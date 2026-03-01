@@ -1,0 +1,21 @@
+{
+    "name": "ss-helper-workspace",
+    "private": true,
+    "scripts": {
+        "install:all": "pnpm install",
+        "build": "node build.js",
+        "build:watch": "node build.js --watch",
+        "build:memory": "node build.js MemoryOS",
+        "build:llm": "node build.js LLMHub",
+        "watch:memory": "node build.js MemoryOS --watch",
+        "watch:llm": "node build.js LLMHub --watch",
+        "clean": "rm -rf MemoryOS/dist LLMHub/dist"
+    },
+    "devDependencies": {
+        "esbuild": "^0.23.0"
+    },
+    "dependencies": {
+        "dexie": "^4.3.0",
+        "zod": "^4.3.6"
+    }
+}

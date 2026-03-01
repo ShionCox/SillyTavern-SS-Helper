@@ -1,0 +1,12 @@
+{
+    "display_name": "SS-Helper [记忆引擎]",
+    "loading_order": 5,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "author": "Shion",
+    "version": "1.0.0",
+    "auto_update": false,
+    "homePage": "#",
+    "email": "348591466@qq.com"
+}

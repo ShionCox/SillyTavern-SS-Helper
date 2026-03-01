@@ -1,0 +1,14 @@
+import { renderTemplateSettings } from './ui/index';
+import { Logger } from '../../SDK/logger';
+
+const logger = new Logger('TemplatePlugin');
+
+// 插件核心逻辑入口点
+logger.info('插件代码已加载执行，SDK Logger 初始化成功');
+
+// 插件加载时自动初始化 UI 挂载
+if (typeof document !== 'undefined') {
+    renderTemplateSettings().catch((err: any) => {
+        logger.error('UI 初始化失败:', err);
+    });
+}
