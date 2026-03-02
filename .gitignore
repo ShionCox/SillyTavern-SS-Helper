@@ -11,13 +11,14 @@ lerna-debug.log*
 node_modules/
 /MemoryOS/node_modules/
 /LLMHub/node_modules/
+/RollHelper/node_modules/
 
 # TypeScript/Build outputs
 dist/
 build/
 /MemoryOS/dist/
 /LLMHub/dist/
-
+/RollHelper/dist/
 # If tsc compiles to the same directory
 # *.js
 # *.map
