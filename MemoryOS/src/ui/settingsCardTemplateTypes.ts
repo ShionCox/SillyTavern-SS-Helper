@@ -45,6 +45,7 @@ export interface MemoryOSSettingsIds {
     dbCompactBtnId: string;
     dbExportBtnId: string;
     dbClearBtnId: string;
+    recordEditorBtnId: string;
     // 审计面板
     auditListId: string;
     auditCreateSnapshotBtnId: string;
@@ -58,6 +59,4 @@ export interface MemoryOSSettingsIds {
     logicTableEntitySelectId: string;
     logicTableRefreshBtnId: string;
     logicTableContainerId: string;
-    // 记录编辑器
-    recordEditorBtnId: string;
 }

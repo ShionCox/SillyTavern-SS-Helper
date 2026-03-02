@@ -128,6 +128,9 @@ export function buildSettingsCardHtmlTemplate(
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.dbCompactBtnId}" type="button" class="stx-ui-btn">立即压缩</button>
+              <button id="${ids.recordEditorBtnId}" type="button" class="stx-ui-btn">
+                <i class="fa-solid fa-pen-to-square"></i>&nbsp;记录编辑
+              </button>
               <button id="${ids.dbExportBtnId}" type="button" class="stx-ui-btn secondary">导出记忆包</button>
               <button id="${ids.dbClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
             </div>

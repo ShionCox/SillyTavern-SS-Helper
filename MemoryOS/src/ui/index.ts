@@ -4,6 +4,7 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, logger, toast } from '../index';
+import { openRecordEditor } from './recordEditor';
 
 
 // UI 组件的唯一命名空间
@@ -84,6 +85,7 @@ const IDS: MemoryOSSettingsIds = {
     logicTableEntitySelectId: `${NAMESPACE}-logic-table-entity`,
     logicTableRefreshBtnId: `${NAMESPACE}-logic-table-refresh`,
     logicTableContainerId: `${NAMESPACE}-logic-table-container`,
+    recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
 };
 
 /**
@@ -506,6 +508,14 @@ function bindUiEvents() {
             } catch (e) {
                 alert('清空失败：' + String(e));
             }
+        });
+    }
+
+    // 记录编辑器按钮绑定
+    const recordEditorBtn = document.getElementById(IDS.recordEditorBtnId);
+    if (recordEditorBtn) {
+        recordEditorBtn.addEventListener('click', () => {
+            openRecordEditor();
         });
     }
 
