@@ -406,5 +406,136 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       border-color: rgba(197, 160, 89, 0.72);
       box-shadow: 0 0 0 2px rgba(197, 160, 89, 0.22);
     }
+
+
+    .stx-record-editor-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: rgba(3, 5, 8, 0.74);
+      backdrop-filter: blur(2px);
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    .stx-record-editor {
+      width: 100%;
+      height: 100%;
+      border-radius: 14px;
+      border: 1px solid rgba(197, 160, 89, 0.3);
+      background: linear-gradient(160deg, rgba(26, 23, 28, 0.95), rgba(12, 13, 17, 0.95));
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .stx-re-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .stx-re-header h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .stx-re-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      flex-wrap: wrap;
+    }
+
+    .stx-re-tab.is-active {
+      border-color: rgba(197, 160, 89, 0.7);
+      background: rgba(197, 160, 89, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(197, 160, 89, 0.2);
+    }
+
+    .stx-re-table {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 14px 16px;
+    }
+
+    .stx-re-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .stx-re-row {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .stx-re-row:nth-child(2n) {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .stx-re-row.is-editing {
+      border-color: rgba(197, 160, 89, 0.65);
+      box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.25);
+    }
+
+    .stx-re-row-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 6px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .stx-re-row-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .stx-re-edit-input {
+      flex: 1;
+      min-width: 260px;
+      background: rgba(0, 0, 0, 0.32);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      padding: 6px 8px;
+      color: inherit;
+    }
+
+    .stx-re-edit-input:disabled {
+      opacity: 0.75;
+      cursor: default;
+    }
+
+    .stx-re-del-btn {
+      border-color: rgba(255, 120, 120, 0.5) !important;
+      color: #ff9b9b;
+    }
+
+    .stx-re-empty {
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      padding: 18px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+    }
   `;
 }

@@ -4,6 +4,7 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, logger, toast } from '../index';
+import { openRecordEditor } from './recordEditor';
 
 
 // UI 组件的唯一命名空间
@@ -63,6 +64,7 @@ const IDS: MemoryOSSettingsIds = {
     dbCompactBtnId: `${NAMESPACE}-db-compact-btn`,
     dbExportBtnId: `${NAMESPACE}-db-export-btn`,
     dbClearBtnId: `${NAMESPACE}-db-clear-btn`,
+    recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
     // 世界模板
     tabTemplateId: `${NAMESPACE}-tab-template`,
     panelTemplateId: `${NAMESPACE}-panel-template`,
@@ -475,6 +477,17 @@ function bindUiEvents() {
                 URL.revokeObjectURL(url);
             } catch (e) {
                 alert('导出失败：' + String(e));
+            }
+        });
+    }
+
+    const recordEditorBtn = document.getElementById(IDS.recordEditorBtnId);
+    if (recordEditorBtn) {
+        recordEditorBtn.addEventListener('click', async () => {
+            try {
+                await openRecordEditor();
+            } catch (e) {
+                alert('打开记录编辑器失败：' + String(e));
             }
         });
     }
