@@ -431,7 +431,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push("   - [REMOVE_STATUS:名]");
     lines.push("   - [CLEAR_STATUS]");
     lines.push("   - 负面状态必须使用负数；正面状态（加值）必须使用正数。");
-    lines.push("   - 状态数值绝对值需与当前骰子面数匹配，避免失衡。");
+    lines.push("   - 状态数值绝对值需与当前骰子面数匹配，避免失衡，还需要注意状态请勿轻易附加，避免破坏平衡！");
   }
 
   lines.push("6. **必须遵守 <dice_runtime_policy> 的运行时限制。**");
