@@ -1,4 +1,4 @@
-import type { DiceMeta, DiceResult } from "../types/diceEvent";
+﻿import type { DiceMeta, DiceResult } from "../types/diceEvent";
 import type {
   ActiveStatusEvent,
   DiceMetaEvent,
@@ -16,15 +16,22 @@ import {
   saveMetadata,
   saveSettingsDebounced,
 } from "../core/runtimeContextEvent";
+import {
+  loadChatScopedState,
+  resolveChatKey,
+  saveSkillStore,
+  saveStatuses,
+} from "../persistence/chatScopedStoreEvent";
+import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
   DEFAULT_RULE_TEXT_Event,
   DEFAULT_SETTINGS_Event,
   MODULE_NAME_Event,
+  RULE_TEXT_MODE_VERSION_Event,
   SKILL_PRESET_DEFAULT_ID_Event,
   SKILL_PRESET_DEFAULT_NAME_Event,
-  SKILL_PRESET_MIGRATION_NAME_Event,
-  SKILL_PRESET_NEW_NAME_BASE_Event,
+    SKILL_PRESET_NEW_NAME_BASE_Event,
   SKILL_PRESET_STORE_VERSION_Event,
   SUMMARY_HISTORY_ROUNDS_MAX_Event,
   SUMMARY_HISTORY_ROUNDS_MIN_Event,
@@ -40,6 +47,74 @@ let syncSettingsUiCallbackEvent: () => void = () => { };
 
 export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
   syncSettingsUiCallbackEvent = callback;
+}
+
+let ACTIVE_CHAT_KEY_Event = "";
+let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
+
+function resolveCurrentChatKeyEvent(): string {
+  const key = resolveChatKey(getLiveContextEvent());
+  ACTIVE_CHAT_KEY_Event = key;
+  return key;
+}
+
+function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string): void {
+  const chatKey = resolveCurrentChatKeyEvent();
+  void saveSkillStore(chatKey, skillPresetStoreText).catch((error) => {
+    logger.warn(`聊天级技能持久化失败，chatKey=${chatKey}`, error);
+  });
+}
+
+function persistStatusesToChatScopedEvent(statuses: ActiveStatusEvent[]): void {
+  const chatKey = resolveCurrentChatKeyEvent();
+  void saveStatuses(chatKey, statuses).catch((error) => {
+    logger.warn(`聊天级状态持久化失败，chatKey=${chatKey}`, error);
+  });
+}
+
+export function getActiveChatKeyEvent(): string {
+  if (ACTIVE_CHAT_KEY_Event) return ACTIVE_CHAT_KEY_Event;
+  return resolveCurrentChatKeyEvent();
+}
+
+export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {
+  const token = ++CHAT_SCOPED_LOAD_TOKEN_Event;
+  const chatKey = resolveCurrentChatKeyEvent();
+  try {
+    const state = await loadChatScopedState(chatKey);
+    if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
+
+    const settings = getSettingsEvent();
+    const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
+      state.skillPresetStoreText,
+      settings.skillTableText
+    );
+    const normalizedStore =
+      parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
+    settings.skillPresetStoreText = JSON.stringify(normalizedStore, null, 2);
+    settings.skillTableText = syncActivePresetToSkillTableTextEvent(normalizedStore, settings.skillTableText);
+
+    const meta = getDiceMetaEvent();
+    meta.activeStatuses = normalizeActiveStatusesFromEvent(state.activeStatuses);
+    saveMetadataSafeEvent();
+
+    SKILL_TABLE_CACHE_TEXT_Event = "";
+    SKILL_TABLE_CACHE_MAP_Event = {};
+    syncSettingsUiCallbackEvent();
+    logger.info(`聊天级状态已装载 (${reason}) chatKey=${chatKey}`);
+  } catch (error) {
+    logger.warn(`聊天级状态装载失败，已降级默认 (${reason}) chatKey=${chatKey}`, error);
+    const settings = getSettingsEvent();
+    const defaultStore = buildDefaultSkillPresetStoreEvent();
+    settings.skillPresetStoreText = JSON.stringify(defaultStore, null, 2);
+    settings.skillTableText = syncActivePresetToSkillTableTextEvent(defaultStore, settings.skillTableText);
+    const meta = getDiceMetaEvent();
+    meta.activeStatuses = [];
+    saveMetadataSafeEvent();
+    SKILL_TABLE_CACHE_TEXT_Event = "";
+    SKILL_TABLE_CACHE_MAP_Event = {};
+    syncSettingsUiCallbackEvent();
+  }
 }
 
 export function getDiceMeta(): DiceMeta {
@@ -85,6 +160,10 @@ export function saveMetadataSafeEvent(): void {
     } catch (error) {
       logger.warn("保存 Event 元数据失败", error);
     }
+  }
+  const meta = getDiceMetaEvent();
+  if (Array.isArray(meta.activeStatuses)) {
+    persistStatusesToChatScopedEvent(meta.activeStatuses);
   }
 }
 
@@ -175,10 +254,15 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
     bucket.skillTableText = syncActivePresetToSkillTableTextEvent(presetStore, bucket.skillTableText);
     bucket.skillPresetStoreText = JSON.stringify(presetStore, null, 2);
   }
-  bucket.ruleText =
-    typeof bucket.ruleText === "string" && bucket.ruleText.trim().length > 0
-      ? bucket.ruleText
-      : DEFAULT_RULE_TEXT_Event;
+  const ruleTextModeVersion = Number((bucket as any).ruleTextModeVersion);
+  if (ruleTextModeVersion !== RULE_TEXT_MODE_VERSION_Event) {
+    bucket.ruleText = "";
+    bucket.ruleTextModeVersion = RULE_TEXT_MODE_VERSION_Event;
+  }
+  if (Number((bucket as any).ruleTextModeVersion) !== RULE_TEXT_MODE_VERSION_Event) {
+    bucket.ruleTextModeVersion = RULE_TEXT_MODE_VERSION_Event;
+  }
+  bucket.ruleText = typeof bucket.ruleText === "string" ? bucket.ruleText : DEFAULT_RULE_TEXT_Event;
   return bucket;
 }
 
@@ -194,13 +278,15 @@ export function ensureActiveStatusesEvent(meta = getDiceMetaEvent()): ActiveStat
   if (!Array.isArray(meta.activeStatuses)) {
     meta.activeStatuses = [];
   }
+  meta.activeStatuses = normalizeActiveStatusesFromEvent(meta.activeStatuses);
   return meta.activeStatuses;
 }
 
 export function setActiveStatusesEvent(statuses: ActiveStatusEvent[]): void {
   const meta = getDiceMetaEvent();
-  meta.activeStatuses = Array.isArray(statuses) ? statuses : [];
+  meta.activeStatuses = normalizeActiveStatusesFromEvent(Array.isArray(statuses) ? statuses : []);
   saveMetadataSafeEvent();
+  persistStatusesToChatScopedEvent(meta.activeStatuses);
 }
 
 export function updateSettingsEvent(patch: Partial<DicePluginSettingsEvent>): void {
@@ -279,11 +365,9 @@ export function getUniqueSkillPresetNameEvent(
 
 export function normalizeSkillPresetStoreTextForSettingsEvent(
   raw: string,
-  legacySkillTableText: string
+  _legacySkillTableText: string
 ): string {
   const now = Date.now();
-  const legacyNormalized = normalizeSkillTableTextForSettingsEvent(legacySkillTableText) ?? "{}";
-  const hasLegacySkillData = legacyNormalized !== "{}";
   const rawText = String(raw ?? "").trim();
 
   let parsed: any = null;
@@ -344,26 +428,9 @@ export function normalizeSkillPresetStoreTextForSettingsEvent(
   if (!defaultPreset) {
     defaultPreset = buildDefaultSkillPresetEvent(now);
     presets.unshift(defaultPreset);
-    usedIds.add(defaultPreset.id);
-    usedNames.add(normalizeSkillPresetNameKeyEvent(defaultPreset.name));
   } else {
     defaultPreset.name = SKILL_PRESET_DEFAULT_NAME_Event;
     defaultPreset.locked = true;
-  }
-
-  if (!rawText && hasLegacySkillData) {
-    const migrationPreset: SkillPresetEvent = {
-      id: createIdEvent("skill_preset_migration"),
-      name: getUniqueSkillPresetNameEvent(
-        { version: SKILL_PRESET_STORE_VERSION_Event, activePresetId: "", presets },
-        SKILL_PRESET_MIGRATION_NAME_Event
-      ),
-      locked: false,
-      skillTableText: legacyNormalized,
-      createdAt: now,
-      updatedAt: now,
-    };
-    presets.push(migrationPreset);
   }
 
   if (!presets.length) {
@@ -372,12 +439,7 @@ export function normalizeSkillPresetStoreTextForSettingsEvent(
 
   let activePresetId = String(parsed?.activePresetId ?? "").trim();
   if (!activePresetId || !presets.some((preset) => preset.id === activePresetId)) {
-    if (!rawText && hasLegacySkillData) {
-      const migration = presets.find((preset) => preset.name.includes(SKILL_PRESET_MIGRATION_NAME_Event));
-      activePresetId = migration?.id ?? SKILL_PRESET_DEFAULT_ID_Event;
-    } else {
-      activePresetId = SKILL_PRESET_DEFAULT_ID_Event;
-    }
+    activePresetId = SKILL_PRESET_DEFAULT_ID_Event;
   }
 
   const normalizedStore: SkillPresetStoreEvent = {
@@ -458,10 +520,12 @@ export function saveSkillPresetStoreEvent(store: SkillPresetStoreEvent): void {
     normalizedStore,
     settings.skillTableText
   );
+  const savedStoreText = JSON.stringify(normalizedStore, null, 2);
   updateSettingsEvent({
-    skillPresetStoreText: JSON.stringify(normalizedStore, null, 2),
+    skillPresetStoreText: savedStoreText,
     skillTableText: activeSkillTableText,
   });
+  persistSkillPresetStoreToChatScopedEvent(savedStoreText);
 }
 
 export function buildSkillDraftSnapshotEvent(rows: SkillEditorRowDraftEvent[]): string {
@@ -524,14 +588,14 @@ export function getSkillModifierTableMapEvent(settings: DicePluginSettingsEvent)
     const parsed = JSON.parse(rawText);
     const normalized = normalizeSkillTableObjectEvent(parsed);
     if (normalized == null) {
-      logger.warn("skillTableText 不是 JSON 对象，已按空表处理");
+      logger.warn("skillTableText 不是合法 JSON 对象，已按空表处理。");
       SKILL_TABLE_CACHE_MAP_Event = {};
       return SKILL_TABLE_CACHE_MAP_Event;
     }
     SKILL_TABLE_CACHE_MAP_Event = normalized;
     return SKILL_TABLE_CACHE_MAP_Event;
   } catch (error) {
-    logger.warn("skillTableText 解析失败，已按空表处理", error);
+    logger.warn("skillTableText 解析失败，已按空表处理。", error);
     SKILL_TABLE_CACHE_MAP_Event = {};
     return SKILL_TABLE_CACHE_MAP_Event;
   }
@@ -624,3 +688,7 @@ export function serializeSkillRowsToSkillTableTextEvent(rows: SkillEditorRowDraf
   if (validation.errors.length > 0) return null;
   return JSON.stringify(validation.table, null, 2);
 }
+
+
+
+

@@ -23,6 +23,7 @@ import {
 } from "./statusEvent";
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
+const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
 
 type ParseDiceExpressionFnEvent = (exprRaw: string) => {
   count: number;
@@ -382,6 +383,32 @@ export function ensureRoundEventTimersSyncedEvent(
   }
 }
 
+function normalizeRemainingRoundsForDecayEvent(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const numeric = Math.floor(Number(raw));
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return numeric;
+}
+
+function decayStatusesForNewRoundEvent(meta: DiceMetaEvent): boolean {
+  const statuses = ensureActiveStatusesEvent(meta);
+  if (statuses.length <= 0) return false;
+  const now = Date.now();
+  const next = statuses
+    .map((status) => {
+      const remaining = normalizeRemainingRoundsForDecayEvent(status.remainingRounds);
+      if (remaining == null) return { ...status, remainingRounds: null };
+      const after = remaining - 1;
+      if (after <= 0) return null;
+      return { ...status, remainingRounds: after, updatedAt: now };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null);
+  if (next.length === statuses.length && next.every((item, index) => item.remainingRounds === statuses[index].remainingRounds)) {
+    return false;
+  }
+  meta.activeStatuses = next;
+  return true;
+}
 export interface EnsureOpenPendingRoundDepsEvent {
   createIdEvent: (prefix: string) => string;
   now?: () => number;
@@ -427,6 +454,12 @@ export function mergeEventsIntoPendingRoundEvent(
 ): PendingRoundEvent {
   const settings = deps.getSettingsEvent();
   const meta = deps.getDiceMetaEvent();
+  const previousRound = meta.pendingRound;
+  if (previousRound && previousRound.status !== "open") {
+    if (decayStatusesForNewRoundEvent(meta)) {
+      logger.info("\u8f6e\u6b21\u5207\u6362\uff1a\u5df2\u5b8c\u6210\u72b6\u6001\u6301\u7eed\u8f6e\u6b21\u8870\u51cf");
+    }
+  }
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
   const now = Date.now();
   const timers = ensureEventTimerIndexEvent(round);
@@ -712,10 +745,23 @@ export function performEventRollByIdEvent(
     return typeof fallback === "string" ? fallback : "";
   }
 
-  const expr = (overrideExpr || event.checkDice || "").trim();
-  if (!expr) {
+  const exprRaw = (overrideExpr || event.checkDice || "").trim();
+  if (!exprRaw) {
     return `❌ 事件 ${eventId} 缺少可用骰式。`;
   }
+
+  const requestedExplode = exprRaw.includes("!");
+  const explodePolicyApplied: EventRollRecordEvent["explodePolicyApplied"] = requestedExplode
+    ? settings.enableExplodingDice
+      ? "enabled"
+      : "disabled_globally"
+    : "not_requested";
+  const explodePolicyReason = requestedExplode
+    ? settings.enableExplodingDice
+      ? "已请求爆骰，按真实掷骰结果决定是否触发连爆。"
+      : "已请求爆骰，但全局爆骰功能关闭，按普通骰结算。"
+    : "未请求爆骰。";
+  const expr = requestedExplode && !settings.enableExplodingDice ? exprRaw.replace("!", "") : exprRaw;
 
   const execution = resolveRollExecutionOptionsEvent(expr, event, settings, deps.parseDiceExpression);
   if (execution.errorText) {
@@ -768,6 +814,8 @@ export function performEventRollByIdEvent(
     rolledAt: Date.now(),
     source: "manual_roll",
     timeoutAt: null,
+    explodePolicyApplied,
+    explodePolicyReason,
   };
 
   round.rolls.push(record);
@@ -812,6 +860,11 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
   let changed = false;
   let lastResult: DiceResult | null = null;
   const resultCards: string[] = [];
+  let aiAutoExplodeUsed = round.rolls.filter(
+    (item) =>
+      item?.source === "ai_auto_roll" &&
+      (item.explodePolicyApplied === "enabled" || String(item.diceExpr || "").includes("!"))
+  ).length;
 
   for (const event of round.events) {
     const mode: EventRollModeEvent = event.rollMode === "auto" ? "auto" : "manual";
@@ -820,8 +873,27 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
     const existingRecord = deps.getLatestRollRecordForEvent(round, event.id);
     if (existingRecord) continue;
 
-    const expr = String(event.checkDice || "").trim();
-    if (!expr) continue;
+    const exprRaw = String(event.checkDice || "").trim();
+    if (!exprRaw) continue;
+    const requestedExplode = exprRaw.includes("!");
+    let explodePolicyApplied: EventRollRecordEvent["explodePolicyApplied"] = "not_requested";
+    let explodePolicyReason = "未请求爆骰。";
+    let expr = exprRaw;
+    if (requestedExplode) {
+      if (!settings.enableExplodingDice) {
+        explodePolicyApplied = "disabled_globally";
+        explodePolicyReason = "已请求爆骰，但全局爆骰功能关闭，按普通骰结算。";
+        expr = exprRaw.replace("!", "");
+      } else if (aiAutoExplodeUsed >= AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event) {
+        explodePolicyApplied = "downgraded_by_ai_limit";
+        explodePolicyReason = `已请求爆骰，但本轮 AI 自动爆骰上限为 ${AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event}，按普通骰结算。`;
+        expr = exprRaw.replace("!", "");
+      } else {
+        explodePolicyApplied = "enabled";
+        explodePolicyReason = "已请求爆骰，按真实掷骰结果决定是否触发连爆。";
+        aiAutoExplodeUsed += 1;
+      }
+    }
 
     const execution = resolveRollExecutionOptionsEvent(expr, event, settings, deps.parseDiceExpression);
     if (execution.errorText) {
@@ -875,6 +947,8 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
       rolledAt: Date.now(),
       source: "ai_auto_roll",
       timeoutAt: null,
+      explodePolicyApplied,
+      explodePolicyReason,
     };
 
     round.rolls.push(record);

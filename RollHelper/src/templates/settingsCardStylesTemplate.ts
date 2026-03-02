@@ -214,12 +214,14 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       align-items: center;
       justify-content: flex-end;
       gap: 10px;
+      flex-wrap: wrap;
     }
 
     #${cardId} .st-roll-field-label {
       font-size: 13px;
       opacity: 0.85;
-      white-space: nowrap;
+      flex: 1;
+      min-width: 200px;
     }
 
     #${cardId} .st-roll-select,
@@ -279,7 +281,12 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: flex;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap; 
+      overflow: visible; 
+    }
+
+    #${cardId} .st-roll-btn {
+      flex-shrink: 0;
     }
 
     #${cardId} .st-roll-btn {
@@ -745,7 +752,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-status-cols {
       display: grid;
-      grid-template-columns: minmax(140px, 1fr) 110px 120px minmax(180px, 1fr) 90px 74px;
+      grid-template-columns: minmax(140px, 1fr) 96px 110px 110px minmax(180px, 1fr) 90px 74px;
       gap: 8px;
       font-size: 12px;
       font-weight: 700;
@@ -756,8 +763,9 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-status-cols span:nth-child(2),
-    #${cardId} .st-roll-status-cols span:nth-child(5),
-    #${cardId} .st-roll-status-cols span:nth-child(6) {
+    #${cardId} .st-roll-status-cols span:nth-child(3),
+    #${cardId} .st-roll-status-cols span:nth-child(6),
+    #${cardId} .st-roll-status-cols span:nth-child(7) {
       text-align: center;
     }
 
@@ -769,12 +777,13 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-status-row {
       display: grid;
-      grid-template-columns: minmax(140px, 1fr) 110px 120px minmax(180px, 1fr) 90px 74px;
+      grid-template-columns: minmax(140px, 1fr) 96px 110px 110px minmax(180px, 1fr) 90px 74px;
       gap: 8px;
       align-items: center;
     }
 
-    #${cardId} .st-roll-status-modifier {
+    #${cardId} .st-roll-status-modifier,
+    #${cardId} .st-roll-status-duration {
       text-align: center;
     }
 

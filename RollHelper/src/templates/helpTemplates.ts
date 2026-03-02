@@ -43,6 +43,11 @@ export function buildEventRollHelpTemplateEvent(): string {
       表达式里的保留语法优先级高于 <code>advantageState</code>。
     </div>
     <div>
+      <strong>动态规则注入</strong>：
+      系统会根据当前设置自动注入可用能力（如爆骰、优势/劣势、走向分支）。
+      爆骰与优劣骰会改变判定结果，并通过 <code>outcomes</code> 直接影响剧情走向。
+    </div>
+    <div>
       <strong>事件目标</strong>：
       可选 <code>events[i].target = { type, name? }</code>，其中
       <code>type</code> 可为 <code>self</code>/<code>scene</code>/<code>supporting</code>/<code>object</code>/<code>other</code>。

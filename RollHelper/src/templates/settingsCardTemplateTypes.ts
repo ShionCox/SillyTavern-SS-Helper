@@ -67,6 +67,7 @@ export interface SettingsCardTemplateIdsEvent {
   skillPresetListId: string;
   skillPresetCreateId: string;
   skillPresetDeleteId: string;
+  skillPresetRestoreDefaultId: string;
   skillPresetNameId: string;
   skillPresetRenameId: string;
   skillPresetMetaId: string;

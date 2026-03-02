@@ -27,6 +27,7 @@ import {
   getDiceMeta as getDiceMetaStoreEvent,
   getDiceMetaEvent as getDiceMetaStoreMetaEvent,
   getSettingsEvent as getSettingsStoreEvent,
+  loadChatScopedStateIntoRuntimeEvent as loadChatScopedStateIntoRuntimeStoreEvent,
   persistChatSafeEvent as persistChatSafeStoreEvent,
   resolveSkillModifierBySkillNameEvent as resolveSkillModifierBySkillNameStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
@@ -179,6 +180,8 @@ export function bindEventButtonsEvent(): void {
   bindEventButtonsModuleEvent({
     performEventRollByIdEvent,
     pushToChat: pushToChatCoreEvent,
+    getSettingsEvent: getSettingsStoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
   });
 }
 
@@ -219,6 +222,7 @@ export function registerEventHooksEvent(): void {
     sanitizeCurrentChatEventBlocksEvent,
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
+    loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
   });
 }
 

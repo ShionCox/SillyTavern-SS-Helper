@@ -6,7 +6,6 @@
 import { buildSettingsCardHtmlTemplateEvent } from "../templates/settingsCardHtmlTemplate";
 import { buildSettingsCardStylesTemplateEvent } from "../templates/settingsCardStylesTemplate";
 import {
-  DEFAULT_RULE_TEXT_Event,
   DEFAULT_SETTINGS_Event,
   SETTINGS_BADGE_ID_Event,
   SETTINGS_BADGE_VERSION_Event,
@@ -39,6 +38,7 @@ import {
   SKILL_PRESET_NEW_NAME_BASE_Event,
   SUMMARY_HISTORY_ROUNDS_MAX_Event,
   SUMMARY_HISTORY_ROUNDS_MIN_Event,
+  DEFAULT_SKILL_PRESET_TABLE_TEXT_Event,
 } from "../settings/constantsEvent";
 import { registerMacro, SlashCommandParser, SlashCommand, SlashCommandArgument, ARGUMENT_TYPE } from "../core/runtimeContextEvent";
 import { pushToChat as pushToChatCoreEvent } from "../core/chatEvent";
@@ -150,8 +150,9 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
     skillPresetActionsDepsEvent: {
       ...SETTINGS_SKILL_PRESET_ACTION_IDS_Event,
       SKILL_PRESET_DEFAULT_ID_Event,
-  SKILL_PRESET_NEW_NAME_BASE_Event,
-          getSkillEditorActivePresetIdEvent: skillEditorRuntimeEvent.getSkillEditorActivePresetIdEvent,
+      SKILL_PRESET_NEW_NAME_BASE_Event,
+      DEFAULT_SKILL_PRESET_TABLE_TEXT_Event,
+      getSkillEditorActivePresetIdEvent: skillEditorRuntimeEvent.getSkillEditorActivePresetIdEvent,
       confirmDiscardSkillDraftEvent,
       getSettingsEvent: getSettingsStoreEvent,
       getSkillPresetStoreEvent: getSkillPresetStoreStoreEvent,
@@ -206,7 +207,6 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
     },
     ruleTextActionsDepsEvent: {
       ...SETTINGS_RULE_TEXT_ACTION_IDS_Event,
-      DEFAULT_RULE_TEXT_Event,
       updateSettingsEvent: updateSettingsStoreEvent,
     },
   });
@@ -219,7 +219,6 @@ function syncSettingsUiEvent(): void {
     isSkillDraftDirtyEvent,
     hydrateSkillDraftFromSettingsEvent,
     getActiveStatusesEvent: () => ensureActiveStatusesStoreEvent(getDiceMetaStoreMetaEvent()),
-    DEFAULT_RULE_TEXT_Event,
     getSkillEditorLastSettingsTextEvent: skillEditorRuntimeEvent.getSkillEditorLastSettingsTextEvent,
     getSkillEditorLastPresetStoreTextEvent: skillEditorRuntimeEvent.getSkillEditorLastPresetStoreTextEvent,
   });

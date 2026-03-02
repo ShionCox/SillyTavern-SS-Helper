@@ -118,6 +118,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_SKILL_PRESET_LIST_ID_Event: string;
   SETTINGS_SKILL_PRESET_CREATE_ID_Event: string;
   SETTINGS_SKILL_PRESET_DELETE_ID_Event: string;
+  SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event: string;
   SETTINGS_SKILL_PRESET_NAME_ID_Event: string;
   SETTINGS_SKILL_PRESET_RENAME_ID_Event: string;
   SETTINGS_SKILL_PRESET_META_ID_Event: string;
@@ -217,6 +218,7 @@ export function buildSettingsCardTemplateIdsEvent(
     skillPresetListId: deps.SETTINGS_SKILL_PRESET_LIST_ID_Event,
     skillPresetCreateId: deps.SETTINGS_SKILL_PRESET_CREATE_ID_Event,
     skillPresetDeleteId: deps.SETTINGS_SKILL_PRESET_DELETE_ID_Event,
+    skillPresetRestoreDefaultId: deps.SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event,
     skillPresetNameId: deps.SETTINGS_SKILL_PRESET_NAME_ID_Event,
     skillPresetRenameId: deps.SETTINGS_SKILL_PRESET_RENAME_ID_Event,
     skillPresetMetaId: deps.SETTINGS_SKILL_PRESET_META_ID_Event,
@@ -378,6 +380,19 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
   ];
 
   let activeTab: "main" | "skill" | "rule" | "about" = "main";
+  const ensureSettingsDrawerVisibleEvent = () => {
+    const drawerContentNode = document.getElementById(deps.drawerContentId) as HTMLElement | null;
+    if (!drawerContentNode) return;
+    if (deps.isElementVisibleEvent(drawerContentNode)) return;
+
+    const drawerToggleNode = document.getElementById(deps.drawerToggleId) as HTMLElement | null;
+    drawerToggleNode?.click();
+    if (deps.isElementVisibleEvent(drawerContentNode)) return;
+
+    drawerContentNode.hidden = false;
+    drawerContentNode.style.display = "block";
+  };
+
   const closeSkillEditorModalEvent = () => {
     if (!skillModal) return;
     if (skillModal.open) {
@@ -396,6 +411,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
 
   const openSkillEditorModalEvent = () => {
     if (!skillModal) return;
+    ensureSettingsDrawerVisibleEvent();
     if (!skillModal.open) {
       try {
         skillModal.showModal();
@@ -428,6 +444,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
 
   const openStatusEditorModalEvent = () => {
     if (!statusModal) return;
+    ensureSettingsDrawerVisibleEvent();
     if (!statusModal.open) {
       try {
         statusModal.showModal();
@@ -470,6 +487,19 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     activateTab(nextTab);
     return true;
   };
+
+  const globalRef = globalThis as any;
+  if (!globalRef.__stRollPreviewEditorBridgeBoundEvent) {
+    document.addEventListener("st-roll-open-skill-editor", () => {
+      if (!tryActivateTab("skill")) return;
+      openSkillEditorModalEvent();
+    });
+    document.addEventListener("st-roll-open-status-editor", () => {
+      if (!tryActivateTab("main")) return;
+      openStatusEditorModalEvent();
+    });
+    globalRef.__stRollPreviewEditorBridgeBoundEvent = true;
+  }
 
   const applySettingsSearchFilter = () => {
     const query = String(searchInput?.value ?? "").trim().toLowerCase();
@@ -838,10 +868,12 @@ export interface BindSkillPresetActionsDepsEvent {
   SETTINGS_SKILL_PRESET_LIST_ID_Event: string;
   SETTINGS_SKILL_PRESET_CREATE_ID_Event: string;
   SETTINGS_SKILL_PRESET_DELETE_ID_Event: string;
+  SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event: string;
   SETTINGS_SKILL_PRESET_NAME_ID_Event: string;
   SETTINGS_SKILL_PRESET_RENAME_ID_Event: string;
   SKILL_PRESET_NEW_NAME_BASE_Event: string;
   SKILL_PRESET_DEFAULT_ID_Event: string;
+  DEFAULT_SKILL_PRESET_TABLE_TEXT_Event: string;
   getSkillEditorActivePresetIdEvent: () => string;
   confirmDiscardSkillDraftEvent: () => boolean;
   getSettingsEvent: () => DicePluginSettingsEvent;
@@ -870,6 +902,9 @@ export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEven
   ) as HTMLButtonElement | null;
   const skillPresetDeleteBtn = document.getElementById(
     deps.SETTINGS_SKILL_PRESET_DELETE_ID_Event
+  ) as HTMLButtonElement | null;
+  const skillPresetRestoreDefaultBtn = document.getElementById(
+    deps.SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event
   ) as HTMLButtonElement | null;
   const skillPresetNameInput = document.getElementById(
     deps.SETTINGS_SKILL_PRESET_NAME_ID_Event
@@ -938,6 +973,31 @@ export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEven
     deps.saveSkillPresetStoreEvent(store);
   });
 
+  skillPresetRestoreDefaultBtn?.addEventListener("click", () => {
+    if (!deps.confirmDiscardSkillDraftEvent()) return;
+    const confirmed = window.confirm("确认将默认预设恢复为内置技能表吗？这会覆盖默认预设当前内容。");
+    if (!confirmed) return;
+    const settings = deps.getSettingsEvent();
+    const store = deps.getSkillPresetStoreEvent(settings);
+    let defaultPreset = deps.getSkillPresetByIdEvent(store, deps.SKILL_PRESET_DEFAULT_ID_Event);
+    if (!defaultPreset) {
+      const fallbackStore = deps.buildDefaultSkillPresetStoreEvent();
+      const fallbackDefault =
+        deps.getSkillPresetByIdEvent(fallbackStore, deps.SKILL_PRESET_DEFAULT_ID_Event) ??
+        fallbackStore.presets[0] ??
+        null;
+      if (!fallbackDefault) return;
+      store.presets.unshift(fallbackDefault);
+      defaultPreset = fallbackDefault;
+    }
+    defaultPreset.locked = true;
+    defaultPreset.skillTableText = deps.DEFAULT_SKILL_PRESET_TABLE_TEXT_Event;
+    defaultPreset.updatedAt = Date.now();
+    deps.saveSkillPresetStoreEvent(store);
+    deps.renderSkillValidationErrorsEvent([]);
+    deps.pushToChat("技能编辑器：默认预设已恢复。");
+  });
+
   const handlePresetRename = () => {
     const nextName = String(skillPresetNameInput?.value ?? "").trim();
     if (!nextName) {
@@ -975,7 +1035,6 @@ export interface BindRuleTextActionsDepsEvent {
   SETTINGS_RULE_TEXT_ID_Event: string;
   SETTINGS_RULE_SAVE_ID_Event: string;
   SETTINGS_RULE_RESET_ID_Event: string;
-  DEFAULT_RULE_TEXT_Event: string;
   updateSettingsEvent: (patch: { ruleText?: string }) => void;
 }
 
@@ -992,15 +1051,14 @@ export function bindRuleTextActionsEvent(deps: BindRuleTextActionsDepsEvent): vo
 
   ruleSaveBtn?.addEventListener("click", () => {
     const value = String(ruleTextInput?.value ?? "");
-    const nextValue = value.trim().length > 0 ? value : deps.DEFAULT_RULE_TEXT_Event;
-    deps.updateSettingsEvent({ ruleText: nextValue });
+    deps.updateSettingsEvent({ ruleText: value });
   });
 
   ruleResetBtn?.addEventListener("click", () => {
     if (ruleTextInput) {
-      ruleTextInput.value = deps.DEFAULT_RULE_TEXT_Event;
+      ruleTextInput.value = "";
     }
-    deps.updateSettingsEvent({ ruleText: deps.DEFAULT_RULE_TEXT_Event });
+    deps.updateSettingsEvent({ ruleText: "" });
   });
 }
 
@@ -1030,6 +1088,7 @@ function parseStatusSkillsTextToKeysEvent(raw: string): string[] {
 function createStatusEditorRowDraftEvent(
   name = "",
   modifierText = "",
+  durationText = "",
   scope: StatusScopeEvent = "skills",
   skillsText = "",
   enabled = true
@@ -1038,6 +1097,7 @@ function createStatusEditorRowDraftEvent(
     rowId: `status_row_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     name,
     modifierText,
+    durationText,
     scope,
     skillsText,
     enabled,
@@ -1049,6 +1109,7 @@ function buildStatusDraftSnapshotEvent(rows: StatusEditorRowDraftEvent[]): strin
     rows.map((row) => ({
       name: String(row.name ?? ""),
       modifierText: String(row.modifierText ?? ""),
+      durationText: String(row.durationText ?? ""),
       scope: row.scope === "all" ? "all" : "skills",
       skillsText: String(row.skillsText ?? ""),
       enabled: row.enabled !== false,
@@ -1090,6 +1151,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const rowId = escapeAttr(String(row.rowId ?? ""));
       const name = escapeAttr(String(row.name ?? ""));
       const modifierText = escapeAttr(String(row.modifierText ?? ""));
+      const durationText = escapeAttr(String(row.durationText ?? ""));
       const scope = row.scope === "all" ? "all" : "skills";
       const skillsText = escapeAttr(String(row.skillsText ?? ""));
       const enabled = row.enabled !== false;
@@ -1099,6 +1161,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
         <div class="st-roll-status-row" data-row-id="${rowId}">
           <input class="st-roll-input st-roll-status-name" type="text" data-status-row-id="${rowId}" data-status-field="name" value="${name}" placeholder="状态名称" />
           <input class="st-roll-input st-roll-status-modifier" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="modifier" value="${modifierText}" placeholder="例如 -2" />
+          <input class="st-roll-input st-roll-status-duration" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="duration" value="${durationText}" placeholder="留空=永久，例如 3" />
           <select class="st-roll-select st-roll-status-scope" data-status-row-id="${rowId}" data-status-field="scope">
             <option value="skills" ${scope === "skills" ? "selected" : ""}>按技能</option>
             <option value="all" ${scope === "all" ? "selected" : ""}>全局</option>
@@ -1120,6 +1183,7 @@ function deserializeActiveStatusesToDraftRowsEvent(statuses: ActiveStatusEvent[]
     createStatusEditorRowDraftEvent(
       String(status.name ?? ""),
       String(status.modifier ?? 0),
+      status.remainingRounds == null ? "" : String(status.remainingRounds),
       status.scope === "all" ? "all" : "skills",
       status.scope === "all" ? "" : (Array.isArray(status.skills) ? status.skills : []).join("|"),
       status.enabled !== false
@@ -1147,6 +1211,7 @@ function validateStatusRowsEvent(
     const name = String(row.name ?? "").trim();
     const nameKey = normalizeStatusNameKeyLocalEvent(name);
     const modifierText = String(row.modifierText ?? "").trim();
+    const durationText = String(row.durationText ?? "").trim();
     const scope: StatusScopeEvent = row.scope === "all" ? "all" : "skills";
     const skills = scope === "all" ? [] : parseStatusSkillsTextToKeysEvent(String(row.skillsText ?? ""));
     let hasError = false;
@@ -1171,6 +1236,23 @@ function validateStatusRowsEvent(
       errors.push(`第 ${rowNo} 行：修正值必须为整数`);
       hasError = true;
     }
+
+    let remainingRounds: number | null = null;
+    if (durationText) {
+      if (!integerPattern.test(durationText)) {
+        errors.push(`第 ${rowNo} 行：持续轮次必须为整数（留空表示永久）`);
+        hasError = true;
+      } else {
+        const parsedRounds = Math.floor(Number(durationText));
+        if (!Number.isFinite(parsedRounds) || parsedRounds < 1) {
+          errors.push(`第 ${rowNo} 行：持续轮次必须 >= 1（留空表示永久）`);
+          hasError = true;
+        } else {
+          remainingRounds = parsedRounds;
+        }
+      }
+    }
+
     if (scope === "skills" && skills.length <= 0) {
       errors.push(`第 ${rowNo} 行：范围为“按技能”时，技能列表不能为空`);
       hasError = true;
@@ -1182,6 +1264,7 @@ function validateStatusRowsEvent(
     statuses.push({
       name,
       modifier,
+      remainingRounds,
       scope,
       skills,
       enabled: row.enabled !== false,
@@ -1207,7 +1290,8 @@ function hydrateStatusDraftFromMetaEvent(
       modifier: item.modifier,
       scope: item.scope,
       skills: item.scope === "all" ? [] : item.skills,
-      enabled: item.enabled !== false,
+      remainingRounds: item.remainingRounds ?? null,
+        enabled: item.enabled !== false,
     }))
   );
   if (!force && STATUS_EDITOR_DIRTY_Event && rowsWrap?.hasChildNodes()) return;
@@ -1264,6 +1348,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     if (field === "name") row.name = target.value;
     if (field === "modifier") row.modifierText = target.value;
     if (field === "skills") row.skillsText = target.value;
+    if (field === "duration") row.durationText = target.value;
     if (field === "scope") {
       row.scope = target.value === "all" ? "all" : "skills";
       if (row.scope === "all") {
@@ -1326,6 +1411,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
         modifier: item.modifier,
         scope: item.scope,
         skills: item.scope === "all" ? [] : item.skills,
+        remainingRounds: item.remainingRounds ?? null,
         enabled: item.enabled !== false,
       }))
     );
@@ -1674,6 +1760,7 @@ export interface RenderSkillPresetListDepsEvent {
   countSkillEntriesFromSkillTableTextEvent: (skillTableText: string) => number;
   escapeAttrEvent: (input: string) => string;
   escapeHtmlEvent: (input: string) => string;
+  activeDraftCountEvent?: number | null;
 }
 
 export function renderSkillPresetListEvent(
@@ -1689,7 +1776,10 @@ export function renderSkillPresetListEvent(
   listWrap.innerHTML = store.presets
     .map((preset) => {
       const isActive = preset.id === store.activePresetId;
-      const skillCount = deps.countSkillEntriesFromSkillTableTextEvent(preset.skillTableText);
+      const skillCount =
+        isActive && Number.isFinite(Number(deps.activeDraftCountEvent))
+          ? Number(deps.activeDraftCountEvent)
+          : deps.countSkillEntriesFromSkillTableTextEvent(preset.skillTableText);
       const presetId = deps.escapeAttrEvent(preset.id);
       const presetName = deps.escapeHtmlEvent(preset.name);
       return `
@@ -1712,6 +1802,7 @@ export interface RenderSkillPresetMetaDepsEvent {
   SETTINGS_SKILL_PRESET_DELETE_ID_Event: string;
   countSkillEntriesFromSkillTableTextEvent: (skillTableText: string) => number;
   getActiveSkillPresetEvent: (store: SkillPresetStoreEvent) => SkillPresetEvent;
+  activeDraftCountEvent?: number | null;
 }
 
 export function renderSkillPresetMetaEvent(
@@ -1721,7 +1812,9 @@ export function renderSkillPresetMetaEvent(
   const activePreset = deps.getActiveSkillPresetEvent(store);
   const meta = document.getElementById(deps.SETTINGS_SKILL_PRESET_META_ID_Event) as HTMLElement | null;
   if (meta) {
-    const count = deps.countSkillEntriesFromSkillTableTextEvent(activePreset.skillTableText);
+    const count = Number.isFinite(Number(deps.activeDraftCountEvent))
+      ? Number(deps.activeDraftCountEvent)
+      : deps.countSkillEntriesFromSkillTableTextEvent(activePreset.skillTableText);
     meta.textContent = `当前预设：${activePreset.name}（技能 ${count} 项）`;
   }
   const nameInput = document.getElementById(
@@ -1844,7 +1937,6 @@ export interface SyncSettingsUiDepsEvent {
   getActiveStatusesEvent: () => ActiveStatusEvent[];
   isSkillDraftDirtyEvent: () => boolean;
   hydrateSkillDraftFromSettingsEvent: () => void;
-  DEFAULT_RULE_TEXT_Event: string;
   getSkillEditorLastSettingsTextEvent: () => string;
   getSkillEditorLastPresetStoreTextEvent: () => string;
 }
@@ -1993,7 +2085,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     }
   }
   if (ruleTextInput) {
-    const nextText = settings.ruleText || deps.DEFAULT_RULE_TEXT_Event;
+    const nextText = typeof settings.ruleText === "string" ? settings.ruleText : "";
     if (ruleTextInput.value !== nextText) {
       ruleTextInput.value = nextText;
     }

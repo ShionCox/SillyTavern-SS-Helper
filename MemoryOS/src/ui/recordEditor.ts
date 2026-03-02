@@ -24,8 +24,11 @@ export async function openRecordEditor() {
                 <i class="fa-solid fa-database"></i>
                 <span>MemoryOS 记录编辑器</span>
             </div>
-            <div class="stx-re-close" id="stx-re-close-btn" title="关闭 (Esc)">
-                <i class="fa-solid fa-xmark"></i>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <button class="stx-re-btn delete" id="stx-re-btn-clear-db" style="border-color:#f44336; color:#f44336; background:rgba(244,67,54,0.1);"><i class="fa-solid fa-radiation"></i> 一键清空数据库</button>
+                <div class="stx-re-close" id="stx-re-close-btn" title="关闭 (Esc)">
+                    <i class="fa-solid fa-xmark"></i>
+                </div>
             </div>
         </div>
         <div class="stx-re-body">
@@ -78,6 +81,31 @@ export async function openRecordEditor() {
     const btnSave = panel.querySelector('#stx-re-btn-save') as HTMLButtonElement;
     const btnBatchDel = panel.querySelector('#stx-re-btn-batch-del') as HTMLButtonElement;
     const pendingMsg = panel.querySelector('#stx-re-pending-msg') as HTMLElement;
+    const btnClearDb = panel.querySelector('#stx-re-btn-clear-db') as HTMLButtonElement;
+
+    if (btnClearDb) {
+        btnClearDb.addEventListener('click', async () => {
+            if (confirm('警告：此操作将清空所有记忆数据（事件、事实、摘要、状态等），这是不可逆转的危险操作！您确定要继续吗？')) {
+                try {
+                    await db.transaction('rw', [db.events, db.facts, db.summaries, db.world_state, db.audit], async () => {
+                        await db.events.clear();
+                        await db.facts.clear();
+                        await db.summaries.clear();
+                        await db.world_state.clear();
+                        await db.audit.clear();
+                    });
+                    toast.success('整个数据库所有内容已清空完毕！', '系统清理');
+                    pendingChanges.deletes.clear();
+                    pendingChanges.updates.clear();
+                    currentChatKey = ''; // 重置为全局
+                    loadChatKeys().then(() => renderTable(currentTable));
+                } catch (err) {
+                    logger.error('Failed to clear entire database', err);
+                    toast.error('清空操作失败: ' + err);
+                }
+            }
+        });
+    }
 
     let currentTable: TableName = 'events';
     let currentChatKey: string = ''; // 默认为空代表不限制，即 'All'
@@ -91,13 +119,13 @@ export async function openRecordEditor() {
     // 事件翻译
     const translateEventType = (type: string) => {
         const typeMap: Record<string, string> = {
-            'chat.message.sent': '对话发送',
-            'chat.message.received': '对话收到',
+            'chat.message.sent': '↑ 发送',
+            'chat.message.received': '↓ 接收',
             'chat.generation.ended': '生成结束',
             'chat.started': '会话开始',
-            'chat.message.swipe': '滑动消息',
+            'chat.message.swipe': '↔ 滑动',
             'character.card_updated': '卡片更新',
-            'world.state_updated': '系统状态更新'
+            'world.state_updated': '系统更新'
         };
         return typeMap[type] || type;
     };
@@ -478,7 +506,7 @@ export async function openRecordEditor() {
             const th = (label: string, col: string, style = '') => {
                 const isActive = sortCol === col;
                 const icon = isActive ? (currentSort.asc ? '<i class="fa-solid fa-sort-up"></i>' : '<i class="fa-solid fa-sort-down"></i>') : '<i class="fa-solid fa-sort"></i>';
-                return `<th class="stx-re-th-sortable ${isActive ? 'active' : ''}" data-col="${col}" style="${style}">${label} ${icon}</th>`;
+                return `<th class="stx-re-th-sortable ${isActive ? 'active' : ''}" data-col="${col}" style="position: relative; ${style}">${label} ${icon}<div class="stx-re-resizer"></div></th>`;
             };
 
             // 构建表头和行
@@ -503,12 +531,32 @@ export async function openRecordEditor() {
                 const cbStatus = isPendingDel ? 'disabled' : '';
 
                 if (tableName === 'events') {
-                    if (!thead) thead = `<tr><th style="width:30px; text-align:center">${masterCheckStr}</th>${th('类型 / ID', 'type')}${th('时间 (Ts)', 'ts')}${th('内容 (Payload)', 'payload')}<th>操作</th></tr>`;
+                    if (!thead) thead = `<tr><th style="width:30px; text-align:center">${masterCheckStr}</th>${th('类型 / ID / 发送方', 'type')}${th('时间 (Ts)', 'ts')}${th('内容 (Payload)', 'payload')}<th>操作</th></tr>`;
                     let val = pendingUpd ? pendingUpd.payload : r.payload;
+                    let senderInfo = '';
+                    if (r.type === 'chat.message.sent' || r.type === 'chat.message.received' || r.type === 'chat.message.swipe') {
+                        let isUser = !!val?.isUser || val?.name === 'You' || val?.name === 'User';
+                        let isSystem = val?.role === 'system' || val?.isSystem || val?.name === 'System' || val?.name === '系统';
+
+                        let senderType = 'AI';
+                        let badgeColor = '#10b981'; // Green for AI
+
+                        if (isSystem) {
+                            senderType = '系统';
+                            badgeColor = '#8b5cf6'; // Purple representing System
+                        } else if (isUser || r.type === 'chat.message.sent') {
+                            senderType = '用户';
+                            badgeColor = '#3b82f6'; // Blue representing User
+                        }
+
+                        const senderName = val?.name || '未知';
+                        senderInfo = `<div style="margin-top:4px; font-size:11px; display:flex; align-items:center; gap:4px;"><span style="background:${badgeColor}; color:#fff; padding:1px 4px; border-radius:3px; font-weight:600;">${senderType}</span> <span style="color:#b0bfd8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px;" title="${senderName}">${senderName}</span></div>`;
+                    }
+
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><div style="font-weight:700">${translateEventType(r.type)}</div><div class="stx-re-json" style="font-size:10px">${r.eventId}</div></td>
+                            <td><div style="font-weight:700">${translateEventType(r.type)}</div><div class="stx-re-json" style="font-size:10px">${r.eventId}</div>${senderInfo}</td>
                             <td>${new Date(r.ts).toLocaleString()}</td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="object">${renderValueHtml(val, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${id}">编辑</button><button class="stx-re-btn delete" data-id="${id}">删除</button></div></td>
@@ -573,7 +621,8 @@ export async function openRecordEditor() {
 
             // 绑定表头排序
             tableEl.querySelectorAll('.stx-re-th-sortable').forEach(thEl => {
-                thEl.addEventListener('click', () => {
+                thEl.addEventListener('click', (e) => {
+                    if ((e.target as HTMLElement).classList.contains('stx-re-resizer')) return;
                     const col = thEl.getAttribute('data-col');
                     if (!col) return;
                     if (currentSort.col === col) {
@@ -583,6 +632,44 @@ export async function openRecordEditor() {
                         currentSort.asc = false; // 默认降序
                     }
                     renderTable(tableName);
+                });
+            });
+
+            // 绑定列宽拖拽
+            tableEl.querySelectorAll('.stx-re-resizer').forEach(resizer => {
+                resizer.addEventListener('mousedown', function (e: Event) {
+                    const mouseEvent = e as MouseEvent;
+                    mouseEvent.preventDefault();
+                    mouseEvent.stopPropagation();
+                    const thEl = resizer.parentElement as HTMLElement;
+
+                    // 获取当前所有表头计算出的初始宽度，并固化为内联样式（防止拖动时表格乱抖）
+                    const table = thEl.closest('table');
+                    if (table) {
+                        const ths = table.querySelectorAll('th');
+                        ths.forEach(t => {
+                            if (!t.style.width) t.style.width = t.offsetWidth + 'px';
+                        });
+                        table.style.tableLayout = 'fixed';
+                    }
+
+                    const startX = mouseEvent.pageX;
+                    const startWidth = thEl.offsetWidth;
+                    resizer.classList.add('is-resizing');
+
+                    const onMouseMove = (moveEvent: MouseEvent) => {
+                        const newWidth = Math.max(50, startWidth + (moveEvent.pageX - startX));
+                        thEl.style.width = newWidth + 'px';
+                    };
+
+                    const onMouseUp = () => {
+                        resizer.classList.remove('is-resizing');
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
+                    };
+
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
                 });
             });
 

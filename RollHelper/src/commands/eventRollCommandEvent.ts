@@ -6,7 +6,7 @@ import type {
   DicePluginSettingsEvent,
   PendingRoundEvent,
 } from "../types/eventDomainEvent";
-import { ensureActiveStatusesEvent, resolveStatusModifiersForSkillEvent } from "../events/statusEvent";
+import { ensureActiveStatusesEvent, formatStatusRemainingRoundsLabelEvent, resolveStatusModifiersForSkillEvent } from "../events/statusEvent";
 
 type RuntimeViewStateEvent = {
   text: string;
@@ -60,8 +60,9 @@ function formatRollModeTextEvent(raw: any): string {
 function formatStatusItemForListEvent(status: ActiveStatusEvent): string {
   const skillsText = status.scope === "all" ? "-" : status.skills.join("|");
   const scopeLabel = status.scope === "all" ? "全局" : "按技能";
+  const durationLabel = formatStatusRemainingRoundsLabelEvent(status.remainingRounds);
   const enabledLabel = status.enabled ? "启用" : "停用";
-  return `- ${status.name} | ${formatSignedEvent(status.modifier)} | 范围=${scopeLabel} | 技能=${skillsText} | ${enabledLabel}`;
+  return `- ${status.name} | ${formatSignedEvent(status.modifier)} | 持续=${durationLabel} | 范围=${scopeLabel} | 技能=${skillsText} | ${enabledLabel}`;
 }
 
 function formatStatusPreviewForEventLineEvent(
@@ -71,11 +72,22 @@ function formatStatusPreviewForEventLineEvent(
 ): string {
   if (!settings.enableStatusSystem) return "状态=关闭";
   const resolved = resolveStatusModifiersForSkillEvent(activeStatuses, skillName);
+  const roundsByName = new Map<string, number | null>();
+  for (const status of activeStatuses) {
+    const key = String(status?.name ?? "").trim().toLowerCase();
+    if (!key) continue;
+    roundsByName.set(key, status.remainingRounds ?? null);
+  }
   if (resolved.modifier === 0) return "状态=+0";
   const detail =
     resolved.matched.length > 0
       ? `（${resolved.matched
-          .map((item) => `${item.name}${formatSignedEvent(item.modifier)}`)
+          .map(
+            (item) =>
+              `${item.name}${formatSignedEvent(item.modifier)}(${formatStatusRemainingRoundsLabelEvent(
+                roundsByName.get(String(item.name ?? "").trim().toLowerCase()) ?? null
+              )})`
+          )
           .join("，")}）`
       : "";
   return `状态=${formatSignedEvent(resolved.modifier)}${detail}`;

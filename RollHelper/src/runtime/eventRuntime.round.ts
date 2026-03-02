@@ -4,7 +4,6 @@
  * 不修改底层 events/parser/round/summary/prompt 模块行为，仅注入依赖。
  */
 import {
-  DEFAULT_RULE_TEXT_Event,
   DICE_RULE_BLOCK_END_Event,
   DICE_RULE_BLOCK_START_Event,
   DICE_RESULT_GUIDANCE_BLOCK_END_Event,
@@ -204,7 +203,6 @@ export function handlePromptReadyEvent(payload: any, sourceEvent = "unknown"): v
     payload,
     {
       getSettingsEvent: getSettingsStoreEvent,
-      DEFAULT_RULE_TEXT_Event,
       DICE_RULE_BLOCK_START_Event,
       DICE_RULE_BLOCK_END_Event,
       DICE_SUMMARY_BLOCK_START_Event,

@@ -12,6 +12,7 @@ import {
 } from "./eventRuntime";
 
 import { logger } from "../../index";
+import { loadChatScopedStateIntoRuntimeEvent } from "../settings/storeEvent";
 
 const INITIALIZE_RETRY_MAX_Event = 80;
 const INITIALIZE_RETRY_DELAY_MS_Event = 500;
@@ -23,6 +24,9 @@ export function initializeEventRuntimeEvent(attempt = 0): void {
   registerEventRollCommandEvent();
   registerDebugCommandEvent();
   registerEventHooksEvent();
+  void loadChatScopedStateIntoRuntimeEvent("init_runtime").catch((error) => {
+    logger.warn("\u521d\u59cb\u5316\u804a\u5929\u7ea7\u72b6\u6001\u5931\u8d25", error);
+  });
   startCountdownTickerEvent();
   sweepTimeoutFailuresEvent();
   refreshCountdownDomEvent();

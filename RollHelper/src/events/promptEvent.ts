@@ -148,7 +148,6 @@ function buildResultGuidanceInstructionEvent(item: PendingResultGuidanceEvent): 
       return `玩家在「${title}」中完成检定，请根据结果推进叙事。`;
   }
 }
-
 function buildResultGuidanceTextEvent(
   queue: PendingResultGuidanceEvent[],
   guidanceStartTag: string,
@@ -338,6 +337,113 @@ export function buildDiceRuleBlockEvent(ruleText: string, ruleStartTag: string, 
   return normalizeBlockTextEvent(`${ruleStartTag}\n${raw}\n${ruleEndTag}`);
 }
 
+export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEvent): string {
+  const checkDiceParts: string[] = ["NdM"];
+  if (settings.enableExplodingDice) checkDiceParts.push("[!]");
+  if (settings.enableAdvantageSystem) checkDiceParts.push("[khX|klX]");
+  checkDiceParts.push("[+/-B]");
+  const checkDicePattern = checkDiceParts.join("");
+  const allowedSides = parseAllowedSidesTextEvent(settings.aiAllowedDiceSidesText);
+
+  const lines: string[] = [];
+  lines.push("【事件骰子协议（系统动态）】");
+  lines.push("1. 仅在文末输出 ```rolljson 代码块（严禁 ```json）。");
+  lines.push("2. 叙事正文禁止直接给出判定结果，先给事件，再由系统结算并推进剧情。");
+  lines.push("3. rolljson 基本格式：");
+  lines.push("{");
+  lines.push('  "type": "dice_events", "version": "1",');
+  lines.push('  "events": [{');
+  lines.push('    "id": "str", "title": "str", "dc": num, "desc": "str",');
+  lines.push(`    "checkDice": "${checkDicePattern}",`);
+  lines.push('    "skill": "str",');
+  lines.push('    "compare": ">=|>|<=|<",');
+  lines.push('    "scope": "protagonist|character|all",');
+  lines.push('    "target": { "type": "self|scene|supporting|object|other", "name": "str(可选)" }');
+  if (settings.enableAiRollMode) {
+    lines.push('    ,"rollMode": "auto|manual"');
+  }
+  if (settings.enableAdvantageSystem) {
+    lines.push('    ,"advantageState": "normal|advantage|disadvantage"');
+  }
+  if (settings.enableDynamicDcReason) {
+    lines.push('    ,"dc_reason": "str"');
+  }
+  if (settings.enableTimeLimit) {
+    lines.push('    ,"timeLimit": "PT30S"');
+  }
+  if (settings.enableOutcomeBranches) {
+    if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
+      lines.push('    ,"outcomes": { "success": "str", "failure": "str", "explode": "str(爆骰优先)" }');
+    } else {
+      lines.push('    ,"outcomes": { "success": "str", "failure": "str" }');
+    }
+  }
+  lines.push("  }]");
+  if (settings.enableAiRoundControl) {
+    lines.push('  ,"round_control": "continue|end_round",');
+    lines.push('  "end_round": bool');
+  }
+  lines.push("}");
+
+  lines.push("4. 可用能力说明：");
+  lines.push(`   - checkDice 仅使用 ${checkDicePattern}，只能写骰式本体，禁止加入技能名、状态名、自然语言、标签或变量,仅允许一个可选修正值，禁止连续修正（如 1d20+1-1）。`);
+  lines.push("   - 合法示例：1d20、2d6+3、2d20kh1、2d20kl1、1d6!+2。");
+  lines.push("   - 非法示例：1d20+1-1、1d20+体能、1d20+[虚弱]、1d20 (优势)。");
+  lines.push("   - 若需施加或移除状态，请仅在 outcomes 文本中使用状态标签。");
+  if (allowedSides !== "none") {
+    lines.push(`   - 骰子面数限制：${allowedSides}。`);
+  }
+  if (settings.enableAiRollMode) {
+    lines.push("   - 可使用 rollMode=auto|manual 指定是否自动掷骰。");
+  }
+  if (settings.enableAiRoundControl) {
+    lines.push("   - 可使用 round_control 或 end_round 控制轮次是否结束。");
+  }
+  if (settings.enableExplodingDice) {
+    lines.push("   - 已启用爆骰：! 会在掷出最大面后连爆，结果会影响剧情走向。");
+    lines.push("   - 爆骰是否触发由系统根据真实掷骰结果决定，不可直接声明“必爆”。");
+    if (settings.enableAiRollMode) {
+      lines.push("   - AI 自动检定时，同一轮最多仅 1 个事件使用 !，其余会按普通骰结算。");
+    }
+  }
+  if (settings.enableAdvantageSystem) {
+    lines.push("   - 已启用优势/劣势：可用 advantageState 或 kh/kl，会改变结果并影响剧情走向。");
+  }
+  if (settings.enableExplodingDice && settings.enableAdvantageSystem) {
+    lines.push("   - ! 与 kh/kl 不能同用。");
+  }
+  if (settings.enableDynamicDcReason) {
+    lines.push("   - 可填写 dc_reason 解释难度依据。");
+  }
+  if (settings.enableTimeLimit) {
+    lines.push("   - 可填写 timeLimit，且必须满足系统最小时限。");
+  }
+  if (settings.enableOutcomeBranches) {
+    lines.push("   - outcomes 走向文本会直接影响后续剧情叙事。");
+    if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
+      lines.push("   - 爆骰触发时优先使用 outcomes.explode。");
+    }
+  }
+  if (settings.enableStatusSystem && settings.enableOutcomeBranches) {
+    lines.push("5. 可在 outcomes 中使用状态标签：");
+    lines.push("   - [APPLY_STATUS:名,整数值,turns=2,skills=A|B 或 scope=all]");
+    lines.push("   - turns 默认 1；支持 duration= 作为 turns 别名；turns=perm 表示永久");
+    lines.push("   - [REMOVE_STATUS:名]");
+    lines.push("   - [CLEAR_STATUS]");
+    lines.push("   - 负面状态必须使用负数；正面状态（加值）必须使用正数。");
+    lines.push("   - 状态数值绝对值需与当前骰子面数匹配，避免失衡。");
+  }
+
+  lines.push("6. **必须遵守 <dice_runtime_policy> 的运行时限制。**");
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+export function buildFinalRuleTextEvent(settings: DicePluginSettingsEvent): string {
+  const systemRuleText = buildDynamicSystemRuleTextEvent(settings);
+  const customRuleText = normalizeTextEvent(settings.ruleText || "").trim();
+  if (!customRuleText) return systemRuleText;
+  return normalizeBlockTextEvent(`${systemRuleText}\n\n【用户自定义补充】\n${customRuleText}`);
+}
 function parseAllowedSidesTextEvent(raw: string): string {
   const parts = String(raw || "")
     .split(/[,\s]+/)
@@ -387,10 +493,12 @@ function buildDiceRuntimePolicyBlockEvent(
     `round_control_allowed=${settings.enableAiRoundControl ? "continue|end_round" : "disabled"}`
   );
   lines.push(`explode_enabled=${settings.enableExplodingDice ? 1 : 0}`);
+  lines.push(`ai_auto_explode_event_limit_per_round=${settings.enableAiRollMode ? 1 : 0}`);
   lines.push(`advantage_enabled=${settings.enableAdvantageSystem ? 1 : 0}`);
   lines.push(`dynamic_dc_reason_enabled=${settings.enableDynamicDcReason ? 1 : 0}`);
   lines.push(`status_system_enabled=${settings.enableStatusSystem ? 1 : 0}`);
   lines.push(`status_tags_allowed=${settings.enableStatusSystem ? 1 : 0}`);
+  lines.push(`status_sign_rule=${settings.enableStatusSystem ? "debuff_negative,buff_positive" : "disabled"}`);
   lines.push(`outcome_branches_enabled=${settings.enableOutcomeBranches ? 1 : 0}`);
   lines.push(`explode_outcome_enabled=${settings.enableExplodeOutcomeBranch ? 1 : 0}`);
   lines.push(`time_limit_enabled=${settings.enableTimeLimit ? 1 : 0}`);
@@ -525,7 +633,6 @@ export function extractPromptChatFromPayloadEvent(payload: any): TavernMessageEv
 
 export interface HandlePromptReadyDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
-  DEFAULT_RULE_TEXT_Event: string;
   DICE_RULE_BLOCK_START_Event: string;
   DICE_RULE_BLOCK_END_Event: string;
   DICE_RUNTIME_POLICY_BLOCK_START_Event?: string;
@@ -639,9 +746,7 @@ export function handlePromptReadyEvent(
   let ruleBlockText = "";
   let runtimePolicyBlockText = "";
   if (settings.autoSendRuleToAI) {
-    const configuredRuleText = normalizeTextEvent(settings.ruleText || "").trim();
-    const fallbackRuleText = normalizeTextEvent(deps.DEFAULT_RULE_TEXT_Event || "").trim();
-    const finalRuleText = configuredRuleText || fallbackRuleText;
+    const finalRuleText = buildFinalRuleTextEvent(settings);
     ruleBlockText = buildDiceRuleBlockEvent(finalRuleText, ruleStartTag, ruleEndTag);
     runtimePolicyBlockText = buildDiceRuntimePolicyBlockEvent(
       settings,
@@ -708,3 +813,4 @@ export function handlePromptReadyEvent(
 
   logger.info(`Prompt managed blocks updated via ${sourceEvent} (target=${injectionTarget})`);
 }
+

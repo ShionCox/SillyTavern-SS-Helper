@@ -652,6 +652,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     .stx-re-content {
       flex: 1;
       overflow-y: auto;
+      overflow-x: auto;
       padding: 0; /* Remove container padding so table touches top */
       scrollbar-width: thin;
       scrollbar-color: rgba(197, 160, 89, 0.5) rgba(0,0,0,0.2);
@@ -675,7 +676,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     /* === Table === */
     .stx-re-table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       font-size: 13px;
       text-align: left;
     }
@@ -689,11 +691,34 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       top: 0;
       z-index: 10;
       box-shadow: 0 4px 10px -4px rgba(0,0,0,0.8);
+      white-space: nowrap;
+      background-clip: padding-box;
+    }
+
+    .stx-re-resizer {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 5px;
+      bottom: 0;
+      cursor: col-resize;
+      user-select: none;
+      background: transparent;
+      z-index: 11;
+      transition: background 0.2s;
+    }
+
+    .stx-re-resizer:hover, .stx-re-resizer.is-resizing {
+      background: rgba(197, 160, 89, 0.6);
     }
     .stx-re-table td {
       padding: 12px 24px;
       border-bottom: 1px solid rgba(255,255,255,0.05);
       vertical-align: top;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 300px;
     }
     
     .stx-re-table td:first-child {
@@ -740,12 +765,30 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-re-value {
-      max-width: 450px;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      max-height: 200px;
+      overflow-y: auto;
+      overflow-x: hidden;
       white-space: pre-wrap;
       word-break: break-all;
       line-height: 1.5;
+      padding-right: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(197, 160, 89, 0.4) transparent;
+    }
+
+    .stx-re-value::-webkit-scrollbar {
+      width: 4px;
+    }
+    .stx-re-value::-webkit-scrollbar-track {
+      background: rgba(0,0,0,0.1);
+      border-radius: 2px;
+    }
+    .stx-re-value::-webkit-scrollbar-thumb {
+      background: rgba(197, 160, 89, 0.4);
+      border-radius: 2px;
+    }
+    .stx-re-value::-webkit-scrollbar-thumb:hover {
+      background: rgba(197, 160, 89, 0.8);
     }
     
     .stx-re-value.editable:hover {

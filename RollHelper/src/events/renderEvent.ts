@@ -1,5 +1,6 @@
 ﻿import type { DiceResult } from "../types/diceEvent";
 import type {
+  ActiveStatusEvent,
   CompareOperatorEvent,
   DiceEventSpecEvent,
   DiceMetaEvent,
@@ -8,7 +9,13 @@ import type {
   EventRollRecordEvent,
   PendingRoundEvent,
 } from "../types/eventDomainEvent";
-import { ensureActiveStatusesEvent, resolveStatusModifiersForSkillEvent, stripStatusTagsFromTextEvent } from "./statusEvent";
+import {
+  ensureActiveStatusesEvent,
+  extractStatusCommandsAndCleanTextEvent,
+  formatStatusRemainingRoundsLabelEvent,
+  resolveStatusModifiersForSkillEvent,
+  stripStatusTagsFromTextEvent,
+} from "./statusEvent";
 import { logger } from "../../index";
 
 export type EventRuntimeToneEvent = "neutral" | "warn" | "danger" | "success";
@@ -228,21 +235,31 @@ function buildOutcomePreviewHtmlEvent(
     : "已关闭";
 
   return `
+    <style>
+      .st-roll-preview-row {
+        display:flex; margin-bottom:6px; align-items:flex-start; padding: 4px; border-radius: 4px; border-left: 2px solid transparent; transition: all 0.2s ease; cursor: default;
+      }
+      .st-roll-preview-row:hover {
+        background-color: rgba(197, 160, 89, 0.1) !important;
+        border-left: 2px solid rgba(197, 160, 89, 0.8) !important;
+        box-shadow: inset 24px 0 24px -24px rgba(197, 160, 89, 0.3) !important;
+      }
+    </style>
     <div style="margin-top:8px; margin-bottom:12px; padding:12px; border:1px solid rgba(197,160,89,0.3); border-radius:6px; background:linear-gradient(135deg, rgba(30,30,30,0.6) 0%, rgba(15,15,15,0.8) 100%); font-size:12px; line-height:1.6; box-shadow:inset 0 1px 4px rgba(0,0,0,0.5);">
       <div style="margin-bottom:10px; font-weight:600; color:#d1b67f; font-size:11px; letter-spacing:1px; display:flex; align-items:center;">
         <span style="flex-grow:1; height:1px; background:linear-gradient(90deg, transparent, rgba(197,160,89,0.4)); margin-right:8px;"></span>
         走向预览
         <span style="margin-left:8px; flex-grow:1; height:1px; background:linear-gradient(270deg, transparent, rgba(197,160,89,0.4));"></span>
       </div>
-      <div style="display:flex; margin-bottom:6px; align-items:flex-start;">
+      <div class="st-roll-preview-row">
         <span style="display:inline-block; padding:0 6px; margin-right:10px; background:rgba(82,196,26,0.15); border:1px solid rgba(82,196,26,0.4); border-radius:4px; color:#73d13d; font-size:10px; font-family:monospace; line-height:1.6; white-space:nowrap; user-select:none; box-shadow:0 0 4px rgba(82,196,26,0.1);">成功</span>
         <span style="color:#e0e0e0; flex:1; word-break:break-word;">${escapeHtmlEvent(success)}</span>
       </div>
-      <div style="display:flex; margin-bottom:6px; align-items:flex-start;">
+      <div class="st-roll-preview-row">
         <span style="display:inline-block; padding:0 6px; margin-right:10px; background:rgba(255,77,79,0.15); border:1px solid rgba(255,77,79,0.4); border-radius:4px; color:#ff7875; font-size:10px; font-family:monospace; line-height:1.6; white-space:nowrap; user-select:none; box-shadow:0 0 4px rgba(255,77,79,0.1);">失败</span>
         <span style="color:#e0e0e0; flex:1; word-break:break-word;">${escapeHtmlEvent(failure)}</span>
       </div>
-      <div style="display:flex; align-items:flex-start;">
+      <div class="st-roll-preview-row" style="margin-bottom:0;">
         <span style="display:inline-block; padding:0 6px; margin-right:10px; background:rgba(250,173,20,0.15); border:1px solid rgba(250,173,20,0.4); border-radius:4px; color:#ffc53d; font-size:10px; font-family:monospace; line-height:1.6; white-space:nowrap; user-select:none; box-shadow:0 0 4px rgba(250,173,20,0.1);">爆骰</span>
         <span style="color:#e0e0e0; flex:1; word-break:break-word;">${escapeHtmlEvent(explode)}</span>
       </div>
@@ -378,29 +395,52 @@ export function buildEventListCardEvent(
         : "cursor:pointer;";
       const showRollButton = !runtime.locked && !lastRecord;
       const timeLimitLabel = settings.enableTimeLimit ? (event.timeLimit ? event.timeLimit : "无") : "关闭";
-      let baseModifierUsed = 0;
-      try {
-        baseModifierUsed = deps.parseDiceExpression(event.checkDice).modifier;
-      } catch {
-        baseModifierUsed = 0;
-      }
-      const skillModifierApplied = deps.resolveSkillModifierBySkillNameEvent(event.skill, settings);
       const statusResolved = settings.enableStatusSystem
         ? resolveStatusModifiersForSkillEvent(activeStatuses, event.skill)
         : { modifier: 0, matched: [] as Array<{ name: string; modifier: number }> };
-      const finalModifierUsed = baseModifierUsed + skillModifierApplied + statusResolved.modifier;
+      const baseModifierUsed = lastRecord
+        ? Number.isFinite(Number(lastRecord.baseModifierUsed))
+          ? Number(lastRecord.baseModifierUsed)
+          : 0
+        : (() => {
+          try {
+            return deps.parseDiceExpression(event.checkDice).modifier;
+          } catch {
+            return 0;
+          }
+        })();
+      const skillModifierApplied = lastRecord
+        ? Number.isFinite(Number(lastRecord.skillModifierApplied))
+          ? Number(lastRecord.skillModifierApplied)
+          : 0
+        : deps.resolveSkillModifierBySkillNameEvent(event.skill, settings);
+      const statusModifierApplied = lastRecord
+        ? Number.isFinite(Number(lastRecord.statusModifierApplied))
+          ? Number(lastRecord.statusModifierApplied)
+          : 0
+        : statusResolved.modifier;
+      const statusMatched = lastRecord
+        ? Array.isArray(lastRecord.statusModifiersApplied)
+          ? lastRecord.statusModifiersApplied
+          : []
+        : statusResolved.matched;
+      const finalModifierUsed = lastRecord
+        ? Number.isFinite(Number(lastRecord.finalModifierUsed))
+          ? Number(lastRecord.finalModifierUsed)
+          : baseModifierUsed + skillModifierApplied + statusModifierApplied
+        : baseModifierUsed + skillModifierApplied + statusModifierApplied;
       const modifierText =
-        settings.enableSkillSystem || statusResolved.modifier !== 0
+        settings.enableSkillSystem || statusModifierApplied !== 0
           ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
             skillModifierApplied
-          )} + 状态 ${deps.formatModifier(statusResolved.modifier)} = ${deps.formatModifier(
+          )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(
             finalModifierUsed
           )}`
           : "";
       const skillHoverTextFinal = settings.enableSkillSystem
-        ? `技能修正：${deps.formatModifier(skillModifierApplied)}${statusResolved.modifier !== 0
-          ? `；状态 ${deps.formatModifier(statusResolved.modifier)}${statusResolved.matched.length > 0
-            ? `（${statusResolved.matched
+        ? `技能修正：${deps.formatModifier(skillModifierApplied)}${statusModifierApplied !== 0
+          ? `；状态 ${deps.formatModifier(statusModifierApplied)}${statusMatched.length > 0
+            ? `（${statusMatched
               .map((item) => `${item.name}${deps.formatModifier(item.modifier)}`)
               .join("，")}）`
             : ""
@@ -484,6 +524,67 @@ function escapeTooltipAttrEvent(input: string): string {
 function formatSignedValueEvent(value: number): string {
   if (value > 0) return `+${value}`;
   return String(value);
+}
+
+/**
+ * 功能：将状态作用域转换为可读文本。
+ * @param scope 状态作用域
+ * @param skills 作用技能列表
+ * @returns 作用域展示文本
+ */
+function formatStatusScopeTextEvent(scope: "all" | "skills", skills: string[]): string {
+  if (scope === "all") return "全局";
+  const normalizedSkills = Array.isArray(skills) ? skills.filter((item) => String(item || "").trim()) : [];
+  if (normalizedSkills.length <= 0) return "当前技能";
+  return normalizedSkills.join(" / ");
+}
+
+/**
+ * 功能：把走向文本中的状态指令提炼为可展示摘要。
+ * @param outcomeText 原始走向文本（可含状态标签）
+ * @param skillName 当前事件技能名
+ * @returns 状态变化摘要文本，无状态变化时返回空字符串
+ */
+function buildOutcomeStatusSummaryTextEvent(outcomeText: string, skillName: string): string {
+  const parsed = extractStatusCommandsAndCleanTextEvent(outcomeText, skillName);
+  if (!Array.isArray(parsed.commands) || parsed.commands.length <= 0) return "";
+
+  const applyLines = parsed.commands
+    .filter((command): command is Extract<typeof parsed.commands[number], { kind: "apply" }> => command.kind === "apply")
+    .map(
+      (command) =>
+        `获得「${command.name}」${formatSignedValueEvent(command.modifier)}（${formatStatusScopeTextEvent(
+          command.scope,
+          command.skills
+        )}，${formatStatusRemainingRoundsLabelEvent(command.durationRounds)}）`
+    );
+  const removeLines = parsed.commands
+    .filter((command): command is Extract<typeof parsed.commands[number], { kind: "remove" }> => command.kind === "remove")
+    .map((command) => `移除「${command.name}」`);
+  const hasClear = parsed.commands.some((command) => command.kind === "clear");
+  const lines = [...applyLines, ...removeLines];
+  if (hasClear) {
+    lines.push("清空全部状态");
+  }
+  return lines.join("；");
+}
+
+function buildCurrentStatusesSummaryTextEvent(statuses: ActiveStatusEvent[]): string {
+  const enabledStatuses = Array.isArray(statuses) ? statuses.filter((item) => item?.enabled !== false) : [];
+  if (enabledStatuses.length <= 0) return "无";
+  return enabledStatuses
+    .map((item) => {
+      const modifierText = formatSignedValueEvent(Number(item.modifier) || 0);
+      const scopeText =
+        item.scope === "all"
+          ? "全局"
+          : Array.isArray(item.skills) && item.skills.length > 0
+            ? item.skills.join(" / ")
+            : "当前技能";
+      const durationText = formatStatusRemainingRoundsLabelEvent(item.remainingRounds);
+      return `${item.name}${modifierText}（${scopeText}，${durationText}）`;
+    })
+    .join("；");
 }
 
 function buildDiceComputationTooltipEvent(
@@ -575,7 +676,7 @@ export function buildAnimatedDiceVisualBlockEvent(
   const finalDiceSvg = buildFinalTotalDiceVisualEvent(finalTotal, resultColor, diceSize);
   const diceVisuals = sharedTooltip
     ? `<span style="display:inline-flex;cursor:help;" title="${escapeTooltipAttrEvent(
-      `${sharedTooltip} | 总计: ${finalTotal}`
+      `${sharedTooltip}`
     )}">${finalDiceSvg}</span>`
     : finalDiceSvg;
   const rollingVisual = deps.getRollingSvg("#ffdb78", rollingSize);
@@ -597,6 +698,7 @@ export function buildAnimatedDiceVisualBlockEvent(
 
 export interface BuildEventRollResultCardDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
+  getDiceMetaEvent: () => DiceMetaEvent;
   resolveTriggeredOutcomeEvent: (
     event: DiceEventSpecEvent,
     record: EventRollRecordEvent | null | undefined,
@@ -621,6 +723,7 @@ export interface BuildEventRollResultCardDepsEvent {
     diceExprHtml: string;
     diceModifierHintHtml: string;
     rollsSummaryHtml: string;
+    explodeInfoHtml: string;
     modifierBreakdownHtml: string;
     compareHtml: string;
     dcText: string;
@@ -633,6 +736,8 @@ export interface BuildEventRollResultCardDepsEvent {
     outcomeLabelHtml: string;
     outcomeTextHtml: string;
     statusImpactHtml: string;
+    outcomeStatusSummaryHtml: string;
+    currentStatusesHtml: string;
   }) => string;
   escapeHtmlEvent: (input: string) => string;
   escapeAttrEvent: (input: string) => string;
@@ -660,6 +765,12 @@ export function buildEventRollResultCardEvent(
     : "剧情走向";
   const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
+  const outcomeStatusSummaryText = settings.enableStatusSystem
+    ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
+    : "";
+  const currentStatusesSummaryText = settings.enableStatusSystem
+    ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
+    : "";
   const status = record.success === null ? "待定" : record.success ? "判定成功" : "判定失败";
   const statusColor = record.success === null ? "#ffdb78" : record.success ? "#52c41a" : "#ff4d4f";
 
@@ -715,6 +826,16 @@ export function buildEventRollResultCardEvent(
     settings.enableSkillSystem && (skillModifierApplied !== 0 || statusModifierApplied !== 0)
       ? `技能${deps.formatModifier(skillModifierApplied)} / 状态${deps.formatModifier(statusModifierApplied)}`
       : "";
+  let explodeInfoText = "未请求爆骰";
+  if (record.explodePolicyApplied === "disabled_globally") {
+    explodeInfoText = "已请求，系统关闭，按普通骰";
+  } else if (record.explodePolicyApplied === "downgraded_by_ai_limit") {
+    explodeInfoText = "已请求，超出本轮 AI 上限，按普通骰";
+  } else if (record.explodePolicyApplied === "enabled") {
+    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
+  } else if (record.result.exploding) {
+    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
+  }
   const statusImpactHtml =
     statusModifierApplied !== 0
       ? `受状态影响 ${deps.formatModifier(statusModifierApplied)}${Array.isArray(record.statusModifiersApplied) && record.statusModifiersApplied.length > 0
@@ -742,6 +863,7 @@ export function buildEventRollResultCardEvent(
       deps.escapeHtmlEvent(record.result.rolls.join(", ")),
       deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
     ),
+    explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
     modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownText),
     compareHtml: deps.escapeHtmlEvent(record.compareUsed),
     dcText: String(record.dcUsed ?? "未设置"),
@@ -757,11 +879,14 @@ export function buildEventRollResultCardEvent(
     outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
     outcomeTextHtml: deps.escapeHtmlEvent(outcomeTextClean),
     statusImpactHtml: deps.escapeHtmlEvent(statusImpactHtml),
+    outcomeStatusSummaryHtml: deps.escapeHtmlEvent(outcomeStatusSummaryText),
+    currentStatusesHtml: deps.escapeHtmlEvent(currentStatusesSummaryText),
   });
 }
 
 export interface BuildEventAlreadyRolledCardDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
+  getDiceMetaEvent: () => DiceMetaEvent;
   resolveTriggeredOutcomeEvent: (
     event: DiceEventSpecEvent,
     record: EventRollRecordEvent | null | undefined,
@@ -782,6 +907,7 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     sourceTextHtml: string;
     targetHtml: string;
     advantageStateHtml: string;
+    explodeInfoHtml: string;
     modifierBreakdownHtml: string;
     compareHtml: string;
     dcText: string;
@@ -793,6 +919,8 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     outcomeLabelHtml: string;
     outcomeTextHtml: string;
     statusImpactHtml: string;
+    outcomeStatusSummaryHtml: string;
+    currentStatusesHtml: string;
     timeoutBlockHtml: string;
   }) => string;
   escapeHtmlEvent: (input: string) => string;
@@ -821,6 +949,12 @@ export function buildEventAlreadyRolledCardEvent(
     : "剧情走向";
   const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
+  const outcomeStatusSummaryText = settings.enableStatusSystem
+    ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
+    : "";
+  const currentStatusesSummaryText = settings.enableStatusSystem
+    ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
+    : "";
   const isTimeout = record.source === "timeout_auto_fail";
   const titleText = isTimeout ? "[超时] 事件已结束" : "[完成] 检定已结算";
   const sourceText = isTimeout
@@ -867,6 +1001,16 @@ export function buildEventAlreadyRolledCardEvent(
         skillModifierApplied
       )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(finalModifierUsed)}`
       : "";
+  let explodeInfoText = "未请求爆骰";
+  if (record.explodePolicyApplied === "disabled_globally") {
+    explodeInfoText = "已请求，系统关闭，按普通骰";
+  } else if (record.explodePolicyApplied === "downgraded_by_ai_limit") {
+    explodeInfoText = "已请求，超出本轮 AI 上限，按普通骰";
+  } else if (record.explodePolicyApplied === "enabled") {
+    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
+  } else if (record.result.exploding) {
+    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
+  }
   const statusImpactHtml =
     statusModifierApplied !== 0
       ? `受状态影响 ${deps.formatModifier(statusModifierApplied)}${Array.isArray(record.statusModifiersApplied) && record.statusModifiersApplied.length > 0
@@ -899,6 +1043,7 @@ export function buildEventAlreadyRolledCardEvent(
     advantageStateHtml: deps.escapeHtmlEvent(
       formatAdvantageStateForCardEvent(record.advantageStateApplied ?? event.advantageState)
     ),
+    explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
     modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownHtml),
     compareHtml: deps.escapeHtmlEvent(record.compareUsed),
     dcText: String(record.dcUsed ?? "未设置"),
@@ -913,6 +1058,8 @@ export function buildEventAlreadyRolledCardEvent(
     outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
     outcomeTextHtml: deps.escapeHtmlEvent(outcomeTextClean),
     statusImpactHtml: deps.escapeHtmlEvent(statusImpactHtml),
+    outcomeStatusSummaryHtml: deps.escapeHtmlEvent(outcomeStatusSummaryText),
+    currentStatusesHtml: deps.escapeHtmlEvent(currentStatusesSummaryText),
     timeoutBlockHtml: timeoutBlock,
   });
 }

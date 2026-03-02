@@ -89,6 +89,7 @@ export function buildEventListCardEvent(round: PendingRoundEvent): string {
 export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record: EventRollRecordEvent): string {
   return buildEventRollResultCardModuleEvent(event, record, {
     getSettingsEvent: getSettingsStoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     resolveTriggeredOutcomeEvent,
     formatEventModifierBreakdownEvent: formatEventModifierBreakdownCoreEvent,
     buildRollsSummaryTemplateEvent,
@@ -105,6 +106,7 @@ export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record:
 export function buildEventAlreadyRolledCardEvent(event: DiceEventSpecEvent, record: EventRollRecordEvent): string {
   return buildEventAlreadyRolledCardModuleEvent(event, record, {
     getSettingsEvent: getSettingsStoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     resolveTriggeredOutcomeEvent,
     formatEventModifierBreakdownEvent: formatEventModifierBreakdownCoreEvent,
     buildEventDistributionBlockTemplateEvent,

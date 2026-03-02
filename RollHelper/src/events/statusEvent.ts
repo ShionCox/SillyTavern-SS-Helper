@@ -1,11 +1,13 @@
-import { normalizeBlankLinesEvent } from "../core/utilsEvent";
+﻿import { normalizeBlankLinesEvent } from "../core/utilsEvent";
 import type { ActiveStatusEvent, DiceMetaEvent, StatusScopeEvent } from "../types/eventDomainEvent";
+import { logger } from "../../index";
 
 export type ParsedStatusCommandEvent =
   | {
       kind: "apply";
       name: string;
       modifier: number;
+      durationRounds?: number | null;
       scope: StatusScopeEvent;
       skills: string[];
     }
@@ -21,6 +23,21 @@ const STATUS_TAG_REGEX_Event = /\[(APPLY_STATUS|REMOVE_STATUS|CLEAR_STATUS)\s*:(
 
 function normalizeStringEvent(raw: any): string {
   return typeof raw === "string" ? raw.trim() : "";
+}
+
+function normalizeRemainingRoundsEvent(raw: any): number | null {
+  if (raw == null || raw === "") return null;
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return null;
+  const rounded = Math.floor(numeric);
+  if (rounded <= 0) return null;
+  return rounded;
+}
+
+export function formatStatusRemainingRoundsLabelEvent(remainingRounds?: number | null): string {
+  const normalized = normalizeRemainingRoundsEvent(remainingRounds);
+  if (normalized == null) return "永久";
+  return `剩余${normalized}轮`;
 }
 
 export function normalizeStatusNameKeyEvent(raw: any): string {
@@ -39,6 +56,22 @@ function parseSkillsTextToKeysEvent(raw: string): string[] {
     .map((item) => normalizeStatusSkillKeyEvent(item))
     .filter(Boolean);
   return Array.from(new Set(tokens));
+}
+
+function parseDurationRoundsFromTailEvent(tailText: string): number | null {
+  const match = tailText.match(/(?:turns|duration)\s*=\s*([^,\]]+)/i);
+  if (!match) return 1;
+  const raw = String(match[1] ?? "").trim();
+  if (!raw) return 1;
+  if (/^(perm|permanent|forever|infinite|inf|\*)$/i.test(raw)) {
+    return null;
+  }
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && Math.floor(numeric) >= 1) {
+    return Math.floor(numeric);
+  }
+  logger.warn(`状态标签 turns/duration 非法，已回退为 1 轮: ${raw}`);
+  return 1;
 }
 
 export function stripStatusTagsFromTextEvent(text: string): string {
@@ -78,6 +111,7 @@ export function parseStatusCommandsFromTextEvent(
     if (!name || !Number.isFinite(modifier)) continue;
 
     const tailText = parts.slice(2).join(",");
+    const durationRounds = parseDurationRoundsFromTailEvent(tailText);
     let scope: StatusScopeEvent = "skills";
     let skills: string[] = [];
     if (/scope\s*=\s*all/i.test(tailText)) {
@@ -96,6 +130,7 @@ export function parseStatusCommandsFromTextEvent(
       kind: "apply",
       name,
       modifier,
+      durationRounds,
       scope,
       skills,
     });
@@ -115,13 +150,11 @@ export function extractStatusCommandsAndCleanTextEvent(
   };
 }
 
-export function normalizeActiveStatusEvent(
-  raw: any,
-  now = Date.now()
-): ActiveStatusEvent | null {
+export function normalizeActiveStatusEvent(raw: any, now = Date.now()): ActiveStatusEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const name = normalizeStringEvent((raw as any).name);
   const modifier = Number((raw as any).modifier);
+  const remainingRounds = normalizeRemainingRoundsEvent((raw as any).remainingRounds);
   const scopeRaw = normalizeStringEvent((raw as any).scope).toLowerCase();
   const scope: StatusScopeEvent = scopeRaw === "all" ? "all" : "skills";
   const enabled = (raw as any).enabled !== false;
@@ -146,6 +179,7 @@ export function normalizeActiveStatusEvent(
   return {
     name,
     modifier,
+    remainingRounds,
     scope,
     skills,
     enabled,
@@ -218,6 +252,7 @@ export function applyStatusCommandsToMetaEvent(
       const next: ActiveStatusEvent = {
         name: command.name,
         modifier: command.modifier,
+        remainingRounds: command.durationRounds == null ? null : Math.max(1, Math.floor(command.durationRounds)),
         scope: command.scope,
         skills: command.scope === "all" ? [] : Array.from(new Set(command.skills)),
         enabled: true,
@@ -248,6 +283,8 @@ export function resolveStatusModifiersForSkillEvent(
 
   for (const status of normalizedStatuses) {
     if (!status.enabled) continue;
+    const remaining = normalizeRemainingRoundsEvent(status.remainingRounds);
+    if (status.remainingRounds != null && remaining == null) continue;
     const value = Number(status.modifier);
     if (!Number.isFinite(value)) continue;
     if (status.scope === "all") {
@@ -282,8 +319,9 @@ export function buildActiveStatusesBlockEvent(
   for (const item of normalized) {
     const scope = item.scope;
     const skills = scope === "all" ? "-" : item.skills.join("|");
+    const duration = formatStatusRemainingRoundsLabelEvent(item.remainingRounds);
     lines.push(
-      `- name="${item.name}" mod=${item.modifier >= 0 ? `+${item.modifier}` : item.modifier} scope=${scope} skills=${skills} enabled=${item.enabled ? 1 : 0}`
+      `- name="${item.name}" mod=${item.modifier >= 0 ? `+${item.modifier}` : item.modifier} duration=${duration} scope=${scope} skills=${skills} enabled=${item.enabled ? 1 : 0}`
     );
   }
   lines.push(endTag);

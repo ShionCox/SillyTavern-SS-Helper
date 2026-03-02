@@ -106,11 +106,53 @@ export function createSkillEditorRuntimeEvent(
     });
   }
 
+  /**
+   * 功能：统计当前草稿中用于侧栏展示的技能条目数。
+   * 参数：无（读取运行时草稿状态）。
+   * 返回：number，去除空名称并按标准化名称去重后的数量。
+   */
+  function countSkillEntriesFromDraftRowsEvent(): number {
+    const dedupe = new Set<string>();
+    for (const row of SKILL_EDITOR_ROWS_DRAFT_Event) {
+      const normalizedKey = String(row.skillName ?? "").trim().toLowerCase();
+      if (!normalizedKey) continue;
+      dedupe.add(normalizedKey);
+    }
+    return dedupe.size;
+  }
+
+  /**
+   * 功能：刷新技能预设侧栏（列表与元信息），并把当前草稿数量实时映射到激活预设。
+   * 参数：无（读取设置与草稿状态）。
+   * 返回：void。
+   */
+  function renderSkillPresetSidebarEvent(): void {
+    const settings = deps.getSettingsEvent();
+    const store = deps.getSkillPresetStoreEvent(settings);
+    const activeDraftCount = countSkillEntriesFromDraftRowsEvent();
+    renderSkillPresetListModuleEvent(store, {
+      SETTINGS_SKILL_PRESET_LIST_ID_Event: deps.SETTINGS_SKILL_PRESET_LIST_ID_Event,
+      countSkillEntriesFromSkillTableTextEvent: deps.countSkillEntriesFromSkillTableTextEvent,
+      escapeAttrEvent: deps.escapeAttrEvent,
+      escapeHtmlEvent: deps.escapeHtmlEvent,
+      activeDraftCountEvent: activeDraftCount,
+    });
+    renderSkillPresetMetaModuleEvent(store, {
+      SETTINGS_SKILL_PRESET_META_ID_Event: deps.SETTINGS_SKILL_PRESET_META_ID_Event,
+      SETTINGS_SKILL_PRESET_NAME_ID_Event: deps.SETTINGS_SKILL_PRESET_NAME_ID_Event,
+      SETTINGS_SKILL_PRESET_DELETE_ID_Event: deps.SETTINGS_SKILL_PRESET_DELETE_ID_Event,
+      countSkillEntriesFromSkillTableTextEvent: deps.countSkillEntriesFromSkillTableTextEvent,
+      getActiveSkillPresetEvent: deps.getActiveSkillPresetEvent,
+      activeDraftCountEvent: activeDraftCount,
+    });
+  }
+
   function renderSkillRowsEvent(): void {
     renderSkillRowsModuleEvent(SKILL_EDITOR_ROWS_DRAFT_Event, {
       SETTINGS_SKILL_ROWS_ID_Event: deps.SETTINGS_SKILL_ROWS_ID_Event,
       escapeAttrEvent: deps.escapeAttrEvent,
     });
+    renderSkillPresetSidebarEvent();
   }
 
   function hydrateSkillDraftFromSettingsEvent(force = false): void {
@@ -140,19 +182,6 @@ export function createSkillEditorRuntimeEvent(
     SKILL_EDITOR_LAST_PRESET_STORE_TEXT_Event = normalizedStoreText;
     setSkillDraftDirtyEvent(false);
     renderSkillValidationErrorsEvent([]);
-    renderSkillPresetListModuleEvent(store, {
-      SETTINGS_SKILL_PRESET_LIST_ID_Event: deps.SETTINGS_SKILL_PRESET_LIST_ID_Event,
-      countSkillEntriesFromSkillTableTextEvent: deps.countSkillEntriesFromSkillTableTextEvent,
-      escapeAttrEvent: deps.escapeAttrEvent,
-      escapeHtmlEvent: deps.escapeHtmlEvent,
-    });
-    renderSkillPresetMetaModuleEvent(store, {
-      SETTINGS_SKILL_PRESET_META_ID_Event: deps.SETTINGS_SKILL_PRESET_META_ID_Event,
-      SETTINGS_SKILL_PRESET_NAME_ID_Event: deps.SETTINGS_SKILL_PRESET_NAME_ID_Event,
-      SETTINGS_SKILL_PRESET_DELETE_ID_Event: deps.SETTINGS_SKILL_PRESET_DELETE_ID_Event,
-      countSkillEntriesFromSkillTableTextEvent: deps.countSkillEntriesFromSkillTableTextEvent,
-      getActiveSkillPresetEvent: deps.getActiveSkillPresetEvent,
-    });
     renderSkillRowsEvent();
   }
 

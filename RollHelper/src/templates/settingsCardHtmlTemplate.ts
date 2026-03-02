@@ -259,6 +259,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
                       <div class="st-roll-actions">
                         <button id="${ids.skillPresetCreateId}" type="button" class="st-roll-btn">新建预设</button>
                         <button id="${ids.skillPresetDeleteId}" type="button" class="st-roll-btn secondary">删除预设</button>
+                        <button id="${ids.skillPresetRestoreDefaultId}" type="button" class="st-roll-btn secondary">恢复默认</button>
                       </div>
                     </div>
                     <div id="${ids.skillPresetMetaId}" class="st-roll-skill-preset-meta"></div>
@@ -272,7 +273,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
                       <button id="${ids.skillPresetRenameId}" type="button" class="st-roll-btn">保存名称</button>
                     </div>
 
-                    <div class="st-roll-tip">技能加值请填写整数；同名技能会按“去空格 + 忽略大小写”判重。</div>
+                    <div class="st-roll-tip">名称不能为空；修正值必须是整数；持续轮次留空=永久，填写时必须为整数且 >=1；范围为“按技能”时技能列表不能为空；同名状态不能重复。</div>
                     <div id="${ids.skillDirtyHintId}" class="st-roll-skill-dirty" hidden>技能改动尚未保存，点击“保存技能表”后生效。</div>
                     <div id="${ids.skillErrorsId}" class="st-roll-skill-errors" hidden></div>
 
@@ -311,13 +312,13 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
           <div class="st-roll-textarea-wrap st-roll-search-item" data-st-roll-search="rule text save reset">
             <div class="st-roll-row" style="margin-bottom:8px;">
-              <span class="st-roll-field-label">发送给 AI 的规则文本</span>
+              <span class="st-roll-field-label">这里填写“自定义补充规则”，系统基础规则会按当前开关动态生成并固定在前，你的内容会追加在最后。</span>
               <div class="st-roll-actions">
-                <button id="${ids.ruleSaveId}" type="button" class="st-roll-btn">保存规则</button>
-                <button id="${ids.ruleResetId}" type="button" class="st-roll-btn secondary">恢复默认</button>
+                <button id="${ids.ruleSaveId}" type="button" class="st-roll-btn">保存补充</button>
+                <button id="${ids.ruleResetId}" type="button" class="st-roll-btn secondary">清空补充</button>
               </div>
             </div>
-            <textarea id="${ids.ruleTextId}" class="st-roll-textarea" rows="12"></textarea>
+            <textarea id="${ids.ruleTextId}" class="st-roll-textarea" rows="12" placeholder="只写额外约束，例如：\n1. 场景以潜入风格推进。\n2. outcomes 文本避免重复措辞。\n3. 优势/劣势触发时加强叙事差异。"></textarea>
           </div>
         </div>
 
@@ -387,7 +388,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             </div>
           </div>
           <div class="st-roll-status-cols">
-            <span>名称</span><span>修正</span><span>范围</span><span>技能列表（用 | 分隔）</span><span>启用</span><span>操作</span>
+            <span>名称</span><span>修正</span><span>持续轮次</span><span>范围</span><span>技能列表（用 | 分隔）</span><span>启用</span><span>操作</span>
           </div>
           <div id="${ids.statusRowsId}" class="st-roll-status-rows"></div>
         </div>

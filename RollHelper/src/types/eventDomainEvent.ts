@@ -1,4 +1,4 @@
-import type { DiceResult } from "./diceEvent";
+﻿import type { DiceResult } from "./diceEvent";
 
 export type CompareOperatorEvent = ">=" | ">" | "<=" | "<";
 export type EventApplyScopeSettingEvent = "protagonist_only" | "all";
@@ -53,6 +53,7 @@ export interface DicePluginSettingsEvent {
   enableSkillSystem: boolean;
   skillTableText: string;
   skillPresetStoreText: string;
+  ruleTextModeVersion: number;
   ruleText: string;
 }
 
@@ -66,6 +67,7 @@ export interface StatusEditorRowDraftEvent {
   rowId: string;
   name: string;
   modifierText: string;
+  durationText: string;
   scope: StatusScopeEvent;
   skillsText: string;
   enabled: boolean;
@@ -74,6 +76,7 @@ export interface StatusEditorRowDraftEvent {
 export interface ActiveStatusEvent {
   name: string;
   modifier: number;
+  remainingRounds?: number | null;
   scope: StatusScopeEvent;
   skills: string[];
   enabled: boolean;
@@ -141,6 +144,12 @@ export interface EventRollRecordEvent {
   rolledAt: number;
   source: EventRollSourceEvent;
   timeoutAt?: number | null;
+  explodePolicyApplied?:
+  | "not_requested"
+  | "enabled"
+  | "disabled_globally"
+  | "downgraded_by_ai_limit";
+  explodePolicyReason?: string;
 }
 
 export interface PendingRoundEvent {
@@ -243,3 +252,4 @@ export interface TavernMessageEvent {
   timestamp?: string | number;
   [key: string]: any;
 }
+

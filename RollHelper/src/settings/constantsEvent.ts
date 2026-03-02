@@ -52,6 +52,7 @@ export const SETTINGS_SKILL_PRESET_SIDEBAR_ID_Event = "st-roll-settings-Event-sk
 export const SETTINGS_SKILL_PRESET_LIST_ID_Event = "st-roll-settings-Event-skill-preset-list";
 export const SETTINGS_SKILL_PRESET_CREATE_ID_Event = "st-roll-settings-Event-skill-preset-create";
 export const SETTINGS_SKILL_PRESET_DELETE_ID_Event = "st-roll-settings-Event-skill-preset-delete";
+export const SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event = "st-roll-settings-Event-skill-preset-restore-default";
 export const SETTINGS_SKILL_PRESET_NAME_ID_Event = "st-roll-settings-Event-skill-preset-name";
 export const SETTINGS_SKILL_PRESET_RENAME_ID_Event = "st-roll-settings-Event-skill-preset-rename";
 export const SETTINGS_SKILL_PRESET_META_ID_Event = "st-roll-settings-Event-skill-preset-meta";
@@ -162,6 +163,7 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_SKILL_PRESET_LIST_ID_Event,
   SETTINGS_SKILL_PRESET_CREATE_ID_Event,
   SETTINGS_SKILL_PRESET_DELETE_ID_Event,
+  SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event,
   SETTINGS_SKILL_PRESET_NAME_ID_Event,
   SETTINGS_SKILL_PRESET_RENAME_ID_Event,
   SETTINGS_SKILL_PRESET_META_ID_Event,
@@ -215,6 +217,7 @@ export const SETTINGS_SKILL_PRESET_ACTION_IDS_Event = {
   SETTINGS_SKILL_PRESET_LIST_ID_Event,
   SETTINGS_SKILL_PRESET_CREATE_ID_Event,
   SETTINGS_SKILL_PRESET_DELETE_ID_Event,
+  SETTINGS_SKILL_PRESET_RESTORE_DEFAULT_ID_Event,
   SETTINGS_SKILL_PRESET_NAME_ID_Event,
   SETTINGS_SKILL_PRESET_RENAME_ID_Event,
 } as const;
@@ -287,66 +290,22 @@ export const SKILL_PRESET_DEFAULT_NAME_Event = "通用叙事TRPG（默认）";
 export const SKILL_PRESET_MIGRATION_NAME_Event = "迁移技能预设";
 export const SKILL_PRESET_NEW_NAME_BASE_Event = "新预设";
 export const DEFAULT_SKILL_PRESET_TABLE_Event: Record<string, number> = {
-  "察觉": 10,
-  "说服": 8,
-  "潜行": 6,
-  "调查": 9,
-  "交涉": 7,
-  "意志": 8,
-  "反应": 6,
-  "体能": 7,
-  "医疗": 5,
-  "知识": 8,
+  "察觉": 3,
+  "说服": 2,
+  "潜行": 1,
+  "调查": 3,
+  "交涉": 2,
+  "意志": 1,
+  "反应": 2,
+  "体能": 1,
+  "医疗": 3,
+  "知识": 2,
 };
 export const DEFAULT_SKILL_PRESET_TABLE_TEXT_Event = JSON.stringify(DEFAULT_SKILL_PRESET_TABLE_Event, null, 2);
 export const ISO_8601_DURATION_REGEX_Event =
   /^P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/i;
-export const DEFAULT_RULE_TEXT_Event = `【事件骰子协议】
-1. 触发判定时，仅在回复末尾输出 \`\`\`rolljson 代码块（严禁 \`\`\`json）。
-2. 叙事勿含判定结果；须严格结合以下上下文保证剧情一致：
-   - <dice_runtime_policy>：遵循全局规则（面数、技能表、时间下限及 round_mode / ai_round_control_enabled 等）。
-   - <dice_round_summary>：承接历史轮次结果，保持剧情连贯。
-   - <dice_result_guidance>：执行叙事指令（如大成功表现、额外收益）。
-   - <dice_active_statuses>：体现当前状态修饰对剧情的实质影响。
-3. rolljson 结构严格如下：
-{
-  "type": "dice_events",
-  "version": "1",
-  "events": [{
-    // --- 必填 ---
-    "id": "str",
-    "title": "str",
-    "checkDice": "str", // NdM[!][khX|klX][+/-B]。面数限policy允许值。kh/kl覆盖advantage且禁与!同用。
-    "dc": num,
-    "skill": "str", // 限policy技能表
-    "desc": "str",
-    // --- 可选 ---
-    "compare": "str", // >=, >, <=, < (默认>=)
-    "scope": "str", // protagonist, character, all
-    "rollMode": "str", // auto(系统自动/分支), manual(默认)
-    "advantageState": "str", // normal, advantage, disadvantage
-    "dc_reason": "str", // 难度来源
-    "timeLimit": "str", // ISO 8601 (例:PT30S，须符policy最低限制)
-    "target": { "type": "self|scene|supporting|object|other", "name": "str(可选)" },
-    "outcomes": { 
-      "success": "str", // 成功走向
-      "failure": "str", // 失败/超时走向
-      "explode": "str"  // 爆骰走向(优先)
-      // 【状态标签】仅限写在outcomes文本内：
-      // [APPLY_STATUS:名,值,skills=A|B] 或 scope=all (缺第3参数默认当前skill)
-      // [REMOVE_STATUS:名] 或 [CLEAR_STATUS]
-      // 值必须为整数（可正可负）；skills 必须用 | 分隔
-      // 同名状态按名称覆盖（后者覆盖前者，不做叠加）
-    }
-  }],
-  // --- 顶层可选 (仅当 policy 中 round_mode=continuous 且 ai_round_control_enabled=1 时可用) ---
-  "round_control": "str", // continue / end_round
-  "end_round": bool       // 兼容写法 (true 等价于 round_control=end_round)
-}
-4. 状态标签附加规则：
-   - 仅当 <dice_runtime_policy> 中 status_system_enabled=1 时，才允许输出状态标签；否则必须不输出任何状态标签。
-   - 采用 skills 范围时，skills 不可为空，且应使用当前技能表中的标准技能名。
-   - 状态标签仅允许出现在 outcomes.success / outcomes.failure / outcomes.explode 文本中，禁止出现在普通叙事正文。`;
+export const RULE_TEXT_MODE_VERSION_Event = 2;
+export const DEFAULT_RULE_TEXT_Event = "";
 export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enabled: true,
   autoSendRuleToAI: true,
@@ -370,6 +329,7 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enableSkillSystem: true,
   skillTableText: "{}",
   skillPresetStoreText: "",
+  ruleTextModeVersion: RULE_TEXT_MODE_VERSION_Event,
   ruleText: DEFAULT_RULE_TEXT_Event,
 };
 
