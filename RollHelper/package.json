@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "build": "esbuild index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/index.js --minify",
+    "watch": "esbuild index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/index.js --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  }
+}

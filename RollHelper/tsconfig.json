@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false,
+    "allowJs": true,
+    "noEmitOnError": false,
+    "lib": ["DOM", "ES2020"]
+  },
+  "include": [
+    "./index.ts",
+    "./src/**/*.ts"
+  ]
+}
