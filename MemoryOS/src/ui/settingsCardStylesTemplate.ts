@@ -412,22 +412,25 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       position: fixed;
       inset: 0;
       z-index: 99999;
-      background: rgba(3, 5, 8, 0.74);
-      backdrop-filter: blur(2px);
+      background: rgba(3, 5, 8, 0.6);
+      backdrop-filter: blur(3px);
       display: flex;
-      align-items: stretch;
+      align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 18px;
       box-sizing: border-box;
     }
 
     .stx-record-editor {
-      width: 100%;
-      height: 100%;
+      width: min(1320px, calc(100vw - 36px));
+      height: min(860px, calc(100vh - 36px));
       border-radius: 14px;
-      border: 1px solid rgba(197, 160, 89, 0.3);
-      background: linear-gradient(160deg, rgba(26, 23, 28, 0.95), rgba(12, 13, 17, 0.95));
+      border: 1px solid rgba(197, 160, 89, 0.35);
+      background:
+        radial-gradient(120% 140% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 55%),
+        linear-gradient(160deg, rgba(31, 25, 25, 0.92), rgba(20, 18, 20, 0.92));
       box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(3px);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -438,7 +441,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       justify-content: space-between;
       align-items: center;
       padding: 14px 16px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
 
     .stx-re-header h3 {
@@ -512,11 +515,16 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     .stx-re-edit-input {
       flex: 1;
       min-width: 260px;
+      min-height: 58px;
       background: rgba(0, 0, 0, 0.32);
       border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 8px;
       padding: 6px 8px;
       color: inherit;
+      resize: vertical;
+      font-size: 12px;
+      line-height: 1.45;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
     }
 
     .stx-re-edit-input:disabled {

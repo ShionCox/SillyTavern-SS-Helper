@@ -37,6 +37,33 @@ function formatTs(ts?: number): string {
     return new Date(ts).toLocaleString();
 }
 
+function escapeHtml(text: unknown): string {
+    return String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function encodeEditValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value ?? '');
+    }
+}
+
+function decodeEditValue(raw: string, previousValue: unknown): unknown {
+    if (typeof previousValue === 'string') return raw;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return raw;
+    }
+}
+
 export async function openRecordEditor() {
     const existing = document.querySelector('.stx-record-editor-overlay');
     if (existing) {
@@ -146,28 +173,36 @@ export async function openRecordEditor() {
                 }
             };
 
-            const value = (record as any).value ?? (record as any).payload ?? (record as any).content ?? (record as any).after;
+            const valueField = 'value' in (record as any)
+                ? 'value'
+                : 'payload' in (record as any)
+                    ? 'payload'
+                    : 'content' in (record as any)
+                        ? 'content'
+                        : 'after' in (record as any)
+                            ? 'after'
+                            : null;
+            const value = valueField ? (record as any)[valueField] : undefined;
 
             row.innerHTML = `
               <div class="stx-re-row-meta">${buildContent()}</div>
               <div class="stx-re-row-actions">
-                <input class="stx-re-edit-input" type="text" value="${String(summarize(value, 200)).replace(/"/g, '&quot;')}" disabled />
+                <textarea class="stx-re-edit-input" rows="2" disabled>${escapeHtml(encodeEditValue(value))}</textarea>
                 <button type="button" class="stx-ui-btn secondary stx-re-edit-btn">编辑</button>
                 <button type="button" class="stx-ui-btn secondary stx-re-del-btn">删除</button>
               </div>
             `;
 
-            const input = row.querySelector('.stx-re-edit-input') as HTMLInputElement;
+            const input = row.querySelector('.stx-re-edit-input') as HTMLTextAreaElement;
             const editBtn = row.querySelector('.stx-re-edit-btn') as HTMLButtonElement;
             const delBtn = row.querySelector('.stx-re-del-btn') as HTMLButtonElement;
 
             const saveValue = async () => {
-                const next = input.value;
+                const next = valueField ? decodeEditValue(input.value, (record as any)[valueField]) : input.value;
                 const cloned = { ...record } as any;
-                if ('value' in cloned) cloned.value = next;
-                else if ('payload' in cloned) cloned.payload = next;
-                else if ('content' in cloned) cloned.content = next;
-                else if ('after' in cloned) cloned.after = next;
+                if (valueField) {
+                    cloned[valueField] = next;
+                }
                 await (db[tableName] as any).put(cloned);
                 input.disabled = true;
                 row.classList.remove('is-editing');
