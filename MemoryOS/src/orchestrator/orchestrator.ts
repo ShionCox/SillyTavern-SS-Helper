@@ -2,7 +2,7 @@ import type { LLMSDK } from '../../../SDK/stx';
 import type { WriteRequest, ProposalResult, ProposalEnvelope } from '../proposal/types';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { EventsManager } from '../core/events-manager';
-import { EventBus } from '../bus/bus';
+import { EventBus } from '../../../SDK/bus/bus';
 import type { EventEnvelope } from '../../../SDK/stx';
 
 /**

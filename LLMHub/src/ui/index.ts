@@ -12,10 +12,15 @@ const generateChangelogHtml = () => {
     if (!Array.isArray(changelogData) || changelogData.length === 0) return '暂无更新记录';
 
     return changelogData.map(log => `
-      <strong>${log.version}</strong>
-      <ul>
-        ${(log.changes || []).map((c: string) => `<li>${c}</li>`).join('')}
-      </ul>
+      <div style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
+            <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
+            ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
+        </div>
+        <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">
+          ${(log.changes || []).map((c: string) => `<li style="margin-bottom: 4px; line-height: 1.4;">${c}</li>`).join('')}
+        </ul>
+      </div>
     `).join('');
 };
 
@@ -101,18 +106,26 @@ export async function renderSettingsUi() {
         }
 
         // 2. 注入 HTML 卡片
+        let ssContainer = document.getElementById('ss-helper-plugins-container');
+        if (!ssContainer) {
+            ssContainer = document.createElement('div');
+            ssContainer.id = 'ss-helper-plugins-container';
+            ssContainer.className = 'ss-helper-plugins-container';
+            container.prepend(ssContainer);
+        }
+
         let cardWrapper = document.getElementById(IDS.cardId);
         if (!cardWrapper) {
             cardWrapper = document.createElement('div');
             cardWrapper.id = IDS.cardId;
             cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
-            container.appendChild(cardWrapper);
+            ssContainer.appendChild(cardWrapper);
         }
 
         // 3. 绑定内部交互逻辑
         bindUiEvents();
     } catch (error) {
-        console.error(`[LLMHub] UI 渲染失败:`, error);
+        console.error(`UI 渲染失败:`, error);
     }
 }
 
@@ -221,7 +234,34 @@ function bindUiEvents() {
     };
 
     // 绑定 LLM Hub 总开关
-    bindToggle(IDS.enabledId, 'enabled');
+    bindToggle(IDS.enabledId, 'enabled', (val) => {
+        // 利用刚建立的高级总线进行状态更新广播
+        const globalBus = (window as any).STX?.bus;
+        if (globalBus) {
+            globalBus.emit('plugin:broadcast:state_changed', {
+                v: 1, type: 'broadcast',
+                topic: 'plugin:broadcast:state_changed',
+                from: 'stx_llmhub',
+                ts: Date.now(),
+                data: { isEnabled: val }
+            });
+        }
+    });
+
+    // 页面加载时自动向外投递一次当前缓存的状态，补偿早于我们监听的相关方
+    const currentEnabled = stContext.extensionSettings?.['stx_llmhub']?.enabled === true;
+    setTimeout(() => {
+        const globalBus = (window as any).STX?.bus;
+        if (globalBus) {
+            globalBus.emit('plugin:broadcast:state_changed', {
+                v: 1, type: 'broadcast',
+                topic: 'plugin:broadcast:state_changed',
+                from: 'stx_llmhub',
+                ts: Date.now(),
+                data: { isEnabled: currentEnabled }
+            });
+        }
+    }, 500);
     // 绑定 全局配置覆盖
     bindToggle(IDS.globalProfileId, 'globalProfile');
 }

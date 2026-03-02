@@ -7,9 +7,11 @@
         "build:watch": "node build.js --watch",
         "build:memory": "node build.js MemoryOS",
         "build:llm": "node build.js LLMHub",
+        "build:roll": "node build.js RollHelper",
         "watch:memory": "node build.js MemoryOS --watch",
         "watch:llm": "node build.js LLMHub --watch",
-        "clean": "rm -rf MemoryOS/dist LLMHub/dist"
+        "watch:roll": "node build.js RollHelper --watch",
+        "clean": "rm -rf MemoryOS/dist LLMHub/dist RollHelper/dist"
     },
     "devDependencies": {
         "esbuild": "^0.23.0"

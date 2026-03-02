@@ -1,6 +1,7 @@
 [
     {
         "version": "v1.0.0",
+        "date": "2024-03-02",
         "changes": [
             "⚡ 初版正式发布，接入 SillyTavern 核心",
             "🧠 完成 Dexie 本地向量数据库基础设施",

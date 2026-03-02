@@ -1,4 +1,4 @@
-export {}; // 确保识别为 module
+export { }; // 确保识别为 module
 
 // -- Event Envelope Wrapper --
 export type EventEnvelope<T = any> = {
@@ -113,6 +113,13 @@ declare global {
       memory: MemorySDK;
       llm: LLMSDK;
       registry: STXRegistry;
+    };
+    toastr: {
+      success(msg: string, title?: string, options?: any): void;
+      info(msg: string, title?: string, options?: any): void;
+      warning(msg: string, title?: string, options?: any): void;
+      error(msg: string, title?: string, options?: any): void;
+      clear(): void;
     };
   }
 }

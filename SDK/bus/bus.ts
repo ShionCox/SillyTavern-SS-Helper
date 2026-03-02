@@ -1,4 +1,4 @@
-import type { STXBus, EventEnvelope } from '../../../SDK/stx';
+import type { STXBus, EventEnvelope } from '../stx';
 
 export class EventBus implements STXBus {
     private handlers: Map<string, Array<(evt: EventEnvelope<any>) => void>> = new Map();

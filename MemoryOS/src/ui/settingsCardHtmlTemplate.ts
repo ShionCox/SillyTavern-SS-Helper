@@ -64,7 +64,10 @@ export function buildSettingsCardHtmlTemplate(
 
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="ai mode rule extraction">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">启用 AI 模式</div>
+              <div class="stx-ui-item-title">
+                启用 AI 模式
+                <i id="${ids.aiModeStatusLightId}" class="fa-solid fa-circle-question" style="color: #666; font-size: 11px; margin-left: 6px;" title="通信中..."></i>
+              </div>
               <div class="stx-ui-item-desc">开启后将使用大模型分析事件并进行事实抽取，关闭则仅使用基础 Rule 模式（快速压缩）。</div>
             </div>
             <div class="stx-ui-inline">
@@ -127,6 +130,17 @@ export function buildSettingsCardHtmlTemplate(
               <button id="${ids.dbCompactBtnId}" type="button" class="stx-ui-btn">立即压缩</button>
               <button id="${ids.dbExportBtnId}" type="button" class="stx-ui-btn secondary">导出记忆包</button>
               <button id="${ids.dbClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
+            </div>
+          </div>
+          
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="bus inspector connection test ping hello">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">微服务通讯自测 (Bus Inspector)</div>
+              <div class="stx-ui-item-desc">手动诊断 MemoryOS 与 LLMHub 间网络层通信状态。结果将反馈至 F12 控制台供详尽追溯 (P2-3)。</div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.testPingBtnId}" type="button" class="stx-ui-btn secondary">发送 Ping 测试</button>
+              <button id="${ids.testHelloBtnId}" type="button" class="stx-ui-btn secondary" style="border-color: rgba(140, 235, 140, 0.4);">向 LLMHub Hello</button>
             </div>
           </div>
         </div>

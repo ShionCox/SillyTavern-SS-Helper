@@ -32,9 +32,14 @@ export interface MemoryOSSettingsIds {
     // Settings Controls
     enabledId: string;
     aiModeEnabledId: string;
+    aiModeStatusLightId: string; // [P0-4] 连接灯状态指标
     autoCompactionId: string;
     compactionThresholdId: string;
     contextMaxTokensId: string;
+
+    // 网络自检及工具 (P2-3)
+    testPingBtnId: string;
+    testHelloBtnId: string;
 
     // DB Actions
     dbCompactBtnId: string;
@@ -53,4 +58,6 @@ export interface MemoryOSSettingsIds {
     logicTableEntitySelectId: string;
     logicTableRefreshBtnId: string;
     logicTableContainerId: string;
+    // 记录编辑器
+    recordEditorBtnId: string;
 }

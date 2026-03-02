@@ -47,6 +47,12 @@ const allBuilds = [
         ...baseOptions,
         entryPoints: ['LLMHub/src/index.ts'],
         outfile: 'LLMHub/dist/index.js',
+    },
+    {
+        name: 'RollHelper',
+        ...baseOptions,
+        entryPoints: ['RollHelper/index.ts'],
+        outfile: 'RollHelper/dist/index.js',
     }
 ];
 

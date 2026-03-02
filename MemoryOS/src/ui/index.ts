@@ -3,6 +3,8 @@ import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
+import { request, subscribe, logger, toast } from '../index';
+
 
 // UI 组件的唯一命名空间
 const NAMESPACE = 'stx-memoryos';
@@ -12,10 +14,15 @@ const generateChangelogHtml = () => {
     if (!Array.isArray(changelogData) || changelogData.length === 0) return '暂无更新记录';
 
     return changelogData.map(log => `
-      <strong>${log.version}</strong>
-      <ul>
-        ${(log.changes || []).map((c: string) => `<li>${c}</li>`).join('')}
-      </ul>
+      <div style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
+            <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
+            ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
+        </div>
+        <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">
+          ${log.changes.map((c: string) => `<li style="margin-bottom: 4px; line-height: 1.4;">${c}</li>`).join('')}
+        </ul>
+      </div>
     `).join('');
 };
 
@@ -46,6 +53,9 @@ const IDS: MemoryOSSettingsIds = {
 
     enabledId: `${NAMESPACE}-enabled`,
     aiModeEnabledId: `${NAMESPACE}-ai-mode`,
+    aiModeStatusLightId: `${NAMESPACE}-ai-mode-status-light`,
+    testPingBtnId: `${NAMESPACE}-test-ping-btn`,
+    testHelloBtnId: `${NAMESPACE}-test-hello-btn`,
     autoCompactionId: `${NAMESPACE}-auto-compaction`,
     compactionThresholdId: `${NAMESPACE}-compaction-threshold`,
     contextMaxTokensId: `${NAMESPACE}-context-max-tokens`,
@@ -126,7 +136,16 @@ export async function renderSettingsUi() {
             cardWrapper = document.createElement('div');
             cardWrapper.id = IDS.cardId;
             cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
-            container.appendChild(cardWrapper);
+
+            // 寻找或创建专用的容器
+            let ssContainer = document.getElementById('ss-helper-plugins-container');
+            if (!ssContainer) {
+                ssContainer = document.createElement('div');
+                ssContainer.id = 'ss-helper-plugins-container';
+                ssContainer.className = 'ss-helper-plugins-container';
+                container.prepend(ssContainer);
+            }
+            ssContainer.appendChild(cardWrapper);
         }
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
@@ -223,33 +242,111 @@ function bindUiEvents() {
     // 绑定总开关
     bindToggle(IDS.enabledId, 'enabled');
 
-    // 绑定 AI 模式开关 (带有 STX.llm 防呆检测)
+    // ==========================================
+    // ==== [P0-4] 微服务通讯三态连接灯与逻辑接管 ====
+    // ==========================================
     const aiToggleEl = document.getElementById(IDS.aiModeEnabledId) as HTMLInputElement;
-    if (aiToggleEl) {
-        // Init state
-        if (stContext.extensionSettings) {
-            const extSet = stContext.extensionSettings['stx_memory_os'] || {};
-            aiToggleEl.checked = extSet['aiMode'] === true;
-        }
+    const aiLightEl = document.getElementById(IDS.aiModeStatusLightId);
 
-        aiToggleEl.addEventListener('change', (e) => {
-            const checked = aiToggleEl.checked;
-            // 如果想开启 AI，则必须检测是否连通大局 LLMHub
-            if (checked) {
-                const hasLLM = !!(window as any).STX?.llm;
-                if (!hasLLM) {
-                    alert('[MemoryOS] 无法启用 AI 能力：未检测到正在运行的 LLM Hub 插件！请确认您已安装并开启它。');
-                    aiToggleEl.checked = false;
-                    return;
+    // 初始化 UI 开关
+    if (aiToggleEl && stContext.extensionSettings) {
+        const extSet = stContext.extensionSettings['stx_memory_os'] || {};
+        aiToggleEl.checked = extSet['aiMode'] === true;
+    }
+
+    // 更新界面状态灯（提供绿Connected / 红Disconnected 变换）
+    const updateLinkStatus = (alive: boolean, isEnabled: boolean) => {
+        if (!aiLightEl || !aiToggleEl) return;
+        if (alive && isEnabled) {
+            aiLightEl.className = 'fa-solid fa-link';
+            aiLightEl.style.color = '#8ceb8c'; // 绿灯运行
+            aiLightEl.title = 'LLMHub 通信正常';
+            aiToggleEl.disabled = false;
+        } else {
+            aiLightEl.className = 'fa-solid fa-link-slash';
+            aiLightEl.style.color = '#ff8787'; // 红灯断锁
+            aiLightEl.title = alive ? 'LLMHub 服务已关闭' : '未检测到 LLMHub';
+            aiToggleEl.checked = false;
+            aiToggleEl.disabled = true; // 强力闭锁
+            const extSet = stContext.extensionSettings?.['stx_memory_os'] || {};
+            extSet['aiMode'] = false; // 联动存表
+        }
+    };
+
+    // 1. 初始化时主动侦测 Ping (跨插件加载可能存在异步时差，必须重试补偿)
+    const checkLLMHubStatus = (retries = 5) => {
+        request('plugin:request:ping', {}, 'stx_memory_os', { to: 'stx_llmhub', timeoutMs: 2000 })
+            .then(res => updateLinkStatus(res.alive, res.isEnabled))
+            .catch(e => {
+                if (retries > 0) {
+                    logger.warn(`[Network] LLMHub 仍未接管通讯总线 (${e.message})，等候重试... 剩余次数: ${retries}`);
+                    setTimeout(() => checkLLMHubStatus(retries - 1), 2500);
+                } else {
+                    logger.error('[Network] 彻底放弃探寻 LLMHub 实例', e);
+                    updateLinkStatus(false, false);
                 }
+            });
+    };
+    checkLLMHubStatus();
+
+    // 2. 长程订阅广播：如果探测途中对方开关发生变化，实时追随打断操作！
+    // P0-5 防漏回收：我们将其绑定在内部单例生命周期（由于暂且没有显式销毁，跟随页面生存）
+    const unsub = subscribe('plugin:broadcast:state_changed', (data: any) => {
+        // 如果开关开启，我们假定活着；如果是关闭那也直接设死
+        updateLinkStatus(true, !!data?.isEnabled);
+    }, { from: 'stx_llmhub' });
+
+    // 3. 用户主观点击操作反馈
+    if (aiToggleEl) {
+        aiToggleEl.addEventListener('change', (e) => {
+            if (aiToggleEl.disabled) {
+                e.preventDefault();
+                aiToggleEl.checked = false;
+                toast.warning('微服务桥接失败：LLMHub 尚未启用或运行异常，无法使用 AI 集成功能。');
+                return;
             }
 
             if (stContext.extensionSettings) {
-                if (!stContext.extensionSettings['stx_memory_os']) {
-                    stContext.extensionSettings['stx_memory_os'] = {};
-                }
+                if (!stContext.extensionSettings['stx_memory_os']) stContext.extensionSettings['stx_memory_os'] = {};
                 stContext.extensionSettings['stx_memory_os']['aiMode'] = aiToggleEl.checked;
                 stContext.saveSettingsDebounced?.();
+            }
+        });
+    }
+
+    // ==========================================
+    // ==== [P2-3] 微服务通讯自检台 (Bus Inspector) ====
+    // ==========================================
+    const pingBtn = document.getElementById(IDS.testPingBtnId);
+    if (pingBtn) {
+        pingBtn.addEventListener('click', async () => {
+            pingBtn.textContent = '探测中...';
+            try {
+                const res = await request('plugin:request:ping', {}, 'stx_memory_os', { to: 'stx_llmhub' });
+                toast.success('网络 Ping 通成功！耗时及详情已打印至控制台。');
+                logger.info('[Bus Inspector Ping]', res);
+            } catch (e: any) {
+                toast.error('网络探测不通，错误详情看控制台。');
+                logger.error('[Bus Inspector Error]', e);
+            } finally {
+                pingBtn.textContent = '发送 Ping 测试';
+            }
+        });
+    }
+
+    const helloBtn = document.getElementById(IDS.testHelloBtnId);
+    if (helloBtn) {
+        helloBtn.addEventListener('click', async () => {
+            helloBtn.textContent = '呼叫中...';
+            try {
+                const res = await request('plugin:request:hello', { testPayload: 'From MemoryOS Inspector' }, 'stx_memory_os', { to: 'stx_llmhub' });
+                toast.success('双向握手完成 (Hello OK)。详情见控制台。');
+                logger.success('[Bus Inspector Hello Reply]', res);
+            } catch (e: any) {
+                toast.error('请求 LLM 枢纽被拒绝或超时，详见控制台。');
+                logger.error('[Bus Inspector Error]', e);
+            } finally {
+                helloBtn.textContent = '向 LLMHub Hello';
             }
         });
     }

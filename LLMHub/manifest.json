@@ -1,12 +1,12 @@
 {
     "display_name": "SS-Helper [AI 调度中枢]",
-    "loading_order": 2,
+    "loading_order": -10,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "author": "Shion",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "auto_update": false,
-    "homePage": "#",
+    "homePage": "https://github.com/ShionCox/SillyTavern-SS-Helper",
     "email": "348591466@qq.com"
 }
