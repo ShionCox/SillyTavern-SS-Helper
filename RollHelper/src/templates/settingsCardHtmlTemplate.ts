@@ -366,7 +366,8 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
       </div>
     </div>
 
-    <dialog id="${ids.statusModalId}" class="st-roll-status-modal">
+    <!--
+    <dialog id="${ids.statusModalId}__legacy_hidden" class="st-roll-status-modal" hidden>
       <div class="st-roll-status-modal-backdrop" data-status-modal-role="backdrop"></div>
       <div class="st-roll-status-modal-panel">
         <div class="st-roll-status-modal-head">
@@ -391,6 +392,65 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             <span>名称</span><span>修正</span><span>持续轮次</span><span>范围</span><span>技能列表（用 | 分隔）</span><span>启用</span><span>操作</span>
           </div>
           <div id="${ids.statusRowsId}" class="st-roll-status-rows"></div>
+        </div>
+      </div>
+    </dialog>
+    -->
+
+    <dialog id="${ids.statusModalId}" class="st-roll-status-modal">
+      <div class="st-roll-status-modal-backdrop" data-status-modal-role="backdrop"></div>
+      <div class="st-roll-status-modal-panel">
+        <div class="st-roll-status-modal-head">
+          <div class="st-roll-status-modal-title">
+            <i class="fa-solid fa-heart-pulse"></i><span>状态编辑器</span>
+          </div>
+          <button id="${ids.statusModalCloseId}" type="button" class="st-roll-btn secondary st-roll-status-modal-close">关闭</button>
+        </div>
+        <div class="st-roll-status-modal-body">
+          <div id="${ids.statusLayoutId}" class="st-roll-status-layout">
+            <aside id="${ids.statusSidebarId}" class="st-roll-status-sidebar">
+              <div class="st-roll-status-sidebar-head">
+                <span class="st-roll-field-label">聊天列表</span>
+                <span id="${ids.statusMemoryStateId}" class="st-roll-status-memory-state">记忆库：检测中</span>
+              </div>
+              <div id="${ids.statusChatListId}" class="st-roll-status-chat-list"></div>
+            </aside>
+            <div
+              id="${ids.statusSplitterId}"
+              class="st-roll-status-splitter"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整聊天侧栏宽度"
+            ></div>
+            <section class="st-roll-status-main">
+              <div class="st-roll-tip">
+                说明：名称必填；修正值必须为整数；范围为“按技能”时，技能列表不能为空。
+              </div>
+              <div id="${ids.statusDirtyHintId}" class="st-roll-status-dirty" hidden>当前聊天有未保存修改。</div>
+              <div id="${ids.statusErrorsId}" class="st-roll-status-errors" hidden></div>
+              <div class="st-roll-status-head">
+                <div class="st-roll-status-head-main">
+                  <span class="st-roll-field-label">Active_Statuses（按聊天隔离）</span>
+                  <div id="${ids.statusChatMetaId}" class="st-roll-status-chat-meta">未选择聊天</div>
+                </div>
+                <div class="st-roll-actions">
+                  <button id="${ids.statusAddId}" type="button" class="st-roll-btn">新增状态</button>
+                  <button id="${ids.statusSaveId}" type="button" class="st-roll-btn">保存</button>
+                  <button id="${ids.statusResetId}" type="button" class="st-roll-btn secondary">重置</button>
+                </div>
+              </div>
+              <div id="${ids.statusColsId}" class="st-roll-status-cols">
+                <span class="st-roll-status-col-head" data-status-col-key="name">名称<div class="st-roll-status-col-resizer" data-status-col-resize-key="name"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="modifier">修正<div class="st-roll-status-col-resizer" data-status-col-resize-key="modifier"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="duration">轮次<div class="st-roll-status-col-resizer" data-status-col-resize-key="duration"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="scope">范围<div class="st-roll-status-col-resizer" data-status-col-resize-key="scope"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="skills">技能（|）<div class="st-roll-status-col-resizer" data-status-col-resize-key="skills"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="enabled">启用<div class="st-roll-status-col-resizer" data-status-col-resize-key="enabled"></div></span>
+                <span class="st-roll-status-col-head" data-status-col-key="actions">操作</span>
+              </div>
+              <div id="${ids.statusRowsId}" class="st-roll-status-rows"></div>
+            </section>
+          </div>
         </div>
       </div>
     </dialog>

@@ -280,6 +280,20 @@ function formatAdvantageStateForCardEvent(raw: any): string {
   return "正常";
 }
 
+function toDomIdTokenEvent(raw: string): string {
+  const normalized = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (normalized) return normalized.slice(0, 64);
+  const fallback = Math.abs(
+    Array.from(String(raw ?? "id")).reduce((acc, ch) => ((acc * 31 + ch.charCodeAt(0)) | 0), 7)
+  );
+  return `id-${fallback}`;
+}
+
 export interface BuildEventListCardDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
   getDiceMetaEvent: () => DiceMetaEvent;
@@ -328,8 +342,11 @@ export interface BuildEventListCardDepsEvent {
     buttonStateStyle: string;
   }) => string;
   buildEventListItemTemplateEvent: (params: {
+    detailsIdAttr: string;
     titleHtml: string;
     eventIdHtml: string;
+    collapsedCheckHtml: string;
+    collapsedRuntimeHtml: string;
     descHtml: string;
     targetHtml: string;
     skillHtml: string;
@@ -372,6 +389,9 @@ export function buildEventListCardEvent(
       const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
       const runtime = deps.getEventRuntimeViewStateEvent(round, event, Date.now());
       const runtimeStyle = deps.getRuntimeToneStyleEvent(runtime.tone);
+      const detailsIdAttr = deps.escapeAttrEvent(
+        `st-rh-event-${toDomIdTokenEvent(round.roundId)}-${toDomIdTokenEvent(event.id)}-details`
+      );
 
       const rolledPrefix = deps.buildEventRolledPrefixTemplateEvent(
         lastRecord?.source === "timeout_auto_fail"
@@ -464,8 +484,11 @@ export function buildEventListCardEvent(
         : "";
 
       return deps.buildEventListItemTemplateEvent({
+        detailsIdAttr,
         titleHtml: deps.escapeHtmlEvent(event.title),
         eventIdHtml: deps.escapeHtmlEvent(event.id),
+        collapsedCheckHtml: deps.escapeHtmlEvent(`${event.checkDice} ${compare} ${String(event.dc)}`),
+        collapsedRuntimeHtml: deps.escapeHtmlEvent(runtime.text),
         descHtml: deps.escapeHtmlEvent(event.desc),
         targetHtml: deps.escapeHtmlEvent(event.targetLabel),
         skillHtml: deps.escapeHtmlEvent(event.skill),
@@ -712,6 +735,12 @@ export interface BuildEventRollResultCardDepsEvent {
   buildRollsSummaryTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
   formatModifier: (mod: number) => string;
   buildEventRollResultCardTemplateEvent: (params: {
+    detailsIdAttr: string;
+    collapsedStatusHtml: string;
+    collapsedConditionHtml: string;
+    collapsedSourceHtml: string;
+    collapsedTotalHtml: string;
+    collapsedDiceVisualHtml: string;
     rollIdHtml: string;
     titleHtml: string;
     eventIdHtml: string;
@@ -808,7 +837,7 @@ export function buildEventRollResultCardEvent(
           getRollingSvg: deps.getRollingSvg,
           buildAlreadyRolledDiceVisualTemplateEvent: deps.buildAlreadyRolledDiceVisualTemplateEvent,
         },
-        true,
+        false,
         diceTooltipText
       );
   const modifierBreakdownText =
@@ -845,8 +874,26 @@ export function buildEventRollResultCardEvent(
         : ""
       }`
       : "";
+  const detailsIdAttr = deps.escapeAttrEvent(
+    `st-rh-result-${toDomIdTokenEvent(record.rollId)}-details`
+  );
+  const collapsedCondition = `${record.compareUsed} ${String(record.dcUsed ?? "未设置")}`;
+  const collapsedDiceVisualHtml =
+    record.source === "timeout_auto_fail"
+      ? ""
+      : buildFinalTotalDiceVisualEvent(
+        Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : 0,
+        statusColor,
+        48
+      );
 
   return deps.buildEventRollResultCardTemplateEvent({
+    detailsIdAttr,
+    collapsedStatusHtml: deps.escapeHtmlEvent(status),
+    collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
+    collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
+    collapsedTotalHtml: deps.escapeHtmlEvent(String(record.result.total)),
+    collapsedDiceVisualHtml,
     rollIdHtml: deps.escapeHtmlEvent(record.rollId),
     titleHtml: deps.escapeHtmlEvent(event.title),
     eventIdHtml: deps.escapeHtmlEvent(event.id),
@@ -900,6 +947,11 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
   buildEventDistributionBlockTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
   buildEventTimeoutAtBlockTemplateEvent: (timeoutIsoHtml: string) => string;
   buildEventAlreadyRolledCardTemplateEvent: (params: {
+    detailsIdAttr: string;
+    collapsedStatusHtml: string;
+    collapsedConditionHtml: string;
+    collapsedSourceHtml: string;
+    collapsedDiceVisualHtml: string;
     titleTextHtml: string;
     rollIdHtml: string;
     eventTitleHtml: string;
@@ -1032,8 +1084,24 @@ export function buildEventAlreadyRolledCardEvent(
       deps.escapeHtmlEvent(new Date(record.timeoutAt).toISOString())
     )
     : "";
+  const detailsIdAttr = deps.escapeAttrEvent(
+    `st-rh-already-${toDomIdTokenEvent(record.rollId)}-details`
+  );
+  const collapsedCondition = `${record.compareUsed} ${String(record.dcUsed ?? "未设置")}`;
+  const collapsedDiceVisualHtml = isTimeout
+    ? ""
+    : buildFinalTotalDiceVisualEvent(
+      Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : 0,
+      statusColor,
+      40
+    );
 
   return deps.buildEventAlreadyRolledCardTemplateEvent({
+    detailsIdAttr,
+    collapsedStatusHtml: deps.escapeHtmlEvent(statusText),
+    collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
+    collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
+    collapsedDiceVisualHtml,
     titleTextHtml: titleText,
     rollIdHtml: deps.escapeHtmlEvent(record.rollId),
     eventTitleHtml: deps.escapeHtmlEvent(event.title),

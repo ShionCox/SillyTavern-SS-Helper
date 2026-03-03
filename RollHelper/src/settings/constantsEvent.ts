@@ -23,6 +23,13 @@ export const SETTINGS_STATUS_SAVE_ID_Event = "st-roll-settings-Event-status-save
 export const SETTINGS_STATUS_RESET_ID_Event = "st-roll-settings-Event-status-reset";
 export const SETTINGS_STATUS_ERRORS_ID_Event = "st-roll-settings-Event-status-errors";
 export const SETTINGS_STATUS_DIRTY_HINT_ID_Event = "st-roll-settings-Event-status-dirty-hint";
+export const SETTINGS_STATUS_LAYOUT_ID_Event = "st-roll-settings-Event-status-layout";
+export const SETTINGS_STATUS_SIDEBAR_ID_Event = "st-roll-settings-Event-status-sidebar";
+export const SETTINGS_STATUS_SPLITTER_ID_Event = "st-roll-settings-Event-status-splitter";
+export const SETTINGS_STATUS_CHAT_LIST_ID_Event = "st-roll-settings-Event-status-chat-list";
+export const SETTINGS_STATUS_CHAT_META_ID_Event = "st-roll-settings-Event-status-chat-meta";
+export const SETTINGS_STATUS_COLS_ID_Event = "st-roll-settings-Event-status-cols";
+export const SETTINGS_STATUS_MEMORY_STATE_ID_Event = "st-roll-settings-Event-status-memory-state";
 export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allowed-dice-sides";
 export const SETTINGS_SUMMARY_DETAIL_ID_Event = "st-roll-settings-Event-summary-detail";
 export const SETTINGS_SUMMARY_ROUNDS_ID_Event = "st-roll-settings-Event-summary-rounds";
@@ -134,6 +141,13 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_RESET_ID_Event,
   SETTINGS_STATUS_ERRORS_ID_Event,
   SETTINGS_STATUS_DIRTY_HINT_ID_Event,
+  SETTINGS_STATUS_LAYOUT_ID_Event,
+  SETTINGS_STATUS_SIDEBAR_ID_Event,
+  SETTINGS_STATUS_SPLITTER_ID_Event,
+  SETTINGS_STATUS_CHAT_LIST_ID_Event,
+  SETTINGS_STATUS_CHAT_META_ID_Event,
+  SETTINGS_STATUS_COLS_ID_Event,
+  SETTINGS_STATUS_MEMORY_STATE_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,

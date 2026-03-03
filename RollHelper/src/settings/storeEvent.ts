@@ -17,10 +17,14 @@ import {
   saveSettingsDebounced,
 } from "../core/runtimeContextEvent";
 import {
+  type ChatScopedStateSummaryEvent,
+  listChatScopedStateSummariesEvent,
   loadChatScopedState,
+  loadStatusesByChatKeyEvent,
   resolveChatKey,
   saveSkillStore,
   saveStatuses,
+  saveStatusesByChatKeyEvent,
 } from "../persistence/chatScopedStoreEvent";
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
@@ -75,6 +79,32 @@ function persistStatusesToChatScopedEvent(statuses: ActiveStatusEvent[]): void {
 export function getActiveChatKeyEvent(): string {
   if (ACTIVE_CHAT_KEY_Event) return ACTIVE_CHAT_KEY_Event;
   return resolveCurrentChatKeyEvent();
+}
+
+export interface ChatScopedStatusSummaryEvent {
+  chatKey: string;
+  updatedAt: number;
+  activeStatusCount: number;
+}
+
+export async function listChatScopedStatusSummariesEvent(): Promise<ChatScopedStatusSummaryEvent[]> {
+  const list = (await listChatScopedStateSummariesEvent()) as ChatScopedStateSummaryEvent[];
+  return list.map((item) => ({
+    chatKey: String(item.chatKey ?? "").trim(),
+    updatedAt: Number(item.updatedAt) || 0,
+    activeStatusCount: Number(item.activeStatusCount) || 0,
+  }));
+}
+
+export async function loadStatusesForChatKeyEvent(chatKey: string): Promise<ActiveStatusEvent[]> {
+  return normalizeActiveStatusesFromEvent(await loadStatusesByChatKeyEvent(chatKey));
+}
+
+export async function saveStatusesForChatKeyEvent(
+  chatKey: string,
+  statuses: ActiveStatusEvent[]
+): Promise<void> {
+  await saveStatusesByChatKeyEvent(chatKey, normalizeActiveStatusesFromEvent(statuses));
 }
 
 export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {

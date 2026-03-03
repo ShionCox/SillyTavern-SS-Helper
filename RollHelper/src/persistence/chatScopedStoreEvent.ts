@@ -38,6 +38,12 @@ export interface ChatScopedStateUpsertEvent {
   updatedAt?: number;
 }
 
+export interface ChatScopedStateSummaryEvent {
+  chatKey: string;
+  updatedAt: number;
+  activeStatusCount: number;
+}
+
 function normalizeKeyPartEvent(raw: unknown, fallback: string): string {
   const text = String(raw ?? "").trim();
   if (!text) return fallback;
@@ -177,6 +183,49 @@ async function readRecordFromDbEvent(chatKey: string): Promise<ChatScopedStateRe
   });
 }
 
+async function readAllRecordsFromDbEvent(): Promise<ChatScopedStateRecordEvent[]> {
+  const db = await openDbEvent();
+  if (!db) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(CHAT_SCOPED_STORE_NAME_Event, "readonly");
+      const store = tx.objectStore(CHAT_SCOPED_STORE_NAME_Event);
+      const rows: ChatScopedStateRecordEvent[] = [];
+
+      if (typeof store.getAll === "function") {
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const list = Array.isArray(req.result) ? req.result : [];
+          resolve(list.map((item) => normalizeRecordEvent(item, "fallback_chat::no_group::default_role")));
+        };
+        req.onerror = () => {
+          logger.warn("聊天级状态：批量读取失败", req.error);
+          resolve([]);
+        };
+        return;
+      }
+
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor) {
+          resolve(rows);
+          return;
+        }
+        rows.push(normalizeRecordEvent(cursor.value, "fallback_chat::no_group::default_role"));
+        cursor.continue();
+      };
+      cursorReq.onerror = () => {
+        logger.warn("聊天级状态：游标读取失败", cursorReq.error);
+        resolve([]);
+      };
+    } catch (error) {
+      logger.warn("聊天级状态：批量读取异常", error);
+      resolve([]);
+    }
+  });
+}
+
 async function writeRecordToDbEvent(record: ChatScopedStateRecordEvent): Promise<boolean> {
   const db = await openDbEvent();
   if (!db) return false;
@@ -307,4 +356,45 @@ export async function saveStatuses(chatKey: string, activeStatuses: ActiveStatus
     activeStatuses,
     updatedAt: Date.now(),
   });
+}
+
+export async function loadStatusesByChatKeyEvent(chatKeyRaw: string): Promise<ActiveStatusEvent[]> {
+  const state = await loadChatScopedState(chatKeyRaw);
+  return normalizeActiveStatusesEvent(state.activeStatuses);
+}
+
+export async function saveStatusesByChatKeyEvent(
+  chatKeyRaw: string,
+  activeStatuses: ActiveStatusEvent[]
+): Promise<void> {
+  await saveStatuses(chatKeyRaw, normalizeActiveStatusesEvent(activeStatuses));
+}
+
+export async function listChatScopedStateSummariesEvent(): Promise<ChatScopedStateSummaryEvent[]> {
+  const merged = new Map<string, ChatScopedStateSummaryEvent>();
+
+  for (const [chatKey, record] of CHAT_SCOPED_CACHE_Event.entries()) {
+    merged.set(chatKey, {
+      chatKey,
+      updatedAt: Number(record.updatedAt) || 0,
+      activeStatusCount: Array.isArray(record.activeStatuses) ? record.activeStatuses.length : 0,
+    });
+  }
+
+  const fromDb = await readAllRecordsFromDbEvent();
+  for (const record of fromDb) {
+    const chatKey = String(record.chatKey ?? "").trim();
+    if (!chatKey) continue;
+    const nextSummary: ChatScopedStateSummaryEvent = {
+      chatKey,
+      updatedAt: Number(record.updatedAt) || 0,
+      activeStatusCount: Array.isArray(record.activeStatuses) ? record.activeStatuses.length : 0,
+    };
+    const current = merged.get(chatKey);
+    if (!current || nextSummary.updatedAt >= current.updatedAt) {
+      merged.set(chatKey, nextSummary);
+    }
+  }
+
+  return Array.from(merged.values()).sort((a, b) => b.updatedAt - a.updatedAt);
 }

@@ -709,6 +709,14 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         radial-gradient(110% 130% at 100% 0%, rgba(197, 160, 89, 0.14), transparent 56%),
         linear-gradient(160deg, rgba(23, 21, 24, 0.96), rgba(15, 14, 17, 0.96));
       box-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
+      --st-roll-status-sidebar-width: 300px;
+      --st-roll-status-col-name: 180px;
+      --st-roll-status-col-modifier: 96px;
+      --st-roll-status-col-duration: 110px;
+      --st-roll-status-col-scope: 110px;
+      --st-roll-status-col-skills: 1fr;
+      --st-roll-status-col-enabled: 96px;
+      --st-roll-status-col-actions: 84px;
     }
 
     #${cardId} .st-roll-status-modal-head {
@@ -736,8 +744,182 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-status-modal-body {
       flex: 1;
       min-height: 0;
-      overflow: auto;
+      overflow: hidden;
       padding: 12px;
+      display: flex;
+    }
+
+    #${cardId} .st-roll-status-layout {
+      display: grid;
+      grid-template-columns: var(--st-roll-status-sidebar-width) 8px minmax(0, 1fr);
+      min-height: 0;
+      height: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.18);
+      flex: 1;
+    }
+
+    #${cardId} .st-roll-status-sidebar {
+      min-width: 180px;
+      border-right: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.26);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    #${cardId} .st-roll-status-sidebar-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    #${cardId} .st-roll-status-memory-state {
+      font-size: 11px;
+      opacity: 0.82;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.35;
+      max-width: 100%;
+      flex: 1 1 100%;
+    }
+
+    #${cardId} .st-roll-status-chat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px;
+      overflow: auto;
+      min-height: 0;
+    }
+
+    #${cardId} .st-roll-status-chat-item {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 8px;
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      cursor: pointer;
+      transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    #${cardId} .st-roll-status-chat-item:hover {
+      border-color: rgba(197, 160, 89, 0.58);
+      background: rgba(197, 160, 89, 0.16);
+    }
+
+    #${cardId} .st-roll-status-chat-item.is-active {
+      border-color: rgba(197, 160, 89, 0.74);
+      background: rgba(197, 160, 89, 0.24);
+      box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.24);
+    }
+
+    #${cardId} .st-roll-status-chat-avatar-wrap {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(0, 0, 0, 0.35);
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar-fallback {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      font-size: 15px;
+      font-weight: 700;
+      color: rgba(255, 236, 201, 0.92);
+      background: linear-gradient(145deg, rgba(197, 160, 89, 0.32), rgba(197, 160, 89, 0.12));
+    }
+
+    #${cardId} .st-roll-status-chat-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      text-align: left;
+    }
+
+    #${cardId} .st-roll-status-chat-name {
+      font-size: 13px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${cardId} .st-roll-status-chat-time {
+      font-size: 11px;
+      opacity: 0.78;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${cardId} .st-roll-status-chat-key {
+      font-size: 11px;
+      opacity: 0.7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #${cardId} .st-roll-status-chat-meta-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      opacity: 0.8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #${cardId} .st-roll-status-splitter {
+      cursor: col-resize;
+      background: rgba(255, 255, 255, 0.04);
+      border-left: 1px solid rgba(255, 255, 255, 0.06);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      transition: background-color 0.2s ease;
+    }
+
+    #${cardId} .st-roll-status-splitter:hover,
+    #${cardId} .st-roll-status-splitter.is-resizing {
+      background: rgba(197, 160, 89, 0.42);
+    }
+
+    #${cardId} .st-roll-status-main {
+      padding: 10px;
+      min-width: 0;
+      min-height: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
     #${cardId} .st-roll-status-head {
@@ -750,9 +932,33 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       flex-wrap: wrap;
     }
 
+    #${cardId} .st-roll-status-head-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    #${cardId} .st-roll-status-chat-meta {
+      font-size: 11px;
+      line-height: 1.4;
+      opacity: 0.8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     #${cardId} .st-roll-status-cols {
       display: grid;
-      grid-template-columns: minmax(140px, 1fr) 96px 110px 110px minmax(180px, 1fr) 90px 74px;
+      grid-template-columns:
+        var(--st-roll-status-col-name)
+        var(--st-roll-status-col-modifier)
+        var(--st-roll-status-col-duration)
+        var(--st-roll-status-col-scope)
+        var(--st-roll-status-col-skills)
+        var(--st-roll-status-col-enabled)
+        var(--st-roll-status-col-actions);
       gap: 8px;
       font-size: 12px;
       font-weight: 700;
@@ -760,6 +966,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       margin-bottom: 6px;
       padding: 0 2px;
       align-items: center;
+      min-width: 760px;
     }
 
     #${cardId} .st-roll-status-cols span:nth-child(2),
@@ -773,13 +980,67 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: visible;
+      padding-bottom: 4px;
     }
 
     #${cardId} .st-roll-status-row {
       display: grid;
-      grid-template-columns: minmax(140px, 1fr) 96px 110px 110px minmax(180px, 1fr) 90px 74px;
+      grid-template-columns:
+        var(--st-roll-status-col-name)
+        var(--st-roll-status-col-modifier)
+        var(--st-roll-status-col-duration)
+        var(--st-roll-status-col-scope)
+        var(--st-roll-status-col-skills)
+        var(--st-roll-status-col-enabled)
+        var(--st-roll-status-col-actions);
       gap: 8px;
       align-items: center;
+      min-width: 760px;
+    }
+
+    #${cardId} .st-roll-status-col-head {
+      position: relative;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-right: 8px;
+    }
+
+    #${cardId} .st-roll-status-col-resizer {
+      position: absolute;
+      top: 0;
+      right: -4px;
+      bottom: 0;
+      width: 8px;
+      cursor: col-resize;
+      user-select: none;
+      background: transparent;
+    }
+
+    #${cardId} .st-roll-status-col-resizer::before {
+      content: "";
+      position: absolute;
+      top: 14%;
+      bottom: 14%;
+      left: 50%;
+      width: 1px;
+      transform: translateX(-50%);
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+    #${cardId} .st-roll-status-col-resizer:hover,
+    #${cardId} .st-roll-status-col-resizer.is-resizing {
+      background: rgba(197, 160, 89, 0.55);
+    }
+
+    #${cardId} .st-roll-status-col-resizer:hover::before,
+    #${cardId} .st-roll-status-col-resizer.is-resizing::before {
+      background: rgba(255, 236, 201, 0.72);
     }
 
     #${cardId} .st-roll-status-modifier,
@@ -957,6 +1218,21 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         padding: 10px;
       }
 
+      #${cardId} .st-roll-status-layout {
+        grid-template-columns: 1fr;
+        min-height: 0;
+      }
+
+      #${cardId} .st-roll-status-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        max-height: 220px;
+      }
+
+      #${cardId} .st-roll-status-splitter {
+        display: none;
+      }
+
       #${cardId} .st-roll-status-head {
         flex-direction: column;
         align-items: stretch;
@@ -980,6 +1256,12 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-remove {
         width: 100%;
+      }
+    }
+
+    @media (max-width: 768px) {
+      #${cardId} .st-roll-status-chat-meta {
+        white-space: normal;
       }
     }
   `;

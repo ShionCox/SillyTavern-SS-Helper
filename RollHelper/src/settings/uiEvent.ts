@@ -89,6 +89,13 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_RESET_ID_Event: string;
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
+  SETTINGS_STATUS_LAYOUT_ID_Event: string;
+  SETTINGS_STATUS_SIDEBAR_ID_Event: string;
+  SETTINGS_STATUS_SPLITTER_ID_Event: string;
+  SETTINGS_STATUS_CHAT_LIST_ID_Event: string;
+  SETTINGS_STATUS_CHAT_META_ID_Event: string;
+  SETTINGS_STATUS_COLS_ID_Event: string;
+  SETTINGS_STATUS_MEMORY_STATE_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
@@ -189,6 +196,13 @@ export function buildSettingsCardTemplateIdsEvent(
     statusResetId: deps.SETTINGS_STATUS_RESET_ID_Event,
     statusErrorsId: deps.SETTINGS_STATUS_ERRORS_ID_Event,
     statusDirtyHintId: deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event,
+    statusLayoutId: deps.SETTINGS_STATUS_LAYOUT_ID_Event,
+    statusSidebarId: deps.SETTINGS_STATUS_SIDEBAR_ID_Event,
+    statusSplitterId: deps.SETTINGS_STATUS_SPLITTER_ID_Event,
+    statusChatListId: deps.SETTINGS_STATUS_CHAT_LIST_ID_Event,
+    statusChatMetaId: deps.SETTINGS_STATUS_CHAT_META_ID_Event,
+    statusColsId: deps.SETTINGS_STATUS_COLS_ID_Event,
+    statusMemoryStateId: deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event,
     allowedDiceSidesId: deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
     summaryDetailId: deps.SETTINGS_SUMMARY_DETAIL_ID_Event,
     summaryRoundsId: deps.SETTINGS_SUMMARY_ROUNDS_ID_Event,
@@ -457,6 +471,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       document.body.dataset.stRollStatusModalOverflow = document.body.style.overflow || "";
       document.body.style.overflow = "hidden";
     }
+    document.dispatchEvent(new CustomEvent("st-roll-status-editor-opened"));
   };
 
   const activateTab = (tab: "main" | "skill" | "rule" | "about") => {
@@ -1066,6 +1081,55 @@ let STATUS_EDITOR_ROWS_DRAFT_Event: StatusEditorRowDraftEvent[] = [];
 let STATUS_EDITOR_LAST_SNAPSHOT_Event = "";
 let STATUS_EDITOR_DIRTY_Event = false;
 let STATUS_EDITOR_LAST_META_SNAPSHOT_Event = "";
+let STATUS_EDITOR_SELECTED_CHAT_KEY_Event = "";
+let STATUS_EDITOR_CURRENT_CHAT_KEY_Event = "";
+let STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：检测中";
+let STATUS_EDITOR_OPEN_EVENT_BOUND_Event = false;
+let STATUS_EDITOR_MEMORY_UNSUBSCRIBE_Event: (() => void) | null = null;
+let STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event = 0;
+
+type StatusEditorColKeyEvent = "name" | "modifier" | "duration" | "scope" | "skills" | "enabled" | "actions";
+
+interface StatusEditorChatListItemEvent {
+  chatKey: string;
+  updatedAt: number;
+  activeStatusCount: number;
+  isCurrent: boolean;
+  fromRollLocal: boolean;
+  fromMemory: boolean;
+}
+
+interface StatusEditorChatDraftCacheEvent {
+  rows: StatusEditorRowDraftEvent[];
+  snapshot: string;
+  metaSnapshot: string;
+  dirty: boolean;
+  updatedAt: number;
+  activeStatusCount: number;
+}
+
+const STATUS_EDITOR_CHAT_DRAFT_CACHE_Event = new Map<string, StatusEditorChatDraftCacheEvent>();
+let STATUS_EDITOR_CHAT_LIST_Event: StatusEditorChatListItemEvent[] = [];
+
+const STATUS_EDITOR_LAYOUT_STORAGE_KEY_Event = "st_roll_status_editor_layout_v1";
+const STATUS_EDITOR_COL_MIN_WIDTH_Event: Record<StatusEditorColKeyEvent, number> = {
+  name: 120,
+  modifier: 72,
+  duration: 90,
+  scope: 90,
+  skills: 160,
+  enabled: 80,
+  actions: 70,
+};
+const STATUS_EDITOR_COL_VAR_MAP_Event: Record<StatusEditorColKeyEvent, string> = {
+  name: "--st-roll-status-col-name",
+  modifier: "--st-roll-status-col-modifier",
+  duration: "--st-roll-status-col-duration",
+  scope: "--st-roll-status-col-scope",
+  skills: "--st-roll-status-col-skills",
+  enabled: "--st-roll-status-col-enabled",
+  actions: "--st-roll-status-col-actions",
+};
 
 function normalizeStatusNameKeyLocalEvent(raw: any): string {
   return String(raw ?? "").trim().toLowerCase();
@@ -1117,6 +1181,24 @@ function buildStatusDraftSnapshotEvent(rows: StatusEditorRowDraftEvent[]): strin
   );
 }
 
+function buildStatusMetaSnapshotEvent(statuses: ActiveStatusEvent[]): string {
+  return JSON.stringify(
+    (Array.isArray(statuses) ? statuses : []).map((item) => ({
+      name: String(item.name ?? ""),
+      modifier: Number(item.modifier ?? 0),
+      scope: item.scope === "all" ? "all" : "skills",
+      skills: item.scope === "all" ? [] : (Array.isArray(item.skills) ? item.skills : []),
+      remainingRounds: item.remainingRounds == null ? null : Number(item.remainingRounds),
+      enabled: item.enabled !== false,
+    }))
+  );
+}
+
+function getStatusEditorModalPanelEvent(rowsWrapId: string): HTMLElement | null {
+  const rowsWrap = document.getElementById(rowsWrapId) as HTMLElement | null;
+  return rowsWrap?.closest(".st-roll-status-modal-panel") as HTMLElement | null;
+}
+
 function renderStatusValidationErrorsEvent(errorWrapId: string, errors: string[]): void {
   const wrap = document.getElementById(errorWrapId) as HTMLElement | null;
   if (!wrap) return;
@@ -1156,7 +1238,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const skillsText = escapeAttr(String(row.skillsText ?? ""));
       const enabled = row.enabled !== false;
       const skillsDisabledAttr = scope === "all" ? "disabled" : "";
-      const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如: 敏捷|潜行";
+      const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：潜行|察觉";
       return `
         <div class="st-roll-status-row" data-row-id="${rowId}">
           <input class="st-roll-input st-roll-status-name" type="text" data-status-row-id="${rowId}" data-status-field="name" value="${name}" placeholder="状态名称" />
@@ -1311,10 +1393,525 @@ export interface BindStatusEditorActionsDepsEvent {
   SETTINGS_STATUS_RESET_ID_Event: string;
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
+  SETTINGS_STATUS_SPLITTER_ID_Event: string;
+  SETTINGS_STATUS_COLS_ID_Event: string;
+  SETTINGS_STATUS_CHAT_LIST_ID_Event: string;
+  SETTINGS_STATUS_CHAT_META_ID_Event: string;
+  SETTINGS_STATUS_MEMORY_STATE_ID_Event: string;
   getActiveStatusesEvent: () => ActiveStatusEvent[];
   setActiveStatusesEvent: (statuses: ActiveStatusEvent[]) => void;
+  getActiveChatKeyEvent: () => string;
+  listChatScopedStatusSummariesEvent: () => Promise<Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>>;
+  loadStatusesForChatKeyEvent: (chatKey: string) => Promise<ActiveStatusEvent[]>;
+  saveStatusesForChatKeyEvent: (chatKey: string, statuses: ActiveStatusEvent[]) => Promise<void>;
+  probeMemoryPluginEvent: (timeoutMs?: number) => Promise<{
+    available: boolean;
+    enabled: boolean;
+    pluginId: string;
+    version: string;
+    capabilities: string[];
+  }>;
+  fetchMemoryChatKeysEvent: (timeoutMs?: number) => Promise<{ chatKeys: string[]; updatedAt: number | null }>;
+  subscribeMemoryPluginStateEvent: (
+    handler: (payload: { enabled: boolean; pluginId: string }) => void
+  ) => () => void;
   syncSettingsUiEvent?: () => void;
   pushToChat?: (message: string) => void;
+}
+
+interface StatusEditorLayoutPrefsEvent {
+  sidebarWidth?: number;
+  columns?: Partial<Record<StatusEditorColKeyEvent, number>>;
+}
+
+function clampStatusEditorValueEvent(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readStatusEditorLayoutPrefsEvent(): StatusEditorLayoutPrefsEvent {
+  try {
+    const raw = localStorage.getItem(STATUS_EDITOR_LAYOUT_STORAGE_KEY_Event);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as StatusEditorLayoutPrefsEvent;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStatusEditorLayoutPrefsEvent(next: StatusEditorLayoutPrefsEvent): void {
+  try {
+    localStorage.setItem(STATUS_EDITOR_LAYOUT_STORAGE_KEY_Event, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
+
+function applyStatusEditorLayoutPrefsEvent(rowsWrapId: string): void {
+  const panel = getStatusEditorModalPanelEvent(rowsWrapId);
+  if (!panel) return;
+  const prefs = readStatusEditorLayoutPrefsEvent();
+  const sidebarWidth = Number(prefs.sidebarWidth);
+  if (Number.isFinite(sidebarWidth)) {
+    const clamped = clampStatusEditorValueEvent(sidebarWidth, 220, 520);
+    panel.style.setProperty("--st-roll-status-sidebar-width", `${clamped}px`);
+  }
+  const columns = prefs.columns ?? {};
+  (Object.keys(STATUS_EDITOR_COL_VAR_MAP_Event) as StatusEditorColKeyEvent[]).forEach((key) => {
+    const width = Number(columns[key]);
+    if (!Number.isFinite(width)) return;
+    const clamped = clampStatusEditorValueEvent(width, STATUS_EDITOR_COL_MIN_WIDTH_Event[key], 520);
+    panel.style.setProperty(STATUS_EDITOR_COL_VAR_MAP_Event[key], `${clamped}px`);
+  });
+}
+
+function bindStatusEditorSplitterResizeEvent(splitter: HTMLElement, rowsWrapId: string): void {
+  splitter.addEventListener("mousedown", (event) => {
+    const panel = getStatusEditorModalPanelEvent(rowsWrapId);
+    if (!panel) return;
+    event.preventDefault();
+    splitter.classList.add("is-resizing");
+
+    const startX = event.clientX;
+    const startWidth = Number.parseFloat(getComputedStyle(panel).getPropertyValue("--st-roll-status-sidebar-width")) || 300;
+    const onMove = (moveEvent: MouseEvent) => {
+      const width = clampStatusEditorValueEvent(startWidth + (moveEvent.clientX - startX), 220, 520);
+      panel.style.setProperty("--st-roll-status-sidebar-width", `${width}px`);
+    };
+    const onUp = () => {
+      splitter.classList.remove("is-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      const width = Number.parseFloat(getComputedStyle(panel).getPropertyValue("--st-roll-status-sidebar-width"));
+      if (Number.isFinite(width)) {
+        const prev = readStatusEditorLayoutPrefsEvent();
+        saveStatusEditorLayoutPrefsEvent({
+          ...prev,
+          sidebarWidth: width,
+        });
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+}
+
+function bindStatusEditorColumnResizeEvent(colsWrap: HTMLElement, rowsWrapId: string): void {
+  colsWrap.addEventListener("mousedown", (event) => {
+    const target = event.target as HTMLElement | null;
+    const handle = target?.closest<HTMLElement>("[data-status-col-resize-key]");
+    if (!handle) return;
+    const key = String(handle.dataset.statusColResizeKey ?? "") as StatusEditorColKeyEvent;
+    if (!key || !STATUS_EDITOR_COL_VAR_MAP_Event[key]) return;
+
+    const panel = getStatusEditorModalPanelEvent(rowsWrapId);
+    if (!panel) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handle.classList.add("is-resizing");
+
+    const header = colsWrap.querySelector<HTMLElement>(`[data-status-col-key="${key}"]`);
+    const startX = event.clientX;
+    const startWidth = Math.max(
+      STATUS_EDITOR_COL_MIN_WIDTH_Event[key],
+      Math.round(header?.getBoundingClientRect().width ?? STATUS_EDITOR_COL_MIN_WIDTH_Event[key])
+    );
+    const onMove = (moveEvent: MouseEvent) => {
+      const width = clampStatusEditorValueEvent(
+        startWidth + (moveEvent.clientX - startX),
+        STATUS_EDITOR_COL_MIN_WIDTH_Event[key],
+        520
+      );
+      panel.style.setProperty(STATUS_EDITOR_COL_VAR_MAP_Event[key], `${width}px`);
+    };
+    const onUp = () => {
+      handle.classList.remove("is-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      const width = Number.parseFloat(getComputedStyle(panel).getPropertyValue(STATUS_EDITOR_COL_VAR_MAP_Event[key]));
+      if (!Number.isFinite(width)) return;
+      const prev = readStatusEditorLayoutPrefsEvent();
+      saveStatusEditorLayoutPrefsEvent({
+        ...prev,
+        columns: {
+          ...(prev.columns ?? {}),
+          [key]: width,
+        },
+      });
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+}
+
+function renderStatusMemoryStateEvent(memoryStateId: string): void {
+  const node = document.getElementById(memoryStateId) as HTMLElement | null;
+  if (!node) return;
+  node.textContent = STATUS_EDITOR_MEMORY_STATE_TEXT_Event;
+}
+
+function getStatusEditorContextEvent(): any {
+  try {
+    return (window as any).SillyTavern?.getContext?.() || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStatusEditorChatKeyPartsEvent(chatKey: string): { chatId: string; roleId: string } {
+  const parts = String(chatKey ?? "").split("::");
+  return {
+    chatId: String(parts[0] ?? "").trim() || "-",
+    roleId: String(parts[2] ?? "").trim() || String(parts[0] ?? "").trim() || "未知",
+  };
+}
+
+function buildStatusEditorChatNameEvent(chatKey: string): string {
+  const { roleId } = parseStatusEditorChatKeyPartsEvent(chatKey);
+  const ctx = getStatusEditorContextEvent();
+  const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
+  let matched: any = null;
+
+  for (const char of characters) {
+    const avatarName = String(char?.avatar ?? "").trim();
+    if (!avatarName) continue;
+    if (roleId === avatarName || roleId.startsWith(avatarName + "_")) {
+      matched = char;
+      break;
+    }
+  }
+  if (!matched) {
+    for (const char of characters) {
+      const name = String(char?.name ?? "").trim();
+      if (!name) continue;
+      if (roleId.toLowerCase().includes(name.toLowerCase())) {
+        matched = char;
+        break;
+      }
+    }
+  }
+
+  if (matched?.name) return String(matched.name);
+  const noExt = roleId.replace(/\.[a-z0-9]+$/i, "");
+  const friendly = noExt.replace(/^default_/i, "").replace(/[_-]+/g, " ").trim();
+  return friendly || roleId || "未知角色";
+}
+
+function buildStatusEditorAvatarUrlEvent(chatKey: string): string {
+  const { roleId } = parseStatusEditorChatKeyPartsEvent(chatKey);
+  const ctx = getStatusEditorContextEvent();
+  const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
+  let avatarName = "";
+
+  for (const char of characters) {
+    const rawAvatar = String(char?.avatar ?? "").trim();
+    if (!rawAvatar) continue;
+    if (roleId === rawAvatar || roleId.startsWith(rawAvatar + "_")) {
+      avatarName = rawAvatar;
+      break;
+    }
+  }
+
+  if (!avatarName && /\.(png|jpe?g|webp|gif|bmp)$/i.test(roleId)) {
+    avatarName = roleId;
+  }
+
+  if (!avatarName) return "";
+  return `/characters/${encodeURIComponent(avatarName)}`;
+}
+
+function formatStatusEditorTimeEvent(ts: number): string {
+  if (!Number.isFinite(ts) || ts <= 0) return "-";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return "-";
+  }
+}
+
+function saveCurrentStatusDraftToCacheEvent(dirtyHintId: string): void {
+  const chatKey = String(STATUS_EDITOR_SELECTED_CHAT_KEY_Event ?? "").trim();
+  if (!chatKey) return;
+  STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.set(chatKey, {
+    rows: [...STATUS_EDITOR_ROWS_DRAFT_Event],
+    snapshot: STATUS_EDITOR_LAST_SNAPSHOT_Event,
+    metaSnapshot: STATUS_EDITOR_LAST_META_SNAPSHOT_Event,
+    dirty: STATUS_EDITOR_DIRTY_Event,
+    updatedAt: Date.now(),
+    activeStatusCount: STATUS_EDITOR_ROWS_DRAFT_Event.length,
+  });
+  setStatusDraftDirtyEvent(STATUS_EDITOR_DIRTY_Event, dirtyHintId);
+}
+
+function restoreStatusDraftFromCacheEvent(
+  chatKey: string,
+  rowsWrapId: string,
+  dirtyHintId: string
+): boolean {
+  const cached = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(chatKey);
+  if (!cached) return false;
+  STATUS_EDITOR_ROWS_DRAFT_Event = [...cached.rows];
+  STATUS_EDITOR_LAST_SNAPSHOT_Event = String(cached.snapshot ?? "[]");
+  STATUS_EDITOR_LAST_META_SNAPSHOT_Event = String(cached.metaSnapshot ?? "[]");
+  setStatusDraftDirtyEvent(Boolean(cached.dirty), dirtyHintId);
+  renderStatusRowsEvent(rowsWrapId);
+  return true;
+}
+
+function mergeStatusEditorChatListEvent(
+  currentChatKey: string,
+  localSummaries: Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>,
+  memoryChatKeys: string[]
+): StatusEditorChatListItemEvent[] {
+  const map = new Map<string, StatusEditorChatListItemEvent>();
+  const currentKey = String(currentChatKey ?? "").trim();
+
+  if (currentKey) {
+    map.set(currentKey, {
+      chatKey: currentKey,
+      updatedAt: Date.now(),
+      activeStatusCount: 0,
+      isCurrent: true,
+      fromRollLocal: false,
+      fromMemory: false,
+    });
+  }
+
+  for (const item of localSummaries) {
+    const key = String(item.chatKey ?? "").trim();
+    if (!key) continue;
+    const prev = map.get(key);
+    map.set(key, {
+      chatKey: key,
+      updatedAt: Math.max(Number(item.updatedAt) || 0, Number(prev?.updatedAt) || 0),
+      activeStatusCount: Number(item.activeStatusCount) || 0,
+      isCurrent: key === currentKey || Boolean(prev?.isCurrent),
+      fromRollLocal: true,
+      fromMemory: Boolean(prev?.fromMemory),
+    });
+  }
+
+  for (const keyRaw of memoryChatKeys) {
+    const key = String(keyRaw ?? "").trim();
+    if (!key) continue;
+    const prev = map.get(key);
+    map.set(key, {
+      chatKey: key,
+      updatedAt: Number(prev?.updatedAt) || 0,
+      activeStatusCount: Number(prev?.activeStatusCount) || 0,
+      isCurrent: key === currentKey || Boolean(prev?.isCurrent),
+      fromRollLocal: Boolean(prev?.fromRollLocal),
+      fromMemory: true,
+    });
+  }
+
+  for (const [key, cached] of STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.entries()) {
+    if (map.has(key)) continue;
+    map.set(key, {
+      chatKey: key,
+      updatedAt: Number(cached.updatedAt) || 0,
+      activeStatusCount: Number(cached.activeStatusCount) || 0,
+      isCurrent: key === currentKey,
+      fromRollLocal: false,
+      fromMemory: false,
+    });
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.chatKey === currentKey) return -1;
+    if (b.chatKey === currentKey) return 1;
+    const aDirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(a.chatKey)?.dirty ? 1 : 0;
+    const bDirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(b.chatKey)?.dirty ? 1 : 0;
+    if (aDirty !== bDirty) return bDirty - aDirty;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+}
+
+function renderStatusEditorChatListEvent(chatListId: string): void {
+  const node = document.getElementById(chatListId) as HTMLElement | null;
+  if (!node) return;
+  if (!STATUS_EDITOR_CHAT_LIST_Event.length) {
+    node.innerHTML = `<div class="st-roll-status-empty">暂无聊天记录。</div>`;
+    return;
+  }
+  node.innerHTML = STATUS_EDITOR_CHAT_LIST_Event.map((item) => {
+    const active = item.chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event;
+    const dirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(item.chatKey)?.dirty === true;
+    const tags: string[] = [];
+    if (item.isCurrent) tags.push("当前");
+    if (item.fromRollLocal) tags.push("本地");
+    if (item.fromMemory) tags.push("记忆库");
+    if (dirty) tags.push("未保存");
+
+    const { chatId } = parseStatusEditorChatKeyPartsEvent(item.chatKey);
+    const name = buildStatusEditorChatNameEvent(item.chatKey);
+    const avatarUrl = buildStatusEditorAvatarUrlEvent(item.chatKey);
+    const avatarFallback = escapeHtml(String(name || "未").slice(0, 1).toUpperCase());
+
+    return `
+      <button type="button" class="st-roll-status-chat-item ${active ? "is-active" : ""}" data-status-chat-key="${escapeAttr(item.chatKey)}">
+        <div class="st-roll-status-chat-avatar-wrap">
+          ${avatarUrl
+            ? `<img class="st-roll-status-chat-avatar" src="${escapeAttr(avatarUrl)}" alt="${escapeAttr(name)}" onerror="this.style.display='none'; const fb=this.nextElementSibling; if(fb){fb.style.display='grid';}" />`
+            : ""}
+          <div class="st-roll-status-chat-avatar-fallback" style="${avatarUrl ? "display:none;" : ""}">${avatarFallback}</div>
+        </div>
+        <div class="st-roll-status-chat-main">
+          <span class="st-roll-status-chat-name">${escapeHtml(name)}</span>
+          <span class="st-roll-status-chat-time">最后聊天：${escapeHtml(formatStatusEditorTimeEvent(item.updatedAt))}</span>
+          <span class="st-roll-status-chat-key">CHATID：${escapeHtml(chatId)}</span>
+          <span class="st-roll-status-chat-meta-line">${escapeHtml(tags.join(" | "))}</span>
+        </div>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderStatusEditorChatMetaEvent(chatMetaId: string): void {
+  const node = document.getElementById(chatMetaId) as HTMLElement | null;
+  if (!node) return;
+  const selectedKey = String(STATUS_EDITOR_SELECTED_CHAT_KEY_Event ?? "").trim();
+  if (!selectedKey) {
+    node.textContent = "未选择聊天";
+    return;
+  }
+  const selected = STATUS_EDITOR_CHAT_LIST_Event.find((item) => item.chatKey === selectedKey);
+  if (!selected) {
+    node.textContent = selectedKey;
+    return;
+  }
+  const tags: string[] = [];
+  if (selected.isCurrent) tags.push("当前");
+  if (selected.fromRollLocal) tags.push("本地");
+  if (selected.fromMemory) tags.push("记忆库");
+  node.textContent = `来源：${tags.join("、") || "未知"}｜状态数：${selected.activeStatusCount}`;
+}
+
+async function switchStatusEditorChatEvent(
+  chatKey: string,
+  deps: BindStatusEditorActionsDepsEvent,
+  options?: { skipSaveCurrent?: boolean }
+): Promise<void> {
+  const key = String(chatKey ?? "").trim();
+  if (!key) return;
+  if (!options?.skipSaveCurrent) {
+    saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+  }
+  STATUS_EDITOR_SELECTED_CHAT_KEY_Event = key;
+
+  const restored = restoreStatusDraftFromCacheEvent(
+    key,
+    deps.SETTINGS_STATUS_ROWS_ID_Event,
+    deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event
+  );
+  if (!restored) {
+    const currentKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+    const statuses =
+      key === currentKey
+        ? deps.getActiveStatusesEvent()
+        : await deps.loadStatusesForChatKeyEvent(key);
+    hydrateStatusDraftFromMetaEvent(
+      statuses,
+      deps.SETTINGS_STATUS_ROWS_ID_Event,
+      deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event,
+      true
+    );
+    saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+  }
+
+  renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+  renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+}
+
+async function refreshStatusEditorChatListEvent(deps: BindStatusEditorActionsDepsEvent): Promise<void> {
+  const token = ++STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event;
+  STATUS_EDITOR_CURRENT_CHAT_KEY_Event = String(deps.getActiveChatKeyEvent() ?? "").trim();
+  STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：检测中";
+  renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
+
+  const [localSummaries, probeResult] = await Promise.all([
+    deps.listChatScopedStatusSummariesEvent().catch(() => []),
+    deps.probeMemoryPluginEvent(1200).catch(() => ({
+      available: false,
+      enabled: false,
+      pluginId: "stx_memory_os",
+      version: "",
+      capabilities: [],
+    })),
+  ]);
+  if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) return;
+
+  let memoryChatKeys: string[] = [];
+  if (!probeResult.available) {
+    STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：未安装";
+  } else if (!probeResult.enabled) {
+    STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：已安装（未启用）";
+  } else {
+    STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：已启用";
+    const memoryResult = await deps.fetchMemoryChatKeysEvent(1200).catch(() => ({ chatKeys: [], updatedAt: null }));
+    if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) return;
+    memoryChatKeys = Array.isArray(memoryResult.chatKeys) ? memoryResult.chatKeys : [];
+  }
+
+  STATUS_EDITOR_CHAT_LIST_Event = mergeStatusEditorChatListEvent(
+    STATUS_EDITOR_CURRENT_CHAT_KEY_Event,
+    localSummaries,
+    memoryChatKeys
+  );
+  renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
+  renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+
+  const selectedExists = STATUS_EDITOR_CHAT_LIST_Event.some((item) => item.chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event);
+  const target =
+    (selectedExists ? STATUS_EDITOR_SELECTED_CHAT_KEY_Event : "") ||
+    STATUS_EDITOR_CURRENT_CHAT_KEY_Event ||
+    STATUS_EDITOR_CHAT_LIST_Event[0]?.chatKey ||
+    "";
+  if (!target) {
+    STATUS_EDITOR_SELECTED_CHAT_KEY_Event = "";
+    STATUS_EDITOR_ROWS_DRAFT_Event = [];
+    STATUS_EDITOR_LAST_SNAPSHOT_Event = "[]";
+    STATUS_EDITOR_LAST_META_SNAPSHOT_Event = "[]";
+    setStatusDraftDirtyEvent(false, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+    return;
+  }
+  await switchStatusEditorChatEvent(target, deps, { skipSaveCurrent: true });
+}
+
+function syncStatusEditorCurrentChatFromRuntimeEvent(deps: Pick<
+  BindStatusEditorActionsDepsEvent,
+  "SETTINGS_STATUS_ROWS_ID_Event" | "SETTINGS_STATUS_DIRTY_HINT_ID_Event" | "getActiveChatKeyEvent" | "getActiveStatusesEvent"
+>): void {
+  const currentKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+  if (!currentKey) return;
+  const cached = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(currentKey);
+  if (cached?.dirty) return;
+  const statuses = deps.getActiveStatusesEvent();
+  const rows = deserializeActiveStatusesToDraftRowsEvent(statuses);
+  const snapshot = buildStatusDraftSnapshotEvent(rows);
+  const metaSnapshot = buildStatusMetaSnapshotEvent(statuses);
+  STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.set(currentKey, {
+    rows,
+    snapshot,
+    metaSnapshot,
+    dirty: false,
+    updatedAt: Date.now(),
+    activeStatusCount: statuses.length,
+  });
+  if (STATUS_EDITOR_SELECTED_CHAT_KEY_Event && STATUS_EDITOR_SELECTED_CHAT_KEY_Event !== currentKey) return;
+  STATUS_EDITOR_SELECTED_CHAT_KEY_Event = currentKey;
+  hydrateStatusDraftFromMetaEvent(
+    statuses,
+    deps.SETTINGS_STATUS_ROWS_ID_Event,
+    deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event,
+    true
+  );
 }
 
 export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEvent): void {
@@ -1322,21 +1919,32 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   const addBtn = document.getElementById(deps.SETTINGS_STATUS_ADD_ID_Event) as HTMLButtonElement | null;
   const saveBtn = document.getElementById(deps.SETTINGS_STATUS_SAVE_ID_Event) as HTMLButtonElement | null;
   const resetBtn = document.getElementById(deps.SETTINGS_STATUS_RESET_ID_Event) as HTMLButtonElement | null;
+  const chatList = document.getElementById(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event) as HTMLElement | null;
+  const splitter = document.getElementById(deps.SETTINGS_STATUS_SPLITTER_ID_Event) as HTMLElement | null;
+  const cols = document.getElementById(deps.SETTINGS_STATUS_COLS_ID_Event) as HTMLElement | null;
+
+  if (!rowsWrap) return;
+  if (rowsWrap.dataset.statusEditorBound === "1") return;
+  rowsWrap.dataset.statusEditorBound = "1";
+
+  applyStatusEditorLayoutPrefsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+  if (splitter) bindStatusEditorSplitterResizeEvent(splitter, deps.SETTINGS_STATUS_ROWS_ID_Event);
+  if (cols) bindStatusEditorColumnResizeEvent(cols, deps.SETTINGS_STATUS_ROWS_ID_Event);
 
   const markDirty = () => {
     const next = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
     setStatusDraftDirtyEvent(next !== STATUS_EDITOR_LAST_SNAPSHOT_Event, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+    saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+    renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
   };
 
-  hydrateStatusDraftFromMetaEvent(
-    deps.getActiveStatusesEvent(),
-    deps.SETTINGS_STATUS_ROWS_ID_Event,
-    deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event,
-    true
-  );
+  syncStatusEditorCurrentChatFromRuntimeEvent(deps);
   renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+  renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
+  renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  void refreshStatusEditorChatListEvent(deps);
 
-  rowsWrap?.addEventListener("input", (event) => {
+  rowsWrap.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement | HTMLSelectElement | null;
     if (!target) return;
     const rowId = String((target as any).dataset.statusRowId ?? "");
@@ -1351,9 +1959,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     if (field === "duration") row.durationText = target.value;
     if (field === "scope") {
       row.scope = target.value === "all" ? "all" : "skills";
-      if (row.scope === "all") {
-        row.skillsText = "";
-      }
+      if (row.scope === "all") row.skillsText = "";
       renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
     }
     if (field === "enabled") {
@@ -1363,7 +1969,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
   });
 
-  rowsWrap?.addEventListener("change", (event) => {
+  rowsWrap.addEventListener("change", (event) => {
     const target = event.target as HTMLInputElement | null;
     if (!target) return;
     const rowId = String(target.dataset.statusRowId ?? "");
@@ -1376,7 +1982,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
   });
 
-  rowsWrap?.addEventListener("click", (event) => {
+  rowsWrap.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
     const removeBtn = target?.closest<HTMLButtonElement>("button[data-status-remove-id]");
     if (!removeBtn) return;
@@ -1388,6 +1994,15 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
   });
 
+  chatList?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    const item = target?.closest<HTMLButtonElement>("button[data-status-chat-key]");
+    if (!item) return;
+    const chatKey = String(item.dataset.statusChatKey ?? "").trim();
+    if (!chatKey || chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event) return;
+    void switchStatusEditorChatEvent(chatKey, deps);
+  });
+
   addBtn?.addEventListener("click", () => {
     STATUS_EDITOR_ROWS_DRAFT_Event = [...STATUS_EDITOR_ROWS_DRAFT_Event, createStatusEditorRowDraftEvent()];
     renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
@@ -1396,45 +2011,100 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   });
 
   saveBtn?.addEventListener("click", () => {
-    const existing = deps.getActiveStatusesEvent();
-    const validated = validateStatusRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event, existing);
-    if (validated.errors.length > 0) {
-      renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, validated.errors);
-      return;
-    }
-    deps.setActiveStatusesEvent(validated.statuses);
-    STATUS_EDITOR_ROWS_DRAFT_Event = deserializeActiveStatusesToDraftRowsEvent(validated.statuses);
-    STATUS_EDITOR_LAST_SNAPSHOT_Event = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
-    STATUS_EDITOR_LAST_META_SNAPSHOT_Event = JSON.stringify(
-      validated.statuses.map((item) => ({
-        name: item.name,
-        modifier: item.modifier,
-        scope: item.scope,
-        skills: item.scope === "all" ? [] : item.skills,
-        remainingRounds: item.remainingRounds ?? null,
-        enabled: item.enabled !== false,
-      }))
-    );
-    setStatusDraftDirtyEvent(false, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
-    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
-    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
-    deps.syncSettingsUiEvent?.();
-    deps.pushToChat?.("状态编辑器：已保存并生效。");
+    void (async () => {
+      const selectedChatKey = String(STATUS_EDITOR_SELECTED_CHAT_KEY_Event ?? "").trim();
+      if (!selectedChatKey) return;
+      const currentKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+      const existing =
+        selectedChatKey === currentKey
+          ? deps.getActiveStatusesEvent()
+          : await deps.loadStatusesForChatKeyEvent(selectedChatKey);
+      const validated = validateStatusRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event, existing);
+      if (validated.errors.length > 0) {
+        renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, validated.errors);
+        return;
+      }
+
+      if (selectedChatKey === currentKey) {
+        deps.setActiveStatusesEvent(validated.statuses);
+      } else {
+        await deps.saveStatusesForChatKeyEvent(selectedChatKey, validated.statuses);
+      }
+      STATUS_EDITOR_ROWS_DRAFT_Event = deserializeActiveStatusesToDraftRowsEvent(validated.statuses);
+      STATUS_EDITOR_LAST_SNAPSHOT_Event = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
+      STATUS_EDITOR_LAST_META_SNAPSHOT_Event = buildStatusMetaSnapshotEvent(validated.statuses);
+      setStatusDraftDirtyEvent(false, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+      saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+
+      const item = STATUS_EDITOR_CHAT_LIST_Event.find((entry) => entry.chatKey === selectedChatKey);
+      if (item) {
+        item.updatedAt = Date.now();
+        item.activeStatusCount = validated.statuses.length;
+      }
+      renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+      renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+      renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+      deps.syncSettingsUiEvent?.();
+      deps.pushToChat?.(
+        selectedChatKey === currentKey
+          ? "状态编辑器：已保存并立即应用到当前聊天。"
+          : `状态编辑器：已保存到聊天 ${selectedChatKey}。`
+      );
+    })();
   });
 
   resetBtn?.addEventListener("click", () => {
-    STATUS_EDITOR_ROWS_DRAFT_Event = [];
-    deps.setActiveStatusesEvent([]);
-    STATUS_EDITOR_LAST_SNAPSHOT_Event = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
-    STATUS_EDITOR_LAST_META_SNAPSHOT_Event = "[]";
-    setStatusDraftDirtyEvent(false, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
-    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
-    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
-    deps.syncSettingsUiEvent?.();
-    deps.pushToChat?.("状态编辑器：已重置为空。");
-  });
-}
+    void (async () => {
+      const selectedChatKey = String(STATUS_EDITOR_SELECTED_CHAT_KEY_Event ?? "").trim();
+      if (!selectedChatKey) return;
+      const currentKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+      if (selectedChatKey === currentKey) {
+        deps.setActiveStatusesEvent([]);
+      } else {
+        await deps.saveStatusesForChatKeyEvent(selectedChatKey, []);
+      }
+      STATUS_EDITOR_ROWS_DRAFT_Event = [];
+      STATUS_EDITOR_LAST_SNAPSHOT_Event = "[]";
+      STATUS_EDITOR_LAST_META_SNAPSHOT_Event = "[]";
+      setStatusDraftDirtyEvent(false, deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+      saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
 
+      const item = STATUS_EDITOR_CHAT_LIST_Event.find((entry) => entry.chatKey === selectedChatKey);
+      if (item) {
+        item.updatedAt = Date.now();
+        item.activeStatusCount = 0;
+      }
+      renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+      renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+      renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+      deps.syncSettingsUiEvent?.();
+      deps.pushToChat?.(
+        selectedChatKey === currentKey
+          ? "状态编辑器：已重置当前聊天状态。"
+          : `状态编辑器：聊天 ${selectedChatKey} 已重置。`
+      );
+    })();
+  });
+
+  if (!STATUS_EDITOR_OPEN_EVENT_BOUND_Event) {
+    document.addEventListener("st-roll-status-editor-opened", () => {
+      void refreshStatusEditorChatListEvent(deps);
+    });
+    STATUS_EDITOR_OPEN_EVENT_BOUND_Event = true;
+  }
+
+  if (!STATUS_EDITOR_MEMORY_UNSUBSCRIBE_Event) {
+    STATUS_EDITOR_MEMORY_UNSUBSCRIBE_Event = deps.subscribeMemoryPluginStateEvent((payload) => {
+      STATUS_EDITOR_MEMORY_STATE_TEXT_Event = payload.enabled
+        ? "记忆库：已启用"
+        : "记忆库：已安装（未启用）";
+      renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
+      void refreshStatusEditorChatListEvent(deps);
+    });
+  }
+}
 
 export interface BindMountedSettingsCardDepsEvent {
   drawerToggleId: string;
@@ -1935,6 +2605,7 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_RULE_TEXT_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
   getActiveStatusesEvent: () => ActiveStatusEvent[];
+  getActiveChatKeyEvent: () => string;
   isSkillDraftDirtyEvent: () => boolean;
   hydrateSkillDraftFromSettingsEvent: () => void;
   getSkillEditorLastSettingsTextEvent: () => string;
@@ -2060,16 +2731,19 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
 
   const statusRowsWrap = document.getElementById(deps.SETTINGS_STATUS_ROWS_ID_Event) as HTMLElement | null;
-  if (
-    statusRowsWrap &&
-    (!STATUS_EDITOR_DIRTY_Event || !statusRowsWrap.hasChildNodes())
-  ) {
-    hydrateStatusDraftFromMetaEvent(
-      deps.getActiveStatusesEvent(),
-      deps.SETTINGS_STATUS_ROWS_ID_Event,
-      deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event
-    );
-    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+  if (statusRowsWrap) {
+    const currentChatKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+    if (currentChatKey) {
+      syncStatusEditorCurrentChatFromRuntimeEvent({
+        SETTINGS_STATUS_ROWS_ID_Event: deps.SETTINGS_STATUS_ROWS_ID_Event,
+        SETTINGS_STATUS_DIRTY_HINT_ID_Event: deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event,
+        getActiveChatKeyEvent: () => currentChatKey,
+        getActiveStatusesEvent: deps.getActiveStatusesEvent,
+      });
+      if (!STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(currentChatKey)?.dirty) {
+        renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+      }
+    }
   }
   if (!deps.isSkillDraftDirtyEvent()) {
     const currentSettingsText = String(settings.skillTableText ?? "{}");

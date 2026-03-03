@@ -18,6 +18,212 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
     .st-rh-card-scope * {
       box-sizing: border-box;
     }
+    .st-rh-details-card {
+      position: relative;
+      overflow: hidden;
+    }
+    .st-rh-details-card > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .st-rh-details-card > summary::-webkit-details-marker {
+      display: none;
+    }
+    .st-rh-collapse-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(197, 160, 89, 0.3);
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(46, 31, 24, 0.85), rgba(18, 12, 9, 0.92));
+      box-shadow: inset 0 1px 0 rgba(255, 223, 163, 0.08), 0 8px 18px rgba(0, 0, 0, 0.26);
+    }
+    .st-rh-collapse-summary-result {
+      margin-bottom: 2px;
+    }
+    .st-rh-summary-main {
+      min-width: 0;
+      flex: 1;
+    }
+    .st-rh-collapse-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .st-rh-summary-title {
+      font-family: "Noto Serif SC", "STSong", "Georgia", serif;
+      color: var(--rh-accent);
+      font-size: 15px;
+      letter-spacing: 0.4px;
+      font-weight: 700;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .st-rh-summary-id {
+      font-size: 11px;
+      color: #7d6a50;
+      opacity: 0.9;
+      flex-shrink: 0;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .st-rh-summary-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 7px;
+    }
+    .st-rh-summary-chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(197, 160, 89, 0.24);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #dbc79f;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .st-rh-summary-pill {
+      --rh-pill: #52c41a;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--rh-pill);
+      background: rgba(0, 0, 0, 0.24);
+      color: var(--rh-pill);
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      line-height: 1.4;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .st-rh-summary-actions {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .st-rh-summary-dice {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 54px;
+      min-height: 54px;
+      border: 1px solid rgba(197, 160, 89, 0.3);
+      border-radius: 9px;
+      background: rgba(0, 0, 0, 0.22);
+      padding: 2px;
+      box-shadow: inset 0 1px 0 rgba(255, 223, 163, 0.08);
+    }
+    .st-rh-summary-dice svg {
+      display: block;
+      width: 48px;
+      height: 48px;
+    }
+    .st-rh-summary-toggle-state {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .st-rh-roll-btn,
+    .st-rh-summary-toggle-state {
+      border: 1px solid #c5a059;
+      background: linear-gradient(135deg, #3a2515, #1a100a);
+      color: var(--rh-accent);
+      border-radius: 8px;
+      min-height: 32px;
+      padding: 6px 12px;
+      font-family: "Noto Serif SC", "STSong", "Georgia", serif;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.8px;
+      line-height: 1;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, filter 0.2s ease;
+      text-transform: uppercase;
+    }
+    .st-rh-roll-btn {
+      cursor: pointer;
+    }
+    .st-rh-summary-toggle-state {
+      cursor: pointer;
+    }
+    .st-rh-roll-btn:hover,
+    .st-rh-details-card:hover .st-rh-summary-toggle-state {
+      border-color: #efd392;
+      filter: brightness(1.08);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.36);
+    }
+    .st-rh-runtime-inline {
+      margin: 0;
+      white-space: nowrap;
+    }
+    .st-rh-summary-lock {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      min-width: 72px;
+      padding: 4px 9px;
+      border: 1px dashed rgba(197, 160, 89, 0.36);
+      border-radius: 8px;
+      color: #a89472;
+      background: rgba(18, 11, 8, 0.5);
+      font-size: 11px;
+    }
+    .st-rh-summary-toggle-icon {
+      display: inline-flex;
+      transition: transform 0.2s ease;
+      line-height: 1;
+      font-size: 11px;
+      opacity: 0.9;
+    }
+    .st-rh-toggle-open {
+      display: none;
+    }
+    .st-rh-details-card[open] .st-rh-toggle-open {
+      display: inline;
+    }
+    .st-rh-details-card[open] .st-rh-toggle-closed {
+      display: none;
+    }
+    .st-rh-details-card[open] .st-rh-summary-toggle-icon {
+      transform: rotate(180deg);
+    }
+    .st-rh-card-details-body {
+      margin-top: 12px;
+      display: none;
+      animation: st-rh-details-reveal 0.2s ease;
+    }
+    .st-rh-details-card[open] > .st-rh-card-details-body {
+      display: block;
+    }
+    @keyframes st-rh-details-reveal {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
     .st-rh-event-board,
     .st-rh-result-card {
       border: 1px solid var(--rh-border);
@@ -192,25 +398,11 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       font-family: "JetBrains Mono", "Consolas", monospace;
       word-break: break-all;
     }
-    .st-rh-roll-btn {
-      border: 1px solid #c5a059;
-      background: linear-gradient(135deg, #3a2515, #1a100a);
-      color: var(--rh-accent);
-      padding: 8px 18px;
-      border-radius: 8px;
-      font-family: "Noto Serif SC", "STSong", "Georgia", serif;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-      cursor: pointer;
+    .st-rh-result-details .st-rh-result-head {
+      margin-bottom: 12px;
     }
-    .st-rh-roll-btn:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.36);
-      border-color: #e0bd76;
+    .st-rh-result-details .st-rh-result-title {
+      margin-bottom: 12px;
     }
     .st-rh-result-head {
       display: flex;
@@ -220,6 +412,16 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       margin-bottom: 14px;
       border-bottom: 1px solid #4a3b2c;
       padding-bottom: 10px;
+    }
+    .st-rh-result-head-centered {
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      gap: 4px;
+    }
+    .st-rh-result-head-centered .st-rh-result-id {
+      text-align: center;
     }
     .st-rh-result-heading {
       color: var(--rh-title);
@@ -292,6 +494,17 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       text-align: right;
       overflow: visible;
     }
+    .st-rh-details-result .st-rh-result-main {
+      grid-template-columns: 1fr;
+      text-align: center;
+      gap: 10px;
+    }
+    .st-rh-details-result .st-rh-result-main-left,
+    .st-rh-details-result .st-rh-result-main-center,
+    .st-rh-details-result .st-rh-result-main-right {
+      justify-self: center;
+      text-align: center;
+    }
     .st-rh-result-kicker {
       font-size: 11px;
       color: var(--rh-text-dim);
@@ -353,6 +566,41 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       text-align: right;
       font-family: "JetBrains Mono", "Consolas", monospace;
     }
+    .st-rh-already-card {
+      border-left: 3px solid rgba(197, 160, 89, 0.58);
+    }
+    .st-rh-already-details .st-rh-result-head {
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+    }
+    .st-rh-already-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #c8b796;
+    }
+    .st-rh-already-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .st-rh-already-line-condition {
+      padding-top: 6px;
+      border-top: 1px solid rgba(197, 160, 89, 0.18);
+    }
+    .st-rh-already-label {
+      color: #8f7a58;
+      white-space: nowrap;
+    }
+    .st-rh-already-dc-reason {
+      color: #c8d6a1;
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .st-rh-tip {
       display: inline-flex;
       align-items: center;
@@ -381,6 +629,35 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       .st-rh-event-item {
         padding: 12px;
       }
+      .st-rh-collapse-summary {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 9px;
+      }
+      .st-rh-summary-title {
+        font-size: 14px;
+      }
+      .st-rh-summary-id {
+        max-width: 100%;
+      }
+      .st-rh-summary-actions {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .st-rh-summary-dice {
+        min-width: 48px;
+        min-height: 48px;
+      }
+      .st-rh-summary-dice svg {
+        width: 42px;
+        height: 42px;
+      }
+      .st-rh-runtime-inline {
+        flex: 1 1 auto;
+      }
+      .st-rh-summary-toggle-state {
+        margin-left: auto;
+      }
       .st-rh-event-title {
         font-size: 16px;
       }
@@ -395,8 +672,8 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         text-align: center;
       }
       .st-rh-roll-btn {
-        width: 100%;
-        max-width: 260px;
+        width: auto;
+        max-width: 220px;
       }
       .st-rh-result-title {
         font-size: 18px;
@@ -445,6 +722,10 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       .st-rh-result-status {
         font-size: 15px;
       }
+      .st-rh-summary-chip,
+      .st-rh-summary-pill {
+        font-size: 10px;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -453,6 +734,14 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       }
       .st-rh-roll-btn:hover {
         transform: none;
+      }
+      .st-rh-summary-toggle-state {
+        transition: none;
+      }
+      .st-rh-summary-toggle-icon,
+      .st-rh-card-details-body {
+        transition: none;
+        animation: none;
       }
     }
   </style>`;

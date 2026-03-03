@@ -3,7 +3,7 @@ import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
-import { request, subscribe, logger, toast } from '../index';
+import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
 
 
@@ -242,7 +242,16 @@ function bindUiEvents() {
     };
 
     // 绑定总开关
-    bindToggle(IDS.enabledId, 'enabled');
+    bindToggle(IDS.enabledId, 'enabled', (val) => {
+        broadcast(
+            'plugin:broadcast:state_changed',
+            {
+                pluginId: 'stx_memory_os',
+                isEnabled: !!val,
+            },
+            'stx_memory_os'
+        );
+    });
 
     // ==========================================
     // ==== [P0-4] 微服务通讯三态连接灯与逻辑接管 ====
@@ -354,6 +363,18 @@ function bindUiEvents() {
     }
 
     bindToggle(IDS.autoCompactionId, 'autoCompaction');
+
+    setTimeout(() => {
+        const enabled = stContext.extensionSettings?.['stx_memory_os']?.enabled === true;
+        broadcast(
+            'plugin:broadcast:state_changed',
+            {
+                pluginId: 'stx_memory_os',
+                isEnabled: enabled,
+            },
+            'stx_memory_os'
+        );
+    }, 300);
 
     // ===== 世界模板面板交互 =====
     const refreshTemplatesUI = async () => {

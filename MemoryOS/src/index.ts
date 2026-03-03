@@ -62,10 +62,13 @@ export type {
 import { renderSettingsUi } from './ui/index';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
+import { respond } from '../../SDK/bus/rpc';
+import { broadcast } from '../../SDK/bus/broadcast';
 import { STXBus, MemorySDK, LLMSDK, STXRegistry, PluginManifest } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
 import { buildChatKey } from './utils/chat-namespace';
+import { db } from './db/db';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
@@ -89,7 +92,66 @@ class MemoryOS {
         this.registry = new STXRegistryImpl();
 
         this.initGlobalSTX();
+        this.setupPluginBusEndpoints();
         this.bindHostEvents();
+    }
+
+    private setupPluginBusEndpoints() {
+        const getEnabledFlag = () => {
+            try {
+                const ctx = (window as any).SillyTavern?.getContext?.() || {};
+                return ctx?.extensionSettings?.['stx_memory_os']?.enabled === true;
+            } catch {
+                return false;
+            }
+        };
+
+        respond('plugin:request:ping', 'stx_memory_os', async () => {
+            return {
+                alive: true,
+                isEnabled: getEnabledFlag(),
+                pluginId: 'stx_memory_os',
+                version: '1.0.0',
+                capabilities: ['memory', 'chat_index', 'rpc', 'ui'],
+            };
+        });
+
+        respond('plugin:request:memory_chat_keys', 'stx_memory_os', async () => {
+            try {
+                const [metaKeys, eventKeys] = await Promise.all([
+                    db.meta.toCollection().primaryKeys(),
+                    db.events.orderBy('chatKey').uniqueKeys(),
+                ]);
+                const chatKeys = Array.from(
+                    new Set(
+                        [...metaKeys, ...eventKeys]
+                            .map((item) => String(item ?? '').trim())
+                            .filter(Boolean)
+                    )
+                );
+                return {
+                    chatKeys,
+                    updatedAt: Date.now(),
+                };
+            } catch (error) {
+                logger.warn('memory_chat_keys query failed', error);
+                return {
+                    chatKeys: [],
+                    updatedAt: Date.now(),
+                };
+            }
+        });
+
+        setTimeout(() => {
+            broadcast(
+                'plugin:broadcast:state_changed',
+                {
+                    pluginId: 'stx_memory_os',
+                    isEnabled: getEnabledFlag(),
+                },
+                'stx_memory_os'
+            );
+        }, 250);
     }
 
     private initGlobalSTX() {

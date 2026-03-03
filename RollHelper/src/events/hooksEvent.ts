@@ -825,11 +825,35 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
         return;
       }
 
+      const collapseToggleButton = target.closest(
+        "button[data-rh-collapse-toggle='1']"
+      ) as HTMLButtonElement | null;
+      if (collapseToggleButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const card = collapseToggleButton.closest(
+          "[data-rh-collapsible-card='1']"
+        ) as HTMLElement | null;
+        if (!card) return;
+        const isCollapsed = card.classList.contains("is-collapsed");
+        const nextExpanded = isCollapsed;
+        card.classList.toggle("is-collapsed", !nextExpanded);
+        collapseToggleButton.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
+        const expandLabel = collapseToggleButton.dataset.labelExpand || "展开详情";
+        const collapseLabel = collapseToggleButton.dataset.labelCollapse || "收起详情";
+        const labelNode = collapseToggleButton.querySelector<HTMLElement>("[data-rh-collapse-label='1']");
+        if (labelNode) {
+          labelNode.textContent = nextExpanded ? collapseLabel : expandLabel;
+        }
+        return;
+      }
+
       const button = target.closest(
         "button[data-dice-event-roll='1']"
       ) as HTMLButtonElement | null;
       if (!button) return;
 
+      // 当前事件卡在 <summary> 中放置了检定按钮；阻断默认行为可避免触发 details 折叠切换。
       event.preventDefault();
       event.stopPropagation();
 

@@ -38,6 +38,13 @@ export interface SettingsCardTemplateIdsEvent {
   statusResetId: string;
   statusErrorsId: string;
   statusDirtyHintId: string;
+  statusLayoutId: string;
+  statusSidebarId: string;
+  statusSplitterId: string;
+  statusChatListId: string;
+  statusChatMetaId: string;
+  statusColsId: string;
+  statusMemoryStateId: string;
   allowedDiceSidesId: string;
   summaryDetailId: string;
   summaryRoundsId: string;
