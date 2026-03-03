@@ -1,106 +1,177 @@
-import type { STXRegistry, PluginManifest } from '../../../SDK/stx';
+import type { PluginManifest, RegistryChangeEvent, STXRegistry } from '../../../SDK/stx';
 
 /** 当前 SDK 版本号 */
-export const STX_VERSION = '1.0.0';
+export const STX_VERSION: string = '1.0.0';
 
 /**
- * 插件注册表 —— 管理所有已注册插件的清单与能力声明
- * 支持版本协商：不满足 requiresSDK 的插件将被降级
+ * 功能：注册中心事件监听器类型。
+ * @param event 注册中心变更事件。
+ * @returns 无返回值。
+ */
+type RegistryChangeHandler = (event: RegistryChangeEvent) => void;
+
+/**
+ * 功能：插件注册中心，提供注册、枚举、查询与变更通知。
  */
 export class PluginRegistry implements STXRegistry {
     private plugins: Map<string, PluginManifest> = new Map();
-    /** 因版本不满足被降级的插件（只可 emit events） */
     private degradedPlugins: Set<string> = new Set();
+    private changeHandlers: Set<RegistryChangeHandler> = new Set();
 
     /**
-     * 注册一个插件（含版本协商）
+     * 功能：注册插件清单并返回注册结果。
+     * @param manifest 插件清单。
+     * @returns 注册结果，包含是否降级与原因。
      */
     register(manifest: PluginManifest): { ok: boolean; degraded: boolean; reason?: string } {
-        // 版本协商校验
-        let degraded = false;
+        let degraded: boolean = false;
         let reason: string | undefined;
 
-        if (manifest.requiresSDK) {
-            if (!this.satisfiesVersion(manifest.requiresSDK, STX_VERSION)) {
-                reason = `插件 "${manifest.pluginId}" 要求 SDK ${manifest.requiresSDK}，当前 ${STX_VERSION}，已降级（仅允许 emit events）`;
-                console.warn('[STXRegistry]', reason);
-                this.degradedPlugins.add(manifest.pluginId);
-                degraded = true;
-            }
+        if (manifest.requiresSDK && !this.satisfiesVersion(manifest.requiresSDK, STX_VERSION)) {
+            degraded = true;
+            reason = `插件 "${manifest.pluginId}" 要求 SDK ${manifest.requiresSDK}，当前 ${STX_VERSION}，已降级。`;
+            this.degradedPlugins.add(manifest.pluginId);
+        } else {
+            this.degradedPlugins.delete(manifest.pluginId);
         }
 
-        if (this.plugins.has(manifest.pluginId)) {
-            console.warn(`[STXRegistry] 插件 "${manifest.pluginId}" 已注册，将覆盖`);
-        }
-        this.plugins.set(manifest.pluginId, manifest);
-        console.log(`[STXRegistry] 已注册插件: ${manifest.name} v${manifest.version}${degraded ? ' (降级)' : ''}`);
+        const action: 'add' | 'update' = this.plugins.has(manifest.pluginId) ? 'update' : 'add';
+        const normalizedManifest: PluginManifest = {
+            ...manifest,
+            declaredAt: manifest.declaredAt ?? Date.now(),
+        };
+        this.plugins.set(manifest.pluginId, normalizedManifest);
+
+        this.emitChanged({
+            pluginId: manifest.pluginId,
+            action,
+            manifest: normalizedManifest,
+            degraded,
+            reason,
+            ts: Date.now(),
+        });
+
         return { ok: true, degraded, reason };
     }
 
     /**
-     * 获取指定插件的清单
+     * 功能：列出所有已注册插件清单。
+     * @returns 清单数组。
      */
-    getManifest(pluginId: string): PluginManifest | undefined {
-        return this.plugins.get(pluginId);
-    }
-
-    /**
-     * 获取所有已注册插件
-     */
-    getAllPlugins(): PluginManifest[] {
+    list(): PluginManifest[] {
         return Array.from(this.plugins.values());
     }
 
     /**
-     * 检查指定插件是否声明了某项能力
+     * 功能：按 pluginId 查询清单。
+     * @param pluginId 插件唯一标识。
+     * @returns 命中返回清单，否则返回 undefined。
+     */
+    get(pluginId: string): PluginManifest | undefined {
+        return this.plugins.get(pluginId);
+    }
+
+    /**
+     * 功能：订阅注册中心变更事件。
+     * @param handler 变更回调。
+     * @returns 取消订阅函数。
+     */
+    onChanged(handler: RegistryChangeHandler): () => void {
+        this.changeHandlers.add(handler);
+        return (): void => {
+            this.changeHandlers.delete(handler);
+        };
+    }
+
+    /**
+     * 功能：兼容旧接口，按 pluginId 获取清单。
+     * @param pluginId 插件唯一标识。
+     * @returns 命中返回清单，否则返回 undefined。
+     */
+    getManifest(pluginId: string): PluginManifest | undefined {
+        return this.get(pluginId);
+    }
+
+    /**
+     * 功能：兼容旧接口，列出全部插件。
+     * @returns 清单数组。
+     */
+    getAllPlugins(): PluginManifest[] {
+        return this.list();
+    }
+
+    /**
+     * 功能：判断插件是否声明某项能力。
+     * @param pluginId 插件唯一标识。
+     * @param capabilityType 能力类别。
+     * @param capability 能力名称。
+     * @returns 是否具备能力。
      */
     hasCapability(pluginId: string, capabilityType: 'events' | 'memory' | 'llm', capability: string): boolean {
-        const manifest = this.plugins.get(pluginId);
+        const manifest: PluginManifest | undefined = this.plugins.get(pluginId);
         if (!manifest) return false;
 
-        // 降级插件只能使用 events 能力
         if (this.degradedPlugins.has(pluginId) && capabilityType !== 'events') {
             return false;
         }
 
-        const caps = manifest.capabilities[capabilityType];
-        return caps ? caps.includes(capability) : false;
+        const capabilities: string[] | undefined = manifest.capabilities[capabilityType];
+        return Array.isArray(capabilities) ? capabilities.includes(capability) : false;
     }
 
     /**
-     * 检查一个插件是否处于降级状态
+     * 功能：判断插件是否处于降级状态。
+     * @param pluginId 插件唯一标识。
+     * @returns 是否降级。
      */
     isDegraded(pluginId: string): boolean {
         return this.degradedPlugins.has(pluginId);
     }
 
     /**
-     * 获取当前 SDK 版本号
+     * 功能：返回当前 SDK 版本号。
+     * @returns SDK 版本号。
      */
     getVersion(): string {
         return STX_VERSION;
     }
 
     /**
-     * 获取已注册插件数量
+     * 功能：返回已注册插件数量。
+     * @returns 插件数量。
      */
     getRegisteredCount(): number {
         return this.plugins.size;
     }
 
     /**
-     * 完整 semver 数值比较
-     * 支持格式：^1.0.0（主版本一致，次版本和补丁 >= required）
-     *           ~1.2.0（主+次版本一致，补丁 >= required）
-     *           1.2.3  （精确匹配）
+     * 功能：触发注册中心变更通知。
+     * @param event 变更事件。
+     * @returns 无返回值。
+     */
+    private emitChanged(event: RegistryChangeEvent): void {
+        for (const handler of this.changeHandlers) {
+            try {
+                handler(event);
+            } catch (error) {
+                console.warn('[STXRegistry] changed handler 执行失败', error);
+            }
+        }
+    }
+
+    /**
+     * 功能：校验 semver 约束是否满足。
+     * @param required 约束版本，支持 ^、~、精确版本。
+     * @param current 当前版本。
+     * @returns 是否满足。
      */
     private satisfiesVersion(required: string, current: string): boolean {
-        const caret = required.startsWith('^');
-        const tilde = required.startsWith('~');
-        const cleanReq = required.replace(/^[\^~]/, '');
+        const caret: boolean = required.startsWith('^');
+        const tilde: boolean = required.startsWith('~');
+        const cleanReq: string = required.replace(/^[\^~]/, '');
 
-        const parseSemver = (v: string): [number, number, number] => {
-            const parts = v.split('.').map(Number);
+        const parseSemver = (value: string): [number, number, number] => {
+            const parts: number[] = value.split('.').map(Number);
             return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
         };
 
@@ -108,18 +179,16 @@ export class PluginRegistry implements STXRegistry {
         const [curMajor, curMinor, curPatch] = parseSemver(current);
 
         if (caret) {
-            // ^ 模式：主版本必须一致，当前次+补丁版本 >= required
             if (curMajor !== reqMajor) return false;
             if (curMinor !== reqMinor) return curMinor > reqMinor;
             return curPatch >= reqPatch;
         }
+
         if (tilde) {
-            // ~ 模式：主+次版本一致，当前补丁版本 >= required
             if (curMajor !== reqMajor || curMinor !== reqMinor) return false;
             return curPatch >= reqPatch;
         }
-        // 精确匹配
+
         return curMajor === reqMajor && curMinor === reqMinor && curPatch === reqPatch;
     }
 }
-

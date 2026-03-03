@@ -2,7 +2,7 @@ import {
     STX_PROTOCOL_VERSION, RpcErrorCode,
     RpcRequestEnvelope, RpcResponseEnvelope
 } from './protocol';
-import { checkPermission, TOPIC_REGISTRY } from './registry';
+import { checkPermission } from './registry';
 import { Logger } from '../logger';
 
 const logger = new Logger('STXBus-RPC');

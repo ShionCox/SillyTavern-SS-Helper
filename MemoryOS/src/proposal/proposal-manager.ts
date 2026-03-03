@@ -14,7 +14,6 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
  * 这是写入数据的唯一合法入口（AI 模式下）
  */
 export class ProposalManager {
-    private chatKey: string;
     private factsManager: FactsManager;
     private stateManager: StateManager;
     private summariesManager: SummariesManager;
@@ -27,7 +26,6 @@ export class ProposalManager {
     private allowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID];
 
     constructor(chatKey: string) {
-        this.chatKey = chatKey;
         this.factsManager = new FactsManager(chatKey);
         this.stateManager = new StateManager(chatKey);
         this.summariesManager = new SummariesManager(chatKey);

@@ -440,7 +440,8 @@ export function normalizeEnvelopeEvent(
 
 export function repairAndParseEventJsonEvent(rawInput: string): any | null {
   const base = String(rawInput || "")
-    .replace(/[\u200B-\u200D\u2060]/g, "")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
     .replace(/\uFEFF/g, "")
     .trim();
   if (!base) return null;
@@ -454,10 +455,16 @@ export function repairAndParseEventJsonEvent(rawInput: string): any | null {
 
   const normalizeTypography = (value: string): string =>
     value
-      .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'")
-      .replace(/：/g, ":")
-      .replace(/，/g, ",")
+      .replace(/[\u201C\u201D\uFF02]/g, '"')
+      .replace(/[\u2018\u2019\uFF07]/g, "'")
+      .replace(/[\uFF1A\uFE55]/g, ":")
+      .replace(/[\uFF0C\u3001]/g, ",")
+      .replace(/[\uFF08]/g, "(")
+      .replace(/[\uFF09]/g, ")")
+      .replace(/[\uFF3B\u3010]/g, "[")
+      .replace(/[\uFF3D\u3011]/g, "]")
+      .replace(/[\uFF5B]/g, "{")
+      .replace(/[\uFF5D]/g, "}")
       .replace(/\u00A0/g, " ");
 
   const stripTrailingComma = (value: string): string => value.replace(/,\s*([}\]])/g, "$1");
@@ -471,8 +478,7 @@ export function repairAndParseEventJsonEvent(rawInput: string): any | null {
   const stripLeadingLanguageTag = (value: string): string =>
     value.replace(/^\s*(?:rolljson|json)\s*[\r\n]+/i, "").trim();
 
-  const extractBalancedObject = (value: string): string | null => {
-    const start = value.indexOf("{");
+  const extractBalancedObjectFromStart = (value: string, start: number): string | null => {
     if (start < 0) return null;
 
     let depth = 0;
@@ -513,6 +519,18 @@ export function repairAndParseEventJsonEvent(rawInput: string): any | null {
     return null;
   };
 
+  const extractBalancedObject = (value: string): string | null => {
+    const start = value.indexOf("{");
+    return extractBalancedObjectFromStart(value, start);
+  };
+
+  const extractObjectByDiceEventAnchor = (value: string): string | null => {
+    const anchor = value.search(/"type"\s*:\s*"dice_events"/i);
+    if (anchor < 0) return null;
+    const start = value.lastIndexOf("{", anchor);
+    return extractBalancedObjectFromStart(value, start);
+  };
+
   const seedVariants = [
     base,
     stripCodeFence(base),
@@ -522,10 +540,14 @@ export function repairAndParseEventJsonEvent(rawInput: string): any | null {
 
   for (const seed of seedVariants) {
     if (!seed) continue;
+    const normalizedSeed = normalizeTypography(seed);
+    const seedNoTrailingComma = stripTrailingComma(seed);
+    const normalizedNoTrailingComma = stripTrailingComma(normalizedSeed);
+
     pushVariant(seed);
-    pushVariant(normalizeTypography(seed));
-    pushVariant(stripTrailingComma(seed));
-    pushVariant(stripTrailingComma(normalizeTypography(seed)));
+    pushVariant(normalizedSeed);
+    pushVariant(seedNoTrailingComma);
+    pushVariant(normalizedNoTrailingComma);
 
     const balanced = extractBalancedObject(seed);
     if (balanced) {
@@ -533,6 +555,26 @@ export function repairAndParseEventJsonEvent(rawInput: string): any | null {
       pushVariant(normalizeTypography(balanced));
       pushVariant(stripTrailingComma(balanced));
       pushVariant(stripTrailingComma(normalizeTypography(balanced)));
+    }
+
+    const normalizedBalanced = extractBalancedObject(normalizedSeed);
+    if (normalizedBalanced) {
+      pushVariant(normalizedBalanced);
+      pushVariant(stripTrailingComma(normalizedBalanced));
+    }
+
+    const anchored = extractObjectByDiceEventAnchor(seed);
+    if (anchored) {
+      pushVariant(anchored);
+      pushVariant(normalizeTypography(anchored));
+      pushVariant(stripTrailingComma(anchored));
+      pushVariant(stripTrailingComma(normalizeTypography(anchored)));
+    }
+
+    const normalizedAnchored = extractObjectByDiceEventAnchor(normalizedSeed);
+    if (normalizedAnchored) {
+      pushVariant(normalizedAnchored);
+      pushVariant(stripTrailingComma(normalizedAnchored));
     }
   }
 
@@ -588,6 +630,7 @@ export function parseEventEnvelopesEvent(
     } catch (error) {
       if (hasDiceEventType) {
         logger.warn("事件 JSON 解析失败，已隐藏代码块", error);
+        logger.debug("解析失败的原始文本:", raw);
       }
       continue;
     }

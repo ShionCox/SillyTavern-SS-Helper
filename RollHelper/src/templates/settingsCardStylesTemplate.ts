@@ -5,6 +5,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       color: var(--SmartThemeBodyColor, inherit);
     }
 
+    #${cardId}.is-card-disabled .st-roll-shell {
+      opacity: 0.56;
+      filter: grayscale(0.92) saturate(0.35);
+    }
+
     #${cardId} .st-roll-shell {
       border: 1px solid rgba(197, 160, 89, 0.35);
       border-radius: 12px;
@@ -153,6 +158,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         box-shadow 0.2s ease;
     }
 
+    #${cardId} .st-roll-item-stack {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
     #${cardId} .st-roll-item-main {
       min-width: 0;
       flex: 1;
@@ -169,6 +179,34 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       line-height: 1.45;
       opacity: 0.75;
     }
+
+    #${cardId} .st-roll-ai-bridge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    #${cardId} .st-roll-ai-bridge-light {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #d75a5a;
+      box-shadow: 0 0 0 3px rgba(215, 90, 90, 0.18);
+    }
+
+    #${cardId} .st-roll-ai-bridge-light.is-online {
+      background: #57d36a;
+      box-shadow: 0 0 0 3px rgba(87, 211, 106, 0.2);
+    }
+
+    #${cardId} .st-roll-ai-bridge-light.is-checking {
+      background: #d7bf5a;
+      box-shadow: 0 0 0 3px rgba(215, 191, 90, 0.2);
+    }
+
 
     #${cardId} .st-roll-about-meta {
       display: flex;
@@ -1101,11 +1139,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       line-height: 1.5;
       opacity: 0.78;
       padding-top: 4px;
-    }
-
-    #${cardId} input[type="checkbox"] {
-      accent-color: rgba(197, 160, 89, 0.92);
-      transition: filter 0.2s ease;
     }
 
     #${cardId} .st-roll-head:hover {

@@ -77,6 +77,10 @@ export interface DBMeta {
     schemaVersion: number;
     lastCompactionTs?: number;
     activeTemplateId?: string;
+    lastExtractTs?: number;
+    lastExtractEventCount?: number;
+    lastExtractUserMsgCount?: number;
+    lastExtractWindowHash?: string;
 }
 
 // --- v2 新增类型 ---
@@ -193,4 +197,68 @@ export class MemoryOSDatabase extends Dexie {
 
 // 暴露出解耦后的单例服务对象，用于上层存储库代理调用
 export const db = new MemoryOSDatabase();
+
+type ClearChatDataOptions = {
+    includeAudit?: boolean;
+};
+
+/**
+ * 功能：按 chatKey 清理 MemoryOS 全量相关数据表。
+ * 参数：
+ *  - chatKey：会话键
+ *  - options.includeAudit：是否同时清理审计表，默认 true
+ * 返回：
+ *  - Promise<void>
+ */
+export async function clearChatData(chatKey: string, options?: ClearChatDataOptions): Promise<void> {
+    const includeAudit = options?.includeAudit !== false;
+    const rwTables: Table<any, any>[] = [
+        db.events,
+        db.facts,
+        db.world_state,
+        db.summaries,
+        db.templates,
+        db.meta,
+        db.template_bindings,
+        db.worldinfo_cache,
+        db.vector_chunks,
+        db.vector_embeddings,
+        db.vector_meta,
+    ];
+    if (includeAudit) {
+        rwTables.push(db.audit);
+    }
+
+    await db.transaction('rw', rwTables, async () => {
+        await db.events.where('chatKey').equals(chatKey).delete();
+        await db.facts.where('chatKey').equals(chatKey).delete();
+        await db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).delete();
+        await db.summaries.where('[chatKey+level+createdAt]').between([chatKey, '', 0], [chatKey, '\uffff', Infinity]).delete();
+        await db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).delete();
+        await db.meta.delete(chatKey);
+        await db.template_bindings.where('chatKey').equals(chatKey).delete();
+        await db.worldinfo_cache.where('chatKey').equals(chatKey).delete();
+        await db.vector_chunks.where('chatKey').equals(chatKey).delete();
+        await db.vector_embeddings.where('chatKey').equals(chatKey).delete();
+        await db.vector_meta.where('chatKey').equals(chatKey).delete();
+        if (includeAudit) {
+            await db.audit.where('chatKey').equals(chatKey).delete();
+        }
+    });
+}
+
+/**
+ * 功能：整库重建，彻底清空所有表数据。
+ * 参数：无
+ * 返回：Promise<void>
+ */
+export async function clearAllDataByRebuild(): Promise<void> {
+    try {
+        db.close();
+        await db.delete();
+        await db.open();
+    } catch (error) {
+        throw new Error(`整库重建失败: ${String(error)}`);
+    }
+}
 

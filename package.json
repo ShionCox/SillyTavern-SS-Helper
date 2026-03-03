@@ -4,17 +4,21 @@
     "scripts": {
         "install:all": "pnpm install",
         "build": "node build.js",
-        "build:watch": "node build.js --watch",
+        "build:watch": "set STX_BUILD_WATCH=1&& node build.js",
         "build:memory": "node build.js MemoryOS",
         "build:llm": "node build.js LLMHub",
         "build:roll": "node build.js RollHelper",
-        "watch:memory": "node build.js MemoryOS --watch",
-        "watch:llm": "node build.js LLMHub --watch",
-        "watch:roll": "node build.js RollHelper --watch",
+        "watch:memory": "set STX_BUILD_WATCH=1&& node build.js MemoryOS",
+        "watch:llm": "set STX_BUILD_WATCH=1&& node build.js LLMHub",
+        "watch:roll": "set STX_BUILD_WATCH=1&& node build.js RollHelper",
         "clean": "rm -rf MemoryOS/dist LLMHub/dist RollHelper/dist"
     },
     "devDependencies": {
-        "esbuild": "^0.23.0"
+        "@vitejs/plugin-vue": "^6.0.4",
+        "esbuild": "^0.23.0",
+        "unocss": "^66.6.4",
+        "vite": "^7.3.1",
+        "vue": "^3.5.29"
     },
     "dependencies": {
         "dexie": "^4.3.0",

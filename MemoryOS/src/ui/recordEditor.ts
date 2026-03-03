@@ -1,4 +1,4 @@
-import { db } from '../db/db';
+import { db, clearAllDataByRebuild, clearChatData } from '../db/db';
 import { logger, toast } from '../index';
 
 type TableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
@@ -87,13 +87,7 @@ export async function openRecordEditor() {
         btnClearDb.addEventListener('click', async () => {
             if (confirm('警告：此操作将清空所有记忆数据（事件、事实、摘要、状态等），这是不可逆转的危险操作！您确定要继续吗？')) {
                 try {
-                    await db.transaction('rw', [db.events, db.facts, db.summaries, db.world_state, db.audit], async () => {
-                        await db.events.clear();
-                        await db.facts.clear();
-                        await db.summaries.clear();
-                        await db.world_state.clear();
-                        await db.audit.clear();
-                    });
+                    await clearAllDataByRebuild();
                     toast.success('整个数据库所有内容已清空完毕！', '系统清理');
                     pendingChanges.deletes.clear();
                     pendingChanges.updates.clear();
@@ -121,6 +115,8 @@ export async function openRecordEditor() {
         const typeMap: Record<string, string> = {
             'chat.message.sent': '↑ 发送',
             'chat.message.received': '↓ 接收',
+            'chat.outcome': '※ 走向',
+            'chat.result': '※ 结果',
             'chat.generation.ended': '生成结束',
             'chat.started': '会话开始',
             'chat.message.swipe': '↔ 滑动',
@@ -266,12 +262,7 @@ export async function openRecordEditor() {
                         item.classList.remove('is-context-target');
                         if (confirm('警告：此操作直接清空数据库中该会话的所有事件、事实、摘要和状态记录，并且不可逆转！确定执行吗？')) {
                             try {
-                                await db.transaction('rw', [db.events, db.facts, db.summaries, db.world_state], async () => {
-                                    await db.events.where('chatKey').equals(chatKey).delete();
-                                    await db.facts.where('chatKey').equals(chatKey).delete();
-                                    await db.summaries.where('chatKey').equals(chatKey).delete();
-                                    await db.world_state.where('chatKey').equals(chatKey).delete();
-                                });
+                                await clearChatData(chatKey);
                                 toast.success('已清空该会话所有记忆数据');
                                 if (currentChatKey === chatKey) currentChatKey = '';
                                 loadChatKeys().then(() => renderTable(currentTable));

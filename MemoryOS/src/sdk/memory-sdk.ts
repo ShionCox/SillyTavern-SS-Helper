@@ -150,7 +150,7 @@ export class MemorySDKImpl implements MemorySDK {
 
     // 注入控制
     injection = {
-        buildContext: (opts?: { maxTokens?: number; sections?: Array<"WORLD_STATE" | "FACTS" | "EVENTS" | "SUMMARY"> }) => {
+        buildContext: (opts?: { maxTokens?: number; sections?: Array<"WORLD_STATE" | "FACTS" | "EVENTS" | "SUMMARY">; query?: string; sectionBudgets?: Partial<Record<"WORLD_STATE" | "FACTS" | "EVENTS" | "SUMMARY", number>>; preferSummary?: boolean }) => {
             return this.injectionManager.buildContext(opts);
         },
         setAnchorPolicy: (opts: { allowSystem?: boolean; allowUser?: boolean; defaultInsert?: "top" | "beforeStart" | "customAnchor" }) => {

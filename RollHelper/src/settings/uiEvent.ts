@@ -10,11 +10,17 @@ import type {
 } from "../types/eventDomainEvent";
 import changelogData from "../../changelog.json";
 import type { SettingsCardTemplateIdsEvent } from "../templates/settingsCardTemplateTypes";
+import { request } from "../../../SDK/bus/rpc";
 import {
   ensureSharedTooltip,
   applyTooltipCatalog,
   hydrateSettingsTooltips,
 } from "../../../SDK/sharedTooltip";
+import {
+  ensureSharedCheckboxStyles,
+  hydrateSharedCheckboxes,
+  renderSharedCheckbox,
+} from "../../../_Components/sharedCheckbox";
 import { buildSettingsTooltipCatalogEvent } from "./settingsTooltipCatalogEvent";
 
 function escapeHtml(input: string): string {
@@ -29,6 +35,9 @@ function escapeHtml(input: string): string {
 function escapeAttr(input: string): string {
   return escapeHtml(input).replace(/`/g, "&#96;");
 }
+
+const ROLLHELPER_NAMESPACE_Event = "stx_rollhelper";
+const LLMHUB_NAMESPACE_Event = "stx_llmhub";
 
 function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | null {
   if (!node) return null;
@@ -57,6 +66,8 @@ function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | 
 function applySettingsTooltipsEvent(root: ParentNode | null, catalog?: Record<string, string>): void {
   const targetRoot = resolveSettingsTooltipRootEvent(root);
   if (!targetRoot) return;
+  ensureSharedCheckboxStyles();
+  hydrateSharedCheckboxes(targetRoot);
   ensureSharedTooltip({
     titleScopeSelectors: [".st-rh-card-scope"],
   });
@@ -84,6 +95,7 @@ export interface EnsureSettingsCardStylesDepsEvent {
 }
 
 export function ensureSettingsCardStylesEvent(deps: EnsureSettingsCardStylesDepsEvent): void {
+  ensureSharedCheckboxStyles();
   if (document.getElementById(deps.SETTINGS_STYLE_ID_Event)) return;
 
   const style = document.createElement("style");
@@ -106,10 +118,12 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_GITHUB_URL_Event: string;
   SETTINGS_SEARCH_ID_Event: string;
   SETTINGS_TAB_MAIN_ID_Event: string;
+  SETTINGS_TAB_AI_ID_Event: string;
   SETTINGS_TAB_SKILL_ID_Event: string;
   SETTINGS_TAB_RULE_ID_Event: string;
   SETTINGS_TAB_ABOUT_ID_Event: string;
   SETTINGS_PANEL_MAIN_ID_Event: string;
+  SETTINGS_PANEL_AI_ID_Event: string;
   SETTINGS_PANEL_SKILL_ID_Event: string;
   SETTINGS_PANEL_RULE_ID_Event: string;
   SETTINGS_PANEL_ABOUT_ID_Event: string;
@@ -177,6 +191,9 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_RULE_SAVE_ID_Event: string;
   SETTINGS_RULE_RESET_ID_Event: string;
   SETTINGS_RULE_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event: string;
 }
 
 export function buildSettingsCardTemplateIdsEvent(
@@ -213,10 +230,12 @@ export function buildSettingsCardTemplateIdsEvent(
     changelogHtml: generateChangelogHtml(),
     searchId: deps.SETTINGS_SEARCH_ID_Event,
     tabMainId: deps.SETTINGS_TAB_MAIN_ID_Event,
+    tabAiId: deps.SETTINGS_TAB_AI_ID_Event,
     tabSkillId: deps.SETTINGS_TAB_SKILL_ID_Event,
     tabRuleId: deps.SETTINGS_TAB_RULE_ID_Event,
     tabAboutId: deps.SETTINGS_TAB_ABOUT_ID_Event,
     panelMainId: deps.SETTINGS_PANEL_MAIN_ID_Event,
+    panelAiId: deps.SETTINGS_PANEL_AI_ID_Event,
     panelSkillId: deps.SETTINGS_PANEL_SKILL_ID_Event,
     panelRuleId: deps.SETTINGS_PANEL_RULE_ID_Event,
     panelAboutId: deps.SETTINGS_PANEL_ABOUT_ID_Event,
@@ -284,6 +303,9 @@ export function buildSettingsCardTemplateIdsEvent(
     ruleSaveId: deps.SETTINGS_RULE_SAVE_ID_Event,
     ruleResetId: deps.SETTINGS_RULE_RESET_ID_Event,
     ruleTextId: deps.SETTINGS_RULE_TEXT_ID_Event,
+    aiBridgeStatusLightId: deps.SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
+    aiBridgeStatusTextId: deps.SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,
+    aiBridgeRefreshId: deps.SETTINGS_AI_BRIDGE_REFRESH_ID_Event,
   };
 }
 
@@ -376,10 +398,12 @@ export interface BindSettingsTabsAndModalDepsEvent {
   drawerToggleId: string;
   drawerContentId: string;
   SETTINGS_TAB_MAIN_ID_Event: string;
+  SETTINGS_TAB_AI_ID_Event: string;
   SETTINGS_TAB_SKILL_ID_Event: string;
   SETTINGS_TAB_RULE_ID_Event: string;
   SETTINGS_TAB_ABOUT_ID_Event: string;
   SETTINGS_PANEL_MAIN_ID_Event: string;
+  SETTINGS_PANEL_AI_ID_Event: string;
   SETTINGS_PANEL_SKILL_ID_Event: string;
   SETTINGS_PANEL_RULE_ID_Event: string;
   SETTINGS_PANEL_ABOUT_ID_Event: string;
@@ -390,6 +414,9 @@ export interface BindSettingsTabsAndModalDepsEvent {
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event: string;
   SETTINGS_SEARCH_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event: string;
   confirmDiscardSkillDraftEvent: () => boolean;
   isElementVisibleEvent: (element: HTMLElement | null) => boolean;
   isSkillDraftDirtyEvent: () => boolean;
@@ -397,10 +424,12 @@ export interface BindSettingsTabsAndModalDepsEvent {
 
 export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDepsEvent): void {
   const tabMain = document.getElementById(deps.SETTINGS_TAB_MAIN_ID_Event) as HTMLButtonElement | null;
+  const tabAi = document.getElementById(deps.SETTINGS_TAB_AI_ID_Event) as HTMLButtonElement | null;
   const tabSkill = document.getElementById(deps.SETTINGS_TAB_SKILL_ID_Event) as HTMLButtonElement | null;
   const tabRule = document.getElementById(deps.SETTINGS_TAB_RULE_ID_Event) as HTMLButtonElement | null;
   const tabAbout = document.getElementById(deps.SETTINGS_TAB_ABOUT_ID_Event) as HTMLButtonElement | null;
   const panelMain = document.getElementById(deps.SETTINGS_PANEL_MAIN_ID_Event) as HTMLElement | null;
+  const panelAi = document.getElementById(deps.SETTINGS_PANEL_AI_ID_Event) as HTMLElement | null;
   const panelSkill = document.getElementById(deps.SETTINGS_PANEL_SKILL_ID_Event) as HTMLElement | null;
   const panelRule = document.getElementById(deps.SETTINGS_PANEL_RULE_ID_Event) as HTMLElement | null;
   const panelAbout = document.getElementById(deps.SETTINGS_PANEL_ABOUT_ID_Event) as HTMLElement | null;
@@ -419,9 +448,21 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     deps.SETTINGS_STATUS_MODAL_CLOSE_ID_Event
   ) as HTMLButtonElement | null;
   const searchInput = document.getElementById(deps.SETTINGS_SEARCH_ID_Event) as HTMLInputElement | null;
+  const aiBridgeStatusLight = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event
+  ) as HTMLElement | null;
+  const aiBridgeStatusText = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event
+  ) as HTMLElement | null;
+  const aiBridgeRefreshBtn = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_REFRESH_ID_Event
+  ) as HTMLButtonElement | null;
 
   const searchableMainItems = panelMain
     ? Array.from(panelMain.querySelectorAll<HTMLElement>(".st-roll-search-item"))
+    : [];
+  const searchableAiItems = panelAi
+    ? Array.from(panelAi.querySelectorAll<HTMLElement>(".st-roll-search-item"))
     : [];
   const searchableSkillItems = panelSkill
     ? Array.from(panelSkill.querySelectorAll<HTMLElement>(".st-roll-search-item"))
@@ -434,12 +475,13 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     : [];
   const searchableItems = [
     ...searchableMainItems,
+    ...searchableAiItems,
     ...searchableSkillItems,
     ...searchableRuleItems,
     ...searchableAboutItems,
   ];
 
-  let activeTab: "main" | "skill" | "rule" | "about" = "main";
+  let activeTab: "main" | "ai" | "skill" | "rule" | "about" = "main";
   const ensureSettingsDrawerVisibleEvent = () => {
     const drawerContentNode = document.getElementById(deps.drawerContentId) as HTMLElement | null;
     if (!drawerContentNode) return;
@@ -520,23 +562,63 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     document.dispatchEvent(new CustomEvent("st-roll-status-editor-opened"));
   };
 
-  const activateTab = (tab: "main" | "skill" | "rule" | "about") => {
+  const setAiBridgeStatusEvent = (
+    state: "online" | "offline" | "checking",
+    text: string
+  ): void => {
+    if (aiBridgeStatusLight) {
+      aiBridgeStatusLight.classList.remove("is-online", "is-offline", "is-checking");
+      aiBridgeStatusLight.classList.add(`is-${state}`);
+    }
+    if (aiBridgeStatusText) {
+      aiBridgeStatusText.textContent = text;
+    }
+  };
+
+  const probeLlmHubBridgeEvent = async (): Promise<void> => {
+    setAiBridgeStatusEvent("checking", "检测中...");
+    try {
+      const result = (await request(
+        "plugin:request:ping",
+        {},
+        ROLLHELPER_NAMESPACE_Event,
+        {
+          to: LLMHUB_NAMESPACE_Event,
+          timeoutMs: 1200,
+        }
+      )) as any;
+      if (Boolean(result?.alive)) {
+        const version = String(result?.version ?? "").trim();
+        const versionText = version ? ` (v${version})` : "";
+        setAiBridgeStatusEvent("online", `已连接 LLMHub${versionText}`);
+        return;
+      }
+      setAiBridgeStatusEvent("offline", "LLMHub 未在线");
+    } catch {
+      setAiBridgeStatusEvent("offline", "LLMHub 未在线");
+    }
+  };
+
+  const activateTab = (tab: "main" | "ai" | "skill" | "rule" | "about") => {
     activeTab = tab;
     const isMain = tab === "main";
+    const isAi = tab === "ai";
     const isSkill = tab === "skill";
     const isRule = tab === "rule";
     const isAbout = tab === "about";
     tabMain?.classList.toggle("is-active", isMain);
+    tabAi?.classList.toggle("is-active", isAi);
     tabSkill?.classList.toggle("is-active", isSkill);
     tabRule?.classList.toggle("is-active", isRule);
     tabAbout?.classList.toggle("is-active", isAbout);
     if (panelMain) panelMain.hidden = !isMain;
+    if (panelAi) panelAi.hidden = !isAi;
     if (panelSkill) panelSkill.hidden = !isSkill;
     if (panelRule) panelRule.hidden = !isRule;
     if (panelAbout) panelAbout.hidden = !isAbout;
   };
 
-  const tryActivateTab = (nextTab: "main" | "skill" | "rule" | "about"): boolean => {
+  const tryActivateTab = (nextTab: "main" | "ai" | "skill" | "rule" | "about"): boolean => {
     if (nextTab === activeTab) return true;
     if (activeTab === "skill" && nextTab !== "skill" && !deps.confirmDiscardSkillDraftEvent()) {
       return false;
@@ -577,6 +659,9 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     const hasMainVisible = searchableMainItems.some(
       (item) => !item.classList.contains("is-hidden-by-search")
     );
+    const hasAiVisible = searchableAiItems.some(
+      (item) => !item.classList.contains("is-hidden-by-search")
+    );
     const hasSkillVisible = searchableSkillItems.some(
       (item) => !item.classList.contains("is-hidden-by-search")
     );
@@ -587,15 +672,17 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       (item) => !item.classList.contains("is-hidden-by-search")
     );
 
-    const hasVisibleByTab: Record<"main" | "skill" | "rule" | "about", boolean> = {
+    const hasVisibleByTab: Record<"main" | "ai" | "skill" | "rule" | "about", boolean> = {
       main: hasMainVisible,
+      ai: hasAiVisible,
       skill: hasSkillVisible,
       rule: hasRuleVisible,
       about: hasAboutVisible,
     };
     if (!hasVisibleByTab[activeTab]) {
-      const fallbackOrder: Array<"main" | "skill" | "rule" | "about"> = [
+      const fallbackOrder: Array<"main" | "ai" | "skill" | "rule" | "about"> = [
         "main",
+        "ai",
         "skill",
         "rule",
         "about",
@@ -610,6 +697,11 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (!tryActivateTab("main")) return;
     applySettingsSearchFilter();
   });
+  tabAi?.addEventListener("click", () => {
+    if (!tryActivateTab("ai")) return;
+    applySettingsSearchFilter();
+    void probeLlmHubBridgeEvent();
+  });
   tabSkill?.addEventListener("click", () => {
     if (!tryActivateTab("skill")) return;
     applySettingsSearchFilter();
@@ -622,8 +714,12 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (!tryActivateTab("about")) return;
     applySettingsSearchFilter();
   });
+  aiBridgeRefreshBtn?.addEventListener("click", () => {
+    void probeLlmHubBridgeEvent();
+  });
   searchInput?.addEventListener("input", applySettingsSearchFilter);
   applySettingsSearchFilter();
+  setAiBridgeStatusEvent("offline", "待检测");
 
   skillEditorOpenBtn?.addEventListener("click", () => {
     if (!tryActivateTab("skill")) return;
@@ -1297,7 +1393,14 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
           </select>
           <input class="st-roll-input st-roll-status-skills" type="text" data-status-row-id="${rowId}" data-status-field="skills" data-tip="技能范围，用 | 分隔。" value="${skillsText}" placeholder="${skillsPlaceholder}" ${skillsDisabledAttr} />
           <label class="st-roll-status-enabled-wrap">
-            <input type="checkbox" data-status-row-id="${rowId}" data-status-field="enabled" data-tip="是否启用该状态。" ${enabled ? "checked" : ""} />
+            ${renderSharedCheckbox({
+              checked: enabled,
+              dataTip: "是否启用该状态。",
+              attributes: {
+                "data-status-row-id": rowId,
+                "data-status-field": "enabled",
+              },
+            })}
             <span>启用</span>
           </label>
           <button type="button" class="st-roll-btn secondary st-roll-status-remove" data-status-remove-id="${rowId}">删除</button>
@@ -2327,7 +2430,7 @@ export function bindSkillImportExportActionsEvent(
     if (!skillImportArea) return;
     const willOpen = skillImportArea.hidden;
     skillImportArea.hidden = !willOpen;
-    skillImportToggleBtn.textContent = willOpen ? "收起导入" : "导入 JSON";
+    skillImportToggleBtn.textContent = willOpen ? "收起导入" : "导入配置";
     if (!willOpen || !skillTextInput) return;
     const serialized = deps.serializeSkillRowsToSkillTableTextEvent(deps.skillDraftAccessorEvent.getRows());
     skillTextInput.value =
@@ -2604,6 +2707,7 @@ export function renderSkillRowsEvent(
 }
 
 export interface SyncSettingsUiDepsEvent {
+  SETTINGS_CARD_ID_Event: string;
   getSettingsEvent: () => {
     enabled: boolean;
     autoSendRuleToAI: boolean;
@@ -2666,6 +2770,8 @@ export interface SyncSettingsUiDepsEvent {
 
 export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const settings = deps.getSettingsEvent();
+  const cardRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event);
+  cardRoot?.classList.toggle("is-card-disabled", !settings.enabled);
   const enabledInput = document.getElementById(deps.SETTINGS_ENABLED_ID_Event) as HTMLInputElement | null;
   const ruleInput = document.getElementById(deps.SETTINGS_RULE_ID_Event) as HTMLInputElement | null;
   const aiRollModeInput = document.getElementById(

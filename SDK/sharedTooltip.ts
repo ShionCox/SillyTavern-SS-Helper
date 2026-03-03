@@ -1,10 +1,8 @@
 const SHARED_TOOLTIP_STYLE_ID = "stx-shared-tooltip-style";
 const SHARED_TOOLTIP_ID = "stx-shared-tooltip";
-const LEGACY_TOOLTIP_STYLE_ID = "st-roll-shared-tooltip-style";
-const LEGACY_TOOLTIP_ID = "st-roll-shared-tooltip";
 const SHARED_TOOLTIP_HIDE_DELAY_MS = 90;
 const SHARED_TOOLTIP_INSTANT_DISTANCE_PX = 260;
-const TOOLTIP_EXCLUDE_SELECTOR = "button, .stx-ui-tab, .st-roll-tab";
+const TOOLTIP_EXCLUDE_SELECTOR = ".st-roll-tab";
 
 const DEFAULT_ROW_SELECTORS: string[] = [
   ".stx-ui-item",
@@ -100,22 +98,10 @@ function isInTitleScope(target: HTMLElement, selectors: Set<string>): boolean {
 
 function ensureTooltipStyle(): void {
   if (document.getElementById(SHARED_TOOLTIP_STYLE_ID)) return;
-  const legacyStyle = document.getElementById(LEGACY_TOOLTIP_STYLE_ID);
-  if (legacyStyle) {
-    legacyStyle.id = SHARED_TOOLTIP_STYLE_ID;
-    return;
-  }
 
   const style = document.createElement("style");
   style.id = SHARED_TOOLTIP_STYLE_ID;
   style.textContent = `
-    #${LEGACY_TOOLTIP_ID} {
-      display: none !important;
-      opacity: 0 !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
-      transform: translate3d(-9999px, -9999px, 0) !important;
-    }
     #${SHARED_TOOLTIP_ID} {
       position: fixed;
       left: 0;
@@ -189,15 +175,6 @@ function ensureTooltipRuntime(state: SharedTooltipGlobalState): SharedTooltipRun
   ensureTooltipStyle();
 
   let root = document.getElementById(SHARED_TOOLTIP_ID) as HTMLDivElement | null;
-  const legacyRoot = document.getElementById(LEGACY_TOOLTIP_ID) as HTMLDivElement | null;
-  if (!root) {
-    if (legacyRoot) {
-      legacyRoot.id = SHARED_TOOLTIP_ID;
-      root = legacyRoot;
-    }
-  } else if (legacyRoot && legacyRoot !== root) {
-    legacyRoot.remove();
-  }
 
   if (!root) {
     root = document.createElement("div");
@@ -354,11 +331,28 @@ function buildTipFromContainer(container: HTMLElement): string {
 }
 
 function buildTipFromControl(control: HTMLElement): string {
+  const getControlLabelText = (): string => {
+    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement) {
+      const ownId = String(control.id || "").trim();
+      if (ownId && document.querySelector) {
+        const escapedId = escapeCssSelector(ownId);
+        const explicitLabel = document.querySelector<HTMLElement>(`label[for="${escapedId}"]`);
+        const explicitText = String(explicitLabel?.textContent ?? "").trim();
+        if (explicitText) return explicitText;
+      }
+      const wrappedLabel = control.closest("label");
+      const wrappedText = String(wrappedLabel?.textContent ?? "").trim();
+      if (wrappedText) return wrappedText;
+    }
+    return "";
+  };
+
   const placeholder = String((control as HTMLInputElement).placeholder ?? "").trim();
   const ariaLabel = String(control.getAttribute("aria-label") ?? "").trim();
+  const labelText = getControlLabelText();
   const text = String(control.textContent ?? "").trim();
   const title = String(control.getAttribute("title") ?? "").trim();
-  return ariaLabel || placeholder || text || title;
+  return ariaLabel || labelText || placeholder || text || title;
 }
 
 /**
@@ -515,7 +509,6 @@ export function hydrateSettingsTooltips(options: SettingsTooltipHydrateOptions):
     const controls = row.matches("input, select, textarea")
       ? [row]
       : Array.from(row.querySelectorAll<HTMLElement>("input, select, textarea"));
-
     controls.forEach((control: HTMLElement) => {
       if (control.dataset.tip && String(control.dataset.tip).trim()) return;
       const controlTip = buildTipFromControl(control);

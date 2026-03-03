@@ -33,6 +33,14 @@ export const TOPIC_REGISTRY: Record<string, TopicDefinition> = {
         allowlist: ['*']
     },
 
+    'plugin:request:memory_append_outcome': {
+        id: 'plugin:request:memory_append_outcome',
+        type: 'rpc',
+        owner: 'stx_memory_os',
+        description: '向 MemoryOS 写入外部结果/走向文本（如骰子结算结果）。',
+        allowlist: ['*']
+    },
+
     'plugin:request:hello': {
         id: 'plugin:request:hello',
         type: 'rpc',

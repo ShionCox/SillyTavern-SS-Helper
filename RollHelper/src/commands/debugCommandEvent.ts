@@ -30,9 +30,9 @@ export function registerDebugCommandEvent(deps: DebugCommandDepsEvent): void {
       namedArgumentList: [],
       unnamedArgumentList: [],
       callback: () => {
-        const legacy = getDiceMeta();
+        const diceMeta = getDiceMeta();
         const eventMeta = getDiceMetaEvent();
-        const text = JSON.stringify({ legacy, eventMeta }, null, 2);
+        const text = JSON.stringify({ diceMeta, eventMeta }, null, 2);
         const msg = buildDebugTemplateEvent(escapeHtmlEvent(text));
         pushToChat(msg);
         return "";

@@ -6,7 +6,9 @@ import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { ensureSharedCheckboxStyles, hydrateSharedCheckboxes } from '../../../_Components/sharedCheckbox';
 import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
+import { discoverConsumers, type DiscoveredConsumer } from '../discovery/consumer-discovery';
 
 type LLMHubSettings = {
     enabled?: boolean;
@@ -37,6 +39,23 @@ type LLMHubRuntime = {
 
 // UI 组件的唯一命名空间
 const NAMESPACE = 'stx-llmhub';
+const PROFILE_LABELS: Record<string, string> = {
+    balanced: '平衡',
+    precise: '精准',
+    creative: '创意',
+    economy: '经济',
+};
+
+/**
+ * 功能：将参数档标识转换为中文标签。
+ * 参数：
+ *   profileId：参数档标识。
+ * 返回：
+ *   string：中文标签，未知值回退为原始值。
+ */
+function getProfileLabel(profileId: string): string {
+    return PROFILE_LABELS[profileId] || profileId;
+}
 
 /**
  * 功能：渲染更新日志 HTML。
@@ -82,11 +101,13 @@ const IDS: LLMHubSettingsIds = {
 
     tabMainId: `${NAMESPACE}-tab-main`,
     tabRouterId: `${NAMESPACE}-tab-router`,
+    tabConsumerMapId: `${NAMESPACE}-tab-consumer-map`,
     tabVaultId: `${NAMESPACE}-tab-vault`,
     tabAboutId: `${NAMESPACE}-tab-about`,
 
     panelMainId: `${NAMESPACE}-panel-main`,
     panelRouterId: `${NAMESPACE}-panel-router`,
+    panelConsumerMapId: `${NAMESPACE}-panel-consumer-map`,
     panelVaultId: `${NAMESPACE}-panel-vault`,
     panelAboutId: `${NAMESPACE}-panel-about`,
 
@@ -95,6 +116,8 @@ const IDS: LLMHubSettingsIds = {
 
     defaultProviderId: `${NAMESPACE}-default-provider`,
     defaultModelId: `${NAMESPACE}-default-model`,
+    routerAdvancedToggleId: `${NAMESPACE}-router-advanced-toggle`,
+    routerAdvancedBodyId: `${NAMESPACE}-router-advanced-body`,
     routeConsumerId: `${NAMESPACE}-route-consumer`,
     routeTaskId: `${NAMESPACE}-route-task`,
     routeProviderId: `${NAMESPACE}-route-provider`,
@@ -103,6 +126,8 @@ const IDS: LLMHubSettingsIds = {
     routeSaveBtnId: `${NAMESPACE}-route-save-btn`,
     routeResetBtnId: `${NAMESPACE}-route-reset-btn`,
     routeListId: `${NAMESPACE}-route-list`,
+
+    consumerMapRefreshBtnId: `${NAMESPACE}-consumer-map-refresh-btn`,
 
     budgetConsumerId: `${NAMESPACE}-budget-consumer`,
     budgetMaxRpmId: `${NAMESPACE}-budget-max-rpm`,
@@ -127,6 +152,8 @@ const IDS: LLMHubSettingsIds = {
 function applySettingsTooltips(): void {
     const cardRoot = document.getElementById(IDS.cardId);
     if (!cardRoot) return;
+    ensureSharedCheckboxStyles();
+    hydrateSharedCheckboxes(cardRoot);
     ensureSharedTooltip();
     const catalog = buildSettingsTooltipCatalog(IDS);
     applyTooltipCatalog(cardRoot, catalog);
@@ -230,9 +257,22 @@ export async function renderSettingsUi(): Promise<void> {
  */
 function bindUiEvents(): void {
     const runtime = getRuntime();
-    const stContext = (window as any).SillyTavern?.getContext?.() || {};
     const refreshSettingsTooltips = (): void => {
         applySettingsTooltips();
+    };
+
+    type STContextSnapshot = {
+        extensionSettings?: Record<string, any>;
+        saveSettingsDebounced?: () => void;
+    } | null;
+
+    /**
+     * 功能：获取最新 SillyTavern 上下文，避免闭包持有过期对象。
+     * 参数：无。
+     * 返回：上下文对象或 null。
+     */
+    const getStContext = (): STContextSnapshot => {
+        return (window as any).SillyTavern?.getContext?.() || null;
     };
 
     /**
@@ -243,6 +283,10 @@ function bindUiEvents(): void {
      *   LLMHubSettings：设置对象引用。
      */
     const ensureSettings = (): LLMHubSettings => {
+        const stContext = getStContext();
+        if (!stContext) {
+            return {};
+        }
         if (!stContext.extensionSettings) {
             stContext.extensionSettings = {};
         }
@@ -260,12 +304,14 @@ function bindUiEvents(): void {
      *   void：无返回值。
      */
     const saveSettings = (): void => {
-        stContext.saveSettingsDebounced?.();
+        const stContext = getStContext();
+        stContext?.saveSettingsDebounced?.();
     };
 
     const tabs = [
         { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
         { tabId: IDS.tabRouterId, panelId: IDS.panelRouterId },
+        { tabId: IDS.tabConsumerMapId, panelId: IDS.panelConsumerMapId },
         { tabId: IDS.tabVaultId, panelId: IDS.panelVaultId },
         { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
     ];
@@ -284,6 +330,11 @@ function bindUiEvents(): void {
             });
             tabEl.classList.add('is-active');
             document.getElementById(panelId)?.removeAttribute('hidden');
+            if (panelId === IDS.panelConsumerMapId) {
+                renderConsumerMappings().catch((error: unknown) => {
+                    console.error('renderConsumerMappings failed:', error);
+                });
+            }
         });
     });
 
@@ -348,12 +399,19 @@ function bindUiEvents(): void {
         });
     }
 
+    const cardRoot = document.getElementById(IDS.cardId);
+    const syncCardDisabledState = (enabled: boolean): void => {
+        cardRoot?.classList.toggle('is-card-disabled', !enabled);
+    };
+
     const enabledEl = document.getElementById(IDS.enabledId) as HTMLInputElement | null;
     if (enabledEl) {
         enabledEl.checked = ensureSettings().enabled === true;
+        syncCardDisabledState(enabledEl.checked);
         enabledEl.addEventListener('change', () => {
             const settings = ensureSettings();
             settings.enabled = enabledEl.checked;
+            syncCardDisabledState(enabledEl.checked);
             saveSettings();
             (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
                 v: 1,
@@ -433,6 +491,8 @@ function bindUiEvents(): void {
     const routeSaveBtn = document.getElementById(IDS.routeSaveBtnId);
     const routeResetBtn = document.getElementById(IDS.routeResetBtnId);
     const routeListEl = document.getElementById(IDS.routeListId);
+    const consumerMapRefreshBtn = document.getElementById(IDS.consumerMapRefreshBtnId);
+    const consumerMapListEl = cardRoot?.querySelector<HTMLElement>('[data-consumer-map-list="1"]') ?? null;
 
     const budgetConsumerEl = document.getElementById(IDS.budgetConsumerId) as HTMLInputElement | null;
     const budgetMaxRpmEl = document.getElementById(IDS.budgetMaxRpmId) as HTMLInputElement | null;
@@ -442,6 +502,23 @@ function bindUiEvents(): void {
     const budgetSaveBtn = document.getElementById(IDS.budgetSaveBtnId);
     const budgetResetBtn = document.getElementById(IDS.budgetResetBtnId);
     const budgetListEl = document.getElementById(IDS.budgetListId);
+    const routerAdvancedToggleEl = document.getElementById(IDS.routerAdvancedToggleId) as HTMLButtonElement | null;
+    const routerAdvancedBodyEl = document.getElementById(IDS.routerAdvancedBodyId) as HTMLElement | null;
+
+    if (routerAdvancedToggleEl && routerAdvancedBodyEl) {
+        routerAdvancedToggleEl.setAttribute('aria-expanded', 'false');
+        routerAdvancedBodyEl.setAttribute('hidden', 'true');
+        routerAdvancedToggleEl.addEventListener('click', () => {
+            const expanded = routerAdvancedToggleEl.getAttribute('aria-expanded') === 'true';
+            const nextExpanded = !expanded;
+            routerAdvancedToggleEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+            if (nextExpanded) {
+                routerAdvancedBodyEl.removeAttribute('hidden');
+            } else {
+                routerAdvancedBodyEl.setAttribute('hidden', 'true');
+            }
+        });
+    }
 
     /**
      * 功能：获取可选 Provider 列表。
@@ -525,6 +602,18 @@ function bindUiEvents(): void {
     };
 
     /**
+     * 功能：判断两个 consumer 是否可视为同一调用方。
+     * 参数：
+     *   left：调用方 A。
+     *   right：调用方 B。
+     * 返回：
+     *   boolean：是否同一调用方。
+     */
+    const isSameConsumer = (left: string, right: string): boolean => {
+        return String(left || '').trim() === String(right || '').trim();
+    };
+
+    /**
      * 功能：写入并应用路由规则。
      * 参数：
      *   policies：待写入规则数组。
@@ -561,14 +650,128 @@ function bindUiEvents(): void {
               <div>
                 <div class="stx-ui-list-title">${policy.consumer} / ${policy.task}</div>
                 <div class="stx-ui-list-meta">
-                  provider=${policy.providerId}
-                  ${policy.profileId ? `, profile=${policy.profileId}` : ''}
-                  ${policy.fallbackProviderId ? `, fallback=${policy.fallbackProviderId}` : ''}
+                  服务商=${policy.providerId}
+                  ${policy.profileId ? `，参数档=${getProfileLabel(policy.profileId)}` : ''}
+                  ${policy.fallbackProviderId ? `，备用=${policy.fallbackProviderId}` : ''}
                 </div>
               </div>
               <button class="stx-ui-btn secondary" type="button" data-route-index="${index}">删除</button>
             </div>
           `)
+            .join('');
+        refreshSettingsTooltips();
+    };
+
+    /**
+     * 功能：转义文本，防止注入到 innerHTML。
+     * 参数：
+     *   value：原始文本。
+     * 返回：
+     *   string：转义后的文本。
+     */
+    const escapeHtml = (value: string): string => {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    };
+
+    /**
+     * 功能：渲染插件映射列表。
+     * 参数：无。
+     * 返回：
+     *   Promise<void>：渲染完成。
+     */
+    const renderConsumerMappings = async (): Promise<void> => {
+        if (!consumerMapListEl) {
+            return;
+        }
+        consumerMapListEl.innerHTML = '<div class="stx-ui-list-empty">正在检测在线插件...</div>';
+        let discovered: DiscoveredConsumer[] = [];
+        try {
+            discovered = await discoverConsumers({
+                fromNamespace: 'stx_llmhub',
+                timeoutMs: 1200,
+                excludePluginIds: ['stx_llmhub'],
+                onlineOnly: true,
+            });
+        } catch (error) {
+            console.error('discoverConsumers failed:', error);
+        }
+
+        if (!discovered.length) {
+            consumerMapListEl.innerHTML = '<div class="stx-ui-list-empty">未检测到在线插件</div>';
+            refreshSettingsTooltips();
+            return;
+        }
+
+        const providerIds = getProviderIds();
+        const profiles = Object.keys(PROFILE_LABELS);
+        const policies = readRoutePolicies();
+
+        const providerOptionHtml = (selected: string): string =>
+            providerIds
+                .map((providerId: string) => `<option value="${escapeHtml(providerId)}"${providerId === selected ? ' selected' : ''}>${escapeHtml(providerId)}</option>`)
+                .join('');
+        const profileOptionHtml = (selected?: string): string =>
+            [''].concat(profiles)
+                .map((profileId: string) => {
+                    const label = profileId ? getProfileLabel(profileId) : '(不指定)';
+                    return `<option value="${escapeHtml(profileId)}"${profileId === (selected || '') ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+                })
+                .join('');
+        const fallbackOptionHtml = (selected?: string): string =>
+            [''].concat(providerIds)
+                .map((providerId: string) => {
+                    const label = providerId || '(不指定)';
+                    return `<option value="${escapeHtml(providerId)}"${providerId === (selected || '') ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+                })
+                .join('');
+
+        consumerMapListEl.innerHTML = discovered
+            .map((item: DiscoveredConsumer) => {
+                const currentPolicy = policies.find((policy: RoutePolicy) => policy.task === '*' && isSameConsumer(policy.consumer, item.pluginId));
+                const pluginId = item.pluginId;
+                const displayName = item.displayName || pluginId;
+                const stateText = item.isEnabled === false ? '在线（插件已关闭）' : '在线';
+                return `
+                <div class="stx-ui-list-item stx-ui-consumer-map-row" data-consumer-map-row="${escapeHtml(pluginId)}">
+                  <div class="stx-ui-consumer-map-head">
+                    <div class="stx-ui-list-title">${escapeHtml(displayName)} <span class="stx-ui-list-meta">(${escapeHtml(pluginId)})</span></div>
+                    <div class="stx-ui-consumer-map-status">
+                      <span class="stx-ui-consumer-map-status-dot" aria-hidden="true"></span>
+                      <span>${escapeHtml(stateText)}</span>
+                    </div>
+                  </div>
+                  <div class="stx-ui-consumer-map-form">
+                    <div class="stx-ui-field">
+                      <label class="stx-ui-field-label">服务商</label>
+                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-provider="${escapeHtml(pluginId)}">
+                        ${providerOptionHtml(currentPolicy?.providerId || providerIds[0] || '')}
+                      </select>
+                    </div>
+                    <div class="stx-ui-field">
+                      <label class="stx-ui-field-label">参数档</label>
+                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-profile="${escapeHtml(pluginId)}">
+                        ${profileOptionHtml(currentPolicy?.profileId)}
+                      </select>
+                    </div>
+                    <div class="stx-ui-field">
+                      <label class="stx-ui-field-label">备用服务商</label>
+                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-fallback="${escapeHtml(pluginId)}">
+                        ${fallbackOptionHtml(currentPolicy?.fallbackProviderId)}
+                      </select>
+                    </div>
+                  </div>
+                  <div class="stx-ui-consumer-map-actions">
+                    <button class="stx-ui-btn" type="button" data-consumer-map-save="${escapeHtml(pluginId)}">保存映射</button>
+                    <button class="stx-ui-btn secondary" type="button" data-consumer-map-delete="${escapeHtml(pluginId)}">删除映射</button>
+                  </div>
+                </div>
+              `;
+            })
             .join('');
         refreshSettingsTooltips();
     };
@@ -627,6 +830,9 @@ function bindUiEvents(): void {
         }
         writeRoutePolicies(policies);
         renderRoutePolicies();
+        renderConsumerMappings().catch((error: unknown) => {
+            console.error('renderConsumerMappings failed:', error);
+        });
         clearRouteForm();
     });
 
@@ -651,6 +857,57 @@ function bindUiEvents(): void {
         policies.splice(index, 1);
         writeRoutePolicies(policies);
         renderRoutePolicies();
+        renderConsumerMappings().catch((error: unknown) => {
+            console.error('renderConsumerMappings failed:', error);
+        });
+    });
+
+    consumerMapRefreshBtn?.addEventListener('click', () => {
+        renderConsumerMappings().catch((error: unknown) => {
+            console.error('renderConsumerMappings failed:', error);
+        });
+    });
+
+    consumerMapListEl?.addEventListener('click', (evt: Event) => {
+        const target = evt.target as HTMLElement;
+        const saveBtn = target.closest<HTMLButtonElement>('button[data-consumer-map-save]');
+        const deleteBtn = target.closest<HTMLButtonElement>('button[data-consumer-map-delete]');
+        const pluginId = String(saveBtn?.dataset.consumerMapSave || deleteBtn?.dataset.consumerMapDelete || '').trim();
+        if (!pluginId) {
+            return;
+        }
+        if (!consumerMapListEl) {
+            return;
+        }
+
+        const policies = readRoutePolicies();
+        const nextPolicies = policies.filter(
+            (item: RoutePolicy) => !(item.task === '*' && isSameConsumer(item.consumer, pluginId))
+        );
+
+        if (saveBtn) {
+            const providerEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-provider="${pluginId}"]`);
+            const profileEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-profile="${pluginId}"]`);
+            const fallbackEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-fallback="${pluginId}"]`);
+            const providerId = String(providerEl?.value || '').trim();
+            if (!providerId) {
+                alert('请先选择服务商');
+                return;
+            }
+            nextPolicies.push({
+                consumer: pluginId,
+                task: '*',
+                providerId,
+                profileId: String(profileEl?.value || '').trim() || undefined,
+                fallbackProviderId: String(fallbackEl?.value || '').trim() || undefined,
+            });
+        }
+
+        writeRoutePolicies(nextPolicies);
+        renderRoutePolicies();
+        renderConsumerMappings().catch((error: unknown) => {
+            console.error('renderConsumerMappings failed:', error);
+        });
     });
 
     /**

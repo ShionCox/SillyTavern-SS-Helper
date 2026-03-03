@@ -5,6 +5,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       color: var(--SmartThemeBodyColor, inherit);
     }
 
+    #${cardId}.is-card-disabled .stx-ui-shell {
+      opacity: 0.56;
+      filter: grayscale(0.92) saturate(0.35);
+    }
+
     #${cardId} .stx-ui-shell {
       border: 1px solid rgba(197, 160, 89, 0.35);
       border-radius: 12px;
@@ -107,6 +112,32 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+
+    #${cardId} .stx-ui-filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    #${cardId} .stx-ui-filter-group[hidden] {
+      display: none !important;
+    }
+
+    #${cardId} .stx-ui-filter-group.is-reveal-animating {
+      animation: stxFilterGroupReveal 0.28s cubic-bezier(0.21, 0.84, 0.35, 1) both;
+    }
+
+    @keyframes stxFilterGroupReveal {
+      0% {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     #${cardId} .stx-ui-panel[hidden] {
@@ -216,6 +247,54 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       gap: 10px;
     }
 
+    #${cardId} .stx-ui-item-stack {
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+    }
+
+    #${cardId} .stx-ui-item-stack .stx-ui-item-main {
+      width: 100%;
+    }
+
+    #${cardId} .stx-ui-item-stack .stx-ui-row,
+    #${cardId} .stx-ui-item-stack .stx-ui-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    #${cardId} .stx-ui-grid-form {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      gap: 8px;
+      width: 100%;
+    }
+
+    #${cardId} .stx-ui-grid-form label {
+      display: block;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-grid-form .stx-ui-input,
+    #${cardId} .stx-ui-grid-form .stx-ui-select {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-checkbox-group {
+      width: 100%;
+      justify-content: flex-start;
+      row-gap: 8px;
+      column-gap: 14px;
+    }
+
+    @media (max-width: 900px) {
+      #${cardId} .stx-ui-grid-form {
+        grid-template-columns: 1fr;
+      }
+    }
+
     #${cardId} .stx-ui-field-label {
       font-size: 13px;
       opacity: 0.85;
@@ -269,6 +348,15 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-input {
       width: 120px;
+    }
+
+    #${cardId} .stx-ui-codeblock-tags {
+      width: 100%;
+      min-height: 78px;
+      resize: vertical;
+      line-height: 1.45;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
 
     #${cardId} .stx-ui-item.is-disabled {
@@ -355,11 +443,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-changelog::-webkit-scrollbar-thumb {
       background: rgba(197, 160, 89, 0.5);
       border-radius: 10px;
-    }
-
-    #${cardId} input[type="checkbox"] {
-      accent-color: rgba(197, 160, 89, 0.92);
-      transition: filter 0.2s ease;
     }
 
     #${cardId} .stx-ui-head:hover {

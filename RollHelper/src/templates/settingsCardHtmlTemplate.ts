@@ -1,4 +1,5 @@
 import type { SettingsCardTemplateIdsEvent } from "./settingsCardTemplateTypes";
+import { renderSharedCheckbox } from "../../../_Components/sharedCheckbox";
 
 export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsEvent): string {
   return `
@@ -20,6 +21,9 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <button id="${ids.tabMainId}" type="button" class="st-roll-tab is-active">
             <i class="fa-solid fa-gear"></i><span>主设置</span>
           </button>
+          <button id="${ids.tabAiId}" type="button" class="st-roll-tab">
+            <i class="fa-solid fa-robot"></i><span>AI</span>
+          </button>
           <button id="${ids.tabSkillId}" type="button" class="st-roll-tab">
             <i class="fa-solid fa-bolt"></i><span>技能</span>
           </button>
@@ -39,7 +43,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用事件骰子系统</div>
               <div class="st-roll-item-desc">总开关。关掉后不再做事件检定。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.enabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.enabledId })}</div>
           </label>
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="scope protagonist all">
@@ -62,7 +66,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">默认发送规则给 AI</div>
               <div class="st-roll-item-desc">发送前自动加规则和摘要，减少跑偏。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.ruleId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.ruleId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="rollMode auto manual">
@@ -70,7 +74,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">允许 AI 决定自动/手动掷骰</div>
               <div class="st-roll-item-desc">开：AI 可自动掷骰。关：你手动掷骰。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.aiRollModeId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.aiRollModeId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="ai round end round_control end_round">
@@ -78,7 +82,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">是否开启持续轮</div>
               <div class="st-roll-item-desc">开：AI 决定何时结束本轮。关：每次事件都开新轮。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.aiRoundControlId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.aiRoundControlId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic dc reason">
@@ -86,7 +90,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用动态 DC 解释</div>
               <div class="st-roll-item-desc">显示这次难度变化的原因。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.dynamicDcReasonId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.dynamicDcReasonId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="status debuff apply remove clear">
@@ -94,7 +98,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用状态异常系统</div>
               <div class="st-roll-item-desc">状态会影响后续检定结果。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.statusSystemEnabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.statusSystemEnabledId })}</div>
           </label>
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="status editor">
@@ -112,7 +116,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用爆骰</div>
               <div class="st-roll-item-desc">满足条件时可追加掷骰。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.explodingEnabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.explodingEnabledId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="advantage disadvantage">
@@ -120,7 +124,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用优势/劣势</div>
               <div class="st-roll-item-desc">开启后按优势/劣势取高或取低。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.advantageEnabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.advantageEnabledId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic result guidance">
@@ -128,7 +132,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用动态结果引导</div>
               <div class="st-roll-item-desc">掷骰后给 AI 一句结果提示。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.dynamicResultGuidanceId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.dynamicResultGuidanceId })}</div>
           </label>
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="dice sides allowed">
@@ -148,7 +152,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用剧情走向分支</div>
               <div class="st-roll-item-desc">成功、失败、爆骰可走不同后果。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.outcomeBranchesId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.outcomeBranchesId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="explode outcome branch">
@@ -156,7 +160,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用爆骰特殊分支</div>
               <div class="st-roll-item-desc">爆骰时使用专用后果文本。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.explodeOutcomeId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.explodeOutcomeId })}</div>
           </label>
 
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="list outcome preview">
@@ -164,7 +168,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">列表卡预览走向</div>
               <div class="st-roll-item-desc">未掷骰时先预览可能结果。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.listOutcomePreviewId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.listOutcomePreviewId })}</div>
           </label>
 
           <div class="st-roll-divider"><i class="fa-solid fa-file-lines"></i><span>摘要注入</span><div class="st-roll-divider-line"></div></div>
@@ -196,7 +200,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">摘要包含走向文本</div>
               <div class="st-roll-item-desc">把本轮结果文本写进摘要。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.includeOutcomeSummaryId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.includeOutcomeSummaryId })}</div>
           </label>
 
           <div class="st-roll-divider"><i class="fa-solid fa-stopwatch"></i><span>时限控制</span><div class="st-roll-divider-line"></div></div>
@@ -206,7 +210,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用事件时限</div>
               <div class="st-roll-item-desc">事件有倒计时，超时按失败处理。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.timeLimitEnabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.timeLimitEnabledId })}</div>
           </label>
 
           <div id="${ids.timeLimitRowId}" class="st-roll-item st-roll-search-item" data-st-roll-search="minimum time limit seconds">
@@ -222,6 +226,21 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           </div>
         </div>
 
+        <div id="${ids.panelAiId}" class="st-roll-panel" hidden>
+          <div class="st-roll-divider"><i class="fa-solid fa-robot"></i><span>AI 对接</span><div class="st-roll-divider-line"></div></div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="llmhub bridge status online">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">LLMHub 连接状态</div>
+              <div class="st-roll-item-desc">用于确认骰子插件是否被 LLMHub 在线识别。</div>
+            </div>
+            <div class="st-roll-ai-bridge-status">
+              <span id="${ids.aiBridgeStatusLightId}" class="st-roll-ai-bridge-light is-offline"></span>
+              <span id="${ids.aiBridgeStatusTextId}" class="st-roll-ai-bridge-text">未检测</span>
+            </div>
+          </div>
+        </div>
+
         <div id="${ids.panelSkillId}" class="st-roll-panel" hidden>
           <div class="st-roll-divider"><i class="fa-solid fa-bolt"></i><span>技能系统</span><div class="st-roll-divider-line"></div></div>
 
@@ -230,7 +249,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div class="st-roll-item-title">启用技能系统</div>
               <div class="st-roll-item-desc">关掉后，技能加值不再生效。</div>
             </div>
-            <div class="st-roll-inline"><input id="${ids.skillEnabledId}" type="checkbox" /></div>
+            <div class="st-roll-inline">${renderSharedCheckbox({ id: ids.skillEnabledId })}</div>
           </label>
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="skill editor modal">
@@ -283,8 +302,8 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
                         <button id="${ids.skillAddId}" type="button" class="st-roll-btn">新增技能</button>
                         <button id="${ids.skillSaveId}" type="button" class="st-roll-btn">保存技能表</button>
                         <button id="${ids.skillResetId}" type="button" class="st-roll-btn secondary">重置为空</button>
-                        <button id="${ids.skillImportToggleId}" type="button" class="st-roll-btn secondary">导入 JSON</button>
-                        <button id="${ids.skillExportId}" type="button" class="st-roll-btn secondary">导出 JSON</button>
+                        <button id="${ids.skillImportToggleId}" type="button" class="st-roll-btn secondary">导入配置</button>
+                        <button id="${ids.skillExportId}" type="button" class="st-roll-btn secondary">导出配置</button>
                       </div>
                     </div>
 
@@ -293,7 +312,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
                     <div id="${ids.skillImportAreaId}" class="st-roll-skill-import" hidden>
                       <div class="st-roll-row" style="margin-bottom:8px;">
-                        <span class="st-roll-field-label">粘贴 JSON 后点击应用</span>
+                        <span class="st-roll-field-label">粘贴配置后点击应用</span>
                         <div class="st-roll-actions">
                           <button id="${ids.skillImportApplyId}" type="button" class="st-roll-btn">应用导入</button>
                         </div>
@@ -350,7 +369,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           </div>
 
           <div class="st-roll-item st-roll-search-item" style="flex-direction: column; align-items: flex-start; margin-bottom: 12px;" data-st-roll-search="changelog updates history">
-            <div class="st-roll-item-title">更新日志 (Changelog)</div>
+            <div class="st-roll-item-title">更新日志</div>
             <div class="st-roll-changelog">
               ${ids.changelogHtml}
             </div>
@@ -365,37 +384,6 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
         </div>
       </div>
     </div>
-
-    <!--
-    <dialog id="${ids.statusModalId}__legacy_hidden" class="st-roll-status-modal" hidden>
-      <div class="st-roll-status-modal-backdrop" data-status-modal-role="backdrop"></div>
-      <div class="st-roll-status-modal-panel">
-        <div class="st-roll-status-modal-head">
-          <div class="st-roll-status-modal-title">
-            <i class="fa-solid fa-heart-pulse"></i><span>状态编辑器（当前会话）</span>
-          </div>
-          <button id="${ids.statusModalCloseId}" type="button" class="st-roll-btn secondary st-roll-status-modal-close">关闭</button>
-        </div>
-        <div class="st-roll-status-modal-body">
-          <div class="st-roll-tip">名称不能为空；修正值必须是整数；范围为“按技能”时，技能列表不能为空；同名状态不能重复。</div>
-          <div id="${ids.statusDirtyHintId}" class="st-roll-status-dirty" hidden>状态改动尚未保存，点击“保存状态”后立即生效。</div>
-          <div id="${ids.statusErrorsId}" class="st-roll-status-errors" hidden></div>
-          <div class="st-roll-status-head">
-            <span class="st-roll-field-label">Active_Statuses（会话级）</span>
-            <div class="st-roll-actions">
-              <button id="${ids.statusAddId}" type="button" class="st-roll-btn">新增状态</button>
-              <button id="${ids.statusSaveId}" type="button" class="st-roll-btn">保存状态</button>
-              <button id="${ids.statusResetId}" type="button" class="st-roll-btn secondary">重置为空</button>
-            </div>
-          </div>
-          <div class="st-roll-status-cols">
-            <span>名称</span><span>修正</span><span>持续轮次</span><span>范围</span><span>技能列表（用 | 分隔）</span><span>启用</span><span>操作</span>
-          </div>
-          <div id="${ids.statusRowsId}" class="st-roll-status-rows"></div>
-        </div>
-      </div>
-    </dialog>
-    -->
 
     <dialog id="${ids.statusModalId}" class="st-roll-status-modal">
       <div class="st-roll-status-modal-backdrop" data-status-modal-role="backdrop"></div>
@@ -430,7 +418,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               <div id="${ids.statusErrorsId}" class="st-roll-status-errors" hidden></div>
               <div class="st-roll-status-head">
                 <div class="st-roll-status-head-main">
-                  <span class="st-roll-field-label">Active_Statuses（按聊天隔离）</span>
+                  <span class="st-roll-field-label">状态列表（按聊天隔离）</span>
                   <div id="${ids.statusChatMetaId}" class="st-roll-status-chat-meta">未选择聊天</div>
                 </div>
                 <div class="st-roll-actions">
