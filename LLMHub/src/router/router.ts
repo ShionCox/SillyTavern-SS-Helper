@@ -41,7 +41,28 @@ export class TaskRouter {
      * 添加路由策略
      */
     addPolicy(policy: RoutePolicy): void {
+        const existingIndex = this.policies.findIndex(
+            p => p.consumer === policy.consumer && p.task === policy.task
+        );
+        if (existingIndex >= 0) {
+            this.policies.splice(existingIndex, 1, policy);
+            return;
+        }
         this.policies.push(policy);
+    }
+
+    /**
+     * 批量替换路由策略
+     */
+    setPolicies(policies: RoutePolicy[]): void {
+        this.policies = [...policies];
+    }
+
+    /**
+     * 清空全部策略
+     */
+    clearPolicies(): void {
+        this.policies = [];
     }
 
     /**
@@ -58,6 +79,25 @@ export class TaskRouter {
     resolve(consumer: string, task: string): {
         primary: LLMProvider;
         fallback: LLMProvider | null;
+        profileId?: string;
+    };
+    resolve(
+        consumer: string,
+        task: string,
+        opts: { providerId?: string }
+    ): {
+        primary: LLMProvider;
+        fallback: LLMProvider | null;
+        profileId?: string;
+    };
+    resolve(
+        consumer: string,
+        task: string,
+        opts?: { providerId?: string }
+    ): {
+        primary: LLMProvider;
+        fallback: LLMProvider | null;
+        profileId?: string;
     } {
         // 1. 精确匹配 consumer + task
         let matched = this.policies.find(
@@ -71,8 +111,8 @@ export class TaskRouter {
             );
         }
 
-        // 3. 全局 default
-        const primaryId = matched?.providerId || this.defaultProviderId;
+        // 3. routeHint 优先，其次策略匹配，再其次全局默认
+        const primaryId = opts?.providerId || matched?.providerId || this.defaultProviderId;
         if (!primaryId) {
             throw new Error(`[TaskRouter] 无法为 consumer="${consumer}" task="${task}" 找到可用的 Provider`);
         }
@@ -87,7 +127,7 @@ export class TaskRouter {
             fallback = this.providers.get(matched.fallbackProviderId) ?? null;
         }
 
-        return { primary, fallback };
+        return { primary, fallback, profileId: matched?.profileId };
     }
 
     /**
@@ -95,5 +135,12 @@ export class TaskRouter {
      */
     getAllProviders(): LLMProvider[] {
         return Array.from(this.providers.values());
+    }
+
+    /**
+     * 按 providerId 获取 provider 实例
+     */
+    getProvider(providerId: string): LLMProvider | undefined {
+        return this.providers.get(providerId);
     }
 }

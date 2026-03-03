@@ -53,8 +53,10 @@ export interface DBTemplate {
     worldType: "fantasy" | "urban" | "custom";
     name: string;
     schema: any;
+    factTypes: any[];
     policies: any;
     layout: any;
+    worldInfoHash?: string;
     worldInfoRef?: { book: string; hash: string };
     createdAt: number;
 }
@@ -93,6 +95,7 @@ export interface DBTemplateBinding {
     chatKey: string;
     activeTemplateId: string;
     worldInfoHash: string;
+    isLocked?: boolean;
     boundAt: number;
 }
 
@@ -135,6 +138,7 @@ export interface DBVectorMeta {
  * v1 - 核心 7 张表（events/facts/world_state/summaries/templates/audit/meta）
  * v2 - 新增 worldinfo_cache + template_bindings
  * v3 - 新增向量层 vector_chunks + vector_embeddings + vector_meta
+ * v4 - templates 增加 worldInfoHash/factTypes 持久化与按 hash 查询索引
  */
 export class MemoryOSDatabase extends Dexie {
     events!: Table<DBEvent, string>;
@@ -177,6 +181,12 @@ export class MemoryOSDatabase extends Dexie {
             vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
             vector_embeddings: '&embeddingId, chunkId, chatKey',
             vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
+        });
+
+        // v4：模板按 worldInfoHash 查询
+        this.version(4).stores({
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            template_bindings: '&bindingKey, chatKey',
         });
     }
 }

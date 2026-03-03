@@ -34,6 +34,13 @@ export class BudgetManager {
     }
 
     /**
+     * 删除指定 consumer 的预算配置
+     */
+    removeConfig(consumer: string): void {
+        this.configs.delete(consumer);
+    }
+
+    /**
      * 取得或初始化 consumer 状态
      */
     private getState(consumer: string): ConsumerState {

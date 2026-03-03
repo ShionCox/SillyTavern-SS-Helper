@@ -1,4 +1,5 @@
 import { db, type DBAudit } from '../db/db';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * 审计管理器 —— 负责操作审计与快照/回滚
@@ -62,7 +63,7 @@ export class AuditManager {
 
         return this.log({
             action: 'snapshot',
-            actor: { pluginId: 'memory-os', mode: 'manual' },
+            actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
             before: {},
             after: { facts, states, summaries, note },
         });

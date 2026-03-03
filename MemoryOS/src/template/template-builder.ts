@@ -3,6 +3,7 @@ import type { WorldTemplate, WorldContextBundle } from './types';
 import { TemplateManager } from './template-manager';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * 世界模板构建器 —— 编排 `world.template.build` 任务
@@ -80,7 +81,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
 
         // 调用 LLM Hub
         const result = await llmSdk.runTask<any>({
-            consumer: 'memory-os',
+            consumer: MEMORY_OS_PLUGIN_ID,
             task: 'world.template.build',
             input: {
                 messages: [

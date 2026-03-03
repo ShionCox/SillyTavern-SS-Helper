@@ -18,7 +18,7 @@ export class EventBus implements STXBus {
             id: crypto.randomUUID(),
             ts,
             chatKey: opts?.chatKey || 'global',
-            source: { pluginId: 'memory-os-bus', version: '1.0.0' }, // 默认标识总线来源，真实流转中应记录触发源
+            source: { pluginId: 'memory_os', version: '1.0.0' }, // 默认标识总线来源，真实流转中应记录触发源
             type,
             payload
         };

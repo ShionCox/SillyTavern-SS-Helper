@@ -55,7 +55,7 @@ export function buildSettingsCardHtmlTemplate(
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="enable memory os switch">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">启用 Memory OS</div>
-              <div class="stx-ui-item-desc">总开关，控制记忆收集、状态追踪和自动化提议。</div>
+              <div class="stx-ui-item-desc">总开关。关闭后不再记录记忆。</div>
             </div>
             <div class="stx-ui-inline">
               <input id="${ids.enabledId}" type="checkbox" />
@@ -68,7 +68,7 @@ export function buildSettingsCardHtmlTemplate(
                 启用 AI 模式
                 <i id="${ids.aiModeStatusLightId}" class="fa-solid fa-circle-question" style="color: #666; font-size: 11px; margin-left: 6px;" title="通信中..."></i>
               </div>
-              <div class="stx-ui-item-desc">开启后将使用大模型分析事件并进行事实抽取，关闭则仅使用基础 Rule 模式（快速压缩）。</div>
+              <div class="stx-ui-item-desc">开启后用 AI 抽取事实。关闭后只用规则模式。</div>
             </div>
             <div class="stx-ui-inline">
               <input id="${ids.aiModeEnabledId}" type="checkbox" />
@@ -86,7 +86,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="max tokens context injection">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">上下文最大 Token 限制</div>
-              <div class="stx-ui-item-desc">每次对话时，注入到 Prompt 里的世界状态和事实的最大总长度。</div>
+              <div class="stx-ui-item-desc">限制每次注入给 AI 的记忆长度。</div>
             </div>
             <div class="stx-ui-row">
               <input id="${ids.contextMaxTokensId}" class="stx-ui-input" type="number" min="500" max="8000" step="100" />
@@ -104,7 +104,7 @@ export function buildSettingsCardHtmlTemplate(
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="auto compaction archive">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">自动事务压缩 (Auto Compaction)</div>
-              <div class="stx-ui-item-desc">当事件流长到一定程度时，自动聚合并归档早期事件。</div>
+              <div class="stx-ui-item-desc">开启后，事件多了会自动压缩。</div>
             </div>
             <div class="stx-ui-inline">
               <input id="${ids.autoCompactionId}" type="checkbox" />
@@ -114,7 +114,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="threshold limit events">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">事件流压缩阈值</div>
-              <div class="stx-ui-item-desc">当事件流达到多少条时触发软归档与摘要生成。</div>
+              <div class="stx-ui-item-desc">事件达到这个数量时开始压缩。</div>
             </div>
             <div class="stx-ui-row">
               <input id="${ids.compactionThresholdId}" class="stx-ui-input" type="number" min="500" max="20000" step="500" />
@@ -124,7 +124,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="manual actions db export clear">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">维护操作</div>
-              <div class="stx-ui-item-desc">手动执行数据库运维。</div>
+              <div class="stx-ui-item-desc">这里是手动维护功能。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.dbCompactBtnId}" type="button" class="stx-ui-btn">立即压缩</button>
@@ -132,6 +132,7 @@ export function buildSettingsCardHtmlTemplate(
                 <i class="fa-solid fa-pen-to-square"></i>&nbsp;记录编辑
               </button>
               <button id="${ids.dbExportBtnId}" type="button" class="stx-ui-btn secondary">导出记忆包</button>
+              <button id="${ids.dbImportBtnId}" type="button" class="stx-ui-btn secondary">导入记忆包</button>
               <button id="${ids.dbClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
             </div>
           </div>
@@ -139,7 +140,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="bus inspector connection test ping hello">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">微服务通讯自测 (Bus Inspector)</div>
-              <div class="stx-ui-item-desc">手动诊断 MemoryOS 与 LLMHub 间网络层通信状态。结果将反馈至 F12 控制台供详尽追溯 (P2-3)。</div>
+              <div class="stx-ui-item-desc">用于检查 MemoryOS 和 LLMHub 是否连通。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.testPingBtnId}" type="button" class="stx-ui-btn secondary">发送 Ping 测试</button>
@@ -158,7 +159,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 12px;">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">当前绑定的世界 Schema</div>
-              <div class="stx-ui-item-desc">根据当前聊天已激活的世界书，由 AI 分析生成的逻辑表结构。</div>
+              <div class="stx-ui-item-desc">这里显示当前聊天使用的模板结构。</div>
             </div>
             <div id="${ids.templateListId}" style="width: 100%; font-size: 12px; color: var(--SmartThemeBodyColor, #ccc); background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
               正在加载...
@@ -171,6 +172,16 @@ export function buildSettingsCardHtmlTemplate(
                 <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp;强制重建模板 (从世界书)
               </button>
             </div>
+            <div style="display:flex; gap:8px; align-items:center; width:100%;">
+              <select id="${ids.templateActiveSelectId}" class="stx-ui-input" style="flex:1; padding: 4px 8px; font-size: 12px;">
+                <option value="">选择要激活的模板...</option>
+              </select>
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap;">
+                <input id="${ids.templateLockId}" type="checkbox" />
+                锁定模板
+              </label>
+              <button id="${ids.templateSetActiveBtnId}" type="button" class="stx-ui-btn">应用</button>
+            </div>
           </div>
 
           <!-- 世界书写回区块 -->
@@ -179,7 +190,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-title">写回到 SillyTavern WorldInfo
                 <span style="font-size: 10px; color: #aaa; font-weight: normal; margin-left: 6px;">（将稳定事实和摘要导入为世界书条目）</span>
               </div>
-              <div class="stx-ui-item-desc">写回后 ST 原生世界书引擎可直接进行自动注入，用户也可在 ST 界面手编。</div>
+              <div class="stx-ui-item-desc">把记忆写回世界书，后续可直接注入。</div>
             </div>
             <div id="${ids.wiPreviewId}" style="width: 100%; font-size: 11px; color: #aaa; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 8px; max-height: 100px; overflow-y: auto; font-family: monospace;"></div>
             <div class="stx-ui-actions">
@@ -201,7 +212,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-title">逻辑表（可编辑）
                 <span style="font-size: 10px; color: #aaa; font-weight: normal; margin-left: 6px;">（双击内容进入编辑）</span>
               </div>
-              <div class="stx-ui-item-desc">根据当前模板生成的实体表，所有条目均可直接内联编辑并实时写入 facts。</div>
+              <div class="stx-ui-item-desc">可直接编辑事实，改完会立刻保存。</div>
             </div>
             <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
               <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
@@ -229,7 +240,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 12px;">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">快照操作</div>
-              <div class="stx-ui-item-desc">创建当前所有事实/摘要/世界状态的快照，稍后可以从历史列表里点击"回滚"恢复到该时刻。</div>
+              <div class="stx-ui-item-desc">先保存一个快照，之后可一键回滚。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.auditCreateSnapshotBtnId}" type="button" class="stx-ui-btn">
@@ -291,7 +302,7 @@ export function buildSettingsCardHtmlTemplate(
           </div>
           
           <div class="stx-ui-tip">
-            Memory OS 是智能状态管理中心。通过事件总线处理行为，将状态聚合反馈给 AI。
+            Memory OS 负责记忆记录、压缩和回写。
           </div>
         </div>
       </div>

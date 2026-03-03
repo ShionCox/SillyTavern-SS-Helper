@@ -37,7 +37,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="enable event dice plugin">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用事件骰子系统</div>
-              <div class="st-roll-item-desc">总开关。关闭后将不再解析事件，也不会执行事件检定。</div>
+              <div class="st-roll-item-desc">总开关。关掉后不再做事件检定。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.enabledId}" type="checkbox" /></div>
           </label>
@@ -45,7 +45,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="scope protagonist all">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">事件应用范围</div>
-              <div class="st-roll-item-desc">选择只处理主角事件，或处理所有角色事件。</div>
+              <div class="st-roll-item-desc">选择只处理主角，或处理全部角色。</div>
             </div>
             <div class="st-roll-row">
               <select id="${ids.scopeId}" class="st-roll-select">
@@ -60,7 +60,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="auto send rule inject">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">默认发送规则给 AI</div>
-              <div class="st-roll-item-desc">你发送消息前，自动附加规则和摘要，减少 AI 输出格式错误。</div>
+              <div class="st-roll-item-desc">发送前自动加规则和摘要，减少跑偏。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.ruleId}" type="checkbox" /></div>
           </label>
@@ -68,7 +68,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="rollMode auto manual">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">允许 AI 决定自动/手动掷骰</div>
-              <div class="st-roll-item-desc">开启后 AI 可把事件设为自动掷骰；关闭后都需要你手动掷骰。</div>
+              <div class="st-roll-item-desc">开：AI 可自动掷骰。关：你手动掷骰。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.aiRollModeId}" type="checkbox" /></div>
           </label>
@@ -76,7 +76,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="ai round end round_control end_round">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">是否开启持续轮</div>
-              <div class="st-roll-item-desc">开启：沿用当前轮，由 AI 通过 round_control=end_round / end_round=true 决定何时结束。关闭：按每轮处理，每次新事件都会开启新轮。</div>
+              <div class="st-roll-item-desc">开：AI 决定何时结束本轮。关：每次事件都开新轮。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.aiRoundControlId}" type="checkbox" /></div>
           </label>
@@ -84,7 +84,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic dc reason">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用动态 DC 解释</div>
-              <div class="st-roll-item-desc">在卡片中显示“为什么这次难度更高或更低”。</div>
+              <div class="st-roll-item-desc">显示这次难度变化的原因。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.dynamicDcReasonId}" type="checkbox" /></div>
           </label>
@@ -92,7 +92,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="status debuff apply remove clear">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用状态异常系统</div>
-              <div class="st-roll-item-desc">事件可给角色加状态（如受伤、惊吓），后续检定会自动加减值。</div>
+              <div class="st-roll-item-desc">状态会影响后续检定结果。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.statusSystemEnabledId}" type="checkbox" /></div>
           </label>
@@ -100,7 +100,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="status editor">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">状态编辑器</div>
-              <div class="st-roll-item-desc">手动管理当前会话的状态列表，适合临时调整剧情状态。</div>
+              <div class="st-roll-item-desc">可手动增删改当前聊天状态。</div>
             </div>
             <div class="st-roll-actions"><button id="${ids.statusEditorOpenId}" type="button" class="st-roll-btn">打开编辑器</button></div>
           </div>
@@ -110,7 +110,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="explode">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用爆骰</div>
-              <div class="st-roll-item-desc">开启后满足条件时可追加掷骰；关闭后不追加。</div>
+              <div class="st-roll-item-desc">满足条件时可追加掷骰。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.explodingEnabledId}" type="checkbox" /></div>
           </label>
@@ -118,7 +118,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="advantage disadvantage">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用优势/劣势</div>
-              <div class="st-roll-item-desc">支持优势和劣势规则，会自动取更高或更低结果。</div>
+              <div class="st-roll-item-desc">开启后按优势/劣势取高或取低。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.advantageEnabledId}" type="checkbox" /></div>
           </label>
@@ -126,7 +126,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic result guidance">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用动态结果引导</div>
-              <div class="st-roll-item-desc">掷骰后会给 AI 一条简短提示，帮助它更自然地衔接剧情。</div>
+              <div class="st-roll-item-desc">掷骰后给 AI 一句结果提示。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.dynamicResultGuidanceId}" type="checkbox" /></div>
           </label>
@@ -134,7 +134,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="dice sides allowed">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">限制 AI 可用骰子面数</div>
-              <div class="st-roll-item-desc">AI 只能使用这里填写的面数，例如：4,6,8,10,12,20,100。</div>
+              <div class="st-roll-item-desc">AI 只能用这里列出的骰子面数。</div>
             </div>
             <div class="st-roll-row">
               <input id="${ids.allowedDiceSidesId}" class="st-roll-input" type="text" placeholder="4,6,8,10,12,20,100" />
@@ -146,7 +146,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="outcome branches">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用剧情走向分支</div>
-              <div class="st-roll-item-desc">可为成功、失败、爆骰分别设置不同后果。</div>
+              <div class="st-roll-item-desc">成功、失败、爆骰可走不同后果。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.outcomeBranchesId}" type="checkbox" /></div>
           </label>
@@ -154,7 +154,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="explode outcome branch">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用爆骰特殊分支</div>
-              <div class="st-roll-item-desc">出现爆骰时，优先使用爆骰后果文本。</div>
+              <div class="st-roll-item-desc">爆骰时使用专用后果文本。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.explodeOutcomeId}" type="checkbox" /></div>
           </label>
@@ -162,7 +162,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="list outcome preview">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">列表卡预览走向</div>
-              <div class="st-roll-item-desc">还没掷骰时，也能先看到可能出现的三种结果。</div>
+              <div class="st-roll-item-desc">未掷骰时先预览可能结果。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.listOutcomePreviewId}" type="checkbox" /></div>
           </label>
@@ -172,7 +172,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="summary detail mode">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">摘要信息等级</div>
-              <div class="st-roll-item-desc">控制发给 AI 的历史摘要是简略、平衡还是详细。</div>
+              <div class="st-roll-item-desc">控制发给 AI 的摘要详细度。</div>
             </div>
             <div class="st-roll-row">
               <select id="${ids.summaryDetailId}" class="st-roll-select">
@@ -186,7 +186,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="summary rounds history">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">历史轮次数</div>
-              <div class="st-roll-item-desc">每次附带最近 N 轮记录。数字越大，AI 上下文越完整。</div>
+              <div class="st-roll-item-desc">每次带上最近 N 轮记录。</div>
             </div>
             <div class="st-roll-row"><input id="${ids.summaryRoundsId}" class="st-roll-input" type="number" min="1" max="10" step="1" /></div>
           </div>
@@ -194,7 +194,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="summary include outcome">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">摘要包含走向文本</div>
-              <div class="st-roll-item-desc">把本轮命中的后果文本也写进摘要。</div>
+              <div class="st-roll-item-desc">把本轮结果文本写进摘要。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.includeOutcomeSummaryId}" type="checkbox" /></div>
           </label>
@@ -204,7 +204,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="time limit timeout">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用事件时限</div>
-              <div class="st-roll-item-desc">事件会倒计时，超时后自动按失败结算。</div>
+              <div class="st-roll-item-desc">事件有倒计时，超时按失败处理。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.timeLimitEnabledId}" type="checkbox" /></div>
           </label>
@@ -212,13 +212,13 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div id="${ids.timeLimitRowId}" class="st-roll-item st-roll-search-item" data-st-roll-search="minimum time limit seconds">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">最短时限（秒）</div>
-              <div class="st-roll-item-desc">AI 给的时限太短时，会自动提高到这个值。</div>
+              <div class="st-roll-item-desc">AI 给的时限太短时，用这个最小值。</div>
             </div>
             <div class="st-roll-row"><input id="${ids.timeLimitMinId}" class="st-roll-input" type="number" min="1" step="1" /></div>
           </div>
 
           <div class="st-roll-tip st-roll-search-item" data-st-roll-search="prompt summary status block">
-            发送前会自动注入规则、摘要和状态信息，帮助 AI 持续理解当前进展。
+            发送前会自动加入规则、摘要和状态。
           </div>
         </div>
 
@@ -228,7 +228,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <label class="st-roll-item st-roll-search-item" data-st-roll-search="skill system enable">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">启用技能系统</div>
-              <div class="st-roll-item-desc">关闭后，技能加值不再参与掷骰计算。</div>
+              <div class="st-roll-item-desc">关掉后，技能加值不再生效。</div>
             </div>
             <div class="st-roll-inline"><input id="${ids.skillEnabledId}" type="checkbox" /></div>
           </label>
@@ -236,7 +236,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="skill editor modal">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">技能编辑器</div>
-              <div class="st-roll-item-desc">在这里维护技能预设和每个技能的加值。</div>
+              <div class="st-roll-item-desc">在这里编辑技能预设和加值。</div>
             </div>
             <div class="st-roll-actions">
               <button id="${ids.skillEditorOpenId}" type="button" class="st-roll-btn">打开编辑器</button>
@@ -273,7 +273,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
                       <button id="${ids.skillPresetRenameId}" type="button" class="st-roll-btn">保存名称</button>
                     </div>
 
-                    <div class="st-roll-tip">名称不能为空；修正值必须是整数；持续轮次留空=永久，填写时必须为整数且 >=1；范围为“按技能”时技能列表不能为空；同名状态不能重复。</div>
+                    <div class="st-roll-tip">名称必填；加值必须是整数；轮次留空=永久；按技能时要填技能；名称不能重复。</div>
                     <div id="${ids.skillDirtyHintId}" class="st-roll-skill-dirty" hidden>技能改动尚未保存，点击“保存技能表”后生效。</div>
                     <div id="${ids.skillErrorsId}" class="st-roll-skill-errors" hidden></div>
 
@@ -312,7 +312,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
           <div class="st-roll-textarea-wrap st-roll-search-item" data-st-roll-search="rule text save reset">
             <div class="st-roll-row" style="margin-bottom:8px;">
-              <span class="st-roll-field-label">这里填写“自定义补充规则”，系统基础规则会按当前开关动态生成并固定在前，你的内容会追加在最后。</span>
+              <span class="st-roll-field-label">这里写补充规则。系统基础规则会自动放在前面。</span>
               <div class="st-roll-actions">
                 <button id="${ids.ruleSaveId}" type="button" class="st-roll-btn">保存补充</button>
                 <button id="${ids.ruleResetId}" type="button" class="st-roll-btn secondary">清空补充</button>
@@ -359,7 +359,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="command eventroll roll list help">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">常用命令</div>
-              <div class="st-roll-item-desc">/roll 1d20 /eventroll list /eventroll roll &lt;id&gt;</div>
+              <div class="st-roll-item-desc">常用命令：/roll 1d20、/eventroll list、/eventroll roll &lt;id&gt;</div>
             </div>
           </div>
         </div>
@@ -423,8 +423,8 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
               aria-label="调整聊天侧栏宽度"
             ></div>
             <section class="st-roll-status-main">
-              <div class="st-roll-tip">
-                说明：名称必填；修正值必须为整数；范围为“按技能”时，技能列表不能为空。
+          <div class="st-roll-tip">
+                名称必填；修正值要整数；按技能时技能列表不能为空。
               </div>
               <div id="${ids.statusDirtyHintId}" class="st-roll-status-dirty" hidden>当前聊天有未保存修改。</div>
               <div id="${ids.statusErrorsId}" class="st-roll-status-errors" hidden></div>

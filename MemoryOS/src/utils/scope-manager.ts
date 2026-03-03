@@ -1,3 +1,5 @@
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+
 /**
  * Scope 管理器 —— 支持 chat / character / global 三种数据隔离级别
  *
@@ -46,7 +48,7 @@ export function buildScopedKey(ctx: ScopeContext, key: string): string {
 export function validateScopeAccess(
     pluginId: string,
     scope: ScopeLevel,
-    globalAllowedPlugins: string[] = ['memory-os']
+    globalAllowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID]
 ): { allowed: boolean; reason?: string } {
     if (scope === 'global' && !globalAllowedPlugins.includes(pluginId)) {
         return {

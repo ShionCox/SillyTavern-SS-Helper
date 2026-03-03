@@ -4,6 +4,7 @@ import { ProposalManager } from '../proposal/proposal-manager';
 import { EventsManager } from '../core/events-manager';
 import { EventBus } from '../../../SDK/bus/bus';
 import type { EventEnvelope } from '../../../SDK/stx';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * 编排胶水层 —— 监听 Bus 事件，自动触发 AI 抽取/写入
@@ -118,7 +119,7 @@ export class Orchestrator {
         if (!this.llmSdk) return;
 
         const result = await this.llmSdk.runTask<any>({
-            consumer: 'memory-os',
+            consumer: MEMORY_OS_PLUGIN_ID,
             task,
             input: {
                 messages: [
@@ -140,7 +141,7 @@ export class Orchestrator {
             confidence: result.data.confidence ?? 0.8,
         };
 
-        await this.proposalManager.processProposal(envelope, 'memory-os');
+        await this.proposalManager.processProposal(envelope, MEMORY_OS_PLUGIN_ID);
     }
 
     /**

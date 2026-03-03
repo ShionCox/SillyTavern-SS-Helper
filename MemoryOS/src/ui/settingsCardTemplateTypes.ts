@@ -28,6 +28,9 @@ export interface MemoryOSSettingsIds {
     templateListId: string;
     templateRefreshBtnId: string;
     templateForceRebuildBtnId: string;
+    templateActiveSelectId: string;
+    templateSetActiveBtnId: string;
+    templateLockId: string;
 
     // Settings Controls
     enabledId: string;
@@ -44,6 +47,7 @@ export interface MemoryOSSettingsIds {
     // DB Actions
     dbCompactBtnId: string;
     dbExportBtnId: string;
+    dbImportBtnId: string;
     dbClearBtnId: string;
     recordEditorBtnId: string;
     // 审计面板

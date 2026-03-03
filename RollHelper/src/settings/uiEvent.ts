@@ -10,6 +10,12 @@ import type {
 } from "../types/eventDomainEvent";
 import changelogData from "../../changelog.json";
 import type { SettingsCardTemplateIdsEvent } from "../templates/settingsCardTemplateTypes";
+import {
+  ensureSharedTooltip,
+  applyTooltipCatalog,
+  hydrateSettingsTooltips,
+} from "../../../SDK/sharedTooltip";
+import { buildSettingsTooltipCatalogEvent } from "./settingsTooltipCatalogEvent";
 
 function escapeHtml(input: string): string {
   return String(input ?? "")
@@ -22,6 +28,42 @@ function escapeHtml(input: string): string {
 
 function escapeAttr(input: string): string {
   return escapeHtml(input).replace(/`/g, "&#96;");
+}
+
+function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | null {
+  if (!node) return null;
+  if (node instanceof HTMLElement) {
+    const shell = node.closest(".st-roll-shell");
+    if (shell) {
+      const wrapper = shell.closest("[id]");
+      return wrapper || shell;
+    }
+    const cardRoot = node.closest("[id^='stx-rollhelper-card'], [id*='rollhelper']");
+    if (cardRoot) return cardRoot;
+  }
+  if (node instanceof Document) {
+    return node;
+  }
+  return node;
+}
+
+/**
+ * 功能：为 RollHelper 设置区域应用共享 tooltip。
+ * 参数：
+ *   root：目标根节点。
+ *   catalog：可选的 ID 文案目录。
+ * 返回：void。
+ */
+function applySettingsTooltipsEvent(root: ParentNode | null, catalog?: Record<string, string>): void {
+  const targetRoot = resolveSettingsTooltipRootEvent(root);
+  if (!targetRoot) return;
+  ensureSharedTooltip({
+    titleScopeSelectors: [".st-rh-card-scope"],
+  });
+  if (catalog) {
+    applyTooltipCatalog(targetRoot, catalog);
+  }
+  hydrateSettingsTooltips({ root: targetRoot });
 }
 
 export interface SyncSettingsBadgeVersionDepsEvent {
@@ -272,8 +314,19 @@ export function mountSettingsCardShellEvent(
 ): void {
   const retryLimit = Number.isFinite(deps.retryLimitEvent) ? Number(deps.retryLimitEvent) : 60;
   const retryDelayMs = Number.isFinite(deps.retryDelayMsEvent) ? Number(deps.retryDelayMsEvent) : 500;
+  const drawerToggleId = `${deps.SETTINGS_CARD_ID_Event}-toggle`;
+  const drawerContentId = `${deps.SETTINGS_CARD_ID_Event}-content`;
+  const drawerIconId = `${deps.SETTINGS_CARD_ID_Event}-icon`;
+  const templateIds = deps.buildSettingsCardTemplateIdsEvent(
+    drawerToggleId,
+    drawerContentId,
+    drawerIconId
+  );
+  const tooltipCatalog = buildSettingsTooltipCatalogEvent(templateIds);
 
-  if (document.getElementById(deps.SETTINGS_CARD_ID_Event)) {
+  const existedRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event);
+  if (existedRoot) {
+    applySettingsTooltipsEvent(existedRoot, tooltipCatalog);
     deps.syncSettingsBadgeVersionEvent();
     deps.syncSettingsUiEvent();
     return;
@@ -291,14 +344,6 @@ export function mountSettingsCardShellEvent(
 
   const root = document.createElement("div");
   root.id = deps.SETTINGS_CARD_ID_Event;
-  const drawerToggleId = `${deps.SETTINGS_CARD_ID_Event}-toggle`;
-  const drawerContentId = `${deps.SETTINGS_CARD_ID_Event}-content`;
-  const drawerIconId = `${deps.SETTINGS_CARD_ID_Event}-icon`;
-  const templateIds = deps.buildSettingsCardTemplateIdsEvent(
-    drawerToggleId,
-    drawerContentId,
-    drawerIconId
-  );
   root.innerHTML = deps.buildSettingsCardHtmlTemplateEvent(templateIds);
 
   const modalInPanel = root.querySelector(`#${deps.SETTINGS_SKILL_MODAL_ID_Event}`) as HTMLElement | null;
@@ -317,6 +362,7 @@ export function mountSettingsCardShellEvent(
     container.prepend(ssContainer);
   }
   ssContainer.appendChild(root);
+  applySettingsTooltipsEvent(root, tooltipCatalog);
 
   deps.syncSettingsBadgeVersionEvent();
   deps.onMountedEvent({ drawerToggleId, drawerContentId });
@@ -1226,6 +1272,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
   if (!rowsWrap) return;
   if (!STATUS_EDITOR_ROWS_DRAFT_Event.length) {
     rowsWrap.innerHTML = `<div class="st-roll-status-empty">暂无状态，点击“新增状态”开始配置。</div>`;
+    applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
     return;
   }
   rowsWrap.innerHTML = STATUS_EDITOR_ROWS_DRAFT_Event
@@ -1241,16 +1288,16 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：潜行|察觉";
       return `
         <div class="st-roll-status-row" data-row-id="${rowId}">
-          <input class="st-roll-input st-roll-status-name" type="text" data-status-row-id="${rowId}" data-status-field="name" value="${name}" placeholder="状态名称" />
-          <input class="st-roll-input st-roll-status-modifier" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="modifier" value="${modifierText}" placeholder="例如 -2" />
-          <input class="st-roll-input st-roll-status-duration" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="duration" value="${durationText}" placeholder="留空=永久，例如 3" />
-          <select class="st-roll-select st-roll-status-scope" data-status-row-id="${rowId}" data-status-field="scope">
+          <input class="st-roll-input st-roll-status-name" type="text" data-status-row-id="${rowId}" data-status-field="name" data-tip="状态名称。" value="${name}" placeholder="状态名称" />
+          <input class="st-roll-input st-roll-status-modifier" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="modifier" data-tip="状态加减值（整数）。" value="${modifierText}" placeholder="例如 -2" />
+          <input class="st-roll-input st-roll-status-duration" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="duration" data-tip="持续轮次，留空表示永久。" value="${durationText}" placeholder="留空=永久，例如 3" />
+          <select class="st-roll-select st-roll-status-scope" data-status-row-id="${rowId}" data-status-field="scope" data-tip="状态作用范围。">
             <option value="skills" ${scope === "skills" ? "selected" : ""}>按技能</option>
             <option value="all" ${scope === "all" ? "selected" : ""}>全局</option>
           </select>
-          <input class="st-roll-input st-roll-status-skills" type="text" data-status-row-id="${rowId}" data-status-field="skills" value="${skillsText}" placeholder="${skillsPlaceholder}" ${skillsDisabledAttr} />
+          <input class="st-roll-input st-roll-status-skills" type="text" data-status-row-id="${rowId}" data-status-field="skills" data-tip="技能范围，用 | 分隔。" value="${skillsText}" placeholder="${skillsPlaceholder}" ${skillsDisabledAttr} />
           <label class="st-roll-status-enabled-wrap">
-            <input type="checkbox" data-status-row-id="${rowId}" data-status-field="enabled" ${enabled ? "checked" : ""} />
+            <input type="checkbox" data-status-row-id="${rowId}" data-status-field="enabled" data-tip="是否启用该状态。" ${enabled ? "checked" : ""} />
             <span>启用</span>
           </label>
           <button type="button" class="st-roll-btn secondary st-roll-status-remove" data-status-remove-id="${rowId}">删除</button>
@@ -1258,6 +1305,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       `;
     })
     .join("");
+  applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
 }
 
 function deserializeActiveStatusesToDraftRowsEvent(statuses: ActiveStatusEvent[]): StatusEditorRowDraftEvent[] {
@@ -2516,6 +2564,7 @@ export function renderSkillRowsEvent(
   if (!rowsWrap) return;
   if (!rows.length) {
     rowsWrap.innerHTML = `<div class="st-roll-skill-empty">暂无技能，点击“新增技能”开始配置。</div>`;
+    applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
     return;
   }
   rowsWrap.innerHTML = rows
@@ -2531,6 +2580,7 @@ export function renderSkillRowsEvent(
           placeholder="例如：察觉"
           data-skill-row-id="${rowId}"
           data-skill-field="name"
+          data-tip="技能名称。"
           value="${skillName}"
         />
         <input
@@ -2540,6 +2590,7 @@ export function renderSkillRowsEvent(
           placeholder="例如：15"
           data-skill-row-id="${rowId}"
           data-skill-field="modifier"
+          data-tip="技能加值（整数）。"
           value="${modifierText}"
         />
         <button type="button" class="st-roll-btn secondary st-roll-skill-remove" data-skill-remove-id="${rowId}">
@@ -2549,6 +2600,7 @@ export function renderSkillRowsEvent(
     `;
     })
     .join("");
+  applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
 }
 
 export interface SyncSettingsUiDepsEvent {

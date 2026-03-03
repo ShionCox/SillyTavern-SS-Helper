@@ -5,6 +5,8 @@ import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
+import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
 
 
 // UI 组件的唯一命名空间
@@ -63,6 +65,7 @@ const IDS: MemoryOSSettingsIds = {
 
     dbCompactBtnId: `${NAMESPACE}-db-compact-btn`,
     dbExportBtnId: `${NAMESPACE}-db-export-btn`,
+    dbImportBtnId: `${NAMESPACE}-db-import-btn`,
     dbClearBtnId: `${NAMESPACE}-db-clear-btn`,
     // 世界模板
     tabTemplateId: `${NAMESPACE}-tab-template`,
@@ -70,6 +73,9 @@ const IDS: MemoryOSSettingsIds = {
     templateListId: `${NAMESPACE}-template-list`,
     templateRefreshBtnId: `${NAMESPACE}-template-refresh`,
     templateForceRebuildBtnId: `${NAMESPACE}-template-force-rebuild`,
+    templateActiveSelectId: `${NAMESPACE}-template-active-select`,
+    templateSetActiveBtnId: `${NAMESPACE}-template-active-apply`,
+    templateLockId: `${NAMESPACE}-template-lock`,
     // 审计面板
     tabAuditId: `${NAMESPACE}-tab-audit`,
     panelAuditId: `${NAMESPACE}-panel-audit`,
@@ -87,6 +93,20 @@ const IDS: MemoryOSSettingsIds = {
     logicTableContainerId: `${NAMESPACE}-logic-table-container`,
     recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
 };
+
+/**
+ * 功能：为 MemoryOS 设置面板应用 tooltip 目录并执行兜底补齐。
+ * 参数：无。
+ * 返回：void。
+ */
+function applySettingsTooltips(): void {
+    const cardRoot = document.getElementById(IDS.cardId);
+    if (!cardRoot) return;
+    ensureSharedTooltip();
+    const catalog = buildSettingsTooltipCatalog(IDS);
+    applyTooltipCatalog(cardRoot, catalog);
+    hydrateSettingsTooltips({ root: cardRoot });
+}
 
 /**
  * 等待元素出现在 DOM 中
@@ -152,6 +172,7 @@ export async function renderSettingsUi() {
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
         bindUiEvents();
+        applySettingsTooltips();
     } catch (error) {
         console.error(`[MemoryOS] UI 渲染失败:`, error);
     }
@@ -161,6 +182,10 @@ export async function renderSettingsUi() {
  * 绑定设置卡片的交互事件
  */
 function bindUiEvents() {
+    const refreshSettingsTooltips = (): void => {
+        applySettingsTooltips();
+    };
+
     // 3.1 抽屉展开/折叠 (移除手动监听，交由 SillyTavern 核心的 .inline-drawer-toggle 自动处理)
 
     // 3.2 标签页切换
@@ -271,12 +296,19 @@ function bindUiEvents() {
         if (alive && isEnabled) {
             aiLightEl.className = 'fa-solid fa-link';
             aiLightEl.style.color = '#8ceb8c'; // 绿灯运行
-            aiLightEl.title = 'LLMHub 通信正常';
+            aiLightEl.setAttribute('data-tip', 'LLMHub 通信正常。');
+            aiLightEl.removeAttribute('title');
             aiToggleEl.disabled = false;
         } else {
             aiLightEl.className = 'fa-solid fa-link-slash';
             aiLightEl.style.color = '#ff8787'; // 红灯断锁
-            aiLightEl.title = alive ? 'LLMHub 服务已关闭' : '未检测到 LLMHub';
+            aiLightEl.setAttribute(
+                'data-tip',
+                alive
+                    ? 'LLMHub 已关闭，AI 模式不可用。'
+                    : '未检测到 LLMHub，AI 模式不可用。'
+            );
+            aiLightEl.removeAttribute('title');
             aiToggleEl.checked = false;
             aiToggleEl.disabled = true; // 强力闭锁
             const extSet = stContext.extensionSettings?.['stx_memory_os'] || {};
@@ -362,7 +394,36 @@ function bindUiEvents() {
         });
     }
 
-    bindToggle(IDS.autoCompactionId, 'autoCompaction');
+    let autoCompactionTimer: ReturnType<typeof setInterval> | null = null;
+    const applyAutoCompactionScheduler = (enabled: boolean): void => {
+        if (autoCompactionTimer) {
+            clearInterval(autoCompactionTimer);
+            autoCompactionTimer = null;
+        }
+        if (!enabled) {
+            return;
+        }
+        autoCompactionTimer = setInterval(async () => {
+            const memory = (window as any).STX?.memory;
+            if (!memory?.compaction?.needsCompaction || !memory?.compaction?.compact) {
+                return;
+            }
+            try {
+                const check = await memory.compaction.needsCompaction();
+                if (check?.needed) {
+                    await memory.compaction.compact({ windowSize: 1000, archiveProcessed: true });
+                }
+            } catch (error) {
+                logger.warn('自动压缩任务执行失败', error);
+            }
+        }, 60_000);
+    };
+
+    bindToggle(IDS.autoCompactionId, 'autoCompaction', (enabled) => {
+        applyAutoCompactionScheduler(enabled);
+    });
+    const autoCompactionEnabled = stContext.extensionSettings?.['stx_memory_os']?.autoCompaction === true;
+    applyAutoCompactionScheduler(autoCompactionEnabled);
 
     setTimeout(() => {
         const enabled = stContext.extensionSettings?.['stx_memory_os']?.enabled === true;
@@ -377,25 +438,54 @@ function bindUiEvents() {
     }, 300);
 
     // ===== 世界模板面板交互 =====
-    const refreshTemplatesUI = async () => {
+    const refreshTemplatesUI = async (): Promise<void> => {
         const listEl = document.getElementById(IDS.templateListId);
+        const activeSelectEl = document.getElementById(IDS.templateActiveSelectId) as HTMLSelectElement | null;
+        const lockEl = document.getElementById(IDS.templateLockId) as HTMLInputElement | null;
         if (!listEl) return;
         const memory = (window as any).STX?.memory;
         if (!memory?.template?.listByChatKey) {
-            listEl.textContent = '暂无可用的模板，请先启动一个带世界书的聊天并开启 AI 模式。';
+            listEl.textContent = '暂无可用模板，请先启动会话并开启 AI 模式。';
             return;
         }
         try {
-            const templates = await memory.template.listByChatKey();
-            if (templates.length === 0) {
-                listEl.textContent = '未找到绑定的模板。';
-            } else {
-                listEl.textContent = templates.map((t: any) =>
-                    `[模板] ${t.name} (${t.worldType})\n实体表: ${Object.keys(t.entities || {}).join(', ')}\nID: ${t.templateId}`
-                ).join('\n\n');
+            const [templates, binding, activeTemplateId] = await Promise.all([
+                memory.template.listByChatKey(),
+                memory.template.getBinding?.(),
+                memory.getActiveTemplateId?.(),
+            ]);
+
+            if (activeSelectEl) {
+                activeSelectEl.innerHTML = '<option value="">选择要激活的模板...</option>';
+                for (const template of templates) {
+                    const option = document.createElement('option');
+                    option.value = template.templateId;
+                    option.textContent = `${template.name} (${template.worldType})`;
+                    activeSelectEl.appendChild(option);
+                }
+                if (activeTemplateId) {
+                    activeSelectEl.value = activeTemplateId;
+                }
             }
+            if (lockEl) {
+                lockEl.checked = binding?.isLocked === true;
+            }
+
+            if (templates.length === 0) {
+                listEl.textContent = '未找到绑定模板。';
+                return;
+            }
+
+            listEl.textContent = templates.map((template: any) => {
+                const isActive = activeTemplateId && template.templateId === activeTemplateId;
+                const mark = isActive ? '★' : ' ';
+                const hash = template.worldInfoRef?.hash || '(无 hash)';
+                return `${mark}[模板] ${template.name} (${template.worldType})\n实体表: ${Object.keys(template.entities || {}).join(', ')}\nFactTypes: ${(template.factTypes || []).map((item: any) => item.type).join(', ') || '(空)'}\nHash: ${hash}\nID: ${template.templateId}`;
+            }).join('\n\n');
+            refreshSettingsTooltips();
         } catch (e) {
             listEl.textContent = '读取模板失败: ' + String(e);
+            refreshSettingsTooltips();
         }
     };
 
@@ -411,26 +501,50 @@ function bindUiEvents() {
         refreshBtn.addEventListener('click', refreshTemplatesUI);
     }
 
-    // 强制重建按鈕：清除 template_bindings hash 缓存并触发 syncWorldInfoState
+    // 强制重建按钮：直接调用 template.rebuildFromWorldInfo()
     const forceRebuildBtn = document.getElementById(IDS.templateForceRebuildBtnId);
     if (forceRebuildBtn) {
         forceRebuildBtn.addEventListener('click', async () => {
             const memory = (window as any).STX?.memory;
-            if (!memory) {
+            if (!memory?.template?.rebuildFromWorldInfo) {
                 alert('请先启动 Memory OS');
                 return;
             }
-            if (confirm('将删除当前界书 Hash 缓存并重新让 AI 生成模板，确定吗？')) {
-                // 讨论：最简单的方式是手动将 memory 下的 template syncWorldInfo调用
-                const tmgr = (memory as any).__templateManager ||
-                    (memory.template as any).__templateManager;
-                if (tmgr?.syncWorldInfoState) {
-                    await tmgr.syncWorldInfoState();
-                    await refreshTemplatesUI();
-                    alert('重建已触发，请等待 AI 响应后再次刷新。');
-                } else {
-                    alert('无法直接访问内部模板管理器。请尝试切换聊天然后切回。');
+            if (!confirm('将强制读取世界书并重建模板，确定吗？')) return;
+            try {
+                const templateId = await memory.template.rebuildFromWorldInfo();
+                await refreshTemplatesUI();
+                alert(templateId ? `重建成功，当前模板: ${templateId}` : '未生成新模板，请检查世界书或 LLM 配置');
+            } catch (error) {
+                alert('重建失败：' + String(error));
+            }
+        });
+    }
+
+    const templateSetActiveBtn = document.getElementById(IDS.templateSetActiveBtnId);
+    if (templateSetActiveBtn) {
+        templateSetActiveBtn.addEventListener('click', async () => {
+            const memory = (window as any).STX?.memory;
+            const activeSelectEl = document.getElementById(IDS.templateActiveSelectId) as HTMLSelectElement | null;
+            const lockEl = document.getElementById(IDS.templateLockId) as HTMLInputElement | null;
+            if (!memory?.template?.setActive || !activeSelectEl) {
+                alert('模板管理器未就绪。');
+                return;
+            }
+            const templateId = activeSelectEl.value;
+            if (!templateId) {
+                alert('请先选择一个模板。');
+                return;
+            }
+            try {
+                await memory.template.setActive(templateId, { lock: lockEl?.checked === true });
+                if (memory.template.setLock && lockEl) {
+                    await memory.template.setLock(lockEl.checked);
                 }
+                await refreshTemplatesUI();
+                alert('模板切换成功。');
+            } catch (error) {
+                alert('模板切换失败：' + String(error));
             }
         });
     }
@@ -498,6 +612,80 @@ function bindUiEvents() {
                 URL.revokeObjectURL(url);
             } catch (e) {
                 alert('导出失败：' + String(e));
+            }
+        });
+    }
+
+    const dbImportBtn = document.getElementById(IDS.dbImportBtnId);
+    if (dbImportBtn) {
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'application/json,.json';
+        fileInput.style.display = 'none';
+        document.body.appendChild(fileInput);
+
+        dbImportBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', async () => {
+            const memory = (window as any).STX?.memory;
+            const file = fileInput.files?.[0];
+            if (!memory || !file) {
+                return;
+            }
+
+            try {
+                const text = await file.text();
+                const payload = JSON.parse(text);
+                const currentChatKey = memory.getChatKey?.();
+                if (!currentChatKey) {
+                    throw new Error('当前 chatKey 不可用');
+                }
+
+                const importedChatKey = String(payload.chatKey || '');
+                if (importedChatKey && importedChatKey !== currentChatKey) {
+                    const shouldContinue = confirm(`导入包属于 [${importedChatKey}]，当前聊天是 [${currentChatKey}]。\n确定继续并映射到当前聊天吗？`);
+                    if (!shouldContinue) {
+                        return;
+                    }
+                }
+
+                const { db } = await import('../db/db');
+                const events = Array.isArray(payload.events) ? payload.events : [];
+                const facts = Array.isArray(payload.facts) ? payload.facts : [];
+                const summaries = Array.isArray(payload.summaries) ? payload.summaries : [];
+
+                await db.transaction('rw', [db.events, db.facts, db.summaries, db.meta], async () => {
+                    if (events.length > 0) {
+                        await db.events.bulkPut(events.map((event: any) => ({
+                            ...event,
+                            chatKey: currentChatKey,
+                        })));
+                    }
+                    if (facts.length > 0) {
+                        await db.facts.bulkPut(facts.map((fact: any) => ({
+                            ...fact,
+                            chatKey: currentChatKey,
+                        })));
+                    }
+                    if (summaries.length > 0) {
+                        await db.summaries.bulkPut(summaries.map((summary: any) => ({
+                            ...summary,
+                            chatKey: currentChatKey,
+                        })));
+                    }
+                    await db.meta.put({
+                        chatKey: currentChatKey,
+                        schemaVersion: 1,
+                    });
+                });
+
+                alert(`导入完成：events=${events.length}, facts=${facts.length}, summaries=${summaries.length}`);
+            } catch (error) {
+                alert('导入失败：' + String(error));
+            } finally {
+                fileInput.value = '';
             }
         });
     }
@@ -571,7 +759,7 @@ function bindUiEvents() {
                         <span style="color:#aaa">${time}</span>
                         <span>${note}</span>
                     </span>
-                    ${isSnapshot ? `<button data-snapshot-id="${r.auditId}" style="font-size: 11px; padding: 2px 8px; background: rgba(124,165,245,0.2); border: 1px solid #7ca5f5; border-radius: 4px; color: #7ca5f5; cursor: pointer;">回滚</button>` : ''}
+                    ${isSnapshot ? `<button data-snapshot-id="${r.auditId}" data-tip="回滚到这个快照。" style="font-size: 11px; padding: 2px 8px; background: rgba(124,165,245,0.2); border: 1px solid #7ca5f5; border-radius: 4px; color: #7ca5f5; cursor: pointer;">回滚</button>` : ''}
                 `;
                 // 绑定回滚按钮
                 if (isSnapshot) {
@@ -593,8 +781,10 @@ function bindUiEvents() {
                 }
                 listEl.appendChild(row);
             }
+            refreshSettingsTooltips();
         } catch (e) {
             listEl.textContent = '加载失败：' + String(e);
+            refreshSettingsTooltips();
         }
     };
 
@@ -678,10 +868,14 @@ function bindUiEvents() {
     const populateEntityTypes = async () => {
         const memory = (window as any).STX?.memory;
         if (!memory?.template || !logicTableSelect) return;
+        const activeTemplate = await memory.template.getActive?.();
         const templates = await memory.template.listByChatKey();
-        if (!templates?.length) return;
-        const latest = templates[templates.length - 1];
-        const entities = latest?.entities || {};
+        const fallbackTemplate = Array.isArray(templates) && templates.length > 0
+            ? templates[templates.length - 1]
+            : null;
+        const targetTemplate = activeTemplate || fallbackTemplate;
+        if (!targetTemplate) return;
+        const entities = targetTemplate.entities || {};
         const prevVal = logicTableSelect.value;
         // 清空并填充新 options
         logicTableSelect.innerHTML = '<option value="">选择实体类型...</option>';
@@ -722,8 +916,9 @@ function bindUiEvents() {
                         data-fact-key="${fact.factKey}" data-type="${fact.type}"
                         data-entity-kind="${fact.entity?.kind ?? ''}" data-entity-id="${fact.entity?.id ?? ''}"
                         data-path="${fact.path ?? ''}"
+                        data-tip="双击可编辑。"
                         style="flex: 1; font-size: 11px; border-radius: 3px; padding: 1px 4px; cursor: default;"
-                        title="双击进入编辑">${valueStr}</span>
+                        >${valueStr}</span>
                 `;
                 // 双击转为编辑模式
                 const valueEl = row.querySelector<HTMLElement>('.stx-logic-value');
@@ -759,7 +954,11 @@ function bindUiEvents() {
                 }
                 logicTableContainer.appendChild(row);
             }
-        } catch (e) { logicTableContainer.textContent = '加载失败：' + String(e); }
+            refreshSettingsTooltips();
+        } catch (e) {
+            logicTableContainer.textContent = '加载失败：' + String(e);
+            refreshSettingsTooltips();
+        }
     };
 
     if (logicTableSelect) {
@@ -779,4 +978,6 @@ function bindUiEvents() {
     if (templateTabBtn) {
         templateTabBtn.addEventListener('click', populateEntityTypes);
     }
+
+    refreshSettingsTooltips();
 }

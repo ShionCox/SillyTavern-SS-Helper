@@ -2,6 +2,7 @@ import type { WorldTemplate } from '../template/types';
 import type { ProposalEnvelope, FactProposal, PatchProposal, GateResult } from './types';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * 四道闸门校验器
@@ -172,8 +173,8 @@ export class GateValidator {
     ): GateResult {
         const errors: string[] = [];
 
-        // memory-os 自身始终有权限
-        if (consumerPluginId === 'memory-os') {
+        // MemoryOS 自身始终有权限
+        if (consumerPluginId === MEMORY_OS_PLUGIN_ID) {
             return { passed: true, gate: 'permission', errors };
         }
 

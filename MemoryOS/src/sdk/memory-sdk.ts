@@ -203,8 +203,23 @@ export class MemorySDKImpl implements MemorySDK {
         getById: (templateId: string) => {
             return this.templateManager.getById(templateId);
         },
+        getActive: () => {
+            return this.templateManager.getActiveTemplate();
+        },
         listByChatKey: () => {
             return this.templateManager.listByChatKey();
+        },
+        setActive: (templateId: string, opts?: { lock?: boolean }) => {
+            return this.templateManager.setActiveTemplate(templateId, opts);
+        },
+        setLock: (locked: boolean) => {
+            return this.templateManager.setTemplateLock(locked);
+        },
+        getBinding: () => {
+            return this.templateManager.getBinding();
+        },
+        rebuildFromWorldInfo: () => {
+            return this.templateManager.forceRebuildFromWorldInfo();
         },
         destroy: () => {
             this.templateManager.destroy();

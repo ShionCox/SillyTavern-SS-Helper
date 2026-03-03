@@ -976,6 +976,7 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     timeoutBlockHtml: string;
   }) => string;
   escapeHtmlEvent: (input: string) => string;
+  escapeAttrEvent: (input: string) => string;
   formatModifier: (mod: number) => string;
   getDiceSvg: (value: number, sides: number, color: string, size?: number) => string;
   getRollingSvg: (color: string, size?: number) => string;

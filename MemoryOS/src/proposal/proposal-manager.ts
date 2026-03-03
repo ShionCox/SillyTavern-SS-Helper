@@ -7,6 +7,7 @@ import { SummariesManager } from '../core/summaries-manager';
 import { AuditManager } from '../core/audit-manager';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * 提议写入管理器 —— 接收 AI 或外部插件的提议，经四道闸门后落盘
@@ -23,7 +24,7 @@ export class ProposalManager {
     private gateValidator: GateValidator;
 
     /** 被授权可以写入 facts/state 的插件列表 */
-    private allowedPlugins: string[] = ['memory-os'];
+    private allowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID];
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;

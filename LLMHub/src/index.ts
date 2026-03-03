@@ -1,6 +1,6 @@
 /**
  * LLMHub 统一入口
- * 导出所有公共模块，供外部引用
+ * 导出公共模块并初始化运行时实例。
  */
 
 // Provider 类型与实现
@@ -37,60 +37,207 @@ export type { ValidationResult } from './schema/validator';
 export { ReasonCode, inferReasonCode } from './schema/error-codes';
 export type { LLMError } from './schema/error-codes';
 
-// SDK 门面层
 // UI 层
 export { renderSettingsUi as renderLLMHubSettings } from './ui/index';
 import { renderSettingsUi } from './ui/index';
-// 补引 respond 进行挂靠
-import { respond } from '../../SDK/bus/rpc';
 
+import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
-import { TaskRouter } from './router/router';
-import { BudgetManager } from './budget/budget-manager';
+import { TaskRouter, type RoutePolicy } from './router/router';
+import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
 import { OpenAIProvider } from './providers/openai-provider';
+import { VaultManager } from './vault/vault-manager';
 
 export const logger = new Logger('AI 调度中枢');
 export const toast = new Toast('AI 调度中枢');
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
+type LLMHubSettings = {
+    enabled?: boolean;
+    globalProfile?: string;
+    defaultProvider?: string;
+    defaultModel?: string;
+    defaultBaseUrl?: string;
+    routePolicies?: RoutePolicy[];
+    budgets?: Record<string, BudgetConfig>;
+};
+
+/**
+ * LLMHub Runtime
+ * 提供 UI 可调用的配置写入能力，确保设置项不是占位逻辑。
+ */
 class LLMHub {
     public router: TaskRouter;
     public budgetManager: BudgetManager;
     public sdk: LLMSDKImpl;
+    public vault: VaultManager;
+
+    private defaultProvider: string = 'openai';
+    private defaultModel: string = 'gpt-4o-mini';
+    private defaultBaseUrl: string = 'https://api.openai.com/v1';
 
     constructor() {
         logger.info('AI 调度中枢核心引擎初始化...');
-
-        // 1. 初始化中间件管理器
         this.router = new TaskRouter();
         this.budgetManager = new BudgetManager();
         this.sdk = new LLMSDKImpl(this.router, this.budgetManager);
+        this.vault = new VaultManager();
 
-        // 2. 预置一个基于 OpenAI 兼容协议的基础 Provider（后续参数可由 UI Settings 取出）
-        const defaultProvider = new OpenAIProvider({
-            id: 'default-openai',
-            apiKey: 'sk-placeholder',
-            baseUrl: 'https://api.openai.com/v1',
-            model: 'gpt-4o-mini'
-        });
-
-        this.router.registerProvider(defaultProvider);
-        this.router.setDefault('default-openai');
-
-        // 3. 尝试向全局的 STX 总线注册 LLM 服务
         this.registerToSTX();
+        this.setupDefaultProvider().catch((error: unknown) => {
+            logger.warn('初始化默认 Provider 失败，后续将等待设置页注入配置。', error);
+        });
     }
 
-    private registerToSTX() {
+    /**
+     * 从设置中刷新完整运行时配置。
+     */
+    public async applySettingsFromContext(): Promise<void> {
+        const settings = this.readSettings();
+
+        if (settings.globalProfile) {
+            try {
+                this.sdk.setGlobalProfile(settings.globalProfile);
+            } catch (error) {
+                logger.warn(`非法 profile "${settings.globalProfile}"，保持默认配置。`, error);
+            }
+        }
+
+        const providerId = settings.defaultProvider || this.defaultProvider;
+        const model = settings.defaultModel || this.defaultModel;
+        const baseUrl = settings.defaultBaseUrl || this.resolveBaseUrl(providerId);
+        await this.upsertProvider(providerId, model, baseUrl);
+        this.router.setDefault(providerId);
+
+        if (Array.isArray(settings.routePolicies)) {
+            this.router.setPolicies(settings.routePolicies);
+        }
+
+        if (settings.budgets) {
+            for (const [consumer, config] of Object.entries(settings.budgets)) {
+                this.budgetManager.setConfig(consumer, config);
+            }
+        }
+    }
+
+    /**
+     * 保存指定服务凭据，并立即刷新 Provider。
+     */
+    public async saveCredential(providerId: string, apiKey: string): Promise<void> {
+        await this.vault.setCredential(providerId, apiKey);
+        const settings = this.readSettings();
+        const model = settings.defaultModel || this.defaultModel;
+        const baseUrl = settings.defaultBaseUrl || this.resolveBaseUrl(providerId);
+        await this.upsertProvider(providerId, model, baseUrl);
+    }
+
+    /**
+     * 清理全部凭据。
+     */
+    public async clearAllCredentials(): Promise<void> {
+        const providerIds = await this.vault.listProviderIds();
+        for (const providerId of providerIds) {
+            await this.vault.removeCredential(providerId);
+        }
+    }
+
+    /**
+     * 设置默认 provider/model/baseUrl，并立即生效。
+     */
+    public async setDefaultRoute(providerId: string, model: string, baseUrl?: string): Promise<void> {
+        const finalBaseUrl = (baseUrl || '').trim() || this.resolveBaseUrl(providerId);
+        await this.upsertProvider(providerId, model, finalBaseUrl);
+        this.router.setDefault(providerId);
+
+        const settings = this.readSettings();
+        this.writeSettings({
+            ...settings,
+            defaultProvider: providerId,
+            defaultModel: model,
+            defaultBaseUrl: finalBaseUrl,
+        });
+    }
+
+    /**
+     * 写入路由策略。
+     */
+    public setRoutePolicies(policies: RoutePolicy[]): void {
+        this.router.setPolicies(policies);
+        const settings = this.readSettings();
+        this.writeSettings({
+            ...settings,
+            routePolicies: policies,
+        });
+    }
+
+    /**
+     * 写入预算配置。
+     */
+    public setBudgetConfig(consumer: string, config: BudgetConfig): void {
+        this.budgetManager.setConfig(consumer, config);
+        const settings = this.readSettings();
+        const budgets = settings.budgets || {};
+        budgets[consumer] = config;
+        this.writeSettings({
+            ...settings,
+            budgets,
+        });
+    }
+
+    /**
+     * 删除单个 consumer 的预算配置。
+     */
+    public removeBudgetConfig(consumer: string): void {
+        this.budgetManager.removeConfig(consumer);
+        const settings = this.readSettings();
+        const budgets = { ...(settings.budgets || {}) };
+        delete budgets[consumer];
+        this.writeSettings({
+            ...settings,
+            budgets,
+        });
+    }
+
+    private async setupDefaultProvider(): Promise<void> {
+        await this.upsertProvider(this.defaultProvider, this.defaultModel, this.defaultBaseUrl);
+        this.router.setDefault(this.defaultProvider);
+        await this.applySettingsFromContext();
+    }
+
+    /**
+     * 注册或覆盖一个 OpenAI 兼容 Provider。
+     */
+    private async upsertProvider(providerId: string, model: string, baseUrl: string): Promise<void> {
+        const apiKey = (await this.vault.getCredential(providerId)) || '';
+        const provider = new OpenAIProvider({
+            id: providerId,
+            apiKey,
+            baseUrl,
+            model,
+        });
+        this.router.registerProvider(provider);
+        logger.info(`Provider 已刷新: ${providerId}, model=${model}, baseUrl=${baseUrl}`);
+    }
+
+    private resolveBaseUrl(providerId: string): string {
+        const map: Record<string, string> = {
+            openai: 'https://api.openai.com/v1',
+            claude: 'https://api.anthropic.com/v1',
+            gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+            groq: 'https://api.groq.com/openai/v1',
+        };
+        return map[providerId] || 'https://api.openai.com/v1';
+    }
+
+    private registerToSTX(): void {
         const globalSTX = (window as any).STX;
         if (globalSTX) {
             globalSTX.llm = this.sdk;
             logger.success('成功将 LLMSDK 挂载至 STX 全局底座。');
 
-            // 注册基于新版微服务通信层的响应管线 (P0-4与请求验证)
             if (globalSTX.bus) {
                 this.setupMicroserviceEndpoints(globalSTX.bus);
             }
@@ -100,53 +247,64 @@ class LLMHub {
         }
     }
 
-    private setupMicroserviceEndpoints(bus: any) {
-        // 由于依赖隔离，我们在这里通过纯事件名称约定响应，或者如果您已全局化 rpc 可直接调用
-        // 1. 活性与能力握手 Ping (P0-4)
-        respond('plugin:request:ping', 'stx_llmhub', async (payload, rawReq) => {
-            const stContext = (window as any).SillyTavern?.getContext?.() || {};
-            const isEnabled = stContext.extensionSettings?.['stx_llmhub']?.enabled === true;
-
+    private setupMicroserviceEndpoints(bus: any): void {
+        respond('plugin:request:ping', 'stx_llmhub', async () => {
+            const settings = this.readSettings();
             return {
                 alive: true,
-                isEnabled,
-                version: '1.0.0', // 后续可从 manifest 获取
-                capabilities: ['rpc', 'llm', 'chat', 'completion']
+                isEnabled: settings.enabled === true,
+                version: '1.0.0',
+                capabilities: ['rpc', 'llm', 'chat', 'completion'],
             };
         });
 
-        // 2. 双向问候示例 Hello 
         respond('plugin:request:hello', 'stx_llmhub', async (payload, rawReq) => {
-            logger.info(`[RPC] 收到来自 ${rawReq.from} 的 Hello 问候！附言:`, payload);
-
+            logger.info(`[RPC] 收到来自 ${rawReq.from} 的 Hello 问候`, payload);
             return {
-                replyMsg: `您好，${rawReq.from}，LLMHub 基础服务已为您敞开大门！`
+                replyMsg: `您好，${rawReq.from}，LLMHub 通信正常。`,
             };
         });
 
-        logger.info('已在 STXBus 挂载了 [ping] 和 [hello] 通信端点。');
+        logger.info('已在 STXBus 挂载 [ping]/[hello] 端点。');
 
-        // 主动广播上线状态，试图叫醒那些由于加载在自己前面而错过 Ping 的接收方
         setTimeout(() => {
-            const stContext = (window as any).SillyTavern?.getContext?.() || {};
-            const isEnabled = stContext.extensionSettings?.['stx_llmhub']?.enabled === true;
+            const settings = this.readSettings();
             bus.emit('plugin:broadcast:state_changed', {
-                v: 1, type: 'broadcast',
+                v: 1,
+                type: 'broadcast',
                 topic: 'plugin:broadcast:state_changed',
                 from: 'stx_llmhub',
                 ts: Date.now(),
-                data: { isEnabled }
+                data: { isEnabled: settings.enabled === true },
             });
         }, 300);
     }
+
+    private readSettings(): LLMHubSettings {
+        try {
+            const stContext = (window as any).SillyTavern?.getContext?.() || {};
+            return (stContext.extensionSettings?.['stx_llmhub'] || {}) as LLMHubSettings;
+        } catch {
+            return {};
+        }
+    }
+
+    private writeSettings(settings: LLMHubSettings): void {
+        const stContext = (window as any).SillyTavern?.getContext?.() || {};
+        if (!stContext.extensionSettings) {
+            return;
+        }
+        stContext.extensionSettings['stx_llmhub'] = settings;
+        stContext.saveSettingsDebounced?.();
+    }
 }
 
-// 模拟插件环境挂载
+// 挂载运行时
 (window as any).LLMHubPlugin = new LLMHub();
 
-// 自动初始化 UI 挂载
+// 自动初始化 UI
 if (typeof document !== 'undefined') {
-    renderSettingsUi().catch(err => {
-        logger.error('UI rendering failed:', err);
+    renderSettingsUi().catch((error: unknown) => {
+        logger.error('UI 渲染失败', error);
     });
 }

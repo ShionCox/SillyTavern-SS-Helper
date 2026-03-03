@@ -85,9 +85,12 @@ export class HybridSearchManager {
         // 排序：向量召回 score 最高优先，其次关键词，事件最后
         merged.sort((a, b) => b.score - a.score);
 
-        logger.info(`混合检索完成：向量 ${vectorResults.length} 条，关键词 ${keywordResults.length} 条，事件 ${eventResults.length} 条，合并去重后 ${merged.length} 条`);
+        // 可选 rerank：若 LLMHub 提供能力，则对合并结果做二次重排
+        const reranked = await this.tryRerank(query, merged);
 
-        return merged;
+        logger.info(`混合检索完成：向量 ${vectorResults.length} 条，关键词 ${keywordResults.length} 条，事件 ${eventResults.length} 条，合并去重后 ${reranked.length} 条`);
+
+        return reranked;
     }
 
     /**
@@ -208,5 +211,43 @@ export class HybridSearchManager {
             if (lowerText.includes(kw.toLowerCase())) hits++;
         }
         return keywords.length > 0 ? hits / keywords.length : 0;
+    }
+
+    /**
+     * 尝试调用 LLMHub 的 rerank，对混合召回结果二次排序。
+     * 如果失败则静默降级返回原顺序。
+     */
+    private async tryRerank(query: string, results: HybridSearchResult[]): Promise<HybridSearchResult[]> {
+        const llm = (window as any).STX?.llm;
+        if (!llm?.rerank || results.length === 0) {
+            return results;
+        }
+
+        try {
+            const docs = results.map((item) => item.content);
+            const rerankResp = await llm.rerank({
+                consumer: 'memory_os',
+                query,
+                docs,
+            });
+            if (!rerankResp?.ok || !Array.isArray(rerankResp.results)) {
+                return results;
+            }
+
+            const sorted = rerankResp.results
+                .map((entry: any) => {
+                    const original = results[entry.index];
+                    if (!original) return null;
+                    return {
+                        ...original,
+                        score: typeof entry.score === 'number' ? entry.score : original.score,
+                    } as HybridSearchResult;
+                })
+                .filter(Boolean) as HybridSearchResult[];
+            return sorted.length > 0 ? sorted : results;
+        } catch (error) {
+            logger.warn('rerank 失败，使用原排序结果', error);
+            return results;
+        }
     }
 }

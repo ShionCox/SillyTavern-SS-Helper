@@ -1,9 +1,14 @@
 import { Logger } from '../../../SDK/logger';
 import type { EventsManager } from './events-manager';
 import type { TemplateManager } from '../template/template-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 const logger = new Logger('ExtractManager');
 
+/**
+ * AI 抽取编排器
+ * 在 generation_ended 后触发，优先做摘要提议，再做事实/状态提议。
+ */
 export class ExtractManager {
     private chatKey: string;
     private eventsManager: EventsManager;
@@ -20,96 +25,121 @@ export class ExtractManager {
     }
 
     /**
-     * 对过往 Events 的最新积累切片发起一次记忆固化任务
-     * AI 产出的提议将经由 ProposalManager 四道闸门审批后才会落盘
+     * 对最新事件窗口发起一次 AI 提议写入流程。
+     * 规则：`memory.summarize` -> `memory.extract`，均通过四道闸门后落盘。
      */
-    public async kickOffExtraction() {
+    public async kickOffExtraction(): Promise<void> {
         const globalST = window as any;
-
-        // 确认 LLMHub 已就绪
-        if (!globalST.STX?.llm) {
-            logger.warn('大模型代理 LLMHub 未就绪，中止由于生成事件结束触发的记忆提取。');
+        const llm = globalST?.STX?.llm;
+        if (!llm) {
+            logger.warn('LLMHub 未就绪，跳过 AI 记忆提议。');
             return;
         }
 
-        // 获取最近 N 条 event，积攒不足则等待
-        const recentEvents = await this.eventsManager.query({ limit: 12 });
+        const recentEvents = await this.eventsManager.query({ limit: 20 });
         if (recentEvents.length < 5) {
             return;
         }
 
+        const memory = globalST?.STX?.memory;
+        if (!memory?.proposal?.processProposal) {
+            logger.warn('ProposalManager 未就绪，跳过 AI 提议落盘。');
+            return;
+        }
+
         try {
-            // 查询当前激活的世界模板 Schema，作为大模型的抽取指引
-            const activeTemplateId = await globalST.STX?.memory?.getActiveTemplateId?.() || undefined;
-            let schemaContext: any = '请以通用视角提取角色与客观事实，包含关系与位置';
+            const activeTemplateId = await memory.getActiveTemplateId?.();
+            let schemaContext: Record<string, unknown> | string = '请以通用视角提取角色、关系、位置与状态';
             if (activeTemplateId) {
-                const currentSchema = await this.templateManager.getById(activeTemplateId);
-                if (currentSchema?.entities) {
-                    schemaContext = currentSchema.entities;
+                const currentTemplate = await this.templateManager.getById(activeTemplateId);
+                if (currentTemplate) {
+                    schemaContext = {
+                        entities: currentTemplate.entities,
+                        factTypes: currentTemplate.factTypes,
+                        extractPolicies: currentTemplate.extractPolicies,
+                    };
                 }
             }
 
-            // 将事件流打包成文本切片
-            const bundleText = recentEvents.map(e =>
-                `[${new Date(e.ts).toLocaleTimeString()}] ${e.type}: ${JSON.stringify(e.payload)}`
+            const bundleText = recentEvents.map((event) =>
+                `[${new Date(event.ts).toLocaleTimeString()}] ${event.type}: ${JSON.stringify(event.payload)}`
             ).join('\n');
 
-            logger.info(`积攒 ${recentEvents.length} 条事件，准备发起 memory.extract 提议生成任务...`);
+            logger.info(`积攒 ${recentEvents.length} 条事件，开始 AI 摘要与提议流程。`);
 
-            // 调用 LLMHub 生成一个提议信封 (ProposalEnvelopeSchema 会在 LLMHub 自动校验)
-            const response = await globalST.STX.llm.runTask({
-                consumer: 'memory_os',
-                task: 'memory.extract',
-                input: {
-                    systemPrompt: [
-                        '你是一个专业的角色信息提取助手，请从对话事件流中提取结构化事实与状态变更。',
-                        '输出必须是严格的 JSON 对象，格式如下：',
-                        '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
-                        '不允许输出任何解释文字，只输出纯 JSON。'
-                    ].join('\n'),
-                    events: bundleText,
-                    schemaContext: typeof schemaContext === 'string'
-                        ? schemaContext
-                        : JSON.stringify(schemaContext, null, 2)
-                }
-            });
+            await this.runProposalTask(
+                'memory.summarize',
+                [
+                    '你是对话摘要助手，请根据事件窗口生成可写入的摘要提议。',
+                    '输出必须是纯 JSON 且符合格式：',
+                    '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+                    '不要输出解释文字。',
+                ].join('\n'),
+                bundleText,
+                schemaContext
+            );
 
-            if (!response.ok) {
-                logger.warn('memory.extract LLM 请求失败：' + response.error);
-                return;
-            }
+            await this.runProposalTask(
+                'memory.extract',
+                [
+                    '你是结构化记忆提取助手，请从事件窗口提取 facts 与 world_state patch。',
+                    '输出必须是纯 JSON 且符合格式：',
+                    '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
+                    '不要输出解释文字。',
+                ].join('\n'),
+                bundleText,
+                schemaContext
+            );
+        } catch (error) {
+            logger.error('ExtractManager.kickOffExtraction 发生错误', error);
+        }
+    }
 
-            const proposalEnvelope = response.data;
+    /**
+     * 执行单个 AI 提议任务并提交四道闸门审批。
+     */
+    private async runProposalTask(
+        task: 'memory.summarize' | 'memory.extract',
+        systemPrompt: string,
+        eventsText: string,
+        schemaContext: Record<string, unknown> | string
+    ): Promise<void> {
+        const globalST = window as any;
+        const llm = globalST?.STX?.llm;
+        const memory = globalST?.STX?.memory;
+        if (!llm || !memory?.proposal?.processProposal) {
+            return;
+        }
 
-            if (!proposalEnvelope?.ok || !proposalEnvelope?.proposal) {
-                logger.warn('大模型返回提议信封格式异常，放弃本次落盘。');
-                return;
-            }
+        const response = await llm.runTask({
+            consumer: MEMORY_OS_PLUGIN_ID,
+            task,
+            input: {
+                systemPrompt,
+                events: eventsText,
+                schemaContext: typeof schemaContext === 'string'
+                    ? schemaContext
+                    : JSON.stringify(schemaContext, null, 2),
+            },
+        });
 
-            logger.info('收到大模型提议，正在提交四道闸门审批...');
+        if (!response.ok) {
+            logger.warn(`${task} 请求失败：${response.error}`);
+            return;
+        }
 
-            // 将提议提交给 ProposalManager / 四道闸门
-            const memory = globalST.STX?.memory;
-            if (!memory?.proposal?.processProposal) {
-                logger.warn('ProposalManager 尚未就绪，降级跳过本次审批。');
-                return;
-            }
+        const envelope = response.data;
+        if (!envelope?.ok || !envelope?.proposal) {
+            logger.warn(`${task} 返回提议信封格式异常，跳过落盘。`);
+            return;
+        }
 
-            const result = await memory.proposal.processProposal(proposalEnvelope, 'memory_os');
-
-            if (result.accepted) {
-                logger.success(
-                    `提议审批通过！写入：` +
-                    `${result.applied.factKeys.length} 个事实, ` +
-                    `${result.applied.statePaths.length} 条状态补丁, ` +
-                    `${result.applied.summaryIds.length} 段摘要`
-                );
-            } else {
-                logger.warn('提议被四道闸门拒绝，原因：' + result.rejectedReasons.join('; '));
-            }
-
-        } catch (e) {
-            logger.error('ExtractManager.kickOffExtraction 发生错误', e);
+        const result = await memory.proposal.processProposal(envelope, MEMORY_OS_PLUGIN_ID);
+        if (result.accepted) {
+            logger.success(`${task} 审批通过：facts=${result.applied.factKeys.length}, patches=${result.applied.statePaths.length}, summaries=${result.applied.summaryIds.length}`);
+        } else {
+            logger.warn(`${task} 被闸门拒绝：${result.rejectedReasons.join('; ')}`);
         }
     }
 }
+

@@ -27,7 +27,19 @@ export class WorldInfoReader {
      * 使用简单的字符串哈希，如运行环境支持 crypto 则使用 SHA-256
      */
     async computeHash(worldInfo: WorldInfoEntry[]): Promise<string> {
-        const raw = JSON.stringify(worldInfo);
+        const normalized = [...worldInfo]
+            .map((entry: WorldInfoEntry) => ({
+                book: String(entry.book ?? '').trim(),
+                entry: String(entry.entry ?? '').trim(),
+                keywords: [...(entry.keywords || [])].map((keyword: string) => String(keyword).trim()).sort(),
+                content: String(entry.content ?? '').trim(),
+            }))
+            .sort((a, b) => {
+                const aKey = `${a.book}::${a.entry}::${a.keywords.join('|')}`;
+                const bKey = `${b.book}::${b.entry}::${b.keywords.join('|')}`;
+                return aKey.localeCompare(bKey, 'zh-Hans-CN');
+            });
+        const raw = JSON.stringify(normalized);
 
         // 优先使用 Web Crypto API
         if (typeof crypto !== 'undefined' && crypto.subtle) {

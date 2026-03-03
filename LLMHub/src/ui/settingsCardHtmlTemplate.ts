@@ -1,13 +1,18 @@
 import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
 
-export function buildSettingsCardHtmlTemplate(
-  ids: LLMHubSettingsIds
-): string {
-  return `
+/**
+ * 功能：构建 LLMHub 设置面板 HTML。
+ * 参数：
+ *   ids：所有 DOM 元素 ID 映射。
+ * 返回：
+ *   string：可直接挂载的 HTML 字符串。
+ */
+export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
+    return `
     <div class="inline-drawer stx-ui-shell">
       <div class="inline-drawer-toggle inline-drawer-header stx-ui-head" id="${ids.drawerToggleId}">
         <div class="stx-ui-head-title">
-          <span style="margin-bottom: 2px;">${ids.displayName}</span>
+          <span>${ids.displayName}</span>
           <span id="${ids.badgeId}" class="stx-ui-head-badge">${ids.badgeText}</span>
         </div>
         <div id="${ids.drawerIconId}" class="inline-drawer-icon fa-solid fa-circle-chevron-down down interactable" tabindex="0" role="button"></div>
@@ -15,17 +20,17 @@ export function buildSettingsCardHtmlTemplate(
 
       <div class="inline-drawer-content stx-ui-content" id="${ids.drawerContentId}" style="display:none;">
         <div class="stx-ui-filters flex-container">
-          <input id="${ids.searchId}" class="text_pole flex1 stx-ui-search" placeholder="搜索设置" type="search" />
+          <input id="${ids.searchId}" class="text_pole flex1 stx-ui-search" placeholder="搜索设置项" type="search" />
         </div>
 
         <div class="stx-ui-tabs">
           <button id="${ids.tabMainId}" type="button" class="stx-ui-tab is-active">
             <i class="fa-solid fa-gear"></i>
-            <span>主设置</span>
+            <span>基础设置</span>
           </button>
           <button id="${ids.tabRouterId}" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-route"></i>
-            <span>路由配置</span>
+            <span>路由与预算</span>
           </button>
           <button id="${ids.tabVaultId}" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-key"></i>
@@ -46,8 +51,8 @@ export function buildSettingsCardHtmlTemplate(
 
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="enable llm hub switch">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">启接 LLM Hub</div>
-              <div class="stx-ui-item-desc">总开关，控制是否接管请求代理。关闭后系统将直接调用 ST 原生发送层。</div>
+              <div class="stx-ui-item-title">启用 LLMHub</div>
+              <div class="stx-ui-item-desc">总开关。关闭后不再接管任务。</div>
             </div>
             <div class="stx-ui-inline">
               <input id="${ids.enabledId}" type="checkbox" />
@@ -56,21 +61,21 @@ export function buildSettingsCardHtmlTemplate(
 
           <div class="stx-ui-divider">
             <i class="fa-solid fa-sliders"></i>
-            <span>默认参数策略 (Profile)</span>
+            <span>默认参数策略</span>
             <div class="stx-ui-divider-line"></div>
           </div>
 
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="global profile temperature param">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">全局默认 Profile</div>
-              <div class="stx-ui-item-desc">当插件请求未指定特定 Profile 时，默认使用的参数集合（影响温度、惩罚项等）。</div>
+              <div class="stx-ui-item-title">全局默认参数档</div>
+              <div class="stx-ui-item-desc">任务没指定 profile 时用它。</div>
             </div>
             <div class="stx-ui-row">
               <select id="${ids.globalProfileId}" class="stx-ui-select">
-                <option value="balanced">均衡 (Balanced)</option>
-                <option value="precise">精确/逻辑 (Precise)</option>
-                <option value="creative">创造/发散 (Creative)</option>
-                <option value="economy">经济/单轮 (Economy)</option>
+                <option value="balanced">平衡（balanced）</option>
+                <option value="precise">精确（precise）</option>
+                <option value="creative">创意（creative）</option>
+                <option value="economy">省钱（economy）</option>
               </select>
             </div>
           </div>
@@ -79,80 +84,187 @@ export function buildSettingsCardHtmlTemplate(
         <div id="${ids.panelRouterId}" class="stx-ui-panel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-network-wired"></i>
-            <span>全局后备路由</span>
+            <span>全局兜底路由</span>
             <div class="stx-ui-divider-line"></div>
           </div>
 
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default provider router fallback">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">默认 Provider</div>
-              <div class="stx-ui-item-desc">未能命中明确路由策略时的全局 Fallback 后端。</div>
+              <div class="stx-ui-item-title">默认服务商</div>
+              <div class="stx-ui-item-desc">没命中规则时用它。</div>
             </div>
             <div class="stx-ui-row">
               <select id="${ids.defaultProviderId}" class="stx-ui-select">
-                <!-- 动态填充 -->
-                <option value="openai">OpenAI API</option>
-                <option value="claude">Anthropic Claude</option>
-                <option value="st-native">ST 原生前端代理 *</option>
-              </select>
-            </div>
-          </div>
-          
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default model deploy fallback">
-            <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">默认处理模型 (Model)</div>
-              <div class="stx-ui-item-desc">用于后备请求的默认大语言模型名称。</div>
-            </div>
-            <div class="stx-ui-row">
-              <input id="${ids.defaultModelId}" class="stx-ui-input" type="text" placeholder="如 gpt-4o-mini" />
-            </div>
-          </div>
-          
-          <div class="stx-ui-tip">
-            详细的「Task 优先级路由表」目前由配置数据层接管，本面板仅设置兜底默认值。
-          </div>
-        </div>
-
-        <div id="${ids.panelVaultId}" class="stx-ui-panel" hidden>
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-vault"></i>
-            <span>凭据金库 (Vault)</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="vault credential add api key">
-            <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">更新服务密钥</div>
-              <div class="stx-ui-item-desc">在此处录入 API Key 以存入内部加密缓存，不会被日志打印。</div>
-            </div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item" style="flex-direction: column; align-items: stretch;" data-stx-ui-search="vault credential update">
-            <div class="stx-ui-row" style="margin-bottom:8px; justify-content: flex-start;">
-              <span class="stx-ui-field-label" style="width: 80px;">服务标识</span>
-              <select id="${ids.vaultAddServiceId}" class="stx-ui-select" style="min-width: 140px;">
                 <option value="openai">openai</option>
                 <option value="claude">claude</option>
                 <option value="gemini">gemini</option>
                 <option value="groq">groq</option>
               </select>
             </div>
-            <div class="stx-ui-row" style="margin-bottom:12px; justify-content: flex-start;">
-              <span class="stx-ui-field-label" style="width: 80px;">API Key</span>
-              <input id="${ids.vaultApiKeyId}" class="stx-ui-input vault-key-input" type="password" placeholder="sk-..." style="flex:1;" />
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default model deploy fallback">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">默认模型</div>
+              <div class="stx-ui-item-desc">默认服务商使用的模型名。</div>
             </div>
-            <div class="stx-ui-actions" style="justify-content: flex-end;">
+            <div class="stx-ui-row">
+              <input id="${ids.defaultModelId}" class="stx-ui-input" type="text" placeholder="例如 gpt-4o-mini" />
+            </div>
+          </div>
+
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-route"></i>
+            <span>任务路由规则</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="route policy task provider profile fallback">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">新增或更新路由规则</div>
+              <div class="stx-ui-item-desc">按 consumer + task 覆盖保存。</div>
+            </div>
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.routeConsumerId}">调用方</label>
+                <input id="${ids.routeConsumerId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.routeTaskId}">任务名</label>
+                <input id="${ids.routeTaskId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory.summarize" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.routeProviderId}">服务商</label>
+                <select id="${ids.routeProviderId}" class="stx-ui-select stx-ui-input-full">
+                  <option value="openai">openai</option>
+                  <option value="claude">claude</option>
+                  <option value="gemini">gemini</option>
+                  <option value="groq">groq</option>
+                </select>
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.routeProfileId}">参数档</label>
+                <select id="${ids.routeProfileId}" class="stx-ui-select stx-ui-input-full">
+                  <option value="">（不指定）</option>
+                  <option value="balanced">平衡（balanced）</option>
+                  <option value="precise">精确（precise）</option>
+                  <option value="creative">创意（creative）</option>
+                  <option value="economy">省钱（economy）</option>
+                </select>
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.routeFallbackProviderId}">备用服务商</label>
+                <select id="${ids.routeFallbackProviderId}" class="stx-ui-select stx-ui-input-full">
+                  <option value="">（不指定）</option>
+                  <option value="openai">openai</option>
+                  <option value="claude">claude</option>
+                  <option value="gemini">gemini</option>
+                  <option value="groq">groq</option>
+                </select>
+              </div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.routeSaveBtnId}" type="button" class="stx-ui-btn">保存规则</button>
+              <button id="${ids.routeResetBtnId}" type="button" class="stx-ui-btn secondary">清空表单</button>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="route policy list delete">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">当前路由规则</div>
+            </div>
+            <div id="${ids.routeListId}" class="stx-ui-list"></div>
+          </div>
+
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-gauge-high"></i>
+            <span>预算规则</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="budget rpm tokens latency cost">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">新增或更新预算</div>
+              <div class="stx-ui-item-desc">按 consumer 设置限流和成本上限。</div>
+            </div>
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.budgetConsumerId}">调用方</label>
+                <input id="${ids.budgetConsumerId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.budgetMaxRpmId}">每分钟请求上限（maxRPM）</label>
+                <input id="${ids.budgetMaxRpmId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.budgetMaxTokensId}">令牌上限（maxTokens）</label>
+                <input id="${ids.budgetMaxTokensId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.budgetMaxLatencyId}">延迟上限（maxLatencyMs）</label>
+                <input id="${ids.budgetMaxLatencyId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.budgetMaxCostId}">成本上限（maxCost）</label>
+                <input id="${ids.budgetMaxCostId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="0.01" />
+              </div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.budgetSaveBtnId}" type="button" class="stx-ui-btn">保存预算</button>
+              <button id="${ids.budgetResetBtnId}" type="button" class="stx-ui-btn secondary">清空表单</button>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="budget list delete">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">当前预算规则</div>
+            </div>
+            <div id="${ids.budgetListId}" class="stx-ui-list"></div>
+          </div>
+        </div>
+
+        <div id="${ids.panelVaultId}" class="stx-ui-panel" hidden>
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-vault"></i>
+            <span>凭据金库</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="vault credential add api key">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">更新服务密钥</div>
+              <div class="stx-ui-item-desc">密钥只存本地加密，不会写日志。</div>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="vault credential update">
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.vaultAddServiceId}">服务标识</label>
+                <select id="${ids.vaultAddServiceId}" class="stx-ui-select stx-ui-input-full">
+                  <option value="openai">openai</option>
+                  <option value="claude">claude</option>
+                  <option value="gemini">gemini</option>
+                  <option value="groq">groq</option>
+                </select>
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.vaultApiKeyId}">密钥（API Key）</label>
+                <input id="${ids.vaultApiKeyId}" class="stx-ui-input vault-key-input stx-ui-input-full" type="password" placeholder="sk-..." />
+              </div>
+            </div>
+            <div class="stx-ui-actions">
               <button id="${ids.vaultSaveBtnId}" type="button" class="stx-ui-btn">加密存入</button>
             </div>
           </div>
-          
+
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="vault erase all keys">
-             <div class="stx-ui-item-main">
+            <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">清空金库</div>
-              <div class="stx-ui-item-desc">清除浏览器本地存储的所有后台调用密钥。</div>
+              <div class="stx-ui-item-desc">删除本地保存的全部密钥。</div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.vaultClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清除全部密钥</button>
+              <button id="${ids.vaultClearBtnId}" type="button" class="stx-ui-btn secondary stx-ui-btn-danger">清除全部密钥</button>
             </div>
           </div>
         </div>
@@ -164,39 +276,25 @@ export function buildSettingsCardHtmlTemplate(
             <div class="stx-ui-divider-line"></div>
           </div>
 
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="about version author email github" style="margin-bottom: 12px; align-items: flex-start;">
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="about version author email github">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">${ids.displayName}</div>
               <div class="stx-ui-item-desc stx-ui-about-meta">
-                <span class="stx-ui-about-meta-item">
-                  <i class="fa-solid fa-tag"></i>
-                  <span>版本：${ids.badgeText}</span>
-                </span>
-                <span class="stx-ui-about-meta-item">
-                  <i class="fa-solid fa-user"></i>
-                  <span>作者：${ids.authorText}</span>
-                </span>
-                <span class="stx-ui-about-meta-item">
-                  <i class="fa-solid fa-envelope"></i>
-                  <span>邮箱：<a href="mailto:${ids.emailText}">${ids.emailText}</a></span>
-                </span>
-                <span class="stx-ui-about-meta-item">
-                  <i class="fa-brands fa-github"></i>
-                  <span>GitHub：<a href="${ids.githubUrl}" target="_blank" rel="noopener">${ids.githubText}</a></span>
-                </span>
+                <span class="stx-ui-about-meta-item"><i class="fa-solid fa-tag"></i><span>版本：${ids.badgeText}</span></span>
+                <span class="stx-ui-about-meta-item"><i class="fa-solid fa-user"></i><span>作者：${ids.authorText}</span></span>
+                <span class="stx-ui-about-meta-item"><i class="fa-solid fa-envelope"></i><span>邮箱：<a href="mailto:${ids.emailText}">${ids.emailText}</a></span></span>
+                <span class="stx-ui-about-meta-item"><i class="fa-brands fa-github"></i><span>GitHub：<a href="${ids.githubUrl}" target="_blank" rel="noopener">${ids.githubText}</a></span></span>
               </div>
             </div>
           </div>
 
-          <div class="stx-ui-item stx-ui-search-item" style="flex-direction: column; align-items: flex-start; margin-bottom: 12px;" data-stx-ui-search="changelog updates history">
-            <div class="stx-ui-item-title">更新日志 (Changelog)</div>
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="changelog updates history">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">更新日志</div>
+            </div>
             <div class="stx-ui-changelog">
               ${ids.changelogHtml}
             </div>
-          </div>
-          
-          <div class="stx-ui-tip">
-            LLM Hub 提供统一的并发控制、熔断限流和 Provider 兜底降级方案，是各插件的共享智能大脑。
           </div>
         </div>
       </div>
