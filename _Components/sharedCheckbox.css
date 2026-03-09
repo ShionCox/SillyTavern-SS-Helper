@@ -1,0 +1,208 @@
+/* shared-checkbox 组件样式 — 由调用方提供作用域前缀替换 _SCOPE_ */
+
+_SCOPE_ .stx-shared-checkbox-card {
+  --stx-checkbox-accent: rgba(197, 160, 89, 0.9);
+  --stx-checkbox-accent-soft: rgba(197, 160, 89, 0.22);
+  --stx-checkbox-accent-strong: rgba(255, 234, 190, 0.96);
+  --stx-checkbox-border: rgba(255, 255, 255, 0.16);
+  --stx-checkbox-surface: rgba(255, 255, 255, 0.05);
+  --stx-checkbox-surface-hover: rgba(255, 255, 255, 0.09);
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+
+_SCOPE_ .stx-shared-checkbox-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+_SCOPE_ .stx-shared-checkbox-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+_SCOPE_ .stx-shared-checkbox-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+_SCOPE_ .stx-shared-checkbox-title,
+_SCOPE_ .stx-shared-checkbox-description {
+  display: block;
+}
+
+_SCOPE_ .stx-shared-checkbox-control {
+  display: inline-grid;
+  grid-template-columns: 16px minmax(28px, auto);
+  align-items: center;
+  padding: 3px 8px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--stx-checkbox-border);
+  background:
+    radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.1), transparent 62%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+  transition:
+    border-color 0.22s ease,
+    background-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+}
+
+_SCOPE_ .stx-shared-checkbox-box {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 16px;
+  block-size: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    border-color 0.22s ease,
+    background-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+}
+
+_SCOPE_ .stx-shared-checkbox-icon {
+  inline-size: 11px;
+  block-size: 11px;
+}
+
+_SCOPE_ .stx-shared-checkbox-icon path {
+  stroke: var(--stx-checkbox-accent-strong);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 18;
+  stroke-dashoffset: 18;
+  opacity: 0;
+  transition:
+    stroke-dashoffset 0.24s ease,
+    opacity 0.18s ease,
+    transform 0.24s ease;
+  transform: scale(0.82);
+  transform-origin: center;
+}
+
+_SCOPE_ .stx-shared-checkbox-state {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-width: 2.3em;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  text-align: right;
+}
+
+_SCOPE_ .stx-shared-checkbox-state-label {
+  grid-area: 1 / 1;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease,
+    color 0.2s ease;
+}
+
+_SCOPE_ .stx-shared-checkbox-state-label.is-off {
+  color: rgba(255, 255, 255, 0.58);
+}
+
+_SCOPE_ .stx-shared-checkbox-state-label.is-on {
+  color: var(--stx-checkbox-accent-strong);
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+_SCOPE_ .stx-shared-checkbox-input + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+  background-color: var(--stx-checkbox-surface);
+}
+
+_SCOPE_ .stx-shared-checkbox-card:hover .stx-shared-checkbox-control {
+  border-color: rgba(255, 255, 255, 0.26);
+  background-color: var(--stx-checkbox-surface-hover);
+  transform: translateY(-1px);
+}
+
+_SCOPE_ .stx-shared-checkbox-card:hover .stx-shared-checkbox-box {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:focus-visible + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+  border-color: var(--stx-checkbox-accent);
+  box-shadow:
+    0 0 0 2px var(--stx-checkbox-accent-soft),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+  border-color: rgba(197, 160, 89, 0.52);
+  background:
+    radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.16), transparent 62%),
+    linear-gradient(135deg, rgba(197, 160, 89, 0.2), rgba(197, 160, 89, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(197, 160, 89, 0.18),
+    0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box {
+  border-color: rgba(197, 160, 89, 0.78);
+  background:
+    linear-gradient(165deg, rgba(255, 235, 192, 0.28), rgba(197, 160, 89, 0.14)),
+    rgba(197, 160, 89, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(197, 160, 89, 0.16);
+  transform: scale(1.02);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-icon path {
+  stroke-dashoffset: 0;
+  opacity: 1;
+  transform: scale(1);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-state-label.is-off {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-state-label.is-on {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:disabled + .stx-shared-checkbox-body {
+  opacity: 0.54;
+}
+
+_SCOPE_ .stx-shared-checkbox-input:disabled + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+  transform: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 6px 14px rgba(0, 0, 0, 0.14);
+}
+
+_SCOPE_ .stx-shared-checkbox-input:disabled + .stx-shared-checkbox-body .stx-shared-checkbox-box {
+  transform: none;
+}

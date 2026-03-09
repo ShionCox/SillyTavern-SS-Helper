@@ -142,6 +142,11 @@ function ensureTooltipStyle(): void {
     #${SHARED_TOOLTIP_ID}.is-instant {
       transition: none !important;
     }
+    #${SHARED_TOOLTIP_ID}.is-shared-checkbox-target .stx-global-tooltip-body,
+    #${SHARED_TOOLTIP_ID}.is-shared-checkbox-target .st-rh-global-tooltip-body {
+      max-width: min(56vw, 220px);
+      min-width: 0;
+    }
     #${SHARED_TOOLTIP_ID} .stx-global-tooltip-body,
     #${SHARED_TOOLTIP_ID} .st-rh-global-tooltip-body {
       max-width: min(78vw, 360px);
@@ -223,13 +228,31 @@ function ensureTooltipRuntime(state: SharedTooltipGlobalState): SharedTooltipRun
   return state.runtime;
 }
 
+function getSharedCheckboxRoot(node: HTMLElement | null): HTMLElement | null {
+  if (!node) return null;
+  return node.closest<HTMLElement>('[data-ui="shared-checkbox"]');
+}
+
+function getTooltipAnchorTarget(node: HTMLElement): HTMLElement {
+  const sharedCheckboxRoot = getSharedCheckboxRoot(node);
+  if (!sharedCheckboxRoot) return node;
+  return (
+    sharedCheckboxRoot.querySelector<HTMLElement>('[data-tooltip-anchor="shared-checkbox-control"]') ||
+    sharedCheckboxRoot
+  );
+}
+
+function isSharedCheckboxTooltipTarget(node: HTMLElement | null): boolean {
+  return !!getSharedCheckboxRoot(node);
+}
+
 function resolveTooltipTarget(node: EventTarget | null, state: SharedTooltipGlobalState): HTMLElement | null {
   if (!(node instanceof HTMLElement)) return null;
   const dataTipTarget = node.closest<HTMLElement>("[data-tip]");
   if (dataTipTarget) {
     if (dataTipTarget.matches(TOOLTIP_EXCLUDE_SELECTOR)) return null;
     const tip = String(dataTipTarget.dataset.tip ?? "").trim();
-    if (tip) return dataTipTarget;
+    if (tip) return getTooltipAnchorTarget(dataTipTarget);
   }
 
   const titleTarget = node.closest<HTMLElement>("[title]");
@@ -238,9 +261,10 @@ function resolveTooltipTarget(node: EventTarget | null, state: SharedTooltipGlob
   if (!isInTitleScope(titleTarget, state.titleScopeSelectors)) return null;
   const title = String(titleTarget.getAttribute("title") ?? "").trim();
   if (!title) return null;
-  titleTarget.dataset.tip = title;
+  const tooltipTarget = getTooltipAnchorTarget(titleTarget);
+  tooltipTarget.dataset.tip = title;
   titleTarget.removeAttribute("title");
-  return titleTarget;
+  return tooltipTarget;
 }
 
 function hideTooltip(state: SharedTooltipGlobalState): void {
@@ -250,6 +274,7 @@ function hideTooltip(state: SharedTooltipGlobalState): void {
   }
   const runtime = ensureTooltipRuntime(state);
   runtime.root.classList.remove("is-visible");
+  runtime.root.classList.remove("is-shared-checkbox-target");
   state.activeTarget = null;
 }
 
@@ -267,7 +292,8 @@ function scheduleHideTooltip(state: SharedTooltipGlobalState): void {
 function positionTooltip(state: SharedTooltipGlobalState): void {
   if (!state.activeTarget) return;
   const runtime = ensureTooltipRuntime(state);
-  const targetRect = state.activeTarget.getBoundingClientRect();
+  const anchorTarget = getTooltipAnchorTarget(state.activeTarget);
+  const targetRect = anchorTarget.getBoundingClientRect();
   const anchorX = targetRect.left + targetRect.width / 2;
   const anchorY = targetRect.top - 8;
 
@@ -297,7 +323,8 @@ function showTooltip(target: HTMLElement, state: SharedTooltipGlobalState): void
   }
 
   const runtime = ensureTooltipRuntime(state);
-  const targetRect = target.getBoundingClientRect();
+  const anchorTarget = getTooltipAnchorTarget(target);
+  const targetRect = anchorTarget.getBoundingClientRect();
   const centerX = targetRect.left + targetRect.width / 2;
   const centerY = targetRect.top + targetRect.height / 2;
   const wasVisible = runtime.root.classList.contains("is-visible");
@@ -308,6 +335,7 @@ function showTooltip(target: HTMLElement, state: SharedTooltipGlobalState): void
   const shouldInstant = !wasVisible || distance >= SHARED_TOOLTIP_INSTANT_DISTANCE_PX;
 
   state.activeTarget = target;
+  runtime.root.classList.toggle("is-shared-checkbox-target", isSharedCheckboxTooltipTarget(target));
   runtime.body.textContent = tip;
   if (shouldInstant) {
     runtime.root.classList.add("is-instant");
@@ -466,7 +494,11 @@ export function applyTooltipCatalog(root: ParentNode, catalog: Record<string, st
       node.removeAttribute("title");
       continue;
     }
-    node.dataset.tip = tip;
+    const tooltipTarget = getTooltipAnchorTarget(node);
+    tooltipTarget.dataset.tip = tip;
+    if (tooltipTarget !== node) {
+      node.removeAttribute("data-tip");
+    }
     node.removeAttribute("title");
     assigned += 1;
   }
@@ -521,7 +553,11 @@ export function hydrateSettingsTooltips(options: SettingsTooltipHydrateOptions):
       const controlTip = buildTipFromControl(control);
       const tip = controlTip || rowTip;
       if (!tip) return;
-      control.dataset.tip = tip;
+      const tooltipTarget = getTooltipAnchorTarget(control);
+      tooltipTarget.dataset.tip = tip;
+      if (tooltipTarget !== control) {
+        control.removeAttribute("data-tip");
+      }
       control.removeAttribute("title");
       assigned += 1;
     });

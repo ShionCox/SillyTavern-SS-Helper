@@ -1,6 +1,28 @@
 import type { SettingsCardTemplateIdsEvent } from "./settingsCardTemplateTypes";
+import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
 
 export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsEvent): string {
+  const buildCheckboxItem = (
+    id: string,
+    title: string,
+    description: string,
+    searchText: string
+  ): string =>
+    buildSharedCheckboxCard({
+      id,
+      title,
+      description,
+      checkedLabel: "开启",
+      uncheckedLabel: "关闭",
+      containerClassName: "st-roll-item st-roll-search-item",
+      copyClassName: "st-roll-item-main",
+      titleClassName: "st-roll-item-title",
+      descriptionClassName: "st-roll-item-desc",
+      attributes: {
+        "data-st-roll-search": searchText,
+      },
+    });
+
   return `
     <div class="inline-drawer st-roll-shell">
       <div class="inline-drawer-toggle inline-drawer-header st-roll-head" id="${ids.drawerToggleId}">
@@ -34,13 +56,12 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
         <div id="${ids.panelMainId}" class="st-roll-panel">
           <div class="st-roll-divider"><i class="fa-solid fa-power-off"></i><span>基础开关</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="enable event dice plugin">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用事件骰子系统</div>
-              <div class="st-roll-item-desc">总开关。关掉后不再做事件检定。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.enabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.enabledId,
+            "启用事件骰子系统",
+            "总开关。关掉后不再做事件检定。",
+            "enable event dice plugin"
+          )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="scope protagonist all">
             <div class="st-roll-item-main">
@@ -57,45 +78,40 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
           <div class="st-roll-divider"><i class="fa-solid fa-robot"></i><span>AI 协议</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="auto send rule inject">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">默认发送规则给 AI</div>
-              <div class="st-roll-item-desc">发送前自动加规则和摘要，减少跑偏。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.ruleId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.ruleId,
+            "默认发送规则给 AI",
+            "发送前自动加规则和摘要，减少跑偏。",
+            "auto send rule inject"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="rollMode auto manual">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">允许 AI 决定自动/手动掷骰</div>
-              <div class="st-roll-item-desc">开：AI 可自动掷骰。关：你手动掷骰。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.aiRollModeId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.aiRollModeId,
+            "允许 AI 决定自动/手动掷骰",
+            "开：AI 可自动掷骰。关：你手动掷骰。",
+            "rollMode auto manual"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="ai round end round_control end_round">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">是否开启持续轮</div>
-              <div class="st-roll-item-desc">开：AI 决定何时结束本轮。关：每次事件都开新轮。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.aiRoundControlId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.aiRoundControlId,
+            "是否开启持续轮",
+            "开：AI 决定何时结束本轮。关：每次事件都开新轮。",
+            "ai round end round_control end_round"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic dc reason">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用动态 DC 解释</div>
-              <div class="st-roll-item-desc">显示这次难度变化的原因。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.dynamicDcReasonId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.dynamicDcReasonId,
+            "启用动态 DC 解释",
+            "显示这次难度变化的原因。",
+            "dynamic dc reason"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="status debuff apply remove clear">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用状态异常系统</div>
-              <div class="st-roll-item-desc">状态会影响后续检定结果。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.statusSystemEnabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.statusSystemEnabledId,
+            "启用状态异常系统",
+            "状态会影响后续检定结果。",
+            "status debuff apply remove clear"
+          )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="status editor">
             <div class="st-roll-item-main">
@@ -107,29 +123,26 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
           <div class="st-roll-divider"><i class="fa-solid fa-dice"></i><span>掷骰规则</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="explode">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用爆骰</div>
-              <div class="st-roll-item-desc">满足条件时可追加掷骰。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.explodingEnabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.explodingEnabledId,
+            "启用爆骰",
+            "满足条件时可追加掷骰。",
+            "explode"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="advantage disadvantage">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用优势/劣势</div>
-              <div class="st-roll-item-desc">开启后按优势/劣势取高或取低。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.advantageEnabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.advantageEnabledId,
+            "启用优势/劣势",
+            "开启后按优势/劣势取高或取低。",
+            "advantage disadvantage"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="dynamic result guidance">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用动态结果引导</div>
-              <div class="st-roll-item-desc">掷骰后给 AI 一句结果提示。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.dynamicResultGuidanceId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.dynamicResultGuidanceId,
+            "启用动态结果引导",
+            "掷骰后给 AI 一句结果提示。",
+            "dynamic result guidance"
+          )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="dice sides allowed">
             <div class="st-roll-item-main">
@@ -143,29 +156,26 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
           <div class="st-roll-divider"><i class="fa-solid fa-route"></i><span>剧情分支</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="outcome branches">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用剧情走向分支</div>
-              <div class="st-roll-item-desc">成功、失败、爆骰可走不同后果。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.outcomeBranchesId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.outcomeBranchesId,
+            "启用剧情走向分支",
+            "成功、失败、爆骰可走不同后果。",
+            "outcome branches"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="explode outcome branch">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用爆骰特殊分支</div>
-              <div class="st-roll-item-desc">爆骰时使用专用后果文本。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.explodeOutcomeId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.explodeOutcomeId,
+            "启用爆骰特殊分支",
+            "爆骰时使用专用后果文本。",
+            "explode outcome branch"
+          )}
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="list outcome preview">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">列表卡预览走向</div>
-              <div class="st-roll-item-desc">未掷骰时先预览可能结果。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.listOutcomePreviewId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.listOutcomePreviewId,
+            "列表卡预览走向",
+            "未掷骰时先预览可能结果。",
+            "list outcome preview"
+          )}
 
           <div class="st-roll-divider"><i class="fa-solid fa-file-lines"></i><span>摘要注入</span><div class="st-roll-divider-line"></div></div>
 
@@ -191,23 +201,21 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             <div class="st-roll-row"><input id="${ids.summaryRoundsId}" class="st-roll-input" type="number" min="1" max="10" step="1" /></div>
           </div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="summary include outcome">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">摘要包含走向文本</div>
-              <div class="st-roll-item-desc">把本轮结果文本写进摘要。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.includeOutcomeSummaryId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.includeOutcomeSummaryId,
+            "摘要包含走向文本",
+            "把本轮结果文本写进摘要。",
+            "summary include outcome"
+          )}
 
           <div class="st-roll-divider"><i class="fa-solid fa-stopwatch"></i><span>时限控制</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="time limit timeout">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用事件时限</div>
-              <div class="st-roll-item-desc">事件有倒计时，超时按失败处理。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.timeLimitEnabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.timeLimitEnabledId,
+            "启用事件时限",
+            "事件有倒计时，超时按失败处理。",
+            "time limit timeout"
+          )}
 
           <div id="${ids.timeLimitRowId}" class="st-roll-item st-roll-search-item" data-st-roll-search="minimum time limit seconds">
             <div class="st-roll-item-main">
@@ -225,13 +233,12 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
         <div id="${ids.panelSkillId}" class="st-roll-panel" hidden>
           <div class="st-roll-divider"><i class="fa-solid fa-bolt"></i><span>技能系统</span><div class="st-roll-divider-line"></div></div>
 
-          <label class="st-roll-item st-roll-search-item" data-st-roll-search="skill system enable">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">启用技能系统</div>
-              <div class="st-roll-item-desc">关掉后，技能加值不再生效。</div>
-            </div>
-            <div class="st-roll-inline"><input id="${ids.skillEnabledId}" type="checkbox" /></div>
-          </label>
+          ${buildCheckboxItem(
+            ids.skillEnabledId,
+            "启用技能系统",
+            "关掉后，技能加值不再生效。",
+            "skill system enable"
+          )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="skill editor modal">
             <div class="st-roll-item-main">

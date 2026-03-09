@@ -1,3 +1,5 @@
+import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
+
 export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
   return `
     #${cardId} {
@@ -1102,6 +1104,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       opacity: 0.78;
       padding-top: 4px;
     }
+
+    ${buildSharedCheckboxStyles(`#${cardId}`)}
 
     #${cardId} input[type="checkbox"] {
       accent-color: rgba(197, 160, 89, 0.92);
