@@ -4,7 +4,261 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
   return `
     #${cardId} {
       margin-bottom: 5px;
-      color: var(--SmartThemeBodyColor, inherit);
+      color: var(--st-roll-text, var(--SmartThemeBodyColor, inherit));
+      --st-roll-text: var(--SmartThemeBodyColor, #dcdcd2);
+      --st-roll-text-muted: rgba(255, 255, 255, 0.75);
+      --st-roll-accent: #c5a059;
+      --st-roll-accent-contrast: #ffeac0;
+      --st-roll-shell-border: rgba(197, 160, 89, 0.35);
+      --st-roll-shell-bg:
+        radial-gradient(120% 140% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 55%),
+        linear-gradient(160deg, rgba(31, 25, 25, 0.82), rgba(20, 18, 20, 0.82));
+      --st-roll-shell-backdrop: blur(3px);
+      --st-roll-content-bg: transparent;
+      --st-roll-content-border: rgba(255, 255, 255, 0.08);
+      --st-roll-tabs-bg: rgba(0, 0, 0, 0.2);
+      --st-roll-tabs-border: rgba(255, 255, 255, 0.16);
+      --st-roll-tab-active-bg: rgba(197, 160, 89, 0.58);
+      --st-roll-tab-hover-bg: rgba(197, 160, 89, 0.2);
+      --st-roll-tab-hover-shadow: 0 0 12px rgba(197, 160, 89, 0.2);
+      --st-roll-divider-line:
+        linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0),
+          rgba(255, 255, 255, 0.2) 18%,
+          rgba(255, 255, 255, 0.26) 50%,
+          rgba(255, 255, 255, 0.2) 82%,
+          rgba(255, 255, 255, 0)
+        );
+      --st-roll-item-bg: rgba(0, 0, 0, 0.16);
+      --st-roll-item-border: rgba(255, 255, 255, 0.2);
+      --st-roll-item-hover-bg: rgba(0, 0, 0, 0.24);
+      --st-roll-item-hover-border: rgba(197, 160, 89, 0.48);
+      --st-roll-item-hover-shadow:
+        0 0 0 1px rgba(197, 160, 89, 0.2),
+        0 0 16px rgba(197, 160, 89, 0.16);
+      --st-roll-control-bg: rgba(0, 0, 0, 0.28);
+      --st-roll-control-bg-hover: rgba(0, 0, 0, 0.34);
+      --st-roll-control-border: rgba(197, 160, 89, 0.36);
+      --st-roll-control-border-hover: rgba(197, 160, 89, 0.58);
+      --st-roll-control-focus-border: rgba(197, 160, 89, 0.72);
+      --st-roll-control-focus-ring: rgba(197, 160, 89, 0.22);
+      --st-roll-btn-bg: rgba(197, 160, 89, 0.14);
+      --st-roll-btn-border: rgba(197, 160, 89, 0.45);
+      --st-roll-btn-hover-bg: rgba(197, 160, 89, 0.24);
+      --st-roll-btn-hover-border: rgba(197, 160, 89, 0.68);
+      --st-roll-btn-hover-shadow:
+        inset 0 0 0 1px rgba(197, 160, 89, 0.26),
+        0 0 14px rgba(197, 160, 89, 0.2);
+      --st-roll-btn-secondary-bg: rgba(255, 255, 255, 0.08);
+      --st-roll-btn-secondary-border: rgba(255, 255, 255, 0.2);
+      --st-roll-textarea-wrap-bg: rgba(0, 0, 0, 0.15);
+      --st-roll-textarea-wrap-border: rgba(255, 255, 255, 0.18);
+      --st-roll-textarea-wrap-hover-border: rgba(197, 160, 89, 0.45);
+      --st-roll-textarea-wrap-hover-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+      --st-roll-panel-muted-bg: rgba(0, 0, 0, 0.16);
+      --st-roll-panel-muted-border: rgba(255, 255, 255, 0.18);
+      --st-roll-modal-panel-bg:
+        radial-gradient(110% 130% at 100% 0%, rgba(197, 160, 89, 0.14), transparent 56%),
+        linear-gradient(160deg, rgba(23, 21, 24, 0.96), rgba(15, 14, 17, 0.96));
+      --st-roll-modal-panel-border: rgba(197, 160, 89, 0.38);
+      --st-roll-modal-panel-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
+      --st-roll-modal-head-bg: rgba(255, 255, 255, 0.04);
+      --st-roll-modal-head-border: rgba(255, 255, 255, 0.1);
+      --st-roll-sidebar-bg: rgba(0, 0, 0, 0.26);
+      --st-roll-sidebar-head-bg: rgba(255, 255, 255, 0.03);
+      --st-roll-layout-bg: rgba(0, 0, 0, 0.18);
+      --st-roll-layout-border: rgba(255, 255, 255, 0.12);
+      --st-roll-list-item-bg: rgba(255, 255, 255, 0.03);
+      --st-roll-list-item-border: rgba(255, 255, 255, 0.14);
+      --st-roll-list-item-hover-bg: rgba(197, 160, 89, 0.16);
+      --st-roll-list-item-hover-border: rgba(197, 160, 89, 0.58);
+      --st-roll-list-item-active-bg: rgba(197, 160, 89, 0.24);
+      --st-roll-list-item-active-border: rgba(197, 160, 89, 0.74);
+      --st-roll-list-item-active-shadow: 0 0 0 1px rgba(197, 160, 89, 0.24);
+      --st-roll-dialog-backdrop: rgba(0, 0, 0, 0.72);
+      --st-roll-dialog-backdrop-filter: blur(2px);
+    }
+
+    #${cardId}[data-st-roll-theme="dark"] {
+      --st-roll-text: #e6edf7;
+      --st-roll-text-muted: #a5b0c4;
+      --st-roll-accent: #5f8de5;
+      --st-roll-accent-contrast: #f1f6ff;
+      --st-roll-shell-border: #35425e;
+      --st-roll-shell-bg: #171f2f;
+      --st-roll-shell-backdrop: none;
+      --st-roll-content-bg: #1f2838;
+      --st-roll-content-border: #2f3a4d;
+      --st-roll-tabs-bg: #1a2333;
+      --st-roll-tabs-border: #2f3a4d;
+      --st-roll-tab-active-bg: #4b71bb;
+      --st-roll-tab-hover-bg: #2e446c;
+      --st-roll-tab-hover-shadow: none;
+      --st-roll-divider-line: linear-gradient(90deg, #1f2838 0%, #3e4c69 50%, #1f2838 100%);
+      --st-roll-item-bg: #212c3f;
+      --st-roll-item-border: #38445a;
+      --st-roll-item-hover-bg: #27344a;
+      --st-roll-item-hover-border: #4f6490;
+      --st-roll-item-hover-shadow: none;
+      --st-roll-control-bg: #1c2535;
+      --st-roll-control-bg-hover: #233047;
+      --st-roll-control-border: #435473;
+      --st-roll-control-border-hover: #5c74a5;
+      --st-roll-control-focus-border: #6f92db;
+      --st-roll-control-focus-ring: #2f446f;
+      --st-roll-btn-bg: #273755;
+      --st-roll-btn-border: #3f5983;
+      --st-roll-btn-hover-bg: #32466b;
+      --st-roll-btn-hover-border: #5778b3;
+      --st-roll-btn-hover-shadow: none;
+      --st-roll-btn-secondary-bg: #202d43;
+      --st-roll-btn-secondary-border: #40526f;
+      --st-roll-textarea-wrap-bg: #1d283b;
+      --st-roll-textarea-wrap-border: #3a4861;
+      --st-roll-textarea-wrap-hover-border: #536d9d;
+      --st-roll-textarea-wrap-hover-shadow: none;
+      --st-roll-panel-muted-bg: #1d2739;
+      --st-roll-panel-muted-border: #35435c;
+      --st-roll-modal-panel-bg: #131c2b;
+      --st-roll-modal-panel-border: #34435f;
+      --st-roll-modal-panel-shadow: 0 12px 30px #0b1020;
+      --st-roll-modal-head-bg: #1f2a3d;
+      --st-roll-modal-head-border: #34425a;
+      --st-roll-sidebar-bg: #182233;
+      --st-roll-sidebar-head-bg: #202c40;
+      --st-roll-layout-bg: #1a2334;
+      --st-roll-layout-border: #344157;
+      --st-roll-list-item-bg: #1f2a3d;
+      --st-roll-list-item-border: #384863;
+      --st-roll-list-item-hover-bg: #2c3b56;
+      --st-roll-list-item-hover-border: #4f6798;
+      --st-roll-list-item-active-bg: #334766;
+      --st-roll-list-item-active-border: #6180bd;
+      --st-roll-list-item-active-shadow: none;
+      --st-roll-dialog-backdrop: #0f1520;
+      --st-roll-dialog-backdrop-filter: none;
+    }
+
+    #${cardId}[data-st-roll-theme="light"] {
+      --st-roll-text: #1f2834;
+      --st-roll-text-muted: #5e6e84;
+      --st-roll-accent: #2f6ee5;
+      --st-roll-accent-contrast: #ffffff;
+      --st-roll-shell-border: #c6d1e2;
+      --st-roll-shell-bg: #f8fbff;
+      --st-roll-shell-backdrop: none;
+      --st-roll-content-bg: #ffffff;
+      --st-roll-content-border: #d7dfec;
+      --st-roll-tabs-bg: #eef3fa;
+      --st-roll-tabs-border: #c9d5e7;
+      --st-roll-tab-active-bg: #2f6ee5;
+      --st-roll-tab-hover-bg: #d9e6ff;
+      --st-roll-tab-hover-shadow: none;
+      --st-roll-divider-line: linear-gradient(90deg, #ffffff 0%, #c3d4ec 50%, #ffffff 100%);
+      --st-roll-item-bg: #f8fbff;
+      --st-roll-item-border: #cfdbec;
+      --st-roll-item-hover-bg: #edf4ff;
+      --st-roll-item-hover-border: #adc3e7;
+      --st-roll-item-hover-shadow: none;
+      --st-roll-control-bg: #ffffff;
+      --st-roll-control-bg-hover: #f1f6ff;
+      --st-roll-control-border: #adc1e0;
+      --st-roll-control-border-hover: #8eaed9;
+      --st-roll-control-focus-border: #3b74e0;
+      --st-roll-control-focus-ring: #cfe0ff;
+      --st-roll-btn-bg: #e7f0ff;
+      --st-roll-btn-border: #a8bfe5;
+      --st-roll-btn-hover-bg: #d2e3ff;
+      --st-roll-btn-hover-border: #83a2d7;
+      --st-roll-btn-hover-shadow: none;
+      --st-roll-btn-secondary-bg: #f1f5fc;
+      --st-roll-btn-secondary-border: #c1d0e6;
+      --st-roll-textarea-wrap-bg: #ffffff;
+      --st-roll-textarea-wrap-border: #cfdbec;
+      --st-roll-textarea-wrap-hover-border: #9cb7df;
+      --st-roll-textarea-wrap-hover-shadow: none;
+      --st-roll-panel-muted-bg: #f5f8fe;
+      --st-roll-panel-muted-border: #cfdbec;
+      --st-roll-modal-panel-bg: #f5f9ff;
+      --st-roll-modal-panel-border: #c6d3e6;
+      --st-roll-modal-panel-shadow: 0 10px 24px #c6d0df;
+      --st-roll-modal-head-bg: #eaf1fb;
+      --st-roll-modal-head-border: #c8d5e8;
+      --st-roll-sidebar-bg: #eef3fa;
+      --st-roll-sidebar-head-bg: #e3ebf8;
+      --st-roll-layout-bg: #f6f9ff;
+      --st-roll-layout-border: #cfdbec;
+      --st-roll-list-item-bg: #ffffff;
+      --st-roll-list-item-border: #cfdbec;
+      --st-roll-list-item-hover-bg: #e8f0ff;
+      --st-roll-list-item-hover-border: #9db6dd;
+      --st-roll-list-item-active-bg: #d8e6ff;
+      --st-roll-list-item-active-border: #7e9fd5;
+      --st-roll-list-item-active-shadow: none;
+      --st-roll-dialog-backdrop: #d9e1ee;
+      --st-roll-dialog-backdrop-filter: none;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] {
+      --st-roll-text: var(--SmartThemeBodyColor, #dcdcd2);
+      --st-roll-text-muted: var(--SmartThemeEmColor, #919191);
+      --st-roll-accent: var(--SmartThemeQuoteColor, #e18a24);
+      --st-roll-accent-contrast: var(--SmartThemeBodyColor, #dcdcd2);
+      --st-roll-shell-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-shell-bg:
+        linear-gradient(348deg, var(--white30a, rgba(255, 255, 255, 0.3)) 2%, var(--grey30a, rgba(50, 50, 50, 0.3)) 10%, var(--black70a, rgba(0, 0, 0, 0.7)) 95%, var(--SmartThemeQuoteColor, #e18a24) 100%);
+      --st-roll-shell-backdrop: blur(var(--SmartThemeBlurStrength, 0px));
+      --st-roll-content-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-content-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-tabs-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 82%, #000 18%);
+      --st-roll-tabs-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-tab-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 50%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-tab-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 26%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-tab-hover-shadow: none;
+      --st-roll-divider-line: linear-gradient(90deg, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 0%, color-mix(in srgb, var(--SmartThemeBodyColor, #dcdcd2) 28%, transparent) 50%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 100%);
+      --st-roll-item-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
+      --st-roll-item-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-item-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 16%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-item-hover-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 54%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-item-hover-shadow: none;
+      --st-roll-control-bg: var(--black30a, rgba(0, 0, 0, 0.3));
+      --st-roll-control-bg-hover: color-mix(in srgb, var(--black30a, rgba(0, 0, 0, 0.3)) 70%, var(--SmartThemeQuoteColor, #e18a24) 30%);
+      --st-roll-control-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-control-border-hover: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 40%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-control-focus-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 70%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-control-focus-ring: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 32%, transparent);
+      --st-roll-btn-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-btn-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-btn-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 20%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-btn-hover-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-btn-hover-shadow: none;
+      --st-roll-btn-secondary-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, var(--SmartThemeBodyColor, #dcdcd2) 15%);
+      --st-roll-btn-secondary-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-textarea-wrap-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-textarea-wrap-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-textarea-wrap-hover-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 50%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-textarea-wrap-hover-shadow: none;
+      --st-roll-panel-muted-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
+      --st-roll-panel-muted-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-modal-panel-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-modal-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-modal-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
+      --st-roll-modal-head-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, var(--SmartThemeBodyColor, #dcdcd2) 15%);
+      --st-roll-modal-head-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-sidebar-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
+      --st-roll-sidebar-head-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 78%, var(--SmartThemeBodyColor, #dcdcd2) 22%);
+      --st-roll-layout-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-layout-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-list-item-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 90%, #000 10%);
+      --st-roll-list-item-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-list-item-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 16%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-list-item-hover-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-list-item-active-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 70%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-list-item-active-shadow: none;
+      --st-roll-dialog-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, #000 15%);
+      --st-roll-dialog-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
     }
 
     #${cardId} .st-roll-shell {
@@ -1108,7 +1362,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     ${buildSharedCheckboxStyles(`#${cardId}`)}
 
     #${cardId} input[type="checkbox"] {
-      accent-color: rgba(197, 160, 89, 0.92);
+      accent-color: var(--st-roll-accent);
       transition: filter 0.2s ease;
     }
 
@@ -1160,6 +1414,287 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       outline: none;
       border-color: rgba(197, 160, 89, 0.72);
       box-shadow: 0 0 0 2px rgba(197, 160, 89, 0.22);
+    }
+
+    #${cardId} .st-roll-shell {
+      color: var(--st-roll-text);
+      border-color: var(--st-roll-shell-border);
+      background: var(--st-roll-shell-bg);
+      backdrop-filter: var(--st-roll-shell-backdrop);
+    }
+
+    #${cardId} .st-roll-content {
+      border-top-color: var(--st-roll-content-border);
+      background: var(--st-roll-content-bg);
+    }
+
+    #${cardId} .st-roll-tabs {
+      border-color: var(--st-roll-tabs-border);
+      background: var(--st-roll-tabs-bg);
+    }
+
+    #${cardId} .st-roll-tab.is-active {
+      color: var(--st-roll-accent-contrast);
+      background: var(--st-roll-tab-active-bg);
+    }
+
+    #${cardId} .st-roll-divider-line {
+      background: var(--st-roll-divider-line);
+    }
+
+    #${cardId} .st-roll-item {
+      border-color: var(--st-roll-item-border);
+      background: var(--st-roll-item-bg);
+    }
+
+    #${cardId} .st-roll-about-meta a {
+      border-bottom-color: var(--st-roll-item-border);
+    }
+
+    #${cardId} .st-roll-select,
+    #${cardId} .st-roll-input,
+    #${cardId} .st-roll-textarea,
+    #${cardId} .st-roll-search {
+      color: var(--st-roll-text);
+      border-color: var(--st-roll-control-border);
+      background: var(--st-roll-control-bg);
+    }
+
+    #${cardId} .st-roll-btn {
+      color: var(--st-roll-text);
+      border-color: var(--st-roll-btn-border);
+      background: var(--st-roll-btn-bg);
+    }
+
+    #${cardId} .st-roll-btn.secondary {
+      border-color: var(--st-roll-btn-secondary-border);
+      background: var(--st-roll-btn-secondary-bg);
+    }
+
+    #${cardId} .st-roll-textarea-wrap,
+    #${cardId} .st-roll-changelog,
+    #${cardId} .st-roll-skill-presets,
+    #${cardId} .st-roll-status-layout {
+      border-color: var(--st-roll-panel-muted-border);
+      background: var(--st-roll-panel-muted-bg);
+    }
+
+    #${cardId} .st-roll-skill-modal-panel,
+    #${cardId} .st-roll-status-modal-panel {
+      border-color: var(--st-roll-modal-panel-border);
+      background: var(--st-roll-modal-panel-bg);
+      box-shadow: var(--st-roll-modal-panel-shadow);
+    }
+
+    #${cardId} .st-roll-skill-modal-head,
+    #${cardId} .st-roll-status-modal-head {
+      border-bottom-color: var(--st-roll-modal-head-border);
+      background: var(--st-roll-modal-head-bg);
+    }
+
+    #${cardId} .st-roll-status-layout {
+      border-color: var(--st-roll-layout-border);
+      background: var(--st-roll-layout-bg);
+    }
+
+    #${cardId} .st-roll-status-sidebar {
+      border-right-color: var(--st-roll-layout-border);
+      background: var(--st-roll-sidebar-bg);
+    }
+
+    #${cardId} .st-roll-status-sidebar-head {
+      border-bottom-color: var(--st-roll-content-border);
+      background: var(--st-roll-sidebar-head-bg);
+    }
+
+    #${cardId} .st-roll-status-chat-item,
+    #${cardId} .st-roll-skill-preset-item {
+      border-color: var(--st-roll-list-item-border);
+      background: var(--st-roll-list-item-bg);
+    }
+
+    #${cardId} .st-roll-status-chat-item:hover,
+    #${cardId} .st-roll-skill-preset-item:hover {
+      border-color: var(--st-roll-list-item-hover-border);
+      background: var(--st-roll-list-item-hover-bg);
+    }
+
+    #${cardId} .st-roll-status-chat-item.is-active,
+    #${cardId} .st-roll-skill-preset-item.is-active {
+      border-color: var(--st-roll-list-item-active-border);
+      background: var(--st-roll-list-item-active-bg);
+      box-shadow: var(--st-roll-list-item-active-shadow);
+    }
+
+    #${cardId} .st-roll-status-splitter {
+      background: var(--st-roll-panel-muted-bg);
+      border-left-color: var(--st-roll-content-border);
+      border-right-color: var(--st-roll-content-border);
+    }
+
+    #${cardId} .st-roll-status-splitter:hover,
+    #${cardId} .st-roll-status-splitter.is-resizing {
+      background: var(--st-roll-tab-hover-bg);
+    }
+
+    #${cardId} .st-roll-skill-modal::backdrop,
+    #${cardId} .st-roll-status-modal::backdrop {
+      background: var(--st-roll-dialog-backdrop);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
+    }
+
+    #${cardId} .stx-shared-checkbox-card {
+      --stx-checkbox-accent: var(--st-roll-accent);
+      --stx-checkbox-accent-soft: var(--st-roll-control-focus-ring);
+      --stx-checkbox-accent-strong: var(--st-roll-accent-contrast);
+      --stx-checkbox-border: var(--st-roll-control-border);
+      --stx-checkbox-surface: var(--st-roll-control-bg);
+      --stx-checkbox-surface-hover: var(--st-roll-control-bg-hover);
+      --stx-checkbox-text-off: var(--st-roll-text-muted);
+      --stx-checkbox-box-border: var(--st-roll-control-border);
+      --stx-checkbox-box-bg: var(--st-roll-control-bg);
+      --stx-checkbox-control-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-control,
+    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-control {
+      background: var(--stx-checkbox-surface);
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-box,
+    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-box {
+      background: var(--stx-checkbox-box-bg);
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control,
+    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+      background: var(--stx-checkbox-accent);
+      border-color: var(--stx-checkbox-accent);
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box,
+    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box {
+      background: var(--stx-checkbox-accent);
+      border-color: var(--stx-checkbox-accent);
+      box-shadow: none;
+    }
+
+    #${cardId} .st-roll-head:hover {
+      background: var(--st-roll-panel-muted-bg);
+      box-shadow: inset 0 -1px 0 var(--st-roll-content-border);
+    }
+
+    #${cardId} .st-roll-tab:hover {
+      opacity: 1;
+      background: var(--st-roll-tab-hover-bg);
+      box-shadow: var(--st-roll-tab-hover-shadow);
+    }
+
+    #${cardId} .st-roll-item:hover {
+      border-color: var(--st-roll-item-hover-border);
+      background: var(--st-roll-item-hover-bg);
+      box-shadow: var(--st-roll-item-hover-shadow);
+    }
+
+    #${cardId} .st-roll-select:hover,
+    #${cardId} .st-roll-input:hover,
+    #${cardId} .st-roll-search:hover,
+    #${cardId} .st-roll-textarea:hover {
+      border-color: var(--st-roll-control-border-hover);
+      background-color: var(--st-roll-control-bg-hover);
+      box-shadow: 0 0 0 1px var(--st-roll-control-focus-ring);
+    }
+
+    #${cardId} .st-roll-textarea-wrap:hover {
+      border-color: var(--st-roll-textarea-wrap-hover-border);
+      box-shadow: var(--st-roll-textarea-wrap-hover-shadow);
+    }
+
+    #${cardId} .st-roll-btn:hover {
+      border-color: var(--st-roll-btn-hover-border);
+      background: var(--st-roll-btn-hover-bg);
+      box-shadow: var(--st-roll-btn-hover-shadow);
+    }
+
+    #${cardId} .st-roll-select:focus,
+    #${cardId} .st-roll-input:focus,
+    #${cardId} .st-roll-search:focus,
+    #${cardId} .st-roll-textarea:focus {
+      outline: none;
+      border-color: var(--st-roll-control-focus-border);
+      box-shadow: 0 0 0 2px var(--st-roll-control-focus-ring);
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole {
+      margin: 0;
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole {
+      background-image: none !important;
+      text-align: left;
+      text-align-last: left;
+      appearance: auto;
+      -webkit-appearance: auto;
+      -moz-appearance: auto;
+      padding-right: 20px;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button {
+      margin: 0;
+      width: auto;
+      min-height: 30px;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button {
+      flex: 1;
+      min-width: 0;
+      border-radius: 999px;
+      padding: 6px 10px;
+      filter: grayscale(0.15);
+      opacity: 0.85;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.is-active,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.active {
+      opacity: 1;
+      filter: none;
+      background-color: var(--white30a, rgba(255, 255, 255, 0.3));
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button {
+      padding: 3px 8px;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole:hover,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole:hover,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole:hover,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:hover {
+      border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      background-color: var(--black30a, rgba(0, 0, 0, 0.3));
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole:focus,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole:focus,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole:focus,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:focus {
+      border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      box-shadow: none;
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button:hover,
+    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button:hover {
+      border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      background-color: var(--white30a, rgba(255, 255, 255, 0.3));
+      box-shadow: none;
     }
 
     @media (max-width: 680px) {

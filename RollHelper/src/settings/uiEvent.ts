@@ -139,6 +139,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_COLS_ID_Event: string;
   SETTINGS_STATUS_MEMORY_STATE_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_THEME_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
@@ -246,6 +247,7 @@ export function buildSettingsCardTemplateIdsEvent(
     statusColsId: deps.SETTINGS_STATUS_COLS_ID_Event,
     statusMemoryStateId: deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event,
     allowedDiceSidesId: deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+    themeId: deps.SETTINGS_THEME_ID_Event,
     summaryDetailId: deps.SETTINGS_SUMMARY_DETAIL_ID_Event,
     summaryRoundsId: deps.SETTINGS_SUMMARY_ROUNDS_ID_Event,
     scopeId: deps.SETTINGS_SCOPE_ID_Event,
@@ -371,6 +373,50 @@ export function mountSettingsCardShellEvent(
 
 let SKILL_EDITOR_BEFORE_UNLOAD_BOUND_Event = false;
 let SKILL_EDITOR_MODAL_KEYDOWN_BOUND_Event = false;
+
+function normalizeSettingsThemeEvent(theme: string): "default" | "dark" | "light" | "tavern" {
+  const normalized = String(theme || "").trim().toLowerCase();
+  if (normalized === "dark" || normalized === "light" || normalized === "tavern") {
+    return normalized;
+  }
+  return "default";
+}
+
+function syncThemeControlClassesEvent(root: ParentNode | null, theme: string): void {
+  if (!(root instanceof HTMLElement)) return;
+  const normalizedTheme = normalizeSettingsThemeEvent(theme);
+  const isTavern = normalizedTheme === "tavern";
+
+  root.classList.toggle("is-theme-tavern", isTavern);
+
+  root
+    .querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+      "input.st-roll-input, input.st-roll-search, select.st-roll-select, textarea.st-roll-textarea"
+    )
+    .forEach((element) => {
+      element.classList.toggle("text_pole", isTavern);
+    });
+
+  root.querySelectorAll<HTMLButtonElement>("button.st-roll-btn, button.st-roll-tab").forEach((button) => {
+    button.classList.toggle("menu_button", isTavern);
+    if (button.classList.contains("st-roll-tab")) {
+      button.classList.toggle("active", isTavern && button.classList.contains("is-active"));
+    } else if (!isTavern) {
+      button.classList.remove("active");
+    }
+  });
+
+  root.querySelectorAll<HTMLElement>(".stx-shared-checkbox-card").forEach((card) => {
+    card.classList.toggle("is-tavern-native", isTavern);
+  });
+}
+
+function syncThemeControlClassesByNodeEvent(node: ParentNode | null): void {
+  if (!(node instanceof HTMLElement)) return;
+  const root = node.closest<HTMLElement>("[id][data-st-roll-theme]");
+  if (!root) return;
+  syncThemeControlClassesEvent(root, root.getAttribute("data-st-roll-theme") || "default");
+}
 
 export interface BindSettingsTabsAndModalDepsEvent {
   drawerToggleId: string;
@@ -534,6 +580,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (panelSkill) panelSkill.hidden = !isSkill;
     if (panelRule) panelRule.hidden = !isRule;
     if (panelAbout) panelAbout.hidden = !isAbout;
+    syncThemeControlClassesByNodeEvent(tabMain || tabSkill || tabRule || tabAbout || panelMain || panelSkill || panelRule || panelAbout || null);
   };
 
   const tryActivateTab = (nextTab: "main" | "skill" | "rule" | "about"): boolean => {
@@ -710,6 +757,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
 }
 
 export interface BindBasicSettingsInputsDepsEvent {
+  SETTINGS_THEME_ID_Event: string;
   SETTINGS_ENABLED_ID_Event: string;
   SETTINGS_RULE_ID_Event: string;
   SETTINGS_AI_ROLL_MODE_ID_Event: string;
@@ -734,6 +782,7 @@ export interface BindBasicSettingsInputsDepsEvent {
   SUMMARY_HISTORY_ROUNDS_MIN_Event: number;
   DEFAULT_SUMMARY_HISTORY_ROUNDS_Event: number;
   updateSettingsEvent: (patch: {
+    theme?: "default" | "dark" | "light" | "tavern";
     enabled?: boolean;
     autoSendRuleToAI?: boolean;
     enableAiRollMode?: boolean;
@@ -758,6 +807,7 @@ export interface BindBasicSettingsInputsDepsEvent {
 }
 
 export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEvent): void {
+  const themeInput = document.getElementById(deps.SETTINGS_THEME_ID_Event) as HTMLSelectElement | null;
   const enabledInput = document.getElementById(deps.SETTINGS_ENABLED_ID_Event) as HTMLInputElement | null;
   const ruleInput = document.getElementById(deps.SETTINGS_RULE_ID_Event) as HTMLInputElement | null;
   const aiRollModeInput = document.getElementById(
@@ -812,6 +862,11 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+
+  themeInput?.addEventListener("change", (event) => {
+    const value = normalizeSettingsThemeEvent(String((event.target as HTMLSelectElement).value || ""));
+    deps.updateSettingsEvent({ theme: value });
+  });
 
   enabledInput?.addEventListener("input", (event) => {
     const value = Boolean((event.target as HTMLInputElement).checked);
@@ -1272,6 +1327,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
   if (!rowsWrap) return;
   if (!STATUS_EDITOR_ROWS_DRAFT_Event.length) {
     rowsWrap.innerHTML = `<div class="st-roll-status-empty">暂无状态，点击“新增状态”开始配置。</div>`;
+    syncThemeControlClassesByNodeEvent(rowsWrap);
     applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
     return;
   }
@@ -1305,6 +1361,7 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       `;
     })
     .join("");
+  syncThemeControlClassesByNodeEvent(rowsWrap);
   applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
 }
 
@@ -2489,6 +2546,7 @@ export function renderSkillPresetListEvent(
   if (!listWrap) return;
   if (!store.presets.length) {
     listWrap.innerHTML = `<div class="st-roll-skill-preset-empty">暂无预设</div>`;
+    syncThemeControlClassesByNodeEvent(listWrap);
     return;
   }
   listWrap.innerHTML = store.presets
@@ -2512,6 +2570,7 @@ export function renderSkillPresetListEvent(
       `;
     })
     .join("");
+  syncThemeControlClassesByNodeEvent(listWrap);
 }
 
 export interface RenderSkillPresetMetaDepsEvent {
@@ -2564,6 +2623,7 @@ export function renderSkillRowsEvent(
   if (!rowsWrap) return;
   if (!rows.length) {
     rowsWrap.innerHTML = `<div class="st-roll-skill-empty">暂无技能，点击“新增技能”开始配置。</div>`;
+    syncThemeControlClassesByNodeEvent(rowsWrap);
     applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
     return;
   }
@@ -2600,11 +2660,13 @@ export function renderSkillRowsEvent(
     `;
     })
     .join("");
+  syncThemeControlClassesByNodeEvent(rowsWrap);
   applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
 }
 
 export interface SyncSettingsUiDepsEvent {
   getSettingsEvent: () => {
+    theme: string;
     enabled: boolean;
     autoSendRuleToAI: boolean;
     enableAiRollMode: boolean;
@@ -2629,6 +2691,8 @@ export interface SyncSettingsUiDepsEvent {
     skillPresetStoreText: string;
     ruleText: string;
   };
+  SETTINGS_CARD_ID_Event: string;
+  SETTINGS_THEME_ID_Event: string;
   SETTINGS_ENABLED_ID_Event: string;
   SETTINGS_RULE_ID_Event: string;
   SETTINGS_AI_ROLL_MODE_ID_Event: string;
@@ -2666,6 +2730,8 @@ export interface SyncSettingsUiDepsEvent {
 
 export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const settings = deps.getSettingsEvent();
+  const settingsRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event) as HTMLElement | null;
+  const themeInput = document.getElementById(deps.SETTINGS_THEME_ID_Event) as HTMLSelectElement | null;
   const enabledInput = document.getElementById(deps.SETTINGS_ENABLED_ID_Event) as HTMLInputElement | null;
   const ruleInput = document.getElementById(deps.SETTINGS_RULE_ID_Event) as HTMLInputElement | null;
   const aiRollModeInput = document.getElementById(
@@ -2727,6 +2793,13 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const ruleTextInput = document.getElementById(
     deps.SETTINGS_RULE_TEXT_ID_Event
   ) as HTMLTextAreaElement | null;
+
+  const normalizedTheme = normalizeSettingsThemeEvent(String(settings.theme || ""));
+  if (themeInput) themeInput.value = normalizedTheme;
+  settingsRoot?.setAttribute("data-st-roll-theme", normalizedTheme);
+  const shell = settingsRoot?.querySelector<HTMLElement>(".st-roll-shell");
+  shell?.setAttribute("data-st-roll-theme", normalizedTheme);
+  syncThemeControlClassesEvent(settingsRoot, normalizedTheme);
 
   if (enabledInput) enabledInput.checked = Boolean(settings.enabled);
   if (ruleInput) ruleInput.checked = Boolean(settings.autoSendRuleToAI);
@@ -2816,4 +2889,5 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
       ruleTextInput.value = nextText;
     }
   }
+  syncThemeControlClassesEvent(settingsRoot, normalizedTheme);
 }

@@ -35,7 +35,7 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
 
       <div class="inline-drawer-content st-roll-content" id="${ids.drawerContentId}" style="display:none;">
         <div class="st-roll-filters flex-container">
-          <input id="${ids.searchId}" class="text_pole flex1 st-roll-search" placeholder="搜索设置" type="search" />
+          <input id="${ids.searchId}" class="flex1 st-roll-search" placeholder="搜索设置" type="search" />
         </div>
 
         <div class="st-roll-tabs">
@@ -62,6 +62,21 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             "总开关。关掉后不再做事件检定。",
             "enable event dice plugin"
           )}
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="theme ui dark light tavern">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">界面主题</div>
+              <div class="st-roll-item-desc">切换设置界面外观：默认、深色、亮色或酒馆风格。</div>
+            </div>
+            <div class="st-roll-row">
+              <select id="${ids.themeId}" class="st-roll-select">
+                <option value="default">默认 UI</option>
+                <option value="dark">深色 UI</option>
+                <option value="light">亮色 UI</option>
+                <option value="tavern">酒馆 UI</option>
+              </select>
+            </div>
+          </div>
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="scope protagonist all">
             <div class="st-roll-item-main">

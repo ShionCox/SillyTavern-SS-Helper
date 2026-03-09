@@ -31,6 +31,7 @@ export const SETTINGS_STATUS_CHAT_META_ID_Event = "st-roll-settings-Event-status
 export const SETTINGS_STATUS_COLS_ID_Event = "st-roll-settings-Event-status-cols";
 export const SETTINGS_STATUS_MEMORY_STATE_ID_Event = "st-roll-settings-Event-status-memory-state";
 export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allowed-dice-sides";
+export const SETTINGS_THEME_ID_Event = "st-roll-settings-Event-theme";
 export const SETTINGS_SUMMARY_DETAIL_ID_Event = "st-roll-settings-Event-summary-detail";
 export const SETTINGS_SUMMARY_ROUNDS_ID_Event = "st-roll-settings-Event-summary-rounds";
 export const SETTINGS_SCOPE_ID_Event = "st-roll-settings-Event-apply-scope";
@@ -149,6 +150,7 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_COLS_ID_Event,
   SETTINGS_STATUS_MEMORY_STATE_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_THEME_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
   SETTINGS_SCOPE_ID_Event,
@@ -206,6 +208,7 @@ export const SETTINGS_TABS_AND_MODAL_IDS_Event = {
   SETTINGS_SEARCH_ID_Event,
 } as const;
 export const SETTINGS_BASIC_INPUT_IDS_Event = {
+  SETTINGS_THEME_ID_Event,
   SETTINGS_ENABLED_ID_Event,
   SETTINGS_RULE_ID_Event,
   SETTINGS_AI_ROLL_MODE_ID_Event,
@@ -254,6 +257,8 @@ export const SETTINGS_RULE_TEXT_ACTION_IDS_Event = {
   SETTINGS_RULE_RESET_ID_Event,
 } as const;
 export const SETTINGS_SYNC_UI_IDS_Event = {
+  SETTINGS_CARD_ID_Event,
+  SETTINGS_THEME_ID_Event,
   SETTINGS_ENABLED_ID_Event,
   SETTINGS_RULE_ID_Event,
   SETTINGS_AI_ROLL_MODE_ID_Event,
@@ -331,6 +336,7 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enableDynamicDcReason: true,
   enableStatusSystem: true,
   aiAllowedDiceSidesText: "4,6,8,10,12,20,100",
+  theme: "default",
   summaryDetailMode: "minimal",
   summaryHistoryRounds: 3,
   eventApplyScope: "protagonist_only",

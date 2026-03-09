@@ -46,6 +46,7 @@ export interface SettingsCardTemplateIdsEvent {
   statusColsId: string;
   statusMemoryStateId: string;
   allowedDiceSidesId: string;
+  themeId: string;
   summaryDetailId: string;
   summaryRoundsId: string;
   scopeId: string;

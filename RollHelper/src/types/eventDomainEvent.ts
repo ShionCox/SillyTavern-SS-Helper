@@ -8,6 +8,7 @@ export type EventRollModeEvent = "auto" | "manual";
 export type AdvantageStateEvent = "normal" | "advantage" | "disadvantage";
 export type EventRollSourceEvent = "manual_roll" | "ai_auto_roll" | "timeout_auto_fail";
 export type SummaryDetailModeEvent = "minimal" | "balanced" | "detailed";
+export type RollHelperSettingsThemeEvent = "default" | "dark" | "light" | "tavern";
 export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
@@ -41,6 +42,7 @@ export interface DicePluginSettingsEvent {
   enableDynamicDcReason: boolean;
   enableStatusSystem: boolean;
   aiAllowedDiceSidesText: string;
+  theme: RollHelperSettingsThemeEvent;
   summaryDetailMode: SummaryDetailModeEvent;
   summaryHistoryRounds: number;
   eventApplyScope: EventApplyScopeSettingEvent;

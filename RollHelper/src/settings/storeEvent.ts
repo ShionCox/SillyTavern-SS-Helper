@@ -6,6 +6,7 @@ import type {
   SkillEditorRowDraftEvent,
   SkillPresetEvent,
   SkillPresetStoreEvent,
+  RollHelperSettingsThemeEvent,
   SummaryDetailModeEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
@@ -246,6 +247,11 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
     typeof (bucket as any).aiAllowedDiceSidesText === "string"
       ? String((bucket as any).aiAllowedDiceSidesText).trim()
       : DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText;
+  const rawTheme = String((bucket as any).theme || "").toLowerCase();
+  bucket.theme =
+    rawTheme === "dark" || rawTheme === "light" || rawTheme === "tavern"
+      ? (rawTheme as RollHelperSettingsThemeEvent)
+      : "default";
   bucket.enableOutcomeBranches = bucket.enableOutcomeBranches !== false;
   bucket.enableExplodeOutcomeBranch = bucket.enableExplodeOutcomeBranch !== false;
   bucket.includeOutcomeInSummary = bucket.includeOutcomeInSummary !== false;
