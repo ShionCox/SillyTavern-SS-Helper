@@ -451,6 +451,10 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event: string;
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
   SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
+  SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
+  SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
+  SETTINGS_STRIP_INTERNAL_ID_Event: string;
+  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SUMMARY_HISTORY_ROUNDS_MAX_Event: number;
   SUMMARY_HISTORY_ROUNDS_MIN_Event: number;
@@ -476,8 +480,12 @@ export interface BindBasicSettingsInputsDepsEvent {
     showOutcomePreviewInListCard?: boolean;
     enableTimeLimit?: boolean;
     minTimeLimitSeconds?: number;
+    compatibilityModeForSummaryPlugins?: boolean;
+    removeRollJsonFromStoredText?: boolean;
+    stripRollHelperInternalBlocks?: boolean;
     enableSkillSystem?: boolean;
   }) => void;
+  cleanAllHistoryChatBlocksEvent: () => void;
 }
 
 export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEvent): void {
@@ -533,6 +541,18 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const minTimeLimitInput = document.getElementById(
     deps.SETTINGS_TIME_LIMIT_MIN_ID_Event
   ) as HTMLInputElement | null;
+  const compatibilityModeInput = document.getElementById(
+    deps.SETTINGS_COMPATIBILITY_MODE_ID_Event
+  ) as HTMLInputElement | null;
+  const removeRollJsonInput = document.getElementById(
+    deps.SETTINGS_REMOVE_ROLLJSON_ID_Event
+  ) as HTMLInputElement | null;
+  const stripInternalBlocksInput = document.getElementById(
+    deps.SETTINGS_STRIP_INTERNAL_ID_Event
+  ) as HTMLInputElement | null;
+  const cleanHistoryBtn = document.getElementById(
+    deps.SETTINGS_CLEAN_HISTORY_BTN_ID_Event
+  ) as HTMLButtonElement | null;
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -654,6 +674,27 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ enableSkillSystem: value });
   });
+
+  compatibilityModeInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ compatibilityModeForSummaryPlugins: value });
+  });
+
+  removeRollJsonInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ removeRollJsonFromStoredText: value });
+  });
+
+  stripInternalBlocksInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ stripRollHelperInternalBlocks: value });
+  });
+
+  cleanHistoryBtn?.addEventListener("click", () => {
+    if (typeof deps.cleanAllHistoryChatBlocksEvent === "function") {
+      deps.cleanAllHistoryChatBlocksEvent();
+    }
+  });
 }
 
 export interface BindRuleTextActionsDepsEvent {
@@ -745,6 +786,9 @@ export interface SyncSettingsUiDepsEvent {
     showOutcomePreviewInListCard: boolean;
     enableTimeLimit: boolean;
     minTimeLimitSeconds: number;
+    compatibilityModeForSummaryPlugins: boolean;
+    removeRollJsonFromStoredText: boolean;
+    stripRollHelperInternalBlocks: boolean;
     enableSkillSystem: boolean;
     skillTableText: string;
     skillPresetStoreText: string;
@@ -772,6 +816,10 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
   SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
   SETTINGS_TIME_LIMIT_ROW_ID_Event: string;
+  SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
+  SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
+  SETTINGS_STRIP_INTERNAL_ID_Event: string;
+  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SETTINGS_SKILL_MODAL_ID_Event: string;
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
@@ -845,6 +893,15 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     deps.SETTINGS_TIME_LIMIT_MIN_ID_Event
   ) as HTMLInputElement | null;
   const minTimeLimitRow = document.getElementById(deps.SETTINGS_TIME_LIMIT_ROW_ID_Event) as HTMLElement | null;
+  const compatibilityModeInput = document.getElementById(
+    deps.SETTINGS_COMPATIBILITY_MODE_ID_Event
+  ) as HTMLInputElement | null;
+  const removeRollJsonInput = document.getElementById(
+    deps.SETTINGS_REMOVE_ROLLJSON_ID_Event
+  ) as HTMLInputElement | null;
+  const stripInternalBlocksInput = document.getElementById(
+    deps.SETTINGS_STRIP_INTERNAL_ID_Event
+  ) as HTMLInputElement | null;
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -910,6 +967,15 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     minTimeLimitInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
   }
   minTimeLimitRow?.classList.toggle("is-disabled", !settings.enableTimeLimit);
+  if (compatibilityModeInput) {
+    compatibilityModeInput.checked = Boolean(settings.compatibilityModeForSummaryPlugins);
+  }
+  if (removeRollJsonInput) {
+    removeRollJsonInput.checked = Boolean(settings.removeRollJsonFromStoredText);
+  }
+  if (stripInternalBlocksInput) {
+    stripInternalBlocksInput.checked = Boolean(settings.stripRollHelperInternalBlocks);
+  }
   if (skillEnabledInput) {
     skillEnabledInput.checked = Boolean(settings.enableSkillSystem);
   }

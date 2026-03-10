@@ -28,6 +28,9 @@ export interface HandleGenerationEndedDepsEvent {
     enabled: boolean;
     eventApplyScope: "protagonist_only" | "all";
     enableAiRoundControl: boolean;
+    compatibilityModeForSummaryPlugins?: boolean;
+    removeRollJsonFromStoredText?: boolean;
+    stripRollHelperInternalBlocks?: boolean;
   };
   getLiveContextEvent: () => STContext | null;
   findLatestAssistantEvent: (
@@ -60,6 +63,7 @@ export interface HandleGenerationEndedDepsEvent {
   sweepTimeoutFailuresEvent: () => boolean;
   refreshCountdownDomEvent: () => void;
   saveMetadataSafeEvent: () => void;
+  sanitizeAssistantMessageForSummary?: (message: any, options?: { blockInternalTags?: boolean }) => any;
 }
 
 export function handleGenerationEndedEvent(
@@ -133,6 +137,15 @@ export function handleGenerationEndedEvent(
   meta.lastProcessedAssistantMsgId = assistantMsgId;
   const cleaned = deps.removeRangesEvent(chosenText, ranges);
   deps.setMessageTextEvent(latestAssistant.msg, cleaned);
+
+  if (settings.compatibilityModeForSummaryPlugins && settings.removeRollJsonFromStoredText) {
+    if (typeof deps.sanitizeAssistantMessageForSummary === "function") {
+      deps.sanitizeAssistantMessageForSummary(latestAssistant.msg, {
+        blockInternalTags: settings.stripRollHelperInternalBlocks,
+      });
+    }
+  }
+
   deps.hideEventCodeBlocksInDomEvent();
   if (ranges.length > 0) {
     deps.persistChatSafeEvent();
@@ -216,6 +229,12 @@ export interface SanitizeAssistantMessageDepsEvent {
   };
   removeRangesEvent: (text: string, ranges: Array<{ start: number; end: number }>) => string;
   setMessageTextEvent: (message: TavernMessageEvent, text: string) => void;
+  sanitizeAssistantMessageForSummary?: (message: any, options?: { blockInternalTags?: boolean }) => any;
+  getSettingsEvent?: () => {
+    compatibilityModeForSummaryPlugins?: boolean;
+    removeRollJsonFromStoredText?: boolean;
+    stripRollHelperInternalBlocks?: boolean;
+  }
 }
 
 export function sanitizeAssistantMessageEventBlocksEvent(
@@ -232,6 +251,17 @@ export function sanitizeAssistantMessageEventBlocksEvent(
     if (ranges.length === 0) continue;
     const cleaned = deps.removeRangesEvent(sourceText, ranges);
     deps.setMessageTextEvent(message, cleaned);
+
+    // 如果启用了兼容模式，追加执行深度净化
+    const settings = deps.getSettingsEvent?.();
+    if (settings && settings.compatibilityModeForSummaryPlugins && settings.removeRollJsonFromStoredText) {
+      if (typeof deps.sanitizeAssistantMessageForSummary === "function") {
+        deps.sanitizeAssistantMessageForSummary(message, {
+          blockInternalTags: settings.stripRollHelperInternalBlocks,
+        });
+      }
+    }
+
     return true;
   }
 

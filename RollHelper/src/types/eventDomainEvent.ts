@@ -57,6 +57,10 @@ export interface DicePluginSettingsEvent {
   skillPresetStoreText: string;
   ruleTextModeVersion: number;
   ruleText: string;
+  // 新增摘要/记忆插件兼容项
+  compatibilityModeForSummaryPlugins: boolean;
+  removeRollJsonFromStoredText: boolean;
+  stripRollHelperInternalBlocks: boolean;
 }
 
 export interface SkillEditorRowDraftEvent {

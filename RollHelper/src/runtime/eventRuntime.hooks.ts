@@ -51,6 +51,10 @@ import {
   isAssistantMessageEvent as isAssistantMessageModuleEvent,
   setMessageTextEvent as setMessageTextModuleEvent,
 } from "../events/promptEvent";
+import {
+  sanitizeAssistantMessageForSummary as sanitizeAssistantMessageForSummaryModuleEvent,
+  cleanAllHistoryChatBlocks as cleanAllHistoryChatBlocksModuleEvent,
+} from "../events/messageSanitizerEvent";
 import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } from "../events/renderEvent";
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
@@ -96,6 +100,8 @@ function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent): 
     parseEventEnvelopesEvent,
     removeRangesEvent,
     setMessageTextEvent: setMessageTextModuleEvent,
+    sanitizeAssistantMessageForSummary: sanitizeAssistantMessageForSummaryModuleEvent,
+    getSettingsEvent: getSettingsStoreEvent,
   });
 }
 
@@ -166,6 +172,7 @@ function handleGenerationEndedEvent(retry = 0): void {
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+    sanitizeAssistantMessageForSummary: sanitizeAssistantMessageForSummaryModuleEvent,
   });
 }
 
@@ -234,5 +241,8 @@ export function registerDebugCommandEvent(): void {
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
     pushToChat: pushToChatCoreEvent,
+    getLiveContextEvent: getLiveContextCoreEvent,
+    cleanAllHistoryChatBlocks: cleanAllHistoryChatBlocksModuleEvent,
+    persistChatSafeEvent: persistChatSafeStoreEvent,
   });
 }

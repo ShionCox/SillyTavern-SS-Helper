@@ -52,7 +52,7 @@ import {
   RULE_TEXT_MODE_VERSION_Event,
   SKILL_PRESET_DEFAULT_ID_Event,
   SKILL_PRESET_DEFAULT_NAME_Event,
-    SKILL_PRESET_NEW_NAME_BASE_Event,
+  SKILL_PRESET_NEW_NAME_BASE_Event,
   SKILL_PRESET_STORE_VERSION_Event,
   SUMMARY_HISTORY_ROUNDS_MAX_Event,
   SUMMARY_HISTORY_ROUNDS_MIN_Event,
@@ -518,12 +518,12 @@ function writeSettingsForCurrentScopeEvent(
     const candidate =
       typeof patchOrNext === "function"
         ? (patchOrNext as (previous: DicePluginSettingsEvent) => DicePluginSettingsEvent)(
-            previousSnapshot
-          )
+          previousSnapshot
+        )
         : ({
-            ...previousSnapshot,
-            ...(patchOrNext ?? {}),
-          } as DicePluginSettingsEvent);
+          ...previousSnapshot,
+          ...(patchOrNext ?? {}),
+        } as DicePluginSettingsEvent);
     return {
       ...candidate,
       theme: resolveSdkSettingsThemeEvent(),
@@ -625,6 +625,12 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
     bucket.ruleTextModeVersion = RULE_TEXT_MODE_VERSION_Event;
   }
   bucket.ruleText = typeof bucket.ruleText === "string" ? bucket.ruleText : DEFAULT_RULE_TEXT_Event;
+
+  // 新设置默认读取与归一化
+  bucket.compatibilityModeForSummaryPlugins = bucket.compatibilityModeForSummaryPlugins !== false;
+  bucket.removeRollJsonFromStoredText = bucket.removeRollJsonFromStoredText !== false;
+  bucket.stripRollHelperInternalBlocks = bucket.stripRollHelperInternalBlocks !== false;
+
   return bucket;
 }
 

@@ -58,6 +58,10 @@ export interface SettingsCardTemplateIdsEvent {
   timeLimitEnabledId: string;
   timeLimitMinId: string;
   timeLimitRowId: string;
+  compatibilityModeForSummaryPluginsId: string;
+  removeRollJsonFromStoredTextId: string;
+  stripRollHelperInternalBlocksId: string;
+  cleanHistoryChatBtnId: string;
   skillEnabledId: string;
   skillEditorWrapId: string;
   skillRowsId: string;

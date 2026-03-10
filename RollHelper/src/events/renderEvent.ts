@@ -204,11 +204,22 @@ export function hideEventCodeBlocksInDomEvent(): void {
   try {
     const preBlocks = Array.from(document.querySelectorAll("pre"));
     for (const pre of preBlocks) {
+      if (pre.classList.contains('language-rolljson') || pre.querySelector('.language-rolljson') || pre.querySelector('code.language-rolljson')) {
+        pre.remove();
+        continue;
+      }
+
       const text = (pre.textContent || "").trim();
-      if (!text) continue;
+      const htmlText = (pre.innerHTML || "").trim();
+      if (!text && !htmlText) continue;
+
       const hasEventPayload =
         text.includes("dice_events") && text.includes("\"events\"") && text.includes("\"type\"");
-      if (!hasEventPayload) continue;
+
+      const hasRolljson = htmlText.includes('rolljson') || text.includes('rolljson');
+      const hasSummaryWrapper = htmlText.includes('ROLLHELPER_SUMMARY_START');
+
+      if (!hasEventPayload && !hasRolljson && !hasSummaryWrapper) continue;
       pre.remove();
     }
   } catch (error) {

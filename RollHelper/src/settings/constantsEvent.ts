@@ -57,6 +57,10 @@ export const SETTINGS_SKILL_SAVE_ID_Event = "st-roll-settings-Event-skill-save";
 export const SETTINGS_SKILL_RESET_ID_Event = "st-roll-settings-Event-skill-reset";
 export const SETTINGS_SKILL_ERRORS_ID_Event = "st-roll-settings-Event-skill-errors";
 export const SETTINGS_SKILL_DIRTY_HINT_ID_Event = "st-roll-settings-Event-skill-dirty-hint";
+export const SETTINGS_COMPATIBILITY_MODE_ID_Event = "st-roll-settings-Event-compatibility-mode";
+export const SETTINGS_REMOVE_ROLLJSON_ID_Event = "st-roll-settings-Event-remove-rolljson";
+export const SETTINGS_STRIP_INTERNAL_ID_Event = "st-roll-settings-Event-strip-internal";
+export const SETTINGS_CLEAN_HISTORY_BTN_ID_Event = "st-roll-settings-Event-clean-history-btn";
 export const SETTINGS_SKILL_PRESET_LAYOUT_ID_Event = "st-roll-settings-Event-skill-preset-layout";
 export const SETTINGS_SKILL_PRESET_SIDEBAR_ID_Event = "st-roll-settings-Event-skill-preset-sidebar";
 export const SETTINGS_SKILL_PRESET_LIST_ID_Event = "st-roll-settings-Event-skill-preset-list";
@@ -164,6 +168,10 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
   SETTINGS_TIME_LIMIT_MIN_ID_Event,
   SETTINGS_TIME_LIMIT_ROW_ID_Event,
+  SETTINGS_COMPATIBILITY_MODE_ID_Event,
+  SETTINGS_REMOVE_ROLLJSON_ID_Event,
+  SETTINGS_STRIP_INTERNAL_ID_Event,
+  SETTINGS_CLEAN_HISTORY_BTN_ID_Event,
   SETTINGS_SKILL_ENABLED_ID_Event,
   SETTINGS_SKILL_EDITOR_WRAP_ID_Event,
   SETTINGS_SKILL_ROWS_ID_Event,
@@ -232,6 +240,10 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event,
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
   SETTINGS_TIME_LIMIT_MIN_ID_Event,
+  SETTINGS_COMPATIBILITY_MODE_ID_Event,
+  SETTINGS_REMOVE_ROLLJSON_ID_Event,
+  SETTINGS_STRIP_INTERNAL_ID_Event,
+  SETTINGS_CLEAN_HISTORY_BTN_ID_Event,
   SETTINGS_SKILL_ENABLED_ID_Event,
 } as const;
 export const SETTINGS_SKILL_PRESET_ACTION_IDS_Event = {
@@ -357,5 +369,8 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   skillPresetStoreText: "",
   ruleTextModeVersion: RULE_TEXT_MODE_VERSION_Event,
   ruleText: DEFAULT_RULE_TEXT_Event,
+  compatibilityModeForSummaryPlugins: true,
+  removeRollJsonFromStoredText: true,
+  stripRollHelperInternalBlocks: true,
 };
 
