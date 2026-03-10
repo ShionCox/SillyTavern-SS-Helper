@@ -105,6 +105,50 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .st-rh-summary-chip-outcome,
+    .st-rh-summary-chip-status-summary {
+      flex: 0 1 auto;
+      width: fit-content;
+      min-width: 0;
+      max-width: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      overflow: hidden;
+      text-overflow: clip;
+    }
+    .st-rh-summary-chip-marquee {
+      display: inline-flex;
+      align-items: center;
+      min-width: max-content;
+      white-space: nowrap;
+      will-change: transform;
+      animation: none;
+    }
+    .st-rh-summary-chip.is-marquee .st-rh-summary-chip-marquee {
+      animation: st-rh-summary-marquee 14s linear infinite;
+    }
+    .st-rh-summary-chip.is-marquee:hover .st-rh-summary-chip-marquee {
+      animation-play-state: paused;
+    }
+    .st-rh-summary-chip-marquee-text,
+    .st-rh-summary-chip-marquee-gap {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+    @keyframes st-rh-summary-marquee {
+      0% {
+        transform: translateX(0);
+      }
+      100% {
+        transform: translateX(calc(-50% - 8px));
+      }
+    }
+    .st-rh-summary-meta-row .st-rh-summary-toggle-state {
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
     .st-rh-summary-pill {
       --rh-pill: #52c41a;
       display: inline-flex;
@@ -129,7 +173,7 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
     .st-rh-summary-actions-result {
       min-width: 104px;
       align-self: stretch;
-      justify-content: center;
+      justify-content: flex-end;
       padding-left: 8px;
       border-left: 1px solid rgba(197, 160, 89, 0.18);
     }
@@ -182,12 +226,12 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       background: linear-gradient(135deg, #3a2515, #1a100a);
       color: var(--rh-accent);
       border-radius: 8px;
-      min-height: 32px;
-      padding: 6px 12px;
+      min-height: 28px;
+      padding: 4px 10px;
       font-family: "Noto Serif SC", "STSong", "Georgia", serif;
       font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 0.8px;
+      font-size: 11px;
+      letter-spacing: 0.4px;
       line-height: 1;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
       transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, filter 0.2s ease;
@@ -695,6 +739,9 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         min-height: 24px;
         font-size: 10px;
       }
+      .st-rh-summary-chip-outcome {
+        max-width: min(100%, 300px);
+      }
       .st-rh-summary-actions {
         width: 100%;
         justify-content: space-between;
@@ -728,8 +775,8 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         flex: 1 1 auto;
       }
       .st-rh-summary-toggle-state {
-        min-height: 28px;
-        padding: 4px 10px;
+        min-height: 24px;
+        padding: 3px 8px;
         font-size: 11px;
         letter-spacing: 0.4px;
       }
@@ -867,6 +914,9 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         min-height: 22px;
         border-radius: 999px;
       }
+      .st-rh-summary-chip-outcome {
+        max-width: min(100%, 240px);
+      }
       .st-rh-summary-actions {
         align-items: center;
       }
@@ -893,9 +943,9 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         height: 52px;
       }
       .st-rh-summary-toggle-state {
-        min-height: 26px;
-        padding: 4px 8px;
-        font-size: 10px;
+        min-height: 22px;
+        padding: 2px 7px;
+        font-size: 9px;
       }
       .st-rh-result-heading {
         font-size: 14px;

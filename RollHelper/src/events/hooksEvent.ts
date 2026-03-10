@@ -932,9 +932,6 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
       )
     )
   );
-  logger.info(
-    `prompt 注入监听事件: ${promptEvents.length > 0 ? promptEvents.join(", ") : "(none)"}`
-  );
   const bindPrompt =
     typeof (src as any).makeLast === "function"
       ? (src as any).makeLast.bind(src)
@@ -968,9 +965,6 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   for (const eventName of promptEvents) {
     bindPrompt(eventName, (payload: any) => {
       try {
-        if (!deps.extractPromptChatFromPayloadEvent(payload)) {
-          logger.info(`${eventName} 已触发，但 payload 中未发现 chat/messages`);
-        }
         deps.handlePromptReadyEvent(payload, eventName);
       } catch (error) {
         logger.error("Prompt hook 错误", error);

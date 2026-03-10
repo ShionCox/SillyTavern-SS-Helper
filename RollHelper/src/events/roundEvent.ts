@@ -727,6 +727,9 @@ export function performEventRollByIdEvent(
   }
 
   const settings = deps.getSettingsEvent();
+  if (!settings.enabled) {
+    return "❌ RollHelper 主开关已关闭，当前不能执行事件掷骰。";
+  }
   deps.ensureRoundEventTimersSyncedEvent(round);
   const timeoutCreated = deps.recordTimeoutFailureIfNeededEvent(round, event);
   if (timeoutCreated) {

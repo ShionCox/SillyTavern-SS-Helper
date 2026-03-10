@@ -76,9 +76,7 @@ export function buildEventListItemTemplateEvent(params: EventListItemTemplatePar
   const rollActionHtml = params.rollButtonHtml
     ? params.rollButtonHtml
     : `<span class="st-rh-summary-lock st-rh-mono">已锁定</span>`;
-  const dcReasonHtml = params.dcReasonHtml
-    ? `<div class="st-rh-dc-reason">${buildTipLabelTemplateEvent("DC 原因", "用于解释该事件难度（DC）设置的叙事依据。")}：${params.dcReasonHtml}</div>`
-    : "";
+  const dcReasonHtml = params.dcReasonHtml ? `<div class="st-rh-dc-reason">${params.dcReasonHtml}</div>` : "";
   return `
       <li class="st-rh-event-item">
         <details class="st-rh-details-card st-rh-details-event">
@@ -162,6 +160,12 @@ export interface EventRollResultCardTemplateParamsEvent {
   collapsedConditionHtml: string;
   collapsedSourceHtml: string;
   collapsedTotalHtml: string;
+  collapsedOutcomeHtml: string;
+  collapsedOutcomeTitleAttr: string;
+  collapsedOutcomeChipClassName: string;
+  collapsedStatusSummaryHtml: string;
+  collapsedStatusSummaryTitleAttr: string;
+  collapsedStatusSummaryChipClassName: string;
   collapsedDiceVisualHtml: string;
   rollIdHtml: string;
   titleHtml: string;
@@ -192,6 +196,15 @@ export interface EventRollResultCardTemplateParamsEvent {
 }
 
 export function buildEventRollResultCardTemplateEvent(params: EventRollResultCardTemplateParamsEvent): string {
+  const collapsedStatusSummaryChipHtml = params.collapsedStatusSummaryHtml
+    ? `<span class="st-rh-summary-chip ${params.collapsedStatusSummaryChipClassName}" title="${params.collapsedStatusSummaryTitleAttr}">
+        <span class="st-rh-summary-chip-marquee">
+          <span class="st-rh-summary-chip-marquee-text">${params.collapsedStatusSummaryHtml}</span>
+          <span class="st-rh-summary-chip-marquee-gap" aria-hidden="true">获得状态</span>
+          <span class="st-rh-summary-chip-marquee-text" aria-hidden="true">${params.collapsedStatusSummaryHtml}</span>
+        </span>
+      </span>`
+    : "";
   const modifierRowHtml = params.modifierBreakdownHtml
     ? `<div class="st-rh-meta-label">${buildTipLabelTemplateEvent("修正", "总修正 = 基础修正 + 技能修正 + 状态修正。")}</div>
        <div class="st-rh-meta-value st-rh-mono" style="color:#ffd987;">${params.modifierBreakdownHtml}</div>`
@@ -211,8 +224,14 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
             <span class="st-rh-summary-chip st-rh-mono">总点 ${params.collapsedTotalHtml}</span>
             <span class="st-rh-summary-chip st-rh-mono">${params.collapsedConditionHtml}</span>
             <span class="st-rh-summary-chip">${params.collapsedSourceHtml}</span>
-          </div>
-          <div class="st-rh-summary-footer-row">
+            <span class="st-rh-summary-chip ${params.collapsedOutcomeChipClassName}" title="${params.collapsedOutcomeTitleAttr}">
+              <span class="st-rh-summary-chip-marquee">
+                <span class="st-rh-summary-chip-marquee-text">${params.collapsedOutcomeHtml}</span>
+                <span class="st-rh-summary-chip-marquee-gap" aria-hidden="true">　　</span>
+                <span class="st-rh-summary-chip-marquee-text" aria-hidden="true">${params.collapsedOutcomeHtml}</span>
+              </span>
+            </span>
+            ${collapsedStatusSummaryChipHtml}
             ${buildSummaryToggleStateTemplateEvent()}
           </div>
         </div>
@@ -297,6 +316,12 @@ export interface EventAlreadyRolledCardTemplateParamsEvent {
   collapsedStatusHtml: string;
   collapsedConditionHtml: string;
   collapsedSourceHtml: string;
+  collapsedOutcomeHtml: string;
+  collapsedOutcomeTitleAttr: string;
+  collapsedOutcomeChipClassName: string;
+  collapsedStatusSummaryHtml: string;
+  collapsedStatusSummaryTitleAttr: string;
+  collapsedStatusSummaryChipClassName: string;
   collapsedDiceVisualHtml: string;
   titleTextHtml: string;
   rollIdHtml: string;
@@ -323,6 +348,15 @@ export interface EventAlreadyRolledCardTemplateParamsEvent {
 }
 
 export function buildEventAlreadyRolledCardTemplateEvent(params: EventAlreadyRolledCardTemplateParamsEvent): string {
+  const collapsedStatusSummaryChipHtml = params.collapsedStatusSummaryHtml
+    ? `<span class="st-rh-summary-chip ${params.collapsedStatusSummaryChipClassName}" title="${params.collapsedStatusSummaryTitleAttr}">
+        <span class="st-rh-summary-chip-marquee">
+          <span class="st-rh-summary-chip-marquee-text">${params.collapsedStatusSummaryHtml}</span>
+          <span class="st-rh-summary-chip-marquee-gap" aria-hidden="true">銆€銆€</span>
+          <span class="st-rh-summary-chip-marquee-text" aria-hidden="true">${params.collapsedStatusSummaryHtml}</span>
+        </span>
+      </span>`
+    : "";
   const modifierLineHtml = params.modifierBreakdownHtml
     ? `<div><span style="color:#8c7b60;" title="总修正 = 基础修正 + 技能修正 + 状态修正。">修正:</span> <code style="font-size:11px;color:#ffdfa3;">${params.modifierBreakdownHtml}</code></div>`
     : "";
@@ -340,11 +374,19 @@ export function buildEventAlreadyRolledCardTemplateEvent(params: EventAlreadyRol
             <span class="st-rh-summary-pill" style="--rh-pill:${params.statusColor};">${params.collapsedStatusHtml}</span>
             <span class="st-rh-summary-chip">${params.collapsedSourceHtml}</span>
             <span class="st-rh-summary-chip st-rh-mono">${params.collapsedConditionHtml}</span>
+            <span class="st-rh-summary-chip ${params.collapsedOutcomeChipClassName}" title="${params.collapsedOutcomeTitleAttr}">
+              <span class="st-rh-summary-chip-marquee">
+                <span class="st-rh-summary-chip-marquee-text">${params.collapsedOutcomeHtml}</span>
+                <span class="st-rh-summary-chip-marquee-gap" aria-hidden="true">　　</span>
+                <span class="st-rh-summary-chip-marquee-text" aria-hidden="true">${params.collapsedOutcomeHtml}</span>
+              </span>
+            </span>
+            ${collapsedStatusSummaryChipHtml}
+            ${buildSummaryToggleStateTemplateEvent()}
           </div>
         </div>
-        <div class="st-rh-summary-actions">
+        <div class="st-rh-summary-actions st-rh-summary-actions-result">
           ${params.collapsedDiceVisualHtml ? `<span class="st-rh-summary-dice">${params.collapsedDiceVisualHtml}</span>` : ""}
-          ${buildSummaryToggleStateTemplateEvent()}
         </div>
       </summary>
 

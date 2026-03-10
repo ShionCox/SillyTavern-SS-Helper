@@ -25,6 +25,7 @@ type SdkThemeListener = (state: SdkThemeState) => void;
 
 const SDK_THEME_EVENT_NAME = "stx-sdk-theme-changed";
 const SDK_THEME_SETTINGS_NAMESPACE = "stx_sdk_theme";
+const SDK_THEME_GLOBAL_STORAGE_KEY = "stx_sdk_theme_global_v1";
 const DEFAULT_SDK_THEME_STATE: SdkThemeState = {
   mode: "sdk",
   themeId: "default",
@@ -112,6 +113,34 @@ function getSdkThemeSettingsStore() {
 }
 
 /**
+ * 功能：从全局本地存储读取 SDK 主题状态，避免受酒馆作用域变化影响。
+ * @returns 已保存的主题状态片段；读取失败时返回空值
+ */
+function readGlobalStoredSdkThemeState(): Partial<SdkThemeState> | null {
+  try {
+    const raw = String(globalThis.localStorage?.getItem(SDK_THEME_GLOBAL_STORAGE_KEY) ?? "").trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SdkThemeState>;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 功能：把 SDK 主题状态写入全局本地存储。
+ * @param state 当前完整主题状态
+ * @returns 无返回值
+ */
+function persistGlobalSdkThemeState(state: SdkThemeState): void {
+  try {
+    globalThis.localStorage?.setItem(SDK_THEME_GLOBAL_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // 忽略本地存储不可用
+  }
+}
+
+/**
  * 功能：把运行时状态转换成界面选择值。
  * @param state 当前 SDK 主题状态。
  * @returns 可直接写入界面控件的主题值。
@@ -144,6 +173,8 @@ export function buildSdkThemePatchFromSelection(theme: string): Partial<SdkTheme
  * @returns 已保存状态；读取失败时返回空值。
  */
 function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
+  const globalStored = readGlobalStoredSdkThemeState();
+  if (globalStored) return globalStored;
   try {
     return getSdkThemeSettingsStore().read();
   } catch {
@@ -157,6 +188,7 @@ function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
  * @returns 无返回值。
  */
 function persistSdkThemeState(state: SdkThemeState): void {
+  persistGlobalSdkThemeState(state);
   try {
     getSdkThemeSettingsStore().write(() => ({ ...state }));
   } catch {
@@ -486,6 +518,44 @@ function readFirstDefinedCustomProperty(style: CSSStyleDeclaration, propertyName
 }
 
 /**
+ * 功能：判断主题变量值是否为不可用的透明背景。
+ * @param value 待判断的主题变量值
+ * @returns 为透明占位值时返回 true，否则返回 false
+ */
+function isTransparentThemeValue(value: string): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  return (
+    normalized === "transparent" ||
+    normalized === "rgba(0,0,0,0)" ||
+    normalized === "rgba(0, 0, 0, 0)" ||
+    normalized === "hsla(0,0%,0%,0)" ||
+    normalized === "hsla(0, 0%, 0%, 0)"
+  );
+}
+
+/**
+ * 功能：从单个样式源中按候选属性顺序读取第一个可用值。
+ * @param style 计算样式对象
+ * @param propertyNames 候选属性名列表
+ * @param shouldSkipValue 可选的值过滤器
+ * @returns 可用的主题值；未命中时返回空字符串
+ */
+function readFirstUsableCustomProperty(
+  style: CSSStyleDeclaration,
+  propertyNames: string[],
+  shouldSkipValue?: (value: string) => boolean
+): string {
+  for (const propertyName of propertyNames) {
+    const value = style.getPropertyValue(propertyName).trim();
+    if (!value) continue;
+    if (shouldSkipValue?.(value)) continue;
+    return value;
+  }
+  return "";
+}
+
+/**
  * 功能：定位 tooltip 等浮层应当读取主题变量的源节点。
  * @param target 当前目标节点。
  * @returns 最接近的主题宿主节点。
@@ -510,13 +580,21 @@ export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
   const style = getComputedStyle(source);
   const bodyStyle = getComputedStyle(document.body);
   const rootStyle = getComputedStyle(document.documentElement);
-  const read = (propertyNames: string[], fallback: string): string => {
-    return (
-      readFirstDefinedCustomProperty(style, propertyNames) ||
-      readFirstDefinedCustomProperty(bodyStyle, propertyNames) ||
-      readFirstDefinedCustomProperty(rootStyle, propertyNames) ||
-      fallback
-    );
+  const read = (
+    propertyNames: string[],
+    fallback: string,
+    shouldSkipValue?: (value: string) => boolean
+  ): string => {
+    const candidates = [
+      readFirstUsableCustomProperty(style, propertyNames, shouldSkipValue),
+      readFirstUsableCustomProperty(bodyStyle, propertyNames, shouldSkipValue),
+      readFirstUsableCustomProperty(rootStyle, propertyNames, shouldSkipValue),
+    ];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      return candidate;
+    }
+    return fallback;
   };
   return {
     text: read(["--stx-theme-text", "--st-roll-text", "--SmartThemeBodyColor"], "#ecdcb8"),
@@ -525,10 +603,14 @@ export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
         "--stx-theme-panel-bg",
         "--st-roll-modal-panel-bg",
         "--st-roll-select-panel-bg",
+        "--st-roll-content-bg",
+        "--stx-theme-toolbar-bg",
+        "--stx-theme-list-item-bg",
         "--st-roll-control-bg",
         "--SmartThemeBlurTintColor",
       ],
-      "rgba(12, 8, 6, 0.96)"
+      "rgba(12, 8, 6, 0.96)",
+      isTransparentThemeValue
     ),
     border: read(
       ["--stx-theme-panel-border", "--st-roll-modal-panel-border", "--st-roll-control-border", "--SmartThemeBorderColor"],

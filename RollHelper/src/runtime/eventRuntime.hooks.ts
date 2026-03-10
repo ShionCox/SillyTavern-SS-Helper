@@ -4,14 +4,13 @@
  * 不修改底层 hooks/commands 模块行为，仅整合跨域依赖并导出稳定 API。
  */
 import {
-  ARGUMENT_TYPE,
-  SlashCommand,
-  SlashCommandArgument,
-  SlashCommandParser,
-  eventSource,
-  event_types,
   getLiveContextEvent as getLiveContextCoreEvent,
 } from "../core/runtimeContextEvent";
+import {
+  getTavernEventSourceEvent,
+  getTavernEventTypesEvent,
+  getTavernSlashCommandRuntimeEvent,
+} from "../../../SDK/tavern";
 import { pushToChat as pushToChatCoreEvent } from "../core/chatEvent";
 import {
   evaluateSuccessEvent as evaluateSuccessCoreEvent,
@@ -193,11 +192,12 @@ export function bindEventButtonsEvent(): void {
 }
 
 export function registerEventRollCommandEvent(): void {
+  const slashCommandRuntime = getTavernSlashCommandRuntimeEvent();
   registerEventRollCommandModuleEvent({
-    SlashCommandParser,
-    SlashCommand,
-    SlashCommandArgument,
-    ARGUMENT_TYPE,
+    SlashCommandParser: slashCommandRuntime.parser,
+    SlashCommand: slashCommandRuntime.command,
+    SlashCommandArgument: slashCommandRuntime.argument,
+    ARGUMENT_TYPE: slashCommandRuntime.argumentType,
     pushToChat: pushToChatCoreEvent,
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
@@ -220,8 +220,8 @@ export function startCountdownTickerEvent(): void {
 export function registerEventHooksEvent(): void {
   registerEventHooksModuleEvent({
     getLiveContextEvent: getLiveContextCoreEvent,
-    eventSource,
-    event_types,
+    eventSource: getTavernEventSourceEvent() ?? undefined,
+    event_types: getTavernEventTypesEvent() ?? undefined,
     extractPromptChatFromPayloadEvent: extractPromptChatFromPayloadModuleEvent,
     handlePromptReadyEvent,
     handleGenerationEndedEvent,
@@ -234,9 +234,11 @@ export function registerEventHooksEvent(): void {
 }
 
 export function registerDebugCommandEvent(): void {
+  const slashCommandRuntime = getTavernSlashCommandRuntimeEvent();
   registerDebugCommandModuleEvent({
-    SlashCommandParser,
-    SlashCommand,
+    SlashCommandParser: slashCommandRuntime.parser,
+    SlashCommand: slashCommandRuntime.command,
+    SlashCommandNamedArgument: slashCommandRuntime.namedArgument,
     getDiceMeta: getDiceMetaStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,

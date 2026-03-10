@@ -3,11 +3,21 @@ export type {
   SdkTavernCharacterEvent,
   SdkTavernChatListItemEvent,
   SdkTavernChatLocatorEvent,
+  SdkTavernEventSourceEvent,
+  SdkTavernPromptMessageEvent,
+  SdkTavernPromptSystemInsertModeEvent,
+  SdkTavernPromptSystemInsertOptionsEvent,
+  SdkTavernPromptTargetEvent,
   SdkTavernChatRefEvent,
   SdkTavernContextEvent,
   SdkTavernGroupEvent,
   SdkTavernInstanceEvent,
   SdkTavernRoleIdentityEvent,
+  SdkTavernRuntimeContextEvent,
+  SdkTavernSlashCommandArgumentFactoryEvent,
+  SdkTavernSlashCommandFactoryEvent,
+  SdkTavernSlashCommandParserEvent,
+  SdkTavernSlashCommandRuntimeEvent,
   SdkTavernScopeLocatorEvent,
   SdkTavernScopeTypeEvent,
   SdkUnifiedTavernChatDirectoryInputEvent,
@@ -35,6 +45,32 @@ export {
   resolveCurrentGroupEvent,
   getTavernContextSnapshotEvent,
 } from "./context";
+
+export {
+  getTavernChatMetadataEvent,
+  getTavernEventSourceEvent,
+  getTavernEventTypesEvent,
+  getTavernExtensionSettingsEvent,
+  getTavernRuntimeContextEvent,
+  getTavernSlashCommandRuntimeEvent,
+  registerTavernMacroEvent,
+  saveTavernMetadataEvent,
+  saveTavernSettingsDebouncedEvent,
+  sendTavernSystemMessageEvent,
+} from "./runtime";
+
+export {
+  extractTavernPromptMessagesEvent,
+  findFirstTavernPromptSystemIndexEvent,
+  findLastTavernPromptSystemIndexEvent,
+  findLastTavernPromptUserIndexEvent,
+  getTavernPromptMessageTextEvent,
+  insertTavernPromptSystemMessageEvent,
+  isTavernPromptSystemMessageEvent,
+  isTavernPromptUserMessageEvent,
+  listTavernPromptTargetsEvent,
+  setTavernPromptMessageTextEvent,
+} from "./prompt";
 
 export { ensureTavernInstanceIdEvent } from "./instance";
 

@@ -21,13 +21,62 @@ export interface SdkTavernGroupEvent {
 
 export interface SdkTavernContextEvent {
   characterId?: number | string;
+  this_chid?: number | string;
   groupId?: string;
   chatId?: string;
+  chat_id?: string;
   characters?: SdkTavernCharacterEvent[];
   groups?: SdkTavernGroupEvent[];
   name1?: string;
+  name2?: string;
+  characterName?: string;
   getRequestHeaders?: () => Record<string, string>;
   accountStorage?: SdkAccountStorageEvent;
+}
+
+export interface SdkTavernEventSourceEvent {
+  on(eventName: string, handler: (payload: unknown) => void): void;
+  makeLast?(eventName: string, handler: (payload: unknown) => void): void;
+}
+
+export interface SdkTavernSlashCommandParserEvent {
+  addCommandObject(commandObject: unknown): void;
+}
+
+export interface SdkTavernSlashCommandFactoryEvent {
+  fromProps(props: Record<string, unknown>): unknown;
+}
+
+export interface SdkTavernSlashCommandArgumentFactoryEvent {
+  fromProps(props: Record<string, unknown>): unknown;
+}
+
+export interface SdkTavernSlashCommandRuntimeEvent {
+  parser: SdkTavernSlashCommandParserEvent | null;
+  command: SdkTavernSlashCommandFactoryEvent | null;
+  argument: SdkTavernSlashCommandArgumentFactoryEvent | null;
+  namedArgument: SdkTavernSlashCommandArgumentFactoryEvent | null;
+  argumentType: Record<string, unknown> | null;
+}
+
+export interface SdkTavernRuntimeContextEvent extends SdkTavernContextEvent {
+  chatMetadata?: Record<string, unknown>;
+  extensionSettings?: Record<string, unknown>;
+  chat?: unknown[];
+  saveMetadata?: () => void;
+  saveSettingsDebounced?: () => void;
+  saveChat?: () => unknown;
+  saveChatConditional?: () => unknown;
+  saveChatDebounced?: () => unknown;
+  registerMacro?: (name: string, fn: () => string) => void;
+  SlashCommandParser?: SdkTavernSlashCommandParserEvent | null;
+  SlashCommand?: SdkTavernSlashCommandFactoryEvent | null;
+  SlashCommandArgument?: SdkTavernSlashCommandArgumentFactoryEvent | null;
+  SlashCommandNamedArgument?: SdkTavernSlashCommandArgumentFactoryEvent | null;
+  ARGUMENT_TYPE?: Record<string, unknown> | null;
+  sendSystemMessage?: (type: unknown, text: string, extra?: unknown) => unknown;
+  eventSource?: SdkTavernEventSourceEvent | null;
+  event_types?: Record<string, string>;
 }
 
 export interface SdkTavernRoleIdentityEvent {
@@ -68,6 +117,39 @@ export interface SdkTavernChatRefEvent extends SdkTavernInstanceEvent {
   scopeType: SdkTavernScopeTypeEvent;
   scopeId: string;
   chatId: string;
+}
+
+export interface SdkTavernPromptMessageEvent {
+  role?: string;
+  is_user?: boolean;
+  is_system?: boolean;
+  content?: unknown;
+  mes?: string;
+  text?: string;
+  swipe_id?: number;
+  swipeId?: number;
+  swipes?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface SdkTavernPromptTargetEvent<
+  TMessage extends SdkTavernPromptMessageEvent = SdkTavernPromptMessageEvent,
+> {
+  path: string;
+  messages: TMessage[];
+}
+
+export type SdkTavernPromptSystemInsertModeEvent =
+  | "append"
+  | "before_index"
+  | "before_end_offset";
+
+export interface SdkTavernPromptSystemInsertOptionsEvent {
+  text?: string;
+  template?: SdkTavernPromptMessageEvent | null;
+  insertMode?: SdkTavernPromptSystemInsertModeEvent;
+  insertBeforeIndex?: number;
+  offsetFromEnd?: number;
 }
 
 export interface SdkUnifiedTavernLocalSummaryEvent {

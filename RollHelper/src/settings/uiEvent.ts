@@ -678,6 +678,14 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   compatibilityModeInput?.addEventListener("input", (event) => {
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ compatibilityModeForSummaryPlugins: value });
+    if (removeRollJsonInput) {
+      removeRollJsonInput.disabled = !value;
+      removeRollJsonInput.style.opacity = value ? "1" : "0.5";
+    }
+    if (stripInternalBlocksInput) {
+      stripInternalBlocksInput.disabled = !value;
+      stripInternalBlocksInput.style.opacity = value ? "1" : "0.5";
+    }
   });
 
   removeRollJsonInput?.addEventListener("input", (event) => {
@@ -972,9 +980,13 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (removeRollJsonInput) {
     removeRollJsonInput.checked = Boolean(settings.removeRollJsonFromStoredText);
+    removeRollJsonInput.disabled = !settings.compatibilityModeForSummaryPlugins;
+    removeRollJsonInput.style.opacity = settings.compatibilityModeForSummaryPlugins ? "1" : "0.5";
   }
   if (stripInternalBlocksInput) {
     stripInternalBlocksInput.checked = Boolean(settings.stripRollHelperInternalBlocks);
+    stripInternalBlocksInput.disabled = !settings.compatibilityModeForSummaryPlugins;
+    stripInternalBlocksInput.style.opacity = settings.compatibilityModeForSummaryPlugins ? "1" : "0.5";
   }
   if (skillEnabledInput) {
     skillEnabledInput.checked = Boolean(settings.enableSkillSystem);

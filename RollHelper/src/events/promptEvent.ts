@@ -1,5 +1,18 @@
 import { normalizeBlankLinesEvent, simpleHashEvent } from "../core/utilsEvent";
 import { buildActiveStatusesBlockEvent, ensureActiveStatusesEvent as ensureActiveStatusesFromMetaEvent } from "./statusEvent";
+import {
+  extractTavernPromptMessagesEvent as extractSdkTavernPromptMessagesEvent,
+  findFirstTavernPromptSystemIndexEvent as findFirstSdkTavernPromptSystemIndexEvent,
+  findLastTavernPromptSystemIndexEvent as findLastSdkTavernPromptSystemIndexEvent,
+  findLastTavernPromptUserIndexEvent as findLastSdkTavernPromptUserIndexEvent,
+  getTavernPromptMessageTextEvent as getSdkTavernPromptMessageTextEvent,
+  insertTavernPromptSystemMessageEvent as insertSdkTavernPromptSystemMessageEvent,
+  isTavernPromptSystemMessageEvent as isSdkTavernPromptSystemMessageEvent,
+  isTavernPromptUserMessageEvent as isSdkTavernPromptUserMessageEvent,
+  listTavernPromptTargetsEvent as listSdkTavernPromptTargetsEvent,
+  setTavernPromptMessageTextEvent as setSdkTavernPromptMessageTextEvent,
+} from "../../../SDK/tavern";
+import type { SdkTavernPromptTargetEvent } from "../../../SDK/tavern";
 import type {
   DiceMetaEvent,
   DicePluginSettingsEvent,
@@ -76,22 +89,6 @@ function normalizeRoleEvent(message: TavernMessageEvent | undefined): string {
   return role;
 }
 
-function getMessageArrayTextEvent(contentArray: any[]): string {
-  const lines: string[] = [];
-  for (const item of contentArray) {
-    if (typeof item === "string") {
-      lines.push(item);
-      continue;
-    }
-    if (!item || typeof item !== "object") continue;
-    const text = (item as any).text ?? (item as any).content ?? "";
-    if (typeof text === "string" && text) {
-      lines.push(text);
-    }
-  }
-  return lines.join("\n");
-}
-
 function resolveMessageTimestampEvent(message: TavernMessageEvent | undefined): string {
   if (!message || typeof message !== "object") return "";
   const value =
@@ -108,10 +105,6 @@ function resolveMessageExplicitIdEvent(message: TavernMessageEvent | undefined):
   const explicitId = (message as any).id ?? (message as any).cid ?? (message as any).uid;
   if (explicitId == null) return "";
   return String(explicitId);
-}
-
-function isArrayLikeMessageListEvent(raw: any): raw is any[] {
-  return Array.isArray(raw);
 }
 
 function formatGradeLabelEvent(grade: EventResultGradeEvent): string {
@@ -174,29 +167,7 @@ function buildResultGuidanceTextEvent(
 }
 
 export function getMessageTextEvent(message: TavernMessageEvent | undefined): string {
-  if (!message || typeof message !== "object") return "";
-
-  if (typeof (message as any).content === "string") {
-    return (message as any).content;
-  }
-  if (Array.isArray((message as any).content)) {
-    return getMessageArrayTextEvent((message as any).content);
-  }
-  if (
-    (message as any).content &&
-    typeof (message as any).content === "object" &&
-    typeof (message as any).content.text === "string"
-  ) {
-    return String((message as any).content.text);
-  }
-  if (typeof (message as any).mes === "string") {
-    return (message as any).mes;
-  }
-  if (typeof (message as any).text === "string") {
-    return (message as any).text;
-  }
-
-  return "";
+  return getSdkTavernPromptMessageTextEvent(message);
 }
 
 export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent | undefined): string {
@@ -214,34 +185,15 @@ export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent
 }
 
 export function setMessageTextEvent(message: TavernMessageEvent, text: string): void {
-  if (!message || typeof message !== "object") return;
-  const nextText = normalizeTextEvent(text);
-
-  const hasContentField = Object.prototype.hasOwnProperty.call(message, "content");
-  const hasMesField = Object.prototype.hasOwnProperty.call(message, "mes");
-  if (hasContentField) {
-    (message as any).content = nextText;
-  }
-  if (hasMesField) {
-    (message as any).mes = nextText;
-  }
-  if (!hasContentField && !hasMesField) {
-    (message as any).content = nextText;
-  }
+  setSdkTavernPromptMessageTextEvent(message, text);
 }
 
 export function isUserMessageEvent(message: TavernMessageEvent | undefined): boolean {
-  if (!message || typeof message !== "object") return false;
-  if ((message as any).is_user === true) return true;
-  const role = normalizeRoleEvent(message);
-  return role === "user";
+  return isSdkTavernPromptUserMessageEvent(message);
 }
 
 export function isSystemMessageEvent(message: TavernMessageEvent | undefined): boolean {
-  if (!message || typeof message !== "object") return false;
-  if ((message as any).is_system === true) return true;
-  const role = normalizeRoleEvent(message);
-  return role === "system";
+  return isSdkTavernPromptSystemMessageEvent(message);
 }
 
 export function isAssistantMessageEvent(message: TavernMessageEvent | undefined): boolean {
@@ -253,33 +205,41 @@ export function isAssistantMessageEvent(message: TavernMessageEvent | undefined)
 }
 
 export function findFirstSystemIndexEvent(chat: TavernMessageEvent[]): number {
-  if (!Array.isArray(chat)) return -1;
-  for (let i = 0; i < chat.length; i++) {
-    if (isSystemMessageEvent(chat[i])) return i;
-  }
-  return -1;
+  return findFirstSdkTavernPromptSystemIndexEvent(chat);
 }
 
 export function findLastSystemIndexEvent(chat: TavernMessageEvent[]): number {
-  if (!Array.isArray(chat)) return -1;
-  for (let i = chat.length - 1; i >= 0; i--) {
-    if (isSystemMessageEvent(chat[i])) return i;
-  }
-  return -1;
+  return findLastSdkTavernPromptSystemIndexEvent(chat);
 }
 
 export function findLastUserIndexEvent(chat: TavernMessageEvent[]): number {
-  if (!Array.isArray(chat)) return -1;
-  for (let i = chat.length - 1; i >= 0; i--) {
-    if (isUserMessageEvent(chat[i])) return i;
-  }
-  return -1;
+  return findLastSdkTavernPromptUserIndexEvent(chat);
 }
 
 export function findLastUserMessageEvent(chat: TavernMessageEvent[]): TavernMessageEvent | null {
   const idx = findLastUserIndexEvent(chat);
   if (idx < 0) return null;
   return chat[idx] || null;
+}
+
+/**
+ * 功能：为本次 prompt payload 创建一条 system 消息，用于承载受管注入块。
+ * @param chat 当前 prompt 消息数组
+ * @param insertBeforeIndex 插入位置
+ * @param template 作为结构参考的消息
+ * @returns 新创建的 system 消息
+ */
+function insertManagedSystemMessageEvent(
+  chat: TavernMessageEvent[],
+  insertBeforeIndex: number,
+  template: TavernMessageEvent | undefined
+): TavernMessageEvent {
+  return insertSdkTavernPromptSystemMessageEvent(chat, {
+    insertMode: "before_index",
+    insertBeforeIndex,
+    template,
+    text: "",
+  }) as TavernMessageEvent;
 }
 
 export function buildPromptMessageIdEvent(message: TavernMessageEvent, index: number): string {
@@ -607,28 +567,19 @@ function upsertRoundSnapshotToHistoryEvent(
   return true;
 }
 
-export function extractPromptChatFromPayloadEvent(payload: any): TavernMessageEvent[] | null {
-  if (isArrayLikeMessageListEvent(payload)) {
-    return payload as TavernMessageEvent[];
-  }
-  if (!payload || typeof payload !== "object") return null;
+type PromptChatTargetEvent = SdkTavernPromptTargetEvent<TavernMessageEvent>;
 
-  const candidates = [
-    (payload as any).chat,
-    (payload as any).messages,
-    (payload as any).message_list,
-    (payload as any).prompt?.chat,
-    (payload as any).prompt?.messages,
-    (payload as any).data?.chat,
-    (payload as any).data?.messages,
-    (payload as any).chatCompletion?.messages,
-  ];
-  for (const item of candidates) {
-    if (isArrayLikeMessageListEvent(item)) {
-      return item as TavernMessageEvent[];
-    }
-  }
-  return null;
+/**
+ * 功能：列出当前 payload 中所有可写的消息数组，并按引用去重。
+ * @param payload Prompt Ready 事件的 payload
+ * @returns 可写消息数组列表
+ */
+function listPromptChatTargetsEvent(payload: any): PromptChatTargetEvent[] {
+  return listSdkTavernPromptTargetsEvent(payload) as PromptChatTargetEvent[];
+}
+
+export function extractPromptChatFromPayloadEvent(payload: any): TavernMessageEvent[] | null {
+  return extractSdkTavernPromptMessagesEvent(payload) as TavernMessageEvent[] | null;
 }
 
 export interface HandlePromptReadyDepsEvent {
@@ -667,16 +618,15 @@ export function handlePromptReadyEvent(
 
   deps.sweepTimeoutFailuresEvent();
 
-  const chat = extractPromptChatFromPayloadEvent(payload);
-  if (!chat || chat.length === 0) return;
-  const userIndex = findLastUserIndexEvent(chat);
+  const chatTargets = listPromptChatTargetsEvent(payload);
+  if (chatTargets.length <= 0) return;
+  const primaryTarget =
+    chatTargets.find((target) => findLastUserIndexEvent(target.messages) >= 0) || null;
+  if (!primaryTarget || primaryTarget.messages.length <= 0) return;
+  const userIndex = findLastUserIndexEvent(primaryTarget.messages);
   if (userIndex < 0) return;
-  const userMsg = chat[userIndex];
+  const userMsg = primaryTarget.messages[userIndex];
   if (!userMsg) return;
-  const systemIndex = findLastSystemIndexEvent(chat);
-  const injectionMsg = systemIndex >= 0 ? chat[systemIndex] : userMsg;
-  if (!injectionMsg) return;
-  const injectionTarget = systemIndex >= 0 ? "system" : "user_fallback";
 
   const ruleStartTag = deps.DICE_RULE_BLOCK_START_Event || DEFAULT_RULE_BLOCK_START_Event;
   const ruleEndTag = deps.DICE_RULE_BLOCK_END_Event || DEFAULT_RULE_BLOCK_END_Event;
@@ -709,11 +659,9 @@ export function handlePromptReadyEvent(
 
   const userStableText = stripManagedBlocksEvent(getMessageTextEvent(userMsg), managedTags);
   const userMsgId = buildPromptMessageIdByTextEvent(userStableText, userMsg, userIndex);
-  if (injectionMsg !== userMsg) {
-    const userCurrentText = getMessageTextEvent(userMsg);
-    if (userCurrentText !== userStableText) {
-      setMessageTextEvent(userMsg, userStableText);
-    }
+  const userCurrentText = getMessageTextEvent(userMsg);
+  if (userCurrentText !== userStableText) {
+    setMessageTextEvent(userMsg, userStableText);
   }
 
   const meta = deps.getDiceMetaEvent();
@@ -739,9 +687,6 @@ export function handlePromptReadyEvent(
     changedMeta = true;
     logger.info("已按“每轮模式”在用户发言后结束当前轮次");
   }
-
-  const currentText = getMessageTextEvent(injectionMsg);
-  const strippedText = stripManagedBlocksEvent(currentText, managedTags);
 
   let ruleBlockText = "";
   let runtimePolicyBlockText = "";
@@ -795,22 +740,80 @@ export function handlePromptReadyEvent(
   const statusBlockText = settings.enableStatusSystem
     ? buildActiveStatusesBlockEvent(ensureActiveStatusesFromMetaEvent(meta), statusesStartTag, statusesEndTag)
     : "";
+  const targetSyncLogs: string[] = [];
 
-  const composedText = composePromptInjectionsEvent(strippedText, [
-    ruleBlockText,
-    runtimePolicyBlockText,
-    summaryBlockText,
-    guidanceBlockText,
-    statusBlockText,
-  ]);
-  if (composedText !== currentText) {
-    setMessageTextEvent(injectionMsg, composedText);
+  for (const target of chatTargets) {
+    const targetUserIndex = findLastUserIndexEvent(target.messages);
+    if (targetUserIndex < 0) {
+      targetSyncLogs.push(`${target.path}:skip_no_user`);
+      continue;
+    }
+
+    const targetUserMsg = target.messages[targetUserIndex];
+    if (!targetUserMsg) {
+      targetSyncLogs.push(`${target.path}:skip_no_user`);
+      continue;
+    }
+
+    const targetUserStableText = stripManagedBlocksEvent(getMessageTextEvent(targetUserMsg), managedTags);
+    const targetUserCurrentText = getMessageTextEvent(targetUserMsg);
+    if (targetUserCurrentText !== targetUserStableText) {
+      setMessageTextEvent(targetUserMsg, targetUserStableText);
+    }
+
+    const targetSystemIndex = findLastSystemIndexEvent(target.messages);
+    let targetInjectionMsg =
+      targetSystemIndex >= 0 ? target.messages[targetSystemIndex] : null;
+    let targetAction = targetSystemIndex >= 0 ? "reuse_system" : "create_system";
+    const targetCurrentText = targetInjectionMsg ? getMessageTextEvent(targetInjectionMsg) : "";
+    const targetStrippedText = stripManagedBlocksEvent(targetCurrentText, managedTags);
+    const targetComposedText = composePromptInjectionsEvent(targetStrippedText, [
+      ruleBlockText,
+      runtimePolicyBlockText,
+      summaryBlockText,
+      guidanceBlockText,
+      statusBlockText,
+    ]);
+
+    if (!targetInjectionMsg && targetComposedText) {
+      targetInjectionMsg = insertManagedSystemMessageEvent(
+        target.messages,
+        targetUserIndex,
+        targetUserMsg
+      );
+    }
+    if (targetInjectionMsg) {
+      const nextTargetText = targetComposedText;
+      const prevTargetText = getMessageTextEvent(targetInjectionMsg);
+      if (prevTargetText !== nextTargetText) {
+        setMessageTextEvent(targetInjectionMsg, nextTargetText);
+      } else if (targetAction === "create_system") {
+        targetAction = "create_system_unchanged";
+      } else {
+        targetAction = "reuse_system_unchanged";
+      }
+      if (targetAction === "create_system" && !nextTargetText) {
+        targetAction = "create_system_empty";
+      } else if (targetAction === "reuse_system" && !nextTargetText) {
+        targetAction = "reuse_system_cleared";
+      }
+    } else {
+      targetAction = "no_system_needed";
+    }
+
+    targetSyncLogs.push(`${target.path}:${targetAction}`);
   }
 
   if (changedMeta) {
     deps.saveMetadataSafeEvent();
   }
 
-  logger.info(`Prompt managed blocks updated via ${sourceEvent} (target=${injectionTarget})`);
+  logger.info(
+    `通过 ${sourceEvent} 更新了提示词管理块 (路径=${chatTargets
+      .map((target) => target.path)
+      .join(",")} 块=规则:${ruleBlockText ? 1 : 0},运行时:${runtimePolicyBlockText ? 1 : 0},摘要:${summaryBlockText ? 1 : 0},指引:${guidanceBlockText ? 1 : 0},状态:${statusBlockText ? 1 : 0} 操作=${targetSyncLogs.join(
+      ";"
+    )})`
+  );
 }
 

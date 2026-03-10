@@ -5,6 +5,7 @@ import {
   applyTooltipCatalog,
   hydrateSettingsTooltips,
 } from "../../../SDK/sharedTooltip";
+import { buildChangelogHtml } from "../../../_Components/changelog";
 import { hydrateSharedSelects } from "../../../_Components/sharedSelect";
 import { hydrateSettingPage } from "../../../_Components/Setting";
 import { buildSettingsTooltipCatalogEvent } from "./settingsTooltipCatalogEvent";
@@ -150,6 +151,10 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
   SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
   SETTINGS_TIME_LIMIT_ROW_ID_Event: string;
+  SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
+  SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
+  SETTINGS_STRIP_INTERNAL_ID_Event: string;
+  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SETTINGS_SKILL_EDITOR_WRAP_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
@@ -183,13 +188,19 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
 export function buildSettingsCardTemplateIdsEvent(
   deps: BuildSettingsCardTemplateIdsDepsEvent
 ): SettingsCardTemplateIdsEvent {
-  type ChangelogItemEvent = {
-    version?: string;
-    date?: string;
-    changes?: string[];
-  };
+  const changelogHtml = buildChangelogHtml(
+    changelogData as Array<{
+      version?: string;
+      date?: string;
+      changes?: string[];
+      sections?: Array<{ type: string; title?: string; items: string[] }>;
+    }>,
+    {
+      emptyText: "暂无更新记录",
+    }
+  );
+  /*
 
-  function generateChangelogHtml() {
     if (!Array.isArray(changelogData) || changelogData.length === 0) return '暂无更新记录';
     return (changelogData as ChangelogItemEvent[]).map((log) => `
       <div style="margin-bottom: 12px;">
@@ -204,6 +215,7 @@ export function buildSettingsCardTemplateIdsEvent(
     `).join('');
   }
 
+  */
   return {
     cardId: deps.SETTINGS_CARD_ID_Event,
     drawerToggleId: deps.drawerToggleId,
@@ -216,7 +228,7 @@ export function buildSettingsCardTemplateIdsEvent(
     emailText: deps.SETTINGS_EMAIL_TEXT_Event,
     githubText: deps.SETTINGS_GITHUB_TEXT_Event,
     githubUrl: deps.SETTINGS_GITHUB_URL_Event,
-    changelogHtml: generateChangelogHtml(),
+    changelogHtml,
     searchId: deps.SETTINGS_SEARCH_ID_Event,
     tabMainId: deps.SETTINGS_TAB_MAIN_ID_Event,
     tabSkillId: deps.SETTINGS_TAB_SKILL_ID_Event,
@@ -264,6 +276,10 @@ export function buildSettingsCardTemplateIdsEvent(
     timeLimitEnabledId: deps.SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
     timeLimitMinId: deps.SETTINGS_TIME_LIMIT_MIN_ID_Event,
     timeLimitRowId: deps.SETTINGS_TIME_LIMIT_ROW_ID_Event,
+    compatibilityModeForSummaryPluginsId: deps.SETTINGS_COMPATIBILITY_MODE_ID_Event,
+    removeRollJsonFromStoredTextId: deps.SETTINGS_REMOVE_ROLLJSON_ID_Event,
+    stripRollHelperInternalBlocksId: deps.SETTINGS_STRIP_INTERNAL_ID_Event,
+    cleanHistoryChatBtnId: deps.SETTINGS_CLEAN_HISTORY_BTN_ID_Event,
     skillEnabledId: deps.SETTINGS_SKILL_ENABLED_ID_Event,
     skillEditorWrapId: deps.SETTINGS_SKILL_EDITOR_WRAP_ID_Event,
     skillRowsId: deps.SETTINGS_SKILL_ROWS_ID_Event,

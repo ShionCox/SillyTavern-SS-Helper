@@ -46,7 +46,8 @@ import {
   SUMMARY_HISTORY_ROUNDS_MIN_Event,
   DEFAULT_SKILL_PRESET_TABLE_TEXT_Event,
 } from "../settings/constantsEvent";
-import { registerMacro, SlashCommandParser, SlashCommand, SlashCommandArgument, ARGUMENT_TYPE } from "../core/runtimeContextEvent";
+import { getLiveContextEvent } from "../core/runtimeContextEvent";
+import { getTavernSlashCommandRuntimeEvent, registerTavernMacroEvent } from "../../../SDK/tavern";
 import { pushToChat as pushToChatCoreEvent } from "../core/chatEvent";
 import {
   createIdEvent as createIdCoreEvent,
@@ -103,8 +104,6 @@ import {
   subscribeMemoryPluginStateEvent as subscribeMemoryPluginStateIntegrationEvent,
 } from "../integration/stxMemoryBusEvent";
 import { cleanAllHistoryChatBlocks } from "../events/messageSanitizerEvent";
-import { getLiveContextEvent } from "../core/runtimeContextEvent";
-
 const skillEditorRuntimeEvent = createSkillEditorRuntimeEvent({
   SETTINGS_SKILL_DIRTY_HINT_ID_Event,
   SETTINGS_SKILL_ERRORS_ID_Event,
@@ -295,12 +294,13 @@ export function mountSettingsCardEvent(attempt = 0): void {
 }
 
 export function registerBaseMacrosAndCommandsEvent(): void {
+  const slashCommandRuntime = getTavernSlashCommandRuntimeEvent();
   registerBaseMacrosAndCommandsModuleEvent({
-    registerMacro,
-    SlashCommandParser,
-    SlashCommand,
-    SlashCommandArgument,
-    ARGUMENT_TYPE,
+    registerMacro: registerTavernMacroEvent,
+    SlashCommandParser: slashCommandRuntime.parser,
+    SlashCommand: slashCommandRuntime.command,
+    SlashCommandArgument: slashCommandRuntime.argument,
+    ARGUMENT_TYPE: slashCommandRuntime.argumentType,
     getDiceMeta: getDiceMetaStoreEvent,
     rollExpression: rollExpressionCoreEvent,
     saveLastRoll: saveLastRollStoreEvent,

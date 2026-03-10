@@ -17,6 +17,25 @@ import { loadChatScopedStateIntoRuntimeEvent } from "../settings/storeEvent";
 const INITIALIZE_RETRY_MAX_Event = 80;
 const INITIALIZE_RETRY_DELAY_MS_Event = 500;
 
+/**
+ * 功能：返回当前尚未完成注册的初始化标记列表。
+ * @param globalRef 全局对象引用
+ * @returns 尚未完成的标记名列表
+ */
+function collectMissingInitFlagsEvent(globalRef: Record<string, unknown>): string[] {
+  const missing: string[] = [];
+  if (!globalRef.__stRollEventCommandRegisteredEvent) missing.push("event_command");
+  if (!globalRef.__stRollBaseCommandRegisteredEvent) missing.push("base_command");
+  if (!globalRef.__stRollDebugCommandRegisteredEvent) missing.push("debug_command");
+  if (!globalRef.__stRollEventHooksRegisteredEvent) missing.push("event_hooks");
+  return missing;
+}
+
+/**
+ * 功能：初始化 RollHelper 运行时，并在宿主能力尚未就绪时自动重试。
+ * @param attempt 当前重试次数
+ * @returns 无返回值
+ */
 export function initializeEventRuntimeEvent(attempt = 0): void {
   registerBaseMacrosAndCommandsEvent();
   mountSettingsCardEvent();
@@ -32,18 +51,12 @@ export function initializeEventRuntimeEvent(attempt = 0): void {
   refreshCountdownDomEvent();
   sanitizeCurrentChatEventBlocksEvent();
 
-  const globalRef = globalThis as any;
-  if (
-    !globalRef.__stRollEventCommandRegisteredEvent ||
-    !globalRef.__stRollBaseCommandRegisteredEvent ||
-    !globalRef.__stRollDebugCommandRegisteredEvent ||
-    !globalRef.__stRollEventHooksRegisteredEvent
-  ) {
+  const globalRef = globalThis as Record<string, unknown>;
+  const missingFlags = collectMissingInitFlagsEvent(globalRef);
+  if (missingFlags.length > 0) {
     if (attempt < INITIALIZE_RETRY_MAX_Event) {
       setTimeout(() => initializeEventRuntimeEvent(attempt + 1), INITIALIZE_RETRY_DELAY_MS_Event);
     }
     return;
   }
-
-  logger.info("Event 初始化完成");
 }

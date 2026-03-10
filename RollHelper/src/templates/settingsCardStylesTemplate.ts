@@ -1,5 +1,6 @@
 import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
 import { buildSharedButtonStyles } from "../../../_Components/sharedButton";
+import { buildChangelogStyles } from "../../../_Components/changelog";
 import { buildSharedInputStyles } from "../../../_Components/sharedInput";
 import { buildSharedSelectStyles } from "../../../_Components/sharedSelect";
 import { buildSettingPageStyles } from "../../../_Components/Setting";
@@ -8,6 +9,7 @@ import { buildSdkThemeVars } from "../../../SDK/theme";
 export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
   return `
     ${buildSettingPageStyles(`#${cardId}`)}
+    ${buildChangelogStyles(`#${cardId}`)}
 
     #${cardId} {
       margin-bottom: 5px;
@@ -749,33 +751,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     }
 
-    #${cardId} .st-roll-changelog {
-      width: 100%;
-      font-size: 12px;
-      background: rgba(0, 0, 0, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 8px;
-      padding: 10px;
-      max-height: 240px;
-      overflow-y: auto;
-    }
-
-    #${cardId} .st-roll-changelog ul {
-      list-style-type: disc;
-      color: inherit;
-    }
-
-    #${cardId} .st-roll-changelog li {
-      margin-bottom: 4px;
-    }
-
-    #${cardId} .st-roll-changelog::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    #${cardId} .st-roll-changelog::-webkit-scrollbar-thumb {
-      background: rgba(197, 160, 89, 0.4);
-      border-radius: 4px;
+    #${cardId} .st-roll-changelog-item {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      margin-bottom: 12px;
     }
 
     #${cardId} .st-roll-skill-head {
@@ -1403,8 +1383,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       min-width: 760px;
     }
 
+    #${cardId} .st-roll-status-cols span:nth-child(1),
     #${cardId} .st-roll-status-cols span:nth-child(2),
     #${cardId} .st-roll-status-cols span:nth-child(3),
+    #${cardId} .st-roll-status-cols span:nth-child(4),
+    #${cardId} .st-roll-status-cols span:nth-child(5),
     #${cardId} .st-roll-status-cols span:nth-child(6),
     #${cardId} .st-roll-status-cols span:nth-child(7) {
       text-align: center;
@@ -1434,6 +1417,75 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       gap: 8px;
       align-items: center;
       min-width: 760px;
+    }
+
+    #${cardId} .st-roll-status-field {
+      display: contents;
+    }
+
+    #${cardId} .st-roll-status-field-label {
+      display: none;
+    }
+
+    #${cardId} .st-roll-status-field-content {
+      display: contents;
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-status-field-content > * {
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-status-bottom-grid {
+      display: contents;
+    }
+
+    #${cardId} .st-roll-status-row .st-roll-status-name-wrap,
+    #${cardId} .st-roll-status-row .st-roll-status-enabled-wrap,
+    #${cardId} .st-roll-status-row .st-roll-status-actions-group {
+      min-height: 36px;
+    }
+
+    #${cardId} .st-roll-status-enabled-card {
+      display: flex;
+      align-items: stretch;
+      min-height: 36px;
+      padding: 0 10px;
+      border-radius: 10px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 90%, transparent);
+      box-sizing: border-box;
+    }
+
+    #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-body {
+      min-height: 34px;
+    }
+
+    #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-title {
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    #${cardId} .st-roll-status-row .st-roll-status-name-wrap {
+      width: 100%;
+      align-self: stretch;
+    }
+
+    #${cardId} .st-roll-status-row .st-roll-status-name,
+    #${cardId} .st-roll-status-row .st-roll-status-modifier,
+    #${cardId} .st-roll-status-row .st-roll-status-duration,
+    #${cardId} .st-roll-status-row .st-roll-status-skills {
+      width: 100%;
+      min-width: 0;
+      min-height: 36px;
+      height: 36px;
+    }
+
+    #${cardId} .st-roll-status-row .stx-shared-select-trigger {
+      min-height: 36px;
+      height: 36px;
+      padding-top: 0;
+      padding-bottom: 0;
     }
 
     #${cardId} .st-roll-status-col-head {
@@ -1487,9 +1539,12 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       align-items: center;
       justify-content: center;
       gap: 6px;
+      min-height: 36px;
+      padding: 0 10px;
       font-size: 12px;
       opacity: 0.9;
       user-select: none;
+      box-sizing: border-box;
     }
 
     #${cardId} .st-roll-status-remove {
@@ -1512,8 +1567,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       border-radius: 8px;
       padding: 8px 10px;
       background: rgba(120, 20, 20, 0.22);
-      margin-top: 8px;
-      margin-bottom: 8px;
+      margin: 0;
     }
 
     #${cardId} .st-roll-status-error-item {
@@ -1523,11 +1577,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-status-dirty {
-      margin-top: 8px;
-      margin-bottom: 2px;
+      margin: 0;
+      min-height: 28px;
       font-size: 12px;
       line-height: 1.4;
       color: #ffe0a6;
+      display: flex;
+      align-items: center;
+    }
+
+    #${cardId} .st-roll-status-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 10px;
     }
 
     #${cardId} .st-roll-tip {
@@ -1659,7 +1722,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-textarea-wrap,
-    #${cardId} .st-roll-changelog,
+    #${cardId} .stx-changelog,
     #${cardId} .st-roll-skill-presets,
     #${cardId} .st-roll-status-layout {
       border-color: var(--st-roll-panel-muted-border);
@@ -2385,7 +2448,69 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       width: 16px;
       height: 16px;
       margin: 0;
-      accent-color: var(--st-roll-accent);
+      border-radius: 5px;
+      border: 1px solid color-mix(in srgb, var(--st-roll-accent) 52%, var(--st-roll-workbench-panel-border));
+      background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 92%, transparent);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      transition:
+        border-color 0.18s ease,
+        background-color 0.18s ease,
+        box-shadow 0.18s ease,
+        transform 0.18s ease;
+    }
+
+    #${cardId} .st-roll-skill-row-select::before,
+    #${cardId} .st-roll-status-row-select::before {
+      content: "";
+      width: 9px;
+      height: 5px;
+      border-left: 2px solid transparent;
+      border-bottom: 2px solid transparent;
+      transform: rotate(-45deg) scale(0.2);
+      transform-origin: center;
+      opacity: 0;
+      transition:
+        transform 0.18s ease,
+        opacity 0.18s ease,
+        border-color 0.18s ease;
+    }
+
+    #${cardId} .st-roll-skill-row-select:hover,
+    #${cardId} .st-roll-status-row-select:hover {
+      border-color: color-mix(in srgb, var(--st-roll-accent) 72%, #fff 10%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 0 0 1px color-mix(in srgb, var(--st-roll-accent) 16%, transparent);
+    }
+
+    #${cardId} .st-roll-skill-row-select:checked,
+    #${cardId} .st-roll-status-row-select:checked {
+      border-color: color-mix(in srgb, var(--st-roll-accent) 84%, #fff 8%);
+      background: color-mix(in srgb, var(--st-roll-accent) 24%, var(--st-roll-workbench-panel-bg));
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.1),
+        0 0 0 1px color-mix(in srgb, var(--st-roll-accent) 20%, transparent);
+    }
+
+    #${cardId} .st-roll-skill-row-select:checked::before,
+    #${cardId} .st-roll-status-row-select:checked::before {
+      border-left-color: var(--st-roll-accent-contrast);
+      border-bottom-color: var(--st-roll-accent-contrast);
+      transform: rotate(-45deg) scale(1);
+      opacity: 1;
+    }
+
+    #${cardId} .st-roll-skill-row-select:focus-visible,
+    #${cardId} .st-roll-status-row-select:focus-visible {
+      outline: none;
+      box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--st-roll-accent) 24%, transparent),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
     }
 
     #${cardId} .st-roll-skill-actions-group,
@@ -2393,7 +2518,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
     }
 
     #${cardId} .st-roll-skill-actions-group {
@@ -2417,6 +2542,22 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       min-height: 28px;
       padding: 0;
       font-size: 11px;
+      line-height: 1;
+    }
+
+    #${cardId} .st-roll-status-actions-group {
+      justify-content: flex-end;
+      display: grid;
+      grid-template-columns: repeat(2, 28px);
+      gap: 6px;
+      align-content: center;
+    }
+
+    #${cardId} .st-roll-status-actions-group .st-roll-toolbar-icon-btn {
+      width: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
       line-height: 1;
     }
 
@@ -2685,7 +2826,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-toolbar {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 8px;
         padding: 10px;
         border-radius: 16px;
@@ -2696,20 +2837,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       }
 
       #${cardId} .st-roll-status-toolbar .st-roll-workbench-select {
-        grid-column: span 2;
+        grid-column: span 3;
         min-width: 0;
         width: 100%;
       }
 
       #${cardId} .st-roll-status-toolbar .st-roll-inline-toggle {
-        grid-column: span 2;
+        grid-column: span 3;
         width: 100%;
         min-height: 34px;
         justify-content: flex-start;
       }
 
       #${cardId} .st-roll-status-selection-count {
-        grid-column: 1 / -1;
+        grid-column: span 2;
         width: 100%;
         justify-content: center;
         min-height: 32px;
@@ -2718,15 +2859,42 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       #${cardId} .st-roll-status-toolbar .st-roll-toolbar-icon-btn {
         width: 100%;
         min-width: 0;
-        min-height: 40px;
-        border-radius: 12px;
+        min-height: 34px;
+        border-radius: 10px;
       }
 
       #${cardId} .st-roll-status-head {
-        flex-direction: row;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
+        flex-wrap: nowrap;
+        gap: 6px;
+      }
+
+      #${cardId} .st-roll-status-head-main {
+        gap: 2px;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-head .st-roll-workbench-subtitle {
+        font-size: 11px;
+        line-height: 1.3;
+      }
+
+      #${cardId} .st-roll-status-head .st-roll-actions {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: max-content;
+        align-items: center;
+        justify-content: end;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-head .st-roll-btn {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 11px;
       }
 
       #${cardId} .st-roll-status-cols {
@@ -2743,11 +2911,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       #${cardId} .st-roll-status-actions-group .st-roll-btn {
         width: 100%;
         min-width: 0;
-        min-height: 36px;
+        min-height: 32px;
       }
 
       #${cardId} .st-roll-status-rows {
-        padding: 10px;
+        padding: 8px;
         border-radius: 16px;
         overflow-x: hidden;
         overflow-y: auto;
@@ -2755,32 +2923,80 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       }
 
       #${cardId} .st-roll-status-row {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-        padding: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        padding: 12px;
         border: 1px solid var(--st-roll-workbench-panel-border);
-        border-radius: 14px;
+        border-radius: 16px;
         background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 88%, transparent);
         min-width: 0;
       }
 
-      #${cardId} .st-roll-status-row > .st-roll-status-name-wrap,
-      #${cardId} .st-roll-status-row > :nth-child(5),
-      #${cardId} .st-roll-status-row > .st-roll-status-actions-group {
-        grid-column: 1 / -1;
-      }
-
-      #${cardId} .st-roll-status-row > :nth-child(2),
-      #${cardId} .st-roll-status-row > :nth-child(3),
-      #${cardId} .st-roll-status-row > :nth-child(4),
-      #${cardId} .st-roll-status-row > :nth-child(6) {
-        grid-column: span 1;
+      #${cardId} .st-roll-status-field {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
         min-width: 0;
       }
 
-      #${cardId} .st-roll-status-row .st-roll-status-name-wrap {
+      #${cardId} .st-roll-status-field-label {
+        display: block;
+        padding: 0 2px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: 0.04em;
+        color: var(--st-roll-workbench-muted);
+        opacity: 0.72;
+      }
+
+      #${cardId} .st-roll-status-field-content {
+        display: block;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-field-name,
+      #${cardId} .st-roll-status-field-skills {
+        grid-column: 1 / -1;
+      }
+
+      #${cardId} .st-roll-status-bottom-grid {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-field-enabled {
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-field-actions {
+        justify-self: end;
+        width: max-content;
+        max-width: 100%;
+      }
+
+      #${cardId} .st-roll-status-field-name .st-roll-status-field-label {
+        padding-left: 32px;
+      }
+
+      #${cardId} .st-roll-status-field-enabled .st-roll-status-field-label {
+        display: none;
+      }
+
+      #${cardId} .st-roll-status-field-actions .st-roll-status-field-label {
+        display: none;
+      }
+
+      #${cardId} .st-roll-status-row .st-roll-status-name-wrap {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 8px;
+        width: 100%;
       }
 
       #${cardId} .st-roll-status-row .st-roll-status-name,
@@ -2792,31 +3008,92 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         min-width: 0;
       }
 
+      #${cardId} .st-roll-status-row .st-roll-status-name,
+      #${cardId} .st-roll-status-row .st-roll-status-modifier,
+      #${cardId} .st-roll-status-row .st-roll-status-duration,
+      #${cardId} .st-roll-status-row .st-roll-status-skills,
+      #${cardId} .st-roll-status-row .stx-shared-select-trigger,
+      #${cardId} .st-roll-status-enabled-wrap {
+        min-height: 36px;
+        height: 36px;
+      }
+
       #${cardId} .st-roll-status-modifier {
         text-align: left;
       }
 
-      #${cardId} .st-roll-status-enabled-wrap {
-        justify-content: flex-start;
-        min-height: 40px;
-        padding: 0 12px;
-        border-radius: 12px;
-        border: 1px solid var(--st-roll-workbench-panel-border);
-        background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 90%, transparent);
+      #${cardId} .st-roll-status-field-scope .st-roll-status-scope-select,
+      #${cardId} .st-roll-status-field-scope .stx-shared-select {
+        width: 100%;
+      }
+
+      #${cardId} .st-roll-status-enabled-card {
+        width: auto;
+        max-width: 100%;
+        min-width: 0;
+        min-height: 36px;
+        margin-left: auto;
+        padding: 0 8px;
+      }
+
+      #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-body {
+        justify-content: flex-end;
+        gap: 4px;
+      }
+
+      #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-copy {
+        flex: 0 0 auto;
+      }
+
+      #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-control {
+        padding: 2px 6px 2px 4px;
+      }
+
+      #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-title {
+        font-size: 12px;
+      }
+
+      #${cardId} .st-roll-status-field-enabled .st-roll-status-field-content,
+      #${cardId} .st-roll-status-field-actions .st-roll-status-field-content {
+        display: flex;
+        align-items: center;
+        min-height: 36px;
+      }
+
+      #${cardId} .st-roll-status-field-enabled .st-roll-status-field-content {
+        justify-content: flex-end;
+        width: 100%;
+      }
+
+      #${cardId} .st-roll-status-field-actions .st-roll-status-field-content {
+        justify-content: flex-end;
+        width: max-content;
+        max-width: 100%;
       }
 
       #${cardId} .st-roll-status-actions-group {
-        width: 100%;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: auto;
+        grid-template-columns: repeat(2, 28px);
+        gap: 6px;
+        justify-content: flex-end;
       }
 
-      #${cardId} .st-roll-status-actions-group .st-roll-btn {
-        min-height: 38px;
+      #${cardId} .st-roll-status-actions-group .st-roll-btn,
+      #${cardId} .st-roll-status-actions-group .st-roll-toolbar-icon-btn {
+        width: 28px;
+        min-width: 28px;
+        min-height: 28px;
+        border-radius: 9px;
+        padding: 0;
+      }
+
+      #${cardId} .st-roll-status-actions-group .stx-shared-button-icon {
+        font-size: 11px;
       }
 
       #${cardId} .st-roll-status-duplicate,
       #${cardId} .st-roll-status-remove {
-        width: 100%;
+        width: 28px;
       }
     }
 

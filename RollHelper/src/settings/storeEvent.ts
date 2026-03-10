@@ -34,7 +34,6 @@ import {
   parseAnyTavernChatRefEvent,
 } from "../../../SDK/tavern";
 import {
-  chatMetadata,
   getLiveContextEvent,
   saveMetadata,
 } from "../core/runtimeContextEvent";
@@ -418,10 +417,11 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
 }
 
 export function getDiceMeta(): DiceMeta {
-  if (!chatMetadata.diceRoller) {
-    (chatMetadata as any).diceRoller = {};
+  const root = getChatMetadataRootEvent();
+  if (!root.diceRoller || typeof root.diceRoller !== "object") {
+    root.diceRoller = {};
   }
-  return chatMetadata.diceRoller as DiceMeta;
+  return root.diceRoller as DiceMeta;
 }
 
 export function saveLastRoll(result: DiceResult): void {
@@ -627,9 +627,18 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.ruleText = typeof bucket.ruleText === "string" ? bucket.ruleText : DEFAULT_RULE_TEXT_Event;
 
   // 新设置默认读取与归一化
-  bucket.compatibilityModeForSummaryPlugins = bucket.compatibilityModeForSummaryPlugins !== false;
-  bucket.removeRollJsonFromStoredText = bucket.removeRollJsonFromStoredText !== false;
-  bucket.stripRollHelperInternalBlocks = bucket.stripRollHelperInternalBlocks !== false;
+  bucket.compatibilityModeForSummaryPlugins =
+    typeof (source as any)?.compatibilityModeForSummaryPlugins === "boolean"
+      ? (source as any).compatibilityModeForSummaryPlugins
+      : true;
+  bucket.removeRollJsonFromStoredText =
+    typeof (source as any)?.removeRollJsonFromStoredText === "boolean"
+      ? (source as any).removeRollJsonFromStoredText
+      : true;
+  bucket.stripRollHelperInternalBlocks =
+    typeof (source as any)?.stripRollHelperInternalBlocks === "boolean"
+      ? (source as any).stripRollHelperInternalBlocks
+      : true;
 
   return bucket;
 }

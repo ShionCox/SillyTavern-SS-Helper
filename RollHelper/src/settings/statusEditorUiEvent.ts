@@ -11,6 +11,7 @@ import {
 } from "../../../SDK/tavern";
 import { buildSharedSelectField, hydrateSharedSelects } from "../../../_Components/sharedSelect";
 import { buildSharedButton } from "../../../_Components/sharedButton";
+import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
 import { buildSharedInputField } from "../../../_Components/sharedInput";
 import { SDK_SETTINGS_NAMESPACE_Event } from "./constantsEvent";
 import { applySettingsTooltipsEvent } from "./uiCardEvent";
@@ -29,6 +30,27 @@ function escapeAttr(input: string): string {
   return escapeHtml(input).replace(/\x60/g, "&#96;");
 }
 
+/**
+ * 功能：构建状态编辑器字段外壳，供移动端显示字段标签。
+ * @param label 字段标签
+ * @param contentHtml 字段内容 HTML
+ * @param className 额外类名
+ * @returns 字段外壳 HTML
+ */
+function buildStatusEditorFieldShellEvent(
+  label: string,
+  contentHtml: string,
+  className = ""
+): string {
+  const classes = ["st-roll-status-field", String(className ?? "").trim()].filter(Boolean).join(" ");
+  return `
+    <div class="${classes}">
+      <span class="st-roll-status-field-label">${escapeHtml(label)}</span>
+      <div class="st-roll-status-field-content">${contentHtml}</div>
+    </div>
+  `;
+}
+
 function buildStatusScopeSelectEvent(rowId: string, scope: StatusScopeEvent): string {
   return buildSharedSelectField({
     id: "st-roll-status-scope-" + rowId,
@@ -40,11 +62,11 @@ function buildStatusScopeSelectEvent(rowId: string, scope: StatusScopeEvent): st
       "data-status-field": "scope",
     },
     triggerAttributes: {
-      "data-tip": "Status scope",
+      "data-tip": "状态范围",
     },
     options: [
-      { value: "skills", label: "By Skill" },
-      { value: "all", label: "Global" },
+      { value: "skills", label: "按技能" },
+      { value: "all", label: "全局" },
     ],
   });
 }
@@ -532,6 +554,163 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
     applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
     return;
   }
+  const renderedRowsHtml = visibleRows
+    .map((row) => {
+      const rowId = escapeAttr(String(row.rowId ?? ""));
+      const name = escapeAttr(String(row.name ?? ""));
+      const modifierText = escapeAttr(String(row.modifierText ?? ""));
+      const durationText = escapeAttr(String(row.durationText ?? ""));
+      const scope = row.scope === "all" ? "all" : "skills";
+      const skillsText = escapeAttr(String(row.skillsText ?? ""));
+      const enabled = row.enabled !== false;
+      const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：反应|潜行";
+      const selected = STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
+
+      const nameFieldHtml = buildStatusEditorFieldShellEvent(
+        "名称",
+        `
+          <div class="st-roll-status-name-wrap">
+            <input type="checkbox" class="st-roll-status-row-select" data-status-select-id="${rowId}" data-tip="选择这条状态"${selected} />
+            ${buildSharedInputField({
+              value: name,
+              className: "st-roll-status-name",
+              attributes: {
+                "data-status-row-id": rowId,
+                "data-status-field": "name",
+                "data-tip": "状态名称。",
+                placeholder: "状态名称",
+              },
+            })}
+          </div>
+        `,
+        "st-roll-status-field-name"
+      );
+      const modifierFieldHtml = buildStatusEditorFieldShellEvent(
+        "修正",
+        buildSharedInputField({
+          value: modifierText,
+          type: "number",
+          className: "st-roll-status-modifier",
+          attributes: {
+            inputmode: "numeric",
+            step: 1,
+            "data-status-row-id": rowId,
+            "data-status-field": "modifier",
+            "data-tip": "状态加减值，必须是整数。",
+            placeholder: "例如 -2",
+          },
+        }),
+        "st-roll-status-field-modifier"
+      );
+      const durationFieldHtml = buildStatusEditorFieldShellEvent(
+        "轮次",
+        buildSharedInputField({
+          value: durationText,
+          type: "number",
+          className: "st-roll-status-duration",
+          attributes: {
+            inputmode: "numeric",
+            min: 1,
+            step: 1,
+            "data-status-row-id": rowId,
+            "data-status-field": "duration",
+            "data-tip": "持续轮次，留空表示永久。",
+            placeholder: "留空=永久，例如 3",
+          },
+        }),
+        "st-roll-status-field-duration"
+      );
+      const scopeFieldHtml = buildStatusEditorFieldShellEvent(
+        "范围",
+        buildStatusScopeSelectEvent(rowId, scope),
+        "st-roll-status-field-scope"
+      );
+      const skillsFieldHtml = buildStatusEditorFieldShellEvent(
+        "技能",
+        buildSharedInputField({
+          value: skillsText,
+          className: "st-roll-status-skills",
+          disabled: scope === "all",
+          attributes: {
+            "data-status-row-id": rowId,
+            "data-status-field": "skills",
+            "data-tip": "技能范围，用 | 分隔。",
+            placeholder: skillsPlaceholder,
+          },
+        }),
+        "st-roll-status-field-skills"
+      );
+      const enabledFieldHtml = buildStatusEditorFieldShellEvent(
+        "",
+        buildSharedCheckboxCard({
+          id: `st-roll-status-enabled-${rowId}`,
+          title: "启用",
+          checkedLabel: "开",
+          uncheckedLabel: "关",
+          containerClassName: "st-roll-status-enabled-card",
+          copyClassName: "st-roll-status-enabled-copy",
+          titleClassName: "st-roll-status-enabled-title",
+          controlClassName: "st-roll-status-enabled-control",
+          inputAttributes: {
+            "data-status-row-id": rowId,
+            "data-status-field": "enabled",
+            "data-tip": "是否启用该状态。",
+            checked: enabled,
+          },
+        }),
+        "st-roll-status-field-enabled"
+      );
+      const actionsFieldHtml = buildStatusEditorFieldShellEvent(
+        "操作",
+        `
+          <div class="st-roll-status-actions-group">
+            ${buildSharedButton({
+              label: "复制",
+              variant: "secondary",
+              iconClassName: "fa-solid fa-copy",
+              className: "st-roll-status-duplicate st-roll-toolbar-icon-btn",
+              attributes: {
+                "data-status-duplicate-id": rowId,
+                "data-tip": "复制这条状态。",
+                "aria-label": "复制状态",
+              },
+            })}
+            ${buildSharedButton({
+              label: "删除",
+              variant: "danger",
+              iconClassName: "fa-solid fa-trash",
+              className: "st-roll-status-remove st-roll-toolbar-icon-btn",
+              attributes: {
+                "data-status-remove-id": rowId,
+                "data-tip": "删除这条状态。",
+                "aria-label": "删除状态",
+              },
+            })}
+          </div>
+        `,
+        "st-roll-status-field-actions"
+      );
+
+      return `
+        <div class="st-roll-status-row" data-row-id="${rowId}">
+          ${nameFieldHtml}
+          ${modifierFieldHtml}
+          ${durationFieldHtml}
+          ${scopeFieldHtml}
+          ${skillsFieldHtml}
+          <div class="st-roll-status-bottom-grid">
+            ${enabledFieldHtml}
+            ${actionsFieldHtml}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+  rowsWrap.innerHTML = renderedRowsHtml;
+  hydrateSharedSelects(rowsWrap);
+  syncThemeControlClassesByNodeEvent(rowsWrap);
+  applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
+  return;
   rowsWrap.innerHTML = visibleRows
     .map((row) => {
       const rowId = escapeAttr(String(row.rowId ?? ""));
@@ -606,20 +785,22 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
               label: "复制",
               variant: "secondary",
               iconClassName: "fa-solid fa-copy",
-              className: "st-roll-status-duplicate",
+              className: "st-roll-status-duplicate st-roll-toolbar-icon-btn",
               attributes: {
                 "data-status-duplicate-id": rowId,
                 "data-tip": "复制这条状态",
+                "aria-label": "复制状态",
               },
             })}
             ${buildSharedButton({
               label: "删除",
               variant: "danger",
               iconClassName: "fa-solid fa-trash",
-              className: "st-roll-status-remove",
+              className: "st-roll-status-remove st-roll-toolbar-icon-btn",
               attributes: {
                 "data-status-remove-id": rowId,
                 "data-tip": "删除这条状态",
+                "aria-label": "删除状态",
               },
             })}
           </div>
@@ -1335,6 +1516,12 @@ function mergeStatusEditorChatListEvent(
         fromHost: item.fromHost,
         fromMemory: item.fromTagged,
       };
+    })
+    .filter((item) => {
+      const cached = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(item.chatKey);
+      if (item.isCurrent || item.fromHost || item.fromMemory) return true;
+      if (Boolean(cached?.dirty)) return true;
+      return Number(item.activeStatusCount) > 0;
     })
     .sort((a, b) => {
       if (a.chatKey === currentKey) return -1;

@@ -1,49 +1,37 @@
-export interface STContext {
-  chatMetadata: Record<string, any>;
-  extensionSettings?: Record<string, any>;
-  chat?: any[];
-  saveMetadata(): void;
-  saveSettingsDebounced?(): void;
-  saveChat?(): unknown;
-  saveChatConditional?(): unknown;
-  saveChatDebounced?(): unknown;
-  registerMacro(name: string, fn: () => string): void;
-  SlashCommandParser: any;
-  SlashCommand: any;
-  SlashCommandArgument: any;
-  SlashCommandNamedArgument: any;
-  ARGUMENT_TYPE: any;
-  sendSystemMessage(type: any, text: string, extra?: any): void;
-  eventSource?: {
-    on(eventName: string, handler: (payload: any) => void): void;
-    makeLast?(eventName: string, handler: (payload: any) => void): void;
-  };
-  event_types?: Record<string, string>;
-}
+import {
+  getTavernEventSourceEvent,
+  getTavernEventTypesEvent,
+  getTavernExtensionSettingsEvent,
+  getTavernRuntimeContextEvent,
+  getTavernSlashCommandRuntimeEvent,
+  registerTavernMacroEvent,
+  saveTavernMetadataEvent,
+  saveTavernSettingsDebouncedEvent,
+  sendTavernSystemMessageEvent,
+} from "../../../SDK/tavern";
+import type { SdkTavernRuntimeContextEvent } from "../../../SDK/tavern";
 
-const ctx = SillyTavern.getContext() as STContext;
+export type STContext = SdkTavernRuntimeContextEvent;
 
-export const {
-  chatMetadata,
-  saveMetadata,
-  registerMacro,
-  SlashCommandParser,
-  SlashCommand,
-  SlashCommandArgument,
-  SlashCommandNamedArgument,
-  ARGUMENT_TYPE,
-  sendSystemMessage,
-  extensionSettings,
-  saveSettingsDebounced,
-  eventSource,
-  event_types,
-} = ctx;
+const slashCommandRuntimeEvent = getTavernSlashCommandRuntimeEvent();
 
+export const registerMacro = registerTavernMacroEvent;
+export const saveMetadata = saveTavernMetadataEvent;
+export const saveSettingsDebounced = saveTavernSettingsDebouncedEvent;
+export const sendSystemMessage = sendTavernSystemMessageEvent;
+export const SlashCommandParser = slashCommandRuntimeEvent.parser;
+export const SlashCommand = slashCommandRuntimeEvent.command;
+export const SlashCommandArgument = slashCommandRuntimeEvent.argument;
+export const SlashCommandNamedArgument = slashCommandRuntimeEvent.namedArgument;
+export const ARGUMENT_TYPE = slashCommandRuntimeEvent.argumentType;
+export const extensionSettings = getTavernExtensionSettingsEvent() ?? undefined;
+export const eventSource = getTavernEventSourceEvent() ?? undefined;
+export const event_types = getTavernEventTypesEvent() ?? undefined;
+
+/**
+ * 功能：获取当前宿主运行时上下文。
+ * @returns 运行时上下文；不可用时返回空值
+ */
 export function getLiveContextEvent(): STContext | null {
-  try {
-    return SillyTavern.getContext() as STContext;
-  } catch {
-    return null;
-  }
+  return getTavernRuntimeContextEvent();
 }
-

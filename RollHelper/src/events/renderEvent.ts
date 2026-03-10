@@ -621,6 +621,51 @@ function buildCurrentStatusesSummaryTextEvent(statuses: ActiveStatusEvent[]): st
     .join("；");
 }
 
+/**
+ * 功能：构建结果卡片摘要区使用的剧情走向预览文本。
+ * @param outcomeLabel 走向标签
+ * @param outcomeText 走向正文
+ * @returns 摘要文本与完整提示文本
+ */
+function buildCollapsedOutcomePreviewEvent(
+  outcomeLabel: string,
+  outcomeText: string
+): { text: string; title: string; chipClassName: string } {
+  const normalizedLabel = String(outcomeLabel ?? "").trim() || "剧情走向";
+  const normalizedText = String(outcomeText ?? "").replace(/\s+/g, " ").trim() || "未设置";
+  const fullText = `${normalizedLabel}：${normalizedText}`;
+  return {
+    text: fullText,
+    title: fullText,
+    chipClassName:
+      fullText.length > 30
+        ? "st-rh-summary-chip-outcome is-marquee"
+        : "st-rh-summary-chip-outcome",
+  };
+}
+
+/**
+ * 功能：构建结果卡片摘要区使用的状态变化预览文本。
+ * @param statusSummaryText 状态变化摘要
+ * @returns 摘要文本、完整提示文本与样式类名
+ */
+function buildCollapsedStatusSummaryPreviewEvent(
+  statusSummaryText: string
+): { text: string; title: string; chipClassName: string } {
+  const normalizedText = String(statusSummaryText ?? "").replace(/\s+/g, " ").trim();
+  if (!normalizedText) {
+    return { text: "", title: "", chipClassName: "st-rh-summary-chip-status-summary" };
+  }
+  return {
+    text: `获得状态：${normalizedText}`,
+    title: `获得状态：${normalizedText}`,
+    chipClassName:
+      normalizedText.length > 24
+        ? "st-rh-summary-chip-status-summary is-marquee"
+        : "st-rh-summary-chip-status-summary",
+  };
+}
+
 function buildDiceComputationTooltipEvent(
   result: DiceResult,
   baseModifierUsed?: number,
@@ -751,6 +796,12 @@ export interface BuildEventRollResultCardDepsEvent {
     collapsedConditionHtml: string;
     collapsedSourceHtml: string;
     collapsedTotalHtml: string;
+    collapsedOutcomeHtml: string;
+    collapsedOutcomeTitleAttr: string;
+    collapsedOutcomeChipClassName: string;
+    collapsedStatusSummaryHtml: string;
+    collapsedStatusSummaryTitleAttr: string;
+    collapsedStatusSummaryChipClassName: string;
     collapsedDiceVisualHtml: string;
     rollIdHtml: string;
     titleHtml: string;
@@ -805,9 +856,11 @@ export function buildEventRollResultCardEvent(
     : "剧情走向";
   const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
+  const collapsedOutcomePreview = buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
   const outcomeStatusSummaryText = settings.enableStatusSystem
     ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
     : "";
+  const collapsedStatusSummaryPreview = buildCollapsedStatusSummaryPreviewEvent(outcomeStatusSummaryText);
   const currentStatusesSummaryText = settings.enableStatusSystem
     ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
     : "";
@@ -904,6 +957,12 @@ export function buildEventRollResultCardEvent(
     collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
     collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
     collapsedTotalHtml: deps.escapeHtmlEvent(String(record.result.total)),
+    collapsedOutcomeHtml: deps.escapeHtmlEvent(collapsedOutcomePreview.text),
+    collapsedOutcomeTitleAttr: deps.escapeAttrEvent(collapsedOutcomePreview.title),
+    collapsedOutcomeChipClassName: collapsedOutcomePreview.chipClassName,
+    collapsedStatusSummaryHtml: deps.escapeHtmlEvent(collapsedStatusSummaryPreview.text),
+    collapsedStatusSummaryTitleAttr: deps.escapeAttrEvent(collapsedStatusSummaryPreview.title),
+    collapsedStatusSummaryChipClassName: collapsedStatusSummaryPreview.chipClassName,
     collapsedDiceVisualHtml,
     rollIdHtml: deps.escapeHtmlEvent(record.rollId),
     titleHtml: deps.escapeHtmlEvent(event.title),
@@ -962,6 +1021,12 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     collapsedStatusHtml: string;
     collapsedConditionHtml: string;
     collapsedSourceHtml: string;
+    collapsedOutcomeHtml: string;
+    collapsedOutcomeTitleAttr: string;
+    collapsedOutcomeChipClassName: string;
+    collapsedStatusSummaryHtml: string;
+    collapsedStatusSummaryTitleAttr: string;
+    collapsedStatusSummaryChipClassName: string;
     collapsedDiceVisualHtml: string;
     titleTextHtml: string;
     rollIdHtml: string;
@@ -1013,9 +1078,11 @@ export function buildEventAlreadyRolledCardEvent(
     : "剧情走向";
   const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
+  const collapsedOutcomePreview = buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
   const outcomeStatusSummaryText = settings.enableStatusSystem
     ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
     : "";
+  const collapsedStatusSummaryPreview = buildCollapsedStatusSummaryPreviewEvent(outcomeStatusSummaryText);
   const currentStatusesSummaryText = settings.enableStatusSystem
     ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
     : "";
@@ -1113,6 +1180,12 @@ export function buildEventAlreadyRolledCardEvent(
     collapsedStatusHtml: deps.escapeHtmlEvent(statusText),
     collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
     collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
+    collapsedOutcomeHtml: deps.escapeHtmlEvent(collapsedOutcomePreview.text),
+    collapsedOutcomeTitleAttr: deps.escapeAttrEvent(collapsedOutcomePreview.title),
+    collapsedOutcomeChipClassName: collapsedOutcomePreview.chipClassName,
+    collapsedStatusSummaryHtml: deps.escapeHtmlEvent(collapsedStatusSummaryPreview.text),
+    collapsedStatusSummaryTitleAttr: deps.escapeAttrEvent(collapsedStatusSummaryPreview.title),
+    collapsedStatusSummaryChipClassName: collapsedStatusSummaryPreview.chipClassName,
     collapsedDiceVisualHtml,
     titleTextHtml: titleText,
     rollIdHtml: deps.escapeHtmlEvent(record.rollId),
