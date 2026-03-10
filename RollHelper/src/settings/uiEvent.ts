@@ -15,6 +15,26 @@ import {
   applyTooltipCatalog,
   hydrateSettingsTooltips,
 } from "../../../SDK/sharedTooltip";
+import {
+  applySdkThemeToNode,
+  buildSdkThemePatchFromSelection,
+  getSdkThemeState,
+  initializeSdkThemeState,
+  resolveSdkThemeSelection,
+  setSdkThemeState,
+} from "../../../SDK/theme";
+import {
+  isFallbackTavernChatEvent,
+  parseLegacyTavernChatKeyEvent,
+  parseTavernChatScopedKeyEvent,
+} from "../../../SDK/tavern";
+import {
+  buildSharedSelectField,
+  hydrateSharedSelects,
+  syncSharedSelects,
+} from "../../../_Components/sharedSelect";
+import { buildSharedButton } from "../../../_Components/sharedButton";
+import { buildSharedInputField } from "../../../_Components/sharedInput";
 import { buildSettingsTooltipCatalogEvent } from "./settingsTooltipCatalogEvent";
 
 function escapeHtml(input: string): string {
@@ -28,6 +48,32 @@ function escapeHtml(input: string): string {
 
 function escapeAttr(input: string): string {
   return escapeHtml(input).replace(/`/g, "&#96;");
+}
+
+/**
+ * 功能：为状态编辑器构建作用范围选择框。
+ * @param rowId 行唯一 ID
+ * @param scope 当前作用范围
+ * @returns 共享选择框 HTML
+ */
+function buildStatusScopeSelectEvent(rowId: string, scope: StatusScopeEvent): string {
+  return buildSharedSelectField({
+    id: `st-roll-status-scope-${rowId}`,
+    value: scope === "all" ? "all" : "skills",
+    containerClassName: "st-roll-status-scope-select",
+    selectClassName: "st-roll-status-scope",
+    selectAttributes: {
+      "data-status-row-id": rowId,
+      "data-status-field": "scope",
+    },
+    triggerAttributes: {
+      "data-tip": "状态作用范围。",
+    },
+    options: [
+      { value: "skills", label: "按技能" },
+      { value: "all", label: "全局" },
+    ],
+  });
 }
 
 function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | null {
@@ -125,6 +171,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
   SETTINGS_STATUS_MODAL_ID_Event: string;
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event: string;
+  SETTINGS_STATUS_REFRESH_ID_Event: string;
   SETTINGS_STATUS_ROWS_ID_Event: string;
   SETTINGS_STATUS_ADD_ID_Event: string;
   SETTINGS_STATUS_SAVE_ID_Event: string;
@@ -183,10 +230,15 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
 export function buildSettingsCardTemplateIdsEvent(
   deps: BuildSettingsCardTemplateIdsDepsEvent
 ): SettingsCardTemplateIdsEvent {
+  type ChangelogItemEvent = {
+    version?: string;
+    date?: string;
+    changes?: string[];
+  };
 
   function generateChangelogHtml() {
     if (!Array.isArray(changelogData) || changelogData.length === 0) return '暂无更新记录';
-    return changelogData.map((log: any) => `
+    return (changelogData as ChangelogItemEvent[]).map((log) => `
       <div style="margin-bottom: 12px;">
         <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
             <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
@@ -233,6 +285,7 @@ export function buildSettingsCardTemplateIdsEvent(
     statusEditorOpenId: deps.SETTINGS_STATUS_EDITOR_OPEN_ID_Event,
     statusModalId: deps.SETTINGS_STATUS_MODAL_ID_Event,
     statusModalCloseId: deps.SETTINGS_STATUS_MODAL_CLOSE_ID_Event,
+    statusRefreshId: deps.SETTINGS_STATUS_REFRESH_ID_Event,
     statusRowsId: deps.SETTINGS_STATUS_ROWS_ID_Event,
     statusAddId: deps.SETTINGS_STATUS_ADD_ID_Event,
     statusSaveId: deps.SETTINGS_STATUS_SAVE_ID_Event,
@@ -328,6 +381,12 @@ export function mountSettingsCardShellEvent(
 
   const existedRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event);
   if (existedRoot) {
+    ensureSdkThemeUiBindingEvent(
+      deps.SETTINGS_CARD_ID_Event,
+      deps.SETTINGS_SKILL_MODAL_ID_Event,
+      deps.SETTINGS_STATUS_MODAL_ID_Event
+    );
+    hydrateSharedSelects(existedRoot);
     applySettingsTooltipsEvent(existedRoot, tooltipCatalog);
     deps.syncSettingsBadgeVersionEvent();
     deps.syncSettingsUiEvent();
@@ -364,6 +423,12 @@ export function mountSettingsCardShellEvent(
     container.prepend(ssContainer);
   }
   ssContainer.appendChild(root);
+  ensureSdkThemeUiBindingEvent(
+    deps.SETTINGS_CARD_ID_Event,
+    deps.SETTINGS_SKILL_MODAL_ID_Event,
+    deps.SETTINGS_STATUS_MODAL_ID_Event
+  );
+  hydrateSharedSelects(root);
   applySettingsTooltipsEvent(root, tooltipCatalog);
 
   deps.syncSettingsBadgeVersionEvent();
@@ -373,19 +438,39 @@ export function mountSettingsCardShellEvent(
 
 let SKILL_EDITOR_BEFORE_UNLOAD_BOUND_Event = false;
 let SKILL_EDITOR_MODAL_KEYDOWN_BOUND_Event = false;
+let SKILL_EDITOR_PRESET_SEARCH_TEXT_Event = "";
+let SKILL_EDITOR_PRESET_SORT_MODE_Event: "recent" | "name" | "count" = "recent";
+let SKILL_EDITOR_ROW_SEARCH_TEXT_Event = "";
+let SKILL_EDITOR_ROW_SORT_MODE_Event: "manual" | "name" | "modifier_desc" = "manual";
+const SKILL_EDITOR_SELECTED_ROW_IDS_Event = new Set<string>();
+let SDK_THEME_SYNC_BOUND_Event = false;
 
-function normalizeSettingsThemeEvent(theme: string): "default" | "dark" | "light" | "tavern" {
+function normalizeSettingsThemeEvent(theme: string): "default" | "dark" | "light" | "tavern" | "smart" {
   const normalized = String(theme || "").trim().toLowerCase();
-  if (normalized === "dark" || normalized === "light" || normalized === "tavern") {
+  if (normalized === "dark" || normalized === "light" || normalized === "tavern" || normalized === "smart") {
     return normalized;
   }
   return "default";
 }
 
+/**
+ * 功能：确保主题选择框包含“跟随酒馆主题”选项。
+ * @param themeInput 主题选择框原生 select 节点。
+ * @returns 无返回值。
+ */
+function ensureThemeSelectSmartOptionEvent(themeInput: HTMLSelectElement | null): void {
+  if (!themeInput) return;
+  if (themeInput.querySelector('option[value="smart"]')) return;
+  const option = document.createElement("option");
+  option.value = "smart";
+  option.textContent = "跟随酒馆主题";
+  themeInput.appendChild(option);
+}
+
 function syncThemeControlClassesEvent(root: ParentNode | null, theme: string): void {
   if (!(root instanceof HTMLElement)) return;
   const normalizedTheme = normalizeSettingsThemeEvent(theme);
-  const isTavern = normalizedTheme === "tavern";
+  const isTavern = normalizedTheme === "tavern" || normalizedTheme === "smart";
 
   root.classList.toggle("is-theme-tavern", isTavern);
 
@@ -416,6 +501,49 @@ function syncThemeControlClassesByNodeEvent(node: ParentNode | null): void {
   const root = node.closest<HTMLElement>("[id][data-st-roll-theme]");
   if (!root) return;
   syncThemeControlClassesEvent(root, root.getAttribute("data-st-roll-theme") || "default");
+}
+
+/**
+ * 功能：把 SDK 全局主题变化实时同步到 RollHelper 的设置页与两个编辑器。
+ * @param cardId 设置卡片根节点 ID。
+ * @param skillModalId 技能编辑器弹窗 ID。
+ * @param statusModalId 状态编辑器弹窗 ID。
+ * @returns 无返回值。
+ */
+function ensureSdkThemeUiBindingEvent(cardId: string, skillModalId: string, statusModalId: string): void {
+  if (SDK_THEME_SYNC_BOUND_Event) return;
+  SDK_THEME_SYNC_BOUND_Event = true;
+  document.addEventListener("stx-sdk-theme-changed", () => {
+    const settingsRoot = document.getElementById(cardId) as HTMLElement | null;
+    const content = settingsRoot?.querySelector<HTMLElement>(".st-roll-content") ?? null;
+    const themeInput =
+      settingsRoot?.querySelector<HTMLSelectElement>('select.stx-shared-select-native[id$="-theme"]') ?? null;
+    const skillModal = document.getElementById(skillModalId) as HTMLElement | null;
+    const statusModal = document.getElementById(statusModalId) as HTMLElement | null;
+    const selection = resolveSdkThemeSelection(getSdkThemeState());
+    ensureThemeSelectSmartOptionEvent(themeInput);
+    if (themeInput) {
+      themeInput.value = selection;
+    }
+    if (content) {
+      content.setAttribute("data-st-roll-theme", selection);
+      applySdkThemeToNode(content);
+    } else {
+      settingsRoot?.setAttribute("data-st-roll-theme", selection);
+    }
+    if (skillModal) {
+      skillModal.setAttribute("data-st-roll-theme", selection);
+      applySdkThemeToNode(skillModal);
+    }
+    if (statusModal) {
+      statusModal.setAttribute("data-st-roll-theme", selection);
+      applySdkThemeToNode(statusModal);
+    }
+    syncThemeControlClassesEvent(content ?? settingsRoot, selection);
+    syncThemeControlClassesEvent(skillModal, selection);
+    syncThemeControlClassesEvent(statusModal, selection);
+    syncSharedSelects(content ?? settingsRoot ?? document);
+  });
 }
 
 export interface BindSettingsTabsAndModalDepsEvent {
@@ -596,7 +724,9 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     return true;
   };
 
-  const globalRef = globalThis as any;
+  const globalRef = globalThis as typeof globalThis & {
+    __stRollPreviewEditorBridgeBoundEvent?: boolean;
+  };
   if (!globalRef.__stRollPreviewEditorBridgeBoundEvent) {
     document.addEventListener("st-roll-open-skill-editor", () => {
       if (!tryActivateTab("skill")) return;
@@ -808,6 +938,7 @@ export interface BindBasicSettingsInputsDepsEvent {
 
 export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEvent): void {
   const themeInput = document.getElementById(deps.SETTINGS_THEME_ID_Event) as HTMLSelectElement | null;
+  ensureThemeSelectSmartOptionEvent(themeInput);
   const enabledInput = document.getElementById(deps.SETTINGS_ENABLED_ID_Event) as HTMLInputElement | null;
   const ruleInput = document.getElementById(deps.SETTINGS_RULE_ID_Event) as HTMLInputElement | null;
   const aiRollModeInput = document.getElementById(
@@ -865,7 +996,10 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
 
   themeInput?.addEventListener("change", (event) => {
     const value = normalizeSettingsThemeEvent(String((event.target as HTMLSelectElement).value || ""));
-    deps.updateSettingsEvent({ theme: value });
+    initializeSdkThemeState(value);
+    setSdkThemeState(buildSdkThemePatchFromSelection(value));
+    const settingsTheme: "default" | "dark" | "light" | "tavern" = value === "smart" ? "default" : value;
+    deps.updateSettingsEvent({ theme: settingsTheme });
   });
 
   enabledInput?.addEventListener("input", (event) => {
@@ -1186,6 +1320,8 @@ let STATUS_EDITOR_SELECTED_CHAT_KEY_Event = "";
 let STATUS_EDITOR_CURRENT_CHAT_KEY_Event = "";
 let STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：检测中";
 let STATUS_EDITOR_OPEN_EVENT_BOUND_Event = false;
+let STATUS_EDITOR_MOBILE_SHEET_OPEN_Event = false;
+let STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event = false;
 let STATUS_EDITOR_MEMORY_UNSUBSCRIBE_Event: (() => void) | null = null;
 let STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event = 0;
 
@@ -1193,10 +1329,17 @@ type StatusEditorColKeyEvent = "name" | "modifier" | "duration" | "scope" | "ski
 
 interface StatusEditorChatListItemEvent {
   chatKey: string;
+  chatId: string;
+  displayName: string;
+  avatarUrl: string;
+  scopeType: "character" | "group";
+  scopeId: string;
+  roleKey: string;
   updatedAt: number;
   activeStatusCount: number;
   isCurrent: boolean;
   fromRollLocal: boolean;
+  fromHost: boolean;
   fromMemory: boolean;
 }
 
@@ -1211,6 +1354,13 @@ interface StatusEditorChatDraftCacheEvent {
 
 const STATUS_EDITOR_CHAT_DRAFT_CACHE_Event = new Map<string, StatusEditorChatDraftCacheEvent>();
 let STATUS_EDITOR_CHAT_LIST_Event: StatusEditorChatListItemEvent[] = [];
+let STATUS_EDITOR_CHAT_SEARCH_TEXT_Event = "";
+let STATUS_EDITOR_CHAT_SOURCE_FILTER_Event: "all" | "current" | "local" | "memory" = "all";
+let STATUS_EDITOR_ROW_SEARCH_TEXT_Event = "";
+let STATUS_EDITOR_SCOPE_FILTER_Event: "all" | "skills" | "global" = "all";
+let STATUS_EDITOR_ONLY_ENABLED_Event = false;
+let STATUS_EDITOR_IS_REFRESHING_Event = false;
+const STATUS_EDITOR_SELECTED_ROW_IDS_Event = new Set<string>();
 
 const STATUS_EDITOR_LAYOUT_STORAGE_KEY_Event = "st_roll_status_editor_layout_v1";
 const STATUS_EDITOR_COL_MIN_WIDTH_Event: Record<StatusEditorColKeyEvent, number> = {
@@ -1232,11 +1382,11 @@ const STATUS_EDITOR_COL_VAR_MAP_Event: Record<StatusEditorColKeyEvent, string> =
   actions: "--st-roll-status-col-actions",
 };
 
-function normalizeStatusNameKeyLocalEvent(raw: any): string {
+function normalizeStatusNameKeyLocalEvent(raw: unknown): string {
   return String(raw ?? "").trim().toLowerCase();
 }
 
-function normalizeStatusSkillKeyLocalEvent(raw: any): string {
+function normalizeStatusSkillKeyLocalEvent(raw: unknown): string {
   return String(raw ?? "").trim().toLowerCase();
 }
 
@@ -1314,6 +1464,170 @@ function renderStatusValidationErrorsEvent(errorWrapId: string, errors: string[]
     .join("");
 }
 
+/**
+ * 功能：根据当前工作台筛选条件返回可见的状态草稿行。
+ * @param rows 全量状态草稿行
+ * @returns 过滤后的状态草稿行列表
+ */
+function getVisibleStatusEditorRowsEvent(rows: StatusEditorRowDraftEvent[]): StatusEditorRowDraftEvent[] {
+  const keyword = String(STATUS_EDITOR_ROW_SEARCH_TEXT_Event ?? "").trim().toLowerCase();
+  return rows.filter((row) => {
+    if (STATUS_EDITOR_ONLY_ENABLED_Event && row.enabled === false) return false;
+    if (STATUS_EDITOR_SCOPE_FILTER_Event === "skills" && row.scope !== "skills") return false;
+    if (STATUS_EDITOR_SCOPE_FILTER_Event === "global" && row.scope !== "all") return false;
+    if (!keyword) return true;
+    return String(row.name ?? "").trim().toLowerCase().includes(keyword);
+  });
+}
+
+/**
+ * 功能：根据当前工作台筛选条件返回可见的聊天列表。
+ * @returns 过滤后的聊天列表
+ */
+function getVisibleStatusEditorChatListEvent(): StatusEditorChatListItemEvent[] {
+  const keyword = String(STATUS_EDITOR_CHAT_SEARCH_TEXT_Event ?? "").trim().toLowerCase();
+  return STATUS_EDITOR_CHAT_LIST_Event.filter((item) => {
+    if (STATUS_EDITOR_CHAT_SOURCE_FILTER_Event === "current" && !item.isCurrent) return false;
+    if (STATUS_EDITOR_CHAT_SOURCE_FILTER_Event === "local" && !item.fromRollLocal) return false;
+    if (STATUS_EDITOR_CHAT_SOURCE_FILTER_Event === "memory" && !item.fromMemory) return false;
+    if (!keyword) return true;
+    const chatId = String(item.chatId ?? "").toLowerCase();
+    const name = String(item.displayName ?? "").toLowerCase();
+    return chatId.includes(keyword) || name.includes(keyword);
+  });
+}
+
+/**
+ * 功能：同步状态编辑器工作台按钮与选择统计。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function syncStatusWorkbenchToolbarStateEvent(rowsWrapId: string): void {
+  const rowsWrap = document.getElementById(rowsWrapId) as HTMLElement | null;
+  const modal = rowsWrap?.closest(".st-roll-status-modal") as HTMLElement | null;
+  if (!rowsWrap || !modal) return;
+
+  const validIds = new Set(STATUS_EDITOR_ROWS_DRAFT_Event.map((row) => String(row.rowId ?? "")));
+  Array.from(STATUS_EDITOR_SELECTED_ROW_IDS_Event).forEach((rowId) => {
+    if (!validIds.has(rowId)) {
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
+    }
+  });
+
+  const visibleRows = getVisibleStatusEditorRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
+  const visibleSelectedCount = visibleRows.filter((row) =>
+    STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? ""))
+  ).length;
+  const selectedCount = STATUS_EDITOR_SELECTED_ROW_IDS_Event.size;
+  const countNode = modal.querySelector(".st-roll-status-selection-count") as HTMLElement | null;
+  if (countNode) {
+    countNode.textContent =
+      visibleSelectedCount > 0 && visibleSelectedCount !== selectedCount
+        ? `已选 ${selectedCount} 项（可见 ${visibleSelectedCount} 项）`
+        : `已选 ${selectedCount} 项`;
+  }
+
+  [
+    ".st-roll-status-batch-enable",
+    ".st-roll-status-batch-disable",
+    ".st-roll-status-batch-delete",
+  ].forEach((selector) => {
+    const button = modal.querySelector(selector) as HTMLButtonElement | null;
+    if (button) button.disabled = selectedCount <= 0;
+  });
+
+  const selectVisibleBtn = modal.querySelector(".st-roll-status-select-visible") as HTMLButtonElement | null;
+  if (selectVisibleBtn) selectVisibleBtn.disabled = visibleRows.length <= 0;
+}
+
+/**
+ * 功能：同步状态编辑器刷新按钮状态。
+ * @param refreshBtnId 刷新按钮 ID
+ * @returns 无返回值
+ */
+function syncStatusRefreshButtonStateEvent(refreshBtnId: string): void {
+  const refreshBtn = document.getElementById(refreshBtnId) as HTMLButtonElement | null;
+  if (!refreshBtn) return;
+  refreshBtn.disabled = STATUS_EDITOR_IS_REFRESHING_Event;
+  const label = refreshBtn.querySelector(".stx-shared-button-label") as HTMLElement | null;
+  if (label) {
+    label.textContent = STATUS_EDITOR_IS_REFRESHING_Event ? "刷新中" : "刷新";
+  }
+}
+
+/**
+ * 功能：同步移动端状态编辑抽屉的开合状态。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function syncStatusMobileSheetStateEvent(rowsWrapId: string): void {
+  const rowsWrap = document.getElementById(rowsWrapId) as HTMLElement | null;
+  const modal = rowsWrap?.closest(".st-roll-status-modal") as HTMLElement | null;
+  if (!modal) return;
+  modal.classList.toggle("is-mobile-sheet-open", STATUS_EDITOR_MOBILE_SHEET_OPEN_Event);
+  modal.classList.toggle("is-mobile-sheet-expanded", STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event);
+}
+
+/**
+ * 功能：打开移动端状态编辑抽屉。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function openStatusMobileSheetEvent(rowsWrapId: string): void {
+  STATUS_EDITOR_MOBILE_SHEET_OPEN_Event = true;
+  STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event = false;
+  syncStatusMobileSheetStateEvent(rowsWrapId);
+}
+
+/**
+ * 功能：关闭移动端状态编辑抽屉。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function closeStatusMobileSheetEvent(rowsWrapId: string): void {
+  STATUS_EDITOR_MOBILE_SHEET_OPEN_Event = false;
+  STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event = false;
+  syncStatusMobileSheetStateEvent(rowsWrapId);
+}
+
+/**
+ * 功能：展开移动端状态编辑抽屉到接近全屏。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function expandStatusMobileSheetEvent(rowsWrapId: string): void {
+  STATUS_EDITOR_MOBILE_SHEET_OPEN_Event = true;
+  STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event = true;
+  syncStatusMobileSheetStateEvent(rowsWrapId);
+}
+
+/**
+ * 功能：收起移动端状态编辑抽屉的扩展高度。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function collapseStatusMobileSheetExpandedEvent(rowsWrapId: string): void {
+  STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event = false;
+  syncStatusMobileSheetStateEvent(rowsWrapId);
+}
+
+/**
+ * 功能：切换移动端状态编辑抽屉的扩展高度。
+ * @param rowsWrapId 状态行容器 ID
+ * @returns 无返回值
+ */
+function toggleStatusMobileSheetExpandedEvent(rowsWrapId: string): void {
+  if (!STATUS_EDITOR_MOBILE_SHEET_OPEN_Event) {
+    openStatusMobileSheetEvent(rowsWrapId);
+    return;
+  }
+  if (STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event) {
+    collapseStatusMobileSheetExpandedEvent(rowsWrapId);
+    return;
+  }
+  expandStatusMobileSheetEvent(rowsWrapId);
+}
+
 function setStatusDraftDirtyEvent(flag: boolean, dirtyHintId: string): void {
   STATUS_EDITOR_DIRTY_Event = Boolean(flag);
   const dirtyHint = document.getElementById(dirtyHintId) as HTMLElement | null;
@@ -1325,13 +1639,21 @@ function setStatusDraftDirtyEvent(flag: boolean, dirtyHintId: string): void {
 function renderStatusRowsEvent(rowsWrapId: string): void {
   const rowsWrap = document.getElementById(rowsWrapId) as HTMLElement | null;
   if (!rowsWrap) return;
+  const visibleRows = getVisibleStatusEditorRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
+  syncStatusWorkbenchToolbarStateEvent(rowsWrapId);
   if (!STATUS_EDITOR_ROWS_DRAFT_Event.length) {
     rowsWrap.innerHTML = `<div class="st-roll-status-empty">暂无状态，点击“新增状态”开始配置。</div>`;
     syncThemeControlClassesByNodeEvent(rowsWrap);
     applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
     return;
   }
-  rowsWrap.innerHTML = STATUS_EDITOR_ROWS_DRAFT_Event
+  if (!visibleRows.length) {
+    rowsWrap.innerHTML = `<div class="st-roll-status-empty">没有匹配的状态</div>`;
+    syncThemeControlClassesByNodeEvent(rowsWrap);
+    applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
+    return;
+  }
+  rowsWrap.innerHTML = visibleRows
     .map((row) => {
       const rowId = escapeAttr(String(row.rowId ?? ""));
       const name = escapeAttr(String(row.name ?? ""));
@@ -1340,27 +1662,93 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const scope = row.scope === "all" ? "all" : "skills";
       const skillsText = escapeAttr(String(row.skillsText ?? ""));
       const enabled = row.enabled !== false;
-      const skillsDisabledAttr = scope === "all" ? "disabled" : "";
       const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：潜行|察觉";
+      const selected = STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
       return `
         <div class="st-roll-status-row" data-row-id="${rowId}">
-          <input class="st-roll-input st-roll-status-name" type="text" data-status-row-id="${rowId}" data-status-field="name" data-tip="状态名称。" value="${name}" placeholder="状态名称" />
-          <input class="st-roll-input st-roll-status-modifier" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="modifier" data-tip="状态加减值（整数）。" value="${modifierText}" placeholder="例如 -2" />
-          <input class="st-roll-input st-roll-status-duration" type="text" inputmode="numeric" data-status-row-id="${rowId}" data-status-field="duration" data-tip="持续轮次，留空表示永久。" value="${durationText}" placeholder="留空=永久，例如 3" />
-          <select class="st-roll-select st-roll-status-scope" data-status-row-id="${rowId}" data-status-field="scope" data-tip="状态作用范围。">
-            <option value="skills" ${scope === "skills" ? "selected" : ""}>按技能</option>
-            <option value="all" ${scope === "all" ? "selected" : ""}>全局</option>
-          </select>
-          <input class="st-roll-input st-roll-status-skills" type="text" data-status-row-id="${rowId}" data-status-field="skills" data-tip="技能范围，用 | 分隔。" value="${skillsText}" placeholder="${skillsPlaceholder}" ${skillsDisabledAttr} />
+          <div class="st-roll-status-name-wrap">
+            <input type="checkbox" class="st-roll-status-row-select" data-status-select-id="${rowId}" data-tip="选择这条状态"${selected} />
+            ${buildSharedInputField({
+              value: name,
+              className: "st-roll-status-name",
+              attributes: {
+                "data-status-row-id": rowId,
+                "data-status-field": "name",
+                "data-tip": "状态名称。",
+                placeholder: "状态名称",
+              },
+            })}
+          </div>
+          ${buildSharedInputField({
+            value: modifierText,
+            type: "number",
+            className: "st-roll-status-modifier",
+            attributes: {
+              inputmode: "numeric",
+              step: 1,
+              "data-status-row-id": rowId,
+              "data-status-field": "modifier",
+              "data-tip": "状态加减值（整数）。",
+              placeholder: "例如 -2",
+            },
+          })}
+          ${buildSharedInputField({
+            value: durationText,
+            type: "number",
+            className: "st-roll-status-duration",
+            attributes: {
+              inputmode: "numeric",
+              min: 1,
+              step: 1,
+              "data-status-row-id": rowId,
+              "data-status-field": "duration",
+              "data-tip": "持续轮次，留空表示永久。",
+              placeholder: "留空=永久，例如 3",
+            },
+          })}
+          ${buildStatusScopeSelectEvent(rowId, scope)}
+          ${buildSharedInputField({
+            value: skillsText,
+            className: "st-roll-status-skills",
+            disabled: scope === "all",
+            attributes: {
+              "data-status-row-id": rowId,
+              "data-status-field": "skills",
+              "data-tip": "技能范围，用 | 分隔。",
+              placeholder: skillsPlaceholder,
+            },
+          })}
           <label class="st-roll-status-enabled-wrap">
             <input type="checkbox" data-status-row-id="${rowId}" data-status-field="enabled" data-tip="是否启用该状态。" ${enabled ? "checked" : ""} />
             <span>启用</span>
           </label>
-          <button type="button" class="st-roll-btn secondary st-roll-status-remove" data-status-remove-id="${rowId}">删除</button>
+          <div class="st-roll-status-actions-group">
+            ${buildSharedButton({
+              label: "复制",
+              variant: "secondary",
+              iconClassName: "fa-solid fa-copy",
+              className: "st-roll-status-duplicate",
+              attributes: {
+                "data-status-duplicate-id": rowId,
+                "data-tip": "复制这条状态",
+              },
+            })}
+            ${buildSharedButton({
+              label: "删除",
+              variant: "danger",
+              iconClassName: "fa-solid fa-trash",
+              className: "st-roll-status-remove",
+              attributes: {
+                "data-status-remove-id": rowId,
+                "data-tip": "删除这条状态",
+              },
+            })}
+          </div>
         </div>
       `;
     })
     .join("");
+  hydrateSharedSelects(rowsWrap);
   syncThemeControlClassesByNodeEvent(rowsWrap);
   applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-status-modal") || rowsWrap);
 }
@@ -1484,6 +1872,7 @@ function hydrateStatusDraftFromMetaEvent(
   if (!force && STATUS_EDITOR_DIRTY_Event && rowsWrap?.hasChildNodes()) return;
   if (!force && metaSnapshot === STATUS_EDITOR_LAST_META_SNAPSHOT_Event && rowsWrap?.hasChildNodes()) return;
 
+  STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
   STATUS_EDITOR_ROWS_DRAFT_Event = deserializeActiveStatusesToDraftRowsEvent(statuses);
   STATUS_EDITOR_LAST_SNAPSHOT_Event = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
   STATUS_EDITOR_LAST_META_SNAPSHOT_Event = metaSnapshot;
@@ -1496,6 +1885,7 @@ export interface BindStatusEditorActionsDepsEvent {
   SETTINGS_STATUS_ADD_ID_Event: string;
   SETTINGS_STATUS_SAVE_ID_Event: string;
   SETTINGS_STATUS_RESET_ID_Event: string;
+  SETTINGS_STATUS_REFRESH_ID_Event: string;
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
   SETTINGS_STATUS_SPLITTER_ID_Event: string;
@@ -1506,6 +1896,18 @@ export interface BindStatusEditorActionsDepsEvent {
   getActiveStatusesEvent: () => ActiveStatusEvent[];
   setActiveStatusesEvent: (statuses: ActiveStatusEvent[]) => void;
   getActiveChatKeyEvent: () => string;
+  listHostChatsForCurrentScopeEvent: () => Promise<
+    Array<{
+      chatKey: string;
+      updatedAt: number;
+      chatId: string;
+      displayName: string;
+      avatarUrl: string;
+      scopeType: "character" | "group";
+      scopeId: string;
+      roleKey: string;
+    }>
+  >;
   listChatScopedStatusSummariesEvent: () => Promise<Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>>;
   loadStatusesForChatKeyEvent: (chatKey: string) => Promise<ActiveStatusEvent[]>;
   saveStatusesForChatKeyEvent: (chatKey: string, statuses: ActiveStatusEvent[]) => Promise<void>;
@@ -1657,27 +2059,164 @@ function renderStatusMemoryStateEvent(memoryStateId: string): void {
   node.textContent = STATUS_EDITOR_MEMORY_STATE_TEXT_Event;
 }
 
-function getStatusEditorContextEvent(): any {
+interface StatusEditorCharacterContextEvent {
+  name?: string;
+  avatar?: string;
+}
+
+interface StatusEditorRuntimeContextEvent {
+  characterId?: number | string;
+  characterName?: string;
+  name1?: string;
+  characters?: StatusEditorCharacterContextEvent[];
+}
+
+interface StatusEditorChatFilterDebugEvent {
+  source: "local" | "memory" | "cache";
+  currentKey: string;
+  candidateKey: string;
+  inScope: boolean;
+  isFallback: boolean;
+  currentParts: { chatId: string; groupId: string; roleId: string };
+  candidateParts: { chatId: string; groupId: string; roleId: string };
+}
+
+function getStatusEditorContextEvent(): StatusEditorRuntimeContextEvent | null {
   try {
-    return (window as any).SillyTavern?.getContext?.() || null;
+    return ((window as { SillyTavern?: { getContext?: () => unknown } }).SillyTavern?.getContext?.() ??
+      null) as StatusEditorRuntimeContextEvent | null;
   } catch {
     return null;
   }
 }
 
-function parseStatusEditorChatKeyPartsEvent(chatKey: string): { chatId: string; roleId: string } {
+/**
+ * 功能：解析状态编辑器使用的聊天键。
+ * @param chatKey 聊天键
+ * @returns 聊天、分组与角色标识
+ */
+function parseStatusEditorChatKeyPartsEvent(chatKey: string): { chatId: string; groupId: string; roleId: string } {
   const parts = String(chatKey ?? "").split("::");
   return {
     chatId: String(parts[0] ?? "").trim() || "-",
+    groupId: String(parts[1] ?? "").trim() || "no_group",
     roleId: String(parts[2] ?? "").trim() || String(parts[0] ?? "").trim() || "未知",
   };
 }
 
+/**
+ * 功能：判断聊天键是否属于兜底占位键。
+ * @param chatKey 聊天键
+ * @returns 是否为兜底占位键
+ */
+function isStatusEditorFallbackChatKeyEvent(chatKey: string): boolean {
+  const { chatId } = parseStatusEditorChatKeyPartsEvent(chatKey);
+  return chatId === "fallback_chat";
+}
+
+/**
+ * 功能：判断角色标识是否属于兜底值。
+ * @param roleId 角色标识
+ * @returns 是否为兜底角色标识
+ */
+function isStatusEditorFallbackRoleIdEvent(roleId: string): boolean {
+  const normalized = String(roleId ?? "").trim().toLowerCase();
+  return !normalized || normalized === "-" || normalized === "user" || normalized === "default_role";
+}
+
+/**
+ * 功能：把角色标识归一化为可比较的作用域键。
+ * @param roleId 原始角色标识
+ * @returns 归一化后的角色作用域键
+ */
+function normalizeStatusEditorRoleScopeKeyEvent(roleId: string): string {
+  return String(roleId ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^default_/i, "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * 功能：从当前运行时上下文推断真实角色标识。
+ * @returns 推断出的角色标识；无法推断时返回空字符串
+ */
+function resolveStatusEditorContextRoleIdEvent(): string {
+  const ctx = getStatusEditorContextEvent();
+  const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
+  const characterIndex = Number(ctx?.characterId);
+  if (Number.isInteger(characterIndex) && characterIndex >= 0 && characterIndex < characters.length) {
+    const matched = characters[characterIndex];
+    const avatar = String(matched?.avatar ?? "").trim();
+    if (avatar) return avatar;
+    const name = String(matched?.name ?? "").trim();
+    if (name) return name;
+  }
+
+  const explicitName = String(ctx?.characterName ?? ctx?.name1 ?? "").trim();
+  if (!explicitName || explicitName.toLowerCase() === "user") return "";
+  const matchedByName = characters.find((item) => String(item?.name ?? "").trim() === explicitName);
+  if (matchedByName) {
+    const avatar = String(matchedByName.avatar ?? "").trim();
+    if (avatar) return avatar;
+  }
+  return explicitName;
+}
+
+/**
+ * 功能：判断候选聊天键是否属于当前酒馆作用域。
+ * @param currentChatKey 当前聊天键
+ * @param candidateChatKey 候选聊天键
+ * @returns 是否属于当前酒馆
+ */
+function isStatusEditorChatKeyInCurrentScopeEvent(currentChatKey: string, candidateChatKey: string): boolean {
+  const currentKey = String(currentChatKey ?? "").trim();
+  const candidateKey = String(candidateChatKey ?? "").trim();
+  if (!candidateKey) return false;
+  if (isStatusEditorFallbackChatKeyEvent(candidateKey)) return false;
+  if (!currentKey) return !isStatusEditorFallbackChatKeyEvent(candidateKey);
+
+  const current = parseStatusEditorChatKeyPartsEvent(currentKey);
+  const candidate = parseStatusEditorChatKeyPartsEvent(candidateKey);
+  if (current.groupId && candidate.groupId !== current.groupId) return false;
+  if (current.groupId && current.groupId !== "no_group") return true;
+
+  const scopeRoleId = isStatusEditorFallbackRoleIdEvent(current.roleId)
+    ? resolveStatusEditorContextRoleIdEvent()
+    : current.roleId;
+  if (!scopeRoleId) return false;
+
+  const currentRoleScopeKey = normalizeStatusEditorRoleScopeKeyEvent(scopeRoleId);
+  const candidateRoleScopeKey = normalizeStatusEditorRoleScopeKeyEvent(candidate.roleId);
+  if (!currentRoleScopeKey || !candidateRoleScopeKey) return false;
+  return candidateRoleScopeKey === currentRoleScopeKey;
+}
+
+/**
+ * 功能：判断当前聊天键是否应该作为“当前聊天”出现在侧栏中。
+ * @param currentChatKey 当前聊天键
+ * @returns 是否应显示
+ */
+function shouldIncludeCurrentStatusEditorChatEvent(currentChatKey: string): boolean {
+  const key = String(currentChatKey ?? "").trim();
+  if (!key) return false;
+  if (isStatusEditorFallbackChatKeyEvent(key)) return false;
+  return true;
+}
+
+/**
+ * 功能：输出状态编辑器聊天候选过滤调试日志。
+ * @param payload 调试数据
+ * @returns 无返回值
+ */
 function buildStatusEditorChatNameEvent(chatKey: string): string {
   const { roleId } = parseStatusEditorChatKeyPartsEvent(chatKey);
   const ctx = getStatusEditorContextEvent();
   const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
-  let matched: any = null;
+  let matched: StatusEditorCharacterContextEvent | null = null;
 
   for (const char of characters) {
     const avatarName = String(char?.avatar ?? "").trim();
@@ -1757,6 +2296,7 @@ function restoreStatusDraftFromCacheEvent(
 ): boolean {
   const cached = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(chatKey);
   if (!cached) return false;
+  STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
   STATUS_EDITOR_ROWS_DRAFT_Event = [...cached.rows];
   STATUS_EDITOR_LAST_SNAPSHOT_Event = String(cached.snapshot ?? "[]");
   STATUS_EDITOR_LAST_META_SNAPSHOT_Event = String(cached.metaSnapshot ?? "[]");
@@ -1765,63 +2305,182 @@ function restoreStatusDraftFromCacheEvent(
   return true;
 }
 
+interface StatusEditorChatKeySnapshotEvent {
+  tavernInstanceId: string;
+  chatId: string;
+  scopeType: "character" | "group";
+  scopeId: string;
+}
+
+/**
+ * 功能：解析聊天键，兼容 V2 结构化键与旧版键。
+ * @param chatKey 聊天键
+ * @returns 聊天键快照
+ */
+function parseStatusEditorChatKeySnapshotEvent(chatKey: string): StatusEditorChatKeySnapshotEvent {
+  const key = String(chatKey ?? "").trim();
+  if (!key) {
+    return { tavernInstanceId: "", chatId: "", scopeType: "character", scopeId: "" };
+  }
+  const parts = key.split("::");
+  if (parts.length >= 4) {
+    const parsed = parseTavernChatScopedKeyEvent(key);
+    return {
+      tavernInstanceId: String(parsed.tavernInstanceId ?? "").trim(),
+      chatId: String(parsed.chatId ?? "").trim(),
+      scopeType: parsed.scopeType === "group" ? "group" : "character",
+      scopeId: String(parsed.scopeId ?? "").trim(),
+    };
+  }
+  const legacy = parseLegacyTavernChatKeyEvent(key);
+  const scopeType = legacy.groupId && legacy.groupId !== "no_group" ? "group" : "character";
+  const scopeId = scopeType === "group" ? String(legacy.groupId ?? "").trim() : String(legacy.roleId ?? "").trim();
+  return {
+    tavernInstanceId: "",
+    chatId: String(legacy.chatId ?? "").trim(),
+    scopeType,
+    scopeId,
+  };
+}
+
+/**
+ * 功能：判断候选聊天是否属于当前作用域。
+ * @param currentKey 当前聊天键
+ * @param candidateKey 候选聊天键
+ * @returns 是否同作用域
+ */
+function isStatusEditorChatInCurrentScopeEvent(currentKey: string, candidateKey: string): boolean {
+  const current = parseStatusEditorChatKeySnapshotEvent(currentKey);
+  const candidate = parseStatusEditorChatKeySnapshotEvent(candidateKey);
+  if (!candidate.chatId || isFallbackTavernChatEvent(candidate.chatId)) return false;
+  if (!current.tavernInstanceId) {
+    return Boolean(candidate.tavernInstanceId);
+  }
+  if (!candidate.tavernInstanceId) return false;
+  return current.tavernInstanceId === candidate.tavernInstanceId;
+}
+
+/**
+ * 功能：构建聊天列表项的兜底展示文案。
+ * @param chatKey 聊天键
+ * @returns 兜底显示名
+ */
+function buildStatusEditorFallbackChatNameEvent(chatKey: string): string {
+  const snapshot = parseStatusEditorChatKeySnapshotEvent(chatKey);
+  return snapshot.chatId || "未命名聊天";
+}
+
 function mergeStatusEditorChatListEvent(
   currentChatKey: string,
+  hostChats: Array<{
+    chatKey: string;
+    updatedAt: number;
+    chatId: string;
+    displayName: string;
+    avatarUrl: string;
+    scopeType: "character" | "group";
+    scopeId: string;
+    roleKey: string;
+  }>,
   localSummaries: Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>,
   memoryChatKeys: string[]
 ): StatusEditorChatListItemEvent[] {
-  const map = new Map<string, StatusEditorChatListItemEvent>();
   const currentKey = String(currentChatKey ?? "").trim();
+  const map = new Map<string, StatusEditorChatListItemEvent>();
+  const memorySet = new Set(
+    (Array.isArray(memoryChatKeys) ? memoryChatKeys : [])
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean)
+  );
 
-  if (currentKey) {
-    map.set(currentKey, {
-      chatKey: currentKey,
-      updatedAt: Date.now(),
+  for (const item of hostChats) {
+    const key = String(item.chatKey ?? "").trim();
+    if (!key) continue;
+    if (!isStatusEditorChatInCurrentScopeEvent(currentKey, key)) continue;
+    const chatId = String(item.chatId ?? "").trim() || parseStatusEditorChatKeySnapshotEvent(key).chatId;
+    if (!chatId || isFallbackTavernChatEvent(chatId)) continue;
+    map.set(key, {
+      chatKey: key,
+      chatId,
+      displayName: String(item.displayName ?? "").trim() || buildStatusEditorFallbackChatNameEvent(key),
+      avatarUrl: String(item.avatarUrl ?? "").trim(),
+      scopeType: item.scopeType === "group" ? "group" : "character",
+      scopeId: String(item.scopeId ?? "").trim(),
+      roleKey: String(item.roleKey ?? "").trim(),
+      updatedAt: Number(item.updatedAt) || 0,
       activeStatusCount: 0,
-      isCurrent: true,
+      isCurrent: key === currentKey,
       fromRollLocal: false,
-      fromMemory: false,
+      fromHost: true,
+      fromMemory: memorySet.has(key),
     });
   }
 
   for (const item of localSummaries) {
     const key = String(item.chatKey ?? "").trim();
     if (!key) continue;
+    if (!isStatusEditorChatInCurrentScopeEvent(currentKey, key)) continue;
+    const snapshot = parseStatusEditorChatKeySnapshotEvent(key);
+    if (!snapshot.chatId || isFallbackTavernChatEvent(snapshot.chatId)) continue;
     const prev = map.get(key);
     map.set(key, {
       chatKey: key,
+      chatId: prev?.chatId || snapshot.chatId,
+      displayName: prev?.displayName || buildStatusEditorFallbackChatNameEvent(key),
+      avatarUrl: prev?.avatarUrl || "",
+      scopeType: prev?.scopeType || snapshot.scopeType,
+      scopeId: prev?.scopeId || snapshot.scopeId,
+      roleKey: prev?.roleKey || "",
       updatedAt: Math.max(Number(item.updatedAt) || 0, Number(prev?.updatedAt) || 0),
       activeStatusCount: Number(item.activeStatusCount) || 0,
       isCurrent: key === currentKey || Boolean(prev?.isCurrent),
       fromRollLocal: true,
-      fromMemory: Boolean(prev?.fromMemory),
-    });
-  }
-
-  for (const keyRaw of memoryChatKeys) {
-    const key = String(keyRaw ?? "").trim();
-    if (!key) continue;
-    const prev = map.get(key);
-    map.set(key, {
-      chatKey: key,
-      updatedAt: Number(prev?.updatedAt) || 0,
-      activeStatusCount: Number(prev?.activeStatusCount) || 0,
-      isCurrent: key === currentKey || Boolean(prev?.isCurrent),
-      fromRollLocal: Boolean(prev?.fromRollLocal),
-      fromMemory: true,
+      fromHost: Boolean(prev?.fromHost),
+      fromMemory: Boolean(prev?.fromMemory) || memorySet.has(key),
     });
   }
 
   for (const [key, cached] of STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.entries()) {
     if (map.has(key)) continue;
+    if (!isStatusEditorChatInCurrentScopeEvent(currentKey, key)) continue;
+    const snapshot = parseStatusEditorChatKeySnapshotEvent(key);
+    if (!snapshot.chatId || isFallbackTavernChatEvent(snapshot.chatId)) continue;
     map.set(key, {
       chatKey: key,
+      chatId: snapshot.chatId,
+      displayName: buildStatusEditorFallbackChatNameEvent(key),
+      avatarUrl: "",
+      scopeType: snapshot.scopeType,
+      scopeId: snapshot.scopeId,
+      roleKey: "",
       updatedAt: Number(cached.updatedAt) || 0,
       activeStatusCount: Number(cached.activeStatusCount) || 0,
       isCurrent: key === currentKey,
       fromRollLocal: false,
-      fromMemory: false,
+      fromHost: false,
+      fromMemory: memorySet.has(key),
     });
+  }
+
+  if (currentKey && !map.has(currentKey) && isStatusEditorChatInCurrentScopeEvent(currentKey, currentKey)) {
+    const snapshot = parseStatusEditorChatKeySnapshotEvent(currentKey);
+    if (snapshot.chatId && !isFallbackTavernChatEvent(snapshot.chatId)) {
+      map.set(currentKey, {
+        chatKey: currentKey,
+        chatId: snapshot.chatId,
+        displayName: buildStatusEditorFallbackChatNameEvent(currentKey),
+        avatarUrl: "",
+        scopeType: snapshot.scopeType,
+        scopeId: snapshot.scopeId,
+        roleKey: "",
+        updatedAt: Date.now(),
+        activeStatusCount: 0,
+        isCurrent: true,
+        fromRollLocal: false,
+        fromHost: false,
+        fromMemory: memorySet.has(currentKey),
+      });
+    }
   }
 
   return Array.from(map.values()).sort((a, b) => {
@@ -1830,6 +2489,7 @@ function mergeStatusEditorChatListEvent(
     const aDirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(a.chatKey)?.dirty ? 1 : 0;
     const bDirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(b.chatKey)?.dirty ? 1 : 0;
     if (aDirty !== bDirty) return bDirty - aDirty;
+    if (a.fromHost !== b.fromHost) return Number(b.fromHost) - Number(a.fromHost);
     return (b.updatedAt || 0) - (a.updatedAt || 0);
   });
 }
@@ -1837,22 +2497,28 @@ function mergeStatusEditorChatListEvent(
 function renderStatusEditorChatListEvent(chatListId: string): void {
   const node = document.getElementById(chatListId) as HTMLElement | null;
   if (!node) return;
+  const visibleChatList = getVisibleStatusEditorChatListEvent();
   if (!STATUS_EDITOR_CHAT_LIST_Event.length) {
-    node.innerHTML = `<div class="st-roll-status-empty">暂无聊天记录。</div>`;
+    node.innerHTML = `<div class="st-roll-status-empty">当前酒馆下暂无聊天记录。</div>`;
     return;
   }
-  node.innerHTML = STATUS_EDITOR_CHAT_LIST_Event.map((item) => {
+  if (!visibleChatList.length) {
+    node.innerHTML = `<div class="st-roll-status-empty">没有匹配的聊天。</div>`;
+    return;
+  }
+  node.innerHTML = visibleChatList.map((item) => {
     const active = item.chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event;
     const dirty = STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(item.chatKey)?.dirty === true;
     const tags: string[] = [];
     if (item.isCurrent) tags.push("当前");
+    if (item.fromHost) tags.push("宿主");
     if (item.fromRollLocal) tags.push("本地");
     if (item.fromMemory) tags.push("记忆库");
     if (dirty) tags.push("未保存");
 
-    const { chatId } = parseStatusEditorChatKeyPartsEvent(item.chatKey);
-    const name = buildStatusEditorChatNameEvent(item.chatKey);
-    const avatarUrl = buildStatusEditorAvatarUrlEvent(item.chatKey);
+    const chatId = String(item.chatId ?? "").trim();
+    const name = String(item.displayName ?? "").trim() || buildStatusEditorFallbackChatNameEvent(item.chatKey);
+    const avatarUrl = String(item.avatarUrl ?? "").trim();
     const avatarFallback = escapeHtml(String(name || "未").slice(0, 1).toUpperCase());
 
     return `
@@ -1867,7 +2533,7 @@ function renderStatusEditorChatListEvent(chatListId: string): void {
           <span class="st-roll-status-chat-name">${escapeHtml(name)}</span>
           <span class="st-roll-status-chat-time">最后聊天：${escapeHtml(formatStatusEditorTimeEvent(item.updatedAt))}</span>
           <span class="st-roll-status-chat-key">CHATID：${escapeHtml(chatId)}</span>
-          <span class="st-roll-status-chat-meta-line">${escapeHtml(tags.join(" | "))}</span>
+          <span class="st-roll-status-chat-meta-line">${tags.map((tag) => `<span class="st-roll-skill-preset-tag">${escapeHtml(tag)}</span>`).join("")}</span>
         </div>
       </button>
     `;
@@ -1889,9 +2555,11 @@ function renderStatusEditorChatMetaEvent(chatMetaId: string): void {
   }
   const tags: string[] = [];
   if (selected.isCurrent) tags.push("当前");
+  if (selected.fromHost) tags.push("宿主");
   if (selected.fromRollLocal) tags.push("本地");
   if (selected.fromMemory) tags.push("记忆库");
-  node.textContent = `来源：${tags.join("、") || "未知"}｜状态数：${selected.activeStatusCount}`;
+  const visibleCount = getVisibleStatusEditorRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event).length;
+  node.textContent = `来源：${tags.join("、") || "未知"}｜状态数：${selected.activeStatusCount}｜可见：${visibleCount}`;
 }
 
 async function switchStatusEditorChatEvent(
@@ -1933,11 +2601,14 @@ async function switchStatusEditorChatEvent(
 
 async function refreshStatusEditorChatListEvent(deps: BindStatusEditorActionsDepsEvent): Promise<void> {
   const token = ++STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event;
+  STATUS_EDITOR_IS_REFRESHING_Event = true;
+  syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
   STATUS_EDITOR_CURRENT_CHAT_KEY_Event = String(deps.getActiveChatKeyEvent() ?? "").trim();
   STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：检测中";
   renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
 
-  const [localSummaries, probeResult] = await Promise.all([
+  const [hostChats, localSummaries, probeResult] = await Promise.all([
+    deps.listHostChatsForCurrentScopeEvent().catch(() => []),
     deps.listChatScopedStatusSummariesEvent().catch(() => []),
     deps.probeMemoryPluginEvent(1200).catch(() => ({
       available: false,
@@ -1947,7 +2618,11 @@ async function refreshStatusEditorChatListEvent(deps: BindStatusEditorActionsDep
       capabilities: [],
     })),
   ]);
-  if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) return;
+  if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) {
+    STATUS_EDITOR_IS_REFRESHING_Event = false;
+    syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
+    return;
+  }
 
   let memoryChatKeys: string[] = [];
   if (!probeResult.available) {
@@ -1957,12 +2632,17 @@ async function refreshStatusEditorChatListEvent(deps: BindStatusEditorActionsDep
   } else {
     STATUS_EDITOR_MEMORY_STATE_TEXT_Event = "记忆库：已启用";
     const memoryResult = await deps.fetchMemoryChatKeysEvent(1200).catch(() => ({ chatKeys: [], updatedAt: null }));
-    if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) return;
+    if (token !== STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event) {
+      STATUS_EDITOR_IS_REFRESHING_Event = false;
+      syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
+      return;
+    }
     memoryChatKeys = Array.isArray(memoryResult.chatKeys) ? memoryResult.chatKeys : [];
   }
 
   STATUS_EDITOR_CHAT_LIST_Event = mergeStatusEditorChatListEvent(
     STATUS_EDITOR_CURRENT_CHAT_KEY_Event,
+    hostChats,
     localSummaries,
     memoryChatKeys
   );
@@ -1984,9 +2664,14 @@ async function refreshStatusEditorChatListEvent(deps: BindStatusEditorActionsDep
     renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
     renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
     renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+    closeStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    STATUS_EDITOR_IS_REFRESHING_Event = false;
+    syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
     return;
   }
   await switchStatusEditorChatEvent(target, deps, { skipSaveCurrent: true });
+  STATUS_EDITOR_IS_REFRESHING_Event = false;
+  syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
 }
 
 function syncStatusEditorCurrentChatFromRuntimeEvent(deps: Pick<
@@ -2024,9 +2709,22 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   const addBtn = document.getElementById(deps.SETTINGS_STATUS_ADD_ID_Event) as HTMLButtonElement | null;
   const saveBtn = document.getElementById(deps.SETTINGS_STATUS_SAVE_ID_Event) as HTMLButtonElement | null;
   const resetBtn = document.getElementById(deps.SETTINGS_STATUS_RESET_ID_Event) as HTMLButtonElement | null;
+  const refreshBtn = document.getElementById(deps.SETTINGS_STATUS_REFRESH_ID_Event) as HTMLButtonElement | null;
   const chatList = document.getElementById(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event) as HTMLElement | null;
   const splitter = document.getElementById(deps.SETTINGS_STATUS_SPLITTER_ID_Event) as HTMLElement | null;
   const cols = document.getElementById(deps.SETTINGS_STATUS_COLS_ID_Event) as HTMLElement | null;
+  const modal = rowsWrap?.closest(".st-roll-status-modal") as HTMLElement | null;
+  const chatSearchInput = modal?.querySelector(".st-roll-status-chat-search") as HTMLInputElement | null;
+  const chatSourceInput = modal?.querySelector(".st-roll-status-chat-source") as HTMLSelectElement | null;
+  const rowSearchInput = modal?.querySelector(".st-roll-status-search") as HTMLInputElement | null;
+  const scopeFilterInput = modal?.querySelector(".st-roll-status-scope-filter") as HTMLSelectElement | null;
+  const onlyEnabledInput = modal?.querySelector(".st-roll-status-only-enabled") as HTMLInputElement | null;
+  const selectVisibleBtn = modal?.querySelector(".st-roll-status-select-visible") as HTMLButtonElement | null;
+  const batchEnableBtn = modal?.querySelector(".st-roll-status-batch-enable") as HTMLButtonElement | null;
+  const batchDisableBtn = modal?.querySelector(".st-roll-status-batch-disable") as HTMLButtonElement | null;
+  const batchDeleteBtn = modal?.querySelector(".st-roll-status-batch-delete") as HTMLButtonElement | null;
+  const mobileBackBtn = modal?.querySelector(".st-roll-status-mobile-back") as HTMLButtonElement | null;
+  const mobileSheetHead = modal?.querySelector(".st-roll-status-mobile-sheet-head") as HTMLElement | null;
 
   if (!rowsWrap) return;
   if (rowsWrap.dataset.statusEditorBound === "1") return;
@@ -2047,13 +2745,146 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
   renderStatusMemoryStateEvent(deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event);
   renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  syncStatusRefreshButtonStateEvent(deps.SETTINGS_STATUS_REFRESH_ID_Event);
+  syncStatusMobileSheetStateEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
   void refreshStatusEditorChatListEvent(deps);
+
+  chatSearchInput?.addEventListener("input", () => {
+    STATUS_EDITOR_CHAT_SEARCH_TEXT_Event = String(chatSearchInput.value ?? "");
+    renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+  });
+
+  chatSourceInput?.addEventListener("change", () => {
+    const next = String(chatSourceInput.value ?? "all");
+    STATUS_EDITOR_CHAT_SOURCE_FILTER_Event =
+      next === "current" || next === "local" || next === "memory" ? next : "all";
+    renderStatusEditorChatListEvent(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event);
+  });
+
+  rowSearchInput?.addEventListener("input", () => {
+    STATUS_EDITOR_ROW_SEARCH_TEXT_Event = String(rowSearchInput.value ?? "");
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  });
+
+  scopeFilterInput?.addEventListener("change", () => {
+    const next = String(scopeFilterInput.value ?? "all");
+    STATUS_EDITOR_SCOPE_FILTER_Event = next === "skills" || next === "global" ? next : "all";
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  });
+
+  onlyEnabledInput?.addEventListener("change", () => {
+    STATUS_EDITOR_ONLY_ENABLED_Event = Boolean(onlyEnabledInput.checked);
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
+  });
+
+  selectVisibleBtn?.addEventListener("click", () => {
+    getVisibleStatusEditorRowsEvent(STATUS_EDITOR_ROWS_DRAFT_Event).forEach((row) => {
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.add(String(row.rowId ?? ""));
+    });
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+  });
+
+  batchEnableBtn?.addEventListener("click", () => {
+    if (STATUS_EDITOR_SELECTED_ROW_IDS_Event.size <= 0) return;
+    STATUS_EDITOR_ROWS_DRAFT_Event = STATUS_EDITOR_ROWS_DRAFT_Event.map((row) =>
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? { ...row, enabled: true } : row
+    );
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    markDirty();
+    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+  });
+
+  batchDisableBtn?.addEventListener("click", () => {
+    if (STATUS_EDITOR_SELECTED_ROW_IDS_Event.size <= 0) return;
+    STATUS_EDITOR_ROWS_DRAFT_Event = STATUS_EDITOR_ROWS_DRAFT_Event.map((row) =>
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? { ...row, enabled: false } : row
+    );
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    markDirty();
+    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+  });
+
+  batchDeleteBtn?.addEventListener("click", () => {
+    if (STATUS_EDITOR_SELECTED_ROW_IDS_Event.size <= 0) return;
+    STATUS_EDITOR_ROWS_DRAFT_Event = STATUS_EDITOR_ROWS_DRAFT_Event.filter(
+      (row) => !STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? ""))
+    );
+    STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
+    renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    markDirty();
+    renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+  });
+
+  mobileBackBtn?.addEventListener("click", () => {
+    closeStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+  });
+
+  if (mobileSheetHead) {
+    let sheetPointerStartY = 0;
+    let sheetPointerMoved = false;
+    let ignoreNextSheetClick = false;
+
+    mobileSheetHead.addEventListener("click", (event: MouseEvent) => {
+      if (ignoreNextSheetClick) {
+        ignoreNextSheetClick = false;
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".st-roll-status-mobile-back")) return;
+      toggleStatusMobileSheetExpandedEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    });
+
+    mobileSheetHead.addEventListener("pointerdown", (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".st-roll-status-mobile-back")) return;
+      sheetPointerStartY = event.clientY;
+      sheetPointerMoved = false;
+    });
+
+    mobileSheetHead.addEventListener("pointermove", (event: PointerEvent) => {
+      if (!sheetPointerStartY) return;
+      if (Math.abs(event.clientY - sheetPointerStartY) > 10) {
+        sheetPointerMoved = true;
+      }
+    });
+
+    mobileSheetHead.addEventListener("pointerup", (event: PointerEvent) => {
+      if (!sheetPointerStartY || !sheetPointerMoved) {
+        sheetPointerStartY = 0;
+        sheetPointerMoved = false;
+        return;
+      }
+      const deltaY = event.clientY - sheetPointerStartY;
+      if (deltaY <= -24) {
+        expandStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      } else if (deltaY >= 28) {
+        if (STATUS_EDITOR_MOBILE_SHEET_EXPANDED_Event) {
+          collapseStatusMobileSheetExpandedEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+        } else {
+          closeStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+        }
+      }
+      ignoreNextSheetClick = true;
+      sheetPointerStartY = 0;
+      sheetPointerMoved = false;
+    });
+
+    mobileSheetHead.addEventListener("pointercancel", () => {
+      sheetPointerStartY = 0;
+      sheetPointerMoved = false;
+      ignoreNextSheetClick = false;
+    });
+  }
 
   rowsWrap.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement | HTMLSelectElement | null;
     if (!target) return;
-    const rowId = String((target as any).dataset.statusRowId ?? "");
-    const field = String((target as any).dataset.statusField ?? "");
+    const rowId = String(target.dataset.statusRowId ?? "");
+    const field = String(target.dataset.statusField ?? "");
     if (!rowId || !field) return;
     const row = STATUS_EDITOR_ROWS_DRAFT_Event.find((item) => item.rowId === rowId);
     if (!row) return;
@@ -2066,9 +2897,6 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       row.scope = target.value === "all" ? "all" : "skills";
       if (row.scope === "all") row.skillsText = "";
       renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
-    }
-    if (field === "enabled") {
-      row.enabled = (target as HTMLInputElement).checked;
     }
     markDirty();
     renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
@@ -2089,10 +2917,46 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
 
   rowsWrap.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
+    const selectInput = target?.closest<HTMLInputElement>("input[data-status-select-id]");
+    if (selectInput) {
+      const rowId = String(selectInput.dataset.statusSelectId ?? "");
+      if (!rowId) return;
+      if (selectInput.checked) {
+        STATUS_EDITOR_SELECTED_ROW_IDS_Event.add(rowId);
+      } else {
+        STATUS_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
+      }
+      syncStatusWorkbenchToolbarStateEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      return;
+    }
+
+    const duplicateBtn = target?.closest<HTMLButtonElement>("button[data-status-duplicate-id]");
+    if (duplicateBtn) {
+      const rowId = String(duplicateBtn.dataset.statusDuplicateId ?? "");
+      const sourceRow = STATUS_EDITOR_ROWS_DRAFT_Event.find((item) => item.rowId === rowId);
+      if (!sourceRow) return;
+      STATUS_EDITOR_ROWS_DRAFT_Event = [
+        ...STATUS_EDITOR_ROWS_DRAFT_Event,
+        createStatusEditorRowDraftEvent(
+          String(sourceRow.name ?? ""),
+          String(sourceRow.modifierText ?? ""),
+          String(sourceRow.durationText ?? ""),
+          sourceRow.scope === "all" ? "all" : "skills",
+          String(sourceRow.skillsText ?? ""),
+          sourceRow.enabled !== false
+        ),
+      ];
+      renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      markDirty();
+      renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+      return;
+    }
+
     const removeBtn = target?.closest<HTMLButtonElement>("button[data-status-remove-id]");
     if (!removeBtn) return;
     const rowId = String(removeBtn.dataset.statusRemoveId ?? "");
     if (!rowId) return;
+    STATUS_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
     STATUS_EDITOR_ROWS_DRAFT_Event = STATUS_EDITOR_ROWS_DRAFT_Event.filter((item) => item.rowId !== rowId);
     renderStatusRowsEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
     markDirty();
@@ -2104,8 +2968,16 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     const item = target?.closest<HTMLButtonElement>("button[data-status-chat-key]");
     if (!item) return;
     const chatKey = String(item.dataset.statusChatKey ?? "").trim();
-    if (!chatKey || chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event) return;
-    void switchStatusEditorChatEvent(chatKey, deps);
+    if (!chatKey) return;
+    if (chatKey === STATUS_EDITOR_SELECTED_CHAT_KEY_Event) {
+      if (!STATUS_EDITOR_MOBILE_SHEET_OPEN_Event) {
+        openStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      }
+      return;
+    }
+    void switchStatusEditorChatEvent(chatKey, deps).then(() => {
+      openStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+    });
   });
 
   addBtn?.addEventListener("click", () => {
@@ -2135,6 +3007,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       } else {
         await deps.saveStatusesForChatKeyEvent(selectedChatKey, validated.statuses);
       }
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
       STATUS_EDITOR_ROWS_DRAFT_Event = deserializeActiveStatusesToDraftRowsEvent(validated.statuses);
       STATUS_EDITOR_LAST_SNAPSHOT_Event = buildStatusDraftSnapshotEvent(STATUS_EDITOR_ROWS_DRAFT_Event);
       STATUS_EDITOR_LAST_META_SNAPSHOT_Event = buildStatusMetaSnapshotEvent(validated.statuses);
@@ -2169,6 +3042,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       } else {
         await deps.saveStatusesForChatKeyEvent(selectedChatKey, []);
       }
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
       STATUS_EDITOR_ROWS_DRAFT_Event = [];
       STATUS_EDITOR_LAST_SNAPSHOT_Event = "[]";
       STATUS_EDITOR_LAST_META_SNAPSHOT_Event = "[]";
@@ -2193,8 +3067,13 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
     })();
   });
 
+  refreshBtn?.addEventListener("click", () => {
+    void refreshStatusEditorChatListEvent(deps);
+  });
+
   if (!STATUS_EDITOR_OPEN_EVENT_BOUND_Event) {
     document.addEventListener("st-roll-status-editor-opened", () => {
+      closeStatusMobileSheetEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
       void refreshStatusEditorChatListEvent(deps);
     });
     STATUS_EDITOR_OPEN_EVENT_BOUND_Event = true;
@@ -2282,6 +3161,67 @@ export function createSkillDraftAccessorEvent(
 export function bindSkillRowsEditingActionsEvent(deps: BindSkillRowsEditingActionsDepsEvent): void {
   const skillRowsWrap = document.getElementById(deps.SETTINGS_SKILL_ROWS_ID_Event) as HTMLElement | null;
   const skillAddBtn = document.getElementById(deps.SETTINGS_SKILL_ADD_ID_Event) as HTMLButtonElement | null;
+  const skillModal = skillRowsWrap?.closest(".st-roll-skill-modal") as HTMLElement | null;
+  const presetSearchInput = skillModal?.querySelector(".st-roll-skill-preset-search") as HTMLInputElement | null;
+  const presetSortInput = skillModal?.querySelector(".st-roll-skill-preset-sort") as HTMLSelectElement | null;
+  const rowSearchInput = skillModal?.querySelector(".st-roll-skill-row-search") as HTMLInputElement | null;
+  const rowSortInput = skillModal?.querySelector(".st-roll-skill-row-sort") as HTMLSelectElement | null;
+  const selectVisibleBtn = skillModal?.querySelector(".st-roll-skill-select-visible") as HTMLButtonElement | null;
+  const clearSelectionBtn = skillModal?.querySelector(".st-roll-skill-clear-selection") as HTMLButtonElement | null;
+  const batchDeleteBtn = skillModal?.querySelector(".st-roll-skill-batch-delete") as HTMLButtonElement | null;
+
+  if (skillRowsWrap?.dataset.skillWorkbenchBound !== "1") {
+    skillRowsWrap?.setAttribute("data-skill-workbench-bound", "1");
+
+    presetSearchInput?.addEventListener("input", () => {
+      SKILL_EDITOR_PRESET_SEARCH_TEXT_Event = String(presetSearchInput.value ?? "");
+      deps.renderSkillRowsEvent();
+    });
+
+    presetSortInput?.addEventListener("change", () => {
+      const next = String(presetSortInput.value ?? "recent");
+      SKILL_EDITOR_PRESET_SORT_MODE_Event =
+        next === "name" || next === "count" ? next : "recent";
+      deps.renderSkillRowsEvent();
+    });
+
+    rowSearchInput?.addEventListener("input", () => {
+      SKILL_EDITOR_ROW_SEARCH_TEXT_Event = String(rowSearchInput.value ?? "");
+      deps.renderSkillRowsEvent();
+    });
+
+    rowSortInput?.addEventListener("change", () => {
+      const next = String(rowSortInput.value ?? "manual");
+      SKILL_EDITOR_ROW_SORT_MODE_Event =
+        next === "name" || next === "modifier_desc" ? next : "manual";
+      deps.renderSkillRowsEvent();
+    });
+
+    selectVisibleBtn?.addEventListener("click", () => {
+      getVisibleSkillRowsEvent(deps.skillDraftAccessorEvent.getRows()).forEach((row) => {
+        SKILL_EDITOR_SELECTED_ROW_IDS_Event.add(String(row.rowId ?? ""));
+      });
+      deps.renderSkillRowsEvent();
+    });
+
+    clearSelectionBtn?.addEventListener("click", () => {
+      SKILL_EDITOR_SELECTED_ROW_IDS_Event.clear();
+      deps.renderSkillRowsEvent();
+    });
+
+    batchDeleteBtn?.addEventListener("click", () => {
+      if (SKILL_EDITOR_SELECTED_ROW_IDS_Event.size <= 0) return;
+      const rows = deps
+        .skillDraftAccessorEvent
+        .getRows()
+        .filter((row) => !SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")));
+      SKILL_EDITOR_SELECTED_ROW_IDS_Event.clear();
+      deps.skillDraftAccessorEvent.setRows(rows);
+      deps.renderSkillRowsEvent();
+      deps.refreshSkillDraftDirtyStateEvent();
+      deps.renderSkillValidationErrorsEvent([]);
+    });
+  }
 
   skillRowsWrap?.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement | null;
@@ -2303,10 +3243,62 @@ export function bindSkillRowsEditingActionsEvent(deps: BindSkillRowsEditingActio
 
   skillRowsWrap?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
+    const selectInput = target?.closest<HTMLInputElement>("input[data-skill-select-id]");
+    if (selectInput) {
+      const rowId = String(selectInput.dataset.skillSelectId ?? "");
+      if (!rowId) return;
+      if (selectInput.checked) {
+        SKILL_EDITOR_SELECTED_ROW_IDS_Event.add(rowId);
+      } else {
+        SKILL_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
+      }
+      syncSkillWorkbenchToolbarStateEvent(deps.skillDraftAccessorEvent.getRows());
+      return;
+    }
+
+    const duplicateBtn = target?.closest<HTMLButtonElement>("button[data-skill-duplicate-id]");
+    if (duplicateBtn) {
+      const rowId = String(duplicateBtn.dataset.skillDuplicateId ?? "");
+      const rows = deps.skillDraftAccessorEvent.getRows();
+      const rowIndex = rows.findIndex((row) => row.rowId === rowId);
+      if (rowIndex < 0) return;
+      const row = rows[rowIndex];
+      const nextRows = [...rows];
+      nextRows.splice(
+        rowIndex + 1,
+        0,
+        deps.createSkillEditorRowDraftEvent(String(row.skillName ?? ""), String(row.modifierText ?? ""))
+      );
+      deps.skillDraftAccessorEvent.setRows(nextRows);
+      deps.renderSkillRowsEvent();
+      deps.refreshSkillDraftDirtyStateEvent();
+      deps.renderSkillValidationErrorsEvent([]);
+      return;
+    }
+
+    const moveBtn = target?.closest<HTMLButtonElement>("button[data-skill-move-id]");
+    if (moveBtn) {
+      const rowId = String(moveBtn.dataset.skillMoveId ?? "");
+      const direction = String(moveBtn.dataset.skillMoveDirection ?? "");
+      const rows = [...deps.skillDraftAccessorEvent.getRows()];
+      const rowIndex = rows.findIndex((row) => row.rowId === rowId);
+      if (rowIndex < 0) return;
+      const nextIndex = direction === "up" ? rowIndex - 1 : rowIndex + 1;
+      if (nextIndex < 0 || nextIndex >= rows.length) return;
+      const [row] = rows.splice(rowIndex, 1);
+      rows.splice(nextIndex, 0, row);
+      deps.skillDraftAccessorEvent.setRows(rows);
+      deps.renderSkillRowsEvent();
+      deps.refreshSkillDraftDirtyStateEvent();
+      deps.renderSkillValidationErrorsEvent([]);
+      return;
+    }
+
     const removeBtn = target?.closest<HTMLButtonElement>("button[data-skill-remove-id]");
     if (!removeBtn) return;
     const rowId = String(removeBtn.dataset.skillRemoveId ?? "");
     if (!rowId) return;
+    SKILL_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
     const rows = deps.skillDraftAccessorEvent.getRows().filter((row) => row.rowId !== rowId);
     deps.skillDraftAccessorEvent.setRows(rows);
     deps.renderSkillRowsEvent();
@@ -2530,6 +3522,111 @@ export function renderSkillValidationErrorsEvent(
     .join("");
 }
 
+/**
+ * 功能：根据当前工作台筛选与排序状态，返回可见的技能预设列表。
+ * @param store 技能预设仓库
+ * @param countSkillEntriesFromSkillTableTextEvent 统计技能数量的方法
+ * @param activeDraftCountEvent 当前草稿技能数
+ * @returns 过滤排序后的技能预设列表
+ */
+function getVisibleSkillPresetsEvent(
+  store: SkillPresetStoreEvent,
+  countSkillEntriesFromSkillTableTextEvent: (skillTableText: string) => number,
+  activeDraftCountEvent?: number | null
+): SkillPresetEvent[] {
+  const keyword = String(SKILL_EDITOR_PRESET_SEARCH_TEXT_Event ?? "").trim().toLowerCase();
+  const activePresetId = String(store.activePresetId ?? "");
+  const next = [...store.presets].filter((preset) => {
+    if (!keyword) return true;
+    return String(preset.name ?? "").trim().toLowerCase().includes(keyword);
+  });
+
+  next.sort((left, right) => {
+    if (SKILL_EDITOR_PRESET_SORT_MODE_Event === "name") {
+      return String(left.name ?? "").localeCompare(String(right.name ?? ""), "zh-Hans-CN");
+    }
+    if (SKILL_EDITOR_PRESET_SORT_MODE_Event === "count") {
+      const leftCount =
+        left.id === activePresetId && Number.isFinite(Number(activeDraftCountEvent))
+          ? Number(activeDraftCountEvent)
+          : countSkillEntriesFromSkillTableTextEvent(left.skillTableText);
+      const rightCount =
+        right.id === activePresetId && Number.isFinite(Number(activeDraftCountEvent))
+          ? Number(activeDraftCountEvent)
+          : countSkillEntriesFromSkillTableTextEvent(right.skillTableText);
+      if (leftCount !== rightCount) return rightCount - leftCount;
+      return String(left.name ?? "").localeCompare(String(right.name ?? ""), "zh-Hans-CN");
+    }
+    return Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
+  });
+  return next;
+}
+
+/**
+ * 功能：根据当前工作台筛选与排序状态，返回可见的技能行。
+ * @param rows 全量技能草稿行
+ * @returns 过滤排序后的技能草稿行列表
+ */
+function getVisibleSkillRowsEvent(rows: SkillEditorRowDraftEvent[]): SkillEditorRowDraftEvent[] {
+  const keyword = String(SKILL_EDITOR_ROW_SEARCH_TEXT_Event ?? "").trim().toLowerCase();
+  const filtered = [...rows].filter((row) => {
+    if (!keyword) return true;
+    return String(row.skillName ?? "").trim().toLowerCase().includes(keyword);
+  });
+
+  if (SKILL_EDITOR_ROW_SORT_MODE_Event === "name") {
+    filtered.sort((left, right) =>
+      String(left.skillName ?? "").localeCompare(String(right.skillName ?? ""), "zh-Hans-CN")
+    );
+  } else if (SKILL_EDITOR_ROW_SORT_MODE_Event === "modifier_desc") {
+    filtered.sort((left, right) => {
+      const leftValue = Number(left.modifierText ?? 0) || 0;
+      const rightValue = Number(right.modifierText ?? 0) || 0;
+      if (leftValue !== rightValue) return rightValue - leftValue;
+      return String(left.skillName ?? "").localeCompare(String(right.skillName ?? ""), "zh-Hans-CN");
+    });
+  }
+  return filtered;
+}
+
+/**
+ * 功能：刷新技能编辑器工具栏状态显示。
+ * @param rows 当前技能草稿行
+ * @returns 无返回值
+ */
+function syncSkillWorkbenchToolbarStateEvent(rows: SkillEditorRowDraftEvent[]): void {
+  const modal = document.querySelector(".st-roll-skill-modal") as HTMLElement | null;
+  if (!modal) return;
+  const validIds = new Set(rows.map((row) => String(row.rowId ?? "")));
+  Array.from(SKILL_EDITOR_SELECTED_ROW_IDS_Event).forEach((rowId) => {
+    if (!validIds.has(rowId)) {
+      SKILL_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
+    }
+  });
+
+  const visibleRows = getVisibleSkillRowsEvent(rows);
+  const selectedVisibleCount = visibleRows.filter((row) =>
+    SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? ""))
+  ).length;
+  const selectedCount = SKILL_EDITOR_SELECTED_ROW_IDS_Event.size;
+  const countNode = modal.querySelector(".st-roll-skill-selection-count") as HTMLElement | null;
+  if (countNode) {
+    countNode.textContent =
+      selectedVisibleCount > 0 && selectedVisibleCount !== selectedCount
+        ? `已选 ${selectedCount} 项（可见 ${selectedVisibleCount} 项）`
+        : `已选 ${selectedCount} 项`;
+  }
+
+  const batchDeleteBtn = modal.querySelector(".st-roll-skill-batch-delete") as HTMLButtonElement | null;
+  if (batchDeleteBtn) batchDeleteBtn.disabled = selectedCount <= 0;
+
+  const clearSelectionBtn = modal.querySelector(".st-roll-skill-clear-selection") as HTMLButtonElement | null;
+  if (clearSelectionBtn) clearSelectionBtn.disabled = selectedCount <= 0;
+
+  const selectVisibleBtn = modal.querySelector(".st-roll-skill-select-visible") as HTMLButtonElement | null;
+  if (selectVisibleBtn) selectVisibleBtn.disabled = visibleRows.length <= 0;
+}
+
 export interface RenderSkillPresetListDepsEvent {
   SETTINGS_SKILL_PRESET_LIST_ID_Event: string;
   countSkillEntriesFromSkillTableTextEvent: (skillTableText: string) => number;
@@ -2549,7 +3646,17 @@ export function renderSkillPresetListEvent(
     syncThemeControlClassesByNodeEvent(listWrap);
     return;
   }
-  listWrap.innerHTML = store.presets
+  const visiblePresets = getVisibleSkillPresetsEvent(
+    store,
+    deps.countSkillEntriesFromSkillTableTextEvent,
+    deps.activeDraftCountEvent
+  );
+  if (!visiblePresets.length) {
+    listWrap.innerHTML = `<div class="st-roll-skill-preset-empty">没有匹配的预设</div>`;
+    syncThemeControlClassesByNodeEvent(listWrap);
+    return;
+  }
+  listWrap.innerHTML = visiblePresets
     .map((preset) => {
       const isActive = preset.id === store.activePresetId;
       const skillCount =
@@ -2592,7 +3699,12 @@ export function renderSkillPresetMetaEvent(
     const count = Number.isFinite(Number(deps.activeDraftCountEvent))
       ? Number(deps.activeDraftCountEvent)
       : deps.countSkillEntriesFromSkillTableTextEvent(activePreset.skillTableText);
-    meta.textContent = `当前预设：${activePreset.name}（技能 ${count} 项）`;
+    const visiblePresetCount = getVisibleSkillPresetsEvent(
+      store,
+      deps.countSkillEntriesFromSkillTableTextEvent,
+      deps.activeDraftCountEvent
+    ).length;
+    meta.textContent = `当前：${activePreset.name} · 技能 ${count} 项 · 可见预设 ${visiblePresetCount}/${store.presets.length}`;
   }
   const nameInput = document.getElementById(
     deps.SETTINGS_SKILL_PRESET_NAME_ID_Event
@@ -2621,41 +3733,98 @@ export function renderSkillRowsEvent(
 ): void {
   const rowsWrap = document.getElementById(deps.SETTINGS_SKILL_ROWS_ID_Event) as HTMLElement | null;
   if (!rowsWrap) return;
+  const visibleRows = getVisibleSkillRowsEvent(rows);
+  syncSkillWorkbenchToolbarStateEvent(rows);
   if (!rows.length) {
     rowsWrap.innerHTML = `<div class="st-roll-skill-empty">暂无技能，点击“新增技能”开始配置。</div>`;
     syncThemeControlClassesByNodeEvent(rowsWrap);
     applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
     return;
   }
-  rowsWrap.innerHTML = rows
+  if (!visibleRows.length) {
+    rowsWrap.innerHTML = `<div class="st-roll-skill-empty">没有匹配的技能</div>`;
+    syncThemeControlClassesByNodeEvent(rowsWrap);
+    applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
+    return;
+  }
+  rowsWrap.innerHTML = visibleRows
     .map((row) => {
       const rowId = deps.escapeAttrEvent(String(row.rowId ?? ""));
       const skillName = deps.escapeAttrEvent(String(row.skillName ?? ""));
       const modifierText = deps.escapeAttrEvent(String(row.modifierText ?? ""));
+      const checked = SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
       return `
       <div class="st-roll-skill-row" data-row-id="${rowId}">
-        <input
-          class="st-roll-input st-roll-skill-name"
-          type="text"
-          placeholder="例如：察觉"
-          data-skill-row-id="${rowId}"
-          data-skill-field="name"
-          data-tip="技能名称。"
-          value="${skillName}"
-        />
-        <input
-          class="st-roll-input st-roll-skill-modifier"
-          type="text"
-          inputmode="numeric"
-          placeholder="例如：15"
-          data-skill-row-id="${rowId}"
-          data-skill-field="modifier"
-          data-tip="技能加值（整数）。"
-          value="${modifierText}"
-        />
-        <button type="button" class="st-roll-btn secondary st-roll-skill-remove" data-skill-remove-id="${rowId}">
-          删除
-        </button>
+        <div class="st-roll-skill-name-wrap">
+          <input type="checkbox" class="st-roll-skill-row-select" data-skill-select-id="${rowId}" data-tip="选择这条技能"${checked} />
+          ${buildSharedInputField({
+            value: skillName,
+            className: "st-roll-skill-name",
+            attributes: {
+              placeholder: "例如：察觉",
+              "data-skill-row-id": rowId,
+              "data-skill-field": "name",
+              "data-tip": "技能名称。",
+            },
+          })}
+        </div>
+        ${buildSharedInputField({
+          value: modifierText,
+          type: "number",
+          className: "st-roll-skill-modifier",
+          attributes: {
+            inputmode: "numeric",
+            step: 1,
+            placeholder: "例如：15",
+            "data-skill-row-id": rowId,
+            "data-skill-field": "modifier",
+            "data-tip": "技能加值（整数）。",
+          },
+        })}
+        <div class="st-roll-skill-actions-group">
+          ${buildSharedButton({
+            label: "复制",
+            variant: "secondary",
+            iconClassName: "fa-solid fa-copy",
+            className: "st-roll-skill-duplicate st-roll-toolbar-icon-btn",
+            attributes: {
+              "data-skill-duplicate-id": rowId,
+              "data-tip": "复制这条技能",
+            },
+          })}
+          ${buildSharedButton({
+            label: "上移",
+            variant: "secondary",
+            iconClassName: "fa-solid fa-arrow-up",
+            className: "st-roll-skill-move-up st-roll-toolbar-icon-btn",
+            attributes: {
+              "data-skill-move-id": rowId,
+              "data-skill-move-direction": "up",
+              "data-tip": "上移这条技能",
+            },
+          })}
+          ${buildSharedButton({
+            label: "下移",
+            variant: "secondary",
+            iconClassName: "fa-solid fa-arrow-down",
+            className: "st-roll-skill-move-down st-roll-toolbar-icon-btn",
+            attributes: {
+              "data-skill-move-id": rowId,
+              "data-skill-move-direction": "down",
+              "data-tip": "下移这条技能",
+            },
+          })}
+          ${buildSharedButton({
+            label: "删除",
+            variant: "danger",
+            iconClassName: "fa-solid fa-trash",
+            className: "st-roll-skill-remove st-roll-toolbar-icon-btn",
+            attributes: {
+              "data-skill-remove-id": rowId,
+              "data-tip": "删除这条技能",
+            },
+          })}
+        </div>
       </div>
     `;
     })
@@ -2714,7 +3883,9 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
   SETTINGS_TIME_LIMIT_ROW_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
+  SETTINGS_SKILL_MODAL_ID_Event: string;
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
+  SETTINGS_STATUS_MODAL_ID_Event: string;
   SETTINGS_STATUS_ROWS_ID_Event: string;
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
@@ -2732,6 +3903,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const settings = deps.getSettingsEvent();
   const settingsRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event) as HTMLElement | null;
   const themeInput = document.getElementById(deps.SETTINGS_THEME_ID_Event) as HTMLSelectElement | null;
+  ensureThemeSelectSmartOptionEvent(themeInput);
   const enabledInput = document.getElementById(deps.SETTINGS_ENABLED_ID_Event) as HTMLInputElement | null;
   const ruleInput = document.getElementById(deps.SETTINGS_RULE_ID_Event) as HTMLInputElement | null;
   const aiRollModeInput = document.getElementById(
@@ -2787,19 +3959,43 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const skillModal = document.getElementById(deps.SETTINGS_SKILL_MODAL_ID_Event) as HTMLElement | null;
   const statusEditorOpenBtn = document.getElementById(
     deps.SETTINGS_STATUS_EDITOR_OPEN_ID_Event
   ) as HTMLButtonElement | null;
+  const statusModal = document.getElementById(deps.SETTINGS_STATUS_MODAL_ID_Event) as HTMLElement | null;
   const ruleTextInput = document.getElementById(
     deps.SETTINGS_RULE_TEXT_ID_Event
   ) as HTMLTextAreaElement | null;
 
   const normalizedTheme = normalizeSettingsThemeEvent(String(settings.theme || ""));
-  if (themeInput) themeInput.value = normalizedTheme;
-  settingsRoot?.setAttribute("data-st-roll-theme", normalizedTheme);
+  initializeSdkThemeState(normalizedTheme);
+  const sdkThemeState = getSdkThemeState();
+  const sdkThemeSelection = resolveSdkThemeSelection(sdkThemeState);
+  if (themeInput) themeInput.value = sdkThemeSelection;
   const shell = settingsRoot?.querySelector<HTMLElement>(".st-roll-shell");
-  shell?.setAttribute("data-st-roll-theme", normalizedTheme);
-  syncThemeControlClassesEvent(settingsRoot, normalizedTheme);
+  const content = settingsRoot?.querySelector<HTMLElement>(".st-roll-content");
+  if (content) {
+    content.setAttribute("data-st-roll-theme", sdkThemeSelection);
+    settingsRoot?.removeAttribute("data-st-roll-theme");
+    shell?.removeAttribute("data-st-roll-theme");
+  } else {
+    settingsRoot?.setAttribute("data-st-roll-theme", sdkThemeSelection);
+  }
+  skillModal?.setAttribute("data-st-roll-theme", sdkThemeSelection);
+  statusModal?.setAttribute("data-st-roll-theme", sdkThemeSelection);
+  if (content) {
+    applySdkThemeToNode(content, { state: sdkThemeState });
+  }
+  if (skillModal) {
+    applySdkThemeToNode(skillModal, { state: sdkThemeState });
+  }
+  if (statusModal) {
+    applySdkThemeToNode(statusModal, { state: sdkThemeState });
+  }
+  syncThemeControlClassesEvent(content ?? settingsRoot, sdkThemeSelection);
+  syncThemeControlClassesEvent(skillModal, sdkThemeSelection);
+  syncThemeControlClassesEvent(statusModal, sdkThemeSelection);
 
   if (enabledInput) enabledInput.checked = Boolean(settings.enabled);
   if (ruleInput) ruleInput.checked = Boolean(settings.autoSendRuleToAI);
@@ -2889,5 +4085,8 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
       ruleTextInput.value = nextText;
     }
   }
-  syncThemeControlClassesEvent(settingsRoot, normalizedTheme);
+  syncSharedSelects(content ?? settingsRoot ?? document);
+  syncThemeControlClassesEvent(content ?? settingsRoot, sdkThemeSelection);
+  syncThemeControlClassesEvent(skillModal, sdkThemeSelection);
+  syncThemeControlClassesEvent(statusModal, sdkThemeSelection);
 }

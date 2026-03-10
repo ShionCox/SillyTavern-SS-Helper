@@ -32,6 +32,7 @@ export interface SettingsCardTemplateIdsEvent {
   statusEditorOpenId: string;
   statusModalId: string;
   statusModalCloseId: string;
+  statusRefreshId: string;
   statusRowsId: string;
   statusAddId: string;
   statusSaveId: string;

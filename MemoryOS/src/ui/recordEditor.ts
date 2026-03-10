@@ -1,12 +1,38 @@
 import { db } from '../db/db';
 import { logger, toast } from '../index';
+import { applySdkThemeToNode, initializeSdkThemeState } from '../../../SDK/theme';
 
 type TableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
 
+/**
+ * 功能：将发送方文本规范化为界面展示标签。
+ * @param senderType 发送方文本。
+ * @returns 规范化后的标签。
+ */
+function normalizeSenderLabel(senderType: string): 'AI' | '用户' | '系统' {
+    if (senderType === '系统') return '系统';
+    if (senderType === '用户') return '用户';
+    return 'AI';
+}
+
+/**
+ * 功能：根据发送方类型返回对应的徽标样式类名。
+ * @param senderType 发送方类型。
+ * @returns 徽标样式类名。
+ */
+function resolveSenderBadgeClass(senderType: string): string {
+    const normalizedSenderType = normalizeSenderLabel(senderType);
+    if (normalizedSenderType === '系统') return 'is-system';
+    if (normalizedSenderType === '用户') return 'is-user';
+    return 'is-ai';
+}
+
 export async function openRecordEditor() {
+    initializeSdkThemeState();
     // 1. 创建遮罩
     const overlay = document.createElement('div');
     overlay.className = 'stx-record-editor-overlay ui-widget';
+    applySdkThemeToNode(overlay);
 
     // 2. 创建主面板
     const panel = document.createElement('div');
@@ -24,8 +50,8 @@ export async function openRecordEditor() {
                 <i class="fa-solid fa-database"></i>
                 <span>MemoryOS 记录编辑器</span>
             </div>
-            <div style="display:flex; align-items:center; gap:12px;">
-                <button class="stx-re-btn delete" id="stx-re-btn-clear-db" style="border-color:#f44336; color:#f44336; background:rgba(244,67,54,0.1);"><i class="fa-solid fa-radiation"></i> 一键清空数据库</button>
+            <div class="stx-re-header-actions">
+                <button class="stx-re-btn danger" id="stx-re-btn-clear-db"><i class="fa-solid fa-radiation"></i> 一键清空数据库</button>
                 <div class="stx-re-close" id="stx-re-close-btn" title="关闭 (Esc)">
                     <i class="fa-solid fa-xmark"></i>
                 </div>
@@ -60,7 +86,7 @@ export async function openRecordEditor() {
                 <!-- 新增：浮动底部操作栏 -->
                 <div class="stx-re-footer">
                     <div class="stx-re-footer-left">
-                         <button class="stx-re-btn delete" id="stx-re-btn-batch-del" style="display:none">批量删除选中</button>
+                         <button class="stx-re-btn danger is-hidden" id="stx-re-btn-batch-del">批量删除选中</button>
                     </div>
                     <div class="stx-re-footer-right">
                          <div class="stx-re-pending-msg" id="stx-re-pending-msg"><i class="fa-solid fa-triangle-exclamation"></i> 有未保存的修改</div>
@@ -82,6 +108,13 @@ export async function openRecordEditor() {
     const btnBatchDel = panel.querySelector('#stx-re-btn-batch-del') as HTMLButtonElement;
     const pendingMsg = panel.querySelector('#stx-re-pending-msg') as HTMLElement;
     const btnClearDb = panel.querySelector('#stx-re-btn-clear-db') as HTMLButtonElement;
+    const headerActions = closeBtn?.parentElement as HTMLElement | null;
+
+    if (headerActions) {
+        headerActions.className = 'stx-re-header-actions';
+    }
+    btnClearDb?.classList.add('danger');
+    btnBatchDel?.classList.add('danger', 'is-hidden');
 
     if (btnClearDb) {
         btnClearDb.addEventListener('click', async () => {
@@ -386,10 +419,10 @@ export async function openRecordEditor() {
         if (masterCb) masterCb.checked = allChecked;
 
         if (checkedCount > 0) {
-            btnBatchDel.style.display = 'block';
+            btnBatchDel.classList.remove('is-hidden');
             btnBatchDel.textContent = `批量删除选中 (${checkedCount})`;
         } else {
-            btnBatchDel.style.display = 'none';
+            btnBatchDel.classList.add('is-hidden');
         }
     };
 
@@ -421,7 +454,7 @@ export async function openRecordEditor() {
 
             // 更换表的时候，重置排序和隐藏批量按钮
             currentSort = { col: '', asc: false };
-            btnBatchDel.style.display = 'none';
+            btnBatchDel.classList.add('is-hidden');
             renderTable(currentTable);
         });
     });
@@ -538,25 +571,22 @@ export async function openRecordEditor() {
                         let isUser = !!val?.isUser || val?.name === 'You' || val?.name === 'User';
                         let isSystem = val?.role === 'system' || val?.isSystem || val?.name === 'System' || val?.name === '系统';
 
-                        let senderType = 'AI';
-                        let badgeColor = '#10b981'; // Green for AI
+                        let senderType: 'AI' | '用户' | '系统' = 'AI';
 
                         if (isSystem) {
                             senderType = '系统';
-                            badgeColor = '#8b5cf6'; // Purple representing System
                         } else if (isUser || r.type === 'chat.message.sent') {
                             senderType = '用户';
-                            badgeColor = '#3b82f6'; // Blue representing User
                         }
 
                         const senderName = val?.name || '未知';
-                        senderInfo = `<div style="margin-top:4px; font-size:11px; display:flex; align-items:center; gap:4px;"><span style="background:${badgeColor}; color:#fff; padding:1px 4px; border-radius:3px; font-weight:600;">${senderType}</span> <span style="color:#b0bfd8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px;" title="${senderName}">${senderName}</span></div>`;
+                        senderInfo = `<div class="stx-re-sender-info"><span class="stx-re-badge ${resolveSenderBadgeClass(senderType)}">${normalizeSenderLabel(senderType)}</span> <span class="stx-re-sender-name" title="${senderName}">${senderName}</span></div>`;
                     }
 
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><div style="font-weight:700">${translateEventType(r.type)}</div><div class="stx-re-json" style="font-size:10px">${r.eventId}</div>${senderInfo}</td>
+                            <td><div class="stx-re-event-type">${translateEventType(r.type)}</div><div class="stx-re-json compact">${r.eventId}</div>${senderInfo}</td>
                             <td>${new Date(r.ts).toLocaleString()}</td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="object">${renderValueHtml(val, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${id}">编辑</button><button class="stx-re-btn delete" data-id="${id}">删除</button></div></td>
@@ -568,7 +598,7 @@ export async function openRecordEditor() {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><div class="stx-re-json" style="width:120px; overflow:hidden; text-overflow:ellipsis" title="${r.factKey}">${r.factKey}</div></td>
+                            <td><div class="stx-re-json truncate" title="${r.factKey}">${r.factKey}</div></td>
                             <td>${r.entity ? `[${r.entity.kind}:${r.entity.id}]` : '-'}</td>
                             <td>${r.path || '-'}</td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="object">${renderValueHtml(val, false)}</div></td>
@@ -581,7 +611,7 @@ export async function openRecordEditor() {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><div style="font-weight:700">${r.level}</div><div>${r.title || ''}</div></td>
+                            <td><div class="stx-re-event-type">${r.level}</div><div>${r.title || ''}</div></td>
                             <td>${(r.keywords || []).join(', ')}</td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="string">${renderValueHtml(val, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${id}">编辑</button><button class="stx-re-btn delete" data-id="${id}">删除</button></div></td>
@@ -593,7 +623,7 @@ export async function openRecordEditor() {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><div style="font-weight:700">${r.path}</div><div class="stx-re-json">${r.stateKey}</div></td>
+                            <td><div class="stx-re-event-type">${r.path}</div><div class="stx-re-json">${r.stateKey}</div></td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="object">${renderValueHtml(val, false)}</div></td>
                             <td>${new Date(r.updatedAt).toLocaleString()}</td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${id}">编辑</button><button class="stx-re-btn delete" data-id="${id}">删除</button></div></td>
@@ -605,7 +635,7 @@ export async function openRecordEditor() {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${id}" ${cbStatus}></td>
-                            <td><b style="color:#7ca5f5">${r.action}</b></td>
+                            <td><b class="stx-re-accent-text">${r.action}</b></td>
                             <td>${r.actor?.pluginId || 'system'} (${r.actor?.mode || ''})</td>
                             <td><div class="stx-re-value editable" data-id="${id}" data-type="object">${renderValueHtml(val || {}, false)}</div></td>
                             <td>${new Date(r.ts).toLocaleString()}</td>
@@ -801,19 +831,17 @@ export async function openRecordEditor() {
                         // 移除编辑态，恢复展示态
                         editableDiv.classList.remove('is-editing');
                         editableDiv.innerHTML = renderValueHtml(newValue, false);
-                        editableDiv.style.background = '';
-                        editableDiv.style.padding = '0';
-                        editableDiv.style.borderRadius = '0';
+                        
 
                         const btnEl = btn as HTMLButtonElement;
                         btnEl.textContent = '编辑';
-                        btnEl.style.color = '';
-                        btnEl.style.borderColor = '';
+                        btnEl.classList.remove('is-editing');
 
                         return;
                     }
 
                     // 否则，切换为编辑态
+                    
                     const currentData = pendingChanges.updates.get(`${tableName}::${id}`)?.payload ?? data.find(r => {
                         let rId = '';
                         switch (tableName) { case 'events': rId = r.eventId; break; case 'facts': rId = r.factKey; break; case 'summaries': rId = r.summaryId; break; case 'world_state': rId = r.stateKey; break; case 'audit': rId = r.auditId; break; }
@@ -827,18 +855,16 @@ export async function openRecordEditor() {
 
                     editableDiv.classList.add('is-editing');
                     editableDiv.innerHTML = renderValueHtml(currentData, true);
-                    editableDiv.style.background = 'rgba(197, 160, 89, 0.1)';
-                    editableDiv.style.padding = '4px';
-                    editableDiv.style.borderRadius = '4px';
+                    
 
                     const btnEl = btn as HTMLButtonElement;
                     btnEl.textContent = '保存';
-                    btnEl.style.color = '#c5a059';
-                    btnEl.style.borderColor = '#c5a059';
+                    btnEl.classList.add('is-editing');
                 });
             });
 
             // 双击可直接激活编辑
+            
             tableEl.querySelectorAll('.editable').forEach(cell => {
                 cell.addEventListener('dblclick', () => {
                     const editBtn = cell.closest('tr')?.querySelector('.stx-re-btn.edit') as HTMLButtonElement;
@@ -848,7 +874,7 @@ export async function openRecordEditor() {
 
         } catch (error) {
             logger.error(`Render records failed:`, error);
-            contentArea.innerHTML = `<div class="stx-re-empty" style="color:#ff8787">加载失败: ${error}</div>`;
+            contentArea.innerHTML = `<div class="stx-re-empty is-error">加载失败: ${error}</div>`;
         }
     }
 

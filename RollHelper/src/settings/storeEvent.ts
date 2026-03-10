@@ -10,6 +10,14 @@ import type {
   SummaryDetailModeEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
+import { initializeSdkThemeState, resolveSdkThemeSelection } from "../../../SDK/theme";
+import type { SdkTavernScopeLocatorEvent } from "../../../SDK/tavern";
+import {
+  buildTavernChatScopedKeyEvent,
+  getTavernContextSnapshotEvent,
+  isFallbackTavernChatEvent,
+  listTavernChatsForCurrentTavernEvent,
+} from "../../../SDK/tavern";
 import {
   chatMetadata,
   extensionSettings,
@@ -18,15 +26,14 @@ import {
   saveSettingsDebounced,
 } from "../core/runtimeContextEvent";
 import {
-  type ChatScopedStateSummaryEvent,
-  listChatScopedStateSummariesEvent,
-  loadChatScopedState,
-  loadStatusesByChatKeyEvent,
-  resolveChatKey,
-  saveSkillStore,
-  saveStatuses,
-  saveStatusesByChatKeyEvent,
-} from "../persistence/chatScopedStoreEvent";
+  type ChatScopedLocatorV2Event,
+  type ChatScopedStateSummaryV2Event,
+  listChatScopedStateSummariesForTavernV2Event,
+  loadChatScopedStateV2ByKeyEvent,
+  loadStatusesByChatScopedKeyV2Event,
+  saveSkillStoreByChatScopedKeyV2Event,
+  saveStatusesByChatScopedKeyV2Event,
+} from "../persistence/chatScopedStoreV2Event";
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
@@ -55,24 +62,70 @@ export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
 }
 
 let ACTIVE_CHAT_KEY_Event = "";
+let ACTIVE_CHAT_SCOPE_Event: SdkTavernScopeLocatorEvent | null = null;
 let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
 
-function resolveCurrentChatKeyEvent(): string {
-  const key = resolveChatKey(getLiveContextEvent());
-  ACTIVE_CHAT_KEY_Event = key;
-  return key;
+/**
+ * 功能：把 SDK 作用域定位转换为 V2 存储定位。
+ * @param scope SDK 作用域定位
+ * @returns V2 定位结构
+ */
+function toV2LocatorEvent(scope: SdkTavernScopeLocatorEvent): ChatScopedLocatorV2Event {
+  return {
+    tavernInstanceId: scope.tavernInstanceId,
+    scopeType: scope.scopeType,
+    scopeId: scope.scopeId,
+    roleKey: scope.roleKey,
+    roleId: scope.roleId,
+    chatId: scope.currentChatId,
+    displayName: scope.displayName,
+    avatarUrl: scope.avatarUrl,
+  };
 }
 
+/**
+ * 功能：解析当前聊天的结构化主键。
+ * @returns 当前聊天主键
+ */
+function resolveCurrentChatKeyEvent(): string {
+  const scope = getTavernContextSnapshotEvent();
+  if (!scope) {
+    ACTIVE_CHAT_SCOPE_Event = null;
+    ACTIVE_CHAT_KEY_Event = "";
+    return "";
+  }
+  ACTIVE_CHAT_SCOPE_Event = scope;
+  ACTIVE_CHAT_KEY_Event = buildTavernChatScopedKeyEvent({
+    ...scope,
+    chatId: scope.currentChatId,
+  });
+  return ACTIVE_CHAT_KEY_Event;
+}
+
+/**
+ * 功能：将技能预设写入当前聊天级存储。
+ * @param skillPresetStoreText 技能预设文本
+ * @returns 无返回值
+ */
 function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string): void {
   const chatKey = resolveCurrentChatKeyEvent();
-  void saveSkillStore(chatKey, skillPresetStoreText).catch((error) => {
+  if (!chatKey) return;
+  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
+  void saveSkillStoreByChatScopedKeyV2Event(chatKey, skillPresetStoreText, locatorHint).catch((error) => {
     logger.warn(`聊天级技能持久化失败，chatKey=${chatKey}`, error);
   });
 }
 
+/**
+ * 功能：将状态列表写入当前聊天级存储。
+ * @param statuses 状态列表
+ * @returns 无返回值
+ */
 function persistStatusesToChatScopedEvent(statuses: ActiveStatusEvent[]): void {
   const chatKey = resolveCurrentChatKeyEvent();
-  void saveStatuses(chatKey, statuses).catch((error) => {
+  if (!chatKey) return;
+  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
+  void saveStatusesByChatScopedKeyV2Event(chatKey, statuses, locatorHint).catch((error) => {
     logger.warn(`聊天级状态持久化失败，chatKey=${chatKey}`, error);
   });
 }
@@ -86,33 +139,87 @@ export interface ChatScopedStatusSummaryEvent {
   chatKey: string;
   updatedAt: number;
   activeStatusCount: number;
+  chatId: string;
+  displayName: string;
+  avatarUrl: string;
+  scopeType: "character" | "group";
+  scopeId: string;
+  roleKey: string;
+}
+
+export interface HostChatListItemEvent {
+  chatKey: string;
+  updatedAt: number;
+  chatId: string;
+  displayName: string;
+  avatarUrl: string;
+  scopeType: "character" | "group";
+  scopeId: string;
+  roleKey: string;
 }
 
 export async function listChatScopedStatusSummariesEvent(): Promise<ChatScopedStatusSummaryEvent[]> {
-  const list = (await listChatScopedStateSummariesEvent()) as ChatScopedStateSummaryEvent[];
+  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
+  if (!scope) return [];
+  ACTIVE_CHAT_SCOPE_Event = scope;
+  const list = (await listChatScopedStateSummariesForTavernV2Event(scope.tavernInstanceId)) as ChatScopedStateSummaryV2Event[];
   return list.map((item) => ({
-    chatKey: String(item.chatKey ?? "").trim(),
+    chatKey: String(item.chatScopedKey ?? "").trim(),
     updatedAt: Number(item.updatedAt) || 0,
     activeStatusCount: Number(item.activeStatusCount) || 0,
+    chatId: String(item.chatId ?? "").trim(),
+    displayName: String(item.displayName ?? "").trim(),
+    avatarUrl: String(item.avatarUrl ?? "").trim(),
+    scopeType: item.scopeType === "group" ? "group" : "character",
+    scopeId: String(item.scopeId ?? "").trim(),
+    roleKey: String(item.roleKey ?? "").trim(),
   }));
 }
 
+/**
+ * 功能：列出当前酒馆下的宿主真实聊天列表。
+ * @returns 聊天列表
+ */
+export async function listHostChatsForCurrentScopeEvent(): Promise<HostChatListItemEvent[]> {
+  const hostList = await listTavernChatsForCurrentTavernEvent();
+  return hostList
+    .map((item) => ({
+      chatKey: buildTavernChatScopedKeyEvent(item.locator),
+      updatedAt: Number(item.updatedAt) || 0,
+      chatId: String(item.locator.chatId ?? "").trim(),
+      displayName: String(item.locator.displayName ?? "").trim(),
+      avatarUrl: String(item.locator.avatarUrl ?? "").trim(),
+      scopeType: item.locator.scopeType === "group" ? "group" : "character",
+      scopeId: String(item.locator.scopeId ?? "").trim(),
+      roleKey: String(item.locator.roleKey ?? "").trim(),
+    }))
+    .filter((item) => item.chatKey && !isFallbackTavernChatEvent(item.chatId));
+}
+
 export async function loadStatusesForChatKeyEvent(chatKey: string): Promise<ActiveStatusEvent[]> {
-  return normalizeActiveStatusesFromEvent(await loadStatusesByChatKeyEvent(chatKey));
+  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
+  return normalizeActiveStatusesFromEvent(
+    await loadStatusesByChatScopedKeyV2Event(chatKey, locatorHint)
+  );
 }
 
 export async function saveStatusesForChatKeyEvent(
   chatKey: string,
   statuses: ActiveStatusEvent[]
 ): Promise<void> {
-  await saveStatusesByChatKeyEvent(chatKey, normalizeActiveStatusesFromEvent(statuses));
+  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
+  await saveStatusesByChatScopedKeyV2Event(chatKey, normalizeActiveStatusesFromEvent(statuses), locatorHint);
 }
 
 export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {
   const token = ++CHAT_SCOPED_LOAD_TOKEN_Event;
   const chatKey = resolveCurrentChatKeyEvent();
+  if (!chatKey) return;
   try {
-    const state = await loadChatScopedState(chatKey);
+    const state = await loadChatScopedStateV2ByKeyEvent(
+      chatKey,
+      ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined
+    );
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
     const settings = getSettingsEvent();
@@ -249,9 +356,12 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
       : DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText;
   const rawTheme = String((bucket as any).theme || "").toLowerCase();
   bucket.theme =
-    rawTheme === "dark" || rawTheme === "light" || rawTheme === "tavern"
+    rawTheme === "dark" ||
+    rawTheme === "light" ||
+    rawTheme === "tavern" ||
+    rawTheme === "smart"
       ? (rawTheme as RollHelperSettingsThemeEvent)
-      : "default";
+      : resolveSdkThemeSelection(initializeSdkThemeState("default"));
   bucket.enableOutcomeBranches = bucket.enableOutcomeBranches !== false;
   bucket.enableExplodeOutcomeBranch = bucket.enableExplodeOutcomeBranch !== false;
   bucket.includeOutcomeInSummary = bucket.includeOutcomeInSummary !== false;

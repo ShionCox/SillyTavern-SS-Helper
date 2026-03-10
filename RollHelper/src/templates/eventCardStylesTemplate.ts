@@ -42,10 +42,19 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
     }
     .st-rh-collapse-summary-result {
       margin-bottom: 2px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 14px;
     }
     .st-rh-summary-main {
       min-width: 0;
       flex: 1;
+    }
+    .st-rh-summary-main-result {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
     }
     .st-rh-collapse-title-row {
       display: flex;
@@ -117,6 +126,13 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       gap: 8px;
       flex-shrink: 0;
     }
+    .st-rh-summary-actions-result {
+      min-width: 104px;
+      align-self: stretch;
+      justify-content: center;
+      padding-left: 8px;
+      border-left: 1px solid rgba(197, 160, 89, 0.18);
+    }
     .st-rh-summary-dice {
       display: inline-flex;
       align-items: center;
@@ -133,6 +149,24 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       display: block;
       width: 48px;
       height: 48px;
+    }
+    .st-rh-summary-dice-large {
+      min-width: 76px;
+      min-height: 76px;
+      padding: 4px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(18, 12, 9, 0.92), rgba(0, 0, 0, 0.28));
+      box-shadow: inset 0 1px 0 rgba(255, 223, 163, 0.12), 0 10px 20px rgba(0, 0, 0, 0.28);
+    }
+    .st-rh-summary-dice-large svg {
+      width: 66px;
+      height: 66px;
+    }
+    .st-rh-summary-footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      margin-top: 10px;
     }
     .st-rh-summary-toggle-state {
       display: inline-flex;
@@ -613,11 +647,14 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
     @media (max-width: 768px) {
       .st-rh-event-board,
       .st-rh-result-card {
-        padding: 12px;
+        padding: 10px;
       }
       .st-rh-board-head {
         flex-direction: column;
         align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
       }
       .st-rh-board-id {
         max-width: 100%;
@@ -627,39 +664,80 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         width: 100%;
       }
       .st-rh-event-item {
-        padding: 12px;
+        padding: 10px;
+        margin-bottom: 12px;
       }
       .st-rh-collapse-summary {
-        flex-direction: column;
+        gap: 7px;
+        padding: 8px 9px;
+        border-radius: 9px;
+      }
+      .st-rh-collapse-summary-result {
+        grid-template-columns: minmax(0, 1fr) 86px;
         align-items: stretch;
-        gap: 9px;
+        gap: 10px;
       }
       .st-rh-summary-title {
-        font-size: 14px;
+        font-size: 13px;
+        line-height: 1.35;
       }
       .st-rh-summary-id {
         max-width: 100%;
+        font-size: 10px;
+      }
+      .st-rh-summary-meta-row {
+        gap: 5px;
+        margin-top: 5px;
+      }
+      .st-rh-summary-chip,
+      .st-rh-summary-pill {
+        padding: 2px 7px;
+        min-height: 24px;
+        font-size: 10px;
       }
       .st-rh-summary-actions {
         width: 100%;
         justify-content: space-between;
+        gap: 6px;
+      }
+      .st-rh-summary-actions-result {
+        width: auto;
+        min-width: 86px;
+        padding-left: 6px;
       }
       .st-rh-summary-dice {
-        min-width: 48px;
-        min-height: 48px;
+        min-width: 42px;
+        min-height: 42px;
+        padding: 1px;
+        border-radius: 8px;
       }
       .st-rh-summary-dice svg {
-        width: 42px;
-        height: 42px;
+        width: 36px;
+        height: 36px;
+      }
+      .st-rh-summary-dice-large {
+        min-width: 68px;
+        min-height: 68px;
+        padding: 3px;
+      }
+      .st-rh-summary-dice-large svg {
+        width: 58px;
+        height: 58px;
       }
       .st-rh-runtime-inline {
         flex: 1 1 auto;
       }
       .st-rh-summary-toggle-state {
-        margin-left: auto;
+        min-height: 28px;
+        padding: 4px 10px;
+        font-size: 11px;
+        letter-spacing: 0.4px;
+      }
+      .st-rh-summary-footer-row {
+        margin-top: 8px;
       }
       .st-rh-event-title {
-        font-size: 16px;
+        font-size: 15px;
       }
       .st-rh-event-id {
         max-width: 100%;
@@ -667,6 +745,9 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       .st-rh-event-footer {
         flex-direction: column;
         justify-content: center;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 10px;
       }
       .st-rh-command {
         text-align: center;
@@ -674,21 +755,49 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       .st-rh-roll-btn {
         width: auto;
         max-width: 220px;
+        min-height: 30px;
+        padding: 5px 11px;
+        font-size: 11px;
+      }
+      .st-rh-card-details-body {
+        margin-top: 8px;
+      }
+      .st-rh-result-details .st-rh-result-head {
+        margin-bottom: 8px;
+      }
+      .st-rh-result-head {
+        gap: 6px;
+        padding-bottom: 8px;
       }
       .st-rh-result-title {
-        font-size: 18px;
+        margin-bottom: 8px;
+        font-size: 16px;
       }
       .st-rh-meta-grid {
-        grid-template-columns: 1fr;
-        gap: 4px;
+        grid-template-columns: 66px minmax(0, 1fr);
+        gap: 5px 8px;
+        padding: 9px 10px;
+        font-size: 11px;
+        line-height: 1.4;
       }
       .st-rh-meta-label {
         text-align: left;
-        margin-top: 8px;
+        margin-top: 0;
+        white-space: normal;
+        font-size: 10px;
+        line-height: 1.35;
+      }
+      .st-rh-meta-value {
+        min-width: 0;
+        font-size: 11px;
+        line-height: 1.45;
       }
       .st-rh-result-main {
         grid-template-columns: 1fr;
         text-align: center;
+        gap: 8px;
+        margin-top: 10px;
+        padding: 10px;
       }
       .st-rh-result-main-left,
       .st-rh-result-main-center,
@@ -696,18 +805,112 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
         justify-self: center;
         text-align: center;
       }
+      .st-rh-result-kicker {
+        margin-bottom: 2px;
+        font-size: 10px;
+      }
+      .st-rh-result-status {
+        font-size: 14px;
+      }
+      .st-rh-outcome-box {
+        margin-top: 8px;
+        padding: 8px 9px;
+      }
+      .st-rh-outcome-label {
+        margin-bottom: 4px;
+      }
+      .st-rh-outcome-text,
+      .st-rh-outcome-status-change,
+      .st-rh-outcome-status-current {
+        line-height: 1.5;
+      }
       .st-rh-time-limit {
         text-align: center;
+        margin-top: 8px;
       }
     }
 
     @media (max-width: 430px) {
+      .st-rh-event-board,
+      .st-rh-result-card {
+        padding: 8px;
+        border-radius: 10px;
+      }
       .st-rh-board-title {
-        font-size: 15px;
+        font-size: 14px;
+        letter-spacing: 1px;
+      }
+      .st-rh-collapse-summary {
+        gap: 6px;
+        padding: 7px 8px;
+      }
+      .st-rh-collapse-summary-result {
+        grid-template-columns: minmax(0, 1fr) 76px;
+        gap: 8px;
+      }
+      .st-rh-collapse-title-row {
+        gap: 6px;
+      }
+      .st-rh-summary-title {
+        font-size: 12px;
+      }
+      .st-rh-summary-id {
+        font-size: 9px;
+      }
+      .st-rh-summary-meta-row {
+        gap: 4px;
+        margin-top: 4px;
+      }
+      .st-rh-summary-chip,
+      .st-rh-summary-pill {
+        padding: 2px 6px;
+        min-height: 22px;
+        border-radius: 999px;
+      }
+      .st-rh-summary-actions {
+        align-items: center;
+      }
+      .st-rh-summary-actions-result {
+        min-width: 76px;
+        padding-left: 4px;
+      }
+      .st-rh-summary-dice {
+        min-width: 38px;
+        min-height: 38px;
+      }
+      .st-rh-summary-dice svg {
+        width: 32px;
+        height: 32px;
+      }
+      .st-rh-summary-dice-large {
+        min-width: 60px;
+        min-height: 60px;
+        padding: 2px;
+        border-radius: 10px;
+      }
+      .st-rh-summary-dice-large svg {
+        width: 52px;
+        height: 52px;
+      }
+      .st-rh-summary-toggle-state {
+        min-height: 26px;
+        padding: 4px 8px;
+        font-size: 10px;
+      }
+      .st-rh-result-heading {
+        font-size: 14px;
+      }
+      .st-rh-result-id {
+        font-size: 10px;
+      }
+      .st-rh-result-title {
+        margin-bottom: 7px;
+        font-size: 14px;
       }
       .st-rh-event-desc,
       .st-rh-outcome-text {
-        font-size: 12px;
+        font-size: 11px;
+        line-height: 1.45;
       }
       .st-rh-outcome-status-change {
         font-size: 11px;
@@ -715,15 +918,34 @@ export function buildEventCardsSharedStylesTemplateEvent(): string {
       .st-rh-outcome-status-current {
         font-size: 11px;
       }
+      .st-rh-meta-grid {
+        grid-template-columns: 58px minmax(0, 1fr);
+        gap: 4px 7px;
+        padding: 8px;
+      }
       .st-rh-chip {
         font-size: 10px;
-        padding: 3px 7px;
+        padding: 2px 6px;
+      }
+      .st-rh-meta-label {
+        font-size: 9px;
+      }
+      .st-rh-meta-value {
+        font-size: 10.5px;
+      }
+      .st-rh-result-main {
+        gap: 6px;
+        margin-top: 8px;
+        padding: 8px;
       }
       .st-rh-result-status {
-        font-size: 15px;
+        font-size: 13px;
       }
-      .st-rh-summary-chip,
-      .st-rh-summary-pill {
+      .st-rh-outcome-box {
+        margin-top: 7px;
+        padding: 7px 8px;
+      }
+      .st-rh-time-limit {
         font-size: 10px;
       }
     }

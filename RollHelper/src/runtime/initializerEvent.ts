@@ -25,7 +25,7 @@ export function initializeEventRuntimeEvent(attempt = 0): void {
   registerDebugCommandEvent();
   registerEventHooksEvent();
   void loadChatScopedStateIntoRuntimeEvent("init_runtime").catch((error) => {
-    logger.warn("\u521d\u59cb\u5316\u804a\u5929\u7ea7\u72b6\u6001\u5931\u8d25", error);
+    logger.warn("初始化聊天级状态失败", error);
   });
   startCountdownTickerEvent();
   sweepTimeoutFailuresEvent();

@@ -1,4 +1,8 @@
 import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
+import { buildSharedButtonStyles } from "../../../_Components/sharedButton";
+import { buildSharedInputStyles } from "../../../_Components/sharedInput";
+import { buildSharedSelectStyles } from "../../../_Components/sharedSelect";
+import { buildSdkThemeVars } from "../../../SDK/theme";
 
 export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
   return `
@@ -52,6 +56,13 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         0 0 14px rgba(197, 160, 89, 0.2);
       --st-roll-btn-secondary-bg: rgba(255, 255, 255, 0.08);
       --st-roll-btn-secondary-border: rgba(255, 255, 255, 0.2);
+      --st-roll-btn-danger-bg: rgba(154, 62, 49, 0.16);
+      --st-roll-btn-danger-border: rgba(214, 104, 85, 0.52);
+      --st-roll-btn-danger-hover-bg: rgba(179, 70, 53, 0.26);
+      --st-roll-btn-danger-hover-border: rgba(230, 123, 101, 0.72);
+      --st-roll-btn-danger-hover-shadow:
+        inset 0 0 0 1px rgba(230, 123, 101, 0.2),
+        0 0 14px rgba(179, 70, 53, 0.24);
       --st-roll-textarea-wrap-bg: rgba(0, 0, 0, 0.15);
       --st-roll-textarea-wrap-border: rgba(255, 255, 255, 0.18);
       --st-roll-textarea-wrap-hover-border: rgba(197, 160, 89, 0.45);
@@ -76,11 +87,22 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: rgba(197, 160, 89, 0.24);
       --st-roll-list-item-active-border: rgba(197, 160, 89, 0.74);
       --st-roll-list-item-active-shadow: 0 0 0 1px rgba(197, 160, 89, 0.24);
+      --st-roll-select-panel-bg: rgba(17, 14, 16, 0.8);
+      --st-roll-workbench-bg: rgba(0, 0, 0, 0.18);
+      --st-roll-workbench-panel-bg: rgba(255, 255, 255, 0.03);
+      --st-roll-workbench-panel-border: rgba(255, 255, 255, 0.12);
+      --st-roll-workbench-toolbar-bg: rgba(0, 0, 0, 0.18);
+      --st-roll-workbench-accent: rgba(197, 160, 89, 0.18);
+      --st-roll-workbench-muted: rgba(255, 255, 255, 0.66);
       --st-roll-dialog-backdrop: rgba(0, 0, 0, 0.72);
       --st-roll-dialog-backdrop-filter: blur(2px);
     }
 
-    #${cardId}[data-st-roll-theme="dark"] {
+    ${buildSdkThemeVars(`#${cardId} .st-roll-content, #${cardId} .st-roll-skill-modal, #${cardId} .st-roll-status-modal`)}
+
+    #${cardId} .st-roll-content[data-st-roll-theme="dark"],
+    #${cardId} .st-roll-skill-modal[data-st-roll-theme="dark"],
+    #${cardId} .st-roll-status-modal[data-st-roll-theme="dark"] {
       --st-roll-text: #e6edf7;
       --st-roll-text-muted: #a5b0c4;
       --st-roll-accent: #5f8de5;
@@ -114,6 +136,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-btn-hover-shadow: none;
       --st-roll-btn-secondary-bg: #202d43;
       --st-roll-btn-secondary-border: #40526f;
+      --st-roll-btn-danger-bg: #4b262a;
+      --st-roll-btn-danger-border: #8e4a54;
+      --st-roll-btn-danger-hover-bg: #5b3034;
+      --st-roll-btn-danger-hover-border: #b76571;
+      --st-roll-btn-danger-hover-shadow: none;
       --st-roll-textarea-wrap-bg: #1d283b;
       --st-roll-textarea-wrap-border: #3a4861;
       --st-roll-textarea-wrap-hover-border: #536d9d;
@@ -136,11 +163,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: #334766;
       --st-roll-list-item-active-border: #6180bd;
       --st-roll-list-item-active-shadow: none;
+      --st-roll-select-panel-bg: rgba(19, 28, 43, 0.96);
+      --st-roll-workbench-bg: #182233;
+      --st-roll-workbench-panel-bg: #1f2a3d;
+      --st-roll-workbench-panel-border: #344157;
+      --st-roll-workbench-toolbar-bg: #202c40;
+      --st-roll-workbench-accent: rgba(95, 141, 229, 0.2);
+      --st-roll-workbench-muted: #a5b0c4;
       --st-roll-dialog-backdrop: #0f1520;
       --st-roll-dialog-backdrop-filter: none;
     }
 
-    #${cardId}[data-st-roll-theme="light"] {
+    #${cardId} .st-roll-content[data-st-roll-theme="light"],
+    #${cardId} .st-roll-skill-modal[data-st-roll-theme="light"],
+    #${cardId} .st-roll-status-modal[data-st-roll-theme="light"] {
       --st-roll-text: #1f2834;
       --st-roll-text-muted: #5e6e84;
       --st-roll-accent: #2f6ee5;
@@ -174,6 +210,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-btn-hover-shadow: none;
       --st-roll-btn-secondary-bg: #f1f5fc;
       --st-roll-btn-secondary-border: #c1d0e6;
+      --st-roll-btn-danger-bg: #fff0ed;
+      --st-roll-btn-danger-border: #d7a39b;
+      --st-roll-btn-danger-hover-bg: #ffe2dc;
+      --st-roll-btn-danger-hover-border: #cb857a;
+      --st-roll-btn-danger-hover-shadow: none;
       --st-roll-textarea-wrap-bg: #ffffff;
       --st-roll-textarea-wrap-border: #cfdbec;
       --st-roll-textarea-wrap-hover-border: #9cb7df;
@@ -196,11 +237,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: #d8e6ff;
       --st-roll-list-item-active-border: #7e9fd5;
       --st-roll-list-item-active-shadow: none;
+      --st-roll-select-panel-bg: rgba(245, 249, 255, 0.95);
+      --st-roll-workbench-bg: #eef3fa;
+      --st-roll-workbench-panel-bg: #ffffff;
+      --st-roll-workbench-panel-border: #cfdbec;
+      --st-roll-workbench-toolbar-bg: #eef3fa;
+      --st-roll-workbench-accent: rgba(47, 110, 229, 0.12);
+      --st-roll-workbench-muted: #5e6e84;
       --st-roll-dialog-backdrop: #d9e1ee;
       --st-roll-dialog-backdrop-filter: none;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"],
+    #${cardId} .st-roll-skill-modal[data-st-roll-theme="tavern"],
+    #${cardId} .st-roll-status-modal[data-st-roll-theme="tavern"] {
       --st-roll-text: var(--SmartThemeBodyColor, #dcdcd2);
       --st-roll-text-muted: var(--SmartThemeEmColor, #919191);
       --st-roll-accent: var(--SmartThemeQuoteColor, #e18a24);
@@ -235,6 +285,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-btn-hover-shadow: none;
       --st-roll-btn-secondary-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, var(--SmartThemeBodyColor, #dcdcd2) 15%);
       --st-roll-btn-secondary-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-btn-danger-bg: color-mix(in srgb, #8f2f1f 32%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-btn-danger-border: color-mix(in srgb, #cf6c4d 62%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-btn-danger-hover-bg: color-mix(in srgb, #b54833 40%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
+      --st-roll-btn-danger-hover-border: color-mix(in srgb, #e28a66 74%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --st-roll-btn-danger-hover-shadow: none;
       --st-roll-textarea-wrap-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
       --st-roll-textarea-wrap-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
       --st-roll-textarea-wrap-hover-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 50%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
@@ -257,8 +312,77 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
       --st-roll-list-item-active-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 70%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
       --st-roll-list-item-active-shadow: none;
+      --st-roll-select-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 92%, #000 8%);
+      --st-roll-workbench-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
+      --st-roll-workbench-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 92%, #000 8%);
+      --st-roll-workbench-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-workbench-toolbar-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 82%, var(--SmartThemeBodyColor, #dcdcd2) 18%);
+      --st-roll-workbench-accent: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 22%, transparent);
+      --st-roll-workbench-muted: var(--SmartThemeEmColor, #919191);
       --st-roll-dialog-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, #000 15%);
       --st-roll-dialog-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
+    }
+
+    #${cardId} .st-roll-content,
+    #${cardId} .st-roll-skill-modal,
+    #${cardId} .st-roll-status-modal {
+      color: var(--stx-theme-text, var(--st-roll-text, inherit));
+      --st-roll-text: var(--stx-theme-text, var(--st-roll-text, inherit));
+      --st-roll-text-muted: var(--stx-theme-text-muted, var(--st-roll-text-muted, rgba(255, 255, 255, 0.72)));
+      --st-roll-accent: var(--stx-theme-accent, var(--st-roll-accent, #c5a059));
+      --st-roll-accent-contrast: var(--stx-theme-accent-contrast, var(--st-roll-accent-contrast, #ffeac0));
+      --st-roll-shell-border: var(--stx-theme-border, var(--st-roll-shell-border, rgba(197, 160, 89, 0.35)));
+      --st-roll-shell-bg: var(--stx-theme-surface-1, var(--st-roll-shell-bg));
+      --st-roll-content-bg: var(--stx-theme-surface-2, var(--st-roll-content-bg));
+      --st-roll-content-border: var(--stx-theme-border, var(--st-roll-content-border, rgba(255, 255, 255, 0.08)));
+      --st-roll-tabs-bg: var(--stx-theme-surface-2, var(--st-roll-tabs-bg));
+      --st-roll-tabs-border: var(--stx-theme-border, var(--st-roll-tabs-border, rgba(255, 255, 255, 0.16)));
+      --st-roll-tab-active-bg: var(--stx-theme-list-item-active-bg, var(--st-roll-tab-active-bg));
+      --st-roll-tab-hover-bg: var(--stx-theme-list-item-hover-bg, var(--st-roll-tab-hover-bg));
+      --st-roll-item-bg: var(--stx-theme-surface-2, var(--st-roll-item-bg));
+      --st-roll-item-border: var(--stx-theme-border, var(--st-roll-item-border));
+      --st-roll-item-hover-bg: var(--stx-theme-list-item-hover-bg, var(--st-roll-item-hover-bg));
+      --st-roll-item-hover-border: var(--stx-theme-border-strong, var(--st-roll-item-hover-border));
+      --st-roll-control-bg: var(--stx-theme-surface-2, var(--st-roll-control-bg));
+      --st-roll-control-bg-hover: var(--stx-theme-surface-3, var(--st-roll-control-bg-hover));
+      --st-roll-control-border: var(--stx-theme-border, var(--st-roll-control-border));
+      --st-roll-control-border-hover: var(--stx-theme-border-strong, var(--st-roll-control-border-hover));
+      --st-roll-control-focus-border: var(--stx-theme-border-strong, var(--st-roll-control-focus-border));
+      --st-roll-control-focus-ring: var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring));
+      --st-roll-btn-bg: var(--stx-theme-surface-3, var(--st-roll-btn-bg));
+      --st-roll-btn-border: var(--stx-theme-border, var(--st-roll-btn-border));
+      --st-roll-btn-hover-bg: var(--stx-theme-list-item-hover-bg, var(--st-roll-btn-hover-bg));
+      --st-roll-btn-hover-border: var(--stx-theme-border-strong, var(--st-roll-btn-hover-border));
+      --st-roll-btn-secondary-bg: var(--stx-theme-surface-2, var(--st-roll-btn-secondary-bg));
+      --st-roll-btn-secondary-border: var(--stx-theme-border, var(--st-roll-btn-secondary-border));
+      --st-roll-textarea-wrap-bg: var(--stx-theme-surface-2, var(--st-roll-textarea-wrap-bg));
+      --st-roll-textarea-wrap-border: var(--stx-theme-border, var(--st-roll-textarea-wrap-border));
+      --st-roll-panel-muted-bg: var(--stx-theme-surface-2, var(--st-roll-panel-muted-bg));
+      --st-roll-panel-muted-border: var(--stx-theme-border, var(--st-roll-panel-muted-border));
+      --st-roll-modal-panel-bg: var(--stx-theme-panel-bg, var(--st-roll-modal-panel-bg));
+      --st-roll-modal-panel-border: var(--stx-theme-panel-border, var(--st-roll-modal-panel-border));
+      --st-roll-modal-panel-shadow: var(--stx-theme-panel-shadow, var(--st-roll-modal-panel-shadow));
+      --st-roll-modal-head-bg: var(--stx-theme-toolbar-bg, var(--st-roll-modal-head-bg));
+      --st-roll-modal-head-border: var(--stx-theme-border, var(--st-roll-modal-head-border));
+      --st-roll-sidebar-bg: var(--stx-theme-surface-2, var(--st-roll-sidebar-bg));
+      --st-roll-sidebar-head-bg: var(--stx-theme-toolbar-bg, var(--st-roll-sidebar-head-bg));
+      --st-roll-layout-bg: var(--stx-theme-surface-2, var(--st-roll-layout-bg));
+      --st-roll-layout-border: var(--stx-theme-border, var(--st-roll-layout-border));
+      --st-roll-list-item-bg: var(--stx-theme-list-item-bg, var(--st-roll-list-item-bg));
+      --st-roll-list-item-border: var(--stx-theme-border, var(--st-roll-list-item-border));
+      --st-roll-list-item-hover-bg: var(--stx-theme-list-item-hover-bg, var(--st-roll-list-item-hover-bg));
+      --st-roll-list-item-hover-border: var(--stx-theme-border-strong, var(--st-roll-list-item-hover-border));
+      --st-roll-list-item-active-bg: var(--stx-theme-list-item-active-bg, var(--st-roll-list-item-active-bg));
+      --st-roll-list-item-active-border: var(--stx-theme-border-strong, var(--st-roll-list-item-active-border));
+      --st-roll-select-panel-bg: var(--stx-theme-panel-bg, var(--st-roll-select-panel-bg));
+      --st-roll-workbench-bg: var(--stx-theme-surface-2, var(--st-roll-workbench-bg));
+      --st-roll-workbench-panel-bg: var(--stx-theme-surface-3, var(--st-roll-workbench-panel-bg));
+      --st-roll-workbench-panel-border: var(--stx-theme-border, var(--st-roll-workbench-panel-border));
+      --st-roll-workbench-toolbar-bg: var(--stx-theme-toolbar-bg, var(--st-roll-workbench-toolbar-bg));
+      --st-roll-workbench-accent: var(--stx-theme-list-item-hover-bg, var(--st-roll-workbench-accent));
+      --st-roll-workbench-muted: var(--stx-theme-text-muted, var(--st-roll-workbench-muted));
+      --st-roll-dialog-backdrop: var(--stx-theme-backdrop, var(--st-roll-dialog-backdrop));
+      --st-roll-dialog-backdrop-filter: var(--stx-theme-backdrop-filter, var(--st-roll-dialog-backdrop-filter));
     }
 
     #${cardId} .st-roll-shell {
@@ -305,6 +429,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       border-top: 1px solid rgba(255, 255, 255, 0.08);
       padding: 10px;
       display: block;
+      color: var(--st-roll-text);
     }
 
     #${cardId} .st-roll-filters {
@@ -480,9 +605,17 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       min-width: 200px;
     }
 
-    #${cardId} .st-roll-select,
-    #${cardId} .st-roll-input,
-    #${cardId} .st-roll-textarea {
+    #${cardId} .st-roll-shared-select {
+      flex: 0 1 220px;
+    }
+
+    #${cardId} .st-roll-status-row .stx-shared-select,
+    #${cardId} .st-roll-status-scope-select {
+      width: 100%;
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-select {
       background: rgba(0, 0, 0, 0.28);
       color: inherit;
       border: 1px solid rgba(197, 160, 89, 0.36);
@@ -494,8 +627,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         background-color 0.2s ease;
     }
 
-    #${cardId} .st-roll-select,
-    #${cardId} .st-roll-input {
+    #${cardId} .st-roll-select {
       padding: 4px 8px;
       min-height: 30px;
     }
@@ -503,25 +635,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-select {
       min-width: 182px;
       max-width: 100%;
-      text-align: center;
-      text-align-last: center;
-      appearance: none;
-      -webkit-appearance: none;
-      -moz-appearance: none;
-      padding-right: 32px;
-      background-image:
-        linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.75) 50%),
-        linear-gradient(135deg, rgba(255, 255, 255, 0.75) 50%, transparent 50%),
-        linear-gradient(to right, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.05));
-      background-position:
-        calc(100% - 16px) calc(50% - 1px),
-        calc(100% - 11px) calc(50% - 1px),
-        calc(100% - 30px) 50%;
-      background-size: 6px 6px, 6px 6px, 1px 62%;
-      background-repeat: no-repeat;
-    }
-
-    #${cardId} .st-roll-select option {
       text-align: left;
     }
 
@@ -572,15 +685,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     }
 
-    #${cardId} .st-roll-textarea {
-      width: 100%;
-      resize: vertical;
-      padding: 8px;
-      font-size: 12px;
-      line-height: 1.5;
-      min-height: 220px;
-    }
-
     #${cardId} .st-roll-changelog {
       width: 100%;
       font-size: 12px;
@@ -622,12 +726,12 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-skill-cols {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) 130px 76px;
-      gap: 8px;
+      grid-template-columns: minmax(280px, 1fr) 84px 124px;
+      gap: 10px;
       font-size: 12px;
       font-weight: 700;
       opacity: 0.72;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       padding: 0 2px;
     }
 
@@ -639,14 +743,14 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-skill-rows {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
     }
 
     #${cardId} .st-roll-skill-row {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) 130px 76px;
-      gap: 8px;
-      align-items: center;
+      grid-template-columns: minmax(280px, 1fr) 84px 124px;
+      gap: 10px;
+      align-items: stretch;
     }
 
     #${cardId} .st-roll-skill-name,
@@ -728,8 +832,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-skill-modal::backdrop {
-      background: rgba(0, 0, 0, 0.72);
-      backdrop-filter: blur(2px);
+      background: var(--st-roll-dialog-backdrop);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
     }
 
     #${cardId} .st-roll-skill-modal-backdrop {
@@ -747,13 +851,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       width: min(1460px, 96vw);
       height: min(96vh, 920px);
       margin: 0;
-      border: 1px solid rgba(197, 160, 89, 0.38);
+      border: 1px solid var(--st-roll-modal-panel-border);
       border-radius: 14px;
       overflow: hidden;
-      background:
-        radial-gradient(110% 130% at 100% 0%, rgba(197, 160, 89, 0.14), transparent 56%),
-        linear-gradient(160deg, rgba(23, 21, 24, 0.96), rgba(15, 14, 17, 0.96));
-      box-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
+      background: var(--st-roll-modal-panel-bg);
+      box-shadow: var(--st-roll-modal-panel-shadow);
     }
 
     #${cardId} .st-roll-skill-modal-head {
@@ -762,8 +864,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       justify-content: space-between;
       gap: 10px;
       padding: 12px 14px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid var(--st-roll-modal-head-border);
+      background: var(--st-roll-modal-head-bg);
     }
 
     #${cardId} .st-roll-skill-modal-title {
@@ -940,8 +1042,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-status-modal::backdrop {
-      background: rgba(0, 0, 0, 0.72);
-      backdrop-filter: blur(2px);
+      background: var(--st-roll-dialog-backdrop);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
     }
 
     #${cardId} .st-roll-status-modal-backdrop {
@@ -958,13 +1060,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       width: min(1220px, 96vw);
       height: min(92vh, 860px);
       margin: 0;
-      border: 1px solid rgba(197, 160, 89, 0.38);
+      border: 1px solid var(--st-roll-modal-panel-border);
       border-radius: 14px;
       overflow: hidden;
-      background:
-        radial-gradient(110% 130% at 100% 0%, rgba(197, 160, 89, 0.14), transparent 56%),
-        linear-gradient(160deg, rgba(23, 21, 24, 0.96), rgba(15, 14, 17, 0.96));
-      box-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
+      background: var(--st-roll-modal-panel-bg);
+      box-shadow: var(--st-roll-modal-panel-shadow);
       --st-roll-status-sidebar-width: 300px;
       --st-roll-status-col-name: 180px;
       --st-roll-status-col-modifier: 96px;
@@ -981,8 +1081,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       justify-content: space-between;
       gap: 10px;
       padding: 12px 14px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid var(--st-roll-modal-head-border);
+      background: var(--st-roll-modal-head-bg);
     }
 
     #${cardId} .st-roll-status-modal-title {
@@ -1178,6 +1278,10 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       flex-direction: column;
     }
 
+    #${cardId} .st-roll-status-mobile-sheet-head {
+      display: none;
+    }
+
     #${cardId} .st-roll-status-head {
       display: flex;
       align-items: center;
@@ -1360,6 +1464,9 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     ${buildSharedCheckboxStyles(`#${cardId}`)}
+    ${buildSharedButtonStyles(`#${cardId}`)}
+    ${buildSharedInputStyles(`#${cardId}`)}
+    ${buildSharedSelectStyles(`#${cardId}`)}
 
     #${cardId} input[type="checkbox"] {
       accent-color: var(--st-roll-accent);
@@ -1385,10 +1492,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         0 0 16px rgba(197, 160, 89, 0.16);
     }
 
-    #${cardId} .st-roll-select:hover,
-    #${cardId} .st-roll-input:hover,
-    #${cardId} .st-roll-search:hover,
-    #${cardId} .st-roll-textarea:hover {
+    #${cardId} .st-roll-select:hover {
       border-color: rgba(197, 160, 89, 0.58);
       background-color: rgba(0, 0, 0, 0.34);
       box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.18);
@@ -1407,10 +1511,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         0 0 14px rgba(197, 160, 89, 0.2);
     }
 
-    #${cardId} .st-roll-select:focus,
-    #${cardId} .st-roll-input:focus,
-    #${cardId} .st-roll-search:focus,
-    #${cardId} .st-roll-textarea:focus {
+    #${cardId} .st-roll-select:focus {
       outline: none;
       border-color: rgba(197, 160, 89, 0.72);
       box-shadow: 0 0 0 2px rgba(197, 160, 89, 0.22);
@@ -1452,9 +1553,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-select,
-    #${cardId} .st-roll-input,
-    #${cardId} .st-roll-textarea,
-    #${cardId} .st-roll-search {
+    #${cardId} .st-roll-select {
       color: var(--st-roll-text);
       border-color: var(--st-roll-control-border);
       background: var(--st-roll-control-bg);
@@ -1464,11 +1563,29 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       color: var(--st-roll-text);
       border-color: var(--st-roll-btn-border);
       background: var(--st-roll-btn-bg);
+      --stx-button-text: var(--st-roll-text);
+      --stx-button-border: var(--st-roll-btn-border);
+      --stx-button-bg: var(--st-roll-btn-bg);
+      --stx-button-hover-border: var(--st-roll-btn-hover-border);
+      --stx-button-hover-bg: var(--st-roll-btn-hover-bg);
+      --stx-button-hover-shadow: var(--st-roll-btn-hover-shadow);
     }
 
     #${cardId} .st-roll-btn.secondary {
       border-color: var(--st-roll-btn-secondary-border);
       background: var(--st-roll-btn-secondary-bg);
+      --stx-button-border: var(--st-roll-btn-secondary-border);
+      --stx-button-bg: var(--st-roll-btn-secondary-bg);
+    }
+
+    #${cardId} .st-roll-btn.danger {
+      border-color: var(--st-roll-btn-danger-border);
+      background: var(--st-roll-btn-danger-bg);
+      --stx-button-border: var(--st-roll-btn-danger-border);
+      --stx-button-bg: var(--st-roll-btn-danger-bg);
+      --stx-button-hover-border: var(--st-roll-btn-danger-hover-border);
+      --stx-button-hover-bg: var(--st-roll-btn-danger-hover-bg);
+      --stx-button-hover-shadow: var(--st-roll-btn-danger-hover-shadow);
     }
 
     #${cardId} .st-roll-textarea-wrap,
@@ -1556,27 +1673,27 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --stx-checkbox-control-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-control,
-    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-control {
+    #${cardId} .st-roll-content[data-st-roll-theme="dark"] .stx-shared-checkbox-control,
+    #${cardId} .st-roll-content[data-st-roll-theme="light"] .stx-shared-checkbox-control {
       background: var(--stx-checkbox-surface);
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-box,
-    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-box {
+    #${cardId} .st-roll-content[data-st-roll-theme="dark"] .stx-shared-checkbox-box,
+    #${cardId} .st-roll-content[data-st-roll-theme="light"] .stx-shared-checkbox-box {
       background: var(--stx-checkbox-box-bg);
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control,
-    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control {
+    #${cardId} .st-roll-content[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control,
+    #${cardId} .st-roll-content[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control {
       background: var(--stx-checkbox-accent);
       border-color: var(--stx-checkbox-accent);
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box,
-    #${cardId}[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box {
+    #${cardId} .st-roll-content[data-st-roll-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box,
+    #${cardId} .st-roll-content[data-st-roll-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box {
       background: var(--stx-checkbox-accent);
       border-color: var(--stx-checkbox-accent);
       box-shadow: none;
@@ -1619,6 +1736,12 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: var(--st-roll-btn-hover-shadow);
     }
 
+    #${cardId} .st-roll-btn.danger:hover {
+      border-color: var(--st-roll-btn-danger-hover-border);
+      background: var(--st-roll-btn-danger-hover-bg);
+      box-shadow: var(--st-roll-btn-danger-hover-shadow);
+    }
+
     #${cardId} .st-roll-select:focus,
     #${cardId} .st-roll-input:focus,
     #${cardId} .st-roll-search:focus,
@@ -1628,15 +1751,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: 0 0 0 2px var(--st-roll-control-focus-ring);
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-select.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-input.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-search.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-select.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-input.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-search.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-textarea.text_pole {
       margin: 0;
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-select.text_pole,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-select.text_pole {
       background-image: none !important;
       text-align: left;
       text-align-last: left;
@@ -1646,14 +1774,17 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       padding-right: 20px;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-tab.menu_button,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-btn.menu_button,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-tab.menu_button,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-btn.menu_button {
       margin: 0;
       width: auto;
       min-height: 30px;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-tab.menu_button,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-tab.menu_button {
       flex: 1;
       min-width: 0;
       border-radius: 999px;
@@ -1662,42 +1793,587 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       opacity: 0.85;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.is-active,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.active {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.is-active,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-tab.menu_button.active,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-tab.menu_button.is-active,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-tab.menu_button.active {
       opacity: 1;
       filter: none;
       background-color: var(--white30a, rgba(255, 255, 255, 0.3));
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-btn.menu_button,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-btn.menu_button {
       padding: 3px 8px;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole:hover,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole:hover,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole:hover,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:hover {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-select.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-input.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-search.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-select.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-input.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-search.text_pole:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-textarea.text_pole:hover {
       border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
       background-color: var(--black30a, rgba(0, 0, 0, 0.3));
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-select.text_pole:focus,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-input.text_pole:focus,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-search.text_pole:focus,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:focus {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-select.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-input.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-search.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-textarea.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-select.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-input.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-search.text_pole:focus,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-textarea.text_pole:focus {
       border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
       box-shadow: none;
     }
 
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-tab.menu_button:hover,
-    #${cardId}[data-st-roll-theme="tavern"] .st-roll-btn.menu_button:hover {
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-tab.menu_button:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-btn.menu_button:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-tab.menu_button:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-btn.menu_button:hover {
       border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
       background-color: var(--white30a, rgba(255, 255, 255, 0.3));
       box-shadow: none;
     }
 
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] .st-roll-btn.danger.menu_button:hover,
+    #${cardId} .st-roll-content[data-st-roll-theme="smart"] .st-roll-btn.danger.menu_button:hover {
+      border-color: var(--st-roll-btn-danger-hover-border);
+      background: var(--st-roll-btn-danger-hover-bg);
+      box-shadow: var(--st-roll-btn-danger-hover-shadow);
+    }
+
+    #${cardId} .st-roll-workbench {
+      --st-roll-status-sidebar-width: 276px;
+      display: grid;
+      min-height: min(72vh, 780px);
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      border-radius: 14px;
+      background: var(--st-roll-workbench-bg);
+      overflow: hidden;
+    }
+
+    #${cardId} .st-roll-workbench-sidebar,
+    #${cardId} .st-roll-workbench-main {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    #${cardId} .st-roll-workbench-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 10px;
+      background: var(--st-roll-workbench-panel-bg);
+      border-right: 1px solid var(--st-roll-workbench-panel-border);
+    }
+
+    #${cardId} .st-roll-workbench-main {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px;
+      background: linear-gradient(180deg, var(--st-roll-workbench-panel-bg), transparent 100%);
+    }
+
+    #${cardId} .st-roll-workbench-context,
+    #${cardId} .st-roll-workbench-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      border-radius: 12px;
+      background: var(--st-roll-workbench-toolbar-bg);
+    }
+
+    #${cardId} .st-roll-workbench-context {
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    #${cardId} .st-roll-status-context {
+      display: grid;
+      grid-template-columns: minmax(240px, auto) minmax(0, 1fr);
+      align-items: center;
+      gap: 6px 14px;
+      padding: 8px 12px;
+      min-height: 0;
+    }
+
+    #${cardId} .st-roll-status-context .st-roll-workbench-head-copy {
+      gap: 2px;
+    }
+
+    #${cardId} .st-roll-status-context .st-roll-field-label {
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    #${cardId} .st-roll-status-context .st-roll-status-chat-meta {
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    #${cardId} .st-roll-status-context .st-roll-tip {
+      padding-top: 0;
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: right;
+      opacity: 0.72;
+    }
+
+    #${cardId} .st-roll-workbench-sidebar-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      border-radius: 12px;
+      background: var(--st-roll-workbench-toolbar-bg);
+    }
+
+    #${cardId} .st-roll-workbench-sidebar-copy,
+    #${cardId} .st-roll-workbench-head-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-workbench-subtitle,
+    #${cardId} .st-roll-workbench-selection {
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--st-roll-workbench-muted);
+    }
+
+    #${cardId} .st-roll-workbench-selection {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      background: var(--st-roll-workbench-accent);
+      white-space: nowrap;
+    }
+
+    #${cardId} .st-roll-status-selection-count {
+      min-height: 28px;
+      padding: 0 8px;
+      font-size: 11px;
+    }
+
+    #${cardId} .st-roll-workbench-select {
+      min-width: 132px;
+    }
+
+    #${cardId} .st-roll-inline-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      background: var(--st-roll-workbench-panel-bg);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #${cardId} .st-roll-status-toolbar {
+      gap: 6px;
+      padding: 8px 10px;
+    }
+
+    #${cardId} .st-roll-status-toolbar .st-roll-workbench-select {
+      min-width: 122px;
+    }
+
+    #${cardId} .st-roll-status-toolbar .st-roll-inline-toggle {
+      min-height: 28px;
+      padding: 0 8px;
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    #${cardId} .st-roll-toolbar-icon-btn {
+      width: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
+      border-radius: 8px;
+      gap: 0;
+      flex: 0 0 auto;
+    }
+
+    #${cardId} .st-roll-toolbar-icon-btn .stx-shared-button-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    #${cardId} .st-roll-toolbar-icon-btn .stx-shared-button-icon {
+      width: 14px;
+      height: 14px;
+      font-size: 13px;
+    }
+
+    #${cardId} .st-roll-inline-toggle input[type="checkbox"] {
+      margin: 0;
+    }
+
+    #${cardId} .st-roll-skill-layout,
+    #${cardId} .st-roll-status-layout {
+      background: var(--st-roll-workbench-bg);
+      border-color: var(--st-roll-workbench-panel-border);
+    }
+
+    #${cardId} .st-roll-skill-layout {
+      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+    }
+
+    #${cardId} .st-roll-status-layout {
+      grid-template-columns: minmax(220px, var(--st-roll-status-sidebar-width)) 8px minmax(0, 1fr);
+    }
+
+    #${cardId} .st-roll-skill-presets,
+    #${cardId} .st-roll-status-sidebar {
+      background: var(--st-roll-workbench-panel-bg);
+      border-color: var(--st-roll-workbench-panel-border);
+    }
+
+    #${cardId} .st-roll-workbench-toolbar-sidebar {
+      gap: 6px;
+      padding: 8px;
+    }
+
+    #${cardId} .st-roll-status-sidebar .st-roll-workbench-toolbar-sidebar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      padding: 8px;
+    }
+
+    #${cardId} .st-roll-status-sidebar .st-roll-status-chat-search {
+      grid-column: 1 / -1;
+    }
+
+    #${cardId} .st-roll-status-sidebar .st-roll-workbench-select {
+      min-width: 0;
+      width: 100%;
+    }
+
+    #${cardId} .st-roll-status-sidebar .stx-shared-select {
+      width: 100%;
+    }
+
+    #${cardId} .st-roll-status-sidebar .st-roll-btn {
+      min-height: 30px;
+      padding: 4px 10px;
+    }
+
+    #${cardId} .st-roll-status-sidebar-head {
+      padding: 8px 12px;
+    }
+
+    #${cardId} .st-roll-status-head-main {
+      gap: 2px;
+    }
+
+    #${cardId} .st-roll-status-memory-state {
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    #${cardId} .st-roll-status-chat-list {
+      gap: 6px;
+    }
+
+    #${cardId} .st-roll-skill-main,
+    #${cardId} .st-roll-status-main {
+      overflow: hidden;
+    }
+
+    #${cardId} .st-roll-skill-preset-list,
+    #${cardId} .st-roll-status-chat-list,
+    #${cardId} .st-roll-skill-rows,
+    #${cardId} .st-roll-status-rows {
+      scrollbar-width: thin;
+    }
+
+    #${cardId} .st-roll-skill-preset-list,
+    #${cardId} .st-roll-status-chat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    #${cardId} .st-roll-skill-preset-item,
+    #${cardId} .st-roll-status-chat-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+    }
+
+    #${cardId} .st-roll-skill-preset-item {
+      align-items: flex-start;
+    }
+
+    #${cardId} .st-roll-skill-preset-name {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    #${cardId} .st-roll-skill-preset-tags {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    #${cardId} .st-roll-skill-preset-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      background: var(--st-roll-workbench-accent);
+    }
+
+    #${cardId} .st-roll-skill-preset-tag.active {
+      color: var(--st-roll-accent-contrast);
+      background: var(--st-roll-accent);
+      border-color: var(--st-roll-accent);
+    }
+
+    #${cardId} .st-roll-skill-preset-tag.locked {
+      background: transparent;
+    }
+
+    #${cardId} .st-roll-skill-preset-meta,
+    #${cardId} .st-roll-status-memory-state,
+    #${cardId} .st-roll-status-chat-meta {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--st-roll-workbench-muted);
+    }
+
+    #${cardId} .st-roll-status-chat-item {
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    #${cardId} .st-roll-status-chat-main {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      flex: 1 1 auto;
+      text-align: left;
+    }
+
+    #${cardId} .st-roll-status-chat-name {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    #${cardId} .st-roll-status-chat-time,
+    #${cardId} .st-roll-status-chat-key,
+    #${cardId} .st-roll-status-chat-meta-line {
+      font-size: 12px;
+      line-height: 1.35;
+      color: var(--st-roll-workbench-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #${cardId} .st-roll-status-chat-meta-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar-wrap {
+      flex: 0 0 56px;
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      background: var(--st-roll-workbench-accent);
+    }
+
+    #${cardId} .st-roll-status-chat-avatar,
+    #${cardId} .st-roll-status-chat-avatar-fallback {
+      width: 100%;
+      height: 100%;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar {
+      object-fit: cover;
+      display: block;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar-fallback {
+      display: grid;
+      place-items: center;
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--st-roll-accent-contrast);
+    }
+
+    #${cardId} .st-roll-skill-cols,
+    #${cardId} .st-roll-status-cols {
+      background: transparent;
+      border-bottom: 1px solid var(--st-roll-workbench-panel-border);
+      padding-bottom: 8px;
+      margin-bottom: 0;
+    }
+
+    #${cardId} .st-roll-skill-rows,
+    #${cardId} .st-roll-status-rows {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 10px;
+      border: 1px solid var(--st-roll-workbench-panel-border);
+      border-radius: 14px;
+      background: var(--st-roll-workbench-panel-bg);
+    }
+
+    #${cardId} .st-roll-skill-row,
+    #${cardId} .st-roll-status-row {
+      align-items: stretch;
+    }
+
+    #${cardId} .st-roll-skill-name-wrap,
+    #${cardId} .st-roll-status-name-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-skill-name-wrap {
+      width: 100%;
+    }
+
+    #${cardId} .st-roll-skill-name,
+    #${cardId} .st-roll-skill-modifier {
+      min-height: 32px;
+    }
+
+    #${cardId} .st-roll-skill-name {
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+    }
+
+    #${cardId} .st-roll-skill-name {
+      font-size: 13px;
+    }
+
+    #${cardId} .st-roll-skill-modifier {
+      text-align: center;
+      font-size: 13px;
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
+    #${cardId} .st-roll-skill-row-select,
+    #${cardId} .st-roll-status-row-select {
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--st-roll-accent);
+    }
+
+    #${cardId} .st-roll-skill-actions-group,
+    #${cardId} .st-roll-status-actions-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    #${cardId} .st-roll-skill-actions-group {
+      display: grid;
+      grid-template-columns: repeat(4, 28px);
+      gap: 4px;
+      justify-content: end;
+      align-content: center;
+    }
+
+    #${cardId} .st-roll-skill-actions-group .st-roll-btn,
+    #${cardId} .st-roll-status-actions-group .st-roll-btn {
+      min-height: 28px;
+      padding: 3px 8px;
+      font-size: 12px;
+    }
+
+    #${cardId} .st-roll-skill-actions-group .st-roll-btn {
+      width: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    #${cardId} .st-roll-skill-empty,
+    #${cardId} .st-roll-status-empty {
+      display: grid;
+      place-items: center;
+      min-height: 120px;
+      border: 1px dashed var(--st-roll-workbench-panel-border);
+      border-radius: 12px;
+      background: var(--st-roll-workbench-panel-bg);
+      color: var(--st-roll-workbench-muted);
+    }
+
     @media (max-width: 680px) {
+      #${cardId} .st-roll-workbench-toolbar,
+      #${cardId} .st-roll-workbench-context,
+      #${cardId} .st-roll-workbench-sidebar-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      #${cardId} .st-roll-workbench-selection,
+      #${cardId} .st-roll-inline-toggle,
+      #${cardId} .st-roll-workbench-select {
+        width: 100%;
+      }
+
       #${cardId} .st-roll-skill-modal-panel {
         width: 100vw;
         height: 100vh;
@@ -1724,6 +2400,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       #${cardId} .st-roll-skill-head {
         flex-direction: column;
         align-items: stretch;
+      }
+
+      #${cardId} .st-roll-skill-actions-group,
+      #${cardId} .st-roll-status-actions-group {
+        width: 100%;
       }
 
       #${cardId} .st-roll-skill-cols {
@@ -1754,35 +2435,272 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       }
 
       #${cardId} .st-roll-status-modal-body {
-        padding: 10px;
+        padding: 0;
+        position: relative;
       }
 
       #${cardId} .st-roll-status-layout {
-        grid-template-columns: 1fr;
+        display: block;
+        position: relative;
         min-height: 0;
+        height: 100%;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
       }
 
       #${cardId} .st-roll-status-sidebar {
-        border-right: 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        max-height: 220px;
+        min-width: 0;
+        height: 100%;
+        border: 0;
+        background: transparent;
+        padding: 12px 12px 20px;
+        gap: 10px;
       }
 
       #${cardId} .st-roll-status-splitter {
         display: none;
       }
 
+      #${cardId} .st-roll-status-sidebar .st-roll-workbench-toolbar-sidebar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 10px;
+        border-radius: 16px;
+      }
+
+      #${cardId} .st-roll-status-sidebar .st-roll-status-chat-search {
+        grid-column: 1 / -1;
+      }
+
+      #${cardId} .st-roll-status-sidebar .st-roll-workbench-select {
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-sidebar .st-roll-btn {
+        min-width: 84px;
+        min-height: 34px;
+      }
+
+      #${cardId} .st-roll-status-sidebar-head {
+        padding: 10px 12px;
+        border-radius: 16px;
+      }
+
+      #${cardId} .st-roll-status-chat-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding-bottom: 24px;
+        gap: 10px;
+      }
+
+      #${cardId} .st-roll-status-chat-item {
+        align-items: center;
+        padding: 12px;
+        min-height: 76px;
+        border-radius: 16px;
+      }
+
+      #${cardId} .st-roll-status-chat-avatar-wrap {
+        flex-basis: 60px;
+        width: 60px;
+        height: 60px;
+      }
+
+      #${cardId} .st-roll-status-main {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 4;
+        height: min(78vh, 720px);
+        padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+        border-radius: 20px 20px 0 0;
+        border: 1px solid var(--st-roll-workbench-panel-border);
+        border-bottom: 0;
+        background: var(--st-roll-workbench-bg);
+        box-shadow: 0 -16px 36px rgba(0, 0, 0, 0.42);
+        transform: translateY(104%);
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 0.24s ease, opacity 0.24s ease;
+        overflow: hidden;
+        overscroll-behavior: contain;
+        touch-action: pan-y;
+        display: grid;
+        grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-open .st-roll-status-main {
+        transform: translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-expanded .st-roll-status-main {
+        height: min(94vh, 920px);
+      }
+
+      #${cardId} .st-roll-status-mobile-sheet-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 4px 8px;
+        position: relative;
+        user-select: none;
+        touch-action: none;
+      }
+
+      #${cardId} .st-roll-status-mobile-sheet-head::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 50%;
+        width: 44px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.22);
+        transform: translateX(-50%);
+      }
+
+      #${cardId} .st-roll-status-mobile-back {
+        min-height: 32px;
+      }
+
+      #${cardId} .st-roll-status-mobile-sheet-copy {
+        min-width: 0;
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        font-size: 12px;
+        color: var(--st-roll-workbench-muted);
+      }
+
+      #${cardId} .st-roll-status-context {
+        grid-template-columns: 1fr;
+        gap: 4px;
+        padding: 8px 10px;
+        border-radius: 14px;
+      }
+
+      #${cardId} .st-roll-status-context .st-roll-tip {
+        text-align: left;
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      #${cardId} .st-roll-status-toolbar {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        padding: 10px;
+        border-radius: 16px;
+      }
+
+      #${cardId} .st-roll-status-toolbar .st-roll-status-search {
+        grid-column: 1 / -1;
+      }
+
+      #${cardId} .st-roll-status-toolbar .st-roll-workbench-select {
+        grid-column: span 2;
+        min-width: 0;
+        width: 100%;
+      }
+
+      #${cardId} .st-roll-status-toolbar .st-roll-inline-toggle {
+        grid-column: span 2;
+        width: 100%;
+        min-height: 34px;
+        justify-content: flex-start;
+      }
+
+      #${cardId} .st-roll-status-selection-count {
+        grid-column: 1 / -1;
+        width: 100%;
+        justify-content: center;
+        min-height: 32px;
+      }
+
+      #${cardId} .st-roll-status-toolbar .st-roll-toolbar-icon-btn {
+        width: 100%;
+        min-width: 0;
+        min-height: 40px;
+        border-radius: 12px;
+      }
+
       #${cardId} .st-roll-status-head {
-        flex-direction: column;
-        align-items: stretch;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
       }
 
       #${cardId} .st-roll-status-cols {
         display: none;
       }
 
+      #${cardId} .st-roll-status-actions-group {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      #${cardId} .st-roll-status-actions-group .st-roll-btn {
+        width: 100%;
+        min-width: 0;
+        min-height: 36px;
+      }
+
+      #${cardId} .st-roll-status-rows {
+        padding: 10px;
+        border-radius: 16px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
       #${cardId} .st-roll-status-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid var(--st-roll-workbench-panel-border);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 88%, transparent);
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-row > .st-roll-status-name-wrap,
+      #${cardId} .st-roll-status-row > :nth-child(5),
+      #${cardId} .st-roll-status-row > .st-roll-status-actions-group {
+        grid-column: 1 / -1;
+      }
+
+      #${cardId} .st-roll-status-row > :nth-child(2),
+      #${cardId} .st-roll-status-row > :nth-child(3),
+      #${cardId} .st-roll-status-row > :nth-child(4),
+      #${cardId} .st-roll-status-row > :nth-child(6) {
+        grid-column: span 1;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-status-row .st-roll-status-name-wrap {
+        align-items: center;
+        gap: 8px;
+      }
+
+      #${cardId} .st-roll-status-row .st-roll-status-name,
+      #${cardId} .st-roll-status-row .st-roll-status-modifier,
+      #${cardId} .st-roll-status-row .st-roll-status-duration,
+      #${cardId} .st-roll-status-row .st-roll-status-skills,
+      #${cardId} .st-roll-status-row .stx-shared-select {
+        width: 100%;
+        min-width: 0;
       }
 
       #${cardId} .st-roll-status-modifier {
@@ -1791,8 +2709,23 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-enabled-wrap {
         justify-content: flex-start;
+        min-height: 40px;
+        padding: 0 12px;
+        border-radius: 12px;
+        border: 1px solid var(--st-roll-workbench-panel-border);
+        background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 90%, transparent);
       }
 
+      #${cardId} .st-roll-status-actions-group {
+        width: 100%;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #${cardId} .st-roll-status-actions-group .st-roll-btn {
+        min-height: 38px;
+      }
+
+      #${cardId} .st-roll-status-duplicate,
       #${cardId} .st-roll-status-remove {
         width: 100%;
       }

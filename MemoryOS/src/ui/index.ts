@@ -6,6 +6,7 @@ import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
 import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { applySdkThemeToNode, initializeSdkThemeState } from '../../../SDK/theme';
 import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
 
 
@@ -13,17 +14,17 @@ import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
 const NAMESPACE = 'stx-memoryos';
 
 // 解析生成更新日志 HTML
-const generateChangelogHtml = () => {
+const generateChangelogHtml = (): string => {
     if (!Array.isArray(changelogData) || changelogData.length === 0) return '暂无更新记录';
 
     return changelogData.map(log => `
-      <div style="margin-bottom: 12px;">
-        <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
-            <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
-            ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
+      <div class="stx-ui-changelog-entry">
+        <div class="stx-ui-changelog-head">
+            <span class="stx-ui-changelog-version">${log.version}</span>
+            ${log.date ? `<span class="stx-ui-changelog-date">${log.date}</span>` : ''}
         </div>
-        <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">
-          ${log.changes.map((c: string) => `<li style="margin-bottom: 4px; line-height: 1.4;">${c}</li>`).join('')}
+        <ul class="stx-ui-changelog-list">
+          ${log.changes.map((c: string) => `<li>${c}</li>`).join('')}
         </ul>
       </div>
     `).join('');
@@ -141,6 +142,7 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
  */
 export async function renderSettingsUi() {
     try {
+        initializeSdkThemeState();
         // SillyTavern 插件设置面板通常挂载在 #extensions_settings
         const container = await waitForElement('#extensions_settings');
 
@@ -169,6 +171,7 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
+        applySdkThemeToNode(cardWrapper);
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
         bindUiEvents();
@@ -295,13 +298,13 @@ function bindUiEvents() {
         if (!aiLightEl || !aiToggleEl) return;
         if (alive && isEnabled) {
             aiLightEl.className = 'fa-solid fa-link';
-            aiLightEl.style.color = '#8ceb8c'; // 绿灯运行
+            aiLightEl.style.color = 'var(--stx-memory-success)';
             aiLightEl.setAttribute('data-tip', 'LLMHub 通信正常。');
             aiLightEl.removeAttribute('title');
             aiToggleEl.disabled = false;
         } else {
             aiLightEl.className = 'fa-solid fa-link-slash';
-            aiLightEl.style.color = '#ff8787'; // 红灯断锁
+            aiLightEl.style.color = 'var(--stx-memory-danger-contrast)';
             aiLightEl.setAttribute(
                 'data-tip',
                 alive
@@ -752,14 +755,14 @@ function bindUiEvents() {
                 const time = new Date(r.ts).toLocaleString();
                 const note = r.after?.note ? ` — ${r.after.note}` : '';
                 const row = document.createElement('div');
-                row.style.cssText = 'padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; background: rgba(255,255,255,0.05); display: flex; align-items: center; gap: 8px;';
+                row.className = 'stx-ui-audit-row';
                 row.innerHTML = `
-                    <span style="flex: 1; font-size: 11px;">
-                        <b style="color: ${isSnapshot ? '#7ca5f5' : '#ccc'}">[${r.action}]</b>
-                        <span style="color:#aaa">${time}</span>
+                    <span class="stx-ui-audit-main">
+                        <b class="stx-ui-audit-action${isSnapshot ? ' is-snapshot' : ''}">[${r.action}]</b>
+                        <span class="stx-ui-audit-time">${time}</span>
                         <span>${note}</span>
                     </span>
-                    ${isSnapshot ? `<button data-snapshot-id="${r.auditId}" data-tip="回滚到这个快照。" style="font-size: 11px; padding: 2px 8px; background: rgba(124,165,245,0.2); border: 1px solid #7ca5f5; border-radius: 4px; color: #7ca5f5; cursor: pointer;">回滚</button>` : ''}
+                    ${isSnapshot ? `<button class="stx-ui-audit-rollback" data-snapshot-id="${r.auditId}" data-tip="回滚到这个快照。">回滚</button>` : ''}
                 `;
                 // 绑定回滚按钮
                 if (isSnapshot) {
@@ -891,67 +894,67 @@ function bindUiEvents() {
     /** 渲染逻辑表内容（按选中的实体类型加载 facts） */
     const renderLogicTable = async (entityType: string) => {
         if (!logicTableContainer) return;
-        if (!entityType) { logicTableContainer.innerHTML = '<span style="color:#aaa">请选择实体类型查看。</span>'; return; }
+        if (!entityType) { logicTableContainer.innerHTML = '<span class="stx-ui-empty-hint">请选择实体类型查看。</span>'; return; }
         const memory = (window as any).STX?.memory;
         if (!memory?.worldInfo) { logicTableContainer.textContent = 'Memory OS 尚未就绪。'; return; }
         logicTableContainer.textContent = '加载中...';
         try {
             const facts = await memory.worldInfo.getLogicTable(entityType);
             if (!facts?.length) {
-                logicTableContainer.innerHTML = `<span style="color:#aaa">暂无 ${entityType} 类型的事实记录。</span>`;
+                logicTableContainer.innerHTML = `<span class="stx-ui-empty-hint">暂无 ${entityType} 类型的事实记录。</span>`;
                 return;
             }
             logicTableContainer.innerHTML = '';
             for (const fact of facts) {
                 const row = document.createElement('div');
-                row.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; margin-bottom: 3px; background: rgba(255,255,255,0.04);';
+                row.className = 'stx-logic-row';
 
                 const entityLabel = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}]` : '';
                 const valueStr = typeof fact.value === 'object' ? JSON.stringify(fact.value) : String(fact.value);
 
                 row.innerHTML = `
-                    <span style="color:#7ca5f5; font-size: 11px; white-space: nowrap;">${entityLabel}</span>
-                    <span style="color:#aaa; font-size: 11px; flex: 0 0 auto;">${fact.path || '(无路径)'}：</span>
+                    <span class="stx-logic-entity">${entityLabel}</span>
+                    <span class="stx-logic-path">${fact.path || '(无路径)'}：</span>
                     <span class="stx-logic-value" contenteditable="false"
                         data-fact-key="${fact.factKey}" data-type="${fact.type}"
                         data-entity-kind="${fact.entity?.kind ?? ''}" data-entity-id="${fact.entity?.id ?? ''}"
                         data-path="${fact.path ?? ''}"
                         data-tip="双击可编辑。"
-                        style="flex: 1; font-size: 11px; border-radius: 3px; padding: 1px 4px; cursor: default;"
                         >${valueStr}</span>
                 `;
                 // 双击转为编辑模式
-                const valueEl = row.querySelector<HTMLElement>('.stx-logic-value');
-                if (valueEl) {
-                    valueEl.addEventListener('dblclick', () => {
-                        valueEl.contentEditable = 'true';
-                        valueEl.style.background = 'rgba(124,165,245,0.15)';
-                        valueEl.style.outline = '1px solid #7ca5f5';
-                        valueEl.style.cursor = 'text';
-                        valueEl.focus();
-                    });
-                    valueEl.addEventListener('blur', async () => {
-                        if (valueEl.contentEditable !== 'true') return;
-                        valueEl.contentEditable = 'false';
-                        valueEl.style.background = '';
-                        valueEl.style.outline = '';
-                        valueEl.style.cursor = 'default';
-                        const newValueStr = valueEl.textContent?.trim() ?? '';
-                        let newValue: any;
-                        try { newValue = JSON.parse(newValueStr); } catch { newValue = newValueStr; }
-                        try {
-                            await memory.worldInfo.updateFact(
+                    const valueEl = row.querySelector<HTMLElement>('.stx-logic-value');
+                    if (valueEl) {
+                        valueEl.addEventListener('dblclick', () => {
+                            valueEl.contentEditable = 'true';
+                            valueEl.classList.remove('is-saved', 'is-error');
+                            valueEl.classList.add('is-editing');
+                            valueEl.focus();
+                        });
+                        valueEl.addEventListener('blur', async () => {
+                            if (valueEl.contentEditable !== 'true') return;
+                            valueEl.contentEditable = 'false';
+                            valueEl.classList.remove('is-editing');
+                            const newValueStr = valueEl.textContent?.trim() ?? '';
+                            let newValue: any;
+                            try { newValue = JSON.parse(newValueStr); } catch { newValue = newValueStr; }
+                            try {
+                                await memory.worldInfo.updateFact(
                                 valueEl.dataset.factKey || undefined,
                                 valueEl.dataset.type ?? entityType,
                                 { kind: valueEl.dataset.entityKind ?? '', id: valueEl.dataset.entityId ?? '' },
-                                valueEl.dataset.path ?? '',
-                                newValue
-                            );
-                            valueEl.style.background = 'rgba(80,200,120,0.1)';
-                            setTimeout(() => { valueEl.style.background = ''; }, 800);
-                        } catch { valueEl.style.background = 'rgba(255,100,100,0.15)'; }
-                    });
-                }
+                                    valueEl.dataset.path ?? '',
+                                    newValue
+                                );
+                                valueEl.classList.remove('is-error');
+                                valueEl.classList.add('is-saved');
+                                setTimeout(() => { valueEl.classList.remove('is-saved'); }, 800);
+                            } catch {
+                                valueEl.classList.remove('is-saved');
+                                valueEl.classList.add('is-error');
+                            }
+                        });
+                    }
                 logicTableContainer.appendChild(row);
             }
             refreshSettingsTooltips();

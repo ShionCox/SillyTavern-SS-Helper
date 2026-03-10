@@ -1,0 +1,62 @@
+/* 共享输入组件样式，由调用方提供作用域前缀替换 _SCOPE_ */
+
+_SCOPE_ .stx-shared-input {
+  width: auto;
+  background: var(--stx-theme-surface-2, var(--st-roll-control-bg, rgba(0, 0, 0, 0.28)));
+  color: var(--stx-theme-text, var(--st-roll-text, inherit));
+  border: 1px solid var(--stx-theme-border, var(--st-roll-control-border, rgba(197, 160, 89, 0.36)));
+  border-radius: 8px;
+  box-sizing: border-box;
+  font-size: 12px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+_SCOPE_ .stx-shared-input::placeholder {
+  color: color-mix(in srgb, var(--stx-theme-text, var(--st-roll-text, #dcdcd2)) 60%, transparent);
+}
+
+_SCOPE_ input.stx-shared-input {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+_SCOPE_ input.stx-shared-input.st-roll-search {
+  min-height: 32px;
+}
+
+_SCOPE_ textarea.stx-shared-input {
+  width: 100%;
+  min-height: 220px;
+  padding: 8px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+_SCOPE_ .stx-shared-input:hover:not(:disabled):not([readonly]) {
+  border-color: var(--stx-theme-border-strong, var(--st-roll-control-border-hover, rgba(197, 160, 89, 0.58)));
+  background-color: var(--stx-theme-surface-3, var(--st-roll-control-bg-hover, rgba(0, 0, 0, 0.34)));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22))) 82%, transparent);
+}
+
+_SCOPE_ .stx-shared-input:focus {
+  outline: none;
+}
+
+_SCOPE_ .stx-shared-input:focus-visible,
+_SCOPE_ .stx-shared-input:focus {
+  border-color: var(--stx-theme-border-strong, var(--st-roll-control-focus-border, rgba(197, 160, 89, 0.72)));
+  box-shadow: 0 0 0 2px var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22)));
+}
+
+_SCOPE_ .stx-shared-input:disabled,
+_SCOPE_ .stx-shared-input[readonly] {
+  cursor: default;
+}
+
+_SCOPE_ .stx-shared-input:disabled {
+  opacity: 0.6;
+}

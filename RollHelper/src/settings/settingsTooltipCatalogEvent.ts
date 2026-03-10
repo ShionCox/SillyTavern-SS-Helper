@@ -22,6 +22,7 @@ export function buildSettingsTooltipCatalogEvent(ids: SettingsCardTemplateIdsEve
     [ids.dynamicDcReasonId]: "显示难度变化原因。",
     [ids.statusSystemEnabledId]: "开启状态效果。",
     [ids.statusEditorOpenId]: "打开状态编辑器。",
+    [ids.statusRefreshId]: "刷新当前酒馆的聊天列表。",
     [ids.explodingEnabledId]: "开启爆骰规则。",
     [ids.advantageEnabledId]: "开启优势/劣势规则。",
     [ids.dynamicResultGuidanceId]: "给 AI 追加结果提示。",

@@ -457,7 +457,7 @@ export function mergeEventsIntoPendingRoundEvent(
   const previousRound = meta.pendingRound;
   if (previousRound && previousRound.status !== "open") {
     if (decayStatusesForNewRoundEvent(meta)) {
-      logger.info("\u8f6e\u6b21\u5207\u6362\uff1a\u5df2\u5b8c\u6210\u72b6\u6001\u6301\u7eed\u8f6e\u6b21\u8870\u51cf");
+      logger.info("轮次切换：已完成状态持续轮次衰减");
     }
   }
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });

@@ -201,7 +201,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     ${buildEventCardsSharedStylesTemplateEvent()}
     <details class="st-rh-result-card st-rh-details-card st-rh-details-result">
       <summary class="st-rh-collapse-summary st-rh-collapse-summary-result">
-        <div class="st-rh-summary-main">
+        <div class="st-rh-summary-main st-rh-summary-main-result">
           <div class="st-rh-collapse-title-row">
             <strong class="st-rh-summary-title">${params.titleHtml}</strong>
             <span class="st-rh-summary-id st-rh-mono">${params.rollIdHtml}</span>
@@ -212,10 +212,12 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
             <span class="st-rh-summary-chip st-rh-mono">${params.collapsedConditionHtml}</span>
             <span class="st-rh-summary-chip">${params.collapsedSourceHtml}</span>
           </div>
+          <div class="st-rh-summary-footer-row">
+            ${buildSummaryToggleStateTemplateEvent()}
+          </div>
         </div>
-        <div class="st-rh-summary-actions">
-          ${params.collapsedDiceVisualHtml ? `<span class="st-rh-summary-dice">${params.collapsedDiceVisualHtml}</span>` : ""}
-          ${buildSummaryToggleStateTemplateEvent()}
+        <div class="st-rh-summary-actions st-rh-summary-actions-result">
+          ${params.collapsedDiceVisualHtml ? `<span class="st-rh-summary-dice st-rh-summary-dice-large">${params.collapsedDiceVisualHtml}</span>` : ""}
         </div>
       </summary>
 
