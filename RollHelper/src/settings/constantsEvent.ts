@@ -2,6 +2,7 @@
 import type { DicePluginSettingsEvent } from "../types/eventDomainEvent";
 
 export const MODULE_NAME_Event = "SillyTavern-Roll";
+export const SDK_SETTINGS_NAMESPACE_Event = "stx_rollhelper";
 export const SETTINGS_CARD_ID_Event = "st-roll-settings-Event-card";
 export const SETTINGS_STYLE_ID_Event = "st-roll-settings-Event-style";
 export const SETTINGS_BADGE_ID_Event = "st-roll-settings-Event-badge";

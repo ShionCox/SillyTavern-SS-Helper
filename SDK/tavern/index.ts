@@ -3,19 +3,27 @@ export type {
   SdkTavernCharacterEvent,
   SdkTavernChatListItemEvent,
   SdkTavernChatLocatorEvent,
+  SdkTavernChatRefEvent,
   SdkTavernContextEvent,
   SdkTavernGroupEvent,
   SdkTavernInstanceEvent,
   SdkTavernRoleIdentityEvent,
   SdkTavernScopeLocatorEvent,
   SdkTavernScopeTypeEvent,
+  SdkUnifiedTavernChatDirectoryInputEvent,
+  SdkUnifiedTavernChatDirectoryItemEvent,
+  SdkUnifiedTavernHostChatEvent,
+  SdkUnifiedTavernLocalSummaryEvent,
 } from "./types";
 
 export {
   normalizeTavernKeyPartEvent,
+  normalizeTavernChatIdEvent,
   normalizeTavernRoleKeyEvent,
   parseLegacyTavernChatKeyEvent,
   isFallbackTavernChatEvent,
+  buildTavernChatEntityKeyEvent,
+  parseAnyTavernChatRefEvent,
   buildTavernChatScopedKeyEvent,
   parseTavernChatScopedKeyEvent,
   withChatIdForScopeEvent,
@@ -30,4 +38,10 @@ export {
 
 export { ensureTavernInstanceIdEvent } from "./instance";
 
-export { listTavernChatsForCurrentScopeEvent, listTavernChatsForCurrentTavernEvent } from "./chats";
+export { buildSdkChatKeyEvent } from "./chatkey";
+
+export {
+  listTavernChatsForCurrentScopeEvent,
+  listTavernChatsForCurrentTavernEvent,
+  listUnifiedTavernChatDirectoryEvent,
+} from "./chats";

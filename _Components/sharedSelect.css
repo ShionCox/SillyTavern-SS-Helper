@@ -93,7 +93,17 @@ _SCOPE_ .stx-shared-select-list {
   border-radius: 12px;
   background:
     radial-gradient(120% 130% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 58%),
-    var(--stx-theme-panel-bg, var(--st-roll-select-panel-bg, rgba(18, 16, 18, 0.78)));
+    var(--stx-shared-select-panel-bg, var(--st-roll-select-panel-bg, var(--stx-theme-panel-bg, rgba(18, 16, 18, 0.78))));
+  -webkit-backdrop-filter:
+    var(
+      --stx-shared-select-panel-backdrop-filter,
+      var(--st-roll-select-panel-backdrop-filter, var(--stx-theme-backdrop-filter, blur(6px)))
+    );
+  backdrop-filter:
+    var(
+      --stx-shared-select-panel-backdrop-filter,
+      var(--st-roll-select-panel-backdrop-filter, var(--stx-theme-backdrop-filter, blur(6px)))
+    );
   box-shadow:
     0 18px 40px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(255, 255, 255, 0.04);

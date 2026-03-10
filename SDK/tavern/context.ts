@@ -1,5 +1,5 @@
 import { ensureTavernInstanceIdEvent } from "./instance";
-import { normalizeTavernKeyPartEvent, normalizeTavernRoleKeyEvent } from "./normalize";
+import { normalizeTavernChatIdEvent, normalizeTavernKeyPartEvent, normalizeTavernRoleKeyEvent } from "./normalize";
 import type {
   SdkTavernCharacterEvent,
   SdkTavernContextEvent,
@@ -78,7 +78,7 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
 
   if (group) {
     const groupId = normalizeTavernKeyPartEvent(group.id, "no_group");
-    const currentChatId = normalizeTavernKeyPartEvent(group.chat_id, "fallback_chat");
+    const currentChatId = normalizeTavernChatIdEvent(group.chat_id, "fallback_chat");
     return {
       tavernInstanceId,
       scopeType: "group",
@@ -94,7 +94,7 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
   }
 
   const role = resolveTavernRoleIdentityEvent(context);
-  const currentChatId = normalizeTavernKeyPartEvent(context?.chatId, "fallback_chat");
+  const currentChatId = normalizeTavernChatIdEvent(context?.chatId, "fallback_chat");
   const characterId = Number.isInteger(Number(context?.characterId)) ? Number(context?.characterId) : -1;
   return {
     tavernInstanceId,

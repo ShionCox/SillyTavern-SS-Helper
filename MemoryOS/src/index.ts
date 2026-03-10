@@ -67,7 +67,7 @@ import { broadcast } from '../../SDK/bus/broadcast';
 import { STXBus, MemorySDK, LLMSDK, STXRegistry, PluginManifest } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
-import { buildChatKey } from './utils/chat-namespace';
+import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { db } from './db/db';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -228,8 +228,12 @@ class MemoryOS {
                 characterId = characters[ctx.characterId]?.avatar || 'unknown';
             }
 
-            // 构造强隔离 namespace
-            const chatKey = buildChatKey({ chatId, groupId, characterId });
+            // 使用 SDK 统一函数构建标准化 chatKey
+            const chatKey = buildSdkChatKeyEvent();
+            if (!chatKey) {
+                logger.warn('无法构建 chatKey（上下文不可用），跳过记忆库初始化');
+                return;
+            }
             logger.info(`已切换记忆，ChatKey: ${chatKey}`);
 
             // 初始化 SDK 实例

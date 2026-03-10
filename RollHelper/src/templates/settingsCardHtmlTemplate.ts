@@ -3,6 +3,7 @@ import { buildSharedButton } from "../../../_Components/sharedButton";
 import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
 import { buildSharedInputField } from "../../../_Components/sharedInput";
 import { buildSharedSelectField } from "../../../_Components/sharedSelect";
+import { buildSettingPageTemplate } from "../../../_Components/Setting";
 
 /**
  * 功能：构建设置页复选卡片项。
@@ -40,17 +41,7 @@ function buildCheckboxItemEvent(
  * @returns 设置卡片 HTML 字符串。
  */
 export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsEvent): string {
-  return `
-    <div class="inline-drawer st-roll-shell">
-      <div class="inline-drawer-toggle inline-drawer-header st-roll-head" id="${ids.drawerToggleId}">
-        <div class="st-roll-head-title">
-          <span style="margin-bottom: 2px;">${ids.displayName}</span>
-          <span id="${ids.badgeId}" class="st-roll-head-badge">${ids.badgeText}</span>
-        </div>
-        <div id="${ids.drawerIconId}" class="inline-drawer-icon fa-solid fa-circle-chevron-down down interactable" tabindex="0" role="button"></div>
-      </div>
-
-      <div class="inline-drawer-content st-roll-content" id="${ids.drawerContentId}" style="display:none;">
+  const contentHtml = `
         <div class="st-roll-filters flex-container">
           ${buildSharedInputField({
             id: ids.searchId,
@@ -87,10 +78,10 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             "enable event dice plugin"
           )}
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="theme ui dark light tavern smart">
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="theme ui dark light tavern">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">界面主题</div>
-              <div class="st-roll-item-desc">切换设置界面外观：默认、深色、亮色、酒馆或跟随酒馆主题。</div>
+              <div class="st-roll-item-desc">切换设置界面外观：默认、深色、亮色或酒馆。</div>
             </div>
             <div class="st-roll-row">
               ${buildSharedSelectField({
@@ -102,7 +93,6 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
                   { value: "dark", label: "深色 UI" },
                   { value: "light", label: "亮色 UI" },
                   { value: "tavern", label: "酒馆 UI" },
-                  { value: "smart", label: "跟随酒馆主题" },
                 ],
               })}
             </div>
@@ -661,8 +651,23 @@ export function buildSettingsCardHtmlTemplateEvent(ids: SettingsCardTemplateIdsE
             </div>
           </div>
         </div>
-      </div>
-    </div>
+  `;
+
+  return `
+    ${buildSettingPageTemplate({
+      drawerToggleId: ids.drawerToggleId,
+      drawerContentId: ids.drawerContentId,
+      drawerIconId: ids.drawerIconId,
+      title: ids.displayName,
+      badgeId: ids.badgeId,
+      badgeText: ids.badgeText,
+      shellClassName: "st-roll-shell",
+      headerClassName: "st-roll-head",
+      contentClassName: "st-roll-content",
+      titleClassName: "st-roll-head-title",
+      badgeClassName: "st-roll-head-badge",
+      contentHtml,
+    })}
 
     <dialog id="${ids.statusModalId}" class="st-roll-status-modal">
       <div class="st-roll-status-modal-backdrop" data-status-modal-role="backdrop"></div>

@@ -10,36 +10,45 @@ import type {
   SummaryDetailModeEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
-import { initializeSdkThemeState, resolveSdkThemeSelection } from "../../../SDK/theme";
+import {
+  createSdkPluginChatStateStore,
+  createSdkPluginSettingsStore,
+  getCurrentTavernSettingsScope,
+  listSdkPluginChatStateSummaries,
+  migrateLegacyPluginChatState,
+  readSdkPluginChatState,
+  writeSdkPluginChatState,
+} from "../../../SDK/settings";
+import {
+  buildSdkThemePatchFromSelection,
+  getSdkThemeState,
+  resolveSdkThemeSelection,
+  setSdkThemeState,
+} from "../../../SDK/theme";
 import type { SdkTavernScopeLocatorEvent } from "../../../SDK/tavern";
 import {
   buildTavernChatScopedKeyEvent,
   getTavernContextSnapshotEvent,
   isFallbackTavernChatEvent,
   listTavernChatsForCurrentTavernEvent,
+  parseAnyTavernChatRefEvent,
 } from "../../../SDK/tavern";
 import {
   chatMetadata,
-  extensionSettings,
   getLiveContextEvent,
   saveMetadata,
-  saveSettingsDebounced,
 } from "../core/runtimeContextEvent";
 import {
-  type ChatScopedLocatorV2Event,
   type ChatScopedStateSummaryV2Event,
   listChatScopedStateSummariesForTavernV2Event,
   loadChatScopedStateV2ByKeyEvent,
-  loadStatusesByChatScopedKeyV2Event,
-  saveSkillStoreByChatScopedKeyV2Event,
-  saveStatusesByChatScopedKeyV2Event,
 } from "../persistence/chatScopedStoreV2Event";
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
   DEFAULT_RULE_TEXT_Event,
   DEFAULT_SETTINGS_Event,
-  MODULE_NAME_Event,
+  SDK_SETTINGS_NAMESPACE_Event,
   RULE_TEXT_MODE_VERSION_Event,
   SKILL_PRESET_DEFAULT_ID_Event,
   SKILL_PRESET_DEFAULT_NAME_Event,
@@ -51,9 +60,22 @@ import {
 } from "./constantsEvent";
 
 const LOCAL_METADATA_FALLBACK_Event: Record<string, any> = {};
-const LOCAL_SETTINGS_FALLBACK_Event: DicePluginSettingsEvent = {
-  ...DEFAULT_SETTINGS_Event,
-};
+let SETTINGS_STORE_Event: ReturnType<typeof createSdkPluginSettingsStore<DicePluginSettingsEvent>> | null = null;
+interface ScopedSettingsCacheEvent {
+  scopeKey: string;
+  settings: DicePluginSettingsEvent;
+}
+let SETTINGS_CACHE_Event: ScopedSettingsCacheEvent | null = null;
+let SETTINGS_STORE_SUBSCRIBED_Event = false;
+let CHAT_STATE_STORE_Event: ReturnType<
+  typeof createSdkPluginChatStateStore<RollHelperChatScopedStateEvent>
+> | null = null;
+const CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event = new Set<string>();
+
+interface RollHelperChatScopedStateEvent {
+  skillPresetStoreText: string;
+  activeStatuses: ActiveStatusEvent[];
+}
 
 let syncSettingsUiCallbackEvent: () => void = () => { };
 
@@ -64,24 +86,6 @@ export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
 let ACTIVE_CHAT_KEY_Event = "";
 let ACTIVE_CHAT_SCOPE_Event: SdkTavernScopeLocatorEvent | null = null;
 let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
-
-/**
- * 功能：把 SDK 作用域定位转换为 V2 存储定位。
- * @param scope SDK 作用域定位
- * @returns V2 定位结构
- */
-function toV2LocatorEvent(scope: SdkTavernScopeLocatorEvent): ChatScopedLocatorV2Event {
-  return {
-    tavernInstanceId: scope.tavernInstanceId,
-    scopeType: scope.scopeType,
-    scopeId: scope.scopeId,
-    roleKey: scope.roleKey,
-    roleId: scope.roleId,
-    chatId: scope.currentChatId,
-    displayName: scope.displayName,
-    avatarUrl: scope.avatarUrl,
-  };
-}
 
 /**
  * 功能：解析当前聊天的结构化主键。
@@ -107,13 +111,138 @@ function resolveCurrentChatKeyEvent(): string {
  * @param skillPresetStoreText 技能预设文本
  * @returns 无返回值
  */
+function normalizeChatScopedStatePayloadEvent(
+  source: Partial<RollHelperChatScopedStateEvent>,
+  fallbackSkillTableText: string
+): RollHelperChatScopedStateEvent {
+  const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
+    typeof source.skillPresetStoreText === "string" ? source.skillPresetStoreText : "",
+    fallbackSkillTableText
+  );
+  const normalizedStore =
+    parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
+  return {
+    skillPresetStoreText: JSON.stringify(normalizedStore, null, 2),
+    activeStatuses: normalizeActiveStatusesFromEvent(source.activeStatuses),
+  };
+}
+
+function getChatStateStoreEvent() {
+  if (!CHAT_STATE_STORE_Event) {
+    CHAT_STATE_STORE_Event = createSdkPluginChatStateStore<RollHelperChatScopedStateEvent>({
+      namespace: SDK_SETTINGS_NAMESPACE_Event,
+      defaults: {
+        skillPresetStoreText: "",
+        activeStatuses: [],
+      },
+      normalize: (candidate) =>
+        normalizeChatScopedStatePayloadEvent(candidate, DEFAULT_SETTINGS_Event.skillTableText),
+    });
+  }
+  return CHAT_STATE_STORE_Event;
+}
+
+function ensureLegacyChatStateMigrationEvent(): void {
+  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
+  if (!scope) return;
+  const tavernInstanceId = String(scope.tavernInstanceId ?? "").trim();
+  if (!tavernInstanceId) return;
+  if (CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.has(tavernInstanceId)) return;
+  CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.add(tavernInstanceId);
+  void migrateLegacyPluginChatState<RollHelperChatScopedStateEvent>(SDK_SETTINGS_NAMESPACE_Event, {
+    versionTag: "rollhelper_chat_v2_to_sdk_v1",
+    list: async () => {
+      const legacy = (await listChatScopedStateSummariesForTavernV2Event(
+        scope.tavernInstanceId
+      )) as ChatScopedStateSummaryV2Event[];
+      return legacy.map((item) => ({
+        chatKey: String(item.chatScopedKey ?? "").trim(),
+        updatedAt: Number(item.updatedAt) || 0,
+        displayName: String(item.displayName ?? "").trim(),
+        avatarUrl: String(item.avatarUrl ?? "").trim(),
+        roleKey: String(item.roleKey ?? "").trim(),
+        summary: {
+          activeStatusCount: Number(item.activeStatusCount) || 0,
+        },
+      }));
+    },
+    read: async (chatKey: string) => {
+      const loaded = await loadChatScopedStateV2ByKeyEvent(chatKey);
+      const fallbackSkillTableText = getSettingsEvent().skillTableText;
+      return normalizeChatScopedStatePayloadEvent(
+        {
+          skillPresetStoreText: loaded.skillPresetStoreText,
+          activeStatuses: loaded.activeStatuses,
+        },
+        fallbackSkillTableText
+      );
+    },
+  }).catch((error) => {
+    CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.delete(tavernInstanceId);
+    logger.warn("聊天级旧数据迁移失败（已忽略）", error);
+  });
+}
+
+function readChatScopedStateByKeyEvent(chatKey: string): RollHelperChatScopedStateEvent {
+  const fallbackSkillTableText = getSettingsEvent().skillTableText;
+  const row = readSdkPluginChatState<RollHelperChatScopedStateEvent>(
+    SDK_SETTINGS_NAMESPACE_Event,
+    chatKey
+  );
+  return normalizeChatScopedStatePayloadEvent(row?.state ?? {}, fallbackSkillTableText);
+}
+
+function writeChatScopedStateByKeyEvent(
+  chatKey: string,
+  patchOrNext:
+    | Partial<RollHelperChatScopedStateEvent>
+    | ((previous: RollHelperChatScopedStateEvent) => Partial<RollHelperChatScopedStateEvent>),
+  meta?: { displayName?: string; avatarUrl?: string; roleKey?: string; updatedAt?: number }
+): RollHelperChatScopedStateEvent {
+  const fallbackSkillTableText = getSettingsEvent().skillTableText;
+  const previous = readChatScopedStateByKeyEvent(chatKey);
+  const patch = typeof patchOrNext === "function" ? patchOrNext(previous) : patchOrNext;
+  const nextPayload = normalizeChatScopedStatePayloadEvent(
+    {
+      ...previous,
+      ...(patch ?? {}),
+    },
+    fallbackSkillTableText
+  );
+
+  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
+  const existing = readSdkPluginChatState<RollHelperChatScopedStateEvent>(
+    SDK_SETTINGS_NAMESPACE_Event,
+    chatKey
+  );
+  const parsed = parseAnyTavernChatRefEvent(chatKey, {
+    tavernInstanceId: scope?.tavernInstanceId,
+  });
+  const fallbackDisplayName = String(existing?.displayName ?? parsed.chatId ?? "unknown_chat").trim();
+  writeSdkPluginChatState<RollHelperChatScopedStateEvent>(SDK_SETTINGS_NAMESPACE_Event, chatKey, {
+    state: nextPayload,
+    updatedAt: Number(meta?.updatedAt) || Date.now(),
+    displayName: String(meta?.displayName ?? existing?.displayName ?? scope?.displayName ?? fallbackDisplayName).trim(),
+    avatarUrl: String(meta?.avatarUrl ?? existing?.avatarUrl ?? scope?.avatarUrl ?? "").trim(),
+    roleKey: String(meta?.roleKey ?? existing?.roleKey ?? scope?.roleKey ?? "").trim(),
+    summary: {
+      activeStatusCount: nextPayload.activeStatuses.length,
+    },
+  });
+  return nextPayload;
+}
+
 function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string): void {
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
-  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
-  void saveSkillStoreByChatScopedKeyV2Event(chatKey, skillPresetStoreText, locatorHint).catch((error) => {
+  try {
+    writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+      ...previous,
+      skillPresetStoreText,
+    }));
+  } catch (error) {
     logger.warn(`聊天级技能持久化失败，chatKey=${chatKey}`, error);
-  });
+  }
 }
 
 /**
@@ -124,10 +253,14 @@ function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string):
 function persistStatusesToChatScopedEvent(statuses: ActiveStatusEvent[]): void {
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
-  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
-  void saveStatusesByChatScopedKeyV2Event(chatKey, statuses, locatorHint).catch((error) => {
+  try {
+    writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+      ...previous,
+      activeStatuses: normalizeActiveStatusesFromEvent(statuses),
+    }));
+  } catch (error) {
     logger.warn(`聊天级状态持久化失败，chatKey=${chatKey}`, error);
-  });
+  }
 }
 
 export function getActiveChatKeyEvent(): string {
@@ -162,11 +295,11 @@ export async function listChatScopedStatusSummariesEvent(): Promise<ChatScopedSt
   const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
   if (!scope) return [];
   ACTIVE_CHAT_SCOPE_Event = scope;
-  const list = (await listChatScopedStateSummariesForTavernV2Event(scope.tavernInstanceId)) as ChatScopedStateSummaryV2Event[];
+  const list = listSdkPluginChatStateSummaries(SDK_SETTINGS_NAMESPACE_Event);
   return list.map((item) => ({
-    chatKey: String(item.chatScopedKey ?? "").trim(),
+    chatKey: String(item.chatKey ?? "").trim(),
     updatedAt: Number(item.updatedAt) || 0,
-    activeStatusCount: Number(item.activeStatusCount) || 0,
+    activeStatusCount: Number((item.summary as { activeStatusCount?: unknown })?.activeStatusCount) || 0,
     chatId: String(item.chatId ?? "").trim(),
     displayName: String(item.displayName ?? "").trim(),
     avatarUrl: String(item.avatarUrl ?? "").trim(),
@@ -183,7 +316,7 @@ export async function listChatScopedStatusSummariesEvent(): Promise<ChatScopedSt
 export async function listHostChatsForCurrentScopeEvent(): Promise<HostChatListItemEvent[]> {
   const hostList = await listTavernChatsForCurrentTavernEvent();
   return hostList
-    .map((item) => ({
+    .map((item): HostChatListItemEvent => ({
       chatKey: buildTavernChatScopedKeyEvent(item.locator),
       updatedAt: Number(item.updatedAt) || 0,
       chatId: String(item.locator.chatId ?? "").trim(),
@@ -197,18 +330,18 @@ export async function listHostChatsForCurrentScopeEvent(): Promise<HostChatListI
 }
 
 export async function loadStatusesForChatKeyEvent(chatKey: string): Promise<ActiveStatusEvent[]> {
-  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
-  return normalizeActiveStatusesFromEvent(
-    await loadStatusesByChatScopedKeyV2Event(chatKey, locatorHint)
-  );
+  const state = readChatScopedStateByKeyEvent(chatKey);
+  return normalizeActiveStatusesFromEvent(state.activeStatuses);
 }
 
 export async function saveStatusesForChatKeyEvent(
   chatKey: string,
   statuses: ActiveStatusEvent[]
 ): Promise<void> {
-  const locatorHint = ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined;
-  await saveStatusesByChatScopedKeyV2Event(chatKey, normalizeActiveStatusesFromEvent(statuses), locatorHint);
+  writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+    ...previous,
+    activeStatuses: normalizeActiveStatusesFromEvent(statuses),
+  }));
 }
 
 export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {
@@ -216,10 +349,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
   try {
-    const state = await loadChatScopedStateV2ByKeyEvent(
-      chatKey,
-      ACTIVE_CHAT_SCOPE_Event ? toV2LocatorEvent(ACTIVE_CHAT_SCOPE_Event) : undefined
-    );
+    const state = readChatScopedStateByKeyEvent(chatKey);
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
     const settings = getSettingsEvent();
@@ -229,29 +359,61 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     );
     const normalizedStore =
       parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
-    settings.skillPresetStoreText = JSON.stringify(normalizedStore, null, 2);
-    settings.skillTableText = syncActivePresetToSkillTableTextEvent(normalizedStore, settings.skillTableText);
+    const nextSkillPresetStoreText = JSON.stringify(normalizedStore, null, 2);
+    const nextSkillTableText = syncActivePresetToSkillTableTextEvent(
+      normalizedStore,
+      settings.skillTableText
+    );
 
     const meta = getDiceMetaEvent();
     meta.activeStatuses = normalizeActiveStatusesFromEvent(state.activeStatuses);
     saveMetadataSafeEvent();
 
+    let wroteSettings = false;
+    if (
+      settings.skillPresetStoreText !== nextSkillPresetStoreText ||
+      settings.skillTableText !== nextSkillTableText
+    ) {
+      updateSettingsEvent({
+        skillPresetStoreText: nextSkillPresetStoreText,
+        skillTableText: nextSkillTableText,
+      });
+      wroteSettings = true;
+    }
+
     SKILL_TABLE_CACHE_TEXT_Event = "";
     SKILL_TABLE_CACHE_MAP_Event = {};
-    syncSettingsUiCallbackEvent();
+    if (!wroteSettings) {
+      syncSettingsUiCallbackEvent();
+    }
     logger.info(`聊天级状态已装载 (${reason}) chatKey=${chatKey}`);
   } catch (error) {
     logger.warn(`聊天级状态装载失败，已降级默认 (${reason}) chatKey=${chatKey}`, error);
     const settings = getSettingsEvent();
     const defaultStore = buildDefaultSkillPresetStoreEvent();
-    settings.skillPresetStoreText = JSON.stringify(defaultStore, null, 2);
-    settings.skillTableText = syncActivePresetToSkillTableTextEvent(defaultStore, settings.skillTableText);
+    const nextSkillPresetStoreText = JSON.stringify(defaultStore, null, 2);
+    const nextSkillTableText = syncActivePresetToSkillTableTextEvent(defaultStore, settings.skillTableText);
     const meta = getDiceMetaEvent();
     meta.activeStatuses = [];
     saveMetadataSafeEvent();
+
+    let wroteSettings = false;
+    if (
+      settings.skillPresetStoreText !== nextSkillPresetStoreText ||
+      settings.skillTableText !== nextSkillTableText
+    ) {
+      updateSettingsEvent({
+        skillPresetStoreText: nextSkillPresetStoreText,
+        skillTableText: nextSkillTableText,
+      });
+      wroteSettings = true;
+    }
+
     SKILL_TABLE_CACHE_TEXT_Event = "";
     SKILL_TABLE_CACHE_MAP_Event = {};
-    syncSettingsUiCallbackEvent();
+    if (!wroteSettings) {
+      syncSettingsUiCallbackEvent();
+    }
   }
 }
 
@@ -305,42 +467,99 @@ export function saveMetadataSafeEvent(): void {
   }
 }
 
-export function saveSettingsSafeEvent(): void {
-  const liveCtx = getLiveContextEvent();
-  const saver = liveCtx?.saveSettingsDebounced ?? saveSettingsDebounced;
-  if (typeof saver === "function") {
-    try {
-      saver.call(liveCtx);
-    } catch (error) {
-      logger.warn("保存扩展设置失败", error);
-    }
+function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThemeEvent {
+  const normalized = String(raw ?? "").trim().toLowerCase();
+  if (normalized === "dark" || normalized === "light" || normalized === "tavern") {
+    return normalized as RollHelperSettingsThemeEvent;
   }
+  return "default";
 }
 
-export function persistChatSafeEvent(): void {
-  const liveCtx = getLiveContextEvent();
-  const fn =
-    liveCtx?.saveChat ?? liveCtx?.saveChatConditional ?? liveCtx?.saveChatDebounced;
-  if (typeof fn !== "function") return;
-  try {
-    Promise.resolve(fn.call(liveCtx)).catch((error) => {
-      logger.warn("保存聊天失败", error);
+function resolveSdkSettingsThemeEvent(): RollHelperSettingsThemeEvent {
+  const selection = resolveSdkThemeSelection(getSdkThemeState());
+  return normalizeSettingsThemeCompatEvent(selection);
+}
+
+function resolveSettingsScopeKeyEvent(scope?: { tavernInstanceId?: unknown } | null): string {
+  const normalized = String(scope?.tavernInstanceId ?? "").trim();
+  return normalized || "unknown_tavern";
+}
+
+function getCurrentSettingsScopeKeyEvent(): string {
+  return resolveSettingsScopeKeyEvent(getCurrentTavernSettingsScope());
+}
+
+function cloneSettingsSnapshotEvent(settings: DicePluginSettingsEvent): DicePluginSettingsEvent {
+  return { ...settings };
+}
+
+function getCachedSettingsForScopeEvent(scopeKey: string): DicePluginSettingsEvent | null {
+  if (!SETTINGS_CACHE_Event) return null;
+  if (SETTINGS_CACHE_Event.scopeKey !== scopeKey) return null;
+  return SETTINGS_CACHE_Event.settings;
+}
+
+function setSettingsCacheForScopeEvent(scopeKey: string, settings: DicePluginSettingsEvent): void {
+  SETTINGS_CACHE_Event = {
+    scopeKey,
+    settings: cloneSettingsSnapshotEvent(settings),
+  };
+}
+
+function writeSettingsForCurrentScopeEvent(
+  patchOrNext:
+    | Partial<DicePluginSettingsEvent>
+    | ((previous: DicePluginSettingsEvent) => DicePluginSettingsEvent)
+): DicePluginSettingsEvent {
+  const store = getSettingsStoreEvent();
+  const scopeKey = getCurrentSettingsScopeKeyEvent();
+  const next = store.write((previous) => {
+    const previousSnapshot = cloneSettingsSnapshotEvent(previous);
+    const candidate =
+      typeof patchOrNext === "function"
+        ? (patchOrNext as (previous: DicePluginSettingsEvent) => DicePluginSettingsEvent)(
+            previousSnapshot
+          )
+        : ({
+            ...previousSnapshot,
+            ...(patchOrNext ?? {}),
+          } as DicePluginSettingsEvent);
+    return {
+      ...candidate,
+      theme: resolveSdkSettingsThemeEvent(),
+    };
+  });
+  setSettingsCacheForScopeEvent(scopeKey, next);
+  return next;
+}
+
+function ensureSettingsThemeMirrorEvent(
+  settings: DicePluginSettingsEvent,
+  allowSeedFromLegacy = false
+): DicePluginSettingsEvent {
+  const legacyTheme = normalizeSettingsThemeCompatEvent(settings.theme);
+  let sdkTheme = resolveSdkSettingsThemeEvent();
+  if (allowSeedFromLegacy && sdkTheme === "default" && legacyTheme !== "default") {
+    setSdkThemeState(buildSdkThemePatchFromSelection(legacyTheme));
+    sdkTheme = resolveSdkSettingsThemeEvent();
+  }
+  if (legacyTheme !== sdkTheme) {
+    return writeSettingsForCurrentScopeEvent({
+      theme: sdkTheme,
     });
-  } catch (error) {
-    logger.warn("保存聊天失败", error);
   }
+  if (settings.theme === sdkTheme) return settings;
+  return {
+    ...settings,
+    theme: sdkTheme,
+  };
 }
 
-export function getSettingsEvent(): DicePluginSettingsEvent {
-  const liveCtx = getLiveContextEvent();
-  const allSettings = liveCtx?.extensionSettings ?? extensionSettings;
-  if (!allSettings || typeof allSettings !== "object") {
-    return LOCAL_SETTINGS_FALLBACK_Event;
-  }
-  if (!allSettings[MODULE_NAME_Event] || typeof allSettings[MODULE_NAME_Event] !== "object") {
-    allSettings[MODULE_NAME_Event] = { ...DEFAULT_SETTINGS_Event };
-  }
-  const bucket = allSettings[MODULE_NAME_Event] as DicePluginSettingsEvent;
+function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>): DicePluginSettingsEvent {
+  const bucket: DicePluginSettingsEvent = {
+    ...DEFAULT_SETTINGS_Event,
+    ...(source ?? {}),
+  };
   bucket.enabled = bucket.enabled !== false;
   bucket.autoSendRuleToAI = bucket.autoSendRuleToAI !== false;
   bucket.enableAiRollMode = bucket.enableAiRollMode !== false;
@@ -351,27 +570,24 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
   bucket.enableDynamicDcReason = bucket.enableDynamicDcReason !== false;
   bucket.enableStatusSystem = bucket.enableStatusSystem !== false;
   bucket.aiAllowedDiceSidesText =
-    typeof (bucket as any).aiAllowedDiceSidesText === "string"
-      ? String((bucket as any).aiAllowedDiceSidesText).trim()
+    typeof (source as any)?.aiAllowedDiceSidesText === "string"
+      ? String((source as any).aiAllowedDiceSidesText).trim()
       : DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText;
-  const rawTheme = String((bucket as any).theme || "").toLowerCase();
+  const rawTheme = String((source as any)?.theme ?? "").trim().toLowerCase();
   bucket.theme =
-    rawTheme === "dark" ||
-    rawTheme === "light" ||
-    rawTheme === "tavern" ||
-    rawTheme === "smart"
+    rawTheme === "dark" || rawTheme === "light" || rawTheme === "tavern"
       ? (rawTheme as RollHelperSettingsThemeEvent)
-      : resolveSdkThemeSelection(initializeSdkThemeState("default"));
+      : "default";
   bucket.enableOutcomeBranches = bucket.enableOutcomeBranches !== false;
   bucket.enableExplodeOutcomeBranch = bucket.enableExplodeOutcomeBranch !== false;
   bucket.includeOutcomeInSummary = bucket.includeOutcomeInSummary !== false;
   bucket.showOutcomePreviewInListCard = bucket.showOutcomePreviewInListCard !== false;
-  const rawSummaryDetail = String((bucket as any).summaryDetailMode || "").toLowerCase();
+  const rawSummaryDetail = String((source as any)?.summaryDetailMode || "").toLowerCase();
   bucket.summaryDetailMode =
     rawSummaryDetail === "balanced" || rawSummaryDetail === "detailed"
       ? (rawSummaryDetail as SummaryDetailModeEvent)
       : "minimal";
-  const rawSummaryRounds = Number((bucket as any).summaryHistoryRounds);
+  const rawSummaryRounds = Number((source as any)?.summaryHistoryRounds);
   const normalizedSummaryRounds = Number.isFinite(rawSummaryRounds)
     ? Math.floor(rawSummaryRounds)
     : DEFAULT_SETTINGS_Event.summaryHistoryRounds;
@@ -390,8 +606,8 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
       ? bucket.skillTableText
       : "{}";
   bucket.skillPresetStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-    typeof (bucket as any).skillPresetStoreText === "string"
-      ? String((bucket as any).skillPresetStoreText)
+    typeof (source as any)?.skillPresetStoreText === "string"
+      ? String((source as any).skillPresetStoreText)
       : "",
     bucket.skillTableText
   );
@@ -400,7 +616,7 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
     bucket.skillTableText = syncActivePresetToSkillTableTextEvent(presetStore, bucket.skillTableText);
     bucket.skillPresetStoreText = JSON.stringify(presetStore, null, 2);
   }
-  const ruleTextModeVersion = Number((bucket as any).ruleTextModeVersion);
+  const ruleTextModeVersion = Number((source as any)?.ruleTextModeVersion);
   if (ruleTextModeVersion !== RULE_TEXT_MODE_VERSION_Event) {
     bucket.ruleText = "";
     bucket.ruleTextModeVersion = RULE_TEXT_MODE_VERSION_Event;
@@ -410,6 +626,61 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
   }
   bucket.ruleText = typeof bucket.ruleText === "string" ? bucket.ruleText : DEFAULT_RULE_TEXT_Event;
   return bucket;
+}
+
+function getSettingsStoreEvent() {
+  if (!SETTINGS_STORE_Event) {
+    SETTINGS_STORE_Event = createSdkPluginSettingsStore<DicePluginSettingsEvent>({
+      namespace: SDK_SETTINGS_NAMESPACE_Event,
+      defaults: DEFAULT_SETTINGS_Event,
+      normalize: normalizeSettingsBucketEvent,
+    });
+  }
+  getChatStateStoreEvent();
+  ensureLegacyChatStateMigrationEvent();
+  if (!SETTINGS_STORE_SUBSCRIBED_Event) {
+    SETTINGS_STORE_SUBSCRIBED_Event = true;
+    SETTINGS_STORE_Event.subscribe((settings, scope) => {
+      setSettingsCacheForScopeEvent(resolveSettingsScopeKeyEvent(scope), settings);
+      syncSettingsUiCallbackEvent();
+    });
+  }
+  return SETTINGS_STORE_Event;
+}
+
+export function saveSettingsSafeEvent(): void {
+  const current = getSettingsEvent();
+  writeSettingsForCurrentScopeEvent(() => ({
+    ...current,
+  }));
+}
+
+export function persistChatSafeEvent(): void {
+  const liveCtx = getLiveContextEvent();
+  const fn =
+    liveCtx?.saveChat ?? liveCtx?.saveChatConditional ?? liveCtx?.saveChatDebounced;
+  if (typeof fn !== "function") return;
+  try {
+    Promise.resolve(fn.call(liveCtx)).catch((error) => {
+      logger.warn("保存聊天失败", error);
+    });
+  } catch (error) {
+    logger.warn("保存聊天失败", error);
+  }
+}
+
+export function getSettingsEvent(): DicePluginSettingsEvent {
+  const scopeKey = getCurrentSettingsScopeKeyEvent();
+  const cached = getCachedSettingsForScopeEvent(scopeKey);
+  const current = cached ?? getSettingsStoreEvent().read();
+  if (!cached) {
+    setSettingsCacheForScopeEvent(scopeKey, current);
+  }
+  const mirrored = ensureSettingsThemeMirrorEvent(current, true);
+  if (mirrored !== current) {
+    setSettingsCacheForScopeEvent(scopeKey, mirrored);
+  }
+  return cloneSettingsSnapshotEvent(mirrored);
 }
 
 export function normalizeStatusNameKeyEvent(raw: any): string {
@@ -436,10 +707,12 @@ export function setActiveStatusesEvent(statuses: ActiveStatusEvent[]): void {
 }
 
 export function updateSettingsEvent(patch: Partial<DicePluginSettingsEvent>): void {
-  const settings = getSettingsEvent();
-  Object.assign(settings, patch);
-  saveSettingsSafeEvent();
-  syncSettingsUiCallbackEvent();
+  const patchAny = patch as Partial<DicePluginSettingsEvent> & { theme?: RollHelperSettingsThemeEvent };
+  if (patchAny.theme != null) {
+    setSdkThemeState(buildSdkThemePatchFromSelection(normalizeSettingsThemeCompatEvent(patchAny.theme)));
+  }
+  const { theme: _themeIgnored, ...restPatch } = patchAny;
+  writeSettingsForCurrentScopeEvent(restPatch);
 }
 
 export function normalizeSkillPresetNameKeyEvent(raw: string): string {

@@ -1,3 +1,5 @@
+import { createSdkPluginSettingsStore } from "./settings";
+
 export type SdkThemeId = "default" | "dark" | "light" | "tavern" | "smart";
 export type SdkThemeMode = "sdk" | "smart";
 export type SdkThemePresetId = Exclude<SdkThemeId, "smart">;
@@ -21,8 +23,8 @@ export interface ApplySdkThemeToNodeOptions {
 
 type SdkThemeListener = (state: SdkThemeState) => void;
 
-const SDK_THEME_STORAGE_KEY = "stx_sdk_theme_state_v1";
 const SDK_THEME_EVENT_NAME = "stx-sdk-theme-changed";
+const SDK_THEME_SETTINGS_NAMESPACE = "stx_sdk_theme";
 const DEFAULT_SDK_THEME_STATE: SdkThemeState = {
   mode: "sdk",
   themeId: "default",
@@ -35,6 +37,10 @@ interface SdkThemeGlobalState {
   listeners: Set<SdkThemeListener>;
   hosts: Set<HTMLElement>;
 }
+
+let SDK_THEME_SETTINGS_STORE:
+  | ReturnType<typeof createSdkPluginSettingsStore<SdkThemeState>>
+  | null = null;
 
 /**
  * 功能：读取 SDK 全局主题状态容器。
@@ -95,6 +101,16 @@ function normalizeSdkThemeState(
   };
 }
 
+function getSdkThemeSettingsStore() {
+  if (SDK_THEME_SETTINGS_STORE) return SDK_THEME_SETTINGS_STORE;
+  SDK_THEME_SETTINGS_STORE = createSdkPluginSettingsStore<SdkThemeState>({
+    namespace: SDK_THEME_SETTINGS_NAMESPACE,
+    defaults: DEFAULT_SDK_THEME_STATE,
+    normalize: (candidate) => normalizeSdkThemeState(candidate, DEFAULT_SDK_THEME_STATE),
+  });
+  return SDK_THEME_SETTINGS_STORE;
+}
+
 /**
  * 功能：把运行时状态转换成界面选择值。
  * @param state 当前 SDK 主题状态。
@@ -129,11 +145,7 @@ export function buildSdkThemePatchFromSelection(theme: string): Partial<SdkTheme
  */
 function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
   try {
-    const raw = globalThis.localStorage?.getItem(SDK_THEME_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<SdkThemeState>;
-    if (!parsed || typeof parsed !== "object") return null;
-    return parsed;
+    return getSdkThemeSettingsStore().read();
   } catch {
     return null;
   }
@@ -146,7 +158,7 @@ function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
  */
 function persistSdkThemeState(state: SdkThemeState): void {
   try {
-    globalThis.localStorage?.setItem(SDK_THEME_STORAGE_KEY, JSON.stringify(state));
+    getSdkThemeSettingsStore().write(() => ({ ...state }));
   } catch {
     // 忽略本地存储不可用的场景
   }
@@ -406,7 +418,19 @@ export function buildSdkThemeVars(scopeSelector: string): string {
       --stx-theme-text-muted: var(--SmartThemeEmColor, #919191);
       --stx-theme-accent: var(--SmartThemeQuoteColor, #e18a24);
       --stx-theme-accent-contrast: var(--SmartThemeBodyColor, #dcdcd2);
-      --stx-theme-surface-1:
+      --stx-theme-surface-1: transparent;
+      --stx-theme-surface-2: transparent;
+      --stx-theme-surface-3: transparent;
+      --stx-theme-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --stx-theme-border-strong: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
+      --stx-theme-focus-ring: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 32%, transparent);
+      --stx-theme-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
+      --stx-theme-backdrop: transparent;
+      --stx-theme-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
+      --stx-theme-panel-bg: transparent;
+      --stx-theme-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --stx-theme-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
+      --stx-theme-toolbar-bg:
         linear-gradient(
           348deg,
           var(--white30a, rgba(255, 255, 255, 0.3)) 2%,
@@ -414,19 +438,7 @@ export function buildSdkThemeVars(scopeSelector: string): string {
           var(--black70a, rgba(0, 0, 0, 0.7)) 95%,
           var(--SmartThemeQuoteColor, #e18a24) 100%
         );
-      --stx-theme-surface-2: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
-      --stx-theme-surface-3: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 92%, #000 8%);
-      --stx-theme-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-border-strong: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
-      --stx-theme-focus-ring: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 32%, transparent);
-      --stx-theme-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, #000 15%);
-      --stx-theme-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
-      --stx-theme-panel-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
-      --stx-theme-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-toolbar-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 82%, var(--SmartThemeBodyColor, #dcdcd2) 18%);
-      --stx-theme-list-item-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 90%, #000 10%);
+      --stx-theme-list-item-bg: transparent;
       --stx-theme-list-item-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 16%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
       --stx-theme-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
     }

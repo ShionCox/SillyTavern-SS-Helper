@@ -113,6 +113,7 @@ export function buildEventAlreadyRolledCardEvent(event: DiceEventSpecEvent, reco
     buildEventTimeoutAtBlockTemplateEvent,
     buildEventAlreadyRolledCardTemplateEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
+    escapeAttrEvent: escapeAttrCoreEvent,
     formatModifier: formatModifierCoreEvent,
     getDiceSvg: buildDiceSvgTemplateEvent,
     getRollingSvg: buildRollingSvgTemplateEvent,

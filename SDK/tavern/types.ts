@@ -64,3 +64,55 @@ export interface SdkTavernChatListItemEvent {
   messageCount: number;
 }
 
+export interface SdkTavernChatRefEvent extends SdkTavernInstanceEvent {
+  scopeType: SdkTavernScopeTypeEvent;
+  scopeId: string;
+  chatId: string;
+}
+
+export interface SdkUnifiedTavernLocalSummaryEvent {
+  chatKey: string;
+  updatedAt: number;
+  activeStatusCount?: number;
+  displayName?: string;
+  avatarUrl?: string;
+  roleKey?: string;
+}
+
+export interface SdkUnifiedTavernHostChatEvent {
+  chatKey: string;
+  updatedAt: number;
+  chatId: string;
+  displayName: string;
+  avatarUrl: string;
+  scopeType: SdkTavernScopeTypeEvent;
+  scopeId: string;
+  roleKey: string;
+}
+
+export interface SdkUnifiedTavernChatDirectoryInputEvent {
+  currentChatKey: string;
+  hostChats: SdkUnifiedTavernHostChatEvent[];
+  localSummaries: SdkUnifiedTavernLocalSummaryEvent[];
+  draftChatKeys?: string[];
+  taggedChatKeys?: string[];
+}
+
+export interface SdkUnifiedTavernChatDirectoryItemEvent {
+  chatKey: string;
+  entityKey: string;
+  chatId: string;
+  displayName: string;
+  avatarUrl: string;
+  scopeType: SdkTavernScopeTypeEvent;
+  scopeId: string;
+  roleKey: string;
+  updatedAt: number;
+  activeStatusCount: number;
+  isCurrent: boolean;
+  fromHost: boolean;
+  fromLocal: boolean;
+  fromDraft: boolean;
+  fromTagged: boolean;
+}
+

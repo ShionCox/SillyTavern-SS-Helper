@@ -2,13 +2,21 @@ import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
 import { buildSharedButtonStyles } from "../../../_Components/sharedButton";
 import { buildSharedInputStyles } from "../../../_Components/sharedInput";
 import { buildSharedSelectStyles } from "../../../_Components/sharedSelect";
+import { buildSettingPageStyles } from "../../../_Components/Setting";
 import { buildSdkThemeVars } from "../../../SDK/theme";
 
 export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
   return `
+    ${buildSettingPageStyles(`#${cardId}`)}
+
     #${cardId} {
       margin-bottom: 5px;
-      color: var(--st-roll-text, var(--SmartThemeBodyColor, inherit));
+    }
+
+    #${cardId} .st-roll-content,
+    #${cardId} .st-roll-skill-modal,
+    #${cardId} .st-roll-status-modal {
+      color: var(--SmartThemeBodyColor, inherit);
       --st-roll-text: var(--SmartThemeBodyColor, #dcdcd2);
       --st-roll-text-muted: rgba(255, 255, 255, 0.75);
       --st-roll-accent: #c5a059;
@@ -87,15 +95,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: rgba(197, 160, 89, 0.24);
       --st-roll-list-item-active-border: rgba(197, 160, 89, 0.74);
       --st-roll-list-item-active-shadow: 0 0 0 1px rgba(197, 160, 89, 0.24);
-      --st-roll-select-panel-bg: rgba(17, 14, 16, 0.8);
+      --st-roll-select-panel-bg: rgba(17, 14, 16, 0.76);
+      --st-roll-select-panel-backdrop-filter: blur(8px);
       --st-roll-workbench-bg: rgba(0, 0, 0, 0.18);
       --st-roll-workbench-panel-bg: rgba(255, 255, 255, 0.03);
       --st-roll-workbench-panel-border: rgba(255, 255, 255, 0.12);
       --st-roll-workbench-toolbar-bg: rgba(0, 0, 0, 0.18);
       --st-roll-workbench-accent: rgba(197, 160, 89, 0.18);
       --st-roll-workbench-muted: rgba(255, 255, 255, 0.66);
-      --st-roll-dialog-backdrop: rgba(0, 0, 0, 0.72);
-      --st-roll-dialog-backdrop-filter: blur(2px);
+      --st-roll-dialog-backdrop: rgba(0, 0, 0, 0.52);
+      --st-roll-dialog-backdrop-filter: blur(8px);
     }
 
     ${buildSdkThemeVars(`#${cardId} .st-roll-content, #${cardId} .st-roll-skill-modal, #${cardId} .st-roll-status-modal`)}
@@ -163,15 +172,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: #334766;
       --st-roll-list-item-active-border: #6180bd;
       --st-roll-list-item-active-shadow: none;
-      --st-roll-select-panel-bg: rgba(19, 28, 43, 0.96);
+      --st-roll-select-panel-bg: rgba(19, 28, 43, 0.84);
+      --st-roll-select-panel-backdrop-filter: blur(8px);
       --st-roll-workbench-bg: #182233;
       --st-roll-workbench-panel-bg: #1f2a3d;
       --st-roll-workbench-panel-border: #344157;
       --st-roll-workbench-toolbar-bg: #202c40;
       --st-roll-workbench-accent: rgba(95, 141, 229, 0.2);
       --st-roll-workbench-muted: #a5b0c4;
-      --st-roll-dialog-backdrop: #0f1520;
-      --st-roll-dialog-backdrop-filter: none;
+      --st-roll-dialog-backdrop: rgba(15, 21, 32, 0.56);
+      --st-roll-dialog-backdrop-filter: blur(8px);
     }
 
     #${cardId} .st-roll-content[data-st-roll-theme="light"],
@@ -237,15 +247,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: #d8e6ff;
       --st-roll-list-item-active-border: #7e9fd5;
       --st-roll-list-item-active-shadow: none;
-      --st-roll-select-panel-bg: rgba(245, 249, 255, 0.95);
+      --st-roll-select-panel-bg: rgba(245, 249, 255, 0.86);
+      --st-roll-select-panel-backdrop-filter: blur(8px);
       --st-roll-workbench-bg: #eef3fa;
       --st-roll-workbench-panel-bg: #ffffff;
       --st-roll-workbench-panel-border: #cfdbec;
       --st-roll-workbench-toolbar-bg: #eef3fa;
       --st-roll-workbench-accent: rgba(47, 110, 229, 0.12);
       --st-roll-workbench-muted: #5e6e84;
-      --st-roll-dialog-backdrop: #d9e1ee;
-      --st-roll-dialog-backdrop-filter: none;
+      --st-roll-dialog-backdrop: rgba(217, 225, 238, 0.56);
+      --st-roll-dialog-backdrop-filter: blur(8px);
     }
 
     #${cardId} .st-roll-content[data-st-roll-theme="tavern"],
@@ -312,15 +323,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
       --st-roll-list-item-active-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 70%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
       --st-roll-list-item-active-shadow: none;
-      --st-roll-select-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 92%, #000 8%);
+      --st-roll-select-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 74%, transparent);
+      --st-roll-select-panel-backdrop-filter: blur(10px);
       --st-roll-workbench-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 88%, #000 12%);
       --st-roll-workbench-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 92%, #000 8%);
       --st-roll-workbench-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
       --st-roll-workbench-toolbar-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 82%, var(--SmartThemeBodyColor, #dcdcd2) 18%);
       --st-roll-workbench-accent: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 22%, transparent);
       --st-roll-workbench-muted: var(--SmartThemeEmColor, #919191);
-      --st-roll-dialog-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, #000 15%);
-      --st-roll-dialog-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
+      --st-roll-dialog-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 66%, transparent);
+      --st-roll-dialog-backdrop-filter: blur(10px);
     }
 
     #${cardId} .st-roll-content,
@@ -383,16 +395,76 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-workbench-muted: var(--stx-theme-text-muted, var(--st-roll-workbench-muted));
       --st-roll-dialog-backdrop: var(--stx-theme-backdrop, var(--st-roll-dialog-backdrop));
       --st-roll-dialog-backdrop-filter: var(--stx-theme-backdrop-filter, var(--st-roll-dialog-backdrop-filter));
+      --stx-shared-select-panel-bg: var(--st-roll-select-panel-bg);
+      --stx-shared-select-panel-backdrop-filter: var(--st-roll-select-panel-backdrop-filter, var(--st-roll-dialog-backdrop-filter));
+    }
+
+    #${cardId}[data-st-roll-theme="tavern"],
+    #${cardId} .st-roll-shell[data-st-roll-theme="tavern"],
+    #${cardId} .st-roll-content[data-st-roll-theme="tavern"] {
+      --st-roll-shell-border: transparent;
+      --st-roll-shell-bg: transparent;
+      --st-roll-shell-backdrop: none;
+      --st-roll-content-bg: transparent;
+      --st-roll-content-border: transparent;
+      --st-roll-tabs-bg: transparent;
+      --st-roll-tabs-border: transparent;
+      --st-roll-item-bg: transparent;
+      --st-roll-item-border: transparent;
+      --st-roll-panel-muted-bg: transparent;
+      --st-roll-panel-muted-border: transparent;
+      --st-roll-modal-head-bg:
+        var(
+          --stx-theme-toolbar-bg,
+          linear-gradient(
+            348deg,
+            var(--white30a, rgba(255, 255, 255, 0.3)) 2%,
+            var(--grey30a, rgba(50, 50, 50, 0.3)) 10%,
+            var(--black70a, rgba(0, 0, 0, 0.7)) 95%,
+            var(--SmartThemeQuoteColor, #e18a24) 100%
+          )
+        );
+      --st-roll-modal-head-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-sidebar-bg: transparent;
+      --st-roll-sidebar-head-bg:
+        var(
+          --stx-theme-toolbar-bg,
+          linear-gradient(
+            348deg,
+            var(--white30a, rgba(255, 255, 255, 0.3)) 2%,
+            var(--grey30a, rgba(50, 50, 50, 0.3)) 10%,
+            var(--black70a, rgba(0, 0, 0, 0.7)) 95%,
+            var(--SmartThemeQuoteColor, #e18a24) 100%
+          )
+        );
+      --st-roll-layout-bg: transparent;
+      --st-roll-layout-border: transparent;
+      --st-roll-list-item-bg: transparent;
+      --st-roll-list-item-border: transparent;
+      --st-roll-workbench-bg: transparent;
+      --st-roll-workbench-panel-bg: transparent;
+      --st-roll-workbench-panel-border: transparent;
+      --st-roll-select-panel-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 74%, transparent);
+      --st-roll-select-panel-backdrop-filter: blur(10px);
+      --stx-shared-select-panel-bg: var(--st-roll-select-panel-bg);
+      --stx-shared-select-panel-backdrop-filter: var(--st-roll-select-panel-backdrop-filter);
+    }
+
+    #${cardId} .st-roll-skill-modal[data-st-roll-theme="tavern"],
+    #${cardId} .st-roll-status-modal[data-st-roll-theme="tavern"] {
+      --st-roll-modal-panel-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
+      --st-roll-modal-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
+      --st-roll-modal-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
+      --st-roll-dialog-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 66%, transparent);
+      --st-roll-dialog-backdrop-filter: blur(10px);
     }
 
     #${cardId} .st-roll-shell {
-      border: 1px solid rgba(197, 160, 89, 0.35);
-      border-radius: 12px;
-      overflow: hidden;
-      background:
-        radial-gradient(120% 140% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 55%),
-        linear-gradient(160deg, rgba(31, 25, 25, 0.82), rgba(20, 18, 20, 0.82));
-      backdrop-filter: blur(3px);
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+      background: transparent;
+      backdrop-filter: none;
     }
 
     #${cardId} .st-roll-head {
@@ -400,11 +472,9 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 0 !important;
-      padding: 10px 12px;
+      min-width: 0;
       cursor: pointer;
       user-select: none;
-      transition: background-color 0.2s ease, box-shadow 0.2s ease;
     }
 
     #${cardId} .st-roll-head-title {
@@ -426,10 +496,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-content {
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-top: 1px solid var(--st-roll-content-border);
       padding: 10px;
       display: block;
       color: var(--st-roll-text);
+      background: var(--st-roll-content-bg);
     }
 
     #${cardId} .st-roll-filters {
@@ -451,10 +522,10 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       align-items: center;
       gap: 4px;
       padding: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
+      border: 1px solid var(--st-roll-tabs-border);
       border-radius: 999px;
       margin-bottom: 10px;
-      background: rgba(0, 0, 0, 0.2);
+      background: var(--st-roll-tabs-bg);
     }
 
     #${cardId} .st-roll-tab {
@@ -480,8 +551,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-tab.is-active {
       opacity: 1;
-      color: var(--SmartThemeQuoteTextColor, #fff);
-      background: rgba(197, 160, 89, 0.58);
+      color: var(--st-roll-accent-contrast);
+      background: var(--st-roll-tab-active-bg);
     }
 
     #${cardId} .st-roll-panel {
@@ -508,22 +579,15 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-divider-line {
       flex: 1;
       height: 1px;
-      background: linear-gradient(
-        90deg,
-        rgba(255, 255, 255, 0),
-        rgba(255, 255, 255, 0.2) 18%,
-        rgba(255, 255, 255, 0.26) 50%,
-        rgba(255, 255, 255, 0.2) 82%,
-        rgba(255, 255, 255, 0)
-      );
+      background: var(--st-roll-divider-line);
     }
 
     #${cardId} .st-roll-item {
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid var(--st-roll-item-border);
       border-radius: 10px;
       padding: 12px;
       margin: 2px 0;
-      background: rgba(0, 0, 0, 0.16);
+      background: var(--st-roll-item-bg);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -839,8 +903,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-skill-modal-backdrop {
       position: absolute;
       inset: 0;
-      background: transparent;
-      backdrop-filter: none;
+      background: color-mix(in srgb, var(--st-roll-dialog-backdrop) 55%, transparent);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
     }
 
     #${cardId} .st-roll-skill-modal-panel {
@@ -1049,7 +1113,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-status-modal-backdrop {
       position: absolute;
       inset: 0;
-      background: transparent;
+      background: color-mix(in srgb, var(--st-roll-dialog-backdrop) 70%, transparent);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
+      opacity: 1;
+      transition: opacity 0.24s ease;
+    }
+
+    #${cardId} .st-roll-skill-modal[data-st-roll-theme="tavern"] .st-roll-skill-modal-backdrop,
+    #${cardId} .st-roll-status-modal[data-st-roll-theme="tavern"] .st-roll-status-modal-backdrop {
+      background: color-mix(in srgb, var(--st-roll-dialog-backdrop) 55%, transparent);
+      backdrop-filter: var(--st-roll-dialog-backdrop-filter);
     }
 
     #${cardId} .st-roll-status-modal-panel {
@@ -1057,8 +1130,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       z-index: 1;
       display: flex;
       flex-direction: column;
-      width: min(1220px, 96vw);
-      height: min(92vh, 860px);
+      width: max(1220px, 90vw);
+      height: max(85vh, 860px);
       margin: 0;
       border: 1px solid var(--st-roll-modal-panel-border);
       border-radius: 14px;
@@ -1257,6 +1330,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-status-splitter {
       cursor: col-resize;
+      user-select: none;
       background: rgba(255, 255, 255, 0.04);
       border-left: 1px solid rgba(255, 255, 255, 0.06);
       border-right: 1px solid rgba(255, 255, 255, 0.06);
@@ -1474,54 +1548,50 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-head:hover {
-      background: rgba(255, 255, 255, 0.04);
-      box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+      filter: none;
+      box-shadow: none;
     }
 
     #${cardId} .st-roll-tab:hover {
       opacity: 1;
-      background: rgba(197, 160, 89, 0.2);
-      box-shadow: 0 0 12px rgba(197, 160, 89, 0.2);
+      background: var(--st-roll-tab-hover-bg);
+      box-shadow: var(--st-roll-tab-hover-shadow);
     }
 
     #${cardId} .st-roll-item:hover {
-      border-color: rgba(197, 160, 89, 0.48);
-      background: rgba(0, 0, 0, 0.24);
-      box-shadow:
-        0 0 0 1px rgba(197, 160, 89, 0.2),
-        0 0 16px rgba(197, 160, 89, 0.16);
+      border-color: var(--st-roll-item-hover-border);
+      background: var(--st-roll-item-hover-bg);
+      box-shadow: var(--st-roll-item-hover-shadow);
     }
 
     #${cardId} .st-roll-select:hover {
-      border-color: rgba(197, 160, 89, 0.58);
-      background-color: rgba(0, 0, 0, 0.34);
-      box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.18);
+      border-color: var(--st-roll-control-border-hover);
+      background-color: var(--st-roll-control-bg-hover);
+      box-shadow: 0 0 0 1px var(--st-roll-control-focus-ring);
     }
 
     #${cardId} .st-roll-textarea-wrap:hover {
-      border-color: rgba(197, 160, 89, 0.45);
-      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+      border-color: var(--st-roll-textarea-wrap-hover-border);
+      box-shadow: var(--st-roll-textarea-wrap-hover-shadow);
     }
 
     #${cardId} .st-roll-btn:hover {
-      border-color: rgba(197, 160, 89, 0.68);
-      background: rgba(197, 160, 89, 0.24);
-      box-shadow:
-        inset 0 0 0 1px rgba(197, 160, 89, 0.26),
-        0 0 14px rgba(197, 160, 89, 0.2);
+      border-color: var(--st-roll-btn-hover-border);
+      background: var(--st-roll-btn-hover-bg);
+      box-shadow: var(--st-roll-btn-hover-shadow);
     }
 
     #${cardId} .st-roll-select:focus {
       outline: none;
-      border-color: rgba(197, 160, 89, 0.72);
-      box-shadow: 0 0 0 2px rgba(197, 160, 89, 0.22);
+      border-color: var(--st-roll-control-focus-border);
+      box-shadow: 0 0 0 2px var(--st-roll-control-focus-ring);
     }
 
     #${cardId} .st-roll-shell {
-      color: var(--st-roll-text);
-      border-color: var(--st-roll-shell-border);
-      background: var(--st-roll-shell-bg);
-      backdrop-filter: var(--st-roll-shell-backdrop);
+      color: inherit;
+      border-color: transparent;
+      background: transparent;
+      backdrop-filter: none;
     }
 
     #${cardId} .st-roll-content {
@@ -1644,6 +1714,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-status-splitter {
+      user-select: none;
       background: var(--st-roll-panel-muted-bg);
       border-left-color: var(--st-roll-content-border);
       border-right-color: var(--st-roll-content-border);
@@ -1700,8 +1771,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-head:hover {
-      background: var(--st-roll-panel-muted-bg);
-      box-shadow: inset 0 -1px 0 var(--st-roll-content-border);
+      background: transparent;
+      box-shadow: none;
     }
 
     #${cardId} .st-roll-tab:hover {
@@ -2430,6 +2501,20 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         border-radius: 0;
       }
 
+      #${cardId} .st-roll-status-modal {
+        --st-roll-status-mobile-sheet-height: min(92vh, 920px);
+        --st-roll-status-mobile-sheet-translate: calc(var(--st-roll-status-mobile-sheet-height) + 84px);
+        --st-roll-status-mobile-sheet-backdrop-opacity: 0;
+      }
+
+      #${cardId} .st-roll-status-modal-backdrop {
+        opacity: var(--st-roll-status-mobile-sheet-backdrop-opacity, 0);
+      }
+
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-dragging .st-roll-status-modal-backdrop {
+        transition: none;
+      }
+
       #${cardId} .st-roll-status-modal-head {
         padding: 10px 12px;
       }
@@ -2515,33 +2600,37 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         right: 0;
         bottom: 0;
         z-index: 4;
-        height: min(78vh, 720px);
+        height: var(--st-roll-status-mobile-sheet-height);
         padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
         border-radius: 20px 20px 0 0;
         border: 1px solid var(--st-roll-workbench-panel-border);
         border-bottom: 0;
-        background: var(--st-roll-workbench-bg);
+        background: var(--st-roll-modal-panel-bg);
         box-shadow: 0 -16px 36px rgba(0, 0, 0, 0.42);
-        transform: translateY(104%);
-        opacity: 0;
+        transform: translateY(var(--st-roll-status-mobile-sheet-translate));
+        opacity: 1;
         pointer-events: none;
-        transition: transform 0.24s ease, opacity 0.24s ease;
+        transition: transform 0.26s cubic-bezier(0.22, 0.74, 0.22, 1);
         overflow: hidden;
         overscroll-behavior: contain;
         touch-action: pan-y;
+        will-change: transform;
         display: grid;
         grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
         gap: 10px;
       }
 
-      #${cardId} .st-roll-status-modal.is-mobile-sheet-open .st-roll-status-main {
-        transform: translateY(0);
-        opacity: 1;
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-open .st-roll-status-main,
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-dragging .st-roll-status-main {
         pointer-events: auto;
       }
 
       #${cardId} .st-roll-status-modal.is-mobile-sheet-expanded .st-roll-status-main {
-        height: min(94vh, 920px);
+        box-shadow: 0 -22px 46px rgba(0, 0, 0, 0.5);
+      }
+
+      #${cardId} .st-roll-status-modal.is-mobile-sheet-dragging .st-roll-status-main {
+        transition: none;
       }
 
       #${cardId} .st-roll-status-mobile-sheet-head {

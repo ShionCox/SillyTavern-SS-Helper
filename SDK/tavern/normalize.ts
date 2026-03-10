@@ -1,5 +1,6 @@
 import type {
   SdkTavernChatLocatorEvent,
+  SdkTavernChatRefEvent,
   SdkTavernScopeLocatorEvent,
 } from "./types";
 
@@ -13,6 +14,17 @@ export function normalizeTavernKeyPartEvent(raw: unknown, fallback: string): str
   const text = String(raw ?? "").trim();
   if (!text) return fallback;
   return text.replace(/\s+/g, "_");
+}
+
+/**
+ * 功能：把任意值规范化为聊天 ID 片段，额外去除常见扩展名。
+ * @param raw 原始输入值
+ * @param fallback 回退值
+ * @returns 规范化后的聊天 ID
+ */
+export function normalizeTavernChatIdEvent(raw: unknown, fallback: string): string {
+  const base = normalizeTavernKeyPartEvent(raw, fallback);
+  return base.replace(/\.(jsonl|json)$/i, "");
 }
 
 /**
@@ -72,7 +84,7 @@ export function buildTavernChatScopedKeyEvent(locator: SdkTavernChatLocatorEvent
   const tavernInstanceId = normalizeTavernKeyPartEvent(locator.tavernInstanceId, "unknown_tavern");
   const scopeType = normalizeTavernKeyPartEvent(locator.scopeType, "character");
   const scopeId = normalizeTavernKeyPartEvent(locator.scopeId, "unknown_scope");
-  const chatId = normalizeTavernKeyPartEvent(locator.chatId, "fallback_chat");
+  const chatId = normalizeTavernChatIdEvent(locator.chatId, "fallback_chat");
   return `${tavernInstanceId}::${scopeType}::${scopeId}::${chatId}`;
 }
 
@@ -97,6 +109,78 @@ export function parseTavernChatScopedKeyEvent(scopedKey: string): {
     scopeType,
     scopeId,
     chatId,
+  };
+}
+
+function normalizeEntityScopeIdEvent(scopeType: "character" | "group", scopeId: string): string {
+  if (scopeType === "group") {
+    return normalizeTavernKeyPartEvent(scopeId, "unknown_scope").toLowerCase();
+  }
+  const normalizedRole = normalizeTavernRoleKeyEvent(scopeId);
+  return normalizeTavernKeyPartEvent(normalizedRole || scopeId, "unknown_scope").toLowerCase();
+}
+
+export function buildTavernChatEntityKeyEvent(ref: SdkTavernChatRefEvent): string {
+  const tavernInstanceId = normalizeTavernKeyPartEvent(ref.tavernInstanceId, "unknown_tavern").toLowerCase();
+  const scopeType = ref.scopeType === "group" ? "group" : "character";
+  const scopeId = normalizeEntityScopeIdEvent(scopeType, String(ref.scopeId ?? ""));
+  const chatId = normalizeTavernChatIdEvent(ref.chatId, "fallback_chat").toLowerCase();
+  if (!tavernInstanceId || !scopeId || !chatId || isFallbackTavernChatEvent(chatId)) return "";
+  return `${tavernInstanceId}::${scopeType}::${scopeId}::${chatId}`;
+}
+
+interface ParseAnyTavernChatRefOptionsEvent {
+  tavernInstanceId?: string;
+  scopeType?: "character" | "group";
+  scopeId?: string;
+}
+
+export function parseAnyTavernChatRefEvent(
+  input: string | Partial<SdkTavernChatRefEvent> | null | undefined,
+  options?: ParseAnyTavernChatRefOptionsEvent
+): SdkTavernChatRefEvent {
+  const fallbackTavernInstanceId = normalizeTavernKeyPartEvent(
+    options?.tavernInstanceId,
+    "unknown_tavern"
+  );
+  const fallbackScopeType = options?.scopeType === "group" ? "group" : "character";
+  const fallbackScopeId = normalizeEntityScopeIdEvent(
+    fallbackScopeType,
+    String(options?.scopeId ?? "")
+  );
+
+  if (typeof input === "string") {
+    const key = String(input ?? "").trim();
+    const parts = key.split("::");
+    if (parts.length >= 4) {
+      const parsed = parseTavernChatScopedKeyEvent(key);
+      const scopeType = parsed.scopeType === "group" ? "group" : "character";
+      return {
+        tavernInstanceId: normalizeTavernKeyPartEvent(parsed.tavernInstanceId, fallbackTavernInstanceId),
+        scopeType,
+        scopeId: normalizeEntityScopeIdEvent(scopeType, parsed.scopeId),
+        chatId: normalizeTavernKeyPartEvent(parsed.chatId, "fallback_chat"),
+      };
+    }
+    const legacy = parseLegacyTavernChatKeyEvent(key);
+    const scopeType =
+      normalizeTavernKeyPartEvent(legacy.groupId, "no_group") !== "no_group" ? "group" : "character";
+    const scopeIdRaw = scopeType === "group" ? legacy.groupId : legacy.roleId;
+    return {
+      tavernInstanceId: fallbackTavernInstanceId,
+      scopeType,
+      scopeId: normalizeEntityScopeIdEvent(scopeType, scopeIdRaw),
+      chatId: normalizeTavernKeyPartEvent(legacy.chatId, "fallback_chat"),
+    };
+  }
+
+  const raw = (input ?? {}) as Partial<SdkTavernChatRefEvent>;
+  const scopeType = raw.scopeType === "group" ? "group" : fallbackScopeType;
+  return {
+    tavernInstanceId: normalizeTavernKeyPartEvent(raw.tavernInstanceId, fallbackTavernInstanceId),
+    scopeType,
+    scopeId: normalizeEntityScopeIdEvent(scopeType, String(raw.scopeId ?? fallbackScopeId)),
+    chatId: normalizeTavernKeyPartEvent(raw.chatId, "fallback_chat"),
   };
 }
 

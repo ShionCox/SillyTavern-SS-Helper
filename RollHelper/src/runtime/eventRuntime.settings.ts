@@ -148,6 +148,7 @@ const skillDraftAccessorEvent = createSkillDraftAccessorModuleEvent({
 
 function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerContentId: string): void {
   bindMountedSettingsCardModuleEvent({
+    SETTINGS_CARD_ID_Event,
     drawerToggleId,
     drawerContentId,
     tabsAndModalDepsEvent: {
