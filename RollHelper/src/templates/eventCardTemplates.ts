@@ -571,7 +571,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
         : ""
       }
          ${params.dcReasonHtml
-        ? `<div class="st-rh-note-box"><strong>DC 原因：</strong>${params.dcReasonHtml}</div>`
+        ? `<div class="st-rh-note-box"><strong>DC 说明：</strong>${params.dcReasonHtml}</div>`
         : ""
       }
        </div>`
@@ -711,7 +711,7 @@ export function buildEventAlreadyRolledCardTemplateEvent(
         : ""
       }
          ${params.dcReasonHtml
-        ? `<div class="st-rh-note-box"><strong>DC 原因：</strong>${params.dcReasonHtml}</div>`
+        ? `<div class="st-rh-note-box"><strong>DC 说明：</strong>${params.dcReasonHtml}</div>`
         : ""
       }
        </div>`

@@ -2,64 +2,245 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RollHelper 样式测试沙盒</title>
   <style>
     :root {
       color-scheme: dark;
-    }
-    body {
-      background:
+      --sidebar-open-width: clamp(320px, 32vw, 420px);
+      --sidebar-rail-width: var(--sidebar-open-width);
+      --iphone17pm-body-ratio: 0.477356;
+      --mobile-preview-max-height: calc(100vh - 132px);
+      --shell-bg:
         radial-gradient(circle at top, rgba(74, 60, 46, 0.25), transparent 42%),
         linear-gradient(180deg, #181411 0%, #0f0d0b 100%);
+      --panel-bg:
+        linear-gradient(180deg, rgba(33, 27, 22, 0.96), rgba(16, 13, 10, 0.98));
+      --panel-border: rgba(176, 143, 76, 0.25);
+      --panel-text: #f3e6c3;
+      --muted-text: rgba(236, 219, 183, 0.72);
+      --phone-shell:
+        linear-gradient(180deg, rgba(36, 29, 24, 0.98), rgba(12, 10, 8, 0.98));
+    }
+    body {
+      background: var(--shell-bg);
       color: #eee;
       font-family: "Segoe UI", sans-serif;
-      padding: 0;
       margin: 0;
-      display: flex;
+      display: grid;
+      grid-template-columns: var(--sidebar-rail-width) minmax(0, 1fr);
       height: 100vh;
       overflow: hidden;
+      transition: grid-template-columns 240ms ease;
+    }
+    body.sidebar-collapsed {
+      --sidebar-rail-width: 18px;
     }
     #sidebar {
-      width: 400px;
-      background:
-        linear-gradient(180deg, rgba(33, 27, 22, 0.96), rgba(16, 13, 10, 0.98));
-      border-right: 1px solid rgba(176, 143, 76, 0.25);
+      position: relative;
+      width: var(--sidebar-open-width);
+      height: 100vh;
+      min-height: 0;
+      background: var(--panel-bg);
+      border-right: 1px solid var(--panel-border);
       display: flex;
       flex-direction: column;
-      padding: 10px;
+      gap: 14px;
+      padding: 18px 18px 18px 20px;
       box-sizing: border-box;
+      box-shadow: 24px 0 40px rgba(0, 0, 0, 0.26);
+      transform: translateX(0);
+      transition: transform 240ms ease, box-shadow 240ms ease;
+      z-index: 2;
+    }
+    body.sidebar-collapsed #sidebar {
+      transform: translateX(calc(-1 * (var(--sidebar-open-width) - var(--sidebar-rail-width))));
+      box-shadow: none;
+    }
+    #sidebar-edge-toggle {
+      position: absolute;
+      top: 24px;
+      right: -18px;
+      width: 42px;
+      height: 92px;
+      border-radius: 18px;
+      border: 1px solid rgba(214, 151, 116, 0.35);
+      background: linear-gradient(180deg, rgba(108, 44, 31, 0.96), rgba(63, 20, 15, 0.96));
+      color: #f4dfbf;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      line-height: 1.2;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
+    .sidebar-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding-right: 18px;
+    }
+    .sidebar-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sidebar-kicker {
+      margin: 0;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(244, 223, 191, 0.56);
+    }
+    .sidebar-title {
+      margin: 0;
+      font-size: 18px;
+      color: var(--panel-text);
+    }
+    .sidebar-desc {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted-text);
+    }
+    .sidebar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
     }
     textarea {
       flex: 1;
+      min-height: 0;
+      width: 100%;
+      box-sizing: border-box;
+      overflow: auto;
       background: rgba(0, 0, 0, 0.72);
       color: #d7c39a;
       font-family: monospace;
       font-size: 12px;
+      line-height: 1.6;
       border: 1px solid rgba(176, 143, 76, 0.22);
-      padding: 10px;
+      border-radius: 18px;
+      padding: 14px;
       resize: none;
       outline: none;
       box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.55);
     }
     button {
-      margin-top: 10px;
-      padding: 10px;
+      padding: 10px 14px;
       background: linear-gradient(180deg, rgba(126, 47, 39, 0.95), rgba(93, 26, 19, 0.95));
       color: #f4dfbf;
       border: 1px solid rgba(214, 151, 116, 0.55);
       cursor: pointer;
       font-weight: bold;
-      border-radius: 2px;
+      border-radius: 999px;
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+      transition: transform 180ms ease, filter 180ms ease, border-color 180ms ease;
     }
-    button:hover { filter: brightness(1.08); }
+    button:hover {
+      filter: brightness(1.08);
+      transform: translateY(-1px);
+    }
+    .ghost-btn {
+      background: rgba(255, 255, 255, 0.02);
+      border-color: rgba(214, 151, 116, 0.26);
+      color: #e9d8b4;
+      box-shadow: none;
+    }
+    .mode-btn {
+      min-width: 84px;
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(214, 151, 116, 0.16);
+      color: #d7c39a;
+      box-shadow: none;
+    }
+    .mode-btn.is-active {
+      background: linear-gradient(180deg, rgba(144, 58, 48, 0.96), rgba(103, 33, 27, 0.96));
+      border-color: rgba(226, 180, 129, 0.55);
+      color: #fff0d1;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.24);
+    }
     #preview-area {
-      flex: 1;
-      padding: 40px;
-      overflow-y: auto;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 24px 24px;
       background:
         linear-gradient(180deg, rgba(34, 39, 48, 0.95), rgba(24, 20, 16, 0.98)),
         repeating-linear-gradient(45deg, rgba(255,255,255,0.02), rgba(255,255,255,0.02) 10px, rgba(0,0,0,0.02) 10px, rgba(0,0,0,0.02) 20px);
+    }
+    .preview-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 8px 4px 18px;
+    }
+    .preview-toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .toolbar-label {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(238, 229, 213, 0.54);
+    }
+    #preview-stage {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 8px 0 24px;
+    }
+    #preview-frame {
+      width: min(100%, 1240px);
+      min-height: 100%;
+      border-radius: 32px;
+      min-width: 0;
+      transition: width 240ms ease, padding 240ms ease, border-radius 240ms ease, background 240ms ease, box-shadow 240ms ease;
+    }
+    body[data-preview-mode="mobile"] #preview-frame {
+      width: min(100%, 430px, calc(var(--mobile-preview-max-height) * var(--iphone17pm-body-ratio)));
+      height: min(var(--mobile-preview-max-height), calc(430px / var(--iphone17pm-body-ratio)));
+      min-height: 0;
+      padding: 18px 14px 22px;
+      aspect-ratio: 78 / 163.4;
+      border-radius: 38px;
+      background: var(--phone-shell);
+      border: 1px solid rgba(240, 204, 147, 0.18);
+      overflow: hidden;
+      box-shadow:
+        0 28px 50px rgba(0, 0, 0, 0.34),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    }
+    body[data-preview-mode="desktop"] #preview-frame {
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+    #preview-surface {
+      width: 100%;
+      min-height: 100%;
+      box-sizing: border-box;
+    }
+    body[data-preview-mode="mobile"] #preview-surface {
+      height: 100%;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 6px;
+      scrollbar-gutter: stable;
     }
     .preview-section {
       margin-bottom: 40px;
@@ -71,7 +252,7 @@
       padding-bottom: 5px;
       margin-bottom: 15px;
     }
-    /* Mocks for SillyTavern text styles often found in chat */
+    /* 模拟酒馆聊天中的文本容器样式 */
     .mes_text {
       width: 100%;
       max-width: 1160px;
@@ -79,9 +260,24 @@
       font-size: 15px;
       line-height: 1.5;
     }
+    body[data-preview-mode="mobile"] .mes_text {
+      max-width: none;
+    }
+    @media (max-width: 900px) {
+      :root {
+        --sidebar-open-width: min(360px, 82vw);
+      }
+      #preview-area {
+        padding-inline: 16px;
+      }
+      .preview-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
   </style>
   <script>
-    // SillyTavern Global Mocks
+    // SillyTavern 全局模拟
     window.SillyTavern = {
       getContext: () => ({
         extension_settings: { dice: { theme: 'default' } },
@@ -92,14 +288,21 @@
       libs: {}
     };
     
-    // Simulate some of the tavern functions
+    // 模拟部分酒馆环境函数
     window.executeSlashCommandsWithOptions = () => {};
     window.getRequestHeaders = () => ({});
   </script>
 </head>
-<body>
+<body data-preview-mode="desktop">
   <div id="sidebar">
-    <h2 style="font-size: 16px; margin: 0 0 10px 0;">RollJson 输入</h2>
+    <button id="sidebar-edge-toggle" type="button" aria-label="收起输入面板">收起</button>
+    <div class="sidebar-head">
+      <div class="sidebar-copy">
+        <p class="sidebar-kicker">RollHelper Test</p>
+        <h2 class="sidebar-title">RollJson 输入</h2>
+        <p class="sidebar-desc">这里保留测试样例，右侧可以在桌面视图与手机视图之间切换。</p>
+      </div>
+    </div>
     <textarea id="json-input">
 {
   "type": "dice_events",
@@ -220,11 +423,24 @@
   "end_round": false
 }
     </textarea>
-    <button id="render-btn">立即渲染</button>
+    <div class="sidebar-actions">
+      <button id="render-btn" type="button">立即渲染</button>
+    </div>
   </div>
   <div id="preview-area">
-    <div class="mes_text" id="preview-cards">
-      <!-- Cards show here -->
+    <div class="preview-toolbar">
+      <div class="preview-toolbar-group">
+        <span class="toolbar-label">预览模式</span>
+        <button id="preview-mode-desktop" type="button" class="mode-btn is-active">桌面模式</button>
+        <button id="preview-mode-mobile" type="button" class="mode-btn">手机模式</button>
+      </div>
+    </div>
+    <div id="preview-stage">
+      <div id="preview-frame">
+        <div class="mes_text" id="preview-surface">
+          <div id="preview-cards"></div>
+        </div>
+      </div>
     </div>
   </div>
   <script type="module" src="./main.ts"></script>

@@ -520,12 +520,16 @@
 }
 
 .st-rh-dc-reason {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.45;
   color: var(--st-rh-text-muted);
-  font-style: italic;
   border: 1px dashed rgba(176, 143, 76, 0.32);
   background: rgba(0, 0, 0, 0.3);
+}
+.st-rh-dc-reason .st-rh-dc-note-stack {
+  display: flex;
+  justify-content: center;
+  justify-items: center;
 }
 
 .st-rh-rolled-block {

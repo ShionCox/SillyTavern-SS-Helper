@@ -205,6 +205,33 @@
   background: rgba(0, 0, 0, 0.4);
   font-size: 12px;
 }
+.st-rh-dc-note-stack {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+}
+.st-rh-dc-note-copy {
+  color: var(--st-rh-text-muted);
+  font-style: italic;
+}
+.st-rh-dc-modifier-chip {
+  gap: 0.32rem;
+  padding-inline: 0.45rem;
+  border-color: color-mix(in srgb, var(--st-rh-border-strong) 78%, transparent);
+  background: linear-gradient(180deg, rgba(152, 115, 50, 0.34), rgba(41, 28, 14, 0.9));
+  color: var(--st-rh-emphasis);
+}
+.st-rh-dc-modifier-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--st-rh-label);
+}
+.st-rh-dc-modifier-value {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #f3d89b;
+}
 
 .st-rh-stack-md > * + * { margin-top: 0.35rem; }
 .st-rh-mini-kicker {

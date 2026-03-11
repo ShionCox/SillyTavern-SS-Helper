@@ -123,6 +123,30 @@ export function getRuntimeToneStyleEvent(tone: EventRuntimeToneEvent): {
   }
 }
 
+function buildDcDescriptionHtmlEvent(
+  dcReason: string | undefined,
+  dcModifier: number,
+  includeReason: boolean,
+  escapeHtmlEvent: (input: string) => string,
+  formatModifier: (mod: number) => string
+): string {
+  const segments: string[] = [];
+  const reasonText = String(dcReason ?? "").trim();
+  const hasModifier = Number.isFinite(dcModifier) && dcModifier !== 0;
+
+  if (includeReason && reasonText) {
+    segments.push(`<span class="st-rh-dc-note-copy">${escapeHtmlEvent(reasonText)}</span>`);
+  }
+  if (hasModifier) {
+    segments.push(
+      `<span class="st-rh-inline-chip st-rh-chip-strong st-rh-dc-modifier-chip"><span class="st-rh-dc-modifier-label">DC修正</span><span class="st-rh-dc-modifier-value">${escapeHtmlEvent(formatModifier(dcModifier))}</span></span>`
+    );
+  }
+
+  if (segments.length === 0) return "";
+  return `<span class="st-rh-dc-note-stack">${segments.join("")}</span>`;
+}
+
 function setEventButtonsDisabledStateEvent(
   roundId: string,
   eventId: string,
@@ -571,7 +595,7 @@ export function buildEventListCardEvent(
           : baseModifierUsed + skillModifierApplied + statusModifierApplied
         : baseModifierUsed + skillModifierApplied + statusModifierApplied;
       const modifierText =
-        settings.enableSkillSystem || statusModifierApplied !== 0
+        baseModifierUsed !== 0 || skillModifierApplied !== 0 || statusModifierApplied !== 0
           ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
             skillModifierApplied
           )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(
@@ -589,6 +613,14 @@ export function buildEventListCardEvent(
           : ""
         }${modifierText ? `（${modifierText}）` : ""}`
         : "技能系统已关闭";
+
+      const dcDescriptionHtml = buildDcDescriptionHtmlEvent(
+        event.dcReason,
+        finalModifierUsed,
+        settings.enableDynamicDcReason,
+        deps.escapeHtmlEvent,
+        deps.formatModifier
+      );
 
       const advantageStateText = formatAdvantageStateForCardEvent(
         lastRecord?.advantageStateApplied ?? event.advantageState
@@ -629,10 +661,7 @@ export function buildEventListCardEvent(
         checkDiceHtml: deps.escapeHtmlEvent(event.checkDice),
         compareHtml: deps.escapeHtmlEvent(compare),
         dcText: String(event.dc),
-        dcReasonHtml:
-          settings.enableDynamicDcReason && event.dcReason
-            ? deps.escapeHtmlEvent(event.dcReason)
-            : "",
+        dcReasonHtml: dcDescriptionHtml,
         timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabel),
         roundIdAttr: deps.escapeAttrEvent(round.roundId),
         eventIdAttr: deps.escapeAttrEvent(event.id),
@@ -1023,7 +1052,7 @@ export function buildEventRollResultCardEvent(
         diceTooltipText
       );
   const modifierBreakdownText =
-    settings.enableSkillSystem || statusModifierApplied !== 0
+    baseModifierUsed !== 0 || skillModifierApplied !== 0 || statusModifierApplied !== 0
       ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
         skillModifierApplied
       )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(finalModifierUsed)}`
@@ -1056,6 +1085,13 @@ export function buildEventRollResultCardEvent(
         : ""
       }`
       : "";
+  const dcDescriptionHtml = buildDcDescriptionHtmlEvent(
+    event.dcReason,
+    finalModifierUsed,
+    settings.enableDynamicDcReason,
+    deps.escapeHtmlEvent,
+    deps.formatModifier
+  );
   const detailsIdAttr = deps.escapeAttrEvent(
     `st-rh-result-${toDomIdTokenEvent(record.rollId)}-details`
   );
@@ -1102,10 +1138,7 @@ export function buildEventRollResultCardEvent(
     modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownText),
     compareHtml: deps.escapeHtmlEvent(record.compareUsed),
     dcText: String(record.dcUsed ?? "未设置"),
-    dcReasonHtml:
-      settings.enableDynamicDcReason && event.dcReason
-        ? deps.escapeHtmlEvent(event.dcReason)
-        : "",
+    dcReasonHtml: dcDescriptionHtml,
     statusText: status,
     statusColor,
     totalText: String(record.result.total),
@@ -1252,7 +1285,7 @@ export function buildEventAlreadyRolledCardEvent(
       diceTooltipText
     );
   const modifierBreakdownHtml =
-    settings.enableSkillSystem || statusModifierApplied !== 0
+    baseModifierUsed !== 0 || skillModifierApplied !== 0 || statusModifierApplied !== 0
       ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
         skillModifierApplied
       )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(finalModifierUsed)}`
@@ -1286,6 +1319,13 @@ export function buildEventAlreadyRolledCardEvent(
       }`
       : "";
 
+  const dcDescriptionHtml = buildDcDescriptionHtmlEvent(
+    event.dcReason,
+    finalModifierUsed,
+    settings.enableDynamicDcReason,
+    deps.escapeHtmlEvent,
+    deps.formatModifier
+  );
   const distributionBlock = !isTimeout && record.result
     ? deps.buildEventDistributionBlockTemplateEvent(
       deps.escapeHtmlEvent(record.result.rolls.join(", ")),
@@ -1343,10 +1383,7 @@ export function buildEventAlreadyRolledCardEvent(
     modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownHtml),
     compareHtml: deps.escapeHtmlEvent(record.compareUsed),
     dcText: String(record.dcUsed ?? "未设置"),
-    dcReasonHtml:
-      settings.enableDynamicDcReason && event.dcReason
-        ? deps.escapeHtmlEvent(event.dcReason)
-        : "",
+    dcReasonHtml: dcDescriptionHtml,
     statusText,
     statusColor,
     diceVisualBlockHtml: diceVisualBlock,

@@ -23,6 +23,7 @@
         "@tailwindcss/postcss": "^4.2.1",
         "autoprefixer": "^10.4.27",
         "esbuild": "^0.23.0",
+        "pinia": "^3.0.4",
         "postcss": "^8.5.8",
         "tailwindcss": "^4.2.1",
         "vite": "^7.3.1"
