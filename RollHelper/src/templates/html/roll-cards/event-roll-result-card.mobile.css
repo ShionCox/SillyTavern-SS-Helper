@@ -1,0 +1,28 @@
+/* ======== 实时结果卡手机模板：专属强化 ======== */
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-head {
+  background:
+    radial-gradient(circle at top, rgba(248, 225, 181, 0.14), transparent 48%),
+    linear-gradient(180deg, rgba(55, 37, 23, 0.98), rgba(18, 12, 9, 0.99));
+}
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll {
+  border-left-color: rgba(186, 78, 60, 0.7);
+}
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core {
+  background:
+    radial-gradient(circle at top, rgba(249, 225, 172, 0.18), transparent 36%),
+    radial-gradient(circle at bottom right, rgba(139, 59, 45, 0.18), transparent 32%),
+    linear-gradient(180deg, rgba(63, 41, 24, 0.99), rgba(12, 8, 6, 1));
+}
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-total {
+  font-size: 42px;
+}
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-visual {
+  background:
+    radial-gradient(circle at center, rgba(255, 232, 179, 0.14), transparent 42%),
+    linear-gradient(180deg, rgba(10, 8, 6, 1), rgba(26, 17, 11, 0.98));
+}

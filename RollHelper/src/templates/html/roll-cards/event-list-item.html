@@ -2,35 +2,47 @@
   <details class="st-rh-details-card st-rh-details-event">
     <summary class="st-rh-collapse-summary">
       <div class="st-rh-summary-header">
-        <strong class="st-rh-summary-title">{{roll_mode_badge_html}}{{title_html}}</strong>
-        <span class="st-rh-summary-id st-rh-mono" data-tip="{{event_id_html}}">#{{event_id_html}}</span>
+        <div class="st-rh-header-deco-left"></div>
+        <div class="st-rh-summary-title-row">
+          <span class="st-rh-summary-badge-slot">{{roll_mode_badge_html}}</span>
+          <strong class="st-rh-summary-title">
+            <span class="st-rh-summary-title-marquee-mobile">
+              <span class="st-rh-summary-title-track-mobile">
+                <span class="st-rh-summary-title-segment-mobile">{{title_html}}</span>
+              </span>
+            </span>
+          </strong>
+        </div>
+        <div class="st-rh-header-deco-right"></div>
       </div>
       <div class="st-rh-summary-layout">
         <div class="st-rh-summary-main">
-          <div class="st-rh-summary-info-bar">
-            <span class="st-rh-summary-chip st-rh-summary-chip-check">
-              <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
-              {{collapsed_check_html}}
-            </span>
-            <span class="st-rh-summary-chip st-rh-summary-chip-time">
-              <i class="fa-solid fa-hourglass-clock fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
-              时限 {{time_limit_html}}
-            </span>
+          <div class="st-rh-summary-info-row">
+            <div class="st-rh-summary-info-bar">
+              <span class="st-rh-summary-chip st-rh-summary-chip-check">
+                <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
+                {{collapsed_check_html}}
+              </span>
+              <span class="st-rh-summary-chip st-rh-summary-chip-time">
+                <i class="fa-solid fa-hourglass-clock fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
+                时限 {{time_limit_html}}
+              </span>
+            </div>
+            <div class="st-rh-summary-runtime-slot">
+              <div data-dice-countdown="1" data-round-id="{{round_id_attr}}" data-event-id="{{event_id_attr}}"
+                data-deadline-at="{{deadline_attr}}" class="st-rh-runtime st-rh-runtime-inline st-rh-mono"
+                {{runtime_style_attr}}>
+                <i class="fa-solid fa-stopwatch fa-fw st-rh-fa-icon st-rh-action-icon" aria-hidden="true"></i>
+                {{collapsed_runtime_html}}
+              </div>
+            </div>
+          </div>
+          <div class="st-rh-summary-mobile-meta">
+            <span class="st-rh-summary-id st-rh-mono" data-tip="{{event_id_html}}">#{{event_id_html}}</span>
           </div>
         </div>
 
         <div class="st-rh-summary-actions">
-          <div
-            data-dice-countdown="1"
-            data-round-id="{{round_id_attr}}"
-            data-event-id="{{event_id_attr}}"
-            data-deadline-at="{{deadline_attr}}"
-            class="st-rh-runtime st-rh-runtime-inline st-rh-mono"
-            {{runtime_style_attr}}
-          >
-            <i class="fa-solid fa-stopwatch fa-fw st-rh-fa-icon st-rh-action-icon" aria-hidden="true"></i>
-            {{collapsed_runtime_html}}
-          </div>
           {{roll_action_html}}
           {{summary_toggle_state_html}}
         </div>
@@ -59,7 +71,8 @@
               <i class="fa-solid fa-wand-sparkles fa-fw st-rh-fa-icon st-rh-fact-label-icon" aria-hidden="true"></i>
               {{tip_label_skill_html}}
             </div>
-            <div class="st-rh-event-fact-value st-rh-event-fact-value-skill" data-tip="{{skill_title_attr}}">{{skill_html}}</div>
+            <div class="st-rh-event-fact-value st-rh-event-fact-value-skill" data-tip="{{skill_title_attr}}">
+              {{skill_html}}</div>
           </div>
           <div class="st-rh-event-fact">
             <div class="st-rh-event-fact-label">

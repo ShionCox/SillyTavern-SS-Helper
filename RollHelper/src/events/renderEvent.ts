@@ -351,6 +351,7 @@ function buildOutcomePreviewHtmlRichEvent(
         summaryBg: "rgba(57,168,40,0.10)",
         summaryBorder: "rgba(82,196,26,0.24)",
         summaryColor: "#b7ef8f",
+        icon: "fa-solid fa-check-circle"
       },
       failure: {
         badgeBg: "rgba(255,77,79,0.15)",
@@ -359,6 +360,7 @@ function buildOutcomePreviewHtmlRichEvent(
         summaryBg: "rgba(171,54,57,0.12)",
         summaryBorder: "rgba(255,120,120,0.22)",
         summaryColor: "#ffb3b3",
+        icon: "fa-solid fa-xmark-circle"
       },
       explode: {
         badgeBg: "rgba(250,173,20,0.15)",
@@ -367,44 +369,39 @@ function buildOutcomePreviewHtmlRichEvent(
         summaryBg: "rgba(173,113,20,0.12)",
         summaryBorder: "rgba(250,173,20,0.22)",
         summaryColor: "#ffd98a",
+        icon: "fa-solid fa-star"
       },
     }[tone];
 
     const escapedSummary = statusSummary ? escapeHtmlEvent(statusSummary) : "";
 
     return `
-      <div class="st-roll-preview-row"${isLast ? ` style="margin-bottom:0;"` : ""}>
-        <span style="display:inline-flex; align-items:center; justify-content:center; min-width:52px; padding:0 8px; margin-right:10px; background:${palette.badgeBg}; border:1px solid ${palette.badgeBorder}; border-radius:4px; color:${palette.badgeColor}; font-size:11px; font-weight:700; font-family:monospace; line-height:1.8; white-space:nowrap; text-align:center; user-select:none; box-shadow:0 0 4px rgba(0,0,0,0.12);">${label}</span>
-        <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; justify-content:center;">
-          <span style="color:#e0e0e0; word-break:break-word; line-height:1.55;font-size:13px">${escapeHtmlEvent(text)}</span>
+      <div class="st-rh-outcome-preview-row st-rh-outcome-${tone}"${isLast ? ` style="margin-bottom:0;"` : ""}>
+        <span class="st-rh-outcome-preview-badge" style="background:${palette.badgeBg}; border-color:${palette.badgeBorder}; color:${palette.badgeColor};">
+          <i class="${palette.icon} fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:4px;"></i>${label}
+        </span>
+        <div class="st-rh-outcome-preview-content">
+          <span class="st-rh-outcome-preview-text">${escapeHtmlEvent(text)}</span>
           ${escapedSummary
-            ? `<div style="display:flex; align-items:center; gap:6px; padding:4px 7px; border:1px solid ${palette.summaryBorder}; border-radius:4px; background:${palette.summaryBg}; box-shadow:inset 0 1px 4px rgba(0,0,0,0.18);">
-                 <span style="flex:0 0 auto; color:${palette.summaryColor}; font-size:12px; letter-spacing:0.06em; white-space:nowrap; line-height:1.2;">状态</span>
-                 <span style="color:#d9c8a2; font-size:10px; line-height:1.45; word-break:break-word;">${escapedSummary}</span>
+        ? `<div class="st-rh-outcome-preview-status" style="border-color:${palette.summaryBorder}; background:${palette.summaryBg};">
+                 <span class="st-rh-outcome-preview-status-label" style="color:${palette.summaryColor};">状态</span>
+                 <span class="st-rh-outcome-preview-status-text">${escapedSummary}</span>
                </div>`
-            : ""
-          }
+        : ""
+      }
         </div>
       </div>
     `;
   };
 
   return `
-    <style>
-      .st-roll-preview-row {
-        display:flex; margin-bottom:7px; align-items:center; padding: 5px 6px 5px 4px; border-radius: 4px; border-left: 2px solid transparent; transition: all 0.2s ease; cursor: default;
-      }
-      .st-roll-preview-row:hover {
-        background-color: rgba(197, 160, 89, 0.1) !important;
-        border-left: 2px solid rgba(197, 160, 89, 0.8) !important;
-        box-shadow: inset 24px 0 24px -24px rgba(197, 160, 89, 0.3) !important;
-      }
-    </style>
-    <div style="margin-top:8px; margin-bottom:12px; padding:12px; border:1px solid rgba(197,160,89,0.3); border-radius:6px; background:linear-gradient(135deg, rgba(30,30,30,0.6) 0%, rgba(15,15,15,0.8) 100%); font-size:12px; line-height:1.6; box-shadow:inset 0 1px 4px rgba(0,0,0,0.5);">
-      <div style="margin-bottom:10px; font-weight:600; color:#d1b67f; font-size:11px; letter-spacing:1px; display:flex; align-items:center;">
-        <span style="flex-grow:1; height:1px; background:linear-gradient(90deg, transparent, rgba(197,160,89,0.4)); margin-right:8px;"></span>
-        走向预览
-        <span style="margin-left:8px; flex-grow:1; height:1px; background:linear-gradient(270deg, transparent, rgba(197,160,89,0.4));"></span>
+    <div class="st-rh-outcome-preview-wrap">
+      <div class="st-rh-outcome-preview-header">
+        <div class="st-rh-outcome-preview-header-line"></div>
+        <span class="st-rh-outcome-preview-header-title">
+          <i class="fa-solid fa-scroll fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right: 6px; font-size: 0.9em; opacity: 0.9;"></i>走向预览
+        </span>
+        <div class="st-rh-outcome-preview-header-line right"></div>
       </div>
       ${buildPreviewRow("success", "成功", successText, successStatusSummary)}
       ${buildPreviewRow("failure", "失败", failureText, failureStatusSummary)}
@@ -489,6 +486,7 @@ export interface BuildEventListCardDepsEvent {
   }) => string;
   buildEventListItemTemplateEvent: (params: {
     detailsIdAttr: string;
+    templateVariant?: "desktop" | "mobile";
     titleHtml: string;
     eventIdHtml: string;
     collapsedCheckHtml: string;
@@ -515,7 +513,11 @@ export interface BuildEventListCardDepsEvent {
     commandTextHtml: string;
     rollButtonHtml: string;
   }) => string;
-  buildEventListCardTemplateEvent: (roundIdHtml: string, itemsHtml: string) => string;
+  buildEventListCardTemplateEvent: (
+    roundIdHtml: string,
+    desktopItemsHtml: string,
+    mobileItemsHtml: string
+  ) => string;
   escapeHtmlEvent: (input: string) => string;
   escapeAttrEvent: (input: string) => string;
 }
@@ -528,7 +530,8 @@ export function buildEventListCardEvent(
   const meta = deps.getDiceMetaEvent();
   const activeStatuses = ensureActiveStatusesEvent(meta);
   deps.ensureRoundEventTimersSyncedEvent(round);
-  const items = round.events
+  const buildItemHtmlByVariantEvent = (templateVariant: "desktop" | "mobile"): string =>
+    round.events
     .map((event) => {
       const compare = event.compare ?? ">=";
       const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
@@ -629,7 +632,7 @@ export function buildEventListCardEvent(
       const rollButtonHtml = (() => {
         if (!showRollButton) return "";
         if (event.rollMode === "auto") {
-          return `<span class="st-rh-summary-lock st-rh-mono" style="color: #d1b67f; border: 1px dashed rgba(209,182,127,0.3); padding: 4px 8px; border-radius: 4px;">等待自动触发</span>`;
+          return `<span class="st-rh-summary-lock st-rh-mono" style="color: #d1b67f; border: 1px dashed rgba(209,182,127,0.3);"><i class="fa-solid fa-hourglass-half fa-fw st-rh-fa-icon" style="margin-right:6px;"></i>等待自动触发</span>`;
         }
         return deps.buildEventRollButtonTemplateEvent({
           roundIdAttr: deps.escapeAttrEvent(round.roundId),
@@ -642,11 +645,12 @@ export function buildEventListCardEvent(
 
       const rollModeBadgeHtml =
         event.rollMode === "auto"
-          ? `<span class="st-rh-chip st-rh-chip-highlight" style="margin-right:0.5em; background-color:rgba(209,182,127,0.2) !important; color:#d1b67f !important;">${deps.escapeHtmlEvent("自动结算")}</span>`
-          : `<span class="st-rh-chip" style="margin-right:0.5em;">${deps.escapeHtmlEvent("需检定")}</span>`;
+          ? `<span class="st-rh-badge-role st-rh-badge-role-auto">${deps.escapeHtmlEvent("自动结算")}</span>`
+          : `<span class="st-rh-badge-role st-rh-badge-role-manual">${deps.escapeHtmlEvent("需检定")}</span>`;
 
       return deps.buildEventListItemTemplateEvent({
         detailsIdAttr,
+        templateVariant,
         titleHtml: deps.escapeHtmlEvent(event.title),
         rollModeBadgeHtml,
         eventIdHtml: deps.escapeHtmlEvent(event.id),
@@ -675,8 +679,14 @@ export function buildEventListCardEvent(
       });
     })
     .join("");
+  const desktopItemsHtml = buildItemHtmlByVariantEvent("desktop");
+  const mobileItemsHtml = buildItemHtmlByVariantEvent("mobile");
 
-  return deps.buildEventListCardTemplateEvent(deps.escapeHtmlEvent(round.roundId), items);
+  return deps.buildEventListCardTemplateEvent(
+    deps.escapeHtmlEvent(round.roundId),
+    desktopItemsHtml,
+    mobileItemsHtml
+  );
 }
 
 export interface BuildAnimatedDiceVisualBlockDepsEvent {
@@ -784,10 +794,7 @@ function buildCollapsedOutcomePreviewEvent(
   return {
     text: fullText,
     title: fullText,
-    chipClassName:
-      fullText.length > 30
-        ? "st-rh-summary-chip-outcome is-marquee"
-        : "st-rh-summary-chip-outcome",
+    chipClassName: "st-rh-summary-chip-outcome",
   };
 }
 
@@ -806,10 +813,7 @@ function buildCollapsedStatusSummaryPreviewEvent(
   return {
     text: `获得状态：${normalizedText}`,
     title: `获得状态：${normalizedText}`,
-    chipClassName:
-      normalizedText.length > 24
-        ? "st-rh-summary-chip-status-summary is-marquee"
-        : "st-rh-summary-chip-status-summary",
+    chipClassName: "st-rh-summary-chip-status-summary",
   };
 }
 

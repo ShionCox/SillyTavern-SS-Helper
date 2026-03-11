@@ -1,0 +1,77 @@
+.st-rh-event-board-mobile {
+  margin-top: 8px;
+  border-width: 1px;
+  border-radius: 3px;
+  padding-bottom: 6px;
+  background:
+    linear-gradient(180deg, rgba(18, 13, 10, 0.98), rgba(7, 5, 4, 0.98)),
+    radial-gradient(circle at top center, rgba(230, 197, 135, 0.08), transparent 48%);
+}
+
+.st-rh-event-board-mobile::before {
+  background:
+    linear-gradient(180deg, rgba(255, 236, 188, 0.05), transparent 16%),
+    linear-gradient(90deg, rgba(176, 143, 76, 0.08), transparent 20%, transparent 80%, rgba(176, 143, 76, 0.05));
+}
+
+.st-rh-board-head-mobile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 8px 10px;
+  border-bottom-width: 1px;
+}
+
+.st-rh-board-head-copy-mobile {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.st-rh-board-title-mobile {
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+
+.st-rh-board-caption-mobile {
+  color: rgba(220, 196, 144, 0.58);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.st-rh-board-id-mobile {
+  align-self: center;
+  max-width: 132px;
+  font-size: 10px;
+  color: rgba(220, 196, 144, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-rh-event-list-mobile {
+  padding: 8px;
+  gap: 10px;
+}
+
+@media (min-width: 481px) and (max-width: 680px) {
+  .st-rh-board-head-mobile {
+    padding: 10px 12px;
+  }
+
+  .st-rh-board-title-mobile {
+    font-size: 15px;
+  }
+
+  .st-rh-board-id-mobile {
+    max-width: 176px;
+  }
+
+  .st-rh-event-list-mobile {
+    padding: 10px;
+    gap: 12px;
+  }
+}

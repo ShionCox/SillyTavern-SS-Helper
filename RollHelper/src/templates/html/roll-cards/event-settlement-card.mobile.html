@@ -1,0 +1,68 @@
+<div class="st-rh-card-scope">
+  <details
+    class="st-rh-settlement-shell st-rh-settlement-shell-mobile {{shell_type_class}} st-rh-shell-frame"
+  >
+    <summary class="st-rh-shell-summary st-rh-mobile-shell-summary">
+      <div class="st-rh-shell-topline st-rh-shell-line"></div>
+      <div class="st-rh-mobile-summary-wrap">
+        <div class="st-rh-mobile-summary-head">
+          <div class="st-rh-mobile-summary-crest" aria-hidden="true"></div>
+          <div class="st-rh-mobile-summary-copy">
+            <div class="st-rh-mobile-summary-kicker-wrap">
+              <p class="st-rh-kicker st-rh-mobile-summary-kicker">
+                {{summary_kicker_text}}
+              </p>
+              <span class="st-rh-summary-id st-rh-mono st-rh-mobile-summary-id"
+                >#{{roll_id_html}}</span
+              >
+            </div>
+            <strong class="st-rh-summary-title st-rh-mobile-summary-title"
+              >{{title_html}}</strong
+            >
+          </div>
+        </div>
+
+        <div class="st-rh-mobile-summary-hero">{{result_core_html}}</div>
+
+        <div class="st-rh-mobile-summary-scroll">
+          {{summary_secondary_chips_html}}
+        </div>
+
+        <div class="st-rh-mobile-summary-actions">{{summary_toggle_html}}</div>
+      </div>
+    </summary>
+
+    <div
+      id="{{details_id_attr}}"
+      class="st-rh-details-body st-rh-mobile-details-body"
+    >
+      <div
+        class="st-rh-details-layout st-rh-details-layout-mobile {{details_layout_type_class}}"
+      >
+        <section class="st-rh-mobile-details-stack">
+          {{outcome_section_html}}
+
+          <div class="st-rh-panel st-rh-meta-panel">
+            <div class="st-rh-details-head">
+              <div class="st-rh-details-head-copy">
+                <p class="st-rh-kicker">{{details_kicker_text}}</p>
+                <div class="st-rh-details-heading">
+                  {{details_heading_html}}
+                </div>
+              </div>
+              <div class="st-rh-details-head-side">
+                <div class="st-rh-details-head-seal" aria-hidden="true"></div>
+                <div class="st-rh-details-badge">
+                  {{details_status_badge_html}}
+                </div>
+              </div>
+            </div>
+            <dl class="st-rh-fact-grid">{{detail_meta_html}}</dl>
+          </div>
+
+          {{detail_aux_html}} {{footer_blocks_html}}
+        </section>
+      </div>
+    </div>
+  </details>
+</div>

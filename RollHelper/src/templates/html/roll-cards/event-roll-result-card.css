@@ -1,14 +1,244 @@
-/* ======== 实时结算结果卡 ======== */
+/* ======== 实时结算结果卡：王庭圣殿变体 ======== */
 
-/* 结果卡专属尺寸 (紧凑) */
-.st-rh-summary-dice-slot-result { width: 64px; height: 64px; }
-
-/* 桌面端分栏 */
-@media (min-width: 640px) {
-  .st-rh-summary-dice-slot-result { width: 72px; height: 72px; }
+.st-rh-settlement-shell-result {
+  background:
+    radial-gradient(circle at top, rgba(246, 224, 179, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(47, 31, 20, 0.98), rgba(11, 8, 6, 1));
 }
+
+.st-rh-settlement-shell-result .st-rh-summary-banner {
+  background: linear-gradient(180deg, rgba(214, 182, 118, 0.55), rgba(87, 56, 30, 0.56));
+}
+
+.st-rh-settlement-shell-result .st-rh-summary-banner-inner {
+  background:
+    radial-gradient(circle at top, rgba(253, 232, 188, 0.13), transparent 56%),
+    linear-gradient(180deg, rgba(53, 36, 22, 0.98), rgba(18, 12, 9, 0.98));
+}
+
+.st-rh-settlement-shell-result .st-rh-summary-ornament-seal::after,
+.st-rh-settlement-shell-result .st-rh-details-head-seal::before {
+  background: radial-gradient(circle at center, rgba(246, 219, 156, 0.9), rgba(124, 73, 42, 0.26) 62%, transparent 70%);
+}
+
+.st-rh-settlement-shell-result .st-rh-summary-judgement {
+  background:
+    radial-gradient(circle at top right, rgba(136, 61, 47, 0.18), transparent 40%),
+    linear-gradient(180deg, rgba(50, 34, 22, 0.94), rgba(16, 10, 8, 0.98));
+}
+
+.st-rh-settlement-shell-result .st-rh-summary-outcome-wrap {
+  border-left-color: rgba(186, 78, 60, 0.72);
+  background:
+    linear-gradient(180deg, rgba(87, 52, 33, 0.24), rgba(26, 17, 11, 0.16)),
+    linear-gradient(135deg, rgba(224, 198, 150, 0.08), rgba(98, 61, 35, 0.12)),
+    repeating-linear-gradient(0deg, rgba(255, 244, 222, 0.03) 0px, rgba(255, 244, 222, 0.03) 1px, transparent 1px, transparent 3px);
+}
+
+.st-rh-summary-dice-slot-result {
+  width: 76px;
+  height: 76px;
+}
+
+.st-rh-settlement-shell-result .st-rh-summary-visual-dais {
+  padding: 12px;
+  border-color: rgba(182, 143, 83, 0.58);
+  background:
+    radial-gradient(circle at top, rgba(250, 227, 182, 0.16), transparent 46%),
+    linear-gradient(180deg, rgba(70, 45, 24, 0.96), rgba(15, 10, 7, 0.99));
+}
+
+.st-rh-settlement-shell-result .st-rh-dice-slot {
+  background:
+    radial-gradient(circle at center, rgba(255, 228, 166, 0.14), transparent 44%),
+    linear-gradient(180deg, rgba(19, 13, 9, 0.98), rgba(7, 5, 4, 1));
+}
+
+.st-rh-settlement-shell-result .st-rh-details-layout-result .st-rh-details-main {
+  gap: 0.78rem;
+}
+
+.st-rh-settlement-shell-result .st-rh-details-layout-result .st-rh-details-side {
+  gap: 0.78rem;
+}
+
+.st-rh-settlement-shell-result .st-rh-result-core {
+  background:
+    radial-gradient(circle at top, rgba(249, 225, 172, 0.16), transparent 38%),
+    radial-gradient(circle at bottom right, rgba(139, 59, 45, 0.16), transparent 32%),
+    linear-gradient(180deg, rgba(63, 41, 24, 0.99), rgba(12, 8, 6, 1));
+  border-color: rgba(186, 147, 84, 0.42);
+}
+
+.st-rh-settlement-shell-result .st-rh-result-core-head {
+  align-items: center;
+}
+
+.st-rh-settlement-shell-result .st-rh-result-core-copy {
+  position: relative;
+  padding-right: 10px;
+}
+
+.st-rh-settlement-shell-result .st-rh-result-core-copy::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 0;
+  bottom: 6px;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(214, 181, 119, 0.42), transparent);
+}
+
+.st-rh-settlement-shell-result .st-rh-score-row {
+  gap: 0.55rem;
+  padding-bottom: 0.58rem;
+}
+
+.st-rh-settlement-shell-result .st-rh-result-total {
+  font-size: 34px;
+  color: var(--st-rh-royal-title);
+  text-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.92),
+    0 0 16px rgba(242, 212, 143, 0.15);
+}
+
+.st-rh-settlement-shell-result .st-rh-result-total-label {
+  color: rgba(229, 205, 161, 0.92);
+}
+
+.st-rh-settlement-shell-result .st-rh-result-visual {
+  padding: 0.9rem;
+  border-color: rgba(184, 145, 84, 0.34);
+  background:
+    radial-gradient(circle at center, rgba(255, 232, 179, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(10, 8, 6, 1), rgba(26, 17, 11, 0.98));
+}
+
+.st-rh-settlement-shell-result .st-rh-result-meta-grid .st-rh-surface-card {
+  background:
+    radial-gradient(circle at top left, rgba(249, 227, 183, 0.06), transparent 34%),
+    linear-gradient(180deg, rgba(52, 36, 23, 0.84), rgba(17, 11, 8, 0.94));
+}
+
+.st-rh-settlement-shell-result .st-rh-meta-panel .st-rh-surface-card,
+.st-rh-settlement-shell-result .st-rh-info-panel .st-rh-surface-card {
+  border-left-color: rgba(189, 149, 87, 0.66);
+}
+
+.st-rh-settlement-shell-result .st-rh-info-panel {
+  background:
+    radial-gradient(circle at top, rgba(247, 223, 169, 0.09), transparent 36%),
+    linear-gradient(180deg, rgba(54, 37, 24, 0.96), rgba(16, 11, 8, 0.98));
+}
+
+.st-rh-settlement-shell-result .st-rh-impact-note {
+  border-color: rgba(163, 64, 48, 0.92);
+  background:
+    radial-gradient(circle at center, rgba(125, 37, 26, 0.22), rgba(0, 0, 0, 0.55)),
+    linear-gradient(180deg, rgba(69, 28, 22, 0.68), rgba(18, 10, 8, 0.82));
+  color: #f0c3bc;
+}
+
+.st-rh-settlement-shell-result .st-rh-note-box {
+  border-color: rgba(188, 151, 89, 0.4);
+  background:
+    linear-gradient(180deg, rgba(44, 30, 20, 0.76), rgba(12, 8, 6, 0.88));
+}
+
+.st-rh-settlement-shell-result .st-rh-status-pill {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--st-rh-status-color, #d8aa58) 22%, rgba(103, 61, 34, 0.94)),
+      rgba(17, 11, 8, 0.98)) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 232, 182, 0.05),
+    inset 0 -12px 14px rgba(0, 0, 0, 0.24),
+    0 0 12px color-mix(in srgb, var(--st-rh-status-color, #d8aa58) 18%, transparent);
+}
+
+@media (min-width: 640px) {
+  .st-rh-summary-dice-slot-result {
+    width: 88px;
+    height: 88px;
+  }
+
+  .st-rh-settlement-shell-result .st-rh-result-total {
+    font-size: 42px;
+  }
+}
+
 @media (min-width: 860px) {
   .st-rh-details-layout-result {
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.65fr);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+  }
+}
+
+@media (max-width: 859px) {
+  .st-rh-settlement-shell-result .st-rh-result-core-copy::after {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .st-rh-summary-dice-slot-result {
+    width: 72px;
+    height: 72px;
+  }
+
+  .st-rh-settlement-shell-result .st-rh-result-total {
+    font-size: 32px;
+  }
+}
+
+@container (min-width: 640px) {
+  .st-rh-summary-dice-slot-result {
+    width: 88px;
+    height: 88px;
+  }
+
+  .st-rh-settlement-shell-result .st-rh-result-total {
+    font-size: 42px;
+  }
+}
+
+@container (min-width: 860px) {
+  .st-rh-details-layout-result {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+  }
+}
+
+@container (max-width: 859px) {
+  .st-rh-settlement-shell-result .st-rh-result-core-copy::after {
+    display: none;
+  }
+}
+
+@container (max-width: 680px) {
+  .st-rh-settlement-shell-result .st-rh-summary-mobile-hero .st-rh-result-core {
+    background:
+      radial-gradient(circle at top, rgba(249, 225, 172, 0.18), transparent 36%),
+      radial-gradient(circle at bottom right, rgba(139, 59, 45, 0.18), transparent 32%),
+      linear-gradient(180deg, rgba(63, 41, 24, 0.99), rgba(12, 8, 6, 1));
+  }
+
+  .st-rh-settlement-shell-result .st-rh-summary-mobile-hero .st-rh-result-total {
+    font-size: 42px;
+  }
+
+  .st-rh-settlement-shell-result .st-rh-summary-mobile-hero .st-rh-result-visual {
+    background:
+      radial-gradient(circle at center, rgba(255, 232, 179, 0.14), transparent 42%),
+      linear-gradient(180deg, rgba(10, 8, 6, 1), rgba(26, 17, 11, 0.98));
+  }
+}
+
+@container (max-width: 520px) {
+  .st-rh-summary-dice-slot-result {
+    width: 72px;
+    height: 72px;
+  }
+
+  .st-rh-settlement-shell-result .st-rh-result-total {
+    font-size: 32px;
   }
 }

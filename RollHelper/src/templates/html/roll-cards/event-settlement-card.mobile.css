@@ -1,0 +1,351 @@
+/* ======== 结算卡手机模板：共享卷轴布局 ======== */
+
+.st-rh-settlement-shell-mobile {
+  overflow: hidden;
+}
+
+.st-rh-mobile-shell-summary {
+  display: block;
+}
+
+.st-rh-mobile-summary-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
+  padding: 0.72rem 0.72rem 0.8rem;
+}
+
+.st-rh-mobile-summary-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem 0.7rem;
+  align-items: start;
+  padding: 0.82rem 0.84rem 0.78rem;
+  border: 1px solid rgba(179, 143, 84, 0.34);
+  background:
+    radial-gradient(circle at top, rgba(247, 223, 174, 0.12), transparent 48%),
+    linear-gradient(180deg, rgba(46, 33, 23, 0.98), rgba(16, 11, 8, 0.98));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 232, 181, 0.04),
+    0 6px 12px rgba(0, 0, 0, 0.28);
+}
+
+.st-rh-mobile-summary-head::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(198, 161, 103, 0.12);
+  pointer-events: none;
+}
+
+.st-rh-mobile-summary-crest {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  margin-top: 0.1rem;
+  transform: rotate(45deg);
+  border: 1px solid rgba(213, 181, 119, 0.42);
+  background:
+    radial-gradient(circle at center, rgba(245, 221, 171, 0.28), transparent 56%),
+    linear-gradient(135deg, rgba(87, 60, 32, 0.96), rgba(18, 12, 9, 0.99));
+}
+
+.st-rh-mobile-summary-crest::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  transform: rotate(-45deg);
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(240, 218, 170, 0.88), rgba(111, 80, 41, 0.16) 64%, transparent 68%);
+}
+
+.st-rh-mobile-summary-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+}
+
+.st-rh-mobile-summary-kicker {
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.st-rh-mobile-summary-title {
+  font-size: 16px;
+  line-height: 1.38;
+}
+
+.st-rh-mobile-summary-id {
+  grid-column: 1 / -1;
+  justify-self: end;
+  max-width: 140px;
+  min-height: 18px;
+  padding: 0 4px;
+  border-color: rgba(135, 105, 63, 0.18);
+  background: rgba(8, 6, 4, 0.16);
+  color: rgba(225, 204, 160, 0.32);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  opacity: 0.72;
+}
+
+.st-rh-mobile-summary-kicker-wrap {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.3rem;
+}
+
+.st-rh-mobile-summary-hero {
+  position: relative;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core {
+  margin: 0;
+  padding: 0.82rem 0.82rem 0.88rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem 0.8rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.26rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin-top: 0;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-total {
+  font-size: 40px;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-status-pill {
+  align-self: center;
+  justify-self: end;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-visual {
+  margin-top: 0.72rem;
+  padding: 0.8rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid {
+  margin-top: 0.72rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.8rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-surface-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 40px;
+  padding: 0.18rem 0;
+  border: none;
+  border-radius: 0;
+  border-top: 1px solid rgba(191, 153, 91, 0.28);
+  background: transparent;
+  box-shadow: none;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-label {
+  margin-bottom: 0;
+  padding-right: 0.4rem;
+  border-bottom: none;
+  white-space: nowrap;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-value {
+  text-align: right;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.st-rh-mobile-summary-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(170, 134, 79, 0.24);
+  border-left: 3px solid rgba(191, 153, 91, 0.58);
+  background:
+    linear-gradient(180deg, rgba(63, 45, 29, 0.24), rgba(17, 11, 8, 0.2)),
+    linear-gradient(135deg, rgba(227, 205, 158, 0.08), rgba(96, 64, 37, 0.12)),
+    repeating-linear-gradient(0deg, rgba(255, 242, 214, 0.03) 0px, rgba(255, 242, 214, 0.03) 1px, transparent 1px, transparent 3px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 236, 195, 0.03),
+    0 4px 10px rgba(0, 0, 0, 0.22);
+}
+
+.st-rh-mobile-summary-scroll > * {
+  min-width: 0;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll .st-rh-inline-chip {
+  max-width: 100%;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll > .st-rh-inline-chip:first-child {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0.58rem 0.8rem;
+  border: none !important;
+  border-bottom: 1px solid rgba(191, 153, 91, 0.18) !important;
+  border-radius: 0 !important;
+  background:
+    linear-gradient(180deg, rgba(83, 59, 34, 0.42), rgba(34, 22, 14, 0.28)) !important;
+  color: rgba(213, 184, 128, 0.92) !important;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.22) !important;
+  font-family: var(--st-rh-font-display);
+  letter-spacing: 0.06em;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll > .st-rh-inline-chip:first-child .st-rh-chip-icon {
+  color: rgba(213, 184, 128, 0.82);
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll .st-rh-summary-chip-outcome {
+  padding: 0.78rem 0.8rem 0.72rem !important;
+  color: var(--st-rh-royal-ink) !important;
+  font-size: 15px;
+  line-height: 1.62;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.56);
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll .st-rh-summary-chip-outcome .st-rh-chip-icon {
+  display: none;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll .st-rh-summary-chip-status-summary {
+  display: flex !important;
+  align-self: auto;
+  align-items: center;
+  margin: 0 0.72rem 0.72rem;
+  padding: 0.55rem 0.72rem;
+  border-radius: 999px;
+  border-color: rgba(167, 133, 78, 0.34) !important;
+  background:
+    linear-gradient(180deg, rgba(50, 37, 23, 0.86), rgba(17, 11, 8, 0.92)) !important;
+  color: rgba(236, 217, 182, 0.94) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 236, 195, 0.03),
+    inset 0 0 14px rgba(0, 0, 0, 0.28);
+  line-height: 1.45;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-scroll .st-rh-summary-chip-status-summary .st-rh-chip-icon {
+  color: rgba(224, 189, 120, 0.9);
+}
+
+.st-rh-mobile-summary-actions {
+  display: flex;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-mobile-summary-actions .st-rh-summary-toggle-state {
+  width: 100%;
+  justify-content: center;
+}
+
+.st-rh-mobile-details-body {
+  padding: 0 0.72rem 0.78rem;
+}
+
+.st-rh-details-layout-mobile {
+  display: block;
+  margin-top: 0.72rem;
+}
+
+.st-rh-mobile-details-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-details-head {
+  gap: 0.52rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-details-head-side {
+  justify-content: space-between;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-fact-grid {
+  grid-template-columns: 1fr;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-info-panel,
+.st-rh-settlement-shell-mobile .st-rh-meta-panel {
+  padding: 0.76rem 0.8rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-panel-copy,
+.st-rh-settlement-shell-mobile .st-rh-body-copy {
+  text-indent: 0;
+  line-height: 1.55;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-meta-copy,
+.st-rh-settlement-shell-mobile .st-rh-value-copy,
+.st-rh-settlement-shell-mobile .st-rh-distribution-copy,
+.st-rh-settlement-shell-mobile .st-rh-timeout-copy {
+  line-height: 1.5;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-note-box,
+.st-rh-settlement-shell-mobile .st-rh-impact-note {
+  margin-top: 0.5rem;
+}
+
+@media (min-width: 480px) {
+  .st-rh-settlement-shell-mobile .st-rh-fact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 380px) {
+  .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core-head {
+    gap: 0.45rem 0.55rem;
+  }
+
+  .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-total {
+    font-size: 36px;
+  }
+
+  .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid {
+    gap: 0.5rem;
+  }
+
+  .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-surface-card {
+    gap: 0.45rem;
+  }
+
+  .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-value {
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st-rh-mobile-summary-wrap,
+  .st-rh-mobile-summary-head,
+  .st-rh-mobile-summary-hero {
+    animation: none;
+    transition: none;
+  }
+}

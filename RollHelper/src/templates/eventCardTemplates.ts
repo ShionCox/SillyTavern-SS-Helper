@@ -1,13 +1,20 @@
 import baseCssText from "./html/roll-cards/_base.css?inline";
 import eventListCardCssText from "./html/roll-cards/event-list-card.css?inline";
+import eventListCardMobileCssText from "./html/roll-cards/event-list-card.mobile.css?inline";
 import eventListItemCssText from "./html/roll-cards/event-list-item.css?inline";
+import eventListItemMobileCssText from "./html/roll-cards/event-list-item.mobile.css?inline";
 import settlementSharedCssText from "./html/roll-cards/_settlement-shared.css?inline";
+import eventSettlementCardMobileCssText from "./html/roll-cards/event-settlement-card.mobile.css?inline";
 import eventRollResultCardCssText from "./html/roll-cards/event-roll-result-card.css?inline";
+import eventRollResultCardMobileCssText from "./html/roll-cards/event-roll-result-card.mobile.css?inline";
 import eventAlreadyRolledCardCssText from "./html/roll-cards/event-already-rolled-card.css?inline";
-import eventAlreadyRolledCardTemplateHtml from "./html/roll-cards/event-already-rolled-card.html?raw";
-import eventRollResultCardTemplateHtml from "./html/roll-cards/event-roll-result-card.html?raw";
+import eventAlreadyRolledCardMobileCssText from "./html/roll-cards/event-already-rolled-card.mobile.css?inline";
+import eventSettlementCardTemplateHtml from "./html/roll-cards/event-settlement-card.html?raw";
+import eventSettlementCardMobileTemplateHtml from "./html/roll-cards/event-settlement-card.mobile.html?raw";
 import eventListCardTemplateHtml from "./html/roll-cards/event-list-card.html?raw";
+import eventListCardMobileTemplateHtml from "./html/roll-cards/event-list-card.mobile.html?raw";
 import eventListItemTemplateHtml from "./html/roll-cards/event-list-item.html?raw";
+import eventListItemMobileTemplateHtml from "./html/roll-cards/event-list-item.mobile.html?raw";
 
 const EVENT_CARD_STYLE_ID_Event = "st-rh-event-card-styles-v1";
 const EVENT_CARD_EXTERNAL_STYLE_LINK_ID_PREFIX_Event = "st-rh-event-card-external-style-v1";
@@ -30,7 +37,6 @@ const EVENT_CARD_EXTERNAL_STYLE_URLS_Event = [
   "https://site-assets.fontawesome.com/releases/v7.2.0/css/utility-semibold.css",
   "https://site-assets.fontawesome.com/releases/v7.2.0/css/whiteboard-semibold.css",
 ];
-
 const fontFaceCssText = `@font-face {
   font-family: "STRHSourceSong";
   src: url("${new URL(/* @vite-ignore */ "./assets/font/思源宋体.otf", import.meta.url).href}") format("opentype");
@@ -58,10 +64,15 @@ function buildCustomPrefixedEventCardCssTextEvent(cssText: string): string {
 const eventCardStylesCssText = [
   processedBaseCssText,
   eventListCardCssText,
+  eventListCardMobileCssText,
   eventListItemCssText,
+  eventListItemMobileCssText,
   settlementSharedCssText,
+  eventSettlementCardMobileCssText,
   eventRollResultCardCssText,
+  eventRollResultCardMobileCssText,
   eventAlreadyRolledCardCssText,
+  eventAlreadyRolledCardMobileCssText,
 ].join("\n");
 
 const eventCardRuntimeCssText = `${eventCardStylesCssText}\n${buildCustomPrefixedEventCardCssTextEvent(eventCardStylesCssText)}`;
@@ -109,10 +120,214 @@ export function ensureEventCardStylesEvent(doc: Document = document): void {
   style.id = EVENT_CARD_STYLE_ID_Event;
   style.textContent = cssText;
   doc.head.appendChild(style);
+
+  // 注入展开/折叠动画拦截器脚本
+  ensureDetailsAnimScriptEvent(doc);
+}
+
+/**
+ * 功能：刷新手机事件卡标题的滚动状态。
+ * @param root 用于查询标题节点的根容器。
+ * @returns 无返回值。
+ */
+export function refreshEventCardMobileTitleMarqueeEvent(root: ParentNode = document): void {
+  const marquees = root.querySelectorAll?.(".st-rh-summary-title-marquee-mobile");
+  if (!marquees?.length) return;
+
+  marquees.forEach((marquee) => {
+    const marqueeElement = marquee as HTMLElement;
+    const track = marqueeElement.querySelector(".st-rh-summary-title-track-mobile") as HTMLElement | null;
+    const segment = marqueeElement.querySelector(".st-rh-summary-title-segment-mobile") as HTMLElement | null;
+    if (!track || !segment) return;
+
+    track.style.removeProperty("--st-rh-marquee-distance");
+    track.style.removeProperty("--st-rh-marquee-duration");
+    marqueeElement.classList.remove("is-overflowing");
+
+    const visibleWidth = Math.ceil(marqueeElement.clientWidth || 0);
+    const contentWidth = Math.ceil(segment.scrollWidth || 0);
+    const overflowWidth = contentWidth - visibleWidth;
+    if (overflowWidth <= 2) return;
+
+    marqueeElement.classList.add("is-overflowing");
+    track.style.setProperty("--st-rh-marquee-distance", `-${overflowWidth}px`);
+    track.style.setProperty("--st-rh-marquee-duration", `${Math.max(6, Math.min(18, overflowWidth / 18 + 4))}s`);
+  });
+}
+
+const DETAILS_ANIM_SCRIPT_ID_Event = "st-rh-details-anim-script-v1";
+
+function ensureDetailsAnimScriptEvent(doc: Document): void {
+  if (doc.getElementById(DETAILS_ANIM_SCRIPT_ID_Event)) return;
+  const script = doc.createElement("script");
+  script.id = DETAILS_ANIM_SCRIPT_ID_Event;
+  script.textContent = `
+(function(){
+  if(window.__stRhDetailsAnimBound)return;
+  window.__stRhDetailsAnimBound=true;
+  var marqueeRefreshQueued=false;
+  function refreshMobileTitleMarquee(){
+    var marquees=document.querySelectorAll('.st-rh-summary-title-marquee-mobile');
+    marquees.forEach(function(marquee){
+      var track=marquee.querySelector('.st-rh-summary-title-track-mobile');
+      var segment=marquee.querySelector('.st-rh-summary-title-segment-mobile');
+      if(!track||!segment)return;
+      track.style.removeProperty('--st-rh-marquee-distance');
+      track.style.removeProperty('--st-rh-marquee-duration');
+      marquee.classList.remove('is-overflowing');
+      var visibleWidth=Math.ceil(marquee.clientWidth||0);
+      var contentWidth=Math.ceil(segment.scrollWidth||0);
+      var overflowWidth=contentWidth-visibleWidth;
+      if(overflowWidth<=2)return;
+      marquee.classList.add('is-overflowing');
+      track.style.setProperty('--st-rh-marquee-distance', '-' + overflowWidth + 'px');
+      track.style.setProperty('--st-rh-marquee-duration', Math.max(6, Math.min(18, overflowWidth / 18 + 4)) + 's');
+    });
+  }
+  function queueMobileTitleMarqueeRefresh(){
+    if(marqueeRefreshQueued)return;
+    marqueeRefreshQueued=true;
+    requestAnimationFrame(function(){
+      marqueeRefreshQueued=false;
+      refreshMobileTitleMarquee();
+    });
+  }
+  function scheduleMobileTitleMarqueeRefresh(delay){
+    window.setTimeout(function(){
+      queueMobileTitleMarqueeRefresh();
+    },delay);
+  }
+  function syncDetailsVariants(details,shouldOpen){
+    var syncKey=details.getAttribute('data-st-rh-sync-key');
+    if(!syncKey)return;
+    var peers=document.querySelectorAll('details[data-st-rh-sync-key]');
+    peers.forEach(function(peer){
+      if(peer===details)return;
+      if(peer.getAttribute('data-st-rh-sync-key')!==syncKey)return;
+      var body=peer.querySelector('.st-rh-card-details-body')||peer.querySelector('.st-rh-details-body');
+      if(body){
+        body.classList.remove('st-rh-anim-opening','st-rh-anim-closing');
+      }
+      if(shouldOpen){
+        peer.setAttribute('open','');
+      }else{
+        peer.removeAttribute('open');
+      }
+    });
+  }
+  queueMobileTitleMarqueeRefresh();
+  scheduleMobileTitleMarqueeRefresh(0);
+  scheduleMobileTitleMarqueeRefresh(120);
+  scheduleMobileTitleMarqueeRefresh(360);
+  scheduleMobileTitleMarqueeRefresh(900);
+  window.addEventListener('resize',queueMobileTitleMarqueeRefresh,{passive:true});
+  window.addEventListener('load',queueMobileTitleMarqueeRefresh,{passive:true});
+  if(document.fonts&&typeof document.fonts.ready==='object'&&typeof document.fonts.ready.then==='function'){
+    document.fonts.ready.then(function(){
+      queueMobileTitleMarqueeRefresh();
+    });
+  }
+  if(window.ResizeObserver){
+    var resizeObserver=new ResizeObserver(function(){
+      queueMobileTitleMarqueeRefresh();
+    });
+    document.querySelectorAll('.st-rh-summary-title-marquee-mobile').forEach(function(marquee){
+      resizeObserver.observe(marquee);
+    });
+  }
+  if(document.body&&window.MutationObserver){
+    var mutationObserver=new MutationObserver(function(){
+      queueMobileTitleMarqueeRefresh();
+    });
+    mutationObserver.observe(document.body,{childList:true,subtree:true,characterData:true});
+  }
+  document.addEventListener('click',function(e){
+    var t=e.target;
+    if(!t)return;
+    if(t.closest&&t.closest('button'))return;
+    var summary=t.closest?t.closest('summary.st-rh-collapse-summary,summary.st-rh-shell-summary'):null;
+    if(!summary){
+      if(t.tagName==='SUMMARY'&&(t.classList.contains('st-rh-collapse-summary')||t.classList.contains('st-rh-shell-summary')))summary=t;
+      else if(t.parentElement&&t.parentElement.tagName==='SUMMARY')summary=t.parentElement;
+      else return;
+    }
+    var d=summary.parentElement;
+    if(!d||d.tagName!=='DETAILS')return;
+    e.preventDefault();
+    var b=d.querySelector('.st-rh-card-details-body')||d.querySelector('.st-rh-details-body');
+    if(!b){d.open=!d.open;return}
+    b.classList.remove('st-rh-anim-opening','st-rh-anim-closing');
+    if(d.open){
+      b.classList.add('st-rh-anim-closing');
+      function cl(){b.removeEventListener('animationend',cl);b.classList.remove('st-rh-anim-closing');d.removeAttribute('open')}
+      b.addEventListener('animationend',cl);
+      syncDetailsVariants(d,false);
+      setTimeout(function(){b.classList.remove('st-rh-anim-closing');if(d.open)d.removeAttribute('open')},300);
+    }else{
+      d.setAttribute('open','');
+      syncDetailsVariants(d,true);
+      b.classList.add('st-rh-anim-opening');
+      function op(){b.removeEventListener('animationend',op);b.classList.remove('st-rh-anim-opening')}
+      b.addEventListener('animationend',op);
+      setTimeout(function(){b.classList.remove('st-rh-anim-opening')},350);
+    }
+  },true);
+})();
+`;
+  doc.head.appendChild(script);
+}
+
+type CardTemplateVariantEvent = "desktop" | "mobile";
+
+/**
+ * 功能：为双模板卡片生成带变体后缀的详情区 ID。
+ * @param detailsIdAttr 原始详情区 ID
+ * @param variant 模板变体
+ * @returns 带后缀的详情区 ID
+ */
+function buildVariantDetailsIdEvent(detailsIdAttr: string, variant: CardTemplateVariantEvent): string {
+  return `${detailsIdAttr}-${variant}`;
+}
+
+/**
+ * 功能：给模板中的 details 根节点补充双模板同步元数据。
+ * @param html 已渲染的模板 HTML
+ * @param syncKey 双模板同步键
+ * @param variant 模板变体
+ * @returns 注入同步属性后的 HTML
+ */
+function decorateDetailsTemplateHtmlEvent(
+  html: string,
+  syncKey: string,
+  variant: CardTemplateVariantEvent
+): string {
+  return html.replace(
+    /<details\b/,
+    `<details data-st-rh-sync-key="${syncKey}" data-st-rh-template-variant="${variant}"`
+  );
+}
+
+/**
+ * 功能：构建桌面与手机双模板切换外壳。
+ * @param switchClass 外壳附加类名
+ * @param desktopHtml 桌面模板 HTML
+ * @param mobileHtml 手机模板 HTML
+ * @returns 双模板外壳 HTML
+ */
+function buildCardVariantSwitchTemplateEvent(
+  switchClass: string,
+  desktopHtml: string,
+  mobileHtml: string
+): string {
+  return `<div class="st-rh-card-switch ${switchClass}">
+    <div class="st-rh-card-variant st-rh-card-variant-desktop" data-st-rh-template-variant="desktop">${desktopHtml}</div>
+    <div class="st-rh-card-variant st-rh-card-variant-mobile" data-st-rh-template-variant="mobile">${mobileHtml}</div>
+  </div>`;
 }
 
 export interface EventListItemTemplateParamsEvent {
   detailsIdAttr: string;
+  templateVariant?: CardTemplateVariantEvent;
   titleHtml: string;
   eventIdHtml: string;
   collapsedCheckHtml: string;
@@ -166,9 +381,8 @@ function buildTipLabelTemplateEvent(label: string, tip: string): string {
 
 function buildSummaryToggleStateTemplateEvent(): string {
   return `<span class="st-rh-summary-toggle-state" aria-hidden="true">
-            <span class="st-rh-summary-toggle-icon">▾</span>
-            <span class="st-rh-toggle-closed">展开详情</span>
-            <span class="st-rh-toggle-open">收起详情</span>
+            <span class="st-rh-toggle-closed"><i class="fa-solid fa-chevron-down fa-fw st-rh-fa-icon" style="margin-right:4px;"></i>展开详情</span>
+            <span class="st-rh-toggle-open"><i class="fa-solid fa-chevron-up fa-fw st-rh-fa-icon" style="margin-right:4px;"></i>收起详情</span>
           </span>`;
 }
 
@@ -176,20 +390,23 @@ export function buildEventRollButtonTemplateEvent(params: EventRollButtonTemplat
   const stateStyleAttr = params.buttonStateStyle ? ` style="${params.buttonStateStyle}"` : "";
   return `<button type="button" class="st-rh-roll-btn" data-dice-event-roll="1" data-round-id="${params.roundIdAttr}"
   data-dice-event-id="${params.eventIdAttr}" data-dice-expr="${params.diceExprAttr}" ${params.buttonDisabledAttr}${stateStyleAttr}>
-  执行检定
+  <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.9;"></i>执行检定
 </button>`;
 }
 
 export function buildEventListItemTemplateEvent(params: EventListItemTemplateParamsEvent): string {
-  const footerClass = "st-rh-event-footer is-centered";
+  const templateVariant: CardTemplateVariantEvent = params.templateVariant ?? "desktop";
+  const detailsIdAttr = buildVariantDetailsIdEvent(params.detailsIdAttr, templateVariant);
+  const templateHtml =
+    templateVariant === "mobile" ? eventListItemMobileTemplateHtml : eventListItemTemplateHtml;
   const modifierBadgeHtml = params.modifierTextHtml
-    ? `<span class="st-rh-chip">${buildTipLabelTemplateEvent("修正：", "总修正 = 基础修正 + 技能修正 + 状态修正。")} <span class="st-rh-chip-highlight">${params.modifierTextHtml}</span></span>`
+    ? `<span class="st-rh-chip"><i class="fa-solid fa-calculator fa-fw st-rh-fa-icon st-rh-fact-label-icon" aria-hidden="true" style="margin-right: 6px; font-size: 0.85rem; color: #d8b87a; opacity: 0.9;"></i>${buildTipLabelTemplateEvent("修正：", "总修正 = 基础修正 + 技能修正 + 状态修正。")} <span class="st-rh-chip-highlight">${params.modifierTextHtml}</span></span>`
     : "";
   const rollActionHtml = params.rollButtonHtml
     ? params.rollButtonHtml
-    : `<span class="st-rh-summary-lock st-rh-mono">已锁定</span>`;
+    : `<span class="st-rh-summary-lock st-rh-mono"><i class="fa-solid fa-lock fa-fw st-rh-fa-icon" style="margin-right:6px;"></i>已锁定</span>`;
   const dcReasonHtml = params.dcReasonHtml ? `<div class="st-rh-dc-reason">${params.dcReasonHtml}</div>` : "";
-  return renderHtmlTemplateEvent(eventListItemTemplateHtml, {
+  const renderedHtml = renderHtmlTemplateEvent(templateHtml, {
     title_html: params.titleHtml,
     roll_mode_badge_html: params.rollModeBadgeHtml,
     event_id_html: params.eventIdHtml,
@@ -202,7 +419,7 @@ export function buildEventListItemTemplateEvent(params: EventListItemTemplatePar
     collapsed_runtime_html: params.runtimeTextHtml || params.collapsedRuntimeHtml,
     roll_action_html: rollActionHtml,
     summary_toggle_state_html: buildSummaryToggleStateTemplateEvent(),
-    details_id_attr: params.detailsIdAttr,
+    details_id_attr: detailsIdAttr,
     desc_html: params.descHtml,
     outcome_preview_html: params.outcomePreviewHtml,
     tip_label_target_html: buildTipLabelTemplateEvent("对象", "本次事件影响的叙事对象。"),
@@ -223,13 +440,23 @@ export function buildEventListItemTemplateEvent(params: EventListItemTemplatePar
     rolled_block_html: params.rolledBlockHtml,
     command_text_html: params.commandTextHtml,
   });
+  return decorateDetailsTemplateHtmlEvent(renderedHtml, params.detailsIdAttr, templateVariant);
 }
 
-export function buildEventListCardTemplateEvent(roundIdHtml: string, itemsHtml: string): string {
-  return renderHtmlTemplateEvent(eventListCardTemplateHtml, {
+export function buildEventListCardTemplateEvent(
+  roundIdHtml: string,
+  desktopItemsHtml: string,
+  mobileItemsHtml: string = desktopItemsHtml
+): string {
+  const desktopHtml = renderHtmlTemplateEvent(eventListCardTemplateHtml, {
     round_id_html: roundIdHtml,
-    items_html: itemsHtml,
+    items_html: desktopItemsHtml,
   });
+  const mobileHtml = renderHtmlTemplateEvent(eventListCardMobileTemplateHtml, {
+    round_id_html: roundIdHtml,
+    items_html: mobileItemsHtml,
+  });
+  return buildCardVariantSwitchTemplateEvent("st-rh-card-switch-event-board", desktopHtml, mobileHtml);
 }
 
 export interface EventRollResultCardTemplateParamsEvent {
@@ -326,13 +553,15 @@ function renderHtmlTemplateEvent(template: string, tokens: Record<string, string
 function buildSettlementStatusBadgeTemplateEvent(
   textHtml: string,
   color: string,
-  extraClasses?: string
+  extraClasses?: string,
+  tipAttr?: string
 ): string {
   if (!String(textHtml ?? "").trim()) return "";
+  const tipDataAttr = tipAttr ? ` data-tip="${tipAttr}"` : "";
   return `<span class="${joinClassNamesTemplateEvent(
     "st-rh-status-pill st-rh-inline-chip st-rh-status-badge",
     extraClasses
-  )}" style="--st-rh-status-color:${color};">${textHtml}</span>`;
+  )}" style="--st-rh-status-color:${color};"${tipDataAttr}>${textHtml}</span>`;
 }
 
 function buildSettlementChipTemplateEvent(
@@ -341,23 +570,26 @@ function buildSettlementChipTemplateEvent(
     classes?: string;
     strong?: boolean;
     tipAttr?: string;
+    iconClass?: string;
   }
 ): string {
   if (!String(innerHtml ?? "").trim()) return "";
   const tipAttr = options?.tipAttr ? ` data-tip="${options.tipAttr}"` : "";
+  const iconHtml = options?.iconClass ? `<i class="${options.iconClass} fa-fw st-rh-chip-icon" aria-hidden="true"></i>` : "";
   return `<span class="${joinClassNamesTemplateEvent(
     options?.strong
       ? "st-rh-chip-strong st-rh-inline-chip st-rh-inline-chip-gap"
       : "st-rh-chip-soft st-rh-inline-chip st-rh-inline-chip-gap",
     options?.classes
-  )}"${tipAttr}>${innerHtml}</span>`;
+  )}"${tipAttr}>${iconHtml}${innerHtml}</span>`;
 }
 
 function buildSettlementPreviewChipTemplateEvent(
   textHtml: string,
   titleAttr: string,
   chipClassName: string,
-  extraClasses?: string
+  extraClasses?: string,
+  iconClass?: string
 ): string {
   if (!String(textHtml ?? "").trim()) return "";
   const allClasses = joinClassNamesTemplateEvent(
@@ -365,19 +597,9 @@ function buildSettlementPreviewChipTemplateEvent(
     chipClassName,
     extraClasses
   );
-  const hasMarquee = String(chipClassName ?? "").includes("is-marquee");
-  if (!hasMarquee) {
-    return `<span class="${allClasses}" data-tip="${titleAttr}">${textHtml}</span>`;
-  }
-  return `<span class="${allClasses}" data-tip="${titleAttr}">
-    <span class="st-rh-marquee-clip">
-      <span class="st-rh-marquee-track">
-        <span class="st-rh-marquee-text">${textHtml}</span>
-        <span class="st-rh-marquee-gap" aria-hidden="true">•</span>
-        <span class="st-rh-marquee-text" aria-hidden="true">${textHtml}</span>
-      </span>
-    </span>
-  </span>`;
+  const iconHtml = iconClass ? `<i class="${iconClass} fa-fw st-rh-chip-icon" aria-hidden="true"></i>` : "";
+
+  return `<span class="${allClasses}">${iconHtml}${textHtml}</span>`;
 }
 
 function buildSettlementFactTemplateEvent(
@@ -464,28 +686,44 @@ export function buildRollsSummaryTemplateEvent(rollsHtml: string, modifierHtml: 
 }
 
 export function buildEventRollResultCardTemplateEvent(params: EventRollResultCardTemplateParamsEvent): string {
-  const summaryStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(params.collapsedStatusHtml, params.statusColor);
+  const summaryStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(
+    params.collapsedStatusHtml,
+    params.statusColor,
+    undefined,
+    "本次结算的最终判定结果。"
+  );
   const detailsStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(params.statusText, params.statusColor);
   const summaryPrimaryChipsHtml = [
     buildSettlementChipTemplateEvent(
       `总点 <span class="st-rh-mono st-rh-title-text">${params.collapsedTotalHtml}</span>`,
-      { strong: true }
+      {
+        strong: true,
+        iconClass: "fa-solid fa-dice-d20",
+        tipAttr: "最终总点数，通常由骰面结果与各类修正共同组成。",
+      }
     ),
-    buildSettlementChipTemplateEvent(`<span class="st-rh-mono">${params.collapsedConditionHtml}</span>`),
+    buildSettlementChipTemplateEvent(`<span class="st-rh-mono">${params.collapsedConditionHtml}</span>`, {
+      iconClass: "fa-solid fa-bullseye",
+      tipAttr: "结算时用于比较总点与 DC 的判定条件。",
+    }),
   ]
     .filter(Boolean)
     .join("");
   const summarySecondaryChipsHtml = [
-    buildSettlementChipTemplateEvent(params.collapsedSourceHtml),
+    buildSettlementChipTemplateEvent(params.collapsedSourceHtml, { iconClass: "fa-solid fa-user-pen" }),
     buildSettlementPreviewChipTemplateEvent(
       params.collapsedOutcomeHtml,
       params.collapsedOutcomeTitleAttr,
-      params.collapsedOutcomeChipClassName
+      params.collapsedOutcomeChipClassName || "st-rh-summary-chip-outcome",
+      "",
+      "fa-solid fa-scroll"
     ),
     buildSettlementPreviewChipTemplateEvent(
       params.collapsedStatusSummaryHtml,
       params.collapsedStatusSummaryTitleAttr,
-      params.collapsedStatusSummaryChipClassName
+      params.collapsedStatusSummaryChipClassName || "st-rh-summary-chip-status-summary",
+      "",
+      "fa-solid fa-bolt-lightning"
     ),
   ]
     .filter(Boolean)
@@ -580,7 +818,11 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     .filter(Boolean)
     .join("");
 
-  return renderHtmlTemplateEvent(eventRollResultCardTemplateHtml, {
+  const desktopHtml = decorateDetailsTemplateHtmlEvent(
+    renderHtmlTemplateEvent(eventSettlementCardTemplateHtml, {
+    shell_type_class: "st-rh-settlement-shell-result",
+    dice_slot_type_class: "st-rh-summary-dice-slot-result",
+    details_layout_type_class: "st-rh-details-layout-result",
     summary_kicker_text: "检定结果",
     title_html: params.titleHtml,
     roll_id_html: params.rollIdHtml,
@@ -588,9 +830,8 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     summary_primary_chips_html: summaryPrimaryChipsHtml,
     summary_secondary_chips_html: summarySecondaryChipsHtml,
     summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "ROLL"),
-    summary_footer_note_html: "手机端默认保留关键结果，展开后查看判定链路与剧情后果。",
     summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
-    details_id_attr: params.detailsIdAttr,
+    details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "desktop"),
     details_kicker_text: "结果档案",
     details_heading_html: params.titleHtml,
     details_status_badge_html: detailsStatusBadgeHtml,
@@ -599,34 +840,80 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     footer_blocks_html: "",
     result_core_html: resultCoreHtml,
     detail_aux_html: detailAuxHtml,
-  });
+    }),
+    params.detailsIdAttr,
+    "desktop"
+  );
+  const mobileHtml = decorateDetailsTemplateHtmlEvent(
+    renderHtmlTemplateEvent(eventSettlementCardMobileTemplateHtml, {
+    shell_type_class: "st-rh-settlement-shell-result",
+    dice_slot_type_class: "st-rh-summary-dice-slot-result",
+    details_layout_type_class: "st-rh-details-layout-result",
+    summary_kicker_text: "检定结果",
+    title_html: params.titleHtml,
+    roll_id_html: params.rollIdHtml,
+    summary_status_badge_html: summaryStatusBadgeHtml,
+    summary_primary_chips_html: summaryPrimaryChipsHtml,
+    summary_secondary_chips_html: summarySecondaryChipsHtml,
+    summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "ROLL"),
+    summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
+    details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "mobile"),
+    details_kicker_text: "结果档案",
+    details_heading_html: params.titleHtml,
+    details_status_badge_html: detailsStatusBadgeHtml,
+    detail_meta_html: detailMetaHtml,
+    outcome_section_html: outcomeSectionHtml,
+    footer_blocks_html: "",
+    result_core_html: resultCoreHtml,
+    detail_aux_html: detailAuxHtml,
+    }),
+    params.detailsIdAttr,
+    "mobile"
+  );
+  return buildCardVariantSwitchTemplateEvent("st-rh-card-switch-settlement st-rh-card-switch-result", desktopHtml, mobileHtml);
 }
 
 export function buildEventAlreadyRolledCardTemplateEvent(
   params: EventAlreadyRolledCardTemplateParamsEvent
 ): string {
-  const summaryStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(params.collapsedStatusHtml, params.statusColor);
+  const summaryStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(
+    params.collapsedStatusHtml,
+    params.statusColor,
+    undefined,
+    "这条历史记录归档时的最终判定结果。"
+  );
   const detailsStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(params.statusText, params.statusColor);
   const summaryPrimaryChipsHtml = [
     buildSettlementChipTemplateEvent(
       `总点 <span class="st-rh-mono st-rh-title-text">${params.collapsedTotalHtml}</span>`,
-      { strong: true }
+      {
+        strong: true,
+        iconClass: "fa-solid fa-dice-d20",
+        tipAttr: "这条历史记录的最终总点数。",
+      }
     ),
-    buildSettlementChipTemplateEvent(`<span class="st-rh-mono">${params.collapsedConditionHtml}</span>`),
+    buildSettlementChipTemplateEvent(`<span class="st-rh-mono">${params.collapsedConditionHtml}</span>`, {
+      iconClass: "fa-solid fa-bullseye",
+      tipAttr: "这条历史记录使用的总点与 DC 比较条件。",
+    }),
   ]
     .filter(Boolean)
     .join("");
   const summarySecondaryChipsHtml = [
-    buildSettlementChipTemplateEvent(params.collapsedSourceHtml),
+    buildSettlementChipTemplateEvent(params.collapsedSourceHtml, { iconClass: "fa-solid fa-user-pen" }),
     buildSettlementPreviewChipTemplateEvent(
       params.collapsedOutcomeHtml,
       params.collapsedOutcomeTitleAttr,
-      params.collapsedOutcomeChipClassName
+      params.collapsedOutcomeChipClassName || "st-rh-summary-chip-outcome",
+      "",
+      "fa-solid fa-scroll"
     ),
     buildSettlementPreviewChipTemplateEvent(
       params.collapsedStatusSummaryHtml,
       params.collapsedStatusSummaryTitleAttr,
-      params.collapsedStatusSummaryChipClassName
+      params.collapsedStatusSummaryChipClassName || "st-rh-summary-chip-status-summary",
+      "",
+      "fa-solid fa-bolt-lightning"
     ),
   ]
     .filter(Boolean)
@@ -722,7 +1009,11 @@ export function buildEventAlreadyRolledCardTemplateEvent(
     .filter(Boolean)
     .join("");
 
-  return renderHtmlTemplateEvent(eventAlreadyRolledCardTemplateHtml, {
+  const desktopHtml = decorateDetailsTemplateHtmlEvent(
+    renderHtmlTemplateEvent(eventSettlementCardTemplateHtml, {
+    shell_type_class: "st-rh-settlement-shell-already",
+    dice_slot_type_class: "st-rh-summary-dice-slot-already",
+    details_layout_type_class: "st-rh-details-layout-already",
     summary_kicker_text: params.titleTextHtml,
     title_html: params.eventTitleHtml,
     roll_id_html: params.rollIdHtml,
@@ -730,9 +1021,8 @@ export function buildEventAlreadyRolledCardTemplateEvent(
     summary_primary_chips_html: summaryPrimaryChipsHtml,
     summary_secondary_chips_html: summarySecondaryChipsHtml,
     summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "LOG"),
-    summary_footer_note_html: "手机端先看关键结算摘要，展开后查看完整归档与后果记录。",
     summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
-    details_id_attr: params.detailsIdAttr,
+    details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "desktop"),
     details_kicker_text: "结算档案",
     details_heading_html: params.titleTextHtml,
     details_status_badge_html: detailsStatusBadgeHtml,
@@ -741,7 +1031,37 @@ export function buildEventAlreadyRolledCardTemplateEvent(
     footer_blocks_html: "",
     result_core_html: resultCoreHtml,
     detail_aux_html: detailAuxHtml,
-  });
+    }),
+    params.detailsIdAttr,
+    "desktop"
+  );
+  const mobileHtml = decorateDetailsTemplateHtmlEvent(
+    renderHtmlTemplateEvent(eventSettlementCardMobileTemplateHtml, {
+    shell_type_class: "st-rh-settlement-shell-already",
+    dice_slot_type_class: "st-rh-summary-dice-slot-already",
+    details_layout_type_class: "st-rh-details-layout-already",
+    summary_kicker_text: params.titleTextHtml,
+    title_html: params.eventTitleHtml,
+    roll_id_html: params.rollIdHtml,
+    summary_status_badge_html: summaryStatusBadgeHtml,
+    summary_primary_chips_html: summaryPrimaryChipsHtml,
+    summary_secondary_chips_html: summarySecondaryChipsHtml,
+    summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "LOG"),
+    summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
+    details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "mobile"),
+    details_kicker_text: "结算档案",
+    details_heading_html: params.titleTextHtml,
+    details_status_badge_html: detailsStatusBadgeHtml,
+    detail_meta_html: detailMetaHtml,
+    outcome_section_html: outcomeSectionHtml,
+    footer_blocks_html: "",
+    result_core_html: resultCoreHtml,
+    detail_aux_html: detailAuxHtml,
+    }),
+    params.detailsIdAttr,
+    "mobile"
+  );
+  return buildCardVariantSwitchTemplateEvent("st-rh-card-switch-settlement st-rh-card-switch-already", desktopHtml, mobileHtml);
 }
 
 export function buildEventDistributionBlockTemplateEvent(rollsHtml: string, modifierHtml: string): string {

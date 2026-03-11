@@ -385,37 +385,37 @@ function buildSSToolbarTemplateEvent(): string {
   return `
     <div class="st-rh-ss-toolbar-shell" data-sshelper-toolbar-shell="1">
       ${buildSharedButton({
-        label: "",
-        className: "st-rh-ss-toggle",
-        iconClassName: "fa-solid fa-angles-right",
-        attributes: {
-          "data-sshelper-tool-toggle": "1",
-          "data-tip": SSHELPER_TOOLBAR_TIP_EXPAND_Event,
-          "aria-expanded": "false",
-          "aria-label": SSHELPER_TOOLBAR_ARIA_EXPAND_Event,
-        },
-      })}
+    label: "",
+    className: "st-rh-ss-toggle",
+    iconClassName: "fa-solid fa-angles-right",
+    attributes: {
+      "data-sshelper-tool-toggle": "1",
+      "data-tip": SSHELPER_TOOLBAR_TIP_EXPAND_Event,
+      "aria-expanded": "false",
+      "aria-label": SSHELPER_TOOLBAR_ARIA_EXPAND_Event,
+    },
+  })}
       <div class="st-rh-ss-actions" data-sshelper-tool-actions="1">
         ${buildSharedButton({
-          label: "",
-          className: "st-rh-ss-preview-btn",
-          iconClassName: "fa-solid fa-wand-magic-sparkles",
-          attributes: {
-            "data-event-preview-open": "skills",
-            "data-tip": SSHELPER_TOOLBAR_TIP_SKILLS_Event,
-            "aria-label": SSHELPER_TOOLBAR_ARIA_SKILLS_Event,
-          },
-        })}
+    label: "",
+    className: "st-rh-ss-preview-btn",
+    iconClassName: "fa-solid fa-wand-magic-sparkles",
+    attributes: {
+      "data-event-preview-open": "skills",
+      "data-tip": SSHELPER_TOOLBAR_TIP_SKILLS_Event,
+      "aria-label": SSHELPER_TOOLBAR_ARIA_SKILLS_Event,
+    },
+  })}
         ${buildSharedButton({
-          label: "",
-          className: "st-rh-ss-preview-btn",
-          iconClassName: "fa-solid fa-heart-pulse",
-          attributes: {
-            "data-event-preview-open": "statuses",
-            "data-tip": SSHELPER_TOOLBAR_TIP_STATUSES_Event,
-            "aria-label": SSHELPER_TOOLBAR_ARIA_STATUSES_Event,
-          },
-        })}
+    label: "",
+    className: "st-rh-ss-preview-btn",
+    iconClassName: "fa-solid fa-heart-pulse",
+    attributes: {
+      "data-event-preview-open": "statuses",
+      "data-tip": SSHELPER_TOOLBAR_TIP_STATUSES_Event,
+      "aria-label": SSHELPER_TOOLBAR_ARIA_STATUSES_Event,
+    },
+  })}
       </div>
     </div>
   `;
@@ -826,6 +826,7 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
     (event: Event) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
+
 
       const toolbarToggleButton = target.closest(
         "button[data-sshelper-tool-toggle=\"1\"]"

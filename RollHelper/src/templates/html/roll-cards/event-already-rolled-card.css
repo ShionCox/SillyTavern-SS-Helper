@@ -1,14 +1,45 @@
 /* ======== 已结算记录卡 ======== */
 
-/* 已结算卡专属尺寸 (紧凑) */
-.st-rh-summary-dice-slot-already { width: 56px; height: 56px; }
+/* 已结算卡专属尺寸，与实时结果卡保持一致 */
+.st-rh-summary-dice-slot-already { width: 76px; height: 76px; }
 
 /* 桌面端分栏 */
 @media (min-width: 640px) {
-  .st-rh-summary-dice-slot-already { width: 64px; height: 64px; }
+  .st-rh-summary-dice-slot-already { width: 88px; height: 88px; }
 }
+
 @media (min-width: 860px) {
   .st-rh-details-layout-already {
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.7fr);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
   }
+}
+
+@media (max-width: 520px) {
+  .st-rh-summary-dice-slot-already { width: 72px; height: 72px; }
+}
+
+@container (min-width: 640px) {
+  .st-rh-summary-dice-slot-already { width: 88px; height: 88px; }
+}
+
+@container (min-width: 860px) {
+  .st-rh-details-layout-already {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+  }
+}
+
+@container (max-width: 680px) {
+  .st-rh-settlement-shell-already .st-rh-summary-mobile-hero .st-rh-result-core {
+    background:
+      radial-gradient(circle at top, rgba(240, 220, 179, 0.11), transparent 38%),
+      linear-gradient(180deg, rgba(49, 38, 28, 0.98), rgba(14, 10, 8, 1));
+  }
+
+  .st-rh-settlement-shell-already .st-rh-summary-mobile-hero .st-rh-result-total {
+    font-size: 38px;
+  }
+}
+
+@container (max-width: 520px) {
+  .st-rh-summary-dice-slot-already { width: 72px; height: 72px; }
 }

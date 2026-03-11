@@ -15,6 +15,24 @@
   --st-rh-border-soft: #4a3e2f;
   --st-rh-border-strong: #755b38;
   --st-rh-border-highlight: #b08f4c;
+  --st-rh-royal-title: #efd8a5;
+  --st-rh-royal-ink: #eadfc7;
+  --st-rh-royal-shadow: rgba(8, 5, 3, 0.82);
+  --st-rh-royal-border: #8e6b3c;
+  --st-rh-royal-border-soft: rgba(182, 146, 85, 0.28);
+  --st-rh-royal-red: #8b3b2d;
+  --st-rh-royal-red-soft: rgba(139, 59, 45, 0.24);
+  --st-rh-royal-glow: rgba(242, 212, 143, 0.15);
+  --st-rh-royal-scroll:
+    linear-gradient(180deg, rgba(73, 55, 37, 0.24), rgba(23, 16, 10, 0.18)),
+    linear-gradient(135deg, rgba(218, 191, 144, 0.06), rgba(84, 60, 35, 0.1)),
+    repeating-linear-gradient(0deg, rgba(255, 245, 220, 0.028) 0px, rgba(255, 245, 220, 0.028) 1px, transparent 1px, transparent 3px);
+  --st-rh-royal-panel:
+    radial-gradient(circle at top, rgba(246, 223, 172, 0.08), transparent 52%),
+    linear-gradient(145deg, rgba(40, 30, 20, 0.96), rgba(14, 10, 7, 0.98));
+  --st-rh-royal-panel-strong:
+    radial-gradient(circle at top, rgba(250, 226, 178, 0.12), transparent 46%),
+    linear-gradient(145deg, rgba(43, 31, 22, 0.98), rgba(10, 7, 5, 1));
   
   /* 紧凑版暗纹理背景 */
   --st-rh-panel-bg:
@@ -31,6 +49,24 @@
   font-size: 13px;
   text-align: left;
   line-height: 1.35;
+  container-type: inline-size;
+}
+
+.st-rh-card-switch {
+  width: 100%;
+  container-type: inline-size;
+}
+
+.st-rh-card-variant {
+  width: 100%;
+}
+
+.st-rh-card-variant-mobile {
+  display: none !important;
+}
+
+.st-rh-card-variant-desktop {
+  display: block;
 }
 
 .st-rh-card-scope * {
@@ -130,9 +166,9 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--st-rh-label);
-  border-bottom: 1px solid var(--st-rh-border-soft);
   padding-bottom: 1px;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
+  margin-left: 3px;
 }
 .st-rh-kicker-hero { letter-spacing: 0.15em; border-bottom: none; }
 .st-rh-kicker-compact { font-size: 9px; letter-spacing: 0.05em; margin-bottom: 2px; }
@@ -257,5 +293,27 @@
   .st-rh-card-scope .st-rh-settlement-shell {
     transition: none;
     animation: none;
+  }
+}
+
+@supports not (container-type: inline-size) {
+  @media (max-width: 680px) {
+    .st-rh-card-switch > .st-rh-card-variant-desktop {
+      display: none !important;
+    }
+
+    .st-rh-card-switch > .st-rh-card-variant-mobile {
+      display: block !important;
+    }
+  }
+}
+
+@container (max-width: 680px) {
+  .st-rh-card-switch > .st-rh-card-variant-desktop {
+    display: none !important;
+  }
+
+  .st-rh-card-switch > .st-rh-card-variant-mobile {
+    display: block !important;
   }
 }

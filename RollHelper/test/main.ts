@@ -25,6 +25,7 @@ import {
   buildEventTimeoutAtBlockTemplateEvent,
   buildRollsSummaryTemplateEvent,
   ensureEventCardStylesEvent,
+  refreshEventCardMobileTitleMarqueeEvent,
 } from "../src/templates/eventCardTemplates";
 import { resolveTriggeredOutcomeEvent } from "../src/events/roundEvent";
 import { ensureSharedTooltip } from "../../SDK/sharedTooltip";
@@ -464,6 +465,13 @@ function renderAll(): void {
     }
 
     preview.innerHTML = blocks;
+    refreshEventCardMobileTitleMarqueeEvent(preview);
+    requestAnimationFrame((): void => {
+      refreshEventCardMobileTitleMarqueeEvent(preview);
+    });
+    window.setTimeout((): void => {
+      refreshEventCardMobileTitleMarqueeEvent(preview);
+    }, 120);
   } catch (error: unknown) {
     console.error(error);
     preview.innerHTML = `<div style='color:#ff4d4f; white-space: pre-wrap;'>渲染过程中发生崩溃：\n${formatErrorText(error)}</div>`;
@@ -494,6 +502,10 @@ function handleRenderButtonClick(): void {
  */
 function handleDesktopModeClick(): void {
   setPreviewMode("desktop");
+  refreshEventCardMobileTitleMarqueeEvent(preview);
+  requestAnimationFrame((): void => {
+    refreshEventCardMobileTitleMarqueeEvent(preview);
+  });
 }
 
 /**
@@ -507,6 +519,10 @@ function handleDesktopModeClick(): void {
  */
 function handleMobileModeClick(): void {
   setPreviewMode("mobile");
+  refreshEventCardMobileTitleMarqueeEvent(preview);
+  requestAnimationFrame((): void => {
+    refreshEventCardMobileTitleMarqueeEvent(preview);
+  });
 }
 
 /**
