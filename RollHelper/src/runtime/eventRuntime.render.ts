@@ -18,6 +18,7 @@ import {
 } from "../templates/diceResultTemplates";
 import {
   buildEventAlreadyRolledCardTemplateEvent,
+  ensureEventCardStylesEvent,
   buildEventDistributionBlockTemplateEvent,
   buildEventListCardTemplateEvent,
   buildEventListItemTemplateEvent,
@@ -81,12 +82,14 @@ export function getEventRuntimeViewStateEvent(round: PendingRoundEvent, event: D
 }
 
 export function buildEventListCardEvent(round: PendingRoundEvent): string {
+  ensureEventCardStylesEvent();
   return buildEventListCardModuleEvent(round, {
     ...cardRenderDepsEvent,
   });
 }
 
 export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record: EventRollRecordEvent): string {
+  ensureEventCardStylesEvent();
   return buildEventRollResultCardModuleEvent(event, record, {
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
@@ -104,11 +107,13 @@ export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record:
 }
 
 export function buildEventAlreadyRolledCardEvent(event: DiceEventSpecEvent, record: EventRollRecordEvent): string {
+  ensureEventCardStylesEvent();
   return buildEventAlreadyRolledCardModuleEvent(event, record, {
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     resolveTriggeredOutcomeEvent,
     formatEventModifierBreakdownEvent: formatEventModifierBreakdownCoreEvent,
+    buildRollsSummaryTemplateEvent,
     buildEventDistributionBlockTemplateEvent,
     buildEventTimeoutAtBlockTemplateEvent,
     buildEventAlreadyRolledCardTemplateEvent,

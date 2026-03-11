@@ -1,0 +1,14 @@
+/* ======== 实时结算结果卡 ======== */
+
+/* 结果卡专属尺寸 (紧凑) */
+.st-rh-summary-dice-slot-result { width: 64px; height: 64px; }
+
+/* 桌面端分栏 */
+@media (min-width: 640px) {
+  .st-rh-summary-dice-slot-result { width: 72px; height: 72px; }
+}
+@media (min-width: 860px) {
+  .st-rh-details-layout-result {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.65fr);
+  }
+}

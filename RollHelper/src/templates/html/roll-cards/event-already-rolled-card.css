@@ -1,0 +1,14 @@
+/* ======== 已结算记录卡 ======== */
+
+/* 已结算卡专属尺寸 (紧凑) */
+.st-rh-summary-dice-slot-already { width: 56px; height: 56px; }
+
+/* 桌面端分栏 */
+@media (min-width: 640px) {
+  .st-rh-summary-dice-slot-already { width: 64px; height: 64px; }
+}
+@media (min-width: 860px) {
+  .st-rh-details-layout-already {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.7fr);
+  }
+}

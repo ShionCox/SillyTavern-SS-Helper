@@ -1,4 +1,4 @@
-import sharedInputCssText from "./sharedInput.css";
+import sharedInputCssText from "./sharedInput.css?inline";
 
 type SharedInputAttributeValue = string | number | boolean | null | undefined;
 

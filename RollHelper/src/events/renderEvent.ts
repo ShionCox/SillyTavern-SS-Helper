@@ -1,4 +1,4 @@
-﻿import type { DiceResult } from "../types/diceEvent";
+import type { DiceResult } from "../types/diceEvent";
 import type {
   ActiveStatusEvent,
   CompareOperatorEvent,
@@ -278,6 +278,117 @@ function buildOutcomePreviewHtmlEvent(
   `;
 }
 
+function buildOutcomePreviewHtmlRichEvent(
+  event: DiceEventSpecEvent,
+  settings: DicePluginSettingsEvent,
+  escapeHtmlEvent: (input: string) => string
+): string {
+  if (!settings.enableOutcomeBranches || !settings.showOutcomePreviewInListCard) return "";
+  const outcomes = event.outcomes;
+  if (!outcomes) return "";
+  const hasAnyOutcomeText = Boolean(
+    outcomes.success?.trim() || outcomes.failure?.trim() || outcomes.explode?.trim()
+  );
+  if (!hasAnyOutcomeText) return "";
+
+  const successRaw = outcomes.success?.trim() || "";
+  const failureRaw = outcomes.failure?.trim() || "";
+  const explodeRaw = outcomes.explode?.trim() || "";
+
+  const successText = stripStatusTagsFromTextEvent(successRaw) || "未设置";
+  const failureText = stripStatusTagsFromTextEvent(failureRaw) || "未设置";
+  const explodeText = settings.enableExplodeOutcomeBranch
+    ? stripStatusTagsFromTextEvent(explodeRaw) || "未设置"
+    : "已关闭";
+
+  const successStatusSummary = settings.enableStatusSystem
+    ? buildOutcomeStatusSummaryTextEvent(successRaw, event.skill)
+    : "";
+  const failureStatusSummary = settings.enableStatusSystem
+    ? buildOutcomeStatusSummaryTextEvent(failureRaw, event.skill)
+    : "";
+  const explodeStatusSummary =
+    settings.enableStatusSystem && settings.enableExplodeOutcomeBranch
+      ? buildOutcomeStatusSummaryTextEvent(explodeRaw, event.skill)
+      : "";
+
+  const buildPreviewRow = (
+    tone: "success" | "failure" | "explode",
+    label: string,
+    text: string,
+    statusSummary: string,
+    isLast = false
+  ): string => {
+    const palette = {
+      success: {
+        badgeBg: "rgba(82,196,26,0.15)",
+        badgeBorder: "rgba(82,196,26,0.4)",
+        badgeColor: "#73d13d",
+        summaryBg: "rgba(57,168,40,0.10)",
+        summaryBorder: "rgba(82,196,26,0.24)",
+        summaryColor: "#b7ef8f",
+      },
+      failure: {
+        badgeBg: "rgba(255,77,79,0.15)",
+        badgeBorder: "rgba(255,77,79,0.4)",
+        badgeColor: "#ff7875",
+        summaryBg: "rgba(171,54,57,0.12)",
+        summaryBorder: "rgba(255,120,120,0.22)",
+        summaryColor: "#ffb3b3",
+      },
+      explode: {
+        badgeBg: "rgba(250,173,20,0.15)",
+        badgeBorder: "rgba(250,173,20,0.4)",
+        badgeColor: "#ffc53d",
+        summaryBg: "rgba(173,113,20,0.12)",
+        summaryBorder: "rgba(250,173,20,0.22)",
+        summaryColor: "#ffd98a",
+      },
+    }[tone];
+
+    const escapedSummary = statusSummary ? escapeHtmlEvent(statusSummary) : "";
+
+    return `
+      <div class="st-roll-preview-row"${isLast ? ` style="margin-bottom:0;"` : ""}>
+        <span style="display:inline-flex; align-items:center; justify-content:center; min-width:52px; padding:0 8px; margin-right:10px; background:${palette.badgeBg}; border:1px solid ${palette.badgeBorder}; border-radius:4px; color:${palette.badgeColor}; font-size:11px; font-weight:700; font-family:monospace; line-height:1.8; white-space:nowrap; text-align:center; user-select:none; box-shadow:0 0 4px rgba(0,0,0,0.12);">${label}</span>
+        <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; justify-content:center;">
+          <span style="color:#e0e0e0; word-break:break-word; line-height:1.55;font-size:13px">${escapeHtmlEvent(text)}</span>
+          ${escapedSummary
+            ? `<div style="display:flex; align-items:center; gap:6px; padding:4px 7px; border:1px solid ${palette.summaryBorder}; border-radius:4px; background:${palette.summaryBg}; box-shadow:inset 0 1px 4px rgba(0,0,0,0.18);">
+                 <span style="flex:0 0 auto; color:${palette.summaryColor}; font-size:12px; letter-spacing:0.06em; white-space:nowrap; line-height:1.2;">状态</span>
+                 <span style="color:#d9c8a2; font-size:10px; line-height:1.45; word-break:break-word;">${escapedSummary}</span>
+               </div>`
+            : ""
+          }
+        </div>
+      </div>
+    `;
+  };
+
+  return `
+    <style>
+      .st-roll-preview-row {
+        display:flex; margin-bottom:7px; align-items:center; padding: 5px 6px 5px 4px; border-radius: 4px; border-left: 2px solid transparent; transition: all 0.2s ease; cursor: default;
+      }
+      .st-roll-preview-row:hover {
+        background-color: rgba(197, 160, 89, 0.1) !important;
+        border-left: 2px solid rgba(197, 160, 89, 0.8) !important;
+        box-shadow: inset 24px 0 24px -24px rgba(197, 160, 89, 0.3) !important;
+      }
+    </style>
+    <div style="margin-top:8px; margin-bottom:12px; padding:12px; border:1px solid rgba(197,160,89,0.3); border-radius:6px; background:linear-gradient(135deg, rgba(30,30,30,0.6) 0%, rgba(15,15,15,0.8) 100%); font-size:12px; line-height:1.6; box-shadow:inset 0 1px 4px rgba(0,0,0,0.5);">
+      <div style="margin-bottom:10px; font-weight:600; color:#d1b67f; font-size:11px; letter-spacing:1px; display:flex; align-items:center;">
+        <span style="flex-grow:1; height:1px; background:linear-gradient(90deg, transparent, rgba(197,160,89,0.4)); margin-right:8px;"></span>
+        走向预览
+        <span style="margin-left:8px; flex-grow:1; height:1px; background:linear-gradient(270deg, transparent, rgba(197,160,89,0.4));"></span>
+      </div>
+      ${buildPreviewRow("success", "成功", successText, successStatusSummary)}
+      ${buildPreviewRow("failure", "失败", failureText, failureStatusSummary)}
+      ${buildPreviewRow("explode", "爆骰", explodeText, explodeStatusSummary, true)}
+    </div>
+  `;
+}
+
 export function outcomeKindLabelEvent(kind: EventOutcomeKindEvent): string {
   if (kind === "explode") return "爆骰走向";
   if (kind === "success") return "成功走向";
@@ -369,13 +480,12 @@ export interface BuildEventListCardDepsEvent {
     dcText: string;
     dcReasonHtml: string;
     timeLimitHtml: string;
+    rollModeBadgeHtml: string;
     roundIdAttr: string;
     eventIdAttr: string;
     deadlineAttr: string;
+    runtimeStyleAttr: string;
     runtimeTextHtml: string;
-    runtimeBorder: string;
-    runtimeBackground: string;
-    runtimeColor: string;
     rolledBlockHtml: string;
     outcomePreviewHtml: string;
     commandTextHtml: string;
@@ -414,7 +524,7 @@ export function buildEventListCardEvent(
           deps.escapeHtmlEvent(deps.formatRollRecordSummaryEvent(lastRecord, event))
         )
         : "";
-      const outcomePreviewHtml = buildOutcomePreviewHtmlEvent(event, settings, deps.escapeHtmlEvent);
+      const outcomePreviewHtml = buildOutcomePreviewHtmlRichEvent(event, settings, deps.escapeHtmlEvent);
 
       const deadlineAttr =
         typeof event.deadlineAt === "number" && Number.isFinite(event.deadlineAt)
@@ -484,19 +594,29 @@ export function buildEventListCardEvent(
         lastRecord?.advantageStateApplied ?? event.advantageState
       );
 
-      const rollButtonHtml = showRollButton
-        ? deps.buildEventRollButtonTemplateEvent({
+      const rollButtonHtml = (() => {
+        if (!showRollButton) return "";
+        if (event.rollMode === "auto") {
+          return `<span class="st-rh-summary-lock st-rh-mono" style="color: #d1b67f; border: 1px dashed rgba(209,182,127,0.3); padding: 4px 8px; border-radius: 4px;">等待自动触发</span>`;
+        }
+        return deps.buildEventRollButtonTemplateEvent({
           roundIdAttr: deps.escapeAttrEvent(round.roundId),
           eventIdAttr: deps.escapeAttrEvent(event.id),
           diceExprAttr: deps.escapeAttrEvent(event.checkDice),
           buttonDisabledAttr: buttonDisabled,
           buttonStateStyle,
-        })
-        : "";
+        });
+      })();
+
+      const rollModeBadgeHtml =
+        event.rollMode === "auto"
+          ? `<span class="st-rh-chip st-rh-chip-highlight" style="margin-right:0.5em; background-color:rgba(209,182,127,0.2) !important; color:#d1b67f !important;">${deps.escapeHtmlEvent("自动结算")}</span>`
+          : `<span class="st-rh-chip" style="margin-right:0.5em;">${deps.escapeHtmlEvent("需检定")}</span>`;
 
       return deps.buildEventListItemTemplateEvent({
         detailsIdAttr,
         titleHtml: deps.escapeHtmlEvent(event.title),
+        rollModeBadgeHtml,
         eventIdHtml: deps.escapeHtmlEvent(event.id),
         collapsedCheckHtml: deps.escapeHtmlEvent(`${event.checkDice} ${compare} ${String(event.dc)}`),
         collapsedRuntimeHtml: deps.escapeHtmlEvent(runtime.text),
@@ -517,10 +637,8 @@ export function buildEventListCardEvent(
         roundIdAttr: deps.escapeAttrEvent(round.roundId),
         eventIdAttr: deps.escapeAttrEvent(event.id),
         deadlineAttr: deps.escapeAttrEvent(deadlineAttr),
+        runtimeStyleAttr: `style="border:${runtimeStyle.border};background:${runtimeStyle.background};color:${runtimeStyle.color};"`,
         runtimeTextHtml: deps.escapeHtmlEvent(runtime.text),
-        runtimeBorder: runtimeStyle.border,
-        runtimeBackground: runtimeStyle.background,
-        runtimeColor: runtimeStyle.color,
         rolledBlockHtml: rolledBlock,
         outcomePreviewHtml,
         commandTextHtml: `/eventroll roll ${deps.escapeHtmlEvent(event.id)}`,
@@ -754,7 +872,7 @@ export function buildAnimatedDiceVisualBlockEvent(
   const finalTotal = Number.isFinite(Number(result.total)) ? Number(result.total) : 0;
   const finalDiceSvg = buildFinalTotalDiceVisualEvent(finalTotal, resultColor, diceSize);
   const diceVisuals = sharedTooltip
-    ? `<span style="display:inline-flex;cursor:help;" title="${escapeTooltipAttrEvent(
+    ? `<span style="display:inline-flex;cursor:help;" data-tip="${escapeTooltipAttrEvent(
       `${sharedTooltip}`
     )}">${finalDiceSvg}</span>`
     : finalDiceSvg;
@@ -772,7 +890,7 @@ export function buildAnimatedDiceVisualBlockEvent(
   if (!sharedTooltip) {
     return visualBlock;
   }
-  return `<div style="display:inline-flex;align-items:center;justify-content:center;cursor:help;" title="${escapeTooltipAttrEvent(sharedTooltip)}">${visualBlock}</div>`;
+  return `<div style="display:inline-flex;align-items:center;justify-content:center;cursor:help;" data-tip="${escapeTooltipAttrEvent(sharedTooltip)}">${visualBlock}</div>`;
 }
 
 export interface BuildEventRollResultCardDepsEvent {
@@ -869,10 +987,10 @@ export function buildEventRollResultCardEvent(
 
   const sourceText =
     record.source === "timeout_auto_fail"
-      ? "超时自动检定"
+      ? "超时检定"
       : record.source === "ai_auto_roll"
-        ? "AI 自动检定"
-        : "主动检定";
+        ? "自动检定"
+        : "手动检定";
   const baseModifierUsed = Number.isFinite(Number(record.baseModifierUsed))
     ? Number(record.baseModifierUsed)
     : Number(record.result.modifier) || 0;
@@ -1014,6 +1132,7 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     skillModifier: number,
     finalModifier: number
   ) => string;
+  buildRollsSummaryTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
   buildEventDistributionBlockTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
   buildEventTimeoutAtBlockTemplateEvent: (timeoutIsoHtml: string) => string;
   buildEventAlreadyRolledCardTemplateEvent: (params: {
@@ -1021,6 +1140,7 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     collapsedStatusHtml: string;
     collapsedConditionHtml: string;
     collapsedSourceHtml: string;
+    collapsedTotalHtml: string;
     collapsedOutcomeHtml: string;
     collapsedOutcomeTitleAttr: string;
     collapsedOutcomeChipClassName: string;
@@ -1034,7 +1154,12 @@ export interface BuildEventAlreadyRolledCardDepsEvent {
     eventIdHtml: string;
     sourceTextHtml: string;
     targetHtml: string;
+    skillHtml: string;
+    skillTitleAttr: string;
     advantageStateHtml: string;
+    diceExprHtml: string;
+    diceModifierHintHtml: string;
+    rollsSummaryHtml: string;
     explodeInfoHtml: string;
     modifierBreakdownHtml: string;
     compareHtml: string;
@@ -1091,8 +1216,8 @@ export function buildEventAlreadyRolledCardEvent(
   const sourceText = isTimeout
     ? "系统强制结算"
     : record.source === "ai_auto_roll"
-      ? "AI 自动检定"
-      : "玩家主动检定";
+      ? "自动检定"
+      : "手动检定";
   const statusText = record.success === null ? "未决" : record.success ? "成功" : "失败";
   const statusColor = record.success === null ? "#a3957a" : record.success ? "#52c41a" : "#ff4d4f";
 
@@ -1131,6 +1256,15 @@ export function buildEventAlreadyRolledCardEvent(
       ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
         skillModifierApplied
       )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(finalModifierUsed)}`
+      : "";
+  const skillHoverText = settings.enableSkillSystem
+    ? `技能修正：${deps.formatModifier(skillModifierApplied)}；状态 ${deps.formatModifier(
+      statusModifierApplied
+    )}${modifierBreakdownHtml ? `（${modifierBreakdownHtml}）` : ""}`
+    : "技能系统已关闭";
+  const diceModifierHint =
+    settings.enableSkillSystem && (skillModifierApplied !== 0 || statusModifierApplied !== 0)
+      ? `技能${deps.formatModifier(skillModifierApplied)} / 状态${deps.formatModifier(statusModifierApplied)}`
       : "";
   let explodeInfoText = "未请求爆骰";
   if (record.explodePolicyApplied === "disabled_globally") {
@@ -1180,6 +1314,7 @@ export function buildEventAlreadyRolledCardEvent(
     collapsedStatusHtml: deps.escapeHtmlEvent(statusText),
     collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
     collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
+    collapsedTotalHtml: deps.escapeHtmlEvent(String(record.result.total)),
     collapsedOutcomeHtml: deps.escapeHtmlEvent(collapsedOutcomePreview.text),
     collapsedOutcomeTitleAttr: deps.escapeAttrEvent(collapsedOutcomePreview.title),
     collapsedOutcomeChipClassName: collapsedOutcomePreview.chipClassName,
@@ -1193,8 +1328,16 @@ export function buildEventAlreadyRolledCardEvent(
     eventIdHtml: deps.escapeHtmlEvent(event.id),
     sourceTextHtml: deps.escapeHtmlEvent(sourceText),
     targetHtml: deps.escapeHtmlEvent(record.targetLabelUsed || event.targetLabel),
+    skillHtml: deps.escapeHtmlEvent(event.skill),
+    skillTitleAttr: deps.escapeAttrEvent(skillHoverText),
     advantageStateHtml: deps.escapeHtmlEvent(
       formatAdvantageStateForCardEvent(record.advantageStateApplied ?? event.advantageState)
+    ),
+    diceExprHtml: deps.escapeHtmlEvent(record.diceExpr),
+    diceModifierHintHtml: deps.escapeHtmlEvent(diceModifierHint),
+    rollsSummaryHtml: deps.buildRollsSummaryTemplateEvent(
+      deps.escapeHtmlEvent(record.result.rolls.join(", ")),
+      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
     ),
     explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
     modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownHtml),

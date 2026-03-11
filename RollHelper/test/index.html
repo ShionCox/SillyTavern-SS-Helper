@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>RollHelper 样式测试沙盒</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      background:
+        radial-gradient(circle at top, rgba(74, 60, 46, 0.25), transparent 42%),
+        linear-gradient(180deg, #181411 0%, #0f0d0b 100%);
+      color: #eee;
+      font-family: "Segoe UI", sans-serif;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #sidebar {
+      width: 400px;
+      background:
+        linear-gradient(180deg, rgba(33, 27, 22, 0.96), rgba(16, 13, 10, 0.98));
+      border-right: 1px solid rgba(176, 143, 76, 0.25);
+      display: flex;
+      flex-direction: column;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    textarea {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.72);
+      color: #d7c39a;
+      font-family: monospace;
+      font-size: 12px;
+      border: 1px solid rgba(176, 143, 76, 0.22);
+      padding: 10px;
+      resize: none;
+      outline: none;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.55);
+    }
+    button {
+      margin-top: 10px;
+      padding: 10px;
+      background: linear-gradient(180deg, rgba(126, 47, 39, 0.95), rgba(93, 26, 19, 0.95));
+      color: #f4dfbf;
+      border: 1px solid rgba(214, 151, 116, 0.55);
+      cursor: pointer;
+      font-weight: bold;
+      border-radius: 2px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    }
+    button:hover { filter: brightness(1.08); }
+    #preview-area {
+      flex: 1;
+      padding: 40px;
+      overflow-y: auto;
+      background:
+        linear-gradient(180deg, rgba(34, 39, 48, 0.95), rgba(24, 20, 16, 0.98)),
+        repeating-linear-gradient(45deg, rgba(255,255,255,0.02), rgba(255,255,255,0.02) 10px, rgba(0,0,0,0.02) 10px, rgba(0,0,0,0.02) 20px);
+    }
+    .preview-section {
+      margin-bottom: 40px;
+    }
+    .preview-section h3 {
+      font-size: 14px;
+      color: #a29076;
+      border-bottom: 1px solid rgba(176, 143, 76, 0.18);
+      padding-bottom: 5px;
+      margin-bottom: 15px;
+    }
+    /* Mocks for SillyTavern text styles often found in chat */
+    .mes_text {
+      width: 100%;
+      max-width: 1160px;
+      margin: 0 auto;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+  </style>
+  <script>
+    // SillyTavern Global Mocks
+    window.SillyTavern = {
+      getContext: () => ({
+        extension_settings: { dice: { theme: 'default' } },
+        chatId: 'test_chat',
+        characters: [],
+        groupId: null
+      }),
+      libs: {}
+    };
+    
+    // Simulate some of the tavern functions
+    window.executeSlashCommandsWithOptions = () => {};
+    window.getRequestHeaders = () => ({});
+  </script>
+</head>
+<body>
+  <div id="sidebar">
+    <h2 style="font-size: 16px; margin: 0 0 10px 0;">RollJson 输入</h2>
+    <textarea id="json-input">
+{
+  "type": "dice_events",
+  "version": 1,
+  "events": [
+    {
+      "id": "eRoll_full_manual",
+      "title": "沉重石门检定（全功能：状态/走向/技能）",
+      "desc": "你试图推开面前沉重的老旧石门，潮湿的环境让它布满了青苔。门上残留着古老的红色符文，似乎是某种封印的痕迹。",
+      "skill": "力量",
+      "checkDice": "1d20+2",
+      "compare": ">=",
+      "dc": 14,
+      "dcReason": "石门常年失修且十分沉重，加上封印的阻力",
+      "advantage": "normal",
+      "rollMode": "manual",
+      "scope": "protagonist",
+      "target": { "type": "scene", "name": "封印石门" },
+      "outcomes": {
+        "success": "你浑身肌肉紧绷，缓缓推开了石门，带起了一阵灰尘。封印符文黯淡下来，通路畅通。 [APPLY_STATUS: 振奋, +1, duration=3, scope=all]",
+        "failure": "你用尽了力气，但石门纹丝不动，反倒因为用力过猛扭伤了肩膀。 [APPLY_STATUS: 扭伤, -2, duration=2, scope=skills, skills=力量|体质]",
+        "explode": "你爆发出惊人的力量，不仅瞬间推开了石门，甚至将封印一并击碎！所有人倍受鼓舞。 [APPLY_STATUS: 战意高昂, +3, duration=5, scope=all]"
+      }
+    },
+    {
+      "id": "eRoll_auto_poison",
+      "title": "毒雾抵抗（自动：限时倒计时+劣势+状态）",
+      "desc": "紫色的毒雾从地牢裂缝中涌出，你的皮肤开始刺痛，必须说服自己的身体抵抗住这致命的侵蚀。",
+      "skill": "体质",
+      "checkDice": "1d20",
+      "compare": ">=",
+      "dc": 12,
+      "dcReason": "毒雾浓度极高，每秒都在侵蚀你的肺部",
+      "advantage": "disadvantage",
+      "rollMode": "auto",
+      "timeLimit": "PT3M",
+      "scope": "protagonist",
+      "target": { "type": "self" },
+      "outcomes": {
+        "success": "你强行屏住呼吸，用湿布捂住口鼻勉强撑过了毒雾最浓的时刻。之前的中毒被清除了。 [REMOVE_STATUS: 中毒]",
+        "failure": "你不慎吸入了大量毒气，眼前一黑，感觉四肢开始发麻。 [APPLY_STATUS: 中毒, -3, duration=4, scope=all]"
+      }
+    },
+    {
+      "id": "eRoll_adv_crit",
+      "title": "致命一击（优势+爆击分支+高难度）",
+      "desc": "借着同伴为你创造的绝佳机会，你瞄准了巨龙鳞片间唯一的防御死角，将武器高高举起。",
+      "skill": "敏捷",
+      "checkDice": "1d20+5",
+      "compare": ">=",
+      "dc": 22,
+      "dcReason": "巨龙的远古鳞甲极其坚硬，只有缝隙才是弱点",
+      "advantage": "advantage",
+      "rollMode": "manual",
+      "scope": "protagonist",
+      "target": { "type": "supporting", "name": "远古黑龙·亚尔戈斯" },
+      "outcomes": {
+        "success": "你的武器顺着鳞片缝隙精准刺入，黑龙发出痛苦的咆哮！ [APPLY_STATUS: 龙鳞破甲, -2, duration=3, scope=skills, skills=敏捷]",
+        "failure": "巨龙在千钧一发之际翻滚了庞大的身躯，你的攻击只在侧腹留下一道浅浅的划痕，它甩尾反击。 [APPLY_STATUS: 被击退, -1, duration=1, scope=all]",
+        "explode": "致命一击！你的武器贯穿了龙鳞直达心脏附近，黑色的龙血喷涌而出，巨龙跌落在地！ [APPLY_STATUS: 战神降临, +5, duration=2, scope=all] [REMOVE_STATUS: 被击退]"
+      }
+    },
+    {
+      "id": "eRoll_npc_action",
+      "title": "NPC 行动：女祭司净化仪式",
+      "desc": "女祭司艾丽亚开始吟唱古老的祈祷文，圣光从她手中的法杖顶端溢出，试图净化盘踞在祭坛上的黑暗力量。",
+      "skill": "信仰",
+      "checkDice": "1d20+4",
+      "compare": ">=",
+      "dc": 16,
+      "dcReason": "黑暗力量已深深扎根于此长达数百年",
+      "advantage": "normal",
+      "rollMode": "auto",
+      "scope": "character",
+      "target": { "type": "object", "name": "被污染的祭坛" },
+      "outcomes": {
+        "success": "圣光洗净了祭坛上的污秽，黑暗力量消散殆尽，艾丽亚额头布满汗珠但露出了欣慰的微笑。 [REMOVE_STATUS: 黑暗侵蚀] [APPLY_STATUS: 圣光庇佑, +2, duration=perm, scope=all]",
+        "failure": "黑暗力量的反噬超出预期，艾丽亚被击退数步，法杖上的光芒黯淡下来。 [APPLY_STATUS: 黑暗侵蚀, -2, duration=3, scope=all]"
+      }
+    },
+    {
+      "id": "eRoll_env_trap",
+      "title": "环境事件：陷阱感知（限时+自动+状态清除）",
+      "desc": "你走过一段看似平常的走廊，脚下的石砖似乎有些松动……你的直觉告诉你这里并不安全。",
+      "skill": "感知",
+      "checkDice": "1d20+3",
+      "compare": ">=",
+      "dc": 15,
+      "dcReason": "陷阱经过精心伪装，与地面完美融合",
+      "advantage": "normal",
+      "rollMode": "auto",
+      "timeLimit": "PT1M30S",
+      "scope": "all",
+      "target": { "type": "scene", "name": "地牢走廊·B3F" },
+      "outcomes": {
+        "success": "你及时注意到了微妙的地砖异样，小心翼翼地绕过了陷阱区域，并标记了安全路线。 [APPLY_STATUS: 警觉, +1, duration=2, scope=skills, skills=感知|敏捷]",
+        "failure": "你没有察觉到脚下的机关——嘎嗒一声，一根毒针从墙壁射出刺入了你的小腿！ [APPLY_STATUS: 麻痹毒素, -4, duration=2, scope=all] [APPLY_STATUS: 流血, -1, duration=3, scope=skills, skills=力量|敏捷]"
+      }
+    },
+    {
+      "id": "eRoll_fireball_dmg",
+      "title": "炽焰爆裂（纯伤害+爆炸骰+状态施加）",
+      "desc": "你双手聚拢炽热的魔力，一颗耀眼的火球在空中炸开，烈焰吞噬了前方所有目标。",
+      "skill": "魔法",
+      "checkDice": "8d6+10",
+      "compare": ">=",
+      "dc": 1,
+      "advantage": "normal",
+      "rollMode": "manual",
+      "scope": "protagonist",
+      "target": { "type": "scene", "name": "前方扇形区域" },
+      "outcomes": {
+        "success": "火球爆炸的冲击波将敌人击飞，高温点燃了周围的一切可燃物。 [APPLY_STATUS: 灼烧领域, +2, duration=2, scope=skills, skills=魔法]",
+        "explode": "火球在空中二次爆炸！连锁的爆裂将整个区域化为焦土，你感受到了魔力的共鸣。 [APPLY_STATUS: 魔力共鸣, +4, duration=1, scope=all] [REMOVE_STATUS: 魔力枯竭]"
+      }
+    }
+  ],
+  "end_round": false
+}
+    </textarea>
+    <button id="render-btn">立即渲染</button>
+  </div>
+  <div id="preview-area">
+    <div class="mes_text" id="preview-cards">
+      <!-- Cards show here -->
+    </div>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

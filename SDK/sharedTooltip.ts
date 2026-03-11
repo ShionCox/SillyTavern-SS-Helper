@@ -2,12 +2,11 @@ import { resolveSdkThemeSnapshot } from "./theme";
 
 const SHARED_TOOLTIP_STYLE_ID = "stx-shared-tooltip-style";
 const SHARED_TOOLTIP_ID = "stx-shared-tooltip";
-const LEGACY_TOOLTIP_STYLE_ID = "st-roll-shared-tooltip-style";
-const LEGACY_TOOLTIP_ID = "st-roll-shared-tooltip";
 const SHARED_TOOLTIP_HIDE_DELAY_MS = 90;
 const SHARED_TOOLTIP_HIDE_TRANSITION_MS = 180;
 const SHARED_TOOLTIP_INSTANT_DISTANCE_PX = 260;
 const TOOLTIP_EXCLUDE_SELECTOR = "button, .stx-ui-tab, .st-roll-tab";
+const TOOLTIP_SOLID_BACKGROUND_FALLBACK = "rgba(12, 8, 6, 0.96)";
 
 const DEFAULT_ROW_SELECTORS: string[] = [
   ".stx-ui-item",
@@ -41,11 +40,6 @@ interface SharedTooltipGlobalState {
   lastTargetCenterY: number | null;
   hideTimer: number | null;
   hideCleanupTimer: number | null;
-  titleScopeSelectors: Set<string>;
-}
-
-export interface EnsureSharedTooltipOptions {
-  titleScopeSelectors?: string[];
 }
 
 export interface SettingsTooltipHydrateOptions {
@@ -63,9 +57,6 @@ function getGlobalState(): SharedTooltipGlobalState {
   const globalRef = globalThis as any;
   const existed = globalRef.__stxSharedTooltipStateV1 as SharedTooltipGlobalState | undefined;
   if (existed) {
-    if (!(existed.titleScopeSelectors instanceof Set)) {
-      existed.titleScopeSelectors = new Set<string>();
-    }
     return existed;
   }
   const created: SharedTooltipGlobalState = {
@@ -76,7 +67,6 @@ function getGlobalState(): SharedTooltipGlobalState {
     lastTargetCenterY: null,
     hideTimer: null,
     hideCleanupTimer: null,
-    titleScopeSelectors: new Set<string>(),
   };
   globalRef.__stxSharedTooltipStateV1 = created;
   return created;
@@ -88,91 +78,107 @@ function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
-/**
- * 功能：读取计算样式中的首个有效自定义属性值。
- * @param style 计算样式对象
- * @param propertyNames 候选属性名列表
- * @returns 命中的属性值；未命中时返回空字符串
- */
-function readFirstDefinedCustomProperty(style: CSSStyleDeclaration, propertyNames: string[]): string {
-  for (const propertyName of propertyNames) {
-    const value = style.getPropertyValue(propertyName).trim();
-    if (value) return value;
+function parseTooltipAlphaToken(raw: string): number | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (text.endsWith("%")) {
+    const percent = Number(text.slice(0, -1).trim());
+    if (!Number.isFinite(percent)) return null;
+    return Math.max(0, Math.min(1, percent / 100));
   }
-  return "";
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.min(1, numeric));
 }
 
-/**
- * 功能：读取 tooltip 主题来源节点。
- * @param target 当前 tooltip 目标节点
- * @returns 用于提取主题变量的节点
- */
-function resolveTooltipThemeSource(target: HTMLElement): HTMLElement {
-  return target;
+function readTooltipColorAlpha(value: string): number | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "transparent") return 0;
+
+  if ((normalized.startsWith("rgb(") || normalized.startsWith("hsl(") || normalized.startsWith("color(")) && normalized.includes("/")) {
+    const slashIndex = normalized.lastIndexOf("/");
+    const closeIndex = normalized.lastIndexOf(")");
+    if (slashIndex >= 0 && closeIndex > slashIndex) {
+      return parseTooltipAlphaToken(normalized.slice(slashIndex + 1, closeIndex).trim());
+    }
+  }
+
+  if (normalized.startsWith("rgba(") || normalized.startsWith("hsla(")) {
+    const openIndex = normalized.indexOf("(");
+    const closeIndex = normalized.lastIndexOf(")");
+    if (openIndex >= 0 && closeIndex > openIndex) {
+      const inner = normalized.slice(openIndex + 1, closeIndex);
+      const parts = inner.split(",").map((part) => part.trim());
+      if (parts.length >= 4) {
+        return parseTooltipAlphaToken(parts[3]);
+      }
+    }
+  }
+
+  return null;
 }
 
-/**
- * 功能：从目标节点提取 tooltip 所需的主题快照。
- * @param target 当前 tooltip 目标节点
- * @returns 主题快照
- */
+function shouldUseSolidTooltipBackground(value: string): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized.includes("var(")) return true;
+  if (normalized === "transparent") return true;
+  if (normalized.includes("color-mix(") && normalized.includes("transparent")) return true;
+  const alpha = readTooltipColorAlpha(normalized);
+  if (alpha !== null && alpha < 0.9) return true;
+  return false;
+}
+
+function resolveTooltipBaseBackground(background: string): string {
+  if (shouldUseSolidTooltipBackground(background)) {
+    return TOOLTIP_SOLID_BACKGROUND_FALLBACK;
+  }
+  return background;
+}
+
+function looksLikeTooltipBackgroundImage(value: string): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("gradient(") ||
+    normalized.includes("url(") ||
+    normalized.includes("image(")
+  );
+}
+
+function resolveTooltipBackgroundColor(background: string): string {
+  if (shouldUseSolidTooltipBackground(background)) {
+    return TOOLTIP_SOLID_BACKGROUND_FALLBACK;
+  }
+  if (looksLikeTooltipBackgroundImage(background)) {
+    return TOOLTIP_SOLID_BACKGROUND_FALLBACK;
+  }
+  return background;
+}
+
+function resolveTooltipBackgroundImage(background: string): string {
+  if (shouldUseSolidTooltipBackground(background)) return "none";
+  if (looksLikeTooltipBackgroundImage(background)) return background;
+  return "none";
+}
+
 function resolveTooltipThemeSnapshot(target: HTMLElement): SharedTooltipThemeSnapshot {
   return resolveSdkThemeSnapshot(target);
 }
 
-/**
- * 功能：把主题快照写入 tooltip 根节点变量。
- * @param runtime tooltip 运行时节点
- * @param snapshot 主题快照
- * @returns 无返回值
- */
 function applyTooltipTheme(runtime: SharedTooltipRuntime, snapshot: SharedTooltipThemeSnapshot): void {
   runtime.root.style.setProperty("--stx-shared-tooltip-text", snapshot.text);
   runtime.root.style.setProperty("--stx-shared-tooltip-background", snapshot.background);
+  runtime.root.style.setProperty("--stx-shared-tooltip-base-background", resolveTooltipBaseBackground(snapshot.background));
+  runtime.root.style.setProperty("--stx-shared-tooltip-background-color", resolveTooltipBackgroundColor(snapshot.background));
+  runtime.root.style.setProperty("--stx-shared-tooltip-background-image", resolveTooltipBackgroundImage(snapshot.background));
   runtime.root.style.setProperty("--stx-shared-tooltip-border", snapshot.border);
   runtime.root.style.setProperty("--stx-shared-tooltip-shadow", snapshot.shadow);
 }
 
-function appendTitleScopes(state: SharedTooltipGlobalState, selectors?: string[]): void {
-  if (!Array.isArray(selectors)) return;
-  selectors.forEach((selector: string) => {
-    const text = String(selector || "").trim();
-    if (text) {
-      state.titleScopeSelectors.add(text);
-    }
-  });
-}
-
-function isInTitleScope(target: HTMLElement, selectors: Set<string>): boolean {
-  if (selectors.size <= 0) return false;
-  for (const selector of selectors) {
-    try {
-      if (target.closest(selector)) return true;
-    } catch {
-      // 忽略非法选择器，避免单个配置影响整体功能
-    }
-  }
-  return false;
-}
-
 function ensureTooltipStyle(): void {
-  if (document.getElementById(SHARED_TOOLTIP_STYLE_ID)) return;
-  const legacyStyle = document.getElementById(LEGACY_TOOLTIP_STYLE_ID);
-  if (legacyStyle) {
-    legacyStyle.id = SHARED_TOOLTIP_STYLE_ID;
-    return;
-  }
-
-  const style = document.createElement("style");
-  style.id = SHARED_TOOLTIP_STYLE_ID;
-  style.textContent = `
-    #${LEGACY_TOOLTIP_ID} {
-      display: none !important;
-      opacity: 0 !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
-      transform: translate3d(-9999px, -9999px, 0) !important;
-    }
+  const cssText = `
     #${SHARED_TOOLTIP_ID} {
       position: fixed;
       left: 0;
@@ -199,25 +205,27 @@ function ensureTooltipStyle(): void {
     #${SHARED_TOOLTIP_ID}.is-instant {
       transition: none !important;
     }
-    #${SHARED_TOOLTIP_ID}.is-shared-checkbox-target .stx-global-tooltip-body,
-    #${SHARED_TOOLTIP_ID}.is-shared-checkbox-target .st-rh-global-tooltip-body {
+    #${SHARED_TOOLTIP_ID}.is-shared-checkbox-target .stx-global-tooltip-body {
       max-width: min(56vw, 220px);
       min-width: 0;
     }
     #${SHARED_TOOLTIP_ID} {
       --stx-shared-tooltip-text: #ecdcb8;
-      --stx-shared-tooltip-background: rgba(12, 8, 6, 0.96);
+      --stx-shared-tooltip-background: ${TOOLTIP_SOLID_BACKGROUND_FALLBACK};
+      --stx-shared-tooltip-base-background: ${TOOLTIP_SOLID_BACKGROUND_FALLBACK};
+      --stx-shared-tooltip-background-color: ${TOOLTIP_SOLID_BACKGROUND_FALLBACK};
+      --stx-shared-tooltip-background-image: none;
       --stx-shared-tooltip-border: rgba(197, 160, 89, 0.55);
       --stx-shared-tooltip-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
     }
-    #${SHARED_TOOLTIP_ID} .stx-global-tooltip-body,
-    #${SHARED_TOOLTIP_ID} .st-rh-global-tooltip-body {
+    #${SHARED_TOOLTIP_ID} .stx-global-tooltip-body {
       max-width: min(78vw, 360px);
       min-width: 72px;
       padding: 8px 10px;
       border: 1px solid var(--stx-shared-tooltip-border);
       border-radius: 8px;
-      background: var(--stx-shared-tooltip-background);
+      background-color: var(--stx-shared-tooltip-background-color);
+      background-image: var(--stx-shared-tooltip-background-image);
       color: var(--stx-shared-tooltip-text);
       font-size: 12px;
       line-height: 1.55;
@@ -225,10 +233,6 @@ function ensureTooltipStyle(): void {
       white-space: pre-wrap;
       box-shadow: var(--stx-shared-tooltip-shadow);
     }
-    html body .st-rh-tip::before,
-    html body .st-rh-tip::after,
-    html body .st-rh-ss-tip::before,
-    html body .st-rh-ss-tip::after,
     html body [data-tip]::before,
     html body [data-tip]::after,
     html body [data-tip]:hover::before,
@@ -249,14 +253,20 @@ function ensureTooltipStyle(): void {
       }
     }
   `;
+  const existing = document.getElementById(SHARED_TOOLTIP_STYLE_ID) as HTMLStyleElement | null;
+  if (existing) {
+    if (existing.textContent !== cssText) {
+      existing.textContent = cssText;
+    }
+    return;
+  }
+
+  const style = document.createElement("style");
+  style.id = SHARED_TOOLTIP_STYLE_ID;
+  style.textContent = cssText;
   document.head.appendChild(style);
 }
 
-/**
- * 功能：解析 tooltip 应挂载的宿主节点。
- * @param target 当前 tooltip 目标节点
- * @returns 宿主节点；优先返回打开中的对话框，否则返回 body
- */
 function resolveTooltipHost(target?: HTMLElement | null): HTMLElement {
   const dialogHost =
     target?.closest<HTMLDialogElement>("dialog[open]") ||
@@ -264,27 +274,11 @@ function resolveTooltipHost(target?: HTMLElement | null): HTMLElement {
   return dialogHost || document.body;
 }
 
-/**
- * 功能：确保 tooltip 运行时节点存在，并挂到正确宿主节点上。
- * @param state 全局状态
- * @param target 当前 tooltip 目标节点
- * @returns tooltip 运行时节点
- */
 function ensureTooltipRuntime(state: SharedTooltipGlobalState, target?: HTMLElement | null): SharedTooltipRuntime {
   ensureTooltipStyle();
   const host = resolveTooltipHost(target);
 
   let root = document.getElementById(SHARED_TOOLTIP_ID) as HTMLDivElement | null;
-  const legacyRoot = document.getElementById(LEGACY_TOOLTIP_ID) as HTMLDivElement | null;
-  if (!root) {
-    if (legacyRoot) {
-      legacyRoot.id = SHARED_TOOLTIP_ID;
-      root = legacyRoot;
-    }
-  } else if (legacyRoot && legacyRoot !== root) {
-    legacyRoot.remove();
-  }
-
   if (!root) {
     root = document.createElement("div");
     root.id = SHARED_TOOLTIP_ID;
@@ -293,18 +287,11 @@ function ensureTooltipRuntime(state: SharedTooltipGlobalState, target?: HTMLElem
     host.appendChild(root);
   }
 
-  let body = root.querySelector<HTMLDivElement>(".stx-global-tooltip-body, .st-rh-global-tooltip-body");
+  let body = root.querySelector<HTMLDivElement>(".stx-global-tooltip-body");
   if (!body) {
     body = document.createElement("div");
-    body.className = "stx-global-tooltip-body st-rh-global-tooltip-body";
+    body.className = "stx-global-tooltip-body";
     root.appendChild(body);
-  } else {
-    if (!body.classList.contains("stx-global-tooltip-body")) {
-      body.classList.add("stx-global-tooltip-body");
-    }
-    if (!body.classList.contains("st-rh-global-tooltip-body")) {
-      body.classList.add("st-rh-global-tooltip-body");
-    }
   }
 
   state.runtime = { root, body };
@@ -354,13 +341,14 @@ function getTooltipAnchorTarget(node: HTMLElement): HTMLElement {
     );
   }
   const sharedSelectRoot = getSharedSelectRoot(node);
-  if (sharedSelectRoot) {
-    return getSharedSelectTrigger(sharedSelectRoot);
-  }
+  if (sharedSelectRoot) return getSharedSelectTrigger(sharedSelectRoot);
+
   const sharedInputRoot = getSharedInputRoot(node);
   if (sharedInputRoot) return sharedInputRoot;
+
   const sharedButtonRoot = getSharedButtonRoot(node);
   if (sharedButtonRoot) return sharedButtonRoot;
+
   return node;
 }
 
@@ -368,29 +356,16 @@ function isSharedCheckboxTooltipTarget(node: HTMLElement | null): boolean {
   return !!getSharedCheckboxRoot(node);
 }
 
-function resolveTooltipTarget(node: EventTarget | null, state: SharedTooltipGlobalState): HTMLElement | null {
+function resolveTooltipTarget(node: EventTarget | null): HTMLElement | null {
   if (!(node instanceof HTMLElement)) return null;
   const dataTipTarget = node.closest<HTMLElement>("[data-tip]");
-  if (dataTipTarget) {
-    if (dataTipTarget.matches(TOOLTIP_EXCLUDE_SELECTOR) && !isSupportedExcludedTooltipNode(dataTipTarget)) {
-      return null;
-    }
-    const tip = String(dataTipTarget.dataset.tip ?? "").trim();
-    if (tip) return getTooltipAnchorTarget(dataTipTarget);
-  }
-
-  const titleTarget = node.closest<HTMLElement>("[title]");
-  if (!titleTarget) return null;
-  if (titleTarget.matches(TOOLTIP_EXCLUDE_SELECTOR) && !isSupportedExcludedTooltipNode(titleTarget)) {
+  if (!dataTipTarget) return null;
+  if (dataTipTarget.matches(TOOLTIP_EXCLUDE_SELECTOR) && !isSupportedExcludedTooltipNode(dataTipTarget)) {
     return null;
   }
-  if (!isInTitleScope(titleTarget, state.titleScopeSelectors)) return null;
-  const title = String(titleTarget.getAttribute("title") ?? "").trim();
-  if (!title) return null;
-  const tooltipTarget = getTooltipAnchorTarget(titleTarget);
-  tooltipTarget.dataset.tip = title;
-  titleTarget.removeAttribute("title");
-  return tooltipTarget;
+  const tip = String(dataTipTarget.dataset.tip ?? "").trim();
+  if (!tip) return null;
+  return getTooltipAnchorTarget(dataTipTarget);
 }
 
 function clearHideCleanupTimer(state: SharedTooltipGlobalState): void {
@@ -532,7 +507,7 @@ function buildTipFromContainer(container: HTMLElement): string {
     ) || null;
   const title = String(titleNode?.textContent ?? "").trim();
   const desc = String(descNode?.textContent ?? "").trim();
-  if (title && desc) return `${title}：${desc}`;
+  if (title && desc) return `${title}: ${desc}`;
   if (title) return title;
   if (desc) return desc;
   return "";
@@ -548,34 +523,24 @@ function buildTipFromControl(control: HTMLElement): string {
       return "";
     }
     const ariaLabel = String(control.getAttribute("aria-label") ?? "").trim();
-    const title = String(control.getAttribute("title") ?? "").trim();
     const selectedLabel = String(control.selectedOptions?.[0]?.textContent ?? "").trim();
-    return ariaLabel || title || selectedLabel;
+    return ariaLabel || selectedLabel;
   }
   const placeholder = String((control as HTMLInputElement).placeholder ?? "").trim();
   const ariaLabel = String(control.getAttribute("aria-label") ?? "").trim();
   const text = String(control.textContent ?? "").trim();
-  const title = String(control.getAttribute("title") ?? "").trim();
-  return ariaLabel || placeholder || text || title;
+  return ariaLabel || placeholder || text;
 }
 
-/**
- * 功能：初始化共享 tooltip 单例，并确保监听器仅绑定一次。
- * 参数：
- *   options：可选初始化参数，支持追加 title 迁移作用域。
- * 返回：
- *   void：无返回值。
- */
-export function ensureSharedTooltip(options?: EnsureSharedTooltipOptions): void {
+export function ensureSharedTooltip(): void {
   const state = getGlobalState();
-  appendTitleScopes(state, options?.titleScopeSelectors);
   ensureTooltipRuntime(state);
   if (state.bound) return;
 
   document.addEventListener(
     "pointerover",
     (event: Event) => {
-      const target = resolveTooltipTarget(event.target, state);
+      const target = resolveTooltipTarget(event.target);
       if (!target) return;
       showTooltip(target, state);
     },
@@ -585,9 +550,9 @@ export function ensureSharedTooltip(options?: EnsureSharedTooltipOptions): void 
   document.addEventListener(
     "pointerout",
     (event: Event) => {
-      const fromTarget = resolveTooltipTarget(event.target, state);
+      const fromTarget = resolveTooltipTarget(event.target);
       if (!fromTarget) return;
-      const toTarget = resolveTooltipTarget((event as PointerEvent).relatedTarget ?? null, state);
+      const toTarget = resolveTooltipTarget((event as PointerEvent).relatedTarget ?? null);
       if (toTarget) return;
       if (state.activeTarget === fromTarget) {
         scheduleHideTooltip(state);
@@ -599,7 +564,7 @@ export function ensureSharedTooltip(options?: EnsureSharedTooltipOptions): void 
   document.addEventListener(
     "focusin",
     (event: Event) => {
-      const target = resolveTooltipTarget(event.target, state);
+      const target = resolveTooltipTarget(event.target);
       if (!target) return;
       showTooltip(target, state);
     },
@@ -609,9 +574,9 @@ export function ensureSharedTooltip(options?: EnsureSharedTooltipOptions): void 
   document.addEventListener(
     "focusout",
     (event: Event) => {
-      const fromTarget = resolveTooltipTarget(event.target, state);
+      const fromTarget = resolveTooltipTarget(event.target);
       if (!fromTarget) return;
-      const toTarget = resolveTooltipTarget((event as FocusEvent).relatedTarget ?? null, state);
+      const toTarget = resolveTooltipTarget((event as FocusEvent).relatedTarget ?? null);
       if (toTarget) return;
       if (state.activeTarget === fromTarget) {
         scheduleHideTooltip(state);
@@ -639,14 +604,6 @@ export function ensureSharedTooltip(options?: EnsureSharedTooltipOptions): void 
   state.bound = true;
 }
 
-/**
- * 功能：按 ID 目录批量写入 data-tip。
- * 参数：
- *   root：查询根节点。
- *   catalog：键为元素 ID、值为 tooltip 文案。
- * 返回：
- *   SettingsTooltipHydrateResult：写入数量与缺失 ID 列表。
- */
 export function applyTooltipCatalog(root: ParentNode, catalog: Record<string, string>): SettingsTooltipHydrateResult {
   let assigned = 0;
   const missing: string[] = [];
@@ -661,7 +618,6 @@ export function applyTooltipCatalog(root: ParentNode, catalog: Record<string, st
     }
     if (node.matches(TOOLTIP_EXCLUDE_SELECTOR) && !isSupportedExcludedTooltipNode(node)) {
       node.removeAttribute("data-tip");
-      node.removeAttribute("title");
       continue;
     }
     const tooltipTarget = getTooltipAnchorTarget(node);
@@ -669,7 +625,6 @@ export function applyTooltipCatalog(root: ParentNode, catalog: Record<string, st
     if (tooltipTarget !== node) {
       node.removeAttribute("data-tip");
     }
-    node.removeAttribute("title");
     assigned += 1;
   }
   return { assigned, missing };
@@ -684,13 +639,6 @@ function stripExcludedTooltips(root: ParentNode): void {
   });
 }
 
-/**
- * 功能：为设置面板内控件自动补全 tooltip，并可叠加目录写入。
- * 参数：
- *   options：包含根节点、可选目录和可选行选择器。
- * 返回：
- *   SettingsTooltipHydrateResult：本次补写数量与目录缺失项。
- */
 export function hydrateSettingsTooltips(options: SettingsTooltipHydrateOptions): SettingsTooltipHydrateResult {
   const root = options.root;
   let assigned = 0;
@@ -730,7 +678,6 @@ export function hydrateSettingsTooltips(options: SettingsTooltipHydrateOptions):
       if (tooltipTarget !== control) {
         control.removeAttribute("data-tip");
       }
-      control.removeAttribute("title");
       assigned += 1;
     });
   });

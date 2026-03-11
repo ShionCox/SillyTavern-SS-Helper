@@ -1,4 +1,4 @@
-﻿import type { DiceMeta, DiceResult } from "../types/diceEvent";
+import type { DiceMeta, DiceResult } from "../types/diceEvent";
 import type {
   ActiveStatusEvent,
   DiceMetaEvent,
@@ -76,7 +76,7 @@ interface RollHelperChatScopedStateEvent {
   activeStatuses: ActiveStatusEvent[];
 }
 
-let syncSettingsUiCallbackEvent: () => void = () => { };
+var syncSettingsUiCallbackEvent: () => void = () => { };
 
 export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
   syncSettingsUiCallbackEvent = callback;

@@ -38,9 +38,7 @@ function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | 
 export function applySettingsTooltipsEvent(root: ParentNode | null, catalog?: Record<string, string>): void {
   const targetRoot = resolveSettingsTooltipRootEvent(root);
   if (!targetRoot) return;
-  ensureSharedTooltip({
-    titleScopeSelectors: [".st-rh-card-scope"],
-  });
+  ensureSharedTooltip();
   if (catalog) {
     applyTooltipCatalog(targetRoot, catalog);
   }

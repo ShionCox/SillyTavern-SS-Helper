@@ -1,4 +1,4 @@
-import changelogCssText from "./changelog.css";
+import changelogCssText from "./changelog.css?inline";
 
 export type ChangelogCategoryType = "added" | "fixed" | "improved" | "changed" | "docs" | "other";
 

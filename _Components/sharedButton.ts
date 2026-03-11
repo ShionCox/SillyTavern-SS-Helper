@@ -1,4 +1,4 @@
-import sharedButtonCssText from "./sharedButton.css";
+import sharedButtonCssText from "./sharedButton.css?inline";
 
 type SharedButtonAttributeValue = string | number | boolean | null | undefined;
 

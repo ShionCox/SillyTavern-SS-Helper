@@ -13,6 +13,7 @@ import {
 
 import { logger } from "../../index";
 import { loadChatScopedStateIntoRuntimeEvent } from "../settings/storeEvent";
+import { ensureEventCardStylesEvent } from "../templates/eventCardTemplates";
 
 const INITIALIZE_RETRY_MAX_Event = 80;
 const INITIALIZE_RETRY_DELAY_MS_Event = 500;
@@ -37,6 +38,7 @@ function collectMissingInitFlagsEvent(globalRef: Record<string, unknown>): strin
  * @returns 无返回值
  */
 export function initializeEventRuntimeEvent(attempt = 0): void {
+  ensureEventCardStylesEvent();
   registerBaseMacrosAndCommandsEvent();
   mountSettingsCardEvent();
   bindEventButtonsEvent();

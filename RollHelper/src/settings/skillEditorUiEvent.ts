@@ -781,7 +781,11 @@ export function renderSkillPresetMetaEvent(
   if (deleteBtn) {
     deleteBtn.disabled = activePreset.locked;
     deleteBtn.style.opacity = activePreset.locked ? "0.5" : "1";
-    deleteBtn.title = activePreset.locked ? "默认预设不可删除" : "";
+    if (activePreset.locked) {
+      deleteBtn.dataset.tip = "默认预设不可删除";
+    } else {
+      deleteBtn.removeAttribute("data-tip");
+    }
   }
 }
 
@@ -895,4 +899,3 @@ export function renderSkillRowsEvent(
   syncThemeControlClassesByNodeEvent(rowsWrap);
   applySettingsTooltipsEvent(rowsWrap.closest(".st-roll-skill-modal") || rowsWrap);
 }
-

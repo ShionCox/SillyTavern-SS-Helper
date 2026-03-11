@@ -1,0 +1,25 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@source not "../MemoryOS/dist";
+@source not "../LLMHub/dist";
+@source not "../RollHelper/dist";
+
+:where(.stx-tw) {
+  color: var(--stx-theme-text, var(--SmartThemeBodyColor, inherit));
+}
+
+@utility stx-text-base {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@utility stx-text-sm {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@utility stx-text-muted {
+  color: color-mix(in srgb, var(--stx-theme-text, #fff) 64%, transparent);
+}

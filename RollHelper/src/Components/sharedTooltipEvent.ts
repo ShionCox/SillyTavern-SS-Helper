@@ -6,7 +6,5 @@ import { ensureSharedTooltip } from "../../../SDK/sharedTooltip";
  * 返回：void。
  */
 export function ensureSharedTooltipEvent(): void {
-  ensureSharedTooltip({
-    titleScopeSelectors: [".st-rh-card-scope"],
-  });
+  ensureSharedTooltip();
 }

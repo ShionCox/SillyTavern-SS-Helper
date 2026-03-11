@@ -529,9 +529,125 @@ function isTransparentThemeValue(value: string): boolean {
     normalized === "transparent" ||
     normalized === "rgba(0,0,0,0)" ||
     normalized === "rgba(0, 0, 0, 0)" ||
+    normalized === "rgba(0 0 0 / 0)" ||
+    normalized === "rgb(0 0 0 / 0)" ||
     normalized === "hsla(0,0%,0%,0)" ||
-    normalized === "hsla(0, 0%, 0%, 0)"
+    normalized === "hsla(0, 0%, 0%, 0)" ||
+    normalized === "hsla(0 0% 0% / 0)"
   );
+}
+
+function parseAlphaChannel(raw: string): number | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (text.endsWith("%")) {
+    const percent = Number(text.slice(0, -1).trim());
+    if (!Number.isFinite(percent)) return null;
+    return Math.max(0, Math.min(1, percent / 100));
+  }
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function readCssColorAlpha(value: string): number | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "transparent") return 0;
+
+  if ((normalized.startsWith("rgb(") || normalized.startsWith("hsl(") || normalized.startsWith("color(")) && normalized.includes("/")) {
+    const slashIndex = normalized.lastIndexOf("/");
+    const closeIndex = normalized.lastIndexOf(")");
+    if (slashIndex >= 0 && closeIndex > slashIndex) {
+      return parseAlphaChannel(normalized.slice(slashIndex + 1, closeIndex).trim());
+    }
+  }
+
+  if (normalized.startsWith("rgba(") || normalized.startsWith("hsla(")) {
+    const openIndex = normalized.indexOf("(");
+    const closeIndex = normalized.lastIndexOf(")");
+    if (openIndex >= 0 && closeIndex > openIndex) {
+      const inner = normalized.slice(openIndex + 1, closeIndex);
+      const parts = inner.split(",").map((part) => part.trim());
+      if (parts.length >= 4) {
+        return parseAlphaChannel(parts[3]);
+      }
+    }
+  }
+
+  return null;
+}
+
+function isUnusableTooltipBackgroundValue(value: string): boolean {
+  if (isTransparentThemeValue(value)) return true;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  // Tooltip root is mounted to dialog/body; unresolved var() can re-resolve to a different scope.
+  if (normalized.includes("var(")) {
+    return true;
+  }
+  if (normalized.includes("color-mix(") && normalized.includes("transparent")) {
+    return true;
+  }
+  const alpha = readCssColorAlpha(normalized);
+  if (alpha !== null && alpha < 0.78) {
+    return true;
+  }
+  return false;
+}
+
+interface ParsedCssVarExpression {
+  name: string;
+  fallback: string;
+}
+
+function parseSingleCssVarExpression(value: string): ParsedCssVarExpression | null {
+  const text = String(value ?? "").trim();
+  if (!text.startsWith("var(") || !text.endsWith(")")) return null;
+  const inner = text.slice(4, -1).trim();
+  if (!inner) return null;
+
+  let depth = 0;
+  for (let index = 0; index < inner.length; index += 1) {
+    const char = inner[index];
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (char === "," && depth === 0) {
+      const name = inner.slice(0, index).trim();
+      const fallback = inner.slice(index + 1).trim();
+      return name ? { name, fallback } : null;
+    }
+  }
+  return { name: inner.trim(), fallback: "" };
+}
+
+function resolveThemeCustomPropertyValue(
+  rawValue: string,
+  styleSources: CSSStyleDeclaration[],
+  depth = 0
+): string {
+  const value = String(rawValue ?? "").trim();
+  if (!value || depth >= 8) return value;
+
+  const parsed = parseSingleCssVarExpression(value);
+  if (!parsed) return value;
+
+  const referenced = readFirstDefinedCustomProperty(styleSources[0], [parsed.name]) ||
+    readFirstDefinedCustomProperty(styleSources[1], [parsed.name]) ||
+    readFirstDefinedCustomProperty(styleSources[2], [parsed.name]);
+  if (referenced) {
+    return resolveThemeCustomPropertyValue(referenced, styleSources, depth + 1);
+  }
+  if (parsed.fallback) {
+    return resolveThemeCustomPropertyValue(parsed.fallback, styleSources, depth + 1);
+  }
+  return value;
 }
 
 /**
@@ -544,10 +660,13 @@ function isTransparentThemeValue(value: string): boolean {
 function readFirstUsableCustomProperty(
   style: CSSStyleDeclaration,
   propertyNames: string[],
+  styleSources: CSSStyleDeclaration[],
   shouldSkipValue?: (value: string) => boolean
 ): string {
   for (const propertyName of propertyNames) {
-    const value = style.getPropertyValue(propertyName).trim();
+    const rawValue = style.getPropertyValue(propertyName).trim();
+    if (!rawValue) continue;
+    const value = resolveThemeCustomPropertyValue(rawValue, styleSources);
     if (!value) continue;
     if (shouldSkipValue?.(value)) continue;
     return value;
@@ -562,10 +681,10 @@ function readFirstUsableCustomProperty(
  */
 function resolveSdkThemeSource(target: HTMLElement): HTMLElement {
   return (
-    target.closest<HTMLElement>("[data-stx-theme]") ||
     target.closest<HTMLElement>("[data-st-roll-theme]") ||
     target.closest<HTMLElement>(".st-roll-content") ||
     target.closest<HTMLElement>(".st-roll-shell") ||
+    target.closest<HTMLElement>("[data-stx-theme]") ||
     target
   );
 }
@@ -580,15 +699,16 @@ export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
   const style = getComputedStyle(source);
   const bodyStyle = getComputedStyle(document.body);
   const rootStyle = getComputedStyle(document.documentElement);
+  const styleSources = [style, bodyStyle, rootStyle];
   const read = (
     propertyNames: string[],
     fallback: string,
     shouldSkipValue?: (value: string) => boolean
   ): string => {
     const candidates = [
-      readFirstUsableCustomProperty(style, propertyNames, shouldSkipValue),
-      readFirstUsableCustomProperty(bodyStyle, propertyNames, shouldSkipValue),
-      readFirstUsableCustomProperty(rootStyle, propertyNames, shouldSkipValue),
+      readFirstUsableCustomProperty(style, propertyNames, styleSources, shouldSkipValue),
+      readFirstUsableCustomProperty(bodyStyle, propertyNames, styleSources, shouldSkipValue),
+      readFirstUsableCustomProperty(rootStyle, propertyNames, styleSources, shouldSkipValue),
     ];
     for (const candidate of candidates) {
       if (!candidate) continue;
@@ -596,21 +716,26 @@ export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
     }
     return fallback;
   };
-  return {
+  const snapshot = {
     text: read(["--stx-theme-text", "--st-roll-text", "--SmartThemeBodyColor"], "#ecdcb8"),
     background: read(
       [
-        "--stx-theme-panel-bg",
         "--st-roll-modal-panel-bg",
+        "--stx-shared-select-panel-bg",
         "--st-roll-select-panel-bg",
-        "--st-roll-content-bg",
+        "--st-roll-workbench-toolbar-bg",
+        "--st-roll-modal-head-bg",
         "--stx-theme-toolbar-bg",
-        "--stx-theme-list-item-bg",
-        "--st-roll-control-bg",
+        "--st-roll-workbench-panel-bg",
+        "--st-roll-btn-bg",
         "--SmartThemeBlurTintColor",
+        "--stx-theme-panel-bg",
+        "--st-roll-content-bg",
+        "--st-roll-control-bg",
+        "--stx-theme-list-item-bg",
       ],
       "rgba(12, 8, 6, 0.96)",
-      isTransparentThemeValue
+      isUnusableTooltipBackgroundValue
     ),
     border: read(
       ["--stx-theme-panel-border", "--st-roll-modal-panel-border", "--st-roll-control-border", "--SmartThemeBorderColor"],
@@ -621,4 +746,5 @@ export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
       "0 8px 20px rgba(0, 0, 0, 0.45)"
     ),
   };
+  return snapshot;
 }

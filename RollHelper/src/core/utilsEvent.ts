@@ -24,8 +24,9 @@ export function simpleHashEvent(input: string): string {
   return Math.abs(hash).toString(36);
 }
 
-export function escapeHtmlEvent(input: string): string {
-  return input
+export function escapeHtmlEvent(input: string | undefined | null): string {
+  if (input == null) return "";
+  return String(input)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

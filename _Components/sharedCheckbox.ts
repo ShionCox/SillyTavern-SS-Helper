@@ -1,4 +1,4 @@
-import sharedCheckboxCssText from "./sharedCheckbox.css";
+import sharedCheckboxCssText from "./sharedCheckbox.css?inline";
 
 type SharedCheckboxAttributeValue = string | number | boolean | null | undefined;
 

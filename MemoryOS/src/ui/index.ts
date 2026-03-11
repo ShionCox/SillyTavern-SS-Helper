@@ -6,6 +6,7 @@ import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
 import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
 import { applySdkThemeToNode, initializeSdkThemeState } from '../../../SDK/theme';
 import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
 
@@ -172,6 +173,7 @@ export async function renderSettingsUi() {
             ssContainer.appendChild(cardWrapper);
         }
         applySdkThemeToNode(cardWrapper);
+        applyTailwindScopeToNode(cardWrapper);
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
         bindUiEvents();

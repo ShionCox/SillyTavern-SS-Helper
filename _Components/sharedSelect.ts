@@ -1,4 +1,4 @@
-import sharedSelectCssText from "./sharedSelect.css";
+import sharedSelectCssText from "./sharedSelect.css?inline";
 
 type SharedSelectAttributeValue = string | number | boolean | null | undefined;
 

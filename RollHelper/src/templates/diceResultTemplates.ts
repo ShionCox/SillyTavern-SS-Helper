@@ -157,10 +157,10 @@ export function buildResultMessageTemplateEvent(
         .map((r, idx) => {
           const diceSvg = buildDiceSvgTemplateEvent(r, result.sides, resultColor);
           const singleDiceTooltip = `${diceTooltip} | 第${idx + 1}颗: ${r}`;
-          return `<span style="display:inline-flex;cursor:help;" title="${escapeAttrTemplateEvent(singleDiceTooltip)}">${diceSvg}</span>`;
+          return `<span style="display:inline-flex;cursor:help;" data-tip="${escapeAttrTemplateEvent(singleDiceTooltip)}">${diceSvg}</span>`;
         })
         .join(" ")
-    : `<span style="display:inline-flex;cursor:help;" title="${escapeAttrTemplateEvent(diceTooltip)}">${buildDiceSvgTemplateEvent(0, result.sides, resultColor)}</span>`;
+    : `<span style="display:inline-flex;cursor:help;" data-tip="${escapeAttrTemplateEvent(diceTooltip)}">${buildDiceSvgTemplateEvent(0, result.sides, resultColor)}</span>`;
   const rollingVisual = buildRollingSvgTemplateEvent(rpgColors.textHighlight);
   const detailParts: string[] = [];
   if (result.rolls.length) {
@@ -317,7 +317,7 @@ export function buildResultMessageTemplateEvent(
             ${critText ? `<div class="${critType === "success" ? `crit-success-${uniqueId}` : `crit-fail-${uniqueId}`}">${critText}</div>` : ""}
           ${result.exploding ? `<div class="explosion-note-${uniqueId}">${result.explosionTriggered ? "连锁爆骰！" : "爆骰已开启"}</div>` : ""}
             
-            <div style="margin-bottom: 12px; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;" title="${escapeAttrTemplateEvent(diceTooltip)}">
+            <div style="margin-bottom: 12px; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;" data-tip="${escapeAttrTemplateEvent(diceTooltip)}">
                 ${diceVisuals}
             </div>
 

@@ -8,13 +8,24 @@
         "build:memory": "node build.js MemoryOS",
         "build:llm": "node build.js LLMHub",
         "build:roll": "node build.js RollHelper",
+        "vite:build": "node scripts/vite-build.mjs",
+        "vite:watch": "node scripts/vite-build.mjs --watch",
+        "vite:build:memory": "node scripts/vite-build.mjs MemoryOS",
+        "vite:build:llm": "node scripts/vite-build.mjs LLMHub",
+        "vite:build:roll": "node scripts/vite-build.mjs RollHelper",
         "watch:memory": "node build.js MemoryOS --watch",
         "watch:llm": "node build.js LLMHub --watch",
         "watch:roll": "node build.js RollHelper --watch",
+        "roll:test": "vite serve RollHelper/test",
         "clean": "rm -rf MemoryOS/dist LLMHub/dist RollHelper/dist"
     },
     "devDependencies": {
-        "esbuild": "^0.23.0"
+        "@tailwindcss/postcss": "^4.2.1",
+        "autoprefixer": "^10.4.27",
+        "esbuild": "^0.23.0",
+        "postcss": "^8.5.8",
+        "tailwindcss": "^4.2.1",
+        "vite": "^7.3.1"
     },
     "dependencies": {
         "dexie": "^4.3.0",
