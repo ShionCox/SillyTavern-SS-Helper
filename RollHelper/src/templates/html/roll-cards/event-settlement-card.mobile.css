@@ -20,7 +20,7 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.45rem 0.7rem;
-  align-items: start;
+  align-items: center;
   padding: 0.82rem 0.84rem 0.78rem;
   border: 1px solid rgba(179, 143, 84, 0.34);
   background:
@@ -43,7 +43,6 @@
   position: relative;
   width: 18px;
   height: 18px;
-  margin-top: 0.1rem;
   transform: rotate(45deg);
   border: 1px solid rgba(213, 181, 119, 0.42);
   background:
@@ -68,11 +67,15 @@
 }
 
 .st-rh-mobile-summary-kicker {
+  min-width: 0;
   margin: 0;
   padding-bottom: 0;
   border-bottom: none;
   font-size: 10px;
   letter-spacing: 0.12em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .st-rh-mobile-summary-title {
@@ -81,8 +84,10 @@
 }
 
 .st-rh-mobile-summary-id {
-  grid-column: 1 / -1;
+  grid-column: auto;
   justify-self: end;
+  align-self: start;
+  min-width: 0;
   max-width: 140px;
   min-height: 18px;
   padding: 0 4px;
@@ -96,8 +101,15 @@
 
 .st-rh-mobile-summary-kicker-wrap {
   display: flex;
+  flex-direction: row;
   justify-content: space-between;
-  gap: 0.3rem;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  min-width: 0;
+}
+
+.st-rh-mobile-summary-kicker-wrap > * {
+  min-width: 0;
 }
 
 .st-rh-mobile-summary-hero {
@@ -151,9 +163,10 @@
 
 .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-surface-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0.3rem;
   min-height: 40px;
   padding: 0.18rem 0;
   border: none;
@@ -165,13 +178,14 @@
 
 .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-label {
   margin-bottom: 0;
-  padding-right: 0.4rem;
+  padding-right: 0;
   border-bottom: none;
   white-space: nowrap;
 }
 
 .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-value {
-  text-align: right;
+  width: 100%;
+  text-align: left;
   font-size: 15px;
   white-space: nowrap;
 }
@@ -320,6 +334,15 @@
 }
 
 @media (max-width: 380px) {
+  .st-rh-mobile-summary-kicker-wrap {
+    flex-wrap: wrap;
+  }
+
+  .st-rh-mobile-summary-id {
+    margin-left: auto;
+    max-width: 100%;
+  }
+
   .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-core-head {
     gap: 0.45rem 0.55rem;
   }
@@ -333,7 +356,7 @@
   }
 
   .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-surface-card {
-    gap: 0.45rem;
+    gap: 0.3rem;
   }
 
   .st-rh-settlement-shell-mobile .st-rh-mobile-summary-hero .st-rh-result-meta-grid .st-rh-fact-value {
@@ -347,5 +370,16 @@
   .st-rh-mobile-summary-hero {
     animation: none;
     transition: none;
+  }
+}
+
+@container (max-width: 380px) {
+  .st-rh-mobile-summary-kicker-wrap {
+    flex-wrap: wrap;
+  }
+
+  .st-rh-mobile-summary-id {
+    margin-left: auto;
+    max-width: 100%;
   }
 }

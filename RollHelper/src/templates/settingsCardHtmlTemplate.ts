@@ -4,6 +4,7 @@ import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
 import { buildSharedInputField } from "../../../_Components/sharedInput";
 import { buildSharedSelectField } from "../../../_Components/sharedSelect";
 import { buildSettingPageTemplate } from "../../../_Components/Setting";
+import rollLogoUrlEvent from "../../../assets/images/ROLL-LOGO.png";
 
 /**
  * 功能：构建设置页复选卡片项。
@@ -655,8 +656,9 @@ export function buildSettingsCardHtmlTemplateEvent(
         <div id="${ids.panelAboutId}" class="st-roll-panel" hidden>
           <div class="st-roll-divider"><i class="fa-solid fa-circle-info"></i><span>关于插件</span><div class="st-roll-divider-line"></div></div>
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="about version author email github" style="margin-bottom: 12px; align-items: flex-start;">
+          <div class="st-roll-item st-roll-search-item st-roll-about-item" data-st-roll-search="about version author email github" style="margin-bottom: 12px; align-items: flex-start;">
             <div class="st-roll-item-main">
+              <img class="st-roll-about-logo" src="${rollLogoUrlEvent}" alt="RollHelper Logo" />
               <div class="st-roll-item-title">${ids.displayName}</div>
               <div class="st-roll-item-desc st-roll-about-meta">
                 <span class="st-roll-about-meta-item">
@@ -670,6 +672,10 @@ export function buildSettingsCardHtmlTemplateEvent(
                 <span class="st-roll-about-meta-item">
                   <i class="fa-solid fa-envelope"></i>
                   <span>邮箱：<a href="mailto:${ids.emailText}">${ids.emailText}</a></span>
+                </span>
+                <span class="st-roll-about-meta-item">
+                  <i class="fa-brands fa-qq"></i>
+                  <span>QQ群：${ids.qqGroupText}</span>
                 </span>
                 <span class="st-roll-about-meta-item">
                   <i class="fa-brands fa-github"></i>
@@ -761,6 +767,15 @@ export function buildSettingsCardHtmlTemplateEvent(
                   iconClassName: "fa-solid fa-rotate",
                   attributes: {
                     "data-tip": "刷新当前酒馆可见的聊天列表。",
+                  },
+                })}
+                ${buildSharedButton({
+                  id: ids.statusCleanUnusedId,
+                  label: "清理无用聊天",
+                  variant: "danger",
+                  iconClassName: "fa-solid fa-trash",
+                  attributes: {
+                    "data-tip": "根据当前酒馆的聊天列表，清理 RollHelper 本地已无用的聊天状态记录。",
                   },
                 })}
               </div>

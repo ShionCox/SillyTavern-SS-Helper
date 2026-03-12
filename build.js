@@ -33,7 +33,16 @@ const baseOptions = {
     sourcemap: true,
     minify: !isWatchMode,
     plugins: [copyManifestPlugin],
-    loader: { '.css': 'text', '.html': 'text' },
+    loader: {
+        '.css': 'text',
+        '.html': 'text',
+        '.png': 'file',
+        '.jpg': 'file',
+        '.jpeg': 'file',
+        '.gif': 'file',
+        '.webp': 'file',
+        '.svg': 'file',
+    },
 };
 
 const allBuilds = [

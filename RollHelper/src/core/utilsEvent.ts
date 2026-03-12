@@ -42,3 +42,27 @@ export function normalizeBlankLinesEvent(input: string): string {
   return input.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+export function formatIsoDurationNaturalLanguageEvent(input: string | undefined | null): string {
+  const value = String(input ?? "").trim();
+  if (!value) return "";
+  if (/^none$/i.test(value)) return "无";
+
+  const match = value.match(/^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i);
+  if (!match) return value;
+
+  const weeks = Number(match[1] || 0);
+  const days = Number(match[2] || 0);
+  const hours = Number(match[3] || 0);
+  const minutes = Number(match[4] || 0);
+  const seconds = Number(match[5] || 0);
+  const parts: string[] = [];
+
+  if (weeks > 0) parts.push(`${weeks}周`);
+  if (days > 0) parts.push(`${days}天`);
+  if (hours > 0) parts.push(`${hours}小时`);
+  if (minutes > 0) parts.push(`${minutes}分钟`);
+  if (seconds > 0) parts.push(`${seconds}秒`);
+
+  return parts.length > 0 ? parts.join("") : "0秒";
+}
+

@@ -223,6 +223,7 @@ export function buildChangelogHtml(
           const itemsHtml = section.items
             .map((item: string): string => `<li class="stx-changelog-section-item">${escapeHtml(item)}</li>`)
             .join("");
+          const shouldShowTitle = section.title !== section.badgeText;
           return `
             <section class="stx-changelog-section ${escapeAttr(section.className)}">
               <div class="stx-changelog-section-head">
@@ -230,7 +231,7 @@ export function buildChangelogHtml(
                   <i class="${escapeAttr(section.iconClassName)}" aria-hidden="true"></i>
                   <span>${escapeHtml(section.badgeText)}</span>
                 </span>
-                <span class="stx-changelog-section-title">${escapeHtml(section.title)}</span>
+                ${shouldShowTitle ? `<span class="stx-changelog-section-title">${escapeHtml(section.title)}</span>` : ""}
               </div>
               <ul class="stx-changelog-section-list">${itemsHtml}</ul>
             </section>

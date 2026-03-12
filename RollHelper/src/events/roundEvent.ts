@@ -679,7 +679,6 @@ export interface PerformEventRollByIdDepsEvent {
   ) => EventRollRecordEvent | null;
   saveMetadataSafeEvent: () => void;
   getLatestRollRecordForEvent: (round: PendingRoundEvent, eventId: string) => EventRollRecordEvent | null;
-  buildEventAlreadyRolledCardEvent: (event: DiceEventSpecEvent, record: EventRollRecordEvent) => string;
   pushToChat: (message: string) => string | undefined | void;
   refreshCountdownDomEvent: () => void;
   rollExpression: (exprRaw: string, options?: DiceOptions) => DiceResult;
@@ -742,8 +741,8 @@ export function performEventRollByIdEvent(
 
   const existingRecord = deps.getLatestRollRecordForEvent(round, event.id);
   if (existingRecord) {
-    const alreadyCard = deps.buildEventAlreadyRolledCardEvent(event, existingRecord);
-    const fallback = deps.pushToChat(alreadyCard);
+    const resultCard = deps.buildEventRollResultCardEvent(event, existingRecord);
+    const fallback = deps.pushToChat(resultCard);
     deps.refreshCountdownDomEvent();
     return typeof fallback === "string" ? fallback : "";
   }

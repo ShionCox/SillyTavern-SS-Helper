@@ -124,6 +124,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_MODAL_ID_Event: string;
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event: string;
   SETTINGS_STATUS_REFRESH_ID_Event: string;
+  SETTINGS_STATUS_CLEAN_UNUSED_ID_Event: string;
   SETTINGS_STATUS_ROWS_ID_Event: string;
   SETTINGS_STATUS_ADD_ID_Event: string;
   SETTINGS_STATUS_SAVE_ID_Event: string;
@@ -224,6 +225,7 @@ export function buildSettingsCardTemplateIdsEvent(
     badgeText: deps.SETTINGS_BADGE_VERSION_Event,
     authorText: deps.SETTINGS_AUTHOR_TEXT_Event,
     emailText: deps.SETTINGS_EMAIL_TEXT_Event,
+    qqGroupText: "862731343",
     githubText: deps.SETTINGS_GITHUB_TEXT_Event,
     githubUrl: deps.SETTINGS_GITHUB_URL_Event,
     changelogHtml,
@@ -249,6 +251,7 @@ export function buildSettingsCardTemplateIdsEvent(
     statusModalId: deps.SETTINGS_STATUS_MODAL_ID_Event,
     statusModalCloseId: deps.SETTINGS_STATUS_MODAL_CLOSE_ID_Event,
     statusRefreshId: deps.SETTINGS_STATUS_REFRESH_ID_Event,
+    statusCleanUnusedId: deps.SETTINGS_STATUS_CLEAN_UNUSED_ID_Event,
     statusRowsId: deps.SETTINGS_STATUS_ROWS_ID_Event,
     statusAddId: deps.SETTINGS_STATUS_ADD_ID_Event,
     statusSaveId: deps.SETTINGS_STATUS_SAVE_ID_Event,

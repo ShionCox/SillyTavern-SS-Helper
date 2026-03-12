@@ -1,4 +1,5 @@
 import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
+import { buildSharedBoxCheckboxStyles } from "../../../_Components/sharedBoxCheckbox";
 import { buildSharedButtonStyles } from "../../../_Components/sharedButton";
 import { buildChangelogStyles } from "../../../_Components/changelog";
 import { buildSharedInputStyles } from "../../../_Components/sharedInput";
@@ -606,9 +607,9 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     #${cardId} .st-roll-item-title {
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 700;
-      margin-bottom: 3px;
+      margin-bottom: 14px;
     }
 
     #${cardId} .st-roll-item-desc {
@@ -621,14 +622,25 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 10px 24px;
+      gap: 6px 24px;
+      width: 100%;
+      min-width: 0;
     }
 
     #${cardId} .st-roll-about-meta-item {
       display: inline-flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
-      white-space: nowrap;
+      min-width: 0;
+      max-width: 100%;
+      white-space: normal;
+    }
+
+    #${cardId} .st-roll-about-meta-item > span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     #${cardId} .st-roll-about-meta-item i {
@@ -641,12 +653,26 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       color: inherit;
       text-decoration: none;
       border-bottom: 1px dashed rgba(255, 255, 255, 0.22);
+      overflow-wrap: anywhere;
+      word-break: break-word;
       transition: border-color 0.2s ease, text-shadow 0.2s ease;
     }
 
     #${cardId} .st-roll-about-meta a:hover {
       border-bottom-color: rgba(255, 255, 255, 0.5);
       text-shadow: 0 0 8px rgba(255, 255, 255, 0.22);
+    }
+
+    #${cardId} .st-roll-about-item {
+      display: block;
+    }
+
+    #${cardId} .st-roll-about-logo {
+      display: block;
+      width: min(240px, 100%);
+      height: auto;
+      margin: 0 auto 14px;
+      object-fit: contain;
     }
 
     #${cardId} .st-roll-inline {
@@ -1450,15 +1476,41 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: flex;
       align-items: stretch;
       min-height: 36px;
-      padding: 0 10px;
-      border-radius: 10px;
-      border: 1px solid var(--st-roll-workbench-panel-border);
-      background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 90%, transparent);
+      padding: 0;
+      border-radius: 0;
+      border: 0;
+      background: transparent;
       box-sizing: border-box;
     }
 
     #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-body {
       min-height: 34px;
+    }
+
+    #${cardId} .st-roll-status-col-head[data-status-col-key="enabled"] {
+      text-align: center;
+    }
+
+    #${cardId} .st-roll-status-col-head[data-status-col-key="actions"] {
+      text-align: center;
+    }
+
+    #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-copy,
+    #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-title {
+      display: none;
+    }
+
+    #${cardId} .st-roll-status-field-enabled .st-roll-status-field-content {
+      justify-content: center;
+    }
+
+    #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-body {
+      justify-content: center;
+    }
+
+    #${cardId} .st-roll-status-row .st-roll-status-actions-group {
+      justify-self: center;
+      justify-content: center;
     }
 
     #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-title {
@@ -1601,6 +1653,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     ${buildSharedCheckboxStyles(`#${cardId}`)}
+    ${buildSharedBoxCheckboxStyles(`#${cardId}`)}
     ${buildSharedButtonStyles(`#${cardId}`)}
     ${buildSharedInputStyles(`#${cardId}`)}
     ${buildSharedSelectStyles(`#${cardId}`)}
@@ -1805,6 +1858,16 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --stx-checkbox-box-border: var(--st-roll-control-border);
       --stx-checkbox-box-bg: var(--st-roll-control-bg);
       --stx-checkbox-control-shadow: none;
+    }
+
+    #${cardId} .stx-shared-box-checkbox {
+      --stx-box-checkbox-border: color-mix(in srgb, var(--st-roll-accent) 52%, var(--st-roll-workbench-panel-border));
+      --stx-box-checkbox-bg: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 92%, transparent);
+      --stx-box-checkbox-hover-border: color-mix(in srgb, var(--st-roll-accent) 72%, #fff 10%);
+      --stx-box-checkbox-focus-ring: color-mix(in srgb, var(--st-roll-accent) 24%, transparent);
+      --stx-box-checkbox-checked-border: color-mix(in srgb, var(--st-roll-accent) 84%, #fff 8%);
+      --stx-box-checkbox-checked-bg: color-mix(in srgb, var(--st-roll-accent) 24%, var(--st-roll-workbench-panel-bg));
+      --stx-box-checkbox-indicator: var(--st-roll-accent-contrast);
     }
 
     #${cardId} .st-roll-content[data-st-roll-theme="dark"] .stx-shared-checkbox-control,
@@ -2199,7 +2262,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-status-sidebar .st-roll-workbench-toolbar-sidebar {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       align-items: center;
       padding: 8px;
     }
@@ -2448,69 +2511,10 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       width: 16px;
       height: 16px;
       margin: 0;
-      border-radius: 5px;
-      border: 1px solid color-mix(in srgb, var(--st-roll-accent) 52%, var(--st-roll-workbench-panel-border));
-      background: color-mix(in srgb, var(--st-roll-workbench-panel-bg) 92%, transparent);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
       display: inline-grid;
       place-items: center;
-      cursor: pointer;
-      appearance: none;
-      -webkit-appearance: none;
-      transition:
-        border-color 0.18s ease,
-        background-color 0.18s ease,
-        box-shadow 0.18s ease,
-        transform 0.18s ease;
-    }
-
-    #${cardId} .st-roll-skill-row-select::before,
-    #${cardId} .st-roll-status-row-select::before {
-      content: "";
-      width: 9px;
-      height: 5px;
-      border-left: 2px solid transparent;
-      border-bottom: 2px solid transparent;
-      transform: rotate(-45deg) scale(0.2);
-      transform-origin: center;
-      opacity: 0;
-      transition:
-        transform 0.18s ease,
-        opacity 0.18s ease,
-        border-color 0.18s ease;
-    }
-
-    #${cardId} .st-roll-skill-row-select:hover,
-    #${cardId} .st-roll-status-row-select:hover {
-      border-color: color-mix(in srgb, var(--st-roll-accent) 72%, #fff 10%);
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.08),
-        0 0 0 1px color-mix(in srgb, var(--st-roll-accent) 16%, transparent);
-    }
-
-    #${cardId} .st-roll-skill-row-select:checked,
-    #${cardId} .st-roll-status-row-select:checked {
-      border-color: color-mix(in srgb, var(--st-roll-accent) 84%, #fff 8%);
-      background: color-mix(in srgb, var(--st-roll-accent) 24%, var(--st-roll-workbench-panel-bg));
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.1),
-        0 0 0 1px color-mix(in srgb, var(--st-roll-accent) 20%, transparent);
-    }
-
-    #${cardId} .st-roll-skill-row-select:checked::before,
-    #${cardId} .st-roll-status-row-select:checked::before {
-      border-left-color: var(--st-roll-accent-contrast);
-      border-bottom-color: var(--st-roll-accent-contrast);
-      transform: rotate(-45deg) scale(1);
-      opacity: 1;
-    }
-
-    #${cardId} .st-roll-skill-row-select:focus-visible,
-    #${cardId} .st-roll-status-row-select:focus-visible {
-      outline: none;
-      box-shadow:
-        0 0 0 2px color-mix(in srgb, var(--st-roll-accent) 24%, transparent),
-        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      align-self: center;
+      --stx-box-checkbox-size: 16px;
     }
 
     #${cardId} .st-roll-skill-actions-group,
@@ -2690,7 +2694,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-sidebar .st-roll-workbench-toolbar-sidebar {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto;
         gap: 8px;
         padding: 10px;
         border-radius: 16px;
@@ -3033,7 +3037,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         min-width: 0;
         min-height: 36px;
         margin-left: auto;
-        padding: 0 8px;
+        padding: 0;
       }
 
       #${cardId} .st-roll-status-enabled-card .stx-shared-checkbox-body {

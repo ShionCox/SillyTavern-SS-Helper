@@ -72,7 +72,6 @@ import {
   sweepTimeoutFailuresEvent,
 } from "./eventRuntime.round";
 import {
-  buildEventAlreadyRolledCardEvent,
   buildEventListCardEvent,
   buildEventRollResultCardEvent,
   getEventRuntimeViewStateEvent,
@@ -136,7 +135,6 @@ function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, ex
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     recordTimeoutFailureIfNeededEvent,
-    buildEventAlreadyRolledCardEvent,
     pushToChat: pushToChatCoreEvent,
     refreshCountdownDomEvent,
   });

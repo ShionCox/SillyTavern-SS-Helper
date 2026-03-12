@@ -9,6 +9,7 @@ import {
   listUnifiedTavernChatDirectoryEvent,
   parseAnyTavernChatRefEvent,
 } from "../../../SDK/tavern";
+import { buildSharedBoxCheckbox } from "../../../_Components/sharedBoxCheckbox";
 import { buildSharedSelectField, hydrateSharedSelects } from "../../../_Components/sharedSelect";
 import { buildSharedButton } from "../../../_Components/sharedButton";
 import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
@@ -564,13 +565,22 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const skillsText = escapeAttr(String(row.skillsText ?? ""));
       const enabled = row.enabled !== false;
       const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：反应|潜行";
-      const selected = STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
 
       const nameFieldHtml = buildStatusEditorFieldShellEvent(
         "名称",
         `
           <div class="st-roll-status-name-wrap">
-            <input type="checkbox" class="st-roll-status-row-select" data-status-select-id="${rowId}" data-tip="选择这条状态"${selected} />
+            ${buildSharedBoxCheckbox({
+              id: `st-roll-status-row-select-${rowId}`,
+              containerClassName: "st-roll-status-row-select",
+              attributes: {
+                "data-tip": "选择这条状态",
+              },
+              inputAttributes: {
+                "data-status-select-id": rowId,
+                checked: STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")),
+              },
+            })}
             ${buildSharedInputField({
               value: name,
               className: "st-roll-status-name",
@@ -721,11 +731,20 @@ function renderStatusRowsEvent(rowsWrapId: string): void {
       const skillsText = escapeAttr(String(row.skillsText ?? ""));
       const enabled = row.enabled !== false;
       const skillsPlaceholder = scope === "all" ? "范围为全局时会忽略此项" : "例如：潜行|察觉";
-      const selected = STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
       return `
         <div class="st-roll-status-row" data-row-id="${rowId}">
           <div class="st-roll-status-name-wrap">
-            <input type="checkbox" class="st-roll-status-row-select" data-status-select-id="${rowId}" data-tip="选择这条状态"${selected} />
+            ${buildSharedBoxCheckbox({
+              id: `st-roll-status-row-select-${rowId}-legacy`,
+              containerClassName: "st-roll-status-row-select",
+              attributes: {
+                "data-tip": "选择这条状态",
+              },
+              inputAttributes: {
+                "data-status-select-id": rowId,
+                checked: STATUS_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")),
+              },
+            })}
             ${buildSharedInputField({
               value: name,
               className: "st-roll-status-name",
@@ -946,6 +965,7 @@ export interface BindStatusEditorActionsDepsEvent {
   SETTINGS_STATUS_SAVE_ID_Event: string;
   SETTINGS_STATUS_RESET_ID_Event: string;
   SETTINGS_STATUS_REFRESH_ID_Event: string;
+  SETTINGS_STATUS_CLEAN_UNUSED_ID_Event: string;
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
   SETTINGS_STATUS_SPLITTER_ID_Event: string;
@@ -971,6 +991,10 @@ export interface BindStatusEditorActionsDepsEvent {
   listChatScopedStatusSummariesEvent: () => Promise<Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>>;
   loadStatusesForChatKeyEvent: (chatKey: string) => Promise<ActiveStatusEvent[]>;
   saveStatusesForChatKeyEvent: (chatKey: string, statuses: ActiveStatusEvent[]) => Promise<void>;
+  cleanupUnusedChatStatesForCurrentTavernEvent: (retainChatKeys: string[]) => Promise<{
+    deletedCount: number;
+    deletedChatKeys: string[];
+  }>;
   probeMemoryPluginEvent: (timeoutMs?: number) => Promise<{
     available: boolean;
     enabled: boolean;
@@ -1372,6 +1396,45 @@ function saveCurrentStatusDraftToCacheEvent(dirtyHintId: string): void {
   setStatusDraftDirtyEvent(STATUS_EDITOR_DIRTY_Event, dirtyHintId);
 }
 
+function buildStatusEditorChatEntityKeySetEvent(chatKeys: string[]): Set<string> {
+  const entityKeys = new Set<string>();
+  (Array.isArray(chatKeys) ? chatKeys : []).forEach((chatKey) => {
+    const entityKey = buildStatusEditorChatEntityKeyFromKeyEvent(String(chatKey ?? "").trim());
+    if (entityKey) entityKeys.add(entityKey);
+  });
+  return entityKeys;
+}
+
+function collectUnusedStatusEditorChatKeysEvent(chatKeys: string[], retainChatKeys: string[]): string[] {
+  const retainEntityKeys = buildStatusEditorChatEntityKeySetEvent(retainChatKeys);
+  return (Array.isArray(chatKeys) ? chatKeys : []).filter((chatKey) => {
+    const normalizedChatKey = String(chatKey ?? "").trim();
+    if (!normalizedChatKey) return false;
+    const entityKey = buildStatusEditorChatEntityKeyFromKeyEvent(normalizedChatKey);
+    if (!entityKey) return false;
+    return !retainEntityKeys.has(entityKey);
+  });
+}
+
+function dropStatusEditorChatDraftCacheEntriesEvent(chatKeys: string[]): number {
+  let removedCount = 0;
+  (Array.isArray(chatKeys) ? chatKeys : []).forEach((chatKey) => {
+    const normalizedChatKey = String(chatKey ?? "").trim();
+    if (!normalizedChatKey) return;
+    if (!STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.has(normalizedChatKey)) return;
+    STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.delete(normalizedChatKey);
+    removedCount += 1;
+  });
+  return removedCount;
+}
+
+function countStatusEditorDirtyDraftEntriesEvent(chatKeys: string[]): number {
+  return (Array.isArray(chatKeys) ? chatKeys : []).filter((chatKey) => {
+    const normalizedChatKey = String(chatKey ?? "").trim();
+    return Boolean(STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.get(normalizedChatKey)?.dirty);
+  }).length;
+}
+
 function restoreStatusDraftFromCacheEvent(
   chatKey: string,
   rowsWrapId: string,
@@ -1750,6 +1813,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   const saveBtn = document.getElementById(deps.SETTINGS_STATUS_SAVE_ID_Event) as HTMLButtonElement | null;
   const resetBtn = document.getElementById(deps.SETTINGS_STATUS_RESET_ID_Event) as HTMLButtonElement | null;
   const refreshBtn = document.getElementById(deps.SETTINGS_STATUS_REFRESH_ID_Event) as HTMLButtonElement | null;
+  const cleanUnusedBtn = document.getElementById(deps.SETTINGS_STATUS_CLEAN_UNUSED_ID_Event) as HTMLButtonElement | null;
   const chatList = document.getElementById(deps.SETTINGS_STATUS_CHAT_LIST_ID_Event) as HTMLElement | null;
   const splitter = document.getElementById(deps.SETTINGS_STATUS_SPLITTER_ID_Event) as HTMLElement | null;
   const cols = document.getElementById(deps.SETTINGS_STATUS_COLS_ID_Event) as HTMLElement | null;
@@ -2004,6 +2068,16 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
   rowsWrap.addEventListener("change", (event) => {
     const target = event.target as HTMLInputElement | null;
     if (!target) return;
+    const selectRowId = String(target.dataset.statusSelectId ?? "");
+    if (selectRowId) {
+      if (target.checked) {
+        STATUS_EDITOR_SELECTED_ROW_IDS_Event.add(selectRowId);
+      } else {
+        STATUS_EDITOR_SELECTED_ROW_IDS_Event.delete(selectRowId);
+      }
+      syncStatusWorkbenchToolbarStateEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
+      return;
+    }
     const rowId = String(target.dataset.statusRowId ?? "");
     const field = String(target.dataset.statusField ?? "");
     if (!rowId || field !== "enabled") return;
@@ -2016,19 +2090,6 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
 
   rowsWrap.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
-    const selectInput = target?.closest<HTMLInputElement>("input[data-status-select-id]");
-    if (selectInput) {
-      const rowId = String(selectInput.dataset.statusSelectId ?? "");
-      if (!rowId) return;
-      if (selectInput.checked) {
-        STATUS_EDITOR_SELECTED_ROW_IDS_Event.add(rowId);
-      } else {
-        STATUS_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
-      }
-      syncStatusWorkbenchToolbarStateEvent(deps.SETTINGS_STATUS_ROWS_ID_Event);
-      return;
-    }
-
     const duplicateBtn = target?.closest<HTMLButtonElement>("button[data-status-duplicate-id]");
     if (duplicateBtn) {
       const rowId = String(duplicateBtn.dataset.statusDuplicateId ?? "");
@@ -2168,6 +2229,74 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
 
   refreshBtn?.addEventListener("click", () => {
     void refreshStatusEditorChatListEvent(deps);
+  });
+
+  cleanUnusedBtn?.addEventListener("click", () => {
+    void (async () => {
+      saveCurrentStatusDraftToCacheEvent(deps.SETTINGS_STATUS_DIRTY_HINT_ID_Event);
+
+      let hostChats: Array<{
+        chatKey: string;
+        updatedAt: number;
+        chatId: string;
+        displayName: string;
+        avatarUrl: string;
+        scopeType: "character" | "group";
+        scopeId: string;
+        roleKey: string;
+      }>;
+      let localSummaries: Array<{ chatKey: string; updatedAt: number; activeStatusCount: number }>;
+      try {
+        [hostChats, localSummaries] = await Promise.all([
+          deps.listHostChatsForCurrentScopeEvent(),
+          deps.listChatScopedStatusSummariesEvent(),
+        ]);
+      } catch {
+        deps.pushToChat?.("状态编辑器：读取当前酒馆聊天列表失败，未执行清理。");
+        return;
+      }
+
+      const currentChatKey = String(deps.getActiveChatKeyEvent() ?? "").trim();
+      const retainChatKeys = Array.from(
+        new Set([
+          ...((Array.isArray(hostChats) ? hostChats : []).map((item) => String(item.chatKey ?? "").trim())),
+          currentChatKey,
+        ].filter(Boolean))
+      );
+      const staleStateKeys = collectUnusedStatusEditorChatKeysEvent(
+        (Array.isArray(localSummaries) ? localSummaries : []).map((item) => String(item.chatKey ?? "").trim()),
+        retainChatKeys
+      );
+      const staleDraftKeys = collectUnusedStatusEditorChatKeysEvent(
+        Array.from(STATUS_EDITOR_CHAT_DRAFT_CACHE_Event.keys()),
+        retainChatKeys
+      );
+
+      if (staleStateKeys.length <= 0 && staleDraftKeys.length <= 0) {
+        deps.pushToChat?.("状态编辑器：当前没有可清理的无用聊天。");
+        return;
+      }
+
+      const dirtyDraftCount = countStatusEditorDirtyDraftEntriesEvent(staleDraftKeys);
+      const confirmed = window.confirm(
+        [
+          `将删除 ${staleStateKeys.length} 条不在当前酒馆聊天列表中的本地聊天状态记录。`,
+          `将同时移除 ${staleDraftKeys.length} 条对应草稿${dirtyDraftCount > 0 ? `（其中 ${dirtyDraftCount} 条未保存）` : ""}。`,
+          "此操作不会影响酒馆原始聊天，也不会影响记忆库。",
+        ].join("\n")
+      );
+      if (!confirmed) return;
+
+      const cleanupResult = await deps.cleanupUnusedChatStatesForCurrentTavernEvent(retainChatKeys);
+      const removedDraftCount = dropStatusEditorChatDraftCacheEntriesEvent(staleDraftKeys);
+      STATUS_EDITOR_SELECTED_ROW_IDS_Event.clear();
+      await refreshStatusEditorChatListEvent(deps);
+      renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
+      deps.syncSettingsUiEvent?.();
+      deps.pushToChat?.(
+        `状态编辑器：已清理 ${cleanupResult.deletedCount} 条无用聊天状态，移除 ${removedDraftCount} 条草稿。`
+      );
+    })();
   });
 
   if (!STATUS_EDITOR_OPEN_EVENT_BOUND_Event) {

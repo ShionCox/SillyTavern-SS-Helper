@@ -9,6 +9,7 @@ import type {
   EventRollRecordEvent,
   PendingRoundEvent,
 } from "../types/eventDomainEvent";
+import { formatIsoDurationNaturalLanguageEvent } from "../core/utilsEvent";
 import {
   ensureActiveStatusesEvent,
   extractStatusCommandsAndCleanTextEvent,
@@ -563,6 +564,9 @@ export function buildEventListCardEvent(
         : "cursor:pointer;";
       const showRollButton = !runtime.locked && !lastRecord;
       const timeLimitLabel = settings.enableTimeLimit ? (event.timeLimit ? event.timeLimit : "无") : "关闭";
+      const timeLimitLabelDisplay = settings.enableTimeLimit
+        ? formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无")
+        : "关闭";
       const statusResolved = settings.enableStatusSystem
         ? resolveStatusModifiersForSkillEvent(activeStatuses, event.skill)
         : { modifier: 0, matched: [] as Array<{ name: string; modifier: number }> };
@@ -666,7 +670,7 @@ export function buildEventListCardEvent(
         compareHtml: deps.escapeHtmlEvent(compare),
         dcText: String(event.dc),
         dcReasonHtml: dcDescriptionHtml,
-        timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabel),
+        timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabelDisplay),
         roundIdAttr: deps.escapeAttrEvent(round.roundId),
         eventIdAttr: deps.escapeAttrEvent(event.id),
         deadlineAttr: deps.escapeAttrEvent(deadlineAttr),
@@ -1108,6 +1112,7 @@ export function buildEventRollResultCardEvent(
         statusColor,
         48
       );
+  const timeLimitLabel = formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无");
 
   return deps.buildEventRollResultCardTemplateEvent({
     detailsIdAttr,
@@ -1146,258 +1151,13 @@ export function buildEventRollResultCardEvent(
     statusText: status,
     statusColor,
     totalText: String(record.result.total),
-    timeLimitHtml: deps.escapeHtmlEvent(event.timeLimit ?? "无"),
+    timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabel),
     diceVisualBlockHtml: diceVisualBlock,
     outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
     outcomeTextHtml: deps.escapeHtmlEvent(outcomeTextClean),
     statusImpactHtml: deps.escapeHtmlEvent(statusImpactHtml),
     outcomeStatusSummaryHtml: deps.escapeHtmlEvent(outcomeStatusSummaryText),
     currentStatusesHtml: deps.escapeHtmlEvent(currentStatusesSummaryText),
-  });
-}
-
-export interface BuildEventAlreadyRolledCardDepsEvent {
-  getSettingsEvent: () => DicePluginSettingsEvent;
-  getDiceMetaEvent: () => DiceMetaEvent;
-  resolveTriggeredOutcomeEvent: (
-    event: DiceEventSpecEvent,
-    record: EventRollRecordEvent | null | undefined,
-    settings: DicePluginSettingsEvent
-  ) => ResolvedOutcomeEvent;
-  formatEventModifierBreakdownEvent: (
-    baseModifier: number,
-    skillModifier: number,
-    finalModifier: number
-  ) => string;
-  buildRollsSummaryTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
-  buildEventDistributionBlockTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
-  buildEventTimeoutAtBlockTemplateEvent: (timeoutIsoHtml: string) => string;
-  buildEventAlreadyRolledCardTemplateEvent: (params: {
-    detailsIdAttr: string;
-    collapsedStatusHtml: string;
-    collapsedConditionHtml: string;
-    collapsedSourceHtml: string;
-    collapsedTotalHtml: string;
-    collapsedOutcomeHtml: string;
-    collapsedOutcomeTitleAttr: string;
-    collapsedOutcomeChipClassName: string;
-    collapsedStatusSummaryHtml: string;
-    collapsedStatusSummaryTitleAttr: string;
-    collapsedStatusSummaryChipClassName: string;
-    collapsedDiceVisualHtml: string;
-    titleTextHtml: string;
-    rollIdHtml: string;
-    eventTitleHtml: string;
-    eventIdHtml: string;
-    sourceTextHtml: string;
-    targetHtml: string;
-    skillHtml: string;
-    skillTitleAttr: string;
-    advantageStateHtml: string;
-    diceExprHtml: string;
-    diceModifierHintHtml: string;
-    rollsSummaryHtml: string;
-    explodeInfoHtml: string;
-    modifierBreakdownHtml: string;
-    compareHtml: string;
-    dcText: string;
-    dcReasonHtml: string;
-    statusText: string;
-    statusColor: string;
-    diceVisualBlockHtml: string;
-    distributionBlockHtml: string;
-    outcomeLabelHtml: string;
-    outcomeTextHtml: string;
-    statusImpactHtml: string;
-    outcomeStatusSummaryHtml: string;
-    currentStatusesHtml: string;
-    timeoutBlockHtml: string;
-  }) => string;
-  escapeHtmlEvent: (input: string) => string;
-  escapeAttrEvent: (input: string) => string;
-  formatModifier: (mod: number) => string;
-  getDiceSvg: (value: number, sides: number, color: string, size?: number) => string;
-  getRollingSvg: (color: string, size?: number) => string;
-  buildAlreadyRolledDiceVisualTemplateEvent: (params: {
-    uniqueId: string;
-    rollingVisualHtml: string;
-    diceVisualsHtml: string;
-    critType: "success" | "fail" | "normal";
-    critText: string;
-    compactMode: boolean;
-  }) => string;
-}
-
-export function buildEventAlreadyRolledCardEvent(
-  event: DiceEventSpecEvent,
-  record: EventRollRecordEvent,
-  deps: BuildEventAlreadyRolledCardDepsEvent
-): string {
-  const settings = deps.getSettingsEvent();
-  const resolvedOutcome = deps.resolveTriggeredOutcomeEvent(event, record, settings);
-  const outcomeLabel = settings.enableOutcomeBranches
-    ? outcomeKindLabelEvent(resolvedOutcome.kind)
-    : "剧情走向";
-  const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
-  const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
-  const collapsedOutcomePreview = buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
-  const outcomeStatusSummaryText = settings.enableStatusSystem
-    ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
-    : "";
-  const collapsedStatusSummaryPreview = buildCollapsedStatusSummaryPreviewEvent(outcomeStatusSummaryText);
-  const currentStatusesSummaryText = settings.enableStatusSystem
-    ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
-    : "";
-  const isTimeout = record.source === "timeout_auto_fail";
-  const titleText = isTimeout ? "[超时] 事件已结束" : "[完成] 检定已结算";
-  const sourceText = isTimeout
-    ? "系统强制结算"
-    : record.source === "ai_auto_roll"
-      ? "自动检定"
-      : "手动检定";
-  const statusText = record.success === null ? "未决" : record.success ? "成功" : "失败";
-  const statusColor = record.success === null ? "#a3957a" : record.success ? "#52c41a" : "#ff4d4f";
-
-  const baseModifierUsed = Number.isFinite(Number(record.baseModifierUsed))
-    ? Number(record.baseModifierUsed)
-    : Number(record.result.modifier) || 0;
-  const skillModifierApplied = Number.isFinite(Number(record.skillModifierApplied))
-    ? Number(record.skillModifierApplied)
-    : 0;
-  const statusModifierApplied = Number.isFinite(Number(record.statusModifierApplied))
-    ? Number(record.statusModifierApplied)
-    : 0;
-  const finalModifierUsed = Number.isFinite(Number(record.finalModifierUsed))
-    ? Number(record.finalModifierUsed)
-    : baseModifierUsed + skillModifierApplied + statusModifierApplied;
-  const diceTooltipText = buildDiceComputationTooltipEvent(
-    record.result,
-    baseModifierUsed,
-    skillModifierApplied,
-    finalModifierUsed
-  );
-  const diceVisualBlock = isTimeout
-    ? ""
-    : buildAnimatedDiceVisualBlockEvent(
-      record.result,
-      {
-        getDiceSvg: deps.getDiceSvg,
-        getRollingSvg: deps.getRollingSvg,
-        buildAlreadyRolledDiceVisualTemplateEvent: deps.buildAlreadyRolledDiceVisualTemplateEvent,
-      },
-      false,
-      diceTooltipText
-    );
-  const modifierBreakdownHtml =
-    baseModifierUsed !== 0 || skillModifierApplied !== 0 || statusModifierApplied !== 0
-      ? `${deps.formatModifier(baseModifierUsed)} + 技能 ${deps.formatModifier(
-        skillModifierApplied
-      )} + 状态 ${deps.formatModifier(statusModifierApplied)} = ${deps.formatModifier(finalModifierUsed)}`
-      : "";
-  const skillHoverText = settings.enableSkillSystem
-    ? `技能修正：${deps.formatModifier(skillModifierApplied)}；状态 ${deps.formatModifier(
-      statusModifierApplied
-    )}${modifierBreakdownHtml ? `（${modifierBreakdownHtml}）` : ""}`
-    : "技能系统已关闭";
-  const diceModifierHint =
-    settings.enableSkillSystem && (skillModifierApplied !== 0 || statusModifierApplied !== 0)
-      ? `技能${deps.formatModifier(skillModifierApplied)} / 状态${deps.formatModifier(statusModifierApplied)}`
-      : "";
-  let explodeInfoText = "未请求爆骰";
-  if (record.explodePolicyApplied === "disabled_globally") {
-    explodeInfoText = "已请求，系统关闭，按普通骰";
-  } else if (record.explodePolicyApplied === "downgraded_by_ai_limit") {
-    explodeInfoText = "已请求，超出本轮 AI 上限，按普通骰";
-  } else if (record.explodePolicyApplied === "enabled") {
-    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
-  } else if (record.result.exploding) {
-    explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
-  }
-  const statusImpactHtml =
-    statusModifierApplied !== 0
-      ? `受状态影响 ${deps.formatModifier(statusModifierApplied)}${Array.isArray(record.statusModifiersApplied) && record.statusModifiersApplied.length > 0
-        ? `（${record.statusModifiersApplied
-          .map((item) => `${item.name}${deps.formatModifier(item.modifier)}`)
-          .join("，")}）`
-        : ""
-      }`
-      : "";
-
-  const dcDescriptionHtml = buildDcDescriptionHtmlEvent(
-    event.dcReason,
-    finalModifierUsed,
-    settings.enableDynamicDcReason,
-    deps.escapeHtmlEvent,
-    deps.formatModifier
-  );
-  const distributionBlock = !isTimeout && record.result
-    ? deps.buildEventDistributionBlockTemplateEvent(
-      deps.escapeHtmlEvent(record.result.rolls.join(", ")),
-      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
-    )
-    : "";
-  const timeoutBlock = record.timeoutAt
-    ? deps.buildEventTimeoutAtBlockTemplateEvent(
-      deps.escapeHtmlEvent(new Date(record.timeoutAt).toISOString())
-    )
-    : "";
-  const detailsIdAttr = deps.escapeAttrEvent(
-    `st-rh-already-${toDomIdTokenEvent(record.rollId)}-details`
-  );
-  const collapsedCondition = `${record.compareUsed} ${String(record.dcUsed ?? "未设置")}`;
-  const collapsedDiceVisualHtml = isTimeout
-    ? ""
-    : buildFinalTotalDiceVisualEvent(
-      Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : 0,
-      statusColor,
-      40
-    );
-
-  return deps.buildEventAlreadyRolledCardTemplateEvent({
-    detailsIdAttr,
-    collapsedStatusHtml: deps.escapeHtmlEvent(statusText),
-    collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
-    collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
-    collapsedTotalHtml: deps.escapeHtmlEvent(String(record.result.total)),
-    collapsedOutcomeHtml: deps.escapeHtmlEvent(collapsedOutcomePreview.text),
-    collapsedOutcomeTitleAttr: deps.escapeAttrEvent(collapsedOutcomePreview.title),
-    collapsedOutcomeChipClassName: collapsedOutcomePreview.chipClassName,
-    collapsedStatusSummaryHtml: deps.escapeHtmlEvent(collapsedStatusSummaryPreview.text),
-    collapsedStatusSummaryTitleAttr: deps.escapeAttrEvent(collapsedStatusSummaryPreview.title),
-    collapsedStatusSummaryChipClassName: collapsedStatusSummaryPreview.chipClassName,
-    collapsedDiceVisualHtml,
-    titleTextHtml: titleText,
-    rollIdHtml: deps.escapeHtmlEvent(record.rollId),
-    eventTitleHtml: deps.escapeHtmlEvent(event.title),
-    eventIdHtml: deps.escapeHtmlEvent(event.id),
-    sourceTextHtml: deps.escapeHtmlEvent(sourceText),
-    targetHtml: deps.escapeHtmlEvent(record.targetLabelUsed || event.targetLabel),
-    skillHtml: deps.escapeHtmlEvent(event.skill),
-    skillTitleAttr: deps.escapeAttrEvent(skillHoverText),
-    advantageStateHtml: deps.escapeHtmlEvent(
-      formatAdvantageStateForCardEvent(record.advantageStateApplied ?? event.advantageState)
-    ),
-    diceExprHtml: deps.escapeHtmlEvent(record.diceExpr),
-    diceModifierHintHtml: deps.escapeHtmlEvent(diceModifierHint),
-    rollsSummaryHtml: deps.buildRollsSummaryTemplateEvent(
-      deps.escapeHtmlEvent(record.result.rolls.join(", ")),
-      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
-    ),
-    explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
-    modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownHtml),
-    compareHtml: deps.escapeHtmlEvent(record.compareUsed),
-    dcText: String(record.dcUsed ?? "未设置"),
-    dcReasonHtml: dcDescriptionHtml,
-    statusText,
-    statusColor,
-    diceVisualBlockHtml: diceVisualBlock,
-    distributionBlockHtml: distributionBlock,
-    outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
-    outcomeTextHtml: deps.escapeHtmlEvent(outcomeTextClean),
-    statusImpactHtml: deps.escapeHtmlEvent(statusImpactHtml),
-    outcomeStatusSummaryHtml: deps.escapeHtmlEvent(outcomeStatusSummaryText),
-    currentStatusesHtml: deps.escapeHtmlEvent(currentStatusesSummaryText),
-    timeoutBlockHtml: timeoutBlock,
   });
 }
 

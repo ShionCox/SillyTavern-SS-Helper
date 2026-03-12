@@ -19,6 +19,7 @@ export const SETTINGS_STATUS_EDITOR_OPEN_ID_Event = "st-roll-settings-Event-stat
 export const SETTINGS_STATUS_MODAL_ID_Event = "st-roll-settings-Event-status-modal";
 export const SETTINGS_STATUS_MODAL_CLOSE_ID_Event = "st-roll-settings-Event-status-modal-close";
 export const SETTINGS_STATUS_REFRESH_ID_Event = "st-roll-settings-Event-status-refresh";
+export const SETTINGS_STATUS_CLEAN_UNUSED_ID_Event = "st-roll-settings-Event-status-clean-unused";
 export const SETTINGS_STATUS_ROWS_ID_Event = "st-roll-settings-Event-status-rows";
 export const SETTINGS_STATUS_ADD_ID_Event = "st-roll-settings-Event-status-add";
 export const SETTINGS_STATUS_SAVE_ID_Event = "st-roll-settings-Event-status-save";
@@ -143,6 +144,7 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_MODAL_ID_Event,
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event,
   SETTINGS_STATUS_REFRESH_ID_Event,
+  SETTINGS_STATUS_CLEAN_UNUSED_ID_Event,
   SETTINGS_STATUS_ROWS_ID_Event,
   SETTINGS_STATUS_ADD_ID_Event,
   SETTINGS_STATUS_SAVE_ID_Event,
@@ -217,6 +219,7 @@ export const SETTINGS_TABS_AND_MODAL_IDS_Event = {
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event,
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event,
   SETTINGS_STATUS_REFRESH_ID_Event,
+  SETTINGS_STATUS_CLEAN_UNUSED_ID_Event,
   SETTINGS_SEARCH_ID_Event,
 } as const;
 export const SETTINGS_BASIC_INPUT_IDS_Event = {

@@ -1,18 +1,19 @@
 <li class="st-rh-event-item">
   <details class="st-rh-details-card st-rh-details-event">
-    <summary class="st-rh-collapse-summary">
+    <summary class="st-rh-collapse-summary" data-st-rh-role="summary">
       <div class="st-rh-summary-header">
         <div class="st-rh-header-deco-left"></div>
         <div class="st-rh-summary-title-row">
           <span class="st-rh-summary-badge-slot">{{roll_mode_badge_html}}</span>
           <strong class="st-rh-summary-title">
-            <span class="st-rh-summary-title-marquee-mobile">
-              <span class="st-rh-summary-title-track-mobile">
-                <span class="st-rh-summary-title-segment-mobile">{{title_html}}</span>
+            <span class="st-rh-summary-title-marquee-mobile" data-st-rh-role="title-marquee">
+              <span class="st-rh-summary-title-track-mobile" data-st-rh-role="title-track">
+                <span class="st-rh-summary-title-segment-mobile" data-st-rh-role="title-segment">{{title_html}}</span>
               </span>
             </span>
           </strong>
         </div>
+        <span class="st-rh-summary-id st-rh-mono" data-tip="{{event_id_html}}">#{{event_id_html}}</span>
         <div class="st-rh-header-deco-right"></div>
       </div>
       <div class="st-rh-summary-layout">
@@ -24,32 +25,30 @@
                 {{collapsed_check_html}}
               </span>
               <span class="st-rh-summary-chip st-rh-summary-chip-time">
-                <i class="fa-solid fa-hourglass-clock fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
+                <i class="fa-solid fa-hourglass-clock fa-fw st-rh-fa-icon st-rh-summary-chip-icon"
+                  aria-hidden="true"></i>
                 时限 {{time_limit_html}}
               </span>
             </div>
-            <div class="st-rh-summary-runtime-slot">
-              <div data-dice-countdown="1" data-round-id="{{round_id_attr}}" data-event-id="{{event_id_attr}}"
-                data-deadline-at="{{deadline_attr}}" class="st-rh-runtime st-rh-runtime-inline st-rh-mono"
-                {{runtime_style_attr}}>
-                <i class="fa-solid fa-stopwatch fa-fw st-rh-fa-icon st-rh-action-icon" aria-hidden="true"></i>
-                {{collapsed_runtime_html}}
-              </div>
-            </div>
-          </div>
-          <div class="st-rh-summary-mobile-meta">
-            <span class="st-rh-summary-id st-rh-mono" data-tip="{{event_id_html}}">#{{event_id_html}}</span>
           </div>
         </div>
 
         <div class="st-rh-summary-actions">
+          <div class="st-rh-summary-runtime-slot">
+            <div data-dice-countdown="1" data-round-id="{{round_id_attr}}" data-event-id="{{event_id_attr}}"
+              data-deadline-at="{{deadline_attr}}" class="st-rh-runtime st-rh-runtime-inline st-rh-mono"
+              {{runtime_style_attr}}>
+              <i class="fa-solid fa-stopwatch fa-fw st-rh-fa-icon st-rh-action-icon" aria-hidden="true"></i>
+              {{collapsed_runtime_html}}
+            </div>
+          </div>
           {{roll_action_html}}
           {{summary_toggle_state_html}}
         </div>
       </div>
     </summary>
 
-    <div id="{{details_id_attr}}" class="st-rh-card-details-body st-rh-event-details">
+    <div id="{{details_id_attr}}" class="st-rh-card-details-body st-rh-event-details" data-st-rh-role="details-body">
       <div class="st-rh-event-body">
         <div class="st-rh-event-narrative">
           <div class="st-rh-event-desc">

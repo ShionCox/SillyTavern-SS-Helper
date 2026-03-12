@@ -13,6 +13,7 @@ import { logger } from "../../index";
 import {
   createSdkPluginChatStateStore,
   createSdkPluginSettingsStore,
+  deleteSdkPluginChatState,
   getCurrentTavernSettingsScope,
   listSdkPluginChatStateSummaries,
   migrateLegacyPluginChatState,
@@ -27,6 +28,7 @@ import {
 } from "../../../SDK/theme";
 import type { SdkTavernScopeLocatorEvent } from "../../../SDK/tavern";
 import {
+  buildTavernChatEntityKeyEvent,
   buildTavernChatScopedKeyEvent,
   getTavernContextSnapshotEvent,
   isFallbackTavernChatEvent,
@@ -341,6 +343,59 @@ export async function saveStatusesForChatKeyEvent(
     ...previous,
     activeStatuses: normalizeActiveStatusesFromEvent(statuses),
   }));
+}
+
+export interface CleanupUnusedChatStatesResultEvent {
+  deletedCount: number;
+  deletedChatKeys: string[];
+}
+
+export async function cleanupUnusedChatStatesForCurrentTavernEvent(
+  retainChatKeys: string[]
+): Promise<CleanupUnusedChatStatesResultEvent> {
+  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
+  if (!scope) {
+    return {
+      deletedCount: 0,
+      deletedChatKeys: [],
+    };
+  }
+  ACTIVE_CHAT_SCOPE_Event = scope;
+
+  const retain = new Set(
+    (Array.isArray(retainChatKeys) ? retainChatKeys : [])
+      .map((item) =>
+        buildTavernChatEntityKeyEvent(
+          parseAnyTavernChatRefEvent(String(item ?? "").trim(), {
+            tavernInstanceId: String(scope.tavernInstanceId ?? "").trim(),
+          })
+        )
+      )
+      .filter(Boolean)
+  );
+  const summaries = listSdkPluginChatStateSummaries(SDK_SETTINGS_NAMESPACE_Event);
+  const deletedChatKeys: string[] = [];
+
+  summaries.forEach((item) => {
+    const chatKey = String(item.chatKey ?? "").trim();
+    if (!chatKey) return;
+    if (String(item.tavernInstanceId ?? "").trim() !== String(scope.tavernInstanceId ?? "").trim()) return;
+    if (isFallbackTavernChatEvent(item.chatId)) return;
+    const entityKey = buildTavernChatEntityKeyEvent(
+      parseAnyTavernChatRefEvent(chatKey, {
+        tavernInstanceId: String(scope.tavernInstanceId ?? "").trim(),
+      })
+    );
+    if (!entityKey || retain.has(entityKey)) return;
+    const deleted = deleteSdkPluginChatState(SDK_SETTINGS_NAMESPACE_Event, chatKey);
+    if (!deleted) return;
+    deletedChatKeys.push(chatKey);
+  });
+
+  return {
+    deletedCount: deletedChatKeys.length,
+    deletedChatKeys,
+  };
 }
 
 export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {

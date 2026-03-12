@@ -33,11 +33,6 @@ interface SharedSelectRefs {
   options: HTMLElement[];
 }
 
-interface SharedSelectHostOffset {
-  left: number;
-  top: number;
-}
-
 let OPEN_SHARED_SELECT_ROOT: HTMLElement | null = null;
 let SHARED_SELECT_GLOBAL_EVENTS_BOUND = false;
 
@@ -196,7 +191,8 @@ function getSharedSelectRefs(root: HTMLElement): SharedSelectRefs | null {
   const select = root.querySelector<HTMLSelectElement>("select.stx-shared-select-native");
   const trigger = root.querySelector<HTMLButtonElement>("button.stx-shared-select-trigger");
   const label = root.querySelector<HTMLElement>(".stx-shared-select-label");
-  const list = root.querySelector<HTMLElement>(".stx-shared-select-list");
+  const listId = String(trigger?.getAttribute("aria-controls") ?? "").trim();
+  const list = (listId ? document.getElementById(listId) : null) || root.querySelector<HTMLElement>(".stx-shared-select-list");
   if (!select || !trigger || !label || !list) return null;
   const options = Array.from(list.querySelectorAll<HTMLElement>(".stx-shared-select-option"));
   return { root, select, trigger, label, list, options };
@@ -314,23 +310,11 @@ function getBoundaryEnabledIndex(refs: SharedSelectRefs, direction: "start" | "e
  * @param root 共享选择框根节点
  * @returns 命中的祖先节点；未命中时返回 null
  */
-function findSharedSelectFixedHost(root: HTMLElement): HTMLElement | null {
-  let current = root.parentElement;
-  while (current && current !== document.body) {
-    const styles = window.getComputedStyle(current);
-    const willChange = String(styles.willChange ?? "").toLowerCase();
-    if (
-      styles.transform !== "none" ||
-      styles.perspective !== "none" ||
-      styles.filter !== "none" ||
-      styles.backdropFilter !== "none" ||
-      willChange.includes("transform")
-    ) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return null;
+function resolveSharedSelectHost(root: HTMLElement): HTMLElement {
+  const dialogHost =
+    root.closest<HTMLDialogElement>("dialog[open]") ||
+    document.querySelector<HTMLDialogElement>("dialog[open]");
+  return dialogHost || document.body;
 }
 
 /**
@@ -338,16 +322,11 @@ function findSharedSelectFixedHost(root: HTMLElement): HTMLElement | null {
  * @param root 共享选择框根节点
  * @returns 宿主偏移量
  */
-function getSharedSelectHostOffset(root: HTMLElement): SharedSelectHostOffset {
-  const host = findSharedSelectFixedHost(root);
-  if (!host) {
-    return { left: 0, top: 0 };
+function ensureSharedSelectListHost(refs: SharedSelectRefs): void {
+  const host = resolveSharedSelectHost(refs.root);
+  if (refs.list.parentElement !== host) {
+    host.appendChild(refs.list);
   }
-  const rect = host.getBoundingClientRect();
-  return {
-    left: rect.left,
-    top: rect.top,
-  };
 }
 
 /**
@@ -356,8 +335,8 @@ function getSharedSelectHostOffset(root: HTMLElement): SharedSelectHostOffset {
  * @returns 无返回值
  */
 function positionSharedSelectList(refs: SharedSelectRefs): void {
+  ensureSharedSelectListHost(refs);
   const triggerRect = refs.trigger.getBoundingClientRect();
-  const hostOffset = getSharedSelectHostOffset(refs.root);
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const minWidth = Math.max(triggerRect.width, 160);
@@ -374,8 +353,8 @@ function positionSharedSelectList(refs: SharedSelectRefs): void {
     ? Math.max(8, triggerRect.top - panelHeight - 4)
     : Math.min(viewportHeight - panelHeight - 8, triggerRect.bottom + 4);
 
-  refs.list.style.left = `${Math.round(nextLeft - hostOffset.left)}px`;
-  refs.list.style.top = `${Math.round(nextTop - hostOffset.top)}px`;
+  refs.list.style.left = `${Math.round(nextLeft)}px`;
+  refs.list.style.top = `${Math.round(nextTop)}px`;
   refs.list.style.minWidth = `${Math.round(minWidth)}px`;
   refs.list.style.maxWidth = `${Math.round(maxWidth)}px`;
   refs.list.style.maxHeight = `${Math.round(Math.max(120, maxHeight))}px`;
@@ -397,6 +376,7 @@ function closeSharedSelect(root: HTMLElement | null, restoreFocus: boolean): voi
   }
   root.classList.remove("is-open");
   refs.trigger.setAttribute("aria-expanded", "false");
+  refs.list.classList.remove("is-open");
   refs.list.hidden = true;
   root.dataset.sharedSelectHighlightIndex = String(getSelectedOptionIndex(refs));
   if (OPEN_SHARED_SELECT_ROOT === root) {
@@ -422,6 +402,7 @@ function openSharedSelect(root: HTMLElement): void {
   const initialIndex = selectedIndex >= 0 ? selectedIndex : getBoundaryEnabledIndex(refs, "start");
   OPEN_SHARED_SELECT_ROOT = root;
   root.classList.add("is-open");
+  refs.list.classList.add("is-open");
   refs.list.hidden = false;
   refs.trigger.setAttribute("aria-expanded", "true");
   setHighlightIndex(refs, initialIndex, false);
@@ -565,7 +546,8 @@ function ensureSharedSelectGlobalEvents(): void {
       return;
     }
     const target = event.target as Node | null;
-    if (target && openRoot.contains(target)) return;
+    const refs = getSharedSelectRefs(openRoot);
+    if (target && (openRoot.contains(target) || refs?.list.contains(target))) return;
     closeSharedSelect(openRoot, false);
   });
 

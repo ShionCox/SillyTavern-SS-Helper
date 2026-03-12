@@ -1,4 +1,5 @@
 import { buildEventRollHelpTemplateEvent, buildPreBlockTemplateEvent } from "../templates/helpTemplates";
+import { formatIsoDurationNaturalLanguageEvent } from "../core/utilsEvent";
 import type {
   ActiveStatusEvent,
   DiceEventSpecEvent,
@@ -139,7 +140,7 @@ function buildEventListTextEvent(
       )} | 模式=${formatRollModeTextEvent(event.rollMode)} | 骰态=${formatAdvantageStateTextEvent(
         event.advantageState
       )} | 时限=${
-        event.timeLimit ?? "无"
+        formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无")
       } | ${statusPreview} | 状态=${state.text}`
     );
   }

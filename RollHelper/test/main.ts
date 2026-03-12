@@ -2,7 +2,6 @@ import { normalizeEnvelopeEvent, repairAndParseEventJsonEvent } from "../src/eve
 import type { EventRollRecordEvent, PendingRoundEvent } from "../src/types/eventDomainEvent";
 import { DEFAULT_SETTINGS_Event } from "../src/settings/constantsEvent";
 import {
-  buildEventAlreadyRolledCardEvent as buildAlreadyRolledCore,
   buildEventListCardEvent as buildListCardCore,
   buildEventRollResultCardEvent as buildResultCardCore,
   getEventRuntimeViewStateEvent as getEventRuntimeViewStateCore,
@@ -14,15 +13,12 @@ import {
   buildRollingSvgTemplateEvent,
 } from "../src/templates/diceResultTemplates";
 import {
-  buildEventAlreadyRolledCardTemplateEvent,
-  buildEventDistributionBlockTemplateEvent,
   buildEventListCardTemplateEvent,
   buildEventListItemTemplateEvent,
   buildEventRolledBlockTemplateEvent,
   buildEventRolledPrefixTemplateEvent,
   buildEventRollButtonTemplateEvent,
   buildEventRollResultCardTemplateEvent,
-  buildEventTimeoutAtBlockTemplateEvent,
   buildRollsSummaryTemplateEvent,
   ensureEventCardStylesEvent,
   refreshEventCardMobileTitleMarqueeEvent,
@@ -58,8 +54,10 @@ type ParsedDiceResult = {
 };
 
 type RenderDeps = Parameters<typeof buildListCardCore>[1]
-  & Parameters<typeof buildResultCardCore>[2]
-  & Parameters<typeof buildAlreadyRolledCore>[2];
+  & Parameters<typeof buildResultCardCore>[2];
+
+const PREVIEW_MODE_STORAGE_KEY = "rollhelper:test:preview-mode";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "rollhelper:test:sidebar-collapsed";
 
 const body = document.body as HTMLBodyElement;
 const input = document.getElementById("json-input") as HTMLTextAreaElement;
@@ -68,6 +66,7 @@ const preview = document.getElementById("preview-cards") as HTMLDivElement;
 const desktopModeButton = document.getElementById("preview-mode-desktop") as HTMLButtonElement;
 const mobileModeButton = document.getElementById("preview-mode-mobile") as HTMLButtonElement;
 const sidebarEdgeToggle = document.getElementById("sidebar-edge-toggle") as HTMLButtonElement;
+const codePanelToggle = document.getElementById("code-panel-toggle") as HTMLButtonElement;
 
 ensureEventCardStylesEvent(document);
 
@@ -263,9 +262,6 @@ function createRenderDeps(): RenderDeps {
     getDiceSvg: buildDiceSvgTemplateEvent,
     getRollingSvg: buildRollingSvgTemplateEvent,
     buildAlreadyRolledDiceVisualTemplateEvent,
-    buildEventDistributionBlockTemplateEvent,
-    buildEventTimeoutAtBlockTemplateEvent,
-    buildEventAlreadyRolledCardTemplateEvent,
   };
 }
 
@@ -292,6 +288,21 @@ function updatePreviewModeButtons(mode: PreviewMode): void {
   mobileModeButton.setAttribute("aria-pressed", String(!isDesktop));
 }
 
+function readStoredPreviewMode(): PreviewMode | null {
+  try {
+    const stored = window.localStorage.getItem(PREVIEW_MODE_STORAGE_KEY);
+    return stored === "desktop" || stored === "mobile" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPreviewMode(mode: PreviewMode): void {
+  try {
+    window.localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, mode);
+  } catch {}
+}
+
 /**
  * 功能：切换测试页的预览模式。
  *
@@ -304,6 +315,7 @@ function updatePreviewModeButtons(mode: PreviewMode): void {
 function setPreviewMode(mode: PreviewMode): void {
   body.dataset.previewMode = mode;
   updatePreviewModeButtons(mode);
+  persistPreviewMode(mode);
 }
 
 /**
@@ -329,9 +341,35 @@ function updateSidebarToggleLabels(collapsed: boolean): void {
  * 返回：
  *   void：无返回值
  */
+function syncCodePanelToggleState(collapsed: boolean): void {
+  const label = collapsed ? "展开代码" : "收起代码";
+  const ariaLabel = collapsed ? "展开代码输入面板" : "收起代码输入面板";
+  sidebarEdgeToggle.textContent = label;
+  sidebarEdgeToggle.setAttribute("aria-label", ariaLabel);
+  codePanelToggle.textContent = label;
+  codePanelToggle.setAttribute("aria-label", ariaLabel);
+  codePanelToggle.setAttribute("aria-pressed", String(!collapsed));
+}
+
+function readStoredSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function persistSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed));
+  } catch {}
+}
+
 function setSidebarCollapsed(collapsed: boolean): void {
   body.classList.toggle("sidebar-collapsed", collapsed);
   updateSidebarToggleLabels(collapsed);
+  syncCodePanelToggleState(collapsed);
+  persistSidebarCollapsed(collapsed);
 }
 
 /**
@@ -458,10 +496,8 @@ function renderAll(): void {
     for (const [index, eventData] of env.events.entries()) {
       const record = buildMockRollRecord(round.roundId, eventData, index);
       const resultHtml = buildResultCardCore(eventData, record, depsObj);
-      const alreadyHtml = buildAlreadyRolledCore(eventData, record, depsObj);
 
       blocks += `<div class="preview-section"><h3>实时结算结果卡片 (ResultCard)</h3>${resultHtml}</div>`;
-      blocks += `<div class="preview-section"><h3>折叠历史记录卡片 (AlreadyRolledCard)</h3>${alreadyHtml}</div>`;
     }
 
     preview.innerHTML = blocks;
@@ -552,10 +588,11 @@ function bindWorkbenchControls(): void {
   desktopModeButton.addEventListener("click", handleDesktopModeClick);
   mobileModeButton.addEventListener("click", handleMobileModeClick);
   sidebarEdgeToggle.addEventListener("click", handleSidebarToggleClick);
+  codePanelToggle.addEventListener("click", handleSidebarToggleClick);
 }
 
 bindWorkbenchControls();
-setPreviewMode("desktop");
-setSidebarCollapsed(false);
+setPreviewMode(readStoredPreviewMode() ?? "desktop");
+setSidebarCollapsed(readStoredSidebarCollapsed());
 renderAll();
 ensureSharedTooltip();

@@ -85,7 +85,7 @@ _SCOPE_ .stx-shared-select-list {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 9999;
+  z-index: 40000;
   display: none;
   margin: 0;
   padding: 5px;
@@ -112,6 +112,10 @@ _SCOPE_ .stx-shared-select-list {
 }
 
 _SCOPE_ .stx-shared-select.is-open .stx-shared-select-list {
+  display: block;
+}
+
+_SCOPE_ .stx-shared-select-list.is-open {
   display: block;
 }
 

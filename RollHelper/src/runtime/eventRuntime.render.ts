@@ -17,21 +17,17 @@ import {
   buildRollingSvgTemplateEvent,
 } from "../templates/diceResultTemplates";
 import {
-  buildEventAlreadyRolledCardTemplateEvent,
   ensureEventCardStylesEvent,
-  buildEventDistributionBlockTemplateEvent,
   buildEventListCardTemplateEvent,
   buildEventListItemTemplateEvent,
   buildEventRolledBlockTemplateEvent,
   buildEventRolledPrefixTemplateEvent,
   buildEventRollButtonTemplateEvent,
   buildEventRollResultCardTemplateEvent,
-  buildEventTimeoutAtBlockTemplateEvent,
   buildRollsSummaryTemplateEvent,
 } from "../templates/eventCardTemplates";
 import { getSettingsEvent as getSettingsStoreEvent, getDiceMetaEvent as getDiceMetaStoreMetaEvent, resolveSkillModifierBySkillNameEvent as resolveSkillModifierBySkillNameStoreEvent } from "../settings/storeEvent";
 import {
-  buildEventAlreadyRolledCardEvent as buildEventAlreadyRolledCardModuleEvent,
   buildEventListCardEvent as buildEventListCardModuleEvent,
   buildEventRollResultCardEvent as buildEventRollResultCardModuleEvent,
   getEventRuntimeViewStateEvent as getEventRuntimeViewStateModuleEvent,
@@ -100,26 +96,6 @@ export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record:
     buildEventRollResultCardTemplateEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
     escapeAttrEvent: escapeAttrCoreEvent,
-    getDiceSvg: buildDiceSvgTemplateEvent,
-    getRollingSvg: buildRollingSvgTemplateEvent,
-    buildAlreadyRolledDiceVisualTemplateEvent,
-  });
-}
-
-export function buildEventAlreadyRolledCardEvent(event: DiceEventSpecEvent, record: EventRollRecordEvent): string {
-  ensureEventCardStylesEvent();
-  return buildEventAlreadyRolledCardModuleEvent(event, record, {
-    getSettingsEvent: getSettingsStoreEvent,
-    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
-    resolveTriggeredOutcomeEvent,
-    formatEventModifierBreakdownEvent: formatEventModifierBreakdownCoreEvent,
-    buildRollsSummaryTemplateEvent,
-    buildEventDistributionBlockTemplateEvent,
-    buildEventTimeoutAtBlockTemplateEvent,
-    buildEventAlreadyRolledCardTemplateEvent,
-    escapeHtmlEvent: escapeHtmlCoreEvent,
-    escapeAttrEvent: escapeAttrCoreEvent,
-    formatModifier: formatModifierCoreEvent,
     getDiceSvg: buildDiceSvgTemplateEvent,
     getRollingSvg: buildRollingSvgTemplateEvent,
     buildAlreadyRolledDiceVisualTemplateEvent,

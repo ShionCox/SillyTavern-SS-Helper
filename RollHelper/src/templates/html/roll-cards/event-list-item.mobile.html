@@ -1,14 +1,14 @@
 <li class="st-rh-event-item st-rh-event-item-mobile">
   <details class="st-rh-details-card st-rh-details-event st-rh-details-event-mobile">
-    <summary class="st-rh-collapse-summary st-rh-collapse-summary-mobile">
+    <summary class="st-rh-collapse-summary st-rh-collapse-summary-mobile" data-st-rh-role="summary">
       <div class="st-rh-summary-mobile-shell">
         <div class="st-rh-summary-mobile-head">
           <div class="st-rh-summary-title-row-mobile">
             <span class="st-rh-summary-badge-slot-mobile">{{roll_mode_badge_html}}</span>
             <strong class="st-rh-summary-title st-rh-summary-title-mobile">
-              <span class="st-rh-summary-title-marquee-mobile">
-                <span class="st-rh-summary-title-track-mobile">
-                  <span class="st-rh-summary-title-segment-mobile">{{title_html}}</span>
+              <span class="st-rh-summary-title-marquee-mobile" data-st-rh-role="title-marquee">
+                <span class="st-rh-summary-title-track-mobile" data-st-rh-role="title-track">
+                  <span class="st-rh-summary-title-segment-mobile" data-st-rh-role="title-segment">{{title_html}}</span>
                 </span>
               </span>
             </strong>
@@ -18,11 +18,19 @@
         <div class="st-rh-summary-mobile-info-grid">
           <span class="st-rh-summary-mobile-info st-rh-summary-mobile-info-check">
             <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
-            {{collapsed_check_html}}
+            <span class="st-rh-mobile-marquee st-rh-summary-mobile-info-marquee" data-st-rh-role="inline-marquee">
+              <span class="st-rh-mobile-marquee-track" data-st-rh-role="inline-track">
+                <span class="st-rh-mobile-marquee-segment" data-st-rh-role="inline-segment">{{collapsed_check_html}}</span>
+              </span>
+            </span>
           </span>
           <span class="st-rh-summary-mobile-info st-rh-summary-mobile-info-time">
             <i class="fa-solid fa-hourglass-clock fa-fw st-rh-fa-icon st-rh-summary-chip-icon" aria-hidden="true"></i>
-            时限 {{time_limit_html}}
+            <span class="st-rh-mobile-marquee st-rh-summary-mobile-info-marquee" data-st-rh-role="inline-marquee">
+              <span class="st-rh-mobile-marquee-track" data-st-rh-role="inline-track">
+                <span class="st-rh-mobile-marquee-segment" data-st-rh-role="inline-segment">时限 {{time_limit_html}}</span>
+              </span>
+            </span>
           </span>
           <div data-dice-countdown="1" data-round-id="{{round_id_attr}}" data-event-id="{{event_id_attr}}"
             data-deadline-at="{{deadline_attr}}" class="st-rh-runtime st-rh-runtime-mobile st-rh-mono"
@@ -43,7 +51,7 @@
       </div>
     </summary>
 
-    <div id="{{details_id_attr}}" class="st-rh-card-details-body st-rh-event-details st-rh-event-details-mobile">
+    <div id="{{details_id_attr}}" class="st-rh-card-details-body st-rh-event-details st-rh-event-details-mobile" data-st-rh-role="details-body">
       <div class="st-rh-event-body st-rh-event-body-mobile">
         <div class="st-rh-event-mobile-lead">
           <div class="st-rh-event-desc st-rh-event-desc-mobile">

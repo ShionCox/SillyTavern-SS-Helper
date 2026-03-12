@@ -666,6 +666,26 @@ function writePluginChatStateEvent(
   return normalized;
 }
 
+function deletePluginChatStateEvent(namespace: string, chatRef: SdkPluginChatStateRefInput): boolean {
+  const snapshot = readBucketForCurrentScopeEvent(namespace);
+  const resolvedRef = resolveChatRefEvent(snapshot.scope, chatRef);
+  const entityKey = buildTavernChatEntityKeyEvent(resolvedRef);
+  if (!entityKey) return false;
+  if (!snapshot.pluginChatState[entityKey]) return false;
+
+  const nextChatState = {
+    ...snapshot.pluginChatState,
+  };
+  delete nextChatState[entityKey];
+
+  writeBucketEvent(namespace, snapshot.scope, {
+    pluginSettings: snapshot.pluginSettings,
+    pluginUiState: snapshot.pluginUiState,
+    pluginChatState: nextChatState,
+  });
+  return true;
+}
+
 function listPluginChatStateSummariesEvent(
   namespace: string,
   options?: SdkPluginChatStateListOptions
@@ -797,6 +817,12 @@ export function writeSdkPluginChatState<TState extends object = Record<string, u
         ) => Partial<SdkPluginChatStateRecord<Record<string, unknown>>>)
   );
   return row as SdkPluginChatStateRecord<TState>;
+}
+
+export function deleteSdkPluginChatState(namespace: string, chatRef: SdkPluginChatStateRefInput): boolean {
+  const normalizedNamespace = normalizeNamespaceEvent(namespace);
+  if (!normalizedNamespace) return false;
+  return deletePluginChatStateEvent(normalizedNamespace, chatRef);
 }
 
 export function listSdkPluginChatStateSummaries(

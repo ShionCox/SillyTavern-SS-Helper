@@ -1,4 +1,4 @@
-import { formatModifier } from "../core/utilsEvent";
+import { formatIsoDurationNaturalLanguageEvent, formatModifier } from "../core/utilsEvent";
 import { stripStatusTagsFromTextEvent } from "./statusEvent";
 import type {
   CompareOperatorEvent,
@@ -238,7 +238,10 @@ function buildSummaryEventNaturalLineByModeEvent(
   }
 
   const sourceText = toSummarySourceTextEvent(item.resultSource);
-  const timeLimit = truncateSummaryTextEvent(item.timeLimit || "none", 26);
+  const timeLimit = truncateSummaryTextEvent(
+    formatIsoDurationNaturalLanguageEvent(item.timeLimit || "none"),
+    26
+  );
   return includeOutcomeInSummary
     ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}｜${outcomeSentence}`
     : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}`;

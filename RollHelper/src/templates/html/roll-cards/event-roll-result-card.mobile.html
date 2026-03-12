@@ -2,7 +2,7 @@
   <details
     class="st-rh-settlement-shell st-rh-settlement-shell-mobile {{shell_type_class}} st-rh-shell-frame"
   >
-    <summary class="st-rh-shell-summary st-rh-mobile-shell-summary">
+    <summary class="st-rh-shell-summary st-rh-mobile-shell-summary" data-st-rh-role="summary">
       <div class="st-rh-shell-topline st-rh-shell-line"></div>
       <div class="st-rh-mobile-summary-wrap">
         <div class="st-rh-mobile-summary-head">
@@ -16,13 +16,19 @@
                 >#{{roll_id_html}}</span
               >
             </div>
-            <strong class="st-rh-summary-title st-rh-mobile-summary-title"
-              >{{title_html}}</strong
-            >
+            <strong class="st-rh-summary-title st-rh-mobile-summary-title">
+              <span class="st-rh-summary-title-marquee" data-st-rh-role="title-marquee">
+                <span class="st-rh-summary-title-track" data-st-rh-role="title-track">
+                  <span class="st-rh-summary-title-segment" data-st-rh-role="title-segment"
+                    >{{title_html}}</span
+                  >
+                </span>
+              </span>
+            </strong>
           </div>
         </div>
 
-        <div class="st-rh-mobile-summary-hero">{{result_core_html}}</div>
+        <div class="st-rh-mobile-summary-hero">{{summary_result_core_html}}</div>
 
         <div class="st-rh-mobile-summary-scroll">
           {{summary_secondary_chips_html}}
@@ -35,6 +41,7 @@
     <div
       id="{{details_id_attr}}"
       class="st-rh-details-body st-rh-mobile-details-body"
+      data-st-rh-role="details-body"
     >
       <div
         class="st-rh-details-layout st-rh-details-layout-mobile {{details_layout_type_class}}"
@@ -46,12 +53,9 @@
             <div class="st-rh-details-head">
               <div class="st-rh-details-head-copy">
                 <p class="st-rh-kicker">{{details_kicker_text}}</p>
-                <div class="st-rh-details-heading">
-                  {{details_heading_html}}
-                </div>
               </div>
               <div class="st-rh-details-head-side">
-                <div class="st-rh-details-head-seal" aria-hidden="true"></div>
+
                 <div class="st-rh-details-badge">
                   {{details_status_badge_html}}
                 </div>
@@ -60,7 +64,7 @@
             <dl class="st-rh-fact-grid">{{detail_meta_html}}</dl>
           </div>
 
-          {{detail_aux_html}} {{footer_blocks_html}}
+          {{detail_result_core_html}} {{detail_aux_html}} {{footer_blocks_html}}
         </section>
       </div>
     </div>

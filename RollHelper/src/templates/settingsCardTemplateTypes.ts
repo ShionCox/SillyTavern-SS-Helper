@@ -8,6 +8,7 @@ export interface SettingsCardTemplateIdsEvent {
   badgeText: string;
   authorText: string;
   emailText: string;
+  qqGroupText: string;
   githubText: string;
   githubUrl: string;
   changelogHtml: string;
@@ -33,6 +34,7 @@ export interface SettingsCardTemplateIdsEvent {
   statusModalId: string;
   statusModalCloseId: string;
   statusRefreshId: string;
+  statusCleanUnusedId: string;
   statusRowsId: string;
   statusAddId: string;
   statusSaveId: string;

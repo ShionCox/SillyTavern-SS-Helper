@@ -73,6 +73,17 @@
   box-sizing: border-box;
 }
 
+.st-rh-card-scope i[class*="fa-"],
+.st-rh-card-scope .st-rh-fa-icon,
+.st-rh-card-scope .st-rh-chip-icon,
+.st-rh-card-scope .st-rh-summary-chip-icon,
+.st-rh-card-scope .st-rh-action-icon,
+.st-rh-card-scope .st-rh-btn-icon,
+.st-rh-card-scope .st-rh-fact-label-icon {
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+}
+
 /* ======== 通用字体 ======== */
 .st-rh-title-font {
   font-family: var(--st-rh-font-display);
@@ -161,14 +172,14 @@
 
 .st-rh-kicker {
   font-family: var(--st-rh-font-display);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--st-rh-label);
   padding-bottom: 1px;
   margin-bottom: 2px;
-  margin-left: 3px;
+  margin-block-start: 0;
 }
 .st-rh-kicker-hero { letter-spacing: 0.15em; border-bottom: none; }
 .st-rh-kicker-compact { font-size: 9px; letter-spacing: 0.05em; margin-bottom: 2px; }
@@ -196,7 +207,7 @@
   text-transform: uppercase;
 }
 .st-rh-fact-value {
-  font-size: 12px;
+  font-size: 10px;
   line-height: 1.35;
   color: var(--st-rh-text);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);

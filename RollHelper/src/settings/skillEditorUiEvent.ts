@@ -4,6 +4,7 @@ import type {
   SkillPresetEvent,
   SkillPresetStoreEvent,
 } from "../types/eventDomainEvent";
+import { buildSharedBoxCheckbox } from "../../../_Components/sharedBoxCheckbox";
 import { buildSharedButton } from "../../../_Components/sharedButton";
 import { buildSharedInputField } from "../../../_Components/sharedInput";
 import { applySettingsTooltipsEvent } from "./uiCardEvent";
@@ -304,21 +305,21 @@ export function bindSkillRowsEditingActionsEvent(deps: BindSkillRowsEditingActio
     deps.renderSkillValidationErrorsEvent([]);
   });
 
+  skillRowsWrap?.addEventListener("change", (event) => {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) return;
+    const rowId = String(target.dataset.skillSelectId ?? "");
+    if (!rowId) return;
+    if (target.checked) {
+      SKILL_EDITOR_SELECTED_ROW_IDS_Event.add(rowId);
+    } else {
+      SKILL_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
+    }
+    syncSkillWorkbenchToolbarStateEvent(deps.skillDraftAccessorEvent.getRows());
+  });
+
   skillRowsWrap?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
-    const selectInput = target?.closest<HTMLInputElement>("input[data-skill-select-id]");
-    if (selectInput) {
-      const rowId = String(selectInput.dataset.skillSelectId ?? "");
-      if (!rowId) return;
-      if (selectInput.checked) {
-        SKILL_EDITOR_SELECTED_ROW_IDS_Event.add(rowId);
-      } else {
-        SKILL_EDITOR_SELECTED_ROW_IDS_Event.delete(rowId);
-      }
-      syncSkillWorkbenchToolbarStateEvent(deps.skillDraftAccessorEvent.getRows());
-      return;
-    }
-
     const duplicateBtn = target?.closest<HTMLButtonElement>("button[data-skill-duplicate-id]");
     if (duplicateBtn) {
       const rowId = String(duplicateBtn.dataset.skillDuplicateId ?? "");
@@ -819,11 +820,20 @@ export function renderSkillRowsEvent(
       const rowId = deps.escapeAttrEvent(String(row.rowId ?? ""));
       const skillName = deps.escapeAttrEvent(String(row.skillName ?? ""));
       const modifierText = deps.escapeAttrEvent(String(row.modifierText ?? ""));
-      const checked = SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")) ? " checked" : "";
       return `
       <div class="st-roll-skill-row" data-row-id="${rowId}">
         <div class="st-roll-skill-name-wrap">
-          <input type="checkbox" class="st-roll-skill-row-select" data-skill-select-id="${rowId}" data-tip="选择这条技能"${checked} />
+          ${buildSharedBoxCheckbox({
+            id: `st-roll-skill-row-select-${rowId}`,
+            containerClassName: "st-roll-skill-row-select",
+            attributes: {
+              "data-tip": "选择这条技能",
+            },
+            inputAttributes: {
+              "data-skill-select-id": rowId,
+              checked: SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")),
+            },
+          })}
           ${buildSharedInputField({
             value: skillName,
             className: "st-roll-skill-name",

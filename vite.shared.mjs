@@ -75,6 +75,20 @@ function copyStaticAssetsPlugin(targetName) {
   };
 }
 
+function copyRollHelperLogoPlugin(targetName) {
+  return {
+    name: `copy-rollhelper-logo:${targetName}`,
+    closeBundle() {
+      if (targetName !== "RollHelper") return;
+      const source = path.resolve(ROOT_DIR, "assets/images/ROLL-LOGO.png");
+      const destination = path.resolve(ROOT_DIR, "RollHelper/dist/assets/images/ROLL-LOGO.png");
+      if (!fs.existsSync(source)) return;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(source, destination);
+    },
+  };
+}
+
 export function createProjectConfig(targetName, options = {}) {
   const target = PROJECT_TARGETS[targetName];
   if (!target) {
@@ -111,6 +125,10 @@ export function createProjectConfig(targetName, options = {}) {
         },
       },
     },
-    plugins: [copyManifestPlugin(targetName), copyStaticAssetsPlugin(targetName)],
+    plugins: [
+      copyManifestPlugin(targetName),
+      copyStaticAssetsPlugin(targetName),
+      copyRollHelperLogoPlugin(targetName),
+    ],
   };
 }
