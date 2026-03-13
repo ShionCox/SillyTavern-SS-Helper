@@ -49,7 +49,7 @@ import {
 } from "../settings/constantsEvent";
 import { getLiveContextEvent } from "../core/runtimeContextEvent";
 import { getTavernSlashCommandRuntimeEvent, registerTavernMacroEvent } from "../../../SDK/tavern";
-import { pushToChat as pushToChatCoreEvent } from "../core/chatEvent";
+import { appendToConsoleEvent as appendToConsoleCoreEvent } from "../Components/rollConsoleEvent";
 import {
   createIdEvent as createIdCoreEvent,
   escapeAttrEvent as escapeAttrCoreEvent,
@@ -121,7 +121,7 @@ const skillEditorRuntimeEvent = createSkillEditorRuntimeEvent({
   deserializeSkillTableTextToRowsEvent: deserializeSkillTableTextToRowsStoreEvent,
   buildSkillDraftSnapshotEvent: buildSkillDraftSnapshotStoreEvent,
   countSkillEntriesFromSkillTableTextEvent: countSkillEntriesFromSkillTableTextStoreEvent,
-  pushToChatEvent: pushToChatCoreEvent,
+  appendToConsoleEvent: appendToConsoleCoreEvent,
   escapeHtmlEvent: escapeHtmlCoreEvent,
   escapeAttrEvent: escapeAttrCoreEvent,
 });
@@ -188,7 +188,7 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
       buildDefaultSkillPresetStoreEvent: () => buildDefaultSkillPresetStoreTemplateStoreEvent(),
       normalizeSkillPresetNameKeyEvent: normalizeSkillPresetNameKeyStoreEvent,
       renderSkillValidationErrorsEvent,
-      pushToChat: pushToChatCoreEvent,
+      appendToConsoleEvent: appendToConsoleCoreEvent,
     },
     skillRowsEditingActionsDepsEvent: {
       ...SETTINGS_SKILL_ROWS_EDIT_IDS_Event,
@@ -212,7 +212,7 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
       refreshSkillDraftDirtyStateEvent,
       renderSkillValidationErrorsEvent,
       copyTextToClipboardEvent: copyTextToClipboardModuleEvent,
-      pushToChat: pushToChatCoreEvent,
+      appendToConsoleEvent: appendToConsoleCoreEvent,
       buildSkillDraftSnapshotEvent: buildSkillDraftSnapshotStoreEvent,
       setSkillDraftDirtyEvent: skillEditorRuntimeEvent.setSkillDraftDirtyEvent,
       saveSkillPresetStoreEvent: saveSkillPresetStoreStoreEvent,
@@ -243,7 +243,7 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
       fetchMemoryChatKeysEvent: fetchMemoryChatKeysIntegrationEvent,
       subscribeMemoryPluginStateEvent: subscribeMemoryPluginStateIntegrationEvent,
       syncSettingsUiEvent,
-      pushToChat: pushToChatCoreEvent,
+      appendToConsoleEvent: appendToConsoleCoreEvent,
     },
     ruleTextActionsDepsEvent: {
       ...SETTINGS_RULE_TEXT_ACTION_IDS_Event,
@@ -309,7 +309,7 @@ export function registerBaseMacrosAndCommandsEvent(): void {
     rollExpression: rollExpressionCoreEvent,
     saveLastRoll: saveLastRollStoreEvent,
     buildResultMessage: buildResultMessageTemplateEvent,
-    pushToChat: pushToChatCoreEvent,
+    appendToConsoleEvent: appendToConsoleCoreEvent,
   });
 }
 

@@ -1,21 +1,36 @@
-import { createSdkPluginSettingsStore } from "./settings";
+import {
+  buildSdkThemeDebugSnapshotView,
+  collectSdkThemeNodeChain,
+  describeSdkThemeNode,
+  readSdkThemeDebugStyle,
+} from "./theme.debug";
+import {
+  buildSdkThemeSnapshot,
+  normalizeSdkThemeId,
+  resolveSdkThemeSource,
+} from "./theme.snapshot";
+import {
+  createSdkThemeRuntimeCaches,
+  ensureSdkThemeRuntimeCaches,
+  getDetachedSdkThemeVarCache,
+  invalidateSdkThemeRuntimeCaches,
+  readCachedSdkThemeSnapshot,
+  syncDetachedSdkThemeCssVars,
+  writeCachedSdkThemeSnapshot,
+} from "./theme.runtime";
+export { buildSdkThemeVars } from "./theme.styles";
+import type {
+  SdkThemeId,
+  SdkThemeMode,
+  SdkThemePresetId,
+  SdkThemeSnapshot,
+  SdkThemeStateLike,
+} from "./theme.snapshot";
+import type { SdkThemeRuntimeCaches } from "./theme.runtime";
 
-export type SdkThemeId = "default" | "dark" | "light" | "tavern" | "smart";
-export type SdkThemeMode = "sdk" | "smart";
-export type SdkThemePresetId = Exclude<SdkThemeId, "smart">;
+export type { SdkThemeId, SdkThemeMode, SdkThemePresetId, SdkThemeSnapshot };
 
-export interface SdkThemeState {
-  mode: SdkThemeMode;
-  themeId: SdkThemePresetId;
-  followSmartTheme: boolean;
-}
-
-export interface SdkThemeSnapshot {
-  text: string;
-  background: string;
-  border: string;
-  shadow: string;
-}
+export interface SdkThemeState extends SdkThemeStateLike {}
 
 export interface ApplySdkThemeToNodeOptions {
   state?: SdkThemeState;
@@ -24,12 +39,11 @@ export interface ApplySdkThemeToNodeOptions {
 type SdkThemeListener = (state: SdkThemeState) => void;
 
 const SDK_THEME_EVENT_NAME = "stx-sdk-theme-changed";
-const SDK_THEME_SETTINGS_NAMESPACE = "stx_sdk_theme";
 const SDK_THEME_GLOBAL_STORAGE_KEY = "stx_sdk_theme_global_v1";
+const SDK_THEME_TRACE_PREFIX = "[SS-Helper][ThemeTrace]";
 const DEFAULT_SDK_THEME_STATE: SdkThemeState = {
   mode: "sdk",
   themeId: "default",
-  followSmartTheme: true,
 };
 
 interface SdkThemeGlobalState {
@@ -37,11 +51,28 @@ interface SdkThemeGlobalState {
   state: SdkThemeState;
   listeners: Set<SdkThemeListener>;
   hosts: Set<HTMLElement>;
+  caches: SdkThemeRuntimeCaches;
 }
 
-let SDK_THEME_SETTINGS_STORE:
-  | ReturnType<typeof createSdkPluginSettingsStore<SdkThemeState>>
-  | null = null;
+function describeSdkThemeHost(node: HTMLElement | null | undefined): string {
+  if (!node) return "(null)";
+  const tag = node.tagName.toLowerCase();
+  const id = node.id ? `#${node.id}` : "";
+  const classes = Array.from(node.classList).slice(0, 4);
+  const classText = classes.length > 0 ? `.${classes.join(".")}` : "";
+  const theme = String(node.getAttribute("data-stx-theme") ?? "").trim();
+  const mode = String(node.getAttribute("data-stx-theme-mode") ?? "").trim();
+  const rollTheme = String(node.getAttribute("data-st-roll-theme") ?? "").trim();
+  return `${tag}${id}${classText} stx=${theme || "-"}/${mode || "-"} roll=${rollTheme || "-"}`;
+}
+
+function traceSdkTheme(message: string, payload?: unknown): void {
+  if (payload === undefined) {
+    console.info(`${SDK_THEME_TRACE_PREFIX} ${message}`);
+    return;
+  }
+  console.info(`${SDK_THEME_TRACE_PREFIX} ${message}`, payload);
+}
 
 /**
  * 功能：读取 SDK 全局主题状态容器。
@@ -52,34 +83,32 @@ function getGlobalThemeState(): SdkThemeGlobalState {
     __stxSdkThemeStateV1?: SdkThemeGlobalState;
   };
   if (globalRef.__stxSdkThemeStateV1) {
-    return globalRef.__stxSdkThemeStateV1;
+    const existing = globalRef.__stxSdkThemeStateV1 as Partial<SdkThemeGlobalState>;
+    const migrated: SdkThemeGlobalState = {
+      initialized: existing.initialized === true,
+      state: normalizeSdkThemeState(existing.state, DEFAULT_SDK_THEME_STATE),
+      listeners:
+        existing.listeners instanceof Set
+          ? (existing.listeners as Set<SdkThemeListener>)
+          : new Set<SdkThemeListener>(),
+      hosts:
+        existing.hosts instanceof Set
+          ? (existing.hosts as Set<HTMLElement>)
+          : new Set<HTMLElement>(),
+      caches: ensureSdkThemeRuntimeCaches(existing.caches),
+    };
+    globalRef.__stxSdkThemeStateV1 = migrated;
+    return migrated;
   }
   const created: SdkThemeGlobalState = {
     initialized: false,
     state: { ...DEFAULT_SDK_THEME_STATE },
     listeners: new Set<SdkThemeListener>(),
     hosts: new Set<HTMLElement>(),
+    caches: createSdkThemeRuntimeCaches(),
   };
   globalRef.__stxSdkThemeStateV1 = created;
   return created;
-}
-
-/**
- * 功能：规范化 SDK 主题选择值。
- * @param theme 传入的原始主题值。
- * @returns 规范化后的 SDK 主题值。
- */
-function normalizeSdkThemeId(theme: string): SdkThemeId {
-  const normalized = String(theme || "").trim().toLowerCase();
-  if (
-    normalized === "dark" ||
-    normalized === "light" ||
-    normalized === "tavern" ||
-    normalized === "smart"
-  ) {
-    return normalized;
-  }
-  return "default";
 }
 
 /**
@@ -98,18 +127,7 @@ function normalizeSdkThemeState(
   return {
     mode: nextMode,
     themeId: nextThemeId === "smart" ? fallback.themeId : nextThemeId,
-    followSmartTheme: partial?.followSmartTheme ?? fallback.followSmartTheme ?? true,
   };
-}
-
-function getSdkThemeSettingsStore() {
-  if (SDK_THEME_SETTINGS_STORE) return SDK_THEME_SETTINGS_STORE;
-  SDK_THEME_SETTINGS_STORE = createSdkPluginSettingsStore<SdkThemeState>({
-    namespace: SDK_THEME_SETTINGS_NAMESPACE,
-    defaults: DEFAULT_SDK_THEME_STATE,
-    normalize: (candidate) => normalizeSdkThemeState(candidate, DEFAULT_SDK_THEME_STATE),
-  });
-  return SDK_THEME_SETTINGS_STORE;
 }
 
 /**
@@ -159,7 +177,6 @@ export function buildSdkThemePatchFromSelection(theme: string): Partial<SdkTheme
   if (normalized === "smart") {
     return {
       mode: "smart",
-      followSmartTheme: true,
     };
   }
   return {
@@ -173,13 +190,7 @@ export function buildSdkThemePatchFromSelection(theme: string): Partial<SdkTheme
  * @returns 已保存状态；读取失败时返回空值。
  */
 function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
-  const globalStored = readGlobalStoredSdkThemeState();
-  if (globalStored) return globalStored;
-  try {
-    return getSdkThemeSettingsStore().read();
-  } catch {
-    return null;
-  }
+  return readGlobalStoredSdkThemeState();
 }
 
 /**
@@ -189,11 +200,6 @@ function readStoredSdkThemeState(): Partial<SdkThemeState> | null {
  */
 function persistSdkThemeState(state: SdkThemeState): void {
   persistGlobalSdkThemeState(state);
-  try {
-    getSdkThemeSettingsStore().write(() => ({ ...state }));
-  } catch {
-    // 忽略本地存储不可用的场景
-  }
 }
 
 /**
@@ -215,6 +221,14 @@ function applyStateToNode(root: HTMLElement, state: SdkThemeState): void {
  */
 function broadcastSdkThemeState(state: SdkThemeState): void {
   const globalState = getGlobalThemeState();
+  globalState.caches = ensureSdkThemeRuntimeCaches(globalState.caches);
+  invalidateSdkThemeRuntimeCaches(globalState.caches);
+  traceSdkTheme("broadcastSdkThemeState", {
+    state,
+    hostCount: globalState.hosts.size,
+    listenerCount: globalState.listeners.size,
+    cacheVersion: globalState.caches.themeSnapshotVersion,
+  });
   Array.from(globalState.hosts).forEach((host: HTMLElement) => {
     if (!host.isConnected) {
       globalState.hosts.delete(host);
@@ -268,11 +282,18 @@ export function setSdkThemeState(next: Partial<SdkThemeState>): SdkThemeState {
   const globalState = getGlobalThemeState();
   const current = initializeSdkThemeState();
   const normalized = normalizeSdkThemeState(next, current);
-  const changed =
-    normalized.mode !== current.mode ||
-    normalized.themeId !== current.themeId ||
-    normalized.followSmartTheme !== current.followSmartTheme;
+  const changed = normalized.mode !== current.mode || normalized.themeId !== current.themeId;
+  traceSdkTheme("setSdkThemeState", {
+    next,
+    current,
+    normalized,
+    changed,
+  });
   if (!changed) {
+    traceSdkTheme("setSdkThemeState skipped broadcast because state is unchanged", {
+      current,
+      normalized,
+    });
     return current;
   }
   globalState.state = normalized;
@@ -325,368 +346,46 @@ export function applySdkThemeToNode(
   const state = options?.state ?? getSdkThemeState();
   globalState.hosts.add(root);
   applyStateToNode(root, state);
+  traceSdkTheme("applySdkThemeToNode", {
+    host: describeSdkThemeHost(root),
+    state,
+    hostCount: globalState.hosts.size,
+  });
   return state;
 }
 
 /**
- * 功能：构建 SDK 全局主题变量样式文本。
- * @param scopeSelector 主题宿主选择器。
- * @returns 对应作用域的主题变量样式。
+ * 功能：输出一次 SDK 主题解析诊断日志，用于排查 tooltip 和脱离层取色问题。
+ * @param target 当前触发诊断的目标节点。
+ * @param reason 触发诊断的原因。
+ * @returns 本次解析得到的主题快照。
  */
-export function buildSdkThemeVars(scopeSelector: string): string {
-  const selectors = scopeSelector
-    .split(",")
-    .map((selector: string) => selector.trim())
-    .filter((selector: string) => selector.length > 0);
-  const scopes = selectors.length > 0 ? selectors : [":root"];
-  const joinScopedSelectors = (suffix = ""): string => scopes.map((selector: string) => `${selector}${suffix}`).join(",\n    ");
-  return `
-    ${joinScopedSelectors()} {
-      color: var(--stx-theme-text, inherit);
-      --stx-theme-text: #ecdcb8;
-      --stx-theme-text-muted: rgba(255, 255, 255, 0.72);
-      --stx-theme-accent: #c5a059;
-      --stx-theme-accent-contrast: #ffeac0;
-      --stx-theme-surface-1:
-        radial-gradient(120% 140% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 55%),
-        linear-gradient(160deg, rgba(31, 25, 25, 0.82), rgba(20, 18, 20, 0.82));
-      --stx-theme-surface-2: rgba(0, 0, 0, 0.18);
-      --stx-theme-surface-3: rgba(255, 255, 255, 0.03);
-      --stx-theme-border: rgba(197, 160, 89, 0.35);
-      --stx-theme-border-strong: rgba(197, 160, 89, 0.58);
-      --stx-theme-focus-ring: rgba(197, 160, 89, 0.22);
-      --stx-theme-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
-      --stx-theme-backdrop: rgba(0, 0, 0, 0.72);
-      --stx-theme-backdrop-filter: blur(2px);
-      --stx-theme-panel-bg:
-        radial-gradient(110% 130% at 100% 0%, rgba(197, 160, 89, 0.14), transparent 56%),
-        linear-gradient(160deg, rgba(23, 21, 24, 0.96), rgba(15, 14, 17, 0.96));
-      --stx-theme-panel-border: rgba(197, 160, 89, 0.38);
-      --stx-theme-panel-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
-      --stx-theme-toolbar-bg: rgba(255, 255, 255, 0.04);
-      --stx-theme-list-item-bg: rgba(255, 255, 255, 0.03);
-      --stx-theme-list-item-hover-bg: rgba(197, 160, 89, 0.16);
-      --stx-theme-list-item-active-bg: rgba(197, 160, 89, 0.24);
-    }
-
-    ${joinScopedSelectors(`[data-stx-theme-mode="sdk"][data-stx-theme="default"]`)} {
-      --SmartThemeBodyColor: var(--stx-theme-text);
-      --SmartThemeEmColor: var(--stx-theme-text-muted);
-      --SmartThemeQuoteColor: var(--stx-theme-accent);
-      --SmartThemeQuoteTextColor: var(--stx-theme-accent-contrast);
-      --SmartThemeBorderColor: var(--stx-theme-border);
-      --SmartThemeBlurTintColor: rgba(23, 21, 24, 0.92);
-      --SmartThemeShadowColor: rgba(0, 0, 0, 0.45);
-      --SmartThemeBlurStrength: 2px;
-      --SmartThemeBodyFont: "Segoe UI", sans-serif;
-    }
-
-    ${joinScopedSelectors(`[data-stx-theme-mode="sdk"][data-stx-theme="dark"]`)} {
-      --stx-theme-text: #e6edf7;
-      --stx-theme-text-muted: #a5b0c4;
-      --stx-theme-accent: #5f8de5;
-      --stx-theme-accent-contrast: #f1f6ff;
-      --stx-theme-surface-1: #171f2f;
-      --stx-theme-surface-2: #182233;
-      --stx-theme-surface-3: #1f2a3d;
-      --stx-theme-border: #35425e;
-      --stx-theme-border-strong: #5c74a5;
-      --stx-theme-focus-ring: rgba(95, 141, 229, 0.24);
-      --stx-theme-shadow: 0 12px 30px #0b1020;
-      --stx-theme-backdrop: rgba(15, 21, 32, 0.9);
-      --stx-theme-backdrop-filter: none;
-      --stx-theme-panel-bg: #131c2b;
-      --stx-theme-panel-border: #34435f;
-      --stx-theme-panel-shadow: 0 12px 30px #0b1020;
-      --stx-theme-toolbar-bg: #202c40;
-      --stx-theme-list-item-bg: #1f2a3d;
-      --stx-theme-list-item-hover-bg: #2c3b56;
-      --stx-theme-list-item-active-bg: #334766;
-      --SmartThemeBodyColor: var(--stx-theme-text);
-      --SmartThemeEmColor: var(--stx-theme-text-muted);
-      --SmartThemeQuoteColor: var(--stx-theme-accent);
-      --SmartThemeQuoteTextColor: var(--stx-theme-accent-contrast);
-      --SmartThemeBorderColor: var(--stx-theme-border);
-      --SmartThemeBlurTintColor: #131c2b;
-      --SmartThemeShadowColor: rgba(11, 16, 32, 0.78);
-      --SmartThemeBlurStrength: 0px;
-      --SmartThemeBodyFont: "Segoe UI", sans-serif;
-    }
-
-    ${joinScopedSelectors(`[data-stx-theme-mode="sdk"][data-stx-theme="light"]`)} {
-      --stx-theme-text: #1f2834;
-      --stx-theme-text-muted: #5e6e84;
-      --stx-theme-accent: #2f6ee5;
-      --stx-theme-accent-contrast: #ffffff;
-      --stx-theme-surface-1: #f8fbff;
-      --stx-theme-surface-2: #eef3fa;
-      --stx-theme-surface-3: #ffffff;
-      --stx-theme-border: #c6d1e2;
-      --stx-theme-border-strong: #8eaed9;
-      --stx-theme-focus-ring: rgba(47, 110, 229, 0.18);
-      --stx-theme-shadow: 0 10px 24px rgba(198, 208, 223, 0.9);
-      --stx-theme-backdrop: rgba(217, 225, 238, 0.86);
-      --stx-theme-backdrop-filter: none;
-      --stx-theme-panel-bg: #f5f9ff;
-      --stx-theme-panel-border: #c6d3e6;
-      --stx-theme-panel-shadow: 0 10px 24px rgba(198, 208, 223, 0.9);
-      --stx-theme-toolbar-bg: #eef3fa;
-      --stx-theme-list-item-bg: #ffffff;
-      --stx-theme-list-item-hover-bg: #e8f0ff;
-      --stx-theme-list-item-active-bg: #d8e6ff;
-      --SmartThemeBodyColor: var(--stx-theme-text);
-      --SmartThemeEmColor: var(--stx-theme-text-muted);
-      --SmartThemeQuoteColor: var(--stx-theme-accent);
-      --SmartThemeQuoteTextColor: var(--stx-theme-accent-contrast);
-      --SmartThemeBorderColor: var(--stx-theme-border);
-      --SmartThemeBlurTintColor: #f5f9ff;
-      --SmartThemeShadowColor: rgba(198, 208, 223, 0.9);
-      --SmartThemeBlurStrength: 0px;
-      --SmartThemeBodyFont: "Segoe UI", sans-serif;
-    }
-
-    ${joinScopedSelectors(`[data-stx-theme-mode="sdk"][data-stx-theme="tavern"]`)} {
-      --stx-theme-text: var(--SmartThemeBodyColor, #dcdcd2);
-      --stx-theme-text-muted: var(--SmartThemeEmColor, #919191);
-      --stx-theme-accent: var(--SmartThemeQuoteColor, #e18a24);
-      --stx-theme-accent-contrast: var(--SmartThemeBodyColor, #dcdcd2);
-      --stx-theme-surface-1: transparent;
-      --stx-theme-surface-2: transparent;
-      --stx-theme-surface-3: transparent;
-      --stx-theme-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-border-strong: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
-      --stx-theme-focus-ring: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 32%, transparent);
-      --stx-theme-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-backdrop: transparent;
-      --stx-theme-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
-      --stx-theme-panel-bg: transparent;
-      --stx-theme-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-toolbar-bg:
-        linear-gradient(
-          348deg,
-          var(--white30a, rgba(255, 255, 255, 0.3)) 2%,
-          var(--grey30a, rgba(50, 50, 50, 0.3)) 10%,
-          var(--black70a, rgba(0, 0, 0, 0.7)) 95%,
-          var(--SmartThemeQuoteColor, #e18a24) 100%
-        );
-      --stx-theme-list-item-bg: transparent;
-      --stx-theme-list-item-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 16%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
-      --stx-theme-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
-    }
-
-    ${joinScopedSelectors(`[data-stx-theme-mode="smart"]`)},
-    ${joinScopedSelectors(`[data-stx-theme="smart"]`)} {
-      --stx-theme-text: var(--SmartThemeBodyColor, #dcdcd2);
-      --stx-theme-text-muted: var(--SmartThemeEmColor, rgba(255, 255, 255, 0.72));
-      --stx-theme-accent: var(--SmartThemeQuoteColor, #e18a24);
-      --stx-theme-accent-contrast: var(--SmartThemeQuoteTextColor, #ffffff);
-      --stx-theme-surface-1: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96));
-      --stx-theme-surface-2: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96)) 88%, #000 12%);
-      --stx-theme-surface-3: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96)) 92%, #000 8%);
-      --stx-theme-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-border-strong: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 56%, var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5)));
-      --stx-theme-focus-ring: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 32%, transparent);
-      --stx-theme-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-backdrop: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 85%, #000 15%);
-      --stx-theme-backdrop-filter: blur(var(--SmartThemeBlurStrength, 0px));
-      --stx-theme-panel-bg: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1));
-      --stx-theme-panel-border: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-panel-shadow: 0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5));
-      --stx-theme-toolbar-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 82%, var(--SmartThemeBodyColor, #dcdcd2) 18%);
-      --stx-theme-list-item-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)) 90%, #000 10%);
-      --stx-theme-list-item-hover-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 16%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
-      --stx-theme-list-item-active-bg: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 24%, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 1)));
-    }
-  `;
-}
-
-/**
- * 功能：读取节点上的第一个有效自定义变量值。
- * @param style 计算后的样式对象。
- * @param propertyNames 候选变量名列表。
- * @returns 命中的变量值；未命中时返回空字符串。
- */
-function readFirstDefinedCustomProperty(style: CSSStyleDeclaration, propertyNames: string[]): string {
-  for (const propertyName of propertyNames) {
-    const value = style.getPropertyValue(propertyName).trim();
-    if (value) {
-      return value;
-    }
-  }
-  return "";
-}
-
-/**
- * 功能：判断主题变量值是否为不可用的透明背景。
- * @param value 待判断的主题变量值
- * @returns 为透明占位值时返回 true，否则返回 false
- */
-function isTransparentThemeValue(value: string): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized) return true;
-  return (
-    normalized === "transparent" ||
-    normalized === "rgba(0,0,0,0)" ||
-    normalized === "rgba(0, 0, 0, 0)" ||
-    normalized === "rgba(0 0 0 / 0)" ||
-    normalized === "rgb(0 0 0 / 0)" ||
-    normalized === "hsla(0,0%,0%,0)" ||
-    normalized === "hsla(0, 0%, 0%, 0)" ||
-    normalized === "hsla(0 0% 0% / 0)"
-  );
-}
-
-function parseAlphaChannel(raw: string): number | null {
-  const text = String(raw ?? "").trim();
-  if (!text) return null;
-  if (text.endsWith("%")) {
-    const percent = Number(text.slice(0, -1).trim());
-    if (!Number.isFinite(percent)) return null;
-    return Math.max(0, Math.min(1, percent / 100));
-  }
-  const numeric = Number(text);
-  if (!Number.isFinite(numeric)) return null;
-  return Math.max(0, Math.min(1, numeric));
-}
-
-function readCssColorAlpha(value: string): number | null {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === "transparent") return 0;
-
-  if ((normalized.startsWith("rgb(") || normalized.startsWith("hsl(") || normalized.startsWith("color(")) && normalized.includes("/")) {
-    const slashIndex = normalized.lastIndexOf("/");
-    const closeIndex = normalized.lastIndexOf(")");
-    if (slashIndex >= 0 && closeIndex > slashIndex) {
-      return parseAlphaChannel(normalized.slice(slashIndex + 1, closeIndex).trim());
-    }
-  }
-
-  if (normalized.startsWith("rgba(") || normalized.startsWith("hsla(")) {
-    const openIndex = normalized.indexOf("(");
-    const closeIndex = normalized.lastIndexOf(")");
-    if (openIndex >= 0 && closeIndex > openIndex) {
-      const inner = normalized.slice(openIndex + 1, closeIndex);
-      const parts = inner.split(",").map((part) => part.trim());
-      if (parts.length >= 4) {
-        return parseAlphaChannel(parts[3]);
-      }
-    }
-  }
-
-  return null;
-}
-
-function isUnusableTooltipBackgroundValue(value: string): boolean {
-  if (isTransparentThemeValue(value)) return true;
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized) return true;
-  // Tooltip root is mounted to dialog/body; unresolved var() can re-resolve to a different scope.
-  if (normalized.includes("var(")) {
-    return true;
-  }
-  if (normalized.includes("color-mix(") && normalized.includes("transparent")) {
-    return true;
-  }
-  const alpha = readCssColorAlpha(normalized);
-  if (alpha !== null && alpha < 0.78) {
-    return true;
-  }
-  return false;
-}
-
-interface ParsedCssVarExpression {
-  name: string;
-  fallback: string;
-}
-
-function parseSingleCssVarExpression(value: string): ParsedCssVarExpression | null {
-  const text = String(value ?? "").trim();
-  if (!text.startsWith("var(") || !text.endsWith(")")) return null;
-  const inner = text.slice(4, -1).trim();
-  if (!inner) return null;
-
-  let depth = 0;
-  for (let index = 0; index < inner.length; index += 1) {
-    const char = inner[index];
-    if (char === "(") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (char === "," && depth === 0) {
-      const name = inner.slice(0, index).trim();
-      const fallback = inner.slice(index + 1).trim();
-      return name ? { name, fallback } : null;
-    }
-  }
-  return { name: inner.trim(), fallback: "" };
-}
-
-function resolveThemeCustomPropertyValue(
-  rawValue: string,
-  styleSources: CSSStyleDeclaration[],
-  depth = 0
-): string {
-  const value = String(rawValue ?? "").trim();
-  if (!value || depth >= 8) return value;
-
-  const parsed = parseSingleCssVarExpression(value);
-  if (!parsed) return value;
-
-  const referenced = readFirstDefinedCustomProperty(styleSources[0], [parsed.name]) ||
-    readFirstDefinedCustomProperty(styleSources[1], [parsed.name]) ||
-    readFirstDefinedCustomProperty(styleSources[2], [parsed.name]);
-  if (referenced) {
-    return resolveThemeCustomPropertyValue(referenced, styleSources, depth + 1);
-  }
-  if (parsed.fallback) {
-    return resolveThemeCustomPropertyValue(parsed.fallback, styleSources, depth + 1);
-  }
-  return value;
-}
-
-/**
- * 功能：从单个样式源中按候选属性顺序读取第一个可用值。
- * @param style 计算样式对象
- * @param propertyNames 候选属性名列表
- * @param shouldSkipValue 可选的值过滤器
- * @returns 可用的主题值；未命中时返回空字符串
- */
-function readFirstUsableCustomProperty(
-  style: CSSStyleDeclaration,
-  propertyNames: string[],
-  styleSources: CSSStyleDeclaration[],
-  shouldSkipValue?: (value: string) => boolean
-): string {
-  for (const propertyName of propertyNames) {
-    const rawValue = style.getPropertyValue(propertyName).trim();
-    if (!rawValue) continue;
-    const value = resolveThemeCustomPropertyValue(rawValue, styleSources);
-    if (!value) continue;
-    if (shouldSkipValue?.(value)) continue;
-    return value;
-  }
-  return "";
-}
-
-/**
- * 功能：定位 tooltip 等浮层应当读取主题变量的源节点。
- * @param target 当前目标节点。
- * @returns 最接近的主题宿主节点。
- */
-function resolveSdkThemeSource(target: HTMLElement): HTMLElement {
-  return (
-    target.closest<HTMLElement>("[data-st-roll-theme]") ||
-    target.closest<HTMLElement>(".st-roll-content") ||
-    target.closest<HTMLElement>(".st-roll-shell") ||
-    target.closest<HTMLElement>("[data-stx-theme]") ||
-    target
-  );
+export function logSdkThemeResolutionDebug(
+  target: HTMLElement,
+  reason: string
+): SdkThemeSnapshot {
+  const globalState = getGlobalThemeState();
+  globalState.caches = ensureSdkThemeRuntimeCaches(globalState.caches);
+  const source = resolveSdkThemeSource(target);
+  const cachedBefore = readCachedSdkThemeSnapshot(globalState.caches, source);
+  const snapshot = resolveSdkThemeSnapshot(target);
+  const cachedAfter = readCachedSdkThemeSnapshot(globalState.caches, source);
+  const payload = {
+    reason,
+    target: describeSdkThemeNode(target),
+    source: describeSdkThemeNode(source),
+    chain: collectSdkThemeNodeChain(target),
+    cache: {
+      version: globalState.caches.themeSnapshotVersion,
+      beforeHit: !!cachedBefore,
+      afterHit: !!cachedAfter,
+    },
+    sourceStyle: readSdkThemeDebugStyle(source),
+    snapshot: buildSdkThemeDebugSnapshotView(snapshot),
+  };
+  (globalThis as typeof globalThis & { __stxThemeDebugLast?: unknown }).__stxThemeDebugLast =
+    payload;
+  return snapshot;
 }
 
 /**
@@ -695,56 +394,49 @@ function resolveSdkThemeSource(target: HTMLElement): HTMLElement {
  * @returns 统一主题快照。
  */
 export function resolveSdkThemeSnapshot(target: HTMLElement): SdkThemeSnapshot {
+  const globalState = getGlobalThemeState();
+  globalState.caches = ensureSdkThemeRuntimeCaches(globalState.caches);
   const source = resolveSdkThemeSource(target);
-  const style = getComputedStyle(source);
-  const bodyStyle = getComputedStyle(document.body);
-  const rootStyle = getComputedStyle(document.documentElement);
-  const styleSources = [style, bodyStyle, rootStyle];
-  const read = (
-    propertyNames: string[],
-    fallback: string,
-    shouldSkipValue?: (value: string) => boolean
-  ): string => {
-    const candidates = [
-      readFirstUsableCustomProperty(style, propertyNames, styleSources, shouldSkipValue),
-      readFirstUsableCustomProperty(bodyStyle, propertyNames, styleSources, shouldSkipValue),
-      readFirstUsableCustomProperty(rootStyle, propertyNames, styleSources, shouldSkipValue),
-    ];
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      return candidate;
-    }
-    return fallback;
-  };
-  const snapshot = {
-    text: read(["--stx-theme-text", "--st-roll-text", "--SmartThemeBodyColor"], "#ecdcb8"),
-    background: read(
-      [
-        "--st-roll-modal-panel-bg",
-        "--stx-shared-select-panel-bg",
-        "--st-roll-select-panel-bg",
-        "--st-roll-workbench-toolbar-bg",
-        "--st-roll-modal-head-bg",
-        "--stx-theme-toolbar-bg",
-        "--st-roll-workbench-panel-bg",
-        "--st-roll-btn-bg",
-        "--SmartThemeBlurTintColor",
-        "--stx-theme-panel-bg",
-        "--st-roll-content-bg",
-        "--st-roll-control-bg",
-        "--stx-theme-list-item-bg",
-      ],
-      "rgba(12, 8, 6, 0.96)",
-      isUnusableTooltipBackgroundValue
-    ),
-    border: read(
-      ["--stx-theme-panel-border", "--st-roll-modal-panel-border", "--st-roll-control-border", "--SmartThemeBorderColor"],
-      "rgba(197, 160, 89, 0.55)"
-    ),
-    shadow: read(
-      ["--stx-theme-panel-shadow", "--st-roll-modal-panel-shadow", "--SmartThemeShadowColor"],
-      "0 8px 20px rgba(0, 0, 0, 0.45)"
-    ),
-  };
+  const cached = readCachedSdkThemeSnapshot(globalState.caches, source);
+  if (cached) {
+    return cached;
+  }
+
+  const snapshot = buildSdkThemeSnapshot(source, getSdkThemeState());
+  writeCachedSdkThemeSnapshot(globalState.caches, source, snapshot);
+  return snapshot;
+}
+
+/**
+ * 功能：把统一主题快照应用到脱离原作用域的节点。
+ * @param node 需要同步主题变量的节点。
+ * @param source 主题源节点或已解析的主题快照。
+ * @returns 最终应用到节点上的主题快照。
+ */
+export function applySdkThemeSnapshotToDetachedNode(
+  node: HTMLElement,
+  source: HTMLElement | SdkThemeSnapshot
+): SdkThemeSnapshot {
+  const snapshot = source instanceof HTMLElement ? resolveSdkThemeSnapshot(source) : source;
+  const globalState = getGlobalThemeState();
+  globalState.caches = ensureSdkThemeRuntimeCaches(globalState.caches);
+  getDetachedSdkThemeVarCache(globalState.caches, node);
+  const currentState = getSdkThemeState();
+  const nextState: SdkThemeState =
+    snapshot.mode === "smart"
+      ? {
+          mode: "smart",
+          themeId: currentState.themeId,
+        }
+      : {
+          mode: "sdk",
+          themeId:
+            snapshot.selection === "smart"
+              ? currentState.themeId
+              : (snapshot.selection as SdkThemePresetId),
+        };
+
+  applyStateToNode(node, nextState);
+  syncDetachedSdkThemeCssVars(globalState.caches, node, snapshot);
   return snapshot;
 }

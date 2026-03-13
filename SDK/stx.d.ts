@@ -327,32 +327,6 @@ export interface SdkUnifiedTavernChatDirectoryItemEvent {
     fromTagged: boolean;
 }
 
-export interface SdkPluginChatStateRecord<TState = Record<string, unknown>> {
-    chatKey: string;
-    entityKey: string;
-    ref: SdkTavernChatRefEvent;
-    state: TState;
-    updatedAt: number;
-    displayName: string;
-    avatarUrl: string;
-    roleKey: string;
-    summary: Record<string, unknown>;
-}
-
-export interface SdkPluginChatStateSummary {
-    chatKey: string;
-    entityKey: string;
-    tavernInstanceId: string;
-    scopeType: SdkTavernScopeTypeEvent;
-    scopeId: string;
-    chatId: string;
-    updatedAt: number;
-    displayName: string;
-    avatarUrl: string;
-    roleKey: string;
-    summary: Record<string, unknown>;
-}
-
 // -- 插件注册接口 --
 export interface PluginManifest {
     pluginId: string;

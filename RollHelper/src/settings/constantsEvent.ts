@@ -372,8 +372,5 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   skillPresetStoreText: "",
   ruleTextModeVersion: RULE_TEXT_MODE_VERSION_Event,
   ruleText: DEFAULT_RULE_TEXT_Event,
-  compatibilityModeForSummaryPlugins: true,
-  removeRollJsonFromStoredText: true,
-  stripRollHelperInternalBlocks: true,
 };
 

@@ -1,4 +1,5 @@
 /// <reference path="./global.d.ts" />
+import { logger } from "../../index";
 /**
  * 模块边界：负责事件生命周期 Hook、指令注册与交互入口组装。
  * 不修改底层 hooks/commands 模块行为，仅整合跨域依赖并导出稳定 API。
@@ -11,7 +12,10 @@ import {
   getTavernEventTypesEvent,
   getTavernSlashCommandRuntimeEvent,
 } from "../../../SDK/tavern";
-import { pushToChat as pushToChatCoreEvent } from "../core/chatEvent";
+import {
+  refreshAllWidgetsFromStateEvent as refreshAllWidgetsFromStateModuleEvent,
+} from "../events/anchorEvent";
+import { appendToConsoleEvent as appendToConsoleCoreEvent } from "../Components/rollConsoleEvent";
 import {
   evaluateSuccessEvent as evaluateSuccessCoreEvent,
   parseDiceExpression as parseDiceExpressionCoreEvent,
@@ -50,15 +54,12 @@ import {
   isAssistantMessageEvent as isAssistantMessageModuleEvent,
   setMessageTextEvent as setMessageTextModuleEvent,
 } from "../events/promptEvent";
-import {
-  sanitizeAssistantMessageForSummary as sanitizeAssistantMessageForSummaryModuleEvent,
-  cleanAllHistoryChatBlocks as cleanAllHistoryChatBlocksModuleEvent,
-} from "../events/messageSanitizerEvent";
 import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } from "../events/renderEvent";
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
 import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
+import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
 import {
   filterEventsByApplyScopeEvent,
   getLatestRollRecordForEvent,
@@ -98,8 +99,6 @@ function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent): 
     parseEventEnvelopesEvent,
     removeRangesEvent,
     setMessageTextEvent: setMessageTextModuleEvent,
-    sanitizeAssistantMessageForSummary: sanitizeAssistantMessageForSummaryModuleEvent,
-    getSettingsEvent: getSettingsStoreEvent,
   });
 }
 
@@ -111,6 +110,56 @@ export function sanitizeCurrentChatEventBlocksEvent(): void {
     persistChatSafeEvent: persistChatSafeStoreEvent,
     hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
   });
+}
+
+const INITIAL_WIDGET_RESTORE_RETRY_MAX_Event = 12;
+const INITIAL_WIDGET_RESTORE_RETRY_DELAY_MS_Event = 250;
+
+/**
+ * 功能：使用运行时依赖执行一次完整的事件卡片刷新。
+ * @returns 本次卡片刷新结果。
+ */
+function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
+  return refreshAllWidgetsFromStateModuleEvent({
+    getLiveContextEvent: getLiveContextCoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    buildEventListCardEvent,
+    buildEventRollResultCardEvent,
+    getLatestRollRecordForEvent,
+  });
+}
+
+/**
+ * 功能：判断初始化恢复阶段是否还需要继续重试挂载卡片。
+ * @param result 最近一次卡片刷新结果。
+ * @returns 需要继续重试时返回 `true`，否则返回 `false`。
+ */
+function shouldRetryInitialWidgetRestoreEvent(result: RefreshAllWidgetsResultEvent): boolean {
+  return result.hasPendingRound && !result.pendingRoundMounted;
+}
+
+/**
+ * 功能：在初始化完成后按状态恢复倒计时与事件卡片。
+ * @param retry 当前重试次数。
+ * @returns 无返回值。
+ */
+export function restoreRuntimeUiFromStateEvent(retry = 0): void {
+  sanitizeCurrentChatEventBlocksEvent();
+  sweepTimeoutFailuresEvent();
+  refreshCountdownDomEvent();
+  const refreshResult = refreshAllWidgetsFromStateWiredEvent();
+
+  if (!shouldRetryInitialWidgetRestoreEvent(refreshResult)) {
+    return;
+  }
+  if (retry >= INITIAL_WIDGET_RESTORE_RETRY_MAX_Event) {
+    logger.warn(`[卡片恢复] 初始化恢复重试耗尽 retry=${retry}`);
+    return;
+  }
+
+  setTimeout(() => {
+    restoreRuntimeUiFromStateEvent(retry + 1);
+  }, INITIAL_WIDGET_RESTORE_RETRY_DELAY_MS_Event);
 }
 
 const rollDepsEvent = {
@@ -135,7 +184,7 @@ function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, ex
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     recordTimeoutFailureIfNeededEvent,
-    pushToChat: pushToChatCoreEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     refreshCountdownDomEvent,
   });
 }
@@ -164,16 +213,21 @@ function handleGenerationEndedEvent(retry = 0): void {
     persistChatSafeEvent: persistChatSafeStoreEvent,
     mergeEventsIntoPendingRoundEvent,
     autoRollEventsByAiModeEvent,
-    buildEventListCardEvent,
-    pushToChat: pushToChatCoreEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
-    sanitizeAssistantMessageForSummary: sanitizeAssistantMessageForSummaryModuleEvent,
   });
 }
 
 function clearDiceMetaEventState(reason = "chat_reset"): void {
+  const normalizedReason = String(reason || "").toLowerCase();
+  if (normalizedReason !== "chat_reset") {
+    const meta = getDiceMetaStoreMetaEvent();
+    delete meta.lastProcessedAssistantMsgId;
+    return;
+  }
+
   clearDiceMetaEventStateModuleEvent(reason, {
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
@@ -183,7 +237,7 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
 export function bindEventButtonsEvent(): void {
   bindEventButtonsModuleEvent({
     performEventRollByIdEvent,
-    pushToChat: pushToChatCoreEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
   });
@@ -196,7 +250,7 @@ export function registerEventRollCommandEvent(): void {
     SlashCommand: slashCommandRuntime.command,
     SlashCommandArgument: slashCommandRuntime.argument,
     ARGUMENT_TYPE: slashCommandRuntime.argumentType,
-    pushToChat: pushToChatCoreEvent,
+    appendToConsoleEvent: appendToConsoleCoreEvent,
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     getSettingsEvent: getSettingsStoreEvent,
@@ -228,6 +282,7 @@ export function registerEventHooksEvent(): void {
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
     loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
   });
 }
 
@@ -236,13 +291,9 @@ export function registerDebugCommandEvent(): void {
   registerDebugCommandModuleEvent({
     SlashCommandParser: slashCommandRuntime.parser,
     SlashCommand: slashCommandRuntime.command,
-    SlashCommandNamedArgument: slashCommandRuntime.namedArgument,
     getDiceMeta: getDiceMetaStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
-    pushToChat: pushToChatCoreEvent,
-    getLiveContextEvent: getLiveContextCoreEvent,
-    cleanAllHistoryChatBlocks: cleanAllHistoryChatBlocksModuleEvent,
-    persistChatSafeEvent: persistChatSafeStoreEvent,
+    appendToConsoleEvent: appendToConsoleCoreEvent,
   });
 }

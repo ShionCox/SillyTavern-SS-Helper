@@ -1,86 +1,107 @@
 <div class="st-rh-card-scope">
-    <details class="st-rh-settlement-shell {{shell_type_class}} st-rh-shell-frame">
-        <summary class="st-rh-shell-summary" data-st-rh-role="summary">
-            <div class="st-rh-shell-topline st-rh-shell-line"></div>
-            <div class="st-rh-summary-wrap st-rh-result-summary-grid">
-                <div class="st-rh-summary-ornament" aria-hidden="true">
-                    <span class="st-rh-summary-ornament-line"></span>
-                    <span class="st-rh-summary-ornament-seal"></span>
-                    <spen style="font-size: 20px;margin-bottom: 3px;">{{summary_kicker_text}}</spen>
-                    <span class="st-rh-summary-ornament-seal"></span>
-                    <span class="st-rh-summary-ornament-line"></span>
-                </div>
-                <div class="st-rh-result-summary-main">
-                    <div class="st-rh-summary-banner">
-                        <div class="st-rh-summary-banner-inner">
-                            <div class="st-rh-summary-header">
-                                <div class="st-rh-header-deco-left"></div>
-                                <strong class="st-rh-summary-title">
-                                    <span class="st-rh-summary-title-marquee" data-st-rh-role="title-marquee">
-                                        <span class="st-rh-summary-title-track" data-st-rh-role="title-track">
-                                            <span class="st-rh-summary-title-segment" data-st-rh-role="title-segment">{{title_html}}</span>
-                                        </span>
-                                    </span>
-                                </strong>
-                                <div class="st-rh-header-deco-right"></div>
-                                <span class="st-rh-summary-id st-rh-mono">#{{roll_id_html}}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="st-rh-summary-primary st-rh-summary-judgement">
-                        <div class="st-rh-summary-badge">{{summary_status_badge_html}}</div>
-                        {{summary_primary_chips_html}}
-                    </div>
-                    <div class="st-rh-summary-mobile-hero">
-                        {{summary_result_core_html}}
-                    </div>
-                    <div class="st-rh-summary-outcome-wrap">
-                        <div class="st-rh-summary-outcome-scroll">
-                            {{summary_secondary_chips_html}}
-                        </div>
-                    </div>
-                </div>
-                <div class="st-rh-result-summary-side">
-                    <div class="st-rh-summary-visual-wrap">
-                        <div class="st-rh-summary-visual-dais">
-                            <div class="st-rh-dice-slot st-rh-summary-dice-slot {{dice_slot_type_class}}">
-                                {{summary_dice_visual_html}}
-                            </div>
-                        </div>
-                    </div>
-                    <div class="st-rh-summary-actions-compact">
-                        {{summary_toggle_html}}
-                    </div>
-                </div>
-            </div>
-        </summary>
-
-        <div id="{{details_id_attr}}" class="st-rh-details-body" data-st-rh-role="details-body">
-            <div class="st-rh-details-layout {{details_layout_type_class}}">
-                <section class="st-rh-details-main">
-                    <div class="st-rh-panel st-rh-meta-panel">
-                        <div class="st-rh-details-head">
-                            <div class="st-rh-details-head-copy">
-                                <p class="st-rh-kicker">{{details_kicker_text}}</p>
-                                <div class="st-rh-details-heading">{{details_heading_html}}</div>
-                            </div>
-                        </div>
-                        <dl class="st-rh-fact-grid">
-                            {{detail_meta_html}}
-                        </dl>
-                    </div>
-
-                    {{outcome_section_html}}
-                    {{footer_blocks_html}}
-                </section>
-
-                <aside class="st-rh-details-side">
-                    <div class="st-rh-details-side-primary">
-                        {{detail_result_core_html}}
-                    </div>
-                    {{detail_aux_html}}
-                </aside>
-            </div>
+  <details
+    class="st-rh-settlement-shell {{shell_type_class}} st-rh-shell-frame"
+  >
+    <summary class="st-rh-shell-summary" data-st-rh-role="summary">
+      <div class="st-rh-shell-topline st-rh-shell-line"></div>
+      <div class="st-rh-summary-wrap st-rh-result-summary-grid">
+        <div class="st-rh-summary-ornament" aria-hidden="true">
+          <span class="st-rh-summary-ornament-line"></span>
+          <span class="st-rh-summary-ornament-seal"></span>
+          <spen style="font-size: 20px; margin-bottom: 3px"
+            >{{summary_kicker_text}}</spen
+          >
+          <span class="st-rh-summary-ornament-seal"></span>
+          <span class="st-rh-summary-ornament-line"></span>
         </div>
-    </details>
+        <div class="st-rh-result-summary-main">
+          <div class="st-rh-summary-banner">
+            <div class="st-rh-summary-banner-inner">
+              <div class="st-rh-summary-header">
+                <div class="st-rh-header-deco-left"></div>
+                <strong class="st-rh-summary-title">
+                  <span
+                    class="st-rh-summary-title-marquee"
+                    data-st-rh-role="title-marquee"
+                  >
+                    <span
+                      class="st-rh-summary-title-track"
+                      data-st-rh-role="title-track"
+                    >
+                      <span
+                        class="st-rh-summary-title-segment"
+                        data-st-rh-role="title-segment"
+                        >{{title_html}}</span
+                      >
+                    </span>
+                  </span>
+                </strong>
+                <span class="st-rh-summary-id st-rh-mono"
+                  >#{{roll_id_html}}</span
+                >
+                <div class="st-rh-header-deco-right"></div>
+              </div>
+            </div>
+          </div>
+          <div class="st-rh-summary-primary st-rh-summary-judgement">
+            <div class="st-rh-summary-badge">{{summary_status_badge_html}}</div>
+            {{summary_primary_chips_html}}
+          </div>
+          <div class="st-rh-summary-mobile-hero">
+            {{summary_result_core_html}}
+          </div>
+          <div class="st-rh-summary-outcome-wrap">
+            <div class="st-rh-summary-outcome-scroll">
+              {{summary_secondary_chips_html}}
+            </div>
+          </div>
+        </div>
+        <div class="st-rh-result-summary-side">
+          <div class="st-rh-summary-visual-wrap">
+            <div class="st-rh-summary-visual-dais">
+              <div
+                class="st-rh-dice-slot st-rh-summary-dice-slot {{dice_slot_type_class}}"
+              >
+                {{summary_dice_visual_html}}
+              </div>
+            </div>
+          </div>
+          <div class="st-rh-summary-actions-compact">
+            {{summary_toggle_html}}
+          </div>
+        </div>
+      </div>
+    </summary>
+
+    <div
+      id="{{details_id_attr}}"
+      class="st-rh-details-body"
+      data-st-rh-role="details-body"
+    >
+      <div class="st-rh-details-layout {{details_layout_type_class}}">
+        <section class="st-rh-details-main">
+          <div class="st-rh-panel st-rh-meta-panel">
+            <div class="st-rh-details-head">
+              <div class="st-rh-details-head-copy">
+                <p class="st-rh-kicker">{{details_kicker_text}}</p>
+                <div class="st-rh-details-heading">
+                  {{details_heading_html}}
+                </div>
+              </div>
+            </div>
+            <dl class="st-rh-fact-grid">{{detail_meta_html}}</dl>
+          </div>
+
+          {{outcome_section_html}} {{footer_blocks_html}}
+        </section>
+
+        <aside class="st-rh-details-side">
+          <div class="st-rh-details-side-primary">
+            {{detail_result_core_html}}
+          </div>
+          {{detail_aux_html}}
+        </aside>
+      </div>
+    </div>
+  </details>
 </div>

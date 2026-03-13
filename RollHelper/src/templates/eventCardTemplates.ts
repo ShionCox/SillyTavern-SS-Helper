@@ -565,6 +565,7 @@ export interface EventRollResultCardTemplateParamsEvent {
   timeLimitHtml: string;
   diceVisualBlockHtml: string;
   outcomeLabelHtml: string;
+  outcomeToneClassName: string;
   outcomeTextHtml: string;
   statusImpactHtml: string;
   outcomeStatusSummaryHtml: string;
@@ -658,6 +659,71 @@ function buildSettlementInfoPanelTemplateEvent(
     <p class="st-rh-kicker">${kickerText}</p>
     <div class="st-rh-detail-note st-rh-panel-copy">${bodyHtml}</div>
   </div>`;
+}
+
+/**
+ * 功能：构建走向面板页脚信息条目。
+ * @param labelText 条目标识文本
+ * @param valueHtml 条目正文 HTML
+ * @param extraClasses 额外样式类名
+ * @returns 页脚信息条目 HTML；无内容时返回空字符串
+ */
+function buildOutcomeStripItemTemplateEvent(
+  labelText: string,
+  valueHtml: string,
+  extraClasses?: string
+): string {
+  if (!String(valueHtml ?? "").trim()) return "";
+  return `<div class="${joinClassNamesTemplateEvent("st-rh-outcome-strip-item", extraClasses)}">
+    <span class="st-rh-outcome-strip-label">${labelText}</span>
+    <span class="st-rh-outcome-strip-value">${valueHtml}</span>
+  </div>`;
+}
+
+/**
+ * 功能：构建结算卡的剧情走向卷轴面板。
+ * @param params 走向面板所需的文案与样式参数
+ * @returns 专用走向面板 HTML；无正文时返回空字符串
+ */
+function buildSettlementOutcomePanelTemplateEvent(params: {
+  kickerText: string;
+  toneClassName: string;
+  outcomeTextHtml: string;
+  statusImpactHtml: string;
+  outcomeStatusSummaryHtml: string;
+  currentStatusesHtml: string;
+}): string {
+  if (!String(params.outcomeTextHtml ?? "").trim()) return "";
+
+  const normalizedStatusesText = String(params.currentStatusesHtml ?? "").trim();
+  const stripHtml = [
+    buildOutcomeStripItemTemplateEvent("判定影响", params.statusImpactHtml),
+    buildOutcomeStripItemTemplateEvent("状态变化", params.outcomeStatusSummaryHtml),
+    buildOutcomeStripItemTemplateEvent(
+      "当前状态",
+      params.currentStatusesHtml,
+      normalizedStatusesText === "无" ? "st-rh-outcome-strip-item-muted" : ""
+    ),
+  ]
+    .filter(Boolean)
+    .join("");
+
+  return `<section class="${joinClassNamesTemplateEvent(
+    "st-rh-panel st-rh-info-panel st-rh-outcome-panel",
+    params.toneClassName
+  )}">
+    <div class="st-rh-outcome-head">
+      <span class="st-rh-outcome-head-line" aria-hidden="true"></span>
+      <span class="st-rh-outcome-head-seal" aria-hidden="true"></span>
+      <p class="st-rh-kicker st-rh-outcome-kicker">${params.kickerText}</p>
+      <span class="st-rh-outcome-head-seal" aria-hidden="true"></span>
+      <span class="st-rh-outcome-head-line" aria-hidden="true"></span>
+    </div>
+    <div class="st-rh-outcome-scroll">
+      <div class="st-rh-outcome-copy">${params.outcomeTextHtml}</div>
+    </div>
+    ${stripHtml ? `<div class="st-rh-outcome-status-strip">${stripHtml}</div>` : ""}
+  </section>`;
 }
 
 function buildSettlementSummaryVisualTemplateEvent(contentHtml: string, fallbackText: string): string {
@@ -782,22 +848,14 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
   ]
     .filter(Boolean)
     .join("");
-  const outcomeSectionHtml = buildSettlementInfoPanelTemplateEvent(
-    params.outcomeLabelHtml,
-    `<div class="st-rh-body-copy">${params.outcomeTextHtml}</div>
-     ${params.outcomeStatusSummaryHtml
-      ? `<div class="st-rh-meta-copy st-rh-meta-copy-spaced"><strong>状态变化：</strong>${params.outcomeStatusSummaryHtml}</div>`
-      : ""
-    }
-     ${params.currentStatusesHtml
-      ? `<div class="st-rh-meta-copy"><strong>当前状态：</strong>${params.currentStatusesHtml}</div>`
-      : ""
-    }
-     ${params.statusImpactHtml
-      ? `<div class="st-rh-impact-note">${params.statusImpactHtml}</div>`
-      : ""
-    }`
-  );
+  const outcomeSectionHtml = buildSettlementOutcomePanelTemplateEvent({
+    kickerText: params.outcomeLabelHtml,
+    toneClassName: params.outcomeToneClassName,
+    outcomeTextHtml: params.outcomeTextHtml,
+    statusImpactHtml: params.statusImpactHtml,
+    outcomeStatusSummaryHtml: params.outcomeStatusSummaryHtml,
+    currentStatusesHtml: params.currentStatusesHtml,
+  });
   const summaryResultCoreHtml = buildSettlementResultCoreTemplateEvent({
     kickerText: "结算结果",
     totalText: params.totalText,

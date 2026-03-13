@@ -119,29 +119,6 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <div class="st-roll-divider"><i class="fa-solid fa-shield-halved"></i><span>向后兼容净化</span><div class="st-roll-divider-line"></div></div>
-
-          ${buildCheckboxItemEvent(
-            ids.compatibilityModeForSummaryPluginsId,
-            "为主流记忆与总结插件净化上下文",
-            "在处理消息回调以提供上下文时删除扩展产生的隐藏块，防干扰其他插件的判断与发散。",
-            "compatibility summary memory sanitize strip",
-          )}
-
-          ${buildCheckboxItemEvent(
-            ids.removeRollJsonFromStoredTextId,
-            "确保原始消息不受隐藏数据污染",
-            "安全剔除 RollJson 等内部代码块。关闭后可能导致酒馆原版指令等外部解析器抓取到内部乱码。",
-            "compatibility storage sanitize regex json format roll",
-          )}
-
-          ${buildCheckboxItemEvent(
-            ids.stripRollHelperInternalBlocksId,
-            "清理自定义标记",
-            "额外净化掉本扩展特有的隐藏注释（如用以隔离提示词与总结内容的 HTML 标记）。",
-            "compatibility internal regex script tag block wrapper",
-          )}
-
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="clean history reset sanitize text chat blocks debug">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">强制清理当前会话</div>

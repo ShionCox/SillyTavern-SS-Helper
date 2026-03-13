@@ -621,6 +621,17 @@ export function buildEventListCardEvent(
         }${modifierText ? `（${modifierText}）` : ""}`
         : "技能系统已关闭";
 
+      const modifierTextHtml = buildModifierBreakdownHtmlEvent(
+        baseModifierUsed,
+        skillModifierApplied,
+        statusModifierApplied,
+        finalModifierUsed,
+        event.skill,
+        statusMatched,
+        deps.escapeHtmlEvent,
+        deps.escapeAttrEvent
+      );
+
       const dcDescriptionHtml = buildDcDescriptionHtmlEvent(
         event.dcReason,
         finalModifierUsed,
@@ -665,7 +676,7 @@ export function buildEventListCardEvent(
         skillHtml: deps.escapeHtmlEvent(event.skill),
         skillTitleAttr: deps.escapeAttrEvent(skillHoverTextFinal),
         advantageStateHtml: deps.escapeHtmlEvent(advantageStateText),
-        modifierTextHtml: deps.escapeHtmlEvent(modifierText),
+        modifierTextHtml,
         checkDiceHtml: deps.escapeHtmlEvent(event.checkDice),
         compareHtml: deps.escapeHtmlEvent(compare),
         dcText: String(event.dc),
@@ -859,6 +870,92 @@ function buildDiceComputationTooltipEvent(
   return parts.join(" | ");
 }
 
+/**
+ * 功能：构建带悬浮说明的修正数值节点。
+ * @param value 当前修正值
+ * @param tipText 悬浮提示文本
+ * @param escapeHtmlEvent HTML 转义函数
+ * @param escapeAttrEvent 属性转义函数
+ * @returns 带提示的数值 HTML
+ */
+function buildModifierSegmentWithTipHtmlEvent(
+  label: string,
+  value: number,
+  tipText: string,
+  escapeHtmlEvent: (input: string) => string,
+  escapeAttrEvent: (input: string) => string
+): string {
+  const labelText = String(label ?? "");
+  const valueText = formatSignedValueEvent(value);
+  const prefixHtml = labelText ? `${escapeHtmlEvent(labelText)} ` : "";
+  return `<span class="st-rh-inline-tip-segment" data-tip="${escapeAttrEvent(tipText)}">${prefixHtml}<span class="st-rh-mono">${escapeHtmlEvent(valueText)}</span></span>`;
+}
+
+/**
+ * 功能：构建带逐项悬浮提示的修正拆解 HTML。
+ * @param baseModifierUsed 基础修正
+ * @param skillModifierApplied 技能修正
+ * @param statusModifierApplied 状态修正
+ * @param finalModifierUsed 最终修正
+ * @param skillName 当前技能名
+ * @param statusMatched 命中的状态修正列表
+ * @param escapeHtmlEvent HTML 转义函数
+ * @param escapeAttrEvent 属性转义函数
+ * @returns 修正拆解 HTML；无修正时返回空字符串
+ */
+function buildModifierBreakdownHtmlEvent(
+  baseModifierUsed: number,
+  skillModifierApplied: number,
+  statusModifierApplied: number,
+  finalModifierUsed: number,
+  skillName: string,
+  statusMatched: Array<{ name: string; modifier: number }>,
+  escapeHtmlEvent: (input: string) => string,
+  escapeAttrEvent: (input: string) => string
+): string {
+  if (baseModifierUsed === 0 && skillModifierApplied === 0 && statusModifierApplied === 0) {
+    return "";
+  }
+
+  const statusSummaryText =
+    Array.isArray(statusMatched) && statusMatched.length > 0
+      ? `当前命中的状态：${statusMatched
+        .map((item) => `${String(item.name ?? "").trim() || "未命名状态"}${formatSignedValueEvent(Number(item.modifier) || 0)}`)
+        .join("、")}。`
+      : "当前没有命中的状态修正。";
+
+  const baseHtml = buildModifierSegmentWithTipHtmlEvent(
+    "",
+    baseModifierUsed,
+    `基础修正：来自骰式本身的固定修正值。当前值 ${formatSignedValueEvent(baseModifierUsed)}。`,
+    escapeHtmlEvent,
+    escapeAttrEvent
+  );
+  const skillHtml = buildModifierSegmentWithTipHtmlEvent(
+    "技能",
+    skillModifierApplied,
+    `技能修正：来自技能「${String(skillName ?? "").trim() || "未指定"}」。当前值 ${formatSignedValueEvent(skillModifierApplied)}。`,
+    escapeHtmlEvent,
+    escapeAttrEvent
+  );
+  const statusHtml = buildModifierSegmentWithTipHtmlEvent(
+    "状态",
+    statusModifierApplied,
+    `状态修正：由当前生效状态提供。当前值 ${formatSignedValueEvent(statusModifierApplied)}。${statusSummaryText}`,
+    escapeHtmlEvent,
+    escapeAttrEvent
+  );
+  const finalHtml = buildModifierSegmentWithTipHtmlEvent(
+    "",
+    finalModifierUsed,
+    `最终修正：基础修正 + 技能修正 + 状态修正。当前值 ${formatSignedValueEvent(finalModifierUsed)}。`,
+    escapeHtmlEvent,
+    escapeAttrEvent
+  );
+
+  return `${baseHtml} + ${skillHtml} + ${statusHtml} = ${finalHtml}`;
+}
+
 function buildFinalTotalDiceVisualEvent(
   total: number,
   color: string,
@@ -980,6 +1077,7 @@ export interface BuildEventRollResultCardDepsEvent {
     timeLimitHtml: string;
     diceVisualBlockHtml: string;
     outcomeLabelHtml: string;
+    outcomeToneClassName: string;
     outcomeTextHtml: string;
     statusImpactHtml: string;
     outcomeStatusSummaryHtml: string;
@@ -1009,6 +1107,9 @@ export function buildEventRollResultCardEvent(
   const outcomeLabel = settings.enableOutcomeBranches
     ? outcomeKindLabelEvent(resolvedOutcome.kind)
     : "剧情走向";
+  const outcomeToneClassName = settings.enableOutcomeBranches
+    ? `st-rh-outcome-tone-${resolvedOutcome.kind}`
+    : "st-rh-outcome-tone-neutral";
   const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
   const collapsedOutcomePreview = buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
@@ -1075,6 +1176,16 @@ export function buildEventRollResultCardEvent(
       ? `技能${deps.formatModifier(skillModifierApplied)} / 状态${deps.formatModifier(statusModifierApplied)}`
       : "";
   let explodeInfoText = "未请求爆骰";
+  const modifierBreakdownHtml = buildModifierBreakdownHtmlEvent(
+    baseModifierUsed,
+    skillModifierApplied,
+    statusModifierApplied,
+    finalModifierUsed,
+    event.skill,
+    Array.isArray(record.statusModifiersApplied) ? record.statusModifiersApplied : [],
+    deps.escapeHtmlEvent,
+    deps.escapeAttrEvent
+  );
   if (record.explodePolicyApplied === "disabled_globally") {
     explodeInfoText = "已请求，系统关闭，按普通骰";
   } else if (record.explodePolicyApplied === "downgraded_by_ai_limit") {
@@ -1144,7 +1255,7 @@ export function buildEventRollResultCardEvent(
       deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
     ),
     explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
-    modifierBreakdownHtml: deps.escapeHtmlEvent(modifierBreakdownText),
+    modifierBreakdownHtml,
     compareHtml: deps.escapeHtmlEvent(record.compareUsed),
     dcText: String(record.dcUsed ?? "未设置"),
     dcReasonHtml: dcDescriptionHtml,
@@ -1154,6 +1265,7 @@ export function buildEventRollResultCardEvent(
     timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabel),
     diceVisualBlockHtml: diceVisualBlock,
     outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
+    outcomeToneClassName,
     outcomeTextHtml: deps.escapeHtmlEvent(outcomeTextClean),
     statusImpactHtml: deps.escapeHtmlEvent(statusImpactHtml),
     outcomeStatusSummaryHtml: deps.escapeHtmlEvent(outcomeStatusSummaryText),

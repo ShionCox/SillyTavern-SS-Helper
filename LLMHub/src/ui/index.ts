@@ -6,7 +6,10 @@ import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { applySdkThemeToNode, initializeSdkThemeState, subscribeSdkTheme } from '../../../SDK/theme';
 import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
+
+let LLMHUB_THEME_BINDING_READY = false;
 
 type LLMHubSettings = {
     enabled?: boolean;
@@ -134,6 +137,23 @@ function applySettingsTooltips(): void {
 }
 
 /**
+ * 功能：确保 LLMHub 设置面板会在全局主题切换后重新应用主题。
+ * 参数：无。
+ * 返回：void。
+ */
+function ensureThemeBinding(): void {
+    if (LLMHUB_THEME_BINDING_READY) return;
+    LLMHUB_THEME_BINDING_READY = true;
+
+    subscribeSdkTheme((): void => {
+        const cardRoot = document.getElementById(IDS.cardId);
+        if (!cardRoot) return;
+        applySdkThemeToNode(cardRoot);
+        applySettingsTooltips();
+    });
+}
+
+/**
  * 功能：读取 LLMHub 运行时实例。
  * 参数：
  *   无。
@@ -189,6 +209,7 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
  */
 export async function renderSettingsUi(): Promise<void> {
     try {
+        initializeSdkThemeState();
         const container = await waitForElement('#extensions_settings');
 
         if (!document.getElementById(`${IDS.cardId}-styles`)) {
@@ -213,6 +234,9 @@ export async function renderSettingsUi(): Promise<void> {
             cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
             ssContainer.appendChild(cardWrapper);
         }
+
+        applySdkThemeToNode(cardWrapper);
+    ensureThemeBinding();
 
         bindUiEvents();
         applySettingsTooltips();

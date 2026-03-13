@@ -7,8 +7,10 @@ import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
 import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
-import { applySdkThemeToNode, initializeSdkThemeState } from '../../../SDK/theme';
+import { applySdkThemeToNode, initializeSdkThemeState, subscribeSdkTheme } from '../../../SDK/theme';
 import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
+
+let MEMORYOS_THEME_BINDING_READY = false;
 
 
 // UI 组件的唯一命名空间
@@ -111,6 +113,29 @@ function applySettingsTooltips(): void {
 }
 
 /**
+ * 功能：确保 MemoryOS 设置面板会在全局主题切换后重新应用主题。
+ * 参数：无。
+ * 返回：void。
+ */
+function ensureThemeBinding(): void {
+    if (MEMORYOS_THEME_BINDING_READY) return;
+    MEMORYOS_THEME_BINDING_READY = true;
+
+    subscribeSdkTheme((): void => {
+        const cardRoot = document.getElementById(IDS.cardId);
+        if (cardRoot) {
+            applySdkThemeToNode(cardRoot);
+            applySettingsTooltips();
+        }
+        document
+            .querySelectorAll<HTMLElement>('.stx-record-editor-overlay')
+            .forEach((overlay: HTMLElement) => {
+                applySdkThemeToNode(overlay);
+            });
+    });
+}
+
+/**
  * 等待元素出现在 DOM 中
  */
 function waitForElement(selector: string, timeout = 5000): Promise<Element> {
@@ -173,6 +198,7 @@ export async function renderSettingsUi() {
             ssContainer.appendChild(cardWrapper);
         }
         applySdkThemeToNode(cardWrapper);
+        ensureThemeBinding();
         applyTailwindScopeToNode(cardWrapper);
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)

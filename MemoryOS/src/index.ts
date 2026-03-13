@@ -69,6 +69,7 @@ import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { db } from './db/db';
+import { migrateMemoryOSLegacyData } from './db/legacy-migration';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
@@ -90,6 +91,9 @@ class MemoryOS {
         logger.info('记忆引擎初始化完成');
         this.stxBus = new EventBus();
         this.registry = new STXRegistryImpl();
+
+        // 一次性旧数据迁移（stx_memory_os → ss-helper-db）
+        void migrateMemoryOSLegacyData();
 
         this.initGlobalSTX();
         this.setupPluginBusEndpoints();

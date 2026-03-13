@@ -16,6 +16,8 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       margin-bottom: 5px;
     }
 
+    #${cardId},
+    #${cardId} .st-roll-shell,
     #${cardId} .st-roll-content,
     #${cardId} .st-roll-skill-modal,
     #${cardId} .st-roll-status-modal {
@@ -110,7 +112,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --st-roll-dialog-backdrop-filter: blur(8px);
     }
 
-    ${buildSdkThemeVars(`#${cardId} .st-roll-content, #${cardId} .st-roll-skill-modal, #${cardId} .st-roll-status-modal`)}
+    ${buildSdkThemeVars(`#${cardId}, #${cardId} .st-roll-shell, #${cardId} .st-roll-content, #${cardId} .st-roll-skill-modal, #${cardId} .st-roll-status-modal`)}
 
     #${cardId} .st-roll-content[data-st-roll-theme="dark"],
     #${cardId} .st-roll-skill-modal[data-st-roll-theme="dark"],

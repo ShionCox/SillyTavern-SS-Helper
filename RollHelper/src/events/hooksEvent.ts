@@ -6,8 +6,8 @@ import type {
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
+import { ensureSharedTooltip } from "../../../SDK/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
-import { ensureSharedTooltipEvent } from "../Components/sharedTooltipEvent";
 import { buildSharedButton } from "../../../_Components/sharedButton";
 
 export interface EventHooksDepsEvent {
@@ -22,6 +22,7 @@ export interface EventHooksDepsEvent {
   sweepTimeoutFailuresEvent: () => boolean;
   refreshCountdownDomEvent: () => void;
   loadChatScopedStateIntoRuntimeEvent: (reason?: string) => Promise<void>;
+  refreshAllWidgetsFromStateEvent: () => void;
 }
 
 export interface HandleGenerationEndedDepsEvent {
@@ -29,9 +30,6 @@ export interface HandleGenerationEndedDepsEvent {
     enabled: boolean;
     eventApplyScope: "protagonist_only" | "all";
     enableAiRoundControl: boolean;
-    compatibilityModeForSummaryPlugins?: boolean;
-    removeRollJsonFromStoredText?: boolean;
-    stripRollHelperInternalBlocks?: boolean;
   };
   getLiveContextEvent: () => STContext | null;
   findLatestAssistantEvent: (
@@ -59,12 +57,10 @@ export interface HandleGenerationEndedDepsEvent {
     assistantMsgId: string
   ) => PendingRoundEvent;
   autoRollEventsByAiModeEvent: (round: PendingRoundEvent) => string[];
-  buildEventListCardEvent: (round: PendingRoundEvent) => string;
-  pushToChat: (message: string) => string | undefined | void;
+  refreshAllWidgetsFromStateEvent: () => void;
   sweepTimeoutFailuresEvent: () => boolean;
   refreshCountdownDomEvent: () => void;
   saveMetadataSafeEvent: () => void;
-  sanitizeAssistantMessageForSummary?: (message: any, options?: { blockInternalTags?: boolean }) => any;
 }
 
 export function handleGenerationEndedEvent(
@@ -119,7 +115,6 @@ export function handleGenerationEndedEvent(
       return;
     }
     meta.lastProcessedAssistantMsgId = assistantMsgId;
-    deps.saveMetadataSafeEvent();
     return;
   }
 
@@ -131,21 +126,12 @@ export function handleGenerationEndedEvent(
       return;
     }
     meta.lastProcessedAssistantMsgId = assistantMsgId;
-    deps.saveMetadataSafeEvent();
     return;
   }
 
   meta.lastProcessedAssistantMsgId = assistantMsgId;
   const cleaned = deps.removeRangesEvent(chosenText, ranges);
   deps.setMessageTextEvent(latestAssistant.msg, cleaned);
-
-  if (settings.compatibilityModeForSummaryPlugins && settings.removeRollJsonFromStoredText) {
-    if (typeof deps.sanitizeAssistantMessageForSummary === "function") {
-      deps.sanitizeAssistantMessageForSummary(latestAssistant.msg, {
-        blockInternalTags: settings.stripRollHelperInternalBlocks,
-      });
-    }
-  }
 
   deps.hideEventCodeBlocksInDomEvent();
   if (ranges.length > 0) {
@@ -158,28 +144,18 @@ export function handleGenerationEndedEvent(
     if (settings.enableAiRoundControl && chosenShouldEndRound) {
       pendingRound.status = "closed";
       closedByAiDirective = true;
-      logger.info("AI 指令结束当前轮次（round_control=end_round）");
     }
   }
 
   if (events.length > 0) {
     const round = deps.mergeEventsIntoPendingRoundEvent(events, assistantMsgId);
-    const autoRollCards = deps.autoRollEventsByAiModeEvent(round);
-    const eventCard = deps.buildEventListCardEvent(round);
-    deps.pushToChat(eventCard);
-    for (const card of autoRollCards) {
-      deps.pushToChat(card);
-    }
+    deps.autoRollEventsByAiModeEvent(round);
     deps.sweepTimeoutFailuresEvent();
+    deps.refreshAllWidgetsFromStateEvent();
     deps.refreshCountdownDomEvent();
   } else {
-    if (chosenEvents.length > 0 && settings.eventApplyScope === "protagonist_only") {
-      logger.info("事件已按“仅主角行动事件”过滤，本次无可用事件");
-    }
-    if (closedByAiDirective) {
-      logger.info("当前轮次已结束，等待下一轮事件");
-    }
-    deps.saveMetadataSafeEvent();
+    void chosenEvents;
+    void closedByAiDirective;
   }
   setTimeout(() => {
     deps.hideEventCodeBlocksInDomEvent();
@@ -230,12 +206,6 @@ export interface SanitizeAssistantMessageDepsEvent {
   };
   removeRangesEvent: (text: string, ranges: Array<{ start: number; end: number }>) => string;
   setMessageTextEvent: (message: TavernMessageEvent, text: string) => void;
-  sanitizeAssistantMessageForSummary?: (message: any, options?: { blockInternalTags?: boolean }) => any;
-  getSettingsEvent?: () => {
-    compatibilityModeForSummaryPlugins?: boolean;
-    removeRollJsonFromStoredText?: boolean;
-    stripRollHelperInternalBlocks?: boolean;
-  }
 }
 
 export function sanitizeAssistantMessageEventBlocksEvent(
@@ -252,16 +222,6 @@ export function sanitizeAssistantMessageEventBlocksEvent(
     if (ranges.length === 0) continue;
     const cleaned = deps.removeRangesEvent(sourceText, ranges);
     deps.setMessageTextEvent(message, cleaned);
-
-    // 如果启用了兼容模式，追加执行深度净化
-    const settings = deps.getSettingsEvent?.();
-    if (settings && settings.compatibilityModeForSummaryPlugins && settings.removeRollJsonFromStoredText) {
-      if (typeof deps.sanitizeAssistantMessageForSummary === "function") {
-        deps.sanitizeAssistantMessageForSummary(message, {
-          blockInternalTags: settings.stripRollHelperInternalBlocks,
-        });
-      }
-    }
 
     return true;
   }
@@ -309,8 +269,6 @@ export function clearDiceMetaEventState(
 
   if (normalizedReason !== "chat_reset") {
     delete meta.lastProcessedAssistantMsgId;
-    deps.saveMetadataSafeEvent();
-    logger.info(`保留 Event 轮次状态，仅重置会话游标 (${reason})`);
     return;
   }
 
@@ -322,7 +280,6 @@ export function clearDiceMetaEventState(
   delete meta.lastPromptUserMsgId;
   delete meta.lastProcessedAssistantMsgId;
   deps.saveMetadataSafeEvent();
-  logger.info(`已清理 Event 轮次状态 (${reason})`);
 }
 
 export interface BindEventButtonsDepsEvent {
@@ -331,7 +288,7 @@ export interface BindEventButtonsDepsEvent {
     overrideExpr?: string,
     expectedRoundId?: string
   ) => string;
-  pushToChat: (message: string) => string | undefined | void;
+  refreshAllWidgetsFromStateEvent: () => void;
   getSettingsEvent: () => {
     enableSkillSystem?: boolean;
     skillTableText?: string;
@@ -817,7 +774,7 @@ function openPreviewDialogEvent(kind: "skills" | "statuses", deps: BindEventButt
 
 export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
   const globalRef = globalThis as any;
-  ensureSharedTooltipEvent();
+  ensureSharedTooltip();
   ensureSSToolbarEvent();
   if (globalRef.__stRollEventButtonsBoundEvent) return;
 
@@ -901,7 +858,7 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
       const expr = button.getAttribute("data-dice-expr") || "";
       const roundId = button.getAttribute("data-round-id") || "";
       const result = deps.performEventRollByIdEvent(eventId, expr || undefined, roundId || undefined);
-      if (result) deps.pushToChat(result);
+      if (result) logger.warn(result);
     },
     true
   );
@@ -1006,10 +963,34 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
               deps.sanitizeCurrentChatEventBlocksEvent();
               deps.sweepTimeoutFailuresEvent();
               deps.refreshCountdownDomEvent();
+              deps.refreshAllWidgetsFromStateEvent();
             }, 0);
           });
       } catch (error) {
         logger.error("Reset hook 错误", error);
+      }
+    });
+  }
+
+  const swipeEditEvents = Array.from(
+    new Set(
+      [
+        types.MESSAGE_SWIPED,
+        types.MESSAGE_EDITED,
+        types.MESSAGE_DELETED,
+        "message_swiped",
+        "message_edited",
+        "message_deleted",
+      ].filter((item): item is string => typeof item === "string" && item.length > 0)
+    )
+  );
+
+  for (const eventName of swipeEditEvents) {
+    src.on(eventName, () => {
+      try {
+        setTimeout(() => deps.refreshAllWidgetsFromStateEvent(), 50);
+      } catch (error) {
+        logger.warn("Swipe/edit widget refresh 异常", error);
       }
     });
   }

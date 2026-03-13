@@ -1,196 +1,25 @@
-import Dexie, { type Table } from 'dexie';
-
-// --- 数据结构类型约束 ---
-
-export interface DBEvent {
-    eventId: string;
-    chatKey: string;
-    ts: number;
-    type: string;
-    source: { pluginId: string; version: string };
-    payload: any;
-    refs?: Record<string, any>;
-    tags?: string[];
-    hash?: string;
-}
-
-export interface DBFact {
-    factKey: string; // 推荐格式：${chatKey}::${type}::${entityKind}:${entityId}::${path}
-    chatKey: string;
-    type: string;
-    entity?: { kind: string; id: string };
-    path?: string;
-    value: any;
-    confidence?: number;
-    provenance?: any;
-    updatedAt: number;
-}
-
-export interface DBWorldState {
-    stateKey: string; // ${chatKey}::${path}
-    chatKey: string;
-    path: string;
-    value: any;
-    sourceEventId?: string;
-    updatedAt: number;
-}
-
-export interface DBSummary {
-    summaryId: string;
-    chatKey: string;
-    level: "message" | "scene" | "arc";
-    title?: string;
-    content: string;
-    keywords?: string[];
-    range?: { fromMessageId?: string; toMessageId?: string };
-    createdAt: number;
-    source?: { extractor?: string; provider?: string };
-}
-
-export interface DBTemplate {
-    templateId: string;
-    chatKey: string;
-    worldType: "fantasy" | "urban" | "custom";
-    name: string;
-    schema: any;
-    factTypes: any[];
-    policies: any;
-    layout: any;
-    worldInfoHash?: string;
-    worldInfoRef?: { book: string; hash: string };
-    createdAt: number;
-}
-
-export interface DBAudit {
-    auditId: string;
-    chatKey: string;
-    ts: number;
-    action: string;
-    actor: { pluginId: string; mode: string };
-    before: any;
-    after: any;
-    refs?: any;
-}
-
-export interface DBMeta {
-    chatKey: string;
-    schemaVersion: number;
-    lastCompactionTs?: number;
-    activeTemplateId?: string;
-}
-
-// --- v2 新增类型 ---
-
-export interface DBWorldInfoCache {
-    cacheKey: string; // ${chatKey}::${bookName}
-    chatKey: string;
-    bookName: string;
-    hash: string;
-    parsedContent: any;
-    updatedAt: number;
-}
-
-export interface DBTemplateBinding {
-    bindingKey: string; // ${chatKey}
-    chatKey: string;
-    activeTemplateId: string;
-    worldInfoHash: string;
-    isLocked?: boolean;
-    boundAt: number;
-}
-
-// --- v3 新增类型（向量层） ---
-
-export interface DBVectorChunk {
-    chunkId: string;
-    chatKey: string;
-    bookId?: string;
-    content: string;
-    metadata?: any;
-    createdAt: number;
-}
-
-export interface DBVectorEmbedding {
-    embeddingId: string;
-    chunkId: string;
-    chatKey: string;
-    vector: number[];
-    model: string;
-    createdAt: number;
-}
-
-export interface DBVectorMeta {
-    metaKey: string; // ${chatKey}::${bookId}
-    chatKey: string;
-    bookId: string;
-    totalChunks: number;
-    embeddingModel: string;
-    lastIndexedAt: number;
-}
-
-// --- 数据库定义实例 ---
-
 /**
- * 核心持久层：提供针对多对象的 IndexedDB 管理封装
- * `stx_memory_os`
+ * MemoryOS 数据库层 — 已并入 ss-helper-db 统一数据库
  *
- * 版本迁移策略：
- * v1 - 核心 7 张表（events/facts/world_state/summaries/templates/audit/meta）
- * v2 - 新增 worldinfo_cache + template_bindings
- * v3 - 新增向量层 vector_chunks + vector_embeddings + vector_meta
- * v4 - templates 增加 worldInfoHash/factTypes 持久化与按 hash 查询索引
+ * 所有 Table 和类型现由 SDK/db 统一管理。
+ * 此文件保留 re-export 以保持 Manager 层 import 路径不变。
  */
-export class MemoryOSDatabase extends Dexie {
-    events!: Table<DBEvent, string>;
-    facts!: Table<DBFact, string>;
-    world_state!: Table<DBWorldState, string>;
-    summaries!: Table<DBSummary, string>;
-    templates!: Table<DBTemplate, string>;
-    audit!: Table<DBAudit, string>;
-    meta!: Table<DBMeta, string>;
-    // v2
-    worldinfo_cache!: Table<DBWorldInfoCache, string>;
-    template_bindings!: Table<DBTemplateBinding, string>;
-    // v3
-    vector_chunks!: Table<DBVectorChunk, string>;
-    vector_embeddings!: Table<DBVectorEmbedding, string>;
-    vector_meta!: Table<DBVectorMeta, string>;
+export { db, patchSdkChatShared } from '../../../SDK/db';
+export type { ChatSharedPatch } from '../../../SDK/db';
+export type {
+    DBEvent,
+    DBFact,
+    DBWorldState,
+    DBSummary,
+    DBTemplate,
+    DBAudit,
+    DBMeta,
+    DBWorldInfoCache,
+    DBTemplateBinding,
+    DBVectorChunk,
+    DBVectorEmbedding,
+    DBVectorMeta,
+} from '../../../SDK/db';
 
-    constructor() {
-        super('stx_memory_os');
-
-        // v1：核心存储
-        this.version(1).stores({
-            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
-            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
-            world_state: '&stateKey, [chatKey+path]',
-            summaries: '&summaryId, [chatKey+level+createdAt]',
-            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType]',
-            audit: '&auditId, chatKey, ts, action',
-            meta: '&chatKey'
-        });
-
-        // v2：世界书缓存 + 模板绑定
-        this.version(2).stores({
-            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
-            template_bindings: '&bindingKey, chatKey',
-        });
-
-        // v3：向量层
-        this.version(3).stores({
-            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
-            vector_embeddings: '&embeddingId, chunkId, chatKey',
-            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
-        });
-
-        // v4：模板按 worldInfoHash 查询
-        this.version(4).stores({
-            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
-            template_bindings: '&bindingKey, chatKey',
-        });
-    }
-}
-
-// 暴露出解耦后的单例服务对象，用于上层存储库代理调用
-export const db = new MemoryOSDatabase();
-
+// 保持旧类名导出以向后兼容
+export { SSHelperDatabase as MemoryOSDatabase } from '../../../SDK/db';

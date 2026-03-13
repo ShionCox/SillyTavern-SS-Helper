@@ -3,6 +3,8 @@ import type {
   ActiveStatusEvent,
   DiceMetaEvent,
   DicePluginSettingsEvent,
+  PendingRoundEvent,
+  RoundSummarySnapshotEvent,
   SkillEditorRowDraftEvent,
   SkillPresetEvent,
   SkillPresetStoreEvent,
@@ -11,15 +13,20 @@ import type {
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
 import {
-  createSdkPluginChatStateStore,
   createSdkPluginSettingsStore,
-  deleteSdkPluginChatState,
   getCurrentTavernSettingsScope,
-  listSdkPluginChatStateSummaries,
-  migrateLegacyPluginChatState,
-  readSdkPluginChatState,
-  writeSdkPluginChatState,
 } from "../../../SDK/settings";
+import {
+  readSdkPluginChatState as readSdkPluginChatStateAsync,
+  writeSdkPluginChatState as writeSdkPluginChatStateAsync,
+  deleteSdkPluginChatState as deleteSdkPluginChatStateAsync,
+  listSdkPluginChatStateSummaries as listSdkPluginChatStateSummariesAsync,
+  patchSdkChatShared,
+  ensureSdkChatDocument,
+  appendSdkPluginChatRecord,
+  querySdkPluginChatRecords,
+  flushSdkChatDataNow,
+} from "../../../SDK/db";
 import {
   buildSdkThemePatchFromSelection,
   getSdkThemeState,
@@ -37,13 +44,8 @@ import {
 } from "../../../SDK/tavern";
 import {
   getLiveContextEvent,
-  saveMetadata,
 } from "../core/runtimeContextEvent";
-import {
-  type ChatScopedStateSummaryV2Event,
-  listChatScopedStateSummariesForTavernV2Event,
-  loadChatScopedStateV2ByKeyEvent,
-} from "../persistence/chatScopedStoreV2Event";
+// 旧 V2 persistence 已移除，迁移由 SDK/db 层一次性处理
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
@@ -61,6 +63,7 @@ import {
 } from "./constantsEvent";
 
 const LOCAL_METADATA_FALLBACK_Event: Record<string, any> = {};
+const STORE_THEME_TRACE_PREFIX_Event = "[SS-Helper][StoreThemeTrace]";
 let SETTINGS_STORE_Event: ReturnType<typeof createSdkPluginSettingsStore<DicePluginSettingsEvent>> | null = null;
 interface ScopedSettingsCacheEvent {
   scopeKey: string;
@@ -68,14 +71,13 @@ interface ScopedSettingsCacheEvent {
 }
 let SETTINGS_CACHE_Event: ScopedSettingsCacheEvent | null = null;
 let SETTINGS_STORE_SUBSCRIBED_Event = false;
-let CHAT_STATE_STORE_Event: ReturnType<
-  typeof createSdkPluginChatStateStore<RollHelperChatScopedStateEvent>
-> | null = null;
-const CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event = new Set<string>();
 
 interface RollHelperChatScopedStateEvent {
   skillPresetStoreText: string;
   activeStatuses: ActiveStatusEvent[];
+  lastBaseRoll: DiceResult | null;
+  pendingRound: PendingRoundEvent | null;
+  summaryHistory: RoundSummarySnapshotEvent[];
 }
 
 var syncSettingsUiCallbackEvent: () => void = () => { };
@@ -87,6 +89,30 @@ export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
 let ACTIVE_CHAT_KEY_Event = "";
 let ACTIVE_CHAT_SCOPE_Event: SdkTavernScopeLocatorEvent | null = null;
 let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
+
+function traceStoreThemeEvent(message: string, payload?: unknown): void {
+  if (payload === undefined) {
+    console.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`);
+    return;
+  }
+  console.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`, payload);
+}
+
+/**
+ * 运行时状态——仅存于内存中，聊天切换时从 chat-scoped store 加载。
+ * 不再写入宿主 chat_metadata。
+ */
+const RUNTIME_DICE_META_Event: DiceMetaEvent = {
+  pendingRound: undefined,
+  activeStatuses: [],
+  outboundSummary: undefined,
+  pendingResultGuidanceQueue: [],
+  outboundResultGuidance: undefined,
+  summaryHistory: [],
+  lastPromptUserMsgId: undefined,
+  lastProcessedAssistantMsgId: undefined,
+};
+const RUNTIME_DICE_META_LEGACY_Event: DiceMeta = {};
 
 /**
  * 功能：解析当前聊天的结构化主键。
@@ -125,83 +151,34 @@ function normalizeChatScopedStatePayloadEvent(
   return {
     skillPresetStoreText: JSON.stringify(normalizedStore, null, 2),
     activeStatuses: normalizeActiveStatusesFromEvent(source.activeStatuses),
+    lastBaseRoll: source.lastBaseRoll ?? null,
+    pendingRound: source.pendingRound ?? null,
+    summaryHistory: Array.isArray(source.summaryHistory) ? source.summaryHistory : [],
   };
 }
 
 function getChatStateStoreEvent() {
-  if (!CHAT_STATE_STORE_Event) {
-    CHAT_STATE_STORE_Event = createSdkPluginChatStateStore<RollHelperChatScopedStateEvent>({
-      namespace: SDK_SETTINGS_NAMESPACE_Event,
-      defaults: {
-        skillPresetStoreText: "",
-        activeStatuses: [],
-      },
-      normalize: (candidate) =>
-        normalizeChatScopedStatePayloadEvent(candidate, DEFAULT_SETTINGS_Event.skillTableText),
-    });
-  }
-  return CHAT_STATE_STORE_Event;
+  // 旧 localStorage 聊天状态链路已彻底移除；聊天状态仅使用 SDK/db。
 }
 
-function ensureLegacyChatStateMigrationEvent(): void {
-  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
-  if (!scope) return;
-  const tavernInstanceId = String(scope.tavernInstanceId ?? "").trim();
-  if (!tavernInstanceId) return;
-  if (CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.has(tavernInstanceId)) return;
-  CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.add(tavernInstanceId);
-  void migrateLegacyPluginChatState<RollHelperChatScopedStateEvent>(SDK_SETTINGS_NAMESPACE_Event, {
-    versionTag: "rollhelper_chat_v2_to_sdk_v1",
-    list: async () => {
-      const legacy = (await listChatScopedStateSummariesForTavernV2Event(
-        scope.tavernInstanceId
-      )) as ChatScopedStateSummaryV2Event[];
-      return legacy.map((item) => ({
-        chatKey: String(item.chatScopedKey ?? "").trim(),
-        updatedAt: Number(item.updatedAt) || 0,
-        displayName: String(item.displayName ?? "").trim(),
-        avatarUrl: String(item.avatarUrl ?? "").trim(),
-        roleKey: String(item.roleKey ?? "").trim(),
-        summary: {
-          activeStatusCount: Number(item.activeStatusCount) || 0,
-        },
-      }));
-    },
-    read: async (chatKey: string) => {
-      const loaded = await loadChatScopedStateV2ByKeyEvent(chatKey);
-      const fallbackSkillTableText = getSettingsEvent().skillTableText;
-      return normalizeChatScopedStatePayloadEvent(
-        {
-          skillPresetStoreText: loaded.skillPresetStoreText,
-          activeStatuses: loaded.activeStatuses,
-        },
-        fallbackSkillTableText
-      );
-    },
-  }).catch((error) => {
-    CHAT_STATE_MIGRATION_TRIGGERED_TAVERNS_Event.delete(tavernInstanceId);
-    logger.warn("聊天级旧数据迁移失败（已忽略）", error);
-  });
-}
-
-function readChatScopedStateByKeyEvent(chatKey: string): RollHelperChatScopedStateEvent {
+async function readChatScopedStateByKeyEvent(chatKey: string): Promise<RollHelperChatScopedStateEvent> {
   const fallbackSkillTableText = getSettingsEvent().skillTableText;
-  const row = readSdkPluginChatState<RollHelperChatScopedStateEvent>(
+  const row = await readSdkPluginChatStateAsync(
     SDK_SETTINGS_NAMESPACE_Event,
     chatKey
   );
-  return normalizeChatScopedStatePayloadEvent(row?.state ?? {}, fallbackSkillTableText);
+  return normalizeChatScopedStatePayloadEvent(row?.state as Partial<RollHelperChatScopedStateEvent> ?? {}, fallbackSkillTableText);
 }
 
-function writeChatScopedStateByKeyEvent(
+async function writeChatScopedStateByKeyEvent(
   chatKey: string,
   patchOrNext:
     | Partial<RollHelperChatScopedStateEvent>
     | ((previous: RollHelperChatScopedStateEvent) => Partial<RollHelperChatScopedStateEvent>),
   meta?: { displayName?: string; avatarUrl?: string; roleKey?: string; updatedAt?: number }
-): RollHelperChatScopedStateEvent {
+): Promise<RollHelperChatScopedStateEvent> {
   const fallbackSkillTableText = getSettingsEvent().skillTableText;
-  const previous = readChatScopedStateByKeyEvent(chatKey);
+  const previous = await readChatScopedStateByKeyEvent(chatKey);
   const patch = typeof patchOrNext === "function" ? patchOrNext(previous) : patchOrNext;
   const nextPayload = normalizeChatScopedStatePayloadEvent(
     {
@@ -212,20 +189,11 @@ function writeChatScopedStateByKeyEvent(
   );
 
   const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
-  const existing = readSdkPluginChatState<RollHelperChatScopedStateEvent>(
-    SDK_SETTINGS_NAMESPACE_Event,
-    chatKey
-  );
   const parsed = parseAnyTavernChatRefEvent(chatKey, {
     tavernInstanceId: scope?.tavernInstanceId,
   });
-  const fallbackDisplayName = String(existing?.displayName ?? parsed.chatId ?? "unknown_chat").trim();
-  writeSdkPluginChatState<RollHelperChatScopedStateEvent>(SDK_SETTINGS_NAMESPACE_Event, chatKey, {
-    state: nextPayload,
-    updatedAt: Number(meta?.updatedAt) || Date.now(),
-    displayName: String(meta?.displayName ?? existing?.displayName ?? scope?.displayName ?? fallbackDisplayName).trim(),
-    avatarUrl: String(meta?.avatarUrl ?? existing?.avatarUrl ?? scope?.avatarUrl ?? "").trim(),
-    roleKey: String(meta?.roleKey ?? existing?.roleKey ?? scope?.roleKey ?? "").trim(),
+  const fallbackDisplayName = String(parsed.chatId ?? "unknown_chat").trim();
+  await writeSdkPluginChatStateAsync(SDK_SETTINGS_NAMESPACE_Event, chatKey, nextPayload as unknown as Record<string, unknown>, {
     summary: {
       activeStatusCount: nextPayload.activeStatuses.length,
     },
@@ -236,32 +204,55 @@ function writeChatScopedStateByKeyEvent(
 function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string): void {
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
-  try {
-    writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
-      ...previous,
-      skillPresetStoreText,
-    }));
-  } catch (error) {
+  void writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+    ...previous,
+    skillPresetStoreText,
+  })).catch((error) => {
     logger.warn(`聊天级技能持久化失败，chatKey=${chatKey}`, error);
-  }
+  });
 }
 
 /**
- * 功能：将状态列表写入当前聊天级存储。
- * @param statuses 状态列表
+ * 功能：将完整运行时状态写入当前聊天级存储，并同步 shared.signals。
  * @returns 无返回值
  */
-function persistStatusesToChatScopedEvent(statuses: ActiveStatusEvent[]): void {
+function persistRuntimeStateToChatScopedEvent(): void {
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
-  try {
-    writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
-      ...previous,
-      activeStatuses: normalizeActiveStatusesFromEvent(statuses),
-    }));
-  } catch (error) {
-    logger.warn(`聊天级状态持久化失败，chatKey=${chatKey}`, error);
-  }
+  const meta = RUNTIME_DICE_META_Event;
+  const diceMeta = RUNTIME_DICE_META_LEGACY_Event;
+  void (async () => {
+    try {
+      await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+        ...previous,
+        activeStatuses: normalizeActiveStatusesFromEvent(meta.activeStatuses),
+        lastBaseRoll: diceMeta.last ?? null,
+        pendingRound: meta.pendingRound ?? null,
+        summaryHistory: Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [],
+      }));
+      // 写入公共区 shared.signals
+      const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
+      if (scope) {
+        await ensureSdkChatDocument(chatKey, {
+          tavernInstanceId: scope.tavernInstanceId,
+          scopeType: scope.scopeType,
+          scopeId: scope.scopeId,
+          chatId: scope.currentChatId,
+        });
+      }
+      await patchSdkChatShared(chatKey, {
+        signals: {
+          stx_rollhelper: {
+            lastRollSummary: diceMeta.last ? `${diceMeta.last.expr} = ${diceMeta.last.total}` : null,
+            hasPendingRound: !!meta.pendingRound,
+            activeStatusCount: meta.activeStatuses.length,
+          },
+        },
+      });
+    } catch (error) {
+      logger.warn(`运行时状态持久化失败，chatKey=${chatKey}`, error);
+    }
+  })();
 }
 
 export function getActiveChatKeyEvent(): string {
@@ -296,17 +287,17 @@ export async function listChatScopedStatusSummariesEvent(): Promise<ChatScopedSt
   const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
   if (!scope) return [];
   ACTIVE_CHAT_SCOPE_Event = scope;
-  const list = listSdkPluginChatStateSummaries(SDK_SETTINGS_NAMESPACE_Event);
+  const list = await listSdkPluginChatStateSummariesAsync(SDK_SETTINGS_NAMESPACE_Event);
   return list.map((item) => ({
     chatKey: String(item.chatKey ?? "").trim(),
     updatedAt: Number(item.updatedAt) || 0,
     activeStatusCount: Number((item.summary as { activeStatusCount?: unknown })?.activeStatusCount) || 0,
-    chatId: String(item.chatId ?? "").trim(),
-    displayName: String(item.displayName ?? "").trim(),
-    avatarUrl: String(item.avatarUrl ?? "").trim(),
-    scopeType: item.scopeType === "group" ? "group" : "character",
-    scopeId: String(item.scopeId ?? "").trim(),
-    roleKey: String(item.roleKey ?? "").trim(),
+    chatId: "",
+    displayName: "",
+    avatarUrl: "",
+    scopeType: "character" as const,
+    scopeId: "",
+    roleKey: "",
   }));
 }
 
@@ -331,7 +322,7 @@ export async function listHostChatsForCurrentScopeEvent(): Promise<HostChatListI
 }
 
 export async function loadStatusesForChatKeyEvent(chatKey: string): Promise<ActiveStatusEvent[]> {
-  const state = readChatScopedStateByKeyEvent(chatKey);
+  const state = await readChatScopedStateByKeyEvent(chatKey);
   return normalizeActiveStatusesFromEvent(state.activeStatuses);
 }
 
@@ -339,7 +330,7 @@ export async function saveStatusesForChatKeyEvent(
   chatKey: string,
   statuses: ActiveStatusEvent[]
 ): Promise<void> {
-  writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+  await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
     ...previous,
     activeStatuses: normalizeActiveStatusesFromEvent(statuses),
   }));
@@ -373,24 +364,22 @@ export async function cleanupUnusedChatStatesForCurrentTavernEvent(
       )
       .filter(Boolean)
   );
-  const summaries = listSdkPluginChatStateSummaries(SDK_SETTINGS_NAMESPACE_Event);
+  const summaries = await listSdkPluginChatStateSummariesAsync(SDK_SETTINGS_NAMESPACE_Event);
   const deletedChatKeys: string[] = [];
 
-  summaries.forEach((item) => {
+  for (const item of summaries) {
     const chatKey = String(item.chatKey ?? "").trim();
-    if (!chatKey) return;
-    if (String(item.tavernInstanceId ?? "").trim() !== String(scope.tavernInstanceId ?? "").trim()) return;
-    if (isFallbackTavernChatEvent(item.chatId)) return;
+    if (!chatKey) continue;
     const entityKey = buildTavernChatEntityKeyEvent(
       parseAnyTavernChatRefEvent(chatKey, {
         tavernInstanceId: String(scope.tavernInstanceId ?? "").trim(),
       })
     );
-    if (!entityKey || retain.has(entityKey)) return;
-    const deleted = deleteSdkPluginChatState(SDK_SETTINGS_NAMESPACE_Event, chatKey);
-    if (!deleted) return;
+    if (!entityKey || retain.has(entityKey)) continue;
+    const deleted = await deleteSdkPluginChatStateAsync(SDK_SETTINGS_NAMESPACE_Event, chatKey);
+    if (!deleted) continue;
     deletedChatKeys.push(chatKey);
-  });
+  }
 
   return {
     deletedCount: deletedChatKeys.length,
@@ -403,7 +392,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
   try {
-    const state = readChatScopedStateByKeyEvent(chatKey);
+    const state = await readChatScopedStateByKeyEvent(chatKey);
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
     const settings = getSettingsEvent();
@@ -421,8 +410,16 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
 
     const meta = getDiceMetaEvent();
     meta.activeStatuses = normalizeActiveStatusesFromEvent(state.activeStatuses);
-    saveMetadataSafeEvent();
-
+    meta.pendingRound = state.pendingRound ?? undefined;
+    meta.summaryHistory = Array.isArray(state.summaryHistory) ? state.summaryHistory : [];
+    meta.outboundSummary = undefined;
+    meta.pendingResultGuidanceQueue = [];
+    meta.outboundResultGuidance = undefined;
+    meta.lastPromptUserMsgId = undefined;
+    meta.lastProcessedAssistantMsgId = undefined;
+    const diceMetaLegacy = getDiceMeta();
+    diceMetaLegacy.last = state.lastBaseRoll ?? undefined;
+    diceMetaLegacy.lastTotal = state.lastBaseRoll?.total;
     let wroteSettings = false;
     if (
       settings.skillPresetStoreText !== nextSkillPresetStoreText ||
@@ -440,7 +437,6 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     if (!wroteSettings) {
       syncSettingsUiCallbackEvent();
     }
-    logger.info(`聊天级状态已装载 (${reason}) chatKey=${chatKey}`);
   } catch (error) {
     logger.warn(`聊天级状态装载失败，已降级默认 (${reason}) chatKey=${chatKey}`, error);
     const settings = getSettingsEvent();
@@ -449,7 +445,16 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     const nextSkillTableText = syncActivePresetToSkillTableTextEvent(defaultStore, settings.skillTableText);
     const meta = getDiceMetaEvent();
     meta.activeStatuses = [];
-    saveMetadataSafeEvent();
+    meta.pendingRound = undefined;
+    meta.summaryHistory = [];
+    meta.outboundSummary = undefined;
+    meta.pendingResultGuidanceQueue = [];
+    meta.outboundResultGuidance = undefined;
+    meta.lastPromptUserMsgId = undefined;
+    meta.lastProcessedAssistantMsgId = undefined;
+    const diceMetaLegacy = getDiceMeta();
+    diceMetaLegacy.last = undefined;
+    diceMetaLegacy.lastTotal = undefined;
 
     let wroteSettings = false;
     if (
@@ -472,18 +477,22 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
 }
 
 export function getDiceMeta(): DiceMeta {
-  const root = getChatMetadataRootEvent();
-  if (!root.diceRoller || typeof root.diceRoller !== "object") {
-    root.diceRoller = {};
-  }
-  return root.diceRoller as DiceMeta;
+  return RUNTIME_DICE_META_LEGACY_Event;
 }
 
 export function saveLastRoll(result: DiceResult): void {
   const meta = getDiceMeta();
-  meta.last = result as any;
-  meta.lastTotal = (result as any).total;
-  saveMetadata();
+  meta.last = result;
+  meta.lastTotal = result.total;
+  saveMetadataSafeEvent();
+  // 追加到 chat_plugin_records
+  const chatKey = getActiveChatKeyEvent();
+  if (chatKey) {
+    void appendSdkPluginChatRecord(SDK_SETTINGS_NAMESPACE_Event, chatKey, 'roll_results', {
+      recordId: createIdEvent('roll'),
+      payload: result as unknown as Record<string, unknown>,
+    }).catch(() => {});
+  }
 }
 
 export function getChatMetadataRootEvent(): Record<string, any> {
@@ -496,30 +505,14 @@ export function getChatMetadataRootEvent(): Record<string, any> {
 }
 
 export function getDiceMetaEvent(): DiceMetaEvent {
-  const root = getChatMetadataRootEvent();
-  if (!root.diceRollerEvent || typeof root.diceRollerEvent !== "object") {
-    root.diceRollerEvent = {};
+  if (!Array.isArray(RUNTIME_DICE_META_Event.activeStatuses)) {
+    RUNTIME_DICE_META_Event.activeStatuses = [];
   }
-  const meta = root.diceRollerEvent as DiceMetaEvent;
-  if (!Array.isArray(meta.activeStatuses)) {
-    meta.activeStatuses = [];
-  }
-  return meta;
+  return RUNTIME_DICE_META_Event;
 }
 
 export function saveMetadataSafeEvent(): void {
-  const liveCtx = getLiveContextEvent();
-  if (typeof liveCtx?.saveMetadata === "function") {
-    try {
-      liveCtx.saveMetadata();
-    } catch (error) {
-      logger.warn("保存 Event 元数据失败", error);
-    }
-  }
-  const meta = getDiceMetaEvent();
-  if (Array.isArray(meta.activeStatuses)) {
-    persistStatusesToChatScopedEvent(meta.activeStatuses);
-  }
+  persistRuntimeStateToChatScopedEvent();
 }
 
 function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThemeEvent {
@@ -594,11 +587,13 @@ function ensureSettingsThemeMirrorEvent(
 ): DicePluginSettingsEvent {
   const legacyTheme = normalizeSettingsThemeCompatEvent(settings.theme);
   let sdkTheme = resolveSdkSettingsThemeEvent();
-  if (allowSeedFromLegacy && sdkTheme === "default" && legacyTheme !== "default") {
-    setSdkThemeState(buildSdkThemePatchFromSelection(legacyTheme));
-    sdkTheme = resolveSdkSettingsThemeEvent();
-  }
   if (legacyTheme !== sdkTheme) {
+    traceStoreThemeEvent("ensureSettingsThemeMirrorEvent writing mirrored theme back to settings", {
+      legacyTheme,
+      sdkTheme,
+      allowSeedFromLegacy,
+      settingsTheme: settings.theme,
+    });
     return writeSettingsForCurrentScopeEvent({
       theme: sdkTheme,
     });
@@ -681,20 +676,6 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   }
   bucket.ruleText = typeof bucket.ruleText === "string" ? bucket.ruleText : DEFAULT_RULE_TEXT_Event;
 
-  // 新设置默认读取与归一化
-  bucket.compatibilityModeForSummaryPlugins =
-    typeof (source as any)?.compatibilityModeForSummaryPlugins === "boolean"
-      ? (source as any).compatibilityModeForSummaryPlugins
-      : true;
-  bucket.removeRollJsonFromStoredText =
-    typeof (source as any)?.removeRollJsonFromStoredText === "boolean"
-      ? (source as any).removeRollJsonFromStoredText
-      : true;
-  bucket.stripRollHelperInternalBlocks =
-    typeof (source as any)?.stripRollHelperInternalBlocks === "boolean"
-      ? (source as any).stripRollHelperInternalBlocks
-      : true;
-
   return bucket;
 }
 
@@ -706,8 +687,6 @@ function getSettingsStoreEvent() {
       normalize: normalizeSettingsBucketEvent,
     });
   }
-  getChatStateStoreEvent();
-  ensureLegacyChatStateMigrationEvent();
   if (!SETTINGS_STORE_SUBSCRIBED_Event) {
     SETTINGS_STORE_SUBSCRIBED_Event = true;
     SETTINGS_STORE_Event.subscribe((settings, scope) => {
@@ -746,7 +725,7 @@ export function getSettingsEvent(): DicePluginSettingsEvent {
   if (!cached) {
     setSettingsCacheForScopeEvent(scopeKey, current);
   }
-  const mirrored = ensureSettingsThemeMirrorEvent(current, true);
+  const mirrored = ensureSettingsThemeMirrorEvent(current, false);
   if (mirrored !== current) {
     setSettingsCacheForScopeEvent(scopeKey, mirrored);
   }
@@ -773,11 +752,15 @@ export function setActiveStatusesEvent(statuses: ActiveStatusEvent[]): void {
   const meta = getDiceMetaEvent();
   meta.activeStatuses = normalizeActiveStatusesFromEvent(Array.isArray(statuses) ? statuses : []);
   saveMetadataSafeEvent();
-  persistStatusesToChatScopedEvent(meta.activeStatuses);
 }
 
 export function updateSettingsEvent(patch: Partial<DicePluginSettingsEvent>): void {
   const patchAny = patch as Partial<DicePluginSettingsEvent> & { theme?: RollHelperSettingsThemeEvent };
+  traceStoreThemeEvent("updateSettingsEvent", {
+    patch,
+    patchTheme: patchAny.theme ?? null,
+    sdkThemeBefore: resolveSdkSettingsThemeEvent(),
+  });
   if (patchAny.theme != null) {
     setSdkThemeState(buildSdkThemePatchFromSelection(normalizeSettingsThemeCompatEvent(patchAny.theme)));
   }

@@ -8,6 +8,7 @@ import { AuditManager } from '../core/audit-manager';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { db, patchSdkChatShared } from '../db/db';
 
 /**
  * 提议写入管理器 —— 接收 AI 或外部插件的提议，经四道闸门后落盘
@@ -182,11 +183,40 @@ export class ProposalManager {
             after: { applied, confidence: envelope.confidence },
         });
 
+        // 更新 shared.signals —— 其他插件可读取的 MemoryOS 摘要
+        void this.updateSharedSignals();
+
         return {
             accepted: true,
             applied,
             rejectedReasons: [],
             gateResults,
         };
+    }
+
+    /**
+     * 统计当前 chatKey 下的事实/事件数量，写入 shared.signals
+     */
+    private async updateSharedSignals(): Promise<void> {
+        try {
+            const [factCount, eventCount, activeTemplateId] = await Promise.all([
+                db.facts.where('chatKey').equals(this.chatKey).count(),
+                db.events.where('chatKey').equals(this.chatKey).count(),
+                this.metaManager.getActiveTemplateId(),
+            ]);
+
+            await patchSdkChatShared(this.chatKey, {
+                signals: {
+                    [MEMORY_OS_PLUGIN_ID]: {
+                        activeTemplate: activeTemplateId,
+                        lastSummaryAt: Date.now(),
+                        factCount,
+                        eventCount,
+                    },
+                },
+            });
+        } catch {
+            // signal 更新失败不应影响主流程
+        }
     }
 }

@@ -1,4 +1,5 @@
 import sharedSelectCssText from "./sharedSelect.css?inline";
+import { applySdkThemeSnapshotToDetachedNode, subscribeSdkTheme } from "../SDK/theme";
 
 type SharedSelectAttributeValue = string | number | boolean | null | undefined;
 
@@ -35,6 +36,25 @@ interface SharedSelectRefs {
 
 let OPEN_SHARED_SELECT_ROOT: HTMLElement | null = null;
 let SHARED_SELECT_GLOBAL_EVENTS_BOUND = false;
+let SHARED_SELECT_REPOSITION_FRAME = 0;
+let SHARED_SELECT_THEME_FRAME = 0;
+
+function traceSharedSelect(message: string, payload?: unknown): void {
+  if (payload === undefined) {
+    console.info(`[SS-Helper][SharedSelectTrace] ${message}`);
+    return;
+  }
+  console.info(`[SS-Helper][SharedSelectTrace] ${message}`, payload);
+}
+
+/**
+ * 功能：阻止共享选择框事件继续冒泡到宿主页面。
+ * @param event 当前交互事件
+ * @returns 无返回值
+ */
+function stopSharedSelectEventPropagation(event: Event): void {
+  event.stopPropagation();
+}
 
 /**
  * 功能：转义 HTML 文本，避免模板注入。
@@ -179,7 +199,7 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
  */
 export function buildSharedSelectStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return sharedSelectCssText.replaceAll("_SCOPE_", scope);
+  return sharedSelectCssText.split("_SCOPE_").join(scope);
 }
 
 /**
@@ -247,6 +267,13 @@ function scrollOptionIntoView(refs: SharedSelectRefs, index: number): void {
  * @returns 无返回值
  */
 function setHighlightIndex(refs: SharedSelectRefs, index: number, ensureVisible: boolean): void {
+  const currentIndex = getHighlightIndex(refs.root);
+  if (currentIndex === index) {
+    if (ensureVisible && index >= 0) {
+      scrollOptionIntoView(refs, index);
+    }
+    return;
+  }
   refs.options.forEach((item, optionIndex) => {
     item.classList.toggle("is-highlighted", optionIndex === index);
   });
@@ -327,6 +354,18 @@ function ensureSharedSelectListHost(refs: SharedSelectRefs): void {
   if (refs.list.parentElement !== host) {
     host.appendChild(refs.list);
   }
+  const isDetached = !refs.root.contains(refs.list);
+  refs.list.dataset.sharedSelectDetached = isDetached ? "true" : "false";
+}
+
+/**
+ * 功能：同步根节点上的主题变量到脱离作用域的下拉面板。
+ * @param refs 共享选择框运行时节点引用
+ * @returns 无返回值
+ */
+function syncSharedSelectDetachedThemeVars(refs: SharedSelectRefs): void {
+  if (refs.list.dataset.sharedSelectDetached !== "true") return;
+  applySdkThemeSnapshotToDetachedNode(refs.list, refs.root);
 }
 
 /**
@@ -362,6 +401,54 @@ function positionSharedSelectList(refs: SharedSelectRefs): void {
 }
 
 /**
+ * 功能：在下一帧统一重算当前打开下拉框的位置。
+ * @returns 无返回值
+ */
+function scheduleOpenSharedSelectReposition(): void {
+  if (SHARED_SELECT_REPOSITION_FRAME) return;
+  SHARED_SELECT_REPOSITION_FRAME = window.requestAnimationFrame((): void => {
+    SHARED_SELECT_REPOSITION_FRAME = 0;
+    const openRoot = OPEN_SHARED_SELECT_ROOT;
+    if (!openRoot) return;
+    if (!openRoot.isConnected) {
+      OPEN_SHARED_SELECT_ROOT = null;
+      return;
+    }
+    const refs = getSharedSelectRefs(openRoot);
+    if (!refs) {
+      OPEN_SHARED_SELECT_ROOT = null;
+      return;
+    }
+    positionSharedSelectList(refs);
+  });
+}
+
+function scheduleOpenSharedSelectThemeRefresh(): void {
+  if (SHARED_SELECT_THEME_FRAME) {
+    window.cancelAnimationFrame(SHARED_SELECT_THEME_FRAME);
+  }
+  SHARED_SELECT_THEME_FRAME = window.requestAnimationFrame((): void => {
+    SHARED_SELECT_THEME_FRAME = 0;
+    const openRoot = OPEN_SHARED_SELECT_ROOT;
+    traceSharedSelect("theme refresh frame fired", {
+      hasOpenRoot: !!openRoot,
+      openRootConnected: !!openRoot?.isConnected,
+    });
+    if (!openRoot || !openRoot.isConnected) {
+      OPEN_SHARED_SELECT_ROOT = null;
+      return;
+    }
+    const refs = getSharedSelectRefs(openRoot);
+    if (!refs) {
+      OPEN_SHARED_SELECT_ROOT = null;
+      return;
+    }
+    syncSharedSelectDetachedThemeVars(refs);
+    scheduleOpenSharedSelectReposition();
+  });
+}
+
+/**
  * 功能：关闭当前打开的选择框。
  * @param root 组件根节点
  * @param restoreFocus 是否把焦点还给触发器
@@ -381,6 +468,10 @@ function closeSharedSelect(root: HTMLElement | null, restoreFocus: boolean): voi
   root.dataset.sharedSelectHighlightIndex = String(getSelectedOptionIndex(refs));
   if (OPEN_SHARED_SELECT_ROOT === root) {
     OPEN_SHARED_SELECT_ROOT = null;
+  }
+  if (SHARED_SELECT_REPOSITION_FRAME) {
+    window.cancelAnimationFrame(SHARED_SELECT_REPOSITION_FRAME);
+    SHARED_SELECT_REPOSITION_FRAME = 0;
   }
   if (restoreFocus) {
     refs.trigger.focus();
@@ -407,6 +498,7 @@ function openSharedSelect(root: HTMLElement): void {
   refs.trigger.setAttribute("aria-expanded", "true");
   setHighlightIndex(refs, initialIndex, false);
   positionSharedSelectList(refs);
+  syncSharedSelectDetachedThemeVars(refs);
 }
 
 /**
@@ -443,6 +535,7 @@ function syncSingleSharedSelect(root: HTMLElement): void {
   refs.root.dataset.sharedSelectHighlightIndex = String(selectedIndex >= 0 ? selectedIndex : -1);
   if (refs.root.classList.contains("is-open")) {
     positionSharedSelectList(refs);
+    syncSharedSelectDetachedThemeVars(refs);
     setHighlightIndex(refs, getHighlightIndex(refs.root), false);
   }
 }
@@ -454,6 +547,11 @@ function syncSingleSharedSelect(root: HTMLElement): void {
  * @returns 无返回值
  */
 function commitSharedSelectValue(refs: SharedSelectRefs, value: string): void {
+  traceSharedSelect("commitSharedSelectValue", {
+    selectId: refs.select.id,
+    previousValue: refs.select.value,
+    nextValue: value,
+  });
   if (refs.select.value === value) {
     syncSingleSharedSelect(refs.root);
     closeSharedSelect(refs.root, true);
@@ -565,7 +663,7 @@ function ensureSharedSelectGlobalEvents(): void {
         OPEN_SHARED_SELECT_ROOT = null;
         return;
       }
-      positionSharedSelectList(refs);
+      scheduleOpenSharedSelectReposition();
     },
     true
   );
@@ -582,7 +680,17 @@ function ensureSharedSelectGlobalEvents(): void {
       OPEN_SHARED_SELECT_ROOT = null;
       return;
     }
-    positionSharedSelectList(refs);
+    scheduleOpenSharedSelectReposition();
+  });
+
+  subscribeSdkTheme(() => {
+    const openRoot = OPEN_SHARED_SELECT_ROOT;
+    traceSharedSelect("subscribeSdkTheme fired", {
+      hasOpenRoot: !!openRoot,
+      openRootConnected: !!openRoot?.isConnected,
+    });
+    if (!openRoot || !openRoot.isConnected) return;
+    scheduleOpenSharedSelectThemeRefresh();
   });
 }
 
@@ -601,7 +709,16 @@ function bindSharedSelect(root: HTMLElement): void {
   root.dataset.sharedSelectBound = "1";
   ensureSharedSelectGlobalEvents();
 
-  refs.trigger.addEventListener("click", () => {
+  refs.trigger.addEventListener("pointerdown", (event: PointerEvent): void => {
+    stopSharedSelectEventPropagation(event);
+  });
+
+  refs.trigger.addEventListener("mousedown", (event: MouseEvent): void => {
+    stopSharedSelectEventPropagation(event);
+  });
+
+  refs.trigger.addEventListener("click", (event: MouseEvent): void => {
+    stopSharedSelectEventPropagation(event);
     toggleSharedSelect(root);
   });
 
@@ -623,15 +740,32 @@ function bindSharedSelect(root: HTMLElement): void {
     if (!option) return;
     const index = Number(option.dataset.sharedSelectOptionIndex ?? "");
     if (!Number.isFinite(index) || option.dataset.sharedSelectDisabled === "true") return;
-    setHighlightIndex(refs, Math.floor(index), false);
+    const nextIndex = Math.floor(index);
+    if (nextIndex === getHighlightIndex(refs.root)) return;
+    setHighlightIndex(refs, nextIndex, false);
   });
 
-  refs.list.addEventListener("click", (event: MouseEvent) => {
+  refs.list.addEventListener("pointerdown", (event: PointerEvent): void => {
+    stopSharedSelectEventPropagation(event);
     const target = event.target as HTMLElement | null;
     const option = target?.closest<HTMLElement>(".stx-shared-select-option");
     if (!option || option.dataset.sharedSelectDisabled === "true") return;
+    if (event.button !== 0) return;
+    event.preventDefault();
     const value = String(option.dataset.sharedSelectOptionValue ?? "");
     commitSharedSelectValue(refs, value);
+  });
+
+  refs.list.addEventListener("mousedown", (event: MouseEvent): void => {
+    stopSharedSelectEventPropagation(event);
+  });
+
+  refs.list.addEventListener("click", (event: MouseEvent) => {
+    stopSharedSelectEventPropagation(event);
+    const target = event.target as HTMLElement | null;
+    const option = target?.closest<HTMLElement>(".stx-shared-select-option");
+    if (!option) return;
+    event.preventDefault();
   });
 
   syncSingleSharedSelect(root);

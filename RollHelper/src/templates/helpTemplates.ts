@@ -13,7 +13,7 @@ export function buildRollCommandHelpTemplateEvent(): string {
         <li><code>/roll 2d20kl1</code>（保留最低 1 个）</li>
       </ul>
       <div>
-        结果会保存到 <code>chatMetadata.lastRoll</code>，可通过
+        结果可通过
         <code>{{lastRoll}}</code> / <code>{{lastRollTotal}}</code> 读取。
       </div>
     `;

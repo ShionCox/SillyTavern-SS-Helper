@@ -1,14 +1,12 @@
 import {
   bindEventButtonsEvent,
   mountSettingsCardEvent,
-  refreshCountdownDomEvent,
   registerBaseMacrosAndCommandsEvent,
   registerDebugCommandEvent,
   registerEventHooksEvent,
   registerEventRollCommandEvent,
-  sanitizeCurrentChatEventBlocksEvent,
+  restoreRuntimeUiFromStateEvent,
   startCountdownTickerEvent,
-  sweepTimeoutFailuresEvent,
 } from "./eventRuntime";
 
 import { logger } from "../../index";
@@ -19,9 +17,9 @@ const INITIALIZE_RETRY_MAX_Event = 80;
 const INITIALIZE_RETRY_DELAY_MS_Event = 500;
 
 /**
- * 功能：返回当前尚未完成注册的初始化标记列表。
- * @param globalRef 全局对象引用
- * @returns 尚未完成的标记名列表
+ * 功能：收集当前尚未完成注册的初始化标记。
+ * @param globalRef 全局对象引用。
+ * @returns 尚未完成的标记名称列表。
  */
 function collectMissingInitFlagsEvent(globalRef: Record<string, unknown>): string[] {
   const missing: string[] = [];
@@ -33,9 +31,9 @@ function collectMissingInitFlagsEvent(globalRef: Record<string, unknown>): strin
 }
 
 /**
- * 功能：初始化 RollHelper 运行时，并在宿主能力尚未就绪时自动重试。
- * @param attempt 当前重试次数
- * @returns 无返回值
+ * 功能：初始化事件运行时，并在宿主能力尚未就绪时自动重试。
+ * @param attempt 当前重试次数。
+ * @returns 无返回值。
  */
 export function initializeEventRuntimeEvent(attempt = 0): void {
   ensureEventCardStylesEvent();
@@ -45,13 +43,15 @@ export function initializeEventRuntimeEvent(attempt = 0): void {
   registerEventRollCommandEvent();
   registerDebugCommandEvent();
   registerEventHooksEvent();
-  void loadChatScopedStateIntoRuntimeEvent("init_runtime").catch((error) => {
-    logger.warn("初始化聊天级状态失败", error);
-  });
   startCountdownTickerEvent();
-  sweepTimeoutFailuresEvent();
-  refreshCountdownDomEvent();
-  sanitizeCurrentChatEventBlocksEvent();
+
+  void loadChatScopedStateIntoRuntimeEvent("init_runtime")
+    .catch((error) => {
+      logger.warn("初始化聊天级状态失败", error);
+    })
+    .finally(() => {
+      restoreRuntimeUiFromStateEvent();
+    });
 
   const globalRef = globalThis as Record<string, unknown>;
   const missingFlags = collectMissingInitFlagsEvent(globalRef);

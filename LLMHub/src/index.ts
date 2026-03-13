@@ -44,6 +44,8 @@ import { renderSettingsUi } from './ui/index';
 import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
+import { patchSdkChatShared, writeSdkPluginChatState } from '../../SDK/db';
+import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { TaskRouter, type RoutePolicy } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
@@ -121,6 +123,9 @@ class LLMHub {
                 this.budgetManager.setConfig(consumer, config);
             }
         }
+
+        this.updateSharedSignals();
+        this.persistChatSnapshot();
     }
 
     /**
@@ -159,6 +164,9 @@ class LLMHub {
             defaultModel: model,
             defaultBaseUrl: finalBaseUrl,
         });
+
+        this.updateSharedSignals();
+        this.persistChatSnapshot();
     }
 
     /**
@@ -296,6 +304,50 @@ class LLMHub {
         }
         stContext.extensionSettings['stx_llmhub'] = settings;
         stContext.saveSettingsDebounced?.();
+    }
+
+    /**
+     * 将当前 provider/model/profile 写入 shared.signals，供其他插件读取
+     */
+    private updateSharedSignals(): void {
+        const chatKey = buildSdkChatKeyEvent();
+        if (!chatKey) return;
+
+        const settings = this.readSettings();
+        void patchSdkChatShared(chatKey, {
+            signals: {
+                stx_llmhub: {
+                    currentProvider: settings.defaultProvider || this.defaultProvider,
+                    currentModel: settings.defaultModel || this.defaultModel,
+                    profile: settings.globalProfile || 'balanced',
+                },
+            },
+        });
+    }
+
+    /**
+     * 持久化路由/预算快照到当前聊天的 chat_plugin_state
+     */
+    private persistChatSnapshot(): void {
+        const chatKey = buildSdkChatKeyEvent();
+        if (!chatKey) return;
+
+        const settings = this.readSettings();
+        void writeSdkPluginChatState('stx_llmhub', chatKey, {
+            state: {
+                routeSnapshot: {
+                    defaultProvider: settings.defaultProvider || this.defaultProvider,
+                    defaultModel: settings.defaultModel || this.defaultModel,
+                    policies: settings.routePolicies || [],
+                },
+                budgetSnapshot: settings.budgets || {},
+                profile: settings.globalProfile || 'balanced',
+            },
+            summary: {
+                provider: settings.defaultProvider || this.defaultProvider,
+                model: settings.defaultModel || this.defaultModel,
+            },
+        });
     }
 }
 

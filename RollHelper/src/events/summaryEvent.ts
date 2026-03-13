@@ -100,6 +100,9 @@ export function createRoundSummarySnapshotEvent(
     eventsCount: round.events.length,
     rolledCount,
     events,
+    sourceAssistantMsgIds: Array.isArray(round.sourceAssistantMsgIds)
+      ? [...round.sourceAssistantMsgIds]
+      : [],
   };
 }
 

@@ -231,6 +231,16 @@
   font-family: var(--st-rh-font-main);
 }
 
+.st-rh-inline-tip-segment {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.18rem;
+  cursor: help;
+  border-bottom: 1px dashed color-mix(in srgb, var(--st-rh-meta) 80%, transparent);
+  line-height: 1.1;
+  text-decoration: none;
+}
+
 /* ======== 辅助区块 ======== */
 .st-rh-impact-note,
 .st-rh-note-box {

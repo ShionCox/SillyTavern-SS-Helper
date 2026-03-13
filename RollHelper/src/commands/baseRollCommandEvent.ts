@@ -16,7 +16,7 @@ export interface BaseRollCommandDepsEvent {
   rollExpression: (exprRaw: string) => DiceResult;
   saveLastRoll: (result: DiceResult) => void;
   buildResultMessage: (result: DiceResult) => string;
-  pushToChat: (message: string) => string | void;
+  appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
 }
 
 export function registerBaseMacrosAndCommandsEvent(
@@ -32,7 +32,7 @@ export function registerBaseMacrosAndCommandsEvent(
     rollExpression,
     saveLastRoll,
     buildResultMessage,
-    pushToChat,
+    appendToConsoleEvent,
   } = deps;
 
   const globalRef = globalThis as any;
@@ -82,12 +82,12 @@ export function registerBaseMacrosAndCommandsEvent(
           const result = rollExpression(expr);
           saveLastRoll(result);
           const msg = buildResultMessage(result);
-          const fallback = pushToChat(msg);
-          return fallback ?? "";
+          appendToConsoleEvent(msg);
+          return "";
         } catch (e: any) {
           const errMsg = `掷骰出错：${e?.message ?? String(e)}`;
-          const fallback = pushToChat(errMsg);
-          return fallback ?? "";
+          appendToConsoleEvent(errMsg, "error");
+          return "";
         }
       },
     })

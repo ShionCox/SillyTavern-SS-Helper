@@ -22,6 +22,8 @@ import type {
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
+import { appendSdkPluginChatRecord } from "../../../SDK/db";
+import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
 
 const DEFAULT_RULE_BLOCK_START_Event = "<dice_rules>";
 const DEFAULT_RULE_BLOCK_END_Event = "</dice_rules>";
@@ -679,6 +681,15 @@ export function handlePromptReadyEvent(
     if (upsertRoundSnapshotToHistoryEvent(history, snapshot)) {
       deps.trimSummaryHistoryEvent(history);
       changedMeta = true;
+
+      // 记录到 chat_plugin_records 以便后续查询
+      const chatKey = buildSdkChatKeyEvent();
+      if (chatKey) {
+        void appendSdkPluginChatRecord('stx_rollhelper', chatKey, 'round_summaries', {
+          recordId: snapshot.roundId,
+          payload: snapshot as unknown as Record<string, unknown>,
+        });
+      }
     }
   }
 

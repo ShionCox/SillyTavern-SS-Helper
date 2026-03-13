@@ -18,7 +18,7 @@ export interface EventRollCommandDepsEvent {
   SlashCommand: any;
   SlashCommandArgument: any;
   ARGUMENT_TYPE: any;
-  pushToChat: (message: string) => string | void;
+  appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
   sweepTimeoutFailuresEvent: () => boolean;
   getDiceMetaEvent: () => DiceMetaEvent;
   getSettingsEvent: () => DicePluginSettingsEvent;
@@ -153,7 +153,7 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
     SlashCommand,
     SlashCommandArgument,
     ARGUMENT_TYPE,
-    pushToChat,
+    appendToConsoleEvent,
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent,
     getSettingsEvent,
@@ -190,8 +190,8 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
         const action = (parts[0] || "help").toLowerCase();
 
         if (action === "help") {
-          const fallback = pushToChat(buildEventRollHelpMessageEvent());
-          return fallback ?? "";
+          appendToConsoleEvent(buildEventRollHelpMessageEvent());
+          return "";
         }
 
         if (action === "list") {
@@ -199,8 +199,8 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
           const meta = getDiceMetaEvent();
           const round = meta.pendingRound;
           if (!round || round.status !== "open") {
-            const fallback = pushToChat("当前没有可用事件，请先等待 AI 输出事件 JSON。");
-            return fallback ?? "";
+            appendToConsoleEvent("当前没有可用事件，请先等待 AI 输出事件 JSON。", "warn");
+            return "";
           }
           const msg = buildPreBlockTemplateEvent(
             escapeHtmlEvent(
@@ -213,8 +213,8 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
               })
             )
           );
-          const fallback = pushToChat(msg);
-          return fallback ?? "";
+          appendToConsoleEvent(msg);
+          return "";
         }
 
         if (action === "roll") {
@@ -222,14 +222,13 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
           const overrideExpr = parts.length > 2 ? parts.slice(2).join(" ") : undefined;
           const feedback = performEventRollByIdEvent(eventId, overrideExpr);
           if (feedback) {
-            const fallback = pushToChat(feedback);
-            return fallback ?? "";
+            appendToConsoleEvent(feedback, "error");
           }
           return "";
         }
 
-        const fallback = pushToChat("未知子命令，请使用 /eventroll help 查看帮助。");
-        return fallback ?? "";
+        appendToConsoleEvent("未知子命令，请使用 /eventroll help 查看帮助。", "warn");
+        return "";
       },
     })
   );

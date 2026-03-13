@@ -2,114 +2,109 @@
  * 凭据管理器 (Vault) —— 密钥集中安全存储
  * 所有 API Key 集中在 LLM Hub 管理，Memory OS 和其他插件不保存明文
  *
- * 存储策略：IndexedDB 加密存储（简单的 base64 混淆 + 前缀标识）
- * 生产环境建议替换为 ST 提供的 secure storage API
+ * 存储策略：统一 ss-helper-db Dexie 表 `llm_credentials`
+ * 密钥使用 base64 混淆 + 前缀标识（生产环境建议替换为 ST secure storage API）
  */
+import Dexie from 'dexie';
+import { db, type DBLlmCredential } from '../../../SDK/db';
+import { Logger } from '../../../SDK/logger';
 
-interface VaultEntry {
-    providerId: string;
-    key: string;        // 混淆后的密钥
-    createdAt: number;
-    updatedAt: number;
-}
+const logger = new Logger('LLMHub-Vault');
+const MIGRATION_FLAG_KEY = 'stx_llm_vault_migrated_to_ss_helper_db';
 
 export class VaultManager {
-    private static readonly DB_NAME = 'stx_llm_vault';
-    private static readonly STORE_NAME = 'credentials';
     private static readonly OBFUSCATION_PREFIX = 'stx_v1_';
 
     private cache: Map<string, string> = new Map();
-    private dbReady: Promise<IDBDatabase>;
+    private migrationDone: Promise<void>;
 
     constructor() {
-        this.dbReady = this.initDB();
+        this.migrationDone = this.migrateLegacyVault();
     }
 
-    /** 初始化 IndexedDB */
-    private initDB(): Promise<IDBDatabase> {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(VaultManager.DB_NAME, 1);
-            request.onupgradeneeded = () => {
-                const db = request.result;
-                if (!db.objectStoreNames.contains(VaultManager.STORE_NAME)) {
-                    db.createObjectStore(VaultManager.STORE_NAME, { keyPath: 'providerId' });
-                }
-            };
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
+    /**
+     * 一次性迁移：旧 stx_llm_vault IndexedDB → ss-helper-db.llm_credentials
+     */
+    private async migrateLegacyVault(): Promise<void> {
+        if (localStorage.getItem(MIGRATION_FLAG_KEY) === '1') return;
+
+        try {
+            const databases = await Dexie.getDatabaseNames();
+            if (!databases.includes('stx_llm_vault')) {
+                localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+                return;
+            }
+
+            logger.info('检测到旧凭据库 stx_llm_vault，开始迁移...');
+
+            const legacyDb = new Dexie('stx_llm_vault');
+            legacyDb.version(1).stores({ credentials: 'providerId' });
+            await legacyDb.open();
+
+            const rows = await legacyDb.table('credentials').toArray();
+            if (rows.length > 0) {
+                const entries: DBLlmCredential[] = rows.map((row: any) => ({
+                    providerId: row.providerId,
+                    key: row.key,
+                    createdAt: row.createdAt ?? Date.now(),
+                    updatedAt: row.updatedAt ?? Date.now(),
+                }));
+                await db.llm_credentials.bulkPut(entries);
+                logger.success(`迁移了 ${entries.length} 条凭据记录`);
+            }
+
+            legacyDb.close();
+            localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+        } catch (err) {
+            logger.error('旧凭据库迁移失败:', err);
+        }
     }
 
     /** 存储凭据 */
     async setCredential(providerId: string, apiKey: string): Promise<void> {
+        await this.migrationDone;
         const obfuscated = this.obfuscate(apiKey);
-        const entry: VaultEntry = {
+        const now = Date.now();
+
+        const existing = await db.llm_credentials.get(providerId);
+        const entry: DBLlmCredential = {
             providerId,
             key: obfuscated,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
         };
 
-        const db = await this.dbReady;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(VaultManager.STORE_NAME, 'readwrite');
-            tx.objectStore(VaultManager.STORE_NAME).put(entry);
-            tx.oncomplete = () => {
-                this.cache.set(providerId, apiKey);
-                resolve();
-            };
-            tx.onerror = () => reject(tx.error);
-        });
+        await db.llm_credentials.put(entry);
+        this.cache.set(providerId, apiKey);
     }
 
     /** 获取凭据（优先从缓存读取） */
     async getCredential(providerId: string): Promise<string | null> {
-        // 缓存命中
+        await this.migrationDone;
         const cached = this.cache.get(providerId);
         if (cached) return cached;
 
-        // 从 IndexedDB 读取
-        const db = await this.dbReady;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(VaultManager.STORE_NAME, 'readonly');
-            const request = tx.objectStore(VaultManager.STORE_NAME).get(providerId);
-            request.onsuccess = () => {
-                const entry = request.result as VaultEntry | undefined;
-                if (entry) {
-                    const apiKey = this.deobfuscate(entry.key);
-                    this.cache.set(providerId, apiKey);
-                    resolve(apiKey);
-                } else {
-                    resolve(null);
-                }
-            };
-            request.onerror = () => reject(request.error);
-        });
+        const entry = await db.llm_credentials.get(providerId);
+        if (entry) {
+            const apiKey = this.deobfuscate(entry.key);
+            this.cache.set(providerId, apiKey);
+            return apiKey;
+        }
+        return null;
     }
 
     /** 删除凭据 */
     async removeCredential(providerId: string): Promise<void> {
-        const db = await this.dbReady;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(VaultManager.STORE_NAME, 'readwrite');
-            tx.objectStore(VaultManager.STORE_NAME).delete(providerId);
-            tx.oncomplete = () => {
-                this.cache.delete(providerId);
-                resolve();
-            };
-            tx.onerror = () => reject(tx.error);
-        });
+        await this.migrationDone;
+        await db.llm_credentials.delete(providerId);
+        this.cache.delete(providerId);
     }
 
     /** 列出所有已存储的 Provider Id */
     async listProviderIds(): Promise<string[]> {
-        const db = await this.dbReady;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(VaultManager.STORE_NAME, 'readonly');
-            const request = tx.objectStore(VaultManager.STORE_NAME).getAllKeys();
-            request.onsuccess = () => resolve(request.result as string[]);
-            request.onerror = () => reject(request.error);
-        });
+        await this.migrationDone;
+        const keys = await db.llm_credentials.toCollection().primaryKeys();
+        return keys as string[];
     }
 
     /** 检查凭据是否存在 */

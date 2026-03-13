@@ -81,7 +81,8 @@ _SCOPE_ .stx-shared-select.is-open .stx-shared-select-indicator {
   opacity: 1;
 }
 
-_SCOPE_ .stx-shared-select-list {
+_SCOPE_ .stx-shared-select-list,
+.stx-shared-select-list {
   position: fixed;
   left: 0;
   top: 0;
@@ -109,17 +110,17 @@ _SCOPE_ .stx-shared-select-list {
     0 0 0 1px rgba(255, 255, 255, 0.04);
   box-sizing: border-box;
   overflow: auto;
+  color: var(--stx-theme-text, var(--st-roll-text, inherit));
 }
 
-_SCOPE_ .stx-shared-select.is-open .stx-shared-select-list {
+_SCOPE_ .stx-shared-select.is-open .stx-shared-select-list,
+_SCOPE_ .stx-shared-select-list.is-open,
+.stx-shared-select-list.is-open {
   display: block;
 }
 
-_SCOPE_ .stx-shared-select-list.is-open {
-  display: block;
-}
-
-_SCOPE_ .stx-shared-select-option {
+_SCOPE_ .stx-shared-select-option,
+.stx-shared-select-list .stx-shared-select-option {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -141,16 +142,19 @@ _SCOPE_ .stx-shared-select-option {
     transform 0.18s ease;
 }
 
-_SCOPE_ .stx-shared-select-option + .stx-shared-select-option {
+_SCOPE_ .stx-shared-select-option + .stx-shared-select-option,
+.stx-shared-select-list .stx-shared-select-option + .stx-shared-select-option {
   margin-top: 4px;
 }
 
-_SCOPE_ .stx-shared-select-option[data-shared-select-disabled="true"] {
+_SCOPE_ .stx-shared-select-option[data-shared-select-disabled="true"],
+.stx-shared-select-list .stx-shared-select-option[data-shared-select-disabled="true"] {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-_SCOPE_ .stx-shared-select-option-label {
+_SCOPE_ .stx-shared-select-option-label,
+.stx-shared-select-list .stx-shared-select-option-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -158,7 +162,8 @@ _SCOPE_ .stx-shared-select-option-label {
   text-align: left;
 }
 
-_SCOPE_ .stx-shared-select-option-mark {
+_SCOPE_ .stx-shared-select-option-mark,
+.stx-shared-select-list .stx-shared-select-option-mark {
   width: 12px;
   height: 12px;
   border-radius: 999px;
@@ -172,20 +177,23 @@ _SCOPE_ .stx-shared-select-option-mark {
     background-color 0.18s ease;
 }
 
-_SCOPE_ .stx-shared-select-option.is-highlighted:not([data-shared-select-disabled="true"]) {
+_SCOPE_ .stx-shared-select-option.is-highlighted:not([data-shared-select-disabled="true"]),
+.stx-shared-select-list .stx-shared-select-option.is-highlighted:not([data-shared-select-disabled="true"]) {
   border-color: var(--stx-theme-border-strong, var(--st-roll-list-item-hover-border, rgba(197, 160, 89, 0.58)));
   background: var(--stx-theme-list-item-hover-bg, var(--st-roll-list-item-hover-bg, rgba(197, 160, 89, 0.16)));
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03);
   transform: translateY(-1px);
 }
 
-_SCOPE_ .stx-shared-select-option.is-selected {
+_SCOPE_ .stx-shared-select-option.is-selected,
+.stx-shared-select-list .stx-shared-select-option.is-selected {
   border-color: var(--stx-theme-border-strong, var(--st-roll-list-item-active-border, rgba(197, 160, 89, 0.74)));
   background: var(--stx-theme-list-item-active-bg, var(--st-roll-list-item-active-bg, rgba(197, 160, 89, 0.24)));
   box-shadow: var(--st-roll-list-item-active-shadow, 0 0 0 1px rgba(197, 160, 89, 0.24));
 }
 
-_SCOPE_ .stx-shared-select-option.is-selected .stx-shared-select-option-mark {
+_SCOPE_ .stx-shared-select-option.is-selected .stx-shared-select-option-mark,
+.stx-shared-select-list .stx-shared-select-option.is-selected .stx-shared-select-option-mark {
   opacity: 1;
   transform: scale(1);
   border-color: var(--stx-theme-accent, var(--st-roll-accent, #c5a059));
@@ -215,11 +223,13 @@ _SCOPE_ .stx-shared-select-trigger:focus-visible {
   box-shadow: 0 0 0 2px var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22)));
 }
 
-_SCOPE_ .stx-shared-select-list::-webkit-scrollbar {
+_SCOPE_ .stx-shared-select-list::-webkit-scrollbar,
+.stx-shared-select-list::-webkit-scrollbar {
   width: 8px;
 }
 
-_SCOPE_ .stx-shared-select-list::-webkit-scrollbar-thumb {
+_SCOPE_ .stx-shared-select-list::-webkit-scrollbar-thumb,
+.stx-shared-select-list::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
 }

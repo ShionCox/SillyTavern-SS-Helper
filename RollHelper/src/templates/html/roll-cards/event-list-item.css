@@ -696,6 +696,13 @@
   border-bottom: 1px dashed rgba(216, 184, 122, 0.5);
 }
 
+.st-rh-event-fact-modifier .st-rh-chip .st-rh-inline-tip-segment {
+  color: #d8b87a;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  border-bottom-color: rgba(216, 184, 122, 0.5);
+}
+
 .st-rh-event-fact-label {
   display: flex;
   align-items: center;
@@ -818,6 +825,9 @@
 }
 
 .st-rh-rolled-block {
+  display: flex;
+  justify-items: center;
+  justify-content: center;
   border: 1px solid rgba(139, 101, 8, 0.42);
   background:
     linear-gradient(180deg, rgba(23, 16, 10, 0.95), rgba(13, 10, 8, 0.92));

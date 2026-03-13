@@ -42,7 +42,7 @@ export interface BindSkillPresetActionsDepsEvent {
   buildDefaultSkillPresetStoreEvent: () => SkillPresetStoreEvent;
   normalizeSkillPresetNameKeyEvent: (raw: string) => string;
   renderSkillValidationErrorsEvent: (errors: string[]) => void;
-  pushToChat: (message: string) => void;
+  appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
 }
 
 export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEvent): void {
@@ -105,7 +105,7 @@ export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEven
     const store = deps.getSkillPresetStoreEvent(settings);
     const activePreset = deps.getActiveSkillPresetEvent(store);
     if (activePreset.locked) {
-      deps.pushToChat("⚠️ 默认预设不可删除。");
+      deps.appendToConsoleEvent("⚠️ 默认预设不可删除。", "warn");
       return;
     }
     if (!deps.confirmDiscardSkillDraftEvent()) return;
@@ -147,7 +147,7 @@ export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEven
     defaultPreset.updatedAt = Date.now();
     deps.saveSkillPresetStoreEvent(store);
     deps.renderSkillValidationErrorsEvent([]);
-    deps.pushToChat("技能编辑器：默认预设已恢复。");
+    deps.appendToConsoleEvent("技能编辑器：默认预设已恢复。");
   });
 
   const handlePresetRename = () => {
@@ -405,7 +405,7 @@ export interface BindSkillImportExportActionsDepsEvent {
   refreshSkillDraftDirtyStateEvent: () => void;
   renderSkillValidationErrorsEvent: (errors: string[]) => void;
   copyTextToClipboardEvent: (text: string) => Promise<boolean>;
-  pushToChat: (message: string) => void;
+  appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
   buildSkillDraftSnapshotEvent: (rows: SkillEditorRowDraftEvent[]) => string;
   setSkillDraftDirtyEvent: (flag: boolean) => void;
   saveSkillPresetStoreEvent: (store: SkillPresetStoreEvent) => void;
@@ -484,7 +484,7 @@ export function bindSkillImportExportActionsEvent(
     }
     deps.copyTextToClipboardEvent(exportText).then((ok) => {
       if (ok) {
-        deps.pushToChat("✅ 技能表 JSON 已复制到剪贴板。");
+        deps.appendToConsoleEvent("✅ 技能表 JSON 已复制到剪贴板。");
         return;
       }
       if (skillImportArea) {
@@ -496,7 +496,7 @@ export function bindSkillImportExportActionsEvent(
       if (skillTextInput) {
         skillTextInput.value = exportText;
       }
-      deps.pushToChat("⚠️ 剪贴板不可用，请在导入框中手动复制 JSON。");
+      deps.appendToConsoleEvent("⚠️ 剪贴板不可用，请在导入框中手动复制 JSON。", "warn");
     });
   });
 
@@ -504,7 +504,7 @@ export function bindSkillImportExportActionsEvent(
     const validation = deps.validateSkillRowsEvent(deps.skillDraftAccessorEvent.getRows());
     if (validation.errors.length > 0) {
       deps.renderSkillValidationErrorsEvent(validation.errors);
-      deps.pushToChat("❌ 技能表保存失败，请先修正校验错误。");
+      deps.appendToConsoleEvent("❌ 技能表保存失败，请先修正校验错误。", "error");
       return;
     }
     const normalized = JSON.stringify(validation.table, null, 2);

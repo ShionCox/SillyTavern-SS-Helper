@@ -309,6 +309,41 @@
   padding: 0.76rem 0.8rem;
 }
 
+.st-rh-settlement-shell-mobile .st-rh-outcome-panel {
+  padding: 0.76rem 0.8rem 0.82rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-head {
+  gap: 0.32rem;
+  margin-bottom: 0.56rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-head-line,
+.st-rh-settlement-shell-mobile .st-rh-outcome-head-seal {
+  display: none;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-kicker {
+  width: 100%;
+  padding-inline: 0.64rem;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-scroll {
+  padding: 0.84rem 0.8rem 0.82rem;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-copy {
+  font-size: 14px;
+  line-height: 1.78;
+}
+
+.st-rh-settlement-shell-mobile .st-rh-outcome-status-strip {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.46rem;
+}
+
 .st-rh-settlement-shell-mobile .st-rh-panel-copy,
 .st-rh-settlement-shell-mobile .st-rh-body-copy {
   text-indent: 0;

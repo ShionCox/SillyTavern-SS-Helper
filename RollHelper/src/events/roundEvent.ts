@@ -456,9 +456,7 @@ export function mergeEventsIntoPendingRoundEvent(
   const meta = deps.getDiceMetaEvent();
   const previousRound = meta.pendingRound;
   if (previousRound && previousRound.status !== "open") {
-    if (decayStatusesForNewRoundEvent(meta)) {
-      logger.info("轮次切换：已完成状态持续轮次衰减");
-    }
+    decayStatusesForNewRoundEvent(meta);
   }
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
   const now = Date.now();
@@ -679,7 +677,7 @@ export interface PerformEventRollByIdDepsEvent {
   ) => EventRollRecordEvent | null;
   saveMetadataSafeEvent: () => void;
   getLatestRollRecordForEvent: (round: PendingRoundEvent, eventId: string) => EventRollRecordEvent | null;
-  pushToChat: (message: string) => string | undefined | void;
+  refreshAllWidgetsFromStateEvent: () => void;
   refreshCountdownDomEvent: () => void;
   rollExpression: (exprRaw: string, options?: DiceOptions) => DiceResult;
   parseDiceExpression: ParseDiceExpressionFnEvent;
@@ -693,7 +691,6 @@ export interface PerformEventRollByIdDepsEvent {
   normalizeCompareOperatorEvent: (raw: any) => CompareOperatorEvent | null;
   evaluateSuccessEvent: (total: number, compare: CompareOperatorEvent, dc: number | null) => boolean | null;
   createIdEvent: (prefix: string) => string;
-  buildEventRollResultCardEvent: (event: DiceEventSpecEvent, record: EventRollRecordEvent) => string;
 }
 
 export function performEventRollByIdEvent(
@@ -741,10 +738,9 @@ export function performEventRollByIdEvent(
 
   const existingRecord = deps.getLatestRollRecordForEvent(round, event.id);
   if (existingRecord) {
-    const resultCard = deps.buildEventRollResultCardEvent(event, existingRecord);
-    const fallback = deps.pushToChat(resultCard);
+    deps.refreshAllWidgetsFromStateEvent();
     deps.refreshCountdownDomEvent();
-    return typeof fallback === "string" ? fallback : "";
+    return "";
   }
 
   const exprRaw = (overrideExpr || event.checkDice || "").trim();
@@ -826,11 +822,9 @@ export function performEventRollByIdEvent(
   }
   applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
   deps.saveMetadataSafeEvent();
+  deps.refreshAllWidgetsFromStateEvent();
   deps.refreshCountdownDomEvent();
-
-  const message = deps.buildEventRollResultCardEvent(event, record);
-  const fallback = deps.pushToChat(message);
-  return typeof fallback === "string" ? fallback : "";
+  return "";
 }
 
 export interface AutoRollEventsByAiModeDepsEvent {

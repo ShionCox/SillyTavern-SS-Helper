@@ -1007,7 +1007,7 @@ export interface BindStatusEditorActionsDepsEvent {
     handler: (payload: { enabled: boolean; pluginId: string }) => void
   ) => () => void;
   syncSettingsUiEvent?: () => void;
-  pushToChat?: (message: string) => void;
+  appendToConsoleEvent?: (html: string, level?: "info" | "warn" | "error") => void;
 }
 
 interface StatusEditorLayoutPrefsEvent {
@@ -2184,7 +2184,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
       renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
       deps.syncSettingsUiEvent?.();
-      deps.pushToChat?.(
+      deps.appendToConsoleEvent?.(
         selectedChatKey === currentKey
           ? "状态编辑器：已保存并立即应用到当前聊天。"
           : `状态编辑器：已保存到聊天 ${selectedChatKey}。`
@@ -2219,7 +2219,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       renderStatusEditorChatMetaEvent(deps.SETTINGS_STATUS_CHAT_META_ID_Event);
       renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
       deps.syncSettingsUiEvent?.();
-      deps.pushToChat?.(
+      deps.appendToConsoleEvent?.(
         selectedChatKey === currentKey
           ? "状态编辑器：已重置当前聊天状态。"
           : `状态编辑器：聊天 ${selectedChatKey} 已重置。`
@@ -2252,7 +2252,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
           deps.listChatScopedStatusSummariesEvent(),
         ]);
       } catch {
-        deps.pushToChat?.("状态编辑器：读取当前酒馆聊天列表失败，未执行清理。");
+        deps.appendToConsoleEvent?.("状态编辑器：读取当前酒馆聊天列表失败，未执行清理。");
         return;
       }
 
@@ -2273,7 +2273,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       );
 
       if (staleStateKeys.length <= 0 && staleDraftKeys.length <= 0) {
-        deps.pushToChat?.("状态编辑器：当前没有可清理的无用聊天。");
+        deps.appendToConsoleEvent?.("状态编辑器：当前没有可清理的无用聊天。");
         return;
       }
 
@@ -2293,7 +2293,7 @@ export function bindStatusEditorActionsEvent(deps: BindStatusEditorActionsDepsEv
       await refreshStatusEditorChatListEvent(deps);
       renderStatusValidationErrorsEvent(deps.SETTINGS_STATUS_ERRORS_ID_Event, []);
       deps.syncSettingsUiEvent?.();
-      deps.pushToChat?.(
+      deps.appendToConsoleEvent?.(
         `状态编辑器：已清理 ${cleanupResult.deletedCount} 条无用聊天状态，移除 ${removedDraftCount} 条草稿。`
       );
     })();

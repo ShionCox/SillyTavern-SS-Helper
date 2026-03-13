@@ -27,7 +27,7 @@ export interface CreateSkillEditorRuntimeEventDeps {
   deserializeSkillTableTextToRowsEvent: (skillTableText: string) => SkillEditorRowDraftEvent[];
   buildSkillDraftSnapshotEvent: (rows: SkillEditorRowDraftEvent[]) => string;
   countSkillEntriesFromSkillTableTextEvent: (skillTableText: string) => number;
-  pushToChatEvent: (message: string) => void;
+  appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
   escapeHtmlEvent: (input: string) => string;
   escapeAttrEvent: (input: string) => string;
 }
@@ -169,7 +169,7 @@ export function createSkillEditorRuntimeEvent(
       if (SKILL_EDITOR_INVALID_SETTINGS_WARNED_TEXT_Event !== activePreset.skillTableText) {
         SKILL_EDITOR_INVALID_SETTINGS_WARNED_TEXT_Event = activePreset.skillTableText;
         logger.warn("技能预设配置无效，已按空表载入");
-        deps.pushToChatEvent("技能预设配置格式无效，已按空表载入。");
+        deps.appendToConsoleEvent("技能预设配置格式无效，已按空表载入。", "warn");
       }
     } else {
       SKILL_EDITOR_INVALID_SETTINGS_WARNED_TEXT_Event = "";

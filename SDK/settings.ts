@@ -1,10 +1,6 @@
 import {
-  buildTavernChatEntityKeyEvent,
-  buildTavernChatScopedKeyEvent,
   ensureTavernInstanceIdEvent,
-  parseAnyTavernChatRefEvent,
 } from "./tavern";
-import type { SdkTavernChatRefEvent, SdkTavernScopeTypeEvent } from "./tavern";
 
 export interface SdkSettingsScope {
   tavernInstanceId: string;
@@ -13,7 +9,6 @@ export interface SdkSettingsScope {
 export interface SdkPluginSettingsBucket {
   pluginSettings: Record<string, unknown>;
   pluginUiState: Record<string, unknown>;
-  pluginChatState: Record<string, unknown>;
   __sdkMeta?: {
     updatedAt?: number;
   };
@@ -37,84 +32,6 @@ export interface SdkPluginSettingsStore<TSettings extends object> {
   readUiState: <TValue = unknown>(key: string, fallback?: TValue) => TValue;
   writeUiState: <TValue = unknown>(key: string, value: TValue) => TValue;
   getScope: () => SdkSettingsScope;
-}
-
-export type SdkPluginChatStateRefInput = string | Partial<SdkTavernChatRefEvent>;
-
-export interface SdkPluginChatStateRecord<TState = Record<string, unknown>> {
-  chatKey: string;
-  entityKey: string;
-  ref: SdkTavernChatRefEvent;
-  state: TState;
-  updatedAt: number;
-  displayName: string;
-  avatarUrl: string;
-  roleKey: string;
-  summary: Record<string, unknown>;
-}
-
-export interface SdkPluginChatStateSummary {
-  chatKey: string;
-  entityKey: string;
-  tavernInstanceId: string;
-  scopeType: SdkTavernScopeTypeEvent;
-  scopeId: string;
-  chatId: string;
-  updatedAt: number;
-  displayName: string;
-  avatarUrl: string;
-  roleKey: string;
-  summary: Record<string, unknown>;
-}
-
-export interface SdkPluginChatStateListOptions {
-  scopeType?: SdkTavernScopeTypeEvent;
-  scopeId?: string;
-}
-
-export interface SdkPluginChatStateStoreOptions<TState extends object> {
-  namespace: string;
-  defaults: TState;
-  normalize?: (candidate: Partial<TState>) => TState;
-}
-
-export interface SdkPluginChatStateWriteMeta {
-  displayName?: string;
-  avatarUrl?: string;
-  roleKey?: string;
-  summary?: Record<string, unknown>;
-  updatedAt?: number;
-}
-
-export interface SdkPluginChatStateStore<TState extends object> {
-  read: (chatRef: SdkPluginChatStateRefInput) => SdkPluginChatStateRecord<TState>;
-  write: (
-    chatRef: SdkPluginChatStateRefInput,
-    patchOrNext: Partial<TState> | ((prev: TState) => TState),
-    meta?: SdkPluginChatStateWriteMeta
-  ) => SdkPluginChatStateRecord<TState>;
-  listSummaries: (options?: SdkPluginChatStateListOptions) => SdkPluginChatStateSummary[];
-}
-
-export interface SdkLegacyPluginChatStateMigrationEntry {
-  chatKey: string;
-  updatedAt?: number;
-  displayName?: string;
-  avatarUrl?: string;
-  roleKey?: string;
-  summary?: Record<string, unknown>;
-}
-
-export interface SdkLegacyPluginChatStateMigrationAdapter<TState extends object> {
-  versionTag: string;
-  list: () => Promise<SdkLegacyPluginChatStateMigrationEntry[]>;
-  read: (chatKey: string) => Promise<TState | null>;
-}
-
-export interface SdkPluginChatStateMigrationResult {
-  migrated: boolean;
-  migratedCount: number;
-  skippedCount: number;
 }
 
 type BucketListener = (snapshot: SdkPluginSettingsSnapshot) => void;
@@ -213,8 +130,7 @@ function bucketRequiresShapeRepairEvent(candidate: unknown): boolean {
   if (!isObjectRecord(candidate.pluginSettings)) return true;
   if (!hasOwnRecordEvent(candidate, "pluginUiState")) return true;
   if (!isObjectRecord(candidate.pluginUiState)) return true;
-  if (!hasOwnRecordEvent(candidate, "pluginChatState")) return true;
-  if (!isObjectRecord(candidate.pluginChatState)) return true;
+  if (hasOwnRecordEvent(candidate, "pluginChatState")) return true;
   return false;
 }
 
@@ -239,7 +155,12 @@ function stableStringifyJsonEvent(value: unknown): string {
 }
 
 function serializeBucketEvent(bucket: SdkPluginSettingsBucket): string {
-  return stableStringifyJsonEvent(sanitizeBucketEvent(bucket));
+  const sanitized = sanitizeBucketEvent(bucket);
+  return stableStringifyJsonEvent({
+    pluginSettings: sanitized.pluginSettings,
+    pluginUiState: sanitized.pluginUiState,
+    __sdkMeta: sanitized.__sdkMeta,
+  });
 }
 
 interface ParsedBucketCandidateEvent {
@@ -255,8 +176,7 @@ function countBucketPayloadSizeEvent(bucket: SdkPluginSettingsBucket | null): nu
   if (!bucket) return 0;
   return (
     Object.keys(bucket.pluginSettings ?? {}).length +
-    Object.keys(bucket.pluginUiState ?? {}).length +
-    Object.keys(bucket.pluginChatState ?? {}).length
+    Object.keys(bucket.pluginUiState ?? {}).length
   );
 }
 
@@ -264,9 +184,8 @@ function scoreBucketCandidateQualityEvent(candidate: unknown): number {
   if (!isObjectRecord(candidate)) return 1;
   const hasPluginSettings = isObjectRecord(candidate.pluginSettings);
   const hasPluginUiState = isObjectRecord(candidate.pluginUiState);
-  const hasPluginChatState = isObjectRecord(candidate.pluginChatState);
-  if (hasPluginSettings && hasPluginUiState && hasPluginChatState) return 3;
-  if (hasPluginSettings || hasPluginUiState || hasPluginChatState) return 2;
+  if (hasPluginSettings && hasPluginUiState) return 3;
+  if (hasPluginSettings || hasPluginUiState) return 2;
   return 1;
 }
 
@@ -310,7 +229,6 @@ function sanitizeBucketEvent(candidate: unknown): SdkPluginSettingsBucket {
     return {
       pluginSettings: {},
       pluginUiState: {},
-      pluginChatState: {},
       __sdkMeta: {
         updatedAt: 0,
       },
@@ -318,14 +236,13 @@ function sanitizeBucketEvent(candidate: unknown): SdkPluginSettingsBucket {
   }
   const pluginSettings = isObjectRecord(candidate.pluginSettings) ? candidate.pluginSettings : {};
   const pluginUiState = isObjectRecord(candidate.pluginUiState) ? candidate.pluginUiState : {};
-  const pluginChatState = isObjectRecord(candidate.pluginChatState) ? candidate.pluginChatState : {};
   const rawUpdatedAt = Number(
     isObjectRecord(candidate.__sdkMeta) ? candidate.__sdkMeta.updatedAt : 0
   );
   return {
     pluginSettings: { ...pluginSettings },
     pluginUiState: { ...pluginUiState },
-    pluginChatState: { ...pluginChatState },
+    pluginChatState: {},
     __sdkMeta: {
       updatedAt: Number.isFinite(rawUpdatedAt) ? rawUpdatedAt : 0,
     },
@@ -410,7 +327,6 @@ function ensureStorageSyncBindingEvent(): void {
       scope,
       pluginSettings: bucket.pluginSettings,
       pluginUiState: bucket.pluginUiState,
-      pluginChatState: bucket.pluginChatState,
     });
   });
 }
@@ -443,7 +359,6 @@ function writeBucketEvent(namespace: string, scope: SdkSettingsScope, bucket: Sd
       scope,
       pluginSettings: normalized.pluginSettings,
       pluginUiState: normalized.pluginUiState,
-      pluginChatState: normalized.pluginChatState,
     });
   }
 }
@@ -456,7 +371,6 @@ function readBucketForCurrentScopeEvent(namespace: string): SdkPluginSettingsSna
     scope,
     pluginSettings: bucket.pluginSettings,
     pluginUiState: bucket.pluginUiState,
-    pluginChatState: bucket.pluginChatState,
   };
 }
 
@@ -472,7 +386,6 @@ function writePluginSettingsEvent(
   writeBucketEvent(namespace, snapshot.scope, {
     pluginSettings: next,
     pluginUiState: snapshot.pluginUiState,
-    pluginChatState: snapshot.pluginChatState,
   });
   return { ...next };
 }
@@ -517,211 +430,8 @@ function writePluginUiStateEvent<TValue = unknown>(namespace: string, key: strin
       ...snapshot.pluginUiState,
       [normalizedKey]: value as unknown,
     },
-    pluginChatState: snapshot.pluginChatState,
   });
   return value;
-}
-
-function resolveChatRefEvent(scope: SdkSettingsScope, chatRef: SdkPluginChatStateRefInput): SdkTavernChatRefEvent {
-  return parseAnyTavernChatRefEvent(chatRef, {
-    tavernInstanceId: scope.tavernInstanceId,
-  });
-}
-
-function buildScopedChatKeyFromRefEvent(
-  ref: SdkTavernChatRefEvent,
-  displayName = "",
-  avatarUrl = "",
-  roleKey = ""
-): string {
-  const scopeType = ref.scopeType === "group" ? "group" : "character";
-  const scopeId = String(ref.scopeId ?? "").trim() || "unknown_scope";
-  const fallbackRoleKey = scopeType === "group" ? `group:${scopeId}` : scopeId;
-  const normalizedRoleKey = String(roleKey ?? "").trim() || fallbackRoleKey;
-  const roleId = normalizedRoleKey;
-  return buildTavernChatScopedKeyEvent({
-    tavernInstanceId: ref.tavernInstanceId,
-    scopeType,
-    scopeId,
-    roleKey: normalizedRoleKey,
-    roleId,
-    displayName: displayName || scopeId,
-    avatarUrl: avatarUrl || "",
-    groupId: scopeType === "group" ? scopeId : "no_group",
-    characterId: -1,
-    currentChatId: ref.chatId,
-    chatId: ref.chatId,
-  });
-}
-
-function sanitizeChatStateRecordEvent(
-  entityKey: string,
-  raw: unknown,
-  fallbackRef: SdkTavernChatRefEvent
-): SdkPluginChatStateRecord<Record<string, unknown>> {
-  const source = isObjectRecord(raw) ? raw : {};
-  const preferredRef = source.ref;
-  const preferredChatKey = String(source.chatKey ?? "").trim();
-  const parsedRef = parseAnyTavernChatRefEvent(
-    isObjectRecord(preferredRef) ? (preferredRef as Partial<SdkTavernChatRefEvent>) : preferredChatKey || fallbackRef,
-    { tavernInstanceId: fallbackRef.tavernInstanceId }
-  );
-  const nextEntityKey = buildTavernChatEntityKeyEvent(parsedRef) || entityKey;
-  const displayName = String(source.displayName ?? "").trim();
-  const avatarUrl = String(source.avatarUrl ?? "").trim();
-  const roleKey = String(source.roleKey ?? "").trim();
-  const chatKey =
-    preferredChatKey || buildScopedChatKeyFromRefEvent(parsedRef, displayName, avatarUrl, roleKey);
-  const state = isObjectRecord(source.state) ? source.state : {};
-  const summary = isObjectRecord(source.summary) ? source.summary : {};
-  const updatedAtRaw = Number(source.updatedAt);
-  return {
-    chatKey,
-    entityKey: nextEntityKey,
-    ref: parsedRef,
-    state: { ...state },
-    updatedAt: Number.isFinite(updatedAtRaw) ? updatedAtRaw : Date.now(),
-    displayName,
-    avatarUrl,
-    roleKey,
-    summary: { ...summary },
-  };
-}
-
-function readPluginChatStateEvent(
-  namespace: string,
-  chatRef: SdkPluginChatStateRefInput
-): SdkPluginChatStateRecord<Record<string, unknown>> | null {
-  const snapshot = readBucketForCurrentScopeEvent(namespace);
-  const resolvedRef = resolveChatRefEvent(snapshot.scope, chatRef);
-  const entityKey = buildTavernChatEntityKeyEvent(resolvedRef);
-  if (!entityKey) return null;
-  const raw = snapshot.pluginChatState[entityKey];
-  if (!raw) return null;
-  return sanitizeChatStateRecordEvent(entityKey, raw, resolvedRef);
-}
-
-function writePluginChatStateEvent(
-  namespace: string,
-  chatRef: SdkPluginChatStateRefInput,
-  patchOrNext:
-    | Partial<SdkPluginChatStateRecord<Record<string, unknown>>>
-    | ((
-        previous: SdkPluginChatStateRecord<Record<string, unknown>>
-      ) => Partial<SdkPluginChatStateRecord<Record<string, unknown>>>)
-): SdkPluginChatStateRecord<Record<string, unknown>> {
-  const snapshot = readBucketForCurrentScopeEvent(namespace);
-  const resolvedRef = resolveChatRefEvent(snapshot.scope, chatRef);
-  const entityKey = buildTavernChatEntityKeyEvent(resolvedRef);
-  if (!entityKey) {
-    const fallback = sanitizeChatStateRecordEvent("", null, resolvedRef);
-    return {
-      ...fallback,
-      entityKey: "",
-    };
-  }
-  const previousRaw = snapshot.pluginChatState[entityKey];
-  const previous = sanitizeChatStateRecordEvent(entityKey, previousRaw, resolvedRef);
-  const patch = typeof patchOrNext === "function" ? patchOrNext({ ...previous }) : patchOrNext;
-  const candidate = {
-    ...previous,
-    ...(isObjectRecord(patch) ? patch : {}),
-  } as SdkPluginChatStateRecord<Record<string, unknown>>;
-  const patchState = isObjectRecord((patch as { state?: unknown } | null)?.state)
-    ? ((patch as { state: Record<string, unknown> }).state ?? {})
-    : null;
-  candidate.state = patchState ? { ...patchState } : { ...previous.state };
-  const normalizedRef = parseAnyTavernChatRefEvent(
-    candidate.chatKey || candidate.ref || resolvedRef,
-    { tavernInstanceId: snapshot.scope.tavernInstanceId }
-  );
-  const normalizedEntityKey = buildTavernChatEntityKeyEvent(normalizedRef) || entityKey;
-  const normalized = sanitizeChatStateRecordEvent(normalizedEntityKey, candidate, normalizedRef);
-  normalized.updatedAt = Number.isFinite(Number(candidate.updatedAt))
-    ? Number(candidate.updatedAt)
-    : Date.now();
-
-  const nextChatState = {
-    ...snapshot.pluginChatState,
-    [normalizedEntityKey]: {
-      chatKey: normalized.chatKey,
-      ref: normalized.ref,
-      state: normalized.state,
-      updatedAt: normalized.updatedAt,
-      displayName: normalized.displayName,
-      avatarUrl: normalized.avatarUrl,
-      roleKey: normalized.roleKey,
-      summary: normalized.summary,
-    },
-  };
-  if (normalizedEntityKey !== entityKey) {
-    delete nextChatState[entityKey];
-  }
-
-  writeBucketEvent(namespace, snapshot.scope, {
-    pluginSettings: snapshot.pluginSettings,
-    pluginUiState: snapshot.pluginUiState,
-    pluginChatState: nextChatState,
-  });
-  return normalized;
-}
-
-function deletePluginChatStateEvent(namespace: string, chatRef: SdkPluginChatStateRefInput): boolean {
-  const snapshot = readBucketForCurrentScopeEvent(namespace);
-  const resolvedRef = resolveChatRefEvent(snapshot.scope, chatRef);
-  const entityKey = buildTavernChatEntityKeyEvent(resolvedRef);
-  if (!entityKey) return false;
-  if (!snapshot.pluginChatState[entityKey]) return false;
-
-  const nextChatState = {
-    ...snapshot.pluginChatState,
-  };
-  delete nextChatState[entityKey];
-
-  writeBucketEvent(namespace, snapshot.scope, {
-    pluginSettings: snapshot.pluginSettings,
-    pluginUiState: snapshot.pluginUiState,
-    pluginChatState: nextChatState,
-  });
-  return true;
-}
-
-function listPluginChatStateSummariesEvent(
-  namespace: string,
-  options?: SdkPluginChatStateListOptions
-): SdkPluginChatStateSummary[] {
-  const snapshot = readBucketForCurrentScopeEvent(namespace);
-  const rows = Object.entries(snapshot.pluginChatState).map(([entityKey, raw]) =>
-    sanitizeChatStateRecordEvent(
-      entityKey,
-      raw,
-      parseAnyTavernChatRefEvent(entityKey, { tavernInstanceId: snapshot.scope.tavernInstanceId })
-    )
-  );
-  const scopeType = options?.scopeType === "group" ? "group" : options?.scopeType === "character" ? "character" : null;
-  const scopeId = String(options?.scopeId ?? "").trim().toLowerCase();
-  return rows
-    .filter((row) => {
-      if (row.ref.tavernInstanceId !== snapshot.scope.tavernInstanceId) return false;
-      if (scopeType && row.ref.scopeType !== scopeType) return false;
-      if (scopeId && String(row.ref.scopeId ?? "").trim().toLowerCase() !== scopeId) return false;
-      if (!row.ref.chatId || row.ref.chatId === "fallback_chat") return false;
-      return true;
-    })
-    .map((row) => ({
-      chatKey: row.chatKey,
-      entityKey: row.entityKey,
-      tavernInstanceId: row.ref.tavernInstanceId,
-      scopeType: row.ref.scopeType,
-      scopeId: row.ref.scopeId,
-      chatId: row.ref.chatId,
-      updatedAt: row.updatedAt,
-      displayName: row.displayName,
-      avatarUrl: row.avatarUrl,
-      roleKey: row.roleKey,
-      summary: row.summary,
-    }))
-    .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
 }
 
 export function getCurrentTavernSettingsScope(): SdkSettingsScope {
@@ -770,135 +480,6 @@ export function writeSdkPluginUiState<TValue = unknown>(namespace: string, key: 
   const normalizedNamespace = normalizeNamespaceEvent(namespace);
   if (!normalizedNamespace) return value;
   return writePluginUiStateEvent(normalizedNamespace, key, value);
-}
-
-export function readSdkPluginChatState<TState extends object = Record<string, unknown>>(
-  namespace: string,
-  chatRef: SdkPluginChatStateRefInput
-): SdkPluginChatStateRecord<TState> | null {
-  const normalizedNamespace = normalizeNamespaceEvent(namespace);
-  if (!normalizedNamespace) return null;
-  const row = readPluginChatStateEvent(normalizedNamespace, chatRef);
-  if (!row) return null;
-  return row as SdkPluginChatStateRecord<TState>;
-}
-
-export function writeSdkPluginChatState<TState extends object = Record<string, unknown>>(
-  namespace: string,
-  chatRef: SdkPluginChatStateRefInput,
-  patchOrNext:
-    | Partial<SdkPluginChatStateRecord<TState>>
-    | ((previous: SdkPluginChatStateRecord<TState>) => Partial<SdkPluginChatStateRecord<TState>>)
-): SdkPluginChatStateRecord<TState> {
-  const normalizedNamespace = normalizeNamespaceEvent(namespace);
-  if (!normalizedNamespace) {
-    const fallbackRef = parseAnyTavernChatRefEvent(chatRef, {
-      tavernInstanceId: getCurrentScopeEvent().tavernInstanceId,
-    });
-    return {
-      chatKey: "",
-      entityKey: "",
-      ref: fallbackRef,
-      state: {} as TState,
-      updatedAt: Date.now(),
-      displayName: "",
-      avatarUrl: "",
-      roleKey: "",
-      summary: {},
-    };
-  }
-  const row = writePluginChatStateEvent(
-    normalizedNamespace,
-    chatRef,
-    patchOrNext as
-      | Partial<SdkPluginChatStateRecord<Record<string, unknown>>>
-      | ((
-          previous: SdkPluginChatStateRecord<Record<string, unknown>>
-        ) => Partial<SdkPluginChatStateRecord<Record<string, unknown>>>)
-  );
-  return row as SdkPluginChatStateRecord<TState>;
-}
-
-export function deleteSdkPluginChatState(namespace: string, chatRef: SdkPluginChatStateRefInput): boolean {
-  const normalizedNamespace = normalizeNamespaceEvent(namespace);
-  if (!normalizedNamespace) return false;
-  return deletePluginChatStateEvent(normalizedNamespace, chatRef);
-}
-
-export function listSdkPluginChatStateSummaries(
-  namespace: string,
-  options?: SdkPluginChatStateListOptions
-): SdkPluginChatStateSummary[] {
-  const normalizedNamespace = normalizeNamespaceEvent(namespace);
-  if (!normalizedNamespace) return [];
-  return listPluginChatStateSummariesEvent(normalizedNamespace, options);
-}
-
-export async function migrateLegacyPluginChatState<TState extends object = Record<string, unknown>>(
-  namespace: string,
-  migrationAdapter: SdkLegacyPluginChatStateMigrationAdapter<TState>
-): Promise<SdkPluginChatStateMigrationResult> {
-  const normalizedNamespace = normalizeNamespaceEvent(namespace);
-  if (!isValidNamespaceEvent(normalizedNamespace)) {
-    return {
-      migrated: false,
-      migratedCount: 0,
-      skippedCount: 0,
-    };
-  }
-  const versionTag = String(migrationAdapter?.versionTag ?? "").trim() || "legacy_v1";
-  const flagKey = `__sdk_chat_state_migrated__${versionTag}`;
-  if (readSdkPluginUiState<boolean>(normalizedNamespace, flagKey, false)) {
-    return {
-      migrated: false,
-      migratedCount: 0,
-      skippedCount: 0,
-    };
-  }
-
-  let listed: SdkLegacyPluginChatStateMigrationEntry[] = [];
-  try {
-    const loaded = await migrationAdapter.list();
-    listed = Array.isArray(loaded) ? loaded : [];
-  } catch {
-    return {
-      migrated: false,
-      migratedCount: 0,
-      skippedCount: 0,
-    };
-  }
-
-  let migratedCount = 0;
-  let skippedCount = 0;
-  for (const row of listed) {
-    const chatKey = String(row.chatKey ?? "").trim();
-    if (!chatKey) {
-      skippedCount += 1;
-      continue;
-    }
-    const loaded = await migrationAdapter.read(chatKey).catch(() => null);
-    if (!loaded || typeof loaded !== "object") {
-      skippedCount += 1;
-      continue;
-    }
-    writeSdkPluginChatState<Record<string, unknown>>(normalizedNamespace, chatKey, {
-      state: { ...(loaded as Record<string, unknown>) },
-      updatedAt: Number(row.updatedAt) || Date.now(),
-      displayName: String(row.displayName ?? "").trim(),
-      avatarUrl: String(row.avatarUrl ?? "").trim(),
-      roleKey: String(row.roleKey ?? "").trim(),
-      summary: isObjectRecord(row.summary) ? row.summary : {},
-    });
-    migratedCount += 1;
-  }
-
-  // Only mark done after a real migration pass (list/read flow) completes.
-  writeSdkPluginUiState(normalizedNamespace, flagKey, true);
-  return {
-    migrated: true,
-    migratedCount,
-    skippedCount,
-  };
 }
 
 export function createSdkPluginSettingsStore<TSettings extends object>(
@@ -961,80 +542,5 @@ export function createSdkPluginSettingsStore<TSettings extends object>(
     writeUiState: <TValue = unknown>(key: string, value: TValue): TValue =>
       writeSdkPluginUiState<TValue>(namespace, key, value),
     getScope: () => getCurrentTavernSettingsScope(),
-  };
-}
-
-export function createSdkPluginChatStateStore<TState extends object>(
-  options: SdkPluginChatStateStoreOptions<TState>
-): SdkPluginChatStateStore<TState> {
-  const namespace = normalizeNamespaceEvent(options.namespace);
-  const defaults = { ...(options.defaults ?? ({} as TState)) };
-  const normalize = options.normalize;
-
-  const normalizeState = (candidate: Partial<TState>): TState => {
-    const merged = {
-      ...defaults,
-      ...candidate,
-    } as Partial<TState>;
-    return normalize ? normalize(merged) : (merged as TState);
-  };
-
-  return {
-    read: (chatRef: SdkPluginChatStateRefInput): SdkPluginChatStateRecord<TState> => {
-      const row = readSdkPluginChatState<TState>(namespace, chatRef);
-      if (!row) {
-        const scope = getCurrentTavernSettingsScope();
-        const ref = resolveChatRefEvent(scope, chatRef);
-        const entityKey = buildTavernChatEntityKeyEvent(ref);
-        return {
-          chatKey: buildScopedChatKeyFromRefEvent(ref),
-          entityKey,
-          ref,
-          state: normalizeState({}),
-          updatedAt: 0,
-          displayName: "",
-          avatarUrl: "",
-          roleKey: "",
-          summary: {},
-        };
-      }
-      return {
-        ...row,
-        state: normalizeState(row.state as Partial<TState>),
-      };
-    },
-    write: (
-      chatRef: SdkPluginChatStateRefInput,
-      patchOrNext: Partial<TState> | ((prev: TState) => TState),
-      meta?: SdkPluginChatStateWriteMeta
-    ): SdkPluginChatStateRecord<TState> => {
-      const row = writeSdkPluginChatState<TState>(namespace, chatRef, (previous) => {
-        const previousState = normalizeState(previous.state as Partial<TState>);
-        const nextState =
-          typeof patchOrNext === "function"
-            ? normalizeState((patchOrNext as (prev: TState) => TState)(previousState))
-            : normalizeState({
-                ...previousState,
-                ...patchOrNext,
-              });
-        return {
-          state: nextState,
-          displayName: String(meta?.displayName ?? previous.displayName ?? "").trim(),
-          avatarUrl: String(meta?.avatarUrl ?? previous.avatarUrl ?? "").trim(),
-          roleKey: String(meta?.roleKey ?? previous.roleKey ?? "").trim(),
-          summary: {
-            ...(isObjectRecord(previous.summary) ? previous.summary : {}),
-            ...(isObjectRecord(meta?.summary) ? meta?.summary : {}),
-          },
-          updatedAt: Number(meta?.updatedAt) || Date.now(),
-        };
-      });
-      return {
-        ...row,
-        state: normalizeState(row.state as Partial<TState>),
-      };
-    },
-    listSummaries: (options?: SdkPluginChatStateListOptions): SdkPluginChatStateSummary[] =>
-      listSdkPluginChatStateSummaries(namespace, options),
   };
 }

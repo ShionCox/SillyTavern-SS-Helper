@@ -1,4 +1,5 @@
-import { db, type DBMeta } from '../db/db';
+import { db, patchSdkChatShared, type DBMeta } from '../db/db';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * Meta 管理器 —— 管理每个 chatKey 的元数据
@@ -38,6 +39,11 @@ export class MetaManager {
      */
     async setActiveTemplateId(templateId: string): Promise<void> {
         await db.meta.update(this.chatKey, { activeTemplateId: templateId });
+        void patchSdkChatShared(this.chatKey, {
+            signals: {
+                [MEMORY_OS_PLUGIN_ID]: { activeTemplate: templateId },
+            },
+        });
     }
 
     /**

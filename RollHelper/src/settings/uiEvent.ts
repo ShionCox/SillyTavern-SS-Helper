@@ -5,6 +5,7 @@ import {
   initializeSdkThemeState,
   resolveSdkThemeSelection,
   setSdkThemeState,
+  type SdkThemeState,
 } from "../../../SDK/theme";
 import {
   type BindSkillImportExportActionsDepsEvent,
@@ -27,6 +28,14 @@ import {
   syncThemeControlClassesByNodeEvent,
 } from "./uiThemeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
+
+function traceRollHelperThemeInput(message: string, payload?: unknown): void {
+  if (payload === undefined) {
+    console.info(`[SS-Helper][RollHelperThemeInput] ${message}`);
+    return;
+  }
+  console.info(`[SS-Helper][RollHelperThemeInput] ${message}`, payload);
+}
 
 export {
   applySettingsTooltipsEvent,
@@ -480,9 +489,6 @@ export interface BindBasicSettingsInputsDepsEvent {
     showOutcomePreviewInListCard?: boolean;
     enableTimeLimit?: boolean;
     minTimeLimitSeconds?: number;
-    compatibilityModeForSummaryPlugins?: boolean;
-    removeRollJsonFromStoredText?: boolean;
-    stripRollHelperInternalBlocks?: boolean;
     enableSkillSystem?: boolean;
   }) => void;
   cleanAllHistoryChatBlocksEvent: () => void;
@@ -556,11 +562,27 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const settingsRoot = document.querySelector<HTMLElement>("[id^='st-roll-settings-'][id$='-card']") ?? null;
+  const skillModal = document.querySelector<HTMLElement>("#st-roll-settings-Event-skill-modal") ?? null;
+  const statusModal = document.querySelector<HTMLElement>("#st-roll-settings-Event-status-modal") ?? null;
 
   themeInput?.addEventListener("change", (event) => {
     const value = normalizeSettingsThemeEvent(String((event.target as HTMLSelectElement).value || ""));
     initializeSdkThemeState();
-    setSdkThemeState(buildSdkThemePatchFromSelection(value));
+    const sdkThemeState: SdkThemeState = setSdkThemeState(buildSdkThemePatchFromSelection(value));
+    traceRollHelperThemeInput("themeInput change", {
+      value,
+      nativeValue: themeInput?.value,
+      sdkThemeState,
+    });
+    applySettingsThemeSelectionEvent({
+      settingsRoot,
+      skillModal,
+      statusModal,
+      selection: value,
+      themeInput,
+      sdkThemeState,
+    });
     deps.updateSettingsEvent({ theme: value });
   });
 
@@ -675,29 +697,6 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     deps.updateSettingsEvent({ enableSkillSystem: value });
   });
 
-  compatibilityModeInput?.addEventListener("input", (event) => {
-    const value = Boolean((event.target as HTMLInputElement).checked);
-    deps.updateSettingsEvent({ compatibilityModeForSummaryPlugins: value });
-    if (removeRollJsonInput) {
-      removeRollJsonInput.disabled = !value;
-      removeRollJsonInput.style.opacity = value ? "1" : "0.5";
-    }
-    if (stripInternalBlocksInput) {
-      stripInternalBlocksInput.disabled = !value;
-      stripInternalBlocksInput.style.opacity = value ? "1" : "0.5";
-    }
-  });
-
-  removeRollJsonInput?.addEventListener("input", (event) => {
-    const value = Boolean((event.target as HTMLInputElement).checked);
-    deps.updateSettingsEvent({ removeRollJsonFromStoredText: value });
-  });
-
-  stripInternalBlocksInput?.addEventListener("input", (event) => {
-    const value = Boolean((event.target as HTMLInputElement).checked);
-    deps.updateSettingsEvent({ stripRollHelperInternalBlocks: value });
-  });
-
   cleanHistoryBtn?.addEventListener("click", () => {
     if (typeof deps.cleanAllHistoryChatBlocksEvent === "function") {
       deps.cleanAllHistoryChatBlocksEvent();
@@ -794,9 +793,6 @@ export interface SyncSettingsUiDepsEvent {
     showOutcomePreviewInListCard: boolean;
     enableTimeLimit: boolean;
     minTimeLimitSeconds: number;
-    compatibilityModeForSummaryPlugins: boolean;
-    removeRollJsonFromStoredText: boolean;
-    stripRollHelperInternalBlocks: boolean;
     enableSkillSystem: boolean;
     skillTableText: string;
     skillPresetStoreText: string;
@@ -924,9 +920,12 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const settingsContent =
     settingsRoot?.querySelector<HTMLElement>(".st-roll-content") ?? settingsRoot ?? null;
 
-  initializeSdkThemeState();
-  const sdkThemeState = getSdkThemeState();
-  const sdkThemeSelection = normalizeSettingsThemeEvent(resolveSdkThemeSelection(sdkThemeState));
+  // 直接读 SDK 当前状态，避免因 store 缓存时序问题读到陈旧的 settings.theme
+  const sdkThemeSelection = normalizeSettingsThemeEvent(resolveSdkThemeSelection(getSdkThemeState()));
+  const sdkThemeState: SdkThemeState = {
+    mode: "sdk",
+    themeId: sdkThemeSelection,
+  };
   if (themeInput) themeInput.value = sdkThemeSelection;
 
   if (enabledInput) enabledInput.checked = Boolean(settings.enabled);
@@ -975,19 +974,6 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     minTimeLimitInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
   }
   minTimeLimitRow?.classList.toggle("is-disabled", !settings.enableTimeLimit);
-  if (compatibilityModeInput) {
-    compatibilityModeInput.checked = Boolean(settings.compatibilityModeForSummaryPlugins);
-  }
-  if (removeRollJsonInput) {
-    removeRollJsonInput.checked = Boolean(settings.removeRollJsonFromStoredText);
-    removeRollJsonInput.disabled = !settings.compatibilityModeForSummaryPlugins;
-    removeRollJsonInput.style.opacity = settings.compatibilityModeForSummaryPlugins ? "1" : "0.5";
-  }
-  if (stripInternalBlocksInput) {
-    stripInternalBlocksInput.checked = Boolean(settings.stripRollHelperInternalBlocks);
-    stripInternalBlocksInput.disabled = !settings.compatibilityModeForSummaryPlugins;
-    stripInternalBlocksInput.style.opacity = settings.compatibilityModeForSummaryPlugins ? "1" : "0.5";
-  }
   if (skillEnabledInput) {
     skillEnabledInput.checked = Boolean(settings.enableSkillSystem);
   }
