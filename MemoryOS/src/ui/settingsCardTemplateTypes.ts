@@ -38,7 +38,30 @@ export interface MemoryOSSettingsIds {
     aiModeStatusLightId: string; // [P0-4] 连接灯状态指标
     autoCompactionId: string;
     compactionThresholdId: string;
+    dbCompactionDividerId: string;
     contextMaxTokensId: string;
+    recordFilterEnabledId: string;
+    recordFilterSectionId: string;
+    recordFilterDetailWrapId: string;
+    recordFilterLevelId: string;
+    recordFilterTypeHtmlId: string;
+    recordFilterTypeXmlId: string;
+    recordFilterTypeJsonId: string;
+    recordFilterTypeCodeblockId: string;
+    recordFilterTypeMarkdownId: string;
+    recordFilterCustomCodeblockEnabledId: string;
+    recordFilterCustomCodeblockTagsId: string;
+    recordFilterJsonModeId: string;
+    recordFilterJsonKeysId: string;
+    recordFilterPureCodePolicyId: string;
+    recordFilterPlaceholderId: string;
+    recordFilterCustomRegexEnabledId: string;
+    recordFilterCustomRegexRulesId: string;
+    recordFilterMaxTextLengthId: string;
+    recordFilterMinEffectiveCharsId: string;
+    recordFilterPreviewInputId: string;
+    recordFilterPreviewBtnId: string;
+    recordFilterPreviewOutputId: string;
 
     // 网络自检及工具 (P2-3)
     testPingBtnId: string;

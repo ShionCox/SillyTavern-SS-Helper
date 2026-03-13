@@ -1,5 +1,5 @@
 import type { WorldTemplate } from '../template/types';
-import type { ProposalEnvelope, FactProposal, PatchProposal, GateResult } from './types';
+import type { ProposalEnvelope, GateResult } from './types';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';

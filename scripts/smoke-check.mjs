@@ -3,10 +3,8 @@ import path from 'node:path';
 
 /**
  * 功能：读取文本文件内容。
- * 参数：
- *   filePath：相对仓库根目录的文件路径。
- * 返回：
- *   string：文件内容。
+ * @param filePath 相对仓库根目录的文件路径。
+ * @returns 文件文本内容。
  */
 function readText(filePath) {
     const abs = path.resolve(process.cwd(), filePath);
@@ -14,17 +12,14 @@ function readText(filePath) {
 }
 
 /**
- * 功能：执行单条断言并收集结果。
- * 参数：
- *   name：断言名称。
- *   predicate：断言函数。
- * 返回：
- *   { name: string, pass: boolean, error?: string }：断言结果。
+ * 功能：执行单条断言并返回结果。
+ * @param name 断言名称。
+ * @param predicate 断言函数。
+ * @returns 断言执行结果。
  */
 function runCheck(name, predicate) {
     try {
-        const pass = Boolean(predicate());
-        return { name, pass };
+        return { name, pass: Boolean(predicate()) };
     } catch (error) {
         return { name, pass: false, error: String(error) };
     }

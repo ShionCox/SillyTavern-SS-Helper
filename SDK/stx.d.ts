@@ -123,6 +123,15 @@ export interface STXBus {
     off(type: string, handler: Function): void;
 }
 
+export interface RegistryChangeEvent {
+    pluginId: string;
+    action: 'add' | 'update';
+    manifest: PluginManifest;
+    degraded: boolean;
+    reason?: string;
+    ts: number;
+}
+
 // -- MemorySDK 接口 --
 export interface MemorySDK {
     getChatKey(): string;
@@ -162,7 +171,13 @@ export interface MemorySDK {
     };
 
     injection: {
-        buildContext(opts?: { maxTokens?: number; sections?: Array<'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY'> }): Promise<string>;
+        buildContext(opts?: {
+            maxTokens?: number;
+            sections?: Array<'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY'>;
+            query?: string;
+            sectionBudgets?: Partial<Record<'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY', number>>;
+            preferSummary?: boolean;
+        }): Promise<string>;
         setAnchorPolicy(opts: { allowSystem?: boolean; allowUser?: boolean; defaultInsert?: 'top' | 'beforeStart' | 'customAnchor' }): Promise<void>;
     };
 
@@ -332,6 +347,7 @@ export interface PluginManifest {
     pluginId: string;
     name: string;
     version: string;
+    displayName?: string;
     capabilities: {
         events?: string[];
         memory?: string[];
@@ -339,10 +355,15 @@ export interface PluginManifest {
     };
     scopes?: string[];
     requiresSDK?: string;
+    source?: 'manifest_json' | 'runtime';
+    declaredAt?: number;
 }
 
 export interface STXRegistry {
-    register(manifest: PluginManifest): void;
+    register(manifest: PluginManifest): { ok: boolean; degraded: boolean; reason?: string };
+    list(): PluginManifest[];
+    get(pluginId: string): PluginManifest | undefined;
+    onChanged?(handler: (event: RegistryChangeEvent) => void): () => void;
 }
 
 // -- 全局对象声明 --

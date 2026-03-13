@@ -1,5 +1,6 @@
 import { db } from '../db/db';
 import { Logger } from '../../../SDK/logger';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 const logger = new Logger('VectorManager');
 
@@ -55,7 +56,7 @@ export class VectorManager {
         try {
             // 批量 embed
             const embedResult = await Promise.race([
-                llm.embed({ consumer: 'memory_os', texts: chunks }),
+                llm.embed({ consumer: MEMORY_OS_PLUGIN_ID, texts: chunks }),
                 new Promise<null>((_, reject) => setTimeout(() => reject(new Error('embed 超时')), 15000))
             ]) as any;
 
@@ -131,7 +132,7 @@ export class VectorManager {
 
         try {
             const embedResult = await Promise.race([
-                llm.embed({ consumer: 'memory_os', texts: [query] }),
+                llm.embed({ consumer: MEMORY_OS_PLUGIN_ID, texts: [query] }),
                 new Promise<null>((_, reject) => setTimeout(() => reject(new Error('embed 超时')), 8000))
             ]) as any;
 

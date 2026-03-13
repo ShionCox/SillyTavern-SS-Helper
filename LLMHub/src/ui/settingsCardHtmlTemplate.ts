@@ -1,12 +1,11 @@
 import { buildSharedSelectField } from '../../../_Components/sharedSelect';
 import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
+import { renderSharedCheckbox } from '../../../_Components/sharedCheckbox';
 
 /**
  * 功能：构建 LLMHub 设置面板 HTML。
- * 参数：
- *   ids：所有 DOM 元素 ID 映射。
- * 返回：
- *   string：可直接挂载的 HTML 字符串。
+ * @param ids DOM 节点 ID 映射。
+ * @returns 设置面板 HTML 字符串。
  */
 export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
     const globalProfileSelect = buildSharedSelectField({
@@ -130,29 +129,17 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         </div>
 
         <div id="${ids.panelMainId}" class="stx-ui-panel">
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-power-off"></i>
-            <span>基础开关</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="enable llm hub switch">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">启用 LLMHub</div>
-              <div class="stx-ui-item-desc">总开关。关闭后不再接管任务。</div>
+              <div class="stx-ui-item-desc">总开关。关闭后不再分发 AI 请求。</div>
             </div>
             <div class="stx-ui-inline">
               <input id="${ids.enabledId}" data-tip="LLMHub 总开关。" type="checkbox" />
             </div>
           </label>
 
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-sliders"></i>
-            <span>默认参数策略</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="global profile temperature param">
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="global profile default profile">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">全局默认参数档</div>
               <div class="stx-ui-item-desc">任务没指定 profile 时使用它。</div>
@@ -164,13 +151,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         </div>
 
         <div id="${ids.panelRouterId}" class="stx-ui-panel" hidden>
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-network-wired"></i>
-            <span>全局兜底路由</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default provider router fallback">
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="default provider model route">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">默认服务商</div>
               <div class="stx-ui-item-desc">没命中规则时用它。</div>
@@ -222,6 +203,22 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
                 <label class="stx-ui-field-label" for="${ids.routeFallbackProviderId}">备用服务商</label>
                 ${routeFallbackSelect}
               </div>
+
+              <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="budget list">
+                <div class="stx-ui-item-main">
+                  <div class="stx-ui-item-title">当前预算规则</div>
+                </div>
+                <div id="${ids.budgetListId}" class="stx-ui-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="${ids.panelConsumerMapId}" class="stx-ui-panel" hidden>
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="consumer mapping discover plugin default ai">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">插件默认 AI 映射</div>
+              <div class="stx-ui-item-desc">只显示在线插件。这里给插件设置默认 AI。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.routeSaveBtnId}" data-tip="保存路由规则。" type="button" class="stx-ui-btn">保存规则</button>
@@ -284,20 +281,11 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         </div>
 
         <div id="${ids.panelVaultId}" class="stx-ui-panel" hidden>
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-vault"></i>
-            <span>凭据金库</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="vault credential add api key">
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="vault credential api key">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">更新服务密钥</div>
-              <div class="stx-ui-item-desc">密钥只存本地加密，不会写日志。</div>
+              <div class="stx-ui-item-title">服务凭据</div>
+              <div class="stx-ui-item-desc">密钥仅保存到本地加密区。</div>
             </div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="vault credential update">
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.vaultAddServiceId}">服务标识</label>
@@ -325,13 +313,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         </div>
 
         <div id="${ids.panelAboutId}" class="stx-ui-panel" hidden>
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-circle-info"></i>
-            <span>关于插件</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="about version author email github">
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="about version author email github changelog">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">${ids.displayName}</div>
               <div class="stx-ui-item-desc stx-ui-about-meta">

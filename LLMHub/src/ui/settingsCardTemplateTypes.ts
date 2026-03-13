@@ -16,12 +16,14 @@ export interface LLMHubSettingsIds {
     // Tabs
     tabMainId: string;
     tabRouterId: string;
+    tabConsumerMapId: string;
     tabVaultId: string;
     tabAboutId: string;
 
     // Panels
     panelMainId: string;
     panelRouterId: string;
+    panelConsumerMapId: string;
     panelVaultId: string;
     panelAboutId: string;
 
@@ -32,6 +34,8 @@ export interface LLMHubSettingsIds {
     // Router
     defaultProviderId: string;
     defaultModelId: string;
+    routerAdvancedToggleId: string;
+    routerAdvancedBodyId: string;
     routeConsumerId: string;
     routeTaskId: string;
     routeProviderId: string;
@@ -40,6 +44,9 @@ export interface LLMHubSettingsIds {
     routeSaveBtnId: string;
     routeResetBtnId: string;
     routeListId: string;
+
+    // Consumer Mapping
+    consumerMapRefreshBtnId: string;
 
     // Budget
     budgetConsumerId: string;

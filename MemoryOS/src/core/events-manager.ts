@@ -67,6 +67,7 @@ export class EventsManager {
         }
 
         let results = await collection
+            .reverse()
             .limit(opts.limit ?? 100)
             .toArray();
 

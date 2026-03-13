@@ -45,7 +45,7 @@ export function registerDebugCommandEvent(deps: DebugCommandDepsEvent): void {
       callback: (): string => {
         const legacy = getDiceMeta();
         const eventMeta = getDiceMetaEvent();
-        const text = JSON.stringify({ legacy, eventMeta }, null, 2);
+        const text = JSON.stringify({ diceMeta, eventMeta }, null, 2);
         const msg = buildDebugTemplateEvent(escapeHtmlEvent(text));
         appendToConsoleEvent(msg);
         return "";

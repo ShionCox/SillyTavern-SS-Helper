@@ -57,6 +57,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       --stx-memory-edit-border: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 42%, transparent);
     }
 
+    #${cardId}.is-card-disabled .stx-ui-shell {
+      opacity: 0.56;
+      filter: grayscale(0.92) saturate(0.35);
+    }
+
     #${cardId} .stx-ui-shell {
       border: 0;
       border-radius: 0;
@@ -164,6 +169,32 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+
+    #${cardId} .stx-ui-filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    #${cardId} .stx-ui-filter-group[hidden] {
+      display: none !important;
+    }
+
+    #${cardId} .stx-ui-filter-group.is-reveal-animating {
+      animation: stxFilterGroupReveal 0.28s cubic-bezier(0.21, 0.84, 0.35, 1) both;
+    }
+
+    @keyframes stxFilterGroupReveal {
+      0% {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     #${cardId} .stx-ui-panel[hidden] {
@@ -374,6 +405,15 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-input {
       width: 120px;
+    }
+
+    #${cardId} .stx-ui-codeblock-tags {
+      width: 100%;
+      min-height: 78px;
+      resize: vertical;
+      line-height: 1.45;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
 
     #${cardId} .stx-ui-item.is-disabled {

@@ -3,6 +3,7 @@ import { VectorManager } from './vector-manager';
 import type { EventsManager } from '../core/events-manager';
 import type { FactsManager } from '../core/facts-manager';
 import type { SummariesManager } from '../core/summaries-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 const logger = new Logger('HybridSearch');
 
@@ -24,7 +25,6 @@ export interface HybridSearchResult {
  * 超时/失败时任意一路不影响其余两路
  */
 export class HybridSearchManager {
-    private chatKey: string;
     private vectorManager: VectorManager;
     private eventsManager: EventsManager;
     private factsManager: FactsManager;
@@ -36,7 +36,6 @@ export class HybridSearchManager {
         factsManager: FactsManager,
         summariesManager: SummariesManager
     ) {
-        this.chatKey = chatKey;
         this.vectorManager = new VectorManager(chatKey);
         this.eventsManager = eventsManager;
         this.factsManager = factsManager;
@@ -180,7 +179,7 @@ export class HybridSearchManager {
         try {
             const events = await this.eventsManager.query({ limit });
             return events.map(e => ({
-                content: `[${new Date(e.ts).toLocaleTimeString()}] ${e.type}: ${JSON.stringify(e.payload)}`,
+                content: `[${new Date(e.ts).toLocaleTimeString()}] ${e.type}: ${this.readEventPayloadText(e.payload)}`,
                 score: 0.3,  // 事件召回基础分，用于保底上下文
                 source: 'event' as const,
                 meta: { eventId: e.id, ts: e.ts }
@@ -194,6 +193,25 @@ export class HybridSearchManager {
     // ==========================================
     // 简单关键词工具
     // ==========================================
+
+    /**
+     * 功能：把事件 payload 转成优先文本。
+     * @param payload 事件 payload。
+     * @returns 可读文本。
+     */
+    private readEventPayloadText(payload: unknown): string {
+        if (typeof payload === 'string') {
+            return payload;
+        }
+        if (payload && typeof payload === 'object' && typeof (payload as { text?: unknown }).text === 'string') {
+            return String((payload as { text: string }).text);
+        }
+        try {
+            return JSON.stringify(payload);
+        } catch {
+            return String(payload ?? '');
+        }
+    }
 
     private extractKeywords(query: string): string[] {
         // 简单过滤：去掉停用词，保留 2+ 字符词语
@@ -226,7 +244,7 @@ export class HybridSearchManager {
         try {
             const docs = results.map((item) => item.content);
             const rerankResp = await llm.rerank({
-                consumer: 'memory_os',
+                consumer: MEMORY_OS_PLUGIN_ID,
                 query,
                 docs,
             });

@@ -1,22 +1,18 @@
 import type { LLMProvider } from '../providers/types';
 
 /**
- * 路由策略配置
+ * 功能：路由策略配置。
  */
 export interface RoutePolicy {
-    consumer: string;   // pluginId
-    task: string;       // 任务名称
-    providerId: string; // 指定使用的 provider
-    profileId?: string; // 可选的参数组合
-    fallbackProviderId?: string; // 备用 provider
+    consumer: string;
+    task: string;
+    providerId: string;
+    profileId?: string;
+    fallbackProviderId?: string;
 }
 
 /**
- * 任务路由器 —— 根据 consumer + task 解析到合适的 LLMProvider
- * 路由优先级：
- *   1. consumer + task 精确匹配
- *   2. task 默认
- *   3. 全局 default
+ * 功能：任务路由器，按 consumer + task 解析 Provider。
  */
 export class TaskRouter {
     private providers: Map<string, LLMProvider> = new Map();
@@ -24,25 +20,31 @@ export class TaskRouter {
     private defaultProviderId: string | null = null;
 
     /**
-     * 注册一个 Provider
+     * 功能：注册 Provider。
+     * @param provider Provider 实例。
+     * @returns 无返回值。
      */
     registerProvider(provider: LLMProvider): void {
         this.providers.set(provider.id, provider);
     }
 
     /**
-     * 移除一个 Provider
+     * 功能：移除 Provider。
+     * @param providerId Provider 标识。
+     * @returns 无返回值。
      */
     removeProvider(providerId: string): void {
         this.providers.delete(providerId);
     }
 
     /**
-     * 添加路由策略
+     * 功能：新增或覆盖路由策略。
+     * @param policy 路由策略。
+     * @returns 无返回值。
      */
     addPolicy(policy: RoutePolicy): void {
-        const existingIndex = this.policies.findIndex(
-            p => p.consumer === policy.consumer && p.task === policy.task
+        const existingIndex: number = this.policies.findIndex(
+            (item: RoutePolicy) => item.consumer === policy.consumer && item.task === policy.task
         );
         if (existingIndex >= 0) {
             this.policies.splice(existingIndex, 1, policy);
@@ -52,30 +54,31 @@ export class TaskRouter {
     }
 
     /**
-     * 批量替换路由策略
+     * 功能：批量替换路由策略。
+     * @param policies 路由策略数组。
+     * @returns 无返回值。
      */
     setPolicies(policies: RoutePolicy[]): void {
         this.policies = [...policies];
     }
 
     /**
-     * 清空全部策略
+     * 功能：清空路由策略。
+     * @returns 无返回值。
      */
     clearPolicies(): void {
         this.policies = [];
     }
 
     /**
-     * 设置全局默认 Provider
+     * 功能：设置全局默认 Provider。
+     * @param providerId Provider 标识。
+     * @returns 无返回值。
      */
     setDefault(providerId: string): void {
         this.defaultProviderId = providerId;
     }
 
-    /**
-     * 解析路由：根据 consumer + task 匹配到 Provider
-     * @returns [主 provider, 备用 provider | null]
-     */
     resolve(consumer: string, task: string): {
         primary: LLMProvider;
         fallback: LLMProvider | null;
@@ -90,6 +93,13 @@ export class TaskRouter {
         fallback: LLMProvider | null;
         profileId?: string;
     };
+    /**
+     * 功能：解析路由，优先级为 routeHint > consumer+task > consumer+* > *+task > default。
+     * @param consumer 调用方标识。
+     * @param task 任务标识。
+     * @param opts 可选路由提示。
+     * @returns 主 Provider、备 Provider 与 profile 信息。
+     */
     resolve(
         consumer: string,
         task: string,
@@ -99,25 +109,13 @@ export class TaskRouter {
         fallback: LLMProvider | null;
         profileId?: string;
     } {
-        // 1. 精确匹配 consumer + task
-        let matched = this.policies.find(
-            p => p.consumer === consumer && p.task === task
-        );
-
-        // 2. 仅匹配 task（任意 consumer）
-        if (!matched) {
-            matched = this.policies.find(
-                p => p.consumer === '*' && p.task === task
-            );
-        }
-
-        // 3. routeHint 优先，其次策略匹配，再其次全局默认
-        const primaryId = opts?.providerId || matched?.providerId || this.defaultProviderId;
+        const matched: RoutePolicy | undefined = this.findMatchedPolicy(consumer, task);
+        const primaryId: string | null = opts?.providerId || matched?.providerId || this.defaultProviderId;
         if (!primaryId) {
-            throw new Error(`[TaskRouter] 无法为 consumer="${consumer}" task="${task}" 找到可用的 Provider`);
+            throw new Error(`[TaskRouter] 无法为 consumer="${consumer}" task="${task}" 找到可用 Provider`);
         }
 
-        const primary = this.providers.get(primaryId);
+        const primary: LLMProvider | undefined = this.providers.get(primaryId);
         if (!primary) {
             throw new Error(`[TaskRouter] Provider ID "${primaryId}" 未注册`);
         }
@@ -131,16 +129,49 @@ export class TaskRouter {
     }
 
     /**
-     * 获取所有已注册的 Provider
+     * 功能：获取全部 Provider。
+     * @returns Provider 列表。
      */
     getAllProviders(): LLMProvider[] {
         return Array.from(this.providers.values());
     }
 
     /**
-     * 按 providerId 获取 provider 实例
+     * 功能：按 providerId 获取 Provider。
+     * @param providerId Provider 标识。
+     * @returns Provider 或 undefined。
      */
     getProvider(providerId: string): LLMProvider | undefined {
         return this.providers.get(providerId);
+    }
+
+    /**
+     * 功能：按优先级查找策略。
+     * @param consumer 调用方标识。
+     * @param task 任务标识。
+     * @returns 命中的策略或 undefined。
+     */
+    private findMatchedPolicy(consumer: string, task: string): RoutePolicy | undefined {
+        return (
+            this.findPolicy([consumer], task) ||
+            this.findPolicy([consumer], '*') ||
+            this.policies.find((policy: RoutePolicy) => policy.consumer === '*' && policy.task === task)
+        );
+    }
+
+    /**
+     * 功能：在候选 consumer 列表中查找 task 命中的策略。
+     * @param consumers consumer 候选列表。
+     * @param task 任务标识。
+     * @returns 命中的策略或 undefined。
+     */
+    private findPolicy(consumers: string[], task: string): RoutePolicy | undefined {
+        if (!consumers.length) {
+            return undefined;
+        }
+        const consumerSet: Set<string> = new Set(consumers);
+        return this.policies.find(
+            (policy: RoutePolicy) => consumerSet.has(policy.consumer) && policy.task === task
+        );
     }
 }

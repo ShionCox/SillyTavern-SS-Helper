@@ -1,6 +1,6 @@
 /**
  * MemoryOS 统一入口
- * 导出所有公共模块，供外部引用
+ * 导出所有公共模块，供外部引用。
  */
 
 // 数据库层
@@ -27,7 +27,6 @@ export { CompactionManager } from './core/compaction-manager';
 export { InjectionManager } from './injection/injection-manager';
 
 // 编排胶水层
-export { Orchestrator } from './orchestrator/orchestrator';
 
 // SDK 门面层
 export { MemorySDKImpl } from './sdk/memory-sdk';
@@ -64,7 +63,7 @@ import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
 import { respond } from '../../SDK/bus/rpc';
 import { broadcast } from '../../SDK/bus/broadcast';
-import { STXBus, MemorySDK, LLMSDK, STXRegistry, PluginManifest } from '../../SDK/stx';
+import type { PluginManifest, RegistryChangeEvent } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
@@ -75,39 +74,137 @@ export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
 export const logger = new Logger('记忆引擎');
 export const toast = new Toast('记忆引擎');
+ensureSharedUnoStyles();
 
-class STXRegistryImpl implements STXRegistry {
-    register(manifest: PluginManifest): void {
-        logger.info(`收到插件注册请求: ${manifest.pluginId}@${manifest.version}`);
-        // 可以将注册信息保存到列表中
-    }
-}
+const MEMORY_OS_MANIFEST: PluginManifest = {
+    pluginId: 'stx_memory_os',
+    name: 'MemoryOS',
+    displayName: manifestJson.display_name || 'SS-Helper [记忆引擎]',
+    version: manifestJson.version || '1.0.0',
+    capabilities: {
+        events: [
+            'plugin:request:ping',
+            'plugin:request:memory_chat_keys',
+            'plugin:request:memory_append_outcome',
+            'plugin:broadcast:registry_changed',
+        ],
+        memory: ['events', 'facts', 'state', 'summaries', 'template', 'audit'],
+        llm: [],
+    },
+    scopes: ['chat', 'memory', 'registry'],
+    requiresSDK: '^1.0.0',
+    source: 'manifest_json',
+};
+
+type MemoryOutcomeWriteRequest = {
+    text?: unknown;
+    outcome?: unknown;
+    result?: unknown;
+    kind?: unknown;
+    eventType?: unknown;
+    sourcePlugin?: unknown;
+    sourceMessageId?: unknown;
+};
+
+type MemoryOutcomeWriteResponse = {
+    ok: boolean;
+    ts: number;
+    reason?: string;
+    eventId?: string;
+    eventType?: string;
+    chatKey?: string;
+    storedTextLength?: number;
+};
 
 class MemoryOS {
     private stxBus: EventBus;
-    private registry: STXRegistryImpl;
+    private registry: PluginRegistry;
+    private refreshChatBindingHandler: (() => Promise<void>) | null;
 
     constructor() {
         logger.info('记忆引擎初始化完成');
         this.stxBus = new EventBus();
-        this.registry = new STXRegistryImpl();
+        this.registry = new PluginRegistry();
+        this.refreshChatBindingHandler = null;
 
         // 一次性旧数据迁移（stx_memory_os → ss-helper-db）
         void migrateMemoryOSLegacyData();
 
         this.initGlobalSTX();
+        this.bindRegistryEvents();
+        this.registerSelfManifest();
         this.setupPluginBusEndpoints();
         this.bindHostEvents();
     }
+    // 功能：在运行中手动刷新当前聊天与 MemorySDK 绑定。
+    public async refreshCurrentChatBinding(): Promise<void> {
+        if (!this.refreshChatBindingHandler) {
+            logger.warn('当前尚未建立聊天绑定处理器，跳过刷新');
+            return;
+        }
+        await this.refreshChatBindingHandler();
+    }
+    // 功能：监听注册中心变更并通过 STX.bus 广播。
+    private bindRegistryEvents(): void {
+        this.registry.onChanged((event: RegistryChangeEvent): void => {
+            this.stxBus.emit(
+                'plugin:broadcast:registry_changed',
+                {
+                    pluginId: event.pluginId,
+                    action: event.action,
+                    manifest: event.manifest,
+                    degraded: event.degraded,
+                    reason: event.reason,
+                    count: this.registry.list().length,
+                    ts: event.ts,
+                },
+                { chatKey: 'global' }
+            );
+        });
+    }
+    // 功能：注册 MemoryOS 自身 manifest。
+    private registerSelfManifest(): void {
+        this.registry.register(MEMORY_OS_MANIFEST);
+    }
 
     private setupPluginBusEndpoints() {
+        const readSettings = (): Record<string, any> => {
+            const ctx = (window as any).SillyTavern?.getContext?.() || {};
+            const extensionSettings = ctx?.extensionSettings || {};
+            return extensionSettings['stx_memory_os'] || {};
+        };
         const getEnabledFlag = () => {
             try {
-                const ctx = (window as any).SillyTavern?.getContext?.() || {};
-                return ctx?.extensionSettings?.['stx_memory_os']?.enabled === true;
+                return readSettings().enabled === true;
             } catch {
                 return false;
             }
+        };
+        const readRecordFilterSettings = (): Record<string, unknown> => {
+            const settings = readSettings();
+            const raw = settings?.recordFilter;
+            if (!raw || typeof raw !== 'object') {
+                return {};
+            }
+            return raw as Record<string, unknown>;
+        };
+        const normalizeExternalText = (payload: MemoryOutcomeWriteRequest): string => {
+            const rawList: unknown[] = [payload?.text, payload?.outcome, payload?.result];
+            for (const raw of rawList) {
+                if (typeof raw !== 'string') continue;
+                const normalized = raw.trim();
+                if (normalized.length > 0) {
+                    return normalized;
+                }
+            }
+            return '';
+        };
+        const resolveExternalEventType = (payload: MemoryOutcomeWriteRequest): string => {
+            const rawType = String(payload?.eventType ?? payload?.kind ?? '').trim().toLowerCase();
+            if (rawType === 'result' || rawType === 'chat.result') {
+                return 'chat.result';
+            }
+            return 'chat.outcome';
         };
 
         respond('plugin:request:ping', 'stx_memory_os', async () => {
@@ -138,13 +235,99 @@ class MemoryOS {
                     updatedAt: Date.now(),
                 };
             } catch (error) {
-                logger.warn('memory_chat_keys query failed', error);
+                logger.warn('查询 memory_chat_keys 失败', error);
                 return {
                     chatKeys: [],
                     updatedAt: Date.now(),
                 };
             }
         });
+
+        respond<MemoryOutcomeWriteRequest, MemoryOutcomeWriteResponse>(
+            'plugin:request:memory_append_outcome',
+            'stx_memory_os',
+            async (payload: MemoryOutcomeWriteRequest, env): Promise<MemoryOutcomeWriteResponse> => {
+                const requestFrom = String(env?.from || 'unknown').trim() || 'unknown';
+                logger.info(
+                    `[MemoryOS 外部写入请求] from=${requestFrom}, kind=${String(payload?.kind ?? payload?.eventType ?? 'outcome')}, hasSourceMessageId=${Boolean(payload?.sourceMessageId)}`
+                );
+                if (!getEnabledFlag()) {
+                    logger.info('[MemoryOS 外部写入拒绝] reason=memory_os_disabled');
+                    return {
+                        ok: false,
+                        reason: 'memory_os_disabled',
+                        ts: Date.now(),
+                    };
+                }
+                const memory = (window as any).STX?.memory;
+                if (!memory?.events?.append) {
+                    logger.info('[MemoryOS 外部写入拒绝] reason=memory_sdk_not_ready');
+                    return {
+                        ok: false,
+                        reason: 'memory_sdk_not_ready',
+                        ts: Date.now(),
+                    };
+                }
+
+                const originalText = normalizeExternalText(payload);
+                if (!originalText) {
+                    logger.info('[MemoryOS 外部写入拒绝] reason=empty_text');
+                    return {
+                        ok: false,
+                        reason: 'empty_text',
+                        ts: Date.now(),
+                    };
+                }
+
+                const filterResult = filterRecordText(originalText, readRecordFilterSettings());
+                const compactText = String(filterResult.filteredText || '').replace(/\s+/g, '');
+                if (filterResult.dropped || compactText.length === 0) {
+                    logger.info(`[MemoryOS 外部写入拒绝] reason=filtered:${filterResult.reasonCode}`);
+                    return {
+                        ok: false,
+                        reason: `filtered:${filterResult.reasonCode}`,
+                        ts: Date.now(),
+                    };
+                }
+
+                const sourcePlugin = typeof payload?.sourcePlugin === 'string' && payload.sourcePlugin.trim().length > 0
+                    ? payload.sourcePlugin.trim()
+                    : String(env?.from || 'external_plugin').trim() || 'external_plugin';
+                const sourceMessageId = typeof payload?.sourceMessageId === 'string' && payload.sourceMessageId.trim().length > 0
+                    ? payload.sourceMessageId.trim()
+                    : undefined;
+                const eventType = resolveExternalEventType(payload);
+
+                try {
+                    const eventId: string = await memory.events.append(
+                        eventType,
+                        { text: filterResult.filteredText },
+                        {
+                            sourcePlugin,
+                            sourceMessageId,
+                        }
+                    );
+                    logger.info(
+                        `[MemoryOS 外部写入成功] from=${sourcePlugin}, eventType=${eventType}, eventId=${eventId}, textLength=${filterResult.filteredText.length}`
+                    );
+                    return {
+                        ok: true,
+                        ts: Date.now(),
+                        eventId,
+                        eventType,
+                        chatKey: typeof memory?.getChatKey === 'function' ? String(memory.getChatKey()) : '',
+                        storedTextLength: filterResult.filteredText.length,
+                    };
+                } catch (error) {
+                    logger.error('[MemoryOS 外部写入失败] reason=append_failed', error);
+                    return {
+                        ok: false,
+                        reason: 'append_failed',
+                        ts: Date.now(),
+                    };
+                }
+            }
+        );
 
         setTimeout(() => {
             broadcast(
@@ -159,13 +342,13 @@ class MemoryOS {
     }
 
     private initGlobalSTX() {
-        // 创建全局的 STX 互通底座
+        // 创建全局 STX 互通底座
         (window as any).STX = {
             version: '1.0.0',
             bus: this.stxBus,
             registry: this.registry,
             memory: null, // 将在首次打开聊天时按 Namespace 赋值
-            llm: null     // 预留给 LLMHub 注册
+            llm: null,    // 预留给 LLMHub 注册
         };
         logger.success('STX 全局事件总线及插件中心已挂载');
     }
@@ -188,48 +371,389 @@ class MemoryOS {
         const eventSource = initCtx.eventSource;
         const types = initCtx.event_types || {};
 
-        // ======= 前置防呆：统一获取开关设定 =======
-        const isPluginEnabled = () => {
+        // ======= 前置防呆：统一读取开关配置 =======
+        const readSettings = (): Record<string, any> => {
             const ctx = getCtx();
-            if (!ctx?.extensionSettings) return false;
-            const settings = ctx.extensionSettings['stx_memory_os'];
-            return settings ? settings.enabled === true : false;
+            if (!ctx?.extensionSettings) return {};
+            return ctx.extensionSettings['stx_memory_os'] || {};
+        };
+        const isPluginEnabled = () => {
+            return readSettings().enabled === true;
         };
         const isAiModeEnabled = () => {
-            const ctx = getCtx();
-            if (!ctx?.extensionSettings) return false;
-            const settings = ctx.extensionSettings['stx_memory_os'];
-            return settings ? settings.aiMode === true : false;
+            return readSettings().aiMode === true;
+        };
+        const resolveRecordableChatBinding = (ctx: any): {
+            valid: boolean;
+            chatId: string;
+            groupId: string;
+            characterId: string;
+            reason: string;
+        } => {
+            const rawChatId = String(ctx?.chatId ?? '').trim();
+            const rawGroupId = String(ctx?.groupId ?? '').trim();
+            const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
+            const characterIndex = Number(ctx?.characterId);
+            const hasGroupBinding = rawGroupId.length > 0;
+            const hasCharacterBinding =
+                Number.isInteger(characterIndex) &&
+                characterIndex >= 0 &&
+                characterIndex < characters.length &&
+                !!characters[characterIndex];
+            const hasChatId = rawChatId.length > 0 && rawChatId !== '0' && rawChatId !== '(未知)' && rawChatId !== '(unknown)';
+            if (!hasChatId) {
+                return {
+                    valid: false,
+                    chatId: '',
+                    groupId: '',
+                    characterId: '',
+                    reason: 'missing_chat_id',
+                };
+            }
+            if (!hasGroupBinding && !hasCharacterBinding) {
+                return {
+                    valid: false,
+                    chatId: rawChatId,
+                    groupId: '',
+                    characterId: '',
+                    reason: 'no_character_or_group_binding',
+                };
+            }
+            const characterId = hasGroupBinding
+                ? ''
+                : String(characters[characterIndex]?.avatar || characters[characterIndex]?.name || characterIndex).trim();
+            if (!hasGroupBinding && !characterId) {
+                return {
+                    valid: false,
+                    chatId: rawChatId,
+                    groupId: '',
+                    characterId: '',
+                    reason: 'missing_character_id',
+                };
+            }
+            return {
+                valid: true,
+                chatId: rawChatId,
+                groupId: rawGroupId,
+                characterId,
+                reason: 'ok',
+            };
+        };
+        // 功能：读取记录过滤配置。
+        const readRecordFilterSettings = (): Record<string, unknown> => {
+            const settings = readSettings();
+            const raw = settings?.recordFilter;
+            if (!raw || typeof raw !== 'object') {
+                return {};
+            }
+            return raw as Record<string, unknown>;
+        };
+        // 功能：过滤消息文本并写入事件流。
+        const appendFilteredMessageEvent = (
+            eventType: string,
+            msgText: string,
+            msgId: unknown,
+            ingestHint: 'normal' | 'bootstrap' = 'normal'
+        ): void => {
+            if (!currentChatKey) {
+                return;
+            }
+            const bindingCheck = resolveRecordableChatBinding(getCtx());
+            if (!bindingCheck.valid) {
+                return;
+            }
+            const memory = (window as any).STX?.memory;
+            if (!memory?.events?.append) {
+                return;
+            }
+            try {
+                const result = filterRecordText(msgText, readRecordFilterSettings());
+                const compactText = String(result.filteredText || '').replace(/\s+/g, '');
+                if (result.dropped || compactText.length === 0) {
+                    logger.info(`记录过滤后跳过入库 type=${eventType}, msgId=${String(msgId ?? '')}, reason=${result.reasonCode}`);
+                    return;
+                }
+
+                const normalizedMsgId = normalizeMessageId(msgId);
+                const activeChatKey = String(
+                    currentChatKey
+                    || (typeof memory?.getChatKey === 'function' ? memory.getChatKey() : '')
+                    || ''
+                ).trim();
+                if (!activeChatKey) {
+                    return;
+                }
+
+                const appendTask = (async (): Promise<void> => {
+                    const recentEvents = await db.events
+                        .where('[chatKey+type+ts]')
+                        .between([activeChatKey, eventType, 0], [activeChatKey, eventType, Infinity])
+                        .reverse()
+                        .limit(200)
+                        .toArray();
+
+                    if (normalizedMsgId) {
+                        const duplicatedByMsgId = recentEvents.some((item) => {
+                            return normalizeMessageId(item?.refs?.messageId) === normalizedMsgId;
+                        });
+                        if (duplicatedByMsgId) {
+                            logger.info(`命中数据库去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId}`);
+                            return;
+                        }
+                    }
+
+                    // 某些历史消息/欢迎语没有稳定 messageId，按文本签名兜底去重
+                    if (!normalizedMsgId) {
+                        const nextTextSignature = normalizeTextSignature(result.filteredText);
+                        if (nextTextSignature) {
+                            const duplicatedByText = recentEvents.some((item) => {
+                                const storedText = String((item?.payload as { text?: unknown } | undefined)?.text ?? '');
+                                return normalizeTextSignature(storedText) === nextTextSignature;
+                            });
+                            if (duplicatedByText) {
+                                logger.info(`命中文本签名去重，跳过重复入库 type=${eventType}`);
+                                return;
+                            }
+                        }
+                    }
+
+                    if (ingestHint === 'bootstrap') {
+                        const latestEvent = recentEvents[0];
+                        const latestText = normalizeTextSignature(String((latestEvent?.payload as { text?: unknown } | undefined)?.text ?? ''));
+                        const nextText = normalizeTextSignature(result.filteredText);
+                        if (latestText && nextText && latestText === nextText) {
+                            logger.info(`bootstrap 补录命中最新文本去重，跳过 type=${eventType}`);
+                            return;
+                        }
+                    }
+
+                    await memory.events.append(
+                        eventType,
+                        { text: result.filteredText },
+                        {
+                            sourcePlugin: 'sillytavern-core',
+                            sourceMessageId: normalizedMsgId || undefined,
+                        }
+                    );
+                })();
+                Promise.resolve(appendTask).catch((error: unknown) => {
+                    logger.error(`记忆入库失败 type=${eventType}, msgId=${String(msgId ?? '')}`, error);
+                });
+            } catch (error) {
+                logger.error(`消息过滤异常 type=${eventType}, msgId=${String(msgId ?? '')}`, error);
+            }
         };
 
         // 用 Set 追踪已记录的消息 ID，切换聊天时重置，防止重复事件写入两条记录
-        const processedMsgIds = new Set<any>();
+        const processedMessageKeys = new Set<string>();
+        const bootstrapAssistantByChatKey = new Map<string, string>();
+        const historicalMessageIdsOnBind = new Set<string>();
+        let bindHydrationUntilTs = 0;
+        let currentChatKey = '';
+        let lastAssistantSignature = '';
+        let lastAssistantSignatureAt = 0;
+        let lastAssistantTextSignature = '';
+        let lastAssistantTextSignatureAt = 0;
+        let lastUserSignature = '';
+        let lastUserSignatureAt = 0;
+        const DUPLICATE_SIGNATURE_WINDOW_MS = 3000;
+        // 功能：将消息 ID 归一化为字符串。
+        const normalizeMessageId = (msgId: unknown): string => {
+            return String(msgId ?? '').trim();
+        };
+        const collectHistoricalMessageIdsFromChat = (chatList: unknown): Set<string> => {
+            const idSet = new Set<string>();
+            if (!Array.isArray(chatList)) return idSet;
+            for (const item of chatList) {
+                const normalized = normalizeMessageId(
+                    (item as any)?._id
+                    ?? (item as any)?.id
+                    ?? (item as any)?.messageId
+                    ?? (item as any)?.mesid
+                );
+                if (normalized) {
+                    idSet.add(normalized);
+                }
+            }
+            return idSet;
+        };
+        const hasStoredMessageEvents = async (chatKey: string): Promise<boolean> => {
+            try {
+                const [received, sent] = await Promise.all([
+                    db.events
+                        .where('[chatKey+type+ts]')
+                        .between([chatKey, 'chat.message.received', 0], [chatKey, 'chat.message.received', Infinity])
+                        .reverse()
+                        .limit(1)
+                        .toArray(),
+                    db.events
+                        .where('[chatKey+type+ts]')
+                        .between([chatKey, 'chat.message.sent', 0], [chatKey, 'chat.message.sent', Infinity])
+                        .reverse()
+                        .limit(1)
+                        .toArray(),
+                ]);
+                return received.length > 0 || sent.length > 0;
+            } catch {
+                return false;
+            }
+        };
+        // 功能：从事件参数中提取消息 ID，兼容 ID/对象两种入参。
+        const extractMessageId = (eventPayload: unknown): string => {
+            if (eventPayload == null) {
+                return '';
+            }
+            if (typeof eventPayload === 'string' || typeof eventPayload === 'number') {
+                return normalizeMessageId(eventPayload);
+            }
+            if (typeof eventPayload === 'object') {
+                const source = eventPayload as Record<string, unknown>;
+                return normalizeMessageId(
+                    source._id
+                    ?? source.id
+                    ?? source.messageId
+                    ?? source.mesid
+                );
+            }
+            return '';
+        };
+        // 功能：从消息对象中提取文本，兼容 mes/content/text/message 字段。
+        const readMessageText = (message: unknown): string => {
+            if (!message || typeof message !== 'object') {
+                return '';
+            }
+            const source = message as Record<string, unknown>;
+            const raw = source.mes ?? source.content ?? source.text ?? source.message;
+            return typeof raw === 'string' ? raw.trim() : '';
+        };
+        const normalizeTextSignature = (value: string): string => {
+            return String(value || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        };
+        // 功能：按消息 ID 在 chat 列表中查找消息对象。
+        const findMessageById = (chatList: unknown, messageId: string): any | null => {
+            if (!messageId || !Array.isArray(chatList)) {
+                return null;
+            }
+            return chatList.find((item: any) => {
+                const left = normalizeMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid);
+                return left === messageId;
+            }) || null;
+        };
+        // 功能：判断消息事件是否重复。
+        const isDuplicateMessageEvent = (eventType: string, msgId: unknown): boolean => {
+            const normalizedMsgId = normalizeMessageId(msgId);
+            if (!normalizedMsgId) {
+                return false;
+            }
+            const key = `${eventType}:${normalizedMsgId}`;
+            if (processedMessageKeys.has(key)) {
+                return true;
+            }
+            processedMessageKeys.add(key);
+            return false;
+        };
+        // 功能：判断消息是否为用户消息。
+        const isUserMessage = (message: any): boolean => {
+            return message?.is_user === true || message?.isUser === true || message?.role === 'user';
+        };
+        // 功能：判断消息是否为系统消息。
+        const isSystemMessage = (message: any): boolean => {
+            return message?.is_system === true || message?.isSystem === true || message?.role === 'system';
+        };
+        // 功能：从聊天上下文中按角色获取最后一条消息。
+        const findLastChatMessageByRole = (ctx: any, role: 'user' | 'assistant'): any | null => {
+            if (!Array.isArray(ctx?.chat) || ctx.chat.length === 0) {
+                return null;
+            }
+            const reversed = [...ctx.chat].reverse();
+            if (role === 'user') {
+                return reversed.find((item: any) => isUserMessage(item) && readMessageText(item).length > 0) || null;
+            }
+            return reversed.find((item: any) => !isUserMessage(item) && !isSystemMessage(item) && readMessageText(item).length > 0) || null;
+        };
+        // 功能：在 generation_ended 等场景兜底记录最后一条 AI 回复。
+        const appendLatestAssistantMessageFallback = (source: 'runtime' | 'bootstrap' = 'runtime'): void => {
+            const ctx = getCtx();
+            if (!ctx) return;
+            const latestAssistant = findLastChatMessageByRole(ctx, 'assistant');
+            if (!latestAssistant) return;
+            const text = readMessageText(latestAssistant);
+            if (!text) return;
+            const assistantMsgId = extractMessageId(latestAssistant);
+            const signature = `${assistantMsgId}|${text}`;
+            const textSignature = normalizeTextSignature(text);
+            const now = Date.now();
+            if (source === 'bootstrap' && currentChatKey) {
+                const latestBootstrappedSignature = bootstrapAssistantByChatKey.get(currentChatKey) || '';
+                if (latestBootstrappedSignature === textSignature) {
+                    return;
+                }
+                bootstrapAssistantByChatKey.set(currentChatKey, textSignature);
+            }
+            if (signature === lastAssistantSignature) {
+                return;
+            }
+            if (
+                textSignature &&
+                textSignature === lastAssistantTextSignature &&
+                now - lastAssistantTextSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
+            ) {
+                return;
+            }
+            lastAssistantSignature = signature;
+            lastAssistantSignatureAt = now;
+            lastAssistantTextSignature = textSignature;
+            lastAssistantTextSignatureAt = now;
+            appendFilteredMessageEvent(
+                'chat.message.received',
+                text,
+                assistantMsgId || undefined,
+                source === 'bootstrap' ? 'bootstrap' : 'normal'
+            );
+        };
 
         // 绑定聊天切换事件：初始化/切换数据库表空间
         const onChangeConfig = async () => {
             const ctx = getCtx();
+            currentChatKey = '';
 
             // 无论是否启用，切换时都清空消息去重 Set
-            processedMsgIds.clear();
+            processedMessageKeys.clear();
+            historicalMessageIdsOnBind.clear();
+            bindHydrationUntilTs = 0;
+            lastAssistantSignature = '';
+            lastAssistantSignatureAt = 0;
+            lastAssistantTextSignature = '';
+            lastAssistantTextSignatureAt = 0;
+            lastUserSignature = '';
+            lastUserSignatureAt = 0;
 
             // 先打印切换通知，帮助排查事件是否正常触发
-            const chatId = ctx?.chatId || '(未知)';
-            logger.info(`检测到聊天切换，chatId: ${chatId}`);
+            const binding = resolveRecordableChatBinding(ctx);
+            const displayChatId = binding.chatId || String(ctx?.chatId ?? '(未知)');
+            logger.info(`检测到聊天切换，chatId: ${displayChatId}`);
 
             if (!isPluginEnabled()) {
                 logger.info('插件当前未启用，跳过记忆库初始化');
                 return;
             }
 
-            if (!ctx) return;
-
-            const characters = ctx.characters || [];
-            const groupId = ctx.groupId || '';
-            let characterId = '';
-
-            // 简单取当前角色或组别
-            if (!groupId && characters.length > 0 && ctx.characterId !== undefined) {
-                characterId = characters[ctx.characterId]?.avatar || 'unknown';
+            if (!ctx || !binding.valid) {
+                const previousMemory = (window as any).STX?.memory;
+                if (previousMemory?.template?.destroy) {
+                    try {
+                        previousMemory.template.destroy();
+                    } catch {
+                        // noop
+                    }
+                }
+                if ((window as any).STX) {
+                    (window as any).STX.memory = null;
+                }
+                logger.info(`当前不是可记录聊天上下文，跳过记忆绑定 reason=${binding.reason}`);
+                return;
             }
 
             // 使用 SDK 统一函数构建标准化 chatKey
@@ -240,85 +764,195 @@ class MemoryOS {
             }
             logger.info(`已切换记忆，ChatKey: ${chatKey}`);
 
+            const historicalIds = collectHistoricalMessageIdsFromChat(ctx?.chat);
+            for (const historyId of historicalIds) {
+                historicalMessageIdsOnBind.add(historyId);
+            }
+            bindHydrationUntilTs = Date.now() + 1500;
+
             // 初始化 SDK 实例
             const sdkInstance = new MemorySDKImpl(chatKey);
-            await sdkInstance.init(); // 触发底层的 dexie 库初始化表
+            await sdkInstance.init(); // 触发底层 dexie 库初始化流程
 
             // 卸载老实例拥有的监听器资源
             if ((window as any).STX.memory) {
                 try {
                     (window as any).STX.memory.template.destroy();
                 } catch (e) {
-                    // Ignore missing or destroyed
+                    // 忽略对象不存在或已销毁的情况
                 }
             }
 
             (window as any).STX.memory = sdkInstance;
             logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
             toast.success(`数据库已就绪`);
+
+            // 新对话时补录开场助手消息；已有记录的旧聊天不再重复补录
+            const shouldBootstrap = !(await hasStoredMessageEvents(chatKey));
+            if (shouldBootstrap) {
+                const bootstrapDelays: number[] = [120, 420, 900];
+                for (const delay of bootstrapDelays) {
+                    setTimeout(() => {
+                        if (!isPluginEnabled()) return;
+                        if (currentChatKey !== chatKey) return;
+                        appendLatestAssistantMessageFallback('bootstrap');
+                    }, delay);
+                }
+            }
         };
 
+        this.refreshChatBindingHandler = onChangeConfig;
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', onChangeConfig);
         eventSource.on(types.CHAT_STARTED || 'chat_started', onChangeConfig);
         eventSource.on(types.CHAT_NEW || 'chat_new', onChangeConfig);
+        void onChangeConfig().catch((error: unknown) => {
+            logger.error('首次绑定当前聊天失败', error);
+        });
 
 
         // 绑定消息接收与发送事件
-        eventSource.on(types.MESSAGE_RECEIVED || 'message_received', (msgId: any) => {
+        const onAssistantMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
-            if (processedMsgIds.has(msgId)) {
+            const msgId = extractMessageId(eventPayload);
+            if (msgId && historicalMessageIdsOnBind.has(msgId)) {
+                logger.info(`历史助手消息已存在，跳过入库 msgId=${msgId}`);
+                return;
+            }
+            if (!msgId && Date.now() <= bindHydrationUntilTs) {
+                logger.info('聊天刚绑定完成，跳过无 msgId 的助手事件');
+                return;
+            }
+            if (isDuplicateMessageEvent('chat.message.received', msgId)) {
                 logger.info(`MESSAGE_RECEIVED 重复触发已跳过，msgId: ${msgId}`);
                 return;
             }
-            processedMsgIds.add(msgId);
             const ctx = getCtx();
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory) {
-                const messageObj = Array.isArray(ctx.chat) ? ctx.chat.find((m: any) => m._id === msgId) || ctx.chat[ctx.chat.length - 1] : null;
-                const text = messageObj ? (messageObj.mes || '') : '';
+                const messageObj = findMessageById(ctx.chat, msgId)
+                    || (eventPayload && typeof eventPayload === 'object' ? eventPayload : null);
+                const text = readMessageText(messageObj);
                 logger.info(`监听到新回复进入，msgId: ${msgId}，准备记录记忆事件...`);
-                memory.events.append('chat.message.received', { text, msgId }, { sourcePlugin: 'sillytavern-core' });
+                if (text && !isUserMessage(messageObj) && !isSystemMessage(messageObj)) {
+                    const signature = `${msgId}|${text}`;
+                    const textSignature = normalizeTextSignature(text);
+                    const now = Date.now();
+                    if (
+                        signature === lastAssistantSignature &&
+                        now - lastAssistantSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
+                    ) {
+                        logger.info(`助手消息签名重复已跳过，msgId: ${msgId}`);
+                        return;
+                    }
+                    if (
+                        textSignature &&
+                        textSignature === lastAssistantTextSignature &&
+                        now - lastAssistantTextSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
+                    ) {
+                        logger.info(`助手消息文本签名重复已跳过，msgId: ${msgId}`);
+                        return;
+                    }
+                    appendFilteredMessageEvent('chat.message.received', text, msgId || undefined);
+                    lastAssistantSignature = signature;
+                    lastAssistantSignatureAt = now;
+                    lastAssistantTextSignature = textSignature;
+                    lastAssistantTextSignatureAt = now;
+                } else {
+                    appendLatestAssistantMessageFallback();
+                }
             }
-        });
+        };
 
-        eventSource.on(types.USER_MESSAGE_RENDERED || 'user_message_rendered', (msgId: any) => {
+        const onUserMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
-            if (processedMsgIds.has(msgId)) {
+            const msgId = extractMessageId(eventPayload);
+            if (msgId && historicalMessageIdsOnBind.has(msgId)) {
+                logger.info(`历史用户消息已存在，跳过入库 msgId=${msgId}`);
+                return;
+            }
+            if (!msgId && Date.now() <= bindHydrationUntilTs) {
+                logger.info('聊天刚绑定完成，跳过无 msgId 的用户事件');
+                return;
+            }
+            if (isDuplicateMessageEvent('chat.message.sent', msgId)) {
                 logger.info(`USER_MESSAGE_RENDERED 重复触发已跳过，msgId: ${msgId}`);
                 return;
             }
-            processedMsgIds.add(msgId);
             const ctx = getCtx();
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory) {
-                const messageObj = Array.isArray(ctx.chat) ? ctx.chat.find((m: any) => m._id === msgId) || ctx.chat[ctx.chat.length - 1] : null;
-                const text = messageObj ? (messageObj.mes || '') : '';
+                const messageObj = findMessageById(ctx.chat, msgId)
+                    || (eventPayload && typeof eventPayload === 'object' ? eventPayload : null)
+                    || findLastChatMessageByRole(ctx, 'user');
+                const text = readMessageText(messageObj);
                 logger.info(`监听到用户发言，msgId: ${msgId}，准备记录记忆事件...`);
-                memory.events.append('chat.message.sent', { text, msgId }, { sourcePlugin: 'sillytavern-core' });
+                if (text) {
+                    const signature = `${msgId}|${text}`;
+                    if (
+                        signature === lastUserSignature &&
+                        Date.now() - lastUserSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
+                    ) {
+                        logger.info(`用户消息签名重复已跳过，msgId: ${msgId}`);
+                        return;
+                    }
+                    appendFilteredMessageEvent('chat.message.sent', text, msgId || undefined);
+                    lastUserSignature = signature;
+                    lastUserSignatureAt = Date.now();
+                }
             }
-        });
+        };
+
+        // 功能：选择单一主事件通道，避免多事件并发导致重复入库。
+        const pickFirstEventName = (...candidates: unknown[]): string => {
+            for (const candidate of candidates) {
+                if (typeof candidate !== 'string') continue;
+                const normalized = candidate.trim();
+                if (!normalized) continue;
+                return normalized;
+            }
+            return '';
+        };
+
+        const assistantPrimaryEventName = pickFirstEventName(
+            (types as any).CHARACTER_MESSAGE_RENDERED,
+            types.MESSAGE_RECEIVED,
+            'character_message_rendered',
+            'message_received'
+        );
+        if (assistantPrimaryEventName) {
+            eventSource.on(assistantPrimaryEventName, onAssistantMessageCaptured);
+        }
+
+        const userPrimaryEventName = pickFirstEventName(
+            types.USER_MESSAGE_RENDERED,
+            (types as any).MESSAGE_SENT,
+            'user_message_rendered',
+            'message_sent'
+        );
+        if (userPrimaryEventName) {
+            eventSource.on(userPrimaryEventName, onUserMessageCaptured);
+        }
+        logger.info(`消息监听通道已收敛：assistant=${assistantPrimaryEventName || 'none'}, user=${userPrimaryEventName || 'none'}`);
 
 
-        // 绑定世代结束事件（有时候 MESSAGE_RECEIVED 获取不到完整更新）
+        // 绑定生成结束事件（有时 MESSAGE_RECEIVED 获取不到完整更新）
         eventSource.on(types.GENERATION_ENDED || 'generation_ended', () => {
             if (!isPluginEnabled()) return;
             const ctx = getCtx();
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory && Array.isArray(ctx.chat) && ctx.chat.length > 0) {
-                // 尝试触发一次持久化扫描或者状态记录
-                memory.events.append('chat.generation.ended', {
-                    lastMsgId: ctx.chat[ctx.chat.length - 1]?._id || ''
-                }, { sourcePlugin: 'sillytavern-core' });
+                // 尝试补录最后一条助手回复（仅兜底）
+                appendLatestAssistantMessageFallback();
 
-                // 🌟若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
+                // 若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
                 if (isAiModeEnabled()) {
                     logger.info('AI 增强模式已开启，尝试挂起闲置记忆池压缩任务...');
-                    // 分发到 LLM Hub 的提取服务去
+                    // 分发到 LLM Hub 的提取服务
                     memory.extract.kickOffExtraction().catch((e: Error) => {
-                        logger.error('记忆提取与压缩后台任务失败:', e);
+                        logger.error('记忆提取与压缩后台任务失败', e);
                     });
                 }
             }
@@ -327,7 +961,7 @@ class MemoryOS {
         // 时间戳节流去重：500ms 内的重复事件才跳过，不影响多次独立生成
         let lastPromptReadyTs = 0;
 
-        // 拦截最终大模型的发送包裹，写入由 Builder 构造出的记忆内容
+        // 拦截最终大模型的发送包装，写入由 Builder 构造出的记忆内容
         eventSource.on(types.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready', async (payload: any) => {
             if (!isPluginEnabled()) return;
             const memory = (window as any).STX?.memory;
@@ -346,15 +980,21 @@ class MemoryOS {
 
             try {
                 logger.info('触发大模型注入栈，正在向 Prompt 内附加短期事件池与摘要...');
+                const latestUserMessage = [...payload.chat]
+                    .reverse()
+                    .find((item: any) => item?.role === 'user' && typeof item?.content === 'string');
+                const query = String(latestUserMessage?.content || '').trim();
                 const injectedContext = await memory.injection.buildContext({
                     maxTokens: 800,
-                    sections: ["WORLD_STATE", "FACTS", "EVENTS", "SUMMARY"]
+                    sections: ["WORLD_STATE", "FACTS", "SUMMARY", "EVENTS"],
+                    query,
+                    preferSummary: true,
                 });
 
                 logger.info(`buildContext 返回内容长度: ${injectedContext?.length ?? 0}`);
 
                 if (!injectedContext || injectedContext.trim().length === 0) {
-                    logger.warn('记忆上下文为空，跳过注入（数据库可能尚无内容）');
+                    logger.warn('记忆上下文为空，跳过注入（数据库可能尚无内容）。');
                     return;
                 }
 
@@ -364,14 +1004,14 @@ class MemoryOS {
 
                 if (insertTop && payload.chat.length > 0) {
                     payload.chat[0].content = payload.chat[0].content + wrapperString;
-                    logger.success('记忆注入完毕，附着于 System Prompt。');
+                    logger.success('记忆注入完成，已附着到 System Prompt。');
                 } else {
                     payload.chat.push({ role: 'system', content: wrapperString });
-                    logger.success('记忆注入完毕，已作为底置 System 元素推入。');
+                    logger.success('记忆注入完成，已作为末尾 System 元素推入。');
                 }
 
             } catch (error) {
-                logger.error('Prompt Context 构建或注入失败:', error);
+                logger.error('Prompt Context 构建或注入失败', error);
             }
         });
     }
@@ -383,6 +1023,6 @@ class MemoryOS {
 // 自动初始化 UI 挂载
 if (typeof document !== 'undefined') {
     renderSettingsUi().catch(err => {
-        logger.error('UI rendering failed:', err);
+        logger.error('UI 渲染失败:', err);
     });
 }

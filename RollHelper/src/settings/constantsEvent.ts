@@ -76,12 +76,17 @@ export const SETTINGS_SKILL_MODAL_CLOSE_ID_Event = "st-roll-settings-Event-skill
 export const SETTINGS_RULE_TEXT_ID_Event = "st-roll-settings-Event-rule-text";
 export const SETTINGS_RULE_SAVE_ID_Event = "st-roll-settings-Event-rule-save";
 export const SETTINGS_RULE_RESET_ID_Event = "st-roll-settings-Event-rule-reset";
+export const SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event = "st-roll-settings-Event-ai-bridge-light";
+export const SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event = "st-roll-settings-Event-ai-bridge-text";
+export const SETTINGS_AI_BRIDGE_REFRESH_ID_Event = "st-roll-settings-Event-ai-bridge-refresh";
 export const SETTINGS_SEARCH_ID_Event = "st-roll-settings-Event-search";
 export const SETTINGS_TAB_MAIN_ID_Event = "st-roll-settings-Event-tab-main";
+export const SETTINGS_TAB_AI_ID_Event = "st-roll-settings-Event-tab-ai";
 export const SETTINGS_TAB_SKILL_ID_Event = "st-roll-settings-Event-tab-skill";
 export const SETTINGS_TAB_RULE_ID_Event = "st-roll-settings-Event-tab-rule";
 export const SETTINGS_TAB_ABOUT_ID_Event = "st-roll-settings-Event-tab-about";
 export const SETTINGS_PANEL_MAIN_ID_Event = "st-roll-settings-Event-panel-main";
+export const SETTINGS_PANEL_AI_ID_Event = "st-roll-settings-Event-panel-ai";
 export const SETTINGS_PANEL_SKILL_ID_Event = "st-roll-settings-Event-panel-skill";
 export const SETTINGS_PANEL_RULE_ID_Event = "st-roll-settings-Event-panel-rule";
 export const SETTINGS_PANEL_ABOUT_ID_Event = "st-roll-settings-Event-panel-about";
@@ -123,10 +128,12 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_GITHUB_URL_Event,
   SETTINGS_SEARCH_ID_Event,
   SETTINGS_TAB_MAIN_ID_Event,
+  SETTINGS_TAB_AI_ID_Event,
   SETTINGS_TAB_SKILL_ID_Event,
   SETTINGS_TAB_RULE_ID_Event,
   SETTINGS_TAB_ABOUT_ID_Event,
   SETTINGS_PANEL_MAIN_ID_Event,
+  SETTINGS_PANEL_AI_ID_Event,
   SETTINGS_PANEL_SKILL_ID_Event,
   SETTINGS_PANEL_RULE_ID_Event,
   SETTINGS_PANEL_ABOUT_ID_Event,
@@ -200,13 +207,18 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_RULE_SAVE_ID_Event,
   SETTINGS_RULE_RESET_ID_Event,
   SETTINGS_RULE_TEXT_ID_Event,
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event,
 } as const;
 export const SETTINGS_TABS_AND_MODAL_IDS_Event = {
   SETTINGS_TAB_MAIN_ID_Event,
+  SETTINGS_TAB_AI_ID_Event,
   SETTINGS_TAB_SKILL_ID_Event,
   SETTINGS_TAB_RULE_ID_Event,
   SETTINGS_TAB_ABOUT_ID_Event,
   SETTINGS_PANEL_MAIN_ID_Event,
+  SETTINGS_PANEL_AI_ID_Event,
   SETTINGS_PANEL_SKILL_ID_Event,
   SETTINGS_PANEL_RULE_ID_Event,
   SETTINGS_PANEL_ABOUT_ID_Event,
@@ -219,6 +231,9 @@ export const SETTINGS_TABS_AND_MODAL_IDS_Event = {
   SETTINGS_STATUS_REFRESH_ID_Event,
   SETTINGS_STATUS_CLEAN_UNUSED_ID_Event,
   SETTINGS_SEARCH_ID_Event,
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event,
 } as const;
 export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_THEME_ID_Event,

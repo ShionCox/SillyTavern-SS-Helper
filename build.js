@@ -1,6 +1,5 @@
-const esbuild = require('esbuild');
-const fs = require('fs');
-const path = require('path');
+﻿const fs = require("fs");
+const path = require("path");
 
 const args = process.argv.slice(2);
 const isWatchMode = args.includes('--watch');
@@ -46,60 +45,125 @@ const baseOptions = {
 };
 
 const allBuilds = [
-    {
-        name: 'MemoryOS',
-        ...baseOptions,
-        entryPoints: ['MemoryOS/src/index.ts'],
-        outfile: 'MemoryOS/dist/index.js',
-    },
-    {
-        name: 'LLMHub',
-        ...baseOptions,
-        entryPoints: ['LLMHub/src/index.ts'],
-        outfile: 'LLMHub/dist/index.js',
-    },
-    {
-        name: 'RollHelper',
-        ...baseOptions,
-        entryPoints: ['RollHelper/index.ts'],
-        outfile: 'RollHelper/dist/index.js',
-    }
+  {
+    name: "MemoryOS",
+    entry: "MemoryOS/src/index.ts",
+    outDir: "MemoryOS/dist",
+    projectDir: "MemoryOS",
+  },
+  {
+    name: "LLMHub",
+    entry: "LLMHub/src/index.ts",
+    outDir: "LLMHub/dist",
+    projectDir: "LLMHub",
+  },
+  {
+    name: "RollHelper",
+    entry: "RollHelper/index.ts",
+    outDir: "RollHelper/dist",
+    projectDir: "RollHelper",
+  },
 ];
 
-// 如果传入了目标名字，则只编译符合名字的项
-const builds = targetProjects.length > 0
-    ? allBuilds.filter(b => targetProjects.some(t => b.name.toLowerCase() === t.toLowerCase()))
+const builds =
+  targetProjects.length > 0
+    ? allBuilds.filter((item) =>
+        targetProjects.some((target) => item.name.toLowerCase() === target.toLowerCase())
+      )
     : allBuilds;
 
 if (builds.length === 0) {
-    console.error(`❌ 找不到匹配的项目。指定的项目：${targetProjects.join(', ')}`);
-    process.exit(1);
+  console.error(`未找到匹配的项目: ${targetProjects.join(", ")}`);
+  process.exit(1);
 }
 
+/**
+ * 功能：创建复制 manifest.json 的 Vite 插件。
+ * @param {string} projectDir 项目目录。
+ * @param {string} distDir 构建输出目录。
+ * @returns {import('vite').Plugin} Vite 插件对象。
+ */
+function createCopyManifestPlugin(projectDir, distDir) {
+  return {
+    name: "copy-manifest",
+    closeBundle() {
+      const manifestSrc = path.join(projectDir, "manifest.json");
+      const manifestDest = path.join(distDir, "manifest.json");
+      if (!fs.existsSync(manifestSrc)) {
+        return;
+      }
+      fs.mkdirSync(distDir, { recursive: true });
+      fs.copyFileSync(manifestSrc, manifestDest);
+    },
+  };
+}
+
+/**
+ * 功能：构建单个项目的 Vite 配置。
+ * @param {{name: string, entry: string, outDir: string, projectDir: string}} target 构建目标。
+ * @param {() => import('vite').Plugin} unoCssVitePluginFactory UnoCSS 插件工厂函数。
+ * @returns {import('vite').InlineConfig} Vite 内联配置。
+ */
+function createViteConfig(target, unoCssVitePluginFactory) {
+  const rootDir = process.cwd();
+  const entryFile = path.resolve(rootDir, target.entry);
+  const outDir = path.resolve(rootDir, target.outDir);
+  const projectDir = path.resolve(rootDir, target.projectDir);
+  return {
+    configFile: false,
+    publicDir: false,
+    plugins: [unoCssVitePluginFactory(), createCopyManifestPlugin(projectDir, outDir)],
+    build: {
+      target: "es2022",
+      sourcemap: true,
+      minify: isWatchMode ? false : "esbuild",
+      watch: isWatchMode ? {} : null,
+      emptyOutDir: false,
+      outDir,
+      lib: {
+        entry: entryFile,
+        formats: ["es"],
+        fileName: () => "index.js",
+      },
+      rollupOptions: {
+        output: {
+          inlineDynamicImports: true,
+          entryFileNames: "index.js",
+        },
+      },
+    },
+  };
+}
+
+/**
+ * 功能：执行 Vite 构建流程。
+ * @returns {Promise<void>} 异步完成信号。
+ */
 async function runBuild() {
-    try {
-        if (isWatchMode) {
-            const names = builds.map(b => b.name).join(', ');
-            console.log(`🔄 启动 Watch 模式监听更改 [${names}]...`);
-            for (const opt of builds) {
-                // 剔除自定义的 name 属性以免干扰 esbuild
-                const { name, ...esbuildOptions } = opt;
-                const ctx = await esbuild.context(esbuildOptions);
-                await ctx.watch();
-            }
-        } else {
-            console.log('🚀 开始编译打包插件模块...');
-            for (const opt of builds) {
-                const { name, ...esbuildOptions } = opt;
-                await esbuild.build(esbuildOptions);
-                console.log(`✅ 成功输出: ${opt.outfile}`);
-            }
-            console.log('🎉 打包完成!');
-        }
-    } catch (error) {
-        console.error('❌ 打包失败:', error);
-        process.exit(1);
+  try {
+    const [{ build }, { default: unoCssVitePluginFactory }] = await Promise.all([
+      import("vite"),
+      import("unocss/vite"),
+    ]);
+    if (isWatchMode) {
+      const names = builds.map((item) => item.name).join(", ");
+      console.log(`启动 Vite watch 模式: [${names}]`);
+      for (const target of builds) {
+        await build(createViteConfig(target, unoCssVitePluginFactory));
+      }
+      return;
     }
+
+    console.log("开始执行 Vite 构建...");
+    for (const target of builds) {
+      await build(createViteConfig(target, unoCssVitePluginFactory));
+      console.log(`构建完成: ${target.outDir}/index.js`);
+    }
+    console.log("全部构建完成。");
+  } catch (error) {
+    console.error("Vite 构建失败:", error);
+    process.exit(1);
+  }
 }
 
 runBuild();

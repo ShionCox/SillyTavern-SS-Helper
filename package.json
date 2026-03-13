@@ -4,7 +4,7 @@
     "scripts": {
         "install:all": "pnpm install",
         "build": "node build.js",
-        "build:watch": "node build.js --watch",
+        "build:watch": "set STX_BUILD_WATCH=1&& node build.js",
         "build:memory": "node build.js MemoryOS",
         "build:llm": "node build.js LLMHub",
         "build:roll": "node build.js RollHelper",

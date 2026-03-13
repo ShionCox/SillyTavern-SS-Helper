@@ -104,10 +104,12 @@ export interface BindSettingsTabsAndModalDepsEvent {
   drawerToggleId: string;
   drawerContentId: string;
   SETTINGS_TAB_MAIN_ID_Event: string;
+  SETTINGS_TAB_AI_ID_Event: string;
   SETTINGS_TAB_SKILL_ID_Event: string;
   SETTINGS_TAB_RULE_ID_Event: string;
   SETTINGS_TAB_ABOUT_ID_Event: string;
   SETTINGS_PANEL_MAIN_ID_Event: string;
+  SETTINGS_PANEL_AI_ID_Event: string;
   SETTINGS_PANEL_SKILL_ID_Event: string;
   SETTINGS_PANEL_RULE_ID_Event: string;
   SETTINGS_PANEL_ABOUT_ID_Event: string;
@@ -118,6 +120,9 @@ export interface BindSettingsTabsAndModalDepsEvent {
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
   SETTINGS_STATUS_MODAL_CLOSE_ID_Event: string;
   SETTINGS_SEARCH_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event: string;
   confirmDiscardSkillDraftEvent: () => boolean;
   isElementVisibleEvent: (element: HTMLElement | null) => boolean;
   isSkillDraftDirtyEvent: () => boolean;
@@ -125,10 +130,12 @@ export interface BindSettingsTabsAndModalDepsEvent {
 
 export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDepsEvent): void {
   const tabMain = document.getElementById(deps.SETTINGS_TAB_MAIN_ID_Event) as HTMLButtonElement | null;
+  const tabAi = document.getElementById(deps.SETTINGS_TAB_AI_ID_Event) as HTMLButtonElement | null;
   const tabSkill = document.getElementById(deps.SETTINGS_TAB_SKILL_ID_Event) as HTMLButtonElement | null;
   const tabRule = document.getElementById(deps.SETTINGS_TAB_RULE_ID_Event) as HTMLButtonElement | null;
   const tabAbout = document.getElementById(deps.SETTINGS_TAB_ABOUT_ID_Event) as HTMLButtonElement | null;
   const panelMain = document.getElementById(deps.SETTINGS_PANEL_MAIN_ID_Event) as HTMLElement | null;
+  const panelAi = document.getElementById(deps.SETTINGS_PANEL_AI_ID_Event) as HTMLElement | null;
   const panelSkill = document.getElementById(deps.SETTINGS_PANEL_SKILL_ID_Event) as HTMLElement | null;
   const panelRule = document.getElementById(deps.SETTINGS_PANEL_RULE_ID_Event) as HTMLElement | null;
   const panelAbout = document.getElementById(deps.SETTINGS_PANEL_ABOUT_ID_Event) as HTMLElement | null;
@@ -147,9 +154,21 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     deps.SETTINGS_STATUS_MODAL_CLOSE_ID_Event
   ) as HTMLButtonElement | null;
   const searchInput = document.getElementById(deps.SETTINGS_SEARCH_ID_Event) as HTMLInputElement | null;
+  const aiBridgeStatusLight = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event
+  ) as HTMLElement | null;
+  const aiBridgeStatusText = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event
+  ) as HTMLElement | null;
+  const aiBridgeRefreshBtn = document.getElementById(
+    deps.SETTINGS_AI_BRIDGE_REFRESH_ID_Event
+  ) as HTMLButtonElement | null;
 
   const searchableMainItems = panelMain
     ? Array.from(panelMain.querySelectorAll<HTMLElement>(".st-roll-search-item"))
+    : [];
+  const searchableAiItems = panelAi
+    ? Array.from(panelAi.querySelectorAll<HTMLElement>(".st-roll-search-item"))
     : [];
   const searchableSkillItems = panelSkill
     ? Array.from(panelSkill.querySelectorAll<HTMLElement>(".st-roll-search-item"))
@@ -162,12 +181,13 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     : [];
   const searchableItems = [
     ...searchableMainItems,
+    ...searchableAiItems,
     ...searchableSkillItems,
     ...searchableRuleItems,
     ...searchableAboutItems,
   ];
 
-  let activeTab: "main" | "skill" | "rule" | "about" = "main";
+  let activeTab: "main" | "ai" | "skill" | "rule" | "about" = "main";
   const ensureSettingsDrawerVisibleEvent = () => {
     const drawerContentNode = document.getElementById(deps.drawerContentId) as HTMLElement | null;
     if (!drawerContentNode) return;
@@ -248,24 +268,64 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     document.dispatchEvent(new CustomEvent("st-roll-status-editor-opened"));
   };
 
-  const activateTab = (tab: "main" | "skill" | "rule" | "about") => {
+  const setAiBridgeStatusEvent = (
+    state: "online" | "offline" | "checking",
+    text: string
+  ): void => {
+    if (aiBridgeStatusLight) {
+      aiBridgeStatusLight.classList.remove("is-online", "is-offline", "is-checking");
+      aiBridgeStatusLight.classList.add(`is-${state}`);
+    }
+    if (aiBridgeStatusText) {
+      aiBridgeStatusText.textContent = text;
+    }
+  };
+
+  const probeLlmHubBridgeEvent = async (): Promise<void> => {
+    setAiBridgeStatusEvent("checking", "检测中...");
+    try {
+      const result = (await request(
+        "plugin:request:ping",
+        {},
+        ROLLHELPER_NAMESPACE_Event,
+        {
+          to: LLMHUB_NAMESPACE_Event,
+          timeoutMs: 1200,
+        }
+      )) as any;
+      if (Boolean(result?.alive)) {
+        const version = String(result?.version ?? "").trim();
+        const versionText = version ? ` (v${version})` : "";
+        setAiBridgeStatusEvent("online", `已连接 LLMHub${versionText}`);
+        return;
+      }
+      setAiBridgeStatusEvent("offline", "LLMHub 未在线");
+    } catch {
+      setAiBridgeStatusEvent("offline", "LLMHub 未在线");
+    }
+  };
+
+  const activateTab = (tab: "main" | "ai" | "skill" | "rule" | "about") => {
     activeTab = tab;
     const isMain = tab === "main";
+    const isAi = tab === "ai";
     const isSkill = tab === "skill";
     const isRule = tab === "rule";
     const isAbout = tab === "about";
     tabMain?.classList.toggle("is-active", isMain);
+    tabAi?.classList.toggle("is-active", isAi);
     tabSkill?.classList.toggle("is-active", isSkill);
     tabRule?.classList.toggle("is-active", isRule);
     tabAbout?.classList.toggle("is-active", isAbout);
     if (panelMain) panelMain.hidden = !isMain;
+    if (panelAi) panelAi.hidden = !isAi;
     if (panelSkill) panelSkill.hidden = !isSkill;
     if (panelRule) panelRule.hidden = !isRule;
     if (panelAbout) panelAbout.hidden = !isAbout;
     syncThemeControlClassesByNodeEvent(tabMain || tabSkill || tabRule || tabAbout || panelMain || panelSkill || panelRule || panelAbout || null);
   };
 
-  const tryActivateTab = (nextTab: "main" | "skill" | "rule" | "about"): boolean => {
+  const tryActivateTab = (nextTab: "main" | "ai" | "skill" | "rule" | "about"): boolean => {
     if (nextTab === activeTab) return true;
     if (activeTab === "skill" && nextTab !== "skill" && !deps.confirmDiscardSkillDraftEvent()) {
       return false;
@@ -308,6 +368,9 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     const hasMainVisible = searchableMainItems.some(
       (item) => !item.classList.contains("is-hidden-by-search")
     );
+    const hasAiVisible = searchableAiItems.some(
+      (item) => !item.classList.contains("is-hidden-by-search")
+    );
     const hasSkillVisible = searchableSkillItems.some(
       (item) => !item.classList.contains("is-hidden-by-search")
     );
@@ -318,15 +381,17 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       (item) => !item.classList.contains("is-hidden-by-search")
     );
 
-    const hasVisibleByTab: Record<"main" | "skill" | "rule" | "about", boolean> = {
+    const hasVisibleByTab: Record<"main" | "ai" | "skill" | "rule" | "about", boolean> = {
       main: hasMainVisible,
+      ai: hasAiVisible,
       skill: hasSkillVisible,
       rule: hasRuleVisible,
       about: hasAboutVisible,
     };
     if (!hasVisibleByTab[activeTab]) {
-      const fallbackOrder: Array<"main" | "skill" | "rule" | "about"> = [
+      const fallbackOrder: Array<"main" | "ai" | "skill" | "rule" | "about"> = [
         "main",
+        "ai",
         "skill",
         "rule",
         "about",
@@ -341,6 +406,11 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (!tryActivateTab("main")) return;
     applySettingsSearchFilter();
   });
+  tabAi?.addEventListener("click", () => {
+    if (!tryActivateTab("ai")) return;
+    applySettingsSearchFilter();
+    void probeLlmHubBridgeEvent();
+  });
   tabSkill?.addEventListener("click", () => {
     if (!tryActivateTab("skill")) return;
     applySettingsSearchFilter();
@@ -353,8 +423,12 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (!tryActivateTab("about")) return;
     applySettingsSearchFilter();
   });
+  aiBridgeRefreshBtn?.addEventListener("click", () => {
+    void probeLlmHubBridgeEvent();
+  });
   searchInput?.addEventListener("input", applySettingsSearchFilter);
   applySettingsSearchFilter();
+  setAiBridgeStatusEvent("offline", "待检测");
 
   skillEditorOpenBtn?.addEventListener("click", () => {
     if (!tryActivateTab("skill")) return;
@@ -766,6 +840,7 @@ export function bindMountedSettingsCardEvent(deps: BindMountedSettingsCardDepsEv
 }
 
 export interface SyncSettingsUiDepsEvent {
+  SETTINGS_CARD_ID_Event: string;
   getSettingsEvent: () => {
     theme: string;
     enabled: boolean;

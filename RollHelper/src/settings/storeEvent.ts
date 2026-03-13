@@ -398,8 +398,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
 
     const settings = getSettingsEvent();
     const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-      state.skillPresetStoreText,
-      settings.skillTableText
+      state.skillPresetStoreText
     );
     const normalizedStore =
       parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
@@ -843,8 +842,7 @@ export function getUniqueSkillPresetNameEvent(
 }
 
 export function normalizeSkillPresetStoreTextForSettingsEvent(
-  raw: string,
-  _legacySkillTableText: string
+  raw: string
 ): string {
   const now = Date.now();
   const rawText = String(raw ?? "").trim();
@@ -949,8 +947,7 @@ export function parseSkillPresetStoreTextEvent(raw: string): SkillPresetStoreEve
 export function getSkillPresetStoreEvent(settings = getSettingsEvent()): SkillPresetStoreEvent {
   const rawStoreText = String(settings.skillPresetStoreText ?? "");
   const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-    rawStoreText,
-    settings.skillTableText
+    rawStoreText
   );
   const parsed = parseSkillPresetStoreTextEvent(normalizedStoreText);
   if (parsed) return parsed;
@@ -990,8 +987,7 @@ export function syncActivePresetToSkillTableTextEvent(
 export function saveSkillPresetStoreEvent(store: SkillPresetStoreEvent): void {
   const settings = getSettingsEvent();
   const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-    JSON.stringify(store),
-    settings.skillTableText
+    JSON.stringify(store)
   );
   const normalizedStore =
     parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();

@@ -336,6 +336,21 @@ export function buildSettingsCardHtmlTemplateEvent(
           </div>
         </div>
 
+        <div id="${ids.panelAiId}" class="st-roll-panel" hidden>
+          <div class="st-roll-divider"><i class="fa-solid fa-robot"></i><span>AI 对接</span><div class="st-roll-divider-line"></div></div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="llmhub bridge status online">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">LLMHub 连接状态</div>
+              <div class="st-roll-item-desc">用于确认骰子插件是否被 LLMHub 在线识别。</div>
+            </div>
+            <div class="st-roll-ai-bridge-status">
+              <span id="${ids.aiBridgeStatusLightId}" class="st-roll-ai-bridge-light is-offline"></span>
+              <span id="${ids.aiBridgeStatusTextId}" class="st-roll-ai-bridge-text">未检测</span>
+            </div>
+          </div>
+        </div>
+
         <div id="${ids.panelSkillId}" class="st-roll-panel" hidden>
           <div class="st-roll-divider"><i class="fa-solid fa-bolt"></i><span>技能系统</span><div class="st-roll-divider-line"></div></div>
 

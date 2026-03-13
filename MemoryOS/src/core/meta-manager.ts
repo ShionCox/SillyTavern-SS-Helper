@@ -54,9 +54,21 @@ export class MetaManager {
     }
 
     /**
-     * 更新 meta 中任意字段
+     * 功能：记录最近一次抽取执行状态。
+     * @param payload 抽取状态信息。
+     * @returns 无返回值。
      */
-    async updateMeta(partial: Partial<Omit<DBMeta, 'chatKey'>>): Promise<void> {
-        await db.meta.update(this.chatKey, partial);
+    async markLastExtract(payload: {
+        ts: number;
+        eventCount: number;
+        userMsgCount: number;
+        windowHash: string;
+    }): Promise<void> {
+        await db.meta.update(this.chatKey, {
+            lastExtractTs: payload.ts,
+            lastExtractEventCount: payload.eventCount,
+            lastExtractUserMsgCount: payload.userMsgCount,
+            lastExtractWindowHash: payload.windowHash,
+        });
     }
 }

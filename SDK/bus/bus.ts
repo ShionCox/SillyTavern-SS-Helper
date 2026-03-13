@@ -1,31 +1,31 @@
 import type { STXBus, EventEnvelope } from '../stx';
 
 export class EventBus implements STXBus {
-    private handlers: Map<string, Array<(evt: EventEnvelope<any>) => void>> = new Map();
+    private handlers: Map<string, Array<(evt: EventEnvelope<unknown>) => void>> = new Map();
 
     /**
-     * 触发一个事件，将按顺序同步调用监听器
-     * @param type 事件类型
-     * @param payload 事件载荷
-     * @param opts 额外选项比如 ChatKey 隔离分区
+     * 功能：触发一个事件，并同步通知对应事件类型的所有监听器。
+     * @param type 事件类型。
+     * @param payload 事件数据。
+     * @param opts 可选参数，当前仅支持 chatKey。
+     * @returns 无返回值。
      */
     emit<T>(type: string, payload: T, opts?: { chatKey?: string }): void {
         const eventHandlers = this.handlers.get(type) || [];
         const ts = Date.now();
 
-        // 构造标准的 EventEnvelope
         const envelope: EventEnvelope<T> = {
             id: crypto.randomUUID(),
             ts,
             chatKey: opts?.chatKey || 'global',
-            source: { pluginId: 'memory_os', version: '1.0.0' }, // 默认标识总线来源，真实流转中应记录触发源
+            source: { pluginId: 'stx_memory_os', version: '1.0.0' },
             type,
-            payload
+            payload,
         };
 
-        eventHandlers.forEach(handler => {
+        eventHandlers.forEach((handler) => {
             try {
-                handler(envelope);
+                handler(envelope as EventEnvelope<unknown>);
             } catch (err) {
                 console.error(`[STXBus] Error in handler for event type: ${type}`, err);
             }
@@ -33,28 +33,26 @@ export class EventBus implements STXBus {
     }
 
     /**
-     * 订阅事件
-     * @param type 事件类型
-     * @param handler 处理函数
-     * @returns 卸载函数的句柄
+     * 功能：订阅指定事件类型。
+     * @param type 事件类型。
+     * @param handler 事件处理函数。
+     * @returns 取消订阅函数。
      */
     on<T>(type: string, handler: (evt: EventEnvelope<T>) => void): () => void {
         const eventHandlers = this.handlers.get(type) || [];
-        eventHandlers.push(handler as (evt: EventEnvelope<any>) => void);
+        eventHandlers.push(handler as (evt: EventEnvelope<unknown>) => void);
         this.handlers.set(type, eventHandlers);
-
-        // 返回解除绑定的函数
         return () => this.off(type, handler);
     }
 
     /**
-     * 单次事件监听
-     * @param type 事件类型
-     * @param handler 处理函数
-     * @returns 卸载函数的句柄
+     * 功能：只订阅一次指定事件类型。
+     * @param type 事件类型。
+     * @param handler 事件处理函数。
+     * @returns 取消订阅函数。
      */
     once<T>(type: string, handler: (evt: EventEnvelope<T>) => void): () => void {
-        const onceHandler = (evt: EventEnvelope<T>) => {
+        const onceHandler = (evt: EventEnvelope<T>): void => {
             this.off(type, onceHandler);
             handler(evt);
         };
@@ -62,17 +60,19 @@ export class EventBus implements STXBus {
     }
 
     /**
-     * 卸载指定的事件监听
-     * @param type 事件类型
-     * @param handler 将被卸载的句柄
+     * 功能：取消指定事件类型的监听器。
+     * @param type 事件类型。
+     * @param handler 事件处理函数。
+     * @returns 无返回值。
      */
     off(type: string, handler: Function): void {
         const eventHandlers = this.handlers.get(type);
-        if (eventHandlers) {
-            this.handlers.set(
-                type,
-                eventHandlers.filter(h => h !== handler)
-            );
+        if (!eventHandlers) {
+            return;
         }
+        this.handlers.set(
+            type,
+            eventHandlers.filter((item) => item !== handler)
+        );
     }
 }

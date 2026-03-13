@@ -66,7 +66,30 @@ const IDS: MemoryOSSettingsIds = {
     testHelloBtnId: `${NAMESPACE}-test-hello-btn`,
     autoCompactionId: `${NAMESPACE}-auto-compaction`,
     compactionThresholdId: `${NAMESPACE}-compaction-threshold`,
+    dbCompactionDividerId: `${NAMESPACE}-db-divider-compaction`,
     contextMaxTokensId: `${NAMESPACE}-context-max-tokens`,
+    recordFilterEnabledId: `${NAMESPACE}-record-filter-enabled`,
+    recordFilterSectionId: `${NAMESPACE}-record-filter-section`,
+    recordFilterDetailWrapId: `${NAMESPACE}-record-filter-detail-wrap`,
+    recordFilterLevelId: `${NAMESPACE}-record-filter-level`,
+    recordFilterTypeHtmlId: `${NAMESPACE}-record-filter-type-html`,
+    recordFilterTypeXmlId: `${NAMESPACE}-record-filter-type-xml`,
+    recordFilterTypeJsonId: `${NAMESPACE}-record-filter-type-json`,
+    recordFilterTypeCodeblockId: `${NAMESPACE}-record-filter-type-codeblock`,
+    recordFilterTypeMarkdownId: `${NAMESPACE}-record-filter-type-markdown`,
+    recordFilterCustomCodeblockEnabledId: `${NAMESPACE}-record-filter-custom-codeblock-enabled`,
+    recordFilterCustomCodeblockTagsId: `${NAMESPACE}-record-filter-custom-codeblock-tags`,
+    recordFilterJsonModeId: `${NAMESPACE}-record-filter-json-mode`,
+    recordFilterJsonKeysId: `${NAMESPACE}-record-filter-json-keys`,
+    recordFilterPureCodePolicyId: `${NAMESPACE}-record-filter-pure-policy`,
+    recordFilterPlaceholderId: `${NAMESPACE}-record-filter-placeholder`,
+    recordFilterCustomRegexEnabledId: `${NAMESPACE}-record-filter-custom-enabled`,
+    recordFilterCustomRegexRulesId: `${NAMESPACE}-record-filter-custom-rules`,
+    recordFilterMaxTextLengthId: `${NAMESPACE}-record-filter-max-length`,
+    recordFilterMinEffectiveCharsId: `${NAMESPACE}-record-filter-min-effective`,
+    recordFilterPreviewInputId: `${NAMESPACE}-record-filter-preview-input`,
+    recordFilterPreviewBtnId: `${NAMESPACE}-record-filter-preview-btn`,
+    recordFilterPreviewOutputId: `${NAMESPACE}-record-filter-preview-output`,
 
     dbCompactBtnId: `${NAMESPACE}-db-compact-btn`,
     dbExportBtnId: `${NAMESPACE}-db-export-btn`,
@@ -142,7 +165,7 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
         const el = document.querySelector(selector);
         if (el) return resolve(el);
 
-        const observer = new MutationObserver((mutations, obs) => {
+        const observer = new MutationObserver((_mutations, obs) => {
             const el = document.querySelector(selector);
             if (el) {
                 obs.disconnect();
@@ -274,12 +297,101 @@ function bindUiEvents() {
                     el.classList.add('is-hidden-by-search');
                 }
             });
+            syncDbCompactionDividerVisibility();
         });
     }
 
     // ==== 在此处可继续添加针对具体配置项的 change 监听与保存逻辑 ====
 
-    const stContext = (window as any).SillyTavern?.getContext?.() || {};
+    type STContextSnapshot = {
+        extensionSettings?: Record<string, Record<string, any>>;
+        saveSettingsDebounced?: () => void;
+    } | null;
+
+    /**
+     * 功能：获取最新 SillyTavern 上下文，避免闭包持有过期对象。
+     * 参数：无。
+     * 返回：上下文对象或 null。
+     */
+    const getStContext = (): STContextSnapshot => {
+        return (window as any).SillyTavern?.getContext?.() || null;
+    };
+    const SETTINGS_NAMESPACE = 'stx_memory_os';
+
+    /**
+     * 功能：确保 MemoryOS 设置对象存在并返回引用。
+     * 参数：ctx 当前 ST 上下文。
+     * 返回：`stx_memory_os` 对应设置对象。
+     */
+    const ensureMemorySettings = (ctx: STContextSnapshot): Record<string, any> => {
+        if (!ctx) return {};
+        if (!ctx.extensionSettings) {
+            ctx.extensionSettings = {};
+        }
+        const currentSettings = ctx.extensionSettings[SETTINGS_NAMESPACE];
+        if (currentSettings && typeof currentSettings === 'object') {
+            return currentSettings as Record<string, any>;
+        }
+
+        const created: Record<string, any> = {};
+        ctx.extensionSettings[SETTINGS_NAMESPACE] = created;
+        return created;
+    };
+    const readSettingBoolean = (settingKey: string): boolean => {
+        const ctx = getStContext();
+        const settings = ensureMemorySettings(ctx);
+        return settings[settingKey] === true;
+    };
+
+    syncCardDisabledState(readSettingBoolean('enabled'));
+
+    type RecordFilterUiSettings = ReturnType<typeof normalizeRecordFilterSettings>;
+
+    /**
+     * 功能：读取记录过滤设置并补齐默认值。
+     * 参数：无。
+     * 返回：完整记录过滤设置。
+     */
+    const readRecordFilterSettings = (): RecordFilterUiSettings => {
+        const ctx = getStContext();
+        const settings = ensureMemorySettings(ctx);
+        return normalizeRecordFilterSettings(settings.recordFilter || {});
+    };
+
+    /**
+     * 功能：写入记录过滤设置。
+     * 参数：
+     *   nextPartial：待写入的局部配置。
+     * 返回：写入后的完整配置。
+     */
+    const saveRecordFilterSettings = (nextPartial: Partial<RecordFilterUiSettings>): RecordFilterUiSettings => {
+        const ctx = getStContext();
+        const merged = normalizeRecordFilterSettings({
+            ...(readRecordFilterSettings() || {}),
+            ...(nextPartial || {}),
+        });
+        if (!ctx) {
+            return merged;
+        }
+        const settings = ensureMemorySettings(ctx);
+        settings.recordFilter = { ...merged };
+        ctx.saveSettingsDebounced?.();
+        return merged;
+    };
+
+    /**
+     * 功能：读取数字设置。
+     * 参数：
+     *   settingKey：设置键。
+     *   defaultValue：默认值。
+     * 返回：数字值。
+     */
+    const readSettingNumber = (settingKey: string, defaultValue: number): number => {
+        const ctx = getStContext();
+        const settings = ensureMemorySettings(ctx);
+        const parsed = Number(settings[settingKey]);
+        return Number.isFinite(parsed) ? parsed : defaultValue;
+    };
 
     // 辅助防呆并初始化开关绑定持久化
     const bindToggle = (toggleId: string, settingKey: string, onToggleCallback?: (val: boolean) => void) => {
@@ -287,26 +399,57 @@ function bindUiEvents() {
         if (!toggleEl) return;
 
         // 初始化读取状态
-        if (stContext.extensionSettings) {
-            const extSet = stContext.extensionSettings['stx_memory_os'] || {};
-            toggleEl.checked = extSet[settingKey] === true;
-        }
+        toggleEl.checked = readSettingBoolean(settingKey);
 
         toggleEl.addEventListener('change', () => {
             const checked = toggleEl.checked;
-            if (stContext.extensionSettings) {
-                if (!stContext.extensionSettings['stx_memory_os']) {
-                    stContext.extensionSettings['stx_memory_os'] = {};
-                }
-                stContext.extensionSettings['stx_memory_os'][settingKey] = checked;
-                stContext.saveSettingsDebounced?.();
+            const currentContext = getStContext();
+            if (currentContext) {
+                const currentSettings = ensureMemorySettings(currentContext);
+                currentSettings[settingKey] = checked;
+                currentContext.saveSettingsDebounced?.();
             }
             if (onToggleCallback) onToggleCallback(checked);
         });
     };
 
+    /**
+     * 功能：绑定数字输入设置项。
+     * 参数：
+     *   inputId：输入框 ID。
+     *   settingKey：设置键名。
+     *   defaultValue：默认值。
+     *   min：最小值。
+     *   max：最大值。
+     * 返回：无。
+     */
+    const bindNumberInput = (
+        inputId: string,
+        settingKey: string,
+        defaultValue: number,
+        min: number,
+        max: number
+    ): void => {
+        const inputEl = document.getElementById(inputId) as HTMLInputElement | null;
+        if (!inputEl) return;
+        inputEl.value = String(readSettingNumber(settingKey, defaultValue));
+        const persist = (): void => {
+            const raw = Number(inputEl.value);
+            const safe = Math.min(max, Math.max(min, Number.isFinite(raw) ? raw : defaultValue));
+            inputEl.value = String(safe);
+            const currentContext = getStContext();
+            if (!currentContext) return;
+            const currentSettings = ensureMemorySettings(currentContext);
+            currentSettings[settingKey] = safe;
+            currentContext.saveSettingsDebounced?.();
+        };
+        inputEl.addEventListener('change', persist);
+        inputEl.addEventListener('blur', persist);
+    };
+
     // 绑定总开关
     bindToggle(IDS.enabledId, 'enabled', (val) => {
+        syncCardDisabledState(!!val);
         broadcast(
             'plugin:broadcast:state_changed',
             {
@@ -315,7 +458,275 @@ function bindUiEvents() {
             },
             'stx_memory_os'
         );
+        if (val) {
+            const plugin = (window as any).MemoryOSPlugin as {
+                refreshCurrentChatBinding?: () => Promise<void>;
+            };
+            plugin?.refreshCurrentChatBinding?.().catch((error: unknown) => {
+                logger.error('启用后立即初始化当前聊天失败', error);
+            });
+        }
     });
+    bindNumberInput(IDS.contextMaxTokensId, 'contextMaxTokens', 1200, 500, 8000);
+    bindNumberInput(IDS.compactionThresholdId, 'compactionThreshold', 5000, 500, 20000);
+
+    const recordFilterEnabledEl = document.getElementById(IDS.recordFilterEnabledId) as HTMLInputElement | null;
+    const recordFilterLevelEl = document.getElementById(IDS.recordFilterLevelId) as HTMLSelectElement | null;
+    const recordFilterTypeHtmlEl = document.getElementById(IDS.recordFilterTypeHtmlId) as HTMLInputElement | null;
+    const recordFilterTypeXmlEl = document.getElementById(IDS.recordFilterTypeXmlId) as HTMLInputElement | null;
+    const recordFilterTypeJsonEl = document.getElementById(IDS.recordFilterTypeJsonId) as HTMLInputElement | null;
+    const recordFilterTypeCodeblockEl = document.getElementById(IDS.recordFilterTypeCodeblockId) as HTMLInputElement | null;
+    const recordFilterTypeMarkdownEl = document.getElementById(IDS.recordFilterTypeMarkdownId) as HTMLInputElement | null;
+    const recordFilterCustomCodeblockEnabledEl = document.getElementById(IDS.recordFilterCustomCodeblockEnabledId) as HTMLInputElement | null;
+    const recordFilterCustomCodeblockTagsEl = document.getElementById(IDS.recordFilterCustomCodeblockTagsId) as HTMLTextAreaElement | null;
+    const recordFilterJsonModeEl = document.getElementById(IDS.recordFilterJsonModeId) as HTMLSelectElement | null;
+    const recordFilterJsonKeysEl = document.getElementById(IDS.recordFilterJsonKeysId) as HTMLInputElement | null;
+    const recordFilterPureCodePolicyEl = document.getElementById(IDS.recordFilterPureCodePolicyId) as HTMLSelectElement | null;
+    const recordFilterPlaceholderEl = document.getElementById(IDS.recordFilterPlaceholderId) as HTMLInputElement | null;
+    const recordFilterCustomRegexEnabledEl = document.getElementById(IDS.recordFilterCustomRegexEnabledId) as HTMLInputElement | null;
+    const recordFilterCustomRegexRulesEl = document.getElementById(IDS.recordFilterCustomRegexRulesId) as HTMLTextAreaElement | null;
+    const recordFilterMaxTextLengthEl = document.getElementById(IDS.recordFilterMaxTextLengthId) as HTMLInputElement | null;
+    const recordFilterMinEffectiveCharsEl = document.getElementById(IDS.recordFilterMinEffectiveCharsId) as HTMLInputElement | null;
+    const recordFilterPreviewInputEl = document.getElementById(IDS.recordFilterPreviewInputId) as HTMLTextAreaElement | null;
+    const recordFilterPreviewBtn = document.getElementById(IDS.recordFilterPreviewBtnId) as HTMLButtonElement | null;
+    const recordFilterPreviewOutputEl = document.getElementById(IDS.recordFilterPreviewOutputId) as HTMLElement | null;
+    const panelAiEl = document.getElementById(IDS.panelAiId) as HTMLElement | null;
+    const panelDbEl = document.getElementById(IDS.panelDbId) as HTMLElement | null;
+
+    /**
+     * 功能：当“数据压缩与清理”分组下没有可见条目时，自动隐藏该分组标题。
+     * 参数：无。
+     * 返回：无。
+     */
+    function syncDbCompactionDividerVisibility(): void {
+        if (!panelDbEl) {
+            return;
+        }
+        const dbCompactionDividerEl = document.getElementById(IDS.dbCompactionDividerId) as HTMLElement | null;
+        if (!dbCompactionDividerEl) {
+            return;
+        }
+
+        const isDbItemVisible = (el: HTMLElement): boolean => {
+            let cursor: HTMLElement | null = el;
+            while (cursor && cursor !== panelDbEl) {
+                if (cursor.hidden || cursor.classList.contains('is-hidden-by-search')) {
+                    return false;
+                }
+                cursor = cursor.parentElement as HTMLElement | null;
+            }
+            return true;
+        };
+
+        const hasVisibleItem = Array.from(
+            panelDbEl.querySelectorAll('.stx-ui-search-item[data-stx-db-group="compaction"]')
+        )
+            .some((item) => isDbItemVisible(item as HTMLElement));
+        dbCompactionDividerEl.hidden = !hasVisibleItem;
+    }
+
+    /**
+     * 功能：将“记录过滤”区块从 AI 面板迁移到数据管理面板，避免与 AI 规则混放。
+     * 参数：无。
+     * 返回：记录过滤详情容器节点；若缺少关键节点则返回 null。
+     */
+    const mountRecordFilterSectionToDbPanel = (): HTMLElement | null => {
+        if (!panelAiEl || !panelDbEl || !recordFilterEnabledEl) {
+            return null;
+        }
+
+        const enabledItem = recordFilterEnabledEl.closest('.stx-ui-item') as HTMLElement | null;
+        if (!enabledItem) {
+            return null;
+        }
+        const divider = enabledItem.previousElementSibling as HTMLElement | null;
+        const strategyItem = recordFilterLevelEl?.closest('.stx-ui-item') as HTMLElement | null;
+        const typeItem = recordFilterTypeHtmlEl?.closest('.stx-ui-item') as HTMLElement | null;
+        const detailItem = recordFilterJsonKeysEl?.closest('.stx-ui-item') as HTMLElement | null;
+        const previewItem = recordFilterPreviewInputEl?.closest('.stx-ui-item') as HTMLElement | null;
+
+        let sectionEl = document.getElementById(IDS.recordFilterSectionId) as HTMLElement | null;
+        if (!sectionEl) {
+            sectionEl = document.createElement('section');
+            sectionEl.id = IDS.recordFilterSectionId;
+        }
+
+        let detailWrapEl = document.getElementById(IDS.recordFilterDetailWrapId) as HTMLElement | null;
+        if (!detailWrapEl) {
+            detailWrapEl = document.createElement('div');
+            detailWrapEl.id = IDS.recordFilterDetailWrapId;
+        }
+        detailWrapEl.classList.add('stx-ui-filter-group');
+
+        if (divider && divider.classList.contains('stx-ui-divider')) {
+            sectionEl.appendChild(divider);
+        }
+        sectionEl.appendChild(enabledItem);
+
+        [strategyItem, typeItem, detailItem, previewItem].forEach((node) => {
+            if (!node) return;
+            detailWrapEl!.appendChild(node);
+        });
+        sectionEl.appendChild(detailWrapEl);
+
+        const dbCompactionDividerEl = document.getElementById(IDS.dbCompactionDividerId);
+        if (dbCompactionDividerEl && dbCompactionDividerEl.parentElement === panelDbEl) {
+            panelDbEl.insertBefore(sectionEl, dbCompactionDividerEl);
+        } else {
+            panelDbEl.prepend(sectionEl);
+        }
+        return detailWrapEl;
+    };
+    const recordFilterDetailWrapEl = mountRecordFilterSectionToDbPanel();
+    syncDbCompactionDividerVisibility();
+
+    /**
+     * 功能：把记录过滤设置写入表单。
+     * 参数：
+     *   settings：完整过滤设置。
+     * 返回：无。
+     */
+    const applyRecordFilterFormValues = (settings: RecordFilterUiSettings): void => {
+        if (recordFilterEnabledEl) recordFilterEnabledEl.checked = settings.enabled;
+        if (recordFilterDetailWrapEl) {
+            const shouldShow = settings.enabled === true;
+            if (!shouldShow) {
+                recordFilterDetailWrapEl.hidden = true;
+                recordFilterDetailWrapEl.classList.remove('is-reveal-animating');
+            } else {
+                const wasHidden = recordFilterDetailWrapEl.hidden;
+                recordFilterDetailWrapEl.hidden = false;
+                if (wasHidden) {
+                    recordFilterDetailWrapEl.classList.remove('is-reveal-animating');
+                    void recordFilterDetailWrapEl.offsetWidth;
+                    recordFilterDetailWrapEl.classList.add('is-reveal-animating');
+                }
+            }
+        }
+        if (recordFilterLevelEl) recordFilterLevelEl.value = settings.level;
+        if (recordFilterTypeHtmlEl) recordFilterTypeHtmlEl.checked = settings.filterTypes.includes('html');
+        if (recordFilterTypeXmlEl) recordFilterTypeXmlEl.checked = settings.filterTypes.includes('xml');
+        if (recordFilterTypeJsonEl) recordFilterTypeJsonEl.checked = settings.filterTypes.includes('json');
+        if (recordFilterTypeCodeblockEl) recordFilterTypeCodeblockEl.checked = settings.filterTypes.includes('codeblock');
+        if (recordFilterTypeMarkdownEl) recordFilterTypeMarkdownEl.checked = settings.filterTypes.includes('markdown');
+        if (recordFilterCustomCodeblockEnabledEl) {
+            recordFilterCustomCodeblockEnabledEl.checked = settings.customCodeblockEnabled === true;
+            recordFilterCustomCodeblockEnabledEl.disabled = settings.filterTypes.includes('codeblock') !== true;
+        }
+        if (recordFilterCustomCodeblockTagsEl) {
+            recordFilterCustomCodeblockTagsEl.value = settings.customCodeblockTags.join(',');
+            recordFilterCustomCodeblockTagsEl.disabled = !(
+                settings.filterTypes.includes('codeblock') === true &&
+                settings.customCodeblockEnabled === true
+            );
+        }
+        if (recordFilterJsonModeEl) recordFilterJsonModeEl.value = settings.jsonExtractMode;
+        if (recordFilterJsonKeysEl) recordFilterJsonKeysEl.value = settings.jsonExtractKeys.join(',');
+        if (recordFilterPureCodePolicyEl) recordFilterPureCodePolicyEl.value = settings.pureCodePolicy;
+        if (recordFilterPlaceholderEl) {
+            recordFilterPlaceholderEl.value = settings.placeholderText;
+            recordFilterPlaceholderEl.disabled = settings.pureCodePolicy !== 'placeholder';
+        }
+        if (recordFilterCustomRegexEnabledEl) recordFilterCustomRegexEnabledEl.checked = settings.customRegexEnabled;
+        if (recordFilterCustomRegexRulesEl) {
+            recordFilterCustomRegexRulesEl.value = settings.customRegexRules;
+            recordFilterCustomRegexRulesEl.disabled = settings.customRegexEnabled !== true;
+        }
+        if (recordFilterMaxTextLengthEl) recordFilterMaxTextLengthEl.value = String(settings.maxTextLength);
+        if (recordFilterMinEffectiveCharsEl) recordFilterMinEffectiveCharsEl.value = String(settings.minEffectiveChars);
+        if (recordFilterJsonKeysEl) {
+            recordFilterJsonKeysEl.disabled = settings.jsonExtractMode === 'off';
+        }
+        syncDbCompactionDividerVisibility();
+    };
+
+    /**
+     * 功能：从表单读取记录过滤设置。
+     * 参数：无。
+     * 返回：完整过滤设置。
+     */
+    const collectRecordFilterFormValues = (): RecordFilterUiSettings => {
+        const current = readRecordFilterSettings();
+        const filterTypes: string[] = [];
+        if (recordFilterTypeHtmlEl?.checked) filterTypes.push('html');
+        if (recordFilterTypeXmlEl?.checked) filterTypes.push('xml');
+        if (recordFilterTypeJsonEl?.checked) filterTypes.push('json');
+        if (recordFilterTypeCodeblockEl?.checked) filterTypes.push('codeblock');
+        if (recordFilterTypeMarkdownEl?.checked) filterTypes.push('markdown');
+        return normalizeRecordFilterSettings({
+            ...current,
+            enabled: recordFilterEnabledEl?.checked ?? current.enabled,
+            level: recordFilterLevelEl?.value || current.level,
+            filterTypes,
+            customCodeblockEnabled: recordFilterCustomCodeblockEnabledEl?.checked ?? current.customCodeblockEnabled,
+            customCodeblockTags: (recordFilterCustomCodeblockTagsEl?.value || '')
+                .split(/[,\n]/)
+                .map((item: string) => item.trim())
+                .filter(Boolean),
+            jsonExtractMode: recordFilterJsonModeEl?.value || current.jsonExtractMode,
+            jsonExtractKeys: (recordFilterJsonKeysEl?.value || '').split(',').map((item: string) => item.trim()).filter(Boolean),
+            pureCodePolicy: recordFilterPureCodePolicyEl?.value || current.pureCodePolicy,
+            placeholderText: recordFilterPlaceholderEl?.value || current.placeholderText,
+            customRegexEnabled: recordFilterCustomRegexEnabledEl?.checked ?? current.customRegexEnabled,
+            customRegexRules: recordFilterCustomRegexRulesEl?.value || '',
+            maxTextLength: Number(recordFilterMaxTextLengthEl?.value || current.maxTextLength),
+            minEffectiveChars: Number(recordFilterMinEffectiveCharsEl?.value || current.minEffectiveChars),
+        });
+    };
+
+    /**
+     * 功能：保存记录过滤表单并刷新控件状态。
+     * 参数：无。
+     * 返回：无。
+     */
+    const persistRecordFilterForm = (): void => {
+        const next = collectRecordFilterFormValues();
+        const saved = saveRecordFilterSettings(next);
+        applyRecordFilterFormValues(saved);
+    };
+
+    applyRecordFilterFormValues(readRecordFilterSettings());
+
+    [
+        recordFilterEnabledEl,
+        recordFilterLevelEl,
+        recordFilterTypeHtmlEl,
+        recordFilterTypeXmlEl,
+        recordFilterTypeJsonEl,
+        recordFilterTypeCodeblockEl,
+        recordFilterTypeMarkdownEl,
+        recordFilterCustomCodeblockEnabledEl,
+        recordFilterCustomCodeblockTagsEl,
+        recordFilterJsonModeEl,
+        recordFilterJsonKeysEl,
+        recordFilterPureCodePolicyEl,
+        recordFilterPlaceholderEl,
+        recordFilterCustomRegexEnabledEl,
+        recordFilterCustomRegexRulesEl,
+        recordFilterMaxTextLengthEl,
+        recordFilterMinEffectiveCharsEl,
+    ].forEach((element: Element | null) => {
+        if (!element) return;
+        element.addEventListener('change', persistRecordFilterForm);
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+            element.addEventListener('blur', persistRecordFilterForm);
+        }
+    });
+
+    if (recordFilterPreviewBtn && recordFilterPreviewInputEl && recordFilterPreviewOutputEl) {
+        recordFilterPreviewBtn.addEventListener('click', () => {
+            const currentSettings = collectRecordFilterFormValues();
+            const result = filterRecordText(recordFilterPreviewInputEl.value, currentSettings);
+            const lines: string[] = [
+                `状态: ${result.dropped ? '将丢弃' : '可入库'}`,
+                `原因: ${result.reasonCode}`,
+                `规则: ${result.appliedRules.join(', ') || '(无)'}`,
+                '结果:',
+                result.filteredText || '(空)',
+            ];
+            recordFilterPreviewOutputEl.textContent = lines.join('\n');
+        });
+    }
 
     // ==========================================
     // ==== [P0-4] 微服务通讯三态连接灯与逻辑接管 ====
@@ -324,9 +735,10 @@ function bindUiEvents() {
     const aiLightEl = document.getElementById(IDS.aiModeStatusLightId);
 
     // 初始化 UI 开关
-    if (aiToggleEl && stContext.extensionSettings) {
-        const extSet = stContext.extensionSettings['stx_memory_os'] || {};
-        aiToggleEl.checked = extSet['aiMode'] === true;
+    if (aiToggleEl) {
+        const initContext = getStContext();
+        const initSettings = ensureMemorySettings(initContext);
+        aiToggleEl.checked = initSettings['aiMode'] === true;
     }
 
     // 更新界面状态灯（提供绿Connected / 红Disconnected 变换）
@@ -350,8 +762,12 @@ function bindUiEvents() {
             aiLightEl.removeAttribute('title');
             aiToggleEl.checked = false;
             aiToggleEl.disabled = true; // 强力闭锁
-            const extSet = stContext.extensionSettings?.['stx_memory_os'] || {};
-            extSet['aiMode'] = false; // 联动存表
+            const currentContext = getStContext();
+            if (currentContext) {
+                const currentSettings = ensureMemorySettings(currentContext);
+                currentSettings['aiMode'] = false; // 联动存表
+                currentContext.saveSettingsDebounced?.();
+            }
         }
     };
 
@@ -373,7 +789,7 @@ function bindUiEvents() {
 
     // 2. 长程订阅广播：如果探测途中对方开关发生变化，实时追随打断操作！
     // P0-5 防漏回收：我们将其绑定在内部单例生命周期（由于暂且没有显式销毁，跟随页面生存）
-    const unsub = subscribe('plugin:broadcast:state_changed', (data: any) => {
+    subscribe('plugin:broadcast:state_changed', (data: any) => {
         // 如果开关开启，我们假定活着；如果是关闭那也直接设死
         updateLinkStatus(true, !!data?.isEnabled);
     }, { from: 'stx_llmhub' });
@@ -388,10 +804,11 @@ function bindUiEvents() {
                 return;
             }
 
-            if (stContext.extensionSettings) {
-                if (!stContext.extensionSettings['stx_memory_os']) stContext.extensionSettings['stx_memory_os'] = {};
-                stContext.extensionSettings['stx_memory_os']['aiMode'] = aiToggleEl.checked;
-                stContext.saveSettingsDebounced?.();
+            const currentContext = getStContext();
+            if (currentContext) {
+                const currentSettings = ensureMemorySettings(currentContext);
+                currentSettings['aiMode'] = aiToggleEl.checked;
+                currentContext.saveSettingsDebounced?.();
             }
         });
     }
@@ -411,7 +828,7 @@ function bindUiEvents() {
                 toast.error('网络探测不通，错误详情看控制台。');
                 logger.error('[Bus Inspector Error]', e);
             } finally {
-                pingBtn.textContent = '发送 Ping 测试';
+                pingBtn.textContent = '发送连通测试';
             }
         });
     }
@@ -428,7 +845,7 @@ function bindUiEvents() {
                 toast.error('请求 LLM 枢纽被拒绝或超时，详见控制台。');
                 logger.error('[Bus Inspector Error]', e);
             } finally {
-                helloBtn.textContent = '向 LLMHub Hello';
+                helloBtn.textContent = '向 LLMHub 打招呼';
             }
         });
     }
@@ -461,11 +878,11 @@ function bindUiEvents() {
     bindToggle(IDS.autoCompactionId, 'autoCompaction', (enabled) => {
         applyAutoCompactionScheduler(enabled);
     });
-    const autoCompactionEnabled = stContext.extensionSettings?.['stx_memory_os']?.autoCompaction === true;
+    const autoCompactionEnabled = readSettingBoolean('autoCompaction');
     applyAutoCompactionScheduler(autoCompactionEnabled);
 
     setTimeout(() => {
-        const enabled = stContext.extensionSettings?.['stx_memory_os']?.enabled === true;
+        const enabled = readSettingBoolean('enabled');
         broadcast(
             'plugin:broadcast:state_changed',
             {
@@ -629,23 +1046,33 @@ function bindUiEvents() {
             }
             try {
                 const chatKey = memory.getChatKey?.() ?? 'unknown';
-                const [events, facts, summaries] = await Promise.all([
+                const { db } = await import('../db/db');
+                const [events, facts, state, summaries, templates, meta, binding] = await Promise.all([
                     memory.events?.query({ limit: 5000 }) ?? [],
                     memory.facts?.query({ limit: 5000 }) ?? [],
+                    db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).toArray(),
                     memory.summaries?.query({ limit: 1000 }) ?? [],
+                    db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).toArray(),
+                    db.meta.get(chatKey),
+                    db.template_bindings.get(chatKey),
                 ]);
                 const exportData = {
                     exportedAt: new Date().toISOString(),
+                    schemaVersion: meta?.schemaVersion ?? 1,
                     chatKey,
                     events,
                     facts,
+                    state,
                     summaries,
+                    templates,
+                    meta,
+                    binding,
                 };
                 const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `memory_os_export_${chatKey}_${Date.now()}.json`;
+                a.download = `stx_memory_os_export_${chatKey}_${Date.now()}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
             } catch (e) {
@@ -689,12 +1116,20 @@ function bindUiEvents() {
                     }
                 }
 
-                const { db } = await import('../db/db');
+                const { db, clearChatData } = await import('../db/db');
                 const events = Array.isArray(payload.events) ? payload.events : [];
                 const facts = Array.isArray(payload.facts) ? payload.facts : [];
                 const summaries = Array.isArray(payload.summaries) ? payload.summaries : [];
+                const mode = confirm('导入模式：确定=replace 全量替换，取消=merge 合并导入。') ? 'replace' : 'merge';
+                const state = Array.isArray(payload.state) ? payload.state : [];
+                const templates = Array.isArray(payload.templates) ? payload.templates : [];
+                const meta = payload.meta && typeof payload.meta === 'object' ? payload.meta : null;
+                const binding = payload.binding && typeof payload.binding === 'object' ? payload.binding : null;
+                if (mode === 'replace') {
+                    await clearChatData(currentChatKey);
+                }
 
-                await db.transaction('rw', [db.events, db.facts, db.summaries, db.meta], async () => {
+                await db.transaction('rw', [db.events, db.facts, db.world_state, db.summaries, db.templates, db.meta, db.template_bindings], async () => {
                     if (events.length > 0) {
                         await db.events.bulkPut(events.map((event: any) => ({
                             ...event,
@@ -713,13 +1148,33 @@ function bindUiEvents() {
                             chatKey: currentChatKey,
                         })));
                     }
+                    if (state.length > 0) {
+                        await db.world_state.bulkPut(state.map((item: any) => ({
+                            ...item,
+                            chatKey: currentChatKey,
+                        })));
+                    }
+                    if (templates.length > 0) {
+                        await db.templates.bulkPut(templates.map((item: any) => ({
+                            ...item,
+                            chatKey: currentChatKey,
+                        })));
+                    }
                     await db.meta.put({
+                        ...(meta || {}),
                         chatKey: currentChatKey,
-                        schemaVersion: 1,
+                        schemaVersion: Number(meta?.schemaVersion ?? payload.schemaVersion ?? 1),
                     });
+                    if (binding) {
+                        await db.template_bindings.put({
+                            ...binding,
+                            bindingKey: currentChatKey,
+                            chatKey: currentChatKey,
+                        });
+                    }
                 });
 
-                alert(`导入完成：events=${events.length}, facts=${facts.length}, summaries=${summaries.length}`);
+                alert(`导入完成(${mode})：events=${events.length}, facts=${facts.length}, state=${state.length}, summaries=${summaries.length}, templates=${templates.length}`);
             } catch (error) {
                 alert('导入失败：' + String(error));
             } finally {
@@ -741,16 +1196,8 @@ function bindUiEvents() {
             if (!confirm(`确定要清空 [${chatKey}] 的所有记忆数据吗？\n此操作不可撤销！`)) return;
             try {
                 // 通过 IndexedDB 的 db 单例直接按 chatKey 批量删除
-                const { db } = await import('../db/db');
-                await Promise.all([
-                    db.events.where('chatKey').equals(chatKey).delete(),
-                    db.facts.where('chatKey').equals(chatKey).delete(),
-                    db.world_state.where('chatKey').equals(chatKey).delete(),
-                    db.summaries.where('chatKey').equals(chatKey).delete(),
-                    db.audit.where('chatKey').equals(chatKey).delete(),
-                    db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).delete(),
-                    db.meta.delete(chatKey),
-                ]);
+                const { clearChatData } = await import('../db/db');
+                await clearChatData(chatKey);
                 alert(`已清空 [${chatKey}] 的所有记忆数据。`);
             } catch (e) {
                 alert('清空失败：' + String(e));

@@ -14,10 +14,12 @@ export interface SettingsCardTemplateIdsEvent {
   changelogHtml: string;
   searchId: string;
   tabMainId: string;
+  tabAiId: string;
   tabSkillId: string;
   tabRuleId: string;
   tabAboutId: string;
   panelMainId: string;
+  panelAiId: string;
   panelSkillId: string;
   panelRuleId: string;
   panelAboutId: string;
@@ -88,4 +90,7 @@ export interface SettingsCardTemplateIdsEvent {
   ruleSaveId: string;
   ruleResetId: string;
   ruleTextId: string;
+  aiBridgeStatusLightId: string;
+  aiBridgeStatusTextId: string;
+  aiBridgeRefreshId: string;
 }
