@@ -90,6 +90,92 @@ let STATUS_EDITOR_MOBILE_SHEET_LAST_MOVE_TS_Event = 0;
 let STATUS_EDITOR_MOBILE_SHEET_CURRENT_TRANSLATE_Event = 0;
 let STATUS_EDITOR_MEMORY_UNSUBSCRIBE_Event: (() => void) | null = null;
 let STATUS_EDITOR_CHAT_REFRESH_TOKEN_Event = 0;
+let STATUS_EDITOR_CHAT_NAME_MARQUEE_BOUND_Event = false;
+let STATUS_EDITOR_CHAT_NAME_MARQUEE_OBSERVER_Event: ResizeObserver | null = null;
+
+function resolveStatusEditorChatNameMarqueeNodesEvent(marqueeElement: HTMLElement): {
+  track: HTMLElement;
+  segment: HTMLElement;
+} | null {
+  const track = marqueeElement.querySelector(
+    '[data-st-roll-role="status-chat-name-track"]'
+  ) as HTMLElement | null;
+  const segment = marqueeElement.querySelector(
+    '[data-st-roll-role="status-chat-name-segment"]'
+  ) as HTMLElement | null;
+  if (!track || !segment) return null;
+  return { track, segment };
+}
+
+function refreshSingleStatusEditorChatNameMarqueeEvent(marqueeElement: HTMLElement): boolean {
+  const nodes = resolveStatusEditorChatNameMarqueeNodesEvent(marqueeElement);
+  if (!nodes) return false;
+  const { track, segment } = nodes;
+  const visibleWidth = Math.ceil(
+    marqueeElement.clientWidth || marqueeElement.getBoundingClientRect().width || 0
+  );
+  const contentWidth = Math.ceil(
+    segment.scrollWidth || segment.getBoundingClientRect().width || 0
+  );
+  if (visibleWidth <= 0 || contentWidth <= 0) return false;
+
+  track.style.removeProperty("--st-roll-status-chat-marquee-distance");
+  track.style.removeProperty("--st-roll-status-chat-marquee-duration");
+  marqueeElement.classList.remove("is-overflowing");
+
+  const overflowWidth = contentWidth - visibleWidth;
+  if (overflowWidth <= 2) return true;
+
+  marqueeElement.classList.add("is-overflowing");
+  track.style.setProperty("--st-roll-status-chat-marquee-distance", `-${overflowWidth}px`);
+  track.style.setProperty(
+    "--st-roll-status-chat-marquee-duration",
+    `${Math.max(6, Math.min(18, overflowWidth / 18 + 4))}s`
+  );
+  return true;
+}
+
+function refreshStatusEditorChatNameMarqueeEvent(root: ParentNode = document): void {
+  const marquees: HTMLElement[] = [];
+  if (root instanceof HTMLElement && root.matches('[data-st-roll-role="status-chat-name-marquee"]')) {
+    marquees.push(root);
+  }
+  root
+    .querySelectorAll?.('[data-st-roll-role="status-chat-name-marquee"]')
+    .forEach((marquee) => {
+      if (marquee instanceof HTMLElement) {
+        marquees.push(marquee);
+      }
+    });
+  if (marquees.length === 0) return;
+  marquees.forEach((marqueeElement) => {
+    refreshSingleStatusEditorChatNameMarqueeEvent(marqueeElement);
+  });
+}
+
+function ensureStatusEditorChatNameMarqueeBindingEvent(): void {
+  if (STATUS_EDITOR_CHAT_NAME_MARQUEE_BOUND_Event) return;
+  STATUS_EDITOR_CHAT_NAME_MARQUEE_BOUND_Event = true;
+  window.addEventListener("resize", () => {
+    window.requestAnimationFrame(() => {
+      refreshStatusEditorChatNameMarqueeEvent(document);
+    });
+  });
+}
+
+function observeStatusEditorChatNameMarqueeLayoutEvent(root: HTMLElement | null): void {
+  if (!(root instanceof HTMLElement) || typeof ResizeObserver === "undefined") return;
+  if (!STATUS_EDITOR_CHAT_NAME_MARQUEE_OBSERVER_Event) {
+    STATUS_EDITOR_CHAT_NAME_MARQUEE_OBSERVER_Event = new ResizeObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.target instanceof HTMLElement) {
+          refreshStatusEditorChatNameMarqueeEvent(entry.target);
+        }
+      });
+    });
+  }
+  STATUS_EDITOR_CHAT_NAME_MARQUEE_OBSERVER_Event.observe(root);
+}
 
 type StatusEditorColKeyEvent = "name" | "modifier" | "duration" | "scope" | "skills" | "enabled" | "actions";
 
@@ -1633,7 +1719,11 @@ function renderStatusEditorChatListEvent(chatListId: string): void {
           <div class="st-roll-status-chat-avatar-fallback" style="${avatarUrl ? "display:none;" : ""}">${avatarFallback}</div>
         </div>
         <div class="st-roll-status-chat-main">
-          <span class="st-roll-status-chat-name">${escapeHtml(name)}</span>
+          <span class="st-roll-status-chat-name-marquee" data-st-roll-role="status-chat-name-marquee">
+            <span class="st-roll-status-chat-name-track" data-st-roll-role="status-chat-name-track">
+              <span class="st-roll-status-chat-name" data-st-roll-role="status-chat-name-segment">${escapeHtml(name)}</span>
+            </span>
+          </span>
           <span class="st-roll-status-chat-time">最后聊天：${escapeHtml(formatStatusEditorTimeEvent(item.updatedAt))}</span>
           <span class="st-roll-status-chat-key">CHATID：${escapeHtml(chatId)}</span>
           <span class="st-roll-status-chat-meta-line">${tags.map((tag) => `<span class="st-roll-skill-preset-tag">${escapeHtml(tag)}</span>`).join("")}</span>
@@ -1641,6 +1731,12 @@ function renderStatusEditorChatListEvent(chatListId: string): void {
       </button>
     `;
   }).join("");
+  ensureStatusEditorChatNameMarqueeBindingEvent();
+  observeStatusEditorChatNameMarqueeLayoutEvent(node);
+  refreshStatusEditorChatNameMarqueeEvent(node);
+  window.requestAnimationFrame(() => {
+    refreshStatusEditorChatNameMarqueeEvent(node);
+  });
 }
 
 function renderStatusEditorChatMetaEvent(chatMetaId: string): void {

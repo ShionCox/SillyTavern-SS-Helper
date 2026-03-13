@@ -5,9 +5,9 @@ import type { RoutePolicy } from '../router/router';
 import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
-import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
-import { applySdkThemeToNode, initializeSdkThemeState, subscribeSdkTheme } from '../../../SDK/theme';
-import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
+import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
+import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
+
 
 let LLMHUB_THEME_BINDING_READY = false;
 
@@ -57,7 +57,7 @@ function generateChangelogHtml(): string {
         .map((log: { version: string; date?: string; changes?: string[] }) => `
       <div style="margin-bottom: 12px;">
         <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
-          <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
+          <span style="font-weight: bold; color: var(--ss-theme-accent-contrast, #fff); font-size: 13px;">${log.version}</span>
           ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
         </div>
         <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">
@@ -128,12 +128,7 @@ const IDS: LLMHubSettingsIds = {
  * 返回：void。
  */
 function applySettingsTooltips(): void {
-    const cardRoot = document.getElementById(IDS.cardId);
-    if (!cardRoot) return;
     ensureSharedTooltip();
-    const catalog = buildSettingsTooltipCatalog(IDS);
-    applyTooltipCatalog(cardRoot, catalog);
-    hydrateSettingsTooltips({ root: cardRoot });
 }
 
 /**
@@ -145,11 +140,14 @@ function ensureThemeBinding(): void {
     if (LLMHUB_THEME_BINDING_READY) return;
     LLMHUB_THEME_BINDING_READY = true;
 
-    subscribeSdkTheme((): void => {
+    subscribeTheme((): void => {
         const cardRoot = document.getElementById(IDS.cardId);
-        if (!cardRoot) return;
-        applySdkThemeToNode(cardRoot);
-        applySettingsTooltips();
+        if (cardRoot) {
+            unmountThemeHost(cardRoot);
+        }
+        const contentRoot = document.getElementById(IDS.drawerContentId);
+        if (!contentRoot) return;
+        mountThemeHost(contentRoot);
     });
 }
 
@@ -209,7 +207,7 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
  */
 export async function renderSettingsUi(): Promise<void> {
     try {
-        initializeSdkThemeState();
+        initThemeKernel();
         const container = await waitForElement('#extensions_settings');
 
         if (!document.getElementById(`${IDS.cardId}-styles`)) {
@@ -235,8 +233,12 @@ export async function renderSettingsUi(): Promise<void> {
             ssContainer.appendChild(cardWrapper);
         }
 
-        applySdkThemeToNode(cardWrapper);
-    ensureThemeBinding();
+        unmountThemeHost(cardWrapper);
+        const contentRoot = document.getElementById(IDS.drawerContentId);
+        if (contentRoot) {
+            mountThemeHost(contentRoot);
+        }
+        ensureThemeBinding();
 
         bindUiEvents();
         applySettingsTooltips();
@@ -255,9 +257,6 @@ export async function renderSettingsUi(): Promise<void> {
 function bindUiEvents(): void {
     const runtime = getRuntime();
     const stContext = (window as any).SillyTavern?.getContext?.() || {};
-    const refreshSettingsTooltips = (): void => {
-        applySettingsTooltips();
-    };
 
     /**
      * 功能：确保存在 `stx_llmhub` 设置对象。
@@ -576,7 +575,6 @@ function bindUiEvents(): void {
         const policies = readRoutePolicies();
         if (policies.length === 0) {
             routeListEl.innerHTML = '<div class="stx-ui-list-empty">暂无路由规则</div>';
-            refreshSettingsTooltips();
             return;
         }
         routeListEl.innerHTML = policies
@@ -594,7 +592,6 @@ function bindUiEvents(): void {
             </div>
           `)
             .join('');
-        refreshSettingsTooltips();
     };
 
     /**
@@ -726,7 +723,6 @@ function bindUiEvents(): void {
         const entries = Object.entries(budgetMap);
         if (entries.length === 0) {
             budgetListEl.innerHTML = '<div class="stx-ui-list-empty">暂无预算规则</div>';
-            refreshSettingsTooltips();
             return;
         }
         budgetListEl.innerHTML = entries
@@ -745,7 +741,6 @@ function bindUiEvents(): void {
             </div>
           `)
             .join('');
-        refreshSettingsTooltips();
     };
 
     /**
@@ -836,8 +831,6 @@ function bindUiEvents(): void {
     refreshProviderSelects();
     renderRoutePolicies();
     renderBudgets();
-    refreshSettingsTooltips();
-
     const currentEnabled = ensureSettings().enabled === true;
     setTimeout(() => {
         (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {

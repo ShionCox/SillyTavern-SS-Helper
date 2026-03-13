@@ -1,5 +1,5 @@
 import sharedSelectCssText from "./sharedSelect.css?inline";
-import { applySdkThemeSnapshotToDetachedNode, subscribeSdkTheme } from "../SDK/theme";
+import { mountThemeHost, subscribeTheme } from "../SDK/theme";
 
 type SharedSelectAttributeValue = string | number | boolean | null | undefined;
 
@@ -365,7 +365,7 @@ function ensureSharedSelectListHost(refs: SharedSelectRefs): void {
  */
 function syncSharedSelectDetachedThemeVars(refs: SharedSelectRefs): void {
   if (refs.list.dataset.sharedSelectDetached !== "true") return;
-  applySdkThemeSnapshotToDetachedNode(refs.list, refs.root);
+  mountThemeHost(refs.list);
 }
 
 /**
@@ -683,9 +683,9 @@ function ensureSharedSelectGlobalEvents(): void {
     scheduleOpenSharedSelectReposition();
   });
 
-  subscribeSdkTheme(() => {
+  subscribeTheme(() => {
     const openRoot = OPEN_SHARED_SELECT_ROOT;
-    traceSharedSelect("subscribeSdkTheme fired", {
+    traceSharedSelect("subscribeTheme fired", {
       hasOpenRoot: !!openRoot,
       openRootConnected: !!openRoot?.isConnected,
     });

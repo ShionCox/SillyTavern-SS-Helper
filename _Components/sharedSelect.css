@@ -1,4 +1,4 @@
-/* 共享选择框组件样式，调用方会用作用域选择器替换 _SCOPE_ */
+/* 共享选择框组件样式，调用方会用作用域选择器替�?_SCOPE_ */
 
 _SCOPE_ .stx-shared-select {
   position: relative;
@@ -6,7 +6,7 @@ _SCOPE_ .stx-shared-select {
   width: min(100%, 240px);
   min-width: 182px;
   max-width: 100%;
-  color: var(--stx-theme-text, var(--st-roll-text, inherit));
+  color: var(--ss-theme-text, inherit);
   vertical-align: middle;
 }
 
@@ -32,12 +32,12 @@ _SCOPE_ .stx-shared-select-trigger {
   width: 100%;
   min-height: 30px;
   padding: 4px 10px;
-  border: 1px solid var(--stx-theme-border, var(--st-roll-control-border, rgba(197, 160, 89, 0.36)));
+  border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.36));
   border-radius: 8px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
-    var(--stx-theme-surface-2, var(--st-roll-control-bg, rgba(0, 0, 0, 0.28)));
-  color: var(--stx-theme-text, var(--st-roll-text, inherit));
+    var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
+  color: var(--ss-theme-text, inherit);
   box-sizing: border-box;
   cursor: pointer;
   transition:
@@ -90,27 +90,27 @@ _SCOPE_ .stx-shared-select-list,
   display: none;
   margin: 0;
   padding: 5px;
-  border: 1px solid var(--stx-theme-border, var(--st-roll-panel-muted-border, rgba(255, 255, 255, 0.18)));
+  border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.18));
   border-radius: 12px;
   background:
     radial-gradient(120% 130% at 100% 0%, rgba(197, 160, 89, 0.12), transparent 58%),
-    var(--stx-shared-select-panel-bg, var(--st-roll-select-panel-bg, var(--stx-theme-panel-bg, rgba(18, 16, 18, 0.78))));
+    var(--stx-shared-select-panel-bg, var(--ss-theme-panel-bg, rgba(18, 16, 18, 0.78)));
   -webkit-backdrop-filter:
     var(
       --stx-shared-select-panel-backdrop-filter,
-      var(--st-roll-select-panel-backdrop-filter, var(--stx-theme-backdrop-filter, blur(6px)))
+      var(--ss-theme-backdrop-filter, blur(6px))
     );
   backdrop-filter:
     var(
       --stx-shared-select-panel-backdrop-filter,
-      var(--st-roll-select-panel-backdrop-filter, var(--stx-theme-backdrop-filter, blur(6px)))
+      var(--ss-theme-backdrop-filter, blur(6px))
     );
   box-shadow:
     0 18px 40px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(255, 255, 255, 0.04);
   box-sizing: border-box;
   overflow: auto;
-  color: var(--stx-theme-text, var(--st-roll-text, inherit));
+  color: var(--ss-theme-text, inherit);
 }
 
 _SCOPE_ .stx-shared-select.is-open .stx-shared-select-list,
@@ -179,48 +179,48 @@ _SCOPE_ .stx-shared-select-option-mark,
 
 _SCOPE_ .stx-shared-select-option.is-highlighted:not([data-shared-select-disabled="true"]),
 .stx-shared-select-list .stx-shared-select-option.is-highlighted:not([data-shared-select-disabled="true"]) {
-  border-color: var(--stx-theme-border-strong, var(--st-roll-list-item-hover-border, rgba(197, 160, 89, 0.58)));
-  background: var(--stx-theme-list-item-hover-bg, var(--st-roll-list-item-hover-bg, rgba(197, 160, 89, 0.16)));
+  border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.58));
+  background: var(--ss-theme-list-item-hover-bg, rgba(197, 160, 89, 0.16));
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03);
   transform: translateY(-1px);
 }
 
 _SCOPE_ .stx-shared-select-option.is-selected,
 .stx-shared-select-list .stx-shared-select-option.is-selected {
-  border-color: var(--stx-theme-border-strong, var(--st-roll-list-item-active-border, rgba(197, 160, 89, 0.74)));
-  background: var(--stx-theme-list-item-active-bg, var(--st-roll-list-item-active-bg, rgba(197, 160, 89, 0.24)));
-  box-shadow: var(--st-roll-list-item-active-shadow, 0 0 0 1px rgba(197, 160, 89, 0.24));
+  border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.74));
+  background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.24));
+  box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.24);
 }
 
 _SCOPE_ .stx-shared-select-option.is-selected .stx-shared-select-option-mark,
 .stx-shared-select-list .stx-shared-select-option.is-selected .stx-shared-select-option-mark {
   opacity: 1;
   transform: scale(1);
-  border-color: var(--stx-theme-accent, var(--st-roll-accent, #c5a059));
+  border-color: var(--ss-theme-accent, #c5a059);
   background:
-    radial-gradient(circle at 50% 50%, var(--stx-theme-accent-contrast, var(--st-roll-accent-contrast, #ffeac0)) 0 28%, transparent 34%),
-    var(--stx-theme-accent, var(--st-roll-accent, #c5a059));
+    radial-gradient(circle at 50% 50%, var(--ss-theme-accent-contrast, #ffeac0) 0 28%, transparent 34%),
+    var(--ss-theme-accent, #c5a059);
 }
 
 _SCOPE_ .stx-shared-select:not([data-shared-select-disabled="true"]) .stx-shared-select-trigger:hover {
-  border-color: var(--stx-theme-border-strong, var(--st-roll-control-border-hover, rgba(197, 160, 89, 0.58)));
+  border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.58));
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
-    var(--stx-theme-surface-3, var(--st-roll-control-bg-hover, rgba(0, 0, 0, 0.34)));
-  box-shadow: 0 0 0 1px var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22)));
+    var(--ss-theme-surface-3, rgba(0, 0, 0, 0.34));
+  box-shadow: 0 0 0 1px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
 }
 
 _SCOPE_ .stx-shared-select.is-open .stx-shared-select-trigger {
-  border-color: var(--stx-theme-border-strong, var(--st-roll-control-focus-border, rgba(197, 160, 89, 0.72)));
+  border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
   box-shadow:
-    0 0 0 2px var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22))),
+    0 0 0 2px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22)),
     0 10px 22px rgba(0, 0, 0, 0.16);
 }
 
 _SCOPE_ .stx-shared-select-trigger:focus-visible {
   outline: none;
-  border-color: var(--stx-theme-border-strong, var(--st-roll-control-focus-border, rgba(197, 160, 89, 0.72)));
-  box-shadow: 0 0 0 2px var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22)));
+  border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
+  box-shadow: 0 0 0 2px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
 }
 
 _SCOPE_ .stx-shared-select-list::-webkit-scrollbar,

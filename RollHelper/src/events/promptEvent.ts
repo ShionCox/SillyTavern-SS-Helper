@@ -352,6 +352,11 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   lines.push("   - 合法示例：1d20、2d6+3、2d20kh1、2d20kl1、1d6!+2。");
   lines.push("   - 非法示例：1d20+1-1、1d20+体能、1d20+[虚弱]、1d20 (优势)。");
   lines.push("   - 若需施加或移除状态，请仅在 outcomes 文本中使用状态标签。");
+  if (settings.enableExplodingDice && settings.enableOutcomeBranches && settings.enableExplodeOutcomeBranch) {
+    lines.push("   - 只有 checkDice 明确包含 ! 时，才允许提供 outcomes.explode；如果 checkDice 不含 !，必须完全省略 explode 字段。");
+    lines.push('   - 正例：{"checkDice":"1d20!","outcomes":{"success":"...","failure":"...","explode":"..."}}');
+    lines.push('   - 反例：{"checkDice":"1d20","outcomes":{"success":"...","failure":"...","explode":"..."}}');
+  }
   if (allowedSides !== "none") {
     lines.push(`   - 骰子面数限制：${allowedSides}。`);
   }
@@ -362,10 +367,12 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push("   - 可使用 round_control 或 end_round 控制轮次是否结束。");
   }
   if (settings.enableExplodingDice) {
-    lines.push("   - 已启用爆骰：! 会在掷出最大面后连爆，结果会影响剧情走向。");
+    lines.push("   - 已启用爆骰：! 会在掷出最大面后连爆，结果会影响剧情走向。(骰式示例：1d6!+2)");
     lines.push("   - 爆骰是否触发由系统根据真实掷骰结果决定，不可直接声明“必爆”。");
+    lines.push("   - 只有在你确实需要一条独立的爆骰后果分支时，才给该事件的 checkDice 加 !；没有 ! 就绝不能写 outcomes.explode。");
     if (settings.enableAiRollMode) {
       lines.push("   - AI 自动检定时，同一轮最多仅 1 个事件使用 !，其余会按普通骰结算。");
+      lines.push("   - 因此，请把 ! 和 outcomes.explode 留给本轮最关键、最值得出现爆骰分支的那个事件。");
     }
   }
   if (settings.enableAdvantageSystem) {
@@ -384,6 +391,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push("   - outcomes 走向文本会直接影响后续剧情叙事。");
     if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
       lines.push("   - 爆骰触发时优先使用 outcomes.explode。");
+      lines.push("   - 如果你设想了“只有爆骰才发生”的特殊后果，就必须同时在 checkDice 中写 !；否则请把该后果合并到 success 或 failure。");
     }
   }
   if (settings.enableStatusSystem && settings.enableOutcomeBranches) {

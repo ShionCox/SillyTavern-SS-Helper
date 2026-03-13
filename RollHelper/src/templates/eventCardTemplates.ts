@@ -43,12 +43,7 @@ const fontFaceCssText = `@font-face {
   font-display: swap;
 }`;
 
-const fallbackFontUrlEvent = new URL(["..", "..", "..", "assets", "font", "\u601d\u6e90\u5b8b\u4f53.otf"].join("/"), import.meta.url).href;
 
-const processedBaseCssText = `${fontFaceCssText.replace(
-  'format("opentype");',
-  `format("opentype"), url("${fallbackFontUrlEvent}") format("opentype");`,
-)}\n${baseCssText}`;
 
 function buildCustomPrefixedEventCardCssTextEvent(cssText: string): string {
   return cssText.replace(EVENT_CARD_CUSTOM_CLASS_SELECTOR_PATTERN_Event, (match, className: string) => {
@@ -59,8 +54,8 @@ function buildCustomPrefixedEventCardCssTextEvent(cssText: string): string {
   });
 }
 
-const eventCardStylesCssText = [
-  processedBaseCssText,
+const eventCardClassesCssText = [
+  baseCssText,
   eventListCardCssText,
   eventListCardMobileCssText,
   eventListItemCssText,
@@ -71,7 +66,7 @@ const eventCardStylesCssText = [
   eventRollResultCardMobileCssText,
 ].join("\n");
 
-const eventCardRuntimeCssText = `${eventCardStylesCssText}\n${buildCustomPrefixedEventCardCssTextEvent(eventCardStylesCssText)}`;
+const eventCardRuntimeCssText = `${fontFaceCssText}\n${eventCardClassesCssText}\n${buildCustomPrefixedEventCardCssTextEvent(eventCardClassesCssText)}`;
 
 export function buildEventCardStylesCssTextEvent(): string {
   return eventCardRuntimeCssText;

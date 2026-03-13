@@ -5,10 +5,10 @@ import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
-import { ensureSharedTooltip, applyTooltipCatalog, hydrateSettingsTooltips } from '../../../SDK/sharedTooltip';
+import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
-import { applySdkThemeToNode, initializeSdkThemeState, subscribeSdkTheme } from '../../../SDK/theme';
-import { buildSettingsTooltipCatalog } from './settingsTooltipCatalog';
+import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
+
 
 let MEMORYOS_THEME_BINDING_READY = false;
 
@@ -104,12 +104,7 @@ const IDS: MemoryOSSettingsIds = {
  * 返回：void。
  */
 function applySettingsTooltips(): void {
-    const cardRoot = document.getElementById(IDS.cardId);
-    if (!cardRoot) return;
     ensureSharedTooltip();
-    const catalog = buildSettingsTooltipCatalog(IDS);
-    applyTooltipCatalog(cardRoot, catalog);
-    hydrateSettingsTooltips({ root: cardRoot });
 }
 
 /**
@@ -121,16 +116,19 @@ function ensureThemeBinding(): void {
     if (MEMORYOS_THEME_BINDING_READY) return;
     MEMORYOS_THEME_BINDING_READY = true;
 
-    subscribeSdkTheme((): void => {
+    subscribeTheme((): void => {
         const cardRoot = document.getElementById(IDS.cardId);
         if (cardRoot) {
-            applySdkThemeToNode(cardRoot);
-            applySettingsTooltips();
+            unmountThemeHost(cardRoot);
+        }
+        const contentRoot = document.getElementById(IDS.drawerContentId);
+        if (contentRoot) {
+            mountThemeHost(contentRoot);
         }
         document
             .querySelectorAll<HTMLElement>('.stx-record-editor-overlay')
             .forEach((overlay: HTMLElement) => {
-                applySdkThemeToNode(overlay);
+                mountThemeHost(overlay);
             });
     });
 }
@@ -168,7 +166,7 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
  */
 export async function renderSettingsUi() {
     try {
-        initializeSdkThemeState();
+        initThemeKernel();
         // SillyTavern 插件设置面板通常挂载在 #extensions_settings
         const container = await waitForElement('#extensions_settings');
 
@@ -197,7 +195,11 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
-        applySdkThemeToNode(cardWrapper);
+        unmountThemeHost(cardWrapper);
+        const contentRoot = document.getElementById(IDS.drawerContentId);
+        if (contentRoot) {
+            mountThemeHost(contentRoot);
+        }
         ensureThemeBinding();
         applyTailwindScopeToNode(cardWrapper);
 
@@ -213,9 +215,6 @@ export async function renderSettingsUi() {
  * 绑定设置卡片的交互事件
  */
 function bindUiEvents() {
-    const refreshSettingsTooltips = (): void => {
-        applySettingsTooltips();
-    };
 
     // 3.1 抽屉展开/折叠 (移除手动监听，交由 SillyTavern 核心的 .inline-drawer-toggle 自动处理)
 
@@ -513,10 +512,8 @@ function bindUiEvents() {
                 const hash = template.worldInfoRef?.hash || '(无 hash)';
                 return `${mark}[模板] ${template.name} (${template.worldType})\n实体表: ${Object.keys(template.entities || {}).join(', ')}\nFactTypes: ${(template.factTypes || []).map((item: any) => item.type).join(', ') || '(空)'}\nHash: ${hash}\nID: ${template.templateId}`;
             }).join('\n\n');
-            refreshSettingsTooltips();
         } catch (e) {
             listEl.textContent = '读取模板失败: ' + String(e);
-            refreshSettingsTooltips();
         }
     };
 
@@ -812,10 +809,8 @@ function bindUiEvents() {
                 }
                 listEl.appendChild(row);
             }
-            refreshSettingsTooltips();
         } catch (e) {
             listEl.textContent = '加载失败：' + String(e);
-            refreshSettingsTooltips();
         }
     };
 
@@ -985,10 +980,8 @@ function bindUiEvents() {
                     }
                 logicTableContainer.appendChild(row);
             }
-            refreshSettingsTooltips();
         } catch (e) {
             logicTableContainer.textContent = '加载失败：' + String(e);
-            refreshSettingsTooltips();
         }
     };
 
@@ -1010,5 +1003,4 @@ function bindUiEvents() {
         templateTabBtn.addEventListener('click', populateEntityTypes);
     }
 
-    refreshSettingsTooltips();
 }

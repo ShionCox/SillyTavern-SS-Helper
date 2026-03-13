@@ -12,6 +12,7 @@
   --st-rh-label: #b0915a;
   --st-rh-meta: #7a6850;
   --st-rh-emphasis: #ffdc7a;
+  --st-rh-emphasis-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.72);
   --st-rh-border-soft: #4a3e2f;
   --st-rh-border-strong: #755b38;
   --st-rh-border-highlight: #b08f4c;
@@ -96,7 +97,7 @@
 .st-rh-meta-text { color: var(--st-rh-meta); }
 .st-rh-emphasis-text {
   color: var(--st-rh-emphasis);
-  text-shadow: 0 0 8px rgba(255, 235, 153, 0.3);
+  text-shadow: var(--st-rh-emphasis-text-shadow);
 }
 
 .st-rh-inline-divider {
@@ -229,6 +230,7 @@
   color: var(--st-rh-label);
   border-bottom: 1px dotted var(--st-rh-meta);
   font-family: var(--st-rh-font-main);
+  font-size: 12px;
 }
 
 .st-rh-inline-tip-segment {
@@ -290,13 +292,13 @@
   color: #f3d89b;
 }
 
-.st-rh-stack-md > * + * { margin-top: 0.35rem; }
+.st-rh-stack-md > * + * { margin-top: 1rem; }
 .st-rh-mini-kicker {
   font-size: 10px;
   font-family: var(--st-rh-font-display);
   color: var(--st-rh-label);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 2px;
+  padding-bottom: 6px;
 }
 .st-rh-value-copy { margin-top: 0.25rem; font-size: 13px; font-family: ui-monospace, monospace; }
 

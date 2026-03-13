@@ -1,60 +1,29 @@
 import changelogData from "../../changelog.json";
 import type { SettingsCardTemplateIdsEvent } from "../templates/settingsCardTemplateTypes";
-import {
-  ensureSharedTooltip,
-  applyTooltipCatalog,
-  hydrateSettingsTooltips,
-} from "../../../SDK/sharedTooltip";
+import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { buildChangelogHtml } from "../../../_Components/changelog";
 import { hydrateSharedSelects } from "../../../_Components/sharedSelect";
 import { hydrateSettingPage } from "../../../_Components/Setting";
-import { buildSettingsTooltipCatalogEvent } from "./settingsTooltipCatalogEvent";
-import { ensureSdkThemeUiBindingEvent } from "./uiThemeEvent";
 
-function resolveSettingsTooltipRootEvent(node: ParentNode | null): ParentNode | null {
-  if (!node) return null;
-  if (node instanceof HTMLElement) {
-    const shell = node.closest(".st-roll-shell");
-    if (shell) {
-      const wrapper = shell.closest("[id]");
-      return wrapper || shell;
-    }
-    const cardRoot = node.closest("[id^='stx-rollhelper-card'], [id*='rollhelper']");
-    if (cardRoot) return cardRoot;
-  }
-  if (node instanceof Document) {
-    return node;
-  }
-  return node;
-}
+import { ensureSdkThemeUiBindingEvent } from "./uiThemeEvent";
 
 /**
  * 功能：为 RollHelper 设置区域应用共享 tooltip。
- * 参数：
- *   root：目标根节点。
- *   catalog：可选的 ID 文案目录。
  * 返回：void。
  */
-export function applySettingsTooltipsEvent(root: ParentNode | null, catalog?: Record<string, string>): void {
-  const targetRoot = resolveSettingsTooltipRootEvent(root);
-  if (!targetRoot) return;
+export function applySettingsTooltipsEvent(): void {
   ensureSharedTooltip();
-  if (catalog) {
-    applyTooltipCatalog(targetRoot, catalog);
-  }
-  hydrateSettingsTooltips({ root: targetRoot });
 }
 
 function prepareMountedSettingsCardEvent(params: {
   root: HTMLElement;
-  tooltipCatalog: Record<string, string>;
   SETTINGS_CARD_ID_Event: string;
   SETTINGS_SKILL_MODAL_ID_Event: string;
   SETTINGS_STATUS_MODAL_ID_Event: string;
   syncSettingsBadgeVersionEvent: () => void;
 }): void {
   // Keep card hydration side effects in one place and stable order.
-  applySettingsTooltipsEvent(params.root, params.tooltipCatalog);
+  applySettingsTooltipsEvent();
   hydrateSharedSelects(params.root);
   ensureSdkThemeUiBindingEvent(
     params.SETTINGS_CARD_ID_Event,
@@ -204,7 +173,7 @@ export function buildSettingsCardTemplateIdsEvent(
     return (changelogData as ChangelogItemEvent[]).map((log) => `
       <div style="margin-bottom: 12px;">
         <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
-            <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
+            <span style="font-weight: bold; color: var(--ss-theme-accent-contrast, #fff); font-size: 13px;">${log.version}</span>
             ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
         </div>
         <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">
@@ -344,14 +313,11 @@ export function mountSettingsCardShellEvent(
     drawerContentId,
     drawerIconId
   );
-  const tooltipCatalog = buildSettingsTooltipCatalogEvent(templateIds);
-
   const existedRoot = document.getElementById(deps.SETTINGS_CARD_ID_Event);
   if (existedRoot) {
     hydrateSettingPage(existedRoot);
     prepareMountedSettingsCardEvent({
       root: existedRoot,
-      tooltipCatalog,
       SETTINGS_CARD_ID_Event: deps.SETTINGS_CARD_ID_Event,
       SETTINGS_SKILL_MODAL_ID_Event: deps.SETTINGS_SKILL_MODAL_ID_Event,
       SETTINGS_STATUS_MODAL_ID_Event: deps.SETTINGS_STATUS_MODAL_ID_Event,
@@ -395,7 +361,6 @@ export function mountSettingsCardShellEvent(
   ssContainer.appendChild(root);
   prepareMountedSettingsCardEvent({
     root,
-    tooltipCatalog,
     SETTINGS_CARD_ID_Event: deps.SETTINGS_CARD_ID_Event,
     SETTINGS_SKILL_MODAL_ID_Event: deps.SETTINGS_SKILL_MODAL_ID_Event,
     SETTINGS_STATUS_MODAL_ID_Event: deps.SETTINGS_STATUS_MODAL_ID_Event,

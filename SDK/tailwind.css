@@ -7,7 +7,7 @@
 @source not "../RollHelper/dist";
 
 :where(.stx-tw) {
-  color: var(--stx-theme-text, var(--SmartThemeBodyColor, inherit));
+  color: var(--ss-theme-text, var(--SmartThemeBodyColor, inherit));
 }
 
 @utility stx-text-base {
@@ -21,5 +21,5 @@
 }
 
 @utility stx-text-muted {
-  color: color-mix(in srgb, var(--stx-theme-text, #fff) 64%, transparent);
+  color: color-mix(in srgb, var(--ss-theme-text, #fff) 64%, transparent);
 }

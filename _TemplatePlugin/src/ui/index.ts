@@ -14,7 +14,7 @@ const generateChangelogHtml = () => {
     return changelogData.map(log => `
       <div style="margin-bottom: 12px;">
         <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
-            <span style="font-weight: bold; color: var(--SmartThemeQuoteTextColor, #fff); font-size: 13px;">${log.version}</span>
+            <span style="font-weight: bold; color: var(--ss-theme-accent-contrast, #fff); font-size: 13px;">${log.version}</span>
             ${log.date ? `<span style="font-size: 11px; opacity: 0.6;">${log.date}</span>` : ''}
         </div>
         <ul style="margin: 0; padding-left: 20px; font-size: 12px; opacity: 0.85;">

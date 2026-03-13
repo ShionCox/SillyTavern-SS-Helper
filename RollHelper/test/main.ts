@@ -24,7 +24,7 @@ import {
   refreshEventCardMobileTitleMarqueeEvent,
 } from "../src/templates/eventCardTemplates";
 import { resolveTriggeredOutcomeEvent } from "../src/events/roundEvent";
-import { ensureSharedTooltip } from "../../SDK/sharedTooltip";
+import { ensureSharedTooltip } from "../../_Components/sharedTooltip";
 
 type PreviewMode = "desktop" | "mobile";
 

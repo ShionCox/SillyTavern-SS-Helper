@@ -34,13 +34,10 @@ const sdkText = readText('SDK/stx.d.ts');
 const uiIndexText = readText('LLMHub/src/ui/index.ts');
 const hubIndexText = readText('LLMHub/src/index.ts');
 const busText = readText('SDK/bus/bus.ts');
-const sharedTooltipText = readText('SDK/sharedTooltip.ts');
-const rollSharedText = readText('RollHelper/src/Components/sharedTooltipEvent.ts');
+const sharedTooltipText = readText('_Components/sharedTooltip.ts');
+const sharedTooltipCssText = readText('_Components/sharedTooltip.css');
 const memoryUiText = readText('MemoryOS/src/ui/index.ts');
-const rollUiText = readText('RollHelper/src/settings/uiEvent.ts');
-const memoryCatalogText = readText('MemoryOS/src/ui/settingsTooltipCatalog.ts');
-const llmCatalogText = readText('LLMHub/src/ui/settingsTooltipCatalog.ts');
-const rollCatalogText = readText('RollHelper/src/settings/settingsTooltipCatalogEvent.ts');
+const rollUiText = readText('RollHelper/src/settings/uiCardEvent.ts');
 
 const checks = [
     runCheck('MemorySDK 已扩展 extract 子域', () => /extract:\s*\{[\s\S]*kickOffExtraction/.test(sdkText)),
@@ -53,30 +50,34 @@ const checks = [
         /setBudgetConfig/.test(hubIndexText) &&
         /removeBudgetConfig/.test(hubIndexText)),
     runCheck('EventBus 默认 pluginId 使用 memory_os', () => /pluginId:\s*'memory_os'/.test(busText)),
-    runCheck('SDK 共享 tooltip 导出完整', () =>
-        /export function ensureSharedTooltip/.test(sharedTooltipText) &&
-        /export function hydrateSettingsTooltips/.test(sharedTooltipText) &&
-        /export function applyTooltipCatalog/.test(sharedTooltipText)),
-    runCheck('RollHelper 共享 tooltip 已桥接 SDK', () =>
-        /ensureSharedTooltip/.test(rollSharedText) &&
-        /\.\.\/\.\.\/\.\.\/SDK\/sharedTooltip/.test(rollSharedText) &&
-        !/__stRollSharedTooltipBoundEvent|SHARED_TOOLTIP_RUNTIME_Event|SHARED_TOOLTIP_ID_Event/.test(rollSharedText)),
-    runCheck('MemoryOS UI 已接入 tooltip 目录与补齐', () =>
-        /buildSettingsTooltipCatalog/.test(memoryUiText) &&
-        /applyTooltipCatalog/.test(memoryUiText) &&
-        /hydrateSettingsTooltips/.test(memoryUiText)),
-    runCheck('LLMHub UI 已接入 tooltip 目录与补齐', () =>
-        /buildSettingsTooltipCatalog/.test(uiIndexText) &&
-        /applyTooltipCatalog/.test(uiIndexText) &&
-        /hydrateSettingsTooltips/.test(uiIndexText)),
-    runCheck('RollHelper 设置 UI 已接入 tooltip 目录与补齐', () =>
-        /buildSettingsTooltipCatalogEvent/.test(rollUiText) &&
-        /applyTooltipCatalog/.test(rollUiText) &&
-        /hydrateSettingsTooltips/.test(rollUiText)),
-    runCheck('三份 tooltip 目录文件存在且非空', () =>
-        memoryCatalogText.length > 200 &&
-        llmCatalogText.length > 200 &&
-        rollCatalogText.length > 200),
+    runCheck('_Components 共享 tooltip 导出 ensureSharedTooltip', () =>
+        /export function ensureSharedTooltip/.test(sharedTooltipText)),
+    runCheck('MemoryOS UI 使用 _Components/sharedTooltip', () =>
+        /_Components\/sharedTooltip/.test(memoryUiText) &&
+        /ensureSharedTooltip/.test(memoryUiText)),
+    runCheck('LLMHub UI 使用 _Components/sharedTooltip', () =>
+        /_Components\/sharedTooltip/.test(uiIndexText) &&
+        /ensureSharedTooltip/.test(uiIndexText)),
+    runCheck('RollHelper 设置 UI 使用 _Components/sharedTooltip', () =>
+        /_Components\/sharedTooltip/.test(rollUiText) &&
+        /ensureSharedTooltip/.test(rollUiText)),
+    runCheck('tooltip 不含 __stxSharedTooltipStateV1', () =>
+        !/__stxSharedTooltipStateV1/.test(sharedTooltipText)),
+    runCheck('tooltip 不含 __stxSharedTooltipStateV2', () =>
+        !/__stxSharedTooltipStateV2/.test(sharedTooltipText)),
+    runCheck('tooltip 不含 st-roll-shared-tooltip', () =>
+        !/st-roll-shared-tooltip/.test(sharedTooltipText)),
+    runCheck('tooltip 不含 is-roll-card-target', () =>
+        !/is-roll-card-target/.test(sharedTooltipText) &&
+        !/is-roll-card-target/.test(sharedTooltipCssText)),
+    runCheck('tooltip 不含 is-shared-checkbox-target', () =>
+        !/is-shared-checkbox-target/.test(sharedTooltipText) &&
+        !/is-shared-checkbox-target/.test(sharedTooltipCssText)),
+    runCheck('tooltip 不含 .stx-global-tooltip-body', () =>
+        !/stx-global-tooltip-body/.test(sharedTooltipText) &&
+        !/stx-global-tooltip-body/.test(sharedTooltipCssText)),
+    runCheck('tooltip 不含 data-stx-tooltip-runtime（旧属性名）', () =>
+        !/data-stx-tooltip-runtime[^-]/.test(sharedTooltipText)),
 ];
 
 let failed = 0;

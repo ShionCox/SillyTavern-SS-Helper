@@ -15,6 +15,93 @@ let SKILL_EDITOR_PRESET_SORT_MODE_Event: "recent" | "name" | "count" = "recent";
 let SKILL_EDITOR_ROW_SEARCH_TEXT_Event = "";
 let SKILL_EDITOR_ROW_SORT_MODE_Event: "manual" | "name" | "modifier_desc" = "manual";
 const SKILL_EDITOR_SELECTED_ROW_IDS_Event = new Set<string>();
+let SKILL_PRESET_MARQUEE_RESIZE_BOUND_Event = false;
+let SKILL_PRESET_MARQUEE_RESIZE_OBSERVER_Event: ResizeObserver | null = null;
+
+function resolveSkillPresetMarqueeNodesEvent(marqueeElement: HTMLElement): {
+  track: HTMLElement;
+  segment: HTMLElement;
+} | null {
+  const track = marqueeElement.querySelector(
+    '[data-st-roll-role="preset-name-track"]'
+  ) as HTMLElement | null;
+  const segment = marqueeElement.querySelector(
+    '[data-st-roll-role="preset-name-segment"]'
+  ) as HTMLElement | null;
+  if (!track || !segment) return null;
+  return { track, segment };
+}
+
+function refreshSingleSkillPresetMarqueeEvent(marqueeElement: HTMLElement): boolean {
+  const nodes = resolveSkillPresetMarqueeNodesEvent(marqueeElement);
+  if (!nodes) return false;
+  const { track, segment } = nodes;
+
+  const visibleWidth = Math.ceil(
+    marqueeElement.clientWidth || marqueeElement.getBoundingClientRect().width || 0
+  );
+  const contentWidth = Math.ceil(
+    segment.scrollWidth || segment.getBoundingClientRect().width || 0
+  );
+  if (visibleWidth <= 0 || contentWidth <= 0) return false;
+
+  track.style.removeProperty("--st-roll-preset-marquee-distance");
+  track.style.removeProperty("--st-roll-preset-marquee-duration");
+  marqueeElement.classList.remove("is-overflowing");
+
+  const overflowWidth = contentWidth - visibleWidth;
+  if (overflowWidth <= 2) return true;
+
+  marqueeElement.classList.add("is-overflowing");
+  track.style.setProperty("--st-roll-preset-marquee-distance", `-${overflowWidth}px`);
+  track.style.setProperty(
+    "--st-roll-preset-marquee-duration",
+    `${Math.max(6, Math.min(18, overflowWidth / 18 + 4))}s`
+  );
+  return true;
+}
+
+function refreshSkillPresetMarqueeEvent(root: ParentNode = document): void {
+  const marquees: HTMLElement[] = [];
+  if (root instanceof HTMLElement && root.matches('[data-st-roll-role="preset-name-marquee"]')) {
+    marquees.push(root);
+  }
+  root
+    .querySelectorAll?.('[data-st-roll-role="preset-name-marquee"]')
+    .forEach((marquee) => {
+      if (marquee instanceof HTMLElement) {
+        marquees.push(marquee);
+      }
+    });
+  if (marquees.length === 0) return;
+  marquees.forEach((marqueeElement) => {
+    refreshSingleSkillPresetMarqueeEvent(marqueeElement);
+  });
+}
+
+function ensureSkillPresetMarqueeResizeBindingEvent(): void {
+  if (SKILL_PRESET_MARQUEE_RESIZE_BOUND_Event) return;
+  SKILL_PRESET_MARQUEE_RESIZE_BOUND_Event = true;
+  window.addEventListener("resize", () => {
+    window.requestAnimationFrame(() => {
+      refreshSkillPresetMarqueeEvent(document);
+    });
+  });
+}
+
+function observeSkillPresetMarqueeLayoutEvent(root: HTMLElement | null): void {
+  if (!(root instanceof HTMLElement) || typeof ResizeObserver === "undefined") return;
+  if (!SKILL_PRESET_MARQUEE_RESIZE_OBSERVER_Event) {
+    SKILL_PRESET_MARQUEE_RESIZE_OBSERVER_Event = new ResizeObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.target instanceof HTMLElement) {
+          refreshSkillPresetMarqueeEvent(entry.target);
+        }
+      });
+    });
+  }
+  SKILL_PRESET_MARQUEE_RESIZE_OBSERVER_Event.observe(root);
+}
 
 export interface BindSkillPresetActionsDepsEvent {
   SETTINGS_SKILL_PRESET_LIST_ID_Event: string;
@@ -731,7 +818,11 @@ export function renderSkillPresetListEvent(
       const presetName = deps.escapeHtmlEvent(preset.name);
       return `
         <button type="button" class="st-roll-skill-preset-item ${isActive ? "is-active" : ""}" data-skill-preset-id="${presetId}">
-          <span class="st-roll-skill-preset-name">${presetName}</span>
+          <span class="st-roll-skill-preset-name-marquee" data-st-roll-role="preset-name-marquee">
+            <span class="st-roll-skill-preset-name-track" data-st-roll-role="preset-name-track">
+              <span class="st-roll-skill-preset-name" data-st-roll-role="preset-name-segment">${presetName}</span>
+            </span>
+          </span>
           <span class="st-roll-skill-preset-tags">
             <span class="st-roll-skill-preset-tag">${skillCount}</span>
             ${isActive ? `<span class="st-roll-skill-preset-tag active">生效中</span>` : ""}
@@ -742,6 +833,12 @@ export function renderSkillPresetListEvent(
     })
     .join("");
   syncThemeControlClassesByNodeEvent(listWrap);
+  ensureSkillPresetMarqueeResizeBindingEvent();
+  observeSkillPresetMarqueeLayoutEvent(listWrap);
+  refreshSkillPresetMarqueeEvent(listWrap);
+  window.requestAnimationFrame(() => {
+    refreshSkillPresetMarqueeEvent(listWrap);
+  });
 }
 
 export interface RenderSkillPresetMetaDepsEvent {

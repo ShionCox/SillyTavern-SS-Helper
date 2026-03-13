@@ -15,7 +15,7 @@
 |---------|---------|---------|------|
 | 插件设置 (settings) | localStorage/accountStorage | **同步** | `createSdkPluginSettingsStore` |
 | UI 状态 (uiState) | localStorage/accountStorage | **同步** | `readSdkPluginUiState` |
-| 主题偏好 | localStorage | **同步** | `getSdkThemeState` |
+| 主题偏好 | localStorage | **同步** | `getTheme` |
 | 聊天级快照 (state) | `ss-helper-db.chat_plugin_state` | **异步** | `writeSdkPluginChatState` |
 | 聊天级时间线 (records) | `ss-helper-db.chat_plugin_records` | **异步** | `appendSdkPluginChatRecord` |
 | 跨插件共享信号 | `ss-helper-db.chat_documents` | **异步** | `patchSdkChatShared` |

@@ -1,6 +1,6 @@
 import { db } from '../db/db';
 import { logger, toast } from '../index';
-import { applySdkThemeToNode, initializeSdkThemeState } from '../../../SDK/theme';
+import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 
 type TableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
 
@@ -28,11 +28,11 @@ function resolveSenderBadgeClass(senderType: string): string {
 }
 
 export async function openRecordEditor() {
-    initializeSdkThemeState();
+    initThemeKernel();
     // 1. 创建遮罩
     const overlay = document.createElement('div');
     overlay.className = 'stx-record-editor-overlay ui-widget';
-    applySdkThemeToNode(overlay);
+    mountThemeHost(overlay);
 
     // 2. 创建主面板
     const panel = document.createElement('div');

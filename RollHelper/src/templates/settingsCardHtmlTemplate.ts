@@ -19,6 +19,7 @@ function buildCheckboxItemEvent(
   title: string,
   description: string,
   searchText: string,
+  dataTip?: string,
 ): string {
   return buildSharedCheckboxCard({
     id,
@@ -32,6 +33,7 @@ function buildCheckboxItemEvent(
     descriptionClassName: "st-roll-item-desc",
     attributes: {
       "data-st-roll-search": searchText,
+      ...(dataTip ? { "data-tip": dataTip } : {}),
     },
   });
 }
@@ -52,21 +54,22 @@ export function buildSettingsCardHtmlTemplateEvent(
             className: "flex1",
             attributes: {
               placeholder: "搜索设置",
+              "data-tip": "按关键词筛选设置项。",
             },
           })}
         </div>
 
         <div class="st-roll-tabs">
-          <button id="${ids.tabMainId}" type="button" class="st-roll-tab is-active">
+          <button id="${ids.tabMainId}" type="button" class="st-roll-tab is-active" data-tip="查看主设置。">
             <i class="fa-solid fa-gear"></i><span>主设置</span>
           </button>
-          <button id="${ids.tabSkillId}" type="button" class="st-roll-tab">
+          <button id="${ids.tabSkillId}" type="button" class="st-roll-tab" data-tip="查看技能设置。">
             <i class="fa-solid fa-bolt"></i><span>技能</span>
           </button>
-          <button id="${ids.tabRuleId}" type="button" class="st-roll-tab">
+          <button id="${ids.tabRuleId}" type="button" class="st-roll-tab" data-tip="查看规则设置。">
             <i class="fa-solid fa-scroll"></i><span>规则</span>
           </button>
-          <button id="${ids.tabAboutId}" type="button" class="st-roll-tab">
+          <button id="${ids.tabAboutId}" type="button" class="st-roll-tab" data-tip="查看插件信息。">
             <i class="fa-solid fa-circle-info"></i><span>关于</span>
           </button>
         </div>
@@ -79,7 +82,8 @@ export function buildSettingsCardHtmlTemplateEvent(
             "启用事件骰子系统",
             "总开关。关掉后不再做事件检定。",
             "enable event dice plugin",
-          )}
+            "事件骰子系统总开关。",
+            )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="theme ui dark light tavern">
             <div class="st-roll-item-main">
@@ -111,6 +115,9 @@ export function buildSettingsCardHtmlTemplateEvent(
                 id: ids.scopeId,
                 value: "protagonist_only",
                 containerClassName: "st-roll-shared-select",
+                attributes: {
+                  "data-tip": "设置事件作用范围。",
+                },
                 options: [
                   { value: "protagonist_only", label: "仅主角事件" },
                   { value: "all", label: "全部事件" },
@@ -142,35 +149,40 @@ export function buildSettingsCardHtmlTemplateEvent(
             "默认发送规则给 AI",
             "发送前自动加规则和摘要，减少跑偏。",
             "auto send rule inject",
-          )}
+            "发送前自动附加规则。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.aiRollModeId,
             "允许 AI 决定自动/手动掷骰",
             "开：AI 可自动掷骰。关：你手动掷骰。",
             "rollMode auto manual",
-          )}
+            "让 AI 决定自动或手动掷骰。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.aiRoundControlId,
             "是否开启持续轮",
             "开：AI 决定何时结束本轮。关：每次事件都开新轮。",
             "ai round end round_control end_round",
-          )}
+            "让 AI 决定何时结束本轮。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.dynamicDcReasonId,
             "启用动态 DC 解释",
             "显示这次难度变化的原因。",
             "dynamic dc reason",
-          )}
+            "显示难度变化原因。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.statusSystemEnabledId,
             "启用状态异常系统",
             "状态会影响后续检定结果。",
             "status debuff apply remove clear",
-          )}
+            "开启状态效果。",
+            )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="status editor">
             <div class="st-roll-item-main">
@@ -195,21 +207,24 @@ export function buildSettingsCardHtmlTemplateEvent(
             "启用爆骰",
             "满足条件时可追加掷骰。",
             "explode",
-          )}
+            "开启爆骰规则。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.advantageEnabledId,
             "启用优势/劣势",
             "开启后按优势/劣势取高或取低。",
             "advantage disadvantage",
-          )}
+            "开启优势与劣势规则。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.dynamicResultGuidanceId,
             "启用动态结果引导",
             "掷骰后给 AI 一句结果提示。",
             "dynamic result guidance",
-          )}
+            "给 AI 追加结果提示。",
+            )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="dice sides allowed">
             <div class="st-roll-item-main">
@@ -221,6 +236,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                 id: ids.allowedDiceSidesId,
                 attributes: {
                   placeholder: "4,6,8,10,12,20,100",
+                  "data-tip": "限制 AI 可用的骰子面数。",
                 },
               })}
             </div>
@@ -233,21 +249,24 @@ export function buildSettingsCardHtmlTemplateEvent(
             "启用剧情走向分支",
             "成功、失败、爆骰可走不同后果。",
             "outcome branches",
-          )}
+            "开启剧情分支结果。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.explodeOutcomeId,
             "启用爆骰特殊分支",
             "爆骰时使用专用后果文本。",
             "explode outcome branch",
-          )}
+            "开启爆骰专属分支。",
+            )}
 
           ${buildCheckboxItemEvent(
             ids.listOutcomePreviewId,
             "列表卡预览走向",
             "未掷骰时先预览可能结果。",
             "list outcome preview",
-          )}
+            "在列表里预览结果分支。",
+            )}
 
           <div class="st-roll-divider"><i class="fa-solid fa-file-lines"></i><span>摘要注入</span><div class="st-roll-divider-line"></div></div>
 
@@ -261,6 +280,9 @@ export function buildSettingsCardHtmlTemplateEvent(
                 id: ids.summaryDetailId,
                 value: "minimal",
                 containerClassName: "st-roll-shared-select",
+                attributes: {
+                  "data-tip": "设置摘要详细度。",
+                },
                 options: [
                   { value: "minimal", label: "简略" },
                   { value: "balanced", label: "平衡" },
@@ -283,6 +305,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                   min: 1,
                   max: 10,
                   step: 1,
+                  "data-tip": "设置历史轮次数量。",
                 },
               })}
             </div>
@@ -293,7 +316,8 @@ export function buildSettingsCardHtmlTemplateEvent(
             "摘要包含走向文本",
             "把本轮结果文本写进摘要。",
             "summary include outcome",
-          )}
+            "摘要里带上结果文本。",
+            )}
 
           <div class="st-roll-divider"><i class="fa-solid fa-stopwatch"></i><span>时限控制</span><div class="st-roll-divider-line"></div></div>
 
@@ -302,7 +326,8 @@ export function buildSettingsCardHtmlTemplateEvent(
             "启用事件时限",
             "事件有倒计时，超时按失败处理。",
             "time limit timeout",
-          )}
+            "开启事件倒计时。",
+            )}
 
           <div id="${ids.timeLimitRowId}" class="st-roll-item st-roll-search-item" data-st-roll-search="minimum time limit seconds">
             <div class="st-roll-item-main">
@@ -316,6 +341,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                 attributes: {
                   min: 1,
                   step: 1,
+                  "data-tip": "设置最短倒计时秒数。",
                 },
               })}
             </div>
@@ -334,7 +360,8 @@ export function buildSettingsCardHtmlTemplateEvent(
             "启用技能系统",
             "关掉后，技能加值不再生效。",
             "skill system enable",
-          )}
+            "开启技能系统。",
+            )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="skill editor modal">
             <div class="st-roll-item-main">
@@ -623,6 +650,7 @@ export function buildSettingsCardHtmlTemplateEvent(
               tag: "textarea",
               attributes: {
                 rows: 12,
+                "data-tip": "编辑补充规则文本。",
                 placeholder:
                   "只写额外约束，例如：\n1. 场景以潜入风格推进。\n2. outcomes 文本避免重复措辞。\n3. 优势/劣势触发时加强叙事差异。",
               },

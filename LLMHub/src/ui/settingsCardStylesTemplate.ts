@@ -1,4 +1,4 @@
-import { buildSdkThemeVars } from "../../../SDK/theme";
+import { buildThemeVars } from "../../../SDK/theme";
 
 /**
  * 功能：构建 LLMHub 设置面板样式。
@@ -9,20 +9,21 @@ import { buildSdkThemeVars } from "../../../SDK/theme";
  */
 export function buildSettingsCardStylesTemplate(cardId: string): string {
     return `
-    ${buildSdkThemeVars(`#${cardId}`)}
+    ${buildThemeVars(`#${cardId} .stx-ui-content`)}
 
     #${cardId} {
       margin-bottom: 5px;
-      color: var(--stx-theme-text, var(--SmartThemeBodyColor, inherit));
+      color: inherit;
     }
 
     #${cardId} .stx-ui-shell {
-      border: 1px solid var(--stx-theme-border, rgba(197, 160, 89, 0.35));
-      border-radius: 12px;
-      overflow: hidden;
-      background: var(--stx-theme-surface-1);
-      backdrop-filter: var(--stx-theme-backdrop-filter, blur(3px));
-      box-shadow: var(--stx-theme-panel-shadow, none);
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+      background: transparent;
+      backdrop-filter: none;
+      box-shadow: none;
+      color: inherit;
     }
 
     #${cardId} .stx-ui-head {
@@ -30,8 +31,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 0 !important;
-      padding: 10px 12px;
       cursor: pointer;
       user-select: none;
       transition: background-color 0.2s ease, box-shadow 0.2s ease;
@@ -45,10 +44,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-head-badge {
-      color: color-mix(in srgb, #f06464 84%, var(--stx-theme-accent, #c5a059));
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.3px;
+      color: inherit;
+      opacity: 0.8;
+      font-size: 0.8em;
+      font-weight: 500;
+      letter-spacing: 0.02em;
     }
 
     #${cardId} .stx-ui-head .inline-drawer-icon {
@@ -56,9 +56,15 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-content {
-      border-top: 1px solid var(--stx-theme-border, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.08));
+      border-top: 0;
+      border-radius: 0 0 10px 10px;
       padding: 10px;
       display: block;
+      color: var(--ss-theme-text, inherit);
+      background: var(--ss-theme-surface-1, rgba(0, 0, 0, 0.16));
+      backdrop-filter: var(--ss-theme-backdrop-filter, blur(3px));
+      box-shadow: var(--ss-theme-panel-shadow, none);
     }
 
     #${cardId} .stx-ui-filters {
@@ -80,10 +86,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 4px;
       padding: 4px;
-      border: 1px solid var(--stx-theme-border, rgba(255, 255, 255, 0.16));
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.16));
       border-radius: 999px;
       margin-bottom: 10px;
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.2));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
     }
 
     #${cardId} .stx-ui-tab {
@@ -106,8 +112,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-tab.is-active {
       opacity: 1;
-      color: var(--stx-theme-accent-contrast, var(--SmartThemeQuoteTextColor, #fff));
-      background: var(--stx-theme-list-item-active-bg, rgba(197, 160, 89, 0.58));
+      color: var(--ss-theme-text, inherit);
+      background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.58));
     }
 
     #${cardId} .stx-ui-panel {
@@ -145,11 +151,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-item {
-      border: 1px solid var(--stx-theme-border, rgba(255, 255, 255, 0.2));
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.2));
       border-radius: 10px;
       padding: 12px;
       margin: 2px 0;
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.16));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.16));
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -382,11 +388,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       letter-spacing: 1px;
     }
 
-    #${cardId} .stx-ui-head:hover {
-      background: rgba(255, 255, 255, 0.04);
-      box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
-    }
-
     #${cardId} .stx-ui-tab:hover {
       opacity: 1;
       background: rgba(197, 160, 89, 0.2);
@@ -426,103 +427,98 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-shell {
-      border-color: var(--stx-theme-border, rgba(197, 160, 89, 0.35));
-      background: var(--stx-theme-surface-1);
-      backdrop-filter: var(--stx-theme-backdrop-filter, blur(3px));
-      box-shadow: var(--stx-theme-panel-shadow, none);
+      border-color: transparent;
+      background: transparent;
+      backdrop-filter: none;
+      box-shadow: none;
     }
 
     #${cardId} .stx-ui-content {
-      border-top-color: var(--stx-theme-border, rgba(255, 255, 255, 0.08));
+      border-top-color: var(--ss-theme-border, rgba(255, 255, 255, 0.08));
     }
 
     #${cardId} .stx-ui-tabs {
-      border-color: var(--stx-theme-border, rgba(255, 255, 255, 0.16));
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.2));
+      border-color: var(--ss-theme-border, rgba(255, 255, 255, 0.16));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
     }
 
     #${cardId} .stx-ui-tab.is-active {
-      color: var(--stx-theme-accent-contrast, var(--SmartThemeQuoteTextColor, #fff));
-      background: var(--stx-theme-list-item-active-bg, rgba(197, 160, 89, 0.58));
+      color: var(--ss-theme-text, inherit);
+      background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.58));
     }
 
     #${cardId} .stx-ui-item {
-      border-color: var(--stx-theme-border, rgba(255, 255, 255, 0.2));
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.16));
+      border-color: var(--ss-theme-border, rgba(255, 255, 255, 0.2));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.16));
     }
 
     #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
     #${cardId} .stx-ui-textarea {
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.28));
-      border-color: var(--stx-theme-border, rgba(197, 160, 89, 0.36));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
+      border-color: var(--ss-theme-border, rgba(197, 160, 89, 0.36));
     }
 
     #${cardId} .stx-ui-btn {
-      border-color: var(--stx-theme-border, rgba(197, 160, 89, 0.45));
-      background: var(--stx-theme-surface-3, rgba(197, 160, 89, 0.14));
+      border-color: var(--ss-theme-border, rgba(197, 160, 89, 0.45));
+      background: var(--ss-theme-surface-3, rgba(197, 160, 89, 0.14));
     }
 
     #${cardId} .stx-ui-btn.secondary {
-      border-color: var(--stx-theme-border, rgba(255, 255, 255, 0.2));
-      background: var(--stx-theme-surface-2, rgba(255, 255, 255, 0.08));
+      border-color: var(--ss-theme-border, rgba(255, 255, 255, 0.2));
+      background: var(--ss-theme-surface-2, rgba(255, 255, 255, 0.08));
     }
 
     #${cardId} .stx-ui-list-item {
-      border-color: var(--stx-theme-border, rgba(255, 255, 255, 0.2));
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.12));
+      border-color: var(--ss-theme-border, rgba(255, 255, 255, 0.2));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.12));
     }
 
     #${cardId} .stx-ui-about-meta a {
-      border-bottom-color: var(--stx-theme-border, rgba(255, 255, 255, 0.22));
+      border-bottom-color: var(--ss-theme-border, rgba(255, 255, 255, 0.22));
     }
 
     #${cardId} .stx-ui-changelog {
-      background: var(--stx-theme-surface-2, rgba(0, 0, 0, 0.2));
-      border-color: var(--stx-theme-border, rgba(255, 255, 255, 0.1));
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
+      border-color: var(--ss-theme-border, rgba(255, 255, 255, 0.1));
     }
 
     #${cardId} .stx-ui-changelog::-webkit-scrollbar-thumb {
-      background: color-mix(in srgb, var(--stx-theme-accent, #c5a059) 48%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 48%, transparent);
     }
 
     #${cardId} input[type="checkbox"] {
-      accent-color: color-mix(in srgb, var(--stx-theme-accent, #c5a059) 92%, white 8%);
-    }
-
-    #${cardId} .stx-ui-head:hover {
-      background: var(--stx-theme-list-item-hover-bg, rgba(255, 255, 255, 0.04));
-      box-shadow: inset 0 -1px 0 var(--stx-theme-border, rgba(255, 255, 255, 0.08));
+      accent-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 92%, white 8%);
     }
 
     #${cardId} .stx-ui-tab:hover {
-      background: var(--stx-theme-list-item-hover-bg, rgba(197, 160, 89, 0.2));
-      box-shadow: 0 0 12px color-mix(in srgb, var(--stx-theme-accent, #c5a059) 24%, transparent);
+      background: var(--ss-theme-list-item-hover-bg, rgba(197, 160, 89, 0.2));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--ss-theme-accent, #c5a059) 24%, transparent);
     }
 
     #${cardId} .stx-ui-item:hover {
-      border-color: var(--stx-theme-border-strong, rgba(197, 160, 89, 0.48));
-      background: var(--stx-theme-list-item-hover-bg, rgba(0, 0, 0, 0.24));
+      border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.48));
+      background: var(--ss-theme-list-item-hover-bg, rgba(0, 0, 0, 0.24));
     }
 
     #${cardId} .stx-ui-select:hover,
     #${cardId} .stx-ui-input:hover,
     #${cardId} .stx-ui-search:hover {
-      border-color: var(--stx-theme-border-strong, rgba(197, 160, 89, 0.58));
-      background-color: var(--stx-theme-surface-3, rgba(0, 0, 0, 0.34));
-      box-shadow: 0 0 0 1px var(--stx-theme-focus-ring, rgba(197, 160, 89, 0.18));
+      border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.58));
+      background-color: var(--ss-theme-surface-3, rgba(0, 0, 0, 0.34));
+      box-shadow: 0 0 0 1px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.18));
     }
 
     #${cardId} .stx-ui-btn:hover {
-      border-color: var(--stx-theme-border-strong, rgba(197, 160, 89, 0.68));
-      background: var(--stx-theme-list-item-hover-bg, rgba(197, 160, 89, 0.24));
+      border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.68));
+      background: var(--ss-theme-list-item-hover-bg, rgba(197, 160, 89, 0.24));
     }
 
     #${cardId} .stx-ui-select:focus,
     #${cardId} .stx-ui-input:focus,
     #${cardId} .stx-ui-search:focus {
-      border-color: var(--stx-theme-border-strong, rgba(197, 160, 89, 0.72));
-      box-shadow: 0 0 0 2px var(--stx-theme-focus-ring, rgba(197, 160, 89, 0.22));
+      border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
+      box-shadow: 0 0 0 2px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
     }
   `;
 }

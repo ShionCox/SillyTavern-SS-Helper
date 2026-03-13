@@ -15,31 +15,31 @@ export function buildSettingsCardHtmlTemplate(
 
       <div class="inline-drawer-content stx-ui-content" id="${ids.drawerContentId}" style="display:none;">
         <div class="stx-ui-filters flex-container">
-          <input id="${ids.searchId}" class="text_pole flex1 stx-ui-search" placeholder="搜索设置" type="search" />
+          <input id="${ids.searchId}" data-tip="按关键词筛选设置项。" class="text_pole flex1 stx-ui-search" placeholder="搜索设置" type="search" />
         </div>
 
         <div class="stx-ui-tabs">
-          <button id="${ids.tabMainId}" type="button" class="stx-ui-tab is-active">
+          <button id="${ids.tabMainId}" data-tip="查看主设置。" type="button" class="stx-ui-tab is-active">
             <i class="fa-solid fa-gear"></i>
             <span>主设置</span>
           </button>
-          <button id="${ids.tabAiId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabAiId}" data-tip="查看 AI 规则。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-microchip"></i>
             <span>AI 规则</span>
           </button>
-          <button id="${ids.tabDbId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabDbId}" data-tip="查看数据管理。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-database"></i>
             <span>数据管理</span>
           </button>
-          <button id="${ids.tabTemplateId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabTemplateId}" data-tip="查看世界模板。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-table-columns"></i>
             <span>世界模板</span>
           </button>
-          <button id="${ids.tabAuditId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabAuditId}" data-tip="查看审计与回滚。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-clock-rotate-left"></i>
             <span>审计回滚</span>
           </button>
-          <button id="${ids.tabAboutId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabAboutId}" data-tip="查看插件信息。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-circle-info"></i>
             <span>关于</span>
           </button>
@@ -58,7 +58,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">总开关。关闭后不再记录记忆。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.enabledId}" type="checkbox" />
+              <input id="${ids.enabledId}" data-tip="MemoryOS 总开关。" type="checkbox" />
             </div>
           </label>
 
@@ -66,12 +66,12 @@ export function buildSettingsCardHtmlTemplate(
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">
                 启用 AI 模式
-                <i id="${ids.aiModeStatusLightId}" class="fa-solid fa-circle-question" style="color: #666; font-size: 11px; margin-left: 6px;" title="通信中..."></i>
+                <i id="${ids.aiModeStatusLightId}" data-tip="显示与 LLMHub 的连接状态。" class="fa-solid fa-circle-question" style="color: #666; font-size: 11px; margin-left: 6px;" title="通信中..."></i>
               </div>
               <div class="stx-ui-item-desc">开启后用 AI 抽取事实。关闭后只用规则模式。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.aiModeEnabledId}" type="checkbox" />
+              <input id="${ids.aiModeEnabledId}" data-tip="开启后使用 AI 抽取事实。" type="checkbox" />
             </div>
           </label>
         </div>
@@ -89,7 +89,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">限制每次注入给 AI 的记忆长度。</div>
             </div>
             <div class="stx-ui-row">
-              <input id="${ids.contextMaxTokensId}" class="stx-ui-input" type="number" min="500" max="8000" step="100" />
+              <input id="${ids.contextMaxTokensId}" data-tip="限制注入给 AI 的记忆长度。" class="stx-ui-input" type="number" min="500" max="8000" step="100" />
             </div>
           </div>
         </div>
@@ -107,7 +107,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">开启后，事件多了会自动压缩。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.autoCompactionId}" type="checkbox" />
+              <input id="${ids.autoCompactionId}" data-tip="自动压缩历史事件。" type="checkbox" />
             </div>
           </label>
           
@@ -117,7 +117,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">事件达到这个数量时开始压缩。</div>
             </div>
             <div class="stx-ui-row">
-              <input id="${ids.compactionThresholdId}" class="stx-ui-input" type="number" min="500" max="20000" step="500" />
+              <input id="${ids.compactionThresholdId}" data-tip="达到这个数量后开始压缩。" class="stx-ui-input" type="number" min="500" max="20000" step="500" />
             </div>
           </div>
 
@@ -127,13 +127,13 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">这里是手动维护功能。</div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.dbCompactBtnId}" type="button" class="stx-ui-btn">立即压缩</button>
-              <button id="${ids.recordEditorBtnId}" type="button" class="stx-ui-btn">
+              <button id="${ids.dbCompactBtnId}" data-tip="立即执行一次压缩。" type="button" class="stx-ui-btn">立即压缩</button>
+              <button id="${ids.recordEditorBtnId}" data-tip="打开记录编辑器。" type="button" class="stx-ui-btn">
                 <i class="fa-solid fa-pen-to-square"></i>&nbsp;记录编辑
               </button>
-              <button id="${ids.dbExportBtnId}" type="button" class="stx-ui-btn secondary">导出记忆包</button>
-              <button id="${ids.dbImportBtnId}" type="button" class="stx-ui-btn secondary">导入记忆包</button>
-              <button id="${ids.dbClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
+              <button id="${ids.dbExportBtnId}" data-tip="导出当前聊天记忆。" type="button" class="stx-ui-btn secondary">导出记忆包</button>
+              <button id="${ids.dbImportBtnId}" data-tip="导入记忆到当前聊天。" type="button" class="stx-ui-btn secondary">导入记忆包</button>
+              <button id="${ids.dbClearBtnId}" data-tip="清空当前聊天记忆。" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
             </div>
           </div>
           
@@ -143,8 +143,8 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">用于检查 MemoryOS 和 LLMHub 是否连通。</div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.testPingBtnId}" type="button" class="stx-ui-btn secondary">发送 Ping 测试</button>
-              <button id="${ids.testHelloBtnId}" type="button" class="stx-ui-btn secondary" style="border-color: rgba(140, 235, 140, 0.4);">向 LLMHub Hello</button>
+              <button id="${ids.testPingBtnId}" data-tip="测试连通性（Ping）。" type="button" class="stx-ui-btn secondary">发送 Ping 测试</button>
+              <button id="${ids.testHelloBtnId}" data-tip="测试握手（Hello）。" type="button" class="stx-ui-btn secondary" style="border-color: rgba(140, 235, 140, 0.4);">向 LLMHub Hello</button>
             </div>
           </div>
         </div>
@@ -161,26 +161,26 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-title">当前绑定的世界 Schema</div>
               <div class="stx-ui-item-desc">这里显示当前聊天使用的模板结构。</div>
             </div>
-            <div id="${ids.templateListId}" style="width: 100%; font-size: 12px; color: var(--SmartThemeBodyColor, #ccc); background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
+            <div id="${ids.templateListId}" style="width: 100%; font-size: 12px; color: var(--ss-theme-text, #ccc); background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
               正在加载...
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.templateRefreshBtnId}" type="button" class="stx-ui-btn">
+              <button id="${ids.templateRefreshBtnId}" data-tip="刷新模板列表。" type="button" class="stx-ui-btn">
                 <i class="fa-solid fa-rotate"></i>&nbsp;刷新模板列表
               </button>
-              <button id="${ids.templateForceRebuildBtnId}" type="button" class="stx-ui-btn secondary">
+              <button id="${ids.templateForceRebuildBtnId}" data-tip="从世界书重建模板。" type="button" class="stx-ui-btn secondary">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp;强制重建模板 (从世界书)
               </button>
             </div>
             <div style="display:flex; gap:8px; align-items:center; width:100%;">
-              <select id="${ids.templateActiveSelectId}" class="stx-ui-input" style="flex:1; padding: 4px 8px; font-size: 12px;">
+              <select id="${ids.templateActiveSelectId}" data-tip="选择要启用的模板。" class="stx-ui-input" style="flex:1; padding: 4px 8px; font-size: 12px;">
                 <option value="">选择要激活的模板...</option>
               </select>
               <label style="display:flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap;">
-                <input id="${ids.templateLockId}" type="checkbox" />
+                <input id="${ids.templateLockId}" data-tip="锁定当前模板。" type="checkbox" />
                 锁定模板
               </label>
-              <button id="${ids.templateSetActiveBtnId}" type="button" class="stx-ui-btn">应用</button>
+              <button id="${ids.templateSetActiveBtnId}" data-tip="应用当前选择的模板。" type="button" class="stx-ui-btn">应用</button>
             </div>
           </div>
 
@@ -194,13 +194,13 @@ export function buildSettingsCardHtmlTemplate(
             </div>
             <div id="${ids.wiPreviewId}" style="width: 100%; font-size: 11px; color: #aaa; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 8px; max-height: 100px; overflow-y: auto; font-family: monospace;"></div>
             <div class="stx-ui-actions">
-              <button id="${ids.wiPreviewBtnId}" type="button" class="stx-ui-btn secondary">
+              <button id="${ids.wiPreviewBtnId}" data-tip="预览写回内容。" type="button" class="stx-ui-btn secondary">
                 <i class="fa-solid fa-eye"></i>&nbsp;预览写回内容
               </button>
-              <button id="${ids.wiWritebackBtnId}" type="button" class="stx-ui-btn">
+              <button id="${ids.wiWritebackBtnId}" data-tip="写回事实和摘要到世界书。" type="button" class="stx-ui-btn">
                 <i class="fa-solid fa-upload"></i>&nbsp;写回到世界书（全部）
               </button>
-              <button id="${ids.wiWriteSummaryBtnId}" type="button" class="stx-ui-btn secondary">
+              <button id="${ids.wiWriteSummaryBtnId}" data-tip="只写回摘要到世界书。" type="button" class="stx-ui-btn secondary">
                 <i class="fa-solid fa-file-lines"></i>&nbsp;仅写回摘要
               </button>
             </div>
@@ -216,10 +216,10 @@ export function buildSettingsCardHtmlTemplate(
             </div>
             <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
               <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
-              <select id="${ids.logicTableEntitySelectId}" class="stx-ui-input" style="flex: 1; padding: 4px 8px; font-size: 12px;">
+              <select id="${ids.logicTableEntitySelectId}" data-tip="选择要查看的实体类型。" class="stx-ui-input" style="flex: 1; padding: 4px 8px; font-size: 12px;">
                 <option value="">选择实体类型...</option>
               </select>
-              <button id="${ids.logicTableRefreshBtnId}" type="button" class="stx-ui-btn" style="padding: 4px 10px; font-size: 12px;">
+              <button id="${ids.logicTableRefreshBtnId}" data-tip="刷新当前逻辑表。" type="button" class="stx-ui-btn" style="padding: 4px 10px; font-size: 12px;">
                 <i class="fa-solid fa-rotate"></i>
               </button>
             </div>
@@ -243,10 +243,10 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">先保存一个快照，之后可一键回滚。</div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.auditCreateSnapshotBtnId}" type="button" class="stx-ui-btn">
+              <button id="${ids.auditCreateSnapshotBtnId}" data-tip="创建一个回滚快照。" type="button" class="stx-ui-btn">
                 <i class="fa-solid fa-camera"></i>&nbsp;创建快照
               </button>
-              <button id="${ids.auditRefreshBtnId}" type="button" class="stx-ui-btn secondary">
+              <button id="${ids.auditRefreshBtnId}" data-tip="刷新审计记录。" type="button" class="stx-ui-btn secondary">
                 <i class="fa-solid fa-rotate"></i>&nbsp;刷新审计记录
               </button>
             </div>
@@ -255,7 +255,7 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 4px;">
             <div class="stx-ui-item-title" style="font-size: 13px;">历史记录（快照可回滚，其他仅查看）</div>
             <div id="${ids.auditListId}"
-              style="width: 100%; font-size: 12px; color: var(--SmartThemeBodyColor, #ccc);
+              style="width: 100%; font-size: 12px; color: var(--ss-theme-text, #ccc);
                      background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px;
                      max-height: 360px; overflow-y: auto; font-family: monospace;">
               正在加载审计记录...

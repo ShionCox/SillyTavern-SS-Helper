@@ -1,0 +1,73 @@
+#stx-shared-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40000;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity 0.16s ease,
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0.16s;
+  transform: translate3d(-9999px, -9999px, 0);
+  will-change: transform, opacity;
+}
+
+#stx-shared-tooltip.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.16s ease,
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+
+#stx-shared-tooltip.is-instant {
+  transition: none !important;
+}
+
+#stx-shared-tooltip .stx-shared-tooltip-body {
+  max-width: min(78vw, 360px);
+  min-width: 72px;
+  padding: 8px 10px;
+  border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.55));
+  border-radius: 8px;
+  background: var(--ss-theme-panel-bg, rgba(23, 21, 24, 0.96));
+  backdrop-filter: var(--ss-theme-backdrop-filter, blur(3px));
+  color: var(--ss-theme-text, #ecdcb8);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  box-shadow: var(--ss-theme-shadow, 0 8px 20px rgba(0, 0, 0, 0.45));
+}
+
+#stx-shared-tooltip[data-stx-tooltip-scope="rollhelper-card"] .stx-shared-tooltip-body {
+  border-color: var(--ss-theme-roll-tooltip-border, var(--ss-theme-border, rgba(197, 160, 89, 0.55)));
+  background: var(--ss-theme-roll-tooltip-bg, var(--ss-theme-panel-bg, rgba(23, 21, 24, 0.96)));
+  color: var(--ss-theme-roll-tooltip-text, var(--ss-theme-text, #ecdcb8));
+  box-shadow: var(--ss-theme-roll-tooltip-shadow, var(--ss-theme-shadow, 0 8px 20px rgba(0, 0, 0, 0.45)));
+}
+
+/* 屏蔽 SillyTavern 原生 data-tip 伪元素提示 */
+html body [data-tip]::before,
+html body [data-tip]::after,
+html body [data-tip]:hover::before,
+html body [data-tip]:hover::after,
+html body [data-tip]:focus::before,
+html body [data-tip]:focus::after,
+html body [data-tip]:focus-visible::before,
+html body [data-tip]:focus-visible::after {
+  content: none !important;
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #stx-shared-tooltip {
+    transition: none;
+  }
+}

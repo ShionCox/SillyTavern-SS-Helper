@@ -1,4 +1,39 @@
 _SCOPE_ .stx-changelog {
+  --stx-changelog-scrollbar: color-mix(
+    in srgb,
+    var(--ss-theme-accent, #c5a059) 42%,
+    transparent
+  );
+  --stx-changelog-shell-border: var(--ss-theme-border, rgba(255, 255, 255, 0.18));
+  --stx-changelog-shell-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    var(--ss-theme-surface-2, rgba(0, 0, 0, 0.16));
+  --stx-changelog-shell-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --stx-changelog-entry-border: color-mix(
+    in srgb,
+    var(--ss-theme-border, rgba(255, 255, 255, 0.18)) 72%,
+    rgba(255, 255, 255, 0.1)
+  );
+  --stx-changelog-entry-bg:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 18%, transparent), transparent 42%),
+    color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.16)) 84%, rgba(0, 0, 0, 0.18) 16%);
+  --stx-changelog-version-color: var(--ss-theme-accent-contrast, #fff);
+  --stx-changelog-date-color: var(--ss-theme-text-muted, rgba(255, 255, 255, 0.62));
+  --stx-changelog-section-border: color-mix(
+    in srgb,
+    var(--ss-theme-border, rgba(255, 255, 255, 0.18)) 58%,
+    rgba(255, 255, 255, 0.08)
+  );
+  --stx-changelog-section-bg: color-mix(
+    in srgb,
+    var(--ss-theme-surface-3, rgba(255, 255, 255, 0.04)) 86%,
+    transparent
+  );
+  --stx-changelog-section-title-color: color-mix(
+    in srgb,
+    var(--ss-theme-text, inherit) 88%,
+    transparent
+  );
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -6,12 +41,10 @@ _SCOPE_ .stx-changelog {
   padding: 12px;
   max-height: 280px;
   overflow-y: auto;
-  border: 1px solid var(--st-roll-panel-muted-border, rgba(255, 255, 255, 0.18));
+  border: 1px solid var(--stx-changelog-shell-border);
   border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
-    var(--st-roll-panel-muted-bg, rgba(0, 0, 0, 0.16));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: var(--stx-changelog-shell-bg);
+  box-shadow: var(--stx-changelog-shell-shadow);
 }
 
 _SCOPE_ .stx-changelog::-webkit-scrollbar {
@@ -19,7 +52,7 @@ _SCOPE_ .stx-changelog::-webkit-scrollbar {
 }
 
 _SCOPE_ .stx-changelog::-webkit-scrollbar-thumb {
-  background: rgba(197, 160, 89, 0.42);
+  background: var(--stx-changelog-scrollbar);
   border-radius: 999px;
 }
 
@@ -28,11 +61,9 @@ _SCOPE_ .stx-changelog-entry {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--stx-changelog-entry-border);
   border-radius: 10px;
-  background:
-    radial-gradient(circle at top right, rgba(197, 160, 89, 0.12), transparent 42%),
-    rgba(0, 0, 0, 0.18);
+  background: var(--stx-changelog-entry-bg);
 }
 
 _SCOPE_ .stx-changelog-entry-head {
@@ -49,7 +80,7 @@ _SCOPE_ .stx-changelog-entry-version {
   gap: 8px;
   min-width: 0;
   font-weight: 700;
-  color: var(--SmartThemeQuoteTextColor, #fff);
+  color: var(--stx-changelog-version-color);
 }
 
 _SCOPE_ .stx-changelog-entry-version-text {
@@ -60,7 +91,7 @@ _SCOPE_ .stx-changelog-entry-version-text {
 _SCOPE_ .stx-changelog-entry-date {
   font-size: 11px;
   line-height: 1.2;
-  color: var(--SmartThemeEmColor, rgba(255, 255, 255, 0.62));
+  color: var(--stx-changelog-date-color);
   white-space: nowrap;
 }
 
@@ -75,9 +106,9 @@ _SCOPE_ .stx-changelog-section {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--stx-changelog-section-border);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--stx-changelog-section-bg);
 }
 
 _SCOPE_ .stx-changelog-section-head {
@@ -104,8 +135,7 @@ _SCOPE_ .stx-changelog-section-badge {
 _SCOPE_ .stx-changelog-section-title {
   font-size: 12px;
   line-height: 1.4;
-  color: var(--SmartThemeBodyColor, inherit);
-  opacity: 0.88;
+  color: var(--stx-changelog-section-title-color);
 }
 
 _SCOPE_ .stx-changelog-section-list {
@@ -119,7 +149,7 @@ _SCOPE_ .stx-changelog-section-list {
 _SCOPE_ .stx-changelog-section-item {
   font-size: 12px;
   line-height: 1.55;
-  color: var(--SmartThemeBodyColor, inherit);
+  color: var(--ss-theme-text, inherit);
 }
 
 _SCOPE_ .stx-changelog-empty {
@@ -128,7 +158,7 @@ _SCOPE_ .stx-changelog-empty {
   justify-content: center;
   min-height: 96px;
   text-align: center;
-  color: var(--SmartThemeEmColor, rgba(255, 255, 255, 0.72));
+  color: var(--ss-theme-text-muted, rgba(255, 255, 255, 0.72));
 }
 
 _SCOPE_ .stx-changelog-section.is-added .stx-changelog-section-badge {
@@ -159,6 +189,92 @@ _SCOPE_ .stx-changelog-section.is-docs .stx-changelog-section-badge {
 _SCOPE_ .stx-changelog-section.is-other .stx-changelog-section-badge {
   color: #d4d4d4;
   background: rgba(105, 105, 105, 0.18);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog,
+_SCOPE_[data-ss-theme="light"] .stx-changelog {
+  --stx-changelog-scrollbar: color-mix(
+    in srgb,
+    var(--ss-theme-accent, #2f6ee5) 26%,
+    var(--ss-theme-border-strong, #8eaed9) 74%
+  );
+  --stx-changelog-shell-border: color-mix(
+    in srgb,
+    var(--ss-theme-border, #c6d1e2) 86%,
+    white 14%
+  );
+  --stx-changelog-shell-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(244, 248, 255, 0.98)),
+    var(--ss-theme-surface-2, #eef3fa);
+  --stx-changelog-shell-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 22px rgba(186, 198, 216, 0.22);
+  --stx-changelog-entry-border: color-mix(
+    in srgb,
+    var(--ss-theme-border-strong, #8eaed9) 48%,
+    white 30%
+  );
+  --stx-changelog-entry-bg:
+    radial-gradient(circle at top right, rgba(47, 110, 229, 0.08), transparent 44%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(246, 250, 255, 0.96));
+  --stx-changelog-version-color: color-mix(
+    in srgb,
+    var(--ss-theme-accent, #2f6ee5) 72%,
+    var(--ss-theme-text, #1f2834) 28%
+  );
+  --stx-changelog-date-color: color-mix(
+    in srgb,
+    var(--ss-theme-text, #1f2834) 76%,
+    transparent
+  );
+  --stx-changelog-section-border: color-mix(
+    in srgb,
+    var(--ss-theme-border, #c6d1e2) 88%,
+    white 12%
+  );
+  --stx-changelog-section-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 251, 255, 0.94));
+  --stx-changelog-section-title-color: color-mix(
+    in srgb,
+    var(--ss-theme-text, #1f2834) 94%,
+    transparent
+  );
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-added .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-added .stx-changelog-section-badge {
+  color: #2d8a57;
+  background: rgba(88, 196, 121, 0.14);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-fixed .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-fixed .stx-changelog-section-badge {
+  color: #c24b4b;
+  background: rgba(239, 117, 117, 0.14);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-improved .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-improved .stx-changelog-section-badge {
+  color: #2f6ee5;
+  background: rgba(47, 110, 229, 0.12);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-changed .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-changed .stx-changelog-section-badge {
+  color: #9e6914;
+  background: rgba(223, 171, 74, 0.16);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-docs .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-docs .stx-changelog-section-badge {
+  color: #6b57cb;
+  background: rgba(129, 105, 228, 0.12);
+}
+
+_SCOPE_ [data-ss-theme="light"] .stx-changelog-section.is-other .stx-changelog-section-badge,
+_SCOPE_[data-ss-theme="light"] .stx-changelog-section.is-other .stx-changelog-section-badge {
+  color: #5c6878;
+  background: rgba(120, 132, 148, 0.14);
 }
 
 @media (max-width: 768px) {

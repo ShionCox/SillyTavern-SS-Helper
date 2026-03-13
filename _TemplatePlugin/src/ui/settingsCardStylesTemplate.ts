@@ -3,7 +3,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     return `
     #${cardId} {
       margin-bottom: 5px;
-      color: var(--SmartThemeBodyColor, inherit);
+      color: var(--ss-theme-text, inherit);
     }
 
     #${cardId} .stx-ui-shell {
@@ -97,7 +97,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-tab.is-active {
       opacity: 1;
-      color: var(--SmartThemeQuoteTextColor, #fff);
+      color: var(--ss-theme-accent-contrast, #fff);
       background: rgba(197, 160, 89, 0.58);
     }
 

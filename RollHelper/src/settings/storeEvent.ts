@@ -28,10 +28,7 @@ import {
   flushSdkChatDataNow,
 } from "../../../SDK/db";
 import {
-  buildSdkThemePatchFromSelection,
-  getSdkThemeState,
-  resolveSdkThemeSelection,
-  setSdkThemeState,
+  getTheme,
 } from "../../../SDK/theme";
 import type { SdkTavernScopeLocatorEvent } from "../../../SDK/tavern";
 import {
@@ -524,7 +521,7 @@ function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThem
 }
 
 function resolveSdkSettingsThemeEvent(): RollHelperSettingsThemeEvent {
-  const selection = resolveSdkThemeSelection(getSdkThemeState());
+  const selection = getTheme().themeId;
   return normalizeSettingsThemeCompatEvent(selection);
 }
 
@@ -761,11 +758,19 @@ export function updateSettingsEvent(patch: Partial<DicePluginSettingsEvent>): vo
     patchTheme: patchAny.theme ?? null,
     sdkThemeBefore: resolveSdkSettingsThemeEvent(),
   });
-  if (patchAny.theme != null) {
-    setSdkThemeState(buildSdkThemePatchFromSelection(normalizeSettingsThemeCompatEvent(patchAny.theme)));
-  }
+  const nextTheme =
+    patchAny.theme != null
+      ? normalizeSettingsThemeCompatEvent(patchAny.theme)
+      : null;
   const { theme: _themeIgnored, ...restPatch } = patchAny;
-  writeSettingsForCurrentScopeEvent(restPatch);
+  writeSettingsForCurrentScopeEvent(
+    nextTheme == null
+      ? restPatch
+      : {
+          ...restPatch,
+          theme: nextTheme,
+        }
+  );
 }
 
 export function normalizeSkillPresetNameKeyEvent(raw: string): string {

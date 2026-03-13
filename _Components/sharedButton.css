@@ -1,19 +1,16 @@
 /* 共享按钮组件样式，由调用方提供作用域前缀替换 _SCOPE_ */
 
 _SCOPE_ .stx-shared-button {
-  --stx-button-text: var(--stx-theme-text, var(--st-roll-text, inherit));
-  --stx-button-bg: var(--stx-theme-surface-3, var(--st-roll-btn-bg, rgba(197, 160, 89, 0.14)));
-  --stx-button-border: var(--stx-theme-border, var(--st-roll-btn-border, rgba(197, 160, 89, 0.45)));
-  --stx-button-hover-bg: var(--stx-theme-list-item-hover-bg, var(--st-roll-btn-hover-bg, rgba(197, 160, 89, 0.24)));
-  --stx-button-hover-border: var(--stx-theme-border-strong, var(--st-roll-btn-hover-border, rgba(197, 160, 89, 0.68)));
+  --stx-button-text: var(--ss-theme-text, inherit);
+  --stx-button-bg: var(--ss-theme-surface-3, rgba(197, 160, 89, 0.14));
+  --stx-button-border: var(--ss-theme-border, rgba(197, 160, 89, 0.45));
+  --stx-button-hover-bg: var(--ss-theme-list-item-hover-bg, rgba(197, 160, 89, 0.24));
+  --stx-button-hover-border: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.68));
   --stx-button-hover-shadow:
-    var(
-      --st-roll-btn-hover-shadow,
-      inset 0 0 0 1px rgba(197, 160, 89, 0.26),
-      0 0 14px rgba(197, 160, 89, 0.2)
-    );
-  --stx-button-focus-border: var(--stx-theme-border-strong, var(--st-roll-control-focus-border, rgba(197, 160, 89, 0.72)));
-  --stx-button-focus-ring: var(--stx-theme-focus-ring, var(--st-roll-control-focus-ring, rgba(197, 160, 89, 0.22)));
+    inset 0 0 0 1px rgba(197, 160, 89, 0.26),
+    0 0 14px rgba(197, 160, 89, 0.2);
+  --stx-button-focus-border: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
+  --stx-button-focus-ring: var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -20,23 +20,23 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
       <div class="inline-drawer-content stx-ui-content" id="${ids.drawerContentId}" style="display:none;">
         <div class="stx-ui-filters flex-container">
-          <input id="${ids.searchId}" class="text_pole flex1 stx-ui-search" placeholder="搜索设置项" type="search" />
+          <input id="${ids.searchId}" data-tip="按关键词筛选设置项。" class="text_pole flex1 stx-ui-search" placeholder="搜索设置项" type="search" />
         </div>
 
         <div class="stx-ui-tabs">
-          <button id="${ids.tabMainId}" type="button" class="stx-ui-tab is-active">
+          <button id="${ids.tabMainId}" data-tip="查看基础设置。" type="button" class="stx-ui-tab is-active">
             <i class="fa-solid fa-gear"></i>
             <span>基础设置</span>
           </button>
-          <button id="${ids.tabRouterId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabRouterId}" data-tip="查看路由和预算。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-route"></i>
             <span>路由与预算</span>
           </button>
-          <button id="${ids.tabVaultId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabVaultId}" data-tip="查看密钥管理。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-key"></i>
             <span>凭据金库</span>
           </button>
-          <button id="${ids.tabAboutId}" type="button" class="stx-ui-tab">
+          <button id="${ids.tabAboutId}" data-tip="查看插件信息。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-circle-info"></i>
             <span>关于</span>
           </button>
@@ -55,7 +55,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">总开关。关闭后不再接管任务。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.enabledId}" type="checkbox" />
+              <input id="${ids.enabledId}" data-tip="LLMHub 总开关。" type="checkbox" />
             </div>
           </label>
 
@@ -71,7 +71,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">任务没指定 profile 时用它。</div>
             </div>
             <div class="stx-ui-row">
-              <select id="${ids.globalProfileId}" class="stx-ui-select">
+              <select id="${ids.globalProfileId}" data-tip="默认参数档。" class="stx-ui-select">
                 <option value="balanced">平衡（balanced）</option>
                 <option value="precise">精确（precise）</option>
                 <option value="creative">创意（creative）</option>
@@ -94,7 +94,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">没命中规则时用它。</div>
             </div>
             <div class="stx-ui-row">
-              <select id="${ids.defaultProviderId}" class="stx-ui-select">
+              <select id="${ids.defaultProviderId}" data-tip="未命中规则时使用的服务商。" class="stx-ui-select">
                 <option value="openai">openai</option>
                 <option value="claude">claude</option>
                 <option value="gemini">gemini</option>
@@ -109,7 +109,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">默认服务商使用的模型名。</div>
             </div>
             <div class="stx-ui-row">
-              <input id="${ids.defaultModelId}" class="stx-ui-input" type="text" placeholder="例如 gpt-4o-mini" />
+              <input id="${ids.defaultModelId}" data-tip="默认模型名。" class="stx-ui-input" type="text" placeholder="例如 gpt-4o-mini" />
             </div>
           </div>
 
@@ -127,15 +127,15 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeConsumerId}">调用方</label>
-                <input id="${ids.routeConsumerId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
+                <input id="${ids.routeConsumerId}" data-tip="填写调用方标识。" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeTaskId}">任务名</label>
-                <input id="${ids.routeTaskId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory.summarize" />
+                <input id="${ids.routeTaskId}" data-tip="填写任务名。" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory.summarize" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeProviderId}">服务商</label>
-                <select id="${ids.routeProviderId}" class="stx-ui-select stx-ui-input-full">
+                <select id="${ids.routeProviderId}" data-tip="选择主服务商。" class="stx-ui-select stx-ui-input-full">
                   <option value="openai">openai</option>
                   <option value="claude">claude</option>
                   <option value="gemini">gemini</option>
@@ -144,7 +144,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeProfileId}">参数档</label>
-                <select id="${ids.routeProfileId}" class="stx-ui-select stx-ui-input-full">
+                <select id="${ids.routeProfileId}" data-tip="选择参数档。" class="stx-ui-select stx-ui-input-full">
                   <option value="">（不指定）</option>
                   <option value="balanced">平衡（balanced）</option>
                   <option value="precise">精确（precise）</option>
@@ -154,7 +154,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeFallbackProviderId}">备用服务商</label>
-                <select id="${ids.routeFallbackProviderId}" class="stx-ui-select stx-ui-input-full">
+                <select id="${ids.routeFallbackProviderId}" data-tip="选择备用服务商。" class="stx-ui-select stx-ui-input-full">
                   <option value="">（不指定）</option>
                   <option value="openai">openai</option>
                   <option value="claude">claude</option>
@@ -164,8 +164,8 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.routeSaveBtnId}" type="button" class="stx-ui-btn">保存规则</button>
-              <button id="${ids.routeResetBtnId}" type="button" class="stx-ui-btn secondary">清空表单</button>
+              <button id="${ids.routeSaveBtnId}" data-tip="保存路由规则。" type="button" class="stx-ui-btn">保存规则</button>
+              <button id="${ids.routeResetBtnId}" data-tip="清空路由表单。" type="button" class="stx-ui-btn secondary">清空表单</button>
             </div>
           </div>
 
@@ -173,7 +173,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">当前路由规则</div>
             </div>
-            <div id="${ids.routeListId}" class="stx-ui-list"></div>
+            <div id="${ids.routeListId}" data-tip="当前路由规则列表。" class="stx-ui-list"></div>
           </div>
 
           <div class="stx-ui-divider">
@@ -190,28 +190,28 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.budgetConsumerId}">调用方</label>
-                <input id="${ids.budgetConsumerId}" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
+                <input id="${ids.budgetConsumerId}" data-tip="填写预算对应的调用方。" class="stx-ui-input stx-ui-input-full" type="text" placeholder="memory_os" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.budgetMaxRpmId}">每分钟请求上限（maxRPM）</label>
-                <input id="${ids.budgetMaxRpmId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+                <input id="${ids.budgetMaxRpmId}" data-tip="每分钟请求上限。" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.budgetMaxTokensId}">令牌上限（maxTokens）</label>
-                <input id="${ids.budgetMaxTokensId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+                <input id="${ids.budgetMaxTokensId}" data-tip="令牌上限。" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.budgetMaxLatencyId}">延迟上限（maxLatencyMs）</label>
-                <input id="${ids.budgetMaxLatencyId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
+                <input id="${ids.budgetMaxLatencyId}" data-tip="最大延迟上限。" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="1" />
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.budgetMaxCostId}">成本上限（maxCost）</label>
-                <input id="${ids.budgetMaxCostId}" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="0.01" />
+                <input id="${ids.budgetMaxCostId}" data-tip="成本上限。" class="stx-ui-input stx-ui-input-full" type="number" min="0" step="0.01" />
               </div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.budgetSaveBtnId}" type="button" class="stx-ui-btn">保存预算</button>
-              <button id="${ids.budgetResetBtnId}" type="button" class="stx-ui-btn secondary">清空表单</button>
+              <button id="${ids.budgetSaveBtnId}" data-tip="保存预算。" type="button" class="stx-ui-btn">保存预算</button>
+              <button id="${ids.budgetResetBtnId}" data-tip="清空预算表单。" type="button" class="stx-ui-btn secondary">清空表单</button>
             </div>
           </div>
 
@@ -219,7 +219,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">当前预算规则</div>
             </div>
-            <div id="${ids.budgetListId}" class="stx-ui-list"></div>
+            <div id="${ids.budgetListId}" data-tip="当前预算列表。" class="stx-ui-list"></div>
           </div>
         </div>
 
@@ -241,7 +241,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.vaultAddServiceId}">服务标识</label>
-                <select id="${ids.vaultAddServiceId}" class="stx-ui-select stx-ui-input-full">
+                <select id="${ids.vaultAddServiceId}" data-tip="选择要保存密钥的服务。" class="stx-ui-select stx-ui-input-full">
                   <option value="openai">openai</option>
                   <option value="claude">claude</option>
                   <option value="gemini">gemini</option>
@@ -250,11 +250,11 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.vaultApiKeyId}">密钥（API Key）</label>
-                <input id="${ids.vaultApiKeyId}" class="stx-ui-input vault-key-input stx-ui-input-full" type="password" placeholder="sk-..." />
+                <input id="${ids.vaultApiKeyId}" data-tip="输入服务密钥。" class="stx-ui-input vault-key-input stx-ui-input-full" type="password" placeholder="sk-..." />
               </div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.vaultSaveBtnId}" type="button" class="stx-ui-btn">加密存入</button>
+              <button id="${ids.vaultSaveBtnId}" data-tip="加密保存密钥。" type="button" class="stx-ui-btn">加密存入</button>
             </div>
           </div>
 
@@ -264,7 +264,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">删除本地保存的全部密钥。</div>
             </div>
             <div class="stx-ui-actions">
-              <button id="${ids.vaultClearBtnId}" type="button" class="stx-ui-btn secondary stx-ui-btn-danger">清除全部密钥</button>
+              <button id="${ids.vaultClearBtnId}" data-tip="清空所有本地密钥。" type="button" class="stx-ui-btn secondary stx-ui-btn-danger">清除全部密钥</button>
             </div>
           </div>
         </div>

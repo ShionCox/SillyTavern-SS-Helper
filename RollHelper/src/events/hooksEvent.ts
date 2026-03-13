@@ -6,7 +6,7 @@ import type {
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
-import { ensureSharedTooltip } from "../../../SDK/sharedTooltip";
+import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
 import { buildSharedButton } from "../../../_Components/sharedButton";
 
@@ -395,10 +395,10 @@ function ensureSSToolbarStyleEvent(): void {
       margin: 0;
       padding: 6px 8px;
       box-sizing: border-box;
-      border: 1px solid var(--SmartThemeBorderColor, rgba(197, 160, 89, 0.35));
+      border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.35));
       border-radius: 12px;
-      background-color: var(--SmartThemeBlurTintColor, rgba(20, 16, 14, 0.82));
-      backdrop-filter: blur(var(--SmartThemeBlurStrength, 8px));
+      background-color: var(--ss-theme-panel-bg, rgba(20, 16, 14, 0.82));
+      backdrop-filter: var(--ss-theme-backdrop-filter, blur(8px));
       box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
       pointer-events: auto;
       position: absolute;

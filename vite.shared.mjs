@@ -103,7 +103,8 @@ function imageFileLoaderPlugin() {
         fileName: `assets/images/${basename}`,
         source: fs.readFileSync(clean),
       });
-      return `export default "./assets/images/${basename.replace(/"/g, '\\"')}";`;
+      const escaped = basename.replace(/"/g, '\\"');
+      return `var __assetPath = "./assets/images/${escaped}"; export default new URL(__assetPath, import.meta.url).href;`;
     },
   };
 }

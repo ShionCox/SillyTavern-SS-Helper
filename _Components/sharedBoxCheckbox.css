@@ -5,37 +5,37 @@ _SCOPE_ .stx-shared-box-checkbox {
   --stx-box-checkbox-radius: 4px;
   --stx-box-checkbox-border: color-mix(
     in srgb,
-    var(--stx-theme-accent, var(--st-roll-accent, rgba(197, 160, 89, 0.9))) 52%,
-    var(--stx-theme-border, var(--st-roll-control-border, rgba(255, 255, 255, 0.18)))
+    var(--ss-theme-accent, rgba(197, 160, 89, 0.9)) 52%,
+    var(--ss-theme-border, rgba(255, 255, 255, 0.18))
   );
   --stx-box-checkbox-bg: color-mix(
     in srgb,
-    var(--stx-theme-surface-3, var(--st-roll-workbench-panel-bg, rgba(255, 255, 255, 0.06))) 92%,
+    var(--ss-theme-surface-3, rgba(255, 255, 255, 0.06)) 92%,
     transparent
   );
   --stx-box-checkbox-hover-border: color-mix(
     in srgb,
-    var(--stx-theme-accent, var(--st-roll-accent, rgba(197, 160, 89, 0.9))) 72%,
+    var(--ss-theme-accent, rgba(197, 160, 89, 0.9)) 72%,
     #fff 10%
   );
   --stx-box-checkbox-focus-ring: color-mix(
     in srgb,
-    var(--stx-theme-accent, var(--st-roll-accent, rgba(197, 160, 89, 0.9))) 24%,
+    var(--ss-theme-accent, rgba(197, 160, 89, 0.9)) 24%,
     transparent
   );
   --stx-box-checkbox-checked-border: color-mix(
     in srgb,
-    var(--stx-theme-accent, var(--st-roll-accent, rgba(197, 160, 89, 0.9))) 84%,
+    var(--ss-theme-accent, rgba(197, 160, 89, 0.9)) 84%,
     #fff 8%
   );
   --stx-box-checkbox-checked-bg: color-mix(
     in srgb,
-    var(--stx-theme-accent, var(--st-roll-accent, rgba(197, 160, 89, 0.9))) 24%,
-    var(--stx-theme-surface-3, var(--st-roll-workbench-panel-bg, rgba(255, 255, 255, 0.06)))
+    var(--ss-theme-accent, rgba(197, 160, 89, 0.9)) 24%,
+    var(--ss-theme-surface-3, rgba(255, 255, 255, 0.06))
   );
   --stx-box-checkbox-indicator: var(
-    --stx-theme-accent-contrast,
-    var(--st-roll-accent-contrast, rgba(255, 234, 190, 0.96))
+    --ss-theme-accent-contrast,
+    rgba(255, 234, 190, 0.96)
   );
   position: relative;
   display: inline-grid;

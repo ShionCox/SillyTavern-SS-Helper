@@ -1,11 +1,9 @@
 import type { ActiveStatusEvent } from "../types/eventDomainEvent";
 import {
-  buildSdkThemePatchFromSelection,
-  getSdkThemeState,
-  initializeSdkThemeState,
-  resolveSdkThemeSelection,
-  setSdkThemeState,
-  type SdkThemeState,
+  initThemeKernel,
+  getTheme,
+  setTheme,
+  normalizeThemeId,
 } from "../../../SDK/theme";
 import {
   type BindSkillImportExportActionsDepsEvent,
@@ -24,7 +22,6 @@ import {
 } from "./statusEditorUiEvent";
 import {
   applySettingsThemeSelectionEvent,
-  normalizeSettingsThemeEvent,
   syncThemeControlClassesByNodeEvent,
 } from "./uiThemeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
@@ -54,7 +51,6 @@ export type {
 export {
   applySettingsThemeSelectionEvent,
   ensureSdkThemeUiBindingEvent,
-  normalizeSettingsThemeEvent,
   syncThemeControlClassesByNodeEvent,
   syncThemeControlClassesEvent,
 } from "./uiThemeEvent";
@@ -567,13 +563,12 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const statusModal = document.querySelector<HTMLElement>("#st-roll-settings-Event-status-modal") ?? null;
 
   themeInput?.addEventListener("change", (event) => {
-    const value = normalizeSettingsThemeEvent(String((event.target as HTMLSelectElement).value || ""));
-    initializeSdkThemeState();
-    const sdkThemeState: SdkThemeState = setSdkThemeState(buildSdkThemePatchFromSelection(value));
+    const value = normalizeThemeId(String((event.target as HTMLSelectElement).value || ""));
+    initThemeKernel();
+    setTheme(value);
     traceRollHelperThemeInput("themeInput change", {
       value,
       nativeValue: themeInput?.value,
-      sdkThemeState,
     });
     applySettingsThemeSelectionEvent({
       settingsRoot,
@@ -581,7 +576,6 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
       statusModal,
       selection: value,
       themeInput,
-      sdkThemeState,
     });
     deps.updateSettingsEvent({ theme: value });
   });
@@ -921,11 +915,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     settingsRoot?.querySelector<HTMLElement>(".st-roll-content") ?? settingsRoot ?? null;
 
   // 直接读 SDK 当前状态，避免因 store 缓存时序问题读到陈旧的 settings.theme
-  const sdkThemeSelection = normalizeSettingsThemeEvent(resolveSdkThemeSelection(getSdkThemeState()));
-  const sdkThemeState: SdkThemeState = {
-    mode: "sdk",
-    themeId: sdkThemeSelection,
-  };
+  const sdkThemeSelection = normalizeThemeId(getTheme().themeId);
   if (themeInput) themeInput.value = sdkThemeSelection;
 
   if (enabledInput) enabledInput.checked = Boolean(settings.enabled);
@@ -987,7 +977,6 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     statusModal,
     selection: sdkThemeSelection,
     themeInput,
-    sdkThemeState,
     syncSharedSelectsEvent: false,
   });
   syncSharedSelects(settingsContent ?? document);
