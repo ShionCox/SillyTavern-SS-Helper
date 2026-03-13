@@ -193,6 +193,31 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
 }
 
 /**
+ * 功能：根据原生选项生成共享下拉面板项的 HTML。
+ * @param select 原生下拉框元素
+ * @returns 共享下拉面板项 HTML 字符串
+ */
+function buildSharedSelectListMarkup(select: HTMLSelectElement): string {
+  return Array.from(select.options)
+    .map((item: HTMLOptionElement, index: number) => {
+      const optionValue = String(item.value ?? "");
+      return `
+          <div
+            class="stx-shared-select-option"
+            role="option"
+            aria-selected="false"
+            data-shared-select-option-index="${index}"
+            data-shared-select-option-value="${escapeAttr(optionValue)}"
+            data-shared-select-disabled="${item.disabled ? "true" : "false"}"
+          >
+            <span class="stx-shared-select-option-label">${escapeHtml(item.textContent?.trim() || "")}</span>
+            <span class="stx-shared-select-option-mark" aria-hidden="true"></span>
+          </div>`;
+    })
+    .join("");
+}
+
+/**
  * 功能：构建共享选择框作用域样式文本。
  * @param scopeSelector 作用域选择器
  * @returns 替换作用域后的样式文本
@@ -541,6 +566,19 @@ function syncSingleSharedSelect(root: HTMLElement): void {
 }
 
 /**
+ * 功能：按照原生 select 当前的 options 重建共享下拉面板。
+ * @param root 共享下拉组件根节点
+ * @returns 是否成功完成重建
+ */
+function rebuildSingleSharedSelectOptions(root: HTMLElement): boolean {
+  const refs = getSharedSelectRefs(root);
+  if (!refs) return false;
+  refs.list.innerHTML = buildSharedSelectListMarkup(refs.select);
+  syncSingleSharedSelect(root);
+  return true;
+}
+
+/**
  * 功能：向原生选择框写入值并派发兼容事件。
  * @param refs 运行时节点集合
  * @param value 目标值
@@ -793,5 +831,18 @@ export function syncSharedSelects(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>('[data-ui="shared-select"]').forEach((node) => {
     bindSharedSelect(node);
     syncSingleSharedSelect(node);
+  });
+}
+
+/**
+ * 功能：刷新指定根节点下共享下拉框的面板选项，并同步当前值与禁用状态。
+ * @param root 需要扫描的根节点
+ * @returns 无返回值
+ */
+export function refreshSharedSelectOptions(root: ParentNode): void {
+  if (!root) return;
+  root.querySelectorAll<HTMLElement>('[data-ui="shared-select"]').forEach((node) => {
+    bindSharedSelect(node);
+    rebuildSingleSharedSelectOptions(node);
   });
 }

@@ -105,5 +105,6 @@ export function buildSharedInputField(options: SharedInputFieldOptions): string 
  */
 export function buildSharedInputStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return sharedInputCssText.replaceAll("_SCOPE_", scope);
+  return sharedInputCssText.split("_SCOPE_").join(scope);
 }
+

@@ -797,15 +797,6 @@
     0 8px 18px rgba(0, 0, 0, 0.34);
 }
 
-.st-rh-outcome-panel::after {
-  content: "";
-  position: absolute;
-  inset: 12px 16px auto;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(214, 183, 122, 0.28), transparent);
-  pointer-events: none;
-}
-
 .st-rh-outcome-head {
   display: flex;
   align-items: center;

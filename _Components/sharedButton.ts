@@ -130,5 +130,5 @@ export function buildSharedButton(options: SharedButtonOptions): string {
  */
 export function buildSharedButtonStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return sharedButtonCssText.replaceAll("_SCOPE_", scope);
+  return sharedButtonCssText.split("_SCOPE_").join(scope);
 }

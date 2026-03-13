@@ -65,5 +65,5 @@ export function buildSharedBoxCheckbox(options: SharedBoxCheckboxOptions): strin
 
 export function buildSharedBoxCheckboxStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return sharedBoxCheckboxCssText.replaceAll("_SCOPE_", scope);
+  return sharedBoxCheckboxCssText.split("_SCOPE_").join(scope);
 }

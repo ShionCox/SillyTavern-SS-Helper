@@ -58,6 +58,10 @@
   container-type: inline-size;
 }
 
+.st-rh-widget-container > .st-rh-card-switch + .st-rh-card-switch {
+  margin-top: 12px;
+}
+
 .st-rh-card-variant {
   width: 100%;
 }
@@ -338,5 +342,11 @@
 
   .st-rh-card-switch > .st-rh-card-variant-mobile {
     display: block !important;
+  }
+}
+
+@media (max-width: 680px) {
+  .st-rh-widget-container > .st-rh-card-switch + .st-rh-card-switch {
+    margin-top: 10px;
   }
 }

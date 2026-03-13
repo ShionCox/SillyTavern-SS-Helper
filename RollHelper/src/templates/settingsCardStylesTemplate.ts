@@ -1489,19 +1489,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       backdrop-filter: var(--ss-theme-backdrop-filter);
     }
 
-    #${cardId} .stx-shared-checkbox-card {
-      --stx-checkbox-accent: var(--ss-theme-accent);
-      --stx-checkbox-accent-soft: var(--ss-theme-focus-ring);
-      --stx-checkbox-accent-strong: var(--ss-theme-accent-contrast);
-      --stx-checkbox-border: var(--ss-theme-border);
-      --stx-checkbox-surface: var(--ss-theme-surface-2);
-      --stx-checkbox-surface-hover: var(--ss-theme-surface-3);
-      --stx-checkbox-text-off: var(--ss-theme-text-muted);
-      --stx-checkbox-box-border: var(--ss-theme-border);
-      --stx-checkbox-box-bg: var(--ss-theme-surface-2);
-      --stx-checkbox-control-shadow: none;
-    }
-
     #${cardId} .stx-shared-box-checkbox {
       --stx-box-checkbox-border: color-mix(in srgb, var(--ss-theme-accent) 52%, var(--ss-theme-border));
       --stx-box-checkbox-bg: color-mix(in srgb, var(--ss-theme-surface-3) 92%, transparent);
@@ -1510,32 +1497,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       --stx-box-checkbox-checked-border: color-mix(in srgb, var(--ss-theme-accent) 84%, #fff 8%);
       --stx-box-checkbox-checked-bg: color-mix(in srgb, var(--ss-theme-accent) 24%, var(--ss-theme-surface-3));
       --stx-box-checkbox-indicator: var(--ss-theme-accent-contrast);
-    }
-
-    #${cardId} .st-roll-content[data-ss-theme="dark"] .stx-shared-checkbox-control,
-    #${cardId} .st-roll-content[data-ss-theme="light"] .stx-shared-checkbox-control {
-      background: var(--stx-checkbox-surface);
-      box-shadow: none;
-    }
-
-    #${cardId} .st-roll-content[data-ss-theme="dark"] .stx-shared-checkbox-box,
-    #${cardId} .st-roll-content[data-ss-theme="light"] .stx-shared-checkbox-box {
-      background: var(--stx-checkbox-box-bg);
-      box-shadow: none;
-    }
-
-    #${cardId} .st-roll-content[data-ss-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control,
-    #${cardId} .st-roll-content[data-ss-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-control {
-      background: var(--stx-checkbox-accent);
-      border-color: var(--stx-checkbox-accent);
-      box-shadow: none;
-    }
-
-    #${cardId} .st-roll-content[data-ss-theme="dark"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box,
-    #${cardId} .st-roll-content[data-ss-theme="light"] .stx-shared-checkbox-input:checked + .stx-shared-checkbox-body .stx-shared-checkbox-box {
-      background: var(--stx-checkbox-accent);
-      border-color: var(--stx-checkbox-accent);
-      box-shadow: none;
     }
 
     #${cardId} .st-roll-tab:hover {

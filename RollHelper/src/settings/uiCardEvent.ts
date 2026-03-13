@@ -122,7 +122,6 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
   SETTINGS_STRIP_INTERNAL_ID_Event: string;
-  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SETTINGS_SKILL_EDITOR_WRAP_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
@@ -246,7 +245,6 @@ export function buildSettingsCardTemplateIdsEvent(
     timeLimitEnabledId: deps.SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
     timeLimitMinId: deps.SETTINGS_TIME_LIMIT_MIN_ID_Event,
     timeLimitRowId: deps.SETTINGS_TIME_LIMIT_ROW_ID_Event,
-    cleanHistoryChatBtnId: deps.SETTINGS_CLEAN_HISTORY_BTN_ID_Event,
     skillEnabledId: deps.SETTINGS_SKILL_ENABLED_ID_Event,
     skillEditorWrapId: deps.SETTINGS_SKILL_EDITOR_WRAP_ID_Event,
     skillRowsId: deps.SETTINGS_SKILL_ROWS_ID_Event,

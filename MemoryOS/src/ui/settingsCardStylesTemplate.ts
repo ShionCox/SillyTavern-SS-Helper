@@ -1,9 +1,13 @@
+import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
+import { buildSharedSelectStyles } from "../../../_Components/sharedSelect";
 import { buildThemeVars } from "../../../SDK/theme";
 
 export function buildSettingsCardStylesTemplate(cardId: string): string {
   return `
     ${buildThemeVars(`#${cardId} .stx-ui-content`)}
     ${buildThemeVars(`.stx-record-editor-overlay`)}
+    ${buildSharedCheckboxStyles(`#${cardId}`)}
+    ${buildSharedSelectStyles(`#${cardId}`)}
 
     #${cardId} {
       margin-bottom: 5px;
@@ -262,11 +266,51 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-shrink: 0;
     }
 
+    #${cardId} .stx-ui-inline-checkbox {
+      width: auto;
+      min-width: 0;
+      flex-shrink: 0;
+    }
+
+    #${cardId} .stx-ui-inline-checkbox .stx-shared-checkbox-body {
+      width: auto;
+      min-width: 0;
+      justify-content: flex-end;
+    }
+
+    #${cardId} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-copy {
+      display: none;
+    }
+
+    #${cardId} .stx-ui-inline-checkbox.is-compact .stx-shared-checkbox-body {
+      gap: 6px;
+    }
+
+    #${cardId} .stx-ui-inline-checkbox.is-compact .stx-shared-checkbox-title {
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
     #${cardId} .stx-ui-row {
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 10px;
+    }
+
+    #${cardId} .stx-ui-shared-select {
+      width: 100%;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-shared-select-inline {
+      flex: 1 1 auto;
+    }
+
+    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger {
+      width: 100%;
+      min-width: 0;
     }
 
     #${cardId} .stx-ui-field-label {
@@ -277,6 +321,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
+    #${cardId} .stx-ui-search,
     #${cardId} .stx-ui-textarea {
       background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
       color: var(--ss-theme-text, inherit);
@@ -290,9 +335,16 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-select,
-    #${cardId} .stx-ui-input {
+    #${cardId} .stx-ui-input,
+    #${cardId} .stx-ui-search {
       padding: 4px 8px;
       min-height: 30px;
+    }
+
+    #${cardId} .stx-ui-input::placeholder,
+    #${cardId} .stx-ui-search::placeholder,
+    #${cardId} .stx-ui-textarea::placeholder {
+      color: color-mix(in srgb, var(--ss-theme-text, #dcdcd2) 60%, transparent);
     }
 
     #${cardId} .stx-ui-select {

@@ -5,6 +5,7 @@ import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
+import { hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
@@ -171,10 +172,17 @@ export async function renderSettingsUi() {
         const container = await waitForElement('#extensions_settings');
 
         // 1. 注入 CSS
-        if (!document.getElementById(`${IDS.cardId}-styles`)) {
+        const styleId = `${IDS.cardId}-styles`;
+        const nextStyleText = buildSettingsCardStylesTemplate(IDS.cardId);
+        const existingStyleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+        if (existingStyleEl) {
+            if (existingStyleEl.innerHTML !== nextStyleText) {
+                existingStyleEl.innerHTML = nextStyleText;
+            }
+        } else {
             const styleEl = document.createElement('style');
-            styleEl.id = `${IDS.cardId}-styles`;
-            styleEl.innerHTML = buildSettingsCardStylesTemplate(IDS.cardId);
+            styleEl.id = styleId;
+            styleEl.innerHTML = nextStyleText;
             document.head.appendChild(styleEl);
         }
 
@@ -195,6 +203,7 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
+        hydrateSharedSelects(cardWrapper);
         unmountThemeHost(cardWrapper);
         const contentRoot = document.getElementById(IDS.drawerContentId);
         if (contentRoot) {
@@ -497,6 +506,7 @@ function bindUiEvents() {
                     activeSelectEl.value = activeTemplateId;
                 }
             }
+            refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
             if (lockEl) {
                 lockEl.checked = binding?.isLocked === true;
             }
@@ -912,6 +922,7 @@ function bindUiEvents() {
             logicTableSelect.appendChild(opt);
         }
         if (prevVal) logicTableSelect.value = prevVal;
+        refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
     };
 
     /** 渲染逻辑表内容（按选中的实体类型加载 facts） */

@@ -60,7 +60,6 @@ export interface SettingsCardTemplateIdsEvent {
   timeLimitEnabledId: string;
   timeLimitMinId: string;
   timeLimitRowId: string;
-  cleanHistoryChatBtnId: string;
   skillEnabledId: string;
   skillEditorWrapId: string;
   skillRowsId: string;

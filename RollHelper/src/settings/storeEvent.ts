@@ -30,6 +30,10 @@ import {
 import {
   getTheme,
 } from "../../../SDK/theme";
+import {
+  normalizeSettingsThemeEvent,
+  sdkThemeToSettingsThemeEvent,
+} from "./themeBridgeEvent";
 import type { SdkTavernScopeLocatorEvent } from "../../../SDK/tavern";
 import {
   buildTavernChatEntityKeyEvent,
@@ -513,16 +517,12 @@ export function saveMetadataSafeEvent(): void {
 }
 
 function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThemeEvent {
-  const normalized = String(raw ?? "").trim().toLowerCase();
-  if (normalized === "dark" || normalized === "light" || normalized === "tavern") {
-    return normalized as RollHelperSettingsThemeEvent;
-  }
-  return "default";
+  return normalizeSettingsThemeEvent(raw);
 }
 
 function resolveSdkSettingsThemeEvent(): RollHelperSettingsThemeEvent {
   const selection = getTheme().themeId;
-  return normalizeSettingsThemeCompatEvent(selection);
+  return sdkThemeToSettingsThemeEvent(selection);
 }
 
 function resolveSettingsScopeKeyEvent(scope?: { tavernInstanceId?: unknown } | null): string {
@@ -582,23 +582,23 @@ function ensureSettingsThemeMirrorEvent(
   settings: DicePluginSettingsEvent,
   allowSeedFromLegacy = false
 ): DicePluginSettingsEvent {
-  const legacyTheme = normalizeSettingsThemeCompatEvent(settings.theme);
-  let sdkTheme = resolveSdkSettingsThemeEvent();
-  if (legacyTheme !== sdkTheme) {
+  const settingsTheme = normalizeSettingsThemeCompatEvent(settings.theme);
+  const sdkSettingsTheme = resolveSdkSettingsThemeEvent();
+  if (settingsTheme !== sdkSettingsTheme) {
     traceStoreThemeEvent("ensureSettingsThemeMirrorEvent writing mirrored theme back to settings", {
-      legacyTheme,
-      sdkTheme,
+      settingsTheme,
+      sdkSettingsTheme,
       allowSeedFromLegacy,
-      settingsTheme: settings.theme,
+      settingsTheme_raw: settings.theme,
     });
     return writeSettingsForCurrentScopeEvent({
-      theme: sdkTheme,
+      theme: sdkSettingsTheme,
     });
   }
-  if (settings.theme === sdkTheme) return settings;
+  if (settings.theme === sdkSettingsTheme) return settings;
   return {
     ...settings,
-    theme: sdkTheme,
+    theme: sdkSettingsTheme,
   };
 }
 
@@ -624,7 +624,9 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.theme =
     rawTheme === "dark" || rawTheme === "light" || rawTheme === "tavern"
       ? (rawTheme as RollHelperSettingsThemeEvent)
-      : "default";
+      : rawTheme === "host"
+        ? "tavern"
+        : "default";
   bucket.enableOutcomeBranches = bucket.enableOutcomeBranches !== false;
   bucket.enableExplodeOutcomeBranch = bucket.enableExplodeOutcomeBranch !== false;
   bucket.includeOutcomeInSummary = bucket.includeOutcomeInSummary !== false;

@@ -1,8 +1,75 @@
+import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
+import { buildSharedSelectField } from '../../../_Components/sharedSelect';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 
-export function buildSettingsCardHtmlTemplate(
-  ids: MemoryOSSettingsIds
-): string {
+/**
+ * 功能：构建 MemoryOS 设置面板 HTML。
+ * 参数：
+ *   ids：所有 DOM 元素 ID 映射。
+ * 返回：
+ *   string：可直接挂载的 HTML 字符串。
+ */
+export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string {
+  const memoryEnabledCheckbox = buildSharedCheckboxCard({
+    id: ids.enabledId,
+    title: '启用 Memory OS',
+    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    inputAttributes: {
+      'data-tip': 'MemoryOS 总开关。',
+      'aria-label': '启用 Memory OS',
+    },
+  });
+
+  const aiModeCheckbox = buildSharedCheckboxCard({
+    id: ids.aiModeEnabledId,
+    title: '启用 AI 模式',
+    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    inputAttributes: {
+      'data-tip': '开启后使用 AI 抽取事实。',
+      'aria-label': '启用 AI 模式',
+    },
+  });
+
+  const autoCompactionCheckbox = buildSharedCheckboxCard({
+    id: ids.autoCompactionId,
+    title: '自动压缩历史事件',
+    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    inputAttributes: {
+      'data-tip': '自动压缩历史事件。',
+      'aria-label': '自动压缩历史事件',
+    },
+  });
+
+  const templateActiveSelect = buildSharedSelectField({
+    id: ids.templateActiveSelectId,
+    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+    selectClassName: 'stx-ui-input',
+    triggerClassName: 'stx-ui-input-full',
+    triggerAttributes: { 'data-tip': '选择要启用的模板。' },
+    options: [{ value: '', label: '选择要激活的模板...' }],
+  });
+
+  const logicTableEntitySelect = buildSharedSelectField({
+    id: ids.logicTableEntitySelectId,
+    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+    selectClassName: 'stx-ui-input',
+    triggerClassName: 'stx-ui-input-full',
+    triggerAttributes: { 'data-tip': '选择要查看的实体类型。' },
+    options: [{ value: '', label: '选择实体类型...' }],
+  });
+
+  const templateLockCheckbox = buildSharedCheckboxCard({
+    id: ids.templateLockId,
+    title: '锁定模板',
+    checkedLabel: '锁定',
+    uncheckedLabel: '未锁',
+    containerClassName: 'stx-ui-inline-checkbox is-compact',
+    inputAttributes: {
+      'data-tip': '锁定当前模板。',
+      'aria-label': '锁定模板',
+    },
+  });
+
   return `
     <div class="inline-drawer stx-ui-shell">
       <div class="inline-drawer-toggle inline-drawer-header stx-ui-head" id="${ids.drawerToggleId}">
@@ -58,7 +125,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">总开关。关闭后不再记录记忆。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.enabledId}" data-tip="MemoryOS 总开关。" type="checkbox" />
+              ${memoryEnabledCheckbox}
             </div>
           </label>
 
@@ -71,7 +138,7 @@ export function buildSettingsCardHtmlTemplate(
               <div class="stx-ui-item-desc">开启后用 AI 抽取事实。关闭后只用规则模式。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.aiModeEnabledId}" data-tip="开启后使用 AI 抽取事实。" type="checkbox" />
+              ${aiModeCheckbox}
             </div>
           </label>
         </div>
@@ -103,14 +170,14 @@ export function buildSettingsCardHtmlTemplate(
 
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="auto compaction archive">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">自动事务压缩 (Auto Compaction)</div>
+              <div class="stx-ui-item-title">自动事务压缩（Auto Compaction）</div>
               <div class="stx-ui-item-desc">开启后，事件多了会自动压缩。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.autoCompactionId}" data-tip="自动压缩历史事件。" type="checkbox" />
+              ${autoCompactionCheckbox}
             </div>
           </label>
-          
+
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="threshold limit events">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">事件流压缩阈值</div>
@@ -136,10 +203,10 @@ export function buildSettingsCardHtmlTemplate(
               <button id="${ids.dbClearBtnId}" data-tip="清空当前聊天记忆。" type="button" class="stx-ui-btn secondary" style="color:#ff8787; border-color: rgba(255,135,135,0.3);">清空当前聊天数据</button>
             </div>
           </div>
-          
+
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="bus inspector connection test ping hello">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">微服务通讯自测 (Bus Inspector)</div>
+              <div class="stx-ui-item-title">微服务通讯自测（Bus Inspector）</div>
               <div class="stx-ui-item-desc">用于检查 MemoryOS 和 LLMHub 是否连通。</div>
             </div>
             <div class="stx-ui-actions">
@@ -169,22 +236,16 @@ export function buildSettingsCardHtmlTemplate(
                 <i class="fa-solid fa-rotate"></i>&nbsp;刷新模板列表
               </button>
               <button id="${ids.templateForceRebuildBtnId}" data-tip="从世界书重建模板。" type="button" class="stx-ui-btn secondary">
-                <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp;强制重建模板 (从世界书)
+                <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp;强制重建模板（从世界书）
               </button>
             </div>
             <div style="display:flex; gap:8px; align-items:center; width:100%;">
-              <select id="${ids.templateActiveSelectId}" data-tip="选择要启用的模板。" class="stx-ui-input" style="flex:1; padding: 4px 8px; font-size: 12px;">
-                <option value="">选择要激活的模板...</option>
-              </select>
-              <label style="display:flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap;">
-                <input id="${ids.templateLockId}" data-tip="锁定当前模板。" type="checkbox" />
-                锁定模板
-              </label>
+              ${templateActiveSelect}
+              ${templateLockCheckbox}
               <button id="${ids.templateSetActiveBtnId}" data-tip="应用当前选择的模板。" type="button" class="stx-ui-btn">应用</button>
             </div>
           </div>
 
-          <!-- 世界书写回区块 -->
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 10px;">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">写回到 SillyTavern WorldInfo
@@ -206,7 +267,6 @@ export function buildSettingsCardHtmlTemplate(
             </div>
           </div>
 
-          <!-- 逻辑表可编辑区块 -->
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 8px;">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">逻辑表（可编辑）
@@ -216,9 +276,7 @@ export function buildSettingsCardHtmlTemplate(
             </div>
             <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
               <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
-              <select id="${ids.logicTableEntitySelectId}" data-tip="选择要查看的实体类型。" class="stx-ui-input" style="flex: 1; padding: 4px 8px; font-size: 12px;">
-                <option value="">选择实体类型...</option>
-              </select>
+              ${logicTableEntitySelect}
               <button id="${ids.logicTableRefreshBtnId}" data-tip="刷新当前逻辑表。" type="button" class="stx-ui-btn" style="padding: 4px 10px; font-size: 12px;">
                 <i class="fa-solid fa-rotate"></i>
               </button>
@@ -253,7 +311,7 @@ export function buildSettingsCardHtmlTemplate(
           </div>
 
           <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 4px;">
-            <div class="stx-ui-item-title" style="font-size: 13px;">历史记录（快照可回滚，其他仅查看）</div>
+            <div class="stx-ui-item-title" style="font-size: 13px;">历史记录（快照可回滚，其它仅查看）</div>
             <div id="${ids.auditListId}"
               style="width: 100%; font-size: 12px; color: var(--ss-theme-text, #ccc);
                      background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px;
@@ -295,12 +353,12 @@ export function buildSettingsCardHtmlTemplate(
           </div>
 
           <div class="stx-ui-item stx-ui-search-item" style="flex-direction: column; align-items: flex-start; margin-bottom: 12px;" data-stx-ui-search="changelog updates history">
-            <div class="stx-ui-item-title">更新日志 (Changelog)</div>
+            <div class="stx-ui-item-title">更新日志（Changelog）</div>
             <div class="stx-ui-changelog">
               ${ids.changelogHtml}
             </div>
           </div>
-          
+
           <div class="stx-ui-tip">
             Memory OS 负责记忆记录、压缩和回写。
           </div>

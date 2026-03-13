@@ -105,7 +105,6 @@ import {
   probeMemoryPluginEvent as probeMemoryPluginIntegrationEvent,
   subscribeMemoryPluginStateEvent as subscribeMemoryPluginStateIntegrationEvent,
 } from "../integration/stxMemoryBusEvent";
-import { cleanAllHistoryChatBlocks } from "../events/messageSanitizerEvent";
 const skillEditorRuntimeEvent = createSkillEditorRuntimeEvent({
   SETTINGS_SKILL_DIRTY_HINT_ID_Event,
   SETTINGS_SKILL_ERRORS_ID_Event,
@@ -166,10 +165,6 @@ function bindSettingsCardMountedActionsEvent(drawerToggleId: string, drawerConte
       SUMMARY_HISTORY_ROUNDS_MIN_Event,
       DEFAULT_SUMMARY_HISTORY_ROUNDS_Event: DEFAULT_SETTINGS_Event.summaryHistoryRounds,
       updateSettingsEvent: updateSettingsStoreEvent,
-      cleanAllHistoryChatBlocksEvent: () => {
-        const live = getLiveContextEvent();
-        cleanAllHistoryChatBlocks(live.chat ?? []);
-      },
     },
     skillPresetActionsDepsEvent: {
       ...SETTINGS_SKILL_PRESET_ACTION_IDS_Event,
@@ -259,7 +254,6 @@ function syncSettingsUiEvent(): void {
     SETTINGS_COMPATIBILITY_MODE_ID_Event: SETTINGS_BASIC_INPUT_IDS_Event.SETTINGS_COMPATIBILITY_MODE_ID_Event,
     SETTINGS_REMOVE_ROLLJSON_ID_Event: SETTINGS_BASIC_INPUT_IDS_Event.SETTINGS_REMOVE_ROLLJSON_ID_Event,
     SETTINGS_STRIP_INTERNAL_ID_Event: SETTINGS_BASIC_INPUT_IDS_Event.SETTINGS_STRIP_INTERNAL_ID_Event,
-    SETTINGS_CLEAN_HISTORY_BTN_ID_Event: SETTINGS_BASIC_INPUT_IDS_Event.SETTINGS_CLEAN_HISTORY_BTN_ID_Event,
     isSkillDraftDirtyEvent,
     hydrateSkillDraftFromSettingsEvent,
     getActiveStatusesEvent: () => ensureActiveStatusesStoreEvent(getDiceMetaStoreMetaEvent()),

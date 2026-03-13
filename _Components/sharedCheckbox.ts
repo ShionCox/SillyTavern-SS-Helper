@@ -48,8 +48,8 @@ function buildAttributes(attributes?: Record<string, SharedCheckboxAttributeValu
 }
 
 export function buildSharedCheckboxCard(options: SharedCheckboxCardOptions): string {
-  const checkedLabel = escapeHtml(options.checkedLabel ?? "ON");
-  const uncheckedLabel = escapeHtml(options.uncheckedLabel ?? "OFF");
+  const checkedLabel = escapeHtml(options.checkedLabel ?? "开启");
+  const uncheckedLabel = escapeHtml(options.uncheckedLabel ?? "关闭");
 
   return `
     <label
@@ -97,5 +97,5 @@ export function buildSharedCheckboxCard(options: SharedCheckboxCardOptions): str
 
 export function buildSharedCheckboxStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return sharedCheckboxCssText.replaceAll("_SCOPE_", scope);
+  return sharedCheckboxCssText.split("_SCOPE_").join(scope);
 }

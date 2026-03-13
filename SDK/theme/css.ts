@@ -84,11 +84,19 @@ export function buildThemeVars(scopeSelector: string): string {
     buildSmartThemeCompatVars({ shadowWidth: "0" })
   );
 
+  const hostTokens = getThemeTokens("host");
+
   const hostRule = buildScopedRule(
     scopes,
     `[data-ss-theme="host"]`,
-    getThemeTokens("host")
+    hostTokens
   );
 
-  return `${baseRule}\n${defaultRule}\n${darkRule}\n${lightRule}\n${hostRule}`;
+  const tavernAliasRule = buildScopedRule(
+    scopes,
+    `[data-ss-theme="tavern"]`,
+    hostTokens
+  );
+
+  return `${baseRule}\n${defaultRule}\n${darkRule}\n${lightRule}\n${hostRule}\n${tavernAliasRule}`;
 }

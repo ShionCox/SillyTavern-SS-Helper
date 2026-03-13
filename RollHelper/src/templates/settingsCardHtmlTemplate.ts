@@ -126,22 +126,6 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="clean history reset sanitize text chat blocks debug">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">强制清理当前会话</div>
-              <div class="st-roll-item-desc">清理当前聊天历史记录里所有由于旧版本缺乏净化机制而残留下来的 rolljson 乱码数据。（建议在新开扩展遇到此情况时手动执行一次）</div>
-            </div>
-            <div class="st-roll-actions">
-              ${buildSharedButton({
-                id: ids.cleanHistoryChatBtnId,
-                label: "现在执行",
-                attributes: {
-                  "data-tip": "清理当前会话里的旧残留数据。",
-                },
-              })}
-            </div>
-          </div>
-
           <div class="st-roll-divider"><i class="fa-solid fa-robot"></i><span>AI 协议</span><div class="st-roll-divider-line"></div></div>
 
           ${buildCheckboxItemEvent(
@@ -664,7 +648,7 @@ export function buildSettingsCardHtmlTemplateEvent(
           <div class="st-roll-item st-roll-search-item st-roll-about-item" data-st-roll-search="about version author email github" style="margin-bottom: 12px; align-items: flex-start;">
             <div class="st-roll-item-main">
               <img class="st-roll-about-logo" src="${rollLogoUrlEvent}" alt="RollHelper Logo" />
-              <div class="st-roll-item-title">${ids.displayName}</div>
+              <div class="st-roll-item-title" style="display: flex; align-items: center; justify-content: center;font-size:18px;margin-bottom: 20px;">${ids.displayName}</div>
               <div class="st-roll-item-desc st-roll-about-meta">
                 <span class="st-roll-about-meta-item">
                   <i class="fa-solid fa-tag"></i>

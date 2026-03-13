@@ -6,6 +6,7 @@ import {
   normalizeThemeId,
   type ThemeId,
 } from "../../../SDK/theme";
+import { sdkThemeToSettingsThemeEvent } from "./themeBridgeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
 
 let SDK_THEME_SYNC_BOUND_Event = false;
@@ -40,10 +41,6 @@ export function syncThemeControlClassesEvent(root: ParentNode | null, theme: str
       button.classList.remove("active");
     }
   });
-
-  root.querySelectorAll<HTMLElement>(".stx-shared-checkbox-card").forEach((card) => {
-    card.classList.toggle("is-host-native", isHost);
-  });
 }
 
 export function syncThemeControlClassesByNodeEvent(node: ParentNode | null): void {
@@ -59,6 +56,8 @@ export interface ApplySettingsThemeSelectionDepsEvent {
   statusModal: HTMLElement | null;
   selection: string;
   themeInput?: HTMLSelectElement | null;
+  /** 下拉框显示值（设置层值，如 "tavern"），缺省时回退到 selection */
+  themeInputValue?: string;
   syncSharedSelectsEvent?: boolean;
 }
 
@@ -118,7 +117,7 @@ export function applySettingsThemeSelectionEvent(
   const statusModalNeedsRefresh = hasThemeRefreshableStateChangedEvent(statusModalPanel, selection);
 
   if (deps.themeInput) {
-    deps.themeInput.value = selection;
+    deps.themeInput.value = deps.themeInputValue ?? selection;
   }
 
   if (deps.settingsRoot instanceof HTMLElement) {
@@ -192,6 +191,7 @@ export function ensureSdkThemeUiBindingEvent(
     const themeInput =
       settingsRoot?.querySelector<HTMLSelectElement>('select.stx-shared-select-native[id$="-theme"]') ?? null;
     const { themeId } = getTheme();
+    const settingsThemeDisplay = sdkThemeToSettingsThemeEvent(themeId);
 
     applySettingsThemeSelectionEvent({
       settingsRoot,
@@ -199,6 +199,7 @@ export function ensureSdkThemeUiBindingEvent(
       skillModal: document.getElementById(skillModalId) as HTMLElement | null,
       statusModal: document.getElementById(statusModalId) as HTMLElement | null,
       selection: themeId,
+      themeInputValue: settingsThemeDisplay,
     });
   });
 }

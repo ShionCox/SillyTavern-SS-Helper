@@ -94,7 +94,7 @@ const PRESET_HOST: ThemeTokens = {
   text: "var(--SmartThemeBodyColor, #dcdcd2)",
   textMuted: "var(--SmartThemeEmColor, rgba(255, 255, 255, 0.72))",
   accent: "var(--SmartThemeQuoteColor, #e18a24)",
-  accentContrast: "var(--SmartThemeQuoteTextColor, #ffffff)",
+  accentContrast: "var(--SmartThemeBodyColor, #dcdcd2)",
   surface1: "var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96))",
   surface2:
     "color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96)) 88%, #000 12%)",
@@ -120,12 +120,12 @@ const PRESET_HOST: ThemeTokens = {
   backdropFilter: "blur(var(--SmartThemeBlurStrength, 0px))",
   shadow:
     "0 14px 30px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5))",
-  rollTooltipText: "#dbd2c2",
+  rollTooltipText: "var(--SmartThemeBodyColor, #dcdcd2)",
   rollTooltipBg:
-    "radial-gradient(circle at top, rgba(246, 223, 172, 0.07), transparent 52%), linear-gradient(145deg, rgba(40, 30, 20, 0.97), rgba(14, 10, 7, 0.99))",
-  rollTooltipBorder: "rgba(176, 143, 76, 0.55)",
+    "var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.96))",
+  rollTooltipBorder: "var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.5))",
   rollTooltipShadow:
-    "0 6px 18px rgba(0, 0, 0, 0.8), inset 0 0 12px rgba(0, 0, 0, 0.4), 0 0 6px rgba(176, 143, 76, 0.1)",
+    "0 6px 18px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.5))",
 };
 
 const THEME_PRESETS: Record<ThemeId, ThemeTokens> = {

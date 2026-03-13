@@ -6,12 +6,12 @@ import type { ThemeId, ThemeState } from "./types";
 
 const THEME_SETTINGS_KEY = "stx_sdk_theme_global_v2";
 
-/** 把任意字符串归一化为合法 ThemeId */
+/** 把任意字符串归一化为合法 ThemeId；"tavern" 统一映射为内部 "host" */
 export function normalizeThemeId(raw: string): ThemeId {
   const s = String(raw ?? "").trim().toLowerCase();
   if (s === "dark") return "dark";
   if (s === "light") return "light";
-  if (s === "host") return "host";
+  if (s === "host" || s === "tavern") return "host";
   return "default";
 }
 

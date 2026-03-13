@@ -1,3 +1,4 @@
+import { buildSharedSelectField } from '../../../_Components/sharedSelect';
 import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
 
 /**
@@ -8,6 +9,92 @@ import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
  *   string：可直接挂载的 HTML 字符串。
  */
 export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
+    const globalProfileSelect = buildSharedSelectField({
+        id: ids.globalProfileId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '默认参数档。' },
+        options: [
+            { value: 'balanced', label: '平衡（balanced）' },
+            { value: 'precise', label: '精确（precise）' },
+            { value: 'creative', label: '创意（creative）' },
+            { value: 'economy', label: '省钱（economy）' },
+        ],
+    });
+
+    const defaultProviderSelect = buildSharedSelectField({
+        id: ids.defaultProviderId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '未命中规则时使用的服务商。' },
+        options: [
+            { value: 'openai', label: 'openai' },
+            { value: 'claude', label: 'claude' },
+            { value: 'gemini', label: 'gemini' },
+            { value: 'groq', label: 'groq' },
+        ],
+    });
+
+    const routeProviderSelect = buildSharedSelectField({
+        id: ids.routeProviderId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '选择主服务商。' },
+        options: [
+            { value: 'openai', label: 'openai' },
+            { value: 'claude', label: 'claude' },
+            { value: 'gemini', label: 'gemini' },
+            { value: 'groq', label: 'groq' },
+        ],
+    });
+
+    const routeProfileSelect = buildSharedSelectField({
+        id: ids.routeProfileId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '选择参数档。' },
+        options: [
+            { value: '', label: '（不指定）' },
+            { value: 'balanced', label: '平衡（balanced）' },
+            { value: 'precise', label: '精确（precise）' },
+            { value: 'creative', label: '创意（creative）' },
+            { value: 'economy', label: '省钱（economy）' },
+        ],
+    });
+
+    const routeFallbackSelect = buildSharedSelectField({
+        id: ids.routeFallbackProviderId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '选择备用服务商。' },
+        options: [
+            { value: '', label: '（不指定）' },
+            { value: 'openai', label: 'openai' },
+            { value: 'claude', label: 'claude' },
+            { value: 'gemini', label: 'gemini' },
+            { value: 'groq', label: 'groq' },
+        ],
+    });
+
+    const vaultServiceSelect = buildSharedSelectField({
+        id: ids.vaultAddServiceId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '选择要保存密钥的服务。' },
+        options: [
+            { value: 'openai', label: 'openai' },
+            { value: 'claude', label: 'claude' },
+            { value: 'gemini', label: 'gemini' },
+            { value: 'groq', label: 'groq' },
+        ],
+    });
+
     return `
     <div class="inline-drawer stx-ui-shell">
       <div class="inline-drawer-toggle inline-drawer-header stx-ui-head" id="${ids.drawerToggleId}">
@@ -68,15 +155,10 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="global profile temperature param">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">全局默认参数档</div>
-              <div class="stx-ui-item-desc">任务没指定 profile 时用它。</div>
+              <div class="stx-ui-item-desc">任务没指定 profile 时使用它。</div>
             </div>
             <div class="stx-ui-row">
-              <select id="${ids.globalProfileId}" data-tip="默认参数档。" class="stx-ui-select">
-                <option value="balanced">平衡（balanced）</option>
-                <option value="precise">精确（precise）</option>
-                <option value="creative">创意（creative）</option>
-                <option value="economy">省钱（economy）</option>
-              </select>
+              ${globalProfileSelect}
             </div>
           </div>
         </div>
@@ -94,12 +176,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-item-desc">没命中规则时用它。</div>
             </div>
             <div class="stx-ui-row">
-              <select id="${ids.defaultProviderId}" data-tip="未命中规则时使用的服务商。" class="stx-ui-select">
-                <option value="openai">openai</option>
-                <option value="claude">claude</option>
-                <option value="gemini">gemini</option>
-                <option value="groq">groq</option>
-              </select>
+              ${defaultProviderSelect}
             </div>
           </div>
 
@@ -135,32 +212,15 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeProviderId}">服务商</label>
-                <select id="${ids.routeProviderId}" data-tip="选择主服务商。" class="stx-ui-select stx-ui-input-full">
-                  <option value="openai">openai</option>
-                  <option value="claude">claude</option>
-                  <option value="gemini">gemini</option>
-                  <option value="groq">groq</option>
-                </select>
+                ${routeProviderSelect}
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeProfileId}">参数档</label>
-                <select id="${ids.routeProfileId}" data-tip="选择参数档。" class="stx-ui-select stx-ui-input-full">
-                  <option value="">（不指定）</option>
-                  <option value="balanced">平衡（balanced）</option>
-                  <option value="precise">精确（precise）</option>
-                  <option value="creative">创意（creative）</option>
-                  <option value="economy">省钱（economy）</option>
-                </select>
+                ${routeProfileSelect}
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.routeFallbackProviderId}">备用服务商</label>
-                <select id="${ids.routeFallbackProviderId}" data-tip="选择备用服务商。" class="stx-ui-select stx-ui-input-full">
-                  <option value="">（不指定）</option>
-                  <option value="openai">openai</option>
-                  <option value="claude">claude</option>
-                  <option value="gemini">gemini</option>
-                  <option value="groq">groq</option>
-                </select>
+                ${routeFallbackSelect}
               </div>
             </div>
             <div class="stx-ui-actions">
@@ -241,12 +301,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.vaultAddServiceId}">服务标识</label>
-                <select id="${ids.vaultAddServiceId}" data-tip="选择要保存密钥的服务。" class="stx-ui-select stx-ui-input-full">
-                  <option value="openai">openai</option>
-                  <option value="claude">claude</option>
-                  <option value="gemini">gemini</option>
-                  <option value="groq">groq</option>
-                </select>
+                ${vaultServiceSelect}
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.vaultApiKeyId}">密钥（API Key）</label>

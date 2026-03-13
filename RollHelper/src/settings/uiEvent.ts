@@ -6,6 +6,11 @@ import {
   normalizeThemeId,
 } from "../../../SDK/theme";
 import {
+  settingsThemeToSdkThemeEvent,
+  sdkThemeToSettingsThemeEvent,
+  normalizeSettingsThemeEvent,
+} from "./themeBridgeEvent";
+import {
   type BindSkillImportExportActionsDepsEvent,
   type BindSkillPresetActionsDepsEvent,
   type BindSkillRowsEditingActionsDepsEvent,
@@ -459,7 +464,6 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
   SETTINGS_STRIP_INTERNAL_ID_Event: string;
-  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SUMMARY_HISTORY_ROUNDS_MAX_Event: number;
   SUMMARY_HISTORY_ROUNDS_MIN_Event: number;
@@ -487,7 +491,6 @@ export interface BindBasicSettingsInputsDepsEvent {
     minTimeLimitSeconds?: number;
     enableSkillSystem?: boolean;
   }) => void;
-  cleanAllHistoryChatBlocksEvent: () => void;
 }
 
 export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEvent): void {
@@ -552,9 +555,6 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const stripInternalBlocksInput = document.getElementById(
     deps.SETTINGS_STRIP_INTERNAL_ID_Event
   ) as HTMLInputElement | null;
-  const cleanHistoryBtn = document.getElementById(
-    deps.SETTINGS_CLEAN_HISTORY_BTN_ID_Event
-  ) as HTMLButtonElement | null;
   const skillEnabledInput = document.getElementById(
     deps.SETTINGS_SKILL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -563,21 +563,26 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const statusModal = document.querySelector<HTMLElement>("#st-roll-settings-Event-status-modal") ?? null;
 
   themeInput?.addEventListener("change", (event) => {
-    const value = normalizeThemeId(String((event.target as HTMLSelectElement).value || ""));
+    const rawValue = String((event.target as HTMLSelectElement).value || "");
+    const settingsValue = normalizeSettingsThemeEvent(rawValue);
+    const sdkValue = settingsThemeToSdkThemeEvent(settingsValue);
     initThemeKernel();
-    setTheme(value);
+    setTheme(sdkValue);
     traceRollHelperThemeInput("themeInput change", {
-      value,
+      rawValue,
+      settingsValue,
+      sdkValue,
       nativeValue: themeInput?.value,
     });
     applySettingsThemeSelectionEvent({
       settingsRoot,
       skillModal,
       statusModal,
-      selection: value,
+      selection: sdkValue,
       themeInput,
+      themeInputValue: settingsValue,
     });
-    deps.updateSettingsEvent({ theme: value });
+    deps.updateSettingsEvent({ theme: settingsValue });
   });
 
   enabledInput?.addEventListener("input", (event) => {
@@ -691,11 +696,6 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     deps.updateSettingsEvent({ enableSkillSystem: value });
   });
 
-  cleanHistoryBtn?.addEventListener("click", () => {
-    if (typeof deps.cleanAllHistoryChatBlocksEvent === "function") {
-      deps.cleanAllHistoryChatBlocksEvent();
-    }
-  });
 }
 
 export interface BindRuleTextActionsDepsEvent {
@@ -817,7 +817,6 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
   SETTINGS_STRIP_INTERNAL_ID_Event: string;
-  SETTINGS_CLEAN_HISTORY_BTN_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SETTINGS_SKILL_MODAL_ID_Event: string;
   SETTINGS_STATUS_EDITOR_OPEN_ID_Event: string;
@@ -916,7 +915,8 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
 
   // 直接读 SDK 当前状态，避免因 store 缓存时序问题读到陈旧的 settings.theme
   const sdkThemeSelection = normalizeThemeId(getTheme().themeId);
-  if (themeInput) themeInput.value = sdkThemeSelection;
+  const settingsThemeDisplay = sdkThemeToSettingsThemeEvent(sdkThemeSelection);
+  if (themeInput) themeInput.value = settingsThemeDisplay;
 
   if (enabledInput) enabledInput.checked = Boolean(settings.enabled);
   if (ruleInput) ruleInput.checked = Boolean(settings.autoSendRuleToAI);
@@ -977,6 +977,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     statusModal,
     selection: sdkThemeSelection,
     themeInput,
+    themeInputValue: settingsThemeDisplay,
     syncSharedSelectsEvent: false,
   });
   syncSharedSelects(settingsContent ?? document);

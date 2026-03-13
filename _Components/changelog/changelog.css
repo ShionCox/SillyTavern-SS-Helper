@@ -39,7 +39,7 @@ _SCOPE_ .stx-changelog {
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  max-height: 280px;
+  max-height: 400px;
   overflow-y: auto;
   border: 1px solid var(--stx-changelog-shell-border);
   border-radius: 10px;

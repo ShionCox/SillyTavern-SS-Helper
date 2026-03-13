@@ -5,6 +5,7 @@ import type { RoutePolicy } from '../router/router';
 import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
+import { hydrateSharedSelects, refreshSharedSelectOptions, syncSharedSelects } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 
@@ -210,10 +211,17 @@ export async function renderSettingsUi(): Promise<void> {
         initThemeKernel();
         const container = await waitForElement('#extensions_settings');
 
-        if (!document.getElementById(`${IDS.cardId}-styles`)) {
+        const styleId = `${IDS.cardId}-styles`;
+        const nextStyleText = buildSettingsCardStylesTemplate(IDS.cardId);
+        const existingStyleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+        if (existingStyleEl) {
+            if (existingStyleEl.innerHTML !== nextStyleText) {
+                existingStyleEl.innerHTML = nextStyleText;
+            }
+        } else {
             const styleEl = document.createElement('style');
-            styleEl.id = `${IDS.cardId}-styles`;
-            styleEl.innerHTML = buildSettingsCardStylesTemplate(IDS.cardId);
+            styleEl.id = styleId;
+            styleEl.innerHTML = nextStyleText;
             document.head.appendChild(styleEl);
         }
 
@@ -232,6 +240,7 @@ export async function renderSettingsUi(): Promise<void> {
             cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
             ssContainer.appendChild(cardWrapper);
         }
+        hydrateSharedSelects(cardWrapper);
 
         unmountThemeHost(cardWrapper);
         const contentRoot = document.getElementById(IDS.drawerContentId);
@@ -403,6 +412,7 @@ function bindUiEvents(): void {
     if (profileEl) {
         profileEl.value = settings.globalProfile || 'balanced';
     }
+    syncSharedSelects(document.getElementById(IDS.cardId) || document.body);
 
     /**
      * 功能：保存默认 Provider 与默认 Model。
@@ -517,11 +527,13 @@ function bindUiEvents(): void {
         updateSelect(defaultProviderEl, false);
         updateSelect(routeProviderEl, false);
         updateSelect(routeFallbackEl, true);
+        updateSelect(vaultServiceSelect, false);
 
         const current = ensureSettings();
         if (defaultProviderEl && current.defaultProvider) {
             defaultProviderEl.value = current.defaultProvider;
         }
+        refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
     };
 
     /**
@@ -617,6 +629,7 @@ function bindUiEvents(): void {
         if (routeFallbackEl) {
             routeFallbackEl.value = '';
         }
+        syncSharedSelects(document.getElementById(IDS.cardId) || document.body);
     };
 
     routeSaveBtn?.addEventListener('click', () => {
