@@ -3,7 +3,7 @@ import { VectorManager } from './vector-manager';
 import type { EventsManager } from '../core/events-manager';
 import type { FactsManager } from '../core/facts-manager';
 import type { SummariesManager } from '../core/summaries-manager';
-import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { runRerank } from '../llm/memoryLlmBridge';
 
 const logger = new Logger('HybridSearch');
 
@@ -236,18 +236,13 @@ export class HybridSearchManager {
      * 如果失败则静默降级返回原顺序。
      */
     private async tryRerank(query: string, results: HybridSearchResult[]): Promise<HybridSearchResult[]> {
-        const llm = (window as any).STX?.llm;
-        if (!llm?.rerank || results.length === 0) {
+        if (results.length === 0) {
             return results;
         }
 
         try {
             const docs = results.map((item) => item.content);
-            const rerankResp = await llm.rerank({
-                consumer: MEMORY_OS_PLUGIN_ID,
-                query,
-                docs,
-            });
+            const rerankResp = await runRerank(query, docs);
             if (!rerankResp?.ok || !Array.isArray(rerankResp.results)) {
                 return results;
             }

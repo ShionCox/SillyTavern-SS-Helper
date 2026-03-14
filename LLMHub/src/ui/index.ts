@@ -1,52 +1,66 @@
 import { buildSettingsCardStylesTemplate } from './settingsCardStylesTemplate';
 import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
 import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
-import type { RoutePolicy } from '../router/router';
 import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
-import { hydrateSharedSelects, refreshSharedSelectOptions, syncSharedSelects } from '../../../_Components/sharedSelect';
+import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions, syncSharedSelects } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
-import { discoverConsumers, type DiscoveredConsumer } from '../discovery/consumer-discovery';
-
+import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
+import type { TavernConnectionInfoItem, TavernConnectionSnapshot } from '../../../SDK/tavern';
+import { discoverConsumers } from '../discovery/consumer-discovery';
+import type { DiscoveredConsumer } from '../discovery/consumer-discovery';
+import type {
+    LLMHubSettings,
+    GlobalCapabilityDefault,
+    PluginCapabilityDefault,
+    TaskOverride,
+    ConsumerSnapshot,
+    TaskDescriptor,
+    CapabilityKind,
+    LLMCapability,
+    SilentPermissionGrant,
+} from '../schema/types';
 
 let LLMHUB_THEME_BINDING_READY = false;
+let LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE: (() => void) | null = null;
+let LLMHUB_CONSUMER_DISCOVERY_SEQ = 0;
 
-type LLMHubSettings = {
-    enabled?: boolean;
-    globalProfile?: string;
-    defaultProvider?: string;
-    defaultModel?: string;
-    routePolicies?: RoutePolicy[];
-    budgets?: Record<string, BudgetConfig>;
-    providers?: ProviderConfigUI[];
-};
-
-type ProviderConfigUI = {
-    id: string;
-    source: 'tavern' | 'custom';
-    label?: string;
-    baseUrl?: string;
-    model?: string;
-    manualModel?: string;
-    selectedModel?: string;
-    enabled?: boolean;
-};
+// ─── 运行时类型声明 ───
 
 type ProviderLite = { id: string };
 
 type LLMHubRuntime = {
     saveCredential?: (providerId: string, apiKey: string) => Promise<void>;
     clearAllCredentials?: () => Promise<void>;
-    setDefaultRoute?: (providerId: string, model: string) => Promise<void>;
-    setRoutePolicies?: (policies: RoutePolicy[]) => void;
+    applySettingsFromContext?: () => Promise<void>;
     setBudgetConfig?: (consumer: string, config: BudgetConfig) => void;
     removeBudgetConfig?: (consumer: string) => void;
-    applySettingsFromContext?: () => Promise<void>;
+    registry?: {
+        listConsumerRegistrations?: () => ConsumerSnapshot[];
+        subscribe?: (listener: () => void) => (() => void);
+    };
     router?: {
         getAllProviders?: () => ProviderLite[];
         getProvider?: (id: string) => ProviderWithTest | null;
+        getProviderCapabilities?: (providerId: string) => LLMCapability[];
+        listProvidersWithCapabilities?: (required?: LLMCapability[]) => ProviderLite[];
+        applyGlobalDefaults?: (defaults: GlobalCapabilityDefault[]) => void;
+        applyPluginDefaults?: (defaults: PluginCapabilityDefault[]) => void;
+        applyTaskOverrides?: (overrides: TaskOverride[]) => void;
+    };
+    orchestrator?: {
+        getQueueSnapshot?: () => {
+            pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
+            active: { requestId: string; consumer: string; taskId: string; state: string } | null;
+            recentHistory: Array<{ requestId: string; consumer: string; taskId: string; state: string; finishedAt?: number }>;
+        };
+    };
+    displayController?: {
+        exportSilentPermissions?: () => SilentPermissionGrant[];
+        grantSilentPermission?: (pluginId: string, taskId: string) => void;
+        revokeSilentPermission?: (pluginId: string, taskId: string) => void;
     };
     sdk?: {
         setGlobalProfile?: (profile: string) => void;
@@ -58,7 +72,8 @@ type ProviderWithTest = ProviderLite & {
     listModels?: () => Promise<{ ok: boolean; models: { id: string; label?: string }[]; message: string; errorCode?: string; detail?: string }>;
 };
 
-// UI 组件的唯一命名空间
+// ─── 常量 ───
+
 const NAMESPACE = 'stx-llmhub';
 const PROFILE_LABELS: Record<string, string> = {
     balanced: '平衡',
@@ -67,29 +82,167 @@ const PROFILE_LABELS: Record<string, string> = {
     economy: '经济',
 };
 
-/**
- * 功能：将参数档标识转换为中文标签。
- * 参数：
- *   profileId：参数档标识。
- * 返回：
- *   string：中文标签，未知值回退为原始值。
- */
+const KIND_LABELS: Record<string, string> = {
+    generation: '生成',
+    embedding: '向量化',
+    rerank: '重排序',
+};
+
+const STATE_LABELS: Record<string, string> = {
+    queued: '排队中',
+    running: '执行中',
+    result_ready: '结果就绪',
+    overlay_waiting: '等待关闭',
+    completed: '已完成',
+    failed: '已失败',
+    cancelled: '已取消',
+};
+
+// ─── 工具函数 ───
+
 function getProfileLabel(profileId: string): string {
     return PROFILE_LABELS[profileId] || profileId;
 }
 
+function getKindLabel(kind: string): string {
+    return KIND_LABELS[kind] || kind;
+}
+
+function getStateBadgeClass(state: string): string {
+    if (state === 'running' || state === 'result_ready' || state === 'overlay_waiting') return 'is-running';
+    if (state === 'queued') return 'is-queued';
+    if (state === 'completed') return 'is-completed';
+    if (state === 'failed') return 'is-failed';
+    if (state === 'cancelled') return 'is-cancelled';
+    return '';
+}
+
+function escapeHtml(value: string): string {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 /**
- * 功能：渲染更新日志 HTML。
+ * 功能：构建服务商共享选择框 HTML，并保留原生 select 作为数据读取源。
  * 参数：
- *   无。
+ *   selectId：选择框唯一 ID。
+ *   selected：当前已选值。
+ *   providerIds：候选服务商列表。
+ *   selectDataAttributes：写入原生 select 的 data 属性。
  * 返回：
- *   string：更新日志 HTML 字符串。
+ *   string：共享选择框 HTML。
  */
+function buildProviderSharedSelectHtml(
+    selectId: string,
+    selected: string,
+    providerIds: string[],
+    selectDataAttributes: Record<string, string>,
+): string {
+    return buildSharedSelectField({
+        id: selectId,
+        value: selected,
+        containerClassName: 'stx-ui-shared-select stx-ui-shared-select-fluid',
+        selectClassName: 'stx-ui-input stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full',
+        selectAttributes: selectDataAttributes,
+        options: [
+            { value: '', label: '（不指定）' },
+            ...providerIds.map((providerId: string) => ({
+                value: providerId,
+                label: providerId,
+            })),
+        ],
+    });
+}
+
+function formatTimestamp(ts: number): string {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+}
+
+/**
+ * 功能：根据酒馆连接快照返回状态样式类名。
+ * 参数：
+ *   snapshot (TavernConnectionSnapshot)：酒馆连接快照。
+ * 返回：
+ *   string：状态区域使用的样式类名。
+ */
+function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
+    return snapshot.available ? 'is-ok' : 'is-warning';
+}
+
+/**
+ * 功能：把酒馆连接信息项列表渲染为 HTML。
+ * 参数：
+ *   items (TavernConnectionInfoItem[])：待渲染的信息项列表。
+ * 返回：
+ *   string：可直接写入容器的 HTML 字符串。
+ */
+function buildTavernInfoItemsHtml(items: TavernConnectionInfoItem[]): string {
+    if (!items.length) {
+        return '<div class="stx-ui-tavern-info-empty">暂未读取到酒馆连接信息</div>';
+    }
+
+    return items
+        .map((item: TavernConnectionInfoItem) => `
+            <div class="stx-ui-tavern-info-row">
+                <span class="stx-ui-tavern-info-label">${escapeHtml(item.label)}</span>
+                <span class="stx-ui-tavern-info-value">${escapeHtml(item.value)}</span>
+            </div>
+        `)
+        .join('');
+}
+
+/**
+ * 功能：把已发现的 consumer 列表整理成可展示的名称摘要。
+ * @param consumers 已发现的 consumer 列表。
+ * @returns 摘要文本。
+ */
+function formatDiscoveredConsumerSummary(consumers: DiscoveredConsumer[]): string {
+    if (consumers.length === 0) {
+        return '';
+    }
+
+    const names = consumers.slice(0, 3).map((consumer: DiscoveredConsumer) => {
+        return consumer.displayName || consumer.pluginId;
+    });
+    const summary = names.join('、');
+    if (consumers.length <= 3) {
+        return summary;
+    }
+    return `${summary} 等 ${consumers.length} 个插件`;
+}
+
+/**
+ * 功能：根据只读探测结果生成“插件默认映射”空态提示。
+ * @param consumers 只读探测得到的 consumer 列表。
+ * @returns 可直接写入列表容器的 HTML。
+ */
+function buildPluginDefaultsEmptyStateHtml(consumers: DiscoveredConsumer[]): string {
+    const onlineConsumers = consumers.filter((consumer: DiscoveredConsumer) => consumer.alive === true);
+    const memoryOsConsumer = onlineConsumers.find((consumer: DiscoveredConsumer) => consumer.pluginId === 'stx_memory_os');
+
+    if (memoryOsConsumer) {
+        return '<div class="stx-ui-list-empty">已检测到 MemoryOS 在线，但它尚未向 LLMHub 注册任务。请稍候片刻，或检查 MemoryLlmBridge 注册日志。</div>';
+    }
+
+    if (onlineConsumers.length > 0) {
+        const summary = escapeHtml(formatDiscoveredConsumerSummary(onlineConsumers));
+        return `<div class="stx-ui-list-empty">已检测到 ${summary} 在线，但它们尚未向 LLMHub 注册任务。</div>`;
+    }
+
+    return '<div class="stx-ui-list-empty">暂无已注册插件</div>';
+}
+
 function generateChangelogHtml(): string {
     if (!Array.isArray(changelogData) || changelogData.length === 0) {
         return '暂无更新记录';
     }
-
     return changelogData
         .map((log: { version: string; date?: string; changes?: string[] }) => `
       <div style="margin-bottom: 12px;">
@@ -104,6 +257,8 @@ function generateChangelogHtml(): string {
     `)
         .join('');
 }
+
+// ─── IDS ───
 
 const IDS: LLMHubSettingsIds = {
     cardId: `${NAMESPACE}-card`,
@@ -121,35 +276,59 @@ const IDS: LLMHubSettingsIds = {
     searchId: `${NAMESPACE}-search`,
 
     tabMainId: `${NAMESPACE}-tab-main`,
-    tabRouterId: `${NAMESPACE}-tab-router`,
-    tabConsumerMapId: `${NAMESPACE}-tab-consumer-map`,
+    tabRouteId: `${NAMESPACE}-tab-route`,
+    tabQueueId: `${NAMESPACE}-tab-queue`,
     tabVaultId: `${NAMESPACE}-tab-vault`,
     tabAboutId: `${NAMESPACE}-tab-about`,
 
     panelMainId: `${NAMESPACE}-panel-main`,
-    panelRouterId: `${NAMESPACE}-panel-router`,
-    panelConsumerMapId: `${NAMESPACE}-panel-consumer-map`,
+    panelRouteId: `${NAMESPACE}-panel-route`,
+    panelQueueId: `${NAMESPACE}-panel-queue`,
     panelVaultId: `${NAMESPACE}-panel-vault`,
     panelAboutId: `${NAMESPACE}-panel-about`,
 
     enabledId: `${NAMESPACE}-enabled`,
     globalProfileId: `${NAMESPACE}-global-profile`,
 
-    defaultProviderId: `${NAMESPACE}-default-provider`,
-    defaultModelId: `${NAMESPACE}-default-model`,
-    routerAdvancedToggleId: `${NAMESPACE}-router-advanced-toggle`,
-    routerAdvancedBodyId: `${NAMESPACE}-router-advanced-body`,
-    routeConsumerId: `${NAMESPACE}-route-consumer`,
-    routeTaskId: `${NAMESPACE}-route-task`,
-    routeProviderId: `${NAMESPACE}-route-provider`,
-    routeProfileId: `${NAMESPACE}-route-profile`,
-    routeFallbackProviderId: `${NAMESPACE}-route-fallback-provider`,
-    routeSaveBtnId: `${NAMESPACE}-route-save-btn`,
-    routeResetBtnId: `${NAMESPACE}-route-reset-btn`,
-    routeListId: `${NAMESPACE}-route-list`,
+    providerSourceId: `${NAMESPACE}-provider-source`,
+    customBaseUrlId: `${NAMESPACE}-custom-base-url`,
+    customModelInputId: `${NAMESPACE}-custom-model-input`,
+    testConnectionBtnId: `${NAMESPACE}-test-connection-btn`,
+    testResultId: `${NAMESPACE}-test-result`,
+    tavernInfoId: `${NAMESPACE}-tavern-info`,
+    tavernInfoStatusId: `${NAMESPACE}-tavern-info-status`,
+    tavernInfoListId: `${NAMESPACE}-tavern-info-list`,
+    fetchModelsBtnId: `${NAMESPACE}-fetch-models-btn`,
+    modelListSelectId: `${NAMESPACE}-model-list-select`,
+    modelListStatusId: `${NAMESPACE}-model-list-status`,
 
-    consumerMapRefreshBtnId: `${NAMESPACE}-consumer-map-refresh-btn`,
+    // Route panel sub-tabs
+    subTabGlobalDefaultsId: `${NAMESPACE}-sub-tab-global`,
+    subTabPluginDefaultsId: `${NAMESPACE}-sub-tab-plugin`,
+    subTabTaskOverridesId: `${NAMESPACE}-sub-tab-task`,
+    subPanelGlobalDefaultsId: `${NAMESPACE}-sub-panel-global`,
+    subPanelPluginDefaultsId: `${NAMESPACE}-sub-panel-plugin`,
+    subPanelTaskOverridesId: `${NAMESPACE}-sub-panel-task`,
 
+    // View A
+    globalDefGenProviderId: `${NAMESPACE}-gdef-gen-provider`,
+    globalDefGenModelId: `${NAMESPACE}-gdef-gen-model`,
+    globalDefGenProfileId: `${NAMESPACE}-gdef-gen-profile`,
+    globalDefEmbProviderId: `${NAMESPACE}-gdef-emb-provider`,
+    globalDefEmbModelId: `${NAMESPACE}-gdef-emb-model`,
+    globalDefRerankProviderId: `${NAMESPACE}-gdef-rerank-provider`,
+    globalDefRerankModelId: `${NAMESPACE}-gdef-rerank-model`,
+    globalDefSaveBtnId: `${NAMESPACE}-gdef-save-btn`,
+
+    // View B
+    pluginDefaultsListId: `${NAMESPACE}-plugin-defaults-list`,
+    pluginDefaultsRefreshBtnId: `${NAMESPACE}-plugin-defaults-refresh`,
+
+    // View C
+    taskOverridesListId: `${NAMESPACE}-task-overrides-list`,
+    taskOverridesRefreshBtnId: `${NAMESPACE}-task-overrides-refresh`,
+
+    // Budget
     budgetConsumerId: `${NAMESPACE}-budget-consumer`,
     budgetMaxRpmId: `${NAMESPACE}-budget-max-rpm`,
     budgetMaxTokensId: `${NAMESPACE}-budget-max-tokens`,
@@ -159,111 +338,52 @@ const IDS: LLMHubSettingsIds = {
     budgetResetBtnId: `${NAMESPACE}-budget-reset-btn`,
     budgetListId: `${NAMESPACE}-budget-list`,
 
+    // Queue
+    queueSnapshotListId: `${NAMESPACE}-queue-snapshot-list`,
+    queueRefreshBtnId: `${NAMESPACE}-queue-refresh-btn`,
+    silentPermissionsListId: `${NAMESPACE}-silent-permissions-list`,
+    recentHistoryListId: `${NAMESPACE}-recent-history-list`,
+
+    // Vault
     vaultAddServiceId: `${NAMESPACE}-vault-service`,
     vaultApiKeyId: `${NAMESPACE}-vault-api-key`,
     vaultSaveBtnId: `${NAMESPACE}-vault-save-btn`,
     vaultClearBtnId: `${NAMESPACE}-vault-clear-btn`,
-
-    providerSourceId: `${NAMESPACE}-provider-source`,
-    customBaseUrlId: `${NAMESPACE}-custom-base-url`,
-    customModelInputId: `${NAMESPACE}-custom-model-input`,
-    testConnectionBtnId: `${NAMESPACE}-test-connection-btn`,
-    testResultId: `${NAMESPACE}-test-result`,
-    fetchModelsBtnId: `${NAMESPACE}-fetch-models-btn`,
-    modelListSelectId: `${NAMESPACE}-model-list-select`,
-    modelListStatusId: `${NAMESPACE}-model-list-status`,
 };
 
-/**
- * 功能：为 LLMHub 设置面板应用 tooltip 目录并执行兜底补齐。
- * 参数：无。
- * 返回：void。
- */
-function applySettingsTooltips(): void {
-    ensureSharedTooltip();
+// ─── 运行时引用 ───
+
+function getRuntime(): LLMHubRuntime | null {
+    return ((window as any).LLMHubPlugin || null) as LLMHubRuntime | null;
 }
 
-/**
- * 功能：动态内容更新后重新应用 tooltip。
- */
-function refreshSettingsTooltips(): void {
-    ensureSharedTooltip();
-}
-
-/**
- * 功能：确保 LLMHub 设置面板会在全局主题切换后重新应用主题。
- * 参数：无。
- * 返回：void。
- */
 function ensureThemeBinding(): void {
     if (LLMHUB_THEME_BINDING_READY) return;
     LLMHUB_THEME_BINDING_READY = true;
-
     subscribeTheme((): void => {
         const cardRoot = document.getElementById(IDS.cardId);
-        if (cardRoot) {
-            unmountThemeHost(cardRoot);
-        }
+        if (cardRoot) unmountThemeHost(cardRoot);
         const contentRoot = document.getElementById(IDS.drawerContentId);
         if (!contentRoot) return;
         mountThemeHost(contentRoot);
     });
 }
 
-/**
- * 功能：读取 LLMHub 运行时实例。
- * 参数：
- *   无。
- * 返回：
- *   LLMHubRuntime | null：运行时实例。
- */
-function getRuntime(): LLMHubRuntime | null {
-    return ((window as any).LLMHubPlugin || null) as LLMHubRuntime | null;
-}
-
-/**
- * 功能：等待元素挂载到 DOM。
- * 参数：
- *   selector：元素选择器。
- *   timeout：等待超时时间。
- * 返回：
- *   Promise<Element>：命中的元素。
- */
 function waitForElement(selector: string, timeout = 5000): Promise<Element> {
     return new Promise((resolve, reject) => {
         const el = document.querySelector(selector);
-        if (el) {
-            resolve(el);
-            return;
-        }
-
+        if (el) { resolve(el); return; }
         const observer = new MutationObserver((_, obs) => {
             const target = document.querySelector(selector);
-            if (target) {
-                obs.disconnect();
-                resolve(target);
-            }
+            if (target) { obs.disconnect(); resolve(target); }
         });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-        });
-
-        setTimeout(() => {
-            observer.disconnect();
-            reject(new Error(`Timeout waiting for ${selector}`));
-        }, timeout);
+        observer.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => { observer.disconnect(); reject(new Error(`Timeout waiting for ${selector}`)); }, timeout);
     });
 }
 
-/**
- * 功能：渲染 LLMHub 设置面板。
- * 参数：
- *   无。
- * 返回：
- *   Promise<void>：渲染流程完成。
- */
+// ─── 入口 ───
+
 export async function renderSettingsUi(): Promise<void> {
     try {
         initThemeKernel();
@@ -273,9 +393,7 @@ export async function renderSettingsUi(): Promise<void> {
         const nextStyleText = buildSettingsCardStylesTemplate(IDS.cardId);
         const existingStyleEl = document.getElementById(styleId) as HTMLStyleElement | null;
         if (existingStyleEl) {
-            if (existingStyleEl.innerHTML !== nextStyleText) {
-                existingStyleEl.innerHTML = nextStyleText;
-            }
+            if (existingStyleEl.innerHTML !== nextStyleText) existingStyleEl.innerHTML = nextStyleText;
         } else {
             const styleEl = document.createElement('style');
             styleEl.id = styleId;
@@ -302,105 +420,92 @@ export async function renderSettingsUi(): Promise<void> {
 
         unmountThemeHost(cardWrapper);
         const contentRoot = document.getElementById(IDS.drawerContentId);
-        if (contentRoot) {
-            mountThemeHost(contentRoot);
-        }
+        if (contentRoot) mountThemeHost(contentRoot);
         ensureThemeBinding();
 
         bindUiEvents();
-        applySettingsTooltips();
+        ensureSharedTooltip();
     } catch (error) {
         console.error('UI 渲染失败:', error);
     }
 }
 
-/**
- * 功能：绑定设置面板交互逻辑。
- * 参数：
- *   无。
- * 返回：
- *   void：无返回值。
- */
+// ──────────────────────────────────────────
+//  事件绑定
+// ──────────────────────────────────────────
+
 function bindUiEvents(): void {
     const runtime = getRuntime();
-    const stContext = (window as any).SillyTavern?.getContext?.() || {};
+    const cardRoot = document.getElementById(IDS.cardId);
 
-    type STContextSnapshot = {
-        extensionSettings?: Record<string, any>;
-        saveSettingsDebounced?: () => void;
-    } | null;
+    // ─── 设置存取 ───
 
-    /**
-     * 功能：获取最新 SillyTavern 上下文，避免闭包持有过期对象。
-     * 参数：无。
-     * 返回：上下文对象或 null。
-     */
-    const getStContext = (): STContextSnapshot => {
-        return (window as any).SillyTavern?.getContext?.() || null;
-    };
+    const getStContext = (): any => (window as any).SillyTavern?.getContext?.() || null;
 
-    /**
-     * 功能：确保存在 `stx_llmhub` 设置对象。
-     * 参数：
-     *   无。
-     * 返回：
-     *   LLMHubSettings：设置对象引用。
-     */
     const ensureSettings = (): LLMHubSettings => {
-        const stContext = getStContext();
-        if (!stContext) {
-            return {};
-        }
-        if (!stContext.extensionSettings) {
-            stContext.extensionSettings = {};
-        }
-        if (!stContext.extensionSettings['stx_llmhub']) {
-            stContext.extensionSettings['stx_llmhub'] = {};
-        }
-        return stContext.extensionSettings['stx_llmhub'] as LLMHubSettings;
+        const ctx = getStContext();
+        if (!ctx) return {};
+        if (!ctx.extensionSettings) ctx.extensionSettings = {};
+        if (!ctx.extensionSettings['stx_llmhub']) ctx.extensionSettings['stx_llmhub'] = {};
+        return ctx.extensionSettings['stx_llmhub'] as LLMHubSettings;
     };
 
-    /**
-     * 功能：触发设置保存。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const saveSettings = (): void => {
-        const stContext = getStContext();
-        stContext?.saveSettingsDebounced?.();
-    };
+    const saveSettings = (): void => { getStContext()?.saveSettingsDebounced?.(); };
+
+    // ─── 主 Tab 切换 ───
 
     const tabs = [
         { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
-        { tabId: IDS.tabRouterId, panelId: IDS.panelRouterId },
-        { tabId: IDS.tabConsumerMapId, panelId: IDS.panelConsumerMapId },
+        { tabId: IDS.tabRouteId, panelId: IDS.panelRouteId },
+        { tabId: IDS.tabQueueId, panelId: IDS.panelQueueId },
         { tabId: IDS.tabVaultId, panelId: IDS.panelVaultId },
         { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
     ];
 
     tabs.forEach(({ tabId, panelId }) => {
         const tabEl = document.getElementById(tabId);
-        if (!tabEl) {
-            return;
-        }
+        if (!tabEl) return;
         tabEl.addEventListener('click', () => {
             tabs.forEach(({ tabId: tId, panelId: pId }) => {
-                const tEl = document.getElementById(tId);
-                const pEl = document.getElementById(pId);
-                tEl?.classList.remove('is-active');
-                pEl?.setAttribute('hidden', 'true');
+                document.getElementById(tId)?.classList.remove('is-active');
+                document.getElementById(pId)?.setAttribute('hidden', 'true');
             });
             tabEl.classList.add('is-active');
             document.getElementById(panelId)?.removeAttribute('hidden');
-            if (panelId === IDS.panelConsumerMapId) {
-                renderConsumerMappings().catch((error: unknown) => {
-                    console.error('renderConsumerMappings failed:', error);
-                });
-            }
+
+            if (panelId === IDS.panelMainId) renderTavernConnectionInfo();
+            // 切换到路由 tab 时刷新 View B
+            if (panelId === IDS.panelRouteId) renderPluginDefaults();
+            // 切换到队列 tab 时刷新
+            if (panelId === IDS.panelQueueId) { renderQueueSnapshot(); renderRecentHistory(); renderSilentPermissions(); }
         });
     });
+
+    // ─── Route sub-tabs ───
+
+    const subTabs = [
+        { tabId: IDS.subTabGlobalDefaultsId, panelId: IDS.subPanelGlobalDefaultsId },
+        { tabId: IDS.subTabPluginDefaultsId, panelId: IDS.subPanelPluginDefaultsId },
+        { tabId: IDS.subTabTaskOverridesId, panelId: IDS.subPanelTaskOverridesId },
+    ];
+
+    subTabs.forEach(({ tabId, panelId }) => {
+        const tabEl = document.getElementById(tabId);
+        if (!tabEl) return;
+        tabEl.addEventListener('click', () => {
+            subTabs.forEach(({ tabId: tId, panelId: pId }) => {
+                document.getElementById(tId)?.classList.remove('is-active');
+                document.getElementById(pId)?.setAttribute('hidden', 'true');
+            });
+            tabEl.classList.add('is-active');
+            document.getElementById(panelId)?.removeAttribute('hidden');
+
+            if (panelId === IDS.subPanelPluginDefaultsId) renderPluginDefaults();
+            if (panelId === IDS.subPanelTaskOverridesId) renderTaskOverrides();
+        });
+    });
+
+    // ─── 搜索 ───
 
     const searchInput = document.getElementById(IDS.searchId) as HTMLInputElement | null;
     if (searchInput) {
@@ -409,14 +514,806 @@ function bindUiEvents(): void {
             const searchableItems = document.querySelectorAll('[data-stx-ui-search]');
             searchableItems.forEach((el: Element) => {
                 const keywords = (el.getAttribute('data-stx-ui-search') || '').toLowerCase();
-                if (!term || keywords.includes(term)) {
-                    el.classList.remove('is-hidden-by-search');
-                } else {
-                    el.classList.add('is-hidden-by-search');
-                }
+                if (!term || keywords.includes(term)) el.classList.remove('is-hidden-by-search');
+                else el.classList.add('is-hidden-by-search');
             });
         });
     }
+
+    // ─── Enable 开关 ───
+
+    const enabledEl = document.getElementById(IDS.enabledId) as HTMLInputElement | null;
+    if (enabledEl) {
+        enabledEl.checked = ensureSettings().enabled === true;
+        cardRoot?.classList.toggle('is-card-disabled', !enabledEl.checked);
+        enabledEl.addEventListener('change', () => {
+            const settings = ensureSettings();
+            settings.enabled = enabledEl.checked;
+            cardRoot?.classList.toggle('is-card-disabled', !enabledEl.checked);
+            saveSettings();
+            (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
+                v: 1, type: 'broadcast', topic: 'plugin:broadcast:state_changed',
+                from: 'stx_llmhub', ts: Date.now(),
+                data: { isEnabled: enabledEl.checked },
+            });
+        });
+    }
+
+    // ─── 全局 Profile ───
+
+    const profileEl = document.getElementById(IDS.globalProfileId) as HTMLSelectElement | null;
+    if (profileEl) {
+        profileEl.value = ensureSettings().globalProfile || 'balanced';
+        syncSharedSelects(cardRoot || document.body);
+        profileEl.addEventListener('change', () => {
+            try {
+                runtime?.sdk?.setGlobalProfile?.(profileEl.value);
+                const current = ensureSettings();
+                current.globalProfile = profileEl.value;
+                saveSettings();
+            } catch (error) {
+                console.error('设置全局 Profile 失败:', error);
+            }
+        });
+    }
+
+    // ─── Provider 来源 ───
+
+    const providerSourceEl = document.getElementById(IDS.providerSourceId) as HTMLSelectElement | null;
+    const testResultEl = document.getElementById(IDS.testResultId) as HTMLElement | null;
+    const tavernInfoStatusEl = document.getElementById(IDS.tavernInfoStatusId) as HTMLElement | null;
+    const tavernInfoListEl = document.getElementById(IDS.tavernInfoListId) as HTMLElement | null;
+    const tavernSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-tavern-section') ?? [];
+    const customSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-custom-section') ?? [];
+
+    const toggleProviderSourceSections = (source: string): void => {
+        const isTavern = source === 'tavern';
+        tavernSections.forEach(el => { el.style.display = isTavern ? '' : 'none'; });
+        customSections.forEach(el => { el.style.display = isTavern ? 'none' : ''; });
+    };
+
+    /**
+     * 功能：渲染当前酒馆连接信息面板。
+     * 返回：
+     *   void：无返回值。
+     */
+    const renderTavernConnectionInfo = (): void => {
+        if (!tavernInfoStatusEl || !tavernInfoListEl) return;
+        const snapshot = getTavernConnectionSnapshot();
+        tavernInfoStatusEl.className = `stx-ui-tavern-info-status ${getTavernInfoStatusClass(snapshot)}`;
+        tavernInfoStatusEl.textContent = snapshot.message;
+        tavernInfoListEl.innerHTML = buildTavernInfoItemsHtml(snapshot.items);
+    };
+
+    const showTestResult = (result: { ok: boolean; message: string; detail?: string; latencyMs?: number }): void => {
+        if (!testResultEl) return;
+        const cls = result.ok ? 'stx-ui-result-ok' : 'stx-ui-result-error';
+        const latency = result.latencyMs != null ? ` (${result.latencyMs}ms)` : '';
+        const detail = result.detail ? `<div class="stx-ui-result-detail">${escapeHtml(result.detail)}</div>` : '';
+        testResultEl.className = `stx-ui-result-area ${cls}`;
+        testResultEl.innerHTML = `<div class="stx-ui-result-msg">${escapeHtml(result.message)}${latency}</div>${detail}`;
+        testResultEl.style.display = '';
+    };
+
+    {
+        const savedSource = ensureSettings().providers?.[0]?.source || 'tavern';
+        if (providerSourceEl) providerSourceEl.value = savedSource;
+        toggleProviderSourceSections(savedSource);
+        renderTavernConnectionInfo();
+        syncSharedSelects(cardRoot || document.body);
+
+        const customCfg = ensureSettings().providers?.find(p => p.source === 'custom');
+        if (customCfg) {
+            const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
+            const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
+            if (customBaseUrlEl) customBaseUrlEl.value = customCfg.baseUrl || '';
+            if (customModelInputEl) customModelInputEl.value = customCfg.manualModel || customCfg.model || '';
+        }
+    }
+
+    providerSourceEl?.addEventListener('change', () => {
+        const source = providerSourceEl.value as 'tavern' | 'custom';
+        toggleProviderSourceSections(source);
+        renderTavernConnectionInfo();
+        if (testResultEl) testResultEl.style.display = 'none';
+        const current = ensureSettings();
+        if (!current.providers || current.providers.length === 0) {
+            current.providers = [{ id: source === 'tavern' ? 'tavern' : 'openai', source }];
+        } else {
+            current.providers[0].source = source;
+            current.providers[0].id = source === 'tavern' ? 'tavern' : (current.providers[0].id || 'openai');
+        }
+        saveSettings();
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
+
+    // ─── 连接测试 ───
+
+    const testConnectionBtn = document.getElementById(IDS.testConnectionBtnId) as HTMLButtonElement | null;
+    testConnectionBtn?.addEventListener('click', async () => {
+        testConnectionBtn.disabled = true;
+        testConnectionBtn.textContent = '测试中…';
+        try {
+            const source = providerSourceEl?.value || 'tavern';
+            const providerId = source === 'tavern' ? 'tavern' : (ensureSettings().providers?.find(p => p.source === 'custom')?.id || 'openai');
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.testConnection) { showTestResult({ ok: false, message: 'Provider 不支持连接测试' }); return; }
+            const res = await provider.testConnection();
+            showTestResult(res);
+        } catch (error: unknown) {
+            showTestResult({ ok: false, message: `测试异常: ${error instanceof Error ? error.message : String(error)}` });
+        } finally {
+            renderTavernConnectionInfo();
+            testConnectionBtn.disabled = false;
+            testConnectionBtn.textContent = '测试连接';
+        }
+    });
+
+    const customTestBtn = document.getElementById(IDS.testConnectionBtnId + '_custom') as HTMLButtonElement | null;
+    customTestBtn?.addEventListener('click', async () => {
+        customTestBtn.disabled = true;
+        customTestBtn.textContent = '测试中…';
+        try {
+            const settings = ensureSettings();
+            const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
+            const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
+            const baseUrl = customBaseUrlEl?.value.trim() || '';
+            const model = customModelInputEl?.value.trim() || '';
+            if (baseUrl || model) {
+                if (!settings.providers) settings.providers = [];
+                const customCfg = settings.providers.find(p => p.source === 'custom');
+                if (customCfg) {
+                    customCfg.baseUrl = baseUrl;
+                    customCfg.manualModel = model;
+                } else {
+                    settings.providers.push({ id: 'openai', source: 'custom', baseUrl, manualModel: model });
+                }
+                saveSettings();
+                await runtime?.applySettingsFromContext?.();
+            }
+            const providerId = settings.providers?.find(p => p.source === 'custom')?.id || 'openai';
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.testConnection) { showTestResult({ ok: false, message: 'Provider 不支持连接测试' }); return; }
+            const res = await provider.testConnection();
+            showTestResult(res);
+        } catch (error: unknown) {
+            showTestResult({ ok: false, message: `测试异常: ${error instanceof Error ? error.message : String(error)}` });
+        } finally {
+            customTestBtn.disabled = false;
+            customTestBtn.textContent = '测试连接';
+        }
+    });
+
+    // ─── 获取模型列表 ───
+
+    const fetchModelsBtn = document.getElementById(IDS.fetchModelsBtnId) as HTMLButtonElement | null;
+    const modelListSelectEl = document.getElementById(IDS.modelListSelectId) as HTMLSelectElement | null;
+    const modelListStatusEl = document.getElementById(IDS.modelListStatusId) as HTMLElement | null;
+
+    fetchModelsBtn?.addEventListener('click', async () => {
+        fetchModelsBtn.disabled = true;
+        fetchModelsBtn.textContent = '获取中…';
+        if (modelListStatusEl) modelListStatusEl.textContent = '';
+        try {
+            const providerId = ensureSettings().providers?.find(p => p.source === 'custom')?.id || 'openai';
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.listModels) {
+                if (modelListStatusEl) modelListStatusEl.textContent = 'Provider 不支持模型列表';
+                return;
+            }
+            const res = await provider.listModels();
+            if (!res.ok) {
+                if (modelListStatusEl) modelListStatusEl.textContent = `获取失败: ${res.message}`;
+                return;
+            }
+            if (modelListSelectEl) {
+                modelListSelectEl.innerHTML = res.models
+                    .map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
+                    .join('');
+                refreshSharedSelectOptions(cardRoot || document.body);
+            }
+            if (modelListStatusEl) modelListStatusEl.textContent = `已获取 ${res.models.length} 个模型`;
+        } catch (error: unknown) {
+            if (modelListStatusEl) modelListStatusEl.textContent = `异常: ${error instanceof Error ? error.message : String(error)}`;
+        } finally {
+            fetchModelsBtn.disabled = false;
+            fetchModelsBtn.textContent = '获取模型列表';
+        }
+    });
+
+    modelListSelectEl?.addEventListener('change', () => {
+        const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
+        if (customModelInputEl && modelListSelectEl.value) customModelInputEl.value = modelListSelectEl.value;
+    });
+
+    // ══════════════════════════════════════
+    //  View A: 全局能力默认
+    // ══════════════════════════════════════
+
+    const getProviderIds = (): string[] => {
+        const dynamic = runtime?.router?.getAllProviders?.() || [];
+        const dynamicIds = dynamic.map((p: ProviderLite) => String(p?.id || '').trim()).filter(Boolean);
+        const fallback = ['openai', 'claude', 'gemini', 'groq'];
+        return Array.from(new Set([...dynamicIds, ...fallback]));
+    };
+
+    const populateProviderSelect = (selectEl: HTMLSelectElement | null, allowEmpty: boolean, currentValue?: string): void => {
+        if (!selectEl) return;
+        const ids = getProviderIds();
+        const prev = currentValue ?? selectEl.value;
+        selectEl.innerHTML = '';
+        if (allowEmpty) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '（自动选择）';
+            selectEl.appendChild(opt);
+        }
+        ids.forEach(id => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = id;
+            selectEl.appendChild(opt);
+        });
+        if (Array.from(selectEl.options).some(o => o.value === prev)) selectEl.value = prev;
+    };
+
+    const refreshAllProviderSelects = (): void => {
+        populateProviderSelect(document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement, true);
+        populateProviderSelect(document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement, true);
+        populateProviderSelect(document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement, true);
+        populateProviderSelect(document.getElementById(IDS.vaultAddServiceId) as HTMLSelectElement, false);
+        refreshSharedSelectOptions(cardRoot || document.body);
+    };
+
+    // 恢复全局默认到 UI
+    const restoreGlobalDefaultsToUI = (): void => {
+        const settings = ensureSettings();
+        const defaults = settings.globalDefaults || [];
+        for (const d of defaults) {
+            if (d.capabilityKind === 'generation') {
+                const provEl = document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement | null;
+                const modelEl = document.getElementById(IDS.globalDefGenModelId) as HTMLInputElement | null;
+                const profileEl = document.getElementById(IDS.globalDefGenProfileId) as HTMLSelectElement | null;
+                if (provEl) provEl.value = d.providerId || '';
+                if (modelEl) modelEl.value = d.model || '';
+                if (profileEl) profileEl.value = d.profileId || '';
+            } else if (d.capabilityKind === 'embedding') {
+                const provEl = document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement | null;
+                const modelEl = document.getElementById(IDS.globalDefEmbModelId) as HTMLInputElement | null;
+                if (provEl) provEl.value = d.providerId || '';
+                if (modelEl) modelEl.value = d.model || '';
+            } else if (d.capabilityKind === 'rerank') {
+                const provEl = document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement | null;
+                const modelEl = document.getElementById(IDS.globalDefRerankModelId) as HTMLInputElement | null;
+                if (provEl) provEl.value = d.providerId || '';
+                if (modelEl) modelEl.value = d.model || '';
+            }
+        }
+        syncSharedSelects(cardRoot || document.body);
+    };
+
+    // 保存全局默认
+    const globalDefSaveBtn = document.getElementById(IDS.globalDefSaveBtnId);
+    globalDefSaveBtn?.addEventListener('click', () => {
+        const genProvider = (document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement)?.value || '';
+        const genModel = (document.getElementById(IDS.globalDefGenModelId) as HTMLInputElement)?.value.trim() || '';
+        const genProfile = (document.getElementById(IDS.globalDefGenProfileId) as HTMLSelectElement)?.value || '';
+        const embProvider = (document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement)?.value || '';
+        const embModel = (document.getElementById(IDS.globalDefEmbModelId) as HTMLInputElement)?.value.trim() || '';
+        const rerankProvider = (document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement)?.value || '';
+        const rerankModel = (document.getElementById(IDS.globalDefRerankModelId) as HTMLInputElement)?.value.trim() || '';
+
+        const defaults: GlobalCapabilityDefault[] = [];
+        if (genProvider) defaults.push({ capabilityKind: 'generation', providerId: genProvider, model: genModel || undefined, profileId: genProfile || undefined });
+        if (embProvider) defaults.push({ capabilityKind: 'embedding', providerId: embProvider, model: embModel || undefined });
+        if (rerankProvider) defaults.push({ capabilityKind: 'rerank', providerId: rerankProvider, model: rerankModel || undefined });
+
+        const settings = ensureSettings();
+        settings.globalDefaults = defaults;
+
+        saveSettings();
+        runtime?.router?.applyGlobalDefaults?.(defaults);
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
+
+    // ══════════════════════════════════════
+    //  View B: 插件默认
+    // ══════════════════════════════════════
+
+    const renderPluginDefaults = (): void => {
+        const listEl = document.getElementById(IDS.pluginDefaultsListId);
+        if (!listEl) return;
+        const renderSeq = ++LLMHUB_CONSUMER_DISCOVERY_SEQ;
+
+        const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
+        if (registrations.length === 0) {
+            listEl.innerHTML = '<div class="stx-ui-list-empty">正在检查已在线但尚未注册任务的插件…</div>';
+            void discoverConsumers({
+                fromNamespace: 'stx_llmhub',
+                onlineOnly: true,
+                excludePluginIds: ['stx_llmhub'],
+            })
+                .then((consumers: DiscoveredConsumer[]): void => {
+                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) {
+                        return;
+                    }
+                    listEl.innerHTML = buildPluginDefaultsEmptyStateHtml(consumers);
+                })
+                .catch((): void => {
+                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) {
+                        return;
+                    }
+                    listEl.innerHTML = '<div class="stx-ui-list-empty">暂无已注册插件</div>';
+                });
+            return;
+        }
+
+        const settings = ensureSettings();
+        const providerIds = getProviderIds();
+        const existingPluginDefaults = settings.pluginDefaults || [];
+
+        const collectCandidateProviderIds = (filterCaps?: LLMCapability[]): string[] => {
+            let candidates = providerIds;
+            if (filterCaps && filterCaps.length > 0 && runtime?.router?.getProviderCapabilities) {
+                candidates = candidates.filter(pid => {
+                    const caps = runtime!.router!.getProviderCapabilities!(pid);
+                    return filterCaps.every(c => caps.includes(c));
+                });
+            }
+            return candidates;
+        };
+
+        const kinds: CapabilityKind[] = ['generation', 'embedding', 'rerank'];
+
+        listEl.innerHTML = registrations.map((snap: ConsumerSnapshot) => {
+            const pluginId = snap.pluginId;
+            const displayName = snap.displayName || pluginId;
+            const isOnline = snap.session?.online ?? false;
+            const lastSeen = snap.session?.seenAt ? formatTimestamp(snap.session.seenAt) : '-';
+
+            // 该插件声明的任务所用到的 kinds
+            const declaredKinds = new Set<CapabilityKind>();
+            (snap.tasks || []).forEach((t: TaskDescriptor) => declaredKinds.add(t.taskKind));
+            const relevantKinds = kinds.filter(k => declaredKinds.has(k));
+            if (relevantKinds.length === 0) relevantKinds.push('generation');
+
+            const kindRows = relevantKinds.map(kind => {
+                const existing = existingPluginDefaults.find(d => d.pluginId === pluginId && d.capabilityKind === kind);
+                // 推算该 kind 下需要的最小能力集
+                const tasksOfKind = (snap.tasks || []).filter((t: TaskDescriptor) => t.taskKind === kind);
+                const requiredCaps = new Set<LLMCapability>();
+                tasksOfKind.forEach(t => (t.requiredCapabilities || []).forEach(c => requiredCaps.add(c)));
+
+                const selectId = `stx-llmhub-plugin-default-${pluginId}-${kind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+                const providerSelectHtml = buildProviderSharedSelectHtml(
+                    selectId,
+                    existing?.providerId || '',
+                    collectCandidateProviderIds(Array.from(requiredCaps)),
+                    {
+                        'data-plugin-def-provider': pluginId,
+                        'data-plugin-def-kind': kind,
+                    },
+                );
+
+                return `
+                  <div class="stx-ui-field">
+                    <label class="stx-ui-field-label">${getKindLabel(kind)} 服务商</label>
+                    ${providerSelectHtml}
+                  </div>`;
+            }).join('');
+
+            return `
+              <div class="stx-ui-list-item stx-ui-consumer-map-row" data-plugin-row="${escapeHtml(pluginId)}">
+                <div class="stx-ui-consumer-map-head">
+                  <div class="stx-ui-consumer-map-head-main">
+                    <div class="stx-ui-list-title">
+                      <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
+                      ${escapeHtml(displayName)} <span class="stx-ui-list-meta">(${escapeHtml(pluginId)})</span>
+                    </div>
+                  </div>
+                  <div class="stx-ui-list-meta">最后活跃 ${lastSeen}</div>
+                </div>
+                <div class="stx-ui-consumer-map-form">${kindRows}</div>
+                <div class="stx-ui-consumer-map-actions">
+                  <button class="stx-ui-btn" type="button" data-plugin-def-save="${escapeHtml(pluginId)}">保存</button>
+                  <button class="stx-ui-btn secondary" type="button" data-plugin-def-delete="${escapeHtml(pluginId)}">清除</button>
+                </div>
+              </div>`;
+        }).join('');
+
+        hydrateSharedSelects(listEl);
+        ensureSharedTooltip();
+    };
+
+    // 插件默认列表事件委托
+    document.getElementById(IDS.pluginDefaultsListId)?.addEventListener('click', (evt: Event) => {
+        const target = evt.target as HTMLElement;
+        const saveBtn = target.closest<HTMLButtonElement>('button[data-plugin-def-save]');
+        const deleteBtn = target.closest<HTMLButtonElement>('button[data-plugin-def-delete]');
+        const pluginId = String(saveBtn?.dataset.pluginDefSave || deleteBtn?.dataset.pluginDefDelete || '').trim();
+        if (!pluginId) return;
+
+        const settings = ensureSettings();
+        let pluginDefaults = (settings.pluginDefaults || []).filter(d => d.pluginId !== pluginId);
+
+        if (saveBtn) {
+            const row = document.querySelector(`[data-plugin-row="${pluginId}"]`);
+            if (!row) return;
+            const selects = row.querySelectorAll<HTMLSelectElement>('select[data-plugin-def-provider]');
+            selects.forEach(sel => {
+                const kind = sel.dataset.pluginDefKind as CapabilityKind;
+                const providerId = sel.value.trim();
+                if (providerId && kind) {
+                    pluginDefaults.push({ pluginId, capabilityKind: kind, providerId });
+                }
+            });
+        }
+
+        settings.pluginDefaults = pluginDefaults;
+        saveSettings();
+        runtime?.router?.applyPluginDefaults?.(pluginDefaults);
+    });
+
+    document.getElementById(IDS.pluginDefaultsRefreshBtnId)?.addEventListener('click', renderPluginDefaults);
+
+    // ══════════════════════════════════════
+    //  View C: 任务覆盖
+    // ══════════════════════════════════════
+
+    const renderTaskOverrides = (): void => {
+        const listEl = document.getElementById(IDS.taskOverridesListId);
+        if (!listEl) return;
+
+        const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
+        const allTasks: Array<{ pluginId: string; displayName: string; task: TaskDescriptor; isOnline: boolean }> = [];
+        for (const snap of registrations) {
+            for (const task of (snap.tasks || [])) {
+                allTasks.push({
+                    pluginId: snap.pluginId,
+                    displayName: snap.displayName || snap.pluginId,
+                    task,
+                    isOnline: snap.session?.online ?? false,
+                });
+            }
+        }
+
+        if (allTasks.length === 0) {
+            listEl.innerHTML = '<div class="stx-ui-list-empty">暂无已注册任务</div>';
+            return;
+        }
+
+        const settings = ensureSettings();
+        const existingOverrides = settings.taskOverrides || [];
+        const providerIds = getProviderIds();
+
+        const collectCandidateProviderIds = (requiredCaps: LLMCapability[]): string[] => {
+            let candidates = providerIds;
+            if (requiredCaps.length > 0 && runtime?.router?.getProviderCapabilities) {
+                candidates = candidates.filter(pid => {
+                    const caps = runtime!.router!.getProviderCapabilities!(pid);
+                    return requiredCaps.every(c => caps.includes(c));
+                });
+            }
+            return candidates;
+        };
+
+        listEl.innerHTML = allTasks.map(({ pluginId, displayName, task, isOnline }) => {
+            const existing = existingOverrides.find(o => o.pluginId === pluginId && o.taskId === task.taskId);
+            const isStale = existing?.isStale === true;
+            const staleHtml = isStale
+                ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
+                : '';
+            const key = `${pluginId}::${task.taskId}`;
+            const selectId = `stx-llmhub-task-override-${pluginId}-${task.taskId}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+            const providerSelectHtml = buildProviderSharedSelectHtml(
+                selectId,
+                existing?.providerId || '',
+                collectCandidateProviderIds(task.requiredCapabilities || []),
+                {
+                    'data-task-override-provider': key,
+                },
+            );
+
+            return `
+              <div class="stx-ui-list-item stx-ui-consumer-map-row" data-task-row="${escapeHtml(key)}">
+                <div class="stx-ui-consumer-map-head">
+                  <div class="stx-ui-consumer-map-head-main">
+                    <div class="stx-ui-list-title">
+                      <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
+                      ${escapeHtml(displayName)} / ${escapeHtml(task.taskId)}
+                    </div>
+                    <div class="stx-ui-list-meta">
+                      类型=${getKindLabel(task.taskKind)}
+                      ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
+                      ${task.backgroundEligible ? '，可静默' : ''}
+                    </div>
+                    ${staleHtml}
+                  </div>
+                </div>
+                <div class="stx-ui-consumer-map-form">
+                  <div class="stx-ui-field">
+                    <label class="stx-ui-field-label">服务商</label>
+                    ${providerSelectHtml}
+                  </div>
+                  <div class="stx-ui-field">
+                    <label class="stx-ui-field-label">模型</label>
+                    <input class="stx-ui-input stx-ui-input-full" type="text" data-task-override-model="${escapeHtml(key)}" value="${escapeHtml(existing?.model || '')}" placeholder="留空跟随默认" />
+                  </div>
+                </div>
+                <div class="stx-ui-consumer-map-actions">
+                  <button class="stx-ui-btn" type="button" data-task-override-save="${escapeHtml(key)}" data-task-kind="${task.taskKind}">保存</button>
+                  <button class="stx-ui-btn secondary" type="button" data-task-override-delete="${escapeHtml(key)}">清除</button>
+                </div>
+              </div>`;
+        }).join('');
+
+        hydrateSharedSelects(listEl);
+        ensureSharedTooltip();
+    };
+
+    // 任务覆盖事件委托
+    document.getElementById(IDS.taskOverridesListId)?.addEventListener('click', (evt: Event) => {
+        const target = evt.target as HTMLElement;
+        const saveBtn = target.closest<HTMLButtonElement>('button[data-task-override-save]');
+        const deleteBtn = target.closest<HTMLButtonElement>('button[data-task-override-delete]');
+        const key = String(saveBtn?.dataset.taskOverrideSave || deleteBtn?.dataset.taskOverrideDelete || '').trim();
+        if (!key) return;
+
+        const [pluginId, taskId] = key.split('::');
+        if (!pluginId || !taskId) return;
+
+        const settings = ensureSettings();
+        let overrides = (settings.taskOverrides || []).filter(o => !(o.pluginId === pluginId && o.taskId === taskId));
+
+        if (saveBtn) {
+            const providerEl = document.querySelector<HTMLSelectElement>(`select[data-task-override-provider="${key}"]`);
+            const modelEl = document.querySelector<HTMLInputElement>(`input[data-task-override-model="${key}"]`);
+            const providerId = providerEl?.value.trim() || '';
+            const model = modelEl?.value.trim() || '';
+            const taskKind = (saveBtn.dataset.taskKind || 'generation') as CapabilityKind;
+
+            if (providerId) {
+                // 前端能力校验: 检查 provider 是否满足该任务的 requiredCapabilities
+                const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
+                let taskDesc: TaskDescriptor | undefined;
+                for (const snap of registrations) {
+                    taskDesc = snap.tasks?.find((t: TaskDescriptor) => t.taskId === taskId);
+                    if (taskDesc) break;
+                }
+                if (taskDesc?.requiredCapabilities?.length && runtime?.router?.getProviderCapabilities) {
+                    const provCaps = runtime.router.getProviderCapabilities(providerId);
+                    const missing = taskDesc.requiredCapabilities.filter(c => !provCaps.includes(c));
+                    if (missing.length > 0) {
+                        alert(`服务商 "${providerId}" 缺少所需能力: ${missing.join(', ')}。无法保存。`);
+                        return;
+                    }
+                }
+                overrides.push({ pluginId, taskId, taskKind, providerId, model: model || undefined, isStale: false });
+            }
+        }
+
+        settings.taskOverrides = overrides;
+        saveSettings();
+        runtime?.router?.applyTaskOverrides?.(overrides);
+    });
+
+    document.getElementById(IDS.taskOverridesRefreshBtnId)?.addEventListener('click', renderTaskOverrides);
+
+    /**
+     * 功能：统一刷新依赖 consumer 注册表的设置视图。
+     * 返回：
+     *   void：无返回值。
+     */
+    const renderConsumerDrivenViews = (): void => {
+        renderPluginDefaults();
+        renderTaskOverrides();
+    };
+
+    LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE?.();
+    LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE = runtime?.registry?.subscribe?.((): void => {
+        renderConsumerDrivenViews();
+    }) || null;
+
+    // ══════════════════════════════════════
+    //  预算规则
+    // ══════════════════════════════════════
+
+    const budgetConsumerEl = document.getElementById(IDS.budgetConsumerId) as HTMLInputElement | null;
+    const budgetMaxRpmEl = document.getElementById(IDS.budgetMaxRpmId) as HTMLInputElement | null;
+    const budgetMaxTokensEl = document.getElementById(IDS.budgetMaxTokensId) as HTMLInputElement | null;
+    const budgetMaxLatencyEl = document.getElementById(IDS.budgetMaxLatencyId) as HTMLInputElement | null;
+    const budgetMaxCostEl = document.getElementById(IDS.budgetMaxCostId) as HTMLInputElement | null;
+    const budgetSaveBtn = document.getElementById(IDS.budgetSaveBtnId);
+    const budgetResetBtn = document.getElementById(IDS.budgetResetBtnId);
+    const budgetListEl = document.getElementById(IDS.budgetListId);
+
+    const parseOptionalNumber = (value: string): number | undefined => {
+        const trimmed = value.trim();
+        if (!trimmed) return undefined;
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+        return parsed;
+    };
+
+    const renderBudgets = (): void => {
+        if (!budgetListEl) return;
+        const budgets = ensureSettings().budgets || {};
+        const entries = Object.entries(budgets);
+        if (entries.length === 0) {
+            budgetListEl.innerHTML = '<div class="stx-ui-list-empty">暂无预算规则</div>';
+            return;
+        }
+        budgetListEl.innerHTML = entries
+            .map(([consumer, config]: [string, BudgetConfig]) => `
+            <div class="stx-ui-list-item">
+              <div>
+                <div class="stx-ui-list-title">${escapeHtml(consumer)}</div>
+                <div class="stx-ui-list-meta">
+                  maxRPM=${config.maxRPM ?? '-'}, maxTokens=${config.maxTokens ?? '-'}, maxLatencyMs=${config.maxLatencyMs ?? '-'}, maxCost=${config.maxCost ?? '-'}
+                </div>
+              </div>
+              <button class="stx-ui-btn secondary" type="button" data-budget-consumer="${escapeHtml(consumer)}">删除</button>
+            </div>`)
+            .join('');
+    };
+
+    const clearBudgetForm = (): void => {
+        if (budgetConsumerEl) budgetConsumerEl.value = '';
+        if (budgetMaxRpmEl) budgetMaxRpmEl.value = '';
+        if (budgetMaxTokensEl) budgetMaxTokensEl.value = '';
+        if (budgetMaxLatencyEl) budgetMaxLatencyEl.value = '';
+        if (budgetMaxCostEl) budgetMaxCostEl.value = '';
+    };
+
+    budgetSaveBtn?.addEventListener('click', () => {
+        const consumer = (budgetConsumerEl?.value || '').trim();
+        if (!consumer) { alert('请填写预算的调用方'); return; }
+        const config: BudgetConfig = {};
+        const maxRPM = parseOptionalNumber(budgetMaxRpmEl?.value || '');
+        const maxTokens = parseOptionalNumber(budgetMaxTokensEl?.value || '');
+        const maxLatencyMs = parseOptionalNumber(budgetMaxLatencyEl?.value || '');
+        const maxCost = parseOptionalNumber(budgetMaxCostEl?.value || '');
+        if (maxRPM !== undefined) config.maxRPM = maxRPM;
+        if (maxTokens !== undefined) config.maxTokens = maxTokens;
+        if (maxLatencyMs !== undefined) config.maxLatencyMs = maxLatencyMs;
+        if (maxCost !== undefined) config.maxCost = maxCost;
+        runtime?.setBudgetConfig?.(consumer, config);
+        const current = ensureSettings();
+        const budgets = { ...(current.budgets || {}) };
+        budgets[consumer] = config;
+        current.budgets = budgets;
+        saveSettings();
+        renderBudgets();
+        clearBudgetForm();
+    });
+
+    budgetResetBtn?.addEventListener('click', clearBudgetForm);
+
+    budgetListEl?.addEventListener('click', (evt: Event) => {
+        const button = (evt.target as HTMLElement).closest<HTMLButtonElement>('button[data-budget-consumer]');
+        if (!button) return;
+        const consumer = String(button.dataset.budgetConsumer || '').trim();
+        if (!consumer) return;
+        runtime?.removeBudgetConfig?.(consumer);
+        const current = ensureSettings();
+        const budgets = { ...(current.budgets || {}) };
+        delete budgets[consumer];
+        current.budgets = budgets;
+        saveSettings();
+        renderBudgets();
+    });
+
+    // ══════════════════════════════════════
+    //  队列快照
+    // ══════════════════════════════════════
+
+    const renderQueueSnapshot = (): void => {
+        const listEl = document.getElementById(IDS.queueSnapshotListId);
+        if (!listEl) return;
+
+        const snapshot = runtime?.orchestrator?.getQueueSnapshot?.();
+        if (!snapshot) { listEl.innerHTML = '<div class="stx-ui-list-empty">编排器未就绪</div>'; return; }
+
+        const items: string[] = [];
+
+        // 当前执行中
+        if (snapshot.active) {
+            const a = snapshot.active;
+            items.push(`
+              <div class="stx-ui-list-item">
+                <div>
+                  <div class="stx-ui-list-title">${escapeHtml(a.consumer)} / ${escapeHtml(a.taskId)}</div>
+                  <div class="stx-ui-list-meta">ID: ${escapeHtml(a.requestId.slice(0, 8))}...</div>
+                </div>
+                <span class="stx-ui-state-badge ${getStateBadgeClass(a.state)}">${STATE_LABELS[a.state] || a.state}</span>
+              </div>`);
+        }
+
+        // 排队中
+        for (const p of snapshot.pending) {
+            items.push(`
+              <div class="stx-ui-list-item">
+                <div>
+                  <div class="stx-ui-list-title">${escapeHtml(p.consumer)} / ${escapeHtml(p.taskId)}</div>
+                  <div class="stx-ui-list-meta">ID: ${escapeHtml(p.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(p.queuedAt)}</div>
+                </div>
+                <span class="stx-ui-state-badge is-queued">排队中</span>
+              </div>`);
+        }
+
+        listEl.innerHTML = items.length > 0 ? items.join('') : '<div class="stx-ui-list-empty">队列为空</div>';
+    };
+
+    // ─── 最近记录 ───
+
+    const renderRecentHistory = (): void => {
+        const listEl = document.getElementById(IDS.recentHistoryListId);
+        if (!listEl) return;
+
+        const snapshot = runtime?.orchestrator?.getQueueSnapshot?.();
+        if (!snapshot || !snapshot.recentHistory.length) {
+            listEl.innerHTML = '<div class="stx-ui-list-empty">暂无记录</div>';
+            return;
+        }
+
+        listEl.innerHTML = snapshot.recentHistory.slice().reverse().map(r => `
+          <div class="stx-ui-list-item">
+            <div>
+              <div class="stx-ui-list-title">${escapeHtml(r.consumer)} / ${escapeHtml(r.taskId)}</div>
+              <div class="stx-ui-list-meta">
+                ID: ${escapeHtml(r.requestId.slice(0, 8))}...
+                ${r.finishedAt ? ` | 完成 ${formatTimestamp(r.finishedAt)}` : ''}
+              </div>
+            </div>
+            <span class="stx-ui-state-badge ${getStateBadgeClass(r.state)}">${STATE_LABELS[r.state] || r.state}</span>
+          </div>`).join('');
+    };
+
+    // ─── 静默权限 ───
+
+    const renderSilentPermissions = (): void => {
+        const listEl = document.getElementById(IDS.silentPermissionsListId);
+        if (!listEl) return;
+
+        const permissions = runtime?.displayController?.exportSilentPermissions?.() || [];
+        if (permissions.length === 0) {
+            listEl.innerHTML = '<div class="stx-ui-list-empty">暂无静默权限授权</div>';
+            return;
+        }
+
+        listEl.innerHTML = permissions.map(p => `
+          <div class="stx-ui-list-item">
+            <div>
+              <div class="stx-ui-list-title">${escapeHtml(p.pluginId)} / ${escapeHtml(p.taskId)}</div>
+              <div class="stx-ui-list-meta">授权于 ${formatTimestamp(p.grantedAt)}</div>
+            </div>
+            <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(p.pluginId)}::${escapeHtml(p.taskId)}">撤销</button>
+          </div>`).join('');
+    };
+
+    document.getElementById(IDS.silentPermissionsListId)?.addEventListener('click', (evt: Event) => {
+        const button = (evt.target as HTMLElement).closest<HTMLButtonElement>('button[data-silent-revoke]');
+        if (!button) return;
+        const key = String(button.dataset.silentRevoke || '').trim();
+        const [pluginId, taskId] = key.split('::');
+        if (!pluginId || !taskId) return;
+        runtime?.displayController?.revokeSilentPermission?.(pluginId, taskId);
+        // 持久化
+        const settings = ensureSettings();
+        settings.silentPermissions = runtime?.displayController?.exportSilentPermissions?.() || [];
+        saveSettings();
+        renderSilentPermissions();
+    });
+
+    document.getElementById(IDS.queueRefreshBtnId)?.addEventListener('click', () => {
+        renderQueueSnapshot();
+        renderRecentHistory();
+        renderSilentPermissions();
+    });
+
+    // ══════════════════════════════════════
+    //  凭据金库
+    // ══════════════════════════════════════
 
     const vaultSaveBtn = document.getElementById(IDS.vaultSaveBtnId);
     const vaultClearBtn = document.getElementById(IDS.vaultClearBtnId);
@@ -427,14 +1324,9 @@ function bindUiEvents(): void {
         vaultSaveBtn.addEventListener('click', async () => {
             const provider = vaultServiceSelect.value;
             const apiKey = vaultKeyInput.value.trim();
-            if (!apiKey) {
-                alert('API Key 不能为空');
-                return;
-            }
+            if (!apiKey) { alert('API Key 不能为空'); return; }
             try {
-                if (!runtime?.saveCredential) {
-                    throw new Error('LLMHub Runtime 未就绪');
-                }
+                if (!runtime?.saveCredential) throw new Error('LLMHub Runtime 未就绪');
                 await runtime.saveCredential(provider, apiKey);
                 vaultKeyInput.value = '';
                 alert(`已保存 ${provider} 的凭据`);
@@ -447,13 +1339,9 @@ function bindUiEvents(): void {
 
     if (vaultClearBtn) {
         vaultClearBtn.addEventListener('click', async () => {
-            if (!confirm('确定清空全部凭据吗？')) {
-                return;
-            }
+            if (!confirm('确定清空全部凭据吗？')) return;
             try {
-                if (!runtime?.clearAllCredentials) {
-                    throw new Error('LLMHub Runtime 未就绪');
-                }
+                if (!runtime?.clearAllCredentials) throw new Error('LLMHub Runtime 未就绪');
                 await runtime.clearAllCredentials();
                 alert('已清空全部凭据');
             } catch (error) {
@@ -463,882 +1351,10 @@ function bindUiEvents(): void {
         });
     }
 
-    const cardRoot = document.getElementById(IDS.cardId);
-    const syncCardDisabledState = (enabled: boolean): void => {
-        cardRoot?.classList.toggle('is-card-disabled', !enabled);
-    };
+    // ─── 初始化渲染 ───
 
-    const enabledEl = document.getElementById(IDS.enabledId) as HTMLInputElement | null;
-    if (enabledEl) {
-        enabledEl.checked = ensureSettings().enabled === true;
-        syncCardDisabledState(enabledEl.checked);
-        enabledEl.addEventListener('change', () => {
-            const settings = ensureSettings();
-            settings.enabled = enabledEl.checked;
-            syncCardDisabledState(enabledEl.checked);
-            saveSettings();
-            (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
-                v: 1,
-                type: 'broadcast',
-                topic: 'plugin:broadcast:state_changed',
-                from: 'stx_llmhub',
-                ts: Date.now(),
-                data: { isEnabled: enabledEl.checked },
-            });
-        });
-    }
-
-    const defaultProviderEl = document.getElementById(IDS.defaultProviderId) as HTMLSelectElement | null;
-    const defaultModelEl = document.getElementById(IDS.defaultModelId) as HTMLInputElement | null;
-    const profileEl = document.getElementById(IDS.globalProfileId) as HTMLSelectElement | null;
-
-    const settings = ensureSettings();
-    if (defaultProviderEl) {
-        defaultProviderEl.value = settings.defaultProvider || 'openai';
-    }
-    if (defaultModelEl) {
-        defaultModelEl.value = settings.defaultModel || 'gpt-4o-mini';
-    }
-    if (profileEl) {
-        profileEl.value = settings.globalProfile || 'balanced';
-    }
-    syncSharedSelects(document.getElementById(IDS.cardId) || document.body);
-
-    /**
-     * 功能：保存默认 Provider 与默认 Model。
-     * 参数：
-     *   无。
-     * 返回：
-     *   Promise<void>：保存流程完成。
-     */
-    const saveDefaultRouteSettings = async (): Promise<void> => {
-        if (!runtime?.setDefaultRoute || !defaultProviderEl || !defaultModelEl) {
-            return;
-        }
-        const provider = defaultProviderEl.value;
-        const model = defaultModelEl.value.trim() || 'gpt-4o-mini';
-        await runtime.setDefaultRoute(provider, model);
-        const current = ensureSettings();
-        current.defaultProvider = provider;
-        current.defaultModel = model;
-        saveSettings();
-    };
-
-    defaultProviderEl?.addEventListener('change', () => {
-        saveDefaultRouteSettings().catch((error: unknown) => {
-            console.error('保存默认 Provider 失败:', error);
-        });
-    });
-
-    defaultModelEl?.addEventListener('blur', () => {
-        saveDefaultRouteSettings().catch((error: unknown) => {
-            console.error('保存默认 Model 失败:', error);
-        });
-    });
-
-    profileEl?.addEventListener('change', () => {
-        const profile = profileEl.value;
-        try {
-            runtime?.sdk?.setGlobalProfile?.(profile);
-            const current = ensureSettings();
-            current.globalProfile = profile;
-            saveSettings();
-        } catch (error) {
-            console.error('设置全局 Profile 失败:', error);
-        }
-    });
-
-    const routeConsumerEl = document.getElementById(IDS.routeConsumerId) as HTMLInputElement | null;
-    const routeTaskEl = document.getElementById(IDS.routeTaskId) as HTMLInputElement | null;
-    const routeProviderEl = document.getElementById(IDS.routeProviderId) as HTMLSelectElement | null;
-    const routeProfileEl = document.getElementById(IDS.routeProfileId) as HTMLSelectElement | null;
-    const routeFallbackEl = document.getElementById(IDS.routeFallbackProviderId) as HTMLSelectElement | null;
-    const routeSaveBtn = document.getElementById(IDS.routeSaveBtnId);
-    const routeResetBtn = document.getElementById(IDS.routeResetBtnId);
-    const routeListEl = document.getElementById(IDS.routeListId);
-    const consumerMapRefreshBtn = document.getElementById(IDS.consumerMapRefreshBtnId);
-    const consumerMapListEl = cardRoot?.querySelector<HTMLElement>('[data-consumer-map-list="1"]') ?? null;
-
-    const budgetConsumerEl = document.getElementById(IDS.budgetConsumerId) as HTMLInputElement | null;
-    const budgetMaxRpmEl = document.getElementById(IDS.budgetMaxRpmId) as HTMLInputElement | null;
-    const budgetMaxTokensEl = document.getElementById(IDS.budgetMaxTokensId) as HTMLInputElement | null;
-    const budgetMaxLatencyEl = document.getElementById(IDS.budgetMaxLatencyId) as HTMLInputElement | null;
-    const budgetMaxCostEl = document.getElementById(IDS.budgetMaxCostId) as HTMLInputElement | null;
-    const budgetSaveBtn = document.getElementById(IDS.budgetSaveBtnId);
-    const budgetResetBtn = document.getElementById(IDS.budgetResetBtnId);
-    const budgetListEl = document.getElementById(IDS.budgetListId);
-    const routerAdvancedToggleEl = document.getElementById(IDS.routerAdvancedToggleId) as HTMLButtonElement | null;
-    const routerAdvancedBodyEl = document.getElementById(IDS.routerAdvancedBodyId) as HTMLElement | null;
-
-    if (routerAdvancedToggleEl && routerAdvancedBodyEl) {
-        routerAdvancedToggleEl.setAttribute('aria-expanded', 'false');
-        routerAdvancedBodyEl.setAttribute('hidden', 'true');
-        routerAdvancedToggleEl.addEventListener('click', () => {
-            const expanded = routerAdvancedToggleEl.getAttribute('aria-expanded') === 'true';
-            const nextExpanded = !expanded;
-            routerAdvancedToggleEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
-            if (nextExpanded) {
-                routerAdvancedBodyEl.removeAttribute('hidden');
-            } else {
-                routerAdvancedBodyEl.setAttribute('hidden', 'true');
-            }
-        });
-    }
-
-    /**
-     * 功能：获取可选 Provider 列表。
-     * 参数：
-     *   无。
-     * 返回：
-     *   string[]：Provider ID 列表。
-     */
-    const getProviderIds = (): string[] => {
-        const dynamic = runtime?.router?.getAllProviders?.() || [];
-        const dynamicIds = dynamic
-            .map((provider: ProviderLite) => String(provider?.id || '').trim())
-            .filter(Boolean);
-        const fallback = ['openai', 'claude', 'gemini', 'groq'];
-        return Array.from(new Set([...dynamicIds, ...fallback]));
-    };
-
-    /**
-     * 功能：刷新 Provider 下拉框选项。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const refreshProviderSelects = (): void => {
-        const providerIds = getProviderIds();
-        const updateSelect = (selectEl: HTMLSelectElement | null, allowEmpty: boolean): void => {
-            if (!selectEl) {
-                return;
-            }
-            const previousValue = selectEl.value;
-            selectEl.innerHTML = '';
-            if (allowEmpty) {
-                const emptyOption = document.createElement('option');
-                emptyOption.value = '';
-                emptyOption.textContent = '(不指定)';
-                selectEl.appendChild(emptyOption);
-            }
-            providerIds.forEach((providerId: string) => {
-                const option = document.createElement('option');
-                option.value = providerId;
-                option.textContent = providerId;
-                selectEl.appendChild(option);
-            });
-            if (Array.from(selectEl.options).some((opt: HTMLOptionElement) => opt.value === previousValue)) {
-                selectEl.value = previousValue;
-            }
-        };
-
-        updateSelect(defaultProviderEl, false);
-        updateSelect(routeProviderEl, false);
-        updateSelect(routeFallbackEl, true);
-        updateSelect(vaultServiceSelect, false);
-
-        const current = ensureSettings();
-        if (defaultProviderEl && current.defaultProvider) {
-            defaultProviderEl.value = current.defaultProvider;
-        }
-        refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
-    };
-
-    /**
-     * 功能：读取路由规则并做最小归一化。
-     * 参数：
-     *   无。
-     * 返回：
-     *   RoutePolicy[]：规范化后的规则数组。
-     */
-    const readRoutePolicies = (): RoutePolicy[] => {
-        const raw = ensureSettings().routePolicies;
-        if (!Array.isArray(raw)) {
-            return [];
-        }
-        return raw
-            .map((item: any) => ({
-                consumer: String(item?.consumer || '').trim(),
-                task: String(item?.task || '').trim(),
-                providerId: String(item?.providerId || '').trim(),
-                profileId: item?.profileId ? String(item.profileId).trim() : undefined,
-                fallbackProviderId: item?.fallbackProviderId ? String(item.fallbackProviderId).trim() : undefined,
-            }))
-            .filter((item: RoutePolicy) => item.consumer && item.task && item.providerId);
-    };
-
-    /**
-     * 功能：判断两个 consumer 是否可视为同一调用方。
-     * 参数：
-     *   left：调用方 A。
-     *   right：调用方 B。
-     * 返回：
-     *   boolean：是否同一调用方。
-     */
-    const isSameConsumer = (left: string, right: string): boolean => {
-        return String(left || '').trim() === String(right || '').trim();
-    };
-
-    /**
-     * 功能：写入并应用路由规则。
-     * 参数：
-     *   policies：待写入规则数组。
-     * 返回：
-     *   void：无返回值。
-     */
-    const writeRoutePolicies = (policies: RoutePolicy[]): void => {
-        runtime?.setRoutePolicies?.(policies);
-        const current = ensureSettings();
-        current.routePolicies = policies;
-        saveSettings();
-    };
-
-    /**
-     * 功能：渲染路由规则列表。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const renderRoutePolicies = (): void => {
-        if (!routeListEl) {
-            return;
-        }
-        const policies = readRoutePolicies();
-        if (policies.length === 0) {
-            routeListEl.innerHTML = '<div class="stx-ui-list-empty">暂无路由规则</div>';
-            return;
-        }
-        routeListEl.innerHTML = policies
-            .map((policy: RoutePolicy, index: number) => `
-            <div class="stx-ui-list-item">
-              <div>
-                <div class="stx-ui-list-title">${policy.consumer} / ${policy.task}</div>
-                <div class="stx-ui-list-meta">
-                  服务商=${policy.providerId}
-                  ${policy.profileId ? `，参数档=${getProfileLabel(policy.profileId)}` : ''}
-                  ${policy.fallbackProviderId ? `，备用=${policy.fallbackProviderId}` : ''}
-                </div>
-              </div>
-              <button class="stx-ui-btn secondary" type="button" data-route-index="${index}">删除</button>
-            </div>
-          `)
-            .join('');
-    };
-
-    /**
-     * 功能：转义文本，防止注入到 innerHTML。
-     * 参数：
-     *   value：原始文本。
-     * 返回：
-     *   string：转义后的文本。
-     */
-    const escapeHtml = (value: string): string => {
-        return String(value || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    };
-
-    /**
-     * 功能：渲染插件映射列表。
-     * 参数：无。
-     * 返回：
-     *   Promise<void>：渲染完成。
-     */
-    const renderConsumerMappings = async (): Promise<void> => {
-        if (!consumerMapListEl) {
-            return;
-        }
-        consumerMapListEl.innerHTML = '<div class="stx-ui-list-empty">正在检测在线插件...</div>';
-        let discovered: DiscoveredConsumer[] = [];
-        try {
-            discovered = await discoverConsumers({
-                fromNamespace: 'stx_llmhub',
-                timeoutMs: 1200,
-                excludePluginIds: ['stx_llmhub'],
-                onlineOnly: true,
-            });
-        } catch (error) {
-            console.error('discoverConsumers failed:', error);
-        }
-
-        if (!discovered.length) {
-            consumerMapListEl.innerHTML = '<div class="stx-ui-list-empty">未检测到在线插件</div>';
-            refreshSettingsTooltips();
-            return;
-        }
-
-        const providerIds = getProviderIds();
-        const profiles = Object.keys(PROFILE_LABELS);
-        const policies = readRoutePolicies();
-
-        const providerOptionHtml = (selected: string): string =>
-            providerIds
-                .map((providerId: string) => `<option value="${escapeHtml(providerId)}"${providerId === selected ? ' selected' : ''}>${escapeHtml(providerId)}</option>`)
-                .join('');
-        const profileOptionHtml = (selected?: string): string =>
-            [''].concat(profiles)
-                .map((profileId: string) => {
-                    const label = profileId ? getProfileLabel(profileId) : '(不指定)';
-                    return `<option value="${escapeHtml(profileId)}"${profileId === (selected || '') ? ' selected' : ''}>${escapeHtml(label)}</option>`;
-                })
-                .join('');
-        const fallbackOptionHtml = (selected?: string): string =>
-            [''].concat(providerIds)
-                .map((providerId: string) => {
-                    const label = providerId || '(不指定)';
-                    return `<option value="${escapeHtml(providerId)}"${providerId === (selected || '') ? ' selected' : ''}>${escapeHtml(label)}</option>`;
-                })
-                .join('');
-
-        consumerMapListEl.innerHTML = discovered
-            .map((item: DiscoveredConsumer) => {
-                const currentPolicy = policies.find((policy: RoutePolicy) => policy.task === '*' && isSameConsumer(policy.consumer, item.pluginId));
-                const pluginId = item.pluginId;
-                const displayName = item.displayName || pluginId;
-                const stateText = item.isEnabled === false ? '在线（插件已关闭）' : '在线';
-                return `
-                <div class="stx-ui-list-item stx-ui-consumer-map-row" data-consumer-map-row="${escapeHtml(pluginId)}">
-                  <div class="stx-ui-consumer-map-head">
-                    <div class="stx-ui-list-title">${escapeHtml(displayName)} <span class="stx-ui-list-meta">(${escapeHtml(pluginId)})</span></div>
-                    <div class="stx-ui-consumer-map-status">
-                      <span class="stx-ui-consumer-map-status-dot" aria-hidden="true"></span>
-                      <span>${escapeHtml(stateText)}</span>
-                    </div>
-                  </div>
-                  <div class="stx-ui-consumer-map-form">
-                    <div class="stx-ui-field">
-                      <label class="stx-ui-field-label">服务商</label>
-                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-provider="${escapeHtml(pluginId)}">
-                        ${providerOptionHtml(currentPolicy?.providerId || providerIds[0] || '')}
-                      </select>
-                    </div>
-                    <div class="stx-ui-field">
-                      <label class="stx-ui-field-label">参数档</label>
-                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-profile="${escapeHtml(pluginId)}">
-                        ${profileOptionHtml(currentPolicy?.profileId)}
-                      </select>
-                    </div>
-                    <div class="stx-ui-field">
-                      <label class="stx-ui-field-label">备用服务商</label>
-                      <select class="stx-ui-select stx-ui-input-full" data-consumer-map-fallback="${escapeHtml(pluginId)}">
-                        ${fallbackOptionHtml(currentPolicy?.fallbackProviderId)}
-                      </select>
-                    </div>
-                  </div>
-                  <div class="stx-ui-consumer-map-actions">
-                    <button class="stx-ui-btn" type="button" data-consumer-map-save="${escapeHtml(pluginId)}">保存映射</button>
-                    <button class="stx-ui-btn secondary" type="button" data-consumer-map-delete="${escapeHtml(pluginId)}">删除映射</button>
-                  </div>
-                </div>
-              `;
-            })
-            .join('');
-        refreshSettingsTooltips();
-    };
-
-    /**
-     * 功能：重置路由编辑表单。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const clearRouteForm = (): void => {
-        if (routeConsumerEl) {
-            routeConsumerEl.value = '';
-        }
-        if (routeTaskEl) {
-            routeTaskEl.value = '';
-        }
-        if (routeProviderEl) {
-            routeProviderEl.value = defaultProviderEl?.value || routeProviderEl.value;
-        }
-        if (routeProfileEl) {
-            routeProfileEl.value = '';
-        }
-        if (routeFallbackEl) {
-            routeFallbackEl.value = '';
-        }
-        syncSharedSelects(document.getElementById(IDS.cardId) || document.body);
-    };
-
-    routeSaveBtn?.addEventListener('click', () => {
-        const consumer = (routeConsumerEl?.value || '').trim();
-        const task = (routeTaskEl?.value || '').trim();
-        const providerId = (routeProviderEl?.value || '').trim();
-        const profileId = (routeProfileEl?.value || '').trim();
-        const fallbackProviderId = (routeFallbackEl?.value || '').trim();
-
-        if (!consumer || !task || !providerId) {
-            alert('请填写：调用方、任务名、服务商');
-            return;
-        }
-
-        const next: RoutePolicy = {
-            consumer,
-            task,
-            providerId,
-            profileId: profileId || undefined,
-            fallbackProviderId: fallbackProviderId || undefined,
-        };
-
-        const policies = readRoutePolicies();
-        const existingIndex = policies.findIndex((item: RoutePolicy) => item.consumer === consumer && item.task === task);
-        if (existingIndex >= 0) {
-            policies[existingIndex] = next;
-        } else {
-            policies.push(next);
-        }
-        writeRoutePolicies(policies);
-        renderRoutePolicies();
-        renderConsumerMappings().catch((error: unknown) => {
-            console.error('renderConsumerMappings failed:', error);
-        });
-        clearRouteForm();
-    });
-
-    routeResetBtn?.addEventListener('click', () => {
-        clearRouteForm();
-    });
-
-    routeListEl?.addEventListener('click', (evt: Event) => {
-        const target = evt.target as HTMLElement;
-        const button = target.closest<HTMLButtonElement>('button[data-route-index]');
-        if (!button) {
-            return;
-        }
-        const index = Number(button.dataset.routeIndex);
-        if (!Number.isInteger(index)) {
-            return;
-        }
-        const policies = readRoutePolicies();
-        if (index < 0 || index >= policies.length) {
-            return;
-        }
-        policies.splice(index, 1);
-        writeRoutePolicies(policies);
-        renderRoutePolicies();
-        renderConsumerMappings().catch((error: unknown) => {
-            console.error('renderConsumerMappings failed:', error);
-        });
-    });
-
-    consumerMapRefreshBtn?.addEventListener('click', () => {
-        renderConsumerMappings().catch((error: unknown) => {
-            console.error('renderConsumerMappings failed:', error);
-        });
-    });
-
-    consumerMapListEl?.addEventListener('click', (evt: Event) => {
-        const target = evt.target as HTMLElement;
-        const saveBtn = target.closest<HTMLButtonElement>('button[data-consumer-map-save]');
-        const deleteBtn = target.closest<HTMLButtonElement>('button[data-consumer-map-delete]');
-        const pluginId = String(saveBtn?.dataset.consumerMapSave || deleteBtn?.dataset.consumerMapDelete || '').trim();
-        if (!pluginId) {
-            return;
-        }
-        if (!consumerMapListEl) {
-            return;
-        }
-
-        const policies = readRoutePolicies();
-        const nextPolicies = policies.filter(
-            (item: RoutePolicy) => !(item.task === '*' && isSameConsumer(item.consumer, pluginId))
-        );
-
-        if (saveBtn) {
-            const providerEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-provider="${pluginId}"]`);
-            const profileEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-profile="${pluginId}"]`);
-            const fallbackEl = consumerMapListEl.querySelector<HTMLSelectElement>(`select[data-consumer-map-fallback="${pluginId}"]`);
-            const providerId = String(providerEl?.value || '').trim();
-            if (!providerId) {
-                alert('请先选择服务商');
-                return;
-            }
-            nextPolicies.push({
-                consumer: pluginId,
-                task: '*',
-                providerId,
-                profileId: String(profileEl?.value || '').trim() || undefined,
-                fallbackProviderId: String(fallbackEl?.value || '').trim() || undefined,
-            });
-        }
-
-        writeRoutePolicies(nextPolicies);
-        renderRoutePolicies();
-        renderConsumerMappings().catch((error: unknown) => {
-            console.error('renderConsumerMappings failed:', error);
-        });
-    });
-
-    /**
-     * 功能：将输入框字符串转换为可选数字。
-     * 参数：
-     *   value：输入字符串。
-     * 返回：
-     *   number | undefined：合法数字或 undefined。
-     */
-    const parseOptionalNumber = (value: string): number | undefined => {
-        const trimmed = value.trim();
-        if (!trimmed) {
-            return undefined;
-        }
-        const parsed = Number(trimmed);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-            return undefined;
-        }
-        return parsed;
-    };
-
-    /**
-     * 功能：读取预算配置映射。
-     * 参数：
-     *   无。
-     * 返回：
-     *   Record<string, BudgetConfig>：预算映射。
-     */
-    const readBudgets = (): Record<string, BudgetConfig> => {
-        const raw = ensureSettings().budgets;
-        if (!raw || typeof raw !== 'object') {
-            return {};
-        }
-        return { ...raw };
-    };
-
-    /**
-     * 功能：渲染预算列表。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const renderBudgets = (): void => {
-        if (!budgetListEl) {
-            return;
-        }
-        const budgetMap = readBudgets();
-        const entries = Object.entries(budgetMap);
-        if (entries.length === 0) {
-            budgetListEl.innerHTML = '<div class="stx-ui-list-empty">暂无预算规则</div>';
-            return;
-        }
-        budgetListEl.innerHTML = entries
-            .map(([consumer, config]: [string, BudgetConfig]) => `
-            <div class="stx-ui-list-item">
-              <div>
-                <div class="stx-ui-list-title">${consumer}</div>
-                <div class="stx-ui-list-meta">
-                  maxRPM=${config.maxRPM ?? '-'},
-                  maxTokens=${config.maxTokens ?? '-'},
-                  maxLatencyMs=${config.maxLatencyMs ?? '-'},
-                  maxCost=${config.maxCost ?? '-'}
-                </div>
-              </div>
-              <button class="stx-ui-btn secondary" type="button" data-budget-consumer="${consumer}">删除</button>
-            </div>
-          `)
-            .join('');
-    };
-
-    /**
-     * 功能：重置预算编辑表单。
-     * 参数：
-     *   无。
-     * 返回：
-     *   void：无返回值。
-     */
-    const clearBudgetForm = (): void => {
-        if (budgetConsumerEl) {
-            budgetConsumerEl.value = '';
-        }
-        if (budgetMaxRpmEl) {
-            budgetMaxRpmEl.value = '';
-        }
-        if (budgetMaxTokensEl) {
-            budgetMaxTokensEl.value = '';
-        }
-        if (budgetMaxLatencyEl) {
-            budgetMaxLatencyEl.value = '';
-        }
-        if (budgetMaxCostEl) {
-            budgetMaxCostEl.value = '';
-        }
-    };
-
-    budgetSaveBtn?.addEventListener('click', () => {
-        const consumer = (budgetConsumerEl?.value || '').trim();
-        if (!consumer) {
-            alert('请填写预算的调用方');
-            return;
-        }
-
-        const config: BudgetConfig = {};
-        const maxRPM = parseOptionalNumber(budgetMaxRpmEl?.value || '');
-        const maxTokens = parseOptionalNumber(budgetMaxTokensEl?.value || '');
-        const maxLatencyMs = parseOptionalNumber(budgetMaxLatencyEl?.value || '');
-        const maxCost = parseOptionalNumber(budgetMaxCostEl?.value || '');
-
-        if (maxRPM !== undefined) {
-            config.maxRPM = maxRPM;
-        }
-        if (maxTokens !== undefined) {
-            config.maxTokens = maxTokens;
-        }
-        if (maxLatencyMs !== undefined) {
-            config.maxLatencyMs = maxLatencyMs;
-        }
-        if (maxCost !== undefined) {
-            config.maxCost = maxCost;
-        }
-
-        runtime?.setBudgetConfig?.(consumer, config);
-        const current = ensureSettings();
-        const budgets = { ...(current.budgets || {}) };
-        budgets[consumer] = config;
-        current.budgets = budgets;
-        saveSettings();
-        renderBudgets();
-        clearBudgetForm();
-    });
-
-    budgetResetBtn?.addEventListener('click', () => {
-        clearBudgetForm();
-    });
-
-    budgetListEl?.addEventListener('click', (evt: Event) => {
-        const target = evt.target as HTMLElement;
-        const button = target.closest<HTMLButtonElement>('button[data-budget-consumer]');
-        if (!button) {
-            return;
-        }
-        const consumer = String(button.dataset.budgetConsumer || '').trim();
-        if (!consumer) {
-            return;
-        }
-
-        runtime?.removeBudgetConfig?.(consumer);
-        const current = ensureSettings();
-        const budgets = { ...(current.budgets || {}) };
-        delete budgets[consumer];
-        current.budgets = budgets;
-        saveSettings();
-        renderBudgets();
-    });
-
-    refreshProviderSelects();
-    renderRoutePolicies();
+    refreshAllProviderSelects();
+    restoreGlobalDefaultsToUI();
+    renderConsumerDrivenViews();
     renderBudgets();
-
-    // ── Provider 来源切换与连接检测 ──
-
-    const providerSourceEl = document.getElementById(IDS.providerSourceId) as HTMLSelectElement | null;
-    const testResultEl = document.getElementById(IDS.testResultId) as HTMLElement | null;
-    const tavernSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-tavern-section') ?? [];
-    const customSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-custom-section') ?? [];
-    const testConnectionBtn = document.getElementById(IDS.testConnectionBtnId) as HTMLButtonElement | null;
-    const fetchModelsBtn = document.getElementById(IDS.fetchModelsBtnId) as HTMLButtonElement | null;
-    const modelListSelectEl = document.getElementById(IDS.modelListSelectId) as HTMLSelectElement | null;
-    const modelListStatusEl = document.getElementById(IDS.modelListStatusId) as HTMLElement | null;
-    const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
-    const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
-
-    /**
-     * 功能：切换 tavern / custom 可见区块。
-     */
-    const toggleProviderSourceSections = (source: string): void => {
-        const isTavern = source === 'tavern';
-        tavernSections.forEach(el => { el.style.display = isTavern ? '' : 'none'; });
-        customSections.forEach(el => { el.style.display = isTavern ? 'none' : ''; });
-    };
-
-    /**
-     * 功能：在测试结果区域显示结构化信息。
-     */
-    const showTestResult = (result: { ok: boolean; message: string; detail?: string; latencyMs?: number }): void => {
-        if (!testResultEl) return;
-        const cls = result.ok ? 'stx-ui-result-ok' : 'stx-ui-result-error';
-        const latency = result.latencyMs != null ? ` (${result.latencyMs}ms)` : '';
-        const detail = result.detail ? `<div class="stx-ui-result-detail">${escapeHtml(result.detail)}</div>` : '';
-        testResultEl.className = `stx-ui-result-area ${cls}`;
-        testResultEl.innerHTML = `<div class="stx-ui-result-msg">${escapeHtml(result.message)}${latency}</div>${detail}`;
-        testResultEl.style.display = '';
-    };
-
-    // 初始化来源选择状态
-    {
-        const savedSource = ensureSettings().providers?.[0]?.source || 'tavern';
-        if (providerSourceEl) {
-            providerSourceEl.value = savedSource;
-        }
-        toggleProviderSourceSections(savedSource);
-        syncSharedSelects(cardRoot || document.body);
-
-        // 恢复 custom 字段
-        const customCfg = ensureSettings().providers?.find(p => p.source === 'custom');
-        if (customCfg) {
-            if (customBaseUrlEl) customBaseUrlEl.value = customCfg.baseUrl || '';
-            if (customModelInputEl) customModelInputEl.value = customCfg.manualModel || customCfg.model || '';
-        }
-    }
-
-    providerSourceEl?.addEventListener('change', () => {
-        const source = providerSourceEl.value as 'tavern' | 'custom';
-        toggleProviderSourceSections(source);
-        if (testResultEl) { testResultEl.style.display = 'none'; }
-
-        // 持久化选择
-        const current = ensureSettings();
-        if (!current.providers || current.providers.length === 0) {
-            current.providers = [{ id: source === 'tavern' ? 'tavern' : 'openai', source }];
-        } else {
-            current.providers[0].source = source;
-            current.providers[0].id = source === 'tavern' ? 'tavern' : (current.providers[0].id || 'openai');
-        }
-        saveSettings();
-        runtime?.applySettingsFromContext?.().catch(() => {});
-    });
-
-    // 连接测试（tavern 直连按钮）
-    testConnectionBtn?.addEventListener('click', async () => {
-        testConnectionBtn.disabled = true;
-        testConnectionBtn.textContent = '测试中…';
-        try {
-            const source = providerSourceEl?.value || 'tavern';
-            const providerId = source === 'tavern' ? 'tavern' : (ensureSettings().defaultProvider || 'openai');
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.testConnection) {
-                showTestResult({ ok: false, message: 'Provider 不支持连接测试' });
-                return;
-            }
-            const res = await provider.testConnection();
-            showTestResult(res);
-        } catch (error: unknown) {
-            const msg = error instanceof Error ? error.message : String(error);
-            showTestResult({ ok: false, message: `测试异常: ${msg}` });
-        } finally {
-            testConnectionBtn.disabled = false;
-            testConnectionBtn.textContent = '测试连接';
-        }
-    });
-
-    // 连接测试（custom 面板的独立按钮）
-    const customTestBtn = document.getElementById(IDS.testConnectionBtnId + '_custom') as HTMLButtonElement | null;
-    customTestBtn?.addEventListener('click', async () => {
-        customTestBtn.disabled = true;
-        customTestBtn.textContent = '测试中…';
-        try {
-            const providerId = ensureSettings().defaultProvider || 'openai';
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.testConnection) {
-                showTestResult({ ok: false, message: 'Provider 不支持连接测试' });
-                return;
-            }
-            const res = await provider.testConnection();
-            showTestResult(res);
-        } catch (error: unknown) {
-            const msg = error instanceof Error ? error.message : String(error);
-            showTestResult({ ok: false, message: `测试异常: ${msg}` });
-        } finally {
-            customTestBtn.disabled = false;
-            customTestBtn.textContent = '测试连接';
-        }
-    });
-
-    // 获取模型列表
-    fetchModelsBtn?.addEventListener('click', async () => {
-        fetchModelsBtn.disabled = true;
-        if (modelListStatusEl) modelListStatusEl.textContent = '获取中…';
-        try {
-            const providerId = ensureSettings().defaultProvider || 'openai';
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.listModels) {
-                if (modelListStatusEl) modelListStatusEl.textContent = 'Provider 不支持模型列表';
-                return;
-            }
-            const res = await provider.listModels();
-            if (!res.ok || res.models.length === 0) {
-                if (modelListStatusEl) modelListStatusEl.textContent = res.message || '无可用模型';
-                return;
-            }
-
-            // 填充列表
-            if (modelListSelectEl) {
-                modelListSelectEl.innerHTML = '';
-                const emptyOpt = document.createElement('option');
-                emptyOpt.value = '';
-                emptyOpt.textContent = '（请选择模型）';
-                modelListSelectEl.appendChild(emptyOpt);
-                for (const m of res.models) {
-                    const opt = document.createElement('option');
-                    opt.value = m.id;
-                    opt.textContent = m.label || m.id;
-                    modelListSelectEl.appendChild(opt);
-                }
-                refreshSharedSelectOptions(cardRoot || document.body);
-            }
-            if (modelListStatusEl) modelListStatusEl.textContent = res.message;
-        } catch (error: unknown) {
-            const msg = error instanceof Error ? error.message : String(error);
-            if (modelListStatusEl) modelListStatusEl.textContent = `获取失败: ${msg}`;
-        } finally {
-            fetchModelsBtn.disabled = false;
-        }
-    });
-
-    // 从模型列表选中后同步到设置
-    modelListSelectEl?.addEventListener('change', () => {
-        const selected = modelListSelectEl.value;
-        if (!selected) return;
-        const current = ensureSettings();
-        if (current.providers && current.providers.length > 0) {
-            current.providers[0].selectedModel = selected;
-        }
-        current.defaultModel = selected;
-        saveSettings();
-        runtime?.applySettingsFromContext?.().catch(() => {});
-    });
-
-    // custom base URL / model 手动输入保存
-    customBaseUrlEl?.addEventListener('blur', () => {
-        const current = ensureSettings();
-        if (!current.providers || current.providers.length === 0) {
-            current.providers = [{ id: 'openai', source: 'custom' }];
-        }
-        current.providers[0].baseUrl = customBaseUrlEl.value.trim();
-        current.defaultBaseUrl = customBaseUrlEl.value.trim();
-        saveSettings();
-        runtime?.applySettingsFromContext?.().catch(() => {});
-    });
-
-    customModelInputEl?.addEventListener('blur', () => {
-        const current = ensureSettings();
-        if (!current.providers || current.providers.length === 0) {
-            current.providers = [{ id: 'openai', source: 'custom' }];
-        }
-        const model = customModelInputEl.value.trim();
-        current.providers[0].manualModel = model;
-        current.defaultModel = model;
-        saveSettings();
-        runtime?.applySettingsFromContext?.().catch(() => {});
-    });
-    const currentEnabled = ensureSettings().enabled === true;
-    setTimeout(() => {
-        (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
-            v: 1,
-            type: 'broadcast',
-            topic: 'plugin:broadcast:state_changed',
-            from: 'stx_llmhub',
-            ts: Date.now(),
-            data: { isEnabled: currentEnabled },
-        });
-    }, 500);
-
-    runtime?.applySettingsFromContext?.().catch((error: unknown) => {
-        console.error('应用 LLMHub 设置失败:', error);
-    });
 }

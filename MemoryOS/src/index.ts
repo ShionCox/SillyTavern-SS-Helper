@@ -57,12 +57,23 @@ export type {
 } from './proposal/types';
 
 // 插件注册表
+// AI 状态中心
+export type {
+    MemoryAiHealthSnapshot, MemoryAiTaskId, MemoryAiTaskRecord,
+    MemoryAiTaskStatus, CapabilityStatus, LlmHubDiagnosisLevel,
+} from './llm/ai-health-types';
+export {
+    getHealthSnapshot, isAiOperational, isCapabilityAvailable,
+    getTaskStatus, onHealthChange,
+} from './llm/ai-health-center';
+export { runAiSelfTests } from './llm/ai-self-test';
+export type { AiSelfTestResult } from './llm/ai-self-test';
 // UI 层
 import { renderSettingsUi } from './ui/index';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
 import { respond } from '../../SDK/bus/rpc';
-import { broadcast } from '../../SDK/bus/broadcast';
+import { broadcast, subscribe as subscribeBroadcast } from '../../SDK/bus/broadcast';
 import type { PluginManifest, RegistryChangeEvent } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
@@ -71,6 +82,8 @@ import { db } from './db/db';
 import { migrateMemoryOSLegacyData } from './db/legacy-migration';
 import { PluginRegistry } from './registry/registry';
 import { filterRecordText } from './core/record-filter';
+import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
+import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -122,12 +135,14 @@ class MemoryOS {
     private stxBus: EventBus;
     private registry: PluginRegistry;
     private refreshChatBindingHandler: (() => Promise<void>) | null;
+    private llmBridgeRetryTimer: ReturnType<typeof setTimeout> | null;
 
     constructor() {
         logger.info('记忆引擎初始化完成');
         this.stxBus = new EventBus();
         this.registry = new PluginRegistry();
         this.refreshChatBindingHandler = null;
+        this.llmBridgeRetryTimer = null;
 
         // 一次性旧数据迁移（stx_memory_os → ss-helper-db）
         void migrateMemoryOSLegacyData();
@@ -136,6 +151,7 @@ class MemoryOS {
         this.bindRegistryEvents();
         this.registerSelfManifest();
         this.setupPluginBusEndpoints();
+        this.initLlmBridgeOnReady();
         this.bindHostEvents();
     }
     // 功能：在运行中手动刷新当前聊天与 MemorySDK 绑定。
@@ -343,6 +359,106 @@ class MemoryOS {
         }, 250);
     }
 
+    /**
+     * 功能：在 LLMHub 就绪后补注册 MemoryOS 的 consumer。
+     * 返回：
+     *   void：无返回值。
+     */
+    private initLlmBridgeOnReady(): void {
+        const maxRetryCount = 6;
+        const retryDelayMs = 1000;
+
+        subscribeBroadcast(
+            'plugin:broadcast:state_changed',
+            (_data: unknown, envelope: { from?: string }): void => {
+                if (envelope.from !== 'stx_llmhub') {
+                    return;
+                }
+                const status = this.tryInitLlmBridge('收到 stx_llmhub 状态广播');
+                if (status === 'registered' || status === 'already_registered') {
+                    this.stopLlmBridgeRetry();
+                }
+            },
+            { from: 'stx_llmhub' }
+        );
+
+        const initialStatus = this.tryInitLlmBridge('MemoryOS 启动后立即尝试');
+        if (initialStatus === 'registered' || initialStatus === 'already_registered') {
+            return;
+        }
+        this.scheduleLlmBridgeRetry(maxRetryCount, retryDelayMs);
+    }
+
+    /**
+     * 功能：停止当前尚未完成的 LLMHub 注册重试。
+     * 返回：
+     *   void：无返回值。
+     */
+    private stopLlmBridgeRetry(): void {
+        if (!this.llmBridgeRetryTimer) {
+            return;
+        }
+        clearTimeout(this.llmBridgeRetryTimer);
+        this.llmBridgeRetryTimer = null;
+    }
+
+    /**
+     * 功能：尝试向当前 LLMHub 实例注册 MemoryOS consumer，并输出诊断日志。
+     * 参数：
+     *   reason：本次触发注册的原因。
+     * 返回：
+     *   BridgeInitStatus：本次注册尝试的结果。
+     */
+    private tryInitLlmBridge(reason: string): BridgeInitStatus {
+        const status = initLlmBridge();
+        if (status === 'registered') {
+            setLlmHubMounted(true);
+            setConsumerRegistered(true);
+            logger.info(`[LLMHub桥接] 已向当前 LLMHub 实例注册 MemoryOS 消费方，触发原因: ${reason}`);
+            return status;
+        }
+        if (status === 'already_registered') {
+            setLlmHubMounted(true);
+            setConsumerRegistered(true);
+            logger.info(`[LLMHub桥接] 当前 LLMHub 实例已完成注册，跳过重复注册，触发原因: ${reason}`);
+            return status;
+        }
+        if (status === 'unsupported') {
+            setLlmHubMounted(true);
+            setConsumerRegistered(false);
+            logger.warn(`[LLMHub桥接] 检测到 STX.llm，但缺少 registerConsumer，触发原因: ${reason}`);
+            return status;
+        }
+        setLlmHubMounted(false);
+        logger.info(`[LLMHub桥接] LLMHub 尚未就绪，暂不注册，触发原因: ${reason}`);
+        return status;
+    }
+
+    /**
+     * 功能：在 LLMHub 延迟挂载时执行有界重试补偿。
+     * 参数：
+     *   remainingRetries：剩余重试次数。
+     *   delayMs：每次重试之间的延迟毫秒数。
+     * 返回：
+     *   void：无返回值。
+     */
+    private scheduleLlmBridgeRetry(remainingRetries: number, delayMs: number): void {
+        this.stopLlmBridgeRetry();
+        if (remainingRetries <= 0) {
+            logger.warn('[LLMHub桥接] 多次重试后仍未检测到可注册的 LLMHub 实例，停止补偿注册。');
+            return;
+        }
+
+        this.llmBridgeRetryTimer = setTimeout((): void => {
+            this.llmBridgeRetryTimer = null;
+            const status = this.tryInitLlmBridge(`延迟重试，剩余次数: ${remainingRetries - 1}`);
+            if (status === 'registered' || status === 'already_registered') {
+                return;
+            }
+            this.scheduleLlmBridgeRetry(remainingRetries - 1, delayMs);
+        }, delayMs);
+    }
+
     private initGlobalSTX() {
         // 创建全局 STX 互通底座
         (window as any).STX = {
@@ -383,7 +499,9 @@ class MemoryOS {
             return readSettings().enabled === true;
         };
         const isAiModeEnabled = () => {
-            return readSettings().aiMode === true;
+            const enabled = readSettings().aiMode === true;
+            setAiModeEnabled(enabled);
+            return enabled;
         };
         const resolveRecordableChatBinding = (ctx: any): {
             valid: boolean;

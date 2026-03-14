@@ -15,15 +15,15 @@ export interface LLMHubSettingsIds {
 
     // Tabs
     tabMainId: string;
-    tabRouterId: string;
-    tabConsumerMapId: string;
+    tabRouteId: string;
+    tabQueueId: string;
     tabVaultId: string;
     tabAboutId: string;
 
     // Panels
     panelMainId: string;
-    panelRouterId: string;
-    panelConsumerMapId: string;
+    panelRouteId: string;
+    panelQueueId: string;
     panelVaultId: string;
     panelAboutId: string;
 
@@ -31,24 +31,46 @@ export interface LLMHubSettingsIds {
     enabledId: string;
     globalProfileId: string;
 
-    // Router
-    defaultProviderId: string;
-    defaultModelId: string;
-    routerAdvancedToggleId: string;
-    routerAdvancedBodyId: string;
-    routeConsumerId: string;
-    routeTaskId: string;
-    routeProviderId: string;
-    routeProfileId: string;
-    routeFallbackProviderId: string;
-    routeSaveBtnId: string;
-    routeResetBtnId: string;
-    routeListId: string;
+    // Provider Source & Connection
+    providerSourceId: string;
+    customBaseUrlId: string;
+    customModelInputId: string;
+    testConnectionBtnId: string;
+    testResultId: string;
+    tavernInfoId: string;
+    tavernInfoStatusId: string;
+    tavernInfoListId: string;
+    fetchModelsBtnId: string;
+    modelListSelectId: string;
+    modelListStatusId: string;
 
-    // Consumer Mapping
-    consumerMapRefreshBtnId: string;
+    // ─── Route Panel: 3-view sub-tabs ───
+    subTabGlobalDefaultsId: string;
+    subTabPluginDefaultsId: string;
+    subTabTaskOverridesId: string;
+    subPanelGlobalDefaultsId: string;
+    subPanelPluginDefaultsId: string;
+    subPanelTaskOverridesId: string;
 
-    // Budget
+    // View A: Global Capability Defaults
+    globalDefGenProviderId: string;
+    globalDefGenModelId: string;
+    globalDefGenProfileId: string;
+    globalDefEmbProviderId: string;
+    globalDefEmbModelId: string;
+    globalDefRerankProviderId: string;
+    globalDefRerankModelId: string;
+    globalDefSaveBtnId: string;
+
+    // View B: Plugin Defaults
+    pluginDefaultsListId: string;
+    pluginDefaultsRefreshBtnId: string;
+
+    // View C: Task Overrides
+    taskOverridesListId: string;
+    taskOverridesRefreshBtnId: string;
+
+    // Budget (legacy compat)
     budgetConsumerId: string;
     budgetMaxRpmId: string;
     budgetMaxTokensId: string;
@@ -58,19 +80,15 @@ export interface LLMHubSettingsIds {
     budgetResetBtnId: string;
     budgetListId: string;
 
+    // Queue & Display
+    queueSnapshotListId: string;
+    queueRefreshBtnId: string;
+    silentPermissionsListId: string;
+    recentHistoryListId: string;
+
     // Vault
     vaultAddServiceId: string;
     vaultApiKeyId: string;
     vaultSaveBtnId: string;
     vaultClearBtnId: string;
-
-    // Provider Source & Connection
-    providerSourceId: string;
-    customBaseUrlId: string;
-    customModelInputId: string;
-    testConnectionBtnId: string;
-    testResultId: string;
-    fetchModelsBtnId: string;
-    modelListSelectId: string;
-    modelListStatusId: string;
 }

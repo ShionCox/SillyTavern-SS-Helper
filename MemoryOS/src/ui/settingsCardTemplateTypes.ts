@@ -86,4 +86,12 @@ export interface MemoryOSSettingsIds {
     logicTableEntitySelectId: string;
     logicTableRefreshBtnId: string;
     logicTableContainerId: string;
+
+    // AI 诊断面板
+    aiDiagOverviewId: string;
+    aiDiagCapabilitiesId: string;
+    aiDiagRecentTasksId: string;
+    aiDiagRefreshBtnId: string;
+    aiSelfTestAllBtnId: string;
+    aiSelfTestResultsId: string;
 }

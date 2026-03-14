@@ -1,9 +1,9 @@
 import { db, type DBTemplate, type DBTemplateBinding } from '../db/db';
-import type { WorldTemplate, WorldInfoEntry } from './types';
+import type { WorldTemplate, WorldInfoEntry, WorldContextBundle } from './types';
 import { Logger } from '../../../SDK/logger';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
-import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { TemplateBuilder } from './template-builder';
 
 const logger = new Logger('TemplateManager');
 
@@ -17,11 +17,14 @@ export class TemplateManager {
     private syncInterval: ReturnType<typeof setInterval> | null = null;
     private worldInfoReader: WorldInfoReader;
     private metaManager: MetaManager;
+    private templateBuilder: TemplateBuilder;
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
         this.worldInfoReader = new WorldInfoReader();
         this.metaManager = new MetaManager(chatKey);
+        this.templateBuilder = new TemplateBuilder(chatKey);
+        this.templateBuilder.setTemplateManager(this);
     }
 
     /**
@@ -211,6 +214,7 @@ export class TemplateManager {
 
     /**
      * 当世界书变化时执行内容级 hash 检测并按需重建模板。
+     * 模板构建统一委托给 TemplateBuilder（唯一权威实现），此处不再直接拼装 LLM 任务。
      * @param forceRebuild true 表示忽略 hash 缓存强制重建
      */
     private async onWorldInfoChanged(forceRebuild: boolean): Promise<string | null> {
@@ -240,61 +244,19 @@ export class TemplateManager {
             return existingBinding.activeTemplateId;
         }
 
-        const globalST = window as any;
-        if (!globalST?.STX?.llm) {
-            logger.warn('未检测到 STX.llm，无法自动构建世界模板。');
-            return null;
-        }
-
-        const bundledPrompt = this.buildWorldPrompt(worldInfoEntries);
-        logger.info(`世界书封包完成，总字符长度：${bundledPrompt.length}，开始构建模板。`);
-
-        const response = await globalST.STX.llm.runTask({
-            consumer: MEMORY_OS_PLUGIN_ID,
-            task: 'world.template.build',
-            input: {
-                systemPrompt: '你是世界模板构建器，请根据世界书生成结构化模板 JSON。',
-                worldInfo: worldInfoEntries,
-                prompt: bundledPrompt,
-            },
-        });
-
-        if (!response.ok) {
-            logger.warn(`世界模板构建失败：${response.error}`);
-            return null;
-        }
-
-        const rawTemplate = response.data || {};
-        const templateId = rawTemplate.templateId || crypto.randomUUID();
-        const template: WorldTemplate = {
-            templateId,
+        // 委托给 TemplateBuilder 执行 LLM 构建
+        const bundle: WorldContextBundle = {
             chatKey: this.chatKey,
-            worldType: rawTemplate.worldType || 'custom',
-            name: rawTemplate.name || `自动模板-${new Date().toLocaleString()}`,
-            entities: rawTemplate.entities || {},
-            factTypes: rawTemplate.factTypes || [],
-            extractPolicies: rawTemplate.extractPolicies || {},
-            injectionLayout: rawTemplate.injectionLayout || {},
-            worldInfoRef: {
-                book: this.activeWorldNames.join(','),
-                hash: currentHash,
-            },
-            createdAt: Date.now(),
+            worldInfo: worldInfoEntries,
         };
+        const template = await this.templateBuilder.ensureTemplate(bundle, forceRebuild);
+        if (!template) {
+            logger.warn('模板构建失败，保留当前有效模板。');
+            return existingBinding?.activeTemplateId ?? null;
+        }
 
-        await this.save(template);
-        await this.metaManager.setActiveTemplateId(templateId);
-        await db.template_bindings.put({
-            bindingKey: this.chatKey,
-            chatKey: this.chatKey,
-            activeTemplateId: templateId,
-            worldInfoHash: currentHash,
-            isLocked: existingBinding?.isLocked ?? false,
-            boundAt: Date.now(),
-        });
-
-        logger.success(`已更新当前会话模板：${templateId}`);
-        return templateId;
+        logger.success(`已更新当前会话模板：${template.templateId}`);
+        return template.templateId;
     }
 
     /**
@@ -332,37 +294,6 @@ export class TemplateManager {
         }
 
         return entries;
-    }
-
-    /**
-     * 将世界书条目拼接为提示词文本。
-     */
-    private buildWorldPrompt(entries: WorldInfoEntry[]): string {
-        const lines: string[] = [
-            '# 世界背景文献设定',
-            '',
-            '请根据以下世界书内容生成当前聊天专属的数据模板。',
-            '',
-        ];
-
-        const grouped = new Map<string, WorldInfoEntry[]>();
-        for (const entry of entries) {
-            const list = grouped.get(entry.book) || [];
-            list.push(entry);
-            grouped.set(entry.book, list);
-        }
-
-        for (const [book, bookEntries] of grouped) {
-            lines.push(`## 世界书文献：${book}`);
-            for (const item of bookEntries) {
-                const keywordText = item.keywords.length > 0 ? `[${item.keywords.join(', ')}]` : '[无关键词]';
-                lines.push(`### 词条项：${item.entry} ${keywordText}`);
-                lines.push(item.content);
-                lines.push('');
-            }
-        }
-
-        return lines.join('\n');
     }
 
     /**

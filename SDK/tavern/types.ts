@@ -23,6 +23,8 @@ export interface SdkTavernContextEvent {
   characterId?: number | string;
   this_chid?: number | string;
   groupId?: string;
+  mainApi?: string;
+  chatCompletionSettings?: Record<string, unknown>;
   chatId?: string;
   chat_id?: string;
   characters?: SdkTavernCharacterEvent[];

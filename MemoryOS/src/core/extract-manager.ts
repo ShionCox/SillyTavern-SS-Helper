@@ -3,7 +3,9 @@ import type { EventsManager } from './events-manager';
 import type { TemplateManager } from '../template/template-manager';
 import { MetaManager } from './meta-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
 import type { EventEnvelope } from '../../../SDK/stx';
+import type { MemoryAiTaskId } from '../llm/ai-health-types';
 
 const logger = new Logger('ExtractManager');
 
@@ -42,12 +44,13 @@ export class ExtractManager {
      * @returns 无返回值。
      */
     public async kickOffExtraction(): Promise<void> {
-        const globalST = window as any;
-        const llm = globalST?.STX?.llm;
-        if (!llm) {
-            logger.warn('LLMHub 未就绪，跳过抽取');
+        // AI 模式守卫：aiMode=false 时不触发摘要抽取
+        const summarizeGuard = checkAiModeGuard(MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId);
+        if (summarizeGuard) {
             return;
         }
+
+        const globalST = window as any;
 
         const memory = globalST?.STX?.memory;
         if (!memory?.proposal?.processProposal) {
@@ -164,16 +167,14 @@ export class ExtractManager {
         budget: { maxTokens: number; maxLatencyMs: number; maxCost: number }
     ): Promise<void> {
         const globalST = window as any;
-        const llm = globalST?.STX?.llm;
         const memory = globalST?.STX?.memory;
-        if (!llm || !memory?.proposal?.processProposal) {
+        if (!memory?.proposal?.processProposal) {
             return;
         }
 
-        const response = await llm.runTask({
-            consumer: MEMORY_OS_PLUGIN_ID,
+        const response = await runGeneration(
             task,
-            input: {
+            {
                 systemPrompt,
                 events: eventsText,
                 schemaContext: typeof schemaContext === 'string'
@@ -181,7 +182,7 @@ export class ExtractManager {
                     : JSON.stringify(schemaContext, null, 2),
             },
             budget,
-        });
+        );
 
         if (!response.ok) {
             logger.warn(`${task} 请求失败：${response.error} (${response.reasonCode || 'unknown'})`);

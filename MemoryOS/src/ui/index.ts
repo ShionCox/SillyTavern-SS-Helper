@@ -4,6 +4,9 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
+import { getHealthSnapshot, onHealthChange, setAiModeEnabled } from '../llm/ai-health-center';
+import { runAiSelfTests } from '../llm/ai-self-test';
+import type { MemoryAiHealthSnapshot } from '../llm/ai-health-types';
 import { openRecordEditor } from './recordEditor';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
@@ -121,6 +124,13 @@ const IDS: MemoryOSSettingsIds = {
     logicTableRefreshBtnId: `${NAMESPACE}-logic-table-refresh`,
     logicTableContainerId: `${NAMESPACE}-logic-table-container`,
     recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
+    // AI 诊断面板
+    aiDiagOverviewId: `${NAMESPACE}-ai-diag-overview`,
+    aiDiagCapabilitiesId: `${NAMESPACE}-ai-diag-capabilities`,
+    aiDiagRecentTasksId: `${NAMESPACE}-ai-diag-recent-tasks`,
+    aiDiagRefreshBtnId: `${NAMESPACE}-ai-diag-refresh`,
+    aiSelfTestAllBtnId: `${NAMESPACE}-ai-self-test-all`,
+    aiSelfTestResultsId: `${NAMESPACE}-ai-self-test-results`,
 };
 
 /**
@@ -801,23 +811,35 @@ function bindUiEvents() {
         aiToggleEl.checked = initSettings['aiMode'] === true;
     }
 
-    // 更新界面状态灯（提供绿Connected / 红Disconnected 变换）
+    // 更新界面状态灯（提供明确的诊断级别文案）
     const updateLinkStatus = (alive: boolean, isEnabled: boolean) => {
         if (!aiLightEl || !aiToggleEl) return;
         if (alive && isEnabled) {
-            aiLightEl.className = 'fa-solid fa-link';
-            aiLightEl.style.color = 'var(--stx-memory-success)';
-            aiLightEl.setAttribute('data-tip', 'LLMHub 通信正常。');
+            const snapshot = getHealthSnapshot();
+            if (snapshot.diagnosisLevel === 'fully_operational') {
+                aiLightEl.className = 'fa-solid fa-link';
+                aiLightEl.style.color = 'var(--stx-memory-success)';
+                aiLightEl.setAttribute('data-tip', snapshot.diagnosisText);
+            } else if (snapshot.diagnosisLevel === 'online_partial_capabilities') {
+                aiLightEl.className = 'fa-solid fa-link';
+                aiLightEl.style.color = 'var(--stx-memory-warning, #ff9800)';
+                aiLightEl.setAttribute('data-tip', snapshot.diagnosisText);
+            } else {
+                aiLightEl.className = 'fa-solid fa-link';
+                aiLightEl.style.color = 'var(--stx-memory-success)';
+                aiLightEl.setAttribute('data-tip', 'LLMHub 通信正常。');
+            }
             aiLightEl.removeAttribute('title');
             aiToggleEl.disabled = false;
         } else {
+            const snapshot = getHealthSnapshot();
             aiLightEl.className = 'fa-solid fa-link-slash';
             aiLightEl.style.color = 'var(--stx-memory-danger-contrast)';
             aiLightEl.setAttribute(
                 'data-tip',
-                alive
+                snapshot.diagnosisText || (alive
                     ? 'LLMHub 已关闭，AI 模式不可用。'
-                    : '未检测到 LLMHub，AI 模式不可用。'
+                    : '未检测到 LLMHub，AI 模式不可用。')
             );
             aiLightEl.removeAttribute('title');
             aiToggleEl.checked = false;
@@ -868,6 +890,7 @@ function bindUiEvents() {
             if (currentContext) {
                 const currentSettings = ensureMemorySettings(currentContext);
                 currentSettings['aiMode'] = aiToggleEl.checked;
+                setAiModeEnabled(aiToggleEl.checked);
                 currentContext.saveSettingsDebounced?.();
             }
         });
@@ -906,6 +929,159 @@ function bindUiEvents() {
                 logger.error('[Bus Inspector Error]', e);
             } finally {
                 helloBtn.textContent = '向 LLMHub 打招呼';
+            }
+        });
+    }
+
+    // ==========================================
+    // ==== AI 诊断面板 ====
+    // ==========================================
+
+    const aiDiagOverviewEl = document.getElementById(IDS.aiDiagOverviewId);
+    const aiDiagCapabilitiesEl = document.getElementById(IDS.aiDiagCapabilitiesId);
+    const aiDiagRecentTasksEl = document.getElementById(IDS.aiDiagRecentTasksId);
+    const aiDiagRefreshBtn = document.getElementById(IDS.aiDiagRefreshBtnId);
+    const aiSelfTestAllBtn = document.getElementById(IDS.aiSelfTestAllBtnId);
+    const aiSelfTestResultsEl = document.getElementById(IDS.aiSelfTestResultsId);
+
+    const TASK_LABELS: Record<string, string> = {
+        'memory.summarize': '摘要',
+        'memory.extract': '抽取',
+        'world.template.build': '模板构建',
+        'memory.vector.embed': '向量化',
+        'memory.search.rerank': '重排',
+    };
+
+    const refreshAiDiagnostics = (): void => {
+        const snapshot: MemoryAiHealthSnapshot = getHealthSnapshot();
+
+        // 总览
+        if (aiDiagOverviewEl) {
+            const diagIcon = snapshot.diagnosisLevel === 'fully_operational' ? '✅'
+                : snapshot.diagnosisLevel === 'online_partial_capabilities' ? '⚠️'
+                : snapshot.diagnosisLevel === 'mounted_not_registered' ? '🔸'
+                : '❌';
+            const lines: string[] = [
+                `${diagIcon} ${snapshot.diagnosisText}`,
+                `LLMHub 挂载: ${snapshot.llmHubMounted ? '是' : '否'}`,
+                `Consumer 注册: ${snapshot.consumerRegistered ? '已注册' : '未注册'}`,
+                `AI 模式: ${snapshot.aiModeEnabled ? '启用' : '关闭'}`,
+            ];
+            aiDiagOverviewEl.textContent = lines.join('\n');
+        }
+
+        // 能力状态
+        if (aiDiagCapabilitiesEl) {
+            aiDiagCapabilitiesEl.innerHTML = snapshot.capabilities.map((cap) => {
+                const color = cap.state === 'available' ? 'var(--stx-memory-success, #4caf50)'
+                    : cap.state === 'degraded' ? 'var(--stx-memory-warning, #ff9800)'
+                    : 'var(--stx-memory-danger-contrast, #f44336)';
+                const icon = cap.state === 'available' ? 'fa-circle-check'
+                    : cap.state === 'degraded' ? 'fa-exclamation-triangle'
+                    : 'fa-circle-xmark';
+                return `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:4px;background:rgba(0,0,0,0.2);font-size:12px;">
+                  <i class="fa-solid ${icon}" style="color:${color};font-size:11px;"></i>
+                  <span>${cap.capability}</span>
+                </span>`;
+            }).join('');
+        }
+
+        // 最近任务
+        if (aiDiagRecentTasksEl) {
+            const taskIds = Object.keys(snapshot.tasks) as Array<keyof typeof snapshot.tasks>;
+            if (taskIds.length === 0) {
+                aiDiagRecentTasksEl.textContent = '暂无任务记录';
+            } else {
+                const lines: string[] = [];
+                for (const tid of taskIds) {
+                    const status = snapshot.tasks[tid];
+                    const label = TASK_LABELS[tid] || tid;
+                    const stateText = status.state === 'idle' ? '空闲'
+                        : status.state === 'running' ? '运行中'
+                        : status.state === 'success' ? '成功'
+                        : '失败';
+                    const stateIcon = status.state === 'success' ? '✅'
+                        : status.state === 'failed' ? '❌'
+                        : status.state === 'running' ? '⏳'
+                        : '⬜';
+                    let line = `${stateIcon} ${label}: ${stateText}`;
+                    if (status.lastRecord) {
+                        const time = new Date(status.lastRecord.ts).toLocaleTimeString();
+                        line += ` (${time}, ${status.lastRecord.durationMs}ms)`;
+                        if (!status.lastRecord.ok && status.lastRecord.error) {
+                            line += `\n   → ${status.lastRecord.error}`;
+                        }
+                    }
+                    lines.push(line);
+                }
+                // 补充最近记录
+                if (snapshot.recentRecords.length > 0) {
+                    lines.push('');
+                    lines.push('── 最近执行记录 ──');
+                    for (const rec of snapshot.recentRecords.slice(0, 10)) {
+                        const icon = rec.ok ? '✅' : '❌';
+                        const time = new Date(rec.ts).toLocaleTimeString();
+                        const label = TASK_LABELS[rec.taskId] || rec.taskId;
+                        let line = `${icon} ${time} ${label} ${rec.durationMs}ms`;
+                        if (!rec.ok && rec.error) {
+                            line += ` - ${rec.error}`;
+                        }
+                        if (rec.note) {
+                            line += ` (${rec.note})`;
+                        }
+                        lines.push(line);
+                    }
+                }
+                aiDiagRecentTasksEl.textContent = lines.join('\n');
+            }
+        }
+    };
+
+    // 初始渲染
+    refreshAiDiagnostics();
+
+    // 订阅健康状态变化自动刷新
+    onHealthChange(refreshAiDiagnostics);
+
+    if (aiDiagRefreshBtn) {
+        aiDiagRefreshBtn.addEventListener('click', () => {
+            refreshAiDiagnostics();
+            toast.success('诊断信息已刷新');
+        });
+    }
+
+    // 全部自测
+    if (aiSelfTestAllBtn) {
+        aiSelfTestAllBtn.addEventListener('click', async () => {
+            if (aiSelfTestResultsEl) {
+                aiSelfTestResultsEl.textContent = '正在运行自测，请稍候...';
+            }
+            aiSelfTestAllBtn.textContent = '自测中...';
+            (aiSelfTestAllBtn as HTMLButtonElement).disabled = true;
+
+            try {
+                const results = await runAiSelfTests();
+                if (aiSelfTestResultsEl) {
+                    const lines = results.map((r) => {
+                        const icon = r.ok ? '✅' : '❌';
+                        const label = TASK_LABELS[r.taskId] || r.taskId;
+                        let line = `${icon} ${label}: ${r.ok ? '通过' : '失败'} (${r.durationMs}ms)`;
+                        if (r.detail) line += ` — ${r.detail}`;
+                        if (!r.ok && r.error) line += `\n   → ${r.error}`;
+                        return line;
+                    });
+                    const passCount = results.filter((r) => r.ok).length;
+                    lines.unshift(`自测完成：${passCount}/${results.length} 项通过\n`);
+                    aiSelfTestResultsEl.textContent = lines.join('\n');
+                }
+                refreshAiDiagnostics();
+            } catch (e: any) {
+                if (aiSelfTestResultsEl) {
+                    aiSelfTestResultsEl.textContent = `自测异常: ${String(e?.message || e)}`;
+                }
+            } finally {
+                aiSelfTestAllBtn.innerHTML = '<i class="fa-solid fa-vial"></i>&nbsp;运行全部自测';
+                (aiSelfTestAllBtn as HTMLButtonElement).disabled = false;
             }
         });
     }

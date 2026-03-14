@@ -1,55 +1,66 @@
-import type { LLMSDK } from '../../../SDK/stx';
 import type { WorldTemplate, WorldContextBundle } from './types';
-import { TemplateManager } from './template-manager';
+import type { TemplateManager } from './template-manager';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
-import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
+import type { MemoryAiTaskId } from '../llm/ai-health-types';
 
 /**
- * 世界模板构建器 —— 编排 `world.template.build` 任务
+ * 世界模板构建器 —— 唯一权威的 `world.template.build` 任务编排入口
  * 职责：检测世界书变更 → 调用 LLM → 校验输出 → 存储模板 → 绑定 chatKey
+ * TemplateManager 不再直接拼装 LLM 任务，统一委托到这里。
  */
 export class TemplateBuilder {
     private chatKey: string;
-    private templateManager: TemplateManager;
+    private templateManager: TemplateManager | null;
     private worldInfoReader: WorldInfoReader;
     private metaManager: MetaManager;
 
-    constructor(chatKey: string) {
+    constructor(chatKey: string, templateManager?: TemplateManager) {
         this.chatKey = chatKey;
-        this.templateManager = new TemplateManager(chatKey);
+        this.templateManager = templateManager ?? null;
         this.worldInfoReader = new WorldInfoReader();
         this.metaManager = new MetaManager(chatKey);
+    }
+
+    /** 供 TemplateManager 在构造后注入自身引用，打破循环依赖 */
+    setTemplateManager(mgr: TemplateManager): void {
+        this.templateManager = mgr;
+    }
+
+    /** 获取 TemplateManager 实例（懒加载兜底） */
+    private getTemplateManager(): TemplateManager {
+        if (this.templateManager) return this.templateManager;
+        // 延迟导入避免循环依赖
+        const { TemplateManager: TM } = require('./template-manager');
+        this.templateManager = new TM(this.chatKey) as TemplateManager;
+        return this.templateManager;
     }
 
     /**
      * 检查并按需重建世界模板
      * 返回当前活跃的模板
      * @param bundle 世界上下文束
-     * @param llmSdk LLM Hub 实例（可选，无则跳过 AI 生成）
+     * @param forceRebuild 是否强制重建（忽略 hash 缓存）
      */
     async ensureTemplate(
         bundle: WorldContextBundle,
-        llmSdk?: LLMSDK
+        forceRebuild = false,
     ): Promise<WorldTemplate | null> {
         // 1. 计算当前世界书 hash
         const currentHash = await this.worldInfoReader.computeHash(bundle.worldInfo);
 
-        // 2. 检查是否已有匹配 hash 的模板
-        const existing = await this.templateManager.findByWorldInfoHash(currentHash);
-        if (existing) {
-            // hash 一致，确保 meta 指向正确的模板
-            await this.metaManager.setActiveTemplateId(existing.templateId);
-            return existing;
+        // 2. 检查是否已有匹配 hash 的模板（非强制重建时）
+        if (!forceRebuild) {
+            const existing = await this.getTemplateManager().findByWorldInfoHash(currentHash);
+            if (existing) {
+                await this.metaManager.setActiveTemplateId(existing.templateId);
+                return existing;
+            }
         }
 
-        // 3. Hash 不一致或不存在，需要重建
-        if (!llmSdk) {
-            console.warn('[TemplateBuilder] 无 LLM Hub 实例，无法生成世界模板');
-            return null;
-        }
-
-        return this.buildFromLLM(bundle, currentHash, llmSdk);
+        // 3. Hash 不一致或不存在或强制，需要重建
+        return this.buildFromLLM(bundle, currentHash);
     }
 
     /**
@@ -58,8 +69,13 @@ export class TemplateBuilder {
     private async buildFromLLM(
         bundle: WorldContextBundle,
         worldInfoHash: string,
-        llmSdk: LLMSDK
     ): Promise<WorldTemplate | null> {
+        // AI 模式守卫
+        const guard = checkAiModeGuard(MEMORY_TASKS.TEMPLATE_BUILD as MemoryAiTaskId);
+        if (guard) {
+            return null;
+        }
+
         const compressedWorldInfo = this.worldInfoReader.compressForPrompt(bundle.worldInfo);
 
         // 构造 Prompt
@@ -80,19 +96,18 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
 请分析以上世界观，生成世界模板 JSON。`;
 
         // 调用 LLM Hub
-        const result = await llmSdk.runTask<any>({
-            consumer: MEMORY_OS_PLUGIN_ID,
-            task: 'world.template.build',
-            input: {
+        const result = await runGeneration<any>(
+            MEMORY_TASKS.TEMPLATE_BUILD,
+            {
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt },
                 ],
                 temperature: 0.3,
             },
-            schema: TEMPLATE_SCHEMA,
-            budget: { maxTokens: 4096, maxLatencyMs: 30000 },
-        });
+            { maxTokens: 4096, maxLatencyMs: 30000 },
+            TEMPLATE_SCHEMA,
+        );
 
         if (!result.ok) {
             console.error('[TemplateBuilder] LLM 生成模板失败:', result.error);
@@ -115,7 +130,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
         };
 
         // 5. 保存并绑定
-        await this.templateManager.save(template);
+        await this.getTemplateManager().save(template);
         await this.metaManager.setActiveTemplateId(template.templateId);
 
         return template;

@@ -1,6 +1,6 @@
 import { db } from '../db/db';
 import { Logger } from '../../../SDK/logger';
-import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { runEmbed } from '../llm/memoryLlmBridge';
 
 const logger = new Logger('VectorManager');
 
@@ -42,23 +42,13 @@ export class VectorManager {
      * @returns 写入的 chunkId 列表
      */
     public async indexText(text: string, bookId?: string): Promise<string[]> {
-        const llm = (window as any).STX?.llm;
-        if (!llm?.embed) {
-            logger.warn('LLMHub 不支持 embed，向量索引跳过。');
-            return [];
-        }
-
         const chunks = this.splitIntoChunks(text, this.chunkSize);
         if (chunks.length === 0) return [];
 
         logger.info(`开始向量索引：${chunks.length} 个文本块，bookId=${bookId ?? '(无)'}`);
 
         try {
-            // 批量 embed
-            const embedResult = await Promise.race([
-                llm.embed({ consumer: MEMORY_OS_PLUGIN_ID, texts: chunks }),
-                new Promise<null>((_, reject) => setTimeout(() => reject(new Error('embed 超时')), 15000))
-            ]) as any;
+            const embedResult = await runEmbed(chunks, { maxLatencyMs: 15000 }) as any;
 
             if (!embedResult?.ok || !Array.isArray(embedResult.vectors)) {
                 logger.warn('embed 返回格式异常，向量索引跳过。');
@@ -125,16 +115,8 @@ export class VectorManager {
      * @returns 按相似度排序的文本块列表
      */
     public async search(query: string, topK = this.defaultTopK): Promise<Array<{ chunkId: string; content: string; score: number }>> {
-        const llm = (window as any).STX?.llm;
-        if (!llm?.embed) {
-            return []; // 不支持 embed，直接返回空
-        }
-
         try {
-            const embedResult = await Promise.race([
-                llm.embed({ consumer: MEMORY_OS_PLUGIN_ID, texts: [query] }),
-                new Promise<null>((_, reject) => setTimeout(() => reject(new Error('embed 超时')), 8000))
-            ]) as any;
+            const embedResult = await runEmbed([query], { maxLatencyMs: 8000 }) as any;
 
             if (!embedResult?.ok || !Array.isArray(embedResult.vectors?.[0])) {
                 return [];

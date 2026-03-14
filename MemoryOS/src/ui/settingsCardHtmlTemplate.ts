@@ -405,6 +405,61 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
             </div>
             <pre id="${ids.recordFilterPreviewOutputId}" style="width:100%; white-space:pre-wrap; word-break:break-word; font-size:12px; background:rgba(0,0,0,0.2); border-radius:6px; padding:8px; margin:0;" data-tip="显示预览结果与命中规则。"></pre>
           </div>
+
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-stethoscope"></i>
+            <span>AI 诊断</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai diagnosis overview capabilities status">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">AI 总览</div>
+              <div class="stx-ui-item-desc">显示 LLMHub 挂载、consumer 注册、能力状态和诊断结果。</div>
+            </div>
+            <div id="${ids.aiDiagOverviewId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; font-family:monospace; white-space:pre-wrap;">
+              正在加载诊断信息...
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai capabilities chat json embeddings rerank">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">能力状态</div>
+              <div class="stx-ui-item-desc">分别显示 chat、json、embeddings、rerank 的可用/缺失/降级状态。</div>
+            </div>
+            <div id="${ids.aiDiagCapabilitiesId}" style="width:100%; font-size:12px; display:flex; flex-wrap:wrap; gap:8px;">
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai recent tasks history status">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">最近任务</div>
+              <div class="stx-ui-item-desc">显示五类任务最近一次执行时间、结果与失败原因。</div>
+            </div>
+            <div id="${ids.aiDiagRecentTasksId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; max-height:240px; overflow-y:auto; font-family:monospace; white-space:pre-wrap;">
+              暂无任务记录
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.aiDiagRefreshBtnId}" data-tip="刷新 AI 诊断信息。" type="button" class="stx-ui-btn secondary">
+                <i class="fa-solid fa-rotate"></i>&nbsp;刷新诊断
+              </button>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai self test diagnostic">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">任务自测</div>
+              <div class="stx-ui-item-desc">使用固定样例验证五类 AI 任务。不写入数据库，不改模板。</div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.aiSelfTestAllBtnId}" data-tip="运行全部五项 AI 自测。" type="button" class="stx-ui-btn">
+                <i class="fa-solid fa-vial"></i>&nbsp;运行全部自测
+              </button>
+            </div>
+            <div id="${ids.aiSelfTestResultsId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; max-height:240px; overflow-y:auto; font-family:monospace; white-space:pre-wrap;">
+              点击上方按钮运行自测
+            </div>
+          </div>
         </div>
 
         <div id="${ids.panelDbId}" class="stx-ui-panel" hidden>

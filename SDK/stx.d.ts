@@ -235,22 +235,129 @@ export interface MemorySDK {
     };
 }
 
+// -- LLMHub 能力约束类型 --
+export type LLMCapability = 'chat' | 'json' | 'tools' | 'embeddings' | 'rerank' | 'vision' | 'reasoning';
+export type CapabilityKind = 'generation' | 'embedding' | 'rerank';
+export type DisplayMode = 'fullscreen' | 'compact' | 'silent';
+
+export interface LLMRunMeta {
+    requestId: string;
+    providerId: string;
+    model?: string;
+    capabilityKind: CapabilityKind;
+    queuedAt: number;
+    startedAt?: number;
+    finishedAt?: number;
+    latencyMs?: number;
+    fallbackUsed?: boolean;
+}
+
+export type LLMRunResult<T> =
+    | { ok: true; data: T; meta: LLMRunMeta }
+    | { ok: false; error: string; retryable?: boolean; fallbackUsed?: boolean; reasonCode?: string; meta?: LLMRunMeta };
+
+export interface TaskDescriptor {
+    taskId: string;
+    taskKind: CapabilityKind;
+    requiredCapabilities: LLMCapability[];
+    recommendedRoute?: { providerId?: string; profileId?: string };
+    recommendedDisplay?: DisplayMode;
+    description?: string;
+    backgroundEligible?: boolean;
+}
+
+export interface ConsumerRegistration {
+    pluginId: string;
+    displayName: string;
+    registrationVersion: number;
+    tasks: TaskDescriptor[];
+    routeBindings?: Array<{
+        taskId: string;
+        providerId: string;
+        model?: string;
+        profileId?: string;
+        fallbackProviderId?: string;
+    }>;
+}
+
+export interface LLMOverlayPatch {
+    title?: string;
+    status?: 'loading' | 'streaming' | 'done' | 'error';
+    progress?: number;
+    content?: { type: 'text' | 'markdown' | 'html'; body: string };
+    actions?: Array<{ id: string; label: string; style?: 'primary' | 'secondary' | 'danger'; closeOnClick?: boolean }>;
+    displayMode?: DisplayMode;
+    autoClose?: boolean;
+    autoCloseMs?: number;
+}
+
+export interface RequestScope {
+    chatId?: string;
+    sessionId?: string;
+    pluginId?: string;
+}
+
+export interface RequestEnqueueOptions {
+    dedupeKey?: string;
+    replacePendingByKey?: string;
+    cancelOnScopeChange?: boolean;
+    displayMode?: DisplayMode;
+    scope?: RequestScope;
+    blockNextUntilOverlayClose?: boolean;
+}
+
 // -- LLMSDK 接口 --
 export interface LLMSDK {
+    // ─── 同步命令式接口 ───
+
+    /** 幂等 upsert 消费方注册。同步返回，内部异步落盘。 */
+    registerConsumer(registration: ConsumerRegistration): void;
+
+    /** 注销消费方。同步返回。 */
+    unregisterConsumer(pluginId: string, opts?: { keepPersistent?: boolean }): void;
+
+    /** 更新已存在的覆层。同步返回。 */
+    updateOverlay(requestId: string, patch: LLMOverlayPatch): void;
+
+    /** 关闭覆层。同步返回。 */
+    closeOverlay(requestId: string, reason?: string): void;
+
+    // ─── 异步接口 ───
+
+    /** 执行 AI 任务。只等待 AI 结果返回，不等待展示关闭。 */
     runTask<T>(args: {
         consumer: string;
-        task: string;
+        taskId: string;
+        taskKind: CapabilityKind;
         input: any;
         schema?: object;
-        routeHint?: { provider?: string; profile?: string };
+        routeHint?: { provider?: string; profile?: string; model?: string };
         budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
-    }): Promise<
-        | { ok: true; data: T; meta: { provider: string; latencyMs: number; cost?: number } }
-        | { ok: false; error: string; retryable?: boolean; fallbackUsed?: boolean; reasonCode?: string }
-    >;
+        enqueue?: RequestEnqueueOptions;
+    }): Promise<LLMRunResult<T>>;
 
-    embed?(args: { consumer: string; texts: string[]; routeHint?: any }): Promise<any>;
-    rerank?(args: { consumer: string; query: string; docs: string[]; routeHint?: any }): Promise<any>;
+    /** 向量化接口 */
+    embed(args: {
+        consumer: string;
+        taskId: string;
+        texts: string[];
+        routeHint?: { provider?: string; model?: string };
+        enqueue?: RequestEnqueueOptions;
+    }): Promise<any>;
+
+    /** 重排序接口 */
+    rerank(args: {
+        consumer: string;
+        taskId: string;
+        query: string;
+        docs: string[];
+        topK?: number;
+        routeHint?: { provider?: string; model?: string };
+        enqueue?: RequestEnqueueOptions;
+    }): Promise<any>;
+
+    /** 等待指定请求的覆层关闭。通过 meta.requestId 获取 requestId。 */
+    waitForOverlayClose(requestId: string): Promise<void>;
 }
 
 // -- Tavern SDK 鎺ュ彛 --

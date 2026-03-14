@@ -38,13 +38,16 @@ const checks = [
     runCheck('MemorySDK 已扩展 extract 子域', () => /extract:\s*\{[\s\S]*kickOffExtraction/.test(sdkText)),
     runCheck('MemorySDK 已扩展 proposal 子域', () => /proposal:\s*\{[\s\S]*processProposal[\s\S]*requestWrite/.test(sdkText)),
     runCheck('MemorySDK 已扩展 template/vector/compaction/worldInfo 子域', () => /template:\s*\{[\s\S]*vector:\s*\{[\s\S]*compaction:\s*\{[\s\S]*worldInfo:\s*\{/.test(sdkText)),
-    runCheck('UI 含路由增删处理', () => /setRoutePolicies/.test(uiIndexText) && /data-route-index/.test(uiIndexText)),
+    runCheck('UI 含路由管理处理', () => /applyGlobalDefaults/.test(uiIndexText) && /globalDefaults/.test(uiIndexText)),
     runCheck('UI 含预算增删处理', () => /setBudgetConfig/.test(uiIndexText) && /removeBudgetConfig/.test(uiIndexText)),
-    runCheck('LLMHub Runtime 含 setRoutePolicies/setBudgetConfig/removeBudgetConfig', () =>
-        /setRoutePolicies/.test(hubIndexText) &&
+    runCheck('LLMHub Runtime 含 setBudgetConfig/removeBudgetConfig', () =>
         /setBudgetConfig/.test(hubIndexText) &&
         /removeBudgetConfig/.test(hubIndexText)),
-    runCheck('EventBus 默认 pluginId 使用 memory_os', () => /pluginId:\s*'memory_os'/.test(busText)),
+    runCheck('LLMHub Runtime 无旧版 defaultProvider 字段', () =>
+        !/private defaultProvider/.test(hubIndexText)),
+    runCheck('LLMHub Runtime 无旧版 setRoutePolicies', () =>
+        !/setRoutePolicies/.test(hubIndexText)),
+    runCheck('EventBus 默认 pluginId 使用 stx_memory_os', () => /pluginId:\s*'stx_memory_os'/.test(busText)),
     runCheck('_Components 共享 tooltip 导出 ensureSharedTooltip', () =>
         /export function ensureSharedTooltip/.test(sharedTooltipText)),
     runCheck('MemoryOS UI 使用 _Components/sharedTooltip', () =>

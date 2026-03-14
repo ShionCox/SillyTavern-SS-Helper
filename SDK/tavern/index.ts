@@ -84,14 +84,21 @@ export {
 
 export type {
   TavernChatResult,
+  TavernConnectionInfoItem,
   TavernConnectionResult,
+  TavernConnectionSnapshot,
   TavernLlmAvailability,
+  TavernRawMessage,
+  TavernRawJsonSchema,
+  TavernRawRequestOptions,
 } from "./llm";
 
 export {
+  getTavernConnectionSnapshot,
   getTavernLlmAvailability,
   getTavernCurrentModel,
   runTavernQuietPrompt,
+  runTavernRawMessages,
   runTavernRawPrompt,
   testTavernLlmConnection,
 } from "./llm";

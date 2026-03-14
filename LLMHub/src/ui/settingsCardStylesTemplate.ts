@@ -98,6 +98,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       align-items: center;
       gap: 4px;
+      flex-wrap: wrap;
       padding: 4px;
       border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.16));
       border-radius: 999px;
@@ -106,7 +107,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-tab {
-      flex: 1;
+      flex: 1 1 140px;
       border: 0;
       border-radius: 999px;
       background: transparent;
@@ -224,7 +225,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-form-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 8px;
       width: 100%;
     }
@@ -239,7 +240,9 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-field-label {
       font-size: 12px;
       opacity: 0.85;
-      white-space: nowrap;
+      white-space: normal;
+      line-height: 1.35;
+      word-break: break-word;
     }
 
     #${cardId} .stx-ui-select,
@@ -335,9 +338,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       justify-content: space-between;
       align-items: flex-start;
       gap: 10px;
+      width: 100%;
       padding: 8px 10px;
       border: 1px dashed rgba(255, 255, 255, 0.2);
       border-radius: 8px;
+      box-sizing: border-box;
       background: rgba(0, 0, 0, 0.12);
     }
 
@@ -345,6 +350,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-size: 13px;
       font-weight: 700;
       margin-bottom: 2px;
+      line-height: 1.4;
+      word-break: break-word;
     }
 
     #${cardId} .stx-ui-list-meta {
@@ -415,9 +422,14 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-wrap: wrap;
     }
 
+    #${cardId} .stx-ui-consumer-map-head-main {
+      flex: 1 1 260px;
+      min-width: 0;
+    }
+
     #${cardId} .stx-ui-consumer-map-form {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 8px;
       width: 100%;
     }
@@ -588,6 +600,114 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.12));
     }
 
+    /* ─── Sub-tabs (3-view route) ─── */
+
+    #${cardId} .stx-ui-sub-tabs {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-wrap: wrap;
+      padding: 3px;
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.12));
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.15));
+    }
+
+    #${cardId} .stx-ui-sub-tab {
+      flex: 1 1 140px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      padding: 5px 8px;
+      font-size: 11px;
+      line-height: 1.2;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      opacity: 0.65;
+      transition: background-color 0.2s ease, opacity 0.2s ease;
+    }
+
+    #${cardId} .stx-ui-sub-tab.is-active {
+      opacity: 1;
+      background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.45));
+    }
+
+    #${cardId} .stx-ui-sub-tab:hover {
+      opacity: 1;
+      background: rgba(197, 160, 89, 0.18);
+    }
+
+    #${cardId} .stx-ui-sub-panel[hidden] {
+      display: none !important;
+    }
+
+    /* ─── Queue & state badges ─── */
+
+    #${cardId} .stx-ui-state-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    #${cardId} .stx-ui-state-badge.is-running {
+      background: rgba(88, 211, 106, 0.22);
+      color: #58d36a;
+    }
+
+    #${cardId} .stx-ui-state-badge.is-queued {
+      background: rgba(197, 160, 89, 0.22);
+      color: #c5a059;
+    }
+
+    #${cardId} .stx-ui-state-badge.is-completed {
+      background: rgba(130, 170, 255, 0.18);
+      color: #82aaff;
+    }
+
+    #${cardId} .stx-ui-state-badge.is-failed {
+      background: rgba(255, 135, 135, 0.18);
+      color: #ff8787;
+    }
+
+    #${cardId} .stx-ui-state-badge.is-cancelled {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    #${cardId} .stx-ui-stale-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #ff8787;
+      opacity: 0.9;
+    }
+
+    #${cardId} .stx-ui-online-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    #${cardId} .stx-ui-online-dot.is-online {
+      background: #58d36a;
+      box-shadow: 0 0 0 2px rgba(88, 211, 106, 0.22);
+    }
+
+    #${cardId} .stx-ui-online-dot.is-offline {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
     #${cardId} .stx-ui-about-meta a {
       border-bottom-color: var(--ss-theme-border, rgba(255, 255, 255, 0.22));
     }
@@ -668,6 +788,66 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       overflow-y: auto;
     }
 
+    #${cardId} .stx-ui-tavern-info-status {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.14));
+      background: var(--ss-theme-surface-3, rgba(255, 255, 255, 0.04));
+      box-sizing: border-box;
+    }
+
+    #${cardId} .stx-ui-tavern-info-status.is-ok {
+      border-color: rgba(88, 211, 106, 0.36);
+      background: rgba(88, 211, 106, 0.12);
+      color: #58d36a;
+    }
+
+    #${cardId} .stx-ui-tavern-info-status.is-warning {
+      border-color: rgba(197, 160, 89, 0.36);
+      background: rgba(197, 160, 89, 0.12);
+      color: #e2c27a;
+    }
+
+    #${cardId} .stx-ui-tavern-info-list {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-tavern-info-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px dashed var(--ss-theme-border, rgba(255, 255, 255, 0.18));
+      background: rgba(0, 0, 0, 0.12);
+      box-sizing: border-box;
+    }
+
+    #${cardId} .stx-ui-tavern-info-label {
+      font-size: 11px;
+      opacity: 0.72;
+    }
+
+    #${cardId} .stx-ui-tavern-info-value {
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-all;
+    }
+
+    #${cardId} .stx-ui-tavern-info-empty {
+      grid-column: 1 / -1;
+      font-size: 12px;
+      opacity: 0.72;
+      padding: 4px 0;
+    }
+
     #${cardId} .stx-ui-field-hint {
       font-size: 11px;
       opacity: 0.68;
@@ -676,9 +856,40 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-shared-select {
-      width: auto;
-      min-width: 182px;
       max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-shared-select-fluid.stx-shared-select,
+    #${cardId} .stx-ui-form-grid .stx-shared-select,
+    #${cardId} .stx-ui-consumer-map-form .stx-shared-select {
+      width: 100%;
+      min-width: 0;
+    }
+
+    @media (max-width: 900px) {
+      #${cardId} .stx-ui-form-grid,
+      #${cardId} .stx-ui-consumer-map-form {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      #${cardId} .stx-ui-tabs,
+      #${cardId} .stx-ui-sub-tabs,
+      #${cardId} .stx-ui-row,
+      #${cardId} .stx-ui-actions {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 768px) {
+      #${cardId} .stx-ui-tavern-info-list {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    @media (max-width: 640px) {
+      #${cardId} .stx-ui-consumer-map-actions {
+        justify-content: flex-start;
+      }
     }
   `;
 }
