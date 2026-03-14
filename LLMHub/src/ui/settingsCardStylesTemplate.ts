@@ -1,3 +1,7 @@
+import { buildSharedCheckboxStyles } from "../../../_Components/sharedCheckbox";
+import { buildSharedSelectStyles } from "../../../_Components/sharedSelect";
+import { buildSharedButtonStyles } from "../../../_Components/sharedButton";
+import { buildSharedInputStyles } from "../../../_Components/sharedInput";
 import { buildThemeVars } from "../../../SDK/theme";
 
 /**
@@ -10,6 +14,10 @@ import { buildThemeVars } from "../../../SDK/theme";
 export function buildSettingsCardStylesTemplate(cardId: string): string {
     return `
     ${buildThemeVars(`#${cardId} .stx-ui-content`)}
+    ${buildSharedCheckboxStyles(`#${cardId}`)}
+    ${buildSharedSelectStyles(`#${cardId}`)}
+    ${buildSharedButtonStyles(`#${cardId}`)}
+    ${buildSharedInputStyles(`#${cardId}`)}
 
     #${cardId} {
       margin-bottom: 5px;
@@ -17,8 +25,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId}.is-card-disabled .stx-ui-shell {
-      opacity: 0.56;
-      filter: grayscale(0.92) saturate(0.35);
+      opacity: 0.68;
+      filter: grayscale(0.6) saturate(0.5);
     }
 
     #${cardId} .stx-ui-shell {
@@ -236,19 +244,28 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
+    #${cardId} .stx-ui-search,
     #${cardId} .stx-ui-textarea {
-      background: rgba(0, 0, 0, 0.28);
+      background: var(--ss-theme-surface-2, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.28)));
       color: inherit;
       border: 1px solid rgba(197, 160, 89, 0.36);
       border-radius: 8px;
       box-sizing: border-box;
+      max-width: 100%;
       transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     }
 
     #${cardId} .stx-ui-select,
-    #${cardId} .stx-ui-input {
+    #${cardId} .stx-ui-input,
+    #${cardId} .stx-ui-search {
       padding: 4px 8px;
       min-height: 30px;
+    }
+
+    #${cardId} .stx-ui-input::placeholder,
+    #${cardId} .stx-ui-search::placeholder,
+    #${cardId} .stx-ui-textarea::placeholder {
+      color: color-mix(in srgb, var(--ss-theme-text, #dcdcd2) 60%, transparent);
     }
 
     #${cardId} .stx-ui-input-full {
@@ -502,7 +519,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-input:hover,
     #${cardId} .stx-ui-search:hover {
       border-color: rgba(197, 160, 89, 0.58);
-      background-color: rgba(0, 0, 0, 0.34);
+      background-color: var(--ss-theme-surface-3, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.34)));
       box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.18);
     }
 
@@ -550,8 +567,9 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
+    #${cardId} .stx-ui-search,
     #${cardId} .stx-ui-textarea {
-      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
+      background: var(--ss-theme-surface-2, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.28)));
       border-color: var(--ss-theme-border, rgba(197, 160, 89, 0.36));
     }
 
@@ -601,7 +619,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-input:hover,
     #${cardId} .stx-ui-search:hover {
       border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.58));
-      background-color: var(--ss-theme-surface-3, rgba(0, 0, 0, 0.34));
+      background-color: var(--ss-theme-surface-3, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.34)));
       box-shadow: 0 0 0 1px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.18));
     }
 
@@ -615,6 +633,52 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-search:focus {
       border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
       box-shadow: 0 0 0 2px var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
+    }
+
+    /* ── 连接测试结果区域 ── */
+    #${cardId} .stx-ui-result-area {
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 4px;
+    }
+
+    #${cardId} .stx-ui-result-ok {
+      background: rgba(88, 211, 106, 0.12);
+      border: 1px solid rgba(88, 211, 106, 0.36);
+      color: #58d36a;
+    }
+
+    #${cardId} .stx-ui-result-error {
+      background: rgba(255, 135, 135, 0.12);
+      border: 1px solid rgba(255, 135, 135, 0.36);
+      color: #ff8787;
+    }
+
+    #${cardId} .stx-ui-result-msg {
+      font-weight: 600;
+    }
+
+    #${cardId} .stx-ui-result-detail {
+      margin-top: 4px;
+      opacity: 0.78;
+      word-break: break-all;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+
+    #${cardId} .stx-ui-field-hint {
+      font-size: 11px;
+      opacity: 0.68;
+      margin-top: 2px;
+      display: block;
+    }
+
+    #${cardId} .stx-shared-select {
+      width: auto;
+      min-width: 182px;
+      max-width: 100%;
     }
   `;
 }

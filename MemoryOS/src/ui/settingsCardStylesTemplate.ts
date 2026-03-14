@@ -58,8 +58,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId}.is-card-disabled .stx-ui-shell {
-      opacity: 0.56;
-      filter: grayscale(0.92) saturate(0.35);
+      opacity: 0.68;
+      filter: grayscale(0.6) saturate(0.5);
     }
 
     #${cardId} .stx-ui-shell {
@@ -111,6 +111,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: var(--ss-theme-surface-1, rgba(0, 0, 0, 0.16));
       backdrop-filter: var(--ss-theme-backdrop-filter, blur(3px));
       box-shadow: var(--ss-theme-panel-shadow, none);
+      overflow: hidden;
+      min-width: 0;
     }
 
     #${cardId} .stx-ui-filters {
@@ -235,27 +237,40 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      overflow: hidden;
+      min-width: 0;
       transition:
         border-color 0.2s ease,
         background-color 0.2s ease,
         box-shadow 0.2s ease;
     }
 
+    #${cardId} .stx-ui-item-stack {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
     #${cardId} .stx-ui-item-main {
       min-width: 0;
       flex: 1;
+      word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     #${cardId} .stx-ui-item-title {
       font-size: 14px;
       font-weight: 700;
       margin-bottom: 3px;
+      word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     #${cardId} .stx-ui-item-desc {
       font-size: 12px;
       line-height: 1.45;
       opacity: 0.75;
+      word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     #${cardId} .stx-ui-about-meta {
@@ -295,6 +310,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 8px;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      min-width: 0;
     }
 
     #${cardId} .stx-ui-inline-checkbox {
@@ -328,6 +345,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       justify-content: flex-end;
       gap: 10px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-item-stack .stx-ui-row {
+      justify-content: flex-start;
+      width: 100%;
     }
 
     #${cardId} .stx-ui-shared-select {
@@ -354,11 +378,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-input,
     #${cardId} .stx-ui-search,
     #${cardId} .stx-ui-textarea {
-      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
+      background: var(--ss-theme-surface-2, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.28)));
       color: var(--ss-theme-text, inherit);
       border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.36));
       border-radius: 8px;
       box-sizing: border-box;
+      max-width: 100%;
       transition:
         border-color 0.2s ease,
         box-shadow 0.2s ease,
@@ -417,7 +442,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-item.is-disabled {
-      opacity: 0.52;
+      opacity: 0.62;
     }
 
     #${cardId} .stx-ui-actions {
@@ -425,6 +450,41 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      width: 100%;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-grid-form {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-grid-form label {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-grid-form label span {
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+
+    #${cardId} .stx-ui-grid-form .stx-ui-input,
+    #${cardId} .stx-ui-grid-form .stx-ui-select {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
     }
 
     #${cardId} .stx-ui-btn {
@@ -449,7 +509,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-textarea-wrap {
       border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.18));
       border-radius: 10px;
-      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.15));
+      background: var(--ss-theme-surface-2, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.15)));
       padding: 10px;
       transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     }
@@ -651,7 +711,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-search:hover,
     #${cardId} .stx-ui-textarea:hover {
       border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.58));
-      background-color: var(--ss-theme-surface-3, rgba(0, 0, 0, 0.34));
+      background-color: var(--ss-theme-surface-3, var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.34)));
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22)) 82%, transparent);
     }
 

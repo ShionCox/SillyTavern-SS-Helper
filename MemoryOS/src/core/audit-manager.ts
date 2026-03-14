@@ -1,4 +1,4 @@
-import { db, clearChatData, type DBAudit } from '../db/db';
+import { db, clearMemoryChatData, type DBAudit } from '../db/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
@@ -119,7 +119,7 @@ export class AuditManager {
         const vectorEmbeddings = Array.isArray(data.vectorEmbeddings) ? data.vectorEmbeddings : [];
         const vectorMeta = Array.isArray(data.vectorMeta) ? data.vectorMeta : [];
 
-        await clearChatData(this.chatKey, { includeAudit: false });
+        await clearMemoryChatData(this.chatKey, { includeAudit: false });
 
         await db.transaction(
             'rw',

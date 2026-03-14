@@ -44,14 +44,40 @@ export interface RerankResponse {
     results: Array<{ index: number; score: number; doc: string }>;
 }
 
+// ── 检测与模型列表 ──
+
+export interface ProviderConnectionResult {
+    ok: boolean;
+    message: string;
+    errorCode?: string;
+    detail?: string;
+    model?: string;
+    latencyMs?: number;
+}
+
+export interface ProviderModelInfo {
+    id: string;
+    label?: string;
+}
+
+export interface ProviderModelListResult {
+    ok: boolean;
+    models: ProviderModelInfo[];
+    message: string;
+    errorCode?: string;
+    detail?: string;
+}
+
 /**
  * Provider 抽象接口
  */
 export interface LLMProvider {
     id: string;
-    kind: 'openai' | 'claude' | 'gemini' | 'local' | 'custom';
+    kind: 'openai' | 'claude' | 'gemini' | 'local' | 'custom' | 'tavern';
     capabilities: LLMProviderCapabilities;
     request(req: LLMRequest): Promise<LLMResponse>;
     embed?(req: EmbedRequest): Promise<EmbedResponse>;
     rerank?(req: RerankRequest): Promise<RerankResponse>;
+    testConnection?(): Promise<ProviderConnectionResult>;
+    listModels?(): Promise<ProviderModelListResult>;
 }

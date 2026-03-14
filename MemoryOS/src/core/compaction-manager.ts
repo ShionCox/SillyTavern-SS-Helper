@@ -15,14 +15,26 @@ export class CompactionManager {
     private summariesManager: SummariesManager;
     private stateManager: StateManager;
 
-    /** 默认触发阈值 */
-    private readonly EVENT_THRESHOLD = 5000;
-    private readonly TIME_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
+    /** 默认触发阈值（可通过 setThresholds 覆盖） */
+    private eventThreshold = 5000;
+    private timeThresholdMs = 7 * 24 * 60 * 60 * 1000; // 7 天
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
         this.summariesManager = new SummariesManager(chatKey);
         this.stateManager = new StateManager(chatKey);
+    }
+
+    /**
+     * 动态设置压缩阈值（从设置页读取后传入）
+     */
+    setThresholds(opts: { eventThreshold?: number; timeThresholdMs?: number }): void {
+        if (opts.eventThreshold !== undefined && opts.eventThreshold > 0) {
+            this.eventThreshold = opts.eventThreshold;
+        }
+        if (opts.timeThresholdMs !== undefined && opts.timeThresholdMs > 0) {
+            this.timeThresholdMs = opts.timeThresholdMs;
+        }
     }
 
     /**
@@ -33,15 +45,15 @@ export class CompactionManager {
             .between([this.chatKey, 0], [this.chatKey, Infinity])
             .count();
 
-        if (count >= this.EVENT_THRESHOLD) {
-            return { needed: true, reason: `事件数量达到阈值 (${count}/${this.EVENT_THRESHOLD})`, eventCount: count };
+        if (count >= this.eventThreshold) {
+            return { needed: true, reason: `事件数量达到阈值 (${count}/${this.eventThreshold})`, eventCount: count };
         }
 
         // 检查上次压缩时间
         const meta = await db.meta.get(this.chatKey);
         if (meta?.lastCompactionTs) {
             const elapsed = Date.now() - meta.lastCompactionTs;
-            if (elapsed >= this.TIME_THRESHOLD_MS && count > 100) {
+            if (elapsed >= this.timeThresholdMs && count > 100) {
                 return { needed: true, reason: `距上次压缩已超过 ${Math.floor(elapsed / 86400000)} 天`, eventCount: count };
             }
         }
@@ -60,10 +72,11 @@ export class CompactionManager {
         const windowSize = opts?.windowSize ?? 1000;
         const archiveProcessed = opts?.archiveProcessed ?? true;
 
-        // 取最旧的 N 条非归档事件
+        // 取最旧的 N 条非归档事件（排除已归档事件）
         const events = await db.events
             .where('[chatKey+ts]')
             .between([this.chatKey, 0], [this.chatKey, Infinity])
+            .filter((e: DBEvent) => !e.tags?.includes('__archived'))
             .limit(windowSize)
             .toArray();
 
@@ -128,8 +141,8 @@ export class CompactionManager {
             .between([this.chatKey, opts?.sinceTs ?? 0], [this.chatKey, Infinity])
             .toArray();
 
-        // 当前状态快照（从 world_state 加载）
-        const currentState: Record<string, any> = await this.stateManager.query('');
+        // 从空状态开始重建，避免在现有 world_state 上叠加
+        const currentState: Record<string, any> = {};
         let statesUpdated = 0;
 
         // 内置的默认规则集

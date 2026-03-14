@@ -81,3 +81,17 @@ export {
   listTavernChatsForCurrentTavernEvent,
   listUnifiedTavernChatDirectoryEvent,
 } from "./chats";
+
+export type {
+  TavernChatResult,
+  TavernConnectionResult,
+  TavernLlmAvailability,
+} from "./llm";
+
+export {
+  getTavernLlmAvailability,
+  getTavernCurrentModel,
+  runTavernQuietPrompt,
+  runTavernRawPrompt,
+  testTavernLlmConnection,
+} from "./llm";

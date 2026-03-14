@@ -1,10 +1,68 @@
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { buildSharedSelectField } from '../../../_Components/sharedSelect';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
-import {
-  renderSharedCheckbox,
-  renderSharedCheckboxWithLabel,
-} from '../../../_Components/sharedCheckbox';
+
+/**
+ * 功能：构建只显示开关控件的紧凑复选框。
+ * @param id 控件 ID。
+ * @param title 无障碍标题。
+ * @param dataTip 提示文本。
+ * @returns 复选框 HTML。
+ */
+function buildControlOnlyCheckbox(id: string, title: string, dataTip: string): string {
+  return buildSharedCheckboxCard({
+    id,
+    title,
+    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    inputAttributes: {
+      'data-tip': dataTip,
+      'aria-label': title,
+    },
+  });
+}
+
+/**
+ * 功能：构建带标题的紧凑复选框。
+ * @param id 控件 ID。
+ * @param title 标题文本。
+ * @param dataTip 提示文本。
+ * @returns 复选框 HTML。
+ */
+function buildCompactCheckbox(id: string, title: string, dataTip: string): string {
+  return buildSharedCheckboxCard({
+    id,
+    title,
+    containerClassName: 'stx-ui-inline-checkbox is-compact',
+    inputAttributes: {
+      'data-tip': dataTip,
+      'aria-label': title,
+    },
+  });
+}
+
+/**
+ * 功能：构建紧凑型共享选择框。
+ * @param id 控件 ID。
+ * @param dataTip 提示文本。
+ * @param options 下拉选项列表。
+ * @returns 共享选择框 HTML。
+ */
+function buildCompactSharedSelect(
+  id: string,
+  dataTip: string,
+  options: Array<{ value: string; label: string; disabled?: boolean }>,
+): string {
+  return buildSharedSelectField({
+    id,
+    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+    selectClassName: 'stx-ui-input',
+    triggerClassName: 'stx-ui-input-full',
+    triggerAttributes: {
+      'data-tip': dataTip,
+    },
+    options,
+  });
+}
 
 /**
  * 功能：构建 MemoryOS 设置面板 HTML。
@@ -62,6 +120,36 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
     options: [{ value: '', label: '选择实体类型...' }],
   });
 
+  const recordFilterLevelSelect = buildCompactSharedSelect(
+    ids.recordFilterLevelId,
+    '设置整体过滤强度：轻度、平衡或严格。',
+    [
+      { value: 'light', label: '轻度' },
+      { value: 'balanced', label: '平衡' },
+      { value: 'strict', label: '严格' },
+    ],
+  );
+
+  const recordFilterJsonModeSelect = buildCompactSharedSelect(
+    ids.recordFilterJsonModeId,
+    '设置 JSON 文本提取模式。',
+    [
+      { value: 'off', label: '关闭' },
+      { value: 'smart', label: '智能提取' },
+      { value: 'all_strings', label: '全部字符串' },
+    ],
+  );
+
+  const recordFilterPureCodePolicySelect = buildCompactSharedSelect(
+    ids.recordFilterPureCodePolicyId,
+    '设置纯代码消息的处理方式：丢弃、占位或保留原文。',
+    [
+      { value: 'drop', label: '丢弃' },
+      { value: 'placeholder', label: '写入占位' },
+      { value: 'keep', label: '保留原文' },
+    ],
+  );
+
   const templateLockCheckbox = buildSharedCheckboxCard({
     id: ids.templateLockId,
     title: '锁定模板',
@@ -73,6 +161,54 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
       'aria-label': '锁定模板',
     },
   });
+
+  const recordFilterEnabledCheckbox = buildControlOnlyCheckbox(
+    ids.recordFilterEnabledId,
+    '启用记录过滤',
+    '启用记录过滤后，仅保留可读有效文本入库。',
+  );
+
+  const recordFilterTypeHtmlCheckbox = buildCompactCheckbox(
+    ids.recordFilterTypeHtmlId,
+    'HTML',
+    '过滤 HTML 标签内容。',
+  );
+
+  const recordFilterTypeXmlCheckbox = buildCompactCheckbox(
+    ids.recordFilterTypeXmlId,
+    'XML',
+    '过滤 XML 标签内容。',
+  );
+
+  const recordFilterTypeJsonCheckbox = buildCompactCheckbox(
+    ids.recordFilterTypeJsonId,
+    'JSON',
+    '过滤或提取结构化 JSON 文本。',
+  );
+
+  const recordFilterTypeCodeblockCheckbox = buildCompactCheckbox(
+    ids.recordFilterTypeCodeblockId,
+    '代码块',
+    '过滤 Markdown 围栏代码块。',
+  );
+
+  const recordFilterTypeMarkdownCheckbox = buildCompactCheckbox(
+    ids.recordFilterTypeMarkdownId,
+    'Markdown',
+    '过滤 Markdown 噪声格式。',
+  );
+
+  const recordFilterCustomCodeblockCheckbox = buildCompactCheckbox(
+    ids.recordFilterCustomCodeblockEnabledId,
+    '启用自定义代码块过滤（仅清理指定标签）',
+    '开启后，不再清除全部代码块；仅清理下方填写标签的代码块。默认建议至少保留 rolljson。',
+  );
+
+  const recordFilterCustomRegexCheckbox = buildCompactCheckbox(
+    ids.recordFilterCustomRegexEnabledId,
+    '启用自定义正则清理',
+    '开启后按规则清理自定义正则命中的文本片段。',
+  );
 
   return `
     <div class="inline-drawer stx-ui-shell">
@@ -160,7 +296,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <div class="stx-ui-item-desc">限制每次注入给 AI 的记忆长度。</div>
             </div>
             <div class="stx-ui-row">
-              <input id="${ids.contextMaxTokensId}" data-tip="限制注入给 AI 的记忆长度。" class="stx-ui-input" type="number" min="500" max="8000" step="100" />
+              <input id="${ids.contextMaxTokensId}" data-tip="限制注入给 AI 的记忆长度。" class="text_pole stx-ui-input" type="number" min="500" max="8000" step="100" />
             </div>
           </div>
           <div class="stx-ui-divider">
@@ -175,10 +311,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <div class="stx-ui-item-desc">只保存可读的有效内容。</div>
             </div>
             <div class="stx-ui-inline">
-              ${renderSharedCheckbox({
-                id: ids.recordFilterEnabledId,
-                dataTip: '启用记录过滤后，仅保留可读有效文本入库。',
-              })}
+              ${recordFilterEnabledCheckbox}
             </div>
           </label>
 
@@ -190,27 +323,15 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
             <div class="stx-ui-row stx-ui-grid-form">
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">过滤强度</span>
-                <select id="${ids.recordFilterLevelId}" class="stx-ui-input" data-tip="设置整体过滤强度：轻度、平衡或严格。">
-                  <option value="light">轻度</option>
-                  <option value="balanced">平衡</option>
-                  <option value="strict">严格</option>
-                </select>
+                ${recordFilterLevelSelect}
               </label>
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">JSON 提取</span>
-                <select id="${ids.recordFilterJsonModeId}" class="stx-ui-input" data-tip="设置 JSON 文本提取模式。">
-                  <option value="off">关闭</option>
-                  <option value="smart">智能提取</option>
-                  <option value="all_strings">全部字符串</option>
-                </select>
+                ${recordFilterJsonModeSelect}
               </label>
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">纯代码处理</span>
-                <select id="${ids.recordFilterPureCodePolicyId}" class="stx-ui-input" data-tip="设置纯代码消息的处理方式：丢弃、占位或保留原文。">
-                  <option value="drop">丢弃</option>
-                  <option value="placeholder">写入占位</option>
-                  <option value="keep">保留原文</option>
-                </select>
+                ${recordFilterPureCodePolicySelect}
               </label>
             </div>
           </div>
@@ -221,11 +342,11 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <div class="stx-ui-item-desc">按需过滤 HTML / XML / JSON / 代码块 / Markdown。</div>
             </div>
             <div class="stx-ui-actions stx-ui-checkbox-group" style="flex-wrap:wrap;">
-              ${renderSharedCheckboxWithLabel({ id: ids.recordFilterTypeHtmlId, label: 'HTML', labelClassName: 'stx-ui-inline', dataTip: '过滤 HTML 标签内容。' })}
-              ${renderSharedCheckboxWithLabel({ id: ids.recordFilterTypeXmlId, label: 'XML', labelClassName: 'stx-ui-inline', dataTip: '过滤 XML 标签内容。' })}
-              ${renderSharedCheckboxWithLabel({ id: ids.recordFilterTypeJsonId, label: 'JSON', labelClassName: 'stx-ui-inline', dataTip: '过滤或提取 JSON 结构文本。' })}
-              ${renderSharedCheckboxWithLabel({ id: ids.recordFilterTypeCodeblockId, label: '代码块', labelClassName: 'stx-ui-inline', dataTip: '过滤 Markdown 围栏代码块。' })}
-              ${renderSharedCheckboxWithLabel({ id: ids.recordFilterTypeMarkdownId, label: 'Markdown', labelClassName: 'stx-ui-inline', dataTip: '过滤 Markdown 噪声格式。' })}
+              ${recordFilterTypeHtmlCheckbox}
+              ${recordFilterTypeXmlCheckbox}
+              ${recordFilterTypeJsonCheckbox}
+              ${recordFilterTypeCodeblockCheckbox}
+              ${recordFilterTypeMarkdownCheckbox}
             </div>
           </div>
 
@@ -237,51 +358,40 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
             <div class="stx-ui-row stx-ui-grid-form">
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">JSON 提取键（逗号分隔）</span>
-                <input id="${ids.recordFilterJsonKeysId}" class="stx-ui-input" type="text" placeholder="content,text,message" data-tip="smart 模式下仅提取这些键名对应的文本，逗号分隔。" />
+                <input id="${ids.recordFilterJsonKeysId}" class="text_pole stx-ui-input" type="text" placeholder="content,text,message" data-tip="smart 模式下仅提取这些键名对应的文本，逗号分隔。" />
               </label>
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">占位文本</span>
-                <input id="${ids.recordFilterPlaceholderId}" class="stx-ui-input" type="text" placeholder="[代码内容已过滤]" data-tip="当策略为占位时写入的提示文本。" />
+                <input id="${ids.recordFilterPlaceholderId}" class="text_pole stx-ui-input" type="text" placeholder="[代码内容已过滤]" data-tip="当策略为占位时写入的提示文本。" />
               </label>
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">最大保存字符</span>
-                <input id="${ids.recordFilterMaxTextLengthId}" class="stx-ui-input" type="number" min="200" max="20000" step="100" data-tip="单条记录允许保存的最大字符数。" />
+                <input id="${ids.recordFilterMaxTextLengthId}" class="text_pole stx-ui-input" type="number" min="200" max="20000" step="100" data-tip="单条记录允许保存的最大字符数。" />
               </label>
               <label>
                 <span style="display:block; font-size:12px; margin-bottom:4px;">最小有效字符</span>
-                <input id="${ids.recordFilterMinEffectiveCharsId}" class="stx-ui-input" type="number" min="1" max="200" step="1" data-tip="小于该有效字符数的文本会被判定为无效内容。" />
+                <input id="${ids.recordFilterMinEffectiveCharsId}" class="text_pole stx-ui-input" type="number" min="1" max="200" step="1" data-tip="小于该有效字符数的文本会被判定为无效内容。" />
               </label>
             </div>
-            <label
-              class="stx-ui-inline"
-              style="margin-top:8px;"
-            >
-              ${renderSharedCheckbox({
-                id: ids.recordFilterCustomCodeblockEnabledId,
-                dataTip: '开启后，不再清除全部代码块；仅清理下方填写标签的代码块。默认建议至少保留 rolljson。',
-              })}
-              启用自定义代码块过滤（仅清理指定标签）
-            </label>
+            <div class="stx-ui-inline" style="margin-top:8px;">
+              ${recordFilterCustomCodeblockCheckbox}
+            </div>
             <label
               style="display:block; width:100%; margin-top:8px;"
             >
               <span style="display:block; font-size:12px; margin-bottom:4px;">代码块标签（逗号分隔）</span>
               <textarea
                 id="${ids.recordFilterCustomCodeblockTagsId}"
-                class="stx-ui-input stx-ui-codeblock-tags"
+                class="text_pole stx-ui-input stx-ui-codeblock-tags"
                 rows="3"
                 placeholder="rolljson&#10;json"
                 data-tip="填写后只会清理这些标签的代码块；未匹配标签的代码块会保留。"
               ></textarea>
             </label>
-            <label class="stx-ui-inline" style="margin-top:8px;">
-              ${renderSharedCheckbox({
-                id: ids.recordFilterCustomRegexEnabledId,
-                dataTip: '开启后按规则清理自定义正则命中的文本片段。',
-              })}
-              启用自定义正则清理
-            </label>
-            <textarea id="${ids.recordFilterCustomRegexRulesId}" class="stx-ui-input" rows="4" placeholder="/\\[OOC\\][^\\n]*/g" style="width:100%; margin-top:8px;" data-tip="每行一条规则；支持 /pattern/flags 或普通文本匹配。"></textarea>
+            <div class="stx-ui-inline" style="margin-top:8px;">
+              ${recordFilterCustomRegexCheckbox}
+            </div>
+            <textarea id="${ids.recordFilterCustomRegexRulesId}" class="text_pole stx-ui-input" rows="4" placeholder="/\\[OOC\\][^\\n]*/g" style="width:100%; margin-top:8px;" data-tip="每行一条规则；支持 /pattern/flags 或普通文本匹配。"></textarea>
           </div>
 
           <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="record filter preview">
@@ -289,7 +399,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <div class="stx-ui-item-title">过滤预览</div>
               <div class="stx-ui-item-desc">输入原文，仅预览不过库。</div>
             </div>
-            <textarea id="${ids.recordFilterPreviewInputId}" class="stx-ui-input" rows="4" placeholder="在这里测试过滤效果..." style="width:100%;" data-tip="输入测试文本，点击预览查看过滤结果。"></textarea>
+            <textarea id="${ids.recordFilterPreviewInputId}" class="text_pole stx-ui-input" rows="4" placeholder="在这里测试过滤效果..." style="width:100%;" data-tip="输入测试文本，点击预览查看过滤结果。"></textarea>
             <div class="stx-ui-actions">
               <button id="${ids.recordFilterPreviewBtnId}" type="button" class="stx-ui-btn secondary" data-tip="执行一次过滤预览，不会写入数据库。">预览过滤结果</button>
             </div>
@@ -315,11 +425,11 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <div class="stx-ui-item-desc">事件达到这个数量时开始压缩。</div>
             </div>
             <div class="stx-ui-row">
-              <input id="${ids.compactionThresholdId}" data-tip="达到这个数量后开始压缩。" class="stx-ui-input" type="number" min="500" max="20000" step="500" />
+              <input id="${ids.compactionThresholdId}" data-tip="达到这个数量后开始压缩。" class="text_pole stx-ui-input" type="number" min="500" max="20000" step="500" />
             </div>
           </div>
 
-          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="manual actions db export clear">
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="manual actions db export clear">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">维护操作</div>
               <div class="stx-ui-item-desc">这里是手动维护功能。</div>

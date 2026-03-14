@@ -1,6 +1,8 @@
-import { db, clearAllDataByRebuild, clearChatData } from '../db/db';
+import { db, clearAllMemoryData, clearMemoryChatData } from '../db/db';
 import { logger, toast } from '../index';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
+import { AuditManager } from '../core/audit-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 type TableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
 
@@ -120,8 +122,10 @@ export async function openRecordEditor() {
         btnClearDb.addEventListener('click', async () => {
             if (confirm('警告：此操作将清空所有记忆数据（事件、事实、摘要、状态等），这是不可逆转的危险操作！您确定要继续吗？')) {
                 try {
-                    await clearAllDataByRebuild();
+                    await clearAllMemoryData();
                     toast.success('整个数据库所有内容已清空完毕！', '系统清理');
+                    // 审计日志：全库清空后无法写入原 chatKey 的 audit，记录到全局日志
+                    logger.warn('[审计] 用户执行了一键清空数据库操作');
                     pendingChanges.deletes.clear();
                     pendingChanges.updates.clear();
                     currentChatKey = ''; // 重置为全局
@@ -295,7 +299,7 @@ export async function openRecordEditor() {
                         item.classList.remove('is-context-target');
                         if (confirm('警告：此操作直接清空数据库中该会话的所有事件、事实、摘要和状态记录，并且不可逆转！确定执行吗？')) {
                             try {
-                                await clearChatData(chatKey);
+                                await clearMemoryChatData(chatKey);
                                 toast.success('已清空该会话所有记忆数据');
                                 if (currentChatKey === chatKey) currentChatKey = '';
                                 loadChatKeys().then(() => renderTable(currentTable));
@@ -368,6 +372,9 @@ export async function openRecordEditor() {
     // 注册底部全局保护动作
     btnSave.addEventListener('click', async () => {
         try {
+            const deleteEntries = Array.from(pendingChanges.deletes);
+            const updateEntries = Array.from(pendingChanges.updates.entries());
+
             await db.transaction('rw', [db.events, db.facts, db.summaries, db.world_state, db.audit], async () => {
                 for (const pendingKey of pendingChanges.deletes) {
                     const [tName, id] = pendingKey.split('::');
@@ -389,6 +396,28 @@ export async function openRecordEditor() {
                     }
                 }
             });
+
+            // 写入审计日志（在事务外，避免循环写入 audit 表冲突）
+            if (currentChatKey) {
+                const auditMgr = new AuditManager(currentChatKey);
+                if (deleteEntries.length > 0) {
+                    await auditMgr.log({
+                        action: 'manual.delete',
+                        actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                        before: { keys: deleteEntries },
+                        after: {},
+                    });
+                }
+                if (updateEntries.length > 0) {
+                    await auditMgr.log({
+                        action: 'manual.edit',
+                        actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                        before: {},
+                        after: { updates: updateEntries.map(([k, v]) => ({ key: k, table: v.tableName })) },
+                    });
+                }
+            }
+
             pendingChanges.deletes.clear();
             pendingChanges.updates.clear();
             updateFooterState();

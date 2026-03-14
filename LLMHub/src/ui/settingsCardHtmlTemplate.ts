@@ -1,6 +1,8 @@
 import { buildSharedSelectField } from '../../../_Components/sharedSelect';
+import { buildSharedInputField } from '../../../_Components/sharedInput';
+import { buildSharedButton } from '../../../_Components/sharedButton';
 import type { LLMHubSettingsIds } from './settingsCardTemplateTypes';
-import { renderSharedCheckbox } from '../../../_Components/sharedCheckbox';
+import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 
 /**
  * 功能：构建 LLMHub 设置面板 HTML。
@@ -94,6 +96,58 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         ],
     });
 
+    // ── Provider 来源选择 ──
+    const providerSourceSelect = buildSharedSelectField({
+        id: ids.providerSourceId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '选择 LLM 来源：直连酒馆 或 自定义服务。' },
+        options: [
+            { value: 'tavern', label: '直连酒馆（Tavern）' },
+            { value: 'custom', label: '自定义服务（OpenAI 兼容）' },
+        ],
+    });
+
+    const customBaseUrlInput = buildSharedInputField({
+        id: ids.customBaseUrlId,
+        type: 'text',
+        className: 'stx-ui-input stx-ui-input-full',
+        attributes: { placeholder: 'https://api.openai.com/v1', 'data-tip': '服务接入点地址。' },
+    });
+
+    const customModelInput = buildSharedInputField({
+        id: ids.customModelInputId,
+        type: 'text',
+        className: 'stx-ui-input stx-ui-input-full',
+        attributes: { placeholder: 'gpt-4o-mini', 'data-tip': '手动填写模型名。' },
+    });
+
+    const testConnectionBtn = buildSharedButton({
+        id: ids.testConnectionBtnId,
+        label: '测试连接',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-plug',
+        attributes: { 'data-tip': '发送最小请求验证连接。' },
+    });
+
+    const fetchModelsBtn = buildSharedButton({
+        id: ids.fetchModelsBtnId,
+        label: '获取模型列表',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-list',
+        attributes: { 'data-tip': '从服务端拉取可用模型。' },
+    });
+
+    const modelListSelect = buildSharedSelectField({
+        id: ids.modelListSelectId,
+        containerClassName: 'stx-ui-shared-select',
+        selectClassName: 'stx-ui-select',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: { 'data-tip': '从列表选择模型。' },
+        options: [{ value: '', label: '（请先获取模型列表）' }],
+    });
+
     return `
     <div class="inline-drawer stx-ui-shell">
       <div class="inline-drawer-toggle inline-drawer-header stx-ui-head" id="${ids.drawerToggleId}">
@@ -132,29 +186,91 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="enable llm hub switch">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">启用 LLMHub</div>
-              <div class="stx-ui-item-desc">总开关。关闭后不再分发 AI 请求。</div>
+              <div class="stx-ui-item-desc">关闭后所有 AI 请求将停止处理。</div>
             </div>
             <div class="stx-ui-inline">
-              <input id="${ids.enabledId}" data-tip="LLMHub 总开关。" type="checkbox" />
+              ${buildSharedCheckboxCard({
+                  id: ids.enabledId,
+                  title: '',
+                  containerClassName: 'stx-ui-inline-checkbox is-control-only',
+                  inputAttributes: {
+                      'data-tip': 'LLMHub 总开关。',
+                      'aria-label': '启用 LLMHub',
+                  },
+              })}
             </div>
           </label>
 
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="global profile default profile">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">全局默认参数档</div>
-              <div class="stx-ui-item-desc">任务没指定 profile 时使用它。</div>
+              <div class="stx-ui-item-desc">平衡（通用场景）；精确（低温度，适合数据提取）；创意（高温度，适合叙事生成）；省钱（低 token，快速返回）。</div>
             </div>
             <div class="stx-ui-row">
               ${globalProfileSelect}
             </div>
           </div>
+
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-plug"></i>
+            <span>LLM 来源</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="provider source tavern custom">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">LLM 来源</div>
+              <div class="stx-ui-item-desc">选择使用酒馆自带的模型，还是接入你自己的 AI 服务。</div>
+            </div>
+            <div class="stx-ui-row">
+              ${providerSourceSelect}
+            </div>
+          </div>
+
+          <div id="${ids.testResultId}" class="stx-ui-result-area" style="display:none;"></div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-provider-tavern-section" data-stx-ui-search="tavern detect test connection model">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">酒馆直连</div>
+              <div class="stx-ui-item-desc">测试酒馆当前连接的模型是否正常工作。</div>
+            </div>
+            <div class="stx-ui-actions">
+              ${testConnectionBtn}
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack stx-ui-provider-custom-section" data-stx-ui-search="custom base url endpoint model api key" style="display:none;">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">自定义服务配置</div>
+              <div class="stx-ui-item-desc">填写你的 AI 服务地址和模型，密钥请在下方「凭据金库」中配置。</div>
+            </div>
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.customBaseUrlId}">Base URL</label>
+                ${customBaseUrlInput}
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.customModelInputId}">模型名（手动）</label>
+                ${customModelInput}
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label">从列表选择</label>
+                ${modelListSelect}
+                <span id="${ids.modelListStatusId}" class="stx-ui-field-hint"></span>
+              </div>
+            </div>
+            <div class="stx-ui-actions">
+              ${testConnectionBtn.replace(ids.testConnectionBtnId, ids.testConnectionBtnId + '_custom')}
+              ${fetchModelsBtn}
+            </div>
+          </div>
         </div>
 
         <div id="${ids.panelRouterId}" class="stx-ui-panel" hidden>
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="default provider model route">
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default provider model route">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">默认服务商</div>
-              <div class="stx-ui-item-desc">没命中规则时用它。</div>
+              <div class="stx-ui-item-desc">未匹配到路由规则的请求将交给此服务商处理。</div>
             </div>
             <div class="stx-ui-row">
               ${defaultProviderSelect}
@@ -164,7 +280,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="default model deploy fallback">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">默认模型</div>
-              <div class="stx-ui-item-desc">默认服务商使用的模型名。</div>
+              <div class="stx-ui-item-desc">默认服务商实际调用的模型名称。</div>
             </div>
             <div class="stx-ui-row">
               <input id="${ids.defaultModelId}" data-tip="默认模型名。" class="stx-ui-input" type="text" placeholder="例如 gpt-4o-mini" />
@@ -180,7 +296,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="route policy task provider profile fallback">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">新增或更新路由规则</div>
-              <div class="stx-ui-item-desc">按 consumer + task 覆盖保存。</div>
+              <div class="stx-ui-item-desc">为指定插件的特定任务设置专属的服务商和参数档。</div>
             </div>
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
@@ -218,7 +334,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="consumer mapping discover plugin default ai">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">插件默认 AI 映射</div>
-              <div class="stx-ui-item-desc">只显示在线插件。这里给插件设置默认 AI。</div>
+              <div class="stx-ui-item-desc">为每个在线插件指定默认使用的 AI 服务商。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.routeSaveBtnId}" data-tip="保存路由规则。" type="button" class="stx-ui-btn">保存规则</button>
@@ -242,7 +358,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="budget rpm tokens latency cost">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">新增或更新预算</div>
-              <div class="stx-ui-item-desc">按 consumer 设置限流和成本上限。</div>
+              <div class="stx-ui-item-desc">为指定插件设置请求频率和费用上限，防止过度消耗。</div>
             </div>
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
@@ -284,7 +400,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="vault credential api key">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">服务凭据</div>
-              <div class="stx-ui-item-desc">密钥仅保存到本地加密区。</div>
+              <div class="stx-ui-item-desc">密钥加密存储在本地浏览器中，不会上传到任何服务器。</div>
             </div>
             <div class="stx-ui-form-grid">
               <div class="stx-ui-field">
@@ -304,7 +420,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="vault erase all keys">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">清空金库</div>
-              <div class="stx-ui-item-desc">删除本地保存的全部密钥。</div>
+              <div class="stx-ui-item-desc">永久清除本地存储的所有 API 密钥，此操作不可撤销。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.vaultClearBtnId}" data-tip="清空所有本地密钥。" type="button" class="stx-ui-btn secondary stx-ui-btn-danger">清除全部密钥</button>

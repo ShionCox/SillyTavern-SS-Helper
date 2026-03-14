@@ -120,6 +120,10 @@ export interface DBMeta {
     schemaVersion: number;
     lastCompactionTs?: number;
     activeTemplateId?: string;
+    lastExtractTs?: number;
+    lastExtractEventCount?: number;
+    lastExtractUserMsgCount?: number;
+    lastExtractWindowHash?: string;
 }
 
 export interface DBWorldInfoCache {

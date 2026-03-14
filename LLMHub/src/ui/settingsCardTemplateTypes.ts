@@ -63,4 +63,14 @@ export interface LLMHubSettingsIds {
     vaultApiKeyId: string;
     vaultSaveBtnId: string;
     vaultClearBtnId: string;
+
+    // Provider Source & Connection
+    providerSourceId: string;
+    customBaseUrlId: string;
+    customModelInputId: string;
+    testConnectionBtnId: string;
+    testResultId: string;
+    fetchModelsBtnId: string;
+    modelListSelectId: string;
+    modelListStatusId: string;
 }

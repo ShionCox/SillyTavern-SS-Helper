@@ -43,6 +43,7 @@ export class MemorySDKImpl implements MemorySDK {
         this.auditManager = new AuditManager(chatKey);
         this.metaManager = new MetaManager(chatKey);
         this.templateManager = new TemplateManager(chatKey);
+        this.templateManager.installSillyTavernHooks();
         this.extractManager = new ExtractManager(
             chatKey,
             this.eventsManager,

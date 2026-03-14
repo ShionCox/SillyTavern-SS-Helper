@@ -69,12 +69,14 @@ import { MemorySDKImpl } from './sdk/memory-sdk';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { db } from './db/db';
 import { migrateMemoryOSLegacyData } from './db/legacy-migration';
+import { PluginRegistry } from './registry/registry';
+import { filterRecordText } from './core/record-filter';
+import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
 export const logger = new Logger('记忆引擎');
 export const toast = new Toast('记忆引擎');
-ensureSharedUnoStyles();
 
 const MEMORY_OS_MANIFEST: PluginManifest = {
     pluginId: 'stx_memory_os',
@@ -598,6 +600,112 @@ class MemoryOS {
                 return false;
             }
         };
+
+        // ── 历史消息差量补录 ──
+        interface BackfillStats {
+            scanned: number;
+            skippedSystem: number;
+            droppedByFilter: number;
+            deduplicatedById: number;
+            deduplicatedByText: number;
+            backfilled: number;
+        }
+
+        const backfillHistoricalMessages = async (
+            chatList: unknown[],
+            chatKey: string,
+        ): Promise<BackfillStats> => {
+            const stats: BackfillStats = {
+                scanned: 0,
+                skippedSystem: 0,
+                droppedByFilter: 0,
+                deduplicatedById: 0,
+                deduplicatedByText: 0,
+                backfilled: 0,
+            };
+            if (!Array.isArray(chatList) || chatList.length === 0) return stats;
+            const memory = (window as any).STX?.memory;
+            if (!memory?.events?.append) return stats;
+
+            // 一次性加载该 chatKey 下所有已有消息事件，构建去重索引
+            const [existingReceived, existingSent] = await Promise.all([
+                db.events
+                    .where('[chatKey+type+ts]')
+                    .between([chatKey, 'chat.message.received', 0], [chatKey, 'chat.message.received', Infinity])
+                    .toArray(),
+                db.events
+                    .where('[chatKey+type+ts]')
+                    .between([chatKey, 'chat.message.sent', 0], [chatKey, 'chat.message.sent', Infinity])
+                    .toArray(),
+            ]);
+            const allExisting = [...existingReceived, ...existingSent];
+            const existingMsgIds = new Set<string>();
+            const existingTextSigs = new Set<string>();
+            for (const ev of allExisting) {
+                const refId = normalizeMessageId(ev?.refs?.messageId);
+                if (refId) existingMsgIds.add(refId);
+                const storedText = String((ev?.payload as { text?: unknown } | undefined)?.text ?? '');
+                const sig = normalizeTextSignature(storedText);
+                if (sig) existingTextSigs.add(sig);
+            }
+
+            const filterSettings = readRecordFilterSettings();
+
+            for (const msg of chatList) {
+                stats.scanned++;
+                if (isSystemMessage(msg)) {
+                    stats.skippedSystem++;
+                    continue;
+                }
+
+                const isUser = isUserMessage(msg);
+                const text = readMessageText(msg);
+                if (!text) continue;
+
+                const eventType = isUser ? 'chat.message.sent' : 'chat.message.received';
+                const rawMsgId = normalizeMessageId(
+                    (msg as any)?._id ?? (msg as any)?.id ?? (msg as any)?.messageId ?? (msg as any)?.mesid
+                );
+
+                // 按消息 ID 去重
+                if (rawMsgId && existingMsgIds.has(rawMsgId)) {
+                    stats.deduplicatedById++;
+                    continue;
+                }
+
+                // 过滤
+                const result = filterRecordText(text, filterSettings);
+                const compactText = String(result.filteredText || '').replace(/\s+/g, '');
+                if (result.dropped || compactText.length === 0) {
+                    stats.droppedByFilter++;
+                    continue;
+                }
+
+                // 按文本签名去重（无稳定 messageId 或 ID 未命中时兜底）
+                const textSig = normalizeTextSignature(result.filteredText);
+                if (textSig && existingTextSigs.has(textSig)) {
+                    stats.deduplicatedByText++;
+                    continue;
+                }
+
+                // 写入
+                await memory.events.append(
+                    eventType,
+                    { text: result.filteredText },
+                    {
+                        sourcePlugin: 'sillytavern-core',
+                        sourceMessageId: rawMsgId || undefined,
+                    },
+                );
+
+                // 更新本地索引，防止同一轮内重复
+                if (rawMsgId) existingMsgIds.add(rawMsgId);
+                if (textSig) existingTextSigs.add(textSig);
+                stats.backfilled++;
+            }
+
+            return stats;
+        };
         // 功能：从事件参数中提取消息 ID，兼容 ID/对象两种入参。
         const extractMessageId = (eventPayload: unknown): string => {
             if (eventPayload == null) {
@@ -784,20 +892,23 @@ class MemoryOS {
             }
 
             (window as any).STX.memory = sdkInstance;
+            currentChatKey = chatKey;
             logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
             toast.success(`数据库已就绪`);
 
-            // 新对话时补录开场助手消息；已有记录的旧聊天不再重复补录
-            const shouldBootstrap = !(await hasStoredMessageEvents(chatKey));
-            if (shouldBootstrap) {
-                const bootstrapDelays: number[] = [120, 420, 900];
-                for (const delay of bootstrapDelays) {
-                    setTimeout(() => {
-                        if (!isPluginEnabled()) return;
-                        if (currentChatKey !== chatKey) return;
-                        appendLatestAssistantMessageFallback('bootstrap');
-                    }, delay);
+            // 历史消息差量补录：扫描 ctx.chat，将缺失的用户/助手消息写入 events
+            try {
+                const backfillResult = await backfillHistoricalMessages(ctx?.chat as unknown[], chatKey);
+                logger.info(
+                    `历史补录完成：扫描=${backfillResult.scanned}, 跳过系统=${backfillResult.skippedSystem}, ` +
+                    `过滤丢弃=${backfillResult.droppedByFilter}, ID去重=${backfillResult.deduplicatedById}, ` +
+                    `文本去重=${backfillResult.deduplicatedByText}, 实际补录=${backfillResult.backfilled}`
+                );
+                if (backfillResult.backfilled > 0) {
+                    toast.info(`已补录 ${backfillResult.backfilled} 条历史消息`);
                 }
+            } catch (backfillError) {
+                logger.error('历史消息补录异常', backfillError);
             }
         };
 
@@ -984,8 +1095,9 @@ class MemoryOS {
                     .reverse()
                     .find((item: any) => item?.role === 'user' && typeof item?.content === 'string');
                 const query = String(latestUserMessage?.content || '').trim();
+                const settingsMaxTokens = Number(readSettings().contextMaxTokens) || 1200;
                 const injectedContext = await memory.injection.buildContext({
-                    maxTokens: 800,
+                    maxTokens: settingsMaxTokens,
                     sections: ["WORLD_STATE", "FACTS", "SUMMARY", "EVENTS"],
                     query,
                     preferSummary: true,
@@ -999,15 +1111,26 @@ class MemoryOS {
                 }
 
                 const wrapperString = `\n<MEMORY_OS_CONTEXT>\n${injectedContext}\n</MEMORY_OS_CONTEXT>\n`;
-                const policy = memory.injection.getAnchorPolicy?.() || { defaultInsert: 'top' };
-                const insertTop = policy.defaultInsert === 'top';
+                const policy = memory.injection.getAnchorPolicy?.() || { defaultInsert: 'top', allowSystem: false, allowUser: true };
 
-                if (insertTop && payload.chat.length > 0) {
-                    payload.chat[0].content = payload.chat[0].content + wrapperString;
-                    logger.success('记忆注入完成，已附着到 System Prompt。');
-                } else {
+                if (policy.defaultInsert === 'beforeStart') {
+                    // 在第一条用户消息之前插入独立 system 消息
+                    const firstUserIdx = payload.chat.findIndex((m: any) => m?.role === 'user');
+                    const insertIdx = firstUserIdx > 0 ? firstUserIdx : 1;
+                    payload.chat.splice(insertIdx, 0, { role: 'system', content: wrapperString });
+                    logger.success('记忆注入完成，已插入到首条用户消息前。');
+                } else if (policy.defaultInsert === 'customAnchor') {
+                    // 追加为独立 system 消息到末尾
                     payload.chat.push({ role: 'system', content: wrapperString });
                     logger.success('记忆注入完成，已作为末尾 System 元素推入。');
+                } else {
+                    // 默认 'top'：在系统提示词后追加为独立消息
+                    if (payload.chat.length > 0 && payload.chat[0]?.role === 'system') {
+                        payload.chat.splice(1, 0, { role: 'system', content: wrapperString });
+                    } else {
+                        payload.chat.unshift({ role: 'system', content: wrapperString });
+                    }
+                    logger.success('记忆注入完成，已作为独立 System 消息插入顶部。');
                 }
 
             } catch (error) {

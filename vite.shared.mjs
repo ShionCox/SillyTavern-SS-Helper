@@ -127,6 +127,7 @@ export function createProjectConfig(targetName, options = {}) {
       target: "es2022",
       sourcemap: true,
       minify: options.watch ? false : "esbuild",
+      cssMinify: options.watch ? false : "esbuild",
       cssCodeSplit: false,
       emptyOutDir: false,
       outDir,
@@ -139,7 +140,7 @@ export function createProjectConfig(targetName, options = {}) {
       },
       rollupOptions: {
         output: {
-          inlineDynamicImports: true,
+          codeSplitting: false,
           entryFileNames: "index.js",
           chunkFileNames: "chunks/[name]-[hash].js",
           assetFileNames: "assets/[name]-[hash][extname]",

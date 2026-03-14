@@ -15,6 +15,7 @@ import { db, patchSdkChatShared } from '../db/db';
  * 这是写入数据的唯一合法入口（AI 模式下）
  */
 export class ProposalManager {
+    private chatKey: string;
     private factsManager: FactsManager;
     private stateManager: StateManager;
     private summariesManager: SummariesManager;
@@ -27,6 +28,7 @@ export class ProposalManager {
     private allowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID];
 
     constructor(chatKey: string) {
+        this.chatKey = chatKey;
         this.factsManager = new FactsManager(chatKey);
         this.stateManager = new StateManager(chatKey);
         this.summariesManager = new SummariesManager(chatKey);
@@ -150,7 +152,7 @@ export class ProposalManager {
             for (const p of patches) {
                 if (!p) continue;
                 if (p.op === 'remove') {
-                    await this.stateManager.set(p.path, null);
+                    await this.stateManager.patch([{ op: 'remove', path: p.path }]);
                 } else {
                     await this.stateManager.set(p.path, p.value);
                 }

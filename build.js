@@ -101,10 +101,9 @@ function createCopyManifestPlugin(projectDir, distDir) {
 /**
  * 功能：构建单个项目的 Vite 配置。
  * @param {{name: string, entry: string, outDir: string, projectDir: string}} target 构建目标。
- * @param {() => import('vite').Plugin} unoCssVitePluginFactory UnoCSS 插件工厂函数。
  * @returns {import('vite').InlineConfig} Vite 内联配置。
  */
-function createViteConfig(target, unoCssVitePluginFactory) {
+function createViteConfig(target) {
   const rootDir = process.cwd();
   const entryFile = path.resolve(rootDir, target.entry);
   const outDir = path.resolve(rootDir, target.outDir);
@@ -112,11 +111,12 @@ function createViteConfig(target, unoCssVitePluginFactory) {
   return {
     configFile: false,
     publicDir: false,
-    plugins: [unoCssVitePluginFactory(), createCopyManifestPlugin(projectDir, outDir)],
+    plugins: [createCopyManifestPlugin(projectDir, outDir)],
     build: {
       target: "es2022",
       sourcemap: true,
       minify: isWatchMode ? false : "esbuild",
+      cssMinify: isWatchMode ? false : "esbuild",
       watch: isWatchMode ? {} : null,
       emptyOutDir: false,
       outDir,
@@ -127,7 +127,7 @@ function createViteConfig(target, unoCssVitePluginFactory) {
       },
       rollupOptions: {
         output: {
-          inlineDynamicImports: true,
+          codeSplitting: false,
           entryFileNames: "index.js",
         },
       },
@@ -141,22 +141,19 @@ function createViteConfig(target, unoCssVitePluginFactory) {
  */
 async function runBuild() {
   try {
-    const [{ build }, { default: unoCssVitePluginFactory }] = await Promise.all([
-      import("vite"),
-      import("unocss/vite"),
-    ]);
+    const { build } = await import("vite");
     if (isWatchMode) {
       const names = builds.map((item) => item.name).join(", ");
       console.log(`启动 Vite watch 模式: [${names}]`);
       for (const target of builds) {
-        await build(createViteConfig(target, unoCssVitePluginFactory));
+        await build(createViteConfig(target));
       }
       return;
     }
 
     console.log("开始执行 Vite 构建...");
     for (const target of builds) {
-      await build(createViteConfig(target, unoCssVitePluginFactory));
+      await build(createViteConfig(target));
       console.log(`构建完成: ${target.outDir}/index.js`);
     }
     console.log("全部构建完成。");

@@ -13,8 +13,12 @@ export type {
     EmbedResponse,
     RerankRequest,
     RerankResponse,
+    ProviderConnectionResult,
+    ProviderModelListResult,
+    ProviderModelInfo,
 } from './providers/types';
 export { OpenAIProvider } from './providers/openai-provider';
+export { TavernProvider } from './providers/tavern-provider';
 
 // 路由层
 export { TaskRouter } from './router/router';
@@ -50,14 +54,13 @@ import { TaskRouter, type RoutePolicy } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
 import { OpenAIProvider } from './providers/openai-provider';
+import { TavernProvider } from './providers/tavern-provider';
 import { VaultManager } from './vault/vault-manager';
 import type { PluginManifest } from '../../SDK/stx';
-import { ensureSharedUnoStyles } from '../../SDK/sharedUno';
 import manifestJson from '../manifest.json';
 
 export const logger = new Logger('AI 调度中枢');
 export const toast = new Toast('AI 调度中枢');
-ensureSharedUnoStyles();
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 
@@ -69,6 +72,22 @@ type LLMHubSettings = {
     defaultBaseUrl?: string;
     routePolicies?: RoutePolicy[];
     budgets?: Record<string, BudgetConfig>;
+    /** 多 Provider 配置条目 */
+    providers?: ProviderConfig[];
+};
+
+export type ProviderConfig = {
+    id: string;
+    /** 'tavern' 直连酒馆 | 'custom' 自定义 OpenAI 兼容 */
+    source: 'tavern' | 'custom';
+    label?: string;
+    baseUrl?: string;
+    model?: string;
+    /** 手动输入的模型名（当列表取不到时） */
+    manualModel?: string;
+    /** 从列表选中的模型 */
+    selectedModel?: string;
+    enabled?: boolean;
 };
 
 const LLMHUB_MANIFEST: PluginManifest = {
@@ -138,6 +157,17 @@ class LLMHub {
             }
         }
 
+        // ── 多 Provider 配置条目 ──
+        if (Array.isArray(settings.providers) && settings.providers.length > 0) {
+            for (const cfg of settings.providers) {
+                if (cfg.enabled === false) continue;
+                const model = cfg.selectedModel || cfg.manualModel || cfg.model || this.defaultModel;
+                const baseUrl = cfg.baseUrl || this.resolveBaseUrl(cfg.id);
+                await this.upsertProvider(cfg.id, model, baseUrl, cfg.source);
+            }
+        }
+
+        // ── 兼容旧配置：defaultProvider / defaultModel / defaultBaseUrl ──
         const providerId = settings.defaultProvider || this.defaultProvider;
         const model = settings.defaultModel || this.defaultModel;
         const baseUrl = settings.defaultBaseUrl || this.resolveBaseUrl(providerId);
@@ -275,21 +305,32 @@ class LLMHub {
      *   Promise<void>
      */
     private async setupDefaultProvider(): Promise<void> {
+        // 内置 tavern 直连 Provider（始终注册）
+        await this.upsertProvider('tavern', '', '', 'tavern');
+
         await this.upsertProvider(this.defaultProvider, this.defaultModel, this.defaultBaseUrl);
         this.router.setDefault(this.defaultProvider);
         await this.applySettingsFromContext();
     }
 
     /**
-     * 功能：注册或覆盖一个 OpenAI 兼容 Provider。
+     * 功能：注册或覆盖 Provider；根据 source 创建不同实例。
      * 参数：
      *   providerId: Provider ID
      *   model: 模型名
      *   baseUrl: 接口基础地址
+     *   source: 来源类型，默认 'custom'
      * 返回：
      *   Promise<void>
      */
-    private async upsertProvider(providerId: string, model: string, baseUrl: string): Promise<void> {
+    private async upsertProvider(providerId: string, model: string, baseUrl: string, source: 'tavern' | 'custom' = 'custom'): Promise<void> {
+        if (source === 'tavern') {
+            const provider = new TavernProvider({ id: providerId });
+            this.router.registerProvider(provider);
+            logger.info(`Provider 已刷新 (tavern): ${providerId}`);
+            return;
+        }
+
         const apiKey = (await this.vault.getCredential(providerId)) || '';
         const provider = new OpenAIProvider({
             id: providerId,

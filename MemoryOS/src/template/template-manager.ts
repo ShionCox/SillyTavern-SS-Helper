@@ -22,13 +22,13 @@ export class TemplateManager {
         this.chatKey = chatKey;
         this.worldInfoReader = new WorldInfoReader();
         this.metaManager = new MetaManager(chatKey);
-        this.installSillyTavernHooks();
     }
 
     /**
-     * 安装 SillyTavern 生命周期监听。
+     * 安装 SillyTavern 生命周期监听（仅主实例调用一次）。
      */
-    private installSillyTavernHooks(): void {
+    public installSillyTavernHooks(): void {
+        if (this.syncInterval) return; // 防止重复安装
         const globalST = window as any;
         if (globalST?.eventSource && globalST?.event_types) {
             globalST.eventSource.on(globalST.event_types.CHAT_CHANGED, () => {

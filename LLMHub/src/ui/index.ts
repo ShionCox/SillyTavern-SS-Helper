@@ -8,6 +8,7 @@ import changelogData from '../../changelog.json';
 import { hydrateSharedSelects, refreshSharedSelectOptions, syncSharedSelects } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
+import { discoverConsumers, type DiscoveredConsumer } from '../discovery/consumer-discovery';
 
 
 let LLMHUB_THEME_BINDING_READY = false;
@@ -19,6 +20,18 @@ type LLMHubSettings = {
     defaultModel?: string;
     routePolicies?: RoutePolicy[];
     budgets?: Record<string, BudgetConfig>;
+    providers?: ProviderConfigUI[];
+};
+
+type ProviderConfigUI = {
+    id: string;
+    source: 'tavern' | 'custom';
+    label?: string;
+    baseUrl?: string;
+    model?: string;
+    manualModel?: string;
+    selectedModel?: string;
+    enabled?: boolean;
 };
 
 type ProviderLite = { id: string };
@@ -33,10 +46,16 @@ type LLMHubRuntime = {
     applySettingsFromContext?: () => Promise<void>;
     router?: {
         getAllProviders?: () => ProviderLite[];
+        getProvider?: (id: string) => ProviderWithTest | null;
     };
     sdk?: {
         setGlobalProfile?: (profile: string) => void;
     };
+};
+
+type ProviderWithTest = ProviderLite & {
+    testConnection?: () => Promise<{ ok: boolean; message: string; errorCode?: string; detail?: string; model?: string; latencyMs?: number }>;
+    listModels?: () => Promise<{ ok: boolean; models: { id: string; label?: string }[]; message: string; errorCode?: string; detail?: string }>;
 };
 
 // UI 组件的唯一命名空间
@@ -144,6 +163,15 @@ const IDS: LLMHubSettingsIds = {
     vaultApiKeyId: `${NAMESPACE}-vault-api-key`,
     vaultSaveBtnId: `${NAMESPACE}-vault-save-btn`,
     vaultClearBtnId: `${NAMESPACE}-vault-clear-btn`,
+
+    providerSourceId: `${NAMESPACE}-provider-source`,
+    customBaseUrlId: `${NAMESPACE}-custom-base-url`,
+    customModelInputId: `${NAMESPACE}-custom-model-input`,
+    testConnectionBtnId: `${NAMESPACE}-test-connection-btn`,
+    testResultId: `${NAMESPACE}-test-result`,
+    fetchModelsBtnId: `${NAMESPACE}-fetch-models-btn`,
+    modelListSelectId: `${NAMESPACE}-model-list-select`,
+    modelListStatusId: `${NAMESPACE}-model-list-status`,
 };
 
 /**
@@ -152,6 +180,13 @@ const IDS: LLMHubSettingsIds = {
  * 返回：void。
  */
 function applySettingsTooltips(): void {
+    ensureSharedTooltip();
+}
+
+/**
+ * 功能：动态内容更新后重新应用 tooltip。
+ */
+function refreshSettingsTooltips(): void {
     ensureSharedTooltip();
 }
 
@@ -1098,6 +1133,199 @@ function bindUiEvents(): void {
     refreshProviderSelects();
     renderRoutePolicies();
     renderBudgets();
+
+    // ── Provider 来源切换与连接检测 ──
+
+    const providerSourceEl = document.getElementById(IDS.providerSourceId) as HTMLSelectElement | null;
+    const testResultEl = document.getElementById(IDS.testResultId) as HTMLElement | null;
+    const tavernSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-tavern-section') ?? [];
+    const customSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-custom-section') ?? [];
+    const testConnectionBtn = document.getElementById(IDS.testConnectionBtnId) as HTMLButtonElement | null;
+    const fetchModelsBtn = document.getElementById(IDS.fetchModelsBtnId) as HTMLButtonElement | null;
+    const modelListSelectEl = document.getElementById(IDS.modelListSelectId) as HTMLSelectElement | null;
+    const modelListStatusEl = document.getElementById(IDS.modelListStatusId) as HTMLElement | null;
+    const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
+    const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
+
+    /**
+     * 功能：切换 tavern / custom 可见区块。
+     */
+    const toggleProviderSourceSections = (source: string): void => {
+        const isTavern = source === 'tavern';
+        tavernSections.forEach(el => { el.style.display = isTavern ? '' : 'none'; });
+        customSections.forEach(el => { el.style.display = isTavern ? 'none' : ''; });
+    };
+
+    /**
+     * 功能：在测试结果区域显示结构化信息。
+     */
+    const showTestResult = (result: { ok: boolean; message: string; detail?: string; latencyMs?: number }): void => {
+        if (!testResultEl) return;
+        const cls = result.ok ? 'stx-ui-result-ok' : 'stx-ui-result-error';
+        const latency = result.latencyMs != null ? ` (${result.latencyMs}ms)` : '';
+        const detail = result.detail ? `<div class="stx-ui-result-detail">${escapeHtml(result.detail)}</div>` : '';
+        testResultEl.className = `stx-ui-result-area ${cls}`;
+        testResultEl.innerHTML = `<div class="stx-ui-result-msg">${escapeHtml(result.message)}${latency}</div>${detail}`;
+        testResultEl.style.display = '';
+    };
+
+    // 初始化来源选择状态
+    {
+        const savedSource = ensureSettings().providers?.[0]?.source || 'tavern';
+        if (providerSourceEl) {
+            providerSourceEl.value = savedSource;
+        }
+        toggleProviderSourceSections(savedSource);
+        syncSharedSelects(cardRoot || document.body);
+
+        // 恢复 custom 字段
+        const customCfg = ensureSettings().providers?.find(p => p.source === 'custom');
+        if (customCfg) {
+            if (customBaseUrlEl) customBaseUrlEl.value = customCfg.baseUrl || '';
+            if (customModelInputEl) customModelInputEl.value = customCfg.manualModel || customCfg.model || '';
+        }
+    }
+
+    providerSourceEl?.addEventListener('change', () => {
+        const source = providerSourceEl.value as 'tavern' | 'custom';
+        toggleProviderSourceSections(source);
+        if (testResultEl) { testResultEl.style.display = 'none'; }
+
+        // 持久化选择
+        const current = ensureSettings();
+        if (!current.providers || current.providers.length === 0) {
+            current.providers = [{ id: source === 'tavern' ? 'tavern' : 'openai', source }];
+        } else {
+            current.providers[0].source = source;
+            current.providers[0].id = source === 'tavern' ? 'tavern' : (current.providers[0].id || 'openai');
+        }
+        saveSettings();
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
+
+    // 连接测试（tavern 直连按钮）
+    testConnectionBtn?.addEventListener('click', async () => {
+        testConnectionBtn.disabled = true;
+        testConnectionBtn.textContent = '测试中…';
+        try {
+            const source = providerSourceEl?.value || 'tavern';
+            const providerId = source === 'tavern' ? 'tavern' : (ensureSettings().defaultProvider || 'openai');
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.testConnection) {
+                showTestResult({ ok: false, message: 'Provider 不支持连接测试' });
+                return;
+            }
+            const res = await provider.testConnection();
+            showTestResult(res);
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            showTestResult({ ok: false, message: `测试异常: ${msg}` });
+        } finally {
+            testConnectionBtn.disabled = false;
+            testConnectionBtn.textContent = '测试连接';
+        }
+    });
+
+    // 连接测试（custom 面板的独立按钮）
+    const customTestBtn = document.getElementById(IDS.testConnectionBtnId + '_custom') as HTMLButtonElement | null;
+    customTestBtn?.addEventListener('click', async () => {
+        customTestBtn.disabled = true;
+        customTestBtn.textContent = '测试中…';
+        try {
+            const providerId = ensureSettings().defaultProvider || 'openai';
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.testConnection) {
+                showTestResult({ ok: false, message: 'Provider 不支持连接测试' });
+                return;
+            }
+            const res = await provider.testConnection();
+            showTestResult(res);
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            showTestResult({ ok: false, message: `测试异常: ${msg}` });
+        } finally {
+            customTestBtn.disabled = false;
+            customTestBtn.textContent = '测试连接';
+        }
+    });
+
+    // 获取模型列表
+    fetchModelsBtn?.addEventListener('click', async () => {
+        fetchModelsBtn.disabled = true;
+        if (modelListStatusEl) modelListStatusEl.textContent = '获取中…';
+        try {
+            const providerId = ensureSettings().defaultProvider || 'openai';
+            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
+            if (!provider?.listModels) {
+                if (modelListStatusEl) modelListStatusEl.textContent = 'Provider 不支持模型列表';
+                return;
+            }
+            const res = await provider.listModels();
+            if (!res.ok || res.models.length === 0) {
+                if (modelListStatusEl) modelListStatusEl.textContent = res.message || '无可用模型';
+                return;
+            }
+
+            // 填充列表
+            if (modelListSelectEl) {
+                modelListSelectEl.innerHTML = '';
+                const emptyOpt = document.createElement('option');
+                emptyOpt.value = '';
+                emptyOpt.textContent = '（请选择模型）';
+                modelListSelectEl.appendChild(emptyOpt);
+                for (const m of res.models) {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.label || m.id;
+                    modelListSelectEl.appendChild(opt);
+                }
+                refreshSharedSelectOptions(cardRoot || document.body);
+            }
+            if (modelListStatusEl) modelListStatusEl.textContent = res.message;
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (modelListStatusEl) modelListStatusEl.textContent = `获取失败: ${msg}`;
+        } finally {
+            fetchModelsBtn.disabled = false;
+        }
+    });
+
+    // 从模型列表选中后同步到设置
+    modelListSelectEl?.addEventListener('change', () => {
+        const selected = modelListSelectEl.value;
+        if (!selected) return;
+        const current = ensureSettings();
+        if (current.providers && current.providers.length > 0) {
+            current.providers[0].selectedModel = selected;
+        }
+        current.defaultModel = selected;
+        saveSettings();
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
+
+    // custom base URL / model 手动输入保存
+    customBaseUrlEl?.addEventListener('blur', () => {
+        const current = ensureSettings();
+        if (!current.providers || current.providers.length === 0) {
+            current.providers = [{ id: 'openai', source: 'custom' }];
+        }
+        current.providers[0].baseUrl = customBaseUrlEl.value.trim();
+        current.defaultBaseUrl = customBaseUrlEl.value.trim();
+        saveSettings();
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
+
+    customModelInputEl?.addEventListener('blur', () => {
+        const current = ensureSettings();
+        if (!current.providers || current.providers.length === 0) {
+            current.providers = [{ id: 'openai', source: 'custom' }];
+        }
+        const model = customModelInputEl.value.trim();
+        current.providers[0].manualModel = model;
+        current.defaultModel = model;
+        saveSettings();
+        runtime?.applySettingsFromContext?.().catch(() => {});
+    });
     const currentEnabled = ensureSettings().enabled === true;
     setTimeout(() => {
         (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {

@@ -5,10 +5,11 @@ import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
 import { openRecordEditor } from './recordEditor';
-import { hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
+import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
+import { filterRecordText, normalizeRecordFilterSettings } from '../core/record-filter';
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
@@ -186,6 +187,54 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
 }
 
 /**
+ * 功能：将设置面板中的原生选择框替换为共享选择框。
+ * 参数：
+ *   root：设置面板根节点。
+ * 返回：
+ *   void：无返回值。
+ */
+function upgradeSettingsSelects(root: HTMLElement): void {
+    const selectIds: string[] = [
+        IDS.recordFilterLevelId,
+        IDS.recordFilterJsonModeId,
+        IDS.recordFilterPureCodePolicyId,
+    ];
+
+    selectIds.forEach((selectId: string): void => {
+        const nativeSelect = root.querySelector<HTMLSelectElement>(`select#${selectId}`);
+        if (!nativeSelect) return;
+        if (nativeSelect.closest('[data-ui="shared-select"]')) return;
+
+        const dataTip = nativeSelect.getAttribute('data-tip') || undefined;
+        const nextMarkup = buildSharedSelectField({
+            id: nativeSelect.id,
+            value: nativeSelect.value,
+            containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+            selectClassName: 'stx-ui-input',
+            triggerClassName: 'stx-ui-input-full',
+            triggerAttributes: dataTip ? { 'data-tip': dataTip } : undefined,
+            options: Array.from(nativeSelect.options).map((option: HTMLOptionElement) => ({
+                value: option.value,
+                label: option.textContent?.trim() || '',
+                disabled: option.disabled,
+            })),
+        });
+
+        const fragment = document.createElement('div');
+        fragment.innerHTML = nextMarkup.trim();
+        const nextRoot = fragment.firstElementChild;
+        if (!(nextRoot instanceof HTMLElement)) return;
+
+        const nextNativeSelect = nextRoot.querySelector<HTMLSelectElement>('select');
+        if (nextNativeSelect) {
+            nextNativeSelect.disabled = nativeSelect.disabled;
+        }
+
+        nativeSelect.replaceWith(nextRoot);
+    });
+}
+
+/**
  * 在设定的拓展面板 (Extensions) 中渲染 MemoryOS 设置卡片
  */
 export async function renderSettingsUi() {
@@ -226,6 +275,7 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
+        upgradeSettingsSelects(cardWrapper);
         hydrateSharedSelects(cardWrapper);
         unmountThemeHost(cardWrapper);
         const contentRoot = document.getElementById(IDS.drawerContentId);
@@ -341,6 +391,16 @@ function bindUiEvents() {
         const ctx = getStContext();
         const settings = ensureMemorySettings(ctx);
         return settings[settingKey] === true;
+    };
+
+    const syncCardDisabledState = (isEnabled: boolean): void => {
+        const cardEl = document.getElementById(IDS.cardId);
+        if (!cardEl) return;
+        if (isEnabled) {
+            cardEl.classList.remove('is-card-disabled');
+        } else {
+            cardEl.classList.add('is-card-disabled');
+        }
     };
 
     syncCardDisabledState(readSettingBoolean('enabled'));
@@ -1116,7 +1176,7 @@ function bindUiEvents() {
                     }
                 }
 
-                const { db, clearChatData } = await import('../db/db');
+                const { db, clearMemoryChatData } = await import('../db/db');
                 const events = Array.isArray(payload.events) ? payload.events : [];
                 const facts = Array.isArray(payload.facts) ? payload.facts : [];
                 const summaries = Array.isArray(payload.summaries) ? payload.summaries : [];
@@ -1126,7 +1186,7 @@ function bindUiEvents() {
                 const meta = payload.meta && typeof payload.meta === 'object' ? payload.meta : null;
                 const binding = payload.binding && typeof payload.binding === 'object' ? payload.binding : null;
                 if (mode === 'replace') {
-                    await clearChatData(currentChatKey);
+                    await clearMemoryChatData(currentChatKey);
                 }
 
                 await db.transaction('rw', [db.events, db.facts, db.world_state, db.summaries, db.templates, db.meta, db.template_bindings], async () => {
@@ -1196,8 +1256,8 @@ function bindUiEvents() {
             if (!confirm(`确定要清空 [${chatKey}] 的所有记忆数据吗？\n此操作不可撤销！`)) return;
             try {
                 // 通过 IndexedDB 的 db 单例直接按 chatKey 批量删除
-                const { clearChatData } = await import('../db/db');
-                await clearChatData(chatKey);
+                const { clearMemoryChatData } = await import('../db/db');
+                await clearMemoryChatData(chatKey);
                 alert(`已清空 [${chatKey}] 的所有记忆数据。`);
             } catch (e) {
                 alert('清空失败：' + String(e));
