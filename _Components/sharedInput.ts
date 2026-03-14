@@ -3,7 +3,7 @@ import sharedInputCssText from "./sharedInput.css?inline";
 type SharedInputAttributeValue = string | number | boolean | null | undefined;
 
 export type SharedInputTag = "input" | "textarea";
-export type SharedInputType = "text" | "number" | "search";
+export type SharedInputType = "text" | "number" | "search" | "password";
 
 export interface SharedInputFieldOptions {
   id?: string;

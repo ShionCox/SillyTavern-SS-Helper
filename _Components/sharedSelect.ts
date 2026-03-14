@@ -31,13 +31,13 @@ interface SharedSelectRefs {
   trigger: HTMLButtonElement;
   label: HTMLElement;
   list: HTMLElement;
-  options: HTMLElement[];
 }
 
-let OPEN_SHARED_SELECT_ROOT: HTMLElement | null = null;
+let OPEN_SHARED_SELECT_REFS: SharedSelectRefs | null = null;
 let SHARED_SELECT_GLOBAL_EVENTS_BOUND = false;
 let SHARED_SELECT_REPOSITION_FRAME = 0;
 let SHARED_SELECT_THEME_FRAME = 0;
+let SHARED_SELECT_OPEN_OBSERVER: MutationObserver | null = null;
 
 function traceSharedSelect(message: string, payload?: unknown): void {
   if (payload === undefined) {
@@ -228,6 +228,31 @@ export function buildSharedSelectStyles(scopeSelector: string): string {
 }
 
 /**
+ * 功能：为指定组件解析当前应使用的下拉面板节点。
+ * @param root 组件根节点。
+ * @param listId 触发器声明的面板节点 ID。
+ * @param inlineList 根节点内原始的面板节点。
+ * @returns 当前实例实际应使用的面板节点；未命中时返回 null。
+ */
+function resolveSharedSelectList(
+  root: HTMLElement,
+  listId: string,
+  inlineList: HTMLElement | null,
+): HTMLElement | null {
+  if (OPEN_SHARED_SELECT_REFS?.root === root) {
+    return OPEN_SHARED_SELECT_REFS.list;
+  }
+  if (inlineList && (!listId || inlineList.id === listId)) {
+    return inlineList;
+  }
+  if (!listId) {
+    return inlineList;
+  }
+  const controlledList = document.getElementById(listId);
+  return controlledList instanceof HTMLElement ? controlledList : inlineList;
+}
+
+/**
  * 功能：读取组件运行时节点引用。
  * @param root 组件根节点
  * @returns 运行时节点集合；缺少关键节点时返回 null
@@ -237,10 +262,19 @@ function getSharedSelectRefs(root: HTMLElement): SharedSelectRefs | null {
   const trigger = root.querySelector<HTMLButtonElement>("button.stx-shared-select-trigger");
   const label = root.querySelector<HTMLElement>(".stx-shared-select-label");
   const listId = String(trigger?.getAttribute("aria-controls") ?? "").trim();
-  const list = (listId ? document.getElementById(listId) : null) || root.querySelector<HTMLElement>(".stx-shared-select-list");
+  const inlineList = root.querySelector<HTMLElement>(".stx-shared-select-list");
+  const list = resolveSharedSelectList(root, listId, inlineList);
   if (!select || !trigger || !label || !list) return null;
-  const options = Array.from(list.querySelectorAll<HTMLElement>(".stx-shared-select-option"));
-  return { root, select, trigger, label, list, options };
+  return { root, select, trigger, label, list };
+}
+
+/**
+ * 功能：实时读取当前面板内的选项节点列表。
+ * @param refs 组件运行时节点集合。
+ * @returns 当前面板中的选项节点数组。
+ */
+function getSharedSelectOptions(refs: SharedSelectRefs): HTMLElement[] {
+  return Array.from(refs.list.querySelectorAll<HTMLElement>(".stx-shared-select-option"));
 }
 
 /**
@@ -250,8 +284,9 @@ function getSharedSelectRefs(root: HTMLElement): SharedSelectRefs | null {
  */
 function getSelectedOptionIndex(refs: SharedSelectRefs): number {
   const selectedIndex = refs.select.selectedIndex;
-  if (selectedIndex >= 0 && selectedIndex < refs.options.length) return selectedIndex;
-  return refs.options.findIndex((item) => item.dataset.sharedSelectOptionValue === refs.select.value);
+  const options = getSharedSelectOptions(refs);
+  if (selectedIndex >= 0 && selectedIndex < options.length) return selectedIndex;
+  return options.findIndex((item) => item.dataset.sharedSelectOptionValue === refs.select.value);
 }
 
 /**
@@ -271,7 +306,7 @@ function getHighlightIndex(root: HTMLElement): number {
  * @returns 无返回值
  */
 function scrollOptionIntoView(refs: SharedSelectRefs, index: number): void {
-  const option = refs.options[index];
+  const option = getSharedSelectOptions(refs)[index];
   if (!option) return;
   const listRect = refs.list.getBoundingClientRect();
   const optionRect = option.getBoundingClientRect();
@@ -299,7 +334,7 @@ function setHighlightIndex(refs: SharedSelectRefs, index: number, ensureVisible:
     }
     return;
   }
-  refs.options.forEach((item, optionIndex) => {
+  getSharedSelectOptions(refs).forEach((item, optionIndex) => {
     item.classList.toggle("is-highlighted", optionIndex === index);
   });
   refs.root.dataset.sharedSelectHighlightIndex = String(index);
@@ -314,7 +349,7 @@ function setHighlightIndex(refs: SharedSelectRefs, index: number, ensureVisible:
  * @returns 未禁用的索引数组
  */
 function getEnabledOptionIndexes(refs: SharedSelectRefs): number[] {
-  return refs.options
+  return getSharedSelectOptions(refs)
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => item.dataset.sharedSelectDisabled !== "true")
     .map(({ index }) => index);
@@ -328,17 +363,18 @@ function getEnabledOptionIndexes(refs: SharedSelectRefs): number[] {
  * @returns 下一个可用索引；无可选项时返回 -1
  */
 function findNextEnabledIndex(refs: SharedSelectRefs, currentIndex: number, step: 1 | -1): number {
+  const options = getSharedSelectOptions(refs);
   const enabledIndexes = getEnabledOptionIndexes(refs);
   if (!enabledIndexes.length) return -1;
   if (currentIndex < 0) {
     return step > 0 ? enabledIndexes[0] : enabledIndexes[enabledIndexes.length - 1];
   }
   let nextIndex = currentIndex;
-  for (let count = 0; count < refs.options.length; count += 1) {
+  for (let count = 0; count < options.length; count += 1) {
     nextIndex += step;
-    if (nextIndex < 0) nextIndex = refs.options.length - 1;
-    if (nextIndex >= refs.options.length) nextIndex = 0;
-    if (refs.options[nextIndex]?.dataset.sharedSelectDisabled !== "true") {
+    if (nextIndex < 0) nextIndex = options.length - 1;
+    if (nextIndex >= options.length) nextIndex = 0;
+    if (options[nextIndex]?.dataset.sharedSelectDisabled !== "true") {
       return nextIndex;
     }
   }
@@ -426,6 +462,182 @@ function positionSharedSelectList(refs: SharedSelectRefs): void {
 }
 
 /**
+ * 功能：判断两组运行时引用是否指向同一个选择框实例。
+ * @param left 第一组运行时引用。
+ * @param right 第二组运行时引用。
+ * @returns 是否为同一个实例。
+ */
+function isSameSharedSelectRefs(
+  left: SharedSelectRefs | null,
+  right: SharedSelectRefs | null,
+): boolean {
+  if (!left || !right) return false;
+  return (
+    left.root === right.root &&
+    left.select === right.select &&
+    left.trigger === right.trigger &&
+    left.label === right.label &&
+    left.list === right.list
+  );
+}
+
+/**
+ * 功能：判断当前打开实例的关键节点是否仍然完整有效。
+ * @param refs 组件运行时节点集合。
+ * @returns 若关键节点仍与原实例保持连接则返回 true，否则返回 false。
+ */
+function isSharedSelectRuntimeAlive(refs: SharedSelectRefs): boolean {
+  return (
+    refs.root.isConnected &&
+    refs.select.isConnected &&
+    refs.trigger.isConnected &&
+    refs.label.isConnected &&
+    refs.list.isConnected &&
+    refs.root.contains(refs.select) &&
+    refs.root.contains(refs.trigger) &&
+    refs.root.contains(refs.label)
+  );
+}
+
+/**
+ * 功能：判断关闭时是否可以把脱离挂载的面板安全归位到原组件。
+ * @param refs 组件运行时节点集合。
+ * @returns 若可安全归位则返回 true，否则返回 false。
+ */
+function canRestoreSharedSelectListToRoot(refs: SharedSelectRefs): boolean {
+  return (
+    refs.root.isConnected &&
+    refs.select.isConnected &&
+    refs.trigger.isConnected &&
+    refs.label.isConnected &&
+    refs.root.contains(refs.select) &&
+    refs.root.contains(refs.trigger) &&
+    refs.root.contains(refs.label)
+  );
+}
+
+/**
+ * 功能：清理面板定位时写入的内联样式与状态标记。
+ * @param refs 组件运行时节点集合。
+ * @returns 无返回值。
+ */
+function resetSharedSelectListLayout(refs: SharedSelectRefs): void {
+  refs.list.style.left = "";
+  refs.list.style.top = "";
+  refs.list.style.minWidth = "";
+  refs.list.style.maxWidth = "";
+  refs.list.style.maxHeight = "";
+  delete refs.root.dataset.sharedSelectPlacement;
+}
+
+/**
+ * 功能：在关闭时回收脱离挂载的面板节点，避免遗留孤立弹层。
+ * @param refs 组件运行时节点集合。
+ * @returns 无返回值。
+ */
+function restoreSharedSelectListHost(refs: SharedSelectRefs): void {
+  resetSharedSelectListLayout(refs);
+  if (canRestoreSharedSelectListToRoot(refs)) {
+    if (refs.list.parentElement !== refs.root) {
+      refs.root.appendChild(refs.list);
+    }
+    refs.list.dataset.sharedSelectDetached = "false";
+    return;
+  }
+  if (refs.list.isConnected) {
+    refs.list.remove();
+  }
+  refs.list.dataset.sharedSelectDetached = "false";
+}
+
+/**
+ * 功能：清理当前选择框相关的异步重排与主题刷新任务。
+ * @returns 无返回值。
+ */
+function clearSharedSelectScheduledFrames(): void {
+  if (SHARED_SELECT_REPOSITION_FRAME) {
+    window.cancelAnimationFrame(SHARED_SELECT_REPOSITION_FRAME);
+    SHARED_SELECT_REPOSITION_FRAME = 0;
+  }
+  if (SHARED_SELECT_THEME_FRAME) {
+    window.cancelAnimationFrame(SHARED_SELECT_THEME_FRAME);
+    SHARED_SELECT_THEME_FRAME = 0;
+  }
+}
+
+/**
+ * 功能：使用已捕获的真实节点关闭指定选择框实例。
+ * @param refs 组件运行时节点集合。
+ * @param restoreFocus 是否将焦点还给触发器。
+ * @returns 无返回值。
+ */
+function closeSharedSelectWithRefs(refs: SharedSelectRefs | null, restoreFocus: boolean): void {
+  if (!refs) return;
+  const isCurrentOpen = isSameSharedSelectRefs(OPEN_SHARED_SELECT_REFS, refs);
+  refs.root.classList.remove("is-open");
+  refs.trigger.setAttribute("aria-expanded", "false");
+  refs.list.classList.remove("is-open");
+  refs.list.hidden = true;
+  refs.root.dataset.sharedSelectHighlightIndex = String(getSelectedOptionIndex(refs));
+  restoreSharedSelectListHost(refs);
+  if (isCurrentOpen) {
+    OPEN_SHARED_SELECT_REFS = null;
+    clearSharedSelectScheduledFrames();
+  }
+  if (restoreFocus && refs.trigger.isConnected) {
+    refs.trigger.focus();
+  }
+}
+
+/**
+ * 功能：强制清理当前已打开的选择框实例，避免孤立弹层残留。
+ * @param reason 触发强制清理的原因说明。
+ * @returns 无返回值。
+ */
+function forceCleanupOpenSharedSelect(reason: string): void {
+  const openRefs = OPEN_SHARED_SELECT_REFS;
+  if (!openRefs) return;
+  /*
+  traceSharedSelect("强制清理已打开的选择框", {
+    reason,
+    selectId: openRefs.select.id,
+    rootConnected: openRefs.root.isConnected,
+    listConnected: openRefs.list.isConnected,
+  });
+  */
+  traceSharedSelect("force cleanup open shared select", {
+    reason,
+    selectId: openRefs.select.id,
+    rootConnected: openRefs.root.isConnected,
+    listConnected: openRefs.list.isConnected,
+  });
+  closeSharedSelectWithRefs(openRefs, false);
+}
+
+/**
+ * 功能：确保已打开实例的断连监听器只绑定一次。
+ * @returns 无返回值。
+ */
+function ensureSharedSelectOpenObserver(): void {
+  if (SHARED_SELECT_OPEN_OBSERVER || typeof MutationObserver === "undefined") return;
+  const target = document.body || document.documentElement;
+  if (!target) return;
+  SHARED_SELECT_OPEN_OBSERVER = new MutationObserver((): void => {
+    const openRefs = OPEN_SHARED_SELECT_REFS;
+    if (!openRefs) return;
+    if (isSharedSelectRuntimeAlive(openRefs)) return;
+    /*
+    forceCleanupOpenSharedSelect("检测到宿主节点已被替换或移除");
+    */
+    forceCleanupOpenSharedSelect("detected disconnected host");
+  });
+  SHARED_SELECT_OPEN_OBSERVER.observe(target, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+/**
  * 功能：在下一帧统一重算当前打开下拉框的位置。
  * @returns 无返回值
  */
@@ -433,18 +645,16 @@ function scheduleOpenSharedSelectReposition(): void {
   if (SHARED_SELECT_REPOSITION_FRAME) return;
   SHARED_SELECT_REPOSITION_FRAME = window.requestAnimationFrame((): void => {
     SHARED_SELECT_REPOSITION_FRAME = 0;
-    const openRoot = OPEN_SHARED_SELECT_ROOT;
-    if (!openRoot) return;
-    if (!openRoot.isConnected) {
-      OPEN_SHARED_SELECT_ROOT = null;
+    const openRefs = OPEN_SHARED_SELECT_REFS;
+    if (!openRefs) return;
+    if (!isSharedSelectRuntimeAlive(openRefs)) {
+      /*
+      forceCleanupOpenSharedSelect("重排时检测到已断连实例");
+      */
+      forceCleanupOpenSharedSelect("detected disconnected instance during reposition");
       return;
     }
-    const refs = getSharedSelectRefs(openRoot);
-    if (!refs) {
-      OPEN_SHARED_SELECT_ROOT = null;
-      return;
-    }
-    positionSharedSelectList(refs);
+    positionSharedSelectList(openRefs);
   });
 }
 
@@ -454,21 +664,20 @@ function scheduleOpenSharedSelectThemeRefresh(): void {
   }
   SHARED_SELECT_THEME_FRAME = window.requestAnimationFrame((): void => {
     SHARED_SELECT_THEME_FRAME = 0;
-    const openRoot = OPEN_SHARED_SELECT_ROOT;
+    const openRefs = OPEN_SHARED_SELECT_REFS;
     traceSharedSelect("theme refresh frame fired", {
-      hasOpenRoot: !!openRoot,
-      openRootConnected: !!openRoot?.isConnected,
+      hasOpenRoot: !!openRefs,
+      openRootConnected: !!openRefs?.root?.isConnected,
     });
-    if (!openRoot || !openRoot.isConnected) {
-      OPEN_SHARED_SELECT_ROOT = null;
+    if (!openRefs) return;
+    if (!isSharedSelectRuntimeAlive(openRefs)) {
+      /*
+      forceCleanupOpenSharedSelect("主题刷新时检测到已断连实例");
+      */
+      forceCleanupOpenSharedSelect("detected disconnected instance during theme refresh");
       return;
     }
-    const refs = getSharedSelectRefs(openRoot);
-    if (!refs) {
-      OPEN_SHARED_SELECT_ROOT = null;
-      return;
-    }
-    syncSharedSelectDetachedThemeVars(refs);
+    syncSharedSelectDetachedThemeVars(openRefs);
     scheduleOpenSharedSelectReposition();
   });
 }
@@ -481,26 +690,13 @@ function scheduleOpenSharedSelectThemeRefresh(): void {
  */
 function closeSharedSelect(root: HTMLElement | null, restoreFocus: boolean): void {
   if (!root) return;
-  const refs = getSharedSelectRefs(root);
-  if (!refs) {
-    if (OPEN_SHARED_SELECT_ROOT === root) OPEN_SHARED_SELECT_ROOT = null;
+  if (OPEN_SHARED_SELECT_REFS?.root === root) {
+    closeSharedSelectWithRefs(OPEN_SHARED_SELECT_REFS, restoreFocus);
     return;
   }
-  root.classList.remove("is-open");
-  refs.trigger.setAttribute("aria-expanded", "false");
-  refs.list.classList.remove("is-open");
-  refs.list.hidden = true;
-  root.dataset.sharedSelectHighlightIndex = String(getSelectedOptionIndex(refs));
-  if (OPEN_SHARED_SELECT_ROOT === root) {
-    OPEN_SHARED_SELECT_ROOT = null;
-  }
-  if (SHARED_SELECT_REPOSITION_FRAME) {
-    window.cancelAnimationFrame(SHARED_SELECT_REPOSITION_FRAME);
-    SHARED_SELECT_REPOSITION_FRAME = 0;
-  }
-  if (restoreFocus) {
-    refs.trigger.focus();
-  }
+  const refs = getSharedSelectRefs(root);
+  if (!refs) return;
+  closeSharedSelectWithRefs(refs, restoreFocus);
 }
 
 /**
@@ -509,14 +705,14 @@ function closeSharedSelect(root: HTMLElement | null, restoreFocus: boolean): voi
  * @returns 无返回值
  */
 function openSharedSelect(root: HTMLElement): void {
-  if (OPEN_SHARED_SELECT_ROOT && OPEN_SHARED_SELECT_ROOT !== root) {
-    closeSharedSelect(OPEN_SHARED_SELECT_ROOT, false);
+  if (OPEN_SHARED_SELECT_REFS && OPEN_SHARED_SELECT_REFS.root !== root) {
+    closeSharedSelectWithRefs(OPEN_SHARED_SELECT_REFS, false);
   }
   const refs = getSharedSelectRefs(root);
   if (!refs || refs.select.disabled) return;
   const selectedIndex = getSelectedOptionIndex(refs);
   const initialIndex = selectedIndex >= 0 ? selectedIndex : getBoundaryEnabledIndex(refs, "start");
-  OPEN_SHARED_SELECT_ROOT = root;
+  OPEN_SHARED_SELECT_REFS = refs;
   root.classList.add("is-open");
   refs.list.classList.add("is-open");
   refs.list.hidden = false;
@@ -549,8 +745,9 @@ function syncSingleSharedSelect(root: HTMLElement): void {
   if (!refs) return;
   const selectedIndex = getSelectedOptionIndex(refs);
   const selectedOption = refs.select.options[selectedIndex] || refs.select.options[0] || null;
+  const options = getSharedSelectOptions(refs);
   refs.label.textContent = selectedOption?.textContent?.trim() || "";
-  refs.options.forEach((item, index) => {
+  options.forEach((item, index) => {
     const isSelected = index === selectedIndex;
     item.classList.toggle("is-selected", isSelected);
     item.setAttribute("aria-selected", isSelected ? "true" : "false");
@@ -585,21 +782,20 @@ function rebuildSingleSharedSelectOptions(root: HTMLElement): boolean {
  * @returns 无返回值
  */
 function commitSharedSelectValue(refs: SharedSelectRefs, value: string): void {
+  const committedRefs = refs;
   traceSharedSelect("commitSharedSelectValue", {
     selectId: refs.select.id,
     previousValue: refs.select.value,
     nextValue: value,
   });
   if (refs.select.value === value) {
-    syncSingleSharedSelect(refs.root);
-    closeSharedSelect(refs.root, true);
+    closeSharedSelectWithRefs(committedRefs, true);
     return;
   }
   refs.select.value = value;
   refs.select.dispatchEvent(new Event("input", { bubbles: true }));
   refs.select.dispatchEvent(new Event("change", { bubbles: true }));
-  syncSingleSharedSelect(refs.root);
-  closeSharedSelect(refs.root, true);
+  closeSharedSelectWithRefs(committedRefs, true);
 }
 
 /**
@@ -660,7 +856,7 @@ function handleSharedSelectTriggerKeydown(root: HTMLElement, event: KeyboardEven
       openSharedSelect(root);
       return;
     }
-    const option = refs.options[currentHighlight];
+    const option = getSharedSelectOptions(refs)[currentHighlight];
     if (!option || option.dataset.sharedSelectDisabled === "true") return;
     commitSharedSelectValue(refs, String(option.dataset.sharedSelectOptionValue ?? ""));
   }
@@ -673,32 +869,33 @@ function handleSharedSelectTriggerKeydown(root: HTMLElement, event: KeyboardEven
 function ensureSharedSelectGlobalEvents(): void {
   if (SHARED_SELECT_GLOBAL_EVENTS_BOUND) return;
   SHARED_SELECT_GLOBAL_EVENTS_BOUND = true;
+  ensureSharedSelectOpenObserver();
 
   document.addEventListener("pointerdown", (event: PointerEvent) => {
-    const openRoot = OPEN_SHARED_SELECT_ROOT;
-    if (!openRoot) return;
-    if (!openRoot.isConnected) {
-      OPEN_SHARED_SELECT_ROOT = null;
+    const openRefs = OPEN_SHARED_SELECT_REFS;
+    if (!openRefs) return;
+    if (!isSharedSelectRuntimeAlive(openRefs)) {
+      /*
+      forceCleanupOpenSharedSelect("点击外部时检测到已断连实例");
+      */
+      forceCleanupOpenSharedSelect("detected disconnected instance during pointerdown");
       return;
     }
     const target = event.target as Node | null;
-    const refs = getSharedSelectRefs(openRoot);
-    if (target && (openRoot.contains(target) || refs?.list.contains(target))) return;
-    closeSharedSelect(openRoot, false);
+    if (target && (openRefs.root.contains(target) || openRefs.list.contains(target))) return;
+    closeSharedSelectWithRefs(openRefs, false);
   });
 
   document.addEventListener(
     "scroll",
     () => {
-      const openRoot = OPEN_SHARED_SELECT_ROOT;
-      if (!openRoot) return;
-      if (!openRoot.isConnected) {
-        OPEN_SHARED_SELECT_ROOT = null;
-        return;
-      }
-      const refs = getSharedSelectRefs(openRoot);
-      if (!refs) {
-        OPEN_SHARED_SELECT_ROOT = null;
+      const openRefs = OPEN_SHARED_SELECT_REFS;
+      if (!openRefs) return;
+      if (!isSharedSelectRuntimeAlive(openRefs)) {
+        /*
+        forceCleanupOpenSharedSelect("滚动时检测到已断连实例");
+        */
+        forceCleanupOpenSharedSelect("detected disconnected instance during scroll");
         return;
       }
       scheduleOpenSharedSelectReposition();
@@ -707,27 +904,32 @@ function ensureSharedSelectGlobalEvents(): void {
   );
 
   window.addEventListener("resize", () => {
-    const openRoot = OPEN_SHARED_SELECT_ROOT;
-    if (!openRoot) return;
-    if (!openRoot.isConnected) {
-      OPEN_SHARED_SELECT_ROOT = null;
-      return;
-    }
-    const refs = getSharedSelectRefs(openRoot);
-    if (!refs) {
-      OPEN_SHARED_SELECT_ROOT = null;
+    const openRefs = OPEN_SHARED_SELECT_REFS;
+    if (!openRefs) return;
+    if (!isSharedSelectRuntimeAlive(openRefs)) {
+      /*
+      forceCleanupOpenSharedSelect("窗口缩放时检测到已断连实例");
+      */
+      forceCleanupOpenSharedSelect("detected disconnected instance during resize");
       return;
     }
     scheduleOpenSharedSelectReposition();
   });
 
   subscribeTheme(() => {
-    const openRoot = OPEN_SHARED_SELECT_ROOT;
+    const openRefs = OPEN_SHARED_SELECT_REFS;
     traceSharedSelect("subscribeTheme fired", {
-      hasOpenRoot: !!openRoot,
-      openRootConnected: !!openRoot?.isConnected,
+      hasOpenRoot: !!openRefs,
+      openRootConnected: !!openRefs?.root?.isConnected,
     });
-    if (!openRoot || !openRoot.isConnected) return;
+    if (!openRefs) return;
+    if (!isSharedSelectRuntimeAlive(openRefs)) {
+      /*
+      forceCleanupOpenSharedSelect("主题订阅回调检测到已断连实例");
+      */
+      forceCleanupOpenSharedSelect("detected disconnected instance during theme subscribe");
+      return;
+    }
     scheduleOpenSharedSelectThemeRefresh();
   });
 }

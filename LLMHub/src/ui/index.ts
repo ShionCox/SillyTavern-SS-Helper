@@ -5,6 +5,8 @@ import type { BudgetConfig } from '../budget/budget-manager';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions, syncSharedSelects } from '../../../_Components/sharedSelect';
+import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
+import { showSharedContextMenu } from '../../../_Components/sharedContextMenu';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
@@ -13,12 +15,16 @@ import { discoverConsumers } from '../discovery/consumer-discovery';
 import type { DiscoveredConsumer } from '../discovery/consumer-discovery';
 import type {
     LLMHubSettings,
-    GlobalCapabilityDefault,
-    PluginCapabilityDefault,
-    TaskOverride,
+    ResourceConfig,
+    ResourceCustomParams,
+    ResourceType,
+    ResourceSource,
+    CapabilityKind,
+    GlobalAssignments,
+    PluginAssignment,
+    TaskAssignment,
     ConsumerSnapshot,
     TaskDescriptor,
-    CapabilityKind,
     LLMCapability,
     SilentPermissionGrant,
 } from '../schema/types';
@@ -27,14 +33,22 @@ let LLMHUB_THEME_BINDING_READY = false;
 let LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE: (() => void) | null = null;
 let LLMHUB_CONSUMER_DISCOVERY_SEQ = 0;
 
-// ─── 运行时类型声明 ───
-
 type ProviderLite = { id: string };
 
+type ResourceOption = {
+    id: string;
+    label: string;
+    capabilities: LLMCapability[];
+    enabled: boolean;
+};
+
 type LLMHubRuntime = {
-    saveCredential?: (providerId: string, apiKey: string) => Promise<void>;
+    saveCredential?: (resourceId: string, apiKey: string) => Promise<void>;
+    removeCredential?: (resourceId: string) => Promise<void>;
     clearAllCredentials?: () => Promise<void>;
     applySettingsFromContext?: () => Promise<void>;
+    getStatusSnapshot?: () => Promise<import('../schema/types').LLMHubStatusSnapshot>;
+    previewRoute?: (args: import('../schema/types').RouteResolveArgs) => Promise<import('../schema/types').RoutePreviewSnapshot>;
     setBudgetConfig?: (consumer: string, config: BudgetConfig) => void;
     removeBudgetConfig?: (consumer: string) => void;
     registry?: {
@@ -43,12 +57,13 @@ type LLMHubRuntime = {
     };
     router?: {
         getAllProviders?: () => ProviderLite[];
-        getProvider?: (id: string) => ProviderWithTest | null;
-        getProviderCapabilities?: (providerId: string) => LLMCapability[];
+        getProvider?: (id: string) => ProviderWithTest | null | undefined;
+        getProviderCapabilities?: (resourceId: string) => LLMCapability[];
         listProvidersWithCapabilities?: (required?: LLMCapability[]) => ProviderLite[];
-        applyGlobalDefaults?: (defaults: GlobalCapabilityDefault[]) => void;
-        applyPluginDefaults?: (defaults: PluginCapabilityDefault[]) => void;
-        applyTaskOverrides?: (overrides: TaskOverride[]) => void;
+        getResourceType?: (resourceId: string) => ResourceType | undefined;
+        applyGlobalAssignments?: (assignments: GlobalAssignments) => void;
+        applyPluginAssignments?: (assignments: PluginAssignment[]) => void;
+        applyTaskAssignments?: (assignments: TaskAssignment[]) => void;
     };
     orchestrator?: {
         getQueueSnapshot?: () => {
@@ -70,9 +85,25 @@ type LLMHubRuntime = {
 type ProviderWithTest = ProviderLite & {
     testConnection?: () => Promise<{ ok: boolean; message: string; errorCode?: string; detail?: string; model?: string; latencyMs?: number }>;
     listModels?: () => Promise<{ ok: boolean; models: { id: string; label?: string }[]; message: string; errorCode?: string; detail?: string }>;
+    embed?: (req: { texts: string[]; model?: string }) => Promise<{ embeddings: number[][] }>;
+    rerank?: (req: { query: string; docs: string[]; topK?: number; model?: string }) => Promise<{ results: Array<{ index: number; score: number; doc: string }> }>;
 };
 
-// ─── 常量 ───
+type ResourceCustomParamValueType = 'string' | 'number' | 'boolean' | 'null' | 'json';
+
+type ResourceCustomParamRow = {
+    key: string;
+    type: ResourceCustomParamValueType;
+    value: string;
+};
+
+type UiTestResult = {
+    ok: boolean;
+    message: string;
+    detail?: string;
+    detailHtml?: string;
+    latencyMs?: number;
+};
 
 const NAMESPACE = 'stx-llmhub';
 const PROFILE_LABELS: Record<string, string> = {
@@ -97,8 +128,6 @@ const STATE_LABELS: Record<string, string> = {
     failed: '已失败',
     cancelled: '已取消',
 };
-
-// ─── 工具函数 ───
 
 function getProfileLabel(profileId: string): string {
     return PROFILE_LABELS[profileId] || profileId;
@@ -126,20 +155,74 @@ function escapeHtml(value: string): string {
         .replace(/'/g, '&#39;');
 }
 
-/**
- * 功能：构建服务商共享选择框 HTML，并保留原生 select 作为数据读取源。
- * 参数：
- *   selectId：选择框唯一 ID。
- *   selected：当前已选值。
- *   providerIds：候选服务商列表。
- *   selectDataAttributes：写入原生 select 的 data 属性。
- * 返回：
- *   string：共享选择框 HTML。
- */
-function buildProviderSharedSelectHtml(
+function resourceTypeToCapabilities(type: ResourceType): LLMCapability[] {
+    switch (type) {
+        case 'generation':
+            return ['chat', 'json', 'tools', 'vision', 'reasoning'];
+        case 'embedding':
+            return ['embeddings'];
+        case 'rerank':
+            return ['rerank'];
+        default:
+            return ['chat'];
+    }
+}
+
+function normalizeCustomParams(value: unknown): ResourceCustomParams | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const entries = Object.entries(value).filter(([key]: [string, unknown]) => String(key || '').trim().length > 0);
+    if (entries.length === 0) return undefined;
+    return Object.fromEntries(entries);
+}
+
+function normalizeResourceCapabilities(config: ResourceConfig): LLMCapability[] {
+    const baseCapabilities = resourceTypeToCapabilities(config.type);
+    const declaredCapabilities = Array.isArray(config.capabilities) ? config.capabilities : [];
+    const nextCapabilities = new Set<LLMCapability>(baseCapabilities);
+
+    if (config.type === 'generation' && config.source === 'custom' && declaredCapabilities.includes('rerank')) {
+        nextCapabilities.add('rerank');
+    }
+
+    return Array.from(nextCapabilities);
+}
+
+function inferCustomParamType(value: unknown): ResourceCustomParamValueType {
+    if (value === null) return 'null';
+    if (typeof value === 'number') return 'number';
+    if (typeof value === 'boolean') return 'boolean';
+    if (typeof value === 'object') return 'json';
+    return 'string';
+}
+
+function serializeCustomParamValue(value: unknown, type: ResourceCustomParamValueType): string {
+    if (type === 'null') return 'null';
+    if (type === 'json') return JSON.stringify(value);
+    return String(value ?? '');
+}
+
+function buildCustomParamRows(params?: ResourceCustomParams): ResourceCustomParamRow[] {
+    if (!params) return [];
+    return Object.entries(params).map(([key, value]: [string, unknown]) => {
+        const type = inferCustomParamType(value);
+        return {
+            key,
+            type,
+            value: serializeCustomParamValue(value, type),
+        };
+    });
+}
+
+function escapeHtmlAttribute(value: string): string {
+    return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function buildResourceSharedSelectHtml(
     selectId: string,
     selected: string,
-    providerIds: string[],
+    resourceOptions: ResourceOption[],
     selectDataAttributes: Record<string, string>,
 ): string {
     return buildSharedSelectField({
@@ -151,11 +234,68 @@ function buildProviderSharedSelectHtml(
         selectAttributes: selectDataAttributes,
         options: [
             { value: '', label: '（不指定）' },
-            ...providerIds.map((providerId: string) => ({
-                value: providerId,
-                label: providerId,
+            ...resourceOptions.map((option: ResourceOption) => ({
+                value: option.id,
+                label: option.label,
             })),
         ],
+    });
+}
+
+function formatResourceOptionLabel(resourceId: string, label?: string): string {
+    const nextLabel = String(label || '').trim();
+    if (!nextLabel || nextLabel === resourceId) {
+        return resourceId;
+    }
+    return `${nextLabel}（${resourceId}）`;
+}
+
+function normalizeResourceConfigForUi(config: ResourceConfig): ResourceConfig {
+    const normalizedBase: ResourceConfig = {
+        id: String(config.id || '').trim(),
+        type: (config.type || 'generation') as ResourceType,
+        source: config.source === 'tavern' ? 'tavern' : 'custom',
+        label: String(config.label || config.id || '').trim() || String(config.id || ''),
+        baseUrl: config.source === 'custom' ? String(config.baseUrl || '').trim() || undefined : undefined,
+        model: String(config.model || '').trim() || undefined,
+        enabled: config.enabled !== false,
+        rerankPath: config.type === 'rerank' ? String(config.rerankPath || '').trim() || undefined : undefined,
+        customParams: normalizeCustomParams(config.customParams),
+    };
+
+    return {
+        ...normalizedBase,
+        capabilities: normalizeResourceCapabilities(normalizedBase),
+    };
+}
+
+function buildResourceOption(config: ResourceConfig): ResourceOption {
+    const normalized = normalizeResourceConfigForUi(config);
+    return {
+        id: normalized.id,
+        label: formatResourceOptionLabel(normalized.id, normalized.label),
+        capabilities: normalizeResourceCapabilities(normalized),
+        enabled: normalized.enabled !== false,
+    };
+}
+
+function buildResourceListToggleHtml(resource: ResourceConfig): string {
+    const resourceLabel = resource.label || resource.id;
+    return buildSharedCheckboxCard({
+        id: `${NAMESPACE}-resource-toggle-${resource.id}`,
+        title: '',
+        checkedLabel: '启用',
+        uncheckedLabel: '停用',
+        containerClassName: 'stx-ui-list-toggle is-control-only',
+        copyClassName: 'stx-ui-list-toggle-copy',
+        controlClassName: 'stx-ui-list-toggle-control',
+        inputAttributes: {
+            'data-resource-toggle': 'true',
+            'data-resource-id': resource.id,
+            'data-tip': `${resource.enabled === false ? '启用' : '停用'}资源 ${resourceLabel}`,
+            'aria-label': `${resource.enabled === false ? '启用' : '停用'}资源 ${resourceLabel}`,
+            checked: resource.enabled !== false,
+        },
     });
 }
 
@@ -165,24 +305,10 @@ function formatTimestamp(ts: number): string {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
 }
 
-/**
- * 功能：根据酒馆连接快照返回状态样式类名。
- * 参数：
- *   snapshot (TavernConnectionSnapshot)：酒馆连接快照。
- * 返回：
- *   string：状态区域使用的样式类名。
- */
 function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
     return snapshot.available ? 'is-ok' : 'is-warning';
 }
 
-/**
- * 功能：把酒馆连接信息项列表渲染为 HTML。
- * 参数：
- *   items (TavernConnectionInfoItem[])：待渲染的信息项列表。
- * 返回：
- *   string：可直接写入容器的 HTML 字符串。
- */
 function buildTavernInfoItemsHtml(items: TavernConnectionInfoItem[]): string {
     if (!items.length) {
         return '<div class="stx-ui-tavern-info-empty">暂未读取到酒馆连接信息</div>';
@@ -198,32 +324,14 @@ function buildTavernInfoItemsHtml(items: TavernConnectionInfoItem[]): string {
         .join('');
 }
 
-/**
- * 功能：把已发现的 consumer 列表整理成可展示的名称摘要。
- * @param consumers 已发现的 consumer 列表。
- * @returns 摘要文本。
- */
 function formatDiscoveredConsumerSummary(consumers: DiscoveredConsumer[]): string {
-    if (consumers.length === 0) {
-        return '';
-    }
-
-    const names = consumers.slice(0, 3).map((consumer: DiscoveredConsumer) => {
-        return consumer.displayName || consumer.pluginId;
-    });
+    if (consumers.length === 0) return '';
+    const names = consumers.slice(0, 3).map((consumer: DiscoveredConsumer) => consumer.displayName || consumer.pluginId);
     const summary = names.join('、');
-    if (consumers.length <= 3) {
-        return summary;
-    }
-    return `${summary} 等 ${consumers.length} 个插件`;
+    return consumers.length <= 3 ? summary : `${summary} 等 ${consumers.length} 个插件`;
 }
 
-/**
- * 功能：根据只读探测结果生成“插件默认映射”空态提示。
- * @param consumers 只读探测得到的 consumer 列表。
- * @returns 可直接写入列表容器的 HTML。
- */
-function buildPluginDefaultsEmptyStateHtml(consumers: DiscoveredConsumer[]): string {
+function buildPluginAssignmentsEmptyStateHtml(consumers: DiscoveredConsumer[]): string {
     const onlineConsumers = consumers.filter((consumer: DiscoveredConsumer) => consumer.alive === true);
     const memoryOsConsumer = onlineConsumers.find((consumer: DiscoveredConsumer) => consumer.pluginId === 'stx_memory_os');
 
@@ -258,8 +366,6 @@ function generateChangelogHtml(): string {
         .join('');
 }
 
-// ─── IDS ───
-
 const IDS: LLMHubSettingsIds = {
     cardId: `${NAMESPACE}-card`,
     drawerToggleId: `${NAMESPACE}-drawer-toggle`,
@@ -275,60 +381,82 @@ const IDS: LLMHubSettingsIds = {
     githubUrl: (manifestJson as any).homePage || '#',
     searchId: `${NAMESPACE}-search`,
 
-    tabMainId: `${NAMESPACE}-tab-main`,
-    tabRouteId: `${NAMESPACE}-tab-route`,
-    tabQueueId: `${NAMESPACE}-tab-queue`,
-    tabVaultId: `${NAMESPACE}-tab-vault`,
+    tabBasicId: `${NAMESPACE}-tab-basic`,
+    tabResourceId: `${NAMESPACE}-tab-resource`,
+    tabAssignId: `${NAMESPACE}-tab-assign`,
+    tabOrchId: `${NAMESPACE}-tab-orch`,
     tabAboutId: `${NAMESPACE}-tab-about`,
 
-    panelMainId: `${NAMESPACE}-panel-main`,
-    panelRouteId: `${NAMESPACE}-panel-route`,
-    panelQueueId: `${NAMESPACE}-panel-queue`,
-    panelVaultId: `${NAMESPACE}-panel-vault`,
+    panelBasicId: `${NAMESPACE}-panel-basic`,
+    panelResourceId: `${NAMESPACE}-panel-resource`,
+    panelAssignId: `${NAMESPACE}-panel-assign`,
+    panelOrchId: `${NAMESPACE}-panel-orch`,
     panelAboutId: `${NAMESPACE}-panel-about`,
 
     enabledId: `${NAMESPACE}-enabled`,
     globalProfileId: `${NAMESPACE}-global-profile`,
 
-    providerSourceId: `${NAMESPACE}-provider-source`,
-    customBaseUrlId: `${NAMESPACE}-custom-base-url`,
-    customModelInputId: `${NAMESPACE}-custom-model-input`,
+    resourceListId: `${NAMESPACE}-resource-list`,
+    resourceNewBtnId: `${NAMESPACE}-resource-new-btn`,
+    resourceEditorId: `${NAMESPACE}-resource-editor`,
+    resourceIdInputId: `${NAMESPACE}-resource-id`,
+    resourceLabelInputId: `${NAMESPACE}-resource-label`,
+    resourceTypeSelectId: `${NAMESPACE}-resource-type`,
+    resourceSourceSelectId: `${NAMESPACE}-resource-source`,
+    resourceEnabledId: `${NAMESPACE}-resource-enabled`,
+    resourceBaseUrlId: `${NAMESPACE}-resource-base-url`,
+    resourceApiKeyId: `${NAMESPACE}-resource-api-key`,
+    resourceApiKeySaveBtnId: `${NAMESPACE}-resource-api-key-save`,
+    resourceDefaultModelId: `${NAMESPACE}-resource-default-model`,
+    resourceRerankPathId: `${NAMESPACE}-resource-rerank-path`,
+    resourceCustomParamsId: `${NAMESPACE}-resource-custom-params`,
+    resourceCustomParamsListId: `${NAMESPACE}-resource-custom-params-list`,
+    resourceCustomParamsAddBtnId: `${NAMESPACE}-resource-custom-params-add-btn`,
+    resourceCustomParamsSyncBtnId: `${NAMESPACE}-resource-custom-params-sync-btn`,
+    rerankTestPanelId: `${NAMESPACE}-rerank-test-panel`,
+    rerankTestQueryId: `${NAMESPACE}-rerank-test-query`,
+    rerankTestDocsId: `${NAMESPACE}-rerank-test-docs`,
+    rerankTestTopKId: `${NAMESPACE}-rerank-test-topk`,
     testConnectionBtnId: `${NAMESPACE}-test-connection-btn`,
+    testRerankBtnId: `${NAMESPACE}-test-rerank-btn`,
     testResultId: `${NAMESPACE}-test-result`,
-    tavernInfoId: `${NAMESPACE}-tavern-info`,
-    tavernInfoStatusId: `${NAMESPACE}-tavern-info-status`,
-    tavernInfoListId: `${NAMESPACE}-tavern-info-list`,
     fetchModelsBtnId: `${NAMESPACE}-fetch-models-btn`,
     modelListSelectId: `${NAMESPACE}-model-list-select`,
     modelListStatusId: `${NAMESPACE}-model-list-status`,
+    resourceCapChatId: `${NAMESPACE}-cap-chat`,
+    resourceCapJsonId: `${NAMESPACE}-cap-json`,
+    resourceCapToolsId: `${NAMESPACE}-cap-tools`,
+    resourceCapEmbId: `${NAMESPACE}-cap-emb`,
+    resourceCapRerankId: `${NAMESPACE}-cap-rerank`,
+    resourceCapVisionId: `${NAMESPACE}-cap-vision`,
+    resourceCapReasoningId: `${NAMESPACE}-cap-reasoning`,
+    resourceSaveBtnId: `${NAMESPACE}-resource-save-btn`,
+    resourceDeleteBtnId: `${NAMESPACE}-resource-delete-btn`,
+    tavernInfoId: `${NAMESPACE}-tavern-info`,
+    tavernInfoStatusId: `${NAMESPACE}-tavern-info-status`,
+    tavernInfoListId: `${NAMESPACE}-tavern-info-list`,
 
-    // Route panel sub-tabs
-    subTabGlobalDefaultsId: `${NAMESPACE}-sub-tab-global`,
-    subTabPluginDefaultsId: `${NAMESPACE}-sub-tab-plugin`,
-    subTabTaskOverridesId: `${NAMESPACE}-sub-tab-task`,
-    subPanelGlobalDefaultsId: `${NAMESPACE}-sub-panel-global`,
-    subPanelPluginDefaultsId: `${NAMESPACE}-sub-panel-plugin`,
-    subPanelTaskOverridesId: `${NAMESPACE}-sub-panel-task`,
+    subTabGlobalAssignId: `${NAMESPACE}-sub-tab-global-assign`,
+    subTabPluginAssignId: `${NAMESPACE}-sub-tab-plugin-assign`,
+    subTabTaskAssignId: `${NAMESPACE}-sub-tab-task-assign`,
+    subPanelGlobalAssignId: `${NAMESPACE}-sub-panel-global-assign`,
+    subPanelPluginAssignId: `${NAMESPACE}-sub-panel-plugin-assign`,
+    subPanelTaskAssignId: `${NAMESPACE}-sub-panel-task-assign`,
 
-    // View A
-    globalDefGenProviderId: `${NAMESPACE}-gdef-gen-provider`,
-    globalDefGenModelId: `${NAMESPACE}-gdef-gen-model`,
-    globalDefGenProfileId: `${NAMESPACE}-gdef-gen-profile`,
-    globalDefEmbProviderId: `${NAMESPACE}-gdef-emb-provider`,
-    globalDefEmbModelId: `${NAMESPACE}-gdef-emb-model`,
-    globalDefRerankProviderId: `${NAMESPACE}-gdef-rerank-provider`,
-    globalDefRerankModelId: `${NAMESPACE}-gdef-rerank-model`,
-    globalDefSaveBtnId: `${NAMESPACE}-gdef-save-btn`,
+    globalAssignGenResourceId: `${NAMESPACE}-gassign-gen-resource`,
+    globalAssignGenModelId: `${NAMESPACE}-gassign-gen-model`,
+    globalAssignEmbResourceId: `${NAMESPACE}-gassign-emb-resource`,
+    globalAssignEmbModelId: `${NAMESPACE}-gassign-emb-model`,
+    globalAssignRerankResourceId: `${NAMESPACE}-gassign-rerank-resource`,
+    globalAssignRerankModelId: `${NAMESPACE}-gassign-rerank-model`,
+    globalAssignSaveBtnId: `${NAMESPACE}-gassign-save-btn`,
 
-    // View B
-    pluginDefaultsListId: `${NAMESPACE}-plugin-defaults-list`,
-    pluginDefaultsRefreshBtnId: `${NAMESPACE}-plugin-defaults-refresh`,
+    pluginAssignListId: `${NAMESPACE}-plugin-assign-list`,
+    pluginAssignRefreshBtnId: `${NAMESPACE}-plugin-assign-refresh`,
 
-    // View C
-    taskOverridesListId: `${NAMESPACE}-task-overrides-list`,
-    taskOverridesRefreshBtnId: `${NAMESPACE}-task-overrides-refresh`,
+    taskAssignListId: `${NAMESPACE}-task-assign-list`,
+    taskAssignRefreshBtnId: `${NAMESPACE}-task-assign-refresh`,
 
-    // Budget
     budgetConsumerId: `${NAMESPACE}-budget-consumer`,
     budgetMaxRpmId: `${NAMESPACE}-budget-max-rpm`,
     budgetMaxTokensId: `${NAMESPACE}-budget-max-tokens`,
@@ -338,20 +466,11 @@ const IDS: LLMHubSettingsIds = {
     budgetResetBtnId: `${NAMESPACE}-budget-reset-btn`,
     budgetListId: `${NAMESPACE}-budget-list`,
 
-    // Queue
     queueSnapshotListId: `${NAMESPACE}-queue-snapshot-list`,
     queueRefreshBtnId: `${NAMESPACE}-queue-refresh-btn`,
     silentPermissionsListId: `${NAMESPACE}-silent-permissions-list`,
     recentHistoryListId: `${NAMESPACE}-recent-history-list`,
-
-    // Vault
-    vaultAddServiceId: `${NAMESPACE}-vault-service`,
-    vaultApiKeyId: `${NAMESPACE}-vault-api-key`,
-    vaultSaveBtnId: `${NAMESPACE}-vault-save-btn`,
-    vaultClearBtnId: `${NAMESPACE}-vault-clear-btn`,
 };
-
-// ─── 运行时引用 ───
 
 function getRuntime(): LLMHubRuntime | null {
     return ((window as any).LLMHubPlugin || null) as LLMHubRuntime | null;
@@ -372,17 +491,24 @@ function ensureThemeBinding(): void {
 function waitForElement(selector: string, timeout = 5000): Promise<Element> {
     return new Promise((resolve, reject) => {
         const el = document.querySelector(selector);
-        if (el) { resolve(el); return; }
+        if (el) {
+            resolve(el);
+            return;
+        }
         const observer = new MutationObserver((_, obs) => {
             const target = document.querySelector(selector);
-            if (target) { obs.disconnect(); resolve(target); }
+            if (target) {
+                obs.disconnect();
+                resolve(target);
+            }
         });
         observer.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => { observer.disconnect(); reject(new Error(`Timeout waiting for ${selector}`)); }, timeout);
+        setTimeout(() => {
+            observer.disconnect();
+            reject(new Error(`Timeout waiting for ${selector}`));
+        }, timeout);
     });
 }
-
-// ─── 入口 ───
 
 export async function renderSettingsUi(): Promise<void> {
     try {
@@ -430,15 +556,9 @@ export async function renderSettingsUi(): Promise<void> {
     }
 }
 
-// ──────────────────────────────────────────
-//  事件绑定
-// ──────────────────────────────────────────
-
 function bindUiEvents(): void {
     const runtime = getRuntime();
     const cardRoot = document.getElementById(IDS.cardId);
-
-    // ─── 设置存取 ───
 
     const getStContext = (): any => (window as any).SillyTavern?.getContext?.() || null;
 
@@ -446,19 +566,19 @@ function bindUiEvents(): void {
         const ctx = getStContext();
         if (!ctx) return {};
         if (!ctx.extensionSettings) ctx.extensionSettings = {};
-        if (!ctx.extensionSettings['stx_llmhub']) ctx.extensionSettings['stx_llmhub'] = {};
-        return ctx.extensionSettings['stx_llmhub'] as LLMHubSettings;
+        if (!ctx.extensionSettings.stx_llmhub) ctx.extensionSettings.stx_llmhub = {};
+        return ctx.extensionSettings.stx_llmhub as LLMHubSettings;
     };
 
-    const saveSettings = (): void => { getStContext()?.saveSettingsDebounced?.(); };
-
-    // ─── 主 Tab 切换 ───
+    const saveSettings = (): void => {
+        getStContext()?.saveSettingsDebounced?.();
+    };
 
     const tabs = [
-        { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
-        { tabId: IDS.tabRouteId, panelId: IDS.panelRouteId },
-        { tabId: IDS.tabQueueId, panelId: IDS.panelQueueId },
-        { tabId: IDS.tabVaultId, panelId: IDS.panelVaultId },
+        { tabId: IDS.tabBasicId, panelId: IDS.panelBasicId },
+        { tabId: IDS.tabResourceId, panelId: IDS.panelResourceId },
+        { tabId: IDS.tabAssignId, panelId: IDS.panelAssignId },
+        { tabId: IDS.tabOrchId, panelId: IDS.panelOrchId },
         { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
     ];
 
@@ -473,20 +593,20 @@ function bindUiEvents(): void {
             tabEl.classList.add('is-active');
             document.getElementById(panelId)?.removeAttribute('hidden');
 
-            if (panelId === IDS.panelMainId) renderTavernConnectionInfo();
-            // 切换到路由 tab 时刷新 View B
-            if (panelId === IDS.panelRouteId) renderPluginDefaults();
-            // 切换到队列 tab 时刷新
-            if (panelId === IDS.panelQueueId) { renderQueueSnapshot(); renderRecentHistory(); renderSilentPermissions(); }
+            if (panelId === IDS.panelBasicId) renderTavernConnectionInfo();
+            if (panelId === IDS.panelAssignId) renderPluginAssignments();
+            if (panelId === IDS.panelOrchId) {
+                renderQueueSnapshot();
+                renderRecentHistory();
+                renderSilentPermissions();
+            }
         });
     });
 
-    // ─── Route sub-tabs ───
-
     const subTabs = [
-        { tabId: IDS.subTabGlobalDefaultsId, panelId: IDS.subPanelGlobalDefaultsId },
-        { tabId: IDS.subTabPluginDefaultsId, panelId: IDS.subPanelPluginDefaultsId },
-        { tabId: IDS.subTabTaskOverridesId, panelId: IDS.subPanelTaskOverridesId },
+        { tabId: IDS.subTabGlobalAssignId, panelId: IDS.subPanelGlobalAssignId },
+        { tabId: IDS.subTabPluginAssignId, panelId: IDS.subPanelPluginAssignId },
+        { tabId: IDS.subTabTaskAssignId, panelId: IDS.subPanelTaskAssignId },
     ];
 
     subTabs.forEach(({ tabId, panelId }) => {
@@ -500,12 +620,10 @@ function bindUiEvents(): void {
             tabEl.classList.add('is-active');
             document.getElementById(panelId)?.removeAttribute('hidden');
 
-            if (panelId === IDS.subPanelPluginDefaultsId) renderPluginDefaults();
-            if (panelId === IDS.subPanelTaskOverridesId) renderTaskOverrides();
+            if (panelId === IDS.subPanelPluginAssignId) renderPluginAssignments();
+            if (panelId === IDS.subPanelTaskAssignId) renderTaskAssignments();
         });
     });
-
-    // ─── 搜索 ───
 
     const searchInput = document.getElementById(IDS.searchId) as HTMLInputElement | null;
     if (searchInput) {
@@ -520,8 +638,6 @@ function bindUiEvents(): void {
         });
     }
 
-    // ─── Enable 开关 ───
-
     const enabledEl = document.getElementById(IDS.enabledId) as HTMLInputElement | null;
     if (enabledEl) {
         enabledEl.checked = ensureSettings().enabled === true;
@@ -532,14 +648,15 @@ function bindUiEvents(): void {
             cardRoot?.classList.toggle('is-card-disabled', !enabledEl.checked);
             saveSettings();
             (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
-                v: 1, type: 'broadcast', topic: 'plugin:broadcast:state_changed',
-                from: 'stx_llmhub', ts: Date.now(),
+                v: 1,
+                type: 'broadcast',
+                topic: 'plugin:broadcast:state_changed',
+                from: 'stx_llmhub',
+                ts: Date.now(),
                 data: { isEnabled: enabledEl.checked },
             });
         });
     }
-
-    // ─── 全局 Profile ───
 
     const profileEl = document.getElementById(IDS.globalProfileId) as HTMLSelectElement | null;
     if (profileEl) {
@@ -557,26 +674,63 @@ function bindUiEvents(): void {
         });
     }
 
-    // ─── Provider 来源 ───
-
-    const providerSourceEl = document.getElementById(IDS.providerSourceId) as HTMLSelectElement | null;
+    const resourceEditorEl = document.getElementById(IDS.resourceEditorId) as HTMLElement | null;
+    const resourceTypeSelectEl = document.getElementById(IDS.resourceTypeSelectId) as HTMLSelectElement | null;
+    const resourceSourceSelectEl = document.getElementById(IDS.resourceSourceSelectId) as HTMLSelectElement | null;
+    const resourceBaseUrlEl = document.getElementById(IDS.resourceBaseUrlId) as HTMLInputElement | null;
+    const resourceApiKeyEl = document.getElementById(IDS.resourceApiKeyId) as HTMLInputElement | null;
+    const resourceApiKeySaveBtn = document.getElementById(IDS.resourceApiKeySaveBtnId) as HTMLButtonElement | null;
+    const resourceDefaultModelEl = document.getElementById(IDS.resourceDefaultModelId) as HTMLInputElement | null;
+    const resourceRerankPathEl = document.getElementById(IDS.resourceRerankPathId) as HTMLInputElement | null;
+    const resourceCustomParamsEl = document.getElementById(IDS.resourceCustomParamsId) as HTMLTextAreaElement | null;
+    const resourceCustomParamsListEl = document.getElementById(IDS.resourceCustomParamsListId) as HTMLElement | null;
+    const resourceCustomParamsAddBtn = document.getElementById(IDS.resourceCustomParamsAddBtnId) as HTMLButtonElement | null;
+    const resourceCustomParamsSyncBtn = document.getElementById(IDS.resourceCustomParamsSyncBtnId) as HTMLButtonElement | null;
+    const rerankTestPanelEl = document.getElementById(IDS.rerankTestPanelId) as HTMLElement | null;
+    const rerankTestQueryEl = document.getElementById(IDS.rerankTestQueryId) as HTMLInputElement | null;
+    const rerankTestDocsEl = document.getElementById(IDS.rerankTestDocsId) as HTMLTextAreaElement | null;
+    const rerankTestTopKEl = document.getElementById(IDS.rerankTestTopKId) as HTMLInputElement | null;
+    const resourceIdInputEl = document.getElementById(IDS.resourceIdInputId) as HTMLInputElement | null;
+    const resourceLabelInputEl = document.getElementById(IDS.resourceLabelInputId) as HTMLInputElement | null;
+    const resourceEnabledEl = document.getElementById(IDS.resourceEnabledId) as HTMLInputElement | null;
+    const resourceListEl = document.getElementById(IDS.resourceListId) as HTMLElement | null;
+    const resourceNewBtn = document.getElementById(IDS.resourceNewBtnId) as HTMLButtonElement | null;
+    const resourceSaveBtn = document.getElementById(IDS.resourceSaveBtnId) as HTMLButtonElement | null;
+    const resourceDeleteBtn = document.getElementById(IDS.resourceDeleteBtnId) as HTMLButtonElement | null;
+    const testConnectionBtn = document.getElementById(IDS.testConnectionBtnId) as HTMLButtonElement | null;
+    const testRerankBtn = document.getElementById(IDS.testRerankBtnId) as HTMLButtonElement | null;
+    const fetchModelsBtn = document.getElementById(IDS.fetchModelsBtnId) as HTMLButtonElement | null;
     const testResultEl = document.getElementById(IDS.testResultId) as HTMLElement | null;
     const tavernInfoStatusEl = document.getElementById(IDS.tavernInfoStatusId) as HTMLElement | null;
     const tavernInfoListEl = document.getElementById(IDS.tavernInfoListId) as HTMLElement | null;
-    const tavernSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-tavern-section') ?? [];
-    const customSections = cardRoot?.querySelectorAll<HTMLElement>('.stx-ui-provider-custom-section') ?? [];
+    const modelListSelectEl = document.getElementById(IDS.modelListSelectId) as HTMLSelectElement | null;
+    const modelListStatusEl = document.getElementById(IDS.modelListStatusId) as HTMLElement | null;
 
-    const toggleProviderSourceSections = (source: string): void => {
-        const isTavern = source === 'tavern';
-        tavernSections.forEach(el => { el.style.display = isTavern ? '' : 'none'; });
-        customSections.forEach(el => { el.style.display = isTavern ? 'none' : ''; });
+    const globalAssignGenModelEl = document.getElementById(IDS.globalAssignGenModelId) as HTMLInputElement | null;
+    const globalAssignEmbModelEl = document.getElementById(IDS.globalAssignEmbModelId) as HTMLInputElement | null;
+    const globalAssignRerankModelEl = document.getElementById(IDS.globalAssignRerankModelId) as HTMLInputElement | null;
+
+    [globalAssignGenModelEl, globalAssignEmbModelEl, globalAssignRerankModelEl].forEach((el: HTMLInputElement | null) => {
+        if (!el) return;
+        el.disabled = true;
+        el.value = '';
+        el.placeholder = '当前版本未启用模型覆盖';
+    });
+
+    const resourceBaseUrlField = resourceBaseUrlEl?.closest('.stx-ui-field') as HTMLElement | null;
+    const resourceRerankPathField = resourceRerankPathEl?.closest('.stx-ui-field') as HTMLElement | null;
+    const resourceCapRerankEl = document.getElementById(IDS.resourceCapRerankId) as HTMLInputElement | null;
+
+    let editingResourceId = '';
+
+    const showResourceEditor = (): void => {
+        if (resourceEditorEl) resourceEditorEl.style.display = '';
     };
 
-    /**
-     * 功能：渲染当前酒馆连接信息面板。
-     * 返回：
-     *   void：无返回值。
-     */
+    const hideResourceEditor = (): void => {
+        if (resourceEditorEl) resourceEditorEl.style.display = 'none';
+    };
+
     const renderTavernConnectionInfo = (): void => {
         if (!tavernInfoStatusEl || !tavernInfoListEl) return;
         const snapshot = getTavernConnectionSnapshot();
@@ -585,63 +739,699 @@ function bindUiEvents(): void {
         tavernInfoListEl.innerHTML = buildTavernInfoItemsHtml(snapshot.items);
     };
 
-    const showTestResult = (result: { ok: boolean; message: string; detail?: string; latencyMs?: number }): void => {
+    const buildRerankResultDetailHtml = (results: Array<{ index: number; score: number; doc: string }>): string => {
+        if (!Array.isArray(results) || results.length === 0) return '';
+        const items = results.map((item: { index: number; score: number; doc: string }, rank: number) => `
+            <div class="stx-ui-rerank-result-item">
+              <div class="stx-ui-rerank-result-head">
+                <span class="stx-ui-rerank-result-rank">#${rank + 1}</span>
+                <span class="stx-ui-rerank-result-index">文档 ${item.index}</span>
+                <span class="stx-ui-rerank-result-score">score=${item.score.toFixed(4)}</span>
+              </div>
+              <div class="stx-ui-rerank-result-doc">${escapeHtml(item.doc)}</div>
+            </div>
+        `).join('');
+
+        return `<div class="stx-ui-rerank-result-list">${items}</div>`;
+    };
+
+    const showTestResult = (result: UiTestResult): void => {
         if (!testResultEl) return;
         const cls = result.ok ? 'stx-ui-result-ok' : 'stx-ui-result-error';
         const latency = result.latencyMs != null ? ` (${result.latencyMs}ms)` : '';
-        const detail = result.detail ? `<div class="stx-ui-result-detail">${escapeHtml(result.detail)}</div>` : '';
+        const detail = result.detailHtml
+            ? `<div class="stx-ui-result-detail is-rich">${result.detailHtml}</div>`
+            : result.detail
+                ? `<div class="stx-ui-result-detail">${escapeHtml(result.detail)}</div>`
+                : '';
         testResultEl.className = `stx-ui-result-area ${cls}`;
         testResultEl.innerHTML = `<div class="stx-ui-result-msg">${escapeHtml(result.message)}${latency}</div>${detail}`;
         testResultEl.style.display = '';
     };
 
-    {
-        const savedSource = ensureSettings().providers?.[0]?.source || 'tavern';
-        if (providerSourceEl) providerSourceEl.value = savedSource;
-        toggleProviderSourceSections(savedSource);
-        renderTavernConnectionInfo();
-        syncSharedSelects(cardRoot || document.body);
-
-        const customCfg = ensureSettings().providers?.find(p => p.source === 'custom');
-        if (customCfg) {
-            const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
-            const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
-            if (customBaseUrlEl) customBaseUrlEl.value = customCfg.baseUrl || '';
-            if (customModelInputEl) customModelInputEl.value = customCfg.manualModel || customCfg.model || '';
+    const renderCustomParamRows = (params?: ResourceCustomParams): void => {
+        if (!resourceCustomParamsListEl) return;
+        const rows = buildCustomParamRows(params);
+        if (rows.length === 0) {
+            resourceCustomParamsListEl.innerHTML = '<div class="stx-ui-param-empty">暂无参数项。可点击“添加参数”，也可直接编辑下方 JSON。</div>';
+            return;
         }
-    }
+        resourceCustomParamsListEl.innerHTML = rows.map((row: ResourceCustomParamRow, index: number) => `
+            <div class="stx-ui-param-row" data-param-row="${index}">
+              <input
+                type="text"
+                class="stx-ui-input stx-ui-input-full"
+                data-param-key
+                placeholder="参数名，如 top_p"
+                value="${escapeHtmlAttribute(row.key)}"
+              />
+                            ${buildSharedSelectField({
+                                    id: `${NAMESPACE}-param-type-${index}`,
+                                    value: row.type,
+                                    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-fluid stx-ui-param-type-select',
+                                    selectClassName: 'stx-ui-input stx-ui-input-full',
+                                    triggerClassName: 'stx-ui-input-full',
+                                    selectAttributes: { 'data-param-type': 'true' },
+                                    options: [
+                                            { value: 'string', label: '字符串' },
+                                            { value: 'number', label: '数字' },
+                                            { value: 'boolean', label: '布尔' },
+                                            { value: 'null', label: 'null' },
+                                            { value: 'json', label: 'JSON' },
+                                    ],
+                            })}
+              <input
+                type="text"
+                class="stx-ui-input stx-ui-input-full"
+                data-param-value
+                placeholder="参数值"
+                value="${escapeHtmlAttribute(row.value)}"
+              />
+              <button type="button" class="stx-ui-btn secondary stx-ui-param-remove" data-param-remove="${index}">删除</button>
+            </div>
+        `).join('');
+                hydrateSharedSelects(resourceCustomParamsListEl);
+                syncSharedSelects(cardRoot || document.body);
+    };
 
-    providerSourceEl?.addEventListener('change', () => {
-        const source = providerSourceEl.value as 'tavern' | 'custom';
-        toggleProviderSourceSections(source);
-        renderTavernConnectionInfo();
+    const parseCustomParamValue = (type: ResourceCustomParamValueType, value: string): unknown => {
+        const text = String(value || '').trim();
+        switch (type) {
+            case 'string':
+                return value;
+            case 'number': {
+                const parsed = Number(text);
+                if (!Number.isFinite(parsed)) throw new Error('数字参数必须是有效数字');
+                return parsed;
+            }
+            case 'boolean':
+                if (/^(true|1)$/i.test(text)) return true;
+                if (/^(false|0)$/i.test(text)) return false;
+                throw new Error('布尔参数仅支持 true / false / 1 / 0');
+            case 'null':
+                return null;
+            case 'json':
+                return JSON.parse(text || 'null');
+            default:
+                return value;
+        }
+    };
+
+    const collectCustomParamsFromRows = (): ResourceCustomParams | undefined => {
+        if (!resourceCustomParamsListEl) return undefined;
+        const rowEls = Array.from(resourceCustomParamsListEl.querySelectorAll<HTMLElement>('[data-param-row]'));
+        if (rowEls.length === 0) return undefined;
+
+        const entries: Array<[string, unknown]> = [];
+        for (const rowEl of rowEls) {
+            const key = String(rowEl.querySelector<HTMLInputElement>('[data-param-key]')?.value || '').trim();
+            const type = (rowEl.querySelector<HTMLSelectElement>('[data-param-type]')?.value || 'string') as ResourceCustomParamValueType;
+            const value = String(rowEl.querySelector<HTMLInputElement>('[data-param-value]')?.value || '');
+            if (!key) continue;
+            entries.push([key, parseCustomParamValue(type, value)]);
+        }
+
+        return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+    };
+
+    const syncCustomParamsTextareaFromRows = (showError = true): boolean => {
+        if (!resourceCustomParamsEl) return true;
+        try {
+            const params = collectCustomParamsFromRows();
+            resourceCustomParamsEl.value = params ? JSON.stringify(params, null, 2) : '';
+            return true;
+        } catch (error: unknown) {
+            if (showError) {
+                alert(`参数项校验失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+            return false;
+        }
+    };
+
+    const syncCustomParamRowsFromTextarea = (showError = true): boolean => {
+        const text = String(resourceCustomParamsEl?.value || '').trim();
+        if (!text) {
+            renderCustomParamRows();
+            return true;
+        }
+        try {
+            const parsed = JSON.parse(text);
+            const params = normalizeCustomParams(parsed);
+            if (!params) {
+                throw new Error('自定义参数必须是 JSON 对象');
+            }
+            renderCustomParamRows(params);
+            return true;
+        } catch (error: unknown) {
+            if (showError) {
+                alert(`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+            return false;
+        }
+    };
+
+    const refreshRerankTestButtonState = (): void => {
+        if (!testRerankBtn) return;
+        const source = (resourceSourceSelectEl?.value || 'custom') as ResourceSource;
+        const type = (resourceTypeSelectEl?.value || 'generation') as ResourceType;
+        const rerankEnabled = type === 'rerank' || (type === 'generation' && source === 'custom' && resourceCapRerankEl?.checked === true);
+        testRerankBtn.style.display = rerankEnabled ? '' : 'none';
+        testRerankBtn.disabled = !rerankEnabled;
+        if (rerankTestPanelEl) {
+            rerankTestPanelEl.style.display = rerankEnabled ? '' : 'none';
+        }
+    };
+
+    const ensureRerankTestDefaults = (): void => {
+        if (rerankTestQueryEl && !rerankTestQueryEl.value.trim()) {
+            rerankTestQueryEl.value = 'health check';
+        }
+        if (rerankTestDocsEl && !rerankTestDocsEl.value.trim()) {
+            rerankTestDocsEl.value = ['health check document', 'fallback document', 'unrelated sample'].join('\n');
+        }
+        if (rerankTestTopKEl && !rerankTestTopKEl.value.trim()) {
+            rerankTestTopKEl.value = '2';
+        }
+    };
+
+    const getRerankTestPayload = (): { query: string; docs: string[]; topK?: number } | null => {
+        const query = String(rerankTestQueryEl?.value || '').trim();
+        const docs = String(rerankTestDocsEl?.value || '')
+            .split(/\r?\n/)
+            .map((item: string) => item.trim())
+            .filter(Boolean);
+        const rawTopK = String(rerankTestTopKEl?.value || '').trim();
+        const topK = rawTopK ? Number(rawTopK) : undefined;
+
+        if (!query) {
+            alert('请先填写重排测试 Query。');
+            return null;
+        }
+        if (docs.length < 2) {
+            alert('请至少提供两条候选文档用于重排测试。');
+            return null;
+        }
+        if (topK != null && (!Number.isFinite(topK) || topK <= 0)) {
+            alert('Top K 必须是大于 0 的整数。');
+            return null;
+        }
+
+        return {
+            query,
+            docs,
+            topK: topK != null ? Math.min(Math.max(1, Math.floor(topK)), docs.length) : undefined,
+        };
+    };
+
+    const getSavedResources = (): ResourceConfig[] => {
+        return (ensureSettings().resources || [])
+            .map((config: ResourceConfig) => normalizeResourceConfigForUi(config))
+            .filter((config: ResourceConfig) => Boolean(config.id));
+    };
+
+    const getSavedResourceOptions = (requiredCapabilities: LLMCapability[] = [], includeDisabled = false): ResourceOption[] => {
+        return getSavedResources()
+            .map((config: ResourceConfig) => buildResourceOption(config))
+            .filter((option: ResourceOption) => includeDisabled || option.enabled)
+            .filter((option: ResourceOption) => requiredCapabilities.every((cap: LLMCapability) => option.capabilities.includes(cap)));
+    };
+
+    const resetModelListSelect = (): void => {
+        if (!modelListSelectEl) return;
+        modelListSelectEl.innerHTML = '<option value="">（请先获取模型列表）</option>';
+        if (modelListStatusEl) modelListStatusEl.textContent = '';
+        refreshSharedSelectOptions(cardRoot || document.body);
+    };
+
+    const syncResourceEditorState = (): void => {
+        const source = (resourceSourceSelectEl?.value || 'custom') as ResourceSource;
+        const type = (resourceTypeSelectEl?.value || 'generation') as ResourceType;
+        const capabilities = resourceTypeToCapabilities(type);
+        const canToggleRerank = type === 'generation' && source === 'custom';
+
+        if (resourceBaseUrlEl) {
+            resourceBaseUrlEl.disabled = source === 'tavern';
+            resourceBaseUrlEl.placeholder = source === 'tavern' ? '酒馆直连无需填写' : 'https://api.openai.com/v1';
+            if (source === 'tavern') resourceBaseUrlEl.value = '';
+        }
+
+        if (resourceBaseUrlField) resourceBaseUrlField.style.display = '';
+        if (resourceRerankPathField) resourceRerankPathField.style.display = type === 'rerank' ? '' : 'none';
+        if (type !== 'rerank' && resourceRerankPathEl) resourceRerankPathEl.value = '';
+
+        const checkboxMap: Array<[string, LLMCapability]> = [
+            [IDS.resourceCapChatId, 'chat'],
+            [IDS.resourceCapJsonId, 'json'],
+            [IDS.resourceCapToolsId, 'tools'],
+            [IDS.resourceCapEmbId, 'embeddings'],
+            [IDS.resourceCapRerankId, 'rerank'],
+            [IDS.resourceCapVisionId, 'vision'],
+            [IDS.resourceCapReasoningId, 'reasoning'],
+        ];
+        checkboxMap.forEach(([checkboxId, cap]: [string, LLMCapability]) => {
+            const el = document.getElementById(checkboxId) as HTMLInputElement | null;
+            if (!el) return;
+            if (cap === 'rerank' && canToggleRerank) {
+                el.checked = el.checked === true;
+                el.disabled = false;
+                return;
+            }
+            el.checked = capabilities.includes(cap);
+            el.disabled = true;
+        });
+
+        refreshRerankTestButtonState();
         if (testResultEl) testResultEl.style.display = 'none';
-        const current = ensureSettings();
-        if (!current.providers || current.providers.length === 0) {
-            current.providers = [{ id: source === 'tavern' ? 'tavern' : 'openai', source }];
-        } else {
-            current.providers[0].source = source;
-            current.providers[0].id = source === 'tavern' ? 'tavern' : (current.providers[0].id || 'openai');
+        syncSharedSelects(cardRoot || document.body);
+    };
+
+    const loadResourceIntoEditor = (resource: ResourceConfig | null, reveal = true): void => {
+        editingResourceId = resource?.id || '';
+        if (resourceIdInputEl) {
+            resourceIdInputEl.value = resource?.id || '';
+            resourceIdInputEl.disabled = !!resource;
         }
+        if (resourceLabelInputEl) resourceLabelInputEl.value = resource?.label || '';
+        if (resourceTypeSelectEl) resourceTypeSelectEl.value = resource?.type || 'generation';
+        if (resourceSourceSelectEl) resourceSourceSelectEl.value = resource?.source || 'custom';
+        if (resourceBaseUrlEl) resourceBaseUrlEl.value = resource?.source === 'custom' ? (resource.baseUrl || '') : '';
+        if (resourceDefaultModelEl) resourceDefaultModelEl.value = resource?.model || '';
+        if (resourceRerankPathEl) resourceRerankPathEl.value = resource?.rerankPath || '';
+        if (resourceCustomParamsEl) {
+            resourceCustomParamsEl.value = resource?.customParams ? JSON.stringify(resource.customParams, null, 2) : '';
+        }
+        renderCustomParamRows(resource?.customParams);
+        ensureRerankTestDefaults();
+        if (resourceEnabledEl) resourceEnabledEl.checked = resource ? resource.enabled !== false : true;
+        if (resourceCapRerankEl) {
+            resourceCapRerankEl.checked = Boolean(resource?.capabilities?.includes('rerank') && resource.type === 'generation' && resource.source === 'custom');
+        }
+        if (resourceApiKeyEl) resourceApiKeyEl.value = '';
+        if (resourceDeleteBtn) resourceDeleteBtn.disabled = !resource;
+        resetModelListSelect();
+        syncResourceEditorState();
+        if (reveal) showResourceEditor();
+        else hideResourceEditor();
+    };
+
+    const renderResourceList = (): void => {
+        if (!resourceListEl) return;
+        const resources = getSavedResources();
+        if (resources.length === 0) {
+            resourceListEl.innerHTML = '<div class="stx-ui-list-empty">暂无已保存资源，请先新建一条资源配置。</div>';
+            return;
+        }
+        resourceListEl.innerHTML = resources
+            .map((resource: ResourceConfig) => `
+                            <div
+                                class="stx-ui-list-item stx-ui-resource-row${editingResourceId === resource.id ? ' is-active' : ''}"
+                                data-resource-id="${escapeHtml(resource.id)}"
+                                title="左击编辑，右键菜单可删除"
+                            >
+                                <button
+                                    type="button"
+                                    class="stx-ui-list-main"
+                                    data-resource-open="${escapeHtml(resource.id)}"
+                                >
+                                    <div class="stx-ui-list-icon">
+                                        <i class="${resource.source === 'tavern' ? 'fa-solid fa-beer-mug-empty' : 'fa-solid fa-server'}"></i>
+                                    </div>
+                                    <div class="stx-ui-list-content">
+                                        <div class="stx-ui-list-title">
+                                            ${escapeHtml(resource.label || resource.id)}
+                                            <span class="stx-ui-list-tag ${resource.type}">${escapeHtml(getKindLabel(resource.type))}</span>
+                                        </div>
+                                        <div class="stx-ui-list-meta">ID=${escapeHtml(resource.id)} · 来源=${escapeHtml(resource.source)} · ${resource.enabled === false ? '停用' : '启用'}</div>
+                                    </div>
+                                </button>
+                                <div class="stx-ui-list-side">
+                                    ${buildResourceListToggleHtml(resource)}
+                                </div>
+                            </div>
+            `)
+            .join('');
+    };
+
+    const readEditingResource = (): ResourceConfig | null => {
+        if (!syncCustomParamsTextareaFromRows()) {
+            return null;
+        }
+        const id = String(resourceIdInputEl?.value || '').trim();
+        const label = String(resourceLabelInputEl?.value || '').trim();
+        const type = (resourceTypeSelectEl?.value || 'generation') as ResourceType;
+        const source = (resourceSourceSelectEl?.value || 'custom') as ResourceSource;
+        const baseUrl = String(resourceBaseUrlEl?.value || '').trim();
+        const model = String(resourceDefaultModelEl?.value || '').trim();
+        const rerankPath = String(resourceRerankPathEl?.value || '').trim();
+        const customParamsText = String(resourceCustomParamsEl?.value || '').trim();
+        const canToggleRerank = type === 'generation' && source === 'custom';
+
+        let customParams: ResourceCustomParams | undefined;
+        if (customParamsText) {
+            try {
+                const parsed = JSON.parse(customParamsText);
+                customParams = normalizeCustomParams(parsed);
+                if (!customParams) {
+                    alert('自定义参数必须是 JSON 对象，例如 {"top_p":0.9}。');
+                    return null;
+                }
+            } catch (error: unknown) {
+                alert(`自定义参数 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`);
+                return null;
+            }
+        }
+
+        if (!id) {
+            alert('请先填写资源 ID。');
+            return null;
+        }
+        if (!label) {
+            alert('请先填写资源显示名称。');
+            return null;
+        }
+        if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+            alert('资源 ID 只支持字母、数字、下划线和短横线。');
+            return null;
+        }
+        if (source === 'custom' && !baseUrl) {
+            alert('自定义资源必须填写 Base URL。');
+            return null;
+        }
+
+        return normalizeResourceConfigForUi({
+            id,
+            label,
+            type,
+            source,
+            baseUrl: source === 'custom' ? baseUrl : undefined,
+            model: model || undefined,
+            enabled: resourceEnabledEl?.checked !== false,
+            rerankPath: type === 'rerank' ? rerankPath || undefined : undefined,
+            capabilities: canToggleRerank && resourceCapRerankEl?.checked ? ['rerank'] : undefined,
+            customParams,
+        });
+    };
+
+    const saveEditingResource = async (): Promise<ResourceConfig | null> => {
+        const resource = readEditingResource();
+        if (!resource) return null;
+        const settings = ensureSettings();
+        const resources = getSavedResources().filter((item: ResourceConfig) => item.id !== resource.id);
+        resources.push(resource);
+        settings.resources = resources;
         saveSettings();
-        runtime?.applySettingsFromContext?.().catch(() => {});
+        await runtime?.applySettingsFromContext?.();
+        editingResourceId = resource.id;
+        if (resourceIdInputEl) resourceIdInputEl.disabled = true;
+        renderResourceList();
+        refreshAllResourceSelects();
+        return resource;
+    };
+
+    const collectResourceReferences = (resourceId: string): string[] => {
+        const settings = ensureSettings();
+        const references: string[] = [];
+        if (settings.globalAssignments?.generation?.resourceId === resourceId) references.push('全局分配 / 生成');
+        if (settings.globalAssignments?.embedding?.resourceId === resourceId) references.push('全局分配 / 向量化');
+        if (settings.globalAssignments?.rerank?.resourceId === resourceId) references.push('全局分配 / 重排序');
+        (settings.pluginAssignments || []).forEach((item: PluginAssignment) => {
+            if (item.generation?.resourceId === resourceId) references.push(`插件分配 / ${item.pluginId} / 生成`);
+            if (item.embedding?.resourceId === resourceId) references.push(`插件分配 / ${item.pluginId} / 向量化`);
+            if (item.rerank?.resourceId === resourceId) references.push(`插件分配 / ${item.pluginId} / 重排序`);
+        });
+        (settings.taskAssignments || []).forEach((item: TaskAssignment) => {
+            if (item.resourceId === resourceId) references.push(`任务分配 / ${item.pluginId} / ${item.taskId}`);
+        });
+        return references;
+    };
+
+    const syncResourceListItemState = (resourceId: string, enabled: boolean): void => {
+        const rowEl = resourceListEl?.querySelector<HTMLElement>(`[data-resource-id="${resourceId}"]`) || null;
+        if (!rowEl) return;
+
+        const metaEl = rowEl.querySelector<HTMLElement>('.stx-ui-list-meta');
+        if (metaEl) {
+            metaEl.textContent = metaEl.textContent?.replace(/(启用|停用)$/, enabled ? '启用' : '停用') || metaEl.textContent || '';
+        }
+
+        const toggleEl = rowEl.querySelector<HTMLInputElement>('[data-resource-toggle]');
+        if (toggleEl) {
+            toggleEl.checked = enabled;
+            const resource = getSavedResources().find((item: ResourceConfig) => item.id === resourceId) || null;
+            const resourceLabel = resource?.label || resourceId;
+            toggleEl.dataset.tip = `${enabled ? '停用' : '启用'}资源 ${resourceLabel}`;
+            toggleEl.setAttribute('aria-label', `${enabled ? '停用' : '启用'}资源 ${resourceLabel}`);
+        }
+    };
+
+    const updateResourceEnabled = async (resourceId: string, enabled: boolean): Promise<void> => {
+        const settings = ensureSettings();
+        const resources = getSavedResources();
+        const target = resources.find((item: ResourceConfig) => item.id === resourceId) || null;
+        if (!target) return;
+
+        settings.resources = resources.map((item: ResourceConfig) => (
+            item.id === resourceId ? { ...item, enabled } : item
+        ));
+
+        saveSettings();
+        await runtime?.applySettingsFromContext?.();
+
+        if (editingResourceId === resourceId && resourceEnabledEl) {
+            resourceEnabledEl.checked = enabled;
+        }
+
+        syncResourceListItemState(resourceId, enabled);
+        refreshAllResourceSelects();
+        restoreGlobalAssignmentsToUI();
+        renderPluginAssignments();
+        renderTaskAssignments();
+        showTestResult({ ok: true, message: `${enabled ? '已启用' : '已停用'}资源 ${target.label || target.id}` });
+    };
+
+    const deleteResource = async (resourceId: string): Promise<void> => {
+        const references = collectResourceReferences(resourceId);
+        const referenceText = references.length > 0
+            ? `\n\n以下设置项正在使用该资源：\n- ${references.join('\n- ')}\n\n删除后这些分配会自动改成未分配。`
+            : '';
+        if (!confirm(`确定删除资源“${resourceId}”吗？${referenceText}`)) {
+            return;
+        }
+
+        const settings = ensureSettings();
+        settings.resources = getSavedResources().filter((item: ResourceConfig) => item.id !== resourceId);
+
+        const nextGlobalAssignments: GlobalAssignments = { ...(settings.globalAssignments || {}) };
+        if (nextGlobalAssignments.generation?.resourceId === resourceId) delete nextGlobalAssignments.generation;
+        if (nextGlobalAssignments.embedding?.resourceId === resourceId) delete nextGlobalAssignments.embedding;
+        if (nextGlobalAssignments.rerank?.resourceId === resourceId) delete nextGlobalAssignments.rerank;
+        settings.globalAssignments = nextGlobalAssignments;
+
+        settings.pluginAssignments = (settings.pluginAssignments || [])
+            .map((item: PluginAssignment) => {
+                const next: PluginAssignment = { pluginId: item.pluginId };
+                if (item.generation && item.generation.resourceId !== resourceId) next.generation = item.generation;
+                if (item.embedding && item.embedding.resourceId !== resourceId) next.embedding = item.embedding;
+                if (item.rerank && item.rerank.resourceId !== resourceId) next.rerank = item.rerank;
+                return next;
+            })
+            .filter((item: PluginAssignment) => Boolean(item.generation || item.embedding || item.rerank));
+
+        settings.taskAssignments = (settings.taskAssignments || []).filter((item: TaskAssignment) => item.resourceId !== resourceId);
+
+        saveSettings();
+        await runtime?.removeCredential?.(resourceId);
+        await runtime?.applySettingsFromContext?.();
+        editingResourceId = editingResourceId === resourceId ? '' : editingResourceId;
+        if (!editingResourceId) {
+            loadResourceIntoEditor(null, false);
+        }
+        renderResourceList();
+        refreshAllResourceSelects();
+        restoreGlobalAssignmentsToUI();
+        renderPluginAssignments();
+        renderTaskAssignments();
+        showTestResult({ ok: true, message: `已删除资源 ${resourceId}` });
+    };
+
+    resourceTypeSelectEl?.addEventListener('change', syncResourceEditorState);
+    resourceSourceSelectEl?.addEventListener('change', syncResourceEditorState);
+    resourceCapRerankEl?.addEventListener('change', refreshRerankTestButtonState);
+
+    resourceCustomParamsAddBtn?.addEventListener('click', () => {
+        const params = collectCustomParamsFromRows() || {};
+        let seed = 'custom_param';
+        let index = Object.keys(params).length + 1;
+        while (Object.prototype.hasOwnProperty.call(params, seed)) {
+            seed = `custom_param_${index++}`;
+        }
+        params[seed] = '';
+        renderCustomParamRows(params);
+        void syncCustomParamsTextareaFromRows(false);
     });
 
-    // ─── 连接测试 ───
+    resourceCustomParamsSyncBtn?.addEventListener('click', () => {
+        if (syncCustomParamRowsFromTextarea()) {
+            showTestResult({ ok: true, message: '已根据 JSON 刷新参数项' });
+        }
+    });
 
-    const testConnectionBtn = document.getElementById(IDS.testConnectionBtnId) as HTMLButtonElement | null;
+    resourceCustomParamsListEl?.addEventListener('input', () => {
+        void syncCustomParamsTextareaFromRows(false);
+    });
+
+    resourceCustomParamsListEl?.addEventListener('change', () => {
+        void syncCustomParamsTextareaFromRows(false);
+    });
+
+    resourceCustomParamsListEl?.addEventListener('click', (event: Event) => {
+        const removeBtn = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-param-remove]');
+        if (!removeBtn) return;
+        const rowEl = removeBtn.closest<HTMLElement>('[data-param-row]');
+        rowEl?.remove();
+        if (!resourceCustomParamsListEl?.querySelector('[data-param-row]')) {
+            renderCustomParamRows();
+        }
+        void syncCustomParamsTextareaFromRows(false);
+    });
+
+    resourceCustomParamsEl?.addEventListener('blur', () => {
+        void syncCustomParamRowsFromTextarea(false);
+    });
+
+    resourceNewBtn?.addEventListener('click', () => {
+        loadResourceIntoEditor(null, true);
+        renderResourceList();
+    });
+
+    resourceListEl?.addEventListener('click', (event: Event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-resource-open]');
+        const resourceId = String(target?.dataset.resourceOpen || '').trim();
+        if (!resourceId) return;
+
+        if (editingResourceId === resourceId) {
+            loadResourceIntoEditor(null, false);
+            editingResourceId = '';
+        } else {
+            const resource = getSavedResources().find((item: ResourceConfig) => item.id === resourceId) || null;
+            loadResourceIntoEditor(resource, true);
+        }
+        renderResourceList();
+    });
+
+    resourceListEl?.addEventListener('change', async (event: Event) => {
+        const target = (event.target as HTMLElement).closest<HTMLInputElement>('[data-resource-toggle]');
+        if (!target) return;
+        const resourceId = String(target.dataset.resourceId || '').trim();
+        if (!resourceId) return;
+        await updateResourceEnabled(resourceId, target.checked);
+    });
+
+    resourceListEl?.addEventListener('contextmenu', async (event: Event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-resource-id]');
+        if (!target) return;
+        const mouseEvent = event as MouseEvent;
+        mouseEvent.preventDefault();
+        const resourceId = String(target.dataset.resourceId || '').trim();
+        if (!resourceId) return;
+
+        target.classList.add('is-context-open');
+        showSharedContextMenu({
+            x: mouseEvent.clientX,
+            y: mouseEvent.clientY,
+            items: [
+                {
+                    id: 'delete-resource',
+                    label: '删除资源',
+                    iconClassName: 'fa-solid fa-trash-can',
+                    danger: true,
+                    onSelect: async () => {
+                        await deleteResource(resourceId);
+                    },
+                },
+            ],
+            onClose: () => {
+                target.classList.remove('is-context-open');
+            },
+        });
+    });
+
+    resourceApiKeySaveBtn?.addEventListener('click', async () => {
+        const resourceId = editingResourceId || String(resourceIdInputEl?.value || '').trim();
+        if (!resourceId) {
+            alert('请先选择或填写资源 ID。');
+            return;
+        }
+        const apiKey = String(resourceApiKeyEl?.value || '').trim();
+        if (!apiKey) {
+            alert('API Key 不能为空');
+            return;
+        }
+        try {
+            if (!runtime?.saveCredential) throw new Error('LLMHub Runtime 未就绪');
+            await runtime.saveCredential(resourceId, apiKey);
+            if (resourceApiKeyEl) resourceApiKeyEl.value = '';
+            showTestResult({ ok: true, message: `已保存 ${resourceId} 的凭据` });
+        } catch (error) {
+            console.error('保存凭据失败:', error);
+            alert('保存凭据失败，请查看控制台');
+        }
+    });
+
     testConnectionBtn?.addEventListener('click', async () => {
         testConnectionBtn.disabled = true;
         testConnectionBtn.textContent = '测试中…';
         try {
-            const source = providerSourceEl?.value || 'tavern';
-            const providerId = source === 'tavern' ? 'tavern' : (ensureSettings().providers?.find(p => p.source === 'custom')?.id || 'openai');
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.testConnection) { showTestResult({ ok: false, message: 'Provider 不支持连接测试' }); return; }
-            const res = await provider.testConnection();
-            showTestResult(res);
+            const resource = await saveEditingResource();
+            if (!resource) return;
+            const runtimeProvider = (runtime?.router?.getProvider?.(resource.id) as ProviderWithTest | null | undefined) || null;
+
+            if (resource.type === 'embedding' && runtimeProvider?.embed) {
+                const start = Date.now();
+                const result = await runtimeProvider.embed({
+                    texts: ['connection health check'],
+                    model: resource.model || undefined,
+                });
+                const first = Array.isArray(result?.embeddings) ? result.embeddings[0] : null;
+                const dim = Array.isArray(first) ? first.length : 0;
+                if (dim > 0) {
+                    showTestResult({ ok: true, message: `连接成功（向量维度 ${dim}）`, latencyMs: Date.now() - start });
+                } else {
+                    showTestResult({ ok: false, message: '连接失败：Embedding 返回为空或格式异常' });
+                }
+                return;
+            }
+
+            if (resource.type === 'rerank' && runtimeProvider?.rerank) {
+                const start = Date.now();
+                const result = await runtimeProvider.rerank({
+                    query: 'health check',
+                    docs: ['health check document', 'fallback document'],
+                    topK: 1,
+                    model: resource.model || undefined,
+                });
+                const first = Array.isArray(result?.results) ? result.results[0] : null;
+                if (first && Number.isFinite(first.index) && Number.isFinite(first.score)) {
+                    showTestResult({
+                        ok: true,
+                        message: `连接成功（返回 ${result.results.length} 条重排结果）`,
+                        detailHtml: buildRerankResultDetailHtml(result.results),
+                        latencyMs: Date.now() - start,
+                    });
+                } else {
+                    showTestResult({ ok: false, message: '连接失败：Rerank 返回为空或格式异常' });
+                }
+                return;
+            }
+
+            if (!runtimeProvider?.testConnection) {
+                showTestResult({ ok: false, message: '当前资源不支持连接测试' });
+                return;
+            }
+            const result = await runtimeProvider.testConnection();
+            showTestResult(result);
         } catch (error: unknown) {
-            showTestResult({ ok: false, message: `测试异常: ${error instanceof Error ? error.message : String(error)}` });
+            showTestResult({ ok: false, message: `测试异常：${error instanceof Error ? error.message : String(error)}` });
         } finally {
             renderTavernConnectionInfo();
             testConnectionBtn.disabled = false;
@@ -649,72 +1439,79 @@ function bindUiEvents(): void {
         }
     });
 
-    const customTestBtn = document.getElementById(IDS.testConnectionBtnId + '_custom') as HTMLButtonElement | null;
-    customTestBtn?.addEventListener('click', async () => {
-        customTestBtn.disabled = true;
-        customTestBtn.textContent = '测试中…';
+    testRerankBtn?.addEventListener('click', async () => {
+        testRerankBtn.disabled = true;
+        testRerankBtn.textContent = '测试中…';
         try {
-            const settings = ensureSettings();
-            const customBaseUrlEl = document.getElementById(IDS.customBaseUrlId) as HTMLInputElement | null;
-            const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
-            const baseUrl = customBaseUrlEl?.value.trim() || '';
-            const model = customModelInputEl?.value.trim() || '';
-            if (baseUrl || model) {
-                if (!settings.providers) settings.providers = [];
-                const customCfg = settings.providers.find(p => p.source === 'custom');
-                if (customCfg) {
-                    customCfg.baseUrl = baseUrl;
-                    customCfg.manualModel = model;
-                } else {
-                    settings.providers.push({ id: 'openai', source: 'custom', baseUrl, manualModel: model });
-                }
-                saveSettings();
-                await runtime?.applySettingsFromContext?.();
+            const resource = await saveEditingResource();
+            if (!resource) return;
+            const testPayload = getRerankTestPayload();
+            if (!testPayload) return;
+            const runtimeProvider = (runtime?.router?.getProvider?.(resource.id) as ProviderWithTest | null | undefined) || null;
+            if (!runtimeProvider?.rerank) {
+                showTestResult({ ok: false, message: '当前资源不支持重排测试' });
+                return;
             }
-            const providerId = settings.providers?.find(p => p.source === 'custom')?.id || 'openai';
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.testConnection) { showTestResult({ ok: false, message: 'Provider 不支持连接测试' }); return; }
-            const res = await provider.testConnection();
-            showTestResult(res);
+
+            const start = Date.now();
+            const result = await runtimeProvider.rerank({
+                query: testPayload.query,
+                docs: testPayload.docs,
+                topK: testPayload.topK,
+                model: resource.model || undefined,
+            });
+            const summary = (result.results || [])
+                .slice(0, 2)
+                .map((item: { index: number; score: number; doc: string }) => `#${item.index}=${item.score.toFixed(3)}：${item.doc.slice(0, 24)}`)
+                .join('，');
+            const modeLabel = resource.type === 'generation' ? 'LLM 重排模式' : '专用重排接口';
+
+            if (Array.isArray(result.results) && result.results.length > 0) {
+                showTestResult({
+                    ok: true,
+                    message: `${modeLabel}测试成功（返回 ${result.results.length} 条结果）`,
+                    detail: summary,
+                    detailHtml: buildRerankResultDetailHtml(result.results),
+                    latencyMs: Date.now() - start,
+                });
+            } else {
+                showTestResult({ ok: false, message: `${modeLabel}测试失败：返回为空或格式异常` });
+            }
         } catch (error: unknown) {
-            showTestResult({ ok: false, message: `测试异常: ${error instanceof Error ? error.message : String(error)}` });
+            showTestResult({ ok: false, message: `重排测试异常：${error instanceof Error ? error.message : String(error)}` });
         } finally {
-            customTestBtn.disabled = false;
-            customTestBtn.textContent = '测试连接';
+            testRerankBtn.disabled = false;
+            testRerankBtn.textContent = '测试重排';
+            refreshRerankTestButtonState();
         }
     });
-
-    // ─── 获取模型列表 ───
-
-    const fetchModelsBtn = document.getElementById(IDS.fetchModelsBtnId) as HTMLButtonElement | null;
-    const modelListSelectEl = document.getElementById(IDS.modelListSelectId) as HTMLSelectElement | null;
-    const modelListStatusEl = document.getElementById(IDS.modelListStatusId) as HTMLElement | null;
 
     fetchModelsBtn?.addEventListener('click', async () => {
         fetchModelsBtn.disabled = true;
         fetchModelsBtn.textContent = '获取中…';
         if (modelListStatusEl) modelListStatusEl.textContent = '';
         try {
-            const providerId = ensureSettings().providers?.find(p => p.source === 'custom')?.id || 'openai';
-            const provider = runtime?.router?.getProvider?.(providerId) as ProviderWithTest | null;
-            if (!provider?.listModels) {
-                if (modelListStatusEl) modelListStatusEl.textContent = 'Provider 不支持模型列表';
+            const resource = await saveEditingResource();
+            if (!resource) return;
+            const runtimeProvider = (runtime?.router?.getProvider?.(resource.id) as ProviderWithTest | null | undefined) || null;
+            if (!runtimeProvider?.listModels) {
+                if (modelListStatusEl) modelListStatusEl.textContent = '当前资源不支持获取模型列表';
                 return;
             }
-            const res = await provider.listModels();
-            if (!res.ok) {
-                if (modelListStatusEl) modelListStatusEl.textContent = `获取失败: ${res.message}`;
+            const result = await runtimeProvider.listModels();
+            if (!result.ok) {
+                if (modelListStatusEl) modelListStatusEl.textContent = `获取失败：${result.message}`;
                 return;
             }
             if (modelListSelectEl) {
-                modelListSelectEl.innerHTML = res.models
-                    .map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
+                modelListSelectEl.innerHTML = ['<option value="">（请选择模型）</option>']
+                    .concat(result.models.map((model: { id: string; label?: string }) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.label || model.id)}</option>`))
                     .join('');
                 refreshSharedSelectOptions(cardRoot || document.body);
             }
-            if (modelListStatusEl) modelListStatusEl.textContent = `已获取 ${res.models.length} 个模型`;
+            if (modelListStatusEl) modelListStatusEl.textContent = `已获取 ${result.models.length} 个模型`;
         } catch (error: unknown) {
-            if (modelListStatusEl) modelListStatusEl.textContent = `异常: ${error instanceof Error ? error.message : String(error)}`;
+            if (modelListStatusEl) modelListStatusEl.textContent = `获取异常：${error instanceof Error ? error.message : String(error)}`;
         } finally {
             fetchModelsBtn.disabled = false;
             fetchModelsBtn.textContent = '获取模型列表';
@@ -722,106 +1519,99 @@ function bindUiEvents(): void {
     });
 
     modelListSelectEl?.addEventListener('change', () => {
-        const customModelInputEl = document.getElementById(IDS.customModelInputId) as HTMLInputElement | null;
-        if (customModelInputEl && modelListSelectEl.value) customModelInputEl.value = modelListSelectEl.value;
+        if (resourceDefaultModelEl && modelListSelectEl.value) {
+            resourceDefaultModelEl.value = modelListSelectEl.value;
+        }
     });
 
-    // ══════════════════════════════════════
-    //  View A: 全局能力默认
-    // ══════════════════════════════════════
+    resourceSaveBtn?.addEventListener('click', async () => {
+        const resource = await saveEditingResource();
+        if (!resource) return;
+        renderResourceList();
+        refreshAllResourceSelects();
+        restoreGlobalAssignmentsToUI();
+        renderPluginAssignments();
+        renderTaskAssignments();
+        showTestResult({ ok: true, message: `已保存资源 ${resource.label || resource.id}` });
+    });
 
-    const getProviderIds = (): string[] => {
-        const dynamic = runtime?.router?.getAllProviders?.() || [];
-        const dynamicIds = dynamic.map((p: ProviderLite) => String(p?.id || '').trim()).filter(Boolean);
-        const fallback = ['openai', 'claude', 'gemini', 'groq'];
-        return Array.from(new Set([...dynamicIds, ...fallback]));
-    };
+    resourceDeleteBtn?.addEventListener('click', async () => {
+        const resourceId = editingResourceId || String(resourceIdInputEl?.value || '').trim();
+        if (!resourceId) {
+            alert('请先选择要删除的资源。');
+            return;
+        }
+        await deleteResource(resourceId);
+    });
 
-    const populateProviderSelect = (selectEl: HTMLSelectElement | null, allowEmpty: boolean, currentValue?: string): void => {
+    const populateResourceSelect = (
+        selectEl: HTMLSelectElement | null,
+        options: ResourceOption[],
+        allowEmpty: boolean,
+        currentValue?: string,
+        emptyLabel = '（自动选择）',
+    ): void => {
         if (!selectEl) return;
-        const ids = getProviderIds();
         const prev = currentValue ?? selectEl.value;
         selectEl.innerHTML = '';
         if (allowEmpty) {
             const opt = document.createElement('option');
             opt.value = '';
-            opt.textContent = '（自动选择）';
+            opt.textContent = emptyLabel;
             selectEl.appendChild(opt);
         }
-        ids.forEach(id => {
+        options.forEach((option: ResourceOption) => {
             const opt = document.createElement('option');
-            opt.value = id;
-            opt.textContent = id;
+            opt.value = option.id;
+            opt.textContent = option.label;
             selectEl.appendChild(opt);
         });
-        if (Array.from(selectEl.options).some(o => o.value === prev)) selectEl.value = prev;
+        if (Array.from(selectEl.options).some((o: HTMLOptionElement) => o.value === prev)) {
+            selectEl.value = prev;
+        }
     };
 
-    const refreshAllProviderSelects = (): void => {
-        populateProviderSelect(document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement, true);
-        populateProviderSelect(document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement, true);
-        populateProviderSelect(document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement, true);
-        populateProviderSelect(document.getElementById(IDS.vaultAddServiceId) as HTMLSelectElement, false);
+    const refreshAllResourceSelects = (): void => {
+        populateResourceSelect(document.getElementById(IDS.globalAssignGenResourceId) as HTMLSelectElement | null, getSavedResourceOptions(['chat']), true);
+        populateResourceSelect(document.getElementById(IDS.globalAssignEmbResourceId) as HTMLSelectElement | null, getSavedResourceOptions(['embeddings']), true);
+        populateResourceSelect(document.getElementById(IDS.globalAssignRerankResourceId) as HTMLSelectElement | null, getSavedResourceOptions(['rerank']), true);
         refreshSharedSelectOptions(cardRoot || document.body);
     };
 
-    // 恢复全局默认到 UI
-    const restoreGlobalDefaultsToUI = (): void => {
+    const restoreGlobalAssignmentsToUI = (): void => {
         const settings = ensureSettings();
-        const defaults = settings.globalDefaults || [];
-        for (const d of defaults) {
-            if (d.capabilityKind === 'generation') {
-                const provEl = document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement | null;
-                const modelEl = document.getElementById(IDS.globalDefGenModelId) as HTMLInputElement | null;
-                const profileEl = document.getElementById(IDS.globalDefGenProfileId) as HTMLSelectElement | null;
-                if (provEl) provEl.value = d.providerId || '';
-                if (modelEl) modelEl.value = d.model || '';
-                if (profileEl) profileEl.value = d.profileId || '';
-            } else if (d.capabilityKind === 'embedding') {
-                const provEl = document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement | null;
-                const modelEl = document.getElementById(IDS.globalDefEmbModelId) as HTMLInputElement | null;
-                if (provEl) provEl.value = d.providerId || '';
-                if (modelEl) modelEl.value = d.model || '';
-            } else if (d.capabilityKind === 'rerank') {
-                const provEl = document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement | null;
-                const modelEl = document.getElementById(IDS.globalDefRerankModelId) as HTMLInputElement | null;
-                if (provEl) provEl.value = d.providerId || '';
-                if (modelEl) modelEl.value = d.model || '';
-            }
-        }
+        const assignments = settings.globalAssignments || {};
+        const genEl = document.getElementById(IDS.globalAssignGenResourceId) as HTMLSelectElement | null;
+        const embEl = document.getElementById(IDS.globalAssignEmbResourceId) as HTMLSelectElement | null;
+        const rerankEl = document.getElementById(IDS.globalAssignRerankResourceId) as HTMLSelectElement | null;
+        if (genEl) genEl.value = assignments.generation?.resourceId || '';
+        if (embEl) embEl.value = assignments.embedding?.resourceId || '';
+        if (rerankEl) rerankEl.value = assignments.rerank?.resourceId || '';
+        [globalAssignGenModelEl, globalAssignEmbModelEl, globalAssignRerankModelEl].forEach((el: HTMLInputElement | null) => {
+            if (el) el.value = '';
+        });
         syncSharedSelects(cardRoot || document.body);
     };
 
-    // 保存全局默认
-    const globalDefSaveBtn = document.getElementById(IDS.globalDefSaveBtnId);
-    globalDefSaveBtn?.addEventListener('click', () => {
-        const genProvider = (document.getElementById(IDS.globalDefGenProviderId) as HTMLSelectElement)?.value || '';
-        const genModel = (document.getElementById(IDS.globalDefGenModelId) as HTMLInputElement)?.value.trim() || '';
-        const genProfile = (document.getElementById(IDS.globalDefGenProfileId) as HTMLSelectElement)?.value || '';
-        const embProvider = (document.getElementById(IDS.globalDefEmbProviderId) as HTMLSelectElement)?.value || '';
-        const embModel = (document.getElementById(IDS.globalDefEmbModelId) as HTMLInputElement)?.value.trim() || '';
-        const rerankProvider = (document.getElementById(IDS.globalDefRerankProviderId) as HTMLSelectElement)?.value || '';
-        const rerankModel = (document.getElementById(IDS.globalDefRerankModelId) as HTMLInputElement)?.value.trim() || '';
+    document.getElementById(IDS.globalAssignSaveBtnId)?.addEventListener('click', () => {
+        const generation = (document.getElementById(IDS.globalAssignGenResourceId) as HTMLSelectElement | null)?.value || '';
+        const embedding = (document.getElementById(IDS.globalAssignEmbResourceId) as HTMLSelectElement | null)?.value || '';
+        const rerank = (document.getElementById(IDS.globalAssignRerankResourceId) as HTMLSelectElement | null)?.value || '';
 
-        const defaults: GlobalCapabilityDefault[] = [];
-        if (genProvider) defaults.push({ capabilityKind: 'generation', providerId: genProvider, model: genModel || undefined, profileId: genProfile || undefined });
-        if (embProvider) defaults.push({ capabilityKind: 'embedding', providerId: embProvider, model: embModel || undefined });
-        if (rerankProvider) defaults.push({ capabilityKind: 'rerank', providerId: rerankProvider, model: rerankModel || undefined });
+        const assignments: GlobalAssignments = {};
+        if (generation) assignments.generation = { resourceId: generation };
+        if (embedding) assignments.embedding = { resourceId: embedding };
+        if (rerank) assignments.rerank = { resourceId: rerank };
 
         const settings = ensureSettings();
-        settings.globalDefaults = defaults;
-
+        settings.globalAssignments = assignments;
         saveSettings();
-        runtime?.router?.applyGlobalDefaults?.(defaults);
+        runtime?.router?.applyGlobalAssignments?.(assignments);
         runtime?.applySettingsFromContext?.().catch(() => {});
     });
 
-    // ══════════════════════════════════════
-    //  View B: 插件默认
-    // ══════════════════════════════════════
-
-    const renderPluginDefaults = (): void => {
-        const listEl = document.getElementById(IDS.pluginDefaultsListId);
+    const renderPluginAssignments = (): void => {
+        const listEl = document.getElementById(IDS.pluginAssignListId);
         if (!listEl) return;
         const renderSeq = ++LLMHUB_CONSUMER_DISCOVERY_SEQ;
 
@@ -834,134 +1624,116 @@ function bindUiEvents(): void {
                 excludePluginIds: ['stx_llmhub'],
             })
                 .then((consumers: DiscoveredConsumer[]): void => {
-                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) {
-                        return;
-                    }
-                    listEl.innerHTML = buildPluginDefaultsEmptyStateHtml(consumers);
+                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) return;
+                    listEl.innerHTML = buildPluginAssignmentsEmptyStateHtml(consumers);
                 })
                 .catch((): void => {
-                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) {
-                        return;
-                    }
+                    if (renderSeq !== LLMHUB_CONSUMER_DISCOVERY_SEQ || !listEl.isConnected) return;
                     listEl.innerHTML = '<div class="stx-ui-list-empty">暂无已注册插件</div>';
                 });
             return;
         }
 
         const settings = ensureSettings();
-        const providerIds = getProviderIds();
-        const existingPluginDefaults = settings.pluginDefaults || [];
-
-        const collectCandidateProviderIds = (filterCaps?: LLMCapability[]): string[] => {
-            let candidates = providerIds;
-            if (filterCaps && filterCaps.length > 0 && runtime?.router?.getProviderCapabilities) {
-                candidates = candidates.filter(pid => {
-                    const caps = runtime!.router!.getProviderCapabilities!(pid);
-                    return filterCaps.every(c => caps.includes(c));
-                });
-            }
-            return candidates;
-        };
-
+        const existingAssignments = settings.pluginAssignments || [];
         const kinds: CapabilityKind[] = ['generation', 'embedding', 'rerank'];
 
-        listEl.innerHTML = registrations.map((snap: ConsumerSnapshot) => {
-            const pluginId = snap.pluginId;
-            const displayName = snap.displayName || pluginId;
-            const isOnline = snap.session?.online ?? false;
-            const lastSeen = snap.session?.seenAt ? formatTimestamp(snap.session.seenAt) : '-';
+        listEl.innerHTML = registrations
+            .map((snap: ConsumerSnapshot) => {
+                const pluginId = snap.pluginId;
+                const displayName = snap.displayName || pluginId;
+                const isOnline = snap.session?.online ?? false;
+                const lastSeen = snap.session?.seenAt ? formatTimestamp(snap.session.seenAt) : '-';
+                const declaredKinds = new Set<CapabilityKind>();
+                (snap.tasks || []).forEach((task: TaskDescriptor) => declaredKinds.add(task.taskKind));
+                const relevantKinds = kinds.filter((kind: CapabilityKind) => declaredKinds.has(kind));
+                if (relevantKinds.length === 0) relevantKinds.push('generation');
 
-            // 该插件声明的任务所用到的 kinds
-            const declaredKinds = new Set<CapabilityKind>();
-            (snap.tasks || []).forEach((t: TaskDescriptor) => declaredKinds.add(t.taskKind));
-            const relevantKinds = kinds.filter(k => declaredKinds.has(k));
-            if (relevantKinds.length === 0) relevantKinds.push('generation');
+                const existing = existingAssignments.find((item: PluginAssignment) => item.pluginId === pluginId);
+                const kindRows = relevantKinds.map((kind: CapabilityKind) => {
+                    const requiredCaps = new Set<LLMCapability>();
+                    (snap.tasks || [])
+                        .filter((task: TaskDescriptor) => task.taskKind === kind)
+                        .forEach((task: TaskDescriptor) => (task.requiredCapabilities || []).forEach((cap: LLMCapability) => requiredCaps.add(cap)));
 
-            const kindRows = relevantKinds.map(kind => {
-                const existing = existingPluginDefaults.find(d => d.pluginId === pluginId && d.capabilityKind === kind);
-                // 推算该 kind 下需要的最小能力集
-                const tasksOfKind = (snap.tasks || []).filter((t: TaskDescriptor) => t.taskKind === kind);
-                const requiredCaps = new Set<LLMCapability>();
-                tasksOfKind.forEach(t => (t.requiredCapabilities || []).forEach(c => requiredCaps.add(c)));
+                    const selected = kind === 'generation'
+                        ? existing?.generation?.resourceId || ''
+                        : kind === 'embedding'
+                            ? existing?.embedding?.resourceId || ''
+                            : existing?.rerank?.resourceId || '';
 
-                const selectId = `stx-llmhub-plugin-default-${pluginId}-${kind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
-                const providerSelectHtml = buildProviderSharedSelectHtml(
-                    selectId,
-                    existing?.providerId || '',
-                    collectCandidateProviderIds(Array.from(requiredCaps)),
-                    {
-                        'data-plugin-def-provider': pluginId,
-                        'data-plugin-def-kind': kind,
-                    },
-                );
+                    const selectId = `stx-llmhub-plugin-assign-${pluginId}-${kind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+                    const selectHtml = buildResourceSharedSelectHtml(selectId, selected, getSavedResourceOptions(Array.from(requiredCaps)), {
+                        'data-plugin-assign-resource': pluginId,
+                        'data-plugin-assign-kind': kind,
+                    });
+
+                    return `
+                      <div class="stx-ui-field">
+                        <label class="stx-ui-field-label">${getKindLabel(kind)} 资源</label>
+                        ${selectHtml}
+                      </div>`;
+                }).join('');
 
                 return `
-                  <div class="stx-ui-field">
-                    <label class="stx-ui-field-label">${getKindLabel(kind)} 服务商</label>
-                    ${providerSelectHtml}
-                  </div>`;
-            }).join('');
-
-            return `
-              <div class="stx-ui-list-item stx-ui-consumer-map-row" data-plugin-row="${escapeHtml(pluginId)}">
-                <div class="stx-ui-consumer-map-head">
-                  <div class="stx-ui-consumer-map-head-main">
-                    <div class="stx-ui-list-title">
-                      <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                      ${escapeHtml(displayName)} <span class="stx-ui-list-meta">(${escapeHtml(pluginId)})</span>
+                  <div class="stx-ui-list-item stx-ui-consumer-map-row" data-plugin-row="${escapeHtml(pluginId)}">
+                    <div class="stx-ui-consumer-map-head">
+                      <div class="stx-ui-consumer-map-head-main">
+                        <div class="stx-ui-list-title">
+                          <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
+                          ${escapeHtml(displayName)} <span class="stx-ui-list-meta">(${escapeHtml(pluginId)})</span>
+                        </div>
+                      </div>
+                      <div class="stx-ui-list-meta">最后活跃 ${lastSeen}</div>
                     </div>
-                  </div>
-                  <div class="stx-ui-list-meta">最后活跃 ${lastSeen}</div>
-                </div>
-                <div class="stx-ui-consumer-map-form">${kindRows}</div>
-                <div class="stx-ui-consumer-map-actions">
-                  <button class="stx-ui-btn" type="button" data-plugin-def-save="${escapeHtml(pluginId)}">保存</button>
-                  <button class="stx-ui-btn secondary" type="button" data-plugin-def-delete="${escapeHtml(pluginId)}">清除</button>
-                </div>
-              </div>`;
-        }).join('');
+                    <div class="stx-ui-consumer-map-form">${kindRows}</div>
+                    <div class="stx-ui-consumer-map-actions">
+                      <button class="stx-ui-btn" type="button" data-plugin-assign-save="${escapeHtml(pluginId)}">保存</button>
+                      <button class="stx-ui-btn secondary" type="button" data-plugin-assign-delete="${escapeHtml(pluginId)}">清除</button>
+                    </div>
+                  </div>`;
+            })
+            .join('');
 
         hydrateSharedSelects(listEl);
         ensureSharedTooltip();
     };
 
-    // 插件默认列表事件委托
-    document.getElementById(IDS.pluginDefaultsListId)?.addEventListener('click', (evt: Event) => {
+    document.getElementById(IDS.pluginAssignListId)?.addEventListener('click', (evt: Event) => {
         const target = evt.target as HTMLElement;
-        const saveBtn = target.closest<HTMLButtonElement>('button[data-plugin-def-save]');
-        const deleteBtn = target.closest<HTMLButtonElement>('button[data-plugin-def-delete]');
-        const pluginId = String(saveBtn?.dataset.pluginDefSave || deleteBtn?.dataset.pluginDefDelete || '').trim();
+        const saveBtn = target.closest<HTMLButtonElement>('button[data-plugin-assign-save]');
+        const deleteBtn = target.closest<HTMLButtonElement>('button[data-plugin-assign-delete]');
+        const pluginId = String(saveBtn?.dataset.pluginAssignSave || deleteBtn?.dataset.pluginAssignDelete || '').trim();
         if (!pluginId) return;
 
         const settings = ensureSettings();
-        let pluginDefaults = (settings.pluginDefaults || []).filter(d => d.pluginId !== pluginId);
+        let assignments = (settings.pluginAssignments || []).filter((item: PluginAssignment) => item.pluginId !== pluginId);
 
         if (saveBtn) {
             const row = document.querySelector(`[data-plugin-row="${pluginId}"]`);
             if (!row) return;
-            const selects = row.querySelectorAll<HTMLSelectElement>('select[data-plugin-def-provider]');
-            selects.forEach(sel => {
-                const kind = sel.dataset.pluginDefKind as CapabilityKind;
-                const providerId = sel.value.trim();
-                if (providerId && kind) {
-                    pluginDefaults.push({ pluginId, capabilityKind: kind, providerId });
-                }
+            const next: PluginAssignment = { pluginId };
+            const selects = row.querySelectorAll<HTMLSelectElement>('select[data-plugin-assign-resource]');
+            selects.forEach((sel: HTMLSelectElement) => {
+                const kind = sel.dataset.pluginAssignKind as CapabilityKind;
+                const resourceId = sel.value.trim();
+                if (!resourceId) return;
+                if (kind === 'generation') next.generation = { resourceId };
+                if (kind === 'embedding') next.embedding = { resourceId };
+                if (kind === 'rerank') next.rerank = { resourceId };
             });
+            if (next.generation || next.embedding || next.rerank) assignments.push(next);
         }
 
-        settings.pluginDefaults = pluginDefaults;
+        settings.pluginAssignments = assignments;
         saveSettings();
-        runtime?.router?.applyPluginDefaults?.(pluginDefaults);
+        runtime?.router?.applyPluginAssignments?.(assignments);
     });
 
-    document.getElementById(IDS.pluginDefaultsRefreshBtnId)?.addEventListener('click', renderPluginDefaults);
+    document.getElementById(IDS.pluginAssignRefreshBtnId)?.addEventListener('click', renderPluginAssignments);
 
-    // ══════════════════════════════════════
-    //  View C: 任务覆盖
-    // ══════════════════════════════════════
-
-    const renderTaskOverrides = (): void => {
-        const listEl = document.getElementById(IDS.taskOverridesListId);
+    const renderTaskAssignments = (): void => {
+        const listEl = document.getElementById(IDS.taskAssignListId);
         if (!listEl) return;
 
         const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
@@ -983,140 +1755,117 @@ function bindUiEvents(): void {
         }
 
         const settings = ensureSettings();
-        const existingOverrides = settings.taskOverrides || [];
-        const providerIds = getProviderIds();
+        const existingAssignments = settings.taskAssignments || [];
 
-        const collectCandidateProviderIds = (requiredCaps: LLMCapability[]): string[] => {
-            let candidates = providerIds;
-            if (requiredCaps.length > 0 && runtime?.router?.getProviderCapabilities) {
-                candidates = candidates.filter(pid => {
-                    const caps = runtime!.router!.getProviderCapabilities!(pid);
-                    return requiredCaps.every(c => caps.includes(c));
+        listEl.innerHTML = allTasks
+            .map(({ pluginId, displayName, task, isOnline }) => {
+                const existing = existingAssignments.find((item: TaskAssignment) => item.pluginId === pluginId && item.taskId === task.taskId);
+                const isStale = existing?.isStale === true;
+                const staleHtml = isStale
+                    ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
+                    : '';
+                const key = `${pluginId}::${task.taskId}`;
+                const selectId = `stx-llmhub-task-assign-${pluginId}-${task.taskId}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+                const selectHtml = buildResourceSharedSelectHtml(selectId, existing?.resourceId || '', getSavedResourceOptions(task.requiredCapabilities || []), {
+                    'data-task-assign-resource': key,
                 });
-            }
-            return candidates;
-        };
 
-        listEl.innerHTML = allTasks.map(({ pluginId, displayName, task, isOnline }) => {
-            const existing = existingOverrides.find(o => o.pluginId === pluginId && o.taskId === task.taskId);
-            const isStale = existing?.isStale === true;
-            const staleHtml = isStale
-                ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
-                : '';
-            const key = `${pluginId}::${task.taskId}`;
-            const selectId = `stx-llmhub-task-override-${pluginId}-${task.taskId}`.replace(/[^a-zA-Z0-9_-]/g, '-');
-            const providerSelectHtml = buildProviderSharedSelectHtml(
-                selectId,
-                existing?.providerId || '',
-                collectCandidateProviderIds(task.requiredCapabilities || []),
-                {
-                    'data-task-override-provider': key,
-                },
-            );
-
-            return `
-              <div class="stx-ui-list-item stx-ui-consumer-map-row" data-task-row="${escapeHtml(key)}">
-                <div class="stx-ui-consumer-map-head">
-                  <div class="stx-ui-consumer-map-head-main">
-                    <div class="stx-ui-list-title">
-                      <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                      ${escapeHtml(displayName)} / ${escapeHtml(task.taskId)}
+                return `
+                  <div class="stx-ui-list-item stx-ui-consumer-map-row" data-task-row="${escapeHtml(key)}">
+                    <div class="stx-ui-consumer-map-head">
+                      <div class="stx-ui-consumer-map-head-main">
+                        <div class="stx-ui-list-title">
+                          <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
+                          ${escapeHtml(displayName)} / ${escapeHtml(task.taskId)}
+                        </div>
+                        <div class="stx-ui-list-meta">
+                          类型=${getKindLabel(task.taskKind)}
+                          ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
+                          ${task.backgroundEligible ? '，可静默' : ''}
+                        </div>
+                        ${staleHtml}
+                      </div>
                     </div>
-                    <div class="stx-ui-list-meta">
-                      类型=${getKindLabel(task.taskKind)}
-                      ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
-                      ${task.backgroundEligible ? '，可静默' : ''}
+                    <div class="stx-ui-consumer-map-form">
+                      <div class="stx-ui-field">
+                        <label class="stx-ui-field-label">资源</label>
+                        ${selectHtml}
+                      </div>
                     </div>
-                    ${staleHtml}
-                  </div>
-                </div>
-                <div class="stx-ui-consumer-map-form">
-                  <div class="stx-ui-field">
-                    <label class="stx-ui-field-label">服务商</label>
-                    ${providerSelectHtml}
-                  </div>
-                  <div class="stx-ui-field">
-                    <label class="stx-ui-field-label">模型</label>
-                    <input class="stx-ui-input stx-ui-input-full" type="text" data-task-override-model="${escapeHtml(key)}" value="${escapeHtml(existing?.model || '')}" placeholder="留空跟随默认" />
-                  </div>
-                </div>
-                <div class="stx-ui-consumer-map-actions">
-                  <button class="stx-ui-btn" type="button" data-task-override-save="${escapeHtml(key)}" data-task-kind="${task.taskKind}">保存</button>
-                  <button class="stx-ui-btn secondary" type="button" data-task-override-delete="${escapeHtml(key)}">清除</button>
-                </div>
-              </div>`;
-        }).join('');
+                    <div class="stx-ui-consumer-map-actions">
+                      <button class="stx-ui-btn" type="button" data-task-assign-save="${escapeHtml(key)}" data-task-kind="${task.taskKind}">保存</button>
+                      <button class="stx-ui-btn secondary" type="button" data-task-assign-delete="${escapeHtml(key)}">清除</button>
+                    </div>
+                  </div>`;
+            })
+            .join('');
 
         hydrateSharedSelects(listEl);
         ensureSharedTooltip();
     };
 
-    // 任务覆盖事件委托
-    document.getElementById(IDS.taskOverridesListId)?.addEventListener('click', (evt: Event) => {
+    document.getElementById(IDS.taskAssignListId)?.addEventListener('click', (evt: Event) => {
         const target = evt.target as HTMLElement;
-        const saveBtn = target.closest<HTMLButtonElement>('button[data-task-override-save]');
-        const deleteBtn = target.closest<HTMLButtonElement>('button[data-task-override-delete]');
-        const key = String(saveBtn?.dataset.taskOverrideSave || deleteBtn?.dataset.taskOverrideDelete || '').trim();
+        const saveBtn = target.closest<HTMLButtonElement>('button[data-task-assign-save]');
+        const deleteBtn = target.closest<HTMLButtonElement>('button[data-task-assign-delete]');
+        const key = String(saveBtn?.dataset.taskAssignSave || deleteBtn?.dataset.taskAssignDelete || '').trim();
         if (!key) return;
 
         const [pluginId, taskId] = key.split('::');
         if (!pluginId || !taskId) return;
 
         const settings = ensureSettings();
-        let overrides = (settings.taskOverrides || []).filter(o => !(o.pluginId === pluginId && o.taskId === taskId));
+        let assignments = (settings.taskAssignments || []).filter((item: TaskAssignment) => !(item.pluginId === pluginId && item.taskId === taskId));
 
         if (saveBtn) {
-            const providerEl = document.querySelector<HTMLSelectElement>(`select[data-task-override-provider="${key}"]`);
-            const modelEl = document.querySelector<HTMLInputElement>(`input[data-task-override-model="${key}"]`);
-            const providerId = providerEl?.value.trim() || '';
-            const model = modelEl?.value.trim() || '';
+            const resourceEl = document.querySelector<HTMLSelectElement>(`select[data-task-assign-resource="${key}"]`);
+            const resourceId = resourceEl?.value.trim() || '';
             const taskKind = (saveBtn.dataset.taskKind || 'generation') as CapabilityKind;
 
-            if (providerId) {
-                // 前端能力校验: 检查 provider 是否满足该任务的 requiredCapabilities
+            if (resourceId) {
                 const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
                 let taskDesc: TaskDescriptor | undefined;
                 for (const snap of registrations) {
-                    taskDesc = snap.tasks?.find((t: TaskDescriptor) => t.taskId === taskId);
+                    taskDesc = snap.tasks?.find((task: TaskDescriptor) => task.taskId === taskId);
                     if (taskDesc) break;
                 }
-                if (taskDesc?.requiredCapabilities?.length && runtime?.router?.getProviderCapabilities) {
-                    const provCaps = runtime.router.getProviderCapabilities(providerId);
-                    const missing = taskDesc.requiredCapabilities.filter(c => !provCaps.includes(c));
+
+                if (taskDesc?.requiredCapabilities?.length) {
+                    const resource = getSavedResources().find((item: ResourceConfig) => item.id === resourceId);
+                    const resourceCaps = resource ? normalizeResourceCapabilities(resource) : [];
+                    const missing = taskDesc.requiredCapabilities.filter((cap: LLMCapability) => !resourceCaps.includes(cap));
                     if (missing.length > 0) {
-                        alert(`服务商 "${providerId}" 缺少所需能力: ${missing.join(', ')}。无法保存。`);
+                        alert(`资源 "${resourceId}" 缺少所需能力: ${missing.join(', ')}。无法保存。`);
                         return;
                     }
                 }
-                overrides.push({ pluginId, taskId, taskKind, providerId, model: model || undefined, isStale: false });
+
+                assignments.push({
+                    pluginId,
+                    taskId,
+                    taskKind,
+                    resourceId,
+                    isStale: false,
+                });
             }
         }
 
-        settings.taskOverrides = overrides;
+        settings.taskAssignments = assignments;
         saveSettings();
-        runtime?.router?.applyTaskOverrides?.(overrides);
+        runtime?.router?.applyTaskAssignments?.(assignments);
     });
 
-    document.getElementById(IDS.taskOverridesRefreshBtnId)?.addEventListener('click', renderTaskOverrides);
+    document.getElementById(IDS.taskAssignRefreshBtnId)?.addEventListener('click', renderTaskAssignments);
 
-    /**
-     * 功能：统一刷新依赖 consumer 注册表的设置视图。
-     * 返回：
-     *   void：无返回值。
-     */
     const renderConsumerDrivenViews = (): void => {
-        renderPluginDefaults();
-        renderTaskOverrides();
+        renderPluginAssignments();
+        renderTaskAssignments();
     };
 
     LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE?.();
     LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE = runtime?.registry?.subscribe?.((): void => {
         renderConsumerDrivenViews();
     }) || null;
-
-    // ══════════════════════════════════════
-    //  预算规则
-    // ══════════════════════════════════════
 
     const budgetConsumerEl = document.getElementById(IDS.budgetConsumerId) as HTMLInputElement | null;
     const budgetMaxRpmEl = document.getElementById(IDS.budgetMaxRpmId) as HTMLInputElement | null;
@@ -1167,7 +1916,10 @@ function bindUiEvents(): void {
 
     budgetSaveBtn?.addEventListener('click', () => {
         const consumer = (budgetConsumerEl?.value || '').trim();
-        if (!consumer) { alert('请填写预算的调用方'); return; }
+        if (!consumer) {
+            alert('请填写预算的调用方');
+            return;
+        }
         const config: BudgetConfig = {};
         const maxRPM = parseOptionalNumber(budgetMaxRpmEl?.value || '');
         const maxTokens = parseOptionalNumber(budgetMaxTokensEl?.value || '');
@@ -1203,39 +1955,34 @@ function bindUiEvents(): void {
         renderBudgets();
     });
 
-    // ══════════════════════════════════════
-    //  队列快照
-    // ══════════════════════════════════════
-
     const renderQueueSnapshot = (): void => {
         const listEl = document.getElementById(IDS.queueSnapshotListId);
         if (!listEl) return;
-
         const snapshot = runtime?.orchestrator?.getQueueSnapshot?.();
-        if (!snapshot) { listEl.innerHTML = '<div class="stx-ui-list-empty">编排器未就绪</div>'; return; }
+        if (!snapshot) {
+            listEl.innerHTML = '<div class="stx-ui-list-empty">编排器未就绪</div>';
+            return;
+        }
 
         const items: string[] = [];
-
-        // 当前执行中
         if (snapshot.active) {
-            const a = snapshot.active;
+            const active = snapshot.active;
             items.push(`
               <div class="stx-ui-list-item">
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(a.consumer)} / ${escapeHtml(a.taskId)}</div>
-                  <div class="stx-ui-list-meta">ID: ${escapeHtml(a.requestId.slice(0, 8))}...</div>
+                  <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(active.taskId)}</div>
+                  <div class="stx-ui-list-meta">ID: ${escapeHtml(active.requestId.slice(0, 8))}...</div>
                 </div>
-                <span class="stx-ui-state-badge ${getStateBadgeClass(a.state)}">${STATE_LABELS[a.state] || a.state}</span>
+                <span class="stx-ui-state-badge ${getStateBadgeClass(active.state)}">${STATE_LABELS[active.state] || active.state}</span>
               </div>`);
         }
 
-        // 排队中
-        for (const p of snapshot.pending) {
+        for (const pending of snapshot.pending) {
             items.push(`
               <div class="stx-ui-list-item">
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(p.consumer)} / ${escapeHtml(p.taskId)}</div>
-                  <div class="stx-ui-list-meta">ID: ${escapeHtml(p.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(p.queuedAt)}</div>
+                  <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(pending.taskId)}</div>
+                  <div class="stx-ui-list-meta">ID: ${escapeHtml(pending.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(pending.queuedAt)}</div>
                 </div>
                 <span class="stx-ui-state-badge is-queued">排队中</span>
               </div>`);
@@ -1244,32 +1991,27 @@ function bindUiEvents(): void {
         listEl.innerHTML = items.length > 0 ? items.join('') : '<div class="stx-ui-list-empty">队列为空</div>';
     };
 
-    // ─── 最近记录 ───
-
     const renderRecentHistory = (): void => {
         const listEl = document.getElementById(IDS.recentHistoryListId);
         if (!listEl) return;
-
         const snapshot = runtime?.orchestrator?.getQueueSnapshot?.();
         if (!snapshot || !snapshot.recentHistory.length) {
             listEl.innerHTML = '<div class="stx-ui-list-empty">暂无记录</div>';
             return;
         }
 
-        listEl.innerHTML = snapshot.recentHistory.slice().reverse().map(r => `
+        listEl.innerHTML = snapshot.recentHistory.slice().reverse().map((item) => `
           <div class="stx-ui-list-item">
             <div>
-              <div class="stx-ui-list-title">${escapeHtml(r.consumer)} / ${escapeHtml(r.taskId)}</div>
+              <div class="stx-ui-list-title">${escapeHtml(item.consumer)} / ${escapeHtml(item.taskId)}</div>
               <div class="stx-ui-list-meta">
-                ID: ${escapeHtml(r.requestId.slice(0, 8))}...
-                ${r.finishedAt ? ` | 完成 ${formatTimestamp(r.finishedAt)}` : ''}
+                ID: ${escapeHtml(item.requestId.slice(0, 8))}...
+                ${item.finishedAt ? ` | 完成 ${formatTimestamp(item.finishedAt)}` : ''}
               </div>
             </div>
-            <span class="stx-ui-state-badge ${getStateBadgeClass(r.state)}">${STATE_LABELS[r.state] || r.state}</span>
+            <span class="stx-ui-state-badge ${getStateBadgeClass(item.state)}">${STATE_LABELS[item.state] || item.state}</span>
           </div>`).join('');
     };
-
-    // ─── 静默权限 ───
 
     const renderSilentPermissions = (): void => {
         const listEl = document.getElementById(IDS.silentPermissionsListId);
@@ -1281,13 +2023,13 @@ function bindUiEvents(): void {
             return;
         }
 
-        listEl.innerHTML = permissions.map(p => `
+        listEl.innerHTML = permissions.map((permission) => `
           <div class="stx-ui-list-item">
             <div>
-              <div class="stx-ui-list-title">${escapeHtml(p.pluginId)} / ${escapeHtml(p.taskId)}</div>
-              <div class="stx-ui-list-meta">授权于 ${formatTimestamp(p.grantedAt)}</div>
+              <div class="stx-ui-list-title">${escapeHtml(permission.pluginId)} / ${escapeHtml(permission.taskId)}</div>
+              <div class="stx-ui-list-meta">授权于 ${formatTimestamp(permission.grantedAt)}</div>
             </div>
-            <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(p.pluginId)}::${escapeHtml(p.taskId)}">撤销</button>
+            <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(permission.pluginId)}::${escapeHtml(permission.taskId)}">撤销</button>
           </div>`).join('');
     };
 
@@ -1298,7 +2040,6 @@ function bindUiEvents(): void {
         const [pluginId, taskId] = key.split('::');
         if (!pluginId || !taskId) return;
         runtime?.displayController?.revokeSilentPermission?.(pluginId, taskId);
-        // 持久化
         const settings = ensureSettings();
         settings.silentPermissions = runtime?.displayController?.exportSilentPermissions?.() || [];
         saveSettings();
@@ -1311,50 +2052,13 @@ function bindUiEvents(): void {
         renderSilentPermissions();
     });
 
-    // ══════════════════════════════════════
-    //  凭据金库
-    // ══════════════════════════════════════
-
-    const vaultSaveBtn = document.getElementById(IDS.vaultSaveBtnId);
-    const vaultClearBtn = document.getElementById(IDS.vaultClearBtnId);
-    const vaultServiceSelect = document.getElementById(IDS.vaultAddServiceId) as HTMLSelectElement | null;
-    const vaultKeyInput = document.getElementById(IDS.vaultApiKeyId) as HTMLInputElement | null;
-
-    if (vaultSaveBtn && vaultServiceSelect && vaultKeyInput) {
-        vaultSaveBtn.addEventListener('click', async () => {
-            const provider = vaultServiceSelect.value;
-            const apiKey = vaultKeyInput.value.trim();
-            if (!apiKey) { alert('API Key 不能为空'); return; }
-            try {
-                if (!runtime?.saveCredential) throw new Error('LLMHub Runtime 未就绪');
-                await runtime.saveCredential(provider, apiKey);
-                vaultKeyInput.value = '';
-                alert(`已保存 ${provider} 的凭据`);
-            } catch (error) {
-                console.error('保存凭据失败:', error);
-                alert('保存凭据失败，请查看控制台');
-            }
-        });
-    }
-
-    if (vaultClearBtn) {
-        vaultClearBtn.addEventListener('click', async () => {
-            if (!confirm('确定清空全部凭据吗？')) return;
-            try {
-                if (!runtime?.clearAllCredentials) throw new Error('LLMHub Runtime 未就绪');
-                await runtime.clearAllCredentials();
-                alert('已清空全部凭据');
-            } catch (error) {
-                console.error('清空凭据失败:', error);
-                alert('清空凭据失败，请查看控制台');
-            }
-        });
-    }
-
-    // ─── 初始化渲染 ───
-
-    refreshAllProviderSelects();
-    restoreGlobalDefaultsToUI();
+    const resources = getSavedResources();
+    loadResourceIntoEditor(null, false);
+    renderCustomParamRows();
+    renderTavernConnectionInfo();
+    renderResourceList();
+    refreshAllResourceSelects();
+    restoreGlobalAssignmentsToUI();
     renderConsumerDrivenViews();
     renderBudgets();
 }

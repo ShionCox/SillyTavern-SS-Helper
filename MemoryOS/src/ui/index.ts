@@ -4,9 +4,11 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { request, subscribe, broadcast, logger, toast } from '../index';
-import { getHealthSnapshot, onHealthChange, setAiModeEnabled } from '../llm/ai-health-center';
-import { runAiSelfTests } from '../llm/ai-self-test';
-import type { MemoryAiHealthSnapshot } from '../llm/ai-health-types';
+import { getHealthSnapshot, onHealthChange, refreshHealthSnapshot, setAiModeEnabled } from '../llm/ai-health-center';
+import { runAiSelfTests, runSingleSelfTest } from '../llm/ai-self-test';
+import type { AiSelfTestResult } from '../llm/ai-self-test';
+import type { MemoryAiHealthSnapshot, MemoryAiTaskId } from '../llm/ai-health-types';
+import type { RoutePreviewSnapshot } from '../../../SDK/stx';
 import { openRecordEditor } from './recordEditor';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
@@ -129,8 +131,12 @@ const IDS: MemoryOSSettingsIds = {
     aiDiagCapabilitiesId: `${NAMESPACE}-ai-diag-capabilities`,
     aiDiagRecentTasksId: `${NAMESPACE}-ai-diag-recent-tasks`,
     aiDiagRefreshBtnId: `${NAMESPACE}-ai-diag-refresh`,
+    aiRoutePreviewId: `${NAMESPACE}-ai-route-preview`,
+    aiSelfTestSelectId: `${NAMESPACE}-ai-self-test-select`,
+    aiSelfTestRunBtnId: `${NAMESPACE}-ai-self-test-run`,
     aiSelfTestAllBtnId: `${NAMESPACE}-ai-self-test-all`,
     aiSelfTestResultsId: `${NAMESPACE}-ai-self-test-results`,
+    aiSelfTestDetailId: `${NAMESPACE}-ai-self-test-detail`,
 };
 
 /**
@@ -194,6 +200,22 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
             reject(new Error(`Timeout waiting for ${selector}`));
         }, timeout);
     });
+}
+
+/**
+ * 功能：转义 HTML 文本，避免将测试结果中的原始内容直接注入页面。
+ * 参数：
+ *   input：待转义的原始文本。
+ * 返回：
+ *   string：可安全插入 HTML 的文本。
+ */
+function escapeHtml(input: string): string {
+    return String(input ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -938,39 +960,360 @@ function bindUiEvents() {
     // ==========================================
 
     const aiDiagOverviewEl = document.getElementById(IDS.aiDiagOverviewId);
+    const aiRoutePreviewEl = document.getElementById(IDS.aiRoutePreviewId);
     const aiDiagCapabilitiesEl = document.getElementById(IDS.aiDiagCapabilitiesId);
     const aiDiagRecentTasksEl = document.getElementById(IDS.aiDiagRecentTasksId);
-    const aiDiagRefreshBtn = document.getElementById(IDS.aiDiagRefreshBtnId);
-    const aiSelfTestAllBtn = document.getElementById(IDS.aiSelfTestAllBtnId);
+    const aiDiagRefreshBtn = document.getElementById(IDS.aiDiagRefreshBtnId) as HTMLButtonElement | null;
+    const aiSelfTestSelectEl = document.getElementById(IDS.aiSelfTestSelectId) as HTMLSelectElement | null;
+    const aiSelfTestRunBtn = document.getElementById(IDS.aiSelfTestRunBtnId) as HTMLButtonElement | null;
+    const aiSelfTestAllBtn = document.getElementById(IDS.aiSelfTestAllBtnId) as HTMLButtonElement | null;
     const aiSelfTestResultsEl = document.getElementById(IDS.aiSelfTestResultsId);
+    const aiSelfTestDetailEl = document.getElementById(IDS.aiSelfTestDetailId);
 
-    const TASK_LABELS: Record<string, string> = {
+    const TASK_ORDER: MemoryAiTaskId[] = [
+        'memory.summarize',
+        'memory.extract',
+        'world.template.build',
+        'memory.vector.embed',
+        'memory.search.rerank',
+    ];
+    const TASK_LABELS: Record<MemoryAiTaskId, string> = {
         'memory.summarize': '摘要',
         'memory.extract': '抽取',
         'world.template.build': '模板构建',
         'memory.vector.embed': '向量化',
         'memory.search.rerank': '重排',
     };
+    const RESOLVED_BY_LABELS: Record<NonNullable<RoutePreviewSnapshot['resolvedBy']>, string> = {
+        route_hint: '路由提示',
+        user_task_override: '任务覆盖',
+        plugin_task_recommend: '插件推荐',
+        user_plugin_default: '插件默认',
+        user_global_default: '全局默认',
+        builtin_tavern_fallback: '内置酒馆回退',
+        fallback: '回退路由',
+    };
 
-    const refreshAiDiagnostics = (): void => {
-        const snapshot: MemoryAiHealthSnapshot = getHealthSnapshot();
+    let lastAiSelfTestResults: AiSelfTestResult[] = [];
+    let lastAiSelfTestDetail: AiSelfTestResult | null = null;
+    let aiSingleTestRunning = false;
+    let aiBatchTestRunning = false;
 
-        // 总览
-        if (aiDiagOverviewEl) {
-            const diagIcon = snapshot.diagnosisLevel === 'fully_operational' ? '✅'
-                : snapshot.diagnosisLevel === 'online_partial_capabilities' ? '⚠️'
-                : snapshot.diagnosisLevel === 'mounted_not_registered' ? '🔸'
-                : '❌';
-            const lines: string[] = [
-                `${diagIcon} ${snapshot.diagnosisText}`,
-                `LLMHub 挂载: ${snapshot.llmHubMounted ? '是' : '否'}`,
-                `Consumer 注册: ${snapshot.consumerRegistered ? '已注册' : '未注册'}`,
-                `AI 模式: ${snapshot.aiModeEnabled ? '启用' : '关闭'}`,
-            ];
-            aiDiagOverviewEl.textContent = lines.join('\n');
+    /**
+     * 功能：读取当前单项自测下拉框中选中的任务。
+     * 参数：无。
+     * 返回：
+     *   MemoryAiTaskId：当前选中的任务 ID。
+     */
+    function getSelectedAiSelfTestTaskId(): MemoryAiTaskId {
+        const fallbackTaskId: MemoryAiTaskId = 'memory.summarize';
+        const currentValue = String(aiSelfTestSelectEl?.value || fallbackTaskId);
+        return (TASK_ORDER.find((taskId: MemoryAiTaskId) => taskId === currentValue) || fallbackTaskId) as MemoryAiTaskId;
+    }
+
+    /**
+     * 功能：将路由命中来源转换成更易读的中文标签。
+     * 参数：
+     *   resolvedBy：路由命中来源。
+     * 返回：
+     *   string：中文说明文本。
+     */
+    function formatResolvedBy(resolvedBy?: RoutePreviewSnapshot['resolvedBy']): string {
+        if (!resolvedBy) return '未命中';
+        return RESOLVED_BY_LABELS[resolvedBy] || resolvedBy;
+    }
+
+    /**
+     * 功能：将资源来源转换为中文显示文本。
+     * 参数：
+     *   source：资源来源类型。
+     * 返回：
+     *   string：中文来源说明。
+     */
+    function formatResourceSource(source?: AiSelfTestResult['source']): string {
+        if (source === 'tavern') return '酒馆';
+        if (source === 'custom') return '自定义';
+        return '未知';
+    }
+
+    /**
+     * 功能：格式化资源显示名称，优先显示标签，必要时补上资源 ID。
+     * 参数：
+     *   resourceId：资源 ID。
+     *   resourceLabel：资源显示名称。
+     * 返回：
+     *   string：格式化后的资源文本。
+     */
+    function formatResourceText(resourceId?: string, resourceLabel?: string): string {
+        if (resourceLabel && resourceId && resourceLabel !== resourceId) {
+            return `${resourceLabel} (${resourceId})`;
+        }
+        return resourceLabel || resourceId || '未分配';
+    }
+
+    /**
+     * 功能：对测试结果数组按固定任务顺序排序，便于稳定展示。
+     * 参数：
+     *   results：原始测试结果数组。
+     * 返回：
+     *   AiSelfTestResult[]：排序后的结果数组。
+     */
+    function sortAiSelfTestResults(results: AiSelfTestResult[]): AiSelfTestResult[] {
+        return [...results].sort((left: AiSelfTestResult, right: AiSelfTestResult): number => {
+            return TASK_ORDER.indexOf(left.taskId) - TASK_ORDER.indexOf(right.taskId);
+        });
+    }
+
+    /**
+     * 功能：格式化单条路由预览文本。
+     * 参数：
+     *   label：路由名称。
+     *   route：路由预览结果。
+     * 返回：
+     *   string：可直接写入预格式化容器的文本。
+     */
+    function formatRoutePreview(label: string, route: RoutePreviewSnapshot | null): string {
+        if (!route) {
+            return `
+                <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:4px; opacity:0.8; display:flex; align-items:center; gap:8px;">
+                    <span style="font-weight:600; font-size:12px;">${label}</span>
+                    <span style="font-size:10px; padding:1px 4px; border-radius:4px; font-weight:normal; background:rgba(255,255,255,0.1);">未获得预览</span>
+                </div>
+            `;
         }
 
-        // 能力状态
+        const isOk = route.available;
+        const statusColor = isOk ? 'var(--stx-memory-success, #4caf50)' : 'var(--stx-memory-danger-contrast, #f44336)';
+        const statusBg = isOk ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)';
+        const statusText = isOk ? '可用' : '不可用';
+        
+        const resourceStr = formatResourceText(route.resourceId, route.resourceLabel);
+        const typeStr = route.resourceType ? (route.resourceType === 'generation' ? '生成' : route.resourceType === 'embedding' ? '向量化' : '重排列') : '未知';
+        const modelStr = route.model || '未设置';
+        const sourceStr = formatResourceSource(route.source);
+        const resolvedByStr = formatResolvedBy(route.resolvedBy);
+        
+        let blockHtml = '';
+        if (route.blockedReason) {
+             blockHtml = `<div style="width:100%; margin-top:2px; color:var(--stx-memory-danger-contrast, #f44336); font-size:10px;">阻塞原因：${route.blockedReason}</div>`;
+        }
+        
+        return `
+            <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:4px;">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; line-height:1;">
+                    <span style="font-weight:600; font-size:12px;">${label}</span>
+                    <span style="font-size:10px; padding:1px 4px; border-radius:4px; background:${statusBg}; color:${statusColor}; border:1px solid ${statusBg}; min-width:max-content;">${statusText}</span>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; opacity:0.85;">
+                    <div>资源：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${resourceStr}</strong></div>
+                    <div>模型：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${modelStr}</strong></div>
+                    <div>类型：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${typeStr}</strong></div>
+                    <div>规则：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${resolvedByStr}</strong></div>
+                    <div>来源：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${sourceStr}</strong></div>
+                    ${blockHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：在“当前测试路由”区域渲染三类能力的命中结果。
+     * 参数：
+     *   snapshot：当前健康快照。
+     * 返回：
+     *   void：无返回值。
+     */
+    function renderAiRoutePreview(snapshot: MemoryAiHealthSnapshot): void {
+        if (!aiRoutePreviewEl) return;
+        const html = `
+            <div style="display:flex; flex-direction:column; gap:4px;">
+                ${formatRoutePreview('生成路由', snapshot.routeOverview.generation)}
+                ${formatRoutePreview('向量路由', snapshot.routeOverview.embedding)}
+                ${formatRoutePreview('重排路由', snapshot.routeOverview.rerank)}
+            </div>
+        `;
+        aiRoutePreviewEl.innerHTML = html;
+    }
+
+    /**
+     * 功能：渲染单项测试的详情区，展示返回预览、资源与错误信息。
+     * 参数：
+     *   result：当前要展示的测试结果。
+     *   snapshot：最新健康快照。
+     * 返回：
+     *   void：无返回值。
+     */
+    function renderAiSelfTestDetail(
+        result: AiSelfTestResult | null,
+        snapshot: MemoryAiHealthSnapshot,
+    ): void {
+        if (!aiSelfTestDetailEl) return;
+        const selectedTaskId = getSelectedAiSelfTestTaskId();
+        const selectedRoute = snapshot.taskRoutes[selectedTaskId];
+
+        const buildBlockHtml = (title: string, detailsHtml: string, preHtml: string, isOk: boolean | null) => {
+            const statusColor = isOk === true ? 'var(--stx-memory-success, #4caf50)' : isOk === false ? 'var(--stx-memory-danger-contrast, #f44336)' : 'var(--ss-theme-text, #ccc)';
+            const statusBg = isOk === true ? 'rgba(76, 175, 80, 0.15)' : isOk === false ? 'rgba(244, 67, 54, 0.15)' : 'rgba(255, 255, 255, 0.1)';
+            const statusText = isOk === true ? '成功' : isOk === false ? '失败' : '未运行';
+
+            return `
+                <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:4px;">
+                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+                        <span style="font-weight:600; font-size:12px;">${title}</span>
+                        <span style="font-size:10px; padding:1px 4px; border-radius:4px; background:${statusBg}; color:${statusColor}; border:1px solid ${statusBg}; min-width:max-content;">${statusText}</span>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; opacity:0.85; margin-bottom:8px;">
+                        ${detailsHtml}
+                    </div>
+                    <div style="font-size:11px; opacity:0.9;">
+                        <div style="font-weight:600; margin-bottom:4px; font-size:10px; opacity:0.6;">返回预览：</div>
+                        <div style="background:rgba(0,0,0,0.3); padding:6px; border-radius:4px; font-family:monospace; white-space:pre-wrap; word-break:break-all;">${preHtml}</div>
+                    </div>
+                </div>
+            `;
+        };
+
+        if (!result) {
+            const detailsHtml = `
+                <div>可测：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${selectedRoute?.available ? '是' : '否'}</strong></div>
+                <div>资源：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${formatResourceText(selectedRoute?.route?.resourceId, selectedRoute?.route?.resourceLabel)}</strong></div>
+                <div>模型：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${selectedRoute?.route?.model || '未设'}</strong></div>
+                <div>规则：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${formatResolvedBy(selectedRoute?.route?.resolvedBy)}</strong></div>
+                ${selectedRoute?.blockedReason ? `<div style="width:100%; color:var(--stx-memory-danger-contrast, #f44336); margin-top:2px;">阻塞原因：${selectedRoute.blockedReason}</div>` : ''}
+            `;
+            aiSelfTestDetailEl.innerHTML = buildBlockHtml(`任务：${TASK_LABELS[selectedTaskId]}`, detailsHtml, '尚未运行该测试。', null);
+            return;
+        }
+
+        const detailsHtml = `
+            <div>耗时：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${result.durationMs}ms</strong></div>
+            <div>资源：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${formatResourceText(result.resourceId, result.resourceLabel)}</strong></div>
+            <div>模型：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${result.model || '未设'}</strong></div>
+            <div>规则：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${formatResolvedBy(result.resolvedBy as RoutePreviewSnapshot['resolvedBy'])}</strong></div>
+            <div>来源：<strong style="color:var(--stx-memory-text, inherit);font-weight:500;">${formatResourceSource(result.source)}</strong></div>
+            ${result.detail ? `<div style="width:100%; margin-top:2px;">说明：${result.detail}</div>` : ''}
+            ${result.blockedReason ? `<div style="width:100%; margin-top:2px; color:var(--stx-memory-danger-contrast, #f44336);">阻塞原因：${result.blockedReason}</div>` : ''}
+            ${result.error ? `<div style="width:100%; margin-top:2px; color:var(--stx-memory-danger-contrast, #f44336);">错误：${result.error}</div>` : ''}
+        `;
+        aiSelfTestDetailEl.innerHTML = buildBlockHtml(`任务：${TASK_LABELS[result.taskId]}`, detailsHtml, escapeHtml(result.responsePreview || '本次测试没有可展示的返回内容。'), result.ok);
+    }
+
+    /**
+     * 功能：渲染自测结果列表，并允许用户点击某项查看详情。
+     * 参数：
+     *   results：最近一次要展示的结果数组。
+     * 返回：
+     *   void：无返回值。
+     */
+    function renderAiSelfTestResults(results: AiSelfTestResult[]): void {
+        if (!aiSelfTestResultsEl) return;
+        if (!results.length) {
+            aiSelfTestResultsEl.textContent = '尚未运行自测。请选择单项测试，或点击“运行全部自测”。';
+            return;
+        }
+        const passCount = results.filter((result: AiSelfTestResult) => result.ok).length;
+        const summaryHtml = `<div style="margin-bottom:10px;font-size:12px;color:var(--ss-theme-text, #ccc);">最近一次测试：${passCount}/${results.length} 项成功。点击下方条目可查看详情。</div>`;
+        const itemsHtml = results.map((result: AiSelfTestResult, index: number): string => {
+            const isActive = lastAiSelfTestDetail === result;
+            const metaParts: string[] = [
+                `${result.durationMs}ms`,
+                formatResourceText(result.resourceId, result.resourceLabel),
+                result.model || '未设模型',
+            ];
+            const subText = result.error || result.blockedReason || result.detail || '执行完成';
+            return `
+                <button
+                    type="button"
+                    data-ai-self-test-index="${index}"
+                    style="width:100%;text-align:left;display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-radius:6px;border:1px solid ${isActive ? 'rgba(88, 166, 255, 0.6)' : 'rgba(255,255,255,0.08)'};background:${isActive ? 'rgba(88,166,255,0.12)' : 'rgba(255,255,255,0.04)'};color:var(--ss-theme-text, #ddd);margin-bottom:4px;cursor:pointer;"
+                >
+                    <span style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                        <span>${result.ok ? '✅' : '❌'} ${escapeHtml(TASK_LABELS[result.taskId])}</span>
+                        <span style="font-size:11px;opacity:0.82;">${escapeHtml(metaParts.join(' · '))}</span>
+                    </span>
+                    <span style="font-size:11px;opacity:0.82;">${escapeHtml(subText)}</span>
+                </button>
+            `;
+        }).join('');
+        aiSelfTestResultsEl.innerHTML = `<div style="display:flex; flex-direction:column; gap:4px;">${summaryHtml}${itemsHtml}</div>`;
+    }
+
+    /**
+     * 功能：根据当前健康快照与运行状态，更新测试按钮的禁用态。
+     * 参数：
+     *   snapshot：当前健康快照。
+     * 返回：
+     *   void：无返回值。
+     */
+    function updateAiTestButtonState(snapshot: MemoryAiHealthSnapshot): void {
+        const selectedTaskId = getSelectedAiSelfTestTaskId();
+        const selectedRoute = snapshot.taskRoutes[selectedTaskId];
+        const hasAvailableTask = TASK_ORDER.some((taskId: MemoryAiTaskId): boolean => {
+            return Boolean(snapshot.taskRoutes[taskId]?.available);
+        });
+
+        if (aiSelfTestRunBtn) {
+            const blockedReason = selectedRoute?.blockedReason || snapshot.diagnosisText;
+            aiSelfTestRunBtn.disabled = aiSingleTestRunning || !selectedRoute?.available;
+            aiSelfTestRunBtn.title = aiSelfTestRunBtn.disabled ? blockedReason : '运行当前选中的单项测试';
+        }
+        if (aiSelfTestAllBtn) {
+            aiSelfTestAllBtn.disabled = aiBatchTestRunning || !hasAvailableTask;
+            aiSelfTestAllBtn.title = aiSelfTestAllBtn.disabled
+                ? '当前没有任何可运行的测试，请先完成 LLM 资源分配。'
+                : '依次运行全部自测任务';
+        }
+    }
+
+    /**
+     * 功能：刷新 AI 诊断区域的全部内容，可选触发一次健康快照重算。
+     * 参数：
+     *   forceRefresh：是否先主动刷新健康快照。
+     * 返回：
+     *   Promise<void>：异步刷新完成。
+     */
+    async function refreshAiDiagnostics(forceRefresh: boolean): Promise<void> {
+        if (forceRefresh) {
+            await refreshHealthSnapshot();
+        }
+        const snapshot: MemoryAiHealthSnapshot = getHealthSnapshot();
+
+        if (aiDiagOverviewEl) {
+            const isFull = snapshot.diagnosisLevel === 'fully_operational';
+            const isPartial = snapshot.diagnosisLevel === 'online_partial_capabilities';
+            const isMounted = snapshot.diagnosisLevel === 'mounted_not_registered';
+            
+            const diagColor = isFull ? 'var(--stx-memory-success, #4caf50)'
+                : (isPartial || isMounted) ? 'var(--stx-memory-warning, #ff9800)'
+                : 'var(--stx-memory-danger-contrast, #f44336)';
+            
+            const diagIcon = isFull ? 'fa-circle-check'
+                : (isPartial || isMounted) ? 'fa-exclamation-triangle'
+                : 'fa-circle-xmark';
+
+            const html = `
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                    <div style="font-weight:600; font-size:13px; color:${diagColor}; display:flex; align-items:center; gap:6px;">
+                        <i class="fa-solid ${diagIcon}"></i>
+                        <span>${escapeHtml(snapshot.diagnosisText)}</span>
+                    </div>
+                    <div style="display:flex; gap:12px; flex-wrap:wrap; font-size:11px; opacity:0.85;">
+                        <span style="background:rgba(255,255,255,0.08); padding:3px 8px; border-radius:4px;">
+                            LLMHub 挂载：<strong style="margin-left:2px; color:var(--stx-memory-text, inherit);">${snapshot.llmHubMounted ? '是' : '否'}</strong>
+                        </span>
+                        <span style="background:rgba(255,255,255,0.08); padding:3px 8px; border-radius:4px;">
+                            Consumer 注册：<strong style="margin-left:2px; color:var(--stx-memory-text, inherit);">${snapshot.consumerRegistered ? '已注册' : '未注册'}</strong>
+                        </span>
+                        <span style="background:rgba(255,255,255,0.08); padding:3px 8px; border-radius:4px;">
+                            AI 模式：<strong style="margin-left:2px; color:var(--stx-memory-text, inherit);">${snapshot.aiModeEnabled ? '启用' : '关闭'}</strong>
+                        </span>
+                    </div>
+                </div>`;
+            aiDiagOverviewEl.innerHTML = html;
+        }
+
+        renderAiRoutePreview(snapshot);
+
         if (aiDiagCapabilitiesEl) {
             aiDiagCapabilitiesEl.innerHTML = snapshot.capabilities.map((cap) => {
                 const color = cap.state === 'available' ? 'var(--stx-memory-success, #4caf50)'
@@ -981,14 +1324,13 @@ function bindUiEvents() {
                     : 'fa-circle-xmark';
                 return `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:4px;background:rgba(0,0,0,0.2);font-size:12px;">
                   <i class="fa-solid ${icon}" style="color:${color};font-size:11px;"></i>
-                  <span>${cap.capability}</span>
+                  <span>${escapeHtml(cap.capability)}</span>
                 </span>`;
             }).join('');
         }
 
-        // 最近任务
         if (aiDiagRecentTasksEl) {
-            const taskIds = Object.keys(snapshot.tasks) as Array<keyof typeof snapshot.tasks>;
+            const taskIds = Object.keys(snapshot.tasks) as MemoryAiTaskId[];
             if (taskIds.length === 0) {
                 aiDiagRecentTasksEl.textContent = '暂无任务记录';
             } else {
@@ -1005,16 +1347,18 @@ function bindUiEvents() {
                         : status.state === 'running' ? '⏳'
                         : '⬜';
                     let line = `${stateIcon} ${label}: ${stateText}`;
+                    if (status.state === 'running') {
+                        line += ` <span class="stx-running-dots"><span class="stx-dot"></span><span class="stx-dot"></span><span class="stx-dot"></span></span>`;
+                    }
                     if (status.lastRecord) {
                         const time = new Date(status.lastRecord.ts).toLocaleTimeString();
                         line += ` (${time}, ${status.lastRecord.durationMs}ms)`;
                         if (!status.lastRecord.ok && status.lastRecord.error) {
-                            line += `\n   → ${status.lastRecord.error}`;
+                            line += `<br>   → ${status.lastRecord.error}`;
                         }
                     }
                     lines.push(line);
                 }
-                // 补充最近记录
                 if (snapshot.recentRecords.length > 0) {
                     lines.push('');
                     lines.push('── 最近执行记录 ──');
@@ -1032,56 +1376,126 @@ function bindUiEvents() {
                         lines.push(line);
                     }
                 }
-                aiDiagRecentTasksEl.textContent = lines.join('\n');
+                aiDiagRecentTasksEl.innerHTML = lines.join('<br>');
             }
         }
-    };
 
-    // 初始渲染
-    refreshAiDiagnostics();
+        renderAiSelfTestResults(lastAiSelfTestResults);
+        renderAiSelfTestDetail(lastAiSelfTestDetail, snapshot);
+        updateAiTestButtonState(snapshot);
+    }
 
-    // 订阅健康状态变化自动刷新
-    onHealthChange(refreshAiDiagnostics);
+    if (aiSelfTestSelectEl && !aiSelfTestSelectEl.value) {
+        aiSelfTestSelectEl.value = TASK_ORDER[0];
+    }
+
+    if (aiSelfTestResultsEl && aiSelfTestResultsEl.dataset.bound !== '1') {
+        aiSelfTestResultsEl.dataset.bound = '1';
+        aiSelfTestResultsEl.addEventListener('click', (event: Event): void => {
+            const target = event.target as HTMLElement | null;
+            const trigger = target?.closest<HTMLElement>('[data-ai-self-test-index]');
+            if (!trigger) return;
+            const index = Number(trigger.dataset.aiSelfTestIndex ?? '');
+            if (!Number.isFinite(index)) return;
+            const nextResult = lastAiSelfTestResults[Math.floor(index)];
+            if (!nextResult) return;
+            lastAiSelfTestDetail = nextResult;
+            renderAiSelfTestResults(lastAiSelfTestResults);
+            renderAiSelfTestDetail(nextResult, getHealthSnapshot());
+        });
+    }
+
+    void refreshAiDiagnostics(true);
+
+    onHealthChange((): void => {
+        void refreshAiDiagnostics(false);
+    });
 
     if (aiDiagRefreshBtn) {
-        aiDiagRefreshBtn.addEventListener('click', () => {
-            refreshAiDiagnostics();
+        aiDiagRefreshBtn.addEventListener('click', async (): Promise<void> => {
+            await refreshAiDiagnostics(true);
             toast.success('诊断信息已刷新');
         });
     }
 
-    // 全部自测
-    if (aiSelfTestAllBtn) {
-        aiSelfTestAllBtn.addEventListener('click', async () => {
-            if (aiSelfTestResultsEl) {
-                aiSelfTestResultsEl.textContent = '正在运行自测，请稍候...';
+    if (aiSelfTestSelectEl) {
+        aiSelfTestSelectEl.addEventListener('change', (): void => {
+            const selectedTaskId = getSelectedAiSelfTestTaskId();
+            lastAiSelfTestDetail = lastAiSelfTestResults.find((result: AiSelfTestResult): boolean => {
+                return result.taskId === selectedTaskId;
+            }) || null;
+            void refreshAiDiagnostics(false);
+        });
+    }
+
+    if (aiSelfTestRunBtn) {
+        aiSelfTestRunBtn.addEventListener('click', async (): Promise<void> => {
+            const taskId = getSelectedAiSelfTestTaskId();
+            aiSingleTestRunning = true;
+            aiSelfTestRunBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>&nbsp;测试中...';
+            if (aiSelfTestDetailEl) {
+                aiSelfTestDetailEl.textContent = `正在运行 ${TASK_LABELS[taskId]} 测试，请稍候...`;
             }
-            aiSelfTestAllBtn.textContent = '自测中...';
-            (aiSelfTestAllBtn as HTMLButtonElement).disabled = true;
+            updateAiTestButtonState(getHealthSnapshot());
+            try {
+                const result = await runSingleSelfTest(taskId);
+                lastAiSelfTestResults = sortAiSelfTestResults([
+                    result,
+                    ...lastAiSelfTestResults.filter((item: AiSelfTestResult): boolean => item.taskId !== taskId),
+                ]);
+                lastAiSelfTestDetail = result;
+                renderAiSelfTestResults(lastAiSelfTestResults);
+                renderAiSelfTestDetail(lastAiSelfTestDetail, getHealthSnapshot());
+                await refreshAiDiagnostics(true);
+                toast[result.ok ? 'success' : 'warning'](`${TASK_LABELS[taskId]}测试${result.ok ? '成功' : '失败'}`);
+            } catch (error: unknown) {
+                const errorText = String((error as Error)?.message || error);
+                if (aiSelfTestDetailEl) {
+                    aiSelfTestDetailEl.textContent = `单项测试异常：${errorText}`;
+                }
+                toast.error(`单项测试异常：${errorText}`);
+            } finally {
+                aiSingleTestRunning = false;
+                aiSelfTestRunBtn.innerHTML = '<i class="fa-solid fa-vial-circle-check"></i>&nbsp;运行所选测试';
+                await refreshAiDiagnostics(false);
+            }
+        });
+    }
+
+    if (aiSelfTestAllBtn) {
+        aiSelfTestAllBtn.addEventListener('click', async (): Promise<void> => {
+            aiBatchTestRunning = true;
+            aiSelfTestAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>&nbsp;自测中...';
+            if (aiSelfTestResultsEl) {
+                aiSelfTestResultsEl.textContent = '正在运行全部自测，请稍候...';
+            }
+            if (aiSelfTestDetailEl) {
+                aiSelfTestDetailEl.textContent = '测试进行中，完成后会在这里展示返回预览。';
+            }
+            updateAiTestButtonState(getHealthSnapshot());
 
             try {
-                const results = await runAiSelfTests();
+                const results = sortAiSelfTestResults(await runAiSelfTests());
+                lastAiSelfTestResults = results;
+                lastAiSelfTestDetail = results.find((item: AiSelfTestResult): boolean => !item.ok) || results[0] || null;
+                renderAiSelfTestResults(results);
+                renderAiSelfTestDetail(lastAiSelfTestDetail, getHealthSnapshot());
+                await refreshAiDiagnostics(true);
+                const passCount = results.filter((item: AiSelfTestResult): boolean => item.ok).length;
+                toast.success(`全部自测完成：${passCount}/${results.length} 项成功`);
+            } catch (error: unknown) {
+                const errorText = String((error as Error)?.message || error);
                 if (aiSelfTestResultsEl) {
-                    const lines = results.map((r) => {
-                        const icon = r.ok ? '✅' : '❌';
-                        const label = TASK_LABELS[r.taskId] || r.taskId;
-                        let line = `${icon} ${label}: ${r.ok ? '通过' : '失败'} (${r.durationMs}ms)`;
-                        if (r.detail) line += ` — ${r.detail}`;
-                        if (!r.ok && r.error) line += `\n   → ${r.error}`;
-                        return line;
-                    });
-                    const passCount = results.filter((r) => r.ok).length;
-                    lines.unshift(`自测完成：${passCount}/${results.length} 项通过\n`);
-                    aiSelfTestResultsEl.textContent = lines.join('\n');
+                    aiSelfTestResultsEl.textContent = `全部自测异常：${errorText}`;
                 }
-                refreshAiDiagnostics();
-            } catch (e: any) {
-                if (aiSelfTestResultsEl) {
-                    aiSelfTestResultsEl.textContent = `自测异常: ${String(e?.message || e)}`;
+                if (aiSelfTestDetailEl) {
+                    aiSelfTestDetailEl.textContent = `全部自测异常：${errorText}`;
                 }
+                toast.error(`全部自测异常：${errorText}`);
             } finally {
+                aiBatchTestRunning = false;
                 aiSelfTestAllBtn.innerHTML = '<i class="fa-solid fa-vial"></i>&nbsp;运行全部自测';
-                (aiSelfTestAllBtn as HTMLButtonElement).disabled = false;
+                await refreshAiDiagnostics(false);
             }
         });
     }

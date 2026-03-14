@@ -4,12 +4,18 @@ import { Logger } from '../../../SDK/logger';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateBuilder } from './template-builder';
+import { buildDisplayTables } from './table-derivation';
 
 const logger = new Logger('TemplateManager');
 
 /**
- * 世界模板管理器
- * 负责模板 CRUD、按世界书内容 hash 绑定模板、以及 activeTemplate 的切换与锁定。
+ * 功能：管理模板的保存、切换与世界书同步。
+ *
+ * 参数：
+ *   chatKey (string)：当前聊天键。
+ *
+ * 返回：
+ *   无。
  */
 export class TemplateManager {
     private chatKey: string;
@@ -28,41 +34,46 @@ export class TemplateManager {
     }
 
     /**
-     * 安装 SillyTavern 生命周期监听（仅主实例调用一次）。
+     * 功能：安装 SillyTavern 世界书同步钩子。
+     * @returns 无返回值
      */
     public installSillyTavernHooks(): void {
-        if (this.syncInterval) return; // 防止重复安装
+        if (this.syncInterval) {
+            return;
+        }
+
         const globalST = window as any;
         if (globalST?.eventSource && globalST?.event_types) {
-            globalST.eventSource.on(globalST.event_types.CHAT_CHANGED, () => {
-                this.syncWorldInfoState().catch((error: unknown) => {
+            globalST.eventSource.on(globalST.event_types.CHAT_CHANGED, (): void => {
+                void this.syncWorldInfoState().catch((error: unknown): void => {
                     logger.warn('CHAT_CHANGED 同步世界书失败', error);
                 });
             });
-            logger.success('成功接管了 ST 的 CHAT_CHANGED 事件用于同步世界书');
+            logger.success('已接管 ST 的 CHAT_CHANGED 事件用于同步世界书');
         }
 
-        // 轮询兜底：即使名称不变，也会检测内容 hash 是否变化。
-        this.syncInterval = setInterval(() => {
-            this.syncWorldInfoState().catch((error: unknown) => {
+        this.syncInterval = setInterval((): void => {
+            void this.syncWorldInfoState().catch((error: unknown): void => {
                 logger.warn('定时同步世界书状态失败', error);
             });
         }, 5000);
     }
 
     /**
-     * 停止监听（析构用）。
+     * 功能：停止世界书同步钩子。
+     * @returns 无返回值
      */
     public destroy(): void {
-        if (this.syncInterval) {
-            clearInterval(this.syncInterval);
-            this.syncInterval = null;
+        if (!this.syncInterval) {
+            return;
         }
+        clearInterval(this.syncInterval);
+        this.syncInterval = null;
     }
 
     /**
-     * 同步当前聊天加载的世界书状态。
-     * 无论书名是否变化，都会在 onWorldInfoChanged 内做内容级 hash 检测。
+     * 功能：同步当前聊天挂载的世界书状态。
+     * @returns 当前激活模板 ID；无变化时返回现有绑定
      */
     public async syncWorldInfoState(): Promise<void> {
         try {
@@ -73,31 +84,33 @@ export class TemplateManager {
             }
 
             const normalizedNames = [...stSelectedWorldInfo]
-                .map((name: unknown) => String(name ?? '').trim())
+                .map((name: unknown): string => String(name ?? '').trim())
                 .filter(Boolean);
 
             const stNamesStr = JSON.stringify([...normalizedNames].sort());
             const myNamesStr = JSON.stringify([...this.activeWorldNames].sort());
             if (stNamesStr !== myNamesStr) {
-                logger.info(`发现世界书挂载集合变化: [${this.activeWorldNames.join(',')}] -> [${normalizedNames.join(',')}]`);
+                logger.info(`发现世界书挂载集合变化 [${this.activeWorldNames.join(',')}] -> [${normalizedNames.join(',')}]`);
             }
 
             this.activeWorldNames = normalizedNames;
             await this.onWorldInfoChanged(false);
-        } catch (e) {
-            logger.error('尝试同步世界书状态时遇到错误', e);
+        } catch (error) {
+            logger.error('同步世界书状态时遇到错误', error);
         }
     }
 
     /**
-     * 强制重建模板（忽略 hash 命中缓存）。
+     * 功能：忽略缓存强制重建模板。
+     * @returns 新模板 ID
      */
     public async forceRebuildFromWorldInfo(): Promise<string | null> {
         return this.onWorldInfoChanged(true);
     }
 
     /**
-     * 获取当前聊天模板绑定信息。
+     * 功能：读取当前聊天的模板绑定信息。
+     * @returns 绑定信息；不存在时返回 null
      */
     public async getBinding(): Promise<DBTemplateBinding | null> {
         const binding = await db.template_bindings.get(this.chatKey);
@@ -105,7 +118,9 @@ export class TemplateManager {
     }
 
     /**
-     * 设置模板锁定状态。
+     * 功能：设置模板锁定状态。
+     * @param locked 是否锁定
+     * @returns 无返回值
      */
     public async setTemplateLock(locked: boolean): Promise<void> {
         const existing = await db.template_bindings.get(this.chatKey);
@@ -120,9 +135,10 @@ export class TemplateManager {
     }
 
     /**
-     * 手动切换 active template。
+     * 功能：手动切换当前激活模板。
      * @param templateId 目标模板 ID
-     * @param opts lock=true 时会锁定模板，后续世界书变化不自动重建
+     * @param opts 是否同时锁定
+     * @returns 无返回值
      */
     public async setActiveTemplate(templateId: string, opts?: { lock?: boolean }): Promise<void> {
         const target = await this.getById(templateId);
@@ -144,7 +160,9 @@ export class TemplateManager {
     }
 
     /**
-     * 按内容 hash 查找当前聊天已存在模板。
+     * 功能：按世界书哈希查找模板。
+     * @param worldInfoHash 世界书内容哈希
+     * @returns 命中的模板；不存在时返回 null
      */
     public async findByWorldInfoHash(worldInfoHash: string): Promise<WorldTemplate | null> {
         const record = await db.templates
@@ -158,7 +176,9 @@ export class TemplateManager {
     }
 
     /**
-     * 保存一个模板到 IndexedDB。
+     * 功能：保存模板到 IndexedDB。
+     * @param template 要保存的模板
+     * @returns 模板 ID
      */
     public async save(template: WorldTemplate): Promise<string> {
         const worldInfoHash = template.worldInfoRef?.hash || '';
@@ -171,6 +191,16 @@ export class TemplateManager {
             factTypes: template.factTypes || [],
             policies: template.extractPolicies,
             layout: template.injectionLayout,
+            tables: template.tables || [],
+            fieldSynonyms: template.fieldSynonyms || {},
+            tableSynonyms: template.tableSynonyms || {},
+            templateFamilyId: template.templateFamilyId,
+            revisionNo: template.revisionNo,
+            revisionState: template.revisionState,
+            parentTemplateId: template.parentTemplateId ?? null,
+            schemaFingerprint: template.schemaFingerprint,
+            lastTouchedAt: template.lastTouchedAt,
+            finalizedAt: template.finalizedAt ?? null,
             worldInfoHash,
             worldInfoRef: template.worldInfoRef,
             createdAt: template.createdAt || Date.now(),
@@ -180,7 +210,9 @@ export class TemplateManager {
     }
 
     /**
-     * 通过 templateId 获取模板。
+     * 功能：按模板 ID 读取模板。
+     * @param templateId 模板 ID
+     * @returns 模板对象；不存在时返回 null
      */
     public async getById(templateId: string): Promise<WorldTemplate | null> {
         const record = await db.templates.get(templateId);
@@ -191,7 +223,8 @@ export class TemplateManager {
     }
 
     /**
-     * 获取当前 active template。
+     * 功能：读取当前激活模板。
+     * @returns 当前激活模板；不存在时返回 null
      */
     public async getActiveTemplate(): Promise<WorldTemplate | null> {
         const activeTemplateId = await this.metaManager.getActiveTemplateId();
@@ -202,30 +235,31 @@ export class TemplateManager {
     }
 
     /**
-     * 获取当前 chatKey 下的所有模板（按时间升序）。
+     * 功能：列出当前聊天下的所有模板。
+     * @returns 模板数组
      */
     public async listByChatKey(): Promise<WorldTemplate[]> {
         const records = await db.templates
             .where('[chatKey+createdAt]')
             .between([this.chatKey, 0], [this.chatKey, Infinity])
             .toArray();
-        return records.map((record: DBTemplate) => this.toWorldTemplate(record));
+        return records.map((record: DBTemplate): WorldTemplate => this.toWorldTemplate(record));
     }
 
     /**
-     * 当世界书变化时执行内容级 hash 检测并按需重建模板。
-     * 模板构建统一委托给 TemplateBuilder（唯一权威实现），此处不再直接拼装 LLM 任务。
-     * @param forceRebuild true 表示忽略 hash 缓存强制重建
+     * 功能：在世界书变化时判断是否需要重建模板。
+     * @param forceRebuild 是否强制重建
+     * @returns 新的模板 ID；无变化时返回现有绑定 ID
      */
     private async onWorldInfoChanged(forceRebuild: boolean): Promise<string | null> {
         if (this.activeWorldNames.length === 0) {
-            logger.info('当前未加载世界书，模板系统保持现状。');
+            logger.info('当前未加载世界书，模板系统保持现状');
             return null;
         }
 
         const worldInfoEntries = await this.collectWorldInfoEntries();
         if (worldInfoEntries.length === 0) {
-            logger.warn('未读取到任何世界书词条，跳过模板重建。');
+            logger.warn('未读取到任何世界书词条，跳过模板重建');
             return null;
         }
 
@@ -234,24 +268,23 @@ export class TemplateManager {
 
         if (!forceRebuild && existingBinding?.isLocked && existingBinding.activeTemplateId) {
             await this.metaManager.setActiveTemplateId(existingBinding.activeTemplateId);
-            logger.info(`模板已锁定（${existingBinding.activeTemplateId}），跳过自动重建。`);
+            logger.info(`模板已锁定（${existingBinding.activeTemplateId}），跳过自动重建`);
             return existingBinding.activeTemplateId;
         }
 
-        if (!forceRebuild && existingBinding && existingBinding.worldInfoHash === currentHash && existingBinding.activeTemplateId) {
+        if (!forceRebuild && existingBinding?.worldInfoHash === currentHash && existingBinding.activeTemplateId) {
             await this.metaManager.setActiveTemplateId(existingBinding.activeTemplateId);
-            logger.info('世界书内容 hash 未变化，复用现有模板。');
+            logger.info('世界书内容哈希未变化，复用现有模板');
             return existingBinding.activeTemplateId;
         }
 
-        // 委托给 TemplateBuilder 执行 LLM 构建
         const bundle: WorldContextBundle = {
             chatKey: this.chatKey,
             worldInfo: worldInfoEntries,
         };
         const template = await this.templateBuilder.ensureTemplate(bundle, forceRebuild);
         if (!template) {
-            logger.warn('模板构建失败，保留当前有效模板。');
+            logger.warn('模板构建失败，保留当前有效模板');
             return existingBinding?.activeTemplateId ?? null;
         }
 
@@ -260,7 +293,8 @@ export class TemplateManager {
     }
 
     /**
-     * 读取当前激活世界书的全部词条，输出统一结构。
+     * 功能：读取当前激活世界书的全部条目。
+     * @returns 规范化后的世界书条目列表
      */
     private async collectWorldInfoEntries(): Promise<WorldInfoEntry[]> {
         const globalST = window as any;
@@ -275,7 +309,7 @@ export class TemplateManager {
                 const rawEntries = Object.values(bookData?.entries || {}) as Array<Record<string, any>>;
                 for (const item of rawEntries) {
                     const keywords = Array.isArray(item.key)
-                        ? item.key.map((key: unknown) => String(key ?? '').trim()).filter(Boolean)
+                        ? item.key.map((key: unknown): string => String(key ?? '').trim()).filter(Boolean)
                         : [];
                     const content = String(item.content ?? '').trim();
                     if (!content) {
@@ -297,7 +331,9 @@ export class TemplateManager {
     }
 
     /**
-     * 将 DBTemplate 映射为 WorldTemplate。
+     * 功能：将数据库模板记录映射为运行时模板对象。
+     * @param record 数据库模板记录
+     * @returns 运行时模板对象
      */
     private toWorldTemplate(record: DBTemplate): WorldTemplate {
         const worldInfoHash = record.worldInfoHash || record.worldInfoRef?.hash || '';
@@ -315,6 +351,16 @@ export class TemplateManager {
                 hash: worldInfoHash,
             },
             createdAt: record.createdAt,
+            tables: buildDisplayTables(record.schema || {}, record.tables || []),
+            fieldSynonyms: record.fieldSynonyms || {},
+            tableSynonyms: record.tableSynonyms || {},
+            templateFamilyId: record.templateFamilyId,
+            revisionNo: record.revisionNo,
+            revisionState: record.revisionState,
+            parentTemplateId: record.parentTemplateId ?? null,
+            schemaFingerprint: record.schemaFingerprint,
+            lastTouchedAt: record.lastTouchedAt,
+            finalizedAt: record.finalizedAt ?? null,
         };
     }
 }

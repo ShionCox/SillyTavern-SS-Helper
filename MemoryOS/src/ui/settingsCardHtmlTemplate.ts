@@ -120,6 +120,18 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
     options: [{ value: '', label: '选择实体类型...' }],
   });
 
+  const aiSelfTestSelect = buildCompactSharedSelect(
+    ids.aiSelfTestSelectId,
+    '选择要运行的单项自测。',
+    [
+      { value: 'memory.summarize', label: '摘要' },
+      { value: 'memory.extract', label: '抽取' },
+      { value: 'world.template.build', label: '模板构建' },
+      { value: 'memory.vector.embed', label: '向量化' },
+      { value: 'memory.search.rerank', label: '重排' },
+    ],
+  );
+
   const recordFilterLevelSelect = buildCompactSharedSelect(
     ids.recordFilterLevelId,
     '设置整体过滤强度：轻度、平衡或严格。',
@@ -406,58 +418,10 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
             <pre id="${ids.recordFilterPreviewOutputId}" style="width:100%; white-space:pre-wrap; word-break:break-word; font-size:12px; background:rgba(0,0,0,0.2); border-radius:6px; padding:8px; margin:0;" data-tip="显示预览结果与命中规则。"></pre>
           </div>
 
-          <div class="stx-ui-divider">
-            <i class="fa-solid fa-stethoscope"></i>
-            <span>AI 诊断</span>
-            <div class="stx-ui-divider-line"></div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai diagnosis overview capabilities status">
+          <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="ai test moved about">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">AI 总览</div>
-              <div class="stx-ui-item-desc">显示 LLMHub 挂载、consumer 注册、能力状态和诊断结果。</div>
-            </div>
-            <div id="${ids.aiDiagOverviewId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; font-family:monospace; white-space:pre-wrap;">
-              正在加载诊断信息...
-            </div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai capabilities chat json embeddings rerank">
-            <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">能力状态</div>
-              <div class="stx-ui-item-desc">分别显示 chat、json、embeddings、rerank 的可用/缺失/降级状态。</div>
-            </div>
-            <div id="${ids.aiDiagCapabilitiesId}" style="width:100%; font-size:12px; display:flex; flex-wrap:wrap; gap:8px;">
-            </div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai recent tasks history status">
-            <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">最近任务</div>
-              <div class="stx-ui-item-desc">显示五类任务最近一次执行时间、结果与失败原因。</div>
-            </div>
-            <div id="${ids.aiDiagRecentTasksId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; max-height:240px; overflow-y:auto; font-family:monospace; white-space:pre-wrap;">
-              暂无任务记录
-            </div>
-            <div class="stx-ui-actions">
-              <button id="${ids.aiDiagRefreshBtnId}" data-tip="刷新 AI 诊断信息。" type="button" class="stx-ui-btn secondary">
-                <i class="fa-solid fa-rotate"></i>&nbsp;刷新诊断
-              </button>
-            </div>
-          </div>
-
-          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai self test diagnostic">
-            <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">任务自测</div>
-              <div class="stx-ui-item-desc">使用固定样例验证五类 AI 任务。不写入数据库，不改模板。</div>
-            </div>
-            <div class="stx-ui-actions">
-              <button id="${ids.aiSelfTestAllBtnId}" data-tip="运行全部五项 AI 自测。" type="button" class="stx-ui-btn">
-                <i class="fa-solid fa-vial"></i>&nbsp;运行全部自测
-              </button>
-            </div>
-            <div id="${ids.aiSelfTestResultsId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; max-height:240px; overflow-y:auto; font-family:monospace; white-space:pre-wrap;">
-              点击上方按钮运行自测
+              <div class="stx-ui-item-title">测试中心已迁移</div>
+              <div class="stx-ui-item-desc">AI 诊断、自测、当前模型与返回结果现在统一放在「关于」页，方便集中查看。</div>
             </div>
           </div>
         </div>
@@ -654,6 +618,83 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
             <div class="stx-ui-item-title">更新日志（Changelog）</div>
             <div class="stx-ui-changelog">
               ${ids.changelogHtml}
+            </div>
+          </div>
+
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-stethoscope"></i>
+            <span>测试中心</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai diagnosis overview capabilities status">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">AI 总览</div>
+              <div class="stx-ui-item-desc">显示 LLMHub 挂载、consumer 注册、能力状态和当前诊断结果。</div>
+            </div>
+            <div id="${ids.aiDiagOverviewId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px;">
+              正在加载诊断信息...
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="route preview model provider generation embedding rerank">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">当前测试路由</div>
+              <div class="stx-ui-item-desc">显示生成、向量、重排三类任务当前实际会命中的资源、模型和可用状态。</div>
+            </div>
+            <div id="${ids.aiRoutePreviewId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px;">
+              正在读取当前路由...
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai capabilities chat json embeddings rerank">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">能力状态</div>
+              <div class="stx-ui-item-desc">分别显示 chat、json、embeddings、rerank 的可用/缺失/降级状态。</div>
+            </div>
+            <div id="${ids.aiDiagCapabilitiesId}" style="width:100%; font-size:12px; display:flex; flex-wrap:wrap; gap:8px;">
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai recent tasks history status">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">最近任务</div>
+              <div class="stx-ui-item-desc">显示五类任务最近一次执行时间、结果与失败原因。</div>
+            </div>
+            <div id="${ids.aiDiagRecentTasksId}" style="width:100%; font-size:12px; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; max-height:240px; overflow-y:auto; font-family:monospace; white-space:pre-wrap;">
+              暂无任务记录
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.aiDiagRefreshBtnId}" data-tip="刷新 AI 诊断信息。" type="button" class="stx-ui-btn secondary">
+                <i class="fa-solid fa-rotate"></i>&nbsp;刷新诊断
+              </button>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="ai self test single all result preview">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">任务自测</div>
+              <div class="stx-ui-item-desc">支持选择单项测试或运行全部测试，并展示命中的资源、模型、结果预览与失败原因。</div>
+            </div>
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label">测试项目</label>
+                ${aiSelfTestSelect}
+              </div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.aiSelfTestRunBtnId}" data-tip="运行当前选中的单项测试。" type="button" class="stx-ui-btn secondary">
+                <i class="fa-solid fa-vial-circle-check"></i>&nbsp;运行所选测试
+              </button>
+              <button id="${ids.aiSelfTestAllBtnId}" data-tip="运行全部五项 AI 自测。" type="button" class="stx-ui-btn">
+                <i class="fa-solid fa-vial"></i>&nbsp;运行全部自测
+              </button>
+            </div>
+            <div id="${ids.aiSelfTestResultsId}" style="width:100%; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:6px; max-height:240px; overflow-y:auto; margin-bottom:8px;">
+              <div style="opacity:0.6; padding:4px; font-size:12px;">点击上方按钮运行自测</div>
+            </div>
+            <div id="${ids.aiSelfTestDetailId}" style="width:100%; color:var(--ss-theme-text, #ccc); background:rgba(0,0,0,0.2); border-radius:6px; padding:6px; max-height:260px; overflow-y:auto;">
+              <div style="opacity:0.6; padding:4px; font-size:12px;">这里会显示最近一次测试的详细返回内容</div>
             </div>
           </div>
 

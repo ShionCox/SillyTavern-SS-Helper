@@ -1,5 +1,6 @@
 import type {
-    LLMProvider, LLMRequest, LLMResponse, EmbedRequest, EmbedResponse,
+    LLMProvider, LLMProviderCapabilities, LLMRequest, LLMResponse, EmbedRequest, EmbedResponse,
+    RerankRequest, RerankResponse,
     ProviderConnectionResult, ProviderModelListResult,
 } from './types';
 
@@ -10,31 +11,123 @@ import type {
 export class OpenAIProvider implements LLMProvider {
     id: string;
     kind: 'openai' = 'openai';
-    capabilities = { chat: true, json: true, tools: true, embeddings: true };
+    capabilities: LLMProviderCapabilities;
 
     private apiKey: string;
     private baseUrl: string;
     private model: string;
+    private customParams: Record<string, unknown>;
 
     constructor(config: {
         id: string;
         apiKey: string;
         baseUrl?: string;
         model?: string;
+        enableRerank?: boolean;
+        customParams?: Record<string, unknown>;
     }) {
         this.id = config.id;
         this.apiKey = config.apiKey;
         this.baseUrl = config.baseUrl || 'https://api.openai.com/v1';
         this.model = config.model || 'gpt-4o-mini';
+        this.capabilities = {
+            chat: true,
+            json: true,
+            tools: true,
+            embeddings: true,
+            rerank: config.enableRerank === true,
+        };
+        this.customParams = config.customParams && typeof config.customParams === 'object' && !Array.isArray(config.customParams)
+            ? { ...config.customParams }
+            : {};
+    }
+
+    private buildHeaders(): Record<string, string> {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
+        };
+    }
+
+    private withCustomParams<T extends Record<string, any>>(payload: T): T {
+        return {
+            ...this.customParams,
+            ...payload,
+        };
+    }
+
+    private extractMessageContent(choice: any): string {
+        const content = choice?.message?.content;
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content
+                .map((item: any) => (typeof item?.text === 'string' ? item.text : typeof item?.content === 'string' ? item.content : ''))
+                .join('')
+                .trim();
+        }
+        return '';
+    }
+
+    private extractJsonObject(raw: string): any {
+        const text = String(raw || '').trim();
+        if (!text) return null;
+
+        const candidates = [text];
+        const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fencedMatch?.[1]) candidates.push(fencedMatch[1].trim());
+
+        const firstBrace = text.indexOf('{');
+        const lastBrace = text.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            candidates.push(text.slice(firstBrace, lastBrace + 1));
+        }
+
+        for (const candidate of candidates) {
+            try {
+                return JSON.parse(candidate);
+            } catch {
+                // continue
+            }
+        }
+
+        return null;
+    }
+
+    private normalizeRerankResponse(data: any, req: RerankRequest): RerankResponse {
+        const rawResults = Array.isArray(data?.results)
+            ? data.results
+            : Array.isArray(data?.ranked)
+                ? data.ranked
+                : Array.isArray(data)
+                    ? data
+                    : [];
+
+        const normalized = rawResults.map((item: any, fallbackIndex: number) => {
+            const rawIndex = Number(item?.index ?? item?.document_index ?? fallbackIndex);
+            const index = Number.isFinite(rawIndex) && rawIndex >= 0 ? rawIndex : fallbackIndex;
+            const rawScore = Number(item?.score ?? item?.relevance_score ?? item?.similarity ?? 0);
+            return {
+                index,
+                score: Number.isFinite(rawScore) ? rawScore : 0,
+                doc: req.docs[index] ?? req.docs[fallbackIndex] ?? '',
+            };
+        });
+
+        const sorted = normalized.sort(
+            (a: { index: number; score: number; doc: string }, b: { index: number; score: number; doc: string }) => b.score - a.score,
+        );
+        return {
+            results: typeof req.topK === 'number' && req.topK > 0 ? sorted.slice(0, req.topK) : sorted,
+        };
     }
 
     async request(req: LLMRequest): Promise<LLMResponse> {
-        const body: Record<string, any> = {
-            model: this.model,
+        const body: Record<string, any> = this.withCustomParams({
+            model: req.model || this.model,
             messages: req.messages,
             temperature: req.temperature ?? 0.7,
             max_tokens: req.maxTokens ?? 2048,
-        };
+        });
 
         if (req.jsonMode) {
             body.response_format = { type: 'json_object' };
@@ -42,10 +135,7 @@ export class OpenAIProvider implements LLMProvider {
 
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`,
-            },
+            headers: this.buildHeaders(),
             body: JSON.stringify(body),
         });
 
@@ -58,7 +148,7 @@ export class OpenAIProvider implements LLMProvider {
         const choice = data.choices?.[0];
 
         return {
-            content: choice?.message?.content || '',
+            content: this.extractMessageContent(choice),
             usage: data.usage ? {
                 promptTokens: data.usage.prompt_tokens,
                 completionTokens: data.usage.completion_tokens,
@@ -71,14 +161,11 @@ export class OpenAIProvider implements LLMProvider {
     async embed(req: EmbedRequest): Promise<EmbedResponse> {
         const response = await fetch(`${this.baseUrl}/embeddings`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`,
-            },
-            body: JSON.stringify({
+            headers: this.buildHeaders(),
+            body: JSON.stringify(this.withCustomParams({
                 model: req.model || 'text-embedding-ada-002',
                 input: req.texts,
-            }),
+            })),
         });
 
         if (!response.ok) {
@@ -92,20 +179,65 @@ export class OpenAIProvider implements LLMProvider {
         };
     }
 
+    async rerank(req: RerankRequest): Promise<RerankResponse> {
+        if (this.capabilities.rerank !== true) {
+            throw new Error('当前资源未启用 rerank 能力');
+        }
+
+        const userPayload = JSON.stringify({
+            query: req.query,
+            documents: req.docs.map((doc: string, index: number) => ({ index, doc })),
+            topK: req.topK ?? req.docs.length,
+        });
+
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: this.buildHeaders(),
+            body: JSON.stringify(this.withCustomParams({
+                model: req.model || this.model,
+                temperature: 0,
+                max_tokens: Math.min(1200, Math.max(300, req.docs.length * 80)),
+                response_format: { type: 'json_object' },
+                messages: [
+                    {
+                        role: 'system',
+                        content: '你是一个文档重排器。请根据 query 评估 documents 的相关性，返回 JSON 对象，格式为 {"results":[{"index":0,"score":0.98}]}。results 必须按相关性从高到低排序，score 为 0 到 1 之间的数字，不要返回额外解释。',
+                    },
+                    {
+                        role: 'user',
+                        content: userPayload,
+                    },
+                ],
+            })),
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`LLM 重排请求失败: ${response.status} ${errText}`);
+        }
+
+        const data = await response.json();
+        const choice = data.choices?.[0];
+        const content = this.extractMessageContent(choice);
+        const parsed = this.extractJsonObject(content);
+        const normalized = this.normalizeRerankResponse(parsed, req);
+        if (!Array.isArray(normalized.results) || normalized.results.length === 0) {
+            throw new Error('LLM 重排返回为空或格式异常');
+        }
+        return normalized;
+    }
+
     async testConnection(): Promise<ProviderConnectionResult> {
         const start = Date.now();
         try {
             const res = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiKey}`,
-                },
-                body: JSON.stringify({
+                headers: this.buildHeaders(),
+                body: JSON.stringify(this.withCustomParams({
                     model: this.model,
                     messages: [{ role: 'user', content: 'Hi' }],
                     max_tokens: 1,
-                }),
+                })),
             });
             const latencyMs = Date.now() - start;
 

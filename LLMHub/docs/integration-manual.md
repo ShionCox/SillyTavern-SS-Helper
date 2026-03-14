@@ -12,7 +12,7 @@ LLMHub 采用 **四层分离架构**：
 | 层级 | 模块 | 职责 |
 |------|------|------|
 | L1 | **Registry**（注册中心） | 消费方身份注册、任务声明、能力约束持久化 |
-| L2 | **Router**（路由器） | 按 6 级优先级解析 provider → 全局/插件/任务默认 |
+| L2 | **Router**（路由器） | 按 6 级优先级解析 resource → 全局/插件/任务分配 |
 | L3 | **Orchestrator**（编排器） | 请求入队、去重、替换、作用域取消、双 Promise 分离 |
 | L4 | **Display Controller**（展示控制器） | 覆层生命周期、静默权限管理 |
 
@@ -115,8 +115,8 @@ type LLMCapability =
 ```
 
 - `CapabilityKind` 是任务大类，决定路由层对应的三棵默认树。
-- `LLMCapability` 是细粒度能力标签；每个 Provider 声明自己支持的能力集合。
-- 设置页面中候选 Provider 下拉列表会按 `requiredCapabilities` 自动过滤，不满足能力约束的 Provider **不会出现在候选项中**。
+- `LLMCapability` 是细粒度能力标签；每个资源会暴露自己支持的能力集合。
+- 设置页面中候选资源下拉列表会按 `requiredCapabilities` 自动过滤，不满足能力约束的资源 **不会出现在候选项中**。
 
 ### 3.2 TaskDescriptor
 
@@ -125,7 +125,7 @@ interface TaskDescriptor {
     taskId: string;            // 任务唯一标识
     taskKind: CapabilityKind;  // 所属大类
     requiredCapabilities: LLMCapability[];  // 执行该任务需要的能力
-    recommendedRoute?: { providerId?: string; profileId?: string };
+    recommendedRoute?: { resourceId?: string; profileId?: string };
     recommendedDisplay?: DisplayMode;
     description?: string;
     backgroundEligible?: boolean;  // 是否允许静默执行
@@ -136,12 +136,12 @@ interface TaskDescriptor {
 |------|------|
 | `taskId` | 在你的插件内唯一。路由层按 `pluginId::taskId` 组合键读取覆盖配置。 |
 | `taskKind` | 必填。决定该任务走哪条路由链路。 |
-| `requiredCapabilities` | 该任务对 Provider 的最低能力要求。Router 会用此字段过滤不合格候选。 |
+| `requiredCapabilities` | 该任务对资源的最低能力要求。Router 会用此字段过滤不合格候选。 |
 | `backgroundEligible` | 设为 `true` 表示该任务可以在后台静默运行（不弹覆层），否则必须弹出 UI 展示结果。 |
 
 ### 3.3 路由解析优先级
 
-Router 按以下 6 级优先级从高到低查找 Provider：
+Router 按以下 6 级优先级从高到低查找资源：
 
 1. **routeHint**（调用时主动指定）
 2. **用户任务覆盖**（设置页 View C 中用户为特定 `pluginId::taskId` 配的覆盖）
@@ -298,7 +298,7 @@ type LLMRunResult<T> =
 ```ts
 interface LLMRunMeta {
     requestId: string;
-    providerId: string;
+    resourceId: string;
     model?: string;
     capabilityKind: CapabilityKind;
     queuedAt: number;
@@ -312,7 +312,7 @@ interface LLMRunMeta {
 关键字段：
 - `meta.requestId`：用于后续 `waitForOverlayClose` / `updateOverlay` / `closeOverlay`。
 - `meta.latencyMs`：从开始执行到拿到结果的毫秒数。
-- `meta.fallbackUsed`：如果首选 Provider 失败后使用了 fallback，此字段为 `true`。
+- `meta.fallbackUsed`：如果首选资源失败后使用了 fallback，此字段为 `true`。
 - `reasonCode`：失败时的错误分类码，如 `'budget_exceeded'`、`'provider_unavailable'`、`'capability_mismatch'`。
 
 ---
@@ -345,7 +345,7 @@ const result = await llm.runTask({
 
 ### 8.1 什么是 stale binding？
 
-当用户在设置页面为某个任务配置了覆盖（Task Override），但后续该任务的 `requiredCapabilities` 变化导致绑定的 Provider 不再满足能力要求时，该覆盖会被标记为 **stale（失效）**。
+当用户在设置页面为某个任务配置了覆盖（Task Override），但后续该任务的 `requiredCapabilities` 变化导致绑定的资源不再满足能力要求时，该覆盖会被标记为 **stale（失效）**。
 
 设置页面 View C 中失效绑定会显示红色的 `⚠ 绑定失效` 警告。
 
@@ -429,7 +429,7 @@ export async function init(): Promise<void> {
 
     if (result.ok) {
         console.log(`意图: ${result.data.intent}, 置信度: ${result.data.confidence}`);
-        console.log(`由 ${result.meta.providerId} (${result.meta.model}) 处理，耗时 ${result.meta.latencyMs}ms`);
+        console.log(`由 ${result.meta.resourceId} (${result.meta.model}) 处理，耗时 ${result.meta.latencyMs}ms`);
 
         // 等待覆层关闭
         await llm.waitForOverlayClose(result.meta.requestId);
@@ -454,7 +454,7 @@ export function dispose(): void {
 ## 11. 常见问题
 
 **Q: `runTask` 返回 `{ ok: false, reasonCode: 'capability_mismatch' }` 怎么办？**  
-A: 检查你的 `requiredCapabilities` 是否与当前配置的 Provider 能力匹配。可能需要在设置页面更换 Provider。
+A: 检查你的 `requiredCapabilities` 是否与当前配置的资源能力匹配。可能需要在设置页面更换资源。
 
 **Q: 覆层没有弹出？**  
 A: 检查 `displayMode` 是否为 `silent`，以及该任务的 `backgroundEligible` 是否为 `true`。

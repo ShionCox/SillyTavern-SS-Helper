@@ -44,7 +44,7 @@ export class VaultManager {
             const rows = await legacyDb.table('credentials').toArray();
             if (rows.length > 0) {
                 const entries: DBLlmCredential[] = rows.map((row: any) => ({
-                    providerId: row.providerId,
+                    providerId: row.resourceId ?? row.providerId,
                     key: row.key,
                     createdAt: row.createdAt ?? Date.now(),
                     updatedAt: row.updatedAt ?? Date.now(),
@@ -61,55 +61,55 @@ export class VaultManager {
     }
 
     /** 存储凭据 */
-    async setCredential(providerId: string, apiKey: string): Promise<void> {
+    async setCredential(resourceId: string, apiKey: string): Promise<void> {
         await this.migrationDone;
         const obfuscated = this.obfuscate(apiKey);
         const now = Date.now();
 
-        const existing = await db.llm_credentials.get(providerId);
+        const existing = await db.llm_credentials.get(resourceId);
         const entry: DBLlmCredential = {
-            providerId,
+            providerId: resourceId,
             key: obfuscated,
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
         };
 
         await db.llm_credentials.put(entry);
-        this.cache.set(providerId, apiKey);
+        this.cache.set(resourceId, apiKey);
     }
 
     /** 获取凭据（优先从缓存读取） */
-    async getCredential(providerId: string): Promise<string | null> {
+    async getCredential(resourceId: string): Promise<string | null> {
         await this.migrationDone;
-        const cached = this.cache.get(providerId);
+        const cached = this.cache.get(resourceId);
         if (cached) return cached;
 
-        const entry = await db.llm_credentials.get(providerId);
+        const entry = await db.llm_credentials.get(resourceId);
         if (entry) {
             const apiKey = this.deobfuscate(entry.key);
-            this.cache.set(providerId, apiKey);
+            this.cache.set(resourceId, apiKey);
             return apiKey;
         }
         return null;
     }
 
     /** 删除凭据 */
-    async removeCredential(providerId: string): Promise<void> {
+    async removeCredential(resourceId: string): Promise<void> {
         await this.migrationDone;
-        await db.llm_credentials.delete(providerId);
-        this.cache.delete(providerId);
+        await db.llm_credentials.delete(resourceId);
+        this.cache.delete(resourceId);
     }
 
-    /** 列出所有已存储的 Provider Id */
-    async listProviderIds(): Promise<string[]> {
+    /** 列出所有已存储的资源 ID */
+    async listResourceIds(): Promise<string[]> {
         await this.migrationDone;
         const keys = await db.llm_credentials.toCollection().primaryKeys();
         return keys as string[];
     }
 
     /** 检查凭据是否存在 */
-    async hasCredential(providerId: string): Promise<boolean> {
-        const key = await this.getCredential(providerId);
+    async hasCredential(resourceId: string): Promise<boolean> {
+        const key = await this.getCredential(resourceId);
         return key !== null;
     }
 

@@ -7,16 +7,18 @@
  */
 
 import type {
+    MemoryAiRouteOverview,
     MemoryAiHealthSnapshot,
     MemoryAiTaskId,
     MemoryAiTaskRecord,
+    MemoryAiTaskRouteStatus,
     MemoryAiTaskStatus,
     MemoryAiTaskStatusState,
     CapabilityStatus,
     CapabilityState,
     LlmHubDiagnosisLevel,
 } from './ai-health-types';
-import type { LLMCapability, LLMSDK } from '../../../SDK/stx';
+import type { CapabilityKind, LLMCapability, LLMSDK, RoutePreviewSnapshot } from '../../../SDK/stx';
 
 // ── 常量 ──
 
@@ -33,6 +35,14 @@ const ALL_TASK_IDS: MemoryAiTaskId[] = [
 /** MemoryOS 依赖的四类能力 */
 const REQUIRED_CAPABILITIES: LLMCapability[] = ['chat', 'json', 'embeddings', 'rerank'];
 
+const TASK_KIND_BY_ID: Record<MemoryAiTaskId, CapabilityKind> = {
+    'memory.summarize': 'generation',
+    'memory.extract': 'generation',
+    'world.template.build': 'generation',
+    'memory.vector.embed': 'embedding',
+    'memory.search.rerank': 'rerank',
+};
+
 // ── 内部可变状态 ──
 
 let _llmHubMounted = false;
@@ -41,6 +51,12 @@ let _aiModeEnabled = false;
 
 const _taskStatuses: Record<MemoryAiTaskId, MemoryAiTaskStatus> = Object.create(null);
 const _recentRecords: MemoryAiTaskRecord[] = [];
+let _routeOverview: MemoryAiRouteOverview = {
+    generation: null,
+    embedding: null,
+    rerank: null,
+};
+const _taskRoutes: Record<MemoryAiTaskId, MemoryAiTaskRouteStatus> = Object.create(null);
 
 /** 订阅者列表 */
 type HealthChangeListener = () => void;
@@ -50,6 +66,13 @@ const _listeners: Set<HealthChangeListener> = new Set();
 
 for (const taskId of ALL_TASK_IDS) {
     _taskStatuses[taskId] = { taskId, state: 'idle', lastRecord: null };
+    _taskRoutes[taskId] = {
+        taskId,
+        taskKind: TASK_KIND_BY_ID[taskId],
+        available: false,
+        blockedReason: '尚未刷新路由状态',
+        route: null,
+    };
 }
 
 // ── 内部辅助 ──
@@ -117,6 +140,115 @@ function computeDiagnosis(
     return { level: 'fully_operational', text: '能力完整，可正常运行。' };
 }
 
+/**
+ * 功能：生成不可用状态下的占位路由预览。
+ * @param taskKind 能力大类。
+ * @param requiredCapabilities 该路由所需能力。
+ * @param blockedReason 当前不可用原因。
+ * @returns 占位路由预览对象。
+ */
+function buildBlockedRoutePreview(
+    taskKind: CapabilityKind,
+    requiredCapabilities: LLMCapability[],
+    blockedReason: string,
+): RoutePreviewSnapshot {
+    return {
+        consumer: 'stx_memory_os',
+        taskKind,
+        requiredCapabilities,
+        available: false,
+        blockedReason,
+    };
+}
+
+/**
+ * 功能：根据三类路由预览更新每项测试的可运行状态。
+ * @returns 无返回值。
+ */
+function syncTaskRoutesFromOverview(): void {
+    const generationRoute = _routeOverview.generation;
+    const embeddingRoute = _routeOverview.embedding;
+    const rerankRoute = _routeOverview.rerank;
+
+    _taskRoutes['memory.summarize'] = {
+        taskId: 'memory.summarize',
+        taskKind: 'generation',
+        available: generationRoute?.available === true,
+        blockedReason: generationRoute?.blockedReason,
+        route: generationRoute,
+    };
+    _taskRoutes['memory.extract'] = {
+        taskId: 'memory.extract',
+        taskKind: 'generation',
+        available: generationRoute?.available === true,
+        blockedReason: generationRoute?.blockedReason,
+        route: generationRoute,
+    };
+    _taskRoutes['world.template.build'] = {
+        taskId: 'world.template.build',
+        taskKind: 'generation',
+        available: generationRoute?.available === true,
+        blockedReason: generationRoute?.blockedReason,
+        route: generationRoute,
+    };
+    _taskRoutes['memory.vector.embed'] = {
+        taskId: 'memory.vector.embed',
+        taskKind: 'embedding',
+        available: embeddingRoute?.available === true,
+        blockedReason: embeddingRoute?.blockedReason,
+        route: embeddingRoute,
+    };
+    _taskRoutes['memory.search.rerank'] = {
+        taskId: 'memory.search.rerank',
+        taskKind: 'rerank',
+        available: rerankRoute?.available === true,
+        blockedReason: rerankRoute?.blockedReason,
+        route: rerankRoute,
+    };
+}
+
+/**
+ * 功能：刷新 MemoryOS 当前可见的三类路由预览。
+ * @returns 刷新后的健康快照。
+ */
+export async function refreshHealthSnapshot(): Promise<MemoryAiHealthSnapshot> {
+    const llm = (window as any).STX?.llm as LLMSDK | undefined;
+    const capabilities = detectCapabilities();
+    const { text } = computeDiagnosis(_llmHubMounted, _consumerRegistered, capabilities);
+
+    if (!llm?.inspect?.previewRoute) {
+        _routeOverview = {
+            generation: buildBlockedRoutePreview('generation', ['chat', 'json'], text),
+            embedding: buildBlockedRoutePreview('embedding', ['embeddings'], text),
+            rerank: buildBlockedRoutePreview('rerank', ['rerank'], text),
+        };
+        syncTaskRoutesFromOverview();
+        notifyListeners();
+        return getHealthSnapshot();
+    }
+
+    _routeOverview = {
+        generation: await llm.inspect.previewRoute({
+            consumer: 'stx_memory_os',
+            taskKind: 'generation',
+            requiredCapabilities: ['chat', 'json'],
+        }),
+        embedding: await llm.inspect.previewRoute({
+            consumer: 'stx_memory_os',
+            taskKind: 'embedding',
+            requiredCapabilities: ['embeddings'],
+        }),
+        rerank: await llm.inspect.previewRoute({
+            consumer: 'stx_memory_os',
+            taskKind: 'rerank',
+            requiredCapabilities: ['rerank'],
+        }),
+    };
+    syncTaskRoutesFromOverview();
+    notifyListeners();
+    return getHealthSnapshot();
+}
+
 // ── 公共写入接口（仅限 MemoryOS 内部模块调用） ──
 
 /** 更新 LLMHub 挂载状态 */
@@ -124,6 +256,7 @@ export function setLlmHubMounted(mounted: boolean): void {
     if (_llmHubMounted === mounted) return;
     _llmHubMounted = mounted;
     notifyListeners();
+    void refreshHealthSnapshot();
 }
 
 /** 更新 consumer 注册状态 */
@@ -131,6 +264,7 @@ export function setConsumerRegistered(registered: boolean): void {
     if (_consumerRegistered === registered) return;
     _consumerRegistered = registered;
     notifyListeners();
+    void refreshHealthSnapshot();
 }
 
 /** 更新 AI 模式开关状态 */
@@ -138,6 +272,7 @@ export function setAiModeEnabled(enabled: boolean): void {
     if (_aiModeEnabled === enabled) return;
     _aiModeEnabled = enabled;
     notifyListeners();
+    void refreshHealthSnapshot();
 }
 
 /** 标记某任务开始运行 */
@@ -181,6 +316,12 @@ export function getHealthSnapshot(): MemoryAiHealthSnapshot {
         diagnosisLevel: level,
         diagnosisText: text,
         tasks: { ...(_taskStatuses as Record<MemoryAiTaskId, MemoryAiTaskStatus>) },
+        routeOverview: {
+            generation: _routeOverview.generation ? { ..._routeOverview.generation } : null,
+            embedding: _routeOverview.embedding ? { ..._routeOverview.embedding } : null,
+            rerank: _routeOverview.rerank ? { ..._routeOverview.rerank } : null,
+        },
+        taskRoutes: { ...(_taskRoutes as Record<MemoryAiTaskId, MemoryAiTaskRouteStatus>) },
         recentRecords: [..._recentRecords],
     };
 }
@@ -199,6 +340,11 @@ export function isCapabilityAvailable(cap: LLMCapability): boolean {
 /** 获取某任务的最新状态 */
 export function getTaskStatus(taskId: MemoryAiTaskId): MemoryAiTaskStatus | null {
     return _taskStatuses[taskId] ?? null;
+}
+
+/** 获取某项测试当前的路由状态 */
+export function getTaskRouteStatus(taskId: MemoryAiTaskId): MemoryAiTaskRouteStatus | null {
+    return _taskRoutes[taskId] ?? null;
 }
 
 // ── 订阅 ──

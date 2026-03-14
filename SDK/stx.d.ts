@@ -30,6 +30,26 @@ export interface WorldTemplate {
     injectionLayout: Record<string, any>;
     worldInfoRef?: { book: string; hash: string };
     createdAt: number;
+    /** v2: 多表定义 */
+    tables?: TemplateTableDef[];
+    /** v2: 字段同义词映射 */
+    fieldSynonyms?: Record<string, string[]>;
+    /** v2: 表同义词映射 */
+    tableSynonyms?: Record<string, string[]>;
+    /** v2: 模板族 ID */
+    templateFamilyId?: string;
+    /** v2: 修订版本号 */
+    revisionNo?: number;
+    /** v2: 修订状态 */
+    revisionState?: 'draft' | 'final';
+    /** v2: 父模板 ID */
+    parentTemplateId?: string | null;
+    /** v2: Schema 指纹 */
+    schemaFingerprint?: string;
+    /** v2: 最后修改时间 */
+    lastTouchedAt?: number;
+    /** v2: 定稿时间 */
+    finalizedAt?: number | null;
 }
 
 export interface TemplateBinding {
@@ -70,8 +90,37 @@ export interface ProposalEnvelope {
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
         notes?: string;
+        /** v2: 模板 schema 变更提案 */
+        schemaChanges?: SchemaChangeProposal[];
+        /** v2: 实体解析提案 */
+        entityResolutions?: EntityResolutionProposal[];
     };
     confidence: number;
+}
+
+/** v2: Schema 变更提案 */
+export interface SchemaChangeProposal {
+    kind: 'add_table' | 'add_field' | 'modify_primary_key' | 'modify_description' | 'alias_suggestion';
+    tableKey: string;
+    fieldKey?: string;
+    payload: Record<string, unknown>;
+    requiredByFacts?: boolean;
+}
+
+/** v2: 实体解析提案 */
+export interface EntityResolutionProposal {
+    tableKey: string;
+    fromRowId: string;
+    toRowId: string;
+    confidence: number;
+    reason: string;
+}
+
+/** v2: 延迟 schema 提示 */
+export interface DeferredSchemaHint {
+    change: SchemaChangeProposal;
+    deferredAt: number;
+    reason: string;
 }
 
 export interface GateResult {
@@ -86,9 +135,17 @@ export interface ProposalResult {
         factKeys: string[];
         statePaths: string[];
         summaryIds: string[];
+        /** v2: 已应用的 schema 变更数 */
+        schemaChangesApplied?: number;
+        /** v2: 被延迟的 schema 变更数 */
+        schemaChangesDeferred?: number;
+        /** v2: 实体解析结果 */
+        entityResolutions?: number;
     };
     rejectedReasons: string[];
     gateResults: GateResult[];
+    /** v2: 本轮产生的延迟 schema 提示 */
+    deferredSchemaHints?: DeferredSchemaHint[];
 }
 
 export interface WriteRequest {
@@ -98,8 +155,14 @@ export interface WriteRequest {
         facts?: FactProposal[];
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
+        /** v2: 模板 schema 变更提案 */
+        schemaChanges?: SchemaChangeProposal[];
+        /** v2: 实体解析提案 */
+        entityResolutions?: EntityResolutionProposal[];
     };
     reason: string;
+    /** v2: 上一轮被延迟的 schema 提示 */
+    deferredSchemaHints?: DeferredSchemaHint[];
 }
 
 export interface HybridSearchResult {
@@ -113,6 +176,88 @@ export interface CompactionResult {
     summariesCreated?: number;
     eventsArchived?: number;
     statesUpdated?: number;
+}
+
+// -- v2: 模板表定义 --
+export interface TemplateTableDef {
+    key: string;
+    label: string;
+    isBase: boolean;
+    primaryKeyField: string;
+    source?: 'persisted' | 'derived';
+    fields: Array<{
+        key: string;
+        label: string;
+        tier: 'core' | 'extension';
+        description?: string;
+        fillSpec?: string;
+        isPrimaryKey?: boolean;
+    }>;
+    description?: string;
+}
+
+// -- v2: 聊天级状态类型 --
+export interface SummaryPolicyOverride {
+    enabled?: boolean;
+    floorUnit?: 'assistant_reply';
+    interval?: number;
+    windowSize?: number;
+    allowAutoSchemaExpansion?: boolean;
+}
+
+export interface AutoSchemaPolicy {
+    maxNewTablesPerRound?: number;
+    maxNewFieldsPerRound?: number;
+    maxNewFieldsPerTable?: number;
+    tableNameConflictThreshold?: number;
+    descriptionSimilarityThreshold?: number;
+}
+
+// -- v2: 行操作类型 --
+export interface RowRefResolution {
+    resolved: boolean;
+    rowId: string | null;
+    source: 'exact' | 'redirect' | 'alias' | 'fuzzy';
+    input: string;
+    flattenedRedirect?: boolean;
+}
+
+export interface RowMergeResult {
+    success: boolean;
+    migratedFactKeys: string[];
+    updatedRedirects: number;
+    updatedAliases: number;
+    auditId?: string;
+    error?: string;
+}
+
+export interface RowSeedData {
+    [fieldKey: string]: unknown;
+}
+
+export interface LogicTableRow {
+    rowId: string;
+    tableKey: string;
+    values: Record<string, unknown>;
+    factKeys: Record<string, string>;
+    tombstoned: boolean;
+    redirectedTo: string | null;
+    aliases: string[];
+    updatedAt: number;
+}
+
+export interface LogicTableQueryOpts {
+    limit?: number;
+    includeTombstones?: boolean;
+    keywords?: string[];
+}
+
+export interface SchemaContextResult {
+    source: 'active_draft' | 'active_final' | 'base_schema' | 'fallback_prompt';
+    schemaSummary: string;
+    dataSnapshot: string;
+    degraded: boolean;
+    degradeReason?: string;
 }
 
 // -- BUS 接口 --
@@ -207,6 +352,14 @@ export interface MemorySDK {
         getBinding(): Promise<TemplateBinding | null>;
         rebuildFromWorldInfo(): Promise<string | null>;
         destroy(): void;
+        /** v2: 返回合并后的有效模板（draft + base） */
+        getEffective(): Promise<WorldTemplate | null>;
+        /** v2: 列出有效模板中的表定义 */
+        listTables(): Promise<TemplateTableDef[]>;
+        /** v2: 列出模板修订历史 */
+        listRevisions(opts?: { limit?: number }): Promise<WorldTemplate[]>;
+        /** v2: 回滚到指定模板修订 */
+        rollbackRevision(templateId: string): Promise<void>;
     };
 
     vector: {
@@ -224,7 +377,7 @@ export interface MemorySDK {
     worldInfo: {
         writeback(mode?: 'facts' | 'summaries' | 'all'): Promise<{ written: number; bookName: string }>;
         preview(): Promise<Array<{ entry: string; keywords: string[]; contentLength: number }>>;
-        getLogicTable(entityType: string): Promise<any[]>;
+        getLogicTable(entityType: string, opts?: LogicTableQueryOpts): Promise<any[]>;
         updateFact(
             factKey: string | undefined,
             type: string,
@@ -232,6 +385,47 @@ export interface MemorySDK {
             path: string,
             value: any
         ): Promise<string>;
+    };
+
+    // ─── v2 新增：聊天级状态管理 ───
+    chatState: {
+        getSummaryPolicy(): Promise<SummaryPolicyOverride>;
+        setSummaryPolicyOverride(override: Partial<SummaryPolicyOverride>): Promise<void>;
+        getAutoSchemaPolicy(): Promise<AutoSchemaPolicy>;
+        setAutoSchemaPolicy(policy: AutoSchemaPolicy): Promise<void>;
+        flush(): Promise<void>;
+        destroy(): Promise<void>;
+    };
+
+    // ─── v2 新增：楼层跟踪器 ───
+    turnTracker: {
+        tryCountTurn(input: {
+            eventType: string;
+            messageId?: string;
+            textContent: string;
+            isSystemMessage: boolean;
+            ingestHint: 'normal' | 'bootstrap' | 'backfill';
+        }): Promise<boolean>;
+        getAssistantTurnCount(): Promise<number>;
+        invalidateCache(): void;
+    };
+
+    // ─── v2 新增：行操作 ───
+    rows: {
+        resolve(tableKey: string, input: string): Promise<RowRefResolution>;
+        resolveMany(tableKey: string, inputs: string[]): Promise<RowRefResolution[]>;
+        create(tableKey: string, rowId: string, seed?: RowSeedData): Promise<string>;
+        merge(tableKey: string, fromRowId: string, toRowId: string): Promise<RowMergeResult>;
+        delete(tableKey: string, rowId: string): Promise<void>;
+        restore(tableKey: string, rowId: string): Promise<void>;
+        listTableRows(tableKey: string, opts?: LogicTableQueryOpts): Promise<LogicTableRow[]>;
+        updateCell(tableKey: string, rowId: string, fieldKey: string, value: unknown): Promise<string>;
+        setAlias(tableKey: string, alias: string, canonicalRowId: string): Promise<void>;
+    };
+
+    // ─── v2 新增：schemaContext 与 Prompt 裁剪 ───
+    schemaContext: {
+        build(mode: 'extract' | 'summarize', windowKeywords?: string[]): Promise<SchemaContextResult>;
     };
 }
 
@@ -242,7 +436,7 @@ export type DisplayMode = 'fullscreen' | 'compact' | 'silent';
 
 export interface LLMRunMeta {
     requestId: string;
-    providerId: string;
+    resourceId: string;
     model?: string;
     capabilityKind: CapabilityKind;
     queuedAt: number;
@@ -260,7 +454,7 @@ export interface TaskDescriptor {
     taskId: string;
     taskKind: CapabilityKind;
     requiredCapabilities: LLMCapability[];
-    recommendedRoute?: { providerId?: string; profileId?: string };
+    recommendedRoute?: { resourceId?: string; profileId?: string };
     recommendedDisplay?: DisplayMode;
     description?: string;
     backgroundEligible?: boolean;
@@ -273,10 +467,10 @@ export interface ConsumerRegistration {
     tasks: TaskDescriptor[];
     routeBindings?: Array<{
         taskId: string;
-        providerId: string;
+        resourceId: string;
         model?: string;
         profileId?: string;
-        fallbackProviderId?: string;
+        fallbackResourceId?: string;
     }>;
 }
 
@@ -306,6 +500,71 @@ export interface RequestEnqueueOptions {
     blockNextUntilOverlayClose?: boolean;
 }
 
+export interface RouteResolveArgs {
+    consumer: string;
+    taskKind: CapabilityKind;
+    taskId?: string;
+    requiredCapabilities?: LLMCapability[];
+    routeHint?: { resourceId?: string; model?: string; profileId?: string };
+}
+
+export interface RoutePreviewSnapshot {
+    consumer: string;
+    taskKind: CapabilityKind;
+    taskId?: string;
+    requiredCapabilities: LLMCapability[];
+    available: boolean;
+    resourceId?: string;
+    resourceLabel?: string;
+    resourceType?: 'generation' | 'embedding' | 'rerank';
+    source?: 'tavern' | 'custom';
+    model?: string;
+    resolvedBy?: 'route_hint' | 'user_task_override' | 'plugin_task_recommend' | 'user_plugin_default' | 'user_global_default' | 'builtin_tavern_fallback' | 'fallback';
+    blockedReason?: string;
+}
+
+export interface ResourceStatusSnapshot {
+    resourceId: string;
+    resourceLabel: string;
+    resourceType: 'generation' | 'embedding' | 'rerank';
+    source: 'tavern' | 'custom';
+    enabled: boolean;
+    baseUrl?: string;
+    model?: string;
+    credentialConfigured: boolean;
+    builtin: boolean;
+}
+
+export interface LLMHubStatusSnapshot {
+    resources: ResourceStatusSnapshot[];
+    globalProfile?: string;
+    globalAssignments: {
+        generation?: { resourceId: string };
+        embedding?: { resourceId: string };
+        rerank?: { resourceId: string };
+    };
+    pluginAssignments: Array<{
+        pluginId: string;
+        generation?: { resourceId: string };
+        embedding?: { resourceId: string };
+        rerank?: { resourceId: string };
+    }>;
+    taskAssignments: Array<{
+        pluginId: string;
+        taskId: string;
+        taskKind: CapabilityKind;
+        resourceId: string;
+        isStale: boolean;
+        staleReason?: string;
+    }>;
+    readiness: Record<CapabilityKind, boolean>;
+}
+
+export interface LLMInspectApi {
+    getStatusSnapshot(): Promise<LLMHubStatusSnapshot> | LLMHubStatusSnapshot;
+    previewRoute(args: RouteResolveArgs): Promise<RoutePreviewSnapshot> | RoutePreviewSnapshot;
+}
+
 // -- LLMSDK 接口 --
 export interface LLMSDK {
     // ─── 同步命令式接口 ───
@@ -331,7 +590,7 @@ export interface LLMSDK {
         taskKind: CapabilityKind;
         input: any;
         schema?: object;
-        routeHint?: { provider?: string; profile?: string; model?: string };
+        routeHint?: { resource?: string; profile?: string; model?: string };
         budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
         enqueue?: RequestEnqueueOptions;
     }): Promise<LLMRunResult<T>>;
@@ -341,7 +600,7 @@ export interface LLMSDK {
         consumer: string;
         taskId: string;
         texts: string[];
-        routeHint?: { provider?: string; model?: string };
+        routeHint?: { resource?: string; model?: string };
         enqueue?: RequestEnqueueOptions;
     }): Promise<any>;
 
@@ -352,12 +611,15 @@ export interface LLMSDK {
         query: string;
         docs: string[];
         topK?: number;
-        routeHint?: { provider?: string; model?: string };
+        routeHint?: { resource?: string; model?: string };
         enqueue?: RequestEnqueueOptions;
     }): Promise<any>;
 
     /** 等待指定请求的覆层关闭。通过 meta.requestId 获取 requestId。 */
     waitForOverlayClose(requestId: string): Promise<void>;
+
+    /** 只读检查接口。*/
+    inspect?: LLMInspectApi;
 }
 
 // -- Tavern SDK 鎺ュ彛 --

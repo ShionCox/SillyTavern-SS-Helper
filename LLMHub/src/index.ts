@@ -1,4 +1,4 @@
-/**
+﻿/**
  * LLMHub 统一入口
  * 四层架构：注册中心 → 路由解析器 → 请求编排器 → 展示控制器
  * 导出公共模块并初始化运行时实例。
@@ -20,9 +20,10 @@ export type {
 } from './providers/types';
 export { OpenAIProvider } from './providers/openai-provider';
 export { TavernProvider } from './providers/tavern-provider';
+export { CustomRerankProvider } from './providers/custom-rerank-provider';
 
 // 路由层
-export { TaskRouter } from './router/router';
+export { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 
 // 注册中心
 export { ConsumerRegistry } from './registry/consumer-registry';
@@ -54,6 +55,9 @@ export type { LLMError } from './schema/error-codes';
 export type {
     LLMCapability,
     CapabilityKind,
+    ResourceType,
+    ResourceSource,
+    ResourceConfig,
     LLMRunMeta,
     LLMRunResult,
     DisplayMode,
@@ -73,12 +77,16 @@ export type {
     OverlayAction,
     RouteResolveArgs,
     RouteResolveResult,
-    GlobalCapabilityDefault,
-    PluginCapabilityDefault,
-    TaskOverride,
+    AssignmentEntry,
+    GlobalAssignments,
+    PluginAssignment,
+    TaskAssignment,
+    LLMHubStatusSnapshot,
+    LLMInspectApi,
+    ResourceStatusSnapshot,
+    RoutePreviewSnapshot,
     SilentPermissionGrant,
     LLMHubSettings,
-    ProviderConfig,
     RunTaskArgs,
     EmbedArgs,
     RerankArgs,
@@ -93,17 +101,31 @@ import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
 import { patchSdkChatShared, writeSdkPluginChatState } from '../../SDK/db';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
-import { TaskRouter } from './router/router';
+import { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
 import { OpenAIProvider } from './providers/openai-provider';
 import { TavernProvider } from './providers/tavern-provider';
+import { CustomRerankProvider } from './providers/custom-rerank-provider';
 import { VaultManager } from './vault/vault-manager';
 import { ConsumerRegistry } from './registry/consumer-registry';
 import { RequestOrchestrator } from './orchestrator/orchestrator';
 import { DisplayController } from './display/display-controller';
 import type { PluginManifest } from '../../SDK/stx';
-import type { LLMHubSettings, ProviderConfig } from './schema/types';
+import type {
+    LLMCapability,
+    LLMHubSettings,
+    LLMHubStatusSnapshot,
+    LLMInspectApi,
+    ResourceConfig,
+    ResourceStatusSnapshot,
+    ResourceType,
+    RoutePreviewSnapshot,
+    RouteResolveArgs,
+    GlobalAssignments,
+    PluginAssignment,
+    TaskAssignment,
+} from './schema/types';
 import manifestJson from '../manifest.json';
 
 export const logger = new Logger('AI 调度中枢');
@@ -130,48 +152,54 @@ const LLMHUB_MANIFEST: PluginManifest = {
     source: 'manifest_json',
 };
 
+/** 资源类型 → 能力映射 */
+function resourceTypeToCapabilities(type: ResourceType): LLMCapability[] {
+    switch (type) {
+        case 'generation': return ['chat', 'json', 'tools', 'vision', 'reasoning'];
+        case 'embedding': return ['embeddings'];
+        case 'rerank': return ['rerank'];
+    }
+}
+
+function normalizeResourceCapabilities(cfg: ResourceConfig): LLMCapability[] {
+    const baseCapabilities = resourceTypeToCapabilities(cfg.type);
+    const declaredCapabilities = Array.isArray(cfg.capabilities) ? cfg.capabilities : [];
+    const nextCapabilities = new Set<LLMCapability>(baseCapabilities);
+
+    if (cfg.type === 'generation' && cfg.source === 'custom' && declaredCapabilities.includes('rerank')) {
+        nextCapabilities.add('rerank');
+    }
+
+    return Array.from(nextCapabilities);
+}
+
 /**
  * LLMHub Runtime — 四层架构
- * 第一层：ConsumerRegistry（注册中心）
- * 第二层：TaskRouter（路由解析器）
- * 第三层：RequestOrchestrator（请求编排器）
- * 第四层：DisplayController（展示控制器）
- *
- * LLMSDKImpl 作为统一入口门面，整合四层。
  */
 class LLMHub {
-    // ─── 四层核心 ───
     public registry: ConsumerRegistry;
     public router: TaskRouter;
     public orchestrator: RequestOrchestrator;
     public displayController: DisplayController;
-
-    // ─── 辅助层 ───
     public budgetManager: BudgetManager;
     public sdk: LLMSDKImpl;
     public vault: VaultManager;
+    private managedResourceIds: Set<string>;
 
     constructor() {
         logger.info('AI 调度中枢核心引擎初始化（四层架构）...');
 
-        // 第一层：注册中心
         this.registry = new ConsumerRegistry();
-
-        // 第二层：路由解析器
         this.router = new TaskRouter();
         this.router.setRegistry(this.registry);
 
-        // 辅助层
         this.budgetManager = new BudgetManager();
         this.vault = new VaultManager();
+        this.managedResourceIds = new Set<string>();
 
-        // 第三层：编排器
         this.orchestrator = new RequestOrchestrator();
-
-        // 第四层：展示控制器
         this.displayController = new DisplayController();
 
-        // 门面层
         this.sdk = new LLMSDKImpl(
             this.router,
             this.budgetManager,
@@ -179,62 +207,61 @@ class LLMHub {
             this.displayController,
             this.registry,
         );
+        this.sdk.inspect = this.buildInspectApi();
 
-        // 连接注册中心持久化
         this.registry.setPersistCallback((snapshots) => {
             const settings = this.readSettings();
             this.writeSettings({ ...settings, consumerSnapshots: snapshots });
         });
 
-        // 连接 Provider 能力查询
-        this.registry.setProviderCapabilityQuery((providerId) => {
-            return this.router.getProviderCapabilities(providerId);
+        this.registry.setResourceCapabilityQuery((resourceId) => {
+            return this.router.getProviderCapabilities(resourceId);
         });
 
-        // 恢复持久数据
         this.restoreFromStorage();
-
+        this.registerBuiltinTavernResource();
         this.registerToSTX();
         this.setupDefaultProvider().catch((error: unknown) => {
-            logger.warn('初始化默认 Provider 失败，后续将等待设置页注入配置。', error);
+            logger.warn('初始化默认资源失败，后续将等待设置页注入配置。', error);
         });
 
         logger.success('AI 调度中枢四层架构初始化完成。');
     }
 
-    /** 从持久存储恢复注册快照与 silent 权限 */
+    /** 注册内置酒馆资源（运行时常驻，不写入持久层） */
+    private registerBuiltinTavernResource(): void {
+        const tavernProvider = new TavernProvider({ id: BUILTIN_TAVERN_RESOURCE_ID });
+        this.router.registerProvider(
+            tavernProvider,
+            'generation',
+            ['chat', 'json'],
+            undefined,
+        );
+        logger.info('内置酒馆生成资源已注册。');
+    }
+
     private restoreFromStorage(): void {
         const settings = this.readSettings();
+
         if (settings.consumerSnapshots) {
             this.registry.restoreFromStorage(settings.consumerSnapshots);
         }
         if (settings.silentPermissions) {
             this.displayController.restoreSilentPermissions(settings.silentPermissions);
         }
-        // 恢复分层路由设置
-        if (settings.globalDefaults) {
-            this.router.applyGlobalDefaults(settings.globalDefaults);
+        if (settings.globalAssignments) {
+            this.router.applyGlobalAssignments(settings.globalAssignments);
         }
-        if (settings.pluginDefaults) {
-            this.router.applyPluginDefaults(settings.pluginDefaults);
+        if (settings.pluginAssignments) {
+            this.router.applyPluginAssignments(settings.pluginAssignments);
         }
-        if (settings.taskOverrides) {
-            this.router.applyTaskOverrides(settings.taskOverrides);
+        if (settings.taskAssignments) {
+            this.router.applyTaskAssignments(settings.taskAssignments);
         }
     }
 
     public async applySettingsFromContext(): Promise<void> {
         const settings = this.readSettings();
-
-        // ── 清除旧字段（硬切换，不迁移） ──
-        const legacy = settings as Record<string, unknown>;
-        const legacyKeys = ['defaultProvider', 'defaultModel', 'defaultBaseUrl', 'routePolicies'];
-        const hadLegacy = legacyKeys.some(k => k in legacy);
-        if (hadLegacy) {
-            for (const k of legacyKeys) delete legacy[k];
-            this.writeSettings(settings);
-            logger.info('已清除旧版设置字段（defaultProvider/defaultModel/defaultBaseUrl/routePolicies）');
-        }
 
         if (settings.globalProfile) {
             try {
@@ -244,26 +271,24 @@ class LLMHub {
             }
         }
 
-        // ── 多 Provider 配置条目 ──
-        if (Array.isArray(settings.providers) && settings.providers.length > 0) {
-            for (const cfg of settings.providers) {
-                if (cfg.enabled === false) continue;
-                const model = cfg.selectedModel || cfg.manualModel || cfg.model || '';
-                const baseUrl = cfg.baseUrl || this.resolveBaseUrl(cfg.id);
-                await this.upsertProvider(cfg.id, model, baseUrl, cfg.source, cfg.capabilities);
+        const enabledResources = (settings.resources || []).filter((cfg: ResourceConfig) => cfg.enabled !== false);
+        const nextResourceIds = new Set<string>(enabledResources.map((cfg: ResourceConfig) => cfg.id));
+
+        // 移除不再存在的资源（但保留内置酒馆）
+        for (const resourceId of this.managedResourceIds) {
+            if (!nextResourceIds.has(resourceId)) {
+                this.router.removeProvider(resourceId);
             }
         }
 
-        // 分层路由设置
-        if (settings.globalDefaults) {
-            this.router.applyGlobalDefaults(settings.globalDefaults);
+        for (const cfg of enabledResources) {
+            await this.upsertResource(cfg);
         }
-        if (settings.pluginDefaults) {
-            this.router.applyPluginDefaults(settings.pluginDefaults);
-        }
-        if (settings.taskOverrides) {
-            this.router.applyTaskOverrides(settings.taskOverrides);
-        }
+        this.managedResourceIds = nextResourceIds;
+
+        this.router.applyGlobalAssignments(settings.globalAssignments || {});
+        this.router.applyPluginAssignments(settings.pluginAssignments || []);
+        this.router.applyTaskAssignments(settings.taskAssignments || []);
 
         if (settings.budgets) {
             for (const [consumer, config] of Object.entries(settings.budgets)) {
@@ -271,7 +296,6 @@ class LLMHub {
             }
         }
 
-        // 恢复 silent 权限
         if (settings.silentPermissions) {
             this.displayController.restoreSilentPermissions(settings.silentPermissions);
         }
@@ -280,19 +304,22 @@ class LLMHub {
         this.persistChatSnapshot();
     }
 
-    public async saveCredential(providerId: string, apiKey: string): Promise<void> {
-        await this.vault.setCredential(providerId, apiKey);
+    public async saveCredential(resourceId: string, apiKey: string): Promise<void> {
+        await this.vault.setCredential(resourceId, apiKey);
         const settings = this.readSettings();
-        const cfg = settings.providers?.find(p => p.id === providerId);
-        const model = cfg?.selectedModel || cfg?.manualModel || cfg?.model || '';
-        const baseUrl = cfg?.baseUrl || this.resolveBaseUrl(providerId);
-        await this.upsertProvider(providerId, model, baseUrl);
+        const cfg = settings.resources?.find((item: ResourceConfig) => item.id === resourceId);
+        if (!cfg) return;
+        await this.upsertResource(cfg);
+    }
+
+    public async removeCredential(resourceId: string): Promise<void> {
+        await this.vault.removeCredential(resourceId);
     }
 
     public async clearAllCredentials(): Promise<void> {
-        const providerIds = await this.vault.listProviderIds();
-        for (const providerId of providerIds) {
-            await this.vault.removeCredential(providerId);
+        const resourceIds = await this.vault.listResourceIds();
+        for (const resourceId of resourceIds) {
+            await this.vault.removeCredential(resourceId);
         }
     }
 
@@ -312,50 +339,191 @@ class LLMHub {
         this.writeSettings({ ...settings, budgets });
     }
 
+    private buildInspectApi(): LLMInspectApi {
+        return {
+            getStatusSnapshot: (): Promise<LLMHubStatusSnapshot> => this.getStatusSnapshot(),
+            previewRoute: (args: RouteResolveArgs): Promise<RoutePreviewSnapshot> => this.previewRoute(args),
+        };
+    }
+
+    public async getStatusSnapshot(): Promise<LLMHubStatusSnapshot> {
+        const settings = this.readSettings();
+
+        const builtinTavern: ResourceStatusSnapshot = {
+            resourceId: BUILTIN_TAVERN_RESOURCE_ID,
+            resourceLabel: '酒馆直连（内置）',
+            resourceType: 'generation',
+            source: 'tavern',
+            enabled: true,
+            credentialConfigured: true,
+            builtin: true,
+        };
+
+        const userResources = await Promise.all((settings.resources || []).map(
+            async (cfg: ResourceConfig): Promise<ResourceStatusSnapshot> => ({
+                resourceId: cfg.id,
+                resourceLabel: cfg.label || cfg.id,
+                resourceType: cfg.type,
+                source: cfg.source,
+                enabled: cfg.enabled !== false,
+                baseUrl: cfg.baseUrl,
+                model: cfg.model,
+                credentialConfigured: cfg.source === 'tavern' ? true : await this.vault.hasCredential(cfg.id),
+                builtin: false,
+            }),
+        ));
+
+        const resources = [builtinTavern, ...userResources];
+
+        const generation = await this.previewRoute({
+            consumer: 'stx_llmhub',
+            taskKind: 'generation',
+            requiredCapabilities: ['chat', 'json'],
+        });
+        const embedding = await this.previewRoute({
+            consumer: 'stx_llmhub',
+            taskKind: 'embedding',
+            requiredCapabilities: ['embeddings'],
+        });
+        const rerank = await this.previewRoute({
+            consumer: 'stx_llmhub',
+            taskKind: 'rerank',
+            requiredCapabilities: ['rerank'],
+        });
+
+        return {
+            resources,
+            globalProfile: settings.globalProfile,
+            globalAssignments: settings.globalAssignments || {},
+            pluginAssignments: settings.pluginAssignments || [],
+            taskAssignments: settings.taskAssignments || [],
+            readiness: {
+                generation: generation.available,
+                embedding: embedding.available,
+                rerank: rerank.available,
+            },
+        };
+    }
+
+    public async previewRoute(args: RouteResolveArgs): Promise<RoutePreviewSnapshot> {
+        const settings = this.readSettings();
+        const requiredCapabilities = args.requiredCapabilities || [];
+
+        if (settings.enabled === false) {
+            return {
+                consumer: args.consumer,
+                taskKind: args.taskKind,
+                taskId: args.taskId,
+                requiredCapabilities,
+                available: false,
+                blockedReason: 'LLMHub 未启用',
+            };
+        }
+
+        try {
+            const resolved = this.router.resolveRoute(args);
+            const isBuiltin = resolved.resourceId === BUILTIN_TAVERN_RESOURCE_ID;
+            const userResource = (settings.resources || []).find((item: ResourceConfig) => item.id === resolved.resourceId);
+
+            let resourceLabel: string;
+            let resourceType: ResourceType;
+            let source: 'tavern' | 'custom';
+            let blockedReason = '';
+
+            if (isBuiltin) {
+                resourceLabel = '酒馆直连（内置）';
+                resourceType = 'generation';
+                source = 'tavern';
+            } else if (userResource) {
+                resourceLabel = userResource.label || userResource.id;
+                resourceType = userResource.type;
+                source = userResource.source;
+
+                if (userResource.enabled === false) {
+                    blockedReason = `资源 ${resourceLabel} 已停用`;
+                } else if (userResource.source !== 'tavern' && !(await this.vault.hasCredential(resolved.resourceId))) {
+                    blockedReason = `资源 ${resourceLabel} 未配置 API Key`;
+                }
+            } else {
+                resourceLabel = resolved.resourceId;
+                resourceType = args.taskKind as ResourceType;
+                source = 'custom';
+                blockedReason = `未找到资源：${resolved.resourceId}`;
+            }
+
+            return {
+                consumer: args.consumer,
+                taskKind: args.taskKind,
+                taskId: args.taskId,
+                requiredCapabilities,
+                available: blockedReason.length === 0,
+                resourceId: resolved.resourceId,
+                resourceLabel,
+                resourceType,
+                source,
+                model: resolved.model || (userResource?.model),
+                resolvedBy: resolved.resolvedBy,
+                blockedReason: blockedReason || undefined,
+            };
+        } catch (error: unknown) {
+            return {
+                consumer: args.consumer,
+                taskKind: args.taskKind,
+                taskId: args.taskId,
+                requiredCapabilities,
+                available: false,
+                blockedReason: String((error as Error)?.message || error),
+            };
+        }
+    }
+
     private async setupDefaultProvider(): Promise<void> {
-        await this.upsertProvider('tavern', '', '', 'tavern');
         await this.applySettingsFromContext();
     }
 
-    private async upsertProvider(
-        providerId: string,
-        model: string,
-        baseUrl: string,
-        source: 'tavern' | 'custom' = 'custom',
-        capabilities?: import('./schema/types').LLMCapability[],
-    ): Promise<void> {
-        if (source === 'tavern') {
-            const provider = new TavernProvider({ id: providerId });
-            this.router.registerProvider(provider, capabilities || ['chat', 'json']);
-            logger.info(`Provider 已刷新 (tavern): ${providerId}`);
+    private async upsertResource(cfg: ResourceConfig): Promise<void> {
+        const capabilities = normalizeResourceCapabilities(cfg);
+        const defaultModel = cfg.model || undefined;
+
+        if (cfg.source === 'tavern') {
+            const provider = new TavernProvider({ id: cfg.id });
+            this.router.registerProvider(provider, cfg.type, capabilities, defaultModel);
+            logger.info(`资源已刷新 (tavern): ${cfg.id}`);
             return;
         }
 
-        const apiKey = (await this.vault.getCredential(providerId)) || '';
-        const provider = new OpenAIProvider({ id: providerId, apiKey, baseUrl, model });
-        this.router.registerProvider(provider, capabilities || ['chat', 'json', 'tools', 'embeddings']);
-        logger.info(`Provider 已刷新: ${providerId}, model=${model}, baseUrl=${baseUrl}`);
+        const apiKey = (await this.vault.getCredential(cfg.id)) || '';
+
+        if (cfg.type === 'rerank') {
+            const provider = new CustomRerankProvider({
+                id: cfg.id,
+                apiKey,
+                baseUrl: cfg.baseUrl || '',
+                model: cfg.model,
+                rerankPath: cfg.rerankPath,
+                customParams: cfg.customParams,
+            });
+            this.router.registerProvider(provider, 'rerank', ['rerank'], defaultModel);
+            logger.info(`资源已刷新 (rerank): ${cfg.id}`);
+            return;
+        }
+
+        // generation 或 embedding 走 OpenAI 兼容
+        const provider = new OpenAIProvider({
+            id: cfg.id,
+            apiKey,
+            baseUrl: cfg.baseUrl || 'https://api.openai.com/v1',
+            model: cfg.model,
+            enableRerank: capabilities.includes('rerank'),
+            customParams: cfg.customParams,
+        });
+        this.router.registerProvider(provider, cfg.type, capabilities, defaultModel);
+        logger.info(`资源已刷新: ${cfg.id}, type=${cfg.type}, model=${cfg.model}`);
     }
 
-    private resolveBaseUrl(providerId: string): string {
-        const map: Record<string, string> = {
-            openai: 'https://api.openai.com/v1',
-            claude: 'https://api.anthropic.com/v1',
-            gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
-            groq: 'https://api.groq.com/openai/v1',
-        };
-        return map[providerId] || 'https://api.openai.com/v1';
-    }
-
-    /**
-     * 功能：在 LLMHub 成功挂载到 STX 后主动通知 MemoryOS 补做 consumer 注册。
-     * 返回：
-     *   void：无返回值。
-     */
     private notifyMemoryOsBridgeReady(): void {
         const memoryOsPlugin = (window as any).MemoryOSPlugin as MemoryOsBridgeRuntime | undefined;
         if (!memoryOsPlugin || typeof memoryOsPlugin.refreshLlmBridgeRegistration !== 'function') {
-            logger.info('[LLMHub桥接] 未检测到 MemoryOS 的补注册链接，跳过主动通知。');
             return;
         }
         try {
@@ -383,7 +551,7 @@ class LLMHub {
         }
     }
 
-    private setupMicroserviceEndpoints(bus: any): void {
+    private setupMicroserviceEndpoints(_bus: any): void {
         respond('plugin:request:ping', 'stx_llmhub', async (): Promise<Record<string, unknown>> => {
             const settings = this.readSettings();
             return {
@@ -403,7 +571,7 @@ class LLMHub {
 
         setTimeout((): void => {
             const settings = this.readSettings();
-            bus.emit('plugin:broadcast:state_changed', {
+            (window as any).STX?.bus?.emit('plugin:broadcast:state_changed', {
                 v: 1,
                 type: 'broadcast',
                 topic: 'plugin:broadcast:state_changed',
@@ -437,15 +605,20 @@ class LLMHub {
         if (!chatKey) return;
 
         const settings = this.readSettings();
-        const genDefault = settings.globalDefaults?.find(d => d.capabilityKind === 'generation');
-        void patchSdkChatShared(chatKey, {
-            signals: {
-                stx_llmhub: {
-                    currentProvider: genDefault?.providerId || '(none)',
-                    currentModel: genDefault?.model || '(none)',
-                    profile: settings.globalProfile || 'balanced',
+        void this.previewRoute({
+            consumer: 'stx_llmhub',
+            taskKind: 'generation',
+            requiredCapabilities: ['chat', 'json'],
+        }).then((preview: RoutePreviewSnapshot) => {
+            void patchSdkChatShared(chatKey, {
+                signals: {
+                    stx_llmhub: {
+                        currentResource: preview.resourceId || '(none)',
+                        currentModel: preview.model || '(none)',
+                        profile: settings.globalProfile || 'balanced',
+                    },
                 },
-            },
+            });
         });
     }
 
@@ -454,21 +627,26 @@ class LLMHub {
         if (!chatKey) return;
 
         const settings = this.readSettings();
-        const genDefault = settings.globalDefaults?.find(d => d.capabilityKind === 'generation');
-        void writeSdkPluginChatState('stx_llmhub', chatKey, {
-            state: {
-                routeSnapshot: {
-                    globalDefaults: settings.globalDefaults || [],
-                    pluginDefaults: settings.pluginDefaults || [],
-                    taskOverrides: settings.taskOverrides || [],
+        void this.previewRoute({
+            consumer: 'stx_llmhub',
+            taskKind: 'generation',
+            requiredCapabilities: ['chat', 'json'],
+        }).then((preview: RoutePreviewSnapshot) => {
+            void writeSdkPluginChatState('stx_llmhub', chatKey, {
+                state: {
+                    routeSnapshot: {
+                        globalAssignments: settings.globalAssignments || {},
+                        pluginAssignments: settings.pluginAssignments || [],
+                        taskAssignments: settings.taskAssignments || [],
+                    },
+                    budgetSnapshot: settings.budgets || {},
+                    profile: settings.globalProfile || 'balanced',
                 },
-                budgetSnapshot: settings.budgets || {},
-                profile: settings.globalProfile || 'balanced',
-            },
-            summary: {
-                provider: genDefault?.providerId || '(none)',
-                model: genDefault?.model || '(none)',
-            },
+                summary: {
+                    resource: preview.resourceId || '(none)',
+                    model: preview.model || '(none)',
+                },
+            });
         });
     }
 }

@@ -39,6 +39,24 @@ export interface InjectionLayout {
     SUMMARY?: { maxTokens?: number };
 }
 
+/** 表定义（聊天级多表知识库） */
+export interface TemplateTableDef {
+    key: string;
+    label: string;
+    isBase: boolean;
+    primaryKeyField: string;
+    source?: 'persisted' | 'derived';
+    fields: Array<{
+        key: string;
+        label: string;
+        tier: 'core' | 'extension';
+        description?: string;
+        fillSpec?: string;
+        isPrimaryKey?: boolean;
+    }>;
+    description?: string;
+}
+
 /** 完整的世界模板 */
 export interface WorldTemplate {
     templateId: string;
@@ -51,6 +69,30 @@ export interface WorldTemplate {
     injectionLayout: InjectionLayout;
     worldInfoRef?: { book: string; hash: string };
     createdAt: number;
+
+    // ── 聊天级多表记忆扩展 ──
+    /** 多表结构化定义 */
+    tables?: TemplateTableDef[];
+    /** 字段同义词映射 */
+    fieldSynonyms?: Record<string, string[]>;
+    /** 表同义词映射 */
+    tableSynonyms?: Record<string, string[]>;
+
+    // ── 修订元数据 ──
+    /** 模板族 ID */
+    templateFamilyId?: string;
+    /** 修订序号 */
+    revisionNo?: number;
+    /** 修订状态 */
+    revisionState?: 'draft' | 'final';
+    /** 父修订模板 ID */
+    parentTemplateId?: string | null;
+    /** schema 指纹 */
+    schemaFingerprint?: string;
+    /** 最后一次触碰时间 */
+    lastTouchedAt?: number;
+    /** 固化时间 */
+    finalizedAt?: number | null;
 }
 
 /** 世界书条目（从 SillyTavern WorldInfo 读入） */

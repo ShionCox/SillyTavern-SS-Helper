@@ -99,6 +99,16 @@ export interface DBTemplate {
     factTypes: any[];
     policies: any;
     layout: any;
+    tables?: any[];
+    fieldSynonyms?: Record<string, string[]>;
+    tableSynonyms?: Record<string, string[]>;
+    templateFamilyId?: string;
+    revisionNo?: number;
+    revisionState?: 'draft' | 'final';
+    parentTemplateId?: string | null;
+    schemaFingerprint?: string;
+    lastTouchedAt?: number;
+    finalizedAt?: number | null;
     worldInfoHash?: string;
     worldInfoRef?: { book: string; hash: string };
     createdAt: number;
@@ -124,6 +134,8 @@ export interface DBMeta {
     lastExtractEventCount?: number;
     lastExtractUserMsgCount?: number;
     lastExtractWindowHash?: string;
+    /** 最近一次提取时的助手楼层计数 */
+    lastExtractAssistantTurnCount?: number;
 }
 
 export interface DBWorldInfoCache {

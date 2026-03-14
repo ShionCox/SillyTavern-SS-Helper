@@ -83,6 +83,7 @@ export class RequestOrchestrator {
         taskId: string,
         taskKind: CapabilityKind,
         options: RequestEnqueueOptions = {},
+        requestArgs?: unknown,
     ): RequestRecord<T> {
         const requestId = generateRequestId();
 
@@ -126,6 +127,7 @@ export class RequestOrchestrator {
             consumer,
             taskId,
             taskKind,
+            requestArgs,
             state: 'queued',
             validity: { isCancelled: false, isSuperseded: false, isObsolete: false },
             enqueueOptions: { ...options, blockNextUntilOverlayClose: blockNext, displayMode },
@@ -307,7 +309,7 @@ export class RequestOrchestrator {
             if (result.ok || result.meta) {
                 const meta: LLMRunMeta = {
                     requestId: record.requestId,
-                    providerId: (result as any).meta?.providerId || '',
+                    resourceId: (result as any).meta?.resourceId || '',
                     model: (result as any).meta?.model,
                     capabilityKind: record.taskKind,
                     queuedAt: record.queuedAt,

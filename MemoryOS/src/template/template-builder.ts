@@ -4,11 +4,17 @@ import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
 import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
+import { buildDisplayTables } from './table-derivation';
 
 /**
- * 世界模板构建器 —— 唯一权威的 `world.template.build` 任务编排入口
- * 职责：检测世界书变更 → 调用 LLM → 校验输出 → 存储模板 → 绑定 chatKey
- * TemplateManager 不再直接拼装 LLM 任务，统一委托到这里。
+ * 功能：负责根据世界书内容生成并保存模板。
+ *
+ * 参数：
+ *   chatKey (string)：当前聊天键。
+ *   templateManager (TemplateManager | undefined)：模板管理器实例。
+ *
+ * 返回：
+ *   无。
  */
 export class TemplateBuilder {
     private chatKey: string;
@@ -23,34 +29,40 @@ export class TemplateBuilder {
         this.metaManager = new MetaManager(chatKey);
     }
 
-    /** 供 TemplateManager 在构造后注入自身引用，打破循环依赖 */
+    /**
+     * 功能：在构造后注入模板管理器，避免循环依赖。
+     * @param mgr 模板管理器实例
+     * @returns 无返回值
+     */
     setTemplateManager(mgr: TemplateManager): void {
         this.templateManager = mgr;
     }
 
-    /** 获取 TemplateManager 实例（懒加载兜底） */
+    /**
+     * 功能：获取模板管理器实例。
+     * @returns 模板管理器实例
+     */
     private getTemplateManager(): TemplateManager {
-        if (this.templateManager) return this.templateManager;
-        // 延迟导入避免循环依赖
-        const { TemplateManager: TM } = require('./template-manager');
-        this.templateManager = new TM(this.chatKey) as TemplateManager;
+        if (this.templateManager) {
+            return this.templateManager;
+        }
+        const { TemplateManager: TemplateManagerCtor } = require('./template-manager');
+        this.templateManager = new TemplateManagerCtor(this.chatKey) as TemplateManager;
         return this.templateManager;
     }
 
     /**
-     * 检查并按需重建世界模板
-     * 返回当前活跃的模板
-     * @param bundle 世界上下文束
-     * @param forceRebuild 是否强制重建（忽略 hash 缓存）
+     * 功能：在需要时生成或复用当前聊天的模板。
+     * @param bundle 世界书上下文
+     * @param forceRebuild 是否强制重建
+     * @returns 当前可用模板
      */
     async ensureTemplate(
         bundle: WorldContextBundle,
-        forceRebuild = false,
+        forceRebuild: boolean = false,
     ): Promise<WorldTemplate | null> {
-        // 1. 计算当前世界书 hash
         const currentHash = await this.worldInfoReader.computeHash(bundle.worldInfo);
 
-        // 2. 检查是否已有匹配 hash 的模板（非强制重建时）
         if (!forceRebuild) {
             const existing = await this.getTemplateManager().findByWorldInfoHash(currentHash);
             if (existing) {
@@ -59,43 +71,40 @@ export class TemplateBuilder {
             }
         }
 
-        // 3. Hash 不一致或不存在或强制，需要重建
         return this.buildFromLLM(bundle, currentHash);
     }
 
     /**
-     * 通过 LLM 生成模板
+     * 功能：调用 LLM 生成模板并补齐 v2 字段。
+     * @param bundle 世界书上下文
+     * @param worldInfoHash 当前世界书内容哈希
+     * @returns 生成后的模板；失败时返回 null
      */
     private async buildFromLLM(
         bundle: WorldContextBundle,
         worldInfoHash: string,
     ): Promise<WorldTemplate | null> {
-        // AI 模式守卫
         const guard = checkAiModeGuard(MEMORY_TASKS.TEMPLATE_BUILD as MemoryAiTaskId);
         if (guard) {
             return null;
         }
 
         const compressedWorldInfo = this.worldInfoReader.compressForPrompt(bundle.worldInfo);
-
-        // 构造 Prompt
-        const systemPrompt = `你是一个世界设定分析专家。根据提供的世界观资料，生成一个结构化的世界模板 JSON。
+        const systemPrompt = `你是一个世界观模板设计专家。请根据提供的世界观资料输出 MemoryOS 模板 JSON。
 要求：
-1. 输出纯 JSON，不含任何解释文字
-2. 必须包含字段：templateId, worldType, name, entities, factTypes, extractPolicies, injectionLayout
-3. worldType 必须是 "fantasy", "urban", "custom" 之一
-4. entities 是一个对象，每个 key 是实体类型名称，value 包含 primaryKey 和 fields 数组
-5. factTypes 是一个数组，每项包含 type, pathPattern, slots
-6. 根据世界观类型智能选择合适的实体和事实类型`;
-
+1. 只输出 JSON，不要附加解释。
+2. 至少包含 templateId、worldType、name、entities、factTypes、extractPolicies、injectionLayout。
+3. worldType 只能是 "fantasy"、"urban"、"custom" 之一。
+4. entities 的每个键都是实体类型，值包含 primaryKey 与 fields 数组。
+5. factTypes 的每项至少包含 type、pathPattern、slots。
+6. 如果能推断出多表结构，请额外返回 tables、fieldSynonyms、tableSynonyms、templateFamilyId、revisionNo、revisionState、parentTemplateId、schemaFingerprint、lastTouchedAt、finalizedAt。`;
         const userPrompt = `世界观资料：
 ${compressedWorldInfo}
 
 ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.characterCard.desc}` : ''}
 
-请分析以上世界观，生成世界模板 JSON。`;
+请生成结构化模板 JSON。`;
 
-        // 调用 LLM Hub
         const result = await runGeneration<any>(
             MEMORY_TASKS.TEMPLATE_BUILD,
             {
@@ -105,7 +114,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
                 ],
                 temperature: 0.3,
             },
-            { maxTokens: 4096, maxLatencyMs: 30000 },
+            { maxTokens: 4096, maxLatencyMs: 0 },
             TEMPLATE_SCHEMA,
         );
 
@@ -114,22 +123,41 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
             return null;
         }
 
-        // 4. 构造 WorldTemplate 对象
-        const data = result.data;
+        const data = result.data ?? {};
+        const templateId = String(data.templateId ?? crypto.randomUUID());
+        const createdAt = Date.now();
+        const entities = data.entities || {};
+        const tables = buildDisplayTables(entities, data.tables || []);
+        const revisionState = data.revisionState === 'draft' ? 'draft' : 'final';
+
         const template: WorldTemplate = {
-            templateId: data.templateId || crypto.randomUUID(),
+            templateId,
             chatKey: this.chatKey,
             worldType: data.worldType || 'custom',
             name: data.name || '自动生成模板',
-            entities: data.entities || {},
+            entities,
             factTypes: data.factTypes || [],
             extractPolicies: data.extractPolicies || {},
             injectionLayout: data.injectionLayout || {},
-            worldInfoRef: { book: bundle.worldInfo[0]?.book || 'unknown', hash: worldInfoHash },
-            createdAt: Date.now(),
+            worldInfoRef: {
+                book: bundle.worldInfo[0]?.book || 'unknown',
+                hash: worldInfoHash,
+            },
+            createdAt,
+            tables,
+            fieldSynonyms: data.fieldSynonyms || {},
+            tableSynonyms: data.tableSynonyms || {},
+            templateFamilyId: data.templateFamilyId || templateId,
+            revisionNo: typeof data.revisionNo === 'number' ? data.revisionNo : 1,
+            revisionState,
+            parentTemplateId: data.parentTemplateId ?? null,
+            schemaFingerprint: data.schemaFingerprint || worldInfoHash,
+            lastTouchedAt: typeof data.lastTouchedAt === 'number' ? data.lastTouchedAt : createdAt,
+            finalizedAt: revisionState === 'draft'
+                ? (typeof data.finalizedAt === 'number' ? data.finalizedAt : null)
+                : (typeof data.finalizedAt === 'number' ? data.finalizedAt : createdAt),
         };
 
-        // 5. 保存并绑定
         await this.getTemplateManager().save(template);
         await this.metaManager.setActiveTemplateId(template.templateId);
 
@@ -138,7 +166,12 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
 }
 
 /**
- * 模板输出 Schema（用于 LLM Hub 的 schema 校验）
+ * 功能：约束 LLM 模板输出的最小结构。
+ * 参数：
+ *   无。
+ *
+ * 返回：
+ *   JSON Schema 对象。
  */
 const TEMPLATE_SCHEMA = {
     type: 'object',
@@ -151,5 +184,15 @@ const TEMPLATE_SCHEMA = {
         factTypes: { type: 'array' },
         extractPolicies: { type: 'object' },
         injectionLayout: { type: 'object' },
+        tables: { type: 'array' },
+        fieldSynonyms: { type: 'object' },
+        tableSynonyms: { type: 'object' },
+        templateFamilyId: { type: 'string' },
+        revisionNo: { type: 'number' },
+        revisionState: { type: 'string' },
+        parentTemplateId: { type: ['string', 'null'] },
+        schemaFingerprint: { type: 'string' },
+        lastTouchedAt: { type: 'number' },
+        finalizedAt: { type: ['number', 'null'] },
     },
 };

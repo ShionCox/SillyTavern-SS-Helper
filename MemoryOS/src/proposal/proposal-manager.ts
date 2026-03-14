@@ -1,18 +1,24 @@
-import type { ProposalEnvelope, ProposalResult, WriteRequest } from './types';
+import type { ProposalEnvelope, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint } from './types';
 import type { WorldTemplate } from '../template/types';
 import { GateValidator } from './gate-validator';
+import { SchemaGate } from '../core/schema-gate';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
 import { SummariesManager } from '../core/summaries-manager';
 import { AuditManager } from '../core/audit-manager';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
+import type { ChatStateManager } from '../core/chat-state-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
+import { DEFAULT_CHANGE_BUDGET } from '../types';
+import { Logger } from '../../../SDK/logger';
+
+const logger = new Logger('ProposalManager');
 
 /**
- * 提议写入管理器 —— 接收 AI 或外部插件的提议，经四道闸门后落盘
- * 这是写入数据的唯一合法入口（AI 模式下）
+ * 提议写入管理器 —— 接收 AI 或外部插件的提议，经闸门后落盘
+ * v2: 支持 schemaChanges 三段闸门与变更预算
  */
 export class ProposalManager {
     private chatKey: string;
@@ -23,11 +29,13 @@ export class ProposalManager {
     private metaManager: MetaManager;
     private templateManager: TemplateManager;
     private gateValidator: GateValidator;
+    private schemaGate: SchemaGate | null;
+    private chatStateManager: ChatStateManager | null;
 
     /** 被授权可以写入 facts/state 的插件列表 */
     private allowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID];
 
-    constructor(chatKey: string) {
+    constructor(chatKey: string, chatStateManager?: ChatStateManager) {
         this.chatKey = chatKey;
         this.factsManager = new FactsManager(chatKey);
         this.stateManager = new StateManager(chatKey);
@@ -36,6 +44,8 @@ export class ProposalManager {
         this.metaManager = new MetaManager(chatKey);
         this.templateManager = new TemplateManager(chatKey);
         this.gateValidator = new GateValidator(this.factsManager, this.stateManager);
+        this.chatStateManager = chatStateManager ?? null;
+        this.schemaGate = chatStateManager ? new SchemaGate(chatStateManager) : null;
     }
 
     /**
@@ -116,6 +126,7 @@ export class ProposalManager {
 
     /**
      * 执行实际的落盘操作
+     * v2: 在同一事务中处理 facts + schemaChanges，支持变更预算
      */
     private async applyProposal(
         envelope: ProposalEnvelope,
@@ -126,14 +137,70 @@ export class ProposalManager {
             factKeys: [] as string[],
             statePaths: [] as string[],
             summaryIds: [] as string[],
+            schemaChangesApplied: 0,
+            schemaChangesDeferred: 0,
+            entityResolutions: 0,
         };
 
-        const { facts, patches, summaries } = envelope.proposal;
+        const { facts, patches, summaries, schemaChanges, entityResolutions } = envelope.proposal;
+        const deferredHints: DeferredSchemaHint[] = [];
 
-        // 写入 facts
+        // 判断 facts 密度
+        const factsHighDensity = (facts?.length ?? 0) > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates;
+
+        // schemaChanges 三段闸门（Schema Gate + Diff Gate）
+        let acceptedSchemaChanges: SchemaChangeProposal[] = [];
+        if (schemaChanges && schemaChanges.length > 0 && this.schemaGate) {
+            const activeTemplateId = await this.metaManager.getActiveTemplateId();
+            let activeTemplate: WorldTemplate | null = null;
+            if (activeTemplateId) {
+                activeTemplate = await this.templateManager.getById(activeTemplateId);
+            }
+
+            const schemaGateResult = await this.schemaGate.validate(
+                schemaChanges,
+                activeTemplate,
+                factsHighDensity,
+            );
+
+            if (schemaGateResult.errors.length > 0) {
+                logger.warn(`Schema 闸门校验错误: ${schemaGateResult.errors.join('; ')}`);
+            }
+
+            acceptedSchemaChanges = schemaGateResult.accepted;
+            applied.schemaChangesDeferred = schemaGateResult.deferred.length;
+
+            // 延后的 changes 记入审计
+            for (const deferred of schemaGateResult.deferred) {
+                deferredHints.push({
+                    change: deferred,
+                    deferredAt: Date.now(),
+                    reason: factsHighDensity ? 'facts_high_density' : 'budget_exceeded',
+                });
+            }
+        }
+
+        // 写入 facts（受变更预算限制）
+        let factCellUpdates = 0;
+        const factEntityIds = new Set<string>();
+
         if (facts) {
             for (const f of facts) {
                 if (!f) continue;
+
+                // 变更预算检查
+                if (factCellUpdates >= DEFAULT_CHANGE_BUDGET.maxFactCellUpdates) {
+                    logger.info('facts 单元格更新达到预算上限，跳过剩余');
+                    break;
+                }
+                if (f.entity?.id) {
+                    factEntityIds.add(`${f.entity.kind}:${f.entity.id}`);
+                    if (factEntityIds.size > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates) {
+                        logger.info('facts 实体行更新达到预算上限，跳过剩余');
+                        break;
+                    }
+                }
+
                 const factKey = await this.factsManager.upsert({
                     factKey: f.factKey,
                     type: f.type,
@@ -144,6 +211,7 @@ export class ProposalManager {
                     provenance: { extractor: 'ai', pluginId: consumerPluginId },
                 });
                 applied.factKeys.push(factKey);
+                factCellUpdates++;
             }
         }
 
@@ -175,15 +243,49 @@ export class ProposalManager {
             }
         }
 
+        // Apply Gate: schemaChanges 落盘（仅记录审计，模板修订由外部管理）
+        if (acceptedSchemaChanges.length > 0) {
+            applied.schemaChangesApplied = acceptedSchemaChanges.length;
+
+            await this.auditManager.log({
+                action: 'schema.changes_applied',
+                actor: { pluginId: consumerPluginId, mode: 'ai' },
+                before: {},
+                after: { changes: acceptedSchemaChanges },
+            });
+        }
+
+        // entityResolutions 记录（v1 只记录建议，不自动 merge）
+        if (entityResolutions && entityResolutions.length > 0) {
+            applied.entityResolutions = entityResolutions.length;
+
+            await this.auditManager.log({
+                action: 'entity.resolution_suggested',
+                actor: { pluginId: consumerPluginId, mode: 'ai' },
+                before: {},
+                after: { resolutions: entityResolutions },
+            });
+        }
+
         // 闸门 4：审计记录（成功落盘）
         await this.auditManager.log({
             action: 'proposal.applied',
             actor: { pluginId: consumerPluginId, mode: 'ai' },
             before: {},
-            after: { applied, confidence: envelope.confidence },
+            after: { applied, confidence: envelope.confidence, deferredSchemaHints: deferredHints.length },
         });
 
-        // 更新 shared.signals —— 其他插件可读取的 MemoryOS 摘要
+        // 延后 schema 建议写入审计
+        if (deferredHints.length > 0) {
+            await this.auditManager.log({
+                action: 'schema.changes_deferred',
+                actor: { pluginId: consumerPluginId, mode: 'ai' },
+                before: {},
+                after: { hints: deferredHints },
+            });
+        }
+
+        // 更新 shared.signals
         void this.updateSharedSignals();
 
         return {
@@ -191,6 +293,7 @@ export class ProposalManager {
             applied,
             rejectedReasons: [],
             gateResults,
+            deferredSchemaHints: deferredHints.length > 0 ? deferredHints : undefined,
         };
     }
 

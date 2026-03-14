@@ -63,12 +63,17 @@ export class MetaManager {
         eventCount: number;
         userMsgCount: number;
         windowHash: string;
+        assistantTurnCount?: number;
     }): Promise<void> {
-        await db.meta.update(this.chatKey, {
+        const update: Record<string, unknown> = {
             lastExtractTs: payload.ts,
             lastExtractEventCount: payload.eventCount,
             lastExtractUserMsgCount: payload.userMsgCount,
             lastExtractWindowHash: payload.windowHash,
-        });
+        };
+        if (payload.assistantTurnCount !== undefined) {
+            update.lastExtractAssistantTurnCount = payload.assistantTurnCount;
+        }
+        await db.meta.update(this.chatKey, update);
     }
 }

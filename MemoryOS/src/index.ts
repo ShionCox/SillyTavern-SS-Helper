@@ -23,6 +23,14 @@ export { AuditManager } from './core/audit-manager';
 export { MetaManager } from './core/meta-manager';
 export { CompactionManager } from './core/compaction-manager';
 
+// v2 核心管理器
+export { ChatStateManager } from './core/chat-state-manager';
+export { TurnTracker } from './core/turn-tracker';
+export { SchemaGate } from './core/schema-gate';
+export { RowResolver } from './core/row-resolver';
+export { RowOperationsManager } from './core/row-operations';
+export { PromptTrimmer } from './core/prompt-trimmer';
+
 // 注入管理器
 export { InjectionManager } from './injection/injection-manager';
 
@@ -43,10 +51,27 @@ export { TemplateBuilder } from './template/template-builder';
 export { WorldInfoReader } from './template/worldinfo-reader';
 export { WorldInfoWriter } from './template/worldinfo-writer';
 export type {
-    WorldTemplate, TemplateEntity, TemplateFactType,
+    WorldTemplate, TemplateEntity, TemplateFactType, TemplateTableDef,
     ExtractPolicies, InjectionLayout,
     WorldInfoEntry, WorldContextBundle,
 } from './template/types';
+
+// v2 类型系统
+export type {
+    MemoryOSChatState, SummaryPolicyOverride, AutoSchemaPolicy,
+    SchemaDraftSession, AssistantTurnTracker,
+    RowAliasIndex, RowRedirects, RowTombstones,
+} from './types/chat-state';
+export type {
+    TableDef, TableFieldDef, FieldTier,
+    TemplateRevisionMeta, SchemaChangeProposal,
+    EntityResolutionProposal, DeferredSchemaHint,
+    ChangeBudget, PromptTrimBudget,
+} from './types/schema-revision';
+export type {
+    RowRefResolution, RowMergeRequest, RowMergeResult,
+    RowDeleteMode, RowSeedData, LogicTableRow, LogicTableQueryOpts,
+} from './types/row-operations';
 
 // 提议制与闸门验证
 export { GateValidator } from './proposal/gate-validator';
@@ -54,6 +79,9 @@ export { ProposalManager } from './proposal/proposal-manager';
 export type {
     ProposalEnvelope, ProposalResult, WriteRequest,
     FactProposal, PatchProposal, SummaryProposal, GateResult,
+    SchemaChangeProposal as ProposalSchemaChange,
+    EntityResolutionProposal as ProposalEntityResolution,
+    DeferredSchemaHint as ProposalDeferredHint,
 } from './proposal/types';
 
 // 插件注册表

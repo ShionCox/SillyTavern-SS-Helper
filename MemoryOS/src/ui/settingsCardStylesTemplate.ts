@@ -953,6 +953,18 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-shrink: 0;
     }
 
+    .stx-re-view-tabs {
+      padding: 14px 24px 8px;
+      display: flex;
+      gap: 10px;
+      background:
+        linear-gradient(180deg,
+          color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent) 0%,
+          transparent 100%);
+      border-bottom: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.06)) 100%, transparent);
+      flex-shrink: 0;
+    }
+
     .stx-re-tab {
       padding: 8px 18px;
       border-radius: 8px;
@@ -978,6 +990,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.6));
       color: var(--ss-theme-text, inherit);
       box-shadow: 0 4px 12px color-mix(in srgb, var(--ss-theme-accent, rgba(197, 160, 89, 1)) 24%, transparent);
+    }
+
+    .stx-re-view-tabs .stx-re-tab {
+      min-width: 120px;
+      text-align: center;
     }
 
     .stx-re-content {
@@ -1463,6 +1480,65 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     .stx-re-btn.edit.is-editing {
       color: var(--ss-theme-accent, #c5a059);
       border-color: var(--stx-memory-edit-border, #c5a059);
+    }
+
+    .stx-re-logic-cell {
+      min-height: 22px;
+      border-radius: 6px;
+      padding: 4px 6px;
+      transition: background 0.2s ease, box-shadow 0.2s ease;
+      cursor: text;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .stx-re-logic-cell:hover {
+      background: color-mix(in srgb, var(--ss-theme-list-item-hover-bg, rgba(255,255,255,0.06)) 100%, transparent);
+    }
+
+    .stx-re-logic-cell.is-readonly {
+      cursor: default;
+      opacity: 0.75;
+      background: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(0,0,0,0.18)) 100%, transparent);
+    }
+
+    .stx-re-logic-cell.is-editing {
+      outline: none;
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 16%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ss-theme-accent, #c5a059) 65%, transparent);
+    }
+
+    .stx-running-dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .stx-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background-color: var(--ss-theme-accent, #c5a059);
+      animation: stxRunningDots 1.4s infinite ease-in-out both;
+    }
+
+    .stx-running-dots .stx-dot:nth-child(1) {
+      animation-delay: -0.32s;
+    }
+
+    .stx-running-dots .stx-dot:nth-child(2) {
+      animation-delay: -0.16s;
+    }
+
+    @keyframes stxRunningDots {
+      0%, 80%, 100% {
+        transform: scale(0);
+        opacity: 0.3;
+      }
+      40% {
+        transform: scale(1);
+        opacity: 1;
+      }
     }
   `;
 }

@@ -1,11 +1,14 @@
 import { Logger } from '../../../SDK/logger';
 import type { EventsManager } from './events-manager';
 import type { TemplateManager } from '../template/template-manager';
+import type { TurnTracker } from './turn-tracker';
+import type { ChatStateManager } from './chat-state-manager';
 import { MetaManager } from './meta-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
 import type { EventEnvelope } from '../../../SDK/stx';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
+import type { ProposalEnvelope } from '../proposal/types';
 
 const logger = new Logger('ExtractManager');
 
@@ -13,12 +16,15 @@ type ProposalTask = 'memory.summarize' | 'memory.extract';
 
 /**
  * 功能：AI 抽取编排器，负责触发策略、窗口去重与预算控制。
+ * v2：支持基于助手楼层计数的触发策略
  */
 export class ExtractManager {
     private chatKey: string;
     private eventsManager: EventsManager;
     private templateManager: TemplateManager;
     private metaManager: MetaManager;
+    private turnTracker: TurnTracker | null;
+    private chatStateManager: ChatStateManager | null;
     private readonly minUserMessageDelta: number = 3;
     private readonly minEventDelta: number = 20;
     private readonly specialTriggerTypes: Set<string> = new Set([
@@ -31,16 +37,21 @@ export class ExtractManager {
     constructor(
         chatKey: string,
         events: EventsManager,
-        templateMgr: TemplateManager
+        templateMgr: TemplateManager,
+        turnTracker?: TurnTracker,
+        chatStateManager?: ChatStateManager,
     ) {
         this.chatKey = chatKey;
         this.eventsManager = events;
         this.templateManager = templateMgr;
         this.metaManager = new MetaManager(chatKey);
+        this.turnTracker = turnTracker ?? null;
+        this.chatStateManager = chatStateManager ?? null;
     }
 
     /**
      * 功能：触发一次抽取流程，满足阈值才会执行。
+     * 优先使用助手楼层计数触发（若 TurnTracker 可用），否则回退到事件计数。
      * @returns 无返回值。
      */
     public async kickOffExtraction(): Promise<void> {
@@ -63,22 +74,57 @@ export class ExtractManager {
             return;
         }
 
-        const eventCount = await this.eventsManager.count();
-        const userMsgCount = recentEvents.filter((event: EventEnvelope<any>) => this.isUserMessageEvent(event.type)).length;
+        const meta = await this.metaManager.getMeta();
         const triggerBySpecialEvent = recentEvents.some((event: EventEnvelope<any>) => this.specialTriggerTypes.has(event.type));
 
-        const meta = await this.metaManager.getMeta();
-        const eventDelta = Math.max(0, eventCount - Number(meta?.lastExtractEventCount ?? 0));
-        const userDelta = Math.max(0, userMsgCount - Number(meta?.lastExtractUserMsgCount ?? 0));
+        // 获取总结策略（优先聊天级覆盖，否则使用默认值）
+        let summaryInterval = 12;
+        let summaryWindowSize = 40;
+        let summaryEnabled = true;
+        if (this.chatStateManager) {
+            const policy = await this.chatStateManager.getSummaryPolicy();
+            summaryInterval = policy.interval;
+            summaryWindowSize = policy.windowSize;
+            summaryEnabled = policy.enabled;
+        }
 
-        const extractionWindow = recentEvents.slice(0, 40);
+        const extractionWindow = recentEvents.slice(0, summaryWindowSize);
         const windowHash = this.computeWindowHash(extractionWindow);
 
-        if (!triggerBySpecialEvent && eventDelta < this.minEventDelta && userDelta < this.minUserMessageDelta) {
+        // 优先使用楼层计数触发
+        let shouldExtract = false;
+
+        if (this.turnTracker && summaryEnabled) {
+            const lastExtractTurnCount = meta?.lastExtractAssistantTurnCount ?? 0;
+            shouldExtract = await this.turnTracker.shouldTriggerExtraction(
+                lastExtractTurnCount,
+                meta?.lastExtractWindowHash,
+                windowHash,
+                summaryInterval,
+                summaryEnabled,
+            );
+        }
+
+        // 回退到旧的事件计数逻辑
+        if (!shouldExtract && !triggerBySpecialEvent) {
+            const eventCount = await this.eventsManager.count();
+            const userMsgCount = recentEvents.filter((event: EventEnvelope<any>) => this.isUserMessageEvent(event.type)).length;
+            const eventDelta = Math.max(0, eventCount - Number(meta?.lastExtractEventCount ?? 0));
+            const userDelta = Math.max(0, userMsgCount - Number(meta?.lastExtractUserMsgCount ?? 0));
+
+            if (eventDelta < this.minEventDelta && userDelta < this.minUserMessageDelta) {
+                return;
+            }
+
+            if (meta?.lastExtractWindowHash === windowHash) {
+                logger.info('抽取窗口未变化，跳过重复抽取');
+                return;
+            }
+        } else if (!shouldExtract && !triggerBySpecialEvent) {
             return;
         }
 
-        if (!triggerBySpecialEvent && meta?.lastExtractWindowHash === windowHash) {
+        if (!triggerBySpecialEvent && !shouldExtract && meta?.lastExtractWindowHash === windowHash) {
             logger.info('抽取窗口未变化，跳过重复抽取');
             return;
         }
@@ -89,7 +135,10 @@ export class ExtractManager {
             .map((event: EventEnvelope<any>) => `[${new Date(event.ts).toLocaleTimeString()}] ${event.type}: ${this.getEventPayloadText(event)}`)
             .join('\n');
 
-        logger.info(`触发抽取：chatKey=${this.chatKey}, eventDelta=${eventDelta}, userDelta=${userDelta}, special=${triggerBySpecialEvent}`);
+        const eventCount = await this.eventsManager.count();
+        const userMsgCount = recentEvents.filter((event: EventEnvelope<any>) => this.isUserMessageEvent(event.type)).length;
+
+        logger.info(`触发抽取：chatKey=${this.chatKey}, turnBased=${!!this.turnTracker}, special=${triggerBySpecialEvent}`);
 
         try {
             await this.runProposalTask(
@@ -101,7 +150,7 @@ export class ExtractManager {
                 ].join('\n'),
                 windowText,
                 schemaContext,
-                { maxTokens: 900, maxLatencyMs: 12000, maxCost: 0.2 }
+                { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 }
             );
 
             await this.runProposalTask(
@@ -113,16 +162,20 @@ export class ExtractManager {
                 ].join('\n'),
                 windowText,
                 schemaContext,
-                { maxTokens: 1400, maxLatencyMs: 15000, maxCost: 0.35 }
+                { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 }
             );
         } catch (error) {
             logger.error('抽取流程执行失败', error);
         } finally {
+            const assistantTurnCount = this.turnTracker
+                ? await this.turnTracker.getAssistantTurnCount()
+                : undefined;
             await this.metaManager.markLastExtract({
                 ts: Date.now(),
                 eventCount,
                 userMsgCount,
                 windowHash,
+                assistantTurnCount,
             });
         }
     }
@@ -172,7 +225,7 @@ export class ExtractManager {
             return;
         }
 
-        const response = await runGeneration(
+        const response = await runGeneration<ProposalEnvelope>(
             task,
             {
                 systemPrompt,

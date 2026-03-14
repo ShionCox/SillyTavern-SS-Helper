@@ -1,0 +1,96 @@
+/* 共享右键菜单组件样式 */
+
+.stx-shared-context-menu-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482000;
+  pointer-events: none;
+}
+
+.stx-shared-context-menu-panel {
+  --stx-context-menu-bg: var(--ss-theme-panel-bg, color-mix(in srgb, var(--ss-theme-surface-2, rgba(24, 24, 28, 0.96)) 92%, black 8%));
+  --stx-context-menu-border: var(--ss-theme-border, rgba(255, 255, 255, 0.14));
+  --stx-context-menu-border-strong: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.4));
+  --stx-context-menu-text: var(--ss-theme-text, inherit);
+  --stx-context-menu-muted: var(--ss-theme-text-muted, rgba(255, 255, 255, 0.68));
+  --stx-context-menu-hover: var(--ss-theme-list-item-hover-bg, rgba(255, 255, 255, 0.06));
+  --stx-context-menu-focus: var(--ss-theme-focus-ring, rgba(197, 160, 89, 0.22));
+  position: absolute;
+  min-width: 180px;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--stx-context-menu-border);
+  background: var(--stx-context-menu-bg);
+  color: var(--stx-context-menu-text);
+  backdrop-filter: var(--ss-theme-backdrop-filter, blur(8px));
+  box-shadow: var(--ss-theme-panel-shadow, 0 14px 40px rgba(0, 0, 0, 0.32));
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.stx-shared-context-menu-root.is-open .stx-shared-context-menu-panel {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.stx-shared-context-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stx-shared-context-menu-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.stx-shared-context-menu-item:hover:not(:disabled),
+.stx-shared-context-menu-item:focus-visible {
+  outline: none;
+  background: var(--stx-context-menu-hover);
+  box-shadow: 0 0 0 1px var(--stx-context-menu-focus);
+}
+
+.stx-shared-context-menu-item:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.stx-shared-context-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stx-context-menu-muted);
+}
+
+.stx-shared-context-menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stx-shared-context-menu-item.is-danger {
+  color: #ff9b9b;
+}
+
+.stx-shared-context-menu-item.is-danger .stx-shared-context-menu-item-icon {
+  color: currentColor;
+}

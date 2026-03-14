@@ -29,6 +29,31 @@ export interface SummaryProposal {
     keywords?: string[];
 }
 
+/** Schema 变更提议 */
+export interface SchemaChangeProposal {
+    kind: 'add_table' | 'add_field' | 'modify_primary_key' | 'modify_description' | 'alias_suggestion';
+    tableKey: string;
+    fieldKey?: string;
+    payload: Record<string, unknown>;
+    requiredByFacts?: boolean;
+}
+
+/** 实体解析提议 */
+export interface EntityResolutionProposal {
+    tableKey: string;
+    fromRowId: string;
+    toRowId: string;
+    confidence: number;
+    reason: string;
+}
+
+/** 延后 Schema 建议 */
+export interface DeferredSchemaHint {
+    change: SchemaChangeProposal;
+    deferredAt: number;
+    reason: string;
+}
+
 /** 统一提议信封（所有 AI 任务的标准返回） */
 export interface ProposalEnvelope {
     ok: boolean;
@@ -37,6 +62,8 @@ export interface ProposalEnvelope {
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
         notes?: string;
+        schemaChanges?: SchemaChangeProposal[];
+        entityResolutions?: EntityResolutionProposal[];
     };
     confidence: number;
 }
@@ -55,9 +82,13 @@ export interface ProposalResult {
         factKeys: string[];
         statePaths: string[];
         summaryIds: string[];
+        schemaChangesApplied?: number;
+        schemaChangesDeferred?: number;
+        entityResolutions?: number;
     };
     rejectedReasons: string[];
     gateResults: GateResult[];
+    deferredSchemaHints?: DeferredSchemaHint[];
 }
 
 /** 外部插件写入请求 */
@@ -68,6 +99,9 @@ export interface WriteRequest {
         facts?: FactProposal[];
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
+        schemaChanges?: SchemaChangeProposal[];
+        entityResolutions?: EntityResolutionProposal[];
     };
     reason: string;
+    deferredSchemaHints?: DeferredSchemaHint[];
 }

@@ -12,11 +12,19 @@ import { ProposalManager } from '../proposal/proposal-manager';
 import { HybridSearchManager } from '../vector/hybrid-search';
 import { CompactionManager } from '../core/compaction-manager';
 import { WorldInfoWriter } from '../template/worldinfo-writer';
+import { ChatStateManager } from '../core/chat-state-manager';
+import { TurnTracker } from '../core/turn-tracker';
+import { RowResolver } from '../core/row-resolver';
+import { RowOperationsManager } from '../core/row-operations';
+import { PromptTrimmer } from '../core/prompt-trimmer';
+import { db } from '../db/db';
+import { buildDisplayTables } from '../template/table-derivation';
+import type { TemplateTableDef } from '../template/types';
+import type { SummaryPolicyOverride, RowRefResolution, RowSeedData, LogicTableQueryOpts, LogicTableRow } from '../types';
 
 /**
  * MemorySDK 门面层 —— 将所有管理器按规范接口统一暴露
- * 实现 SDK/stx.d.ts 中定义的 MemorySDK 接口
- * 每个 chatKey 对应一个独立的实例（聊天隔离）
+ * v2: 增加聊天级状态、楼层跟踪、行操作、schemaContext 等新能力
  */
 export class MemorySDKImpl implements MemorySDK {
     private chatKey_: string;
@@ -33,6 +41,11 @@ export class MemorySDKImpl implements MemorySDK {
     private hybridSearch: HybridSearchManager;
     private compactionManager: CompactionManager;
     private worldInfoWriter: WorldInfoWriter;
+    private chatStateManager: ChatStateManager;
+    private turnTrackerManager: TurnTracker;
+    private rowResolver: RowResolver;
+    private rowOperations: RowOperationsManager;
+    private promptTrimmer: PromptTrimmer;
 
     constructor(chatKey: string) {
         this.chatKey_ = chatKey;
@@ -44,10 +57,14 @@ export class MemorySDKImpl implements MemorySDK {
         this.metaManager = new MetaManager(chatKey);
         this.templateManager = new TemplateManager(chatKey);
         this.templateManager.installSillyTavernHooks();
+        this.chatStateManager = new ChatStateManager(chatKey);
+        this.turnTrackerManager = new TurnTracker(this.chatStateManager);
         this.extractManager = new ExtractManager(
             chatKey,
             this.eventsManager,
-            this.templateManager
+            this.templateManager,
+            this.turnTrackerManager,
+            this.chatStateManager,
         );
         this.injectionManager = new InjectionManager(
             chatKey,
@@ -56,7 +73,7 @@ export class MemorySDKImpl implements MemorySDK {
             this.stateManager,
             this.summariesManager
         );
-        this.proposalManager = new ProposalManager(chatKey);
+        this.proposalManager = new ProposalManager(chatKey, this.chatStateManager);
         this.hybridSearch = new HybridSearchManager(
             chatKey,
             this.eventsManager,
@@ -65,6 +82,9 @@ export class MemorySDKImpl implements MemorySDK {
         );
         this.compactionManager = new CompactionManager(chatKey);
         this.worldInfoWriter = new WorldInfoWriter(chatKey);
+        this.rowResolver = new RowResolver(this.chatStateManager, this.factsManager);
+        this.rowOperations = new RowOperationsManager(chatKey, this.chatStateManager, this.factsManager, this.auditManager);
+        this.promptTrimmer = new PromptTrimmer(chatKey, this.templateManager, this.chatStateManager, this.factsManager);
     }
 
     /**
@@ -73,6 +93,7 @@ export class MemorySDKImpl implements MemorySDK {
      */
     async init(): Promise<void> {
         await this.metaManager.ensureInit();
+        await this.chatStateManager.load();
     }
 
     // --- MemorySDK 接口实现 ---
@@ -87,6 +108,23 @@ export class MemorySDKImpl implements MemorySDK {
 
     async setActiveTemplateId(templateId: string): Promise<void> {
         await this.metaManager.setActiveTemplateId(templateId);
+    }
+
+    /**
+     * 功能：返回当前聊天可展示的逻辑表定义。
+     * @returns 兼容旧模板回退后的表定义列表
+     */
+    private async listDisplayTables(): Promise<TemplateTableDef[]> {
+        const activeTemplate = await this.templateManager.getActiveTemplate();
+        const template = activeTemplate || (await this.templateManager.listByChatKey()).slice(-1)[0] || null;
+        if (!template) {
+            return [];
+        }
+        const facts = await db.facts
+            .where('[chatKey+updatedAt]')
+            .between([this.chatKey_, 0], [this.chatKey_, Infinity])
+            .toArray();
+        return buildDisplayTables(template.entities || {}, template.tables || [], facts);
     }
 
     // 事件流
@@ -207,8 +245,27 @@ export class MemorySDKImpl implements MemorySDK {
         getActive: () => {
             return this.templateManager.getActiveTemplate();
         },
+        getEffective: () => {
+            return this.templateManager.getActiveTemplate().then(async (template) => {
+                if (template) {
+                    return template;
+                }
+                const templates = await this.templateManager.listByChatKey();
+                return templates[templates.length - 1] ?? null;
+            });
+        },
         listByChatKey: () => {
             return this.templateManager.listByChatKey();
+        },
+        listTables: async () => {
+            return this.listDisplayTables();
+        },
+        listRevisions: async () => {
+            const all = await this.templateManager.listByChatKey();
+            return all.filter(t => t.templateFamilyId);
+        },
+        rollbackRevision: async (templateId: string) => {
+            await this.templateManager.setActiveTemplate(templateId);
         },
         setActive: (templateId: string, opts?: { lock?: boolean }) => {
             return this.templateManager.setActiveTemplate(templateId, opts);
@@ -273,35 +330,107 @@ export class MemorySDKImpl implements MemorySDK {
 
     // 世界书写回（World Info Write-back）
     worldInfo = {
-        /**
-         * 将稳定事实/摘要写回 SillyTavern 的 WorldInfo，使 ST 原生引擎可以注入
-         * @param mode 'facts' | 'summaries' | 'all'
-         */
         writeback: (mode: 'facts' | 'summaries' | 'all' = 'all') => {
             return this.worldInfoWriter.writebackToST(mode);
         },
-        /**
-         * 预览将会写回的条目（不实际写入）
-         */
         preview: () => {
             return this.worldInfoWriter.previewWriteback();
         },
-        /**
-         * 读取当前 chatKey 下所有逻辑表实体（按 template 的 entities 分组的 facts）
-         * 可用于逻辑表 UI 可编辑展示
-         */
-        getLogicTable: async (entityType: string) => {
+        getLogicTable: async (entityType: string, opts?: LogicTableQueryOpts) => {
             const facts = await this.factsManager.query({
                 type: entityType,
-                limit: 200,
+                limit: opts?.limit ?? 200,
             });
-            return facts;
+            if (opts?.includeTombstones) return facts;
+            // 过滤 tombstone 行
+            const tombstones = await this.chatStateManager.getRowTombstones();
+            return facts.filter(f => !tombstones[entityType]?.[f.entity?.id ?? '']);
         },
-        /**
-         * 写一条 fact（逻辑表编辑时直接调用）
-         */
         updateFact: (factKey: string | undefined, type: string, entity: { kind: string; id: string }, path: string, value: any) => {
             return this.factsManager.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });
+        },
+    };
+
+    // ─── v2 新增：聊天级状态管理 ───
+
+    chatState = {
+        getSummaryPolicy: () => {
+            return this.chatStateManager.getSummaryPolicy();
+        },
+        setSummaryPolicyOverride: (override: Partial<SummaryPolicyOverride>) => {
+            return this.chatStateManager.setSummaryPolicyOverride(override);
+        },
+        getAutoSchemaPolicy: () => {
+            return this.chatStateManager.getAutoSchemaPolicy();
+        },
+        setAutoSchemaPolicy: (policy: any) => {
+            return this.chatStateManager.setAutoSchemaPolicy(policy);
+        },
+        flush: () => {
+            return this.chatStateManager.flush();
+        },
+        destroy: () => {
+            return this.chatStateManager.destroy();
+        },
+    };
+
+    // ─── v2 新增：楼层跟踪器 ───
+
+    turnTracker = {
+        tryCountTurn: (input: {
+            eventType: string;
+            messageId?: string;
+            textContent: string;
+            isSystemMessage: boolean;
+            ingestHint: 'normal' | 'bootstrap' | 'backfill';
+        }) => {
+            return this.turnTrackerManager.tryCountTurn(input);
+        },
+        getAssistantTurnCount: () => {
+            return this.turnTrackerManager.getAssistantTurnCount();
+        },
+        invalidateCache: () => {
+            this.turnTrackerManager.invalidateCache();
+        },
+    };
+
+    // ─── v2 新增：行操作 ───
+
+    rows = {
+        resolve: (tableKey: string, input: string): Promise<RowRefResolution> => {
+            return this.rowResolver.resolveRowRef(tableKey, input);
+        },
+        resolveMany: (tableKey: string, inputs: string[]): Promise<RowRefResolution[]> => {
+            return this.rowResolver.resolveRowRefs(tableKey, inputs);
+        },
+        create: (tableKey: string, rowId: string, seed?: RowSeedData) => {
+            return this.rowOperations.createRow(tableKey, rowId, seed);
+        },
+        merge: (tableKey: string, fromRowId: string, toRowId: string) => {
+            return this.rowOperations.mergeRows(tableKey, fromRowId, toRowId);
+        },
+        delete: (tableKey: string, rowId: string) => {
+            return this.rowOperations.deleteRow(tableKey, rowId);
+        },
+        restore: (tableKey: string, rowId: string) => {
+            return this.rowOperations.restoreRow(tableKey, rowId);
+        },
+        listTableRows: (tableKey: string, opts?: LogicTableQueryOpts): Promise<LogicTableRow[]> => {
+            return this.rowOperations.listTableRows(tableKey, opts);
+        },
+        updateCell: (tableKey: string, rowId: string, fieldKey: string, value: unknown): Promise<string> => {
+            return this.rowOperations.updateCell(tableKey, rowId, fieldKey, value);
+        },
+        setAlias: (tableKey: string, alias: string, canonicalRowId: string) => {
+            return this.chatStateManager.setRowAlias(tableKey, alias, canonicalRowId);
+        },
+    };
+
+    // ─── v2 新增：schemaContext 与 Prompt 裁剪 ───
+
+    schemaContext = {
+        build: (mode: 'extract' | 'summarize', windowKeywords?: string[]) => {
+            return this.promptTrimmer.buildSchemaContext(mode, windowKeywords);
         },
     };
 }

@@ -734,18 +734,6 @@ function resolveJsonSchema(options?: TavernRawRequestOptions): TavernResolvedJso
     };
   }
 
-  if (options?.jsonMode) {
-    return {
-      name: "llmhub_response",
-      description: "返回合法 JSON 对象",
-      strict: true,
-      value: {
-        type: "object",
-        additionalProperties: true,
-      },
-    };
-  }
-
   return undefined;
 }
 
@@ -842,6 +830,8 @@ function buildChatCompletionRequestBody(
   const jsonSchema = resolveJsonSchema(options);
   if (jsonSchema) {
     body.json_schema = jsonSchema;
+  } else if (options?.jsonMode) {
+    body.response_format = { type: "json_object" };
   }
 
   return body;

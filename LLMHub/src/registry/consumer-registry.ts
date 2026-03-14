@@ -39,8 +39,8 @@ export class ConsumerRegistry {
 
     /** 外部注入的持久化回调（由 LLMHub 主类设置） */
     private persistCallback: ((snapshots: Record<string, ConsumerPersistentSnapshot>) => void) | null = null;
-    /** 外部注入的 Provider 能力查询回调 */
-    private providerCapabilityQuery: ((providerId: string) => LLMCapability[]) | null = null;
+    /** 外部注入的资源能力查询回调 */
+    private resourceCapabilityQuery: ((resourceId: string) => LLMCapability[]) | null = null;
     /** 只读变更监听器 */
     private listeners: Set<ConsumerRegistryListener> = new Set();
 
@@ -62,9 +62,9 @@ export class ConsumerRegistry {
         this.persistCallback = cb;
     }
 
-    /** 设置 Provider 能力查询回调 */
-    setProviderCapabilityQuery(cb: (providerId: string) => LLMCapability[]): void {
-        this.providerCapabilityQuery = cb;
+    /** 设置资源能力查询回调 */
+    setResourceCapabilityQuery(cb: (resourceId: string) => LLMCapability[]): void {
+        this.resourceCapabilityQuery = cb;
     }
 
     /**
@@ -336,12 +336,12 @@ export class ConsumerRegistry {
                 continue;
             }
 
-            // 能力要求变更 → 检查旧 Provider 是否还合法
+            // 能力要求变更 → 检查旧资源是否还合法
             if (this.capabilitiesChanged(oldTask.requiredCapabilities, newTask.requiredCapabilities)) {
                 const binding = existing.routeBindings?.find(b => b.taskId === oldTask.taskId);
-                if (binding && this.providerCapabilityQuery) {
-                    const providerCaps = this.providerCapabilityQuery(binding.providerId);
-                    const missing = newTask.requiredCapabilities.filter(c => !providerCaps.includes(c));
+                if (binding && this.resourceCapabilityQuery) {
+                    const resourceCaps = this.resourceCapabilityQuery(binding.resourceId);
+                    const missing = newTask.requiredCapabilities.filter(c => !resourceCaps.includes(c));
                     if (missing.length > 0) {
                         stale.push({
                             taskId: oldTask.taskId,
@@ -350,7 +350,7 @@ export class ConsumerRegistry {
                             lastSeenAt: Date.now(),
                             source: 'capability_mismatch',
                             isStale: true,
-                            staleReason: `Provider ${binding.providerId} 不满足新增能力要求: ${missing.join(', ')}`,
+                            staleReason: `资源 ${binding.resourceId} 不满足新增能力要求: ${missing.join(', ')}`,
                         });
                     }
                 }
@@ -369,13 +369,13 @@ export class ConsumerRegistry {
 
     private buildRecommendedSnapshots(
         tasks: TaskDescriptor[],
-    ): Record<string, { taskId: string; providerId?: string; model?: string; profileId?: string }> {
-        const result: Record<string, { taskId: string; providerId?: string; model?: string; profileId?: string }> = {};
+    ): Record<string, { taskId: string; resourceId?: string; model?: string; profileId?: string }> {
+        const result: Record<string, { taskId: string; resourceId?: string; model?: string; profileId?: string }> = {};
         for (const task of tasks) {
             if (task.recommendedRoute) {
                 result[task.taskId] = {
                     taskId: task.taskId,
-                    providerId: task.recommendedRoute.providerId,
+                    resourceId: task.recommendedRoute.resourceId,
                     profileId: task.recommendedRoute.profileId,
                 };
             }

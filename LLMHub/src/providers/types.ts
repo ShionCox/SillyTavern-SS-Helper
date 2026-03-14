@@ -13,6 +13,7 @@ export interface LLMProviderCapabilities {
 
 export interface LLMRequest {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+    model?: string;
     temperature?: number;
     maxTokens?: number;
     jsonMode?: boolean;
@@ -38,6 +39,7 @@ export interface RerankRequest {
     query: string;
     docs: string[];
     topK?: number;
+    model?: string;
 }
 
 export interface RerankResponse {

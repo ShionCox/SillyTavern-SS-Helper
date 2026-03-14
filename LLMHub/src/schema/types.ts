@@ -20,7 +20,7 @@ export type CapabilityKind = 'generation' | 'embedding' | 'rerank';
 /** 请求元数据 —— 固定字段集 */
 export interface LLMRunMeta {
     requestId: string;
-    providerId: string;
+    resourceId: string;
     model?: string;
     capabilityKind: CapabilityKind;
     queuedAt: number;
@@ -50,7 +50,7 @@ export interface TaskDescriptor {
     taskId: string;
     taskKind: CapabilityKind;
     requiredCapabilities: LLMCapability[];
-    recommendedRoute?: { providerId?: string; profileId?: string };
+    recommendedRoute?: { resourceId?: string; profileId?: string };
     recommendedDisplay?: DisplayMode;
     description?: string;
     backgroundEligible?: boolean;
@@ -59,10 +59,10 @@ export interface TaskDescriptor {
 /** 路由绑定 —— 一个插件对某个任务的覆盖 */
 export interface RouteBinding {
     taskId: string;
-    providerId: string;
+    resourceId: string;
     model?: string;
     profileId?: string;
-    fallbackProviderId?: string;
+    fallbackResourceId?: string;
 }
 
 /** 消费方注册包 */
@@ -89,7 +89,7 @@ export interface ConsumerPersistentSnapshot {
     /** 用户覆盖来源快照 */
     userOverrides?: Record<string, {
         taskId: string;
-        providerId?: string;
+        resourceId?: string;
         model?: string;
         profileId?: string;
         source: 'user_task_override' | 'user_plugin_default' | 'user_global_default';
@@ -97,7 +97,7 @@ export interface ConsumerPersistentSnapshot {
     /** 推荐值快照 */
     recommendedSnapshots?: Record<string, {
         taskId: string;
-        providerId?: string;
+        resourceId?: string;
         model?: string;
         profileId?: string;
     }>;
@@ -180,6 +180,7 @@ export interface RequestRecord<T = unknown> {
     consumer: string;
     taskId: string;
     taskKind: CapabilityKind;
+    requestArgs?: unknown;
     state: RequestState;
     validity: RequestValidity;
     enqueueOptions: RequestEnqueueOptions;
@@ -237,51 +238,79 @@ export interface RouteResolveArgs {
     taskKind: CapabilityKind;
     taskId?: string;
     requiredCapabilities?: LLMCapability[];
-    routeHint?: { providerId?: string; model?: string; profileId?: string };
+    routeHint?: { resourceId?: string; model?: string; profileId?: string };
 }
 
 /** 路由解析结果 */
 export interface RouteResolveResult {
-    providerId: string;
+    resourceId: string;
     model?: string;
     profileId?: string;
-    fallbackProviderId?: string;
+    fallbackResourceId?: string;
     /** 实际生效来源 */
-    resolvedBy: 'route_hint' | 'user_task_override' | 'plugin_task_recommend' | 'user_plugin_default' | 'user_global_default' | 'fallback';
+    resolvedBy: 'route_hint' | 'user_task_override' | 'plugin_task_recommend' | 'user_plugin_default' | 'user_global_default' | 'builtin_tavern_fallback' | 'fallback';
 }
 
 // ═══════════════════════════════════════════
-//  设置数据模型
+//  资源类型
 // ═══════════════════════════════════════════
 
-/** 全局能力默认 */
-export interface GlobalCapabilityDefault {
-    capabilityKind: CapabilityKind;
-    providerId: string;
+/** 资源类型 —— 决定能力，不再手动勾选 */
+export type ResourceType = 'generation' | 'embedding' | 'rerank';
+
+/** 资源来源 */
+export type ResourceSource = 'tavern' | 'custom';
+
+/** 资源级自定义请求参数 */
+export type ResourceCustomParams = Record<string, unknown>;
+
+/** 用户创建的第三方资源配置 */
+export interface ResourceConfig {
+    id: string;
+    type: ResourceType;
+    source: ResourceSource;
+    label: string;
+    baseUrl?: string;
     model?: string;
-    profileId?: string;
-    fallbackProviderId?: string;
+    enabled?: boolean;
+    /** 重排资源专用路径，如 /rerank */
+    rerankPath?: string;
+    /** 资源声明能力（包含基础能力与附加能力） */
+    capabilities?: LLMCapability[];
+    /** 透传到 Provider 请求体中的自定义参数 */
+    customParams?: ResourceCustomParams;
 }
 
-/** 插件能力默认 */
-export interface PluginCapabilityDefault {
+// ═══════════════════════════════════════════
+//  分配数据模型
+// ═══════════════════════════════════════════
+
+/** 单条分配项 —— 只保存 resourceId */
+export interface AssignmentEntry {
+    resourceId: string;
+}
+
+/** 全局分配 */
+export interface GlobalAssignments {
+    generation?: AssignmentEntry;
+    embedding?: AssignmentEntry;
+    rerank?: AssignmentEntry;
+}
+
+/** 插件分配 */
+export interface PluginAssignment {
     pluginId: string;
-    capabilityKind: CapabilityKind;
-    providerId: string;
-    model?: string;
-    profileId?: string;
-    fallbackProviderId?: string;
+    generation?: AssignmentEntry;
+    embedding?: AssignmentEntry;
+    rerank?: AssignmentEntry;
 }
 
-/** 任务覆盖 */
-export interface TaskOverride {
+/** 任务分配 */
+export interface TaskAssignment {
     pluginId: string;
     taskId: string;
     taskKind: CapabilityKind;
-    providerId?: string;
-    model?: string;
-    profileId?: string;
-    fallbackProviderId?: string;
+    resourceId: string;
     isStale: boolean;
     staleReason?: string;
 }
@@ -297,14 +326,14 @@ export interface SilentPermissionGrant {
 export interface LLMHubSettings {
     enabled?: boolean;
     globalProfile?: string;
-    /** 多 Provider 配置条目 */
-    providers?: ProviderConfig[];
-    /** 全局能力默认 */
-    globalDefaults?: GlobalCapabilityDefault[];
-    /** 插件能力默认 */
-    pluginDefaults?: PluginCapabilityDefault[];
-    /** 任务覆盖 */
-    taskOverrides?: TaskOverride[];
+    /** 用户创建的资源列表 */
+    resources?: ResourceConfig[];
+    /** 全局分配 */
+    globalAssignments?: GlobalAssignments;
+    /** 插件分配 */
+    pluginAssignments?: PluginAssignment[];
+    /** 任务分配 */
+    taskAssignments?: TaskAssignment[];
     /** 预算配置 */
     budgets?: Record<string, import('../budget/budget-manager').BudgetConfig>;
     /** 消费方注册持久快照 */
@@ -313,25 +342,53 @@ export interface LLMHubSettings {
     silentPermissions?: SilentPermissionGrant[];
 }
 
-export interface ProviderConfig {
-    id: string;
-    source: 'tavern' | 'custom';
-    label?: string;
+// ═══════════════════════════════════════════
+//  资源状态快照
+// ═══════════════════════════════════════════
+
+/** 单个资源的运行时状态摘要 */
+export interface ResourceStatusSnapshot {
+    resourceId: string;
+    resourceLabel: string;
+    resourceType: ResourceType;
+    source: ResourceSource;
+    enabled: boolean;
     baseUrl?: string;
     model?: string;
-    manualModel?: string;
-    selectedModel?: string;
-    enabled?: boolean;
-    /** Provider 声明支持的能力 */
-    capabilities?: LLMCapability[];
+    credentialConfigured: boolean;
+    builtin: boolean;
 }
 
-// ═══════════════════════════════════════════
-//  Provider 能力声明（扩展）
-// ═══════════════════════════════════════════
+/** 路由预览结果 */
+export interface RoutePreviewSnapshot {
+    consumer: string;
+    taskKind: CapabilityKind;
+    taskId?: string;
+    requiredCapabilities: LLMCapability[];
+    available: boolean;
+    resourceId?: string;
+    resourceLabel?: string;
+    resourceType?: ResourceType;
+    source?: ResourceSource;
+    model?: string;
+    resolvedBy?: RouteResolveResult['resolvedBy'];
+    blockedReason?: string;
+}
 
-export interface ProviderCapabilitySet {
-    capabilities: LLMCapability[];
+/** 当前资源池与分配的只读状态快照 */
+export interface LLMHubStatusSnapshot {
+    resources: ResourceStatusSnapshot[];
+    globalProfile?: string;
+    globalAssignments: GlobalAssignments;
+    pluginAssignments: PluginAssignment[];
+    taskAssignments: TaskAssignment[];
+    readiness: Record<CapabilityKind, boolean>;
+}
+
+/** 提供给外部插件读取 LLMHub 状态与路由预览的只读接口 */
+export interface LLMInspectApi {
+    getStatusSnapshot(): Promise<LLMHubStatusSnapshot> | LLMHubStatusSnapshot;
+    previewRoute(args: RouteResolveArgs): Promise<RoutePreviewSnapshot> | RoutePreviewSnapshot;
 }
 
 // ═══════════════════════════════════════════
@@ -344,7 +401,7 @@ export interface RunTaskArgs<T = unknown> {
     taskKind: CapabilityKind;
     input: any;
     schema?: any;
-    routeHint?: { provider?: string; profile?: string; model?: string };
+    routeHint?: { resource?: string; profile?: string; model?: string };
     budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
     enqueue?: RequestEnqueueOptions;
 }
@@ -353,7 +410,7 @@ export interface EmbedArgs {
     consumer: string;
     taskId: string;
     texts: string[];
-    routeHint?: { provider?: string; model?: string };
+    routeHint?: { resource?: string; model?: string };
     enqueue?: RequestEnqueueOptions;
 }
 
@@ -363,6 +420,6 @@ export interface RerankArgs {
     query: string;
     docs: string[];
     topK?: number;
-    routeHint?: { provider?: string; model?: string };
+    routeHint?: { resource?: string; model?: string };
     enqueue?: RequestEnqueueOptions;
 }

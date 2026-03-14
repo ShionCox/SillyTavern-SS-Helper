@@ -12,7 +12,7 @@ import { buildThemeVars } from "../../../SDK/theme";
  *   string：可注入 style 标签的 CSS 文本。
  */
 export function buildSettingsCardStylesTemplate(cardId: string): string {
-    return `
+  return `
     ${buildThemeVars(`#${cardId} .stx-ui-content`)}
     ${buildSharedCheckboxStyles(`#${cardId}`)}
     ${buildSharedSelectStyles(`#${cardId}`)}
@@ -99,6 +99,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 4px;
       flex-wrap: wrap;
+      justify-content: flex-start;
       padding: 4px;
       border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.16));
       border-radius: 999px;
@@ -107,7 +108,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-tab {
-      flex: 1 1 140px;
+      flex: 1 1 0;
+      min-width: max-content;
       border: 0;
       border-radius: 999px;
       background: transparent;
@@ -115,6 +117,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       padding: 6px 10px;
       font-size: 12px;
       line-height: 1.2;
+      white-space: nowrap;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -221,6 +224,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+      margin-top: 6px;
     }
 
     #${cardId} .stx-ui-form-grid {
@@ -244,6 +248,84 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.35;
       word-break: break-word;
     }
+
+    #${cardId} .stx-ui-resource-cap-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    #${cardId} .stx-ui-param-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-param-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+
+    #${cardId} .stx-ui-param-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 1.6fr) auto;
+      gap: 6px;
+      align-items: stretch;
+      padding: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    #${cardId} .stx-ui-param-row > * {
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-param-row .stx-ui-input,
+    #${cardId} .stx-ui-param-row .stx-ui-select {
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+      min-height: 32px;
+    }
+
+    #${cardId} .stx-ui-param-row .stx-ui-param-type-select.stx-shared-select,
+    #${cardId} .stx-ui-param-row .stx-ui-param-type-select .stx-shared-select-trigger {
+      width: 100%;
+      min-width: 0;
+      min-height: 32px;
+    }
+
+    #${cardId} .stx-ui-param-row .stx-ui-param-remove,
+    #${cardId} .stx-ui-param-row .stx-ui-btn {
+      align-self: stretch;
+      min-height: 32px;
+    }
+
+    #${cardId} .stx-ui-param-empty {
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      opacity: 0.72;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px dashed rgba(255, 255, 255, 0.12);
+    }
+
+    #${cardId} .stx-ui-param-remove {
+      white-space: nowrap;
+      justify-self: stretch;
+    }
+
+    #${cardId} .stx-ui-rerank-test-panel {
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(197, 160, 89, 0.18);
+      background: rgba(197, 160, 89, 0.05);
+    }
+
 
     #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
@@ -315,6 +397,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: rgba(255, 255, 255, 0.08);
     }
 
+    @media (max-width: 900px) {
+      #${cardId} .stx-ui-param-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
     #${cardId} .stx-ui-btn-danger {
       color: #ff8787;
       border-color: rgba(255, 135, 135, 0.3);
@@ -335,30 +423,128 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-list-item {
       display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 10px;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 14px;
       width: 100%;
-      padding: 8px 10px;
-      border: 1px dashed rgba(255, 255, 255, 0.2);
-      border-radius: 8px;
+      padding: 12px 14px;
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.15));
+      border-radius: 10px;
       box-sizing: border-box;
-      background: rgba(0, 0, 0, 0.12);
+      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
+      cursor: pointer;
+      text-align: left;
+      color: inherit;
+      transition: all 0.2s ease;
+    }
+
+    #${cardId} .stx-ui-list-main {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex: 1;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    #${cardId} .stx-ui-list-side {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    #${cardId} .stx-ui-list-item:hover {
+      background: var(--ss-theme-surface-hover, rgba(255, 255, 255, 0.05));
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 40%, transparent);
+      transform: translateY(-1px);
+    }
+
+    #${cardId} .stx-ui-list-item.is-active,
+    #${cardId} .stx-ui-list-item.is-context-open {
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 15%, transparent);
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 60%, transparent);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    #${cardId} .stx-ui-list-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--ss-theme-text, #fff) 8%, transparent);
+      font-size: 16px;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 90%, transparent);
+      flex-shrink: 0;
+    }
+
+    #${cardId} .stx-ui-list-content {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    #${cardId} .stx-ui-list-tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      margin-left: 8px;
+      font-weight: 500;
+      vertical-align: middle;
+      display: inline-block;
+    }
+
+    #${cardId} .stx-ui-list-tag.generation { color: #8ce99a; background: rgba(140, 233, 154, 0.15); }
+    #${cardId} .stx-ui-list-tag.embedding { color: #74c0fc; background: rgba(116, 192, 252, 0.15); }
+    #${cardId} .stx-ui-list-tag.rerank { color: #ffa8a8; background: rgba(255, 168, 168, 0.15); }
+
+    #${cardId} .stx-ui-list-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-width: 72px;
+    }
+
+    #${cardId} .stx-ui-list-toggle-copy {
+      display: none;
+    }
+
+    #${cardId} .stx-ui-list-toggle .stx-shared-checkbox-body {
+      width: auto;
+    }
+
+    #${cardId} .stx-ui-list-toggle-control {
+      min-width: 64px;
+      justify-content: center;
     }
 
     #${cardId} .stx-ui-list-title {
-      font-size: 13px;
+      display: flex;
+      align-items: center;
+      font-size: 14px;
       font-weight: 700;
-      margin-bottom: 2px;
-      line-height: 1.4;
+      line-height: 1.2;
       word-break: break-word;
     }
 
     #${cardId} .stx-ui-list-meta {
       font-size: 12px;
-      opacity: 0.78;
-      line-height: 1.4;
-      word-break: break-all;
+      opacity: 0.65;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #${cardId} .stx-ui-advanced {
@@ -786,6 +972,49 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       word-break: break-all;
       max-height: 80px;
       overflow-y: auto;
+    }
+
+    #${cardId} .stx-ui-result-detail.is-rich {
+      max-height: 220px;
+      opacity: 1;
+      word-break: normal;
+    }
+
+    #${cardId} .stx-ui-rerank-result-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
+    #${cardId} .stx-ui-rerank-result-item {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    #${cardId} .stx-ui-rerank-result-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+
+    #${cardId} .stx-ui-rerank-result-rank,
+    #${cardId} .stx-ui-rerank-result-score {
+      font-weight: 700;
+    }
+
+    #${cardId} .stx-ui-rerank-result-doc {
+      font-size: 12px;
+      line-height: 1.55;
+      color: inherit;
+      opacity: 0.88;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     #${cardId} .stx-ui-tavern-info-status {

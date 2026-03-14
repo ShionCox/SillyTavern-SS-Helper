@@ -4,33 +4,33 @@ import type {
     RouteResolveResult,
     LLMCapability,
     CapabilityKind,
-    GlobalCapabilityDefault,
-    PluginCapabilityDefault,
-    TaskOverride,
-    TaskDescriptor,
-    RouteBinding,
+    ResourceType,
+    GlobalAssignments,
+    AssignmentEntry,
+    PluginAssignment,
+    TaskAssignment,
 } from '../schema/types';
 import type { ConsumerRegistry } from '../registry/consumer-registry';
 
+/** 内置酒馆资源固定 ID */
+export const BUILTIN_TAVERN_RESOURCE_ID = '__builtin_tavern__';
+
 /**
- * 能力感知任务路由器
+ * 资源感知任务路由器
  *
  * 路由优先级：
- *   routeHint → 用户任务级覆盖 → 插件注册任务推荐 → 插件能力默认 → 全局能力默认 → fallback
- *
- * 所有合法性判断统一基于 LLMCapability，不写 Provider 名字级特判。
+ *   routeHint → 任务分配 → 插件注册推荐 → 插件分配 → 全局分配 → 内置酒馆(仅生成) → fallback
  */
 export class TaskRouter {
     private providers: Map<string, LLMProvider> = new Map();
-    /** Provider 声明的能力 */
     private providerCapabilities: Map<string, LLMCapability[]> = new Map();
+    private providerDefaultModels: Map<string, string | undefined> = new Map();
+    private resourceTypes: Map<string, ResourceType> = new Map();
 
-    // 新版分层设置
-    private globalDefaults: Map<CapabilityKind, GlobalCapabilityDefault> = new Map();
-    private pluginDefaults: Map<string, PluginCapabilityDefault> = new Map(); // key: `${pluginId}::${capabilityKind}`
-    private taskOverrides: Map<string, TaskOverride> = new Map(); // key: `${pluginId}::${taskId}`
+    private globalAssignments: GlobalAssignments = {};
+    private pluginAssignments: Map<string, PluginAssignment> = new Map();
+    private taskAssignments: Map<string, TaskAssignment> = new Map();
 
-    /** 外部注入注册中心引用 */
     private registry: ConsumerRegistry | null = null;
 
     setRegistry(registry: ConsumerRegistry): void {
@@ -39,12 +39,17 @@ export class TaskRouter {
 
     // ─── Provider 管理 ───
 
-    registerProvider(provider: LLMProvider, capabilities?: LLMCapability[]): void {
+    registerProvider(
+        provider: LLMProvider,
+        resourceType: ResourceType,
+        capabilities?: LLMCapability[],
+        defaultModel?: string,
+    ): void {
         this.providers.set(provider.id, provider);
+        this.resourceTypes.set(provider.id, resourceType);
         if (capabilities) {
             this.providerCapabilities.set(provider.id, capabilities);
         } else {
-            // 从 provider.capabilities 推断
             const caps: LLMCapability[] = [];
             if (provider.capabilities.chat) caps.push('chat');
             if (provider.capabilities.json) caps.push('json');
@@ -53,77 +58,57 @@ export class TaskRouter {
             if (provider.capabilities.rerank) caps.push('rerank');
             this.providerCapabilities.set(provider.id, caps);
         }
+        this.providerDefaultModels.set(provider.id, defaultModel);
     }
 
-    removeProvider(providerId: string): void {
-        this.providers.delete(providerId);
-        this.providerCapabilities.delete(providerId);
+    removeProvider(resourceId: string): void {
+        this.providers.delete(resourceId);
+        this.providerCapabilities.delete(resourceId);
+        this.providerDefaultModels.delete(resourceId);
+        this.resourceTypes.delete(resourceId);
     }
 
-    // ─── 分层设置管理 ───
+    // ─── 分配设置管理 ───
 
-    setGlobalDefault(def: GlobalCapabilityDefault): void {
-        this.globalDefaults.set(def.capabilityKind, def);
+    applyGlobalAssignments(assignments: GlobalAssignments): void {
+        this.globalAssignments = { ...assignments };
     }
 
-    setPluginDefault(def: PluginCapabilityDefault): void {
-        this.pluginDefaults.set(`${def.pluginId}::${def.capabilityKind}`, def);
+    applyPluginAssignments(assignments: PluginAssignment[]): void {
+        this.pluginAssignments.clear();
+        for (const a of assignments) this.pluginAssignments.set(a.pluginId, a);
     }
 
-    setTaskOverride(override: TaskOverride): void {
-        this.taskOverrides.set(`${override.pluginId}::${override.taskId}`, override);
+    applyTaskAssignments(assignments: TaskAssignment[]): void {
+        this.taskAssignments.clear();
+        for (const a of assignments) this.taskAssignments.set(`${a.pluginId}::${a.taskId}`, a);
     }
 
-    removeTaskOverride(pluginId: string, taskId: string): void {
-        this.taskOverrides.delete(`${pluginId}::${taskId}`);
-    }
+    // ─── 统一路由解析 ───
 
-    applyGlobalDefaults(defaults: GlobalCapabilityDefault[]): void {
-        this.globalDefaults.clear();
-        for (const d of defaults) this.globalDefaults.set(d.capabilityKind, d);
-    }
-
-    applyPluginDefaults(defaults: PluginCapabilityDefault[]): void {
-        this.pluginDefaults.clear();
-        for (const d of defaults) this.pluginDefaults.set(`${d.pluginId}::${d.capabilityKind}`, d);
-    }
-
-    applyTaskOverrides(overrides: TaskOverride[]): void {
-        this.taskOverrides.clear();
-        for (const o of overrides) this.taskOverrides.set(`${o.pluginId}::${o.taskId}`, o);
-    }
-
-    // ─── 新版统一解析入口 ───
-
-    /**
-     * 统一路由解析。
-     * 优先级：routeHint → 用户任务级覆盖 → 插件注册任务推荐 → 插件能力默认 → 全局能力默认 → fallback
-     */
     resolveRoute(args: RouteResolveArgs): RouteResolveResult {
         const { consumer, taskKind, taskId, requiredCapabilities, routeHint } = args;
 
         // 1. routeHint
-        if (routeHint?.providerId) {
-            if (this.providerSatisfies(routeHint.providerId, requiredCapabilities)) {
+        if (routeHint?.resourceId) {
+            if (this.providerSatisfies(routeHint.resourceId, requiredCapabilities)) {
                 return {
-                    providerId: routeHint.providerId,
-                    model: routeHint.model,
+                    resourceId: routeHint.resourceId,
+                    model: routeHint.model || this.resolveDefaultModel(routeHint.resourceId),
                     profileId: routeHint.profileId,
                     resolvedBy: 'route_hint',
                 };
             }
         }
 
-        // 2. 用户任务级覆盖
+        // 2. 任务分配
         if (taskId) {
-            const override = this.taskOverrides.get(`${consumer}::${taskId}`);
-            if (override?.providerId && !override.isStale) {
-                if (this.providerSatisfies(override.providerId, requiredCapabilities)) {
+            const assignment = this.taskAssignments.get(`${consumer}::${taskId}`);
+            if (assignment?.resourceId && !assignment.isStale) {
+                if (this.providerSatisfies(assignment.resourceId, requiredCapabilities)) {
                     return {
-                        providerId: override.providerId,
-                        model: override.model,
-                        profileId: override.profileId,
-                        fallbackProviderId: override.fallbackProviderId,
+                        resourceId: assignment.resourceId,
+                        model: this.resolveDefaultModel(assignment.resourceId),
                         resolvedBy: 'user_task_override',
                     };
                 }
@@ -133,10 +118,10 @@ export class TaskRouter {
         // 3. 插件注册任务推荐
         if (taskId && this.registry) {
             const taskDesc = this.registry.getTaskDescriptor(consumer, taskId);
-            if (taskDesc?.recommendedRoute?.providerId) {
-                if (this.providerSatisfies(taskDesc.recommendedRoute.providerId, requiredCapabilities)) {
+            if (taskDesc?.recommendedRoute?.resourceId) {
+                if (this.providerSatisfies(taskDesc.recommendedRoute.resourceId, requiredCapabilities)) {
                     return {
-                        providerId: taskDesc.recommendedRoute.providerId,
+                        resourceId: taskDesc.recommendedRoute.resourceId,
                         profileId: taskDesc.recommendedRoute.profileId,
                         resolvedBy: 'plugin_task_recommend',
                     };
@@ -144,57 +129,82 @@ export class TaskRouter {
             }
         }
 
-        // 4. 插件能力默认
-        const pluginDefault = this.pluginDefaults.get(`${consumer}::${taskKind}`);
-        if (pluginDefault?.providerId) {
-            if (this.providerSatisfies(pluginDefault.providerId, requiredCapabilities)) {
+        // 4. 插件分配
+        const pluginAssignment = this.pluginAssignments.get(consumer);
+        const pluginEntry = pluginAssignment?.[taskKind] as AssignmentEntry | undefined;
+        if (pluginEntry?.resourceId) {
+            if (this.providerSatisfies(pluginEntry.resourceId, requiredCapabilities)) {
                 return {
-                    providerId: pluginDefault.providerId,
-                    model: pluginDefault.model,
-                    profileId: pluginDefault.profileId,
-                    fallbackProviderId: pluginDefault.fallbackProviderId,
+                    resourceId: pluginEntry.resourceId,
+                    model: this.resolveDefaultModel(pluginEntry.resourceId),
                     resolvedBy: 'user_plugin_default',
                 };
             }
         }
 
-        // 5. 全局能力默认
-        const globalDefault = this.globalDefaults.get(taskKind);
-        if (globalDefault?.providerId) {
-            if (this.providerSatisfies(globalDefault.providerId, requiredCapabilities)) {
+        // 5. 全局分配
+        const globalEntry = this.globalAssignments[taskKind] as AssignmentEntry | undefined;
+        if (globalEntry?.resourceId) {
+            if (this.providerSatisfies(globalEntry.resourceId, requiredCapabilities)) {
                 return {
-                    providerId: globalDefault.providerId,
-                    model: globalDefault.model,
-                    profileId: globalDefault.profileId,
-                    fallbackProviderId: globalDefault.fallbackProviderId,
+                    resourceId: globalEntry.resourceId,
+                    model: this.resolveDefaultModel(globalEntry.resourceId),
                     resolvedBy: 'user_global_default',
                 };
             }
         }
 
-        // 6. 终极 fallback: 任意一个满足能力要求的 Provider
-        for (const [pid] of this.providers) {
-            if (this.providerSatisfies(pid, requiredCapabilities)) {
-                return { providerId: pid, resolvedBy: 'fallback' };
+        // 6. 内置酒馆回退（仅生成类）
+        if (taskKind === 'generation') {
+            if (this.providers.has(BUILTIN_TAVERN_RESOURCE_ID)) {
+                if (this.providerSatisfies(BUILTIN_TAVERN_RESOURCE_ID, requiredCapabilities)) {
+                    return {
+                        resourceId: BUILTIN_TAVERN_RESOURCE_ID,
+                        model: this.resolveDefaultModel(BUILTIN_TAVERN_RESOURCE_ID),
+                        resolvedBy: 'builtin_tavern_fallback',
+                    };
+                }
             }
         }
 
-        throw new Error(`[TaskRouter] 无法为 consumer="${consumer}" taskKind="${taskKind}" 找到可用 Provider`);
+        // 7. 终极 fallback: 先找同类型资源
+        for (const [rid] of this.providers) {
+            const rType = this.resourceTypes.get(rid);
+            if (rType === taskKind && this.providerSatisfies(rid, requiredCapabilities)) {
+                return {
+                    resourceId: rid,
+                    model: this.resolveDefaultModel(rid),
+                    resolvedBy: 'fallback',
+                };
+            }
+        }
+
+        // 8. 跨类型 fallback：允许具备所需能力的资源参与，例如 generation 资源承担 rerank
+        for (const [rid] of this.providers) {
+            if (this.providerSatisfies(rid, requiredCapabilities)) {
+                return {
+                    resourceId: rid,
+                    model: this.resolveDefaultModel(rid),
+                    resolvedBy: 'fallback',
+                };
+            }
+        }
+
+        throw new Error(`[TaskRouter] 无法为 consumer="${consumer}" taskKind="${taskKind}" 找到可用资源`);
     }
 
     // ─── 能力查询 ───
 
-    getProviderCapabilities(providerId: string): LLMCapability[] {
-        return this.providerCapabilities.get(providerId) || [];
+    getProviderCapabilities(resourceId: string): LLMCapability[] {
+        return this.providerCapabilities.get(resourceId) || [];
     }
 
-    /** 列出满足指定能力要求的所有 Provider */
     listProvidersWithCapabilities(required?: LLMCapability[]): LLMProvider[] {
         if (!required || required.length === 0) {
             return Array.from(this.providers.values());
         }
         return Array.from(this.providers.values()).filter(p =>
-            this.providerSatisfies(p.id, required)
+            this.providerSatisfies(p.id, required),
         );
     }
 
@@ -202,34 +212,24 @@ export class TaskRouter {
         return Array.from(this.providers.values());
     }
 
-    getProvider(providerId: string): LLMProvider | undefined {
-        return this.providers.get(providerId);
+    getProvider(resourceId: string): LLMProvider | undefined {
+        return this.providers.get(resourceId);
     }
 
-    // ─── 设置页查询 ───
-
-    getGlobalDefault(kind: CapabilityKind): GlobalCapabilityDefault | undefined {
-        return this.globalDefaults.get(kind);
-    }
-
-    getPluginDefault(pluginId: string, kind: CapabilityKind): PluginCapabilityDefault | undefined {
-        return this.pluginDefaults.get(`${pluginId}::${kind}`);
-    }
-
-    getTaskOverride(pluginId: string, taskId: string): TaskOverride | undefined {
-        return this.taskOverrides.get(`${pluginId}::${taskId}`);
-    }
-
-    listTaskOverrides(): TaskOverride[] {
-        return Array.from(this.taskOverrides.values());
+    getResourceType(resourceId: string): ResourceType | undefined {
+        return this.resourceTypes.get(resourceId);
     }
 
     // ─── 内部方法 ───
 
-    private providerSatisfies(providerId: string, required?: LLMCapability[]): boolean {
+    private providerSatisfies(resourceId: string, required?: LLMCapability[]): boolean {
         if (!required || required.length === 0) return true;
-        const caps = this.providerCapabilities.get(providerId);
+        const caps = this.providerCapabilities.get(resourceId);
         if (!caps) return false;
         return required.every(c => caps.includes(c));
+    }
+
+    private resolveDefaultModel(resourceId: string): string | undefined {
+        return this.providerDefaultModels.get(resourceId);
     }
 }

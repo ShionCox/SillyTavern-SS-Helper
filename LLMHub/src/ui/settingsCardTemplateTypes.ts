@@ -13,64 +13,100 @@ export interface LLMHubSettingsIds {
     githubUrl: string;
     searchId: string;
 
-    // Tabs
-    tabMainId: string;
-    tabRouteId: string;
-    tabQueueId: string;
-    tabVaultId: string;
-    tabAboutId: string;
+    // ─── 5-Tab Layout ───
+    tabBasicId: string;       // 基础
+    tabResourceId: string;    // 资源
+    tabAssignId: string;      // 分配
+    tabOrchId: string;        // 编排
+    tabAboutId: string;       // 关于
 
-    // Panels
-    panelMainId: string;
-    panelRouteId: string;
-    panelQueueId: string;
-    panelVaultId: string;
+    panelBasicId: string;
+    panelResourceId: string;
+    panelAssignId: string;
+    panelOrchId: string;
     panelAboutId: string;
 
-    // Settings Controls
+    // ─── 基础 Panel ───
     enabledId: string;
     globalProfileId: string;
 
-    // Provider Source & Connection
-    providerSourceId: string;
-    customBaseUrlId: string;
-    customModelInputId: string;
+    // ─── 资源 Panel ───
+    resourceListId: string;
+    resourceNewBtnId: string;
+
+    // Resource Editor
+    resourceEditorId: string;
+    resourceIdInputId: string;
+    resourceLabelInputId: string;
+    resourceTypeSelectId: string;
+    resourceSourceSelectId: string;
+    resourceEnabledId: string;
+    resourceBaseUrlId: string;
+    resourceApiKeyId: string;
+    resourceApiKeySaveBtnId: string;
+    resourceDefaultModelId: string;
+    resourceRerankPathId: string;
+    resourceCustomParamsId: string;
+    resourceCustomParamsListId: string;
+    resourceCustomParamsAddBtnId: string;
+    resourceCustomParamsSyncBtnId: string;
+    rerankTestPanelId: string;
+    rerankTestQueryId: string;
+    rerankTestDocsId: string;
+    rerankTestTopKId: string;
+
+    // Connection Test
     testConnectionBtnId: string;
+    testRerankBtnId: string;
     testResultId: string;
-    tavernInfoId: string;
-    tavernInfoStatusId: string;
-    tavernInfoListId: string;
     fetchModelsBtnId: string;
     modelListSelectId: string;
     modelListStatusId: string;
 
-    // ─── Route Panel: 3-view sub-tabs ───
-    subTabGlobalDefaultsId: string;
-    subTabPluginDefaultsId: string;
-    subTabTaskOverridesId: string;
-    subPanelGlobalDefaultsId: string;
-    subPanelPluginDefaultsId: string;
-    subPanelTaskOverridesId: string;
+    // Capabilities (checkboxes)
+    resourceCapChatId: string;
+    resourceCapJsonId: string;
+    resourceCapToolsId: string;
+    resourceCapEmbId: string;
+    resourceCapRerankId: string;
+    resourceCapVisionId: string;
+    resourceCapReasoningId: string;
 
-    // View A: Global Capability Defaults
-    globalDefGenProviderId: string;
-    globalDefGenModelId: string;
-    globalDefGenProfileId: string;
-    globalDefEmbProviderId: string;
-    globalDefEmbModelId: string;
-    globalDefRerankProviderId: string;
-    globalDefRerankModelId: string;
-    globalDefSaveBtnId: string;
+    resourceSaveBtnId: string;
+    resourceDeleteBtnId: string;
 
-    // View B: Plugin Defaults
-    pluginDefaultsListId: string;
-    pluginDefaultsRefreshBtnId: string;
+    // Tavern Info
+    tavernInfoId: string;
+    tavernInfoStatusId: string;
+    tavernInfoListId: string;
 
-    // View C: Task Overrides
-    taskOverridesListId: string;
-    taskOverridesRefreshBtnId: string;
+    // ─── 分配 Panel: 3-view sub-tabs ───
+    subTabGlobalAssignId: string;
+    subTabPluginAssignId: string;
+    subTabTaskAssignId: string;
+    subPanelGlobalAssignId: string;
+    subPanelPluginAssignId: string;
+    subPanelTaskAssignId: string;
 
-    // Budget (legacy compat)
+    // Global Assignments
+    globalAssignGenResourceId: string;
+    globalAssignGenModelId: string;
+    globalAssignEmbResourceId: string;
+    globalAssignEmbModelId: string;
+    globalAssignRerankResourceId: string;
+    globalAssignRerankModelId: string;
+    globalAssignSaveBtnId: string;
+
+    // Plugin Assignments
+    pluginAssignListId: string;
+    pluginAssignRefreshBtnId: string;
+
+    // Task Assignments
+    taskAssignListId: string;
+    taskAssignRefreshBtnId: string;
+
+    // ─── 编排 Panel ───
+    // Budget
     budgetConsumerId: string;
     budgetMaxRpmId: string;
     budgetMaxTokensId: string;
@@ -85,10 +121,4 @@ export interface LLMHubSettingsIds {
     queueRefreshBtnId: string;
     silentPermissionsListId: string;
     recentHistoryListId: string;
-
-    // Vault
-    vaultAddServiceId: string;
-    vaultApiKeyId: string;
-    vaultSaveBtnId: string;
-    vaultClearBtnId: string;
 }

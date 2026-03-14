@@ -4,7 +4,7 @@
  * 只读快照类型，供 UI 和运行时共同读取。
  */
 
-import type { LLMCapability } from '../../../SDK/stx';
+import type { CapabilityKind, LLMCapability, RoutePreviewSnapshot } from '../../../SDK/stx';
 
 // ── 任务标识 ──
 
@@ -42,6 +42,20 @@ export interface MemoryAiTaskStatus {
     state: MemoryAiTaskStatusState;
     /** 最近一次执行记录 */
     lastRecord: MemoryAiTaskRecord | null;
+}
+
+export interface MemoryAiTaskRouteStatus {
+    taskId: MemoryAiTaskId;
+    taskKind: CapabilityKind;
+    available: boolean;
+    blockedReason?: string;
+    route: RoutePreviewSnapshot | null;
+}
+
+export interface MemoryAiRouteOverview {
+    generation: RoutePreviewSnapshot | null;
+    embedding: RoutePreviewSnapshot | null;
+    rerank: RoutePreviewSnapshot | null;
 }
 
 // ── 能力可用性 ──
@@ -87,6 +101,12 @@ export interface MemoryAiHealthSnapshot {
 
     /** 各任务最新状态 */
     tasks: Record<MemoryAiTaskId, MemoryAiTaskStatus>;
+
+    /** 当前三类能力的路由预览 */
+    routeOverview: MemoryAiRouteOverview;
+
+    /** 每项测试当前是否可运行以及命中的路由 */
+    taskRoutes: Record<MemoryAiTaskId, MemoryAiTaskRouteStatus>;
 
     /** 最近任务记录（最多 10 条，仅诊断用） */
     recentRecords: MemoryAiTaskRecord[];
