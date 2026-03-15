@@ -69,7 +69,19 @@ type LLMHubRuntime = {
         getQueueSnapshot?: () => {
             pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
             active: { requestId: string; consumer: string; taskId: string; state: string } | null;
-            recentHistory: Array<{ requestId: string; consumer: string; taskId: string; state: string; finishedAt?: number }>;
+            recentHistory: Array<{
+                requestId: string;
+                consumer: string;
+                taskId: string;
+                state: string;
+                finishedAt?: number;
+                rawResponseText?: string;
+                parsedResponse?: unknown;
+                normalizedResponse?: unknown;
+                validationErrors?: string[];
+                finalError?: string;
+                reasonCode?: string;
+            }>;
         };
     };
     displayController?: {
@@ -153,6 +165,15 @@ function escapeHtml(value: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function stringifyDebugValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
 }
 
 function resourceTypeToCapabilities(type: ResourceType): LLMCapability[] {
@@ -2000,17 +2021,69 @@ function bindUiEvents(): void {
             return;
         }
 
-        listEl.innerHTML = snapshot.recentHistory.slice().reverse().map((item) => `
-          <div class="stx-ui-list-item">
-            <div>
-              <div class="stx-ui-list-title">${escapeHtml(item.consumer)} / ${escapeHtml(item.taskId)}</div>
-              <div class="stx-ui-list-meta">
-                ID: ${escapeHtml(item.requestId.slice(0, 8))}...
-                ${item.finishedAt ? ` | 完成 ${formatTimestamp(item.finishedAt)}` : ''}
-              </div>
-            </div>
-            <span class="stx-ui-state-badge ${getStateBadgeClass(item.state)}">${STATE_LABELS[item.state] || item.state}</span>
-          </div>`).join('');
+                listEl.innerHTML = snapshot.recentHistory.slice().reverse().map((item) => {
+                        const debugSections: string[] = [];
+                        if (item.finalError) {
+                                debugSections.push(`
+                                        <div class="stx-ui-history-section">
+                                            <div class="stx-ui-history-label">错误信息</div>
+                                            <div class="stx-ui-history-error">${escapeHtml(item.finalError)}${item.reasonCode ? `\n原因码：${escapeHtml(item.reasonCode)}` : ''}</div>
+                                        </div>
+                                `);
+                        }
+                        if (Array.isArray(item.validationErrors) && item.validationErrors.length > 0) {
+                                debugSections.push(`
+                                        <div class="stx-ui-history-section">
+                                            <div class="stx-ui-history-label">Schema 校验详情</div>
+                                            <pre class="stx-ui-history-pre">${escapeHtml(item.validationErrors.join('\n'))}</pre>
+                                        </div>
+                                `);
+                        }
+                        if (item.normalizedResponse !== undefined) {
+                                debugSections.push(`
+                                        <div class="stx-ui-history-section">
+                                            <div class="stx-ui-history-label">归一化后 JSON</div>
+                                            <pre class="stx-ui-history-pre">${escapeHtml(stringifyDebugValue(item.normalizedResponse))}</pre>
+                                        </div>
+                                `);
+                        }
+                        if (item.parsedResponse !== undefined) {
+                                debugSections.push(`
+                                        <div class="stx-ui-history-section">
+                                            <div class="stx-ui-history-label">解析出的 JSON</div>
+                                            <pre class="stx-ui-history-pre">${escapeHtml(stringifyDebugValue(item.parsedResponse))}</pre>
+                                        </div>
+                                `);
+                        }
+                        if (item.rawResponseText) {
+                                debugSections.push(`
+                                        <div class="stx-ui-history-section">
+                                            <div class="stx-ui-history-label">AI 原始回复</div>
+                                            <pre class="stx-ui-history-pre">${escapeHtml(item.rawResponseText)}</pre>
+                                        </div>
+                                `);
+                        }
+
+                        return `
+                            <div class="stx-ui-list-item stx-ui-history-item">
+                                <div class="stx-ui-history-head">
+                                    <div class="stx-ui-history-main">
+                                        <div class="stx-ui-list-title">${escapeHtml(item.consumer)} / ${escapeHtml(item.taskId)}</div>
+                                        <div class="stx-ui-list-meta">
+                                            ID: ${escapeHtml(item.requestId.slice(0, 8))}...
+                                            ${item.finishedAt ? ` | 完成 ${formatTimestamp(item.finishedAt)}` : ''}
+                                        </div>
+                                    </div>
+                                    <span class="stx-ui-state-badge ${getStateBadgeClass(item.state)}">${STATE_LABELS[item.state] || item.state}</span>
+                                </div>
+                                ${debugSections.length > 0 ? `
+                                    <details class="stx-ui-history-details">
+                                        <summary>查看 AI 回复详情</summary>
+                                        <div class="stx-ui-history-body">${debugSections.join('')}</div>
+                                    </details>
+                                ` : ''}
+                            </div>`;
+                }).join('');
     };
 
     const renderSilentPermissions = (): void => {

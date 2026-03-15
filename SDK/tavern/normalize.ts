@@ -44,6 +44,62 @@ export function normalizeTavernRoleKeyEvent(roleId: string): string {
 }
 
 /**
+ * 功能：判断角色键是否代表稳定角色卡身份，而不是占位符或通用助手名。
+ * @param roleKey 原始角色键。
+ * @param options 附加判断条件。
+ * @returns 是否为稳定角色键。
+ */
+export function isStableTavernRoleKeyEvent(
+  roleKey: unknown,
+  options?: { characterId?: unknown }
+): boolean {
+  const raw = normalizeTavernKeyPartEvent(roleKey, "").toLowerCase();
+  const normalized = normalizeTavernRoleKeyEvent(String(roleKey ?? ""));
+  const characterIdText = String(options?.characterId ?? "").trim().toLowerCase();
+  const hasStableCharacterId = Boolean(characterIdText)
+    && characterIdText !== "-1"
+    && characterIdText !== "unknown";
+
+  const blockedRaw = new Set([
+    "",
+    "default_role",
+    "unknown_role",
+    "unknown_character",
+    "default",
+    "unknown",
+  ]);
+  if (blockedRaw.has(raw)) {
+    return false;
+  }
+
+  const blockedNormalized = new Set([
+    "",
+    "default role",
+    "unknown role",
+    "unknown character",
+    "未知角色",
+  ]);
+  if (blockedNormalized.has(normalized)) {
+    return false;
+  }
+
+  const genericAssistantLike = new Set([
+    "assistant",
+    "ai",
+    "bot",
+    "system",
+    "helper",
+    "助手",
+    "助理",
+  ]);
+  if (genericAssistantLike.has(normalized)) {
+    return hasStableCharacterId;
+  }
+
+  return true;
+}
+
+/**
  * 功能：从旧版聊天键中解析三段结构。
  * @param legacyChatKey 旧版聊天键
  * @returns 解析结果

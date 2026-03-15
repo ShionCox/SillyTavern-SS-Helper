@@ -1,5 +1,5 @@
 import { readSdkPluginSettings, writeSdkPluginSettings } from '../../../SDK/settings';
-import { getTavernSemanticSnapshotEvent } from '../../../SDK/tavern';
+import { getTavernSemanticSnapshotEvent, isStableTavernRoleKeyEvent } from '../../../SDK/tavern';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import type {
     AdaptivePolicy,
@@ -123,7 +123,10 @@ function resolveRoleScopeFromState(state?: MemoryOSChatState | null): { roleScop
         };
     }
     const roleKey = normalizeText(state?.semanticSeed?.identitySeed?.roleKey);
-    if (roleKey) {
+    const semanticCharacterId = normalizeText(
+        ((state?.semanticSeed as Record<string, unknown> | undefined)?.characterCore as Record<string, unknown> | undefined)?.characterId,
+    );
+    if (isStableTavernRoleKeyEvent(roleKey, { characterId: semanticCharacterId })) {
         return {
             roleScope: 'character',
             roleScopeKey: `character:${roleKey}`,
@@ -149,7 +152,7 @@ function resolveRoleScopeFromState(state?: MemoryOSChatState | null): { roleScop
         };
     }
     const hostRoleKey = normalizeText(hostSnapshot?.roleKey);
-    if (hostRoleKey) {
+    if (isStableTavernRoleKeyEvent(hostRoleKey, { characterId: hostSnapshot?.characterId })) {
         return {
             roleScope: 'character',
             roleScopeKey: `character:${hostRoleKey}`,

@@ -330,7 +330,7 @@ export class InjectionManager {
             lorebookPolicyWeight: 0.55,
             groupLaneBudgetShare: 0.35,
             actorSalienceTopK: 3,
-            profileRefreshInterval: 12,
+            profileRefreshInterval: 6,
             qualityRefreshInterval: 12,
             groupLaneEnabled: true,
         };

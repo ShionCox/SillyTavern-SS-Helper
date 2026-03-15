@@ -39,30 +39,14 @@ type RawRecord = Record<string, unknown>;
  * @param senderType 原始发送方类型
  * @returns 规范化后的标签
  */
-function normalizeSenderLabel(senderType: string): 'AI' | '用户' | '系统' {
+function normalizeSenderLabel(senderType: string): '助手' | '用户' | '系统' {
     if (senderType === '系统') {
         return '系统';
     }
     if (senderType === '用户') {
         return '用户';
     }
-    return 'AI';
-}
-
-/**
- * 功能：根据发送方标签返回徽标样式类名。
- * @param senderType 发送方类型
- * @returns 对应的样式类名
- */
-function resolveSenderBadgeClass(senderType: string): string {
-    const normalizedSenderType = normalizeSenderLabel(senderType);
-    if (normalizedSenderType === '系统') {
-        return 'is-system';
-    }
-    if (normalizedSenderType === '用户') {
-        return 'is-user';
-    }
-    return 'is-ai';
+    return '助手';
 }
 
 /**
@@ -306,7 +290,339 @@ const RE_KEY_I18N: Record<string, string> = {
     thought: '内部思考',
     context: '背景信息',
     entities: '实体引用',
+    ability: '能力',
+    abilities: '能力',
+    companion: '同伴',
+    current_emotion: '当前情绪',
+    emotion: '情绪',
+    goal: '目标',
+    health: '健康',
+    hp: '生命值',
+    inventory: '物品',
+    location: '位置',
+    notes: '备注',
+    relationship: '关系',
+    relationships: '关系',
+    scene: '场景',
+    status: '状态',
+    value: '值',
+    world_state: '世界状态',
 };
+
+const RE_ENTITY_KIND_I18N: Record<string, string> = {
+    user: '用户',
+    character: '角色',
+    relationship: '关系',
+    location: '地点',
+    environment: '环境',
+    goal: '目标',
+    world: '世界',
+    item: '物品',
+    group: '群组',
+    scene: '场景',
+    semantic: '语义',
+    state: '状态',
+    actor: '对象',
+};
+
+const RE_EVENT_TYPE_I18N: Record<string, string> = {
+    'chat.message.sent': '用户发言',
+    'chat.message.received': '角色回复',
+    'chat.message.system': '系统消息',
+    'chat.message.updated': '消息更新',
+    'memory.extract': '记忆抽取',
+    'memory.summarize': '摘要生成',
+    'memory.vector.embed': '向量写入',
+    'memory.search.rerank': '检索重排',
+    'world.template.build': '世界模板构建',
+    'world_state.update': '世界状态更新',
+};
+
+const RE_AUDIT_ACTION_I18N: Record<string, string> = {
+    create: '新建',
+    upsert: '写入',
+    update: '更新',
+    patch: '修补',
+    delete: '删除',
+    restore: '恢复',
+    merge: '合并',
+    compact: '压缩',
+    rebuild: '重建',
+    snapshot: '快照',
+};
+
+/**
+ * 功能：把记录字段键名转换为更友好的中文标签。
+ * @param key 原始字段键名。
+ * @returns 友好的字段标签。
+ */
+function formatRecordEditorKeyLabel(key: string): string {
+    const trimmed = String(key ?? '').trim();
+    if (!trimmed) {
+        return '未命名字段';
+    }
+
+    const normalized = trimmed.toLowerCase();
+    if (RE_KEY_I18N[normalized]) {
+        return RE_KEY_I18N[normalized];
+    }
+
+    const parts = trimmed.split(/[_./-]+/).filter(Boolean);
+    if (parts.length === 0) {
+        return trimmed;
+    }
+
+    const translatedParts = parts.map((part: string): string => {
+        const partKey = part.toLowerCase();
+        if (RE_KEY_I18N[partKey]) {
+            return RE_KEY_I18N[partKey];
+        }
+        if (/^(id|uuid)$/i.test(part)) {
+            return part.toUpperCase();
+        }
+        return part;
+    });
+    const hasTranslatedPart = parts.some((part: string): boolean => Boolean(RE_KEY_I18N[part.toLowerCase()]));
+    return hasTranslatedPart ? translatedParts.join('') : trimmed;
+}
+
+/**
+ * 功能：压缩内部标识的显示长度，避免界面被长键值撑开。
+ * @param value 原始内部标识。
+ * @param maxLength 最大展示长度。
+ * @returns 压缩后的展示文本。
+ */
+function compactInternalIdentifier(value: string, maxLength: number = 64): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '暂无';
+    }
+    if (trimmed.length <= maxLength) {
+        return trimmed;
+    }
+    const headLength = Math.max(12, Math.floor(maxLength * 0.42));
+    const tailLength = Math.max(10, maxLength - headLength - 3);
+    return `${trimmed.slice(0, headLength)}...${trimmed.slice(-tailLength)}`;
+}
+
+/**
+ * 功能：把实体类型转换成更直观的中文称呼。
+ * @param kind 实体类型。
+ * @returns 中文类型名。
+ */
+function formatEntityKindLabel(kind: string): string {
+    const normalized = String(kind ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '未绑定对象';
+    }
+    if (RE_ENTITY_KIND_I18N[normalized]) {
+        return RE_ENTITY_KIND_I18N[normalized];
+    }
+    return formatRecordEditorKeyLabel(normalized);
+}
+
+/**
+ * 功能：把路径或代码式片段转换成更适合阅读的中文主题。
+ * @param value 原始路径或标识片段。
+ * @param fallback 兜底文本。
+ * @returns 中文化后的主题名。
+ */
+function formatHumanReadableTopic(value: string, fallback: string = '未命名'): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return fallback;
+    }
+    const normalized = trimmed.replace(/^\/+/, '').trim();
+    if (!normalized) {
+        return fallback;
+    }
+    const segments = normalized.split(/[/.]+/).filter(Boolean);
+    if (segments.length === 0) {
+        return fallback;
+    }
+    const translated = segments.map((segment: string): string => formatRecordEditorKeyLabel(segment));
+    return translated.join(' / ');
+}
+
+/**
+ * 功能：把实体对象渲染成更直观的中文说明。
+ * @param entity 原始实体对象。
+ * @returns 中文实体说明。
+ */
+function formatEntityDisplayLabel(entity: Record<string, unknown> | undefined): string {
+    if (!entity) {
+        return '未绑定对象';
+    }
+    const kind = formatEntityKindLabel(String(entity.kind ?? ''));
+    const entityId = String(entity.id ?? '').trim();
+    if (!entityId) {
+        return kind;
+    }
+    return `${kind}：${entityId}`;
+}
+
+/**
+ * 功能：生成实体的原始引用提示，方便需要时核对。
+ * @param entity 原始实体对象。
+ * @returns 原始引用文本。
+ */
+function formatEntityRawHint(entity: Record<string, unknown> | undefined): string {
+    if (!entity) {
+        return '未填写实体引用';
+    }
+    const kind = String(entity.kind ?? '').trim();
+    const entityId = String(entity.id ?? '').trim();
+    if (!kind || !entityId) {
+        return '实体信息不完整';
+    }
+    return `[${kind}:${entityId}]`;
+}
+
+/**
+ * 功能：把事件类型转换成更容易理解的中文名称。
+ * @param value 原始事件类型。
+ * @returns 中文事件名称。
+ */
+function formatEventTypeLabel(value: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '未命名事件';
+    }
+    if (RE_EVENT_TYPE_I18N[normalized]) {
+        return RE_EVENT_TYPE_I18N[normalized];
+    }
+    return formatHumanReadableTopic(normalized.replace(/\./g, '/'), normalized);
+}
+
+/**
+ * 功能：把审计动作转换成更自然的中文动词。
+ * @param value 原始审计动作。
+ * @returns 中文动作名称。
+ */
+function formatAuditActionLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '未命名动作';
+    }
+    if (RE_AUDIT_ACTION_I18N[normalized]) {
+        return RE_AUDIT_ACTION_I18N[normalized];
+    }
+    return formatRecordEditorKeyLabel(normalized);
+}
+
+/**
+ * 功能：把维护来源模式转换成中文说明。
+ * @param value 原始模式值。
+ * @returns 中文模式说明。
+ */
+function formatOperationModeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '常规';
+    }
+    if (normalized === 'manual') {
+        return '手动';
+    }
+    if (normalized === 'auto') {
+        return '自动';
+    }
+    if (normalized === 'system') {
+        return '系统';
+    }
+    return formatRecordEditorKeyLabel(normalized);
+}
+
+/**
+ * 功能：生成事实记录的主标题，让原始事实更像资料项。
+ * @param record 原始事实记录。
+ * @returns 主标题文本。
+ */
+function buildFactHeadline(record: RawRecord): string {
+    const path = String(record.path ?? '').trim();
+    if (path) {
+        return formatHumanReadableTopic(path, '未命名事实');
+    }
+    const type = String(record.type ?? '').trim();
+    if (type) {
+        return formatRecordEditorKeyLabel(type);
+    }
+    return '未命名事实';
+}
+
+/**
+ * 功能：根据事实记录给出简洁的分类说明。
+ * @param record 原始事实记录。
+ * @returns 分类说明文本。
+ */
+function buildFactSummaryLabel(record: RawRecord): string {
+    const type = String(record.type ?? '').trim();
+    if (type) {
+        return `分类：${formatRecordEditorKeyLabel(type)}`;
+    }
+    return '分类：未标记';
+}
+
+/**
+ * 功能：生成世界状态记录的主标题。
+ * @param path 原始路径。
+ * @returns 主标题文本。
+ */
+function buildWorldStateHeadline(path: string): string {
+    return formatHumanReadableTopic(path, '未命名状态');
+}
+
+/**
+ * 功能：把多个描述片段拼成一行辅助说明。
+ * @param parts 片段列表。
+ * @returns 合并后的辅助说明。
+ */
+function joinReadableMeta(parts: string[]): string {
+    return parts.map((part: string): string => String(part ?? '').trim()).filter(Boolean).join(' · ');
+}
+
+/**
+ * 功能：判断事实记录是否存在结构信息缺失。
+ * @param record 原始事实记录。
+ * @returns 是否需要提示结构待整理。
+ */
+function isFactStructurallyIncomplete(record: RawRecord): boolean {
+    const entity = record.entity as Record<string, unknown> | undefined;
+    const entityKind = String(entity?.kind ?? '').trim();
+    const entityId = String(entity?.id ?? '').trim();
+    const path = String(record.path ?? '').trim();
+    return !entityKind || !entityId || !path;
+}
+
+/**
+ * 功能：渲染带标题、说明和内部提示的记录摘要块。
+ * @param title 主标题。
+ * @param subtitle 辅助说明。
+ * @param internalLabel 内部信息标签。
+ * @param internalValue 内部信息原值。
+ * @param flagText 右上角提示文案。
+ * @returns HTML 字符串。
+ */
+function renderRecordSummaryMarkup(
+    title: string,
+    subtitle: string,
+    internalLabel: string,
+    internalValue: string,
+    flagText: string = '',
+): string {
+    const normalizedTitle = String(title ?? '').trim() || '未命名';
+    const normalizedSubtitle = String(subtitle ?? '').trim() || '暂无补充说明';
+    const normalizedInternalValue = String(internalValue ?? '').trim();
+    return `
+        <div class="stx-re-record-main">
+            <div class="stx-re-record-title-row">
+                <div class="stx-re-record-title">${escapeHtml(normalizedTitle)}</div>
+                ${flagText ? `<span class="stx-re-record-flag">${escapeHtml(flagText)}</span>` : ''}
+            </div>
+            <div class="stx-re-record-sub">${escapeHtml(normalizedSubtitle)}</div>
+            ${normalizedInternalValue ? `<div class="stx-re-record-code" title="${escapeHtml(normalizedInternalValue)}">${escapeHtml(internalLabel)}：${escapeHtml(compactInternalIdentifier(normalizedInternalValue))}</div>` : ''}
+        </div>
+    `.trim();
+}
 
 /**
  * 功能：渲染原始值的查看或编辑 HTML。
@@ -334,7 +650,7 @@ function renderRawValueHtml(value: unknown, isEditing: boolean): string {
         <div class="stx-re-kv">
             ${entries.map(([key, itemValue]: [string, unknown]): string => {
                 const renderedValue = escapeHtml(stringifyDisplayValue(itemValue));
-                const displayKey = RE_KEY_I18N[key] || key;
+                const displayKey = formatRecordEditorKeyLabel(key);
                 if (isEditing) {
                     return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div contenteditable="true" class="stx-re-kv-input" data-key="${escapeHtml(key)}">${renderedValue}</div></div>`;
                 }
@@ -825,17 +1141,22 @@ export async function openRecordEditor(): Promise<void> {
 
                 if (tableName === 'events') {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('类型 / ID / 发送方', 'type')}${headerCell('时间', 'ts')}${headerCell('内容', 'payload')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('事件概览', 'type')}${headerCell('发生时间', 'ts')}${headerCell('内容', 'payload')}<th>操作</th></tr>`;
                     }
                     const payloadRecord = payloadValue as Record<string, unknown> | null;
-                    const senderName = String(payloadRecord?.name ?? '未知');
+                    const senderName = String(payloadRecord?.name ?? '未知').trim() || '未知';
                     const isUser = Boolean(payloadRecord?.isUser) || payloadRecord?.name === 'You' || payloadRecord?.name === 'User';
                     const isSystem = payloadRecord?.role === 'system' || payloadRecord?.name === 'System' || payloadRecord?.name === '系统';
                     const senderType = isSystem ? '系统' : isUser || record.type === 'chat.message.sent' ? '用户' : 'AI';
+                    const eventTypeLabel = formatEventTypeLabel(String(record.type ?? ''));
+                    const eventSummary = joinReadableMeta([
+                        `来源：${normalizeSenderLabel(senderType)}`,
+                        senderName && senderName !== normalizeSenderLabel(senderType) ? senderName : '',
+                    ]);
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><div class="stx-re-event-type">${escapeHtml(String(record.type ?? ''))}</div><div class="stx-re-json compact">${escapeHtml(recordId)}</div><div class="stx-re-sender-info"><span class="stx-re-badge ${resolveSenderBadgeClass(senderType)}">${normalizeSenderLabel(senderType)}</span><span class="stx-re-sender-name" title="${escapeHtml(senderName)}">${escapeHtml(senderName)}</span></div></td>
+                            <td>${renderRecordSummaryMarkup(eventTypeLabel, eventSummary, '事件编号', recordId)}</td>
                             <td>${escapeHtml(formatTimeLabel(record.ts))}</td>
                             <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
@@ -843,15 +1164,23 @@ export async function openRecordEditor(): Promise<void> {
                     `;
                 } else if (tableName === 'facts') {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('记忆锚点', 'factKey')}${headerCell('实体', 'entity')}${headerCell('路径', 'path')}${headerCell('值', 'value')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('记忆主题', 'factKey')}${headerCell('关联对象', 'entity')}${headerCell('主题位置', 'path')}${headerCell('内容', 'value')}<th>操作</th></tr>`;
                     }
                     const entity = record.entity as Record<string, unknown> | undefined;
+                    const pathValue = String(record.path ?? '').trim();
+                    const entityLabel = formatEntityDisplayLabel(entity);
+                    const rawEntityLabel = formatEntityRawHint(entity);
+                    const pathLabel = pathValue ? formatHumanReadableTopic(pathValue, '未填写路径') : '未填写路径';
+                    const pathSummary = pathValue ? '这条记录会归入当前主题下' : '这条记录还没有填写路径';
+                    const factTitle = buildFactHeadline(record);
+                    const factSubtitle = joinReadableMeta([entityLabel, buildFactSummaryLabel(record)]);
+                    const entitySummary = entity ? '这条记录已经绑定到具体对象' : '这条记录还没有绑定对象';
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><div class="stx-re-json" style="white-space: pre-wrap; word-break: break-all; min-width: 120px;" title="${escapeHtml(recordId)}">${escapeHtml(recordId)}</div></td>
-                            <td>${escapeHtml(entity ? `[${String(entity.kind ?? '')}:${String(entity.id ?? '')}]` : '-')}</td>
-                            <td>${escapeHtml(String(record.path ?? '-'))}</td>
+                            <td>${renderRecordSummaryMarkup(factTitle, factSubtitle, '内部键', recordId, isFactStructurallyIncomplete(record) ? '结构待整理' : '')}</td>
+                            <td>${renderRecordSummaryMarkup(entityLabel, entitySummary, '原始引用', rawEntityLabel === '未填写实体引用' ? '' : rawEntityLabel)}</td>
+                            <td>${renderRecordSummaryMarkup(pathLabel, pathSummary, '原始路径', pathValue)}</td>
                             <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
                         </tr>
@@ -871,12 +1200,13 @@ export async function openRecordEditor(): Promise<void> {
                     `;
                 } else if (tableName === 'world_state') {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('路径 / Key', 'path')}${headerCell('值', 'value')}${headerCell('更新时间', 'updatedAt')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('状态主题', 'path')}${headerCell('当前状态', 'value')}${headerCell('最近更新时间', 'updatedAt')}<th>操作</th></tr>`;
                     }
+                    const worldPath = String(record.path ?? '').trim();
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><div class="stx-re-event-type">${escapeHtml(String(record.path ?? ''))}</div><div class="stx-re-json">${escapeHtml(recordId)}</div></td>
+                            <td>${renderRecordSummaryMarkup(buildWorldStateHeadline(worldPath), worldPath ? `归类到：${formatHumanReadableTopic(worldPath, '未填写路径')}` : '这条世界状态还没有填写路径', '状态编号', recordId)}</td>
                             <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
                             <td>${escapeHtml(formatTimeLabel(record.updatedAt))}</td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
@@ -884,14 +1214,21 @@ export async function openRecordEditor(): Promise<void> {
                     `;
                 } else {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('动作', 'action')}${headerCell('发起者', 'actor')}${headerCell('变更内容', 'after')}${headerCell('时间', 'ts')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('变更动作', 'action')}${headerCell('执行来源', 'actor')}${headerCell('变更内容', 'after')}${headerCell('发生时间', 'ts')}<th>操作</th></tr>`;
                     }
                     const actor = record.actor as Record<string, unknown> | undefined;
+                    const actorPluginId = String(actor?.pluginId ?? 'system').trim() || 'system';
+                    const actorMode = String(actor?.mode ?? '').trim();
+                    const actorTitle = actorPluginId === 'system' ? '系统维护' : actorPluginId === MEMORY_OS_PLUGIN_ID ? 'MemoryOS' : actorPluginId;
+                    const actorSubtitle = joinReadableMeta([
+                        actorMode ? `方式：${formatOperationModeLabel(actorMode)}` : '',
+                        actorPluginId === 'system' ? '来源：系统内核' : '',
+                    ]);
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><b class="stx-re-accent-text">${escapeHtml(String(record.action ?? ''))}</b></td>
-                            <td>${escapeHtml(`${String(actor?.pluginId ?? 'system')} (${String(actor?.mode ?? '')})`)}</td>
+                            <td>${renderRecordSummaryMarkup(formatAuditActionLabel(String(record.action ?? '')), String(record.reason ?? '记录发生了结构变更').trim() || '记录发生了结构变更', '审计编号', recordId)}</td>
+                            <td>${renderRecordSummaryMarkup(actorTitle, actorSubtitle || '未记录额外来源信息', '内部来源', actorPluginId)}</td>
                             <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
                             <td>${escapeHtml(formatTimeLabel(record.ts))}</td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>

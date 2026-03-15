@@ -1138,6 +1138,7 @@ export interface LLMSDK {
     runTask<T>(args: {
         consumer: string;
         taskId: string;
+        taskDescription?: string;
         taskKind: CapabilityKind;
         input: any;
         schema?: object;
@@ -1150,6 +1151,7 @@ export interface LLMSDK {
     embed(args: {
         consumer: string;
         taskId: string;
+        taskDescription?: string;
         texts: string[];
         routeHint?: { resource?: string; model?: string };
         enqueue?: RequestEnqueueOptions;
@@ -1159,6 +1161,7 @@ export interface LLMSDK {
     rerank(args: {
         consumer: string;
         taskId: string;
+        taskDescription?: string;
         query: string;
         docs: string[];
         topK?: number;

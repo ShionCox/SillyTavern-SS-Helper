@@ -30,11 +30,16 @@ const ALLOWED_TAGS = new Set([
     'tr', 'th', 'td', 'hr', 'mark', 'small', 'sub', 'sup',
 ]);
 
-/** compact 模式默认自动关闭延迟 */
-const COMPACT_AUTO_CLOSE_MS = 8000;
-
 /** 平台内部插件 ID（默认具备 silent 权限） */
 const PLATFORM_INTERNAL_PLUGINS = new Set(['stx_llmhub', 'stx_memory_os']);
+
+function formatTaskTitle(record: RequestRecord): string {
+    const taskLabel = String(record.taskDescription || record.taskId || '').trim() || record.taskId;
+    if (record.consumer === 'stx_memory_os') {
+        return taskLabel;
+    }
+    return `${record.consumer} / ${taskLabel}`;
+}
 
 export class DisplayController {
     /** 当前活跃的覆层 */
@@ -119,15 +124,15 @@ export class DisplayController {
         // silent 权限检查
         if (mode === 'silent') {
             if (!this.canUseSilent(pluginId, taskId, backgroundEligible)) {
-                logger.warn(`插件 ${pluginId} 任务 ${taskId} 无 silent 权限，降级为 compact`);
-                return 'compact';
+                logger.warn(`插件 ${pluginId} 任务 ${taskId} 无 silent 权限，紧凑弹窗已禁用，保持静默执行`);
+                return 'silent';
             }
             return 'silent';
         }
 
-        // fullscreen + blockNext=false → compact
+        // fullscreen + blockNext=false：右下角紧凑弹窗已禁用，直接静默
         if (mode === 'fullscreen' && blockNext === false) {
-            return 'compact';
+            return 'silent';
         }
 
         return mode;
@@ -136,40 +141,85 @@ export class DisplayController {
     // ─── 展示生命周期（同步命令式） ───
 
     /**
+     * 为正在执行中的请求创建占位覆层。
+     */
+    openPendingOverlay(record: RequestRecord): void {
+        const displayMode = record.enqueueOptions.displayMode || 'fullscreen';
+        if (displayMode !== 'fullscreen') {
+            return;
+        }
+
+        const existing = this.activeOverlays.get(record.requestId);
+        const spec: LLMOverlaySpec = existing || {
+            requestId: record.requestId,
+            title: formatTaskTitle(record),
+            status: 'loading',
+            content: {
+                type: 'text',
+                body: [
+                    '正在调用模型处理中…',
+                    '',
+                    `任务：${String(record.taskDescription || record.taskId || '').trim() || record.taskId}`,
+                    `请求：${record.requestId}`,
+                ].join('\n'),
+            },
+            displayMode: 'fullscreen',
+            autoClose: false,
+        };
+
+        spec.title = formatTaskTitle(record);
+        spec.status = 'loading';
+        spec.displayMode = 'fullscreen';
+        spec.autoClose = false;
+        spec.autoCloseMs = undefined;
+        spec.content = {
+            type: 'text',
+            body: [
+                '正在调用模型处理中…',
+                '',
+                `任务：${String(record.taskDescription || record.taskId || '').trim() || record.taskId}`,
+                `请求：${record.requestId}`,
+            ].join('\n'),
+        };
+
+        this.activeOverlays.set(record.requestId, spec);
+        this.renderCallback?.(spec);
+    }
+
+    /**
      * 为请求创建展示覆层（由编排器调用）
      */
     createOverlay(record: RequestRecord, result: LLMRunResult<any>): void {
         const displayMode = record.enqueueOptions.displayMode || 'fullscreen';
 
-        if (displayMode === 'silent') {
-            // silent 不创建覆层，直接通知关闭
+        if (displayMode === 'silent' || displayMode === 'compact') {
+            // silent / compact 都不创建覆层，直接通知关闭
             this.notifyOrchestratorClosed?.(record.requestId);
             return;
         }
 
-        const spec: LLMOverlaySpec = {
+        const spec: LLMOverlaySpec = this.activeOverlays.get(record.requestId) || {
             requestId: record.requestId,
-            title: `${record.consumer} / ${record.taskId}`,
+            title: formatTaskTitle(record),
             status: result.ok ? 'done' : 'error',
             content: this.buildSafeContent(result),
             displayMode,
-            autoClose: displayMode === 'compact',
-            autoCloseMs: displayMode === 'compact' ? COMPACT_AUTO_CLOSE_MS : undefined,
+            autoClose: false,
+            autoCloseMs: undefined,
         };
+
+        spec.title = formatTaskTitle(record);
+        spec.status = result.ok ? 'done' : 'error';
+        spec.content = this.buildSafeContent(result);
+        spec.displayMode = displayMode;
+        spec.autoClose = false;
+        spec.autoCloseMs = undefined;
 
         this.activeOverlays.set(record.requestId, spec);
 
         // 渲染
         if (this.renderCallback) {
             this.renderCallback(spec);
-        }
-
-        // compact 自动关闭
-        if (spec.autoClose && spec.autoCloseMs) {
-            const timer = setTimeout(() => {
-                this.closeOverlay(record.requestId, 'auto_close');
-            }, spec.autoCloseMs);
-            this.autoCloseTimers.set(record.requestId, timer);
         }
     }
 

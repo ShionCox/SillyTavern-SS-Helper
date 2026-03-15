@@ -313,6 +313,12 @@ export interface AdaptivePolicy {
     groupLaneEnabled: boolean;
 }
 
+export interface SummaryPolicyOverride {
+    enabled?: boolean;
+    interval?: number;
+    windowSize?: number;
+}
+
 export interface PromptInjectionProfile {
     allowSystem: boolean;
     allowUser: boolean;
@@ -411,6 +417,7 @@ export interface RetentionArchives {
 export interface ManualOverrides {
     chatProfile?: ChatProfileOverride;
     adaptivePolicy?: Partial<AdaptivePolicy>;
+    summaryPolicy?: SummaryPolicyOverride;
     retentionPolicy?: Partial<RetentionPolicy>;
     promptInjectionProfile?: Partial<PromptInjectionProfile>;
 }
@@ -732,7 +739,7 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
     lorebookPolicyWeight: 0.55,
     groupLaneBudgetShare: 0.35,
     actorSalienceTopK: 3,
-    profileRefreshInterval: 12,
+    profileRefreshInterval: 6,
     qualityRefreshInterval: 12,
     groupLaneEnabled: true,
 };

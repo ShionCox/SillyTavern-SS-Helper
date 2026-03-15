@@ -31,6 +31,7 @@ export { RowResolver } from './core/row-resolver';
 export { RowOperationsManager } from './core/row-operations';
 export { PromptTrimmer } from './core/prompt-trimmer';
 export { ChatViewManager } from './core/chat-view-manager';
+export { ChatLifecycleManager } from './core/chat-lifecycle-manager';
 
 // 注入管理器
 export { InjectionManager } from './injection/injection-manager';
@@ -106,6 +107,7 @@ import { broadcast, subscribe as subscribeBroadcast } from '../../SDK/bus/broadc
 import type { PluginManifest, RegistryChangeEvent } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
+import { ChatLifecycleManager } from './core/chat-lifecycle-manager';
 import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
@@ -778,6 +780,7 @@ class MemoryOS {
 
         const eventSource = initCtx.eventSource;
         const types = initCtx.event_types || {};
+        const chatLifecycleManager = new ChatLifecycleManager();
 
         // ======= 前置防呆：统一读取开关配置 =======
         const readSettings = (): Record<string, any> => {
@@ -1381,12 +1384,26 @@ class MemoryOS {
             } catch (backfillError) {
                 logger.error('历史消息补录异常', backfillError);
             }
+
+            try {
+                if (typeof (sdkInstance as any)?.chatState?.rebuildLogicalChatView === 'function') {
+                    await (sdkInstance as any).chatState.rebuildLogicalChatView();
+                }
+            } catch (rebuildError) {
+                logger.warn('聊天绑定后重建逻辑消息视图失败', rebuildError);
+            }
+
+            void chatLifecycleManager.reconcileCurrentScope('bind_current_chat').catch((error: unknown) => {
+                logger.warn('聊天绑定后作用域对账失败', error);
+            });
         };
 
         this.refreshChatBindingHandler = onChangeConfig;
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', onChangeConfig);
         eventSource.on(types.CHAT_STARTED || 'chat_started', onChangeConfig);
         eventSource.on(types.CHAT_NEW || 'chat_new', onChangeConfig);
+        eventSource.on(types.CHAT_CREATED || 'chat_created', onChangeConfig);
+        eventSource.on(types.GROUP_CHAT_CREATED || 'group_chat_created', onChangeConfig);
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', () => {
             setTimeout(() => rebuildLogicalViewIfNeeded('chat_changed', true), 0);
         });
@@ -1395,6 +1412,26 @@ class MemoryOS {
         });
         eventSource.on(types.CHAT_NEW || 'chat_new', () => {
             setTimeout(() => rebuildLogicalViewIfNeeded('chat_new', true), 0);
+        });
+        eventSource.on(types.CHAT_CREATED || 'chat_created', () => {
+            setTimeout(() => rebuildLogicalViewIfNeeded('chat_created', true), 0);
+        });
+        eventSource.on(types.GROUP_CHAT_CREATED || 'group_chat_created', () => {
+            setTimeout(() => rebuildLogicalViewIfNeeded('group_chat_created', true), 0);
+        });
+        eventSource.on(types.CHAT_DELETED || 'chat_deleted', (deletedChatId: unknown) => {
+            void chatLifecycleManager.purgeDeletedChatFromHost(deletedChatId, 'host_chat_deleted')
+                .then(() => chatLifecycleManager.reconcileCurrentScope('chat_deleted'))
+                .catch((error: unknown) => {
+                    logger.warn('处理角色聊天删除事件失败', error);
+                });
+        });
+        eventSource.on(types.GROUP_CHAT_DELETED || 'group_chat_deleted', (deletedChatId: unknown) => {
+            void chatLifecycleManager.purgeDeletedChatFromHost(deletedChatId, 'host_group_chat_deleted')
+                .then(() => chatLifecycleManager.reconcileCurrentScope('group_chat_deleted'))
+                .catch((error: unknown) => {
+                    logger.warn('处理群聊删除事件失败', error);
+                });
         });
         void onChangeConfig().catch((error: unknown) => {
             logger.error('首次绑定当前聊天失败', error);

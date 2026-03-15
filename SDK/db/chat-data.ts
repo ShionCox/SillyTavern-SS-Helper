@@ -135,6 +135,19 @@ export async function ensureSdkChatDocument(
     return doc;
 }
 
+export async function deleteSdkChatDocument(chatKey: string): Promise<boolean> {
+    documentCache.delete(chatKey);
+    pendingDocWrites.delete(chatKey);
+
+    try {
+        await db.chat_documents.delete(chatKey);
+        notifyChange('chat_documents', '', chatKey);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export type ChatSharedPatch = {
     labels?: string[];
     flags?: Record<string, boolean>;
@@ -374,12 +387,20 @@ export function invalidateSdkChatDataCache(chatKey?: string): void {
     if (!chatKey) {
         documentCache.clear();
         stateCache.clear();
+        pendingDocWrites.clear();
+        pendingStateWrites.clear();
         return;
     }
     documentCache.delete(chatKey);
+    pendingDocWrites.delete(chatKey);
     for (const key of stateCache.keys()) {
         if (key.endsWith(`::${chatKey}`)) {
             stateCache.delete(key);
+        }
+    }
+    for (const key of pendingStateWrites.keys()) {
+        if (key.endsWith(`::${chatKey}`)) {
+            pendingStateWrites.delete(key);
         }
     }
 }

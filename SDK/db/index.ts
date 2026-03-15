@@ -26,6 +26,7 @@ export type {
 export {
     getSdkChatDocument,
     ensureSdkChatDocument,
+    deleteSdkChatDocument,
     patchSdkChatShared,
     readSdkPluginChatState,
     writeSdkPluginChatState,

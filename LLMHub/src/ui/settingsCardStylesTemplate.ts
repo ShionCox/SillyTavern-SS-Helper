@@ -868,6 +868,102 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       color: rgba(255, 255, 255, 0.6);
     }
 
+    #${cardId} .stx-ui-history-item {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #${cardId} .stx-ui-history-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+
+    #${cardId} .stx-ui-history-main {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    #${cardId} .stx-ui-history-details {
+      width: 100%;
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.12));
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.16);
+      overflow: hidden;
+    }
+
+    #${cardId} .stx-ui-history-details > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: inherit;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+
+    #${cardId} .stx-ui-history-details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    #${cardId} .stx-ui-history-details > summary::before {
+      content: '▸';
+      opacity: 0.8;
+      transition: transform 0.2s ease;
+    }
+
+    #${cardId} .stx-ui-history-details[open] > summary::before {
+      transform: rotate(90deg);
+    }
+
+    #${cardId} .stx-ui-history-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 0 10px 10px;
+    }
+
+    #${cardId} .stx-ui-history-section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    #${cardId} .stx-ui-history-label {
+      font-size: 11px;
+      font-weight: 700;
+      opacity: 0.72;
+      letter-spacing: 0.02em;
+    }
+
+    #${cardId} .stx-ui-history-pre {
+      margin: 0;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 11px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    #${cardId} .stx-ui-history-error {
+      color: #ffb4b4;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     #${cardId} .stx-ui-stale-indicator {
       display: inline-flex;
       align-items: center;

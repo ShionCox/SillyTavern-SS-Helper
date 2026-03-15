@@ -93,6 +93,7 @@ export class TemplateBuilder {
         const systemPrompt = `你是一个世界观模板设计专家。请根据提供的世界观资料输出 MemoryOS 模板 JSON。
 要求：
 1. 只输出 JSON，不要附加解释。
+    1.1 所有 label、name、description 等自然语言字段必须使用简体中文。
 2. 至少包含 templateId、worldType、name、tables、factTypes、extractPolicies、injectionLayout。
 3. worldType 只能是 "fantasy"、"urban"、"custom" 之一。
 4. tables 的每一项都要包含 key、label、primaryKeyField 与 fields 数组。
@@ -117,6 +118,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
             },
             { maxTokens: 4096, maxLatencyMs: 0 },
             TEMPLATE_SCHEMA,
+            '世界模板构建',
         );
 
         if (!result.ok) {

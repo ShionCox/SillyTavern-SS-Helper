@@ -31,6 +31,7 @@ export {
   normalizeTavernKeyPartEvent,
   normalizeTavernChatIdEvent,
   normalizeTavernRoleKeyEvent,
+  isStableTavernRoleKeyEvent,
   isFallbackTavernChatEvent,
   buildTavernChatEntityKeyEvent,
   parseAnyTavernChatRefEvent,

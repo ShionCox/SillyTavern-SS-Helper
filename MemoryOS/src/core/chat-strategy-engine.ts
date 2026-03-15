@@ -5,12 +5,14 @@ import type {
     ChatProfile,
     InjectionIntent,
     InjectionSectionName,
+    LogicalChatView,
     ManualOverrides,
     MaintenanceAdvice,
     MemoryQualityLevel,
     MemoryQualityScorecard,
     RetentionPolicy,
     StrategyDecision,
+    SummaryPolicyOverride,
     VectorLifecycleState,
     VectorMode,
 } from '../types';
@@ -28,6 +30,7 @@ export interface StrategyInferenceInput {
     events?: Array<EventEnvelope<unknown>>;
     metrics?: AdaptiveMetrics;
     profile?: ChatProfile;
+    logicalView?: LogicalChatView | null;
 }
 
 /**
@@ -326,6 +329,7 @@ export function extractTopicTerms(text: string): string[] {
 export function collectAdaptiveMetricsFromEvents(
     events: Array<EventEnvelope<unknown>>,
     previous?: AdaptiveMetrics,
+    logicalView?: LogicalChatView | null,
 ): AdaptiveMetrics {
     const recentEvents = Array.isArray(events) ? events.slice(0, DEFAULT_ADAPTIVE_METRICS.windowSize) : [];
     const messageEvents = recentEvents.filter((event: EventEnvelope<unknown>): boolean => {
@@ -380,6 +384,22 @@ export function collectAdaptiveMetricsFromEvents(
         }
         return speakerSet;
     }, new Set<string>());
+    const visibleSpeakerMatches = Array.isArray(logicalView?.visibleMessages)
+        ? logicalView!.visibleMessages
+            .slice(Math.max(0, logicalView!.visibleMessages.length - DEFAULT_ADAPTIVE_METRICS.windowSize))
+            .reduce((speakerSet: Set<string>, node): Set<string> => {
+                const match = String(node.text ?? '').match(/^([A-Za-z\u4e00-\u9fff0-9_]{1,24})[:：]/);
+                if (match?.[1]) {
+                    speakerSet.add(String(match[1]).toLowerCase());
+                }
+                return speakerSet;
+            }, new Set<string>())
+        : new Set<string>();
+    const branchPressure = Array.isArray(logicalView?.branchRoots) ? logicalView!.branchRoots.length : 0;
+    const supersededPressure = Array.isArray(logicalView?.supersededCandidates) ? logicalView!.supersededCandidates.length : 0;
+    const editedPressure = Array.isArray(logicalView?.editedRevisions) ? logicalView!.editedRevisions.length : 0;
+    const deletedPressure = Array.isArray(logicalView?.deletedTurns) ? logicalView!.deletedTurns.length : 0;
+    const mutationPenalty = Math.min(0.18, (branchPressure * 0.03) + (supersededPressure * 0.02) + (editedPressure * 0.015) + (deletedPressure * 0.02));
     const worldStateSignal = clampNumber(
         (
             Number(previous?.worldStateSignal ?? 0) * 0.4
@@ -400,8 +420,8 @@ export function collectAdaptiveMetricsFromEvents(
         repeatedTopicRate,
         recentUserTurns: userEvents.length,
         recentAssistantTurns: assistantEvents.length,
-        recentGroupSpeakerCount: Math.max(1, speakerMatches.size),
-        worldStateSignal,
+        recentGroupSpeakerCount: Math.max(1, speakerMatches.size, visibleSpeakerMatches.size),
+        worldStateSignal: clampNumber(worldStateSignal - mutationPenalty, 0, 1),
         lastUpdatedAt: Date.now(),
     };
 }
@@ -415,9 +435,25 @@ export function inferChatProfile(input: StrategyInferenceInput): ChatProfile {
     const profile = { ...DEFAULT_CHAT_PROFILE, ...(input.profile ?? {}) };
     const metrics = { ...DEFAULT_ADAPTIVE_METRICS, ...(input.metrics ?? {}) };
     const events = Array.isArray(input.events) ? input.events : [];
+    const logicalView = input.logicalView;
     const query = String(input.query ?? '').trim().toLowerCase();
+    const namedSpeakerCount = Array.isArray(logicalView?.visibleMessages)
+        ? logicalView!.visibleMessages
+            .slice(Math.max(0, logicalView!.visibleMessages.length - 32))
+            .reduce((speakerSet: Set<string>, node): Set<string> => {
+                const match = String(node.text ?? '').match(/^([A-Za-z\u4e00-\u9fff0-9_]{1,24})[:：]/);
+                if (match?.[1]) {
+                    speakerSet.add(String(match[1]).toLowerCase());
+                }
+                return speakerSet;
+            }, new Set<string>())
+            .size
+        : 0;
+    const hasBranchMutation = Array.isArray(logicalView?.mutationKinds)
+        ? logicalView!.mutationKinds.includes('chat_branched') || logicalView!.mutationKinds.includes('message_swiped')
+        : false;
 
-    const groupSignal = metrics.recentGroupSpeakerCount >= 3 || events.some((event: EventEnvelope<unknown>): boolean => {
+    const groupSignal = metrics.recentGroupSpeakerCount >= 3 || namedSpeakerCount >= 2 || events.some((event: EventEnvelope<unknown>): boolean => {
         return /群聊|大家|众人|队伍|队友|npc们/.test(readEventTextForStrategy(event));
     });
     const toolSignal = /怎么|如何|步骤|命令|配置|报错|为什么|修复|说明/.test(query);
@@ -467,7 +503,9 @@ export function inferChatProfile(input: StrategyInferenceInput): ChatProfile {
         ...profile,
         chatType: nextChatType,
         stylePreference: nextStylePreference,
-        memoryStrength: nextMemoryStrength,
+        memoryStrength: hasBranchMutation && nextStylePreference !== 'qa'
+            ? (nextMemoryStrength === 'low' ? 'medium' : nextMemoryStrength)
+            : nextMemoryStrength,
         extractStrategy: nextExtractStrategy,
         summaryStrategy: nextSummaryStrategy,
         vectorStrategy: {
@@ -502,8 +540,8 @@ export function buildAdaptivePolicy(
     let lorebookPolicyWeight = profile.chatType === 'worldbook' ? 0.85 : 0.55;
     let groupLaneBudgetShare = profile.chatType === 'group' ? 0.42 : 0.2;
     let actorSalienceTopK = profile.chatType === 'group' ? 4 : 2;
-    let profileRefreshInterval = profile.memoryStrength === 'high' ? 6 : profile.memoryStrength === 'low' ? 16 : 10;
-    let qualityRefreshInterval = profile.summaryStrategy === 'timeline' ? 10 : 14;
+    let profileRefreshInterval = profile.memoryStrength === 'low' ? 12 : 6;
+    let qualityRefreshInterval = profile.summaryStrategy === 'timeline' ? 10 : 12;
     const groupLaneEnabled = profile.chatType === 'group';
 
     if (metrics.userInfoDensity <= 0.08) {
@@ -588,10 +626,30 @@ export function applyChatProfileOverrides(profile: ChatProfile, overrides?: Manu
  * @returns 最终生效策略。
  */
 export function applyAdaptivePolicyOverrides(policy: AdaptivePolicy, overrides?: ManualOverrides): AdaptivePolicy {
-    return {
+    const nextPolicy: AdaptivePolicy = {
         ...policy,
         ...(overrides?.adaptivePolicy ?? {}),
     };
+    const summaryPolicy: SummaryPolicyOverride | undefined = overrides?.summaryPolicy;
+    if (!summaryPolicy) {
+        return nextPolicy;
+    }
+
+    if (typeof summaryPolicy.enabled === 'boolean') {
+        nextPolicy.summaryEnabled = summaryPolicy.enabled;
+    }
+
+    const interval = Number(summaryPolicy.interval);
+    if (Number.isFinite(interval)) {
+        nextPolicy.extractInterval = Math.max(1, Math.round(interval));
+    }
+
+    const windowSize = Number(summaryPolicy.windowSize);
+    if (Number.isFinite(windowSize)) {
+        nextPolicy.extractWindowSize = Math.max(1, Math.round(windowSize));
+    }
+
+    return nextPolicy;
 }
 
 /**

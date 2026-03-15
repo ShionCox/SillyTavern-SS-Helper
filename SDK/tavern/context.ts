@@ -1,5 +1,5 @@
 import { ensureTavernInstanceIdEvent } from "./instance";
-import { normalizeTavernChatIdEvent, normalizeTavernKeyPartEvent, normalizeTavernRoleKeyEvent } from "./normalize";
+import { isStableTavernRoleKeyEvent, normalizeTavernChatIdEvent, normalizeTavernKeyPartEvent, normalizeTavernRoleKeyEvent } from "./normalize";
 import type {
   SdkTavernCharacterEvent,
   SdkTavernContextEvent,
@@ -109,8 +109,9 @@ export function resolveTavernRoleIdentityEvent(
   const displayName =
     String(matched?.name ?? context?.characterName ?? context?.name2 ?? context?.name1 ?? "").trim() ||
     "未知角色";
-  const roleId = normalizeTavernKeyPartEvent(avatarName || displayName, "default_role");
-  const roleKey = normalizeTavernRoleKeyEvent(roleId) || "default_role";
+  const rawRoleId = normalizeTavernKeyPartEvent(avatarName || displayName, "");
+  const roleId = isStableTavernRoleKeyEvent(rawRoleId, { characterId: resolved.index }) ? rawRoleId : "";
+  const roleKey = roleId ? normalizeTavernRoleKeyEvent(roleId) : "";
   const avatarUrl = avatarName ? `/characters/${encodeURIComponent(avatarName)}` : "";
 
   return {
@@ -168,7 +169,7 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
   return {
     tavernInstanceId,
     scopeType: "character",
-    scopeId: role.roleKey || "default_role",
+    scopeId: role.roleKey || "unknown_scope",
     roleKey: role.roleKey,
     roleId: role.roleId,
     displayName: role.displayName,

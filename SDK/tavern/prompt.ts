@@ -107,6 +107,40 @@ function buildEmptyPromptContentLikeEvent(
 }
 
 /**
+ * 功能：按参考消息的字段形状创建新的 system 消息，避免无意义地同时携带多份重复文本字段。
+ * @param template 参考消息
+ * @returns 新的 system 消息对象
+ */
+function buildPromptSystemMessageLikeEvent(
+  template: SdkTavernPromptMessageEvent | null | undefined
+): SdkTavernPromptMessageEvent {
+  const templateRecord =
+    template && typeof template === "object"
+      ? (template as Record<string, unknown>)
+      : null;
+  const message: SdkTavernPromptMessageEvent = {
+    role: "system",
+    is_system: true,
+  };
+
+  const hasContentField = Boolean(templateRecord) && Object.prototype.hasOwnProperty.call(templateRecord, "content");
+  const hasMesField = Boolean(templateRecord) && Object.prototype.hasOwnProperty.call(templateRecord, "mes");
+  const hasTextField = Boolean(templateRecord) && Object.prototype.hasOwnProperty.call(templateRecord, "text");
+
+  if (hasContentField || (!hasMesField && !hasTextField)) {
+    message.content = buildEmptyPromptContentLikeEvent(template);
+  }
+  if (hasMesField) {
+    message.mes = "";
+  }
+  if (hasTextField) {
+    message.text = "";
+  }
+
+  return message;
+}
+
+/**
  * 功能：把文本同步写回消息对象常见字段。
  * @param target 目标消息对象
  * @param nextText 要写入的文本
@@ -366,13 +400,7 @@ export function insertTavernPromptSystemMessageEvent(
   chat: SdkTavernPromptMessageEvent[],
   options?: SdkTavernPromptSystemInsertOptionsEvent
 ): SdkTavernPromptMessageEvent {
-  const message: SdkTavernPromptMessageEvent = {
-    role: "system",
-    is_system: true,
-    content: buildEmptyPromptContentLikeEvent(options?.template),
-    mes: "",
-    text: "",
-  };
+  const message = buildPromptSystemMessageLikeEvent(options?.template);
   if (options?.text != null) {
     setTavernPromptMessageTextEvent(message, options.text);
   }

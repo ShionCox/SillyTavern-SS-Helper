@@ -45,6 +45,7 @@ import type {
     SchemaDraftSession,
     StrategyDecision,
     SummaryFixTask,
+    SummaryPolicyOverride,
     UserFacingChatPreset,
     VectorLifecycleState,
 } from '../types';
@@ -147,8 +148,48 @@ function inferRelationshipDelta(text: string): string {
     return hit ?? '';
 }
 
+function isGenericUserName(value: string): boolean {
+    const normalized = normalizeSeedText(value).toLowerCase();
+    return normalized === 'user' || normalized === 'you' || normalized === '玩家' || normalized === '用户';
+}
+
+function isGenericAssistantName(value: string): boolean {
+    const normalized = normalizeSeedText(value).toLowerCase();
+    return normalized === 'assistant' || normalized === 'ai' || normalized === 'bot' || normalized === '助手';
+}
+
+function isGenericSystemName(value: string): boolean {
+    const normalized = normalizeSeedText(value).toLowerCase();
+    return normalized === 'system' || normalized === '系统';
+}
+
+function buildAssistantActorIdentity(
+    previous: GroupMemoryState,
+    semanticSeed?: ChatSemanticSeed | null,
+): { actorKey: string; displayName: string; identityHint: string } {
+    const semanticDisplayName = normalizeSeedText(semanticSeed?.identitySeed?.displayName);
+    const semanticRoleKey = normalizeSeedText(semanticSeed?.identitySeed?.roleKey);
+    const semanticAliases = Array.isArray(semanticSeed?.identitySeed?.aliases)
+        ? semanticSeed!.identitySeed.aliases.map((alias: string): string => normalizeSeedText(alias)).filter(Boolean)
+        : [];
+    const memberNames = Array.isArray(previous.bindingSnapshot?.memberNames)
+        ? previous.bindingSnapshot.memberNames
+            .map((name: string): string => normalizeSeedText(name))
+            .filter((name: string): boolean => Boolean(name) && !isGenericUserName(name) && !isGenericAssistantName(name) && !isGenericSystemName(name))
+        : [];
+    const displayName = [semanticDisplayName, ...semanticAliases, ...memberNames].find(Boolean) || 'Assistant';
+    const actorKeySource = semanticRoleKey || displayName.toLowerCase();
+    return {
+        actorKey: `assistant:${actorKeySource}`,
+        displayName,
+        identityHint: semanticRoleKey || semanticDisplayName || 'role_anchor',
+    };
+}
+
 function guessActorFromMessage(
     node: LogicalChatView['visibleMessages'][number],
+    previous: GroupMemoryState,
+    semanticSeed?: ChatSemanticSeed | null,
 ): { actorKey: string; displayName: string; identityHint: string } {
     const text = normalizeSeedText(node.text);
     const speakerMatch = text.match(/^([A-Za-z0-9_\u4e00-\u9fa5]{1,24})[:：]/);
@@ -172,10 +213,11 @@ function guessActorFromMessage(
         };
     }
     if (node.role === 'assistant') {
+        const assistantIdentity = buildAssistantActorIdentity(previous, semanticSeed);
         return {
-            actorKey: actorKeyFromId || 'role:assistant',
-            displayName: speaker || 'Assistant',
-            identityHint: actorKeyFromId || 'role_anchor',
+            actorKey: assistantIdentity.actorKey,
+            displayName: assistantIdentity.displayName,
+            identityHint: assistantIdentity.identityHint || actorKeyFromId || 'role_anchor',
         };
     }
     return {
@@ -183,6 +225,25 @@ function guessActorFromMessage(
         displayName: 'System',
         identityHint: actorKeyFromId || 'role_anchor',
     };
+}
+
+/**
+ * 功能：为群聊分轨生成稳定的近期消息标识。
+ * @param node 逻辑消息节点。
+ * @returns 可用于去重计数的稳定标识。
+ */
+function buildGroupLaneRecentMessageId(node: LogicalChatView['visibleMessages'][number]): string {
+    const directMessageId = normalizeSeedText(node.messageId);
+    if (directMessageId) {
+        return directMessageId;
+    }
+    const fallbackParts: string[] = [
+        normalizeSeedText(node.nodeId),
+        normalizeSeedText(node.role),
+        String(Number(node.updatedAt ?? node.createdAt ?? 0) || 0),
+        normalizeSeedText(node.textSignature).slice(0, 48),
+    ].filter(Boolean);
+    return fallbackParts.join('|');
 }
 
 /**
@@ -438,8 +499,8 @@ export class ChatStateManager {
                 action: item.action,
                 severity,
                 title: item.title,
-                detail: item.detail,
-                shortLabel: shortLabelMap[item.action] ?? item.title,
+                detail: this.formatMaintenanceInsightDetail(item, state),
+                shortLabel: this.formatMaintenanceInsightShortLabel(item, state, shortLabelMap[item.action] ?? item.title),
                 reasonCodes: Array.isArray(item.reasonCodes) ? item.reasonCodes : [],
                 surfaces,
                 actionLabel: actionLabelMap[item.action] ?? '立即维护',
@@ -469,6 +530,55 @@ export class ChatStateManager {
             }
         });
         return Array.from(dedup.values());
+    }
+
+    /**
+     * 功能：格式化维护感知的详情文案，让 schema 整理提示更直观。
+     * 参数：
+     *   item：维护建议原始项。
+     *   state：当前聊天状态。
+     * 返回：
+     *   string：面向用户的详情文案。
+     */
+    private formatMaintenanceInsightDetail(item: MaintenanceAdvice, state: MemoryOSChatState): string {
+        if (item.action !== 'schema_cleanup') {
+            return item.detail;
+        }
+        const detailParts: string[] = [];
+        const orphanFactsRatio = Number(state.adaptiveMetrics?.orphanFactsRatio ?? 0);
+        if (orphanFactsRatio >= 0.22) {
+            detailParts.push('当前孤儿事实偏多，说明有些记忆已经脱离现有设定结构。');
+        }
+        if (state.schemaDraftSession?.draftRevisionId) {
+            detailParts.push('当前还有未合并的 schema 草稿，这也会持续拉低设定卫生度。');
+        }
+        if (detailParts.length === 0) {
+            detailParts.push('检测到设定结构卫生度偏低，通常意味着存在失效映射、墓碑记录或未完成的结构变更。');
+        }
+        detailParts.push('整理设定会清理无效映射和孤儿事实，但不会自动替你合并草稿。');
+        return detailParts.join('');
+    }
+
+    /**
+     * 功能：格式化维护感知的短标签，让顶部提示更容易理解。
+     * 参数：
+     *   item：维护建议原始项。
+     *   state：当前聊天状态。
+     *   fallbackLabel：默认短标签。
+     * 返回：
+     *   string：短标签文案。
+     */
+    private formatMaintenanceInsightShortLabel(item: MaintenanceAdvice, state: MemoryOSChatState, fallbackLabel: string): string {
+        if (item.action !== 'schema_cleanup') {
+            return fallbackLabel;
+        }
+        if (state.schemaDraftSession?.draftRevisionId) {
+            return '设定草稿待处理';
+        }
+        if (Number(state.adaptiveMetrics?.orphanFactsRatio ?? 0) >= 0.22) {
+            return '孤儿事实偏多';
+        }
+        return fallbackLabel;
     }
 
     /**
@@ -511,6 +621,9 @@ export class ChatStateManager {
                     ...state.manualOverrides.chatProfile.vectorStrategy,
                 },
             } : undefined,
+            summaryPolicy: state.manualOverrides?.summaryPolicy ? {
+                ...state.manualOverrides.summaryPolicy,
+            } : undefined,
         };
         const inferredProfile = inferChatProfile({
             profile: {
@@ -525,6 +638,7 @@ export class ChatStateManager {
                 ...DEFAULT_ADAPTIVE_METRICS,
                 ...(state.adaptiveMetrics ?? {}),
             },
+            logicalView: state.logicalChatView ?? null,
         });
         const vectorLifecycle: VectorLifecycleState = {
             ...DEFAULT_VECTOR_LIFECYCLE,
@@ -720,6 +834,29 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：根据当前指标重算自动聊天画像。
+     * @param state 当前聊天状态。
+     * @returns 自动画像。
+     */
+    private inferAutoChatProfileFromState(state: MemoryOSChatState): ChatProfile {
+        return inferChatProfile({
+            profile: {
+                ...DEFAULT_CHAT_PROFILE,
+                ...(state.chatProfile ?? {}),
+                vectorStrategy: {
+                    ...DEFAULT_CHAT_PROFILE.vectorStrategy,
+                    ...(state.chatProfile?.vectorStrategy ?? {}),
+                },
+            },
+            metrics: {
+                ...DEFAULT_ADAPTIVE_METRICS,
+                ...(state.adaptiveMetrics ?? {}),
+            },
+            logicalView: state.logicalChatView ?? null,
+        });
+    }
+
+    /**
      * 功能：标记状态已变更并安排节流写回。
      * @returns 无返回值。
      */
@@ -769,13 +906,29 @@ export class ChatStateManager {
      */
     async getChatProfile(): Promise<ChatProfile> {
         const state = await this.load();
-        const inferred = inferChatProfile({
-            profile: state.chatProfile,
-            metrics: state.adaptiveMetrics,
-        });
-        state.chatProfile = inferred;
+        if (!state.chatProfile) {
+            state.chatProfile = this.inferAutoChatProfileFromState(state);
+        }
         const presetBundle = this.getEffectivePresetBundleFromState(state);
-        const presetAware = applyChatProfileOverrides(inferred, {
+        const presetAware = applyChatProfileOverrides(state.chatProfile, {
+            chatProfile: presetBundle.effectiveChatProfile,
+        });
+        return applyChatProfileOverrides(presetAware, state.manualOverrides);
+    }
+
+    /**
+     * 功能：按当前动态指标重算并持久化自动聊天画像。
+     * @param options 重算选项。
+     * @returns 重算后的聊天画像。
+     */
+    async recomputeChatProfile(options?: { markDirty?: boolean }): Promise<ChatProfile> {
+        const state = await this.load();
+        state.chatProfile = this.inferAutoChatProfileFromState(state);
+        if (options?.markDirty !== false) {
+            this.markDirty();
+        }
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
+        const presetAware = applyChatProfileOverrides(state.chatProfile, {
             chatProfile: presetBundle.effectiveChatProfile,
         });
         return applyChatProfileOverrides(presetAware, state.manualOverrides);
@@ -822,7 +975,10 @@ export class ChatStateManager {
      * @param patch 指标补丁。
      * @returns 更新后的动态指标。
      */
-    async updateAdaptiveMetrics(patch: Partial<AdaptiveMetrics>): Promise<AdaptiveMetrics> {
+    async updateAdaptiveMetrics(
+        patch: Partial<AdaptiveMetrics>,
+        options?: { refreshDerivedState?: boolean },
+    ): Promise<AdaptiveMetrics> {
         const state = await this.load();
         state.adaptiveMetrics = {
             ...DEFAULT_ADAPTIVE_METRICS,
@@ -830,8 +986,10 @@ export class ChatStateManager {
             ...(patch ?? {}),
             lastUpdatedAt: Date.now(),
         };
-        state.chatProfile = await this.getChatProfile();
-        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        if (options?.refreshDerivedState !== false) {
+            await this.recomputeChatProfile({ markDirty: false });
+            state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        }
         this.markDirty();
         return state.adaptiveMetrics;
     }
@@ -871,7 +1029,7 @@ export class ChatStateManager {
     async recomputeAdaptivePolicy(): Promise<AdaptivePolicy> {
         const state = await this.load();
         const lifecycle = await this.refreshLifecycleState(state, 'recompute_policy');
-        const profile = await this.getChatProfile();
+        const profile = await this.recomputeChatProfile({ markDirty: false });
         const metrics = await this.getAdaptiveMetrics();
         const vectorLifecycle = await this.getVectorLifecycle();
         const memoryQuality = await this.getMemoryQuality();
@@ -1273,7 +1431,7 @@ export class ChatStateManager {
             } else if (action === 'group_maintenance') {
                 const view = state.logicalChatView;
                 if (view) {
-                    state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY);
+                    state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY, state.semanticSeed ?? null);
                     touchedCounts.lanesRebuilt = Number(state.groupMemory?.lanes?.length ?? 0);
                     touchedCounts.salienceUpdated = Number(state.groupMemory?.actorSalience?.length ?? 0);
                 }
@@ -1289,7 +1447,7 @@ export class ChatStateManager {
             const result: MaintenanceExecutionResult = {
                 action,
                 ok: true,
-                message: '维护动作已完成',
+                message: this.buildMaintenanceExecutionMessage(action, touchedCounts, state, quality),
                 reasonCodes: [...(quality.reasonCodes ?? [])],
                 touchedCounts,
                 executedAt: Date.now(),
@@ -1312,6 +1470,41 @@ export class ChatStateManager {
             this.markDirty();
             return result;
         }
+    }
+
+    /**
+     * 功能：根据维护动作结果生成更明确的执行反馈。
+     * 参数：
+     *   action：执行的维护动作。
+     *   touchedCounts：本次触达统计。
+     *   state：当前聊天状态。
+     *   quality：最新的记忆质量结果。
+     * 返回：
+     *   string：给界面展示的结果文案。
+     */
+    private buildMaintenanceExecutionMessage(
+        action: MaintenanceActionType,
+        touchedCounts: MaintenanceExecutionResult['touchedCounts'],
+        state: MemoryOSChatState,
+        quality: MemoryQualityScorecard,
+    ): string {
+        if (action !== 'schema_cleanup') {
+            return '维护动作已完成';
+        }
+        const cleanedStates = Number(touchedCounts.cleanedStates ?? 0);
+        const cleanedFacts = Number(touchedCounts.cleanedFacts ?? 0);
+        const messageParts: string[] = [];
+        if (cleanedStates > 0 || cleanedFacts > 0) {
+            messageParts.push(`已清理 ${cleanedStates} 项失效设定状态、${cleanedFacts} 条孤儿事实`);
+        } else {
+            messageParts.push('已完成检查，但没有发现可清理的失效设定状态或孤儿事实');
+        }
+        if (state.schemaDraftSession?.draftRevisionId) {
+            messageParts.push('当前仍有未合并的 schema 草稿，所以这条提示可能暂时不会消失');
+        } else if (Array.isArray(quality.reasonCodes) && quality.reasonCodes.includes('schema_hygiene_low')) {
+            messageParts.push('设定卫生度仍然偏低，说明还有其他结构问题需要继续处理');
+        }
+        return messageParts.join('；');
     }
 
     /**
@@ -1729,11 +1922,53 @@ export class ChatStateManager {
      * 功能：读取兼容旧接口的摘要策略。
      * @returns 兼容旧接口的摘要策略。
      */
+    async getSummaryPolicyOverride(): Promise<SummaryPolicyOverride> {
+        const state = await this.load();
+        const adaptivePolicy = await this.getAdaptivePolicy();
+        return {
+            enabled: typeof state.manualOverrides?.summaryPolicy?.enabled === 'boolean'
+                ? state.manualOverrides.summaryPolicy.enabled
+                : adaptivePolicy.summaryEnabled,
+            interval: Number.isFinite(Number(state.manualOverrides?.summaryPolicy?.interval))
+                ? Number(state.manualOverrides?.summaryPolicy?.interval)
+                : adaptivePolicy.extractInterval,
+            windowSize: Number.isFinite(Number(state.manualOverrides?.summaryPolicy?.windowSize))
+                ? Number(state.manualOverrides?.summaryPolicy?.windowSize)
+                : adaptivePolicy.extractWindowSize,
+        };
+    }
+
     /**
      * 功能：写入兼容旧接口的摘要策略覆盖。
      * @param override 摘要策略覆盖项。
      * @returns 无返回值。
      */
+    async setSummaryPolicyOverride(override: SummaryPolicyOverride): Promise<void> {
+        const state = await this.load();
+        const current = await this.getSummaryPolicyOverride();
+        const next: SummaryPolicyOverride = {
+            enabled: typeof override.enabled === 'boolean' ? override.enabled : current.enabled,
+            interval: Number.isFinite(Number(override.interval))
+                ? Math.max(1, Math.round(Number(override.interval)))
+                : current.interval,
+            windowSize: Number.isFinite(Number(override.windowSize))
+                ? Math.max(1, Math.round(Number(override.windowSize)))
+                : current.windowSize,
+        };
+        state.manualOverrides = {
+            ...(state.manualOverrides ?? {}),
+            summaryPolicy: next,
+            adaptivePolicy: {
+                ...(state.manualOverrides?.adaptivePolicy ?? {}),
+                ...(typeof next.enabled === 'boolean' ? { summaryEnabled: next.enabled } : {}),
+                ...(Number.isFinite(Number(next.interval)) ? { extractInterval: Number(next.interval) } : {}),
+                ...(Number.isFinite(Number(next.windowSize)) ? { extractWindowSize: Number(next.windowSize) } : {}),
+            },
+        };
+        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        this.markDirty();
+    }
+
     /**
      * 功能：读取自动 schema 策略。
      * @returns 自动 schema 策略。
@@ -1845,7 +2080,7 @@ export class ChatStateManager {
         );
         const effectivePolicy = await this.getAdaptivePolicy();
         if (effectivePolicy.groupLaneEnabled !== false) {
-            state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY);
+            state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY, state.semanticSeed ?? null);
         }
         state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice ?? [], state);
         await this.refreshLifecycleState(state, 'logical_view');
@@ -1995,6 +2230,23 @@ export class ChatStateManager {
      */
     async getGroupMemory(): Promise<GroupMemoryState | null> {
         const state = await this.load();
+        if (state.groupMemory && state.logicalChatView) {
+            const hasGenericAssistantLane = Array.isArray(state.groupMemory.lanes)
+                && state.groupMemory.lanes.some((lane) => isGenericAssistantName(lane.displayName));
+            const hasEmptyRecentMessageCounts = Array.isArray(state.groupMemory.lanes)
+                && state.groupMemory.lanes.length > 0
+                && state.groupMemory.lanes.every((lane) => Number(lane.recentMessageIds?.length ?? 0) === 0)
+                && Array.isArray(state.logicalChatView.visibleMessages)
+                && state.logicalChatView.visibleMessages.length > 0;
+            if (hasGenericAssistantLane || hasEmptyRecentMessageCounts) {
+                state.groupMemory = this.deriveGroupMemoryFromView(
+                    state.logicalChatView,
+                    state.groupMemory,
+                    state.semanticSeed ?? null,
+                );
+                this.markDirty();
+            }
+        }
         return state.groupMemory ?? null;
     }
 
@@ -2256,7 +2508,11 @@ export class ChatStateManager {
      * 返回：
      *   GroupMemoryState：更新后的群聊记忆状态。
      */
-    private deriveGroupMemoryFromView(view: LogicalChatView, previous: GroupMemoryState): GroupMemoryState {
+    private deriveGroupMemoryFromView(
+        view: LogicalChatView,
+        previous: GroupMemoryState,
+        semanticSeed?: ChatSemanticSeed | null,
+    ): GroupMemoryState {
         const base = {
             ...DEFAULT_GROUP_MEMORY,
             ...(previous ?? DEFAULT_GROUP_MEMORY),
@@ -2273,7 +2529,7 @@ export class ChatStateManager {
         const mentions = new Map<string, number>();
         const actorMessageCount = new Map<string, number>();
         for (const node of recent) {
-            const actor = guessActorFromMessage(node);
+            const actor = guessActorFromMessage(node, base, semanticSeed);
             const existing = laneMap.get(actor.actorKey);
             const nextLane = {
                 laneId: existing?.laneId ?? crypto.randomUUID(),
@@ -2285,7 +2541,14 @@ export class ChatStateManager {
                 recentGoal: inferLaneGoal(node.text) || existing?.recentGoal || '',
                 relationshipDelta: inferRelationshipDelta(node.text) || existing?.relationshipDelta || '',
                 lastActiveAt: Number(node.updatedAt ?? node.createdAt ?? Date.now()),
-                recentMessageIds: Array.from(new Set([...(existing?.recentMessageIds ?? []), normalizeSeedText(node.messageId)].filter(Boolean))).slice(-8),
+                recentMessageIds: Array.from(
+                    new Set(
+                        [
+                            ...(existing?.recentMessageIds ?? []),
+                            buildGroupLaneRecentMessageId(node),
+                        ].filter(Boolean),
+                    ),
+                ).slice(-8),
             };
             laneMap.set(actor.actorKey, nextLane);
             actorMessageCount.set(actor.actorKey, Number(actorMessageCount.get(actor.actorKey) ?? 0) + 1);
@@ -2304,6 +2567,12 @@ export class ChatStateManager {
 
         const lanes = Array.from(laneMap.values())
             .sort((left, right): number => Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0))
+            .filter((lane) => {
+                if (!isGenericAssistantName(lane.displayName)) {
+                    return true;
+                }
+                return actorMessageCount.has(lane.actorKey);
+            })
             .slice(0, 24);
 
         const latestText = normalizeSeedText(recent.slice(-1)[0]?.text ?? '');

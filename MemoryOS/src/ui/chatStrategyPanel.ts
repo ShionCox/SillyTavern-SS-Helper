@@ -19,10 +19,12 @@ import {
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
+    ChatMutationKind,
     ChatLifecycleState,
     ChatProfile,
     DeletionStrategy,
     EffectivePresetBundle,
+    GroupMemoryState,
     MaintenanceActionType,
     MaintenanceAdvice,
     MaintenanceExecutionResult,
@@ -33,6 +35,7 @@ import type {
     PromptInjectionProfile,
     RetentionPolicy,
     StrategyDecision,
+    SummaryPolicyOverride,
     UserFacingChatPreset,
     UserFacingPresetId,
     VectorLifecycleState,
@@ -65,11 +68,13 @@ interface ChatStrategySnapshot {
     promptInjectionProfile: PromptInjectionProfile;
     effectivePresetBundle: EffectivePresetBundle;
     userFacingPreset: UserFacingChatPreset | null;
+    groupMemory: GroupMemoryState | null;
     overrides: Record<string, unknown>;
 }
 
 interface MemoryChatStateApi {
     setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
+    setSummaryPolicyOverride?(override: SummaryPolicyOverride): Promise<void>;
     setRetentionPolicyOverride(override: Partial<RetentionPolicy>): Promise<void>;
     setUserFacingPreset?(preset: UserFacingChatPreset | null): Promise<void>;
     saveGlobalPreset?(preset: UserFacingChatPreset): Promise<void>;
@@ -119,13 +124,16 @@ const EDITOR_IDS = {
     currentChatNameId: 'stx-memoryos-chat-strategy-current-name',
     currentChatMetaId: 'stx-memoryos-chat-strategy-current-meta',
     currentIntentId: 'stx-memoryos-chat-strategy-current-intent',
+    currentScopeId: 'stx-memoryos-chat-strategy-current-scope',
     sectionsWrapId: 'stx-memoryos-chat-strategy-current-sections',
     presetId: 'stx-memoryos-chat-strategy-preset',
+    presetMountId: 'stx-memoryos-chat-strategy-preset-mount',
     saveGlobalPresetBtnId: 'stx-memoryos-chat-strategy-save-global-preset',
     saveRolePresetBtnId: 'stx-memoryos-chat-strategy-save-role-preset',
     clearRolePresetBtnId: 'stx-memoryos-chat-strategy-clear-role-preset',
     summaryIntervalDirectId: 'stx-memoryos-chat-strategy-direct-summary-interval',
     summaryWindowDirectId: 'stx-memoryos-chat-strategy-direct-summary-window',
+    summaryEnabledDirectId: 'stx-memoryos-chat-strategy-direct-summary-enabled',
     profileRefreshDirectId: 'stx-memoryos-chat-strategy-direct-profile-refresh',
     qualityRefreshDirectId: 'stx-memoryos-chat-strategy-direct-quality-refresh',
     vectorFactsDirectId: 'stx-memoryos-chat-strategy-direct-vector-facts',
@@ -157,8 +165,17 @@ const EDITOR_IDS = {
     qualityAdviceId: 'stx-memoryos-chat-strategy-quality-advice',
     qualityReasonsId: 'stx-memoryos-chat-strategy-quality-reasons',
     maintenanceInsightsId: 'stx-memoryos-chat-strategy-maintenance-insights',
+    lifecycleHeroId: 'stx-memoryos-chat-strategy-lifecycle-hero',
     lifecycleStageId: 'stx-memoryos-chat-strategy-lifecycle-stage',
     lifecycleMetaId: 'stx-memoryos-chat-strategy-lifecycle-meta',
+    lifecycleSummaryId: 'stx-memoryos-chat-strategy-lifecycle-summary',
+    lifecycleExplanationId: 'stx-memoryos-chat-strategy-lifecycle-explanation',
+    lifecycleReasonListId: 'stx-memoryos-chat-strategy-lifecycle-reasons',
+    lifecycleTimelineId: 'stx-memoryos-chat-strategy-lifecycle-timeline',
+    lifecycleImpactId: 'stx-memoryos-chat-strategy-lifecycle-impact',
+    presetScopeMetaId: 'stx-memoryos-chat-strategy-preset-scope-meta',
+    groupLaneMetaId: 'stx-memoryos-chat-strategy-group-lane-meta',
+    groupLaneActorsId: 'stx-memoryos-chat-strategy-group-lane-actors',
     autoBlockId: 'stx-memoryos-chat-strategy-auto',
     overrideBlockId: 'stx-memoryos-chat-strategy-override',
     finalBlockId: 'stx-memoryos-chat-strategy-final',
@@ -637,6 +654,7 @@ function buildEditorMarkup(): string {
               <div class="stx-memory-chat-strategy-hero-main">
                 <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-strategy-hero-title">未选择聊天</div>
                 <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-strategy-hero-meta">等待加载聊天画像</div>
+                                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-strategy-hero-meta">预设来源等待加载</div>
               </div>
               <div class="stx-memory-chat-strategy-hero-side">
                 <span class="stx-memory-chat-strategy-hero-label">当前意图</span>
@@ -646,12 +664,27 @@ function buildEditorMarkup(): string {
             <section class="stx-memory-chat-strategy-section">
               <div class="stx-memory-chat-strategy-section-head">
                 <div>
-                  <h3>最近注入区段</h3>
-                  <p>用于快速确认当前聊天最近一次上下文注入的侧重点。</p>
+                  <h3>最近注入区段与场景预设</h3>
+                  <p>左边看最近一次注入重点，右边直接切换当前聊天的场景预设。</p>
                 </div>
               </div>
-              <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-strategy-pill-wrap">
-                <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+              <div class="stx-memory-chat-strategy-top-inline-grid">
+                <article class="stx-memory-chat-strategy-inline-card">
+                  <div class="stx-memory-chat-strategy-inline-card-head">
+                    <h4>最近注入区段</h4>
+                    <p>快速确认最近一次上下文注入偏向哪些内容。</p>
+                  </div>
+                  <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-strategy-pill-wrap">
+                    <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+                  </div>
+                </article>
+                <div id="${EDITOR_IDS.presetMountId}" class="stx-memory-chat-strategy-inline-card stx-memory-chat-strategy-inline-card-preset">
+                  <div class="stx-memory-chat-strategy-inline-card-head">
+                    <h4>场景预设</h4>
+                    <p>选择更贴近当前聊天用途的默认方案。</p>
+                  </div>
+                  <div class="stx-memory-chat-strategy-empty">正在加载场景预设...</div>
+                </div>
               </div>
             </section>
             <section class="stx-memory-chat-strategy-section">
@@ -821,47 +854,61 @@ function buildEditorMarkup(): string {
  */
 function ensureEditorSections(overlay: HTMLElement): void {
     if (!overlay.querySelector(`#${EDITOR_IDS.presetId}`)) {
+        const presetMount: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.presetMountId}`) as HTMLElement | null;
         const anchorWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
         const anchorSection: HTMLElement | null = anchorWrap?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+        const presetMarkup = `
+          <div class="stx-memory-chat-strategy-form-grid">
+            ${buildEditorSelectField(EDITOR_IDS.presetId, '聊天场景预设', '为当前聊天选择更贴近 ST 使用习惯的场景预设。', listUserFacingPresetOptions())}
+          </div>
+          <div class="stx-memory-chat-strategy-card-actions stx-memory-chat-strategy-preset-actions" style="margin-top: 10px;">
+            ${buildSharedButton({
+                id: EDITOR_IDS.saveGlobalPresetBtnId,
+                label: '存为全局默认',
+                variant: 'secondary',
+                iconClassName: 'fa-solid fa-globe',
+            })}
+            ${buildSharedButton({
+                id: EDITOR_IDS.saveRolePresetBtnId,
+                label: '存为角色卡默认',
+                variant: 'secondary',
+                iconClassName: 'fa-solid fa-id-card',
+            })}
+            ${buildSharedButton({
+                id: EDITOR_IDS.clearRolePresetBtnId,
+                label: '清除角色卡默认',
+                variant: 'secondary',
+                iconClassName: 'fa-solid fa-eraser',
+            })}
+          </div>
+        `.trim();
+        if (presetMount) {
+            presetMount.innerHTML = `
+              <div class="stx-memory-chat-strategy-inline-card-head">
+                <h4>场景预设</h4>
+                <p>先用易懂预设起步，再决定要不要细调参数。</p>
+              </div>
+              ${presetMarkup}
+            `.trim();
+        }
         if (anchorSection) {
-            const presetMarkup = `
-              <section class="stx-memory-chat-strategy-section">
-                <div class="stx-memory-chat-strategy-section-head">
-                  <div>
-                    <h3>场景预设</h3>
-                    <p>先用用户能看懂的预设起步，再决定要不要进入高级参数。</p>
-                  </div>
-                </div>
-                <div class="stx-memory-chat-strategy-form-grid">
-                  ${buildEditorSelectField(EDITOR_IDS.presetId, '聊天场景预设', '为当前聊天选择更贴近 ST 使用习惯的场景预设。', listUserFacingPresetOptions())}
-                </div>
-                <div class="stx-memory-chat-strategy-card-actions" style="margin-top: 12px;">
-                  ${buildSharedButton({
-                      id: EDITOR_IDS.saveGlobalPresetBtnId,
-                      label: '存为全局默认',
-                      variant: 'secondary',
-                      iconClassName: 'fa-solid fa-globe',
-                  })}
-                  ${buildSharedButton({
-                      id: EDITOR_IDS.saveRolePresetBtnId,
-                      label: '存为角色默认',
-                      variant: 'secondary',
-                      iconClassName: 'fa-solid fa-id-card',
-                  })}
-                  ${buildSharedButton({
-                      id: EDITOR_IDS.clearRolePresetBtnId,
-                      label: '清除角色默认',
-                      variant: 'secondary',
-                      iconClassName: 'fa-solid fa-eraser',
-                  })}
-                </div>
-              </section>
+            const directAdjustMarkup = `
               <section class="stx-memory-chat-strategy-section">
                 <div class="stx-memory-chat-strategy-section-head">
                   <div>
                     <h3>简易调整</h3>
                     <p>聊天习惯参数</p>
                   </div>
+                </div>
+                <div class="stx-memory-chat-strategy-toggle-wrap">
+                  ${buildSharedCheckboxCard({
+                      id: EDITOR_IDS.summaryEnabledDirectId,
+                      title: '启用楼层总结',
+                      description: '关闭后仍会提取事实，但不再按楼层自动生成总结。',
+                      checkedLabel: '开启',
+                      uncheckedLabel: '关闭',
+                      containerClassName: 'stx-memory-chat-strategy-toggle',
+                  })}
                 </div>
                 <div class="stx-memory-chat-strategy-form-grid">
                   ${buildEditorInputField(EDITOR_IDS.summaryIntervalDirectId, '多少楼总结一次', '控制摘要多久触发一次。', 'number', '1', '200', '1')}
@@ -890,11 +937,11 @@ function ensureEditorSections(overlay: HTMLElement): void {
                       checkedLabel: '开启',
                       uncheckedLabel: '关闭',
                       containerClassName: 'stx-memory-chat-strategy-toggle',
-                  })}
+                    })}
                 </div>
               </section>
             `.trim();
-            anchorSection.insertAdjacentHTML('afterend', presetMarkup);
+            anchorSection.insertAdjacentHTML('afterend', directAdjustMarkup);
         }
     }
 
@@ -917,14 +964,41 @@ function ensureEditorSections(overlay: HTMLElement): void {
                 <div class="stx-memory-chat-strategy-section-head">
                   <div>
                     <h3>聊天生命周期</h3>
-                    <p>生命周期只影响默认策略偏置，不覆盖预设与手动覆盖。</p>
+                    <p>快速看懂当前阶段、判断原因和默认偏向。</p>
                   </div>
                 </div>
-                <div class="stx-memory-chat-strategy-quality-grid">
-                  <article class="stx-memory-chat-strategy-quality-card">
-                    <span class="stx-memory-chat-strategy-quality-label">当前阶段</span>
-                    <strong id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                <div class="stx-memory-chat-strategy-quality-grid stx-memory-chat-strategy-lifecycle-grid">
+                  <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row stx-memory-chat-strategy-lifecycle-hero" data-stage="new">
+                    <span class="stx-memory-chat-strategy-quality-label">当前状态</span>
+                    <div class="stx-memory-chat-strategy-lifecycle-hero-head">
+                      <strong id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-quality-meta stx-memory-chat-strategy-lifecycle-stage-badge">--</strong>
+                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-strategy-lifecycle-summary">--</div>
+                    </div>
+                    <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-strategy-lifecycle-explanation">--</div>
+                    <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-lifecycle-reasons">
+                      <span class="stx-memory-chat-strategy-empty">正在整理判断依据...</span>
+                    </div>
+                  </article>
+                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
+                    <span class="stx-memory-chat-strategy-quality-label">关键时间点</span>
+                    <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-strategy-lifecycle-timeline">
+                      <span class="stx-memory-chat-strategy-empty">正在整理时间线...</span>
+                    </div>
+                  </article>
+                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
+                    <span class="stx-memory-chat-strategy-quality-label">这代表什么</span>
+                    <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-strategy-lifecycle-impact">--</div>
                     <div id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                  </article>
+                  <article class="stx-memory-chat-strategy-quality-card">
+                    <span class="stx-memory-chat-strategy-quality-label">当前策略主要来自</span>
+                    <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                    <div class="stx-memory-chat-strategy-quality-subtext">显示当前真正生效的主来源。</div>
+                  </article>
+                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
+                    <span class="stx-memory-chat-strategy-quality-label">群聊分轨状态</span>
+                    <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                    <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-strategy-quality-subtext">正在加载分轨卡片...</div>
                   </article>
                 </div>
               </section>
@@ -1189,6 +1263,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
     const clearRolePresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.clearRolePresetBtnId}`) as HTMLButtonElement | null;
     const presetSelect: HTMLSelectElement | null = overlay.querySelector(`#${EDITOR_IDS.presetId}`) as HTMLSelectElement | null;
     const directFieldIds: string[] = [
+        EDITOR_IDS.summaryEnabledDirectId,
         EDITOR_IDS.summaryIntervalDirectId,
         EDITOR_IDS.summaryWindowDirectId,
         EDITOR_IDS.profileRefreshDirectId,
@@ -1408,7 +1483,8 @@ async function renderCompactPanelState(chatKey: string): Promise<void> {
     }
     const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
     replaceSummaryChips(summarySections, snapshot.decision?.sectionsUsed || []);
-    summaryName.textContent = findChatLabel(chatKey);
+    summaryName.textContent = formatCompactChatLabel(chatKey);
+    summaryName.title = findChatLabel(chatKey);
     summaryIntent.textContent = formatIntentLabel(snapshot.decision?.intent || 'auto');
     summaryProfile.textContent = [
         formatChatTypeLabel(snapshot.effectiveProfile.chatType),
@@ -1458,6 +1534,7 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
         retentionPolicy: snapshot.effectiveRetention,
         promptInjection: snapshot.promptInjectionProfile,
         presetBundle: snapshot.effectivePresetBundle,
+        groupMemory: snapshot.groupMemory,
     });
     writeJsonBlock(overlay, EDITOR_IDS.metricsBlockId, snapshot.metrics);
     writeJsonBlock(overlay, EDITOR_IDS.decisionBlockId, snapshot.decision ?? {
@@ -1496,6 +1573,7 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
         const promptInjectionProfile: PromptInjectionProfile = await manager.getPromptInjectionProfile();
         const effectivePresetBundle: EffectivePresetBundle = await manager.getEffectivePresetBundle();
         const userFacingPreset: UserFacingChatPreset | null = await manager.getUserFacingPreset();
+        const groupMemory: GroupMemoryState | null = await manager.getGroupMemory();
         const autoProfile: ChatProfile = state.chatProfile ?? DEFAULT_CHAT_PROFILE;
         const autoPolicy: AdaptivePolicy = state.adaptivePolicy
             ?? buildAdaptivePolicy(autoProfile, state.adaptiveMetrics ?? DEFAULT_ADAPTIVE_METRICS, state.vectorLifecycle, state.memoryQuality);
@@ -1530,6 +1608,7 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
             promptInjectionProfile,
             effectivePresetBundle,
             userFacingPreset,
+            groupMemory,
             overrides: (state.manualOverrides ?? {}) as Record<string, unknown>,
         };
     } finally {
@@ -1674,6 +1753,13 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
         if (typeof currentChatState.setUserFacingPreset === 'function') {
             await currentChatState.setUserFacingPreset(userFacingPreset);
         }
+        if (typeof currentChatState.setSummaryPolicyOverride === 'function') {
+            await currentChatState.setSummaryPolicyOverride({
+                enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
+                interval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
+                windowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
+            });
+        }
         await currentChatState.setChatProfileOverride(profileOverride);
         await currentChatState.setRetentionPolicyOverride(retentionOverride);
         await currentChatState.recomputeAdaptivePolicy();
@@ -1688,6 +1774,11 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
     try {
         await manager.load();
         await manager.setUserFacingPreset(userFacingPreset);
+        await manager.setSummaryPolicyOverride({
+            enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
+            interval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
+            windowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
+        });
         await manager.setChatProfileOverride(profileOverride);
         await manager.setRetentionPolicyOverride(retentionOverride);
         await manager.recomputeAdaptivePolicy();
@@ -1708,8 +1799,9 @@ function updateEditorHeader(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     const nameElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentChatNameId}`) as HTMLElement | null;
     const metaElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentChatMetaId}`) as HTMLElement | null;
     const intentElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentIntentId}`) as HTMLElement | null;
+    const scopeElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentScopeId}`) as HTMLElement | null;
     const sectionsWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
-    if (!nameElement || !metaElement || !intentElement || !sectionsWrap) {
+    if (!nameElement || !metaElement || !intentElement || !scopeElement || !sectionsWrap) {
         return;
     }
     nameElement.textContent = findChatLabel(snapshot.chatKey);
@@ -1720,6 +1812,7 @@ function updateEditorHeader(overlay: HTMLElement, snapshot: ChatStrategySnapshot
         snapshot.effectiveProfile.vectorStrategy.enabled ? '向量开启' : '向量关闭',
     ].join(' · ');
     intentElement.textContent = formatIntentLabel(snapshot.decision?.intent || 'auto');
+    scopeElement.textContent = `预设来源：${formatPresetScopeLabel(snapshot.effectivePresetBundle)} · 分轨：${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
     replaceSummaryChips(sectionsWrap, snapshot.decision?.sectionsUsed || []);
 }
 
@@ -1788,7 +1881,7 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
         const scoreWrap = overlay.querySelector(`#${EDITOR_IDS.qualityReasonsId}`);
         if (scoreWrap) {
             scoreWrap.innerHTML = quality.reasonCodes
-                .map((code: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(code)}</span>`)
+                .map((code: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(formatQualityReasonCodeLabel(code))}</span>`)
                 .join('');
         }
     }
@@ -1802,16 +1895,44 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
  */
 function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
     const insightsElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.maintenanceInsightsId}`) as HTMLElement | null;
+    const lifecycleHeroElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleHeroId}`) as HTMLElement | null;
     const lifecycleStageElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleStageId}`) as HTMLElement | null;
     const lifecycleMetaElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleMetaId}`) as HTMLElement | null;
-    if (!insightsElement || !lifecycleStageElement || !lifecycleMetaElement) {
+    const lifecycleSummaryElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleSummaryId}`) as HTMLElement | null;
+    const lifecycleExplanationElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleExplanationId}`) as HTMLElement | null;
+    const lifecycleReasonListElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleReasonListId}`) as HTMLElement | null;
+    const lifecycleTimelineElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleTimelineId}`) as HTMLElement | null;
+    const lifecycleImpactElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleImpactId}`) as HTMLElement | null;
+    const presetScopeElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.presetScopeMetaId}`) as HTMLElement | null;
+    const groupLaneMetaElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.groupLaneMetaId}`) as HTMLElement | null;
+    const groupLaneActorsElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.groupLaneActorsId}`) as HTMLElement | null;
+    if (
+        !insightsElement
+        || !lifecycleHeroElement
+        || !lifecycleStageElement
+        || !lifecycleMetaElement
+        || !lifecycleSummaryElement
+        || !lifecycleExplanationElement
+        || !lifecycleReasonListElement
+        || !lifecycleTimelineElement
+        || !lifecycleImpactElement
+        || !presetScopeElement
+        || !groupLaneMetaElement
+        || !groupLaneActorsElement
+    ) {
         return;
     }
+    lifecycleHeroElement.dataset.stage = snapshot.lifecycleState.stage;
     lifecycleStageElement.textContent = formatLifecycleStageLabel(snapshot.lifecycleState.stage);
-    const reasonText = Array.isArray(snapshot.lifecycleState.stageReasonCodes) && snapshot.lifecycleState.stageReasonCodes.length > 0
-        ? snapshot.lifecycleState.stageReasonCodes.join(' / ')
-        : '无';
-    lifecycleMetaElement.textContent = `进入时间: ${formatTimestamp(snapshot.lifecycleState.stageEnteredAt)} | 原因: ${reasonText}`;
+    lifecycleSummaryElement.textContent = formatLifecycleStageSummary(snapshot.lifecycleState.stage);
+    lifecycleExplanationElement.textContent = formatLifecycleStageDescription(snapshot.lifecycleState);
+    lifecycleReasonListElement.innerHTML = buildLifecycleReasonPillsMarkup(snapshot.lifecycleState.stageReasonCodes);
+    lifecycleTimelineElement.innerHTML = buildLifecycleTimelineMarkup(snapshot.lifecycleState);
+    lifecycleImpactElement.innerHTML = buildLifecycleImpactMarkup(snapshot.lifecycleState);
+    lifecycleMetaElement.textContent = formatLifecycleMetaText(snapshot.lifecycleState);
+    presetScopeElement.textContent = formatPresetScopeLabel(snapshot.effectivePresetBundle);
+    groupLaneMetaElement.textContent = formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled);
+    groupLaneActorsElement.innerHTML = buildGroupLaneCardsMarkup(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled);
 
     const insights = Array.isArray(snapshot.maintenanceInsights) ? snapshot.maintenanceInsights : [];
     if (insights.length === 0) {
@@ -1861,7 +1982,7 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
                         if (!result) {
                             toast.error('维护动作执行失败：缺少执行结果');
                         } else if (result.ok) {
-                            toast.success(`${formatMaintenanceActionLabel(action)}已完成：${result.message}`);
+                            toast.success(formatMaintenanceExecutionToast(action, result));
                         } else {
                             toast.error(`${formatMaintenanceActionLabel(action)}失败：${result.message}`);
                         }
@@ -1876,6 +1997,235 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
                     });
             };
         });
+}
+
+/**
+ * 功能：为生命周期阶段生成一句直白总结。
+ * @param stage 生命周期阶段。
+ * @returns 面向用户的简短总结。
+ */
+function formatLifecycleStageSummary(stage: ChatLifecycleState['stage']): string {
+    if (stage === 'new') {
+        return '刚起步，系统还在建立这段聊天的基础印象。';
+    }
+    if (stage === 'active') {
+        return '发展很快，系统会更积极地跟踪新剧情和新事实。';
+    }
+    if (stage === 'stable') {
+        return '节奏已经稳定，系统更重视保持设定一致和关系连续。';
+    }
+    if (stage === 'long_running') {
+        return '这是长期聊天，系统会更看重整理、压缩和按需检索。';
+    }
+    if (stage === 'archived') {
+        return '当前活跃度偏低，系统默认会转向低频维护。';
+    }
+    if (stage === 'deleted') {
+        return '这段聊天已被视为删除状态，系统通常不再继续维护。';
+    }
+    return '系统已识别当前聊天阶段。';
+}
+
+/**
+ * 功能：解释系统为何把聊天判定为当前阶段。
+ * @param lifecycle 生命周期状态。
+ * @returns 更完整的解释文本。
+ */
+function formatLifecycleStageDescription(lifecycle: ChatLifecycleState): string {
+    const reasonText = Array.isArray(lifecycle.stageReasonCodes) && lifecycle.stageReasonCodes.length > 0
+        ? lifecycle.stageReasonCodes.map((code: string): string => formatLifecycleReasonCodeLabel(code)).join('、')
+        : '当前没有更多判定细节';
+    return `${formatLifecycleStageSummary(lifecycle.stage)} 判断依据：${reasonText}。`;
+}
+
+/**
+ * 功能：输出生命周期对默认策略的影响说明。
+ * @param lifecycle 生命周期状态。
+ * @returns HTML 字符串。
+ */
+function buildLifecycleImpactMarkup(lifecycle: ChatLifecycleState): string {
+    const title = formatLifecycleImpactTitle(lifecycle.stage);
+    const detail = formatLifecycleImpactDetail(lifecycle.stage);
+    return `
+        <strong class="stx-memory-chat-strategy-lifecycle-impact-title">${escapeHtml(title)}</strong>
+        <span class="stx-memory-chat-strategy-lifecycle-impact-detail">${escapeHtml(detail)}</span>
+    `.trim();
+}
+
+/**
+ * 功能：生成生命周期影响标题。
+ * @param stage 生命周期阶段。
+ * @returns 标题文本。
+ */
+function formatLifecycleImpactTitle(stage: ChatLifecycleState['stage']): string {
+    if (stage === 'new') {
+        return '默认更偏向“先建立基础记忆”';
+    }
+    if (stage === 'active') {
+        return '默认更偏向“及时记录变化”';
+    }
+    if (stage === 'stable') {
+        return '默认更偏向“维持连续性”';
+    }
+    if (stage === 'long_running') {
+        return '默认更偏向“整理长期记忆”';
+    }
+    if (stage === 'archived') {
+        return '默认更偏向“保守维护”';
+    }
+    if (stage === 'deleted') {
+        return '默认更偏向“停止维护与清理痕迹”';
+    }
+    return '默认策略会跟随阶段做轻微偏置';
+}
+
+/**
+ * 功能：生成生命周期影响说明。
+ * @param stage 生命周期阶段。
+ * @returns 说明文本。
+ */
+function formatLifecycleImpactDetail(stage: ChatLifecycleState['stage']): string {
+    if (stage === 'new') {
+        return '更容易优先记录身份、关系、设定等基础信息，帮助后续聊天尽快进入状态。';
+    }
+    if (stage === 'active') {
+        return '更关注新事件、新关系和新冲突，适合快速推进剧情时保持记忆同步。';
+    }
+    if (stage === 'stable') {
+        return '会更重视一致性和连续感，避免已经稳定的设定频繁被噪声打断。';
+    }
+    if (stage === 'long_running') {
+        return '会更关注摘要、压缩、向量检索和长期成本，让老聊天继续可用而不臃肿。';
+    }
+    if (stage === 'archived') {
+        return '默认减少高频维护动作，只有在重新活跃时才会逐步提高处理强度。';
+    }
+    if (stage === 'deleted') {
+        return '通常只保留必要的系统痕迹，不再继续为后续对话提供主动支持。';
+    }
+    return '这个阶段只会影响默认倾向，不会覆盖你的预设和手动覆盖。';
+}
+
+/**
+ * 功能：把生命周期原因列表渲染成更易读的标签。
+ * @param reasonCodes 生命周期原因码列表。
+ * @returns HTML 字符串。
+ */
+function buildLifecycleReasonPillsMarkup(reasonCodes: string[]): string {
+    if (!Array.isArray(reasonCodes) || reasonCodes.length === 0) {
+        return '<span class="stx-memory-chat-strategy-empty">当前没有额外判定依据</span>';
+    }
+    return reasonCodes
+        .map((code: string): string => `<span class="stx-memory-chat-strategy-pill stx-memory-chat-strategy-lifecycle-pill">${escapeHtml(formatLifecycleReasonCodeLabel(code))}</span>`)
+        .join('');
+}
+
+/**
+ * 功能：构建生命周期时间线展示。
+ * @param lifecycle 生命周期状态。
+ * @returns HTML 字符串。
+ */
+function buildLifecycleTimelineMarkup(lifecycle: ChatLifecycleState): string {
+    const mutationKinds = Array.isArray(lifecycle.mutationKinds) ? lifecycle.mutationKinds : [];
+    const mutationSummary = mutationKinds.length > 0
+        ? mutationKinds.map((kind: ChatMutationKind): string => formatChatMutationKindLabel(kind)).join('、')
+        : '暂无明显结构变化';
+    const maintenanceSummary = lifecycle.lastMaintenanceAt > 0
+        ? `${formatTimestamp(lifecycle.lastMaintenanceAt)} · ${lifecycle.lastMaintenanceAction ? formatMaintenanceActionLabel(lifecycle.lastMaintenanceAction) : '已执行维护'}`
+        : '还没有执行过维护动作';
+    return `
+        <div class="stx-memory-chat-strategy-lifecycle-point">
+          <span class="stx-memory-chat-strategy-lifecycle-point-label">第一次被系统识别</span>
+          <strong>${escapeHtml(formatTimestamp(lifecycle.firstSeenAt))}</strong>
+          <small>系统开始跟踪这段聊天。</small>
+        </div>
+        <div class="stx-memory-chat-strategy-lifecycle-point">
+          <span class="stx-memory-chat-strategy-lifecycle-point-label">进入当前阶段</span>
+          <strong>${escapeHtml(formatTimestamp(lifecycle.stageEnteredAt))}</strong>
+          <small>默认策略从这里开始切换偏向。</small>
+        </div>
+        <div class="stx-memory-chat-strategy-lifecycle-point">
+          <span class="stx-memory-chat-strategy-lifecycle-point-label">最近一次聊天变化</span>
+          <strong>${escapeHtml(formatTimestamp(lifecycle.lastMutationAt))}</strong>
+          <small>${escapeHtml(`${mutationSummary} · 来源 ${formatLifecycleMutationSourceLabel(lifecycle.lastMutationSource)}`)}</small>
+        </div>
+        <div class="stx-memory-chat-strategy-lifecycle-point">
+          <span class="stx-memory-chat-strategy-lifecycle-point-label">最近一次维护</span>
+          <strong>${escapeHtml(maintenanceSummary)}</strong>
+          <small>影响摘要、压缩或向量状态。</small>
+        </div>
+    `.trim();
+}
+
+/**
+ * 功能：格式化生命周期底部的补充说明。
+ * @param lifecycle 生命周期状态。
+ * @returns 补充说明文本。
+ */
+function formatLifecycleMetaText(lifecycle: ChatLifecycleState): string {
+    const mutationKinds = Array.isArray(lifecycle.mutationKinds) ? lifecycle.mutationKinds : [];
+    const changeText = mutationKinds.length > 0
+        ? mutationKinds.map((kind: ChatMutationKind): string => formatChatMutationKindLabel(kind)).join(' / ')
+        : '暂无明显聊天结构变化';
+    return `最近变化：${changeText}。这部分只影响系统默认倾向，不会覆盖你的预设和手动覆盖。`;
+}
+
+/**
+ * 功能：把聊天变动类型转成直白中文。
+ * @param kind 变动类型。
+ * @returns 中文标签。
+ */
+function formatChatMutationKindLabel(kind: ChatMutationKind): string {
+    if (kind === 'message_added') {
+        return '新增消息';
+    }
+    if (kind === 'message_edited') {
+        return '修改消息';
+    }
+    if (kind === 'message_swiped') {
+        return '切换回复分支';
+    }
+    if (kind === 'message_deleted') {
+        return '删除消息';
+    }
+    if (kind === 'chat_branched') {
+        return '聊天分支';
+    }
+    if (kind === 'chat_renamed') {
+        return '聊天改名';
+    }
+    if (kind === 'character_binding_changed') {
+        return '角色绑定变化';
+    }
+    return kind;
+}
+
+/**
+ * 功能：把最近变动来源转成更容易理解的文字。
+ * @param source 最近变动来源。
+ * @returns 中文说明。
+ */
+function formatLifecycleMutationSourceLabel(source: string): string {
+    const normalized = String(source || '').trim().toLowerCase();
+    if (!normalized) {
+        return '系统未记录';
+    }
+    if (normalized === 'host' || normalized === 'host_deleted') {
+        return '宿主聊天';
+    }
+    if (normalized.includes('maintenance')) {
+        return '系统维护';
+    }
+    if (normalized.includes('extract')) {
+        return '记忆抽取';
+    }
+    if (normalized.includes('summary')) {
+        return '摘要更新';
+    }
+    if (normalized.includes('vector')) {
+        return '向量处理';
+    }
+    return source;
 }
 
 /**
@@ -1918,6 +2268,7 @@ function fillPresetAndDirectFields(overlay: HTMLElement, snapshot: ChatStrategyS
         ?? snapshot.effectivePresetBundle.globalPreset?.presetId
         ?? 'custom';
     setSelectValue(overlay, EDITOR_IDS.presetId, presetId);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId, snapshot.effectivePolicy.summaryEnabled);
     setInputValue(overlay, EDITOR_IDS.summaryIntervalDirectId, snapshot.effectivePolicy.extractInterval);
     setInputValue(overlay, EDITOR_IDS.summaryWindowDirectId, snapshot.effectivePolicy.extractWindowSize);
     setInputValue(overlay, EDITOR_IDS.profileRefreshDirectId, snapshot.effectivePolicy.profileRefreshInterval);
@@ -1964,6 +2315,11 @@ function applyPresetTemplateToForm(overlay: HTMLElement, presetId: UserFacingPre
         ...(preset.retentionPolicy ?? {}),
     };
     fillEditorForm(overlay, profile, retention);
+    setCheckboxValue(
+        overlay,
+        EDITOR_IDS.summaryEnabledDirectId,
+        preset.adaptivePolicy?.summaryEnabled !== false,
+    );
     setInputValue(
         overlay,
         EDITOR_IDS.summaryIntervalDirectId,
@@ -2020,12 +2376,15 @@ function collectUserFacingPresetFromForm(overlay: HTMLElement): UserFacingChatPr
         },
         adaptivePolicy: {
             ...(basePreset.adaptivePolicy ?? {}),
+            summaryEnabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
             extractInterval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
-            extractWindowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 32),
-            profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 12),
+            extractWindowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
+            profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 6),
             qualityRefreshInterval: getNumberValue(overlay, EDITOR_IDS.qualityRefreshDirectId, 12),
             groupLaneEnabled: getCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId),
         },
+        profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 6),
+        qualityRefreshInterval: getNumberValue(overlay, EDITOR_IDS.qualityRefreshDirectId, 12),
         retentionPolicy: {
             ...(basePreset.retentionPolicy ?? {}),
             deletionStrategy: getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId) as DeletionStrategy,
@@ -2189,6 +2548,13 @@ function translateDiagnosticKey(key: string): string {
         promptInjectionProfile: '注入配置概览',
         effectivePresetBundle: '当前预设方案',
         userFacingPreset: '当前可见预设',
+        groupMemory: '群聊分轨状态',
+        lanes: '角色车道',
+        sharedScene: '共享场景',
+        actorSalience: '角色显著度',
+        roleScope: '角色作用域',
+        roleScopeKey: '角色作用域键',
+        bindingSnapshot: '绑定快照',
         overrides: '手动覆盖项',
 
         // 决策与状态
@@ -2240,6 +2606,14 @@ function buildDiagnosticKeyTip(key: string): string {
         contextMaxTokensShare: '给记忆留出的最大上下文额度。占比越高，AI 能记住的陈年旧事越多。',
         lorebookPolicyWeight: '系统在决策时，给予 ST 世界书匹配结果的优先程度。',
         actorSalienceTopK: '决定在群聊中，优先考虑多少个最活跃的角色进行关联记忆搜索。',
+        groupLaneEnabled: '开启后会为群聊拆出角色车道、共享场景和角色显著度，方便群像场景保持连续性。',
+        groupMemory: '群聊模式下的诊断快照，包含每个角色车道、共享场景摘要和活跃角色排序。',
+        lanes: '每条车道代表一个角色或发言轨迹，能帮助定位谁的上下文被重点保留。',
+        sharedScene: '群聊共享场景信息，通常记录共同地点、时间线或当前队伍共识。',
+        actorSalience: '按最近活跃度和重要性排序的角色列表，越靠前越容易拿到预算。',
+        roleScope: '当前聊天套用角色卡默认预设时解析出的作用域类型，例如 character 或 group。',
+        roleScopeKey: '角色卡默认预设的唯一作用域键，用来判断当前聊天命中了哪一层默认策略。',
+        bindingSnapshot: '记录群聊绑定时的成员信息快照，用于后续校验分轨是否仍然有效。',
         windowSize: '系统在计算动态指标时参考的最近对话轮数。',
         avgMessageLength: '最近窗口内消息的平均字数，反映对话内容的丰富程度。',
         assistantLongMessageRatio: 'AI 回复中长文本占比。比例高说明 AI 倾向于展开描写，比例低则说明多为短语。',
@@ -2313,6 +2687,41 @@ function buildDiagnosticKeyTip(key: string): string {
 }
 
 /**
+ * 功能：把诊断面板中的内部值转换为更用户友好的展示文案。
+ * @param key 字段键名。
+ * @param value 原始值。
+ * @returns 用户可读值。
+ */
+function formatDiagnosticDisplayValue(key: string, value: unknown): unknown {
+    if (key === 'roleScope') {
+        if (value === 'group') {
+            return '群聊默认';
+        }
+        if (value === 'character') {
+            return '角色卡默认';
+        }
+        if (value === 'none' || value === '' || value == null) {
+            return '未命中显式默认';
+        }
+    }
+
+    if (key === 'roleScopeKey') {
+        const text = String(value ?? '').trim();
+        if (!text) {
+            return '未命中显式默认';
+        }
+        if (text.startsWith('group:')) {
+            return `群聊对象 · ${text.slice('group:'.length) || '未命名群聊'}`;
+        }
+        if (text.startsWith('character:')) {
+            return `角色卡对象 · ${text.slice('character:'.length) || '未命名角色卡'}`;
+        }
+    }
+
+    return value;
+}
+
+/**
  * 功能：把对象写入诊断卡片，使用自然语言渲染机制。
  * @param overlay 编辑器遮罩层根节点。
  * @param blockId 内容区域 ID。
@@ -2325,7 +2734,9 @@ function writeJsonBlock(overlay: HTMLElement, blockId: string, payload: unknown)
         return;
     }
 
-    function renderNode(obj: unknown, depth: number = 0): string {
+    function renderNode(obj: unknown, depth: number = 0, fieldKey: string = ''): string {
+        const formatted = fieldKey ? formatDiagnosticDisplayValue(fieldKey, obj) : obj;
+        obj = formatted;
         if (obj == null) return '<span class="stx-memory-diag-val is-null">空</span>';
         if (typeof obj === 'boolean') return `<span class="stx-memory-diag-val is-bool">${obj ? '开启' : '关闭'}</span>`;
         if (typeof obj === 'number') return `<span class="stx-memory-diag-val is-num">${obj}</span>`;
@@ -2333,7 +2744,7 @@ function writeJsonBlock(overlay: HTMLElement, blockId: string, payload: unknown)
 
         if (Array.isArray(obj)) {
             if (obj.length === 0) return '<span class="stx-memory-diag-val is-empty">无内容</span>';
-            const items = obj.map(v => `<div class="stx-memory-diag-array-item">${renderNode(v, depth + 1)}</div>`).join('');
+            const items = obj.map(v => `<div class="stx-memory-diag-array-item">${renderNode(v, depth + 1, fieldKey)}</div>`).join('');
             return `<div class="stx-memory-diag-array">${items}</div>`;
         }
 
@@ -2346,7 +2757,7 @@ function writeJsonBlock(overlay: HTMLElement, blockId: string, payload: unknown)
                 return `
                     <div class="stx-memory-diag-row">
                         <span class="stx-memory-diag-key" data-tip-html="true" data-tip="${escapeHtml(buildDiagnosticKeyTip(k))}">${escapeHtml(translateDiagnosticKey(k))}</span>
-                        <div class="stx-memory-diag-value">${renderNode(val, depth + 1)}</div>
+                        <div class="stx-memory-diag-value">${renderNode(val, depth + 1, k)}</div>
                     </div>
                 `;
             }).join('');
@@ -2560,6 +2971,33 @@ function findChatLabel(chatKey: string): string {
 }
 
 /**
+ * 功能：生成适合摘要卡展示的紧凑聊天名称。
+ * @param chatKey 聊天键。
+ * @returns 更短的摘要名称。
+ */
+function formatCompactChatLabel(chatKey: string): string {
+    const fullLabel = findChatLabel(chatKey).trim();
+    if (!fullLabel) {
+        return '未选择聊天';
+    }
+    const normalizedKey = String(chatKey || '').trim();
+    if (normalizedKey && fullLabel.includes(normalizedKey)) {
+        const compactLabel = fullLabel
+            .replace(normalizedKey, ' ')
+            .replace(/[()（）]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (compactLabel) {
+            return compactLabel;
+        }
+    }
+    if (fullLabel.length > 28) {
+        return `${fullLabel.slice(0, 25)}...`;
+    }
+    return fullLabel;
+}
+
+/**
  * 功能：设置下拉框的当前值。
  * @param root 根节点。
  * @param id 元素 ID。
@@ -2701,6 +3139,311 @@ function formatLifecycleStageLabel(stage: ChatLifecycleState['stage']): string {
 }
 
 /**
+ * 功能：格式化当前预设来源链路。
+ * @param bundle 生效预设包。
+ * @returns 用户可读的预设来源说明。
+ */
+function formatPresetScopeLabel(bundle: EffectivePresetBundle): string {
+    if (bundle.chatPreset?.label) {
+        return `聊天覆盖 · ${bundle.chatPreset.label}`;
+    }
+    if (bundle.rolePreset?.label) {
+        const scope = bundle.roleScope === 'group' ? '群聊默认' : '角色卡默认';
+        return `${scope} · ${bundle.rolePreset.label}`;
+    }
+    if (bundle.globalPreset?.label) {
+        return `全局默认 · ${bundle.globalPreset.label}`;
+    }
+    return '未命中显式预设';
+}
+
+/**
+ * 功能：格式化群聊分轨摘要。
+ * @param groupMemory 群聊分轨状态。
+ * @param enabled 是否启用分轨。
+ * @returns 分轨摘要文本。
+ */
+function formatGroupLaneSummary(groupMemory: GroupMemoryState | null, enabled: boolean): string {
+    if (!enabled) {
+        return '已关闭';
+    }
+    const lanes = Array.isArray(groupMemory?.lanes) ? groupMemory!.lanes : [];
+    if (lanes.length === 0) {
+        return '已开启，暂未形成车道';
+    }
+    const hasSharedScene = Boolean(
+        String(groupMemory?.sharedScene?.currentScene ?? '').trim()
+        || String(groupMemory?.sharedScene?.currentConflict ?? '').trim()
+        || (Array.isArray(groupMemory?.sharedScene?.groupConsensus) && groupMemory!.sharedScene.groupConsensus.length > 0),
+    );
+    return `已开启 · ${lanes.length} 条车道${hasSharedScene ? ' · 含共享场景' : ''}`;
+}
+
+/**
+ * 功能：格式化群聊分轨的主要角色概览。
+ * @param groupMemory 群聊分轨状态。
+ * @returns 角色概览文本。
+ */
+function formatGroupLaneActors(groupMemory: GroupMemoryState | null): string {
+    const laneNameByActorKey: Map<string, string> = new Map(
+        (Array.isArray(groupMemory?.lanes) ? groupMemory!.lanes : []).map((lane) => [lane.actorKey, lane.displayName]),
+    );
+    const topActors = Array.isArray(groupMemory?.actorSalience)
+        ? groupMemory!.actorSalience
+            .slice(0, 3)
+            .map((item): string => String(laneNameByActorKey.get(item.actorKey) ?? item.actorKey ?? '').trim())
+            .filter((name: string): boolean => Boolean(name))
+        : [];
+    const sceneParts = [
+        String(groupMemory?.sharedScene?.currentScene ?? '').trim(),
+        String(groupMemory?.sharedScene?.currentConflict ?? '').trim(),
+    ].filter((part: string): boolean => Boolean(part));
+    const sceneSummary = sceneParts.join(' / ');
+    if (topActors.length === 0 && !sceneSummary) {
+        return '暂无角色显著度数据';
+    }
+    if (topActors.length === 0) {
+        return `共享场景：${sceneSummary}`;
+    }
+    return sceneSummary
+        ? `高活跃角色：${topActors.join(' / ')} · 共享场景：${sceneSummary}`
+        : `高活跃角色：${topActors.join(' / ')}`;
+}
+
+/**
+ * 功能：格式化角色车道风格标签。
+ * @param value 原始风格值。
+ * @returns 中文风格标签。
+ */
+function formatLaneStyleLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        narrative: '叙事',
+        story: '剧情',
+        chat: '闲聊',
+        dialogue: '对话',
+        roleplay: '角色扮演',
+        rp: '角色扮演',
+        trpg: '跑团',
+        info: '信息说明',
+        qa: '问答',
+        tool: '工具协作',
+    };
+    return dict[normalized] || value || '未知';
+}
+
+/**
+ * 功能：格式化角色车道情绪标签。
+ * @param value 原始情绪值。
+ * @returns 中文情绪标签。
+ */
+function formatLaneEmotionLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        neutral: '平静',
+        calm: '冷静',
+        happy: '愉快',
+        joy: '喜悦',
+        sad: '难过',
+        angry: '愤怒',
+        upset: '不安',
+        anxious: '焦虑',
+        tense: '紧张',
+        curious: '好奇',
+        serious: '严肃',
+        gentle: '温和',
+        cold: '冷淡',
+    };
+    return dict[normalized] || value || '未知';
+}
+
+/**
+ * 功能：格式化角色车道目标标签。
+ * @param value 原始目标值。
+ * @returns 中文目标标签。
+ */
+function formatLaneGoalLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        immediate_response: '立刻回应',
+        answer_question: '回答问题',
+        provide_comfort: '安抚对方',
+        keep_distance: '保持距离',
+        push_plot: '推进剧情',
+        gather_info: '收集信息',
+        observe_reaction: '观察反应',
+        maintain_scene: '维持场景',
+        protect_user: '保护用户',
+    };
+    return dict[normalized] || value || '未知';
+}
+
+/**
+ * 功能：格式化质量原因码。
+ * @param code 原始原因码。
+ * @returns 中文说明。
+ */
+function formatQualityReasonCodeLabel(code: string): string {
+    const normalized = String(code || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        duplicate_rate_high: '重复内容偏多',
+        retrieval_precision_low: '检索精度偏低',
+        extract_acceptance_low: '抽取采纳率偏低',
+        summary_freshness_low: '摘要新鲜度偏低',
+        summary_staleness_high: '摘要陈旧度偏高',
+        token_efficiency_low: 'Token 利用效率偏低',
+        orphan_facts_ratio_high: '孤儿事实比例偏高',
+        schema_hygiene_low: '结构卫生度偏低',
+        vector_idle_too_long: '向量库沉寂过久',
+        vector_precision_low: '向量精度偏低',
+        maintenance_recommended: '建议执行维护',
+    };
+    return dict[normalized] || code;
+}
+
+/**
+ * 功能：格式化生命周期原因码。
+ * @param code 原始原因码。
+ * @returns 中文说明。
+ */
+function formatLifecycleReasonCodeLabel(code: string): string {
+    const raw = String(code || '').trim();
+    const normalized = raw.toLowerCase();
+    const directDict: Record<string, string> = {
+        stage_new: '新会话阶段',
+        stage_active: '处于活跃阶段',
+        stage_stable: '进入稳定阶段',
+        stage_long_running: '进入长线阶段',
+        stage_archived: '已归档',
+    };
+    if (directDict[normalized]) {
+        return directDict[normalized];
+    }
+    if (/^turns_\d+$/.test(normalized)) {
+        return `已累计 ${normalized.replace('turns_', '')} 楼`;
+    }
+    if (/^facts_\d+$/.test(normalized)) {
+        return `已沉淀 ${normalized.replace('facts_', '')} 条事实`;
+    }
+    if (/^summaries_\d+$/.test(normalized)) {
+        return `已生成 ${normalized.replace('summaries_', '')} 条摘要`;
+    }
+    return raw || '未知';
+}
+
+/**
+ * 功能：构建群聊分轨卡片 HTML。
+ * @param groupMemory 群聊分轨状态。
+ * @param enabled 是否开启群聊分轨。
+ * @returns HTML 字符串。
+ */
+function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled: boolean): string {
+        if (!enabled) {
+                return '<span class="stx-memory-chat-strategy-empty">当前聊天未开启群聊分轨。</span>';
+        }
+
+        const lanes = Array.isArray(groupMemory?.lanes) ? groupMemory!.lanes : [];
+        const salienceMap: Map<string, number> = new Map(
+                (Array.isArray(groupMemory?.actorSalience) ? groupMemory!.actorSalience : []).map((item) => [item.actorKey, Number(item.score ?? 0)]),
+        );
+        const sortedLanes = [...lanes].sort((left, right): number => {
+                const salienceDelta = Number(salienceMap.get(right.actorKey) ?? 0) - Number(salienceMap.get(left.actorKey) ?? 0);
+                if (salienceDelta !== 0) {
+                        return salienceDelta;
+                }
+                return Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0);
+        });
+        const topLanes = sortedLanes.slice(0, 4);
+        const sharedScene = groupMemory?.sharedScene;
+        const sharedSceneParts = [
+                String(sharedScene?.currentScene ?? '').trim(),
+                String(sharedScene?.currentConflict ?? '').trim(),
+        ].filter((part: string): boolean => Boolean(part));
+        const groupConsensus = Array.isArray(sharedScene?.groupConsensus) ? sharedScene!.groupConsensus.filter(Boolean) : [];
+        const pendingEvents = Array.isArray(sharedScene?.pendingEvents) ? sharedScene!.pendingEvents.filter(Boolean) : [];
+
+        const sceneCardMarkup = `
+            <article class="stx-memory-chat-strategy-group-scene-card">
+                <div class="stx-memory-chat-strategy-group-scene-head">
+                    <div>
+                        <div class="stx-memory-chat-strategy-group-section-title">共享场景</div>
+                        <div class="stx-memory-chat-strategy-group-scene-summary">${sharedSceneParts.length > 0 ? escapeHtml(sharedSceneParts.join(' / ')) : '暂无共享场景摘要'}</div>
+                    </div>
+                    <span class="stx-memory-chat-strategy-group-count">${lanes.length} 条车道</span>
+                </div>
+                <div class="stx-memory-chat-strategy-group-scene-body">
+                    <div class="stx-memory-chat-strategy-group-subsection">
+                        <span class="stx-memory-chat-strategy-group-subtitle">当前共识</span>
+                        <div class="stx-memory-chat-strategy-pill-wrap">
+                            ${groupConsensus.length > 0 ? groupConsensus.slice(0, 4).map((item: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-strategy-empty">暂无群体共识</span>'}
+                        </div>
+                    </div>
+                    <div class="stx-memory-chat-strategy-group-subsection">
+                        <span class="stx-memory-chat-strategy-group-subtitle">待处理事件</span>
+                        <div class="stx-memory-chat-strategy-group-event-list">
+                            ${pendingEvents.length > 0 ? pendingEvents.slice(0, 2).map((item: string, index: number): string => `
+                                <div class="stx-memory-chat-strategy-group-event-item">
+                                    <span class="stx-memory-chat-strategy-group-event-index">${index + 1}</span>
+                                    <span class="stx-memory-chat-strategy-group-event-text">${escapeHtml(item)}</span>
+                                </div>
+                            `.trim()).join('') : '<span class="stx-memory-chat-strategy-empty">暂无待处理事件</span>'}
+                        </div>
+                    </div>
+                </div>
+            </article>
+        `.trim();
+
+        if (topLanes.length === 0) {
+                return `${sceneCardMarkup}<span class="stx-memory-chat-strategy-empty">分轨已开启，但当前还没有形成稳定角色车道。</span>`;
+        }
+
+        const laneCardsMarkup = topLanes.map((lane, index): string => {
+                const salience = Number(salienceMap.get(lane.actorKey) ?? 0);
+                const metaPills = [
+                lane.lastStyle ? `风格：${formatLaneStyleLabel(lane.lastStyle)}` : '',
+                lane.lastEmotion ? `情绪：${formatLaneEmotionLabel(lane.lastEmotion)}` : '',
+                lane.recentGoal ? `目标：${formatLaneGoalLabel(lane.recentGoal)}` : '',
+                ].filter((item: string): boolean => Boolean(item));
+                const footerBits = [
+                        lane.relationshipDelta ? `关系：${lane.relationshipDelta}` : '',
+                        Number.isFinite(Number(lane.recentMessageIds?.length ?? 0)) ? `近期消息 ${Number(lane.recentMessageIds?.length ?? 0)} 条` : '',
+                ].filter((item: string): boolean => Boolean(item));
+                return `
+                    <article class="stx-memory-chat-strategy-group-lane-card">
+                        <div class="stx-memory-chat-strategy-group-lane-head">
+                            <div class="stx-memory-chat-strategy-group-lane-copy">
+                                <strong class="stx-memory-chat-strategy-group-lane-name">#${index + 1} ${escapeHtml(lane.displayName || lane.actorKey || '未命名角色')}</strong>
+                                <span class="stx-memory-chat-strategy-group-lane-time">最近活跃：${escapeHtml(formatTimestamp(Number(lane.lastActiveAt ?? 0)))}</span>
+                            </div>
+                            <span class="stx-memory-chat-strategy-pill stx-memory-chat-strategy-group-salience">显著度 ${(salience * 100).toFixed(0)}%</span>
+                        </div>
+                        <div class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-group-lane-tags">
+                            ${metaPills.length > 0 ? metaPills.map((item: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-strategy-empty">暂无风格 / 情绪 / 目标线索</span>'}
+                        </div>
+                        <div class="stx-memory-chat-strategy-group-lane-footer">
+                            ${footerBits.length > 0 ? escapeHtml(footerBits.join(' · ')) : '暂无关系变化记录'}
+                        </div>
+                    </article>
+                `.trim();
+        }).join('');
+
+        const hiddenLaneCount = Math.max(0, sortedLanes.length - topLanes.length);
+        const hiddenLaneHint = hiddenLaneCount > 0
+                ? `<div class="stx-memory-chat-strategy-group-footnote">还有 ${hiddenLaneCount} 条车道未展开，已优先展示最活跃的角色。</div>`
+                : '';
+
+        return `
+            <div class="stx-memory-chat-strategy-group-memory">
+                ${sceneCardMarkup}
+                <div class="stx-memory-chat-strategy-group-lane-grid">
+                    ${laneCardsMarkup}
+                </div>
+                ${hiddenLaneHint}
+            </div>
+        `.trim();
+}
+
+/**
  * 功能：格式化维护动作标签。
  * @param action 维护动作。
  * @returns 维护动作中文标签。
@@ -2722,6 +3465,16 @@ function formatMaintenanceActionLabel(action: MaintenanceActionType): string {
         return '群聊维护';
     }
     return action;
+}
+
+/**
+ * 功能：格式化维护动作完成后的提示文案。
+ * @param action 维护动作类型。
+ * @param result 执行结果。
+ * @returns 面向用户的提示文本。
+ */
+function formatMaintenanceExecutionToast(action: MaintenanceActionType, result: MaintenanceExecutionResult): string {
+    return `${formatMaintenanceActionLabel(action)}：${result.message}`;
 }
 
 /**

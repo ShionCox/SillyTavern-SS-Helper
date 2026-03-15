@@ -99,7 +99,12 @@ import { renderSettingsUi } from './ui/index';
 import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
-import { patchSdkChatShared, writeSdkPluginChatState } from '../../SDK/db';
+import {
+    deleteSdkPluginChatState,
+    patchSdkChatShared,
+    readSdkPluginChatState,
+    writeSdkPluginChatState,
+} from '../../SDK/db';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
@@ -127,6 +132,9 @@ import type {
     TaskAssignment,
 } from './schema/types';
 import manifestJson from '../manifest.json';
+
+const LLMHUB_OVERLAY_ROOT_ID = 'stx-llmhub-overlay-root';
+const LLMHUB_OVERLAY_STYLE_ID = 'stx-llmhub-overlay-style';
 
 export const logger = new Logger('AI 调度中枢');
 export const toast = new Toast('AI 调度中枢');
@@ -209,6 +217,8 @@ class LLMHub {
         );
         this.sdk.inspect = this.buildInspectApi();
 
+        this.bindOverlayRenderer();
+
         this.registry.setPersistCallback((snapshots) => {
             const settings = this.readSettings();
             this.writeSettings({ ...settings, consumerSnapshots: snapshots });
@@ -226,6 +236,272 @@ class LLMHub {
         });
 
         logger.success('AI 调度中枢四层架构初始化完成。');
+    }
+
+    private bindOverlayRenderer(): void {
+        if (typeof document === 'undefined') {
+            return;
+        }
+
+        const ensureRoot = (): HTMLElement => {
+            let root = document.getElementById(LLMHUB_OVERLAY_ROOT_ID) as HTMLElement | null;
+            if (!root) {
+                root = document.createElement('div');
+                root.id = LLMHUB_OVERLAY_ROOT_ID;
+                document.body.appendChild(root);
+            }
+            return root;
+        };
+
+        const ensureStyle = (): void => {
+            if (document.getElementById(LLMHUB_OVERLAY_STYLE_ID)) {
+                return;
+            }
+            const styleEl = document.createElement('style');
+            styleEl.id = LLMHUB_OVERLAY_STYLE_ID;
+            styleEl.textContent = `
+                #${LLMHUB_OVERLAY_ROOT_ID} {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 99999;
+                    pointer-events: none;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay {
+                    position: absolute;
+                    pointer-events: auto;
+                    box-sizing: border-box;
+                    color: var(--SmartThemeBodyColor, #f5f5f5);
+                    font-family: inherit;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--fullscreen {
+                    inset: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    background: rgba(8, 10, 16, 0.72);
+                    backdrop-filter: blur(12px);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact {
+                    right: 20px;
+                    bottom: 20px;
+                    width: min(420px, calc(100vw - 24px));
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-card {
+                    width: min(880px, 100%);
+                    max-height: min(82vh, 900px);
+                    overflow: hidden;
+                    display: flex;
+                    flex-direction: column;
+                    border-radius: 18px;
+                    border: 1px solid rgba(255, 255, 255, 0.14);
+                    background: linear-gradient(180deg, rgba(27, 31, 42, 0.96), rgba(16, 18, 28, 0.96));
+                    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-card {
+                    width: 100%;
+                    max-height: 50vh;
+                    border-radius: 14px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-head {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                    padding: 16px 18px;
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-title-wrap {
+                    min-width: 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-title {
+                    font-size: 16px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                    word-break: break-word;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-meta {
+                    font-size: 12px;
+                    opacity: 0.72;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 10px;
+                    border-radius: 999px;
+                    font-size: 12px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status--loading {
+                    background: rgba(197, 160, 89, 0.18);
+                    color: #e7c46f;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status--done {
+                    background: rgba(88, 211, 106, 0.18);
+                    color: #7de68d;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status--error {
+                    background: rgba(255, 120, 120, 0.18);
+                    color: #ff9a9a;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close {
+                    border: 0;
+                    border-radius: 10px;
+                    padding: 8px 10px;
+                    cursor: pointer;
+                    color: inherit;
+                    background: rgba(255, 255, 255, 0.08);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-body {
+                    padding: 18px;
+                    overflow: auto;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 14px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-content {
+                    margin: 0;
+                    padding: 14px;
+                    border-radius: 14px;
+                    background: rgba(255, 255, 255, 0.05);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    font-size: 13px;
+                    line-height: 1.65;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-loading-bar {
+                    position: relative;
+                    width: 100%;
+                    height: 6px;
+                    overflow: hidden;
+                    border-radius: 999px;
+                    background: rgba(255, 255, 255, 0.08);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-loading-bar::after {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    width: 38%;
+                    border-radius: inherit;
+                    background: linear-gradient(90deg, rgba(197,160,89,0.2), rgba(197,160,89,0.95), rgba(197,160,89,0.2));
+                    animation: stx-llmhub-overlay-loading 1.2s ease-in-out infinite;
+                }
+
+                @keyframes stx-llmhub-overlay-loading {
+                    0% { transform: translateX(-120%); }
+                    100% { transform: translateX(280%); }
+                }
+
+                @media (max-width: 640px) {
+                    #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--fullscreen {
+                        padding: 12px;
+                    }
+                    #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-head,
+                    #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-body {
+                        padding: 14px;
+                    }
+                }
+            `;
+            document.head.appendChild(styleEl);
+        };
+
+        const escapeHtml = (value: string): string => String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const formatBody = (body: string): string => escapeHtml(body || '');
+        const renderContent = (content?: { type: 'text' | 'markdown' | 'html'; body: string }): string => {
+            if (!content) {
+                return '<pre class="stx-llmhub-overlay-content">暂无内容</pre>';
+            }
+            if (content.type === 'html') {
+                return `<div class="stx-llmhub-overlay-content">${content.body}</div>`;
+            }
+            return `<pre class="stx-llmhub-overlay-content">${formatBody(content.body)}</pre>`;
+        };
+
+        const statusLabelMap: Record<string, string> = {
+            loading: '处理中',
+            streaming: '生成中',
+            done: '已完成',
+            error: '出错了',
+        };
+
+        const renderAll = (): void => {
+            ensureStyle();
+            const root = ensureRoot();
+            const overlays = this.displayController.listActiveOverlays();
+            if (overlays.length === 0) {
+                root.innerHTML = '';
+                return;
+            }
+
+            root.innerHTML = overlays.map((spec) => {
+                const modeClass = spec.displayMode === 'compact' ? 'stx-llmhub-overlay--compact' : 'stx-llmhub-overlay--fullscreen';
+                const status = spec.status || 'done';
+                return `
+                    <section class="stx-llmhub-overlay ${modeClass}" data-llmhub-overlay-id="${escapeHtml(spec.requestId)}">
+                        <div class="stx-llmhub-overlay-card">
+                            <header class="stx-llmhub-overlay-head">
+                                <div class="stx-llmhub-overlay-title-wrap">
+                                    <div class="stx-llmhub-overlay-title">${escapeHtml(spec.title || 'LLM 任务')}</div>
+                                    <div class="stx-llmhub-overlay-meta">请求 ID：${escapeHtml(spec.requestId)}</div>
+                                </div>
+                                <div class="stx-llmhub-overlay-status stx-llmhub-overlay-status--${escapeHtml(status)}">${escapeHtml(statusLabelMap[status] || status)}</div>
+                                <button type="button" class="stx-llmhub-overlay-close" data-llmhub-overlay-close="${escapeHtml(spec.requestId)}" aria-label="关闭">关闭</button>
+                            </header>
+                            <div class="stx-llmhub-overlay-body">
+                                ${status === 'loading' || status === 'streaming' ? '<div class="stx-llmhub-overlay-loading-bar"></div>' : ''}
+                                ${renderContent(spec.content)}
+                            </div>
+                        </div>
+                    </section>
+                `;
+            }).join('');
+        };
+
+        this.displayController.setRenderCallback(() => {
+            renderAll();
+        });
+        this.displayController.setCloseCallback(() => {
+            renderAll();
+        });
+
+        document.addEventListener('click', (event: MouseEvent): void => {
+            const target = event.target as HTMLElement | null;
+            const closeButton = target?.closest<HTMLElement>('[data-llmhub-overlay-close]');
+            if (!closeButton) return;
+            const requestId = String(closeButton.getAttribute('data-llmhub-overlay-close') || '').trim();
+            if (!requestId) return;
+            this.displayController.closeOverlay(requestId, 'user_close');
+        });
     }
 
     /** 注册内置酒馆资源（运行时常驻，不写入持久层） */
@@ -631,9 +907,19 @@ class LLMHub {
             consumer: 'stx_llmhub',
             taskKind: 'generation',
             requiredCapabilities: ['chat', 'json'],
-        }).then((preview: RoutePreviewSnapshot) => {
-            void writeSdkPluginChatState('stx_llmhub', chatKey, {
-                state: {
+        }).then(async (preview: RoutePreviewSnapshot) => {
+            const existing = await readSdkPluginChatState('stx_llmhub', chatKey);
+            const looksLikeLegacyNestedState = typeof existing?.state?.state === 'object'
+                || typeof existing?.state?.summary === 'object';
+
+            if (looksLikeLegacyNestedState) {
+                await deleteSdkPluginChatState('stx_llmhub', chatKey);
+            }
+
+            await writeSdkPluginChatState(
+                'stx_llmhub',
+                chatKey,
+                {
                     routeSnapshot: {
                         globalAssignments: settings.globalAssignments || {},
                         pluginAssignments: settings.pluginAssignments || [],
@@ -642,11 +928,14 @@ class LLMHub {
                     budgetSnapshot: settings.budgets || {},
                     profile: settings.globalProfile || 'balanced',
                 },
-                summary: {
-                    resource: preview.resourceId || '(none)',
-                    model: preview.model || '(none)',
+                {
+                    schemaVersion: 2,
+                    summary: {
+                        resource: preview.resourceId || '(none)',
+                        model: preview.model || '(none)',
+                    },
                 },
-            });
+            );
         });
     }
 }

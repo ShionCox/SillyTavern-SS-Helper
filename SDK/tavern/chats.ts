@@ -4,6 +4,7 @@ import {
   buildTavernChatEntityKeyEvent,
   buildTavernChatScopedKeyEvent,
   isFallbackTavernChatEvent,
+  isStableTavernRoleKeyEvent,
   normalizeTavernChatIdEvent,
   normalizeTavernKeyPartEvent,
   parseAnyTavernChatRefEvent,
@@ -138,8 +139,8 @@ function buildCharacterScopeLocatorEvent(
 ): SdkTavernScopeLocatorEvent | null {
   const avatar = normalizeTavernKeyPartEvent(character.avatar, "");
   const displayName = String(character.name ?? "").trim();
-  const roleId = normalizeTavernKeyPartEvent(avatar || displayName, "default_role");
-  if (!roleId || roleId === "default_role") return null;
+  const roleId = normalizeTavernKeyPartEvent(avatar || displayName, "");
+  if (!isStableTavernRoleKeyEvent(roleId, { characterId: index })) return null;
   const roleKey =
     String(roleId)
       .trim()

@@ -74,6 +74,198 @@ export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: 
     return { ok: false, data: null, error: '无法从 LLM 输出中识别到有效的 JSON' };
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asArray<T>(value: T | T[] | undefined | null): T[] {
+    if (Array.isArray(value)) return value;
+    if (value == null) return [];
+    return [value];
+}
+
+function normalizeConfidence(value: unknown): number {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+        return Math.max(0, Math.min(1, numeric));
+    }
+    return 0.7;
+}
+
+function normalizeSummaryLevel(value: unknown): 'message' | 'scene' | 'arc' {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'message' || normalized === 'msg' || normalized === 'turn') return 'message';
+    if (normalized === 'arc' || normalized === 'chapter' || normalized === 'story') return 'arc';
+    return 'scene';
+}
+
+function normalizePatchOp(value: unknown): 'add' | 'replace' | 'remove' | null {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'add' || normalized === 'insert' || normalized === 'create') return 'add';
+    if (normalized === 'replace' || normalized === 'set' || normalized === 'update') return 'replace';
+    if (normalized === 'remove' || normalized === 'delete') return 'remove';
+    return null;
+}
+
+function normalizeKeywords(value: unknown): string[] | undefined {
+    if (Array.isArray(value)) {
+        const items = value.map((item: unknown) => String(item || '').trim()).filter(Boolean);
+        return items.length > 0 ? items : undefined;
+    }
+    if (typeof value === 'string') {
+        const items = value.split(/[，,、;；\n]/).map((item: string) => item.trim()).filter(Boolean);
+        return items.length > 0 ? items : undefined;
+    }
+    return undefined;
+}
+
+function normalizeEntity(value: unknown, fallbackKind?: unknown, fallbackId?: unknown): { kind: string; id: string } | undefined {
+    if (isRecord(value)) {
+        const kind = String(value.kind || value.type || fallbackKind || '').trim();
+        const id = String(value.id || value.entityId || value.name || fallbackId || '').trim();
+        if (kind && id) {
+            return { kind, id };
+        }
+    }
+
+    const inferredId = String(fallbackId || value || '').trim();
+    const inferredKind = String(fallbackKind || '').trim();
+    if (inferredId && inferredKind) {
+        return { kind: inferredKind, id: inferredId };
+    }
+    return undefined;
+}
+
+function normalizeFactProposalInput(item: unknown): Record<string, any> | null {
+    if (typeof item === 'string') {
+        const content = item.trim();
+        if (!content) return null;
+        return {
+            type: 'observation',
+            value: content,
+        };
+    }
+    if (!isRecord(item)) return null;
+
+    const type = String(item.type || item.factType || item.kind || item.category || '').trim();
+    const value = item.value ?? item.fact ?? item.content ?? item.text ?? item.data ?? item.summary;
+    if (!type || value === undefined) {
+        return null;
+    }
+
+    const factKey = String(item.factKey || item.id || '').trim() || undefined;
+    const path = String(item.path || item.statePath || item.key || '').trim() || undefined;
+    const confidence = Number(item.confidence);
+    const entity = normalizeEntity(item.entity, item.entityKind, item.entityId);
+
+    return {
+        ...(factKey ? { factKey } : {}),
+        type,
+        ...(entity ? { entity } : {}),
+        ...(path ? { path } : {}),
+        value,
+        ...(Number.isFinite(confidence) ? { confidence: Math.max(0, Math.min(1, confidence)) } : {}),
+    };
+}
+
+function normalizePatchProposalInput(item: unknown): Record<string, any> | null {
+    if (!isRecord(item)) return null;
+    const op = normalizePatchOp(item.op || item.operation || item.action || item.kind);
+    const path = String(item.path || item.statePath || item.key || item.field || '').trim();
+    const value = item.value ?? item.nextValue ?? item.data ?? item.content;
+    if (!op || !path) {
+        return null;
+    }
+    if (op !== 'remove' && value === undefined) {
+        return null;
+    }
+    return op === 'remove'
+        ? { op, path }
+        : { op, path, value };
+}
+
+function normalizeSummaryProposalInput(item: unknown): Record<string, any> | null {
+    if (typeof item === 'string') {
+        const content = item.trim();
+        if (!content) return null;
+        return {
+            level: 'scene',
+            content,
+        };
+    }
+    if (!isRecord(item)) return null;
+
+    const content = String(item.content ?? item.summary ?? item.text ?? item.value ?? item.description ?? '').trim();
+    if (!content) {
+        return null;
+    }
+
+    const title = String(item.title || item.label || '').trim() || undefined;
+    const keywords = normalizeKeywords(item.keywords || item.tags);
+
+    return {
+        level: normalizeSummaryLevel(item.level || item.scope || item.kind),
+        ...(title ? { title } : {}),
+        content,
+        ...(keywords ? { keywords } : {}),
+    };
+}
+
+function hasProposalPayloadShape(value: unknown): boolean {
+    if (!isRecord(value)) return false;
+    return ['facts', 'patches', 'summaries', 'notes', 'schemaChanges', 'entityResolutions'].some((key: string) => key in value);
+}
+
+function unwrapProposalSource(value: unknown): Record<string, any> | null {
+    if (!isRecord(value)) return null;
+    if (isRecord(value.proposal) || hasProposalPayloadShape(value)) {
+        return value;
+    }
+    if (isRecord(value.data) && (isRecord(value.data.proposal) || hasProposalPayloadShape(value.data))) {
+        return value.data;
+    }
+    if (isRecord(value.result) && (isRecord(value.result.proposal) || hasProposalPayloadShape(value.result))) {
+        return value.result;
+    }
+    return value;
+}
+
+export function normalizeProposalEnvelopeInput(input: unknown): unknown {
+    const source = unwrapProposalSource(input);
+    if (!source) {
+        return input;
+    }
+
+    const proposalSource = isRecord(source.proposal)
+        ? source.proposal
+        : hasProposalPayloadShape(source)
+            ? source
+            : null;
+    if (!proposalSource) {
+        return input;
+    }
+
+    const facts = asArray(proposalSource.facts).map(normalizeFactProposalInput).filter((item): item is Record<string, any> => item != null);
+    const patches = asArray(proposalSource.patches).map(normalizePatchProposalInput).filter((item): item is Record<string, any> => item != null);
+    const summaries = asArray(proposalSource.summaries).map(normalizeSummaryProposalInput).filter((item): item is Record<string, any> => item != null);
+    const notes = typeof proposalSource.notes === 'string' ? proposalSource.notes.trim() || undefined : undefined;
+    const schemaChanges = Array.isArray(proposalSource.schemaChanges) ? proposalSource.schemaChanges : undefined;
+    const entityResolutions = Array.isArray(proposalSource.entityResolutions) ? proposalSource.entityResolutions : undefined;
+
+    return {
+        ok: typeof source.ok === 'boolean' ? source.ok : true,
+        proposal: {
+            ...(facts.length > 0 ? { facts } : {}),
+            ...(patches.length > 0 ? { patches } : {}),
+            ...(summaries.length > 0 ? { summaries } : {}),
+            ...(notes ? { notes } : {}),
+            ...(schemaChanges ? { schemaChanges } : {}),
+            ...(entityResolutions ? { entityResolutions } : {}),
+        },
+        confidence: normalizeConfidence(source.confidence),
+    };
+}
+
 // ==========================================
 // 具体业务 Schema 定义 (由 Zod 驱动)
 // ==========================================

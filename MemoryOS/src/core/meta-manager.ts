@@ -54,6 +54,28 @@ export class MetaManager {
     }
 
     /**
+     * 功能：记录画像与质量诊断最近一次按助手楼层触发的刷新游标。
+     * @param payload 刷新游标。
+     * @returns 无返回值。
+     */
+    async markRefreshCheckpoints(payload: {
+        profileAssistantTurnCount?: number;
+        qualityAssistantTurnCount?: number;
+    }): Promise<void> {
+        const update: Record<string, unknown> = {};
+        if (payload.profileAssistantTurnCount !== undefined) {
+            update.lastProfileRefreshAssistantTurnCount = payload.profileAssistantTurnCount;
+        }
+        if (payload.qualityAssistantTurnCount !== undefined) {
+            update.lastQualityRefreshAssistantTurnCount = payload.qualityAssistantTurnCount;
+        }
+        if (Object.keys(update).length === 0) {
+            return;
+        }
+        await db.meta.update(this.chatKey, update);
+    }
+
+    /**
      * 功能：记录最近一次抽取执行状态。
      * @param payload 抽取状态信息。
      * @returns 无返回值。

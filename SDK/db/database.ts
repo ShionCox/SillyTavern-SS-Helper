@@ -135,6 +135,10 @@ export interface DBMeta {
     lastExtractWindowHash?: string;
     /** 最近一次提取时的助手楼层计数 */
     lastExtractAssistantTurnCount?: number;
+    /** 最近一次刷新聊天画像时的助手楼层计数 */
+    lastProfileRefreshAssistantTurnCount?: number;
+    /** 最近一次重算记忆质量时的助手楼层计数 */
+    lastQualityRefreshAssistantTurnCount?: number;
     lastCommittedTurnCursor?: string;
     lastVisibleTurnSnapshotHash?: string;
 }

@@ -373,8 +373,40 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-shared-select .stx-shared-select-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       width: 100%;
       min-width: 0;
+      min-height: 44px;
+      padding-top: 0;
+      padding-bottom: 0;
+      line-height: 1;
+      box-sizing: border-box;
+    }
+
+    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger-copy,
+    #${cardId} .stx-ui-shared-select .stx-shared-select-main,
+    #${cardId} .stx-ui-shared-select .stx-shared-select-label,
+    #${cardId} .stx-ui-shared-select .stx-shared-select-indicator {
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+    }
+
+    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger-copy,
+    #${cardId} .stx-ui-shared-select .stx-shared-select-main {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-shared-select .stx-shared-select-label {
+      line-height: 1.2;
+    }
+
+    #${cardId} .stx-ui-shared-select .stx-shared-select-indicator {
+      flex: 0 0 auto;
     }
 
     #${cardId} .stx-ui-field-label {
@@ -1077,6 +1109,57 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       white-space: nowrap;
       max-width: 300px;
     }
+
+    .stx-re-record-main {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      white-space: normal;
+    }
+
+    .stx-re-record-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .stx-re-record-title {
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 94%, transparent);
+      word-break: break-word;
+    }
+
+    .stx-re-record-sub {
+      font-size: 11px;
+      line-height: 1.5;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 68%, transparent);
+      word-break: break-word;
+    }
+
+    .stx-re-record-code {
+      font-size: 10px;
+      line-height: 1.45;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 42%, transparent);
+      word-break: break-all;
+    }
+
+    .stx-re-record-flag {
+      flex: 0 0 auto;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--stx-memory-warning, #ff9800) 88%, white 12%);
+      background: color-mix(in srgb, var(--stx-memory-warning, #ff9800) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--stx-memory-warning, #ff9800) 28%, transparent);
+      white-space: nowrap;
+    }
     
     .stx-re-table td:first-child {
       border-left: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.03)) 52%, transparent);
@@ -1264,7 +1347,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
       font-size: 12px;
       padding: 0 4px;
       border-radius: 6px;
@@ -1279,11 +1361,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     .stx-re-kv-key {
       color: var(--stx-memory-info, #7ca5f5);
       font-weight: 600;
-      min-width: 60px;
+      min-width: 64px;
     }
     .stx-re-kv-val {
-      color: color-mix(in srgb, var(--stx-memory-code-text, #a3c2cf) 90%, transparent);
-      word-break: break-all;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 86%, transparent);
+      word-break: break-word;
     }
     .stx-re-kv-input {
       background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.4)) 100%, black 6%);
@@ -1581,6 +1663,69 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-wrap: wrap;
     }
 
+    .stx-memory-chat-strategy-preset-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .stx-memory-chat-strategy-preset-actions > * {
+      min-width: 0;
+      width: 100%;
+    }
+
+    .stx-memory-chat-strategy-preset-actions button {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .stx-memory-chat-strategy-top-inline-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .stx-memory-chat-strategy-inline-card {
+      border-radius: 14px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.12)) 88%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.04)) 100%, transparent);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-inline-card-head {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-inline-card-head h4 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.3;
+      font-weight: 800;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent);
+    }
+
+    .stx-memory-chat-strategy-inline-card-head p {
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.5;
+      opacity: 0.72;
+    }
+
+    .stx-memory-chat-strategy-inline-card-preset .stx-memory-chat-strategy-card-actions {
+      margin-top: 0 !important;
+    }
+
     #${cardId} .stx-memory-chat-strategy-card-field,
     .stx-memory-chat-strategy-field {
       display: flex;
@@ -1601,42 +1746,46 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-memory-chat-strategy-summary-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
+      gap: 6px;
       width: 100%;
     }
 
     #${cardId} .stx-memory-chat-strategy-summary-card {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      padding: 10px 12px;
-      border-radius: 10px;
+      gap: 4px;
+      padding: 8px 10px;
+      border-radius: 9px;
       border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.14)) 88%, transparent);
       background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.06)) 100%, transparent);
       min-width: 0;
     }
 
     #${cardId} .stx-memory-chat-strategy-summary-value {
-      font-size: 13px;
+      display: -webkit-box;
+      overflow: hidden;
+      font-size: 12px;
       font-weight: 700;
-      line-height: 1.35;
+      line-height: 1.25;
       word-break: break-word;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
     }
 
     #${cardId} .stx-memory-chat-strategy-summary-maintenance {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border-radius: 10px;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 9px;
       border: 1px solid color-mix(in srgb, var(--ss-theme-warning, #ffb24d) 42%, transparent);
       background: color-mix(in srgb, var(--ss-theme-warning, #ffb24d) 12%, transparent);
     }
 
     #${cardId} .stx-memory-chat-strategy-summary-maintenance-text {
-      font-size: 12px;
-      line-height: 1.4;
+      font-size: 11px;
+      line-height: 1.3;
       font-weight: 600;
     }
 
@@ -1645,8 +1794,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(255,255,255,0.08)) 96%, transparent);
       color: var(--ss-theme-text, inherit);
       border-radius: 8px;
-      padding: 4px 10px;
-      font-size: 12px;
+      padding: 3px 8px;
+      font-size: 11px;
       cursor: pointer;
     }
 
@@ -2108,9 +2257,175 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
     }
 
+    .stx-memory-chat-strategy-quality-card-full-row {
+      grid-column: 1 / -1;
+    }
+
     .stx-memory-chat-strategy-quality-card.is-score {
       align-items: flex-start;
       justify-content: center;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-grid {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.95fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero {
+      grid-column: 1 / span 2;
+      position: relative;
+      overflow: hidden;
+      gap: 10px;
+      padding: 14px;
+      background:
+        radial-gradient(circle at top right, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 18%, transparent) 0%, transparent 38%),
+        linear-gradient(135deg, color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.06)) 100%, transparent), color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.2)) 100%, transparent));
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -8% -42% auto;
+      width: 148px;
+      height: 148px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent);
+      filter: blur(14px);
+      pointer-events: none;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="new"] {
+      border-color: color-mix(in srgb, #79c0ff 35%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="active"] {
+      border-color: color-mix(in srgb, #6dd19c 35%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="stable"] {
+      border-color: color-mix(in srgb, #d7c06a 35%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="long_running"] {
+      border-color: color-mix(in srgb, #f0a35e 38%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="archived"],
+    .stx-memory-chat-strategy-lifecycle-hero[data-stage="deleted"] {
+      border-color: color-mix(in srgb, #b18cff 30%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-hero-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-stage-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(12,12,16,0.72)) 86%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.16)) 85%, transparent);
+      font-size: 14px;
+      margin-bottom: 0;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-summary {
+      font-size: 15px;
+      line-height: 1.42;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 94%, transparent);
+      position: relative;
+      z-index: 1;
+      max-width: 680px;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-explanation {
+      font-size: 12px;
+      line-height: 1.58;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 84%, transparent);
+      position: relative;
+      z-index: 1;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-reasons {
+      position: relative;
+      z-index: 1;
+      gap: 6px;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-pill {
+      min-height: 22px;
+      padding: 3px 8px;
+      font-size: 10px;
+      background: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18,18,22,0.72)) 88%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-card {
+      min-height: 100%;
+      padding: 10px;
+      gap: 6px;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-timeline {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-point {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.18)) 100%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.09)) 78%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-point-label {
+      font-size: 10px;
+      line-height: 1.3;
+      opacity: 0.68;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-point strong {
+      font-size: 12px;
+      line-height: 1.32;
+      font-weight: 800;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 94%, transparent);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-point small {
+      font-size: 10px;
+      line-height: 1.42;
+      opacity: 0.76;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-impact {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .stx-memory-chat-strategy-lifecycle-impact-title {
+      font-size: 13px;
+      line-height: 1.35;
+      font-weight: 800;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 76%, white 24%);
+    }
+
+    .stx-memory-chat-strategy-lifecycle-impact-detail {
+      font-size: 11px;
+      line-height: 1.55;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 86%, transparent);
     }
 
     .stx-memory-chat-strategy-quality-label {
@@ -2172,6 +2487,187 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.45;
       opacity: 0.76;
       word-break: break-word;
+    }
+
+    .stx-memory-chat-strategy-group-memory {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-scene-card,
+    .stx-memory-chat-strategy-group-lane-card {
+      border-radius: 14px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.12)) 88%, transparent);
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.06)) 100%, transparent), color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.16)) 100%, transparent));
+      box-shadow: inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-scene-card {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .stx-memory-chat-strategy-group-scene-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-section-title,
+    .stx-memory-chat-strategy-group-subtitle {
+      font-size: 11px;
+      line-height: 1.3;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.64;
+    }
+
+    .stx-memory-chat-strategy-group-scene-summary {
+      margin-top: 6px;
+      font-size: 18px;
+      line-height: 1.55;
+      font-weight: 600;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent);
+      word-break: break-word;
+    }
+
+    .stx-memory-chat-strategy-group-count {
+      flex: 0 0 auto;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 82%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.18)) 100%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.12)) 76%, transparent);
+      white-space: nowrap;
+    }
+
+    .stx-memory-chat-strategy-group-scene-body {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-subsection {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      padding: 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0,0,0,0.18)) 88%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.08)) 80%, transparent);
+    }
+
+    .stx-memory-chat-strategy-group-event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-event-item {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 10px;
+      align-items: flex-start;
+      min-width: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(0,0,0,0.14)) 100%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.08)) 76%, transparent);
+    }
+
+    .stx-memory-chat-strategy-group-event-index {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 84%, white 16%);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 14%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 28%, transparent);
+    }
+
+    .stx-memory-chat-strategy-group-event-text,
+    .stx-memory-chat-strategy-group-lane-time,
+    .stx-memory-chat-strategy-group-lane-footer,
+    .stx-memory-chat-strategy-group-footnote {
+      font-size: 12px;
+      line-height: 1.6;
+      opacity: 0.82;
+      word-break: break-word;
+    }
+
+    .stx-memory-chat-strategy-group-lane-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-lane-card {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .stx-memory-chat-strategy-group-lane-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .stx-memory-chat-strategy-group-lane-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+    }
+
+    .stx-memory-chat-strategy-group-lane-name {
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 800;
+      word-break: break-word;
+    }
+
+    .stx-memory-chat-strategy-group-salience {
+      flex: 0 0 auto;
+      white-space: nowrap;
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 18%, transparent);
+    }
+
+    .stx-memory-chat-strategy-group-lane-tags .stx-memory-chat-strategy-pill {
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.45;
+      align-items: flex-start;
+    }
+
+    .stx-memory-chat-strategy-group-footnote {
+      opacity: 0.68;
+      padding: 0 4px;
     }
 
     .stx-memory-chat-strategy-quality-list {
@@ -2255,6 +2751,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       align-items: stretch;
       justify-content: flex-start;
+      gap: 10px;
     }
 
     .stx-memory-chat-strategy-toggle {
@@ -2465,6 +2962,38 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       .stx-memory-chat-strategy-quality-grid {
         grid-template-columns: 1fr;
       }
+
+      .stx-memory-chat-strategy-group-scene-body {
+        grid-template-columns: 1fr;
+      }
+
+      .stx-memory-chat-strategy-top-inline-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stx-memory-chat-strategy-lifecycle-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stx-memory-chat-strategy-lifecycle-hero {
+        grid-column: 1 / -1;
+      }
+
+      .stx-memory-chat-strategy-lifecycle-timeline {
+        grid-template-columns: 1fr;
+      }
+
+      .stx-memory-chat-strategy-lifecycle-hero {
+        padding: 14px;
+      }
+
+      .stx-memory-chat-strategy-lifecycle-summary {
+        font-size: 15px;
+      }
+
+      .stx-memory-chat-strategy-group-lane-grid {
+        grid-template-columns: 1fr;
+      }
     }
 
     @media (max-width: 640px) {
@@ -2552,6 +3081,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
       .stx-memory-chat-strategy-hero {
         flex-direction: column;
+      }
+
+      .stx-memory-chat-strategy-preset-actions {
+        grid-template-columns: 1fr;
       }
     }
   `;

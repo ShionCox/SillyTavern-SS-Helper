@@ -47,6 +47,8 @@ export class RequestOrchestrator {
     private executeCallback: ((record: RequestRecord) => Promise<LLMRunResult<any>>) | null = null;
     /** 外部注入的展示回调 */
     private displayCallback: ((record: RequestRecord, result: LLMRunResult<any>) => void) | null = null;
+    /** 外部注入的运行中覆层回调 */
+    private pendingDisplayCallback: ((record: RequestRecord) => void) | null = null;
     /** 外部注入的 scope 变更监听注册 */
     private scopeChangeCallback: ((listener: (scope: RequestScope) => void) => () => void) | null = null;
 
@@ -67,6 +69,10 @@ export class RequestOrchestrator {
 
     setDisplayCallback(cb: (record: RequestRecord, result: LLMRunResult<any>) => void): void {
         this.displayCallback = cb;
+    }
+
+    setPendingDisplayCallback(cb: (record: RequestRecord) => void): void {
+        this.pendingDisplayCallback = cb;
     }
 
     setScopeChangeCallback(cb: (listener: (scope: RequestScope) => void) => () => void): void {
@@ -217,7 +223,19 @@ export class RequestOrchestrator {
     getQueueSnapshot(): {
         pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
         active: { requestId: string; consumer: string; taskId: string; state: RequestState } | null;
-        recentHistory: Array<{ requestId: string; consumer: string; taskId: string; state: RequestState; finishedAt?: number }>;
+        recentHistory: Array<{
+            requestId: string;
+            consumer: string;
+            taskId: string;
+            state: RequestState;
+            finishedAt?: number;
+            rawResponseText?: string;
+            parsedResponse?: unknown;
+            normalizedResponse?: unknown;
+            validationErrors?: string[];
+            finalError?: string;
+            reasonCode?: string;
+        }>;
     } {
         return {
             pending: this.queue.map(r => ({
@@ -238,6 +256,12 @@ export class RequestOrchestrator {
                 taskId: r.taskId,
                 state: r.state,
                 finishedAt: r.finishedAt,
+                rawResponseText: r.debug?.rawResponseText,
+                parsedResponse: r.debug?.parsedResponse,
+                normalizedResponse: r.debug?.normalizedResponse,
+                validationErrors: r.debug?.validationErrors,
+                finalError: r.debug?.finalError,
+                reasonCode: r.debug?.reasonCode,
             })),
         };
     }
@@ -282,6 +306,10 @@ export class RequestOrchestrator {
         record.state = 'running';
         record.startedAt = Date.now();
 
+        if ((record.enqueueOptions.displayMode || 'fullscreen') === 'fullscreen' && this.pendingDisplayCallback) {
+            this.pendingDisplayCallback(record);
+        }
+
         try {
             if (!this.executeCallback) {
                 throw new Error('编排器未设置执行回调');
@@ -304,6 +332,13 @@ export class RequestOrchestrator {
 
             record.state = 'result_ready';
             record.finishedAt = Date.now();
+            if (!result.ok) {
+                record.debug = {
+                    ...(record.debug || {}),
+                    finalError: result.error,
+                    reasonCode: result.reasonCode,
+                };
+            }
 
             // 填充 meta
             if (result.ok || result.meta) {
@@ -354,6 +389,11 @@ export class RequestOrchestrator {
             record.state = 'failed';
             record.finishedAt = Date.now();
             const errMsg = (error as Error).message;
+            record.debug = {
+                ...(record.debug || {}),
+                finalError: errMsg,
+                reasonCode: 'unknown',
+            };
             record.resolveResult?.({ ok: false, error: errMsg, retryable: true, reasonCode: 'unknown' });
             record.resolveOverlay?.();
             this.activeRequest = null;

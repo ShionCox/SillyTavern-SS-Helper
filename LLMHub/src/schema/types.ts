@@ -174,11 +174,21 @@ export interface RequestValidity {
     isObsolete: boolean;
 }
 
+export interface RequestDebugInfo {
+    rawResponseText?: string;
+    parsedResponse?: unknown;
+    normalizedResponse?: unknown;
+    validationErrors?: string[];
+    finalError?: string;
+    reasonCode?: string;
+}
+
 /** 内部请求记录 */
 export interface RequestRecord<T = unknown> {
     requestId: string;
     consumer: string;
     taskId: string;
+    taskDescription?: string;
     taskKind: CapabilityKind;
     requestArgs?: unknown;
     state: RequestState;
@@ -193,6 +203,7 @@ export interface RequestRecord<T = unknown> {
     resolveResult?: (value: LLMRunResult<T>) => void;
     resolveOverlay?: () => void;
     meta?: LLMRunMeta;
+    debug?: RequestDebugInfo;
 }
 
 // ═══════════════════════════════════════════
@@ -398,6 +409,7 @@ export interface LLMInspectApi {
 export interface RunTaskArgs<T = unknown> {
     consumer: string;
     taskId: string;
+    taskDescription?: string;
     taskKind: CapabilityKind;
     input: any;
     schema?: any;
@@ -409,6 +421,7 @@ export interface RunTaskArgs<T = unknown> {
 export interface EmbedArgs {
     consumer: string;
     taskId: string;
+    taskDescription?: string;
     texts: string[];
     routeHint?: { resource?: string; model?: string };
     enqueue?: RequestEnqueueOptions;
@@ -417,6 +430,7 @@ export interface EmbedArgs {
 export interface RerankArgs {
     consumer: string;
     taskId: string;
+    taskDescription?: string;
     query: string;
     docs: string[];
     topK?: number;

@@ -1,7 +1,7 @@
 import type { LLMRequest } from '../providers/types';
 import { TaskRouter } from '../router/router';
 import { BudgetManager } from '../budget/budget-manager';
-import { parseJsonOutput, validateZodSchema, WorldTemplateSchema, ProposalEnvelopeSchema } from '../schema/validator';
+import { parseJsonOutput, validateZodSchema, WorldTemplateSchema, ProposalEnvelopeSchema, normalizeProposalEnvelopeInput } from '../schema/validator';
 import { ProfileManager } from '../profile/profile-manager';
 import { inferReasonCode } from '../schema/error-codes';
 import { RequestOrchestrator } from '../orchestrator/orchestrator';
@@ -55,6 +55,9 @@ export class LLMSDKImpl {
         this.globalProfileId = 'balanced';
 
         // 连接编排器与展示控制器
+        this.orchestrator.setPendingDisplayCallback((record) => {
+            this.displayController.openPendingOverlay(record);
+        });
         this.orchestrator.setExecuteCallback((record) => this.executeRequest(record));
         this.orchestrator.setDisplayCallback((record, result) => {
             this.displayController.createOverlay(record, result);
@@ -100,12 +103,23 @@ export class LLMSDKImpl {
         return this.globalProfileId;
     }
 
+    private resolveTaskDescription(consumer: string, taskId: string, explicit?: string): string {
+        const explicitText = String(explicit || '').trim();
+        if (explicitText) {
+            return explicitText;
+        }
+        const registered = this.registry.getTaskDescriptor(consumer, taskId)?.description;
+        const registeredText = String(registered || '').trim();
+        return registeredText || taskId;
+    }
+
     /**
      * 执行 AI 任务。
      * 只等待 AI 结果返回，不等待展示关闭。
      */
     async runTask<T>(args: RunTaskArgs<T>): Promise<LLMRunResult<T>> {
         const taskKind: CapabilityKind = args.taskKind;
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
 
         const record = this.orchestrator.enqueue<T>(
             args.consumer,
@@ -118,6 +132,7 @@ export class LLMSDKImpl {
             },
             args,
         );
+        record.taskDescription = taskDescription;
 
         // 将执行参数附到 record 上供 executeCallback 使用
         return record.resultPromise;
@@ -128,6 +143,7 @@ export class LLMSDKImpl {
      * AI 结果返回时立即完成。
      */
     async embed(args: EmbedArgs): Promise<any> {
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
         const record = this.orchestrator.enqueue(
             args.consumer,
             args.taskId,
@@ -139,6 +155,7 @@ export class LLMSDKImpl {
             },
             args,
         );
+        record.taskDescription = taskDescription;
 
         return record.resultPromise;
     }
@@ -148,6 +165,7 @@ export class LLMSDKImpl {
      * AI 结果返回时立即完成。
      */
     async rerank(args: RerankArgs): Promise<any> {
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
         const record = this.orchestrator.enqueue(
             args.consumer,
             args.taskId,
@@ -159,6 +177,7 @@ export class LLMSDKImpl {
             },
             args,
         );
+        record.taskDescription = taskDescription;
 
         return record.resultPromise;
     }
@@ -275,6 +294,12 @@ export class LLMSDKImpl {
         const profile = this.profileManager.get(profileId);
         const consumerBudget = this.budgetManager.getConfig(args.consumer);
 
+        const runtimeSchema = args.taskId === 'world.template.build'
+            ? WorldTemplateSchema
+            : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
+                ? ProposalEnvelopeSchema
+                : args.schema;
+
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
                 ? args.input.messages
@@ -290,7 +315,7 @@ export class LLMSDKImpl {
                 ],
             model: resolved.model,
             maxTokens: args.budget?.maxTokens ?? consumerBudget?.maxTokens ?? profile?.maxTokens ?? 2048,
-            jsonMode: !!args.schema || profile?.jsonMode === true,
+            jsonMode: !!runtimeSchema || profile?.jsonMode === true,
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
         };
 
@@ -300,11 +325,13 @@ export class LLMSDKImpl {
         const primaryResult = await this.tryProvider(
             resolved.resourceId,
             llmReq,
-            args.schema,
+            runtimeSchema,
             args.consumer,
             args.taskId,
             maxLatencyMs,
         );
+
+        this.attachRecordDebug(record, primaryResult);
 
         if (primaryResult.ok) {
             const meta: LLMRunMeta = {
@@ -325,11 +352,12 @@ export class LLMSDKImpl {
             const fallbackResult = await this.tryProvider(
                 resolved.fallbackResourceId,
                 llmReq,
-                args.schema,
+                runtimeSchema,
                 args.consumer,
                 args.taskId,
                 maxLatencyMs,
             );
+            this.attachRecordDebug(record, fallbackResult);
             if (fallbackResult.ok) {
                 const meta: LLMRunMeta = {
                     requestId: record.requestId,
@@ -358,6 +386,31 @@ export class LLMSDKImpl {
             error: primaryResult.error || '未知错误',
             retryable: primaryResult.retryable,
             reasonCode: primaryResult.reasonCode,
+        };
+    }
+
+    private attachRecordDebug(record: RequestRecord, result: {
+        rawResponseText?: string;
+        parsedResponse?: unknown;
+        normalizedResponse?: unknown;
+        validationErrors?: string[];
+        error?: string;
+        reasonCode?: string;
+    }): void {
+        const hasDebug = result.rawResponseText != null
+            || result.parsedResponse !== undefined
+            || result.normalizedResponse !== undefined
+            || (Array.isArray(result.validationErrors) && result.validationErrors.length > 0)
+            || result.error;
+        if (!hasDebug) return;
+
+        record.debug = {
+            rawResponseText: result.rawResponseText,
+            parsedResponse: result.parsedResponse,
+            normalizedResponse: result.normalizedResponse,
+            validationErrors: result.validationErrors,
+            finalError: result.error,
+            reasonCode: result.reasonCode,
         };
     }
 
@@ -465,7 +518,18 @@ export class LLMSDKImpl {
         consumer: string,
         taskId: string,
         maxLatencyMs?: number,
-    ): Promise<{ ok: boolean; data?: any; error?: string; retryable?: boolean; cost?: number; reasonCode?: string }> {
+    ): Promise<{
+        ok: boolean;
+        data?: any;
+        error?: string;
+        retryable?: boolean;
+        cost?: number;
+        reasonCode?: string;
+        rawResponseText?: string;
+        parsedResponse?: unknown;
+        normalizedResponse?: unknown;
+        validationErrors?: string[];
+    }> {
         try {
             const provider = this.router.getProvider(resourceId);
             if (!provider) {
@@ -480,32 +544,52 @@ export class LLMSDKImpl {
                 ])
                 : await provider.request(req);
 
-            let runtimeSchema = schema;
-            if (taskId === 'world.template.build') {
-                runtimeSchema = WorldTemplateSchema;
-            } else if (taskId === 'memory.extract' || taskId === 'world.update' || taskId === 'memory.summarize') {
-                runtimeSchema = ProposalEnvelopeSchema;
-            }
+            const runtimeSchema = schema;
 
             if (runtimeSchema) {
                 const parsed = parseJsonOutput(response.content);
                 if (!parsed.ok) {
                     this.budgetManager.recordFailure(consumer);
-                    return { ok: false, error: `JSON 解析失败: ${parsed.error}`, retryable: true, reasonCode: 'invalid_json' };
+                    return {
+                        ok: false,
+                        error: `JSON 解析失败: ${parsed.error}`,
+                        retryable: true,
+                        reasonCode: 'invalid_json',
+                        rawResponseText: response.content,
+                    };
                 }
 
-                const validation = validateZodSchema(parsed.data, runtimeSchema);
+                const normalizedInput = taskId === 'memory.extract' || taskId === 'world.update' || taskId === 'memory.summarize'
+                    ? normalizeProposalEnvelopeInput(parsed.data)
+                    : parsed.data;
+
+                const validation = validateZodSchema(normalizedInput, runtimeSchema);
                 if (!validation.valid) {
                     this.budgetManager.recordFailure(consumer);
-                    return { ok: false, error: `Schema Zod 校验失败: ${validation.errors.join('; ')}`, retryable: true, reasonCode: 'schema_validation_failed' };
+                    return {
+                        ok: false,
+                        error: `Schema Zod 校验失败: ${validation.errors.join('; ')}`,
+                        retryable: true,
+                        reasonCode: 'schema_validation_failed',
+                        rawResponseText: response.content,
+                        parsedResponse: parsed.data,
+                        normalizedResponse: normalizedInput,
+                        validationErrors: validation.errors,
+                    };
                 }
 
                 this.budgetManager.recordSuccess(consumer);
-                return { ok: true, data: validation.data };
+                return {
+                    ok: true,
+                    data: validation.data,
+                    rawResponseText: response.content,
+                    parsedResponse: parsed.data,
+                    normalizedResponse: normalizedInput,
+                };
             }
 
             this.budgetManager.recordSuccess(consumer);
-            return { ok: true, data: response.content };
+            return { ok: true, data: response.content, rawResponseText: response.content };
         } catch (error) {
             this.budgetManager.recordFailure(consumer);
             const message = (error as Error).message;

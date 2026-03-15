@@ -1,4 +1,5 @@
 import type { MemorySDK } from '../../../SDK/stx';
+import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
@@ -20,6 +21,7 @@ import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeed } from '../core/chat-semantic-bootstrap';
 import { archiveMemoryChat, db, purgeMemoryChat, restoreArchivedMemoryChat } from '../db/db';
+import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import type { TemplateTableDef } from '../template/types';
 import type {
@@ -132,8 +134,32 @@ export class MemorySDKImpl implements MemorySDK {
      */
     async init(): Promise<void> {
         await this.metaManager.ensureInit();
+        await this.ensureChatDocumentReady();
         await this.chatStateManager.load();
         await this.bootstrapSemanticSeedIfNeeded();
+    }
+
+    /**
+     * 功能：确保当前聊天已经建立统一 chat_document 主文档。
+     * @returns Promise<void>
+     */
+    private async ensureChatDocumentReady(): Promise<void> {
+        const scope = getTavernContextSnapshotEvent();
+        const ref = parseAnyTavernChatRefEvent(this.chatKey_, {
+            tavernInstanceId: String(scope?.tavernInstanceId ?? '').trim() || undefined,
+            scopeType: scope?.scopeType,
+            scopeId: String(scope?.scopeId ?? '').trim() || undefined,
+        });
+        if (!String(ref.chatId ?? '').trim() || String(ref.chatId ?? '').trim() === 'fallback_chat') {
+            return;
+        }
+        await ensureSdkChatDocument(this.chatKey_, ref, {
+            displayName: String(scope?.displayName ?? '').trim(),
+            avatarUrl: String(scope?.avatarUrl ?? '').trim(),
+            roleKey: String(scope?.roleKey ?? '').trim(),
+            scopeType: ref.scopeType,
+            scopeId: String(ref.scopeId ?? '').trim(),
+        });
     }
 
     // --- MemorySDK 接口实现 ---
@@ -198,7 +224,11 @@ export class MemorySDKImpl implements MemorySDK {
      * @param fingerprint 种子指纹。
      */
     private async persistSemanticSeed(seed: ChatSemanticSeed, fingerprint: string): Promise<void> {
-        const roleKey = String(seed.identitySeed?.roleKey ?? 'default_role').trim() || 'default_role';
+        const roleKey = String(seed.identitySeed?.roleKey ?? '').trim();
+        const semanticCharacterId = String((seed.characterCore as Record<string, unknown> | undefined)?.characterId ?? '').trim();
+        if (!isStableTavernRoleKeyEvent(roleKey, { characterId: semanticCharacterId })) {
+            return;
+        }
         const roleEntity = { kind: 'character', id: roleKey };
         const provenance = { extractor: 'semantic_seed_bootstrap', fingerprint, ts: Date.now() };
         await this.factsManager.upsert({
@@ -487,6 +517,12 @@ export class MemorySDKImpl implements MemorySDK {
         },
         setChatProfileOverride: (override: Partial<ChatProfile>): Promise<void> => {
             return this.chatStateManager.setChatProfileOverride(override);
+        },
+        getSummaryPolicyOverride: () => {
+            return this.chatStateManager.getSummaryPolicyOverride();
+        },
+        setSummaryPolicyOverride: (override) => {
+            return this.chatStateManager.setSummaryPolicyOverride(override);
         },
         getAdaptiveMetrics: (): Promise<AdaptiveMetrics> => {
             return this.chatStateManager.getAdaptiveMetrics();

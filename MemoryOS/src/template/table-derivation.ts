@@ -11,6 +11,64 @@ export interface TableFactShape {
     path?: string;
 }
 
+const DISPLAY_LABEL_I18N: Record<string, string> = {
+    abilities: '能力',
+    ability: '能力',
+    actor: '角色',
+    assistant: '助手',
+    companion: '同伴',
+    content: '内容',
+    context: '上下文',
+    created_at: '创建时间',
+    current_emotion: '当前情绪',
+    description: '描述',
+    emotion: '情绪',
+    entities: '实体',
+    goal: '目标',
+    health: '健康',
+    hp: '生命值',
+    id: 'ID',
+    importance: '重要度',
+    inventory: '物品',
+    keywords: '关键词',
+    location: '位置',
+    name: '名称',
+    notes: '备注',
+    observation: '观察',
+    path: '路径',
+    relationship: '关系',
+    relationships: '关系',
+    role: '角色',
+    scene: '场景',
+    significance: '显著度',
+    status: '状态',
+    summary: '摘要',
+    text: '文本',
+    title: '标题',
+    type: '类型',
+    updated_at: '更新时间',
+    user: '用户',
+    value: '值',
+    world_state: '世界状态',
+};
+
+/**
+ * 功能：翻译字段名片段，优先输出中文。
+ * @param part 字段名片段。
+ * @returns 翻译后的片段。
+ */
+function formatDisplayLabelPart(part: string): string {
+    const trimmed = String(part ?? '').trim();
+    const normalized = trimmed.toLowerCase();
+    if (DISPLAY_LABEL_I18N[normalized]) {
+        return DISPLAY_LABEL_I18N[normalized];
+    }
+    if (/^(id|uuid)$/i.test(trimmed)) {
+        return trimmed.toUpperCase();
+    }
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
 /**
  * 功能：将内部键名转换为适合界面展示的标签。
  * @param value 字段或表的内部键名。
@@ -21,11 +79,15 @@ function formatDisplayLabel(value: string): string {
     if (!trimmed) {
         return '未命名';
     }
-    return trimmed
-        .split(/[_./-]+/)
-        .filter(Boolean)
-        .map((part: string): string => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
+    const normalized = trimmed.toLowerCase();
+    if (DISPLAY_LABEL_I18N[normalized]) {
+        return DISPLAY_LABEL_I18N[normalized];
+    }
+
+    const parts = trimmed.split(/[_./-]+/).filter(Boolean);
+    const hasTranslatedPart = parts.some((part: string): boolean => Boolean(DISPLAY_LABEL_I18N[part.toLowerCase()]));
+    const formattedParts = parts.map((part: string): string => formatDisplayLabelPart(part));
+    return hasTranslatedPart ? formattedParts.join('') : formattedParts.join(' ');
 }
 
 /**

@@ -6,6 +6,7 @@ import type { MemoryAiTaskId } from '../llm/ai-health-types';
 import type { ProposalEnvelope } from '../proposal/types';
 import type {
     ChatProfile,
+    ChatMutationKind,
     GenerationValueClass,
     LogicalChatView,
     PostGenerationGateDecision,
@@ -121,7 +122,7 @@ export class ExtractManager {
         let summaryEnabled = true;
         if (this.chatStateManager) {
             const previousMetrics = await this.chatStateManager.getAdaptiveMetrics();
-            const nextMetrics = collectAdaptiveMetricsFromEvents(recentEvents, previousMetrics);
+            const nextMetrics = collectAdaptiveMetricsFromEvents(recentEvents, previousMetrics, logicalView);
             await this.chatStateManager.updateAdaptiveMetrics({
                 avgMessageLength: nextMetrics.avgMessageLength,
                 assistantLongMessageRatio: nextMetrics.assistantLongMessageRatio,
@@ -131,8 +132,23 @@ export class ExtractManager {
                 recentAssistantTurns: nextMetrics.recentAssistantTurns,
                 recentGroupSpeakerCount: nextMetrics.recentGroupSpeakerCount,
                 worldStateSignal: nextMetrics.worldStateSignal,
-            });
-            const adaptivePolicy = await this.chatStateManager.getAdaptivePolicy();
+            }, { refreshDerivedState: false });
+
+            const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
+            let adaptivePolicy = await this.chatStateManager.getAdaptivePolicy();
+            const shouldRefreshProfile = this.shouldRefreshByAssistantTurns(
+                currentAssistantTurnCount,
+                Number(meta?.lastProfileRefreshAssistantTurnCount ?? 0),
+                Number(adaptivePolicy.profileRefreshInterval ?? 0),
+            );
+            if (shouldRefreshProfile) {
+                await this.chatStateManager.recomputeChatProfile({ markDirty: false });
+                adaptivePolicy = await this.chatStateManager.recomputeAdaptivePolicy();
+                await this.metaManager.markRefreshCheckpoints({
+                    profileAssistantTurnCount: currentAssistantTurnCount,
+                });
+            }
+
             summaryInterval = adaptivePolicy.extractInterval;
             summaryWindowSize = adaptivePolicy.extractWindowSize;
             summaryEnabled = adaptivePolicy.summaryEnabled;
@@ -226,6 +242,7 @@ export class ExtractManager {
             lorebookDecision,
             summaryEnabled,
             logicalView,
+            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
             extractStrategy: chatProfile?.extractStrategy ?? 'facts_relations',
             stylePreference: chatProfile?.stylePreference ?? 'story',
         });
@@ -248,6 +265,7 @@ export class ExtractManager {
             const summarizeResult = summaryEnabled && postGate.rebuildSummary
                 ? await this.runProposalTask(
                     'memory.summarize',
+                    '对话摘要生成',
                     summarizePrompt,
                     windowText,
                     schemaContext,
@@ -256,6 +274,7 @@ export class ExtractManager {
                 : null;
             const extractResult = await this.runProposalTask(
                 'memory.extract',
+                '结构化记忆提取',
                 extractPrompt,
                 windowText,
                 schemaContext,
@@ -310,13 +329,32 @@ export class ExtractManager {
                         lorebookDecision.mode,
                     );
                 }
+                if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                    await this.chatStateManager.enqueueSummaryFixTask(
+                        `mutation_repair:${postGate.reasonCodes.join('|')}`,
+                        lorebookDecision.mode,
+                    );
+                }
                 if (postGate.rebuildSummary && summarizeResult?.accepted === false) {
                     await this.chatStateManager.enqueueSummaryFixTask(
                         `post_gate_summary_retry:${postGate.valueClass}`,
                         lorebookDecision.mode,
                     );
                 }
-                await this.chatStateManager.recomputeMemoryQuality();
+                const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
+                const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
+                    currentAssistantTurnCount,
+                    Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
+                    Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
+                );
+                if (shouldRefreshQuality) {
+                    await this.chatStateManager.recomputeMemoryQuality();
+                    await this.metaManager.markRefreshCheckpoints({
+                        qualityAssistantTurnCount: currentAssistantTurnCount,
+                    });
+                } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                    await this.chatStateManager.recomputeMemoryQuality();
+                }
             }
         } catch (error) {
             logger.error('抽取流程执行失败', error);
@@ -337,6 +375,49 @@ export class ExtractManager {
     }
 
     /**
+     * 功能：解析当前聊天可见的 assistant turn 计数。
+     * @param logicalView 逻辑消息视图。
+     * @param recentEvents 最近事件窗口。
+     * @returns assistant turn 计数。
+     */
+    private async resolveAssistantTurnCount(
+        logicalView: LogicalChatView | null,
+        recentEvents: Array<EventEnvelope<unknown>>,
+    ): Promise<number> {
+        if (this.turnTracker) {
+            const snapshot = await this.turnTracker.getExtractionSnapshot();
+            return Math.max(0, Number(snapshot.activeAssistantTurnCount ?? 0));
+        }
+        if (logicalView) {
+            return Math.max(0, Number(logicalView.visibleAssistantTurns.length ?? 0));
+        }
+        return recentEvents.filter((event: EventEnvelope<unknown>): boolean => {
+            return event.type === 'chat.message.received' || event.type === 'assistant_message_rendered';
+        }).length;
+    }
+
+    /**
+     * 功能：判断是否到达基于 assistant turn 的刷新阈值。
+     * @param currentAssistantTurnCount 当前 assistant turn 计数。
+     * @param lastRefreshAssistantTurnCount 上次刷新时的 assistant turn 计数。
+     * @param interval 刷新间隔。
+     * @returns 是否需要刷新。
+     */
+    private shouldRefreshByAssistantTurns(
+        currentAssistantTurnCount: number,
+        lastRefreshAssistantTurnCount: number,
+        interval: number,
+    ): boolean {
+        const normalizedInterval = Math.max(1, Math.round(Number(interval || 0)));
+        const currentCount = Math.max(0, Math.round(Number(currentAssistantTurnCount || 0)));
+        const lastCount = Math.max(0, Math.round(Number(lastRefreshAssistantTurnCount || 0)));
+        if (currentCount <= 0) {
+            return false;
+        }
+        return currentCount - lastCount >= normalizedInterval;
+    }
+
+    /**
      * 功能：构建摘要任务提示词。
      * @param lorebookMode 当前世界书裁决模式。
      * @param postGate 生成后 gate 结果。
@@ -354,10 +435,13 @@ export class ExtractManager {
         return [
             '你是对话摘要助手，请根据事件窗口生成可写入的摘要提议。',
             '输出必须是纯 JSON，格式如下：',
+            '所有摘要中的 title、content、keywords 等自然语言内容都必须使用简体中文。',
             `Lorebook gate mode: ${lorebookMode}.`,
             `Post gate class: ${postGate.valueClass}.`,
             `Should rebuild summary: ${postGate.rebuildSummary}.`,
             lorebookHint,
+            'summaries 数组中的每一项都必须是对象，且至少包含：level(只能是 message/scene/arc) 与 content(字符串)。',
+            '可选字段只有：title(字符串)、keywords(字符串数组)。不要输出纯字符串数组，不要输出 markdown。',
             '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
         ].join('\n');
     }
@@ -386,6 +470,7 @@ export class ExtractManager {
         return [
             '你是结构化记忆提取助手，请提取 facts 与 patches。',
             '输出必须是纯 JSON，格式如下：',
+            '所有 notes、summaries.content、summaries.title，以及 value 中的自然语言文本都必须使用简体中文。',
             `Lorebook gate mode: ${lorebookMode}.`,
             `Post gate class: ${postGate.valueClass}.`,
             `Persist long term: ${postGate.shouldPersistLongTerm}.`,
@@ -395,6 +480,9 @@ export class ExtractManager {
             worldHint,
             relationHint,
             retentionHint,
+            'facts 数组中的每一项都必须是对象，且至少包含：type(字符串) 与 value(任意 JSON 值)。可选字段：factKey、entity={kind,id}、path、confidence。',
+            'patches 数组中的每一项都必须是对象，且必须包含：op(只能是 add/replace/remove) 与 path(字符串)。当 op 不是 remove 时，必须提供 value。',
+            'summaries 如果返回，也必须是对象数组，每项字段同摘要任务要求。不要输出字符串数组，不要输出额外解释文本。',
             '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
         ].join('\n');
     }
@@ -431,6 +519,7 @@ export class ExtractManager {
      */
     private async runProposalTask(
         task: ProposalTask,
+        taskDescription: string,
         systemPrompt: string,
         eventsText: string,
         schemaContext: SchemaContextPayload,
@@ -451,6 +540,8 @@ export class ExtractManager {
                     : JSON.stringify(schemaContext, null, 2),
             },
             budget,
+            undefined,
+            taskDescription,
         );
         if (!response.ok) {
             logger.warn(`${task} 请求失败：${response.error} (${response.reasonCode || 'unknown'})`);
@@ -503,6 +594,7 @@ export class ExtractManager {
         lorebookDecision: { mode: string; shouldExtractWorldFacts: boolean };
         summaryEnabled: boolean;
         logicalView: LogicalChatView | null;
+        mutationKinds: ChatMutationKind[];
         extractStrategy: ChatProfile['extractStrategy'];
         stylePreference: ChatProfile['stylePreference'];
     }): PostGenerationGateDecision {
@@ -514,6 +606,11 @@ export class ExtractManager {
         const supportsRelations = input.extractStrategy !== 'facts_only';
         const supportsWorldState = input.extractStrategy === 'facts_relations_world'
             && input.lorebookDecision.shouldExtractWorldFacts;
+        const mutationKinds = Array.isArray(input.mutationKinds) ? input.mutationKinds : [];
+        const requiresMutationRepair = mutationKinds.some((kind: ChatMutationKind): boolean => {
+            return kind === 'message_edited' || kind === 'message_swiped' || kind === 'message_deleted' || kind === 'chat_branched';
+        });
+        const mutationReasonCodes = requiresMutationRepair ? ['mutation_repair_required', ...mutationKinds] : [];
 
         if (valueClass === 'small_talk_noise') {
             return {
@@ -522,10 +619,10 @@ export class ExtractManager {
                 shouldExtractFacts: false,
                 shouldExtractRelations: false,
                 shouldExtractWorldState: false,
-                rebuildSummary: false,
+                rebuildSummary: requiresMutationRepair && input.summaryEnabled,
                 shouldUpdateWorldState: false,
                 shortTermOnly: true,
-                reasonCodes: ['small_talk_noise', 'skip_long_term_extract'],
+                reasonCodes: ['small_talk_noise', 'skip_long_term_extract', ...mutationReasonCodes],
                 generatedAt: Date.now(),
             };
         }
@@ -537,10 +634,10 @@ export class ExtractManager {
                 shouldExtractFacts: true,
                 shouldExtractRelations: false,
                 shouldExtractWorldState: false,
-                rebuildSummary: false,
+                rebuildSummary: requiresMutationRepair && input.summaryEnabled,
                 shouldUpdateWorldState: false,
                 shortTermOnly: false,
-                reasonCodes: ['tool_result', 'facts_only_focus'],
+                reasonCodes: ['tool_result', 'facts_only_focus', ...mutationReasonCodes],
                 generatedAt: Date.now(),
             };
         }
@@ -555,7 +652,7 @@ export class ExtractManager {
                 rebuildSummary: input.summaryEnabled,
                 shouldUpdateWorldState: supportsWorldState,
                 shortTermOnly: false,
-                reasonCodes: ['setting_confirmed', supportsWorldState ? 'world_state_update' : 'world_state_blocked'],
+                reasonCodes: ['setting_confirmed', supportsWorldState ? 'world_state_update' : 'world_state_blocked', ...mutationReasonCodes],
                 generatedAt: Date.now(),
             };
         }
@@ -570,7 +667,7 @@ export class ExtractManager {
                 rebuildSummary: input.summaryEnabled,
                 shouldUpdateWorldState: false,
                 shortTermOnly: false,
-                reasonCodes: ['relationship_shift', 'relation_tracking'],
+                reasonCodes: ['relationship_shift', 'relation_tracking', ...mutationReasonCodes],
                 generatedAt: Date.now(),
             };
         }
@@ -581,12 +678,13 @@ export class ExtractManager {
             shouldExtractFacts: true,
             shouldExtractRelations: supportsRelations,
             shouldExtractWorldState: supportsWorldState,
-            rebuildSummary: input.summaryEnabled,
+            rebuildSummary: input.summaryEnabled || requiresMutationRepair,
             shouldUpdateWorldState: supportsWorldState,
             shortTermOnly: false,
             reasonCodes: [
                 input.logicalView?.mutationKinds?.includes('chat_branched') ? 'plot_progress_branch' : 'plot_progress',
                 supportsWorldState ? 'world_state_candidate' : 'world_state_disabled',
+                ...mutationReasonCodes,
             ],
             generatedAt: Date.now(),
         };

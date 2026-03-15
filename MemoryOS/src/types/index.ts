@@ -63,6 +63,7 @@ export type {
     SpeakerTrackingLevel,
     StrategyDecision,
     StylePreference,
+    SummaryPolicyOverride,
     SummaryStrategy,
     SummaryFixTask,
     TurnKind,
