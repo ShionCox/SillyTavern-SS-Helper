@@ -1593,7 +1593,7 @@ function bindUiEvents() {
                 const isActive = activeTemplateId && template.templateId === activeTemplateId;
                 const mark = isActive ? '★' : ' ';
                 const hash = template.worldInfoRef?.hash || '(无 hash)';
-                return `${mark}[模板] ${template.name} (${template.worldType})\n实体表: ${Object.keys(template.entities || {}).join(', ')}\nFactTypes: ${(template.factTypes || []).map((item: any) => item.type).join(', ') || '(空)'}\nHash: ${hash}\nID: ${template.templateId}`;
+                return `${mark}[模板] ${template.name} (${template.worldType})\n逻辑表: ${(template.tables || []).map((item: any) => item.key).join(', ') || '(空)'}\nFactTypes: ${(template.factTypes || []).map((item: any) => item.type).join(', ') || '(空)'}\nHash: ${hash}\nID: ${template.templateId}`;
             }).join('\n\n');
         } catch (e) {
             listEl.textContent = '读取模板失败: ' + String(e);
@@ -2003,7 +2003,7 @@ function bindUiEvents() {
     const logicTableSelect = document.getElementById(IDS.logicTableEntitySelectId) as HTMLSelectElement;
     const logicTableContainer = document.getElementById(IDS.logicTableContainerId);
 
-    /** 从当前激活模板的 entities 中构建实体类型列表 */
+    /** 从当前激活模板的逻辑表中构建实体类型列表 */
     const populateEntityTypes = async () => {
         const memory = (window as any).STX?.memory;
         if (!memory?.template || !logicTableSelect) return;
@@ -2014,11 +2014,15 @@ function bindUiEvents() {
             : null;
         const targetTemplate = activeTemplate || fallbackTemplate;
         if (!targetTemplate) return;
-        const entities = targetTemplate.entities || {};
+        const tables = Array.isArray(targetTemplate.tables) ? targetTemplate.tables : [];
         const prevVal = logicTableSelect.value;
         // 清空并填充新 options
         logicTableSelect.innerHTML = '<option value="">选择实体类型...</option>';
-        for (const entityType of Object.keys(entities)) {
+        for (const table of tables) {
+            const entityType = String(table?.key ?? '').trim();
+            if (!entityType) {
+                continue;
+            }
             const opt = document.createElement('option');
             opt.value = entityType;
             opt.textContent = entityType;

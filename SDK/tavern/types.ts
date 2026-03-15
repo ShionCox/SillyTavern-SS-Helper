@@ -9,6 +9,15 @@ export interface SdkTavernCharacterEvent {
   name?: string;
   avatar?: string;
   chat?: string;
+  description?: string;
+  desc?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  mes_example?: string;
+  creator_notes?: string;
+  tags?: string[];
+  data?: Record<string, unknown>;
 }
 
 export interface SdkTavernGroupEvent {
@@ -17,6 +26,8 @@ export interface SdkTavernGroupEvent {
   chat_id?: string;
   chats?: string[];
   avatar_url?: string;
+  members?: Array<string | { id?: string; name?: string; avatar?: string }>;
+  memberNames?: string[];
 }
 
 export interface SdkTavernContextEvent {
@@ -32,6 +43,31 @@ export interface SdkTavernContextEvent {
   name1?: string;
   name2?: string;
   characterName?: string;
+  systemPrompt?: string;
+  system_prompt?: string;
+  main_prompt?: string;
+  firstMessage?: string;
+  first_mes?: string;
+  opener?: string;
+  authorNote?: string;
+  author_note?: string;
+  jailbreak?: string;
+  jailbreak_prompt?: string;
+  instruct?: string;
+  instruct_prompt?: string;
+  preset?: string;
+  presetName?: string;
+  chatCompletionPreset?: string;
+  description?: string;
+  desc?: string;
+  personality?: string;
+  scenario?: string;
+  mes_example?: string;
+  creator_notes?: string;
+  world_info?: string;
+  selected_world_info?: string[];
+  groupMembers?: Array<string | { id?: string; name?: string; avatar?: string }>;
+  group_members?: Array<string | { id?: string; name?: string; avatar?: string }>;
   getRequestHeaders?: () => Record<string, string>;
   accountStorage?: SdkAccountStorageEvent;
 }
@@ -79,6 +115,22 @@ export interface SdkTavernRuntimeContextEvent extends SdkTavernContextEvent {
   sendSystemMessage?: (type: unknown, text: string, extra?: unknown) => unknown;
   eventSource?: SdkTavernEventSourceEvent | null;
   event_types?: Record<string, string>;
+}
+
+export interface SdkTavernSemanticSnapshotEvent {
+  roleKey: string;
+  roleId: string;
+  displayName: string;
+  groupId: string;
+  characterId: string;
+  systemPrompt: string;
+  firstMessage: string;
+  authorNote: string;
+  jailbreak: string;
+  instruct: string;
+  activeLorebooks: string[];
+  groupMembers: string[];
+  presetStyle: string;
 }
 
 export interface SdkTavernRoleIdentityEvent {

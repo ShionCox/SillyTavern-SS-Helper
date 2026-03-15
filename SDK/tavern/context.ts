@@ -5,6 +5,7 @@ import type {
   SdkTavernContextEvent,
   SdkTavernGroupEvent,
   SdkTavernRoleIdentityEvent,
+  SdkTavernSemanticSnapshotEvent,
   SdkTavernScopeLocatorEvent,
 } from "./types";
 
@@ -175,5 +176,80 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
     groupId: "no_group",
     characterId: resolved.index,
     currentChatId,
+  };
+}
+
+function normalizeSemanticTextEvent(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeMemberNamesEvent(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item: unknown): string => {
+      if (typeof item === "string") return normalizeSemanticTextEvent(item);
+      if (item && typeof item === "object") {
+        const source = item as Record<string, unknown>;
+        return normalizeSemanticTextEvent(source.name ?? source.id);
+      }
+      return "";
+    })
+    .filter((name: string): boolean => Boolean(name))
+    .slice(0, 32);
+}
+
+/**
+ * 功能：提取用于语义冷启动的宿主上下文快照。
+ * @returns 语义快照；无上下文时返回 null。
+ */
+export function getTavernSemanticSnapshotEvent(): SdkTavernSemanticSnapshotEvent | null {
+  const context = getSillyTavernContextEvent();
+  if (!context) return null;
+  const role = resolveTavernRoleIdentityEvent(context);
+  const group = resolveCurrentGroupEvent(context);
+  const contextRecord = context as Record<string, unknown>;
+  const groupRecord = (group ?? null) as Record<string, unknown> | null;
+  const activeLorebooksRaw = (globalThis as Record<string, unknown>).selected_world_info ?? contextRecord.selected_world_info;
+  const activeLorebooks = Array.isArray(activeLorebooksRaw)
+    ? activeLorebooksRaw.map((item: unknown): string => normalizeSemanticTextEvent(item)).filter(Boolean).slice(0, 32)
+    : [];
+  const groupMembers = normalizeMemberNamesEvent(
+    contextRecord.groupMembers
+    ?? contextRecord.group_members
+    ?? groupRecord?.members
+    ?? groupRecord?.memberNames
+    ?? [],
+  );
+  return {
+    roleKey: role.roleKey,
+    roleId: role.roleId,
+    displayName: role.displayName,
+    groupId: normalizeSemanticTextEvent(groupRecord?.id ?? contextRecord.groupId),
+    characterId: normalizeSemanticTextEvent(contextRecord.characterId ?? contextRecord.this_chid),
+    systemPrompt: normalizeSemanticTextEvent(
+      contextRecord.systemPrompt
+      ?? contextRecord.system_prompt
+      ?? contextRecord.main_prompt,
+    ),
+    firstMessage: normalizeSemanticTextEvent(
+      contextRecord.firstMessage
+      ?? contextRecord.first_mes
+      ?? contextRecord.opener,
+    ),
+    authorNote: normalizeSemanticTextEvent(
+      contextRecord.authorNote
+      ?? contextRecord.author_note
+      ?? contextRecord.creator_notes,
+    ),
+    jailbreak: normalizeSemanticTextEvent(contextRecord.jailbreak ?? contextRecord.jailbreak_prompt),
+    instruct: normalizeSemanticTextEvent(contextRecord.instruct ?? contextRecord.instruct_prompt),
+    activeLorebooks,
+    groupMembers,
+    presetStyle: normalizeSemanticTextEvent(
+      contextRecord.preset
+      ?? contextRecord.presetName
+      ?? contextRecord.chatCompletionPreset
+      ?? (contextRecord.chatCompletionSettings as Record<string, unknown> | undefined)?.preset,
+    ),
   };
 }

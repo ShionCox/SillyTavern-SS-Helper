@@ -95,7 +95,6 @@ export interface DBTemplate {
     chatKey: string;
     worldType: 'fantasy' | 'urban' | 'custom';
     name: string;
-    schema: any;
     factTypes: any[];
     policies: any;
     layout: any;
@@ -136,6 +135,8 @@ export interface DBMeta {
     lastExtractWindowHash?: string;
     /** 最近一次提取时的助手楼层计数 */
     lastExtractAssistantTurnCount?: number;
+    lastCommittedTurnCursor?: string;
+    lastVisibleTurnSnapshotHash?: string;
 }
 
 export interface DBWorldInfoCache {

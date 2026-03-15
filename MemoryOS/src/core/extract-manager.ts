@@ -1,19 +1,51 @@
 import { Logger } from '../../../SDK/logger';
-import type { EventEnvelope, ProposalResult } from '../../../SDK/stx';
+import type { EventEnvelope, MemorySDK, ProposalResult } from '../../../SDK/stx';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MEMORY_TASKS, checkAiModeGuard, runGeneration } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
 import type { ProposalEnvelope } from '../proposal/types';
+import type {
+    ChatProfile,
+    GenerationValueClass,
+    LogicalChatView,
+    PostGenerationGateDecision,
+} from '../types';
 import type { ChatStateManager } from './chat-state-manager';
+import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';
 import type { EventsManager } from './events-manager';
+import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from './lorebook-relevance-gate';
 import { MetaManager } from './meta-manager';
 import type { TemplateManager } from '../template/template-manager';
 import type { TurnTracker } from './turn-tracker';
-import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';
 
 const logger = new Logger('ExtractManager');
 
 type ProposalTask = 'memory.summarize' | 'memory.extract';
+type SchemaContextPayload = Record<string, unknown> | string;
+
+/**
+ * 功能：从事件窗口中提取最近一条用户文本。
+ * @param events 最近事件窗口。
+ * @returns 用户文本；不存在时返回空字符串。
+ */
+function normalizeTextFromEventWindow(events: Array<EventEnvelope<unknown>>): string {
+    const userEvent = [...events].find((event: EventEnvelope<unknown>): boolean => {
+        return event.type === 'chat.message.sent' || event.type === 'user_message_rendered';
+    });
+    if (!userEvent) {
+        return '';
+    }
+    const payload = userEvent.payload;
+    if (typeof payload === 'string') {
+        return payload;
+    }
+    if (payload && typeof payload === 'object') {
+        const source = payload as { text?: unknown; content?: unknown; message?: unknown };
+        const text = source.text ?? source.content ?? source.message;
+        return typeof text === 'string' ? text : '';
+    }
+    return '';
+}
 
 /**
  * 功能：调度 MemoryOS 的摘要与抽取任务。
@@ -31,8 +63,8 @@ export class ExtractManager {
     private metaManager: MetaManager;
     private turnTracker: TurnTracker | null;
     private chatStateManager: ChatStateManager | null;
-    private readonly minUserMessageDelta = 3;
-    private readonly minEventDelta = 20;
+    private readonly minUserMessageDelta: number = 3;
+    private readonly minEventDelta: number = 20;
     private readonly specialTriggerTypes: Set<string> = new Set([
         'memory.template.changed',
         'world.template.changed',
@@ -65,20 +97,24 @@ export class ExtractManager {
             return;
         }
 
-        const globalST = window as any;
-        const memory = globalST?.STX?.memory;
+        const memory = this.getWindowMemory();
         if (!memory?.proposal?.processProposal) {
             logger.warn('ProposalManager 未就绪，跳过抽取');
             return;
         }
 
         const recentEvents = await this.eventsManager.query({ limit: 120 });
-        if (recentEvents.length === 0) {
+        const logicalView = this.chatStateManager
+            ? await this.chatStateManager.getLogicalChatView()
+            : null;
+        if (recentEvents.length === 0 && !logicalView) {
             return;
         }
 
         const meta = await this.metaManager.getMeta();
-        const triggerBySpecialEvent = recentEvents.some((event: EventEnvelope<any>): boolean => this.specialTriggerTypes.has(event.type));
+        const triggerBySpecialEvent = recentEvents.some((event: EventEnvelope<unknown>): boolean => {
+            return this.specialTriggerTypes.has(event.type);
+        });
 
         let summaryInterval = 12;
         let summaryWindowSize = 40;
@@ -103,23 +139,29 @@ export class ExtractManager {
         }
 
         const extractionWindow = recentEvents.slice(0, summaryWindowSize);
-        const windowHash = this.computeWindowHash(extractionWindow);
+        const windowHash = logicalView
+            ? this.computeLogicalViewHash(logicalView, summaryWindowSize)
+            : this.computeWindowHash(extractionWindow);
         let shouldExtract = false;
 
         if (this.turnTracker && summaryEnabled) {
             const lastExtractTurnCount = meta?.lastExtractAssistantTurnCount ?? 0;
-            shouldExtract = await this.turnTracker.shouldTriggerExtraction(
-                lastExtractTurnCount,
-                meta?.lastExtractWindowHash,
-                windowHash,
-                summaryInterval,
+            shouldExtract = await this.turnTracker.shouldTriggerExtraction({
+                lastExtractAssistantTurnCount: lastExtractTurnCount,
+                lastExtractWindowHash: meta?.lastExtractWindowHash,
+                currentWindowHash: windowHash,
+                interval: summaryInterval,
                 summaryEnabled,
-            );
+                lastCommittedTurnCursor: meta?.lastCommittedTurnCursor,
+                lastVisibleTurnSnapshotHash: meta?.lastVisibleTurnSnapshotHash,
+            });
         }
 
         if (!shouldExtract && !triggerBySpecialEvent) {
             const eventCount = await this.eventsManager.count();
-            const userMsgCount = recentEvents.filter((event: EventEnvelope<any>): boolean => this.isUserMessageEvent(event.type)).length;
+            const userMsgCount = recentEvents.filter((event: EventEnvelope<unknown>): boolean => {
+                return this.isUserMessageEvent(event.type);
+            }).length;
             const eventDelta = Math.max(0, eventCount - Number(meta?.lastExtractEventCount ?? 0));
             const userDelta = Math.max(0, userMsgCount - Number(meta?.lastExtractUserMsgCount ?? 0));
             if (eventDelta < this.minEventDelta && userDelta < this.minUserMessageDelta) {
@@ -139,24 +181,74 @@ export class ExtractManager {
         }
 
         const schemaContext = await this.buildSchemaContext(memory);
-        const windowText = [...extractionWindow]
-            .reverse()
-            .map((event: EventEnvelope<any>): string => `[${new Date(event.ts).toLocaleTimeString()}] ${event.type}: ${this.getEventPayloadText(event)}`)
-            .join('\n');
+        const windowText = logicalView
+            ? this.buildLogicalWindowText(logicalView, summaryWindowSize)
+            : [...extractionWindow]
+                .reverse()
+                .map((event: EventEnvelope<unknown>): string => {
+                    return `[${new Date(event.ts).toLocaleTimeString()}] ${event.type}: ${this.getEventPayloadText(event)}`;
+                })
+                .join('\n');
+        const recentUserLine = logicalView
+            ? [...logicalView.visibleMessages].reverse().find((node) => node.role === 'user')?.text ?? ''
+            : normalizeTextFromEventWindow(extractionWindow);
+        const recentAssistantLine = logicalView
+            ? [...logicalView.visibleMessages].reverse().find((node) => node.role === 'assistant')?.text ?? ''
+            : [...extractionWindow]
+                .reverse()
+                .map((event: EventEnvelope<unknown>): string => this.getEventPayloadText(event))
+                .find((text: string): boolean => text.trim().length > 0) ?? '';
+        const worldInfoEntries = await loadActiveWorldInfoEntriesFromHost();
+        const previousLorebookDecision = this.chatStateManager
+            ? await this.chatStateManager.getLorebookDecision()
+            : null;
+        const chatProfile = this.chatStateManager
+            ? await this.chatStateManager.getChatProfile()
+            : null;
+        const lorebookDecision = evaluateLorebookRelevance({
+            query: recentUserLine,
+            profileChatType: chatProfile?.chatType,
+            visibleMessages: logicalView?.visibleMessages,
+            recentEvents: extractionWindow,
+            worldStateText: '',
+            entries: worldInfoEntries,
+        });
+        if (this.chatStateManager) {
+            await this.chatStateManager.setLorebookDecision(lorebookDecision, 'extract');
+        }
         const eventCount = await this.eventsManager.count();
-        const userMsgCount = recentEvents.filter((event: EventEnvelope<any>): boolean => this.isUserMessageEvent(event.type)).length;
+        const userMsgCount = logicalView
+            ? logicalView.visibleUserTurns.length
+            : recentEvents.filter((event: EventEnvelope<unknown>): boolean => this.isUserMessageEvent(event.type)).length;
+        const postGate = this.buildPostGenerationDecision({
+            recentUserLine,
+            recentAssistantLine,
+            lorebookDecision,
+            summaryEnabled,
+            logicalView,
+            extractStrategy: chatProfile?.extractStrategy ?? 'facts_relations',
+            stylePreference: chatProfile?.stylePreference ?? 'story',
+        });
+
+        if (this.chatStateManager) {
+            await this.chatStateManager.setLastPostGenerationDecision(postGate);
+        }
 
         logger.info(`触发抽取：chatKey=${this.chatKey}, turnBased=${Boolean(this.turnTracker)}, special=${triggerBySpecialEvent}`);
 
         try {
-            const summarizeResult = summaryEnabled
+            if (postGate.shortTermOnly && !postGate.shouldPersistLongTerm) {
+                logger.info(`生成后 gate 判定为短期噪音，跳过长期抽取：${postGate.valueClass}`);
+                return;
+            }
+
+            const summarizePrompt = this.buildSummarizePrompt(lorebookDecision.mode, postGate);
+            const extractPrompt = this.buildExtractPrompt(lorebookDecision.mode, lorebookDecision.shouldExtractWorldFacts, postGate);
+
+            const summarizeResult = summaryEnabled && postGate.rebuildSummary
                 ? await this.runProposalTask(
                     'memory.summarize',
-                    [
-                        '你是对话摘要助手，请根据事件窗口生成可写入的摘要提议。',
-                        '输出必须是纯 JSON，格式：',
-                        '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
-                    ].join('\n'),
+                    summarizePrompt,
                     windowText,
                     schemaContext,
                     { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
@@ -164,11 +256,7 @@ export class ExtractManager {
                 : null;
             const extractResult = await this.runProposalTask(
                 'memory.extract',
-                [
-                    '你是结构化记忆提取助手，请提取 facts 与 patches。',
-                    '输出必须是纯 JSON，格式：',
-                    '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
-                ].join('\n'),
+                extractPrompt,
                 windowText,
                 schemaContext,
                 { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 },
@@ -202,7 +290,9 @@ export class ExtractManager {
                 ].slice(-12);
                 await this.chatStateManager.recordExtractHealth({
                     recentTasks: nextRecentTasks,
-                    lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted ? Date.now() : extractHealth.lastAcceptedAt,
+                    lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
+                        ? Date.now()
+                        : extractHealth.lastAcceptedAt,
                 });
                 await this.chatStateManager.updateAdaptiveMetrics({
                     factsHitRate: Math.min(1, factsApplied / windowBase),
@@ -210,32 +300,112 @@ export class ExtractManager {
                     summaryEffectiveness: summariesApplied > 0
                         ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
                         : 0,
+                    worldStateSignal: postGate.shouldUpdateWorldState
+                        ? Math.max(0, Math.min(1, lorebookDecision.score))
+                        : 0,
                 });
+                if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
+                    await this.chatStateManager.enqueueSummaryFixTask(
+                        `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
+                        lorebookDecision.mode,
+                    );
+                }
+                if (postGate.rebuildSummary && summarizeResult?.accepted === false) {
+                    await this.chatStateManager.enqueueSummaryFixTask(
+                        `post_gate_summary_retry:${postGate.valueClass}`,
+                        lorebookDecision.mode,
+                    );
+                }
                 await this.chatStateManager.recomputeMemoryQuality();
             }
         } catch (error) {
             logger.error('抽取流程执行失败', error);
         } finally {
-            const assistantTurnCount = this.turnTracker
-                ? await this.turnTracker.getAssistantTurnCount()
-                : undefined;
+            const extractionSnapshot = this.turnTracker
+                ? await this.turnTracker.getExtractionSnapshot()
+                : null;
             await this.metaManager.markLastExtract({
                 ts: Date.now(),
                 eventCount,
                 userMsgCount,
                 windowHash,
-                assistantTurnCount,
+                activeAssistantTurnCount: extractionSnapshot?.activeAssistantTurnCount,
+                lastCommittedTurnCursor: extractionSnapshot?.lastCommittedTurnCursor,
+                lastVisibleTurnSnapshotHash: extractionSnapshot?.lastVisibleTurnSnapshotHash,
             });
         }
     }
 
     /**
+     * 功能：构建摘要任务提示词。
+     * @param lorebookMode 当前世界书裁决模式。
+     * @param postGate 生成后 gate 结果。
+     * @returns 摘要任务提示词。
+     */
+    private buildSummarizePrompt(
+        lorebookMode: string,
+        postGate: PostGenerationGateDecision,
+    ): string {
+        const lorebookHint = lorebookMode === 'block'
+            ? '不要把世界书原文写入摘要，只保留聊天里明确出现的信息。'
+            : lorebookMode === 'summary_only'
+                ? '只保留概念级设定，不要复制世界书条目原文。'
+                : '可以吸收世界书信息，但优先保留聊天显式确认内容。';
+        return [
+            '你是对话摘要助手，请根据事件窗口生成可写入的摘要提议。',
+            '输出必须是纯 JSON，格式如下：',
+            `Lorebook gate mode: ${lorebookMode}.`,
+            `Post gate class: ${postGate.valueClass}.`,
+            `Should rebuild summary: ${postGate.rebuildSummary}.`,
+            lorebookHint,
+            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+        ].join('\n');
+    }
+
+    /**
+     * 功能：构建事实抽取任务提示词。
+     * @param lorebookMode 当前世界书裁决模式。
+     * @param allowWorldFacts 是否允许世界事实提取。
+     * @param postGate 生成后 gate 结果。
+     * @returns 抽取任务提示词。
+     */
+    private buildExtractPrompt(
+        lorebookMode: string,
+        allowWorldFacts: boolean,
+        postGate: PostGenerationGateDecision,
+    ): string {
+        const worldHint = postGate.shouldExtractWorldState && allowWorldFacts
+            ? '允许抽取世界设定类事实，但必须区分“聊天确认”和“仅世界书支撑”。'
+            : '不要扩张世界设定类事实抽取，优先提取聊天显式信息。';
+        const relationHint = postGate.shouldExtractRelations
+            ? '允许提取关系变化、情绪变化和目标变化。'
+            : '不要创建新的关系变化事实，除非文本明确出现强关系变动。';
+        const retentionHint = postGate.shouldPersistLongTerm
+            ? '允许写入长期记忆。'
+            : '本轮只保留必要短期信息，不要扩张长期事实。';
+        return [
+            '你是结构化记忆提取助手，请提取 facts 与 patches。',
+            '输出必须是纯 JSON，格式如下：',
+            `Lorebook gate mode: ${lorebookMode}.`,
+            `Post gate class: ${postGate.valueClass}.`,
+            `Persist long term: ${postGate.shouldPersistLongTerm}.`,
+            `Extract facts: ${postGate.shouldExtractFacts}.`,
+            `Extract relations: ${postGate.shouldExtractRelations}.`,
+            `Extract world state: ${postGate.shouldExtractWorldState}.`,
+            worldHint,
+            relationHint,
+            retentionHint,
+            '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
+        ].join('\n');
+    }
+
+    /**
      * 功能：构建抽取任务所需的 schema 上下文。
-     * @param memory MemorySDK 实例。
+     * @param memory 当前 MemorySDK。
      * @returns schema 上下文。
      */
-    private async buildSchemaContext(memory: any): Promise<Record<string, unknown> | string> {
-        const activeTemplateId = await memory.getActiveTemplateId?.();
+    private async buildSchemaContext(memory: MemorySDK | null): Promise<SchemaContextPayload> {
+        const activeTemplateId = await memory?.getActiveTemplateId?.();
         if (!activeTemplateId) {
             return '请以通用视角提取角色、关系、位置与状态。';
         }
@@ -244,7 +414,7 @@ export class ExtractManager {
             return '请以通用视角提取角色、关系、位置与状态。';
         }
         return {
-            entities: currentTemplate.entities,
+            tables: currentTemplate.tables,
             factTypes: currentTemplate.factTypes,
             extractPolicies: currentTemplate.extractPolicies,
         };
@@ -263,11 +433,10 @@ export class ExtractManager {
         task: ProposalTask,
         systemPrompt: string,
         eventsText: string,
-        schemaContext: Record<string, unknown> | string,
+        schemaContext: SchemaContextPayload,
         budget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
     ): Promise<ProposalResult | null> {
-        const globalST = window as any;
-        const memory = globalST?.STX?.memory;
+        const memory = this.getWindowMemory();
         if (!memory?.proposal?.processProposal) {
             return null;
         }
@@ -304,6 +473,17 @@ export class ExtractManager {
     }
 
     /**
+     * 功能：读取窗口中的 MemorySDK 实例。
+     * @returns MemorySDK；不存在时返回 null。
+     */
+    private getWindowMemory(): MemorySDK | null {
+        const globalRef = window as typeof window & {
+            STX?: { memory?: MemorySDK };
+        };
+        return globalRef.STX?.memory ?? null;
+    }
+
+    /**
      * 功能：判断事件是否属于用户消息。
      * @param eventType 事件类型。
      * @returns 是否属于用户消息。
@@ -313,15 +493,184 @@ export class ExtractManager {
     }
 
     /**
+     * 功能：构建生成后 gate 决策。
+     * @param input 判定输入。
+     * @returns 生成后 gate 决策。
+     */
+    private buildPostGenerationDecision(input: {
+        recentUserLine: string;
+        recentAssistantLine: string;
+        lorebookDecision: { mode: string; shouldExtractWorldFacts: boolean };
+        summaryEnabled: boolean;
+        logicalView: LogicalChatView | null;
+        extractStrategy: ChatProfile['extractStrategy'];
+        stylePreference: ChatProfile['stylePreference'];
+    }): PostGenerationGateDecision {
+        const valueClass = this.classifyPostGenerationValue(
+            input.recentUserLine,
+            input.recentAssistantLine,
+            input.stylePreference,
+        );
+        const supportsRelations = input.extractStrategy !== 'facts_only';
+        const supportsWorldState = input.extractStrategy === 'facts_relations_world'
+            && input.lorebookDecision.shouldExtractWorldFacts;
+
+        if (valueClass === 'small_talk_noise') {
+            return {
+                valueClass,
+                shouldPersistLongTerm: false,
+                shouldExtractFacts: false,
+                shouldExtractRelations: false,
+                shouldExtractWorldState: false,
+                rebuildSummary: false,
+                shouldUpdateWorldState: false,
+                shortTermOnly: true,
+                reasonCodes: ['small_talk_noise', 'skip_long_term_extract'],
+                generatedAt: Date.now(),
+            };
+        }
+
+        if (valueClass === 'tool_result') {
+            return {
+                valueClass,
+                shouldPersistLongTerm: true,
+                shouldExtractFacts: true,
+                shouldExtractRelations: false,
+                shouldExtractWorldState: false,
+                rebuildSummary: false,
+                shouldUpdateWorldState: false,
+                shortTermOnly: false,
+                reasonCodes: ['tool_result', 'facts_only_focus'],
+                generatedAt: Date.now(),
+            };
+        }
+
+        if (valueClass === 'setting_confirmed') {
+            return {
+                valueClass,
+                shouldPersistLongTerm: true,
+                shouldExtractFacts: true,
+                shouldExtractRelations: supportsRelations,
+                shouldExtractWorldState: supportsWorldState,
+                rebuildSummary: input.summaryEnabled,
+                shouldUpdateWorldState: supportsWorldState,
+                shortTermOnly: false,
+                reasonCodes: ['setting_confirmed', supportsWorldState ? 'world_state_update' : 'world_state_blocked'],
+                generatedAt: Date.now(),
+            };
+        }
+
+        if (valueClass === 'relationship_shift') {
+            return {
+                valueClass,
+                shouldPersistLongTerm: true,
+                shouldExtractFacts: true,
+                shouldExtractRelations: true,
+                shouldExtractWorldState: false,
+                rebuildSummary: input.summaryEnabled,
+                shouldUpdateWorldState: false,
+                shortTermOnly: false,
+                reasonCodes: ['relationship_shift', 'relation_tracking'],
+                generatedAt: Date.now(),
+            };
+        }
+
+        return {
+            valueClass,
+            shouldPersistLongTerm: true,
+            shouldExtractFacts: true,
+            shouldExtractRelations: supportsRelations,
+            shouldExtractWorldState: supportsWorldState,
+            rebuildSummary: input.summaryEnabled,
+            shouldUpdateWorldState: supportsWorldState,
+            shortTermOnly: false,
+            reasonCodes: [
+                input.logicalView?.mutationKinds?.includes('chat_branched') ? 'plot_progress_branch' : 'plot_progress',
+                supportsWorldState ? 'world_state_candidate' : 'world_state_disabled',
+            ],
+            generatedAt: Date.now(),
+        };
+    }
+
+    /**
+     * 功能：对最近一轮回复进行轻量价值分类。
+     * @param userLine 最近一条用户消息。
+     * @param assistantLine 最近一条助手消息。
+     * @param stylePreference 当前聊天风格偏好。
+     * @returns 生成价值分类。
+     */
+    private classifyPostGenerationValue(
+        userLine: string,
+        assistantLine: string,
+        stylePreference: ChatProfile['stylePreference'],
+    ): GenerationValueClass {
+        const userText = String(userLine ?? '').trim();
+        const assistantText = String(assistantLine ?? '').trim();
+        const mergedText = `${userText}\n${assistantText}`;
+
+        if (!assistantText) {
+            return 'small_talk_noise';
+        }
+        if (/```|npm|pnpm|tsc|stack|error|函数|代码|命令|日志|修复|配置|接口|返回值/i.test(mergedText)) {
+            return 'tool_result';
+        }
+        if (/设定|世界观|规则|地点|背景|是谁|是什么|哪国|历史|种族|阵营|资料|百科/.test(mergedText)) {
+            return 'setting_confirmed';
+        }
+        if (/关系|好感|敌人|盟友|恋人|队友|背叛|和解|信任|疏远|站在.*一边/.test(mergedText)) {
+            return 'relationship_shift';
+        }
+        if (
+            assistantText.length < 72
+            && /^(好|嗯|哈哈|是的|不是|当然|谢谢|没事|晚安|好的呀|知道了|收到)[。！!？?~ ]*$/i.test(assistantText)
+        ) {
+            return 'small_talk_noise';
+        }
+        if (stylePreference === 'qa' || stylePreference === 'info') {
+            return 'setting_confirmed';
+        }
+        return 'plot_progress';
+    }
+
+    /**
      * 功能：为事件窗口计算哈希，避免重复抽取。
      * @param events 事件窗口。
      * @returns 哈希字符串。
      */
-    private computeWindowHash(events: EventEnvelope<any>[]): string {
+    private computeWindowHash(events: Array<EventEnvelope<unknown>>): string {
         const payload = events
-            .map((event: EventEnvelope<any>): string => `${event.id}|${event.type}|${this.getEventPayloadText(event)}`)
+            .map((event: EventEnvelope<unknown>): string => `${event.id}|${event.type}|${this.getEventPayloadText(event)}`)
             .join('\n');
         return this.hashString(payload);
+    }
+
+    /**
+     * 功能：对逻辑消息视图窗口计算哈希，避免重复抽取。
+     * @param view 逻辑消息视图。
+     * @param limit 窗口长度。
+     * @returns 窗口哈希值。
+     */
+    private computeLogicalViewHash(view: LogicalChatView, limit: number): string {
+        const windowMessages = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - limit));
+        const payload = windowMessages
+            .map((node) => `${node.messageId}|${node.role}|${node.textSignature}`)
+            .join('\n');
+        return this.hashString(`${payload}|${view.snapshotHash}|${(view.mutationKinds || []).join(',')}`);
+    }
+
+    /**
+     * 功能：把逻辑消息视图转换为抽取窗口文本。
+     * @param view 逻辑消息视图。
+     * @param limit 窗口长度。
+     * @returns 窗口文本。
+     */
+    private buildLogicalWindowText(view: LogicalChatView, limit: number): string {
+        const windowMessages = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - limit));
+        return windowMessages
+            .map((node) => {
+                return `[${new Date(node.updatedAt || node.createdAt || Date.now()).toLocaleTimeString()}] chat.message.${node.role}: ${node.text}`;
+            })
+            .join('\n');
     }
 
     /**
@@ -329,7 +678,7 @@ export class ExtractManager {
      * @param event 事件对象。
      * @returns 事件文本。
      */
-    private getEventPayloadText(event: EventEnvelope<any>): string {
+    private getEventPayloadText(event: EventEnvelope<unknown>): string {
         const payload = event?.payload;
         if (typeof payload === 'string') {
             return payload;

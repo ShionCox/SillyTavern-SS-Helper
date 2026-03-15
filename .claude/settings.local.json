@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//g:/vue/SS-Helper/.claude/worktrees/agent-ab14bff9/MemoryOS/src/**)",
-      "Bash(pnpm.cmd -C \"G:/vue/SS-Helper/MemoryOS\" exec tsc --pretty false --noEmit)",
-      "Bash(pnpm.cmd build:memory)"
-    ]
-  }
-}

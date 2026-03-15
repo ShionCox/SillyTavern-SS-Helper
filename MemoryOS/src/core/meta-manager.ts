@@ -63,7 +63,9 @@ export class MetaManager {
         eventCount: number;
         userMsgCount: number;
         windowHash: string;
-        assistantTurnCount?: number;
+        activeAssistantTurnCount?: number;
+        lastCommittedTurnCursor?: string;
+        lastVisibleTurnSnapshotHash?: string;
     }): Promise<void> {
         const update: Record<string, unknown> = {
             lastExtractTs: payload.ts,
@@ -71,8 +73,14 @@ export class MetaManager {
             lastExtractUserMsgCount: payload.userMsgCount,
             lastExtractWindowHash: payload.windowHash,
         };
-        if (payload.assistantTurnCount !== undefined) {
-            update.lastExtractAssistantTurnCount = payload.assistantTurnCount;
+        if (payload.activeAssistantTurnCount !== undefined) {
+            update.lastExtractAssistantTurnCount = payload.activeAssistantTurnCount;
+        }
+        if (payload.lastCommittedTurnCursor !== undefined) {
+            update.lastCommittedTurnCursor = payload.lastCommittedTurnCursor;
+        }
+        if (payload.lastVisibleTurnSnapshotHash !== undefined) {
+            update.lastVisibleTurnSnapshotHash = payload.lastVisibleTurnSnapshotHash;
         }
         await db.meta.update(this.chatKey, update);
     }

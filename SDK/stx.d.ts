@@ -24,14 +24,13 @@ export interface WorldTemplate {
     chatKey: string;
     worldType: 'fantasy' | 'urban' | 'custom';
     name: string;
-    entities: Record<string, any>;
     factTypes: TemplateFactType[];
     extractPolicies: Record<string, any>;
     injectionLayout: Record<string, any>;
     worldInfoRef?: { book: string; hash: string };
     createdAt: number;
     /** v2: 多表定义 */
-    tables?: TemplateTableDef[];
+    tables: TemplateTableDef[];
     /** v2: 字段同义词映射 */
     fieldSynonyms?: Record<string, string[]>;
     /** v2: 表同义词映射 */
@@ -197,14 +196,6 @@ export interface TemplateTableDef {
 }
 
 // -- v2: 聊天级状态类型 --
-export interface SummaryPolicyOverride {
-    enabled?: boolean;
-    floorUnit?: 'assistant_reply';
-    interval?: number;
-    windowSize?: number;
-    allowAutoSchemaExpansion?: boolean;
-}
-
 export interface AutoSchemaPolicy {
     maxNewTablesPerRound?: number;
     maxNewFieldsPerRound?: number;
@@ -227,6 +218,40 @@ export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
 
+export type PromptAnchorMode =
+    | 'top'
+    | 'before_start'
+    | 'custom_anchor'
+    | 'after_first_system'
+    | 'after_last_system'
+    | 'after_persona'
+    | 'after_author_note'
+    | 'after_lorebook'
+    | 'setting_query_only';
+
+export type PromptRenderStyle = 'xml' | 'markdown' | 'comment' | 'compact_kv' | 'minimal_bullets';
+
+export type PromptSoftPersonaMode = 'scene_note' | 'continuity_note' | 'character_anchor' | 'hidden_context_summary';
+
+export type PromptQueryMode = 'always' | 'setting_only';
+
+export type GenerationValueClass =
+    | 'plot_progress'
+    | 'setting_confirmed'
+    | 'relationship_shift'
+    | 'small_talk_noise'
+    | 'tool_result';
+
+export type UserFacingPresetId =
+    | 'companion_chat'
+    | 'long_rp'
+    | 'worldbook_qa'
+    | 'group_trpg'
+    | 'tool_qa'
+    | 'custom';
+
+export type PresetScope = 'global' | 'character' | 'group' | 'chat';
+
 export type InjectionSectionName =
     | 'WORLD_STATE'
     | 'FACTS'
@@ -241,7 +266,13 @@ export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
-export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup';
+export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup' | 'group_maintenance';
+
+export type MaintenanceSeverity = 'info' | 'warning' | 'critical';
+
+export type MaintenanceSurface = 'panel' | 'compact' | 'toast';
+
+export type ChatLifecycleStage = 'new' | 'active' | 'stable' | 'long_running' | 'archived' | 'deleted';
 
 export interface ChatProfileVectorStrategy {
     enabled: boolean;
@@ -261,6 +292,10 @@ export interface ChatProfile {
     summaryStrategy: SummaryStrategy;
     vectorStrategy: ChatProfileVectorStrategy;
     deletionStrategy: DeletionStrategy;
+}
+
+export interface ChatProfileOverride extends Partial<Omit<ChatProfile, 'vectorStrategy'>> {
+    vectorStrategy?: Partial<ChatProfileVectorStrategy>;
 }
 
 export interface AdaptiveMetrics {
@@ -332,6 +367,37 @@ export interface MaintenanceAdvice {
     detail: string;
 }
 
+export interface MaintenanceInsight {
+    id: string;
+    action: MaintenanceActionType;
+    severity: MaintenanceSeverity;
+    title: string;
+    detail: string;
+    shortLabel: string;
+    reasonCodes: string[];
+    surfaces: MaintenanceSurface[];
+    actionLabel: string;
+    generatedAt: number;
+}
+
+export interface MaintenanceExecutionResult {
+    action: MaintenanceActionType;
+    ok: boolean;
+    message: string;
+    reasonCodes: string[];
+    touchedCounts: {
+        summariesCreated: number;
+        eventsArchived: number;
+        vectorChunksRebuilt: number;
+        cleanedFacts: number;
+        cleanedStates: number;
+        lanesRebuilt: number;
+        salienceUpdated: number;
+    };
+    executedAt: number;
+    durationMs: number;
+}
+
 export interface IngestHealthWindow {
     totalAttempts: number;
     duplicateDrops: number;
@@ -379,6 +445,53 @@ export interface AdaptivePolicy {
     rerankEnabled: boolean;
     vectorIdleDecayDays: number;
     contextMaxTokensShare: number;
+    lorebookPolicyWeight: number;
+    groupLaneBudgetShare: number;
+    actorSalienceTopK: number;
+    profileRefreshInterval: number;
+    qualityRefreshInterval: number;
+    groupLaneEnabled: boolean;
+}
+
+export interface PromptInjectionProfile {
+    allowSystem: boolean;
+    allowUser: boolean;
+    defaultInsert: PromptAnchorMode;
+    fallbackOrder: PromptAnchorMode[];
+    queryMode: PromptQueryMode;
+    renderStyle: PromptRenderStyle;
+    softPersonaMode: PromptSoftPersonaMode;
+    wrapTag: string;
+    settingOnlyMinScore: number;
+}
+
+export interface PreGenerationGateDecision {
+    shouldInject: boolean;
+    intent: InjectionIntent;
+    sectionsUsed: InjectionSectionName[];
+    budgets: Partial<Record<InjectionSectionName, number>>;
+    lorebookMode: LorebookGateMode;
+    anchorMode: PromptAnchorMode;
+    fallbackOrder: PromptAnchorMode[];
+    queryMode: PromptQueryMode;
+    renderStyle: PromptRenderStyle;
+    softPersonaMode: PromptSoftPersonaMode;
+    shouldTrimPrompt: boolean;
+    reasonCodes: string[];
+    generatedAt: number;
+}
+
+export interface PostGenerationGateDecision {
+    valueClass: GenerationValueClass;
+    shouldPersistLongTerm: boolean;
+    shouldExtractFacts: boolean;
+    shouldExtractRelations: boolean;
+    shouldExtractWorldState: boolean;
+    rebuildSummary: boolean;
+    shouldUpdateWorldState: boolean;
+    shortTermOnly: boolean;
+    reasonCodes: string[];
+    generatedAt: number;
 }
 
 export interface RetentionPolicy {
@@ -402,9 +515,215 @@ export interface BuildContextDecision {
     budgets: Partial<Record<InjectionSectionName, number>>;
     intent: InjectionIntent;
     reasonCodes: string[];
+    preDecision: PreGenerationGateDecision;
+}
+
+export interface UserFacingChatPreset {
+    presetId: UserFacingPresetId;
+    label: string;
+    chatProfile?: ChatProfileOverride;
+    adaptivePolicy?: Partial<AdaptivePolicy>;
+    retentionPolicy?: Partial<RetentionPolicy>;
+    promptInjection?: Partial<PromptInjectionProfile>;
+    profileRefreshInterval?: number;
+    qualityRefreshInterval?: number;
+    autoBootstrapSemanticSeed?: boolean;
+    groupLaneEnabled?: boolean;
+    updatedAt: number;
+}
+
+export interface EffectivePresetBundle {
+    globalPreset: UserFacingChatPreset | null;
+    rolePreset: UserFacingChatPreset | null;
+    chatPreset: UserFacingChatPreset | null;
+    effectiveChatProfile: ChatProfileOverride;
+    effectiveAdaptivePolicy: Partial<AdaptivePolicy>;
+    effectiveRetentionPolicy: Partial<RetentionPolicy>;
+    effectivePromptInjection: PromptInjectionProfile;
+    profileRefreshInterval: number;
+    qualityRefreshInterval: number;
+    autoBootstrapSemanticSeed: boolean;
+    groupLaneEnabled: boolean;
+    roleScope: PresetScope | 'none';
+    roleScopeKey: string;
 }
 
 // -- v2: 行操作类型 --
+export type TurnLifecycle = 'active' | 'edited' | 'swiped_out' | 'deleted' | 'branch_root';
+
+export type TurnKind = 'user' | 'assistant' | 'system';
+
+export interface TurnRecord {
+    turnId: string;
+    messageId: string;
+    kind: TurnKind;
+    lifecycle: TurnLifecycle;
+    chatKey: string;
+    sourceEventId: string;
+    createdAt: number;
+    updatedAt: number;
+    textSignature: string;
+    baseMessageId?: string;
+    branchFromTurnId?: string;
+}
+
+export interface LogicalMessageNode {
+    nodeId: string;
+    messageId: string;
+    role: TurnKind;
+    text: string;
+    textSignature: string;
+    isVisible: boolean;
+    lifecycle: TurnLifecycle;
+    createdAt: number;
+    updatedAt: number;
+    baseMessageId?: string;
+    branchFromTurnId?: string;
+}
+
+export type ChatMutationKind =
+    | 'message_added'
+    | 'message_edited'
+    | 'message_swiped'
+    | 'message_deleted'
+    | 'chat_branched'
+    | 'chat_renamed'
+    | 'character_binding_changed';
+
+export interface LogicalChatView {
+    chatKey: string;
+    visibleMessages: LogicalMessageNode[];
+    visibleUserTurns: LogicalMessageNode[];
+    visibleAssistantTurns: LogicalMessageNode[];
+    supersededCandidates: LogicalMessageNode[];
+    editedRevisions: LogicalMessageNode[];
+    deletedTurns: LogicalMessageNode[];
+    branchRoots: LogicalMessageNode[];
+    viewHash: string;
+    snapshotHash: string;
+    mutationKinds: ChatMutationKind[];
+    rebuiltAt: number;
+}
+
+export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' | 'block';
+
+export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
+
+export interface SeedSourceTrace {
+    field: string;
+    source: string;
+    confidence: number;
+}
+
+export interface IdentitySeed {
+    roleKey: string;
+    displayName: string;
+    aliases: string[];
+    identity: string[];
+    alignment?: string;
+    catchphrases: string[];
+    relationshipAnchors: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface WorldSeed {
+    locations: string[];
+    rules: string[];
+    hardConstraints: string[];
+    entities: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface StyleSeed {
+    mode: StyleSeedMode;
+    cues: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface ChatSemanticSeed {
+    collectedAt: number;
+    characterCore: Record<string, unknown>;
+    systemPrompt: string;
+    firstMessage: string;
+    authorNote: string;
+    jailbreak: string;
+    instruct: string;
+    activeLorebooks: string[];
+    groupMembers: string[];
+    presetStyle: string;
+    identitySeed: IdentitySeed;
+    worldSeed: WorldSeed;
+    styleSeed: StyleSeed;
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface LorebookGateDecision {
+    mode: LorebookGateMode;
+    score: number;
+    reasonCodes: string[];
+    matchedEntries: string[];
+    conflictDetected: boolean;
+    shouldExtractWorldFacts: boolean;
+    shouldWriteback: boolean;
+    generatedAt: number;
+}
+
+export interface SpeakerMemoryLane {
+    laneId: string;
+    actorKey: string;
+    displayName: string;
+    identityHint: string;
+    lastStyle: string;
+    lastEmotion: string;
+    recentGoal: string;
+    relationshipDelta: string;
+    lastActiveAt: number;
+    recentMessageIds: string[];
+}
+
+export interface SharedSceneMemory {
+    currentScene: string;
+    currentConflict: string;
+    groupConsensus: string[];
+    pendingEvents: string[];
+    participantActorKeys: string[];
+    updatedAt: number;
+}
+
+export interface ActorSalienceScore {
+    actorKey: string;
+    score: number;
+    reasonCodes: string[];
+    updatedAt: number;
+}
+
+export interface GroupBindingSnapshot {
+    groupId: string;
+    characterIds: string[];
+    memberNames: string[];
+    updatedAt: number;
+}
+
+export interface GroupMemoryState {
+    lanes: SpeakerMemoryLane[];
+    sharedScene: SharedSceneMemory;
+    actorSalience: ActorSalienceScore[];
+    bindingSnapshot: GroupBindingSnapshot;
+    updatedAt: number;
+}
+
+export interface ChatLifecycleState {
+    stage: ChatLifecycleStage;
+    stageReasonCodes: string[];
+    firstSeenAt: number;
+    stageEnteredAt: number;
+    lastMaintenanceAt: number;
+    lastMaintenanceAction?: MaintenanceActionType;
+    lastMutationAt: number;
+    lastMutationSource: string;
+    mutationKinds: ChatMutationKind[];
+}
+
 export interface RowRefResolution {
     resolved: boolean;
     rowId: string | null;
@@ -516,7 +835,18 @@ export interface MemorySDK {
             intentHint?: InjectionIntent;
             includeDecisionMeta?: boolean;
         }): Promise<string | BuildContextDecision>;
-        setAnchorPolicy(opts: { allowSystem?: boolean; allowUser?: boolean; defaultInsert?: 'top' | 'beforeStart' | 'customAnchor' }): Promise<void>;
+        setAnchorPolicy(opts: {
+            allowSystem?: boolean;
+            allowUser?: boolean;
+            defaultInsert?: PromptAnchorMode;
+            fallbackOrder?: PromptAnchorMode[];
+            queryMode?: PromptQueryMode;
+            renderStyle?: PromptRenderStyle;
+            softPersonaMode?: PromptSoftPersonaMode;
+            wrapTag?: string;
+            settingOnlyMinScore?: number;
+        }): Promise<void>;
+        getAnchorPolicy(): PromptInjectionProfile;
     };
 
     audit: {
@@ -593,28 +923,41 @@ export interface MemorySDK {
         getMemoryQuality(): Promise<MemoryQualityScorecard>;
         recomputeMemoryQuality(): Promise<MemoryQualityScorecard>;
         getMaintenanceAdvice(): Promise<MaintenanceAdvice[]>;
+        getMaintenanceInsights(): Promise<MaintenanceInsight[]>;
+        getLifecycleState(): Promise<ChatLifecycleState>;
+        runMaintenanceAction(action: MaintenanceActionType): Promise<MaintenanceExecutionResult>;
         recomputeAdaptivePolicy(): Promise<AdaptivePolicy>;
         getRetentionPolicy(): Promise<RetentionPolicy>;
         setRetentionPolicyOverride(override: Partial<RetentionPolicy>): Promise<void>;
         getLastStrategyDecision(): Promise<StrategyDecision | null>;
-        getSummaryPolicy(): Promise<SummaryPolicyOverride>;
-        setSummaryPolicyOverride(override: Partial<SummaryPolicyOverride>): Promise<void>;
         getAutoSchemaPolicy(): Promise<AutoSchemaPolicy>;
         setAutoSchemaPolicy(policy: Partial<AutoSchemaPolicy>): Promise<void>;
+        bootstrapSemanticSeed(): Promise<void>;
+        getSemanticSeed(): Promise<ChatSemanticSeed | null>;
+        getLorebookDecision(): Promise<LorebookGateDecision | null>;
+        getGroupMemory(): Promise<GroupMemoryState | null>;
+        getPromptInjectionProfile(): Promise<PromptInjectionProfile>;
+        setPromptInjectionProfile(profile: Partial<PromptInjectionProfile>): Promise<void>;
+        getEffectivePresetBundle(): Promise<EffectivePresetBundle>;
+        saveGlobalPreset(preset: UserFacingChatPreset): Promise<void>;
+        saveRolePreset(preset: UserFacingChatPreset): Promise<void>;
+        clearRolePreset(): Promise<void>;
+        getUserFacingPreset(): Promise<UserFacingChatPreset | null>;
+        setUserFacingPreset(preset: UserFacingChatPreset | null): Promise<void>;
+        getLastPreGenerationDecision(): Promise<PreGenerationGateDecision | null>;
+        getLastPostGenerationDecision(): Promise<PostGenerationGateDecision | null>;
+        getLogicalChatView(): Promise<LogicalChatView | null>;
+        rebuildLogicalChatView(): Promise<LogicalChatView>;
+        archiveChat(): Promise<void>;
+        restoreArchivedChat(): Promise<void>;
+        purgeChat(options?: { includeAudit?: boolean }): Promise<void>;
         flush(): Promise<void>;
         destroy(): Promise<void>;
     };
 
     // ─── v2 新增：楼层跟踪器 ───
     turnTracker: {
-        tryCountTurn(input: {
-            eventType: string;
-            messageId?: string;
-            textContent: string;
-            isSystemMessage: boolean;
-            ingestHint: 'normal' | 'bootstrap' | 'backfill';
-        }): Promise<boolean>;
-        getAssistantTurnCount(): Promise<number>;
+        getActiveAssistantTurnCount(): Promise<number>;
         invalidateCache(): void;
     };
 

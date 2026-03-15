@@ -18,6 +18,40 @@ export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
 
+export type PromptAnchorMode =
+    | 'top'
+    | 'before_start'
+    | 'custom_anchor'
+    | 'after_first_system'
+    | 'after_last_system'
+    | 'after_persona'
+    | 'after_author_note'
+    | 'after_lorebook'
+    | 'setting_query_only';
+
+export type PromptRenderStyle = 'xml' | 'markdown' | 'comment' | 'compact_kv' | 'minimal_bullets';
+
+export type PromptSoftPersonaMode = 'scene_note' | 'continuity_note' | 'character_anchor' | 'hidden_context_summary';
+
+export type PromptQueryMode = 'always' | 'setting_only';
+
+export type GenerationValueClass =
+    | 'plot_progress'
+    | 'setting_confirmed'
+    | 'relationship_shift'
+    | 'small_talk_noise'
+    | 'tool_result';
+
+export type UserFacingPresetId =
+    | 'companion_chat'
+    | 'long_rp'
+    | 'worldbook_qa'
+    | 'group_trpg'
+    | 'tool_qa'
+    | 'custom';
+
+export type PresetScope = 'global' | 'character' | 'group' | 'chat';
+
 export type InjectionSectionName =
     | 'WORLD_STATE'
     | 'FACTS'
@@ -32,13 +66,9 @@ export type EntityResolutionLevel = 'low' | 'medium' | 'high';
 
 export type SpeakerTrackingLevel = 'low' | 'medium' | 'high';
 
-export interface SummaryPolicyOverride {
-    enabled?: boolean;
-    floorUnit?: 'assistant_reply';
-    interval?: number;
-    windowSize?: number;
-    allowAutoSchemaExpansion?: boolean;
-}
+export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' | 'block';
+
+export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
 
 /**
  * 功能：描述聊天画像中的向量策略。
@@ -133,7 +163,13 @@ export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
-export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup';
+export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup' | 'group_maintenance';
+
+export type MaintenanceSeverity = 'info' | 'warning' | 'critical';
+
+export type MaintenanceSurface = 'panel' | 'compact' | 'toast';
+
+export type ChatLifecycleStage = 'new' | 'active' | 'stable' | 'long_running' | 'archived' | 'deleted';
 
 export interface VectorLifecycleState {
     vectorMode: VectorMode;
@@ -174,6 +210,37 @@ export interface MaintenanceAdvice {
     reasonCodes: string[];
     title: string;
     detail: string;
+}
+
+export interface MaintenanceInsight {
+    id: string;
+    action: MaintenanceActionType;
+    severity: MaintenanceSeverity;
+    title: string;
+    detail: string;
+    shortLabel: string;
+    reasonCodes: string[];
+    surfaces: MaintenanceSurface[];
+    actionLabel: string;
+    generatedAt: number;
+}
+
+export interface MaintenanceExecutionResult {
+    action: MaintenanceActionType;
+    ok: boolean;
+    message: string;
+    reasonCodes: string[];
+    touchedCounts: {
+        summariesCreated: number;
+        eventsArchived: number;
+        vectorChunksRebuilt: number;
+        cleanedFacts: number;
+        cleanedStates: number;
+        lanesRebuilt: number;
+        salienceUpdated: number;
+    };
+    executedAt: number;
+    durationMs: number;
 }
 
 export interface IngestHealthWindow {
@@ -238,6 +305,24 @@ export interface AdaptivePolicy {
     rerankEnabled: boolean;
     vectorIdleDecayDays: number;
     contextMaxTokensShare: number;
+    lorebookPolicyWeight: number;
+    groupLaneBudgetShare: number;
+    actorSalienceTopK: number;
+    profileRefreshInterval: number;
+    qualityRefreshInterval: number;
+    groupLaneEnabled: boolean;
+}
+
+export interface PromptInjectionProfile {
+    allowSystem: boolean;
+    allowUser: boolean;
+    defaultInsert: PromptAnchorMode;
+    fallbackOrder: PromptAnchorMode[];
+    queryMode: PromptQueryMode;
+    renderStyle: PromptRenderStyle;
+    softPersonaMode: PromptSoftPersonaMode;
+    wrapTag: string;
+    settingOnlyMinScore: number;
 }
 
 /**
@@ -253,6 +338,35 @@ export interface StrategyDecision {
     intent: InjectionIntent;
     sectionsUsed: InjectionSectionName[];
     budgets: Partial<Record<InjectionSectionName, number>>;
+    reasonCodes: string[];
+    generatedAt: number;
+}
+
+export interface PreGenerationGateDecision {
+    shouldInject: boolean;
+    intent: InjectionIntent;
+    sectionsUsed: InjectionSectionName[];
+    budgets: Partial<Record<InjectionSectionName, number>>;
+    lorebookMode: LorebookGateMode;
+    anchorMode: PromptAnchorMode;
+    fallbackOrder: PromptAnchorMode[];
+    queryMode: PromptQueryMode;
+    renderStyle: PromptRenderStyle;
+    softPersonaMode: PromptSoftPersonaMode;
+    shouldTrimPrompt: boolean;
+    reasonCodes: string[];
+    generatedAt: number;
+}
+
+export interface PostGenerationGateDecision {
+    valueClass: GenerationValueClass;
+    shouldPersistLongTerm: boolean;
+    shouldExtractFacts: boolean;
+    shouldExtractRelations: boolean;
+    shouldExtractWorldState: boolean;
+    rebuildSummary: boolean;
+    shouldUpdateWorldState: boolean;
+    shortTermOnly: boolean;
     reasonCodes: string[];
     generatedAt: number;
 }
@@ -298,6 +412,7 @@ export interface ManualOverrides {
     chatProfile?: ChatProfileOverride;
     adaptivePolicy?: Partial<AdaptivePolicy>;
     retentionPolicy?: Partial<RetentionPolicy>;
+    promptInjectionProfile?: Partial<PromptInjectionProfile>;
 }
 
 export interface AutoSchemaPolicy {
@@ -315,10 +430,225 @@ export interface SchemaDraftSession {
     mergeWindowMs: number;
 }
 
+export type TurnLifecycle = 'active' | 'edited' | 'swiped_out' | 'deleted' | 'branch_root';
+
+export type TurnKind = 'user' | 'assistant' | 'system';
+
+export interface TurnRecord {
+    turnId: string;
+    messageId: string;
+    kind: TurnKind;
+    lifecycle: TurnLifecycle;
+    chatKey: string;
+    sourceEventId: string;
+    createdAt: number;
+    updatedAt: number;
+    textSignature: string;
+    baseMessageId?: string;
+    branchFromTurnId?: string;
+}
+
+export interface LogicalMessageNode {
+    nodeId: string;
+    messageId: string;
+    role: TurnKind;
+    text: string;
+    textSignature: string;
+    isVisible: boolean;
+    lifecycle: TurnLifecycle;
+    createdAt: number;
+    updatedAt: number;
+    baseMessageId?: string;
+    branchFromTurnId?: string;
+}
+
+export type ChatMutationKind =
+    | 'message_added'
+    | 'message_edited'
+    | 'message_swiped'
+    | 'message_deleted'
+    | 'chat_branched'
+    | 'chat_renamed'
+    | 'character_binding_changed';
+
+export interface LogicalChatView {
+    chatKey: string;
+    visibleMessages: LogicalMessageNode[];
+    visibleUserTurns: LogicalMessageNode[];
+    visibleAssistantTurns: LogicalMessageNode[];
+    supersededCandidates: LogicalMessageNode[];
+    editedRevisions: LogicalMessageNode[];
+    deletedTurns: LogicalMessageNode[];
+    branchRoots: LogicalMessageNode[];
+    viewHash: string;
+    snapshotHash: string;
+    mutationKinds: ChatMutationKind[];
+    rebuiltAt: number;
+}
+
+export interface ChatArchiveState {
+    archived: boolean;
+    archivedAt?: number;
+    archiveReason?: string;
+}
+
+export interface ChatLifecycleState {
+    stage: ChatLifecycleStage;
+    stageReasonCodes: string[];
+    firstSeenAt: number;
+    stageEnteredAt: number;
+    lastMaintenanceAt: number;
+    lastMaintenanceAction?: MaintenanceActionType;
+    lastMutationAt: number;
+    lastMutationSource: string;
+    mutationKinds: ChatMutationKind[];
+}
+
+export interface SeedSourceTrace {
+    field: string;
+    source: string;
+    confidence: number;
+}
+
+export interface IdentitySeed {
+    roleKey: string;
+    displayName: string;
+    aliases: string[];
+    identity: string[];
+    alignment?: string;
+    catchphrases: string[];
+    relationshipAnchors: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface WorldSeed {
+    locations: string[];
+    rules: string[];
+    hardConstraints: string[];
+    entities: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface StyleSeed {
+    mode: StyleSeedMode;
+    cues: string[];
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface ChatSemanticSeed {
+    collectedAt: number;
+    characterCore: Record<string, unknown>;
+    systemPrompt: string;
+    firstMessage: string;
+    authorNote: string;
+    jailbreak: string;
+    instruct: string;
+    activeLorebooks: string[];
+    groupMembers: string[];
+    presetStyle: string;
+    identitySeed: IdentitySeed;
+    worldSeed: WorldSeed;
+    styleSeed: StyleSeed;
+    sourceTrace: SeedSourceTrace[];
+}
+
+export interface LorebookGateDecision {
+    mode: LorebookGateMode;
+    score: number;
+    reasonCodes: string[];
+    matchedEntries: string[];
+    conflictDetected: boolean;
+    shouldExtractWorldFacts: boolean;
+    shouldWriteback: boolean;
+    generatedAt: number;
+}
+
+export interface SpeakerMemoryLane {
+    laneId: string;
+    actorKey: string;
+    displayName: string;
+    identityHint: string;
+    lastStyle: string;
+    lastEmotion: string;
+    recentGoal: string;
+    relationshipDelta: string;
+    lastActiveAt: number;
+    recentMessageIds: string[];
+}
+
+export interface SharedSceneMemory {
+    currentScene: string;
+    currentConflict: string;
+    groupConsensus: string[];
+    pendingEvents: string[];
+    participantActorKeys: string[];
+    updatedAt: number;
+}
+
+export interface ActorSalienceScore {
+    actorKey: string;
+    score: number;
+    reasonCodes: string[];
+    updatedAt: number;
+}
+
+export interface GroupBindingSnapshot {
+    groupId: string;
+    characterIds: string[];
+    memberNames: string[];
+    updatedAt: number;
+}
+
+export interface GroupMemoryState {
+    lanes: SpeakerMemoryLane[];
+    sharedScene: SharedSceneMemory;
+    actorSalience: ActorSalienceScore[];
+    bindingSnapshot: GroupBindingSnapshot;
+    updatedAt: number;
+}
+
+export interface UserFacingChatPreset {
+    presetId: UserFacingPresetId;
+    label: string;
+    chatProfile?: ChatProfileOverride;
+    adaptivePolicy?: Partial<AdaptivePolicy>;
+    retentionPolicy?: Partial<RetentionPolicy>;
+    promptInjection?: Partial<PromptInjectionProfile>;
+    profileRefreshInterval?: number;
+    qualityRefreshInterval?: number;
+    autoBootstrapSemanticSeed?: boolean;
+    groupLaneEnabled?: boolean;
+    updatedAt: number;
+}
+
+export interface EffectivePresetBundle {
+    globalPreset: UserFacingChatPreset | null;
+    rolePreset: UserFacingChatPreset | null;
+    chatPreset: UserFacingChatPreset | null;
+    effectiveChatProfile: ChatProfileOverride;
+    effectiveAdaptivePolicy: Partial<AdaptivePolicy>;
+    effectiveRetentionPolicy: Partial<RetentionPolicy>;
+    effectivePromptInjection: PromptInjectionProfile;
+    profileRefreshInterval: number;
+    qualityRefreshInterval: number;
+    autoBootstrapSemanticSeed: boolean;
+    groupLaneEnabled: boolean;
+    roleScope: PresetScope | 'none';
+    roleScopeKey: string;
+}
+
+export interface SummaryFixTask {
+    reason: string;
+    lorebookMode: LorebookGateMode;
+    createdAt: number;
+}
+
 export interface AssistantTurnTracker {
-    countedAssistantMessageIds: string[];
-    recentAssistantTurnSignatures: string[];
-    assistantTurnCount: number;
+    activeAssistantTurnCount: number;
+    turnRecords: TurnRecord[];
+    lastViewHash: string;
+    lastVisibleTurnSnapshotHash: string;
+    lastCommittedTurnCursor: string;
     lastUpdatedAt: number;
 }
 
@@ -334,14 +664,6 @@ export interface RowTombstone {
 }
 
 export type RowTombstones = Record<string, Record<string, RowTombstone>>;
-
-export const DEFAULT_SUMMARY_POLICY: Required<SummaryPolicyOverride> = {
-    enabled: true,
-    floorUnit: 'assistant_reply',
-    interval: 12,
-    windowSize: 40,
-    allowAutoSchemaExpansion: true,
-};
 
 export const DEFAULT_CHAT_PROFILE: ChatProfile = {
     chatType: 'solo',
@@ -407,6 +729,54 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
     rerankEnabled: true,
     vectorIdleDecayDays: 14,
     contextMaxTokensShare: 0.55,
+    lorebookPolicyWeight: 0.55,
+    groupLaneBudgetShare: 0.35,
+    actorSalienceTopK: 3,
+    profileRefreshInterval: 12,
+    qualityRefreshInterval: 12,
+    groupLaneEnabled: true,
+};
+
+export const DEFAULT_PROMPT_INJECTION_PROFILE: PromptInjectionProfile = {
+    allowSystem: false,
+    allowUser: true,
+    defaultInsert: 'after_last_system',
+    fallbackOrder: ['after_last_system', 'top'],
+    queryMode: 'always',
+    renderStyle: 'xml',
+    softPersonaMode: 'continuity_note',
+    wrapTag: 'MEMORY_OS_CONTEXT',
+    settingOnlyMinScore: 0.35,
+};
+
+export const DEFAULT_USER_FACING_CHAT_PRESET: UserFacingChatPreset = {
+    presetId: 'custom',
+    label: '自定义',
+    chatProfile: {},
+    adaptivePolicy: {},
+    retentionPolicy: {},
+    promptInjection: {},
+    profileRefreshInterval: DEFAULT_ADAPTIVE_POLICY.profileRefreshInterval,
+    qualityRefreshInterval: DEFAULT_ADAPTIVE_POLICY.qualityRefreshInterval,
+    autoBootstrapSemanticSeed: true,
+    groupLaneEnabled: true,
+    updatedAt: 0,
+};
+
+export const DEFAULT_EFFECTIVE_PRESET_BUNDLE: EffectivePresetBundle = {
+    globalPreset: null,
+    rolePreset: null,
+    chatPreset: null,
+    effectiveChatProfile: {},
+    effectiveAdaptivePolicy: {},
+    effectiveRetentionPolicy: {},
+    effectivePromptInjection: DEFAULT_PROMPT_INJECTION_PROFILE,
+    profileRefreshInterval: DEFAULT_ADAPTIVE_POLICY.profileRefreshInterval,
+    qualityRefreshInterval: DEFAULT_ADAPTIVE_POLICY.qualityRefreshInterval,
+    autoBootstrapSemanticSeed: true,
+    groupLaneEnabled: true,
+    roleScope: 'none',
+    roleScopeKey: '',
 };
 
 export const DEFAULT_VECTOR_LIFECYCLE: VectorLifecycleState = {
@@ -492,21 +862,66 @@ export const DEFAULT_SCHEMA_DRAFT_SESSION: SchemaDraftSession = {
 };
 
 export const DEFAULT_ASSISTANT_TURN_TRACKER: AssistantTurnTracker = {
-    countedAssistantMessageIds: [],
-    recentAssistantTurnSignatures: [],
-    assistantTurnCount: 0,
+    activeAssistantTurnCount: 0,
+    turnRecords: [],
+    lastViewHash: '',
+    lastVisibleTurnSnapshotHash: '',
+    lastCommittedTurnCursor: '',
     lastUpdatedAt: 0,
 };
 
-export const TRACKER_LRU_LIMIT = 200;
+export const DEFAULT_GROUP_MEMORY: GroupMemoryState = {
+    lanes: [],
+    sharedScene: {
+        currentScene: '',
+        currentConflict: '',
+        groupConsensus: [],
+        pendingEvents: [],
+        participantActorKeys: [],
+        updatedAt: 0,
+    },
+    actorSalience: [],
+    bindingSnapshot: {
+        groupId: '',
+        characterIds: [],
+        memberNames: [],
+        updatedAt: 0,
+    },
+    updatedAt: 0,
+};
 
-export const TRACKER_FLUSH_INTERVAL_MS = 1000;
+export const DEFAULT_CHAT_LIFECYCLE_STATE: ChatLifecycleState = {
+    stage: 'new',
+    stageReasonCodes: ['stage_new'],
+    firstSeenAt: 0,
+    stageEnteredAt: 0,
+    lastMaintenanceAt: 0,
+    lastMaintenanceAction: undefined,
+    lastMutationAt: 0,
+    lastMutationSource: '',
+    mutationKinds: [],
+};
 
 export interface MemoryOSChatState {
-    summaryPolicyOverride?: SummaryPolicyOverride;
     autoSchemaPolicy?: AutoSchemaPolicy;
     schemaDraftSession?: SchemaDraftSession;
     assistantTurnTracker?: AssistantTurnTracker;
+    turnLedger?: TurnRecord[];
+    logicalChatView?: LogicalChatView;
+    chatLifecycle?: ChatLifecycleState;
+    archived?: boolean;
+    archivedAt?: number;
+    archiveReason?: string;
+    characterBindingFingerprint?: string;
+    semanticSeed?: ChatSemanticSeed;
+    coldStartFingerprint?: string;
+    lastLorebookDecision?: LorebookGateDecision;
+    promptInjectionProfile?: PromptInjectionProfile;
+    lastPreGenerationDecision?: PreGenerationGateDecision | null;
+    lastPostGenerationDecision?: PostGenerationGateDecision | null;
+    userFacingPreset?: UserFacingChatPreset | null;
+    groupMemory?: GroupMemoryState;
+    summaryFixQueue?: SummaryFixTask[];
     rowAliasIndex?: RowAliasIndex;
     rowRedirects?: RowRedirects;
     rowTombstones?: RowTombstones;
@@ -516,6 +931,8 @@ export interface MemoryOSChatState {
     vectorLifecycle?: VectorLifecycleState;
     memoryQuality?: MemoryQualityScorecard;
     maintenanceAdvice?: MaintenanceAdvice[];
+    maintenanceInsights?: MaintenanceInsight[];
+    lastMaintenanceExecution?: MaintenanceExecutionResult;
     ingestHealth?: IngestHealthWindow;
     retrievalHealth?: RetrievalHealthWindow;
     extractHealth?: ExtractHealthWindow;

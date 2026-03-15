@@ -1,5 +1,6 @@
 import { buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent } from '../../../SDK/tavern';
 import type { SdkTavernChatLocatorEvent } from '../../../SDK/tavern/types';
+import { toast } from '../index';
 import { buildSharedButton } from '../../../_Components/sharedButton';
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { buildSharedInputField } from '../../../_Components/sharedInput';
@@ -18,12 +19,22 @@ import {
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
+    ChatLifecycleState,
     ChatProfile,
     DeletionStrategy,
+    EffectivePresetBundle,
+    MaintenanceActionType,
     MaintenanceAdvice,
+    MaintenanceExecutionResult,
+    MaintenanceInsight,
     MemoryQualityScorecard,
+    PostGenerationGateDecision,
+    PreGenerationGateDecision,
+    PromptInjectionProfile,
     RetentionPolicy,
     StrategyDecision,
+    UserFacingChatPreset,
+    UserFacingPresetId,
     VectorLifecycleState,
 } from '../types';
 
@@ -46,13 +57,27 @@ interface ChatStrategySnapshot {
     vectorLifecycle: VectorLifecycleState;
     memoryQuality: MemoryQualityScorecard;
     maintenanceAdvice: MaintenanceAdvice[];
+    maintenanceInsights: MaintenanceInsight[];
+    lifecycleState: ChatLifecycleState;
     decision: StrategyDecision | null;
+    preDecision: PreGenerationGateDecision | null;
+    postDecision: PostGenerationGateDecision | null;
+    promptInjectionProfile: PromptInjectionProfile;
+    effectivePresetBundle: EffectivePresetBundle;
+    userFacingPreset: UserFacingChatPreset | null;
     overrides: Record<string, unknown>;
 }
 
 interface MemoryChatStateApi {
     setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
     setRetentionPolicyOverride(override: Partial<RetentionPolicy>): Promise<void>;
+    setUserFacingPreset?(preset: UserFacingChatPreset | null): Promise<void>;
+    saveGlobalPreset?(preset: UserFacingChatPreset): Promise<void>;
+    saveRolePreset?(preset: UserFacingChatPreset): Promise<void>;
+    clearRolePreset?(): Promise<void>;
+    getMaintenanceInsights?(): Promise<MaintenanceInsight[]>;
+    getLifecycleState?(): Promise<ChatLifecycleState>;
+    runMaintenanceAction?(action: MaintenanceActionType): Promise<MaintenanceExecutionResult>;
     recomputeAdaptivePolicy(): Promise<AdaptivePolicy | void>;
     recomputeMemoryQuality?(): Promise<MemoryQualityScorecard | void>;
     flush(): Promise<void>;
@@ -74,6 +99,10 @@ const PANEL_IDS = {
     summaryIntentId: 'stx-memoryos-chat-strategy-summary-intent',
     summarySectionsId: 'stx-memoryos-chat-strategy-summary-sections',
     summaryProfileId: 'stx-memoryos-chat-strategy-summary-profile',
+    summaryLifecycleId: 'stx-memoryos-chat-strategy-summary-lifecycle',
+    summaryMaintenanceId: 'stx-memoryos-chat-strategy-summary-maintenance',
+    summaryMaintenanceTextId: 'stx-memoryos-chat-strategy-summary-maintenance-text',
+    summaryMaintenanceActionId: 'stx-memoryos-chat-strategy-summary-maintenance-action',
     openBtnId: 'stx-memoryos-chat-strategy-open',
     refreshBtnId: 'stx-memoryos-chat-strategy-refresh-card',
 } as const;
@@ -91,6 +120,18 @@ const EDITOR_IDS = {
     currentChatMetaId: 'stx-memoryos-chat-strategy-current-meta',
     currentIntentId: 'stx-memoryos-chat-strategy-current-intent',
     sectionsWrapId: 'stx-memoryos-chat-strategy-current-sections',
+    presetId: 'stx-memoryos-chat-strategy-preset',
+    saveGlobalPresetBtnId: 'stx-memoryos-chat-strategy-save-global-preset',
+    saveRolePresetBtnId: 'stx-memoryos-chat-strategy-save-role-preset',
+    clearRolePresetBtnId: 'stx-memoryos-chat-strategy-clear-role-preset',
+    summaryIntervalDirectId: 'stx-memoryos-chat-strategy-direct-summary-interval',
+    summaryWindowDirectId: 'stx-memoryos-chat-strategy-direct-summary-window',
+    profileRefreshDirectId: 'stx-memoryos-chat-strategy-direct-profile-refresh',
+    qualityRefreshDirectId: 'stx-memoryos-chat-strategy-direct-quality-refresh',
+    vectorFactsDirectId: 'stx-memoryos-chat-strategy-direct-vector-facts',
+    deletionStrategyDirectId: 'stx-memoryos-chat-strategy-direct-delete',
+    autoBootstrapSeedId: 'stx-memoryos-chat-strategy-auto-bootstrap-seed',
+    groupLaneEnabledId: 'stx-memoryos-chat-strategy-group-lane-enabled',
     chatTypeId: 'stx-memoryos-chat-strategy-chat-type',
     stylePreferenceId: 'stx-memoryos-chat-strategy-style',
     memoryStrengthId: 'stx-memoryos-chat-strategy-memory-strength',
@@ -115,11 +156,21 @@ const EDITOR_IDS = {
     qualityVectorTimesId: 'stx-memoryos-chat-strategy-quality-vector-times',
     qualityAdviceId: 'stx-memoryos-chat-strategy-quality-advice',
     qualityReasonsId: 'stx-memoryos-chat-strategy-quality-reasons',
+    maintenanceInsightsId: 'stx-memoryos-chat-strategy-maintenance-insights',
+    lifecycleStageId: 'stx-memoryos-chat-strategy-lifecycle-stage',
+    lifecycleMetaId: 'stx-memoryos-chat-strategy-lifecycle-meta',
     autoBlockId: 'stx-memoryos-chat-strategy-auto',
     overrideBlockId: 'stx-memoryos-chat-strategy-override',
     finalBlockId: 'stx-memoryos-chat-strategy-final',
     metricsBlockId: 'stx-memoryos-chat-strategy-metrics',
     decisionBlockId: 'stx-memoryos-chat-strategy-decision',
+    preDecisionBlockId: 'stx-memoryos-chat-strategy-pre-decision',
+    postDecisionBlockId: 'stx-memoryos-chat-strategy-post-decision',
+    diagnosticBasicDetailsId: 'stx-memoryos-chat-strategy-diagnostic-basic',
+    diagnosticAdvancedDetailsId: 'stx-memoryos-chat-strategy-diagnostic-advanced',
+    diagnosticBasicGridId: 'stx-memoryos-chat-strategy-diagnostic-basic-grid',
+    diagnosticAdvancedGridId: 'stx-memoryos-chat-strategy-diagnostic-advanced-grid',
+    advancedSettingsId: 'stx-memoryos-chat-strategy-advanced-settings',
 } as const;
 
 let selectedChatKey: string = '';
@@ -130,6 +181,190 @@ let autoLoadAttempts: number = 0;
 
 const CHAT_STRATEGY_AUTO_LOAD_MAX_ATTEMPTS: number = 8;
 const CHAT_STRATEGY_AUTO_LOAD_INTERVAL_MS: number = 700;
+
+/**
+ * 功能：返回聊天预设下拉选项。
+ * @returns 预设选项列表。
+ */
+function listUserFacingPresetOptions(): Array<{ value: UserFacingPresetId; label: string }> {
+    return [
+        { value: 'companion_chat', label: '轻陪伴聊天' },
+        { value: 'long_rp', label: '长剧情 RP' },
+        { value: 'worldbook_qa', label: '世界设定问答' },
+        { value: 'group_trpg', label: '跑团 / 多角色' },
+        { value: 'tool_qa', label: '工具 / 代码问答' },
+        { value: 'custom', label: '自定义' },
+    ];
+}
+
+/**
+ * 功能：根据预设编号构建用户可读预设。
+ * @param presetId 预设编号。
+ * @returns 预设对象。
+ */
+function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChatPreset {
+    if (presetId === 'companion_chat') {
+        return {
+            presetId,
+            label: '轻陪伴聊天',
+            chatProfile: {
+                chatType: 'solo',
+                stylePreference: 'story',
+                memoryStrength: 'medium',
+                extractStrategy: 'facts_relations',
+                summaryStrategy: 'short',
+            },
+            adaptivePolicy: {
+                extractInterval: 10,
+                extractWindowSize: 28,
+            },
+            retentionPolicy: {
+                deletionStrategy: 'soft_delete',
+            },
+            promptInjection: {
+                renderStyle: 'minimal_bullets',
+                softPersonaMode: 'hidden_context_summary',
+                defaultInsert: 'after_author_note',
+            },
+            profileRefreshInterval: 12,
+            qualityRefreshInterval: 12,
+            autoBootstrapSemanticSeed: true,
+            groupLaneEnabled: false,
+            updatedAt: Date.now(),
+        };
+    }
+    if (presetId === 'long_rp') {
+        return {
+            presetId,
+            label: '长剧情 RP',
+            chatProfile: {
+                chatType: 'solo',
+                stylePreference: 'trpg',
+                memoryStrength: 'high',
+                extractStrategy: 'facts_relations_world',
+                summaryStrategy: 'timeline',
+            },
+            adaptivePolicy: {
+                extractInterval: 8,
+                extractWindowSize: 40,
+            },
+            retentionPolicy: {
+                deletionStrategy: 'soft_delete',
+            },
+            promptInjection: {
+                renderStyle: 'xml',
+                softPersonaMode: 'continuity_note',
+                defaultInsert: 'after_author_note',
+            },
+            profileRefreshInterval: 8,
+            qualityRefreshInterval: 10,
+            autoBootstrapSemanticSeed: true,
+            groupLaneEnabled: false,
+            updatedAt: Date.now(),
+        };
+    }
+    if (presetId === 'worldbook_qa') {
+        return {
+            presetId,
+            label: '世界设定问答',
+            chatProfile: {
+                chatType: 'worldbook',
+                stylePreference: 'info',
+                memoryStrength: 'medium',
+                extractStrategy: 'facts_relations_world',
+                summaryStrategy: 'short',
+            },
+            adaptivePolicy: {
+                extractInterval: 6,
+                extractWindowSize: 24,
+            },
+            retentionPolicy: {
+                deletionStrategy: 'soft_delete',
+            },
+            promptInjection: {
+                renderStyle: 'markdown',
+                softPersonaMode: 'hidden_context_summary',
+                defaultInsert: 'after_lorebook',
+                queryMode: 'setting_only',
+            },
+            profileRefreshInterval: 6,
+            qualityRefreshInterval: 8,
+            autoBootstrapSemanticSeed: true,
+            groupLaneEnabled: false,
+            updatedAt: Date.now(),
+        };
+    }
+    if (presetId === 'group_trpg') {
+        return {
+            presetId,
+            label: '跑团 / 多角色',
+            chatProfile: {
+                chatType: 'group',
+                stylePreference: 'trpg',
+                memoryStrength: 'high',
+                extractStrategy: 'facts_relations_world',
+                summaryStrategy: 'timeline',
+            },
+            adaptivePolicy: {
+                extractInterval: 8,
+                extractWindowSize: 36,
+                groupLaneEnabled: true,
+            },
+            retentionPolicy: {
+                deletionStrategy: 'soft_delete',
+            },
+            promptInjection: {
+                renderStyle: 'xml',
+                softPersonaMode: 'continuity_note',
+                defaultInsert: 'after_author_note',
+            },
+            profileRefreshInterval: 8,
+            qualityRefreshInterval: 8,
+            autoBootstrapSemanticSeed: true,
+            groupLaneEnabled: true,
+            updatedAt: Date.now(),
+        };
+    }
+    if (presetId === 'tool_qa') {
+        return {
+            presetId,
+            label: '工具 / 代码问答',
+            chatProfile: {
+                chatType: 'tool',
+                stylePreference: 'qa',
+                memoryStrength: 'low',
+                extractStrategy: 'facts_only',
+                summaryStrategy: 'short',
+            },
+            adaptivePolicy: {
+                extractInterval: 12,
+                extractWindowSize: 20,
+            },
+            retentionPolicy: {
+                deletionStrategy: 'immediate_purge',
+            },
+            promptInjection: {
+                renderStyle: 'compact_kv',
+                softPersonaMode: 'hidden_context_summary',
+                defaultInsert: 'after_first_system',
+            },
+            profileRefreshInterval: 16,
+            qualityRefreshInterval: 16,
+            autoBootstrapSemanticSeed: false,
+            groupLaneEnabled: false,
+            updatedAt: Date.now(),
+        };
+    }
+    return {
+        presetId: 'custom',
+        label: '自定义',
+        chatProfile: {},
+        adaptivePolicy: {},
+        retentionPolicy: {},
+        promptInjection: {},
+        updatedAt: Date.now(),
+    };
+}
 
 /**
  * 功能：为聊天策略画像区域应用共享提示逻辑。
@@ -215,6 +450,7 @@ export async function openChatStrategyEditor(): Promise<void> {
     document.body.appendChild(overlay);
     document.body.classList.add('stx-memory-chat-strategy-lock-scroll');
 
+    ensureEditorSections(overlay);
     hydrateSharedSelects(overlay);
     applyChatStrategyTooltips();
 
@@ -307,6 +543,16 @@ function buildCompactPanelMarkup(): string {
             <span class="stx-memory-chat-strategy-summary-label">画像概览</span>
             <strong id="${PANEL_IDS.summaryProfileId}" class="stx-memory-chat-strategy-summary-value">等待加载</strong>
           </div>
+          <div class="stx-memory-chat-strategy-summary-card">
+            <span class="stx-memory-chat-strategy-summary-label">生命周期</span>
+            <strong id="${PANEL_IDS.summaryLifecycleId}" class="stx-memory-chat-strategy-summary-value">new</strong>
+          </div>
+        </div>
+        <div id="${PANEL_IDS.summaryMaintenanceId}" class="stx-memory-chat-strategy-summary-maintenance" style="display: none;">
+          <span id="${PANEL_IDS.summaryMaintenanceTextId}" class="stx-memory-chat-strategy-summary-maintenance-text">暂无维护异常</span>
+          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-strategy-summary-maintenance-action">
+            去维护
+          </button>
         </div>
         <div class="stx-memory-chat-strategy-sections">
           <span class="stx-memory-chat-strategy-card-label">最近注入区段</span>
@@ -532,24 +778,220 @@ function buildEditorMarkup(): string {
               </div>
             </section>
             <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head" data-tip="用于查看系统在本聊天中的真实决策过程，帮助你定位为什么会这样注入、抽取和检索。">
+              <div class="stx-memory-chat-strategy-section-head" data-tip="面板展示了当前聊天在实际运行中的具体策略参数。这里的数据是系统融合了默认预设、全局覆盖和当前聊天自定义设置后最终生效的结果，主要用来帮你诊断配置有没有如你希望的那样工作。">
                 <div>
                   <h3>底层运行诊断面板</h3>
                   <p>监控系统如何处理自动策略与人工覆盖的合并效果，以及近期调参指标。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-diagnostic-grid">
-                ${buildJsonCardMarkup(EDITOR_IDS.autoBlockId, '系统自动推测', '用于查看系统自动给出的初始配置，判断当前聊天默认会走什么策略。')}
-                ${buildJsonCardMarkup(EDITOR_IDS.overrideBlockId, '人工锁定设置', '用于确认你手动覆盖了哪些项，以及这些覆盖会怎样改变系统默认行为。')}
-                ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '结合生效方案', '用于查看最终实际生效的规则，排查“配置看起来对但结果不对”的问题。')}
-                ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最新执行决策', '用于追踪最近一轮实际使用了哪些记忆区段，判断注入是否符合预期。')}
-                ${buildJsonCardMarkup(EDITOR_IDS.metricsBlockId, '上下文动态指标', '用于观察输入输出和密度变化，辅助决定是否需要调阈值或重建摘要。')}
-              </div>
+              <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-strategy-diagnostic-group" open>
+                <summary>
+                  <span>基础诊断</span>
+                  <small>先看这组：本轮怎么注入、最终怎么生效、生成前后 gate 如何决策。</small>
+                </summary>
+                <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-basic">
+                  ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '结合生效方案', '这里显示的是系统当下正在使用的最终规则。当你觉得某个功能（比如抽取或者向量激活）没有按你的设置生效时，可以先来这里确认一下最终混合出的参数对不对。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最新执行决策', '这代表了 AI 最近一次回答时，底层都捞取了什么记忆。你能在这里看到是不是漏找了关键设定，或者是否多塞了无关紧要的记忆进去。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', 'AI 生成前系统做的判断：比如它有没有打算去搜索向量库？分配了多少预算给额外上下文？这有助于你诊断系统在发问前是不是已经定错了搜索方向。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', 'AI 回复后系统的准入判断：系统是否觉得这段新对话有价值被记入长久记忆里？如果明明觉得该记住却没记住，说明这道门槛可能卡得太严了。')}
+                </div>
+              </details>
+              <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
+                <summary>
+                  <span>高级诊断</span>
+                  <small>深入定位时再展开：自动推断、人工覆盖与上下文动态指标。</small>
+                </summary>
+                <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-advanced">
+                  ${buildJsonCardMarkup(EDITOR_IDS.autoBlockId, '系统自动推测', '这里指的是系统在没有任何干预下，默认认为当前聊天应该用什么策略。你可以对比一下它和“结合生效方案”的差异。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.overrideBlockId, '人工锁定设置', '显示你为了这个聊天单独做了哪些参数覆盖。只有在这里看到的值，才代表了你真正成功锁定的个性化配置。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.metricsBlockId, '上下文动态指标', '这部分记录了聊天过程中各项活动的频次，比如总结了多少次、抽取了多少事实等。数字变化太快或太慢都能帮你决定要不要去调上面的阈值。')}
+                </div>
+              </details>
             </section>
           </main>
         </div>
       </div>
     `.trim();
+}
+
+/**
+ * 功能：为旧版编辑器补充“场景预设 / 简易调整 / 双 gate 诊断”区块。
+ * @param overlay 编辑器遮罩层根节点。
+ * @returns 无返回值。
+ */
+function ensureEditorSections(overlay: HTMLElement): void {
+    if (!overlay.querySelector(`#${EDITOR_IDS.presetId}`)) {
+        const anchorWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
+        const anchorSection: HTMLElement | null = anchorWrap?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+        if (anchorSection) {
+            const presetMarkup = `
+              <section class="stx-memory-chat-strategy-section">
+                <div class="stx-memory-chat-strategy-section-head">
+                  <div>
+                    <h3>场景预设</h3>
+                    <p>先用用户能看懂的预设起步，再决定要不要进入高级参数。</p>
+                  </div>
+                </div>
+                <div class="stx-memory-chat-strategy-form-grid">
+                  ${buildEditorSelectField(EDITOR_IDS.presetId, '聊天场景预设', '为当前聊天选择更贴近 ST 使用习惯的场景预设。', listUserFacingPresetOptions())}
+                </div>
+                <div class="stx-memory-chat-strategy-card-actions" style="margin-top: 12px;">
+                  ${buildSharedButton({
+                      id: EDITOR_IDS.saveGlobalPresetBtnId,
+                      label: '存为全局默认',
+                      variant: 'secondary',
+                      iconClassName: 'fa-solid fa-globe',
+                  })}
+                  ${buildSharedButton({
+                      id: EDITOR_IDS.saveRolePresetBtnId,
+                      label: '存为角色默认',
+                      variant: 'secondary',
+                      iconClassName: 'fa-solid fa-id-card',
+                  })}
+                  ${buildSharedButton({
+                      id: EDITOR_IDS.clearRolePresetBtnId,
+                      label: '清除角色默认',
+                      variant: 'secondary',
+                      iconClassName: 'fa-solid fa-eraser',
+                  })}
+                </div>
+              </section>
+              <section class="stx-memory-chat-strategy-section">
+                <div class="stx-memory-chat-strategy-section-head">
+                  <div>
+                    <h3>简易调整</h3>
+                    <p>聊天习惯参数</p>
+                  </div>
+                </div>
+                <div class="stx-memory-chat-strategy-form-grid">
+                  ${buildEditorInputField(EDITOR_IDS.summaryIntervalDirectId, '多少楼总结一次', '控制摘要多久触发一次。', 'number', '1', '200', '1')}
+                  ${buildEditorInputField(EDITOR_IDS.summaryWindowDirectId, '总结覆盖最近多少楼', '控制单次摘要回看窗口大小。', 'number', '1', '200', '1')}
+                  ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多少楼刷新一次画像', '控制聊天画像重算频率。', 'number', '1', '200', '1')}
+                  ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多少楼重算一次质量分', '控制质量诊断刷新频率。', 'number', '1', '200', '1')}
+                  ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后启用向量', '控制向量检索的启用水位。', 'number', '1', '5000', '1')}
+                  ${buildEditorSelectField(EDITOR_IDS.deletionStrategyDirectId, '聊天删除时', '控制聊天删除时默认采用归档还是彻底清理。', [
+                      { value: 'soft_delete', label: '归档记忆' },
+                      { value: 'immediate_purge', label: '彻底删除' },
+                  ])}
+                </div>
+                <div class="stx-memory-chat-strategy-toggle-wrap">
+                  ${buildSharedCheckboxCard({
+                      id: EDITOR_IDS.autoBootstrapSeedId,
+                      title: '新聊天自动从角色卡初始化',
+                      description: '进入新聊天时自动执行角色卡冷启动建档。',
+                      checkedLabel: '开启',
+                      uncheckedLabel: '关闭',
+                      containerClassName: 'stx-memory-chat-strategy-toggle',
+                  })}
+                  ${buildSharedCheckboxCard({
+                      id: EDITOR_IDS.groupLaneEnabledId,
+                      title: '群聊启用说话人分轨',
+                      description: '为群聊独立维护角色车道、共享场景和显著度。',
+                      checkedLabel: '开启',
+                      uncheckedLabel: '关闭',
+                      containerClassName: 'stx-memory-chat-strategy-toggle',
+                  })}
+                </div>
+              </section>
+            `.trim();
+            anchorSection.insertAdjacentHTML('afterend', presetMarkup);
+        }
+    }
+
+    if (!overlay.querySelector(`#${EDITOR_IDS.maintenanceInsightsId}`)) {
+        const qualitySection = overlay.querySelector(`#${EDITOR_IDS.qualityScoreId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+        if (qualitySection) {
+            const maintenanceMarkup = `
+              <section class="stx-memory-chat-strategy-section">
+                <div class="stx-memory-chat-strategy-section-head">
+                  <div>
+                    <h3>维护感知</h3>
+                    <p>面向当前聊天的可执行维护提示。只在执行动作后显示 Toast。</p>
+                  </div>
+                </div>
+                <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-strategy-quality-list">
+                  <span class="stx-memory-chat-strategy-empty">暂无维护提示</span>
+                </div>
+              </section>
+              <section class="stx-memory-chat-strategy-section">
+                <div class="stx-memory-chat-strategy-section-head">
+                  <div>
+                    <h3>聊天生命周期</h3>
+                    <p>生命周期只影响默认策略偏置，不覆盖预设与手动覆盖。</p>
+                  </div>
+                </div>
+                <div class="stx-memory-chat-strategy-quality-grid">
+                  <article class="stx-memory-chat-strategy-quality-card">
+                    <span class="stx-memory-chat-strategy-quality-label">当前阶段</span>
+                    <strong id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                    <div id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                  </article>
+                </div>
+              </section>
+            `.trim();
+            qualitySection.insertAdjacentHTML('beforebegin', maintenanceMarkup);
+        }
+    }
+
+    ensureAdvancedSettingsFold(overlay);
+
+    const basicDiagnosticGrid: HTMLElement | null =
+        (overlay.querySelector(`#${EDITOR_IDS.diagnosticBasicGridId}`) as HTMLElement | null)
+        ?? (overlay.querySelector('.stx-memory-chat-strategy-diagnostic-grid') as HTMLElement | null);
+    if (basicDiagnosticGrid) {
+        if (!overlay.querySelector(`#${EDITOR_IDS.preDecisionBlockId}`)) {
+            basicDiagnosticGrid.insertAdjacentHTML(
+                'beforeend',
+                buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', '查看生成前的注入、预算与锚点决策。'),
+            );
+        }
+        if (!overlay.querySelector(`#${EDITOR_IDS.postDecisionBlockId}`)) {
+            basicDiagnosticGrid.insertAdjacentHTML(
+                'beforeend',
+                buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', '查看生成后的长期记忆准入决策。'),
+            );
+        }
+    }
+}
+
+/**
+ * 功能：把技术参数区块折叠到“高级设置”里，默认收起直白参数之外的复杂项。
+ * @param overlay 编辑器遮罩层根节点。
+ * @returns 无返回值。
+ */
+function ensureAdvancedSettingsFold(overlay: HTMLElement): void {
+    if (overlay.querySelector(`#${EDITOR_IDS.advancedSettingsId}`)) {
+        return;
+    }
+    const profileSection = overlay.querySelector(`#${EDITOR_IDS.chatTypeId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+    const extractSection = overlay.querySelector(`#${EDITOR_IDS.extractStrategyId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+    const vectorSection = overlay.querySelector(`#${EDITOR_IDS.vectorChunkThresholdId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+    if (!profileSection || !extractSection || !vectorSection) {
+        return;
+    }
+    const host = profileSection.parentElement;
+    if (!host || host !== extractSection.parentElement || host !== vectorSection.parentElement) {
+        return;
+    }
+    const details = document.createElement('details');
+    details.id = EDITOR_IDS.advancedSettingsId;
+    details.className = 'stx-memory-chat-strategy-section stx-memory-chat-strategy-advanced';
+    const summary = document.createElement('summary');
+    summary.className = 'stx-memory-chat-strategy-advanced-summary';
+    summary.innerHTML = `
+      <div>
+        <h3>高级设置</h3>
+        <p>这里包含技术阈值与底层策略，通常先调“场景预设”和“直白参数”即可。</p>
+      </div>
+    `.trim();
+    const body = document.createElement('div');
+    body.className = 'stx-memory-chat-strategy-advanced-body';
+    details.appendChild(summary);
+    details.appendChild(body);
+    profileSection.insertAdjacentElement('beforebegin', details);
+    body.appendChild(profileSection);
+    body.appendChild(extractSection);
+    body.appendChild(vectorSection);
 }
 
 /**
@@ -671,6 +1113,11 @@ function bindCompactPanelListeners(): void {
             }
         });
     });
+
+    const maintenanceActionBtn: HTMLButtonElement | null = document.getElementById(PANEL_IDS.summaryMaintenanceActionId) as HTMLButtonElement | null;
+    maintenanceActionBtn?.addEventListener('click', (): void => {
+        void openChatStrategyEditor();
+    });
 }
 
 /**
@@ -737,6 +1184,20 @@ function bindEditorListeners(overlay: HTMLElement): void {
     const refreshBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.refreshBtnId}`) as HTMLButtonElement | null;
     const recomputeBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.recomputeBtnId}`) as HTMLButtonElement | null;
     const applyBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.applyBtnId}`) as HTMLButtonElement | null;
+    const saveGlobalPresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.saveGlobalPresetBtnId}`) as HTMLButtonElement | null;
+    const saveRolePresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.saveRolePresetBtnId}`) as HTMLButtonElement | null;
+    const clearRolePresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.clearRolePresetBtnId}`) as HTMLButtonElement | null;
+    const presetSelect: HTMLSelectElement | null = overlay.querySelector(`#${EDITOR_IDS.presetId}`) as HTMLSelectElement | null;
+    const directFieldIds: string[] = [
+        EDITOR_IDS.summaryIntervalDirectId,
+        EDITOR_IDS.summaryWindowDirectId,
+        EDITOR_IDS.profileRefreshDirectId,
+        EDITOR_IDS.qualityRefreshDirectId,
+        EDITOR_IDS.vectorFactsDirectId,
+        EDITOR_IDS.deletionStrategyDirectId,
+        EDITOR_IDS.autoBootstrapSeedId,
+        EDITOR_IDS.groupLaneEnabledId,
+    ];
     const chatSearchInput: HTMLInputElement | null = overlay.querySelector(`#${EDITOR_IDS.chatSearchId}`) as HTMLInputElement | null;
     const chatList: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.chatListId}`) as HTMLElement | null;
 
@@ -769,6 +1230,47 @@ function bindEditorListeners(overlay: HTMLElement): void {
         void applySelectedChatOverrides(overlay, selectedChatKey).then(async (): Promise<void> => {
             await renderEditorState(overlay, selectedChatKey);
             await renderCompactPanelState(selectedChatKey);
+        });
+    });
+    presetSelect?.addEventListener('change', (): void => {
+        const nextPresetId = (String(presetSelect.value || 'custom').trim() || 'custom') as UserFacingPresetId;
+        applyPresetTemplateToForm(overlay, nextPresetId);
+    });
+    directFieldIds.forEach((fieldId: string): void => {
+        const field = overlay.querySelector(`#${fieldId}`) as HTMLElement | null;
+        if (!field) {
+            return;
+        }
+        const markPresetCustom = (): void => {
+            markPresetAsCustomIfNeeded(overlay);
+        };
+        field.addEventListener('change', markPresetCustom);
+        if (field instanceof HTMLInputElement && field.type !== 'checkbox') {
+            field.addEventListener('input', markPresetCustom);
+        }
+    });
+    saveGlobalPresetBtn?.addEventListener('click', (): void => {
+        if (!selectedChatKey) {
+            return;
+        }
+        void savePresetForChat(overlay, selectedChatKey, 'global').then(async (): Promise<void> => {
+            await renderEditorState(overlay, selectedChatKey);
+        });
+    });
+    saveRolePresetBtn?.addEventListener('click', (): void => {
+        if (!selectedChatKey) {
+            return;
+        }
+        void savePresetForChat(overlay, selectedChatKey, 'role').then(async (): Promise<void> => {
+            await renderEditorState(overlay, selectedChatKey);
+        });
+    });
+    clearRolePresetBtn?.addEventListener('click', (): void => {
+        if (!selectedChatKey) {
+            return;
+        }
+        void clearRolePresetForChat(selectedChatKey).then(async (): Promise<void> => {
+            await renderEditorState(overlay, selectedChatKey);
         });
     });
     chatSearchInput?.addEventListener('input', (): void => {
@@ -898,7 +1400,10 @@ async function renderCompactPanelState(chatKey: string): Promise<void> {
     const summaryIntent: HTMLElement | null = document.getElementById(PANEL_IDS.summaryIntentId);
     const summarySections: HTMLElement | null = document.getElementById(PANEL_IDS.summarySectionsId);
     const summaryProfile: HTMLElement | null = document.getElementById(PANEL_IDS.summaryProfileId);
-    if (!summaryName || !summaryIntent || !summarySections || !summaryProfile) {
+    const summaryLifecycle: HTMLElement | null = document.getElementById(PANEL_IDS.summaryLifecycleId);
+    const summaryMaintenance: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMaintenanceId);
+    const summaryMaintenanceText: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMaintenanceTextId);
+    if (!summaryName || !summaryIntent || !summarySections || !summaryProfile || !summaryLifecycle || !summaryMaintenance || !summaryMaintenanceText) {
         return;
     }
     const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
@@ -910,6 +1415,15 @@ async function renderCompactPanelState(chatKey: string): Promise<void> {
         formatStyleLabel(snapshot.effectiveProfile.stylePreference),
         formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength),
     ].join(' / ');
+    summaryLifecycle.textContent = formatLifecycleStageLabel(snapshot.lifecycleState.stage);
+    const topAlert = pickTopMaintenanceAlert(snapshot.maintenanceInsights);
+    if (topAlert) {
+        summaryMaintenance.style.display = 'flex';
+        summaryMaintenanceText.textContent = `[${formatMaintenanceSeverityLabel(topAlert.severity)}] ${topAlert.shortLabel}`;
+    } else {
+        summaryMaintenance.style.display = 'none';
+        summaryMaintenanceText.textContent = '暂无维护异常';
+    }
     const select: HTMLSelectElement | null = document.getElementById(PANEL_IDS.chatSelectId) as HTMLSelectElement | null;
     if (select && select.value !== chatKey) {
         select.value = chatKey;
@@ -927,8 +1441,10 @@ async function renderCompactPanelState(chatKey: string): Promise<void> {
 async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise<void> {
     const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
     fillEditorForm(overlay, snapshot.effectiveProfile, snapshot.effectiveRetention);
+    fillPresetAndDirectFields(overlay, snapshot);
     updateEditorHeader(overlay, snapshot);
     updateQualityPanel(overlay, snapshot);
+    updateMaintenancePanel(overlay, snapshot);
     updateChatListActiveState(overlay, chatKey);
     writeJsonBlock(overlay, EDITOR_IDS.autoBlockId, {
         chatProfile: snapshot.autoProfile,
@@ -940,10 +1456,18 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
         chatProfile: snapshot.effectiveProfile,
         adaptivePolicy: snapshot.effectivePolicy,
         retentionPolicy: snapshot.effectiveRetention,
+        promptInjection: snapshot.promptInjectionProfile,
+        presetBundle: snapshot.effectivePresetBundle,
     });
     writeJsonBlock(overlay, EDITOR_IDS.metricsBlockId, snapshot.metrics);
     writeJsonBlock(overlay, EDITOR_IDS.decisionBlockId, snapshot.decision ?? {
         tip: '暂无注入决策，下次注入后会显示在这里。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.preDecisionBlockId, snapshot.preDecision ?? {
+        tip: '暂无生成前 gate 决策。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.postDecisionBlockId, snapshot.postDecision ?? {
+        tip: '暂无生成后 gate 决策。',
     });
     applyChatStrategyTooltips();
 }
@@ -964,7 +1488,14 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
         const vectorLifecycle: VectorLifecycleState = await manager.getVectorLifecycle();
         const memoryQuality: MemoryQualityScorecard = await manager.getMemoryQuality();
         const maintenanceAdvice: MaintenanceAdvice[] = await manager.getMaintenanceAdvice();
+        const maintenanceInsights: MaintenanceInsight[] = await manager.getMaintenanceInsights();
+        const lifecycleState: ChatLifecycleState = await manager.getLifecycleState();
         const decision: StrategyDecision | null = await manager.getLastStrategyDecision();
+        const preDecision: PreGenerationGateDecision | null = await manager.getLastPreGenerationDecision();
+        const postDecision: PostGenerationGateDecision | null = await manager.getLastPostGenerationDecision();
+        const promptInjectionProfile: PromptInjectionProfile = await manager.getPromptInjectionProfile();
+        const effectivePresetBundle: EffectivePresetBundle = await manager.getEffectivePresetBundle();
+        const userFacingPreset: UserFacingChatPreset | null = await manager.getUserFacingPreset();
         const autoProfile: ChatProfile = state.chatProfile ?? DEFAULT_CHAT_PROFILE;
         const autoPolicy: AdaptivePolicy = state.adaptivePolicy
             ?? buildAdaptivePolicy(autoProfile, state.adaptiveMetrics ?? DEFAULT_ADAPTIVE_METRICS, state.vectorLifecycle, state.memoryQuality);
@@ -991,7 +1522,14 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
                 },
             },
             maintenanceAdvice,
+            maintenanceInsights,
+            lifecycleState,
             decision,
+            preDecision,
+            postDecision,
+            promptInjectionProfile,
+            effectivePresetBundle,
+            userFacingPreset,
             overrides: (state.manualOverrides ?? {}) as Record<string, unknown>,
         };
     } finally {
@@ -1027,20 +1565,121 @@ async function recomputeSelectedChatPolicy(chatKey: string): Promise<void> {
 }
 
 /**
+ * 功能：执行指定聊天的一键维护动作。
+ * @param chatKey 聊天键。
+ * @param action 维护动作。
+ * @returns 维护执行结果；若无法执行则返回 null。
+ */
+async function runMaintenanceActionForChat(
+    chatKey: string,
+    action: MaintenanceActionType,
+): Promise<MaintenanceExecutionResult | null> {
+    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
+    if (typeof currentChatState?.runMaintenanceAction === 'function') {
+        return currentChatState.runMaintenanceAction(action);
+    }
+    const manager: ChatStateManager = new ChatStateManager(chatKey);
+    try {
+        await manager.load();
+        const result = await manager.runMaintenanceAction(action);
+        await manager.flush();
+        return result;
+    } finally {
+        await manager.destroy();
+    }
+}
+
+/**
+ * 功能：将当前表单中的预设保存到指定作用域。
+ * @param overlay 编辑器遮罩层根节点。
+ * @param chatKey 聊天键。
+ * @param scope 保存作用域。
+ * @returns 无返回值。
+ */
+async function savePresetForChat(overlay: HTMLElement, chatKey: string, scope: 'global' | 'role'): Promise<void> {
+    const preset: UserFacingChatPreset = collectUserFacingPresetFromForm(overlay);
+    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
+    try {
+        if (scope === 'global' && typeof currentChatState?.saveGlobalPreset === 'function') {
+            await currentChatState.saveGlobalPreset(preset);
+            return;
+        }
+        if (scope === 'role' && typeof currentChatState?.saveRolePreset === 'function') {
+            await currentChatState.saveRolePreset(preset);
+            return;
+        }
+        const manager: ChatStateManager = new ChatStateManager(chatKey);
+        try {
+            await manager.load();
+            if (scope === 'global') {
+                await manager.saveGlobalPreset(preset);
+            } else {
+                await manager.saveRolePreset(preset);
+            }
+        } finally {
+            await manager.destroy();
+        }
+    } catch (error) {
+        console.warn('保存预设失败', error);
+    }
+}
+
+/**
+ * 功能：清除指定聊天对应的角色或群聊默认预设。
+ * @param chatKey 聊天键。
+ * @returns 无返回值。
+ */
+async function clearRolePresetForChat(chatKey: string): Promise<void> {
+    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
+    try {
+        if (typeof currentChatState?.clearRolePreset === 'function') {
+            await currentChatState.clearRolePreset();
+            return;
+        }
+        const manager: ChatStateManager = new ChatStateManager(chatKey);
+        try {
+            await manager.load();
+            await manager.clearRolePreset();
+        } finally {
+            await manager.destroy();
+        }
+    } catch (error) {
+        console.warn('清除角色预设失败', error);
+    }
+}
+
+/**
  * 功能：保存当前编辑器表单中的覆盖配置。
  * @param overlay 编辑器遮罩层根节点。
  * @param chatKey 聊天键。
  * @returns 无返回值。
  */
 async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string): Promise<void> {
+    setInputValue(
+        overlay,
+        EDITOR_IDS.vectorActivationFactsId,
+        getNumberValue(overlay, EDITOR_IDS.vectorFactsDirectId, DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts),
+    );
+    setSelectValue(
+        overlay,
+        EDITOR_IDS.deletionStrategyId,
+        getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId) || 'soft_delete',
+    );
     const profileOverride: Partial<ChatProfile> = collectProfileOverrideFromForm(overlay);
     const retentionOverride: Partial<RetentionPolicy> = collectRetentionOverrideFromForm(overlay);
+    const userFacingPreset: UserFacingChatPreset = collectUserFacingPresetFromForm(overlay);
     const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
 
     if (currentChatState) {
+        if (typeof currentChatState.setUserFacingPreset === 'function') {
+            await currentChatState.setUserFacingPreset(userFacingPreset);
+        }
         await currentChatState.setChatProfileOverride(profileOverride);
         await currentChatState.setRetentionPolicyOverride(retentionOverride);
         await currentChatState.recomputeAdaptivePolicy();
+        if (typeof currentChatState.recomputeMemoryQuality === 'function') {
+            await currentChatState.recomputeMemoryQuality();
+        }
         await currentChatState.flush();
         return;
     }
@@ -1048,9 +1687,11 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
     const manager: ChatStateManager = new ChatStateManager(chatKey);
     try {
         await manager.load();
+        await manager.setUserFacingPreset(userFacingPreset);
         await manager.setChatProfileOverride(profileOverride);
         await manager.setRetentionPolicyOverride(retentionOverride);
         await manager.recomputeAdaptivePolicy();
+        await manager.recomputeMemoryQuality();
         await manager.flush();
     } finally {
         await manager.destroy();
@@ -1154,6 +1795,90 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
 }
 
 /**
+ * 功能：更新维护感知与生命周期区块。
+ * @param overlay 编辑器遮罩层根节点。
+ * @param snapshot 聊天策略快照。
+ * @returns 无返回值。
+ */
+function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
+    const insightsElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.maintenanceInsightsId}`) as HTMLElement | null;
+    const lifecycleStageElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleStageId}`) as HTMLElement | null;
+    const lifecycleMetaElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.lifecycleMetaId}`) as HTMLElement | null;
+    if (!insightsElement || !lifecycleStageElement || !lifecycleMetaElement) {
+        return;
+    }
+    lifecycleStageElement.textContent = formatLifecycleStageLabel(snapshot.lifecycleState.stage);
+    const reasonText = Array.isArray(snapshot.lifecycleState.stageReasonCodes) && snapshot.lifecycleState.stageReasonCodes.length > 0
+        ? snapshot.lifecycleState.stageReasonCodes.join(' / ')
+        : '无';
+    lifecycleMetaElement.textContent = `进入时间: ${formatTimestamp(snapshot.lifecycleState.stageEnteredAt)} | 原因: ${reasonText}`;
+
+    const insights = Array.isArray(snapshot.maintenanceInsights) ? snapshot.maintenanceInsights : [];
+    if (insights.length === 0) {
+        insightsElement.innerHTML = '<span class="stx-memory-chat-strategy-empty">暂无维护提示</span>';
+        return;
+    }
+
+    const severityOrder = (severity: MaintenanceInsight['severity']): number => {
+        if (severity === 'critical') {
+            return 3;
+        }
+        if (severity === 'warning') {
+            return 2;
+        }
+        return 1;
+    };
+    const sortedInsights = [...insights].sort(
+        (left: MaintenanceInsight, right: MaintenanceInsight): number => severityOrder(right.severity) - severityOrder(left.severity),
+    );
+
+    insightsElement.innerHTML = sortedInsights
+        .map((item: MaintenanceInsight): string => `
+          <div class="stx-memory-chat-strategy-quality-advice-item">
+            <strong>[${escapeHtml(formatMaintenanceSeverityLabel(item.severity))}] ${escapeHtml(item.title)}</strong>
+            <span>${escapeHtml(item.detail)}</span>
+            <button
+              type="button"
+              class="stx-memory-chat-strategy-maintenance-action"
+              data-action="${escapeHtml(item.action)}"
+            >
+              ${escapeHtml(item.actionLabel || '立即维护')}
+            </button>
+          </div>
+        `.trim())
+        .join('');
+
+    insightsElement.querySelectorAll<HTMLButtonElement>('.stx-memory-chat-strategy-maintenance-action')
+        .forEach((button: HTMLButtonElement): void => {
+            button.onclick = (): void => {
+                const action = String(button.dataset.action || '').trim() as MaintenanceActionType;
+                if (!action) {
+                    return;
+                }
+                button.disabled = true;
+                void runMaintenanceActionForChat(snapshot.chatKey, action)
+                    .then(async (result: MaintenanceExecutionResult | null): Promise<void> => {
+                        if (!result) {
+                            toast.error('维护动作执行失败：缺少执行结果');
+                        } else if (result.ok) {
+                            toast.success(`${formatMaintenanceActionLabel(action)}已完成：${result.message}`);
+                        } else {
+                            toast.error(`${formatMaintenanceActionLabel(action)}失败：${result.message}`);
+                        }
+                        await renderEditorState(overlay, snapshot.chatKey);
+                        await renderCompactPanelState(snapshot.chatKey);
+                    })
+                    .catch((error: unknown): void => {
+                        toast.error(`维护动作执行异常：${String(error)}`);
+                    })
+                    .finally((): void => {
+                        button.disabled = false;
+                    });
+            };
+        });
+}
+
+/**
  * 功能：将快照中的配置写回编辑器表单。
  * @param overlay 编辑器遮罩层根节点。
  * @param profile 当前生效画像。
@@ -1178,6 +1903,137 @@ function fillEditorForm(overlay: HTMLElement, profile: ChatProfile, retention: R
     setInputValue(overlay, EDITOR_IDS.keepEventCountId, retention.keepEventCount);
     setInputValue(overlay, EDITOR_IDS.keepVectorDaysId, retention.keepVectorDays);
     refreshSharedSelectOptions(overlay);
+}
+
+/**
+ * 功能：把预设与直白参数同步到编辑器表单。
+ * @param overlay 编辑器遮罩层根节点。
+ * @param snapshot 聊天策略快照。
+ * @returns 无返回值。
+ */
+function fillPresetAndDirectFields(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
+    const presetId = snapshot.userFacingPreset?.presetId
+        ?? snapshot.effectivePresetBundle.chatPreset?.presetId
+        ?? snapshot.effectivePresetBundle.rolePreset?.presetId
+        ?? snapshot.effectivePresetBundle.globalPreset?.presetId
+        ?? 'custom';
+    setSelectValue(overlay, EDITOR_IDS.presetId, presetId);
+    setInputValue(overlay, EDITOR_IDS.summaryIntervalDirectId, snapshot.effectivePolicy.extractInterval);
+    setInputValue(overlay, EDITOR_IDS.summaryWindowDirectId, snapshot.effectivePolicy.extractWindowSize);
+    setInputValue(overlay, EDITOR_IDS.profileRefreshDirectId, snapshot.effectivePolicy.profileRefreshInterval);
+    setInputValue(overlay, EDITOR_IDS.qualityRefreshDirectId, snapshot.effectivePolicy.qualityRefreshInterval);
+    setInputValue(overlay, EDITOR_IDS.vectorFactsDirectId, snapshot.effectiveProfile.vectorStrategy.activationFacts);
+    setSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId, snapshot.effectiveRetention.deletionStrategy);
+    setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, snapshot.effectivePresetBundle.autoBootstrapSemanticSeed);
+    setCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId, snapshot.effectivePolicy.groupLaneEnabled);
+    refreshSharedSelectOptions(overlay);
+}
+
+/**
+ * 功能：当用户手动修改直白参数时，把预设状态切换为“自定义”。
+ * @param overlay 编辑器遮罩层根节点。
+ * @returns 无返回值。
+ */
+function markPresetAsCustomIfNeeded(overlay: HTMLElement): void {
+    const currentPreset = getSelectValue(overlay, EDITOR_IDS.presetId);
+    if (currentPreset === 'custom') {
+        return;
+    }
+    setSelectValue(overlay, EDITOR_IDS.presetId, 'custom');
+    refreshSharedSelectOptions(overlay);
+}
+
+/**
+ * 功能：将预设模板快速回填到编辑器表单。
+ * @param overlay 编辑器遮罩层根节点。
+ * @param presetId 预设编号。
+ * @returns 无返回值。
+ */
+function applyPresetTemplateToForm(overlay: HTMLElement, presetId: UserFacingPresetId): void {
+    const preset = buildUserFacingPresetById(presetId);
+    const profile = {
+        ...DEFAULT_CHAT_PROFILE,
+        ...(preset.chatProfile ?? {}),
+        vectorStrategy: {
+            ...DEFAULT_CHAT_PROFILE.vectorStrategy,
+            ...(preset.chatProfile?.vectorStrategy ?? {}),
+        },
+    };
+    const retention = {
+        ...DEFAULT_RETENTION_POLICY,
+        ...(preset.retentionPolicy ?? {}),
+    };
+    fillEditorForm(overlay, profile, retention);
+    setInputValue(
+        overlay,
+        EDITOR_IDS.summaryIntervalDirectId,
+        Number(preset.adaptivePolicy?.extractInterval ?? 12),
+    );
+    setInputValue(
+        overlay,
+        EDITOR_IDS.summaryWindowDirectId,
+        Number(preset.adaptivePolicy?.extractWindowSize ?? 32),
+    );
+    setInputValue(
+        overlay,
+        EDITOR_IDS.profileRefreshDirectId,
+        Number(preset.profileRefreshInterval ?? 12),
+    );
+    setInputValue(
+        overlay,
+        EDITOR_IDS.qualityRefreshDirectId,
+        Number(preset.qualityRefreshInterval ?? 12),
+    );
+    setInputValue(
+        overlay,
+        EDITOR_IDS.vectorFactsDirectId,
+        Number(profile.vectorStrategy.activationFacts ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts),
+    );
+    setSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId, retention.deletionStrategy);
+    setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, preset.autoBootstrapSemanticSeed !== false);
+    setCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId, preset.groupLaneEnabled === true);
+    refreshSharedSelectOptions(overlay);
+}
+
+/**
+ * 功能：从编辑器表单采集用户可读预设。
+ * @param overlay 编辑器遮罩层根节点。
+ * @returns 用户可读预设对象。
+ */
+function collectUserFacingPresetFromForm(overlay: HTMLElement): UserFacingChatPreset {
+    const presetId = (getSelectValue(overlay, EDITOR_IDS.presetId) || 'custom') as UserFacingPresetId;
+    const basePreset = buildUserFacingPresetById(presetId);
+    return {
+        ...basePreset,
+        presetId,
+        label: listUserFacingPresetOptions().find((item) => item.value === presetId)?.label || '自定义',
+        chatProfile: {
+            ...(basePreset.chatProfile ?? {}),
+            vectorStrategy: {
+                ...(basePreset.chatProfile?.vectorStrategy ?? {}),
+                activationFacts: getNumberValue(
+                    overlay,
+                    EDITOR_IDS.vectorFactsDirectId,
+                    DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts,
+                ),
+            },
+        },
+        adaptivePolicy: {
+            ...(basePreset.adaptivePolicy ?? {}),
+            extractInterval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
+            extractWindowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 32),
+            profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 12),
+            qualityRefreshInterval: getNumberValue(overlay, EDITOR_IDS.qualityRefreshDirectId, 12),
+            groupLaneEnabled: getCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId),
+        },
+        retentionPolicy: {
+            ...(basePreset.retentionPolicy ?? {}),
+            deletionStrategy: getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId) as DeletionStrategy,
+        },
+        autoBootstrapSemanticSeed: getCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId),
+        groupLaneEnabled: getCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId),
+        updatedAt: Date.now(),
+    };
 }
 
 /**
@@ -1238,9 +2094,15 @@ function updateChatListActiveState(overlay: HTMLElement, chatKey: string): void 
  */
 function translateDiagnosticKey(key: string): string {
     const dict: Record<string, string> = {
+        // 顶层结构
         chatProfile: '基础配置',
         adaptivePolicy: '自适应策略',
         retentionPolicy: '数据保留',
+        effectiveProfile: '结合生效方案',
+        effectivePolicy: '结合生效策略',
+        effectiveRetention: '结合数据保留',
+
+        // 画像/参数
         chatType: '聊天结构',
         stylePreference: '响应风格',
         memoryStrength: '记忆干预度',
@@ -1258,7 +2120,79 @@ function translateDiagnosticKey(key: string): string {
         keepSummaryCount: '保留摘要数',
         keepEventCount: '保留事件数',
         keepVectorDays: '保留天数',
-        vectorMode: '当前运转模式',
+
+        // 自适应策略扩展
+        extractInterval: '抽取触发间隔',
+        extractWindowSize: '抽取窗口大小',
+        summaryEnabled: '摘要总开关',
+        worldStateWeight: '世界状态权重',
+        vectorMinFacts: '事实启动水位',
+        vectorMinSummaries: '摘要启动水位',
+        vectorSearchStride: '搜索步进比例',
+        rerankEnabled: '深度重排开关',
+        contextMaxTokensShare: '上下文预算占比',
+        lorebookPolicyWeight: '世界书权重',
+        actorSalienceTopK: '角色活跃度 TopK',
+        groupLaneEnabled: '群组分流',
+        entityResolutionLevel: '实体解析强度',
+        speakerTrackingLevel: '说话人跟踪强度',
+        summaryMode: '摘要生成模式',
+
+        // 动态指标
+        adaptiveMetrics: '近况指标',
+        windowSize: '观察窗口',
+        avgMessageLength: '平均消息长度',
+        assistantLongMessageRatio: '助手长文率',
+        userInfoDensity: '有效信息密度',
+        repeatedTopicRate: '主题重复率',
+        factsHitRate: '事实命中率',
+        factsUpdateRate: '事实更新率',
+        retrievalHitRate: '检索命中率',
+        promptInjectionTokenRatio: '注入占比',
+        summaryEffectiveness: '摘要有效率',
+        worldStateSignal: '世界状态信号',
+        duplicateRate: '冗余度',
+        retrievalPrecision: '检索精度',
+        extractAcceptance: '抽取接受率',
+        summaryStaleness: '摘要陈旧度',
+        tokenEfficiency: '令牌利用效率',
+        orphanFactsRatio: '孤儿事实比',
+        schemaHygiene: '结构卫生度',
+        messageInputRatio: '长短交流比',
+        recentDensity: '有效信息密度',
+        userInvolvement: '交互频繁度',
+        recentUserTurns: '最近玩家发言数',
+        recentAssistantTurns: '最近助手发言数',
+        recentGroupSpeakerCount: '最近群聊发言人数',
+        lastVectorAccessAt: '最近库访问时间',
+        lastVectorHitAt: '最近库命中时间',
+        lastVectorIndexAt: '最近库索引时间',
+        lastUpdatedAt: '最后更新时间',
+
+        // 向量/质量统计
+        factCount: '事实总数',
+        summaryCount: '摘要总数',
+        vectorChunkCount: '向量分块总数',
+        lastAccessAt: '最后访问时间',
+        lastHitAt: '最后命中时间',
+        lastIndexAt: '最后索引时间',
+        searchRequestCount: '搜索请求计数',
+        lastPrecision: '最近精准度评级',
+        totalScore: '综合健壮得分',
+        level: '状态评级',
+        dimensions: '评分细项',
+        vectorLifecycle: '向量库生命周期',
+        memoryQuality: '记忆质量评估',
+        maintenanceAdvice: '维护建议列表',
+        maintenanceInsights: '深度维护洞察',
+        lifecycleState: '聊天活跃阶段',
+        promptInjectionProfile: '注入配置概览',
+        effectivePresetBundle: '当前预设方案',
+        userFacingPreset: '当前可见预设',
+        overrides: '手动覆盖项',
+
+        // 决策与状态
+        vectorMode: '运转模式',
         maintenanceMode: '深度维护状态',
         budgetMaxTokens: '投入上限',
         budgetReservedTokens: '容忍阈值',
@@ -1267,11 +2201,23 @@ function translateDiagnosticKey(key: string): string {
         budgetSummaries: '摘要预算',
         intent: '本次研判意图',
         sectionsUsed: '本次激活区块',
+        budgets: '详细预算分配',
         reason: '产生原因',
-        adaptiveMetrics: '近况指标',
-        messageInputRatio: '长短交流比',
-        recentDensity: '有效信息密度',
-        userInvolvement: '交互频繁度'
+        reasonCodes: '决策代码',
+        generatedAt: '决策生成时间',
+        shouldInject: '是否注入',
+        lorebookMode: '世界书拦截模式',
+        anchorMode: '注入锚点位置',
+        shouldTrimPrompt: '是否裁剪 Prompt',
+        valueClass: '生成价值等级',
+        shouldPersistLongTerm: '是否永久存储',
+        shouldExtractFacts: '是否抽取事实',
+        shouldUpdateWorldState: '是否更新世界状态',
+        shortTermOnly: '仅短期滞留',
+        groupLaneBudgetShare: '分流预算占比',
+        profileRefreshInterval: '画像刷新间隔',
+        qualityRefreshInterval: '质量评估间隔',
+        vectorIdleDecayDays: '闲置衰减天数',
     };
     return dict[key] || key;
 }
@@ -1282,8 +2228,88 @@ function translateDiagnosticKey(key: string): string {
  * @returns 中文提示文案。
  */
 function buildDiagnosticKeyTip(key: string): string {
+    const tips: Record<string, string> = {
+        extractInterval: '决定每隔多少轮对话触发一次记忆总结。数值越小，记忆更新越频繁。',
+        extractWindowSize: '总结记忆时回溯的对话轮数。窗口越大，单次总结覆盖的信息越全。',
+        summaryEnabled: '是否允许系统自动生成历史摘要，关闭后将只依赖短期记忆。',
+        worldStateWeight: '决定在生成时给“世界设定/当前环境”分配多少影响力。',
+        vectorMinFacts: '至少累积多少条事实后，系统才会开始通过向量库检索知识。',
+        vectorMinSummaries: '至少累积多少条摘要后，系统才会开始检索长周期历史摘要。',
+        vectorSearchStride: '向量搜索时的广度因子。步长越大，找回的记忆越跳跃、越丰富。',
+        rerankEnabled: '开启后，系统会进行二次筛选，确保检索到的记忆与当前语境高度契合。',
+        contextMaxTokensShare: '给记忆留出的最大上下文额度。占比越高，AI 能记住的陈年旧事越多。',
+        lorebookPolicyWeight: '系统在决策时，给予 ST 世界书匹配结果的优先程度。',
+        actorSalienceTopK: '决定在群聊中，优先考虑多少个最活跃的角色进行关联记忆搜索。',
+        windowSize: '系统在计算动态指标时参考的最近对话轮数。',
+        avgMessageLength: '最近窗口内消息的平均字数，反映对话内容的丰富程度。',
+        assistantLongMessageRatio: 'AI 回复中长文本占比。比例高说明 AI 倾向于展开描写，比例低则说明多为短语。',
+        userInfoDensity: '评估用户每条发言包含的实质信息价值。数值越高，越容易触发记忆总结。',
+        repeatedTopicRate: '最近对话中话题循环往复的程度，过高可能导致记忆系统尝试干预。',
+        factsHitRate: '查询事实记录时，能被准确找到并成功利用的概率。',
+        factsUpdateRate: '发现并记录新事实的频率。高的更新率代表剧情进入了密集的信息变动期。',
+        retrievalHitRate: '向量检索或关键词检索能搜寻到相关片段的成功概率。',
+        promptInjectionTokenRatio: '各种记忆内容占据当前 prompt 总长度的百分比，反映记忆对生成的干预强度。',
+        summaryEffectiveness: '被注入的摘要内容有多少能对当前的补全产生实质助推作用。',
+        worldStateSignal: '当前语境对世界观、环境设定等底层规则的敏感程度。',
+        duplicateRate: '记忆库中语义重复的内容占比。过高会触发数据去重维护。',
+        retrievalPrecision: '检索结果与当前对话语境的相关性得分，反映搜到的东西“准不准”。',
+        extractAcceptance: 'AI 提炼出的新事实有多少被通过并正式写入长期数据库。',
+        summaryStaleness: '评估现有历史总结是否已经过时（对话已偏离原主题）。',
+        tokenEfficiency: '单位 Token 承载的有效信息量。反映记忆压缩和表达是否精炼。',
+        orphanFactsRatio: '库中那些虽然存在但与当前任何剧情主线都关联不上的琐碎碎片的比例。',
+        schemaHygiene: '系统元数据和表结构的整洁度，影响检索效率和模型理解力。',
+        chatType: '系统自动分析出的当前对话性质（单人聊天、群聊、说明书问答等）。',
+        stylePreference: '系统认为目前最适合的回复基调（剧情向、问答向、跑团向或信息向）。',
+        memoryStrength: '系统认为本聊天需要的记忆接入强度。高强度会更激进地寻找相关背景。',
+        extractStrategy: '决定要自动提取哪些维度的信息：纯事实、还是包含人际关系或世界设定。',
+        summaryStrategy: '决定历史总结的排版方案。分层摘要侧重全局，时间轴摘要侧重流程。',
+        deletionStrategy: '决定当记忆容量不足时，如何筛选并丢弃那些最不重要的旧数据。',
+        shouldInject: '判定本轮 AI 发言前，系统最终决定是否向上下文塞入记忆信息。',
+        sectionsUsed: '本轮决策挑选并使用了哪些记忆模块（如事实、摘要、群聊分流等）。',
+        budgets: '给各记忆模块分配的最大字数限额。由系统根据当前的上下文剩余空间动态分配。',
+        lorebookMode: '针对这次生成，系统决定如何结合世界书条目：强制注入、有条件注入或禁止。',
+        anchorMode: '确定记忆内容将被放置在 ST 命令流中的哪个具体位置（如 Author\'s Note 之后）。',
+        shouldTrimPrompt: '当上下文即将溢出时，系统是否决定主动对原始 Prompt 进行无损压缩。',
+        valueClass: '评估 AI 这一句回复的“含金量”（如剧情推进、设定确认、琐事闲谈等）。',
+        shouldPersistLongTerm: '判定本次对话产生的信息，是否有必要记入长期数据库（长远记忆）。',
+        shouldExtractFacts: '判定是否需要从这段对话中提炼出结构化的固定事实记录。',
+        shouldUpdateWorldState: '判定这段对话是否改变了当前的环境、位置或时间等底层状态。',
+        shortTermOnly: '如果开启，代表系统认为这段对话只在当下有用，几天后就不再需要保留。',
+        intent: '系统通过分析你上一句话，判断你现在是在“问设定”、“续写剧情”还是“RP”。',
+        recentUserTurns: '在当前观察窗口内，来自玩家的有效发言轮数。',
+        recentAssistantTurns: '在当前观察窗口内，来自助手（AI）的发言轮数。',
+        recentGroupSpeakerCount: '在最近的群聊语境中，系统识别出的活跃发言人数估计。',
+        lastVectorAccessAt: '向量数据库上一次被读取的精确时间戳。',
+        lastVectorHitAt: '向量库上一次成功找到并匹配到相关记忆的时间戳。',
+        lastVectorIndexAt: '上一次将新对话内容写入并索引进向量库的时间戳。',
+        lastUpdatedAt: '该诊断卡片内所有指标数据最后一次计算更新的时间。',
+        groupLaneBudgetShare: '在群聊模式下，给不同角色的独立记忆流分配的上下文预算比例。',
+        profileRefreshInterval: '系统自动重新研判聊天画像（响应风格、记忆强度等）的轮数间隔。',
+        qualityRefreshInterval: '系统自动重新评估记忆质量分数和维护建议的轮数间隔。',
+        vectorIdleDecayDays: '向量记忆在没有任何访问的情况下，开始逐渐降低由于新鲜度带来的权重的冷却周期。',
+        entityResolutionLevel: '决定系统识别不同角色、物品等实体之间关联关联关系的由于语义相似度而合并的强度。',
+        speakerTrackingLevel: '在多角色或群聊环境下，系统追踪不同角色的发言特征和当前状态的精细程度。',
+        summaryMode: '当前使用的总结算法和格式布局，如分层架构或线性时间轴。',
+        factCount: '当前语境下已持久化存储的离散事实点总数。',
+        summaryCount: '已生成的用于长周期理解的历史摘要总数。',
+        vectorChunkCount: '经过分块并存储在向量检索库中的高维张量数量。',
+        lastAccessAt: '该组件或指标最后一次被系统访问执行的操作时刻。',
+        lastHitAt: '该组件（如检索库）最后一次成功产生有效返回值的时刻。',
+        lastIndexAt: '该组件最后一次接收并处理新数据索引的时刻。',
+        searchRequestCount: '自聊天开始以来，系统尝试通过检索寻找记忆的总频率。',
+        lastPrecision: '最后一次检索任务中，搜回的内容与当前语境的相关程度系数。',
+        totalScore: '由算法综合评估得出的记忆系统整体健康得分，满分 100。',
+        level: '当前记忆状态的等级化分类，从“极佳”到“危急”不等。',
+        dimensions: '包含冗余度、精准度、接受率等多个具体评分维度的集合。',
+        vectorLifecycle: '向量数据库的内部运转状态总结，包括索引频率和利用率。',
+        memoryQuality: '当前聊天记忆的综合质量评估，直接影响 AI 的逻辑连贯性。',
+        lifecycleState: '系统判定该聊天的发展阶段，如“新会话”、“活跃期”或“已归档”。',
+        overrides: '你手动设置的、会覆盖系统自动建议的个性化参数列表。',
+    };
+
     const label: string = translateDiagnosticKey(key);
-    return `${label}：用于说明该诊断字段当前值的来源与作用，帮助你定位策略是否按预期生效。`;
+    const tip: string = tips[key] || `用于说明该诊断字段 [${key}] 当前值的来源与作用，帮助你定位策略是否按预期生效。`;
+    return `<strong>${label}</strong><br/>${tip}`;
 }
 
 /**
@@ -1319,7 +2345,7 @@ function writeJsonBlock(overlay: HTMLElement, blockId: string, payload: unknown)
                 const val = (obj as Record<string, unknown>)[k];
                 return `
                     <div class="stx-memory-diag-row">
-                        <span class="stx-memory-diag-key" data-tip="${escapeHtml(buildDiagnosticKeyTip(k))}">${escapeHtml(translateDiagnosticKey(k))}</span>
+                        <span class="stx-memory-diag-key" data-tip-html="true" data-tip="${escapeHtml(buildDiagnosticKeyTip(k))}">${escapeHtml(translateDiagnosticKey(k))}</span>
                         <div class="stx-memory-diag-value">${renderNode(val, depth + 1)}</div>
                     </div>
                 `;
@@ -1608,6 +2634,94 @@ function getNumberValue(root: ParentNode, id: string, fallback: number): number 
     const element: HTMLInputElement | null = root.querySelector(`#${id}`) as HTMLInputElement | null;
     const numeric: number = Number(element?.value ?? fallback);
     return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+/**
+ * 功能：选择顶部小诊断要展示的最高优先级维护异常。
+ * @param insights 维护感知列表。
+ * @returns 最高优先级维护异常；没有异常则返回 null。
+ */
+function pickTopMaintenanceAlert(insights: MaintenanceInsight[]): MaintenanceInsight | null {
+    const list = Array.isArray(insights) ? insights : [];
+    const priority = (value: MaintenanceInsight['severity']): number => {
+        if (value === 'critical') {
+            return 3;
+        }
+        if (value === 'warning') {
+            return 2;
+        }
+        return 1;
+    };
+    const visible = list
+        .filter((item: MaintenanceInsight): boolean => item.severity === 'warning' || item.severity === 'critical')
+        .sort((left: MaintenanceInsight, right: MaintenanceInsight): number => priority(right.severity) - priority(left.severity));
+    return visible[0] ?? null;
+}
+
+/**
+ * 功能：格式化维护严重度标签。
+ * @param severity 严重度。
+ * @returns 严重度中文标签。
+ */
+function formatMaintenanceSeverityLabel(severity: MaintenanceInsight['severity']): string {
+    if (severity === 'critical') {
+        return '严重';
+    }
+    if (severity === 'warning') {
+        return '警告';
+    }
+    return '提示';
+}
+
+/**
+ * 功能：格式化生命周期阶段标签。
+ * @param stage 生命周期阶段。
+ * @returns 生命周期中文标签。
+ */
+function formatLifecycleStageLabel(stage: ChatLifecycleState['stage']): string {
+    if (stage === 'new') {
+        return '新会话';
+    }
+    if (stage === 'active') {
+        return '活跃';
+    }
+    if (stage === 'stable') {
+        return '稳定';
+    }
+    if (stage === 'long_running') {
+        return '长线运行';
+    }
+    if (stage === 'archived') {
+        return '已归档';
+    }
+    if (stage === 'deleted') {
+        return '已删除';
+    }
+    return stage;
+}
+
+/**
+ * 功能：格式化维护动作标签。
+ * @param action 维护动作。
+ * @returns 维护动作中文标签。
+ */
+function formatMaintenanceActionLabel(action: MaintenanceActionType): string {
+    if (action === 'compress') {
+        return '压缩维护';
+    }
+    if (action === 'rebuild_summary') {
+        return '摘要重建';
+    }
+    if (action === 'revectorize') {
+        return '向量重建';
+    }
+    if (action === 'schema_cleanup') {
+        return '设定整理';
+    }
+    if (action === 'group_maintenance') {
+        return '群聊维护';
+    }
+    return action;
 }
 
 /**

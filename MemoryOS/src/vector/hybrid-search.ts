@@ -60,6 +60,9 @@ export class HybridSearchManager {
         query: string,
         options?: { maxVectorResults?: number; maxKeywordResults?: number; maxEventResults?: number },
     ): Promise<HybridSearchResult[]> {
+        if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
+            return [];
+        }
         const adaptivePolicy = this.chatStateManager
             ? await this.chatStateManager.getAdaptivePolicy()
             : null;

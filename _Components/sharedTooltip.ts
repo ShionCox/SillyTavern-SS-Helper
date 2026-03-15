@@ -364,7 +364,11 @@ function showTooltip(target: HTMLElement, state: TooltipGlobalState): void {
   } else {
     runtime.root.removeAttribute("data-stx-tooltip-scope");
   }
-  runtime.body.textContent = tip;
+  if (target.getAttribute("data-tip-html") === "true") {
+    runtime.body.innerHTML = tip;
+  } else {
+    runtime.body.textContent = tip;
+  }
 
   if (instant) {
     runtime.root.classList.add("is-instant");

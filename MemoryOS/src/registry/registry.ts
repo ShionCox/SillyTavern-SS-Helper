@@ -88,18 +88,10 @@ export class PluginRegistry implements STXRegistry {
      * @param pluginId 插件唯一标识。
      * @returns 命中返回清单，否则返回 undefined。
      */
-    getManifest(pluginId: string): PluginManifest | undefined {
-        return this.get(pluginId);
-    }
-
     /**
      * 功能：兼容旧接口，列出全部插件。
      * @returns 清单数组。
      */
-    getAllPlugins(): PluginManifest[] {
-        return this.list();
-    }
-
     /**
      * 功能：判断插件是否声明某项能力。
      * @param pluginId 插件唯一标识。

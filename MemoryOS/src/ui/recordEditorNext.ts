@@ -287,6 +287,27 @@ async function buildChatItemMeta(
     };
 }
 
+const RE_KEY_I18N: Record<string, string> = {
+    role: '角色',
+    name: '名称',
+    content: '内容正文',
+    text: '普通文本',
+    summary: '摘要内容',
+    significance: '显著度',
+    importance: '重要度',
+    keywords: '关键词',
+    type: '类型',
+    description: '描述',
+    system: '系统设定',
+    user: '用户意图',
+    assistant: 'AI回复',
+    observation: '观察结果',
+    resolution: '决议',
+    thought: '内部思考',
+    context: '背景信息',
+    entities: '实体引用',
+};
+
 /**
  * 功能：渲染原始值的查看或编辑 HTML。
  * @param value 原始值
@@ -313,10 +334,11 @@ function renderRawValueHtml(value: unknown, isEditing: boolean): string {
         <div class="stx-re-kv">
             ${entries.map(([key, itemValue]: [string, unknown]): string => {
                 const renderedValue = escapeHtml(stringifyDisplayValue(itemValue));
+                const displayKey = RE_KEY_I18N[key] || key;
                 if (isEditing) {
-                    return `<div class="stx-re-kv-row"><div class="stx-re-kv-key">${escapeHtml(key)}:</div><div contenteditable="true" class="stx-re-kv-input" data-key="${escapeHtml(key)}">${renderedValue}</div></div>`;
+                    return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div contenteditable="true" class="stx-re-kv-input" data-key="${escapeHtml(key)}">${renderedValue}</div></div>`;
                 }
-                return `<div class="stx-re-kv-row"><div class="stx-re-kv-key">${escapeHtml(key)}:</div><div class="stx-re-kv-val">${renderedValue}</div></div>`;
+                return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div class="stx-re-kv-val">${renderedValue}</div></div>`;
             }).join('')}
         </div>
     `;
@@ -821,13 +843,13 @@ export async function openRecordEditor(): Promise<void> {
                     `;
                 } else if (tableName === 'facts') {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('事实 Key', 'factKey')}${headerCell('实体', 'entity')}${headerCell('路径', 'path')}${headerCell('值', 'value')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('记忆锚点', 'factKey')}${headerCell('实体', 'entity')}${headerCell('路径', 'path')}${headerCell('值', 'value')}<th>操作</th></tr>`;
                     }
                     const entity = record.entity as Record<string, unknown> | undefined;
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><div class="stx-re-json truncate" title="${escapeHtml(recordId)}">${escapeHtml(recordId)}</div></td>
+                            <td><div class="stx-re-json" style="white-space: pre-wrap; word-break: break-all; min-width: 120px;" title="${escapeHtml(recordId)}">${escapeHtml(recordId)}</div></td>
                             <td>${escapeHtml(entity ? `[${String(entity.kind ?? '')}:${String(entity.id ?? '')}]` : '-')}</td>
                             <td>${escapeHtml(String(record.path ?? '-'))}</td>
                             <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
@@ -1445,7 +1467,7 @@ export async function openRecordEditor(): Promise<void> {
         currentRawTable = nextTable;
         currentSort = { col: '', asc: false };
         btnBatchDelete.classList.add('is-hidden');
-        void renderRawTable(currentRawTable);
+        void renderActiveView();
     });
 
     chatListContainer.addEventListener('click', (event: Event): void => {

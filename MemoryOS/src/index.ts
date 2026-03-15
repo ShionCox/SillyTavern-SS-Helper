@@ -30,6 +30,7 @@ export { SchemaGate } from './core/schema-gate';
 export { RowResolver } from './core/row-resolver';
 export { RowOperationsManager } from './core/row-operations';
 export { PromptTrimmer } from './core/prompt-trimmer';
+export { ChatViewManager } from './core/chat-view-manager';
 
 // 注入管理器
 export { InjectionManager } from './injection/injection-manager';
@@ -40,8 +41,6 @@ export { InjectionManager } from './injection/injection-manager';
 export { MemorySDKImpl } from './sdk/memory-sdk';
 
 // 工具函数
-export { buildChatKey } from './utils/chat-namespace';
-export type { ChatNamespaceInput } from './utils/chat-namespace';
 export { buildScopePrefix, buildScopedKey, validateScopeAccess } from './utils/scope-manager';
 export type { ScopeLevel, ScopeContext } from './utils/scope-manager';
 
@@ -51,7 +50,7 @@ export { TemplateBuilder } from './template/template-builder';
 export { WorldInfoReader } from './template/worldinfo-reader';
 export { WorldInfoWriter } from './template/worldinfo-writer';
 export type {
-    WorldTemplate, TemplateEntity, TemplateFactType, TemplateTableDef,
+    WorldTemplate, TemplateFactType, TemplateTableDef,
     ExtractPolicies, InjectionLayout,
     WorldInfoEntry, WorldContextBundle,
 } from './template/types';
@@ -60,7 +59,8 @@ export type {
 export type {
     AdaptiveMetrics, AdaptivePolicy, ChatProfile, ChatProfileOverride,
     MemoryOSChatState, RetentionPolicy, StrategyDecision,
-    SummaryPolicyOverride, AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
+    AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
+    TurnLifecycle, TurnKind, TurnRecord, LogicalChatView, LogicalMessageNode, ChatMutationKind, ChatArchiveState,
     RowAliasIndex, RowRedirects, RowTombstones,
 } from './types/chat-state';
 export type {
@@ -106,13 +106,22 @@ import { broadcast, subscribe as subscribeBroadcast } from '../../SDK/bus/broadc
 import type { PluginManifest, RegistryChangeEvent } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
-import { buildSdkChatKeyEvent } from '../../SDK/tavern';
+import {
+    buildSdkChatKeyEvent,
+    extractTavernPromptMessagesEvent,
+    findFirstTavernPromptSystemIndexEvent,
+    findLastTavernPromptSystemIndexEvent,
+    getTavernPromptMessageTextEvent,
+    insertTavernPromptSystemMessageEvent,
+    isTavernPromptSystemMessageEvent,
+} from '../../SDK/tavern';
+import type { SdkTavernPromptMessageEvent } from '../../SDK/tavern';
 import { db } from './db/db';
-import { migrateMemoryOSLegacyData } from './db/legacy-migration';
 import { PluginRegistry } from './registry/registry';
 import { filterRecordText } from './core/record-filter';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
+import type { PreGenerationGateDecision, PromptAnchorMode } from './types';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -160,6 +169,261 @@ type MemoryOutcomeWriteResponse = {
     storedTextLength?: number;
 };
 
+type PromptBlockKind = 'system' | 'persona' | 'author_note' | 'lorebook' | 'other';
+
+/**
+ * 功能：归一化 Prompt 分段文本，降低空白和换行带来的噪声。
+ * @param text 原始文本。
+ * @returns 归一化后的文本。
+ */
+function normalizePromptSegmentText(text: unknown): string {
+    return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 功能：提取 Prompt 消息中的辅助元信息，提高分段分类精度。
+ * @param message Prompt 消息对象。
+ * @returns 可用于分类的元信息文本。
+ */
+function getPromptMessageMetaText(message: SdkTavernPromptMessageEvent | null | undefined): string {
+    if (!message || typeof message !== 'object') {
+        return '';
+    }
+    const record = message as Record<string, unknown>;
+    const candidates: unknown[] = [
+        record.name,
+        record.title,
+        record.label,
+        record.identifier,
+        record.source,
+        record.type,
+        record.prompt_name,
+        record.promptName,
+        record.comment,
+        record.note,
+    ];
+    return candidates
+        .map((item: unknown): string => normalizePromptSegmentText(item))
+        .filter((item: string): boolean => Boolean(item))
+        .join(' ');
+}
+
+/**
+ * 功能：按启发式规则对 Prompt 分段类型进行打分。
+ * @param analysisText 合并后的分析文本。
+ * @param headText 文本前缀，用于识别标题式模板。
+ * @param isSystemMessage 当前消息是否为 system。
+ * @returns 各候选类型分数。
+ */
+function scorePromptBlockHints(
+    analysisText: string,
+    headText: string,
+    isSystemMessage: boolean,
+): Record<'author_note' | 'lorebook' | 'persona' | 'system', number> {
+    const score: Record<'author_note' | 'lorebook' | 'persona' | 'system', number> = {
+        author_note: 0,
+        lorebook: 0,
+        persona: 0,
+        system: 0,
+    };
+
+    if (isSystemMessage) {
+        score.system += 2;
+    }
+
+    if (/^(?:[#\-\*\s\[]*)?(author'?s?\s*note|a\/n|作者注释|作者注记|创作注释|作者说明)/i.test(headText)) {
+        score.author_note += 4;
+    }
+    if (/(author'?s?\s*note|a\/n|creator\s*notes?|作者注释|作者注记|创作注释|作者说明)/i.test(analysisText)) {
+        score.author_note += 2;
+    }
+
+    if (/^(?:[#\-\*\s\[]*)?(lorebook|world\s*info(?:rmation)?|worldinfo|世界书|世界信息|设定词条|百科设定)/i.test(headText)) {
+        score.lorebook += 4;
+    }
+    if (/(lorebook|world\s*info(?:rmation)?|worldinfo|wi\s*entry|wi\s*entries|世界书|世界信息|世界观设定|设定词条|背景设定)/i.test(analysisText)) {
+        score.lorebook += 2;
+    }
+    if (/(keywords?|secondary\s*keys?|entry|constant|position|comment)\s*[:：]/i.test(headText) && /(lore|world|设定|世界)/i.test(analysisText)) {
+        score.lorebook += 2;
+    }
+
+    if (/^(?:[#\-\*\s\[]*)?(persona|character\s*card|character\s*persona|角色卡|角色设定|人物设定|人设)/i.test(headText)) {
+        score.persona += 4;
+    }
+    if (/(persona|character\s*card|character\s*persona|character\s*description|角色卡|角色设定|人物设定|人设|身份设定|扮演设定)/i.test(analysisText)) {
+        score.persona += 2;
+    }
+    if (/(description|personality|scenario|example|示例对话|性格设定|世界观)\s*[:：]/i.test(headText) && /(character|persona|角色|人设)/i.test(analysisText)) {
+        score.persona += 2;
+    }
+
+    if (/^(you are|you'?re|system|instruction|guideline|规则|系统提示|你是)/i.test(headText)) {
+        score.system += 2;
+    }
+    if (/(system\s*prompt|system\s*instruction|必须遵守|core\s*instruction|global\s*rule)/i.test(analysisText)) {
+        score.system += 1;
+    }
+
+    return score;
+}
+
+/**
+ * 功能：按文本和元信息特征推断 Prompt 区块类型。
+ * @param text 当前消息文本。
+ * @param message 当前 Prompt 消息对象。
+ * @returns 归类后的 Prompt 区块类型。
+ */
+function inferPromptBlockKind(text: string, message?: SdkTavernPromptMessageEvent): PromptBlockKind {
+    const normalized = normalizePromptSegmentText(text);
+    if (!normalized) {
+        return 'other';
+    }
+    const metaText = getPromptMessageMetaText(message);
+    const isSystemMessage = isTavernPromptSystemMessageEvent(message);
+    const analysisText = `${normalized} ${metaText}`.toLowerCase();
+    const headText = analysisText.slice(0, 320);
+    const score = scorePromptBlockHints(analysisText, headText, isSystemMessage);
+    const rankedKinds: Array<{ kind: PromptBlockKind; score: number }> = [
+        { kind: 'author_note', score: score.author_note },
+        { kind: 'lorebook', score: score.lorebook },
+        { kind: 'persona', score: score.persona },
+    ];
+    rankedKinds.sort((left, right): number => right.score - left.score);
+    const bestKind = rankedKinds[0];
+    if (bestKind && (bestKind.score >= 3 || (isSystemMessage && bestKind.score >= 2))) {
+        return bestKind.kind;
+    }
+    if (score.system >= 3) {
+        return 'system';
+    }
+    if (isSystemMessage) {
+        return 'system';
+    }
+    return 'other';
+}
+
+/**
+ * 功能：在 Prompt 消息数组中查找目标区块。
+ * @param chat Prompt 消息数组。
+ * @param kind 目标区块类型。
+ * @param direction 查找方向。
+ * @returns 命中的索引；未命中时返回 -1。
+ */
+function findPromptBlockIndexByKind(
+    chat: SdkTavernPromptMessageEvent[],
+    kind: PromptBlockKind,
+    direction: 'first' | 'last' = 'last',
+): number {
+    if (!Array.isArray(chat) || chat.length === 0) {
+        return -1;
+    }
+    const shouldPreferSystem = kind === 'persona' || kind === 'author_note' || kind === 'lorebook';
+    const probe = (strictSystemOnly: boolean): number => {
+        const start = direction === 'first' ? 0 : chat.length - 1;
+        const end = direction === 'first' ? chat.length : -1;
+        const step = direction === 'first' ? 1 : -1;
+        for (let index = start; index !== end; index += step) {
+            const message = chat[index];
+            if (strictSystemOnly && shouldPreferSystem && !isTavernPromptSystemMessageEvent(message)) {
+                continue;
+            }
+            const text = getTavernPromptMessageTextEvent(message);
+            if (inferPromptBlockKind(text, message) === kind) {
+                return index;
+            }
+        }
+        return -1;
+    };
+    const strictIndex = probe(true);
+    if (strictIndex >= 0) {
+        return strictIndex;
+    }
+    return probe(false);
+}
+
+/**
+ * 功能：根据锚点模式计算插入位置。
+ * @param chat Prompt 消息数组。
+ * @param anchorMode 目标锚点。
+ * @param intent 当前注入意图。
+ * @returns 可用插入位置；无法定位时返回 null。
+ */
+function resolvePromptIndexBySingleAnchor(
+    chat: SdkTavernPromptMessageEvent[],
+    anchorMode: PromptAnchorMode,
+    intent: string,
+): number | null {
+    if (!Array.isArray(chat)) {
+        return null;
+    }
+    if (anchorMode === 'top') {
+        return 0;
+    }
+    if (anchorMode === 'custom_anchor') {
+        return chat.length;
+    }
+    if (anchorMode === 'before_start') {
+        const firstUserIndex = chat.findIndex((message: SdkTavernPromptMessageEvent): boolean => {
+            return String(message?.role ?? '').trim().toLowerCase() === 'user' || message?.is_user === true;
+        });
+        return firstUserIndex >= 0 ? firstUserIndex : Math.min(1, chat.length);
+    }
+    if (anchorMode === 'after_first_system') {
+        const index = findFirstTavernPromptSystemIndexEvent(chat);
+        return index >= 0 ? index + 1 : null;
+    }
+    if (anchorMode === 'after_last_system') {
+        const index = findLastTavernPromptSystemIndexEvent(chat);
+        return index >= 0 ? index + 1 : null;
+    }
+    if (anchorMode === 'after_persona') {
+        const index = findPromptBlockIndexByKind(chat, 'persona');
+        return index >= 0 ? index + 1 : null;
+    }
+    if (anchorMode === 'after_author_note') {
+        const index = findPromptBlockIndexByKind(chat, 'author_note');
+        return index >= 0 ? index + 1 : null;
+    }
+    if (anchorMode === 'after_lorebook') {
+        const index = findPromptBlockIndexByKind(chat, 'lorebook');
+        return index >= 0 ? index + 1 : null;
+    }
+    if (anchorMode === 'setting_query_only') {
+        if (intent !== 'setting_qa') {
+            return null;
+        }
+        const lorebookIndex = findPromptBlockIndexByKind(chat, 'lorebook');
+        if (lorebookIndex >= 0) {
+            return lorebookIndex + 1;
+        }
+        const lastSystemIndex = findLastTavernPromptSystemIndexEvent(chat);
+        return lastSystemIndex >= 0 ? lastSystemIndex + 1 : 0;
+    }
+    return null;
+}
+
+/**
+ * 功能：按主锚点和回退链解析最终插入位置。
+ * @param chat Prompt 消息数组。
+ * @param decision 生成前 gate 决策。
+ * @returns 可用插入位置。
+ */
+function resolvePromptInsertIndexByAnchor(
+    chat: SdkTavernPromptMessageEvent[],
+    decision: PreGenerationGateDecision,
+): number {
+    const orderedAnchors = [decision.anchorMode, ...decision.fallbackOrder].filter(Boolean);
+    const uniqueAnchors = Array.from(new Set(orderedAnchors));
+    for (const anchorMode of uniqueAnchors) {
+        const index = resolvePromptIndexBySingleAnchor(chat, anchorMode, decision.intent);
+        if (index != null) {
+            return Math.max(0, Math.min(index, chat.length));
+        }
+    }
+    return Math.max(0, chat.length);
+}
+
 class MemoryOS {
     private stxBus: EventBus;
     private registry: PluginRegistry;
@@ -172,9 +436,6 @@ class MemoryOS {
         this.registry = new PluginRegistry();
         this.refreshChatBindingHandler = null;
         this.llmBridgeRetryTimer = null;
-
-        // 一次性旧数据迁移（stx_memory_os → ss-helper-db）
-        void migrateMemoryOSLegacyData();
 
         this.initGlobalSTX();
         this.bindRegistryEvents();
@@ -725,6 +986,7 @@ class MemoryOS {
         let lastAssistantTextSignatureAt = 0;
         let lastUserSignature = '';
         let lastUserSignatureAt = 0;
+        let lastChatStructureSignature = '';
         const DUPLICATE_SIGNATURE_WINDOW_MS = 3000;
         // 功能：将消息 ID 归一化为字符串。
         const normalizeMessageId = (msgId: unknown): string => {
@@ -906,6 +1168,40 @@ class MemoryOS {
                 .replace(/\s+/g, ' ')
                 .trim();
         };
+        // 功能：计算轻量聊天结构签名，用于快照差异兜底。
+        const computeChatStructureSignature = (chatList: unknown): string => {
+            if (!Array.isArray(chatList)) return '';
+            const payload = chatList
+                .map((item: any, index: number): string => {
+                    const msgId = normalizeMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid ?? '');
+                    const role = isSystemMessage(item) ? 'system' : (isUserMessage(item) ? 'user' : 'assistant');
+                    const text = normalizeTextSignature(readMessageText(item));
+                    return `${index}|${msgId}|${role}|${text}`;
+                })
+                .join('\n');
+            let hash = 5381;
+            for (let i = 0; i < payload.length; i += 1) {
+                hash = ((hash << 5) + hash) ^ payload.charCodeAt(i);
+            }
+            return `h${(hash >>> 0).toString(16)}`;
+        };
+        // 功能：按事件或快照差异重建逻辑消息视图与语义楼层。
+        const rebuildLogicalViewIfNeeded = (reason: string, force: boolean = false): void => {
+            const memory = (window as any).STX?.memory;
+            const ctx = getCtx();
+            if (!memory?.chatState?.rebuildLogicalChatView || !ctx) {
+                return;
+            }
+            const signature = computeChatStructureSignature(ctx.chat);
+            if (!force && signature && signature === lastChatStructureSignature) {
+                return;
+            }
+            lastChatStructureSignature = signature;
+            Promise.resolve(memory.chatState.rebuildLogicalChatView())
+                .catch((error: unknown) => {
+                    logger.warn(`逻辑消息视图重建失败 reason=${reason}`, error);
+                });
+        };
         // 功能：按消息 ID 在 chat 列表中查找消息对象。
         const findMessageById = (chatList: unknown, messageId: string): any | null => {
             if (!messageId || !Array.isArray(chatList)) {
@@ -1004,6 +1300,7 @@ class MemoryOS {
             lastAssistantTextSignatureAt = 0;
             lastUserSignature = '';
             lastUserSignatureAt = 0;
+            lastChatStructureSignature = '';
 
             // 先打印切换通知，帮助排查事件是否正常触发
             const binding = resolveRecordableChatBinding(ctx);
@@ -1060,6 +1357,13 @@ class MemoryOS {
 
             (window as any).STX.memory = sdkInstance;
             currentChatKey = chatKey;
+            const bindingFingerprint = `${binding.groupId || '-'}|${binding.characterId || '-'}`;
+            if (typeof (sdkInstance as any)?.chatState?.setCharacterBindingFingerprint === 'function') {
+                await (sdkInstance as any).chatState.setCharacterBindingFingerprint(bindingFingerprint);
+            }
+            if (typeof (sdkInstance as any)?.chatState?.bootstrapSemanticSeed === 'function') {
+                await (sdkInstance as any).chatState.bootstrapSemanticSeed();
+            }
             logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
             toast.success(`数据库已就绪`);
 
@@ -1083,6 +1387,15 @@ class MemoryOS {
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', onChangeConfig);
         eventSource.on(types.CHAT_STARTED || 'chat_started', onChangeConfig);
         eventSource.on(types.CHAT_NEW || 'chat_new', onChangeConfig);
+        eventSource.on(types.CHAT_CHANGED || 'chat_changed', () => {
+            setTimeout(() => rebuildLogicalViewIfNeeded('chat_changed', true), 0);
+        });
+        eventSource.on(types.CHAT_STARTED || 'chat_started', () => {
+            setTimeout(() => rebuildLogicalViewIfNeeded('chat_started', true), 0);
+        });
+        eventSource.on(types.CHAT_NEW || 'chat_new', () => {
+            setTimeout(() => rebuildLogicalViewIfNeeded('chat_new', true), 0);
+        });
         void onChangeConfig().catch((error: unknown) => {
             logger.error('首次绑定当前聊天失败', error);
         });
@@ -1132,12 +1445,14 @@ class MemoryOS {
                         return;
                     }
                     appendFilteredMessageEvent('chat.message.received', text, msgId || undefined);
+                    rebuildLogicalViewIfNeeded('assistant_message');
                     lastAssistantSignature = signature;
                     lastAssistantSignatureAt = now;
                     lastAssistantTextSignature = textSignature;
                     lastAssistantTextSignatureAt = now;
                 } else {
                     appendLatestAssistantMessageFallback();
+                    rebuildLogicalViewIfNeeded('assistant_fallback');
                 }
             }
         };
@@ -1176,6 +1491,7 @@ class MemoryOS {
                         return;
                     }
                     appendFilteredMessageEvent('chat.message.sent', text, msgId || undefined);
+                    rebuildLogicalViewIfNeeded('user_message');
                     lastUserSignature = signature;
                     lastUserSignatureAt = Date.now();
                 }
@@ -1216,6 +1532,25 @@ class MemoryOS {
 
 
         // 绑定生成结束事件（有时 MESSAGE_RECEIVED 获取不到完整更新）
+        const mutationEventCandidates = [
+            (types as any).MESSAGE_EDITED,
+            (types as any).MESSAGE_SWIPED,
+            (types as any).MESSAGE_DELETED,
+            (types as any).CHAT_RENAMED,
+            'message_edited',
+            'message_swiped',
+            'message_deleted',
+            'chat_renamed',
+        ]
+            .map((value: unknown): string => String(value ?? '').trim())
+            .filter((value: string): boolean => value.length > 0);
+        const mutationEventNames = Array.from(new Set(mutationEventCandidates));
+        for (const eventName of mutationEventNames) {
+            eventSource.on(eventName, () => {
+                rebuildLogicalViewIfNeeded(`mutation_event:${eventName}`, true);
+            });
+        }
+
         eventSource.on(types.GENERATION_ENDED || 'generation_ended', () => {
             if (!isPluginEnabled()) return;
             const ctx = getCtx();
@@ -1224,6 +1559,7 @@ class MemoryOS {
             if (memory && Array.isArray(ctx.chat) && ctx.chat.length > 0) {
                 // 尝试补录最后一条助手回复（仅兜底）
                 appendLatestAssistantMessageFallback();
+                rebuildLogicalViewIfNeeded('generation_ended', true);
 
                 // 若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
                 if (isAiModeEnabled()) {
@@ -1243,8 +1579,9 @@ class MemoryOS {
         eventSource.on(types.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready', async (payload: any) => {
             if (!isPluginEnabled()) return;
             const memory = (window as any).STX?.memory;
-            if (!memory || !payload || !Array.isArray(payload.chat)) {
-                logger.warn(`PROMPT_READY 跳过：memory=${!!memory}, payload=${!!payload}, chatArray=${Array.isArray(payload?.chat)}`);
+            const promptMessages = extractTavernPromptMessagesEvent(payload);
+            if (!memory || !payload || !Array.isArray(promptMessages)) {
+                logger.warn(`PROMPT_READY 跳过：memory=${!!memory}, payload=${!!payload}, promptMessages=${Array.isArray(promptMessages)}`);
                 return;
             }
 
@@ -1255,13 +1592,16 @@ class MemoryOS {
                 return;
             }
             lastPromptReadyTs = now;
+            rebuildLogicalViewIfNeeded('prompt_ready');
 
             try {
                 logger.info('触发大模型注入栈，正在向 Prompt 内附加短期事件池与摘要...');
-                const latestUserMessage = [...payload.chat]
+                const latestUserMessage = [...promptMessages]
                     .reverse()
-                    .find((item: any) => item?.role === 'user' && typeof item?.content === 'string');
-                const query = String(latestUserMessage?.content || '').trim();
+                    .find((item: SdkTavernPromptMessageEvent) => {
+                        return String(item?.role ?? '').trim().toLowerCase() === 'user' || item?.is_user === true;
+                    });
+                const query = getTavernPromptMessageTextEvent(latestUserMessage).trim();
                 const settingsMaxTokens = Number(readSettings().contextMaxTokens) || 1200;
                 const injectedContextResult = await memory.injection.buildContext({
                     maxTokens: settingsMaxTokens,
@@ -1273,39 +1613,28 @@ class MemoryOS {
                 const injectedContext = typeof injectedContextResult === 'string'
                     ? injectedContextResult
                     : injectedContextResult?.text || '';
+                const preDecision = typeof injectedContextResult === 'object' && injectedContextResult
+                    ? (injectedContextResult.preDecision as PreGenerationGateDecision | undefined)
+                    : undefined;
                 if (typeof injectedContextResult === 'object' && injectedContextResult) {
                     logger.info(`buildContext 选用区段: ${injectedContextResult.sectionsUsed.join(', ')}`);
                 }
 
                 logger.info(`buildContext 返回内容长度: ${injectedContext?.length ?? 0}`);
 
-                if (!injectedContext || injectedContext.trim().length === 0) {
-                    logger.warn('记忆上下文为空，跳过注入（数据库可能尚无内容）。');
+                if (!preDecision?.shouldInject || !injectedContext || injectedContext.trim().length === 0) {
+                    logger.warn('记忆上下文为空或生成前 gate 判定跳过，已取消注入。');
                     return;
                 }
 
-                const wrapperString = `\n<MEMORY_OS_CONTEXT>\n${injectedContext}\n</MEMORY_OS_CONTEXT>\n`;
-                const policy = memory.injection.getAnchorPolicy?.() || { defaultInsert: 'top', allowSystem: false, allowUser: true };
-
-                if (policy.defaultInsert === 'beforeStart') {
-                    // 在第一条用户消息之前插入独立 system 消息
-                    const firstUserIdx = payload.chat.findIndex((m: any) => m?.role === 'user');
-                    const insertIdx = firstUserIdx > 0 ? firstUserIdx : 1;
-                    payload.chat.splice(insertIdx, 0, { role: 'system', content: wrapperString });
-                    logger.success('记忆注入完成，已插入到首条用户消息前。');
-                } else if (policy.defaultInsert === 'customAnchor') {
-                    // 追加为独立 system 消息到末尾
-                    payload.chat.push({ role: 'system', content: wrapperString });
-                    logger.success('记忆注入完成，已作为末尾 System 元素推入。');
-                } else {
-                    // 默认 'top'：在系统提示词后追加为独立消息
-                    if (payload.chat.length > 0 && payload.chat[0]?.role === 'system') {
-                        payload.chat.splice(1, 0, { role: 'system', content: wrapperString });
-                    } else {
-                        payload.chat.unshift({ role: 'system', content: wrapperString });
-                    }
-                    logger.success('记忆注入完成，已作为独立 System 消息插入顶部。');
-                }
+                const insertIndex = resolvePromptInsertIndexByAnchor(promptMessages, preDecision);
+                insertTavernPromptSystemMessageEvent(promptMessages, {
+                    text: injectedContext,
+                    insertMode: 'before_index',
+                    insertBeforeIndex: insertIndex,
+                    template: promptMessages[Math.max(0, Math.min(insertIndex - 1, promptMessages.length - 1))] ?? promptMessages[0],
+                });
+                logger.success(`记忆注入完成，已按锚点 ${preDecision.anchorMode} 插入到 Prompt 结构中。`);
 
             } catch (error) {
                 logger.error('Prompt Context 构建或注入失败', error);

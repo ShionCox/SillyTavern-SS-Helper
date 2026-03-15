@@ -499,6 +499,12 @@ export function buildAdaptivePolicy(
     let speakerTrackingLevel: AdaptivePolicy['speakerTrackingLevel'] = profile.chatType === 'group' ? 'high' : 'medium';
     let worldStateWeight = profile.chatType === 'worldbook' ? 0.85 : profile.extractStrategy === 'facts_relations_world' ? 0.7 : 0.45;
     let contextMaxTokensShare = profile.stylePreference === 'qa' ? 0.35 : profile.chatType === 'worldbook' ? 0.7 : 0.55;
+    let lorebookPolicyWeight = profile.chatType === 'worldbook' ? 0.85 : 0.55;
+    let groupLaneBudgetShare = profile.chatType === 'group' ? 0.42 : 0.2;
+    let actorSalienceTopK = profile.chatType === 'group' ? 4 : 2;
+    let profileRefreshInterval = profile.memoryStrength === 'high' ? 6 : profile.memoryStrength === 'low' ? 16 : 10;
+    let qualityRefreshInterval = profile.summaryStrategy === 'timeline' ? 10 : 14;
+    const groupLaneEnabled = profile.chatType === 'group';
 
     if (metrics.userInfoDensity <= 0.08) {
         extractInterval += 6;
@@ -508,15 +514,21 @@ export function buildAdaptivePolicy(
         entityResolutionLevel = 'high';
         speakerTrackingLevel = 'high';
         worldStateWeight = Math.max(worldStateWeight, 0.55);
+        groupLaneBudgetShare = Math.max(groupLaneBudgetShare, 0.45);
+        actorSalienceTopK = Math.max(actorSalienceTopK, 5);
+        profileRefreshInterval = Math.min(profileRefreshInterval, 6);
+        qualityRefreshInterval = Math.min(qualityRefreshInterval, 10);
     }
     if (metrics.worldStateSignal >= 0.5) {
         worldStateWeight = Math.max(worldStateWeight, 0.8);
         contextMaxTokensShare = Math.max(contextMaxTokensShare, 0.65);
+        lorebookPolicyWeight = Math.max(lorebookPolicyWeight, 0.75);
     }
     if (profile.stylePreference === 'qa' && metrics.avgMessageLength <= 100) {
         summaryEnabled = false;
         extractInterval = Math.max(extractInterval, 18);
         contextMaxTokensShare = Math.min(contextMaxTokensShare, 0.3);
+        lorebookPolicyWeight = Math.min(lorebookPolicyWeight, 0.45);
     }
 
     const vectorDecision = inferVectorMode(profile, metrics, vectorLifecycle);
@@ -543,6 +555,12 @@ export function buildAdaptivePolicy(
         rerankEnabled: vectorDecision.rerankEnabled && quality.dimensions.retrievalPrecision >= 0.35,
         vectorIdleDecayDays: Math.max(1, Math.round(profile.vectorStrategy.idleDecayDays)),
         contextMaxTokensShare: clampNumber(contextMaxTokensShare, 0.2, 0.8),
+        lorebookPolicyWeight: clampNumber(lorebookPolicyWeight, 0.1, 1),
+        groupLaneBudgetShare: clampNumber(groupLaneBudgetShare, 0.1, 0.8),
+        actorSalienceTopK: Math.max(1, Math.min(8, Math.round(actorSalienceTopK))),
+        profileRefreshInterval: Math.max(1, Math.round(profileRefreshInterval)),
+        qualityRefreshInterval: Math.max(1, Math.round(qualityRefreshInterval)),
+        groupLaneEnabled,
     };
 }
 

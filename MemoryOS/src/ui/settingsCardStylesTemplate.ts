@@ -954,7 +954,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-re-tabs {
-      padding: 12px 24px;
+      padding: 6px 24px;
       display: flex;
       gap: 10px;
       background: var(--ss-theme-toolbar-bg, rgba(0,0,0,0.15));
@@ -1069,7 +1069,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 60%, transparent);
     }
     .stx-re-table td {
-      padding: 12px 24px;
+      padding: 6px 24px;
       border-bottom: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.05)) 68%, transparent);
       vertical-align: top;
       overflow: hidden;
@@ -1147,6 +1147,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       padding-right: 4px;
       scrollbar-width: thin;
       scrollbar-color: var(--stx-memory-scrollbar, rgba(197, 160, 89, 0.4)) transparent;
+      display: flex;
+      flex-direction: column;
     }
 
     .stx-re-value::-webkit-scrollbar {
@@ -1264,12 +1266,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       gap: 6px;
       font-family: 'JetBrains Mono', 'Fira Code', monospace;
       font-size: 12px;
-      padding: 4px;
+      padding: 0 4px;
       border-radius: 6px;
       background: transparent;
       border: none;
     }
     .stx-re-kv-row {
+      align-items: flex-start;
       display: flex;
       gap: 8px;
     }
@@ -1597,7 +1600,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-memory-chat-strategy-summary-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
       width: 100%;
     }
@@ -1618,6 +1621,33 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-weight: 700;
       line-height: 1.35;
       word-break: break-word;
+    }
+
+    #${cardId} .stx-memory-chat-strategy-summary-maintenance {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-warning, #ffb24d) 42%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-warning, #ffb24d) 12%, transparent);
+    }
+
+    #${cardId} .stx-memory-chat-strategy-summary-maintenance-text {
+      font-size: 12px;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+
+    #${cardId} .stx-memory-chat-strategy-summary-maintenance-action {
+      border: 1px solid color-mix(in srgb, var(--ss-theme-warning, #ffb24d) 60%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(255,255,255,0.08)) 96%, transparent);
+      color: var(--ss-theme-text, inherit);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
     }
 
     #${cardId} .stx-memory-chat-strategy-pill-wrap,
@@ -1659,6 +1689,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       position: fixed;
       inset: 0;
       z-index: 100000;
+      --stx-shared-select-z-index: 1000001;
       display: flex;
       align-items: stretch;
       justify-content: center;
@@ -1966,6 +1997,48 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       margin: 4px 0 0 0;
     }
 
+    .stx-memory-chat-strategy-advanced {
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.12)) 88%, transparent);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.03)) 100%, transparent);
+    }
+
+    .stx-memory-chat-strategy-advanced-summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .stx-memory-chat-strategy-advanced-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .stx-memory-chat-strategy-advanced-summary h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.25;
+      font-weight: 800;
+    }
+
+    .stx-memory-chat-strategy-advanced-summary p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      line-height: 1.4;
+      opacity: 0.72;
+    }
+
+    .stx-memory-chat-strategy-advanced-body {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
     [data-tip] {
       cursor: help;
       pointer-events: auto;
@@ -1981,6 +2054,43 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     .stx-memory-chat-strategy-diagnostic-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group {
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.12)) 88%, transparent);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.03)) 100%, transparent);
+      overflow: hidden;
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group summary span {
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.3;
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group summary small {
+      font-size: 11px;
+      line-height: 1.45;
+      opacity: 0.72;
+    }
+
+    .stx-memory-chat-strategy-diagnostic-group .stx-memory-chat-strategy-diagnostic-grid {
+      padding: 0 12px 12px 12px;
     }
 
     .stx-memory-chat-strategy-quality-grid {
@@ -2099,6 +2209,22 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.45;
       opacity: 0.9;
       word-break: break-word;
+    }
+
+    .stx-memory-chat-strategy-maintenance-action {
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 46%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent);
+      color: var(--ss-theme-text, inherit);
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-size: 12px;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+
+    .stx-memory-chat-strategy-maintenance-action:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     .stx-memory-chat-strategy-dimension-value,
@@ -2261,6 +2387,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-memory-chat-strategy-input {
+      height: 32px;
       width: 100%;
       min-width: 0;
     }

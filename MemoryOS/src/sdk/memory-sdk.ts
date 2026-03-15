@@ -17,24 +17,44 @@ import { TurnTracker } from '../core/turn-tracker';
 import { RowResolver } from '../core/row-resolver';
 import { RowOperationsManager } from '../core/row-operations';
 import { PromptTrimmer } from '../core/prompt-trimmer';
-import { db } from '../db/db';
+import { ChatViewManager } from '../core/chat-view-manager';
+import { collectChatSemanticSeed } from '../core/chat-semantic-bootstrap';
+import { archiveMemoryChat, db, purgeMemoryChat, restoreArchivedMemoryChat } from '../db/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import type { TemplateTableDef } from '../template/types';
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     AutoSchemaPolicy,
+    ChatSemanticSeed,
     ChatProfile,
+    EffectivePresetBundle,
+    GroupMemoryState,
+    InjectionIntent,
+    InjectionSectionName,
+    LorebookGateDecision,
+    MaintenanceActionType,
     MaintenanceAdvice,
+    MaintenanceExecutionResult,
+    MaintenanceInsight,
+    ChatLifecycleState,
     MemoryQualityScorecard,
+    PostGenerationGateDecision,
+    PreGenerationGateDecision,
+    PromptAnchorMode,
+    PromptInjectionProfile,
+    PromptQueryMode,
+    PromptRenderStyle,
+    PromptSoftPersonaMode,
     RetentionPolicy,
     StrategyDecision,
-    SummaryPolicyOverride,
+    UserFacingChatPreset,
     VectorLifecycleState,
     RowRefResolution,
     RowSeedData,
     LogicTableQueryOpts,
     LogicTableRow,
+    LogicalChatView,
 } from '../types';
 
 /**
@@ -61,6 +81,7 @@ export class MemorySDKImpl implements MemorySDK {
     private rowResolver: RowResolver;
     private rowOperations: RowOperationsManager;
     private promptTrimmer: PromptTrimmer;
+    private chatViewManager: ChatViewManager;
 
     constructor(chatKey: string) {
         this.chatKey_ = chatKey;
@@ -102,6 +123,7 @@ export class MemorySDKImpl implements MemorySDK {
         this.rowResolver = new RowResolver(this.chatStateManager, this.factsManager);
         this.rowOperations = new RowOperationsManager(chatKey, this.chatStateManager, this.factsManager, this.auditManager);
         this.promptTrimmer = new PromptTrimmer(chatKey, this.templateManager, this.chatStateManager, this.factsManager);
+        this.chatViewManager = new ChatViewManager(chatKey);
     }
 
     /**
@@ -111,6 +133,7 @@ export class MemorySDKImpl implements MemorySDK {
     async init(): Promise<void> {
         await this.metaManager.ensureInit();
         await this.chatStateManager.load();
+        await this.bootstrapSemanticSeedIfNeeded();
     }
 
     // --- MemorySDK 接口实现 ---
@@ -141,7 +164,74 @@ export class MemorySDKImpl implements MemorySDK {
             .where('[chatKey+updatedAt]')
             .between([this.chatKey_, 0], [this.chatKey_, Infinity])
             .toArray();
-        return buildDisplayTables(template.entities || {}, template.tables || [], facts);
+        return buildDisplayTables(template.tables || [], facts);
+    }
+
+    /**
+     * 功能：执行聊天冷启动语义建档，双写到 chatState 与 facts/state。
+     * @returns Promise<void>
+     */
+    private async bootstrapSemanticSeedIfNeeded(): Promise<void> {
+        const presetBundle = await this.chatStateManager.getEffectivePresetBundle();
+        if (presetBundle.autoBootstrapSemanticSeed === false) {
+            return;
+        }
+        const bootstrap = collectChatSemanticSeed(this.chatKey_);
+        if (!bootstrap.seed) {
+            return;
+        }
+        const currentFingerprint = await this.chatStateManager.getColdStartFingerprint();
+        if (currentFingerprint && currentFingerprint === bootstrap.fingerprint) {
+            return;
+        }
+        const seed = bootstrap.seed;
+        await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
+        if (bootstrap.bindingFingerprint) {
+            await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
+        }
+        await this.persistSemanticSeed(seed, bootstrap.fingerprint);
+    }
+
+    /**
+     * 功能：将语义种子提炼后写入 facts/state。
+     * @param seed 语义种子。
+     * @param fingerprint 种子指纹。
+     */
+    private async persistSemanticSeed(seed: ChatSemanticSeed, fingerprint: string): Promise<void> {
+        const roleKey = String(seed.identitySeed?.roleKey ?? 'default_role').trim() || 'default_role';
+        const roleEntity = { kind: 'character', id: roleKey };
+        const provenance = { extractor: 'semantic_seed_bootstrap', fingerprint, ts: Date.now() };
+        await this.factsManager.upsert({
+            type: 'semantic.identity',
+            entity: roleEntity,
+            path: 'profile',
+            value: {
+                displayName: seed.identitySeed.displayName,
+                aliases: seed.identitySeed.aliases,
+                identity: seed.identitySeed.identity,
+                catchphrases: seed.identitySeed.catchphrases,
+                relationshipAnchors: seed.identitySeed.relationshipAnchors,
+            },
+            confidence: 0.9,
+            provenance,
+        });
+        await this.factsManager.upsert({
+            type: 'semantic.style',
+            entity: roleEntity,
+            path: 'mode',
+            value: {
+                mode: seed.styleSeed.mode,
+                cues: seed.styleSeed.cues,
+                presetStyle: seed.presetStyle,
+            },
+            confidence: 0.8,
+            provenance,
+        });
+        await this.stateManager.set('/semantic/world/locations', seed.worldSeed.locations, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/world/rules', seed.worldSeed.rules, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/world/hardConstraints', seed.worldSeed.hardConstraints, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/meta/activeLorebooks', seed.activeLorebooks, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/meta/groupMembers', seed.groupMembers, { sourceEventId: fingerprint });
     }
 
     // 事件流
@@ -206,11 +296,32 @@ export class MemorySDKImpl implements MemorySDK {
 
     // 注入控制
     injection = {
-        buildContext: (opts?: { maxTokens?: number; sections?: Array<"WORLD_STATE" | "FACTS" | "EVENTS" | "SUMMARY">; query?: string; sectionBudgets?: Partial<Record<"WORLD_STATE" | "FACTS" | "EVENTS" | "SUMMARY", number>>; preferSummary?: boolean }) => {
+        buildContext: (opts?: {
+            maxTokens?: number;
+            sections?: InjectionSectionName[];
+            query?: string;
+            sectionBudgets?: Partial<Record<InjectionSectionName, number>>;
+            preferSummary?: boolean;
+            intentHint?: InjectionIntent;
+            includeDecisionMeta?: boolean;
+        }) => {
             return this.injectionManager.buildContext(opts);
         },
-        setAnchorPolicy: (opts: { allowSystem?: boolean; allowUser?: boolean; defaultInsert?: "top" | "beforeStart" | "customAnchor" }) => {
+        setAnchorPolicy: (opts: {
+            allowSystem?: boolean;
+            allowUser?: boolean;
+            defaultInsert?: PromptAnchorMode;
+            fallbackOrder?: PromptAnchorMode[];
+            queryMode?: PromptQueryMode;
+            renderStyle?: PromptRenderStyle;
+            softPersonaMode?: PromptSoftPersonaMode;
+            wrapTag?: string;
+            settingOnlyMinScore?: number;
+        }) => {
             return this.injectionManager.setAnchorPolicy(opts);
+        },
+        getAnchorPolicy: (): PromptInjectionProfile => {
+            return this.injectionManager.getAnchorPolicy();
         },
     };
 
@@ -404,6 +515,15 @@ export class MemorySDKImpl implements MemorySDK {
         getMaintenanceAdvice: (): Promise<MaintenanceAdvice[]> => {
             return this.chatStateManager.getMaintenanceAdvice();
         },
+        getMaintenanceInsights: (): Promise<MaintenanceInsight[]> => {
+            return this.chatStateManager.getMaintenanceInsights();
+        },
+        getLifecycleState: (): Promise<ChatLifecycleState> => {
+            return this.chatStateManager.getLifecycleState();
+        },
+        runMaintenanceAction: (action: MaintenanceActionType): Promise<MaintenanceExecutionResult> => {
+            return this.chatStateManager.runMaintenanceAction(action);
+        },
         recomputeAdaptivePolicy: (): Promise<AdaptivePolicy> => {
             return this.chatStateManager.recomputeAdaptivePolicy();
         },
@@ -416,17 +536,79 @@ export class MemorySDKImpl implements MemorySDK {
         getLastStrategyDecision: (): Promise<StrategyDecision | null> => {
             return this.chatStateManager.getLastStrategyDecision();
         },
-        getSummaryPolicy: () => {
-            return this.chatStateManager.getSummaryPolicy();
-        },
-        setSummaryPolicyOverride: (override: Partial<SummaryPolicyOverride>) => {
-            return this.chatStateManager.setSummaryPolicyOverride(override);
-        },
         getAutoSchemaPolicy: () => {
             return this.chatStateManager.getAutoSchemaPolicy();
         },
         setAutoSchemaPolicy: (policy: Partial<AutoSchemaPolicy>) => {
             return this.chatStateManager.setAutoSchemaPolicy(policy);
+        },
+        setCharacterBindingFingerprint: (fingerprint: string): Promise<void> => {
+            return this.chatStateManager.setCharacterBindingFingerprint(fingerprint);
+        },
+        bootstrapSemanticSeed: async (): Promise<void> => {
+            await this.bootstrapSemanticSeedIfNeeded();
+        },
+        getSemanticSeed: (): Promise<ChatSemanticSeed | null> => {
+            return this.chatStateManager.getSemanticSeed();
+        },
+        getLorebookDecision: (): Promise<LorebookGateDecision | null> => {
+            return this.chatStateManager.getLorebookDecision();
+        },
+        getGroupMemory: (): Promise<GroupMemoryState | null> => {
+            return this.chatStateManager.getGroupMemory();
+        },
+        getPromptInjectionProfile: (): Promise<PromptInjectionProfile> => {
+            return this.chatStateManager.getPromptInjectionProfile();
+        },
+        setPromptInjectionProfile: (profile: Partial<PromptInjectionProfile>): Promise<void> => {
+            return this.chatStateManager.setPromptInjectionProfile(profile);
+        },
+        getEffectivePresetBundle: (): Promise<EffectivePresetBundle> => {
+            return this.chatStateManager.getEffectivePresetBundle();
+        },
+        saveGlobalPreset: (preset: UserFacingChatPreset): Promise<void> => {
+            return this.chatStateManager.saveGlobalPreset(preset);
+        },
+        saveRolePreset: (preset: UserFacingChatPreset): Promise<void> => {
+            return this.chatStateManager.saveRolePreset(preset);
+        },
+        clearRolePreset: (): Promise<void> => {
+            return this.chatStateManager.clearRolePreset();
+        },
+        getUserFacingPreset: (): Promise<UserFacingChatPreset | null> => {
+            return this.chatStateManager.getUserFacingPreset();
+        },
+        setUserFacingPreset: (preset: UserFacingChatPreset | null): Promise<void> => {
+            return this.chatStateManager.setUserFacingPreset(preset);
+        },
+        getLastPreGenerationDecision: (): Promise<PreGenerationGateDecision | null> => {
+            return this.chatStateManager.getLastPreGenerationDecision();
+        },
+        getLastPostGenerationDecision: (): Promise<PostGenerationGateDecision | null> => {
+            return this.chatStateManager.getLastPostGenerationDecision();
+        },
+        getLogicalChatView: () => {
+            return this.chatStateManager.getLogicalChatView();
+        },
+        rebuildLogicalChatView: async (): Promise<LogicalChatView> => {
+            const context = (window as any)?.SillyTavern?.getContext?.();
+            const previous = await this.chatStateManager.getLogicalChatView();
+            const rebuildResult = this.chatViewManager.rebuildFromChat(context?.chat, previous);
+            await this.chatStateManager.setLogicalChatView(rebuildResult.view, 'sdk.rebuild');
+            await this.turnTrackerManager.rebuildFromLogicalView(rebuildResult.view);
+            return rebuildResult.view;
+        },
+        archiveChat: async (): Promise<void> => {
+            await this.chatStateManager.archiveMemoryChat('soft_delete');
+            await archiveMemoryChat(this.chatKey_, 'soft_delete');
+        },
+        restoreArchivedChat: async (): Promise<void> => {
+            await this.chatStateManager.restoreArchivedMemoryChat();
+            await restoreArchivedMemoryChat(this.chatKey_);
+        },
+        purgeChat: async (options?: { includeAudit?: boolean }): Promise<void> => {
+            await purgeMemoryChat(this.chatKey_, { includeAudit: options?.includeAudit ?? false });
+            await this.chatStateManager.destroy();
         },
         flush: () => {
             return this.chatStateManager.flush();
@@ -439,17 +621,8 @@ export class MemorySDKImpl implements MemorySDK {
     // ─── v2 新增：楼层跟踪器 ───
 
     turnTracker = {
-        tryCountTurn: (input: {
-            eventType: string;
-            messageId?: string;
-            textContent: string;
-            isSystemMessage: boolean;
-            ingestHint: 'normal' | 'bootstrap' | 'backfill';
-        }) => {
-            return this.turnTrackerManager.tryCountTurn(input);
-        },
-        getAssistantTurnCount: () => {
-            return this.turnTrackerManager.getAssistantTurnCount();
+        getActiveAssistantTurnCount: () => {
+            return this.turnTrackerManager.getActiveAssistantTurnCount();
         },
         invalidateCache: () => {
             this.turnTrackerManager.invalidateCache();

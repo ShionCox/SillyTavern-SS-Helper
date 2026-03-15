@@ -1,9 +1,11 @@
 import Dexie from 'dexie';
 import {
     db,
+    readSdkPluginChatState,
     deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
+    writeSdkPluginChatState,
 } from '../../../SDK/db';
 import type {
     ChatSharedPatch,
@@ -43,6 +45,60 @@ export { SSHelperDatabase as MemoryOSDatabase };
 
 export interface ClearMemoryChatDataOptions {
     includeAudit?: boolean;
+}
+
+/**
+ * 功能：将指定聊天的 MemoryOS 状态标记为归档。
+ * 参数：
+ *   chatKey (string)：聊天键。
+ *   reason (string)：归档原因。
+ * 返回：
+ *   Promise<void>：异步完成。
+ */
+export async function archiveMemoryChat(chatKey: string, reason: string = 'soft_delete'): Promise<void> {
+    const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey);
+    const state = (row?.state ?? {}) as Record<string, unknown>;
+    await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey, {
+        ...state,
+        archived: true,
+        archivedAt: Date.now(),
+        archiveReason: reason,
+    });
+}
+
+/**
+ * 功能：恢复指定聊天的归档状态。
+ * 参数：
+ *   chatKey (string)：聊天键。
+ * 返回：
+ *   Promise<void>：异步完成。
+ */
+export async function restoreArchivedMemoryChat(chatKey: string): Promise<void> {
+    const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey);
+    const state = (row?.state ?? {}) as Record<string, unknown>;
+    await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey, {
+        ...state,
+        archived: false,
+        archivedAt: undefined,
+        archiveReason: undefined,
+    });
+}
+
+/**
+ * 功能：执行聊天级立即清理。
+ * 参数：
+ *   chatKey (string)：聊天键。
+ *   options ({ includeAudit?: boolean })：是否连审计一起删除。
+ * 返回：
+ *   Promise<void>：异步完成。
+ */
+export async function purgeMemoryChat(
+    chatKey: string,
+    options: { includeAudit?: boolean } = {},
+): Promise<void> {
+    await clearMemoryChatData(chatKey, {
+        includeAudit: options.includeAudit ?? false,
+    });
 }
 
 /**
@@ -140,6 +196,17 @@ export async function clearMemoryChatData(
             },
         }),
     ]);
+    const chatData = await db.chat_documents.get(chatKey);
+    if (chatData?.shared?.signals?.[MEMORY_OS_PLUGIN_ID]) {
+        const nextSignals = { ...(chatData.shared.signals ?? {}) };
+        delete nextSignals[MEMORY_OS_PLUGIN_ID];
+        await db.chat_documents.update(chatKey, {
+            shared: {
+                ...chatData.shared,
+                signals: nextSignals,
+            },
+        } as unknown as ChatSharedPatch);
+    }
 }
 
 /**

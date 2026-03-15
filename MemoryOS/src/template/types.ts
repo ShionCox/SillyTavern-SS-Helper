@@ -4,12 +4,6 @@
  */
 
 /** 实体定义（逻辑表的列结构） */
-export interface TemplateEntity {
-    primaryKey: string;
-    fields: string[];
-    indexes?: string[];
-}
-
 /** 事实类型定义（决定 facts 的 path 模式与注入分区） */
 export interface TemplateFactType {
     type: string;
@@ -63,7 +57,6 @@ export interface WorldTemplate {
     chatKey: string;
     worldType: 'fantasy' | 'urban' | 'custom';
     name: string;
-    entities: Record<string, TemplateEntity>;
     factTypes: TemplateFactType[];
     extractPolicies: ExtractPolicies;
     injectionLayout: InjectionLayout;
@@ -72,7 +65,7 @@ export interface WorldTemplate {
 
     // ── 聊天级多表记忆扩展 ──
     /** 多表结构化定义 */
-    tables?: TemplateTableDef[];
+    tables: TemplateTableDef[];
     /** 字段同义词映射 */
     fieldSynonyms?: Record<string, string[]>;
     /** 表同义词映射 */

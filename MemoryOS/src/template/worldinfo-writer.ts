@@ -1,6 +1,9 @@
 import type { WorldInfoEntry } from './types';
 import { FactsManager } from '../core/facts-manager';
 import { SummariesManager } from '../core/summaries-manager';
+import { ChatStateManager } from '../core/chat-state-manager';
+import { StateManager } from '../core/state-manager';
+import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from '../core/lorebook-relevance-gate';
 
 /**
  * 世界书写回兼容层 —— 将稳定事实/摘要写回 ST WorldInfo
@@ -17,6 +20,8 @@ export class WorldInfoWriter {
     private chatKey: string;
     private factsManager: FactsManager;
     private summariesManager: SummariesManager;
+    private chatStateManager: ChatStateManager;
+    private stateManager: StateManager;
 
     /** 条目前缀 */
     private readonly PREFIX = '[MEMORY_OS]';
@@ -25,6 +30,8 @@ export class WorldInfoWriter {
         this.chatKey = chatKey;
         this.factsManager = new FactsManager(chatKey);
         this.summariesManager = new SummariesManager(chatKey);
+        this.chatStateManager = new ChatStateManager(chatKey);
+        this.stateManager = new StateManager(chatKey);
     }
 
     /**
@@ -138,10 +145,35 @@ export class WorldInfoWriter {
         // 生成写回数据
         const payload = await this.buildWritebackPayload();
         const { bookName, entries: allEntries } = payload;
+        const [profile, logicalView, knownDecision, worldEntries] = await Promise.all([
+            this.chatStateManager.getChatProfile(),
+            this.chatStateManager.getLogicalChatView(),
+            this.chatStateManager.getLorebookDecision(),
+            loadActiveWorldInfoEntriesFromHost(),
+        ]);
+        const worldStateText = JSON.stringify(await this.stateManager.query(''));
+        const nextDecision = evaluateLorebookRelevance({
+            query: '',
+            profileChatType: profile.chatType,
+            visibleMessages: logicalView?.visibleMessages,
+            recentEvents: [],
+            worldStateText,
+            entries: worldEntries,
+        });
+        const lorebookDecision = knownDecision && knownDecision.generatedAt >= nextDecision.generatedAt
+            ? knownDecision
+            : nextDecision;
+        await this.chatStateManager.setLorebookDecision(lorebookDecision, 'writeback');
+        if (!lorebookDecision.shouldWriteback || lorebookDecision.mode === 'block') {
+            return { written: 0, bookName };
+        }
 
         // 按 mode 过滤（facts 来自 exportFactsAsEntries，summaries 来自 exportSummariesAsEntries）
         let entriesToWrite = allEntries;
         if (mode === 'facts') {
+            if (lorebookDecision.mode === 'summary_only') {
+                return { written: 0, bookName };
+            }
             const factEntries = await this.exportFactsAsEntries();
             entriesToWrite = factEntries.map(e => ({ key: e.keywords, content: e.content, comment: `${this.PREFIX} ${e.entry}`, disable: false }));
         } else if (mode === 'summaries') {
@@ -166,7 +198,7 @@ export class WorldInfoWriter {
                     await stContext.saveWorldInfo(bookName, {
                         key: entry.key,
                         keysecondary: [],
-                        comment: entry.comment,
+                        comment: `${entry.comment} [gate:${lorebookDecision.mode}]`,
                         content: entry.content,
                         constant: false,
                         selective: false,

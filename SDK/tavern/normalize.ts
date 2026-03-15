@@ -48,19 +48,6 @@ export function normalizeTavernRoleKeyEvent(roleId: string): string {
  * @param legacyChatKey 旧版聊天键
  * @returns 解析结果
  */
-export function parseLegacyTavernChatKeyEvent(legacyChatKey: string): {
-  chatId: string;
-  groupId: string;
-  roleId: string;
-} {
-  const parts = String(legacyChatKey ?? "").split("::");
-  return {
-    chatId: String(parts[0] ?? "").trim(),
-    groupId: String(parts[1] ?? "").trim() || "no_group",
-    roleId: String(parts[2] ?? "").trim(),
-  };
-}
-
 /**
  * 功能：判断聊天标识是否为 fallback 占位聊天。
  * @param input 聊天键或聊天 ID
@@ -70,8 +57,6 @@ export function isFallbackTavernChatEvent(input: string): boolean {
   const text = String(input ?? "").trim();
   if (!text) return true;
   if (text === "fallback_chat") return true;
-  const parsed = parseLegacyTavernChatKeyEvent(text);
-  if (parsed.chatId === "fallback_chat") return true;
   return false;
 }
 
@@ -162,15 +147,11 @@ export function parseAnyTavernChatRefEvent(
         chatId: normalizeTavernKeyPartEvent(parsed.chatId, "fallback_chat"),
       };
     }
-    const legacy = parseLegacyTavernChatKeyEvent(key);
-    const scopeType =
-      normalizeTavernKeyPartEvent(legacy.groupId, "no_group") !== "no_group" ? "group" : "character";
-    const scopeIdRaw = scopeType === "group" ? legacy.groupId : legacy.roleId;
     return {
       tavernInstanceId: fallbackTavernInstanceId,
-      scopeType,
-      scopeId: normalizeEntityScopeIdEvent(scopeType, scopeIdRaw),
-      chatId: normalizeTavernKeyPartEvent(legacy.chatId, "fallback_chat"),
+      scopeType: fallbackScopeType,
+      scopeId: fallbackScopeId,
+      chatId: normalizeTavernKeyPartEvent(key, "fallback_chat"),
     };
   }
 

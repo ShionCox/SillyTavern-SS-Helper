@@ -128,13 +128,7 @@ export class PromptTrimmer {
     private buildSchemaSummary(template: WorldTemplate): string {
         const tables = template.tables ?? [];
         if (tables.length === 0) {
-            // 回退到旧的 entities 格式
-            const entities = template.entities ?? {};
-            const lines: string[] = ['## 当前知识表结构'];
-            for (const [key, entity] of Object.entries(entities)) {
-                lines.push(`- ${key}: PK=${entity.primaryKey}, 字段=[${entity.fields?.join(', ') ?? ''}]`);
-            }
-            return lines.join('\n');
+            return '## 当前知识表结构\n- 当前模板未声明可用表结构';
         }
 
         const lines: string[] = ['## 当前知识表结构'];

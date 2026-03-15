@@ -2,41 +2,68 @@ import { readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db
 import { db } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import {
+    buildEffectivePresetBundle,
+    clearRolePreset,
+    saveGlobalPreset,
+    saveRolePreset,
+} from './chat-preset-store';
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     AssistantTurnTracker,
     AutoSchemaPolicy,
+    ChatLifecycleStage,
+    ChatLifecycleState,
+    EffectivePresetBundle,
+    ChatSemanticSeed,
+    ChatMutationKind,
     ChatProfile,
     ExtractHealthWindow,
+    GroupMemoryState,
     IngestHealthWindow,
+    LorebookGateDecision,
+    LorebookGateMode,
+    LogicalChatView,
+    MaintenanceActionType,
     MaintenanceAdvice,
+    MaintenanceExecutionResult,
+    MaintenanceInsight,
     ManualOverrides,
     MemoryOSChatState,
     MemoryQualityScorecard,
+    PostGenerationGateDecision,
+    PreGenerationGateDecision,
+    PromptInjectionProfile,
     RetentionArchives,
     RetentionPolicy,
     RetrievalHealthWindow,
     RowAliasIndex,
     RowRedirects,
+    TurnRecord,
     RowTombstones,
     SchemaDraftSession,
     StrategyDecision,
-    SummaryPolicyOverride,
+    SummaryFixTask,
+    UserFacingChatPreset,
     VectorLifecycleState,
 } from '../types';
 import {
     DEFAULT_ADAPTIVE_METRICS,
     DEFAULT_ASSISTANT_TURN_TRACKER,
     DEFAULT_AUTO_SCHEMA_POLICY,
+    DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_CHAT_PROFILE,
+    DEFAULT_EFFECTIVE_PRESET_BUNDLE,
     DEFAULT_EXTRACT_HEALTH,
+    DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
     DEFAULT_MEMORY_QUALITY,
+    DEFAULT_PROMPT_INJECTION_PROFILE,
     DEFAULT_RETENTION_ARCHIVES,
     DEFAULT_RETRIEVAL_HEALTH,
     DEFAULT_SCHEMA_DRAFT_SESSION,
-    DEFAULT_SUMMARY_POLICY,
+    DEFAULT_USER_FACING_CHAT_PRESET,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
 import {
@@ -50,6 +77,9 @@ import {
     inferChatProfile,
     inferVectorMode,
 } from './chat-strategy-engine';
+import { CompactionManager } from './compaction-manager';
+import { SummariesManager } from './summaries-manager';
+import { VectorManager } from '../vector/vector-manager';
 
 const logger = new Logger('ChatStateManager');
 
@@ -58,6 +88,101 @@ function averagePrecisionWindow(values: number[]): number {
         return 0;
     }
     return values.reduce((sum: number, value: number): number => sum + Number(value || 0), 0) / values.length;
+}
+
+function normalizeSeedText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function inferLaneStyle(text: string): string {
+    const normalized = normalizeSeedText(text);
+    if (!normalized) {
+        return '';
+    }
+    if (/怎么|如何|步骤|配置|命令|修复|why|how/i.test(normalized)) {
+        return 'tool_like';
+    }
+    if (/设定|世界观|规则|百科|资料/.test(normalized)) {
+        return 'setting_explain';
+    }
+    if (normalized.length >= 120) {
+        return 'narrative';
+    }
+    if (/^\s*["“”'「」]/.test(normalized) || /（.*）|\(.*\)/.test(normalized)) {
+        return 'rp_dialog';
+    }
+    return 'chat';
+}
+
+function inferLaneEmotion(text: string): string {
+    const normalized = normalizeSeedText(text);
+    if (!normalized) {
+        return '';
+    }
+    if (/生气|愤怒|怒|恼火|敌意/.test(normalized)) {
+        return 'angry';
+    }
+    if (/开心|高兴|喜悦|兴奋|轻松/.test(normalized)) {
+        return 'happy';
+    }
+    if (/担心|害怕|恐惧|紧张/.test(normalized)) {
+        return 'anxious';
+    }
+    if (/难过|悲伤|失落/.test(normalized)) {
+        return 'sad';
+    }
+    return 'neutral';
+}
+
+function inferLaneGoal(text: string): string {
+    const normalized = normalizeSeedText(text);
+    const match = normalized.match(/(要|准备|计划|必须|想要|目标是)([^。！？!?]{2,48})/);
+    return normalizeSeedText(match?.[2] ?? '');
+}
+
+function inferRelationshipDelta(text: string): string {
+    const normalized = normalizeSeedText(text);
+    const hints = ['盟友', '敌人', '同伴', '队友', '恋人', '仇人', '上级', '下属', '家人'];
+    const hit = hints.find((hint: string): boolean => normalized.includes(hint));
+    return hit ?? '';
+}
+
+function guessActorFromMessage(
+    node: LogicalChatView['visibleMessages'][number],
+): { actorKey: string; displayName: string; identityHint: string } {
+    const text = normalizeSeedText(node.text);
+    const speakerMatch = text.match(/^([A-Za-z0-9_\u4e00-\u9fa5]{1,24})[:：]/);
+    const speaker = normalizeSeedText(speakerMatch?.[1] ?? '');
+    const normalizedId = normalizeSeedText(node.messageId);
+    const actorKeyFromId = normalizedId
+        ? `msg:${normalizedId.slice(0, 24)}`
+        : '';
+    if (speaker) {
+        return {
+            actorKey: `name:${speaker.toLowerCase()}`,
+            displayName: speaker,
+            identityHint: actorKeyFromId || 'name_anchor',
+        };
+    }
+    if (node.role === 'user') {
+        return {
+            actorKey: 'role:user',
+            displayName: 'User',
+            identityHint: actorKeyFromId || 'role_anchor',
+        };
+    }
+    if (node.role === 'assistant') {
+        return {
+            actorKey: actorKeyFromId || 'role:assistant',
+            displayName: speaker || 'Assistant',
+            identityHint: actorKeyFromId || 'role_anchor',
+        };
+    }
+    return {
+        actorKey: actorKeyFromId || 'role:system',
+        displayName: 'System',
+        identityHint: actorKeyFromId || 'role_anchor',
+    };
 }
 
 /**
@@ -77,6 +202,276 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：根据当前聊天状态推导生命周期阶段。
+     * 参数：
+     *   state (MemoryOSChatState)：当前聊天状态。
+     * 返回：
+     *   Promise<{ stage: ChatLifecycleStage; reasonCodes: string[] }>：生命周期阶段与原因码。
+     */
+    private async resolveLifecycleStage(state: MemoryOSChatState): Promise<{ stage: ChatLifecycleStage; reasonCodes: string[] }> {
+        if (state.archived === true) {
+            return { stage: 'archived', reasonCodes: ['stage_archived'] };
+        }
+        const activeAssistantTurnCount = Number(state.assistantTurnTracker?.activeAssistantTurnCount ?? 0);
+        const summaryCount = await db.summaries
+            .where('[chatKey+level+createdAt]')
+            .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
+            .count();
+        const factCount = await db.facts
+            .where('[chatKey+updatedAt]')
+            .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+            .count();
+        const vectorMode = String(state.vectorLifecycle?.vectorMode ?? 'off');
+
+        if (activeAssistantTurnCount >= 80 || summaryCount >= 6 || factCount >= 120) {
+            return {
+                stage: 'long_running',
+                reasonCodes: ['stage_long_running', `turns_${activeAssistantTurnCount}`, `summaries_${summaryCount}`, `facts_${factCount}`],
+            };
+        }
+        if (activeAssistantTurnCount >= 20 || summaryCount >= 1 || vectorMode !== 'off') {
+            return {
+                stage: 'stable',
+                reasonCodes: ['stage_stable', `turns_${activeAssistantTurnCount}`, `summaries_${summaryCount}`, `vector_${vectorMode}`],
+            };
+        }
+        if (activeAssistantTurnCount >= 4 || factCount >= 8) {
+            return {
+                stage: 'active',
+                reasonCodes: ['stage_active', `turns_${activeAssistantTurnCount}`, `facts_${factCount}`],
+            };
+        }
+        return { stage: 'new', reasonCodes: ['stage_new'] };
+    }
+
+    /**
+     * 功能：刷新聊天生命周期状态。
+     * 参数：
+     *   state (MemoryOSChatState)：当前聊天状态。
+     *   source (string)：触发来源。
+     * 返回：
+     *   Promise<ChatLifecycleState>：刷新后的生命周期状态。
+     */
+    private async refreshLifecycleState(state: MemoryOSChatState, source: string): Promise<ChatLifecycleState> {
+        const previous: ChatLifecycleState = {
+            ...DEFAULT_CHAT_LIFECYCLE_STATE,
+            ...(state.chatLifecycle ?? {}),
+            stageReasonCodes: Array.isArray(state.chatLifecycle?.stageReasonCodes) ? state.chatLifecycle.stageReasonCodes : [],
+            mutationKinds: Array.isArray(state.chatLifecycle?.mutationKinds) ? state.chatLifecycle.mutationKinds : [],
+        };
+        const now = Date.now();
+        const resolved = await this.resolveLifecycleStage(state);
+        const next: ChatLifecycleState = {
+            ...previous,
+            stage: resolved.stage,
+            stageReasonCodes: resolved.reasonCodes,
+            firstSeenAt: Number(previous.firstSeenAt ?? 0) > 0 ? Number(previous.firstSeenAt) : now,
+            stageEnteredAt: previous.stage === resolved.stage && Number(previous.stageEnteredAt ?? 0) > 0
+                ? Number(previous.stageEnteredAt)
+                : now,
+            lastMaintenanceAt: Number(previous.lastMaintenanceAt ?? 0),
+            lastMaintenanceAction: previous.lastMaintenanceAction,
+            lastMutationAt: Number(previous.lastMutationAt ?? 0),
+            lastMutationSource: String(previous.lastMutationSource ?? source ?? ''),
+            mutationKinds: Array.isArray(previous.mutationKinds) ? previous.mutationKinds : [],
+        };
+        state.chatLifecycle = next;
+        return next;
+    }
+
+    /**
+     * 功能：在生命周期对象上登记聊天变动事件。
+     * 参数：
+     *   state (MemoryOSChatState)：当前聊天状态。
+     *   kinds (ChatMutationKind[])：变动类型列表。
+     *   source (string)：变动来源。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    private async recordLifecycleMutation(state: MemoryOSChatState, kinds: ChatMutationKind[], source: string): Promise<void> {
+        const current = await this.refreshLifecycleState(state, source);
+        const mutationKinds = new Set<ChatMutationKind>(current.mutationKinds ?? []);
+        kinds.forEach((kind: ChatMutationKind): void => {
+            if (kind) {
+                mutationKinds.add(kind);
+            }
+        });
+        state.chatLifecycle = {
+            ...current,
+            mutationKinds: Array.from(mutationKinds),
+            lastMutationAt: Date.now(),
+            lastMutationSource: source,
+        };
+    }
+
+    /**
+     * 功能：把生命周期偏置应用到默认策略。
+     * 参数：
+     *   basePolicy (AdaptivePolicy)：自动推断策略。
+     *   stage (ChatLifecycleStage)：生命周期阶段。
+     * 返回：
+     *   AdaptivePolicy：应用偏置后的策略。
+     */
+    private applyLifecycleBias(basePolicy: AdaptivePolicy, stage: ChatLifecycleStage): AdaptivePolicy {
+        if (stage === 'new') {
+            return {
+                ...basePolicy,
+                extractInterval: Math.max(basePolicy.extractInterval, 18),
+                extractWindowSize: Math.max(16, Math.min(basePolicy.extractWindowSize, 24)),
+                vectorEnabled: false,
+                vectorMode: 'off',
+                contextMaxTokensShare: Math.min(basePolicy.contextMaxTokensShare, 0.45),
+            };
+        }
+        if (stage === 'stable') {
+            return {
+                ...basePolicy,
+                summaryEnabled: true,
+                vectorEnabled: basePolicy.vectorEnabled || basePolicy.vectorMode !== 'off',
+                qualityRefreshInterval: Math.min(basePolicy.qualityRefreshInterval, 10),
+            };
+        }
+        if (stage === 'long_running') {
+            return {
+                ...basePolicy,
+                extractInterval: Math.min(basePolicy.extractInterval, 8),
+                extractWindowSize: Math.max(basePolicy.extractWindowSize, 48),
+                summaryMode: basePolicy.summaryMode === 'short' ? 'timeline' : basePolicy.summaryMode,
+                qualityRefreshInterval: Math.min(basePolicy.qualityRefreshInterval, 8),
+            };
+        }
+        if (stage === 'archived') {
+            return {
+                ...basePolicy,
+                summaryEnabled: false,
+                vectorEnabled: false,
+                vectorMode: 'off',
+                contextMaxTokensShare: 0.2,
+            };
+        }
+        return basePolicy;
+    }
+
+    /**
+     * 功能：检测群聊车道是否存在明显分裂。
+     * 参数：
+     *   groupMemory (GroupMemoryState | null | undefined)：群聊记忆状态。
+     * 返回：
+     *   { hasSplit: boolean; reasonCodes: string[]; severity: MaintenanceInsight['severity'] }：分裂检测结果。
+     */
+    private detectGroupLaneSplit(groupMemory?: GroupMemoryState | null): {
+        hasSplit: boolean;
+        reasonCodes: string[];
+        severity: MaintenanceInsight['severity'];
+    } {
+        const lanes = Array.isArray(groupMemory?.lanes) ? groupMemory!.lanes : [];
+        if (lanes.length <= 1) {
+            return { hasSplit: false, reasonCodes: [], severity: 'info' };
+        }
+        const displayNameMap = new Map<string, Set<string>>();
+        const actorProfileMap = new Map<string, Set<string>>();
+        for (const lane of lanes) {
+            const displayName = normalizeSeedText(lane.displayName).toLowerCase();
+            const actorKey = normalizeSeedText(lane.actorKey);
+            if (displayName) {
+                const keySet = displayNameMap.get(displayName) ?? new Set<string>();
+                keySet.add(actorKey);
+                displayNameMap.set(displayName, keySet);
+            }
+            const profileSet = actorProfileMap.get(actorKey) ?? new Set<string>();
+            profileSet.add(`${normalizeSeedText(lane.lastStyle)}|${normalizeSeedText(lane.lastEmotion)}`);
+            actorProfileMap.set(actorKey, profileSet);
+        }
+        const sameNameMultiActor = Array.from(displayNameMap.values()).some((keys: Set<string>): boolean => keys.size >= 2);
+        const sameActorMultiProfile = Array.from(actorProfileMap.values()).some((profiles: Set<string>): boolean => profiles.size >= 2);
+        if (!sameNameMultiActor && !sameActorMultiProfile) {
+            return { hasSplit: false, reasonCodes: [], severity: 'info' };
+        }
+        const reasonCodes: string[] = [];
+        if (sameNameMultiActor) {
+            reasonCodes.push('group_lane_same_name_multi_actor');
+        }
+        if (sameActorMultiProfile) {
+            reasonCodes.push('group_lane_profile_split');
+        }
+        return {
+            hasSplit: true,
+            reasonCodes,
+            severity: sameActorMultiProfile ? 'critical' : 'warning',
+        };
+    }
+
+    /**
+     * 功能：将底层维护建议转换为用户可读的维护感知。
+     * 参数：
+     *   advice (MaintenanceAdvice[])：底层维护建议。
+     *   state (MemoryOSChatState)：当前聊天状态。
+     * 返回：
+     *   MaintenanceInsight[]：面向用户的维护感知列表。
+     */
+    private buildMaintenanceInsightsFromAdvice(advice: MaintenanceAdvice[], state: MemoryOSChatState): MaintenanceInsight[] {
+        const now = Date.now();
+        const priorityMap: Record<MaintenanceAdvice['priority'], MaintenanceInsight['severity']> = {
+            low: 'info',
+            medium: 'warning',
+            high: 'critical',
+        };
+        const actionLabelMap: Record<MaintenanceActionType, string> = {
+            compress: '执行压缩',
+            rebuild_summary: '重建摘要',
+            revectorize: '重建索引',
+            schema_cleanup: '整理设定',
+            group_maintenance: '群聊维护',
+        };
+        const shortLabelMap: Record<MaintenanceActionType, string> = {
+            compress: '记忆过载',
+            rebuild_summary: '摘要老化',
+            revectorize: '向量命中偏低',
+            schema_cleanup: '失效设定偏多',
+            group_maintenance: '群聊状态分裂',
+        };
+        const mapped = advice.map((item: MaintenanceAdvice): MaintenanceInsight => {
+            const severity = priorityMap[item.priority] ?? 'info';
+            const surfaces: MaintenanceInsight['surfaces'] = severity === 'info' ? ['panel'] : ['panel', 'compact'];
+            return {
+                id: `${item.action}:${(item.reasonCodes ?? []).join('|')}` || `${item.action}:${now}`,
+                action: item.action,
+                severity,
+                title: item.title,
+                detail: item.detail,
+                shortLabel: shortLabelMap[item.action] ?? item.title,
+                reasonCodes: Array.isArray(item.reasonCodes) ? item.reasonCodes : [],
+                surfaces,
+                actionLabel: actionLabelMap[item.action] ?? '立即维护',
+                generatedAt: now,
+            };
+        });
+        const groupSplit = this.detectGroupLaneSplit(state.groupMemory);
+        if (groupSplit.hasSplit) {
+            mapped.push({
+                id: `group_maintenance:${groupSplit.reasonCodes.join('|') || now}`,
+                action: 'group_maintenance',
+                severity: groupSplit.severity,
+                title: '群聊角色状态可能已分裂',
+                detail: '检测到群聊角色车道存在拆分迹象，建议执行群聊维护以重建 lanes、显著度和共享场景。',
+                shortLabel: '群聊状态分裂',
+                reasonCodes: groupSplit.reasonCodes,
+                surfaces: ['panel', 'compact'],
+                actionLabel: '执行群聊维护',
+                generatedAt: now,
+            });
+        }
+        const dedup = new Map<string, MaintenanceInsight>();
+        mapped.forEach((item: MaintenanceInsight): void => {
+            const key = `${item.action}:${item.reasonCodes.join('|')}`;
+            if (!dedup.has(key)) {
+                dedup.set(key, item);
+            }
+        });
+        return Array.from(dedup.values());
+    }
+
+    /**
      * 功能：加载聊天状态并补齐默认结构。
      * @returns 完整的聊天状态。
      */
@@ -88,10 +483,16 @@ export class ChatStateManager {
             const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, this.chatKey);
             const raw = (row?.state ?? {}) as MemoryOSChatState;
             this.cache = this.normalizeState(raw);
+            await this.refreshLifecycleState(this.cache, 'load');
+            if (!Array.isArray(this.cache.maintenanceInsights) || this.cache.maintenanceInsights.length === 0) {
+                this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
+            }
             return this.cache;
         } catch (error) {
             logger.warn('加载聊天状态失败，已回退默认值', error);
             this.cache = this.normalizeState({});
+            await this.refreshLifecycleState(this.cache, 'load_fallback');
+            this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
             return this.cache;
         }
     }
@@ -163,9 +564,6 @@ export class ChatStateManager {
         };
         return {
             ...state,
-            summaryPolicyOverride: {
-                ...state.summaryPolicyOverride,
-            },
             autoSchemaPolicy: {
                 ...state.autoSchemaPolicy,
             },
@@ -177,6 +575,87 @@ export class ChatStateManager {
                 ...DEFAULT_ASSISTANT_TURN_TRACKER,
                 ...(state.assistantTurnTracker ?? {}),
             },
+            turnLedger: Array.isArray(state.turnLedger) ? state.turnLedger : [],
+            logicalChatView: state.logicalChatView ?? undefined,
+            chatLifecycle: {
+                ...DEFAULT_CHAT_LIFECYCLE_STATE,
+                ...(state.chatLifecycle ?? {}),
+                stage: (state.chatLifecycle?.stage ?? DEFAULT_CHAT_LIFECYCLE_STATE.stage) as ChatLifecycleStage,
+                stageReasonCodes: Array.isArray(state.chatLifecycle?.stageReasonCodes)
+                    ? state.chatLifecycle.stageReasonCodes
+                    : [...DEFAULT_CHAT_LIFECYCLE_STATE.stageReasonCodes],
+                firstSeenAt: Number(state.chatLifecycle?.firstSeenAt ?? 0),
+                stageEnteredAt: Number(state.chatLifecycle?.stageEnteredAt ?? 0),
+                lastMaintenanceAt: Number(state.chatLifecycle?.lastMaintenanceAt ?? 0),
+                lastMaintenanceAction: (state.chatLifecycle?.lastMaintenanceAction ?? undefined) as MaintenanceActionType | undefined,
+                lastMutationAt: Number(state.chatLifecycle?.lastMutationAt ?? 0),
+                lastMutationSource: String(state.chatLifecycle?.lastMutationSource ?? ''),
+                mutationKinds: Array.isArray(state.chatLifecycle?.mutationKinds)
+                    ? state.chatLifecycle.mutationKinds
+                    : [],
+            },
+            archived: state.archived === true,
+            archivedAt: Number(state.archivedAt ?? 0) || undefined,
+            archiveReason: typeof state.archiveReason === 'string' ? state.archiveReason : undefined,
+            characterBindingFingerprint: typeof state.characterBindingFingerprint === 'string'
+                ? state.characterBindingFingerprint
+                : undefined,
+            semanticSeed: state.semanticSeed ?? undefined,
+            coldStartFingerprint: typeof state.coldStartFingerprint === 'string'
+                ? state.coldStartFingerprint
+                : undefined,
+            lastLorebookDecision: state.lastLorebookDecision ?? undefined,
+            promptInjectionProfile: {
+                ...DEFAULT_PROMPT_INJECTION_PROFILE,
+                ...(state.promptInjectionProfile ?? {}),
+                fallbackOrder: Array.isArray(state.promptInjectionProfile?.fallbackOrder)
+                    ? state.promptInjectionProfile!.fallbackOrder
+                    : [...DEFAULT_PROMPT_INJECTION_PROFILE.fallbackOrder],
+            },
+            lastPreGenerationDecision: state.lastPreGenerationDecision ?? null,
+            lastPostGenerationDecision: state.lastPostGenerationDecision ?? null,
+            userFacingPreset: state.userFacingPreset
+                ? {
+                    ...DEFAULT_USER_FACING_CHAT_PRESET,
+                    ...state.userFacingPreset,
+                    chatProfile: {
+                        ...(state.userFacingPreset.chatProfile ?? {}),
+                        vectorStrategy: {
+                            ...(state.userFacingPreset.chatProfile?.vectorStrategy ?? {}),
+                        },
+                    },
+                    adaptivePolicy: {
+                        ...(state.userFacingPreset.adaptivePolicy ?? {}),
+                    },
+                    retentionPolicy: {
+                        ...(state.userFacingPreset.retentionPolicy ?? {}),
+                    },
+                    promptInjection: {
+                        ...(state.userFacingPreset.promptInjection ?? {}),
+                    },
+                }
+                : null,
+            groupMemory: {
+                ...DEFAULT_GROUP_MEMORY,
+                ...(state.groupMemory ?? {}),
+                lanes: Array.isArray(state.groupMemory?.lanes) ? state.groupMemory!.lanes : [],
+                actorSalience: Array.isArray(state.groupMemory?.actorSalience) ? state.groupMemory!.actorSalience : [],
+                sharedScene: {
+                    ...DEFAULT_GROUP_MEMORY.sharedScene,
+                    ...(state.groupMemory?.sharedScene ?? {}),
+                },
+                bindingSnapshot: {
+                    ...DEFAULT_GROUP_MEMORY.bindingSnapshot,
+                    ...(state.groupMemory?.bindingSnapshot ?? {}),
+                    characterIds: Array.isArray(state.groupMemory?.bindingSnapshot?.characterIds)
+                        ? state.groupMemory!.bindingSnapshot.characterIds
+                        : [],
+                    memberNames: Array.isArray(state.groupMemory?.bindingSnapshot?.memberNames)
+                        ? state.groupMemory!.bindingSnapshot.memberNames
+                        : [],
+                },
+            },
+            summaryFixQueue: Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [],
             rowAliasIndex: state.rowAliasIndex ?? {},
             rowRedirects: state.rowRedirects ?? {},
             rowTombstones: state.rowTombstones ?? {},
@@ -194,6 +673,24 @@ export class ChatStateManager {
             },
             memoryQuality,
             maintenanceAdvice: Array.isArray(state.maintenanceAdvice) ? state.maintenanceAdvice : [],
+            maintenanceInsights: Array.isArray(state.maintenanceInsights) ? state.maintenanceInsights : [],
+            lastMaintenanceExecution: state.lastMaintenanceExecution
+                ? {
+                    ...state.lastMaintenanceExecution,
+                    reasonCodes: Array.isArray(state.lastMaintenanceExecution.reasonCodes)
+                        ? state.lastMaintenanceExecution.reasonCodes
+                        : [],
+                    touchedCounts: {
+                        summariesCreated: Number(state.lastMaintenanceExecution.touchedCounts?.summariesCreated ?? 0),
+                        eventsArchived: Number(state.lastMaintenanceExecution.touchedCounts?.eventsArchived ?? 0),
+                        vectorChunksRebuilt: Number(state.lastMaintenanceExecution.touchedCounts?.vectorChunksRebuilt ?? 0),
+                        cleanedFacts: Number(state.lastMaintenanceExecution.touchedCounts?.cleanedFacts ?? 0),
+                        cleanedStates: Number(state.lastMaintenanceExecution.touchedCounts?.cleanedStates ?? 0),
+                        lanesRebuilt: Number(state.lastMaintenanceExecution.touchedCounts?.lanesRebuilt ?? 0),
+                        salienceUpdated: Number(state.lastMaintenanceExecution.touchedCounts?.salienceUpdated ?? 0),
+                    },
+                }
+                : undefined,
             ingestHealth: {
                 ...DEFAULT_INGEST_HEALTH,
                 ...(state.ingestHealth ?? {}),
@@ -277,7 +774,11 @@ export class ChatStateManager {
             metrics: state.adaptiveMetrics,
         });
         state.chatProfile = inferred;
-        return applyChatProfileOverrides(inferred, state.manualOverrides);
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
+        const presetAware = applyChatProfileOverrides(inferred, {
+            chatProfile: presetBundle.effectiveChatProfile,
+        });
+        return applyChatProfileOverrides(presetAware, state.manualOverrides);
     }
 
     /**
@@ -344,13 +845,21 @@ export class ChatStateManager {
         if (!state.adaptivePolicy) {
             await this.recomputeAdaptivePolicy();
         }
+        const lifecycle = await this.refreshLifecycleState(state, 'get_policy');
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
         return applyAdaptivePolicyOverrides(
-            state.adaptivePolicy ?? buildAdaptivePolicy(
-                await this.getChatProfile(),
-                await this.getAdaptiveMetrics(),
-                await this.getVectorLifecycle(),
-                await this.getMemoryQuality(),
-            ),
+            {
+                ...(state.adaptivePolicy ?? this.applyLifecycleBias(
+                    buildAdaptivePolicy(
+                        await this.getChatProfile(),
+                        await this.getAdaptiveMetrics(),
+                        await this.getVectorLifecycle(),
+                        await this.getMemoryQuality(),
+                    ),
+                    lifecycle.stage,
+                )),
+                ...(presetBundle.effectiveAdaptivePolicy ?? {}),
+            },
             state.manualOverrides,
         );
     }
@@ -361,11 +870,19 @@ export class ChatStateManager {
      */
     async recomputeAdaptivePolicy(): Promise<AdaptivePolicy> {
         const state = await this.load();
+        const lifecycle = await this.refreshLifecycleState(state, 'recompute_policy');
         const profile = await this.getChatProfile();
         const metrics = await this.getAdaptiveMetrics();
         const vectorLifecycle = await this.getVectorLifecycle();
         const memoryQuality = await this.getMemoryQuality();
-        state.adaptivePolicy = buildAdaptivePolicy(profile, metrics, vectorLifecycle, memoryQuality);
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
+        state.adaptivePolicy = {
+            ...this.applyLifecycleBias(
+                buildAdaptivePolicy(profile, metrics, vectorLifecycle, memoryQuality),
+                lifecycle.stage,
+            ),
+            ...(presetBundle.effectiveAdaptivePolicy ?? {}),
+        };
         state.vectorLifecycle = {
             ...vectorLifecycle,
             vectorMode: state.adaptivePolicy.vectorMode,
@@ -381,15 +898,147 @@ export class ChatStateManager {
     async getRetentionPolicy(): Promise<RetentionPolicy> {
         const state = await this.load();
         const profile = await this.getChatProfile();
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
         const base = buildRetentionPolicy(profile);
         state.retentionPolicy = applyRetentionPolicyOverrides(
             {
                 ...base,
+                ...(presetBundle.effectiveRetentionPolicy ?? {}),
                 ...(state.retentionPolicy ?? {}),
             },
             { retentionPolicy: {} },
         );
         return applyRetentionPolicyOverrides(state.retentionPolicy, state.manualOverrides);
+    }
+
+    /**
+     * 功能：读取当前聊天生效的 Prompt 注入画像。
+     * 参数：无。
+     * 返回：
+     *   Promise<PromptInjectionProfile>：最终生效的注入画像。
+     */
+    async getPromptInjectionProfile(): Promise<PromptInjectionProfile> {
+        const state = await this.load();
+        const presetBundle = this.getEffectivePresetBundleFromState(state);
+        const manualProfile = state.manualOverrides?.promptInjectionProfile ?? {};
+        return {
+            ...DEFAULT_PROMPT_INJECTION_PROFILE,
+            ...(presetBundle.effectivePromptInjection ?? DEFAULT_PROMPT_INJECTION_PROFILE),
+            ...(state.promptInjectionProfile ?? {}),
+            ...(manualProfile ?? {}),
+            fallbackOrder: Array.isArray(manualProfile?.fallbackOrder) && manualProfile.fallbackOrder.length > 0
+                ? manualProfile.fallbackOrder
+                : Array.isArray(state.promptInjectionProfile?.fallbackOrder) && state.promptInjectionProfile.fallbackOrder.length > 0
+                    ? state.promptInjectionProfile.fallbackOrder
+                    : presetBundle.effectivePromptInjection.fallbackOrder,
+        };
+    }
+
+    /**
+     * 功能：写入聊天级 Prompt 注入画像。
+     * 参数：
+     *   profile (Partial<PromptInjectionProfile>)：注入画像补丁。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setPromptInjectionProfile(profile: Partial<PromptInjectionProfile>): Promise<void> {
+        const state = await this.load();
+        state.promptInjectionProfile = {
+            ...DEFAULT_PROMPT_INJECTION_PROFILE,
+            ...(state.promptInjectionProfile ?? {}),
+            ...(profile ?? {}),
+            fallbackOrder: Array.isArray(profile?.fallbackOrder) && profile.fallbackOrder.length > 0
+                ? profile.fallbackOrder
+                : Array.isArray(state.promptInjectionProfile?.fallbackOrder) && state.promptInjectionProfile.fallbackOrder.length > 0
+                    ? state.promptInjectionProfile.fallbackOrder
+                    : [...DEFAULT_PROMPT_INJECTION_PROFILE.fallbackOrder],
+        };
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取当前聊天的三层 preset 合并结果。
+     * 参数：无。
+     * 返回：
+     *   Promise<EffectivePresetBundle>：三层 preset 生效结果。
+     */
+    async getEffectivePresetBundle(): Promise<EffectivePresetBundle> {
+        const state = await this.load();
+        return this.getEffectivePresetBundleFromState(state);
+    }
+
+    /**
+     * 功能：保存全局预设。
+     * 参数：
+     *   preset (UserFacingChatPreset)：要保存的预设。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async saveGlobalPreset(preset: UserFacingChatPreset): Promise<void> {
+        saveGlobalPreset(preset);
+    }
+
+    /**
+     * 功能：保存角色级或群聊级预设。
+     * 参数：
+     *   preset (UserFacingChatPreset)：要保存的预设。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async saveRolePreset(preset: UserFacingChatPreset): Promise<void> {
+        const state = await this.load();
+        saveRolePreset(state, preset);
+    }
+
+    /**
+     * 功能：清除当前角色或群聊绑定的预设。
+     * 参数：无。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async clearRolePreset(): Promise<void> {
+        const state = await this.load();
+        clearRolePreset(state);
+    }
+
+    /**
+     * 功能：读取聊天级用户预设。
+     * 参数：无。
+     * 返回：
+     *   Promise<UserFacingChatPreset | null>：聊天级预设。
+     */
+    async getUserFacingPreset(): Promise<UserFacingChatPreset | null> {
+        const state = await this.load();
+        return state.userFacingPreset ?? null;
+    }
+
+    /**
+     * 功能：写入聊天级用户预设。
+     * 参数：
+     *   preset (UserFacingChatPreset | null)：聊天级预设。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setUserFacingPreset(preset: UserFacingChatPreset | null): Promise<void> {
+        const state = await this.load();
+        state.userFacingPreset = preset ? {
+            ...DEFAULT_USER_FACING_CHAT_PRESET,
+            ...preset,
+        } : null;
+        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        state.retentionPolicy = await this.getRetentionPolicy();
+        this.markDirty();
+    }
+
+    /**
+     * 功能：从当前状态构建三层 preset 生效结果。
+     * 参数：
+     *   state (MemoryOSChatState)：当前聊天状态。
+     * 返回：
+     *   EffectivePresetBundle：三层 preset 的合并结果。
+     */
+    private getEffectivePresetBundleFromState(state: MemoryOSChatState): EffectivePresetBundle {
+        return buildEffectivePresetBundle(state ?? {}) ?? DEFAULT_EFFECTIVE_PRESET_BUNDLE;
     }
 
     /**
@@ -459,6 +1108,210 @@ export class ChatStateManager {
         const state = await this.load();
         state.maintenanceAdvice = Array.isArray(state.maintenanceAdvice) ? state.maintenanceAdvice : [];
         return state.maintenanceAdvice;
+    }
+
+    /**
+     * 功能：读取用户可读的维护感知列表。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<MaintenanceInsight[]>：维护感知列表。
+     */
+    async getMaintenanceInsights(): Promise<MaintenanceInsight[]> {
+        const state = await this.load();
+        if (!Array.isArray(state.maintenanceInsights) || state.maintenanceInsights.length === 0) {
+            state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice ?? [], state);
+            this.markDirty();
+        }
+        return state.maintenanceInsights;
+    }
+
+    /**
+     * 功能：读取当前聊天的生命周期状态。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<ChatLifecycleState>：生命周期状态。
+     */
+    async getLifecycleState(): Promise<ChatLifecycleState> {
+        const state = await this.load();
+        return this.refreshLifecycleState(state, 'read_lifecycle');
+    }
+
+    /**
+     * 功能：执行指定维护动作并返回执行结果。
+     * 参数：
+     *   action (MaintenanceActionType)：维护动作类型。
+     * 返回：
+     *   Promise<MaintenanceExecutionResult>：维护执行结果。
+     */
+    async runMaintenanceAction(action: MaintenanceActionType): Promise<MaintenanceExecutionResult> {
+        const state = await this.load();
+        const startedAt = Date.now();
+        const touchedCounts: MaintenanceExecutionResult['touchedCounts'] = {
+            summariesCreated: 0,
+            eventsArchived: 0,
+            vectorChunksRebuilt: 0,
+            cleanedFacts: 0,
+            cleanedStates: 0,
+            lanesRebuilt: 0,
+            salienceUpdated: 0,
+        };
+        try {
+            if (action === 'compress') {
+                const compactionManager = new CompactionManager(this.chatKey);
+                const result = await compactionManager.compactRuleMode({ archiveProcessed: true });
+                touchedCounts.summariesCreated = Number(result.summariesCreated ?? 0);
+                touchedCounts.eventsArchived = Number(result.eventsArchived ?? 0);
+            } else if (action === 'rebuild_summary') {
+                const summariesManager = new SummariesManager(this.chatKey);
+                const logicalView = state.logicalChatView;
+                const lines = Array.isArray(logicalView?.visibleMessages)
+                    ? logicalView!.visibleMessages.slice(-16).map((item): string => normalizeSeedText(item.text)).filter(Boolean)
+                    : [];
+                const fallbackEvents = lines.length === 0
+                    ? await db.events
+                        .where('[chatKey+ts]')
+                        .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                        .reverse()
+                        .limit(16)
+                        .toArray()
+                    : [];
+                const fallbackLines = fallbackEvents
+                    .map((event): string => normalizeSeedText((event.payload as { text?: string; content?: string })?.text ?? (event.payload as { content?: string })?.content ?? ''))
+                    .filter(Boolean);
+                const sourceLines = lines.length > 0 ? lines : fallbackLines;
+                if (sourceLines.length > 0) {
+                    await summariesManager.upsert({
+                        level: 'scene',
+                        title: '维护重建摘要',
+                        content: sourceLines.slice(0, 16).join('\n'),
+                        source: { extractor: 'maintenance' },
+                    });
+                    touchedCounts.summariesCreated = 1;
+                }
+                state.summaryFixQueue = [];
+            } else if (action === 'revectorize') {
+                const vectorManager = new VectorManager(this.chatKey);
+                await vectorManager.clear();
+                const [facts, summaries] = await Promise.all([
+                    db.facts
+                        .where('[chatKey+updatedAt]')
+                        .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                        .reverse()
+                        .limit(180)
+                        .toArray(),
+                    db.summaries
+                        .where('[chatKey+level+createdAt]')
+                        .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
+                        .reverse()
+                        .limit(80)
+                        .toArray(),
+                ]);
+                let rebuilt = 0;
+                for (const fact of facts) {
+                    const text = normalizeSeedText(`${fact.type} ${fact.path} ${JSON.stringify(fact.value ?? '')}`);
+                    if (!text) {
+                        continue;
+                    }
+                    const chunkIds = await vectorManager.indexText(text, 'facts');
+                    rebuilt += chunkIds.length;
+                }
+                for (const summary of summaries) {
+                    const text = normalizeSeedText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
+                    if (!text) {
+                        continue;
+                    }
+                    const chunkIds = await vectorManager.indexText(text, 'summaries');
+                    rebuilt += chunkIds.length;
+                }
+                touchedCounts.vectorChunksRebuilt = rebuilt;
+            } else if (action === 'schema_cleanup') {
+                const rowRedirects = state.rowRedirects ?? {};
+                const rowAliasIndex = state.rowAliasIndex ?? {};
+                for (const [tableKey, redirects] of Object.entries(rowRedirects)) {
+                    for (const [fromRowId, toRowId] of Object.entries(redirects ?? {})) {
+                        if (!normalizeSeedText(fromRowId) || !normalizeSeedText(toRowId) || fromRowId === toRowId) {
+                            delete rowRedirects[tableKey]?.[fromRowId];
+                            touchedCounts.cleanedStates += 1;
+                        }
+                    }
+                }
+                for (const [tableKey, aliasMap] of Object.entries(rowAliasIndex)) {
+                    for (const [alias, canonical] of Object.entries(aliasMap ?? {})) {
+                        if (!normalizeSeedText(alias) || !normalizeSeedText(canonical)) {
+                            delete rowAliasIndex[tableKey]?.[alias];
+                            touchedCounts.cleanedStates += 1;
+                        }
+                    }
+                }
+                state.rowRedirects = rowRedirects;
+                state.rowAliasIndex = rowAliasIndex;
+
+                const facts = await db.facts
+                    .where('[chatKey+updatedAt]')
+                    .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                    .reverse()
+                    .limit(300)
+                    .toArray();
+                const orphanFactKeys = facts
+                    .filter((fact): boolean => {
+                        const entityKind = normalizeSeedText(fact.entity?.kind);
+                        const entityId = normalizeSeedText(fact.entity?.id);
+                        const path = normalizeSeedText(fact.path);
+                        if (!entityKind || !entityId || !path) {
+                            return true;
+                        }
+                        return Boolean(state.rowTombstones?.[entityKind]?.[entityId]);
+                    })
+                    .map((fact): string => normalizeSeedText(fact.factKey))
+                    .filter(Boolean);
+                if (orphanFactKeys.length > 0) {
+                    await this.archiveFactKeys(orphanFactKeys);
+                }
+                touchedCounts.cleanedFacts = orphanFactKeys.length;
+            } else if (action === 'group_maintenance') {
+                const view = state.logicalChatView;
+                if (view) {
+                    state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY);
+                    touchedCounts.lanesRebuilt = Number(state.groupMemory?.lanes?.length ?? 0);
+                    touchedCounts.salienceUpdated = Number(state.groupMemory?.actorSalience?.length ?? 0);
+                }
+            }
+
+            const quality = await this.recomputeMemoryQuality();
+            await this.refreshLifecycleState(state, `maintenance:${action}`);
+            state.chatLifecycle = {
+                ...(state.chatLifecycle ?? DEFAULT_CHAT_LIFECYCLE_STATE),
+                lastMaintenanceAt: Date.now(),
+                lastMaintenanceAction: action,
+            };
+            const result: MaintenanceExecutionResult = {
+                action,
+                ok: true,
+                message: '维护动作已完成',
+                reasonCodes: [...(quality.reasonCodes ?? [])],
+                touchedCounts,
+                executedAt: Date.now(),
+                durationMs: Math.max(0, Date.now() - startedAt),
+            };
+            state.lastMaintenanceExecution = result;
+            this.markDirty();
+            return result;
+        } catch (error) {
+            const result: MaintenanceExecutionResult = {
+                action,
+                ok: false,
+                message: `维护动作执行失败：${String((error as Error)?.message ?? error)}`,
+                reasonCodes: ['maintenance_action_failed'],
+                touchedCounts,
+                executedAt: Date.now(),
+                durationMs: Math.max(0, Date.now() - startedAt),
+            };
+            state.lastMaintenanceExecution = result;
+            this.markDirty();
+            return result;
+        }
     }
 
     /**
@@ -621,12 +1474,33 @@ export class ChatStateManager {
             latestSignalAt,
         });
         state.memoryQuality = quality;
-        state.maintenanceAdvice = buildMaintenanceAdvice({
+        const nextAdvice = buildMaintenanceAdvice({
             metrics: nextMetrics,
             quality,
             vectorLifecycle,
         });
-        state.adaptivePolicy = buildAdaptivePolicy(await this.getChatProfile(), nextMetrics, vectorLifecycle, quality);
+        const groupSplit = this.detectGroupLaneSplit(state.groupMemory);
+        state.maintenanceAdvice = groupSplit.hasSplit
+            ? [
+                ...nextAdvice,
+                {
+                    action: 'group_maintenance',
+                    priority: groupSplit.severity === 'critical' ? 'high' : 'medium',
+                    reasonCodes: groupSplit.reasonCodes,
+                    title: '建议执行群聊维护',
+                    detail: '检测到群聊角色车道状态分裂，建议重建 lanes、显著度和共享场景。',
+                },
+            ]
+            : nextAdvice;
+        state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice, state);
+        await this.refreshLifecycleState(state, 'recompute_quality');
+        state.adaptivePolicy = {
+            ...this.applyLifecycleBias(
+                buildAdaptivePolicy(await this.getChatProfile(), nextMetrics, vectorLifecycle, quality),
+                state.chatLifecycle?.stage ?? 'new',
+            ),
+            ...(this.getEffectivePresetBundleFromState(state).effectiveAdaptivePolicy ?? {}),
+        };
         this.markDirty();
         return quality;
     }
@@ -667,6 +1541,52 @@ export class ChatStateManager {
     async getLastStrategyDecision(): Promise<StrategyDecision | null> {
         const state = await this.load();
         return state.lastStrategyDecision ?? null;
+    }
+
+    /**
+     * 功能：记录最近一次生成前 gate 决策。
+     * 参数：
+     *   decision (PreGenerationGateDecision | null)：生成前决策。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setLastPreGenerationDecision(decision: PreGenerationGateDecision | null): Promise<void> {
+        const state = await this.load();
+        state.lastPreGenerationDecision = decision;
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取最近一次生成前 gate 决策。
+     * 返回：
+     *   Promise<PreGenerationGateDecision | null>：生成前决策。
+     */
+    async getLastPreGenerationDecision(): Promise<PreGenerationGateDecision | null> {
+        const state = await this.load();
+        return state.lastPreGenerationDecision ?? null;
+    }
+
+    /**
+     * 功能：记录最近一次生成后 gate 决策。
+     * 参数：
+     *   decision (PostGenerationGateDecision | null)：生成后决策。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setLastPostGenerationDecision(decision: PostGenerationGateDecision | null): Promise<void> {
+        const state = await this.load();
+        state.lastPostGenerationDecision = decision;
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取最近一次生成后 gate 决策。
+     * 返回：
+     *   Promise<PostGenerationGateDecision | null>：生成后决策。
+     */
+    async getLastPostGenerationDecision(): Promise<PostGenerationGateDecision | null> {
+        const state = await this.load();
+        return state.lastPostGenerationDecision ?? null;
     }
 
     /**
@@ -809,42 +1729,11 @@ export class ChatStateManager {
      * 功能：读取兼容旧接口的摘要策略。
      * @returns 兼容旧接口的摘要策略。
      */
-    async getSummaryPolicy(): Promise<Required<SummaryPolicyOverride>> {
-        const state = await this.load();
-        const adaptivePolicy = await this.getAdaptivePolicy();
-        return {
-            ...DEFAULT_SUMMARY_POLICY,
-            ...(state.summaryPolicyOverride ?? {}),
-            enabled: adaptivePolicy.summaryEnabled,
-            interval: adaptivePolicy.extractInterval,
-            windowSize: adaptivePolicy.extractWindowSize,
-        };
-    }
-
     /**
      * 功能：写入兼容旧接口的摘要策略覆盖。
      * @param override 摘要策略覆盖项。
      * @returns 无返回值。
      */
-    async setSummaryPolicyOverride(override: Partial<SummaryPolicyOverride>): Promise<void> {
-        const state = await this.load();
-        state.summaryPolicyOverride = {
-            ...(state.summaryPolicyOverride ?? {}),
-            ...(override ?? {}),
-        };
-        state.manualOverrides = {
-            ...(state.manualOverrides ?? {}),
-            adaptivePolicy: {
-                ...(state.manualOverrides?.adaptivePolicy ?? {}),
-                summaryEnabled: override.enabled ?? state.manualOverrides?.adaptivePolicy?.summaryEnabled,
-                extractInterval: override.interval ?? state.manualOverrides?.adaptivePolicy?.extractInterval,
-                extractWindowSize: override.windowSize ?? state.manualOverrides?.adaptivePolicy?.extractWindowSize,
-            },
-        };
-        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
-        this.markDirty();
-    }
-
     /**
      * 功能：读取自动 schema 策略。
      * @returns 自动 schema 策略。
@@ -923,6 +1812,314 @@ export class ChatStateManager {
             ...(patch ?? {}),
             lastUpdatedAt: Date.now(),
         };
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取当前聊天的逻辑消息视图快照。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<LogicalChatView | null>：逻辑消息视图，不存在时返回 null。
+     */
+    async getLogicalChatView(): Promise<LogicalChatView | null> {
+        const state = await this.load();
+        return state.logicalChatView ?? null;
+    }
+
+    /**
+     * 功能：写入逻辑消息视图并同步聊天生命周期变更信息。
+     * 参数：
+     *   view (LogicalChatView)：新的逻辑消息视图。
+     *   mutationSource (string)：本次重建来源。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setLogicalChatView(view: LogicalChatView, mutationSource: string = 'snapshot_diff'): Promise<void> {
+        const state = await this.load();
+        state.logicalChatView = view;
+        await this.recordLifecycleMutation(
+            state,
+            Array.isArray(view.mutationKinds) ? view.mutationKinds : [],
+            mutationSource,
+        );
+        const effectivePolicy = await this.getAdaptivePolicy();
+        if (effectivePolicy.groupLaneEnabled !== false) {
+            state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY);
+        }
+        state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice ?? [], state);
+        await this.refreshLifecycleState(state, 'logical_view');
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取冷启动语义种子。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<ChatSemanticSeed | null>：语义种子，不存在时返回 null。
+     */
+    async getSemanticSeed(): Promise<ChatSemanticSeed | null> {
+        const state = await this.load();
+        return state.semanticSeed ?? null;
+    }
+
+    /**
+     * 功能：读取冷启动指纹。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<string | null>：指纹，不存在时返回 null。
+     */
+    async getColdStartFingerprint(): Promise<string | null> {
+        const state = await this.load();
+        const value = normalizeSeedText(state.coldStartFingerprint);
+        return value || null;
+    }
+
+    /**
+     * 功能：写入冷启动语义种子并同步基础画像偏置。
+     * 参数：
+     *   seed (ChatSemanticSeed)：语义种子。
+     *   fingerprint (string)：种子指纹。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async saveSemanticSeed(seed: ChatSemanticSeed, fingerprint: string): Promise<void> {
+        const state = await this.load();
+        state.semanticSeed = seed;
+        state.coldStartFingerprint = normalizeSeedText(fingerprint) || undefined;
+
+        const nextProfile: ChatProfile = {
+            ...DEFAULT_CHAT_PROFILE,
+            ...(state.chatProfile ?? {}),
+            vectorStrategy: {
+                ...DEFAULT_CHAT_PROFILE.vectorStrategy,
+                ...(state.chatProfile?.vectorStrategy ?? {}),
+            },
+        };
+        if (Array.isArray(seed.groupMembers) && seed.groupMembers.length > 1) {
+            nextProfile.chatType = 'group';
+        }
+        if (seed.styleSeed?.mode === 'tool') {
+            nextProfile.stylePreference = 'qa';
+        } else if (seed.styleSeed?.mode === 'setting_qa') {
+            nextProfile.chatType = nextProfile.chatType === 'group' ? 'group' : 'worldbook';
+            nextProfile.stylePreference = 'info';
+        } else if (seed.styleSeed?.mode === 'rp') {
+            nextProfile.stylePreference = 'trpg';
+        } else if (seed.styleSeed?.mode === 'narrative') {
+            nextProfile.stylePreference = 'story';
+        }
+        state.chatProfile = nextProfile;
+
+        state.groupMemory = {
+            ...(state.groupMemory ?? DEFAULT_GROUP_MEMORY),
+            bindingSnapshot: {
+                ...(state.groupMemory?.bindingSnapshot ?? DEFAULT_GROUP_MEMORY.bindingSnapshot),
+                memberNames: Array.from(new Set(seed.groupMembers ?? [])).filter(Boolean).slice(0, 24),
+                updatedAt: Date.now(),
+            },
+            updatedAt: Date.now(),
+        };
+        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取最近一次 lorebook 裁决结果。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<LorebookGateDecision | null>：裁决结果，不存在时返回 null。
+     */
+    async getLorebookDecision(): Promise<LorebookGateDecision | null> {
+        const state = await this.load();
+        return state.lastLorebookDecision ?? null;
+    }
+
+    /**
+     * 功能：写入 lorebook 裁决结果并记录生命周期来源。
+     * 参数：
+     *   decision (LorebookGateDecision)：裁决结果。
+     *   source (string)：来源标识。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setLorebookDecision(decision: LorebookGateDecision, source: string = 'injection'): Promise<void> {
+        const state = await this.load();
+        state.lastLorebookDecision = decision;
+        await this.recordLifecycleMutation(state, [], `lorebook:${source}`);
+        this.markDirty();
+    }
+
+    /**
+     * 功能：加入摘要修正队列。
+     * 参数：
+     *   reason (string)：修正原因。
+     *   lorebookMode (LorebookGateMode)：触发时的 lorebook 模式。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async enqueueSummaryFixTask(reason: string, lorebookMode: LorebookGateMode): Promise<void> {
+        const state = await this.load();
+        const queue = Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [];
+        const task: SummaryFixTask = {
+            reason: normalizeSeedText(reason) || 'lorebook_decision_changed',
+            lorebookMode,
+            createdAt: Date.now(),
+        };
+        state.summaryFixQueue = [...queue, task].slice(-32);
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取摘要修正队列。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<SummaryFixTask[]>：摘要修正任务列表。
+     */
+    async getSummaryFixQueue(): Promise<SummaryFixTask[]> {
+        const state = await this.load();
+        state.summaryFixQueue = Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [];
+        return state.summaryFixQueue;
+    }
+
+    /**
+     * 功能：读取群聊记忆状态。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<GroupMemoryState | null>：群聊记忆状态，不存在时返回 null。
+     */
+    async getGroupMemory(): Promise<GroupMemoryState | null> {
+        const state = await this.load();
+        return state.groupMemory ?? null;
+    }
+
+    /**
+     * 功能：覆盖写入群聊记忆状态。
+     * 参数：
+     *   groupMemory (GroupMemoryState)：群聊记忆状态。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setGroupMemory(groupMemory: GroupMemoryState): Promise<void> {
+        const state = await this.load();
+        state.groupMemory = {
+            ...DEFAULT_GROUP_MEMORY,
+            ...(groupMemory ?? DEFAULT_GROUP_MEMORY),
+            lanes: Array.isArray(groupMemory?.lanes) ? groupMemory.lanes : [],
+            actorSalience: Array.isArray(groupMemory?.actorSalience) ? groupMemory.actorSalience : [],
+            sharedScene: {
+                ...DEFAULT_GROUP_MEMORY.sharedScene,
+                ...(groupMemory?.sharedScene ?? {}),
+            },
+            bindingSnapshot: {
+                ...DEFAULT_GROUP_MEMORY.bindingSnapshot,
+                ...(groupMemory?.bindingSnapshot ?? {}),
+                characterIds: Array.isArray(groupMemory?.bindingSnapshot?.characterIds) ? groupMemory.bindingSnapshot.characterIds : [],
+                memberNames: Array.isArray(groupMemory?.bindingSnapshot?.memberNames) ? groupMemory.bindingSnapshot.memberNames : [],
+            },
+            updatedAt: Date.now(),
+        };
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取当前聊天的楼层台账。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<TurnRecord[]>：楼层台账副本。
+     */
+    async getTurnLedger(): Promise<TurnRecord[]> {
+        const state = await this.load();
+        return Array.isArray(state.turnLedger) ? state.turnLedger : [];
+    }
+
+    /**
+     * 功能：写入楼层台账。
+     * 参数：
+     *   turnLedger (TurnRecord[])：楼层记录数组。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setTurnLedger(turnLedger: TurnRecord[]): Promise<void> {
+        const state = await this.load();
+        state.turnLedger = Array.isArray(turnLedger) ? turnLedger : [];
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取聊天是否归档。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<boolean>：是否已归档。
+     */
+    async isChatArchived(): Promise<boolean> {
+        const state = await this.load();
+        return state.archived === true;
+    }
+
+    /**
+     * 功能：将聊天标记为归档状态。
+     * 参数：
+     *   reason (string)：归档原因。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async archiveMemoryChat(reason: string = 'soft_delete'): Promise<void> {
+        const state = await this.load();
+        state.archived = true;
+        state.archivedAt = Date.now();
+        state.archiveReason = reason;
+        await this.refreshLifecycleState(state, 'archive');
+        this.markDirty();
+    }
+
+    /**
+     * 功能：恢复归档聊天。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async restoreArchivedMemoryChat(): Promise<void> {
+        const state = await this.load();
+        state.archived = false;
+        state.archivedAt = undefined;
+        state.archiveReason = undefined;
+        await this.refreshLifecycleState(state, 'restore_archive');
+        this.markDirty();
+    }
+
+    /**
+     * 功能：记录角色绑定指纹变更。
+     * 参数：
+     *   fingerprint (string)：角色绑定指纹。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setCharacterBindingFingerprint(fingerprint: string): Promise<void> {
+        const state = await this.load();
+        state.characterBindingFingerprint = String(fingerprint ?? '').trim() || undefined;
+        const [groupIdRaw, characterIdRaw] = String(fingerprint ?? '').split('|');
+        const groupId = normalizeSeedText(groupIdRaw === '-' ? '' : groupIdRaw);
+        const characterId = normalizeSeedText(characterIdRaw === '-' ? '' : characterIdRaw);
+        state.groupMemory = {
+            ...(state.groupMemory ?? DEFAULT_GROUP_MEMORY),
+            bindingSnapshot: {
+                ...(state.groupMemory?.bindingSnapshot ?? DEFAULT_GROUP_MEMORY.bindingSnapshot),
+                groupId,
+                characterIds: characterId ? [characterId] : [],
+                updatedAt: Date.now(),
+            },
+            updatedAt: Date.now(),
+        };
+        await this.recordLifecycleMutation(state, ['character_binding_changed'], 'character_binding');
         this.markDirty();
     }
 
@@ -1049,6 +2246,132 @@ export class ChatStateManager {
     async isRowTombstoned(tableKey: string, rowId: string): Promise<boolean> {
         const tombstones = await this.getRowTombstones();
         return Boolean(tombstones[tableKey]?.[rowId]);
+    }
+
+    /**
+     * 功能：根据逻辑消息视图推导群聊车道、共享场景与角色显著度。
+     * 参数：
+     *   view (LogicalChatView)：逻辑消息视图。
+     *   previous (GroupMemoryState)：上一版群聊记忆。
+     * 返回：
+     *   GroupMemoryState：更新后的群聊记忆状态。
+     */
+    private deriveGroupMemoryFromView(view: LogicalChatView, previous: GroupMemoryState): GroupMemoryState {
+        const base = {
+            ...DEFAULT_GROUP_MEMORY,
+            ...(previous ?? DEFAULT_GROUP_MEMORY),
+        };
+        const laneMap = new Map<string, GroupMemoryState['lanes'][number]>();
+        for (const lane of base.lanes ?? []) {
+            laneMap.set(lane.actorKey, {
+                ...lane,
+                recentMessageIds: Array.isArray(lane.recentMessageIds) ? lane.recentMessageIds.slice(-8) : [],
+            });
+        }
+
+        const recent = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - 40));
+        const mentions = new Map<string, number>();
+        const actorMessageCount = new Map<string, number>();
+        for (const node of recent) {
+            const actor = guessActorFromMessage(node);
+            const existing = laneMap.get(actor.actorKey);
+            const nextLane = {
+                laneId: existing?.laneId ?? crypto.randomUUID(),
+                actorKey: actor.actorKey,
+                displayName: actor.displayName || existing?.displayName || actor.actorKey,
+                identityHint: actor.identityHint || existing?.identityHint || '',
+                lastStyle: inferLaneStyle(node.text) || existing?.lastStyle || '',
+                lastEmotion: inferLaneEmotion(node.text) || existing?.lastEmotion || '',
+                recentGoal: inferLaneGoal(node.text) || existing?.recentGoal || '',
+                relationshipDelta: inferRelationshipDelta(node.text) || existing?.relationshipDelta || '',
+                lastActiveAt: Number(node.updatedAt ?? node.createdAt ?? Date.now()),
+                recentMessageIds: Array.from(new Set([...(existing?.recentMessageIds ?? []), normalizeSeedText(node.messageId)].filter(Boolean))).slice(-8),
+            };
+            laneMap.set(actor.actorKey, nextLane);
+            actorMessageCount.set(actor.actorKey, Number(actorMessageCount.get(actor.actorKey) ?? 0) + 1);
+
+            const text = normalizeSeedText(node.text);
+            const speakerPattern = /([A-Za-z0-9_\u4e00-\u9fa5]{2,24})/g;
+            const matched = text.match(speakerPattern) ?? [];
+            for (const token of matched.slice(0, 8)) {
+                const lowered = token.toLowerCase();
+                if (!lowered || lowered === actor.displayName.toLowerCase()) {
+                    continue;
+                }
+                mentions.set(lowered, Number(mentions.get(lowered) ?? 0) + 1);
+            }
+        }
+
+        const lanes = Array.from(laneMap.values())
+            .sort((left, right): number => Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0))
+            .slice(0, 24);
+
+        const latestText = normalizeSeedText(recent.slice(-1)[0]?.text ?? '');
+        const sceneMatch = latestText.match(/在([^。！？!?]{2,24})/);
+        const conflictMatch = latestText.match(/(冲突|争执|战斗|分歧|危机|任务|调查)([^。！？!?]{0,30})/);
+        const pendingMatches = recent
+            .map((node) => normalizeSeedText(node.text))
+            .filter((text) => /待办|稍后|之后|下一步|计划|准备/.test(text))
+            .slice(-6);
+        const consensusMatches = recent
+            .map((node) => normalizeSeedText(node.text))
+            .filter((text) => /一致|同意|决定|达成|共识/.test(text))
+            .slice(-6);
+        const participantActorKeys = Array.from(actorMessageCount.entries())
+            .sort((left, right) => right[1] - left[1])
+            .slice(0, 8)
+            .map((item) => item[0]);
+
+        const sharedScene = {
+            ...base.sharedScene,
+            currentScene: normalizeSeedText(sceneMatch?.[1] ?? base.sharedScene.currentScene),
+            currentConflict: normalizeSeedText(conflictMatch?.[0] ?? base.sharedScene.currentConflict),
+            groupConsensus: Array.from(new Set([...(base.sharedScene.groupConsensus ?? []), ...consensusMatches])).slice(-8),
+            pendingEvents: Array.from(new Set([...(base.sharedScene.pendingEvents ?? []), ...pendingMatches])).slice(-10),
+            participantActorKeys,
+            updatedAt: Date.now(),
+        };
+
+        const actorSalience = lanes
+            .map((lane) => {
+                const msgCount = Number(actorMessageCount.get(lane.actorKey) ?? 0);
+                const mentionCount = Number(mentions.get(lane.displayName.toLowerCase()) ?? 0);
+                const goalBonus = lane.recentGoal ? 0.12 : 0;
+                const conflictBonus = sharedScene.currentConflict && normalizeSeedText(sharedScene.currentConflict).includes(lane.displayName)
+                    ? 0.12
+                    : 0;
+                const recency = Math.max(0, 1 - ((Date.now() - Number(lane.lastActiveAt ?? 0)) / (1000 * 60 * 60 * 12)));
+                const score = Math.max(0, Math.min(1, msgCount * 0.12 + mentionCount * 0.04 + goalBonus + conflictBonus + recency * 0.24));
+                const reasonCodes: string[] = [];
+                if (msgCount > 0) {
+                    reasonCodes.push('recent_speaker');
+                }
+                if (mentionCount > 0) {
+                    reasonCodes.push('mentioned');
+                }
+                if (goalBonus > 0) {
+                    reasonCodes.push('goal_pending');
+                }
+                if (conflictBonus > 0) {
+                    reasonCodes.push('conflict_related');
+                }
+                return {
+                    actorKey: lane.actorKey,
+                    score,
+                    reasonCodes,
+                    updatedAt: Date.now(),
+                };
+            })
+            .sort((left, right): number => right.score - left.score)
+            .slice(0, 16);
+
+        return {
+            ...base,
+            lanes,
+            sharedScene,
+            actorSalience,
+            updatedAt: Date.now(),
+        };
     }
 
     /**

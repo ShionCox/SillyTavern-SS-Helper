@@ -14,6 +14,7 @@ export type {
   SdkTavernInstanceEvent,
   SdkTavernRoleIdentityEvent,
   SdkTavernRuntimeContextEvent,
+  SdkTavernSemanticSnapshotEvent,
   SdkTavernSlashCommandArgumentFactoryEvent,
   SdkTavernSlashCommandFactoryEvent,
   SdkTavernSlashCommandParserEvent,
@@ -30,7 +31,6 @@ export {
   normalizeTavernKeyPartEvent,
   normalizeTavernChatIdEvent,
   normalizeTavernRoleKeyEvent,
-  parseLegacyTavernChatKeyEvent,
   isFallbackTavernChatEvent,
   buildTavernChatEntityKeyEvent,
   parseAnyTavernChatRefEvent,
@@ -44,6 +44,7 @@ export {
   resolveTavernRoleIdentityEvent,
   resolveCurrentGroupEvent,
   getTavernContextSnapshotEvent,
+  getTavernSemanticSnapshotEvent,
 } from "./context";
 
 export {

@@ -93,11 +93,12 @@ export class TemplateBuilder {
         const systemPrompt = `你是一个世界观模板设计专家。请根据提供的世界观资料输出 MemoryOS 模板 JSON。
 要求：
 1. 只输出 JSON，不要附加解释。
-2. 至少包含 templateId、worldType、name、entities、factTypes、extractPolicies、injectionLayout。
+2. 至少包含 templateId、worldType、name、tables、factTypes、extractPolicies、injectionLayout。
 3. worldType 只能是 "fantasy"、"urban"、"custom" 之一。
-4. entities 的每个键都是实体类型，值包含 primaryKey 与 fields 数组。
+4. tables 的每一项都要包含 key、label、primaryKeyField 与 fields 数组。
 5. factTypes 的每项至少包含 type、pathPattern、slots。
-6. 如果能推断出多表结构，请额外返回 tables、fieldSynonyms、tableSynonyms、templateFamilyId、revisionNo、revisionState、parentTemplateId、schemaFingerprint、lastTouchedAt、finalizedAt。`;
+6. tables.fields 的每一项都要包含 key、label、tier，如为主键请标记 isPrimaryKey=true。
+7. 额外元数据可以包含 fieldSynonyms、tableSynonyms、templateFamilyId、revisionNo、revisionState、parentTemplateId、schemaFingerprint、lastTouchedAt、finalizedAt。`;
         const userPrompt = `世界观资料：
 ${compressedWorldInfo}
 
@@ -126,8 +127,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
         const data = result.data ?? {};
         const templateId = String(data.templateId ?? crypto.randomUUID());
         const createdAt = Date.now();
-        const entities = data.entities || {};
-        const tables = buildDisplayTables(entities, data.tables || []);
+        const tables = buildDisplayTables(data.tables || [], []);
         const revisionState = data.revisionState === 'draft' ? 'draft' : 'final';
 
         const template: WorldTemplate = {
@@ -135,7 +135,6 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
             chatKey: this.chatKey,
             worldType: data.worldType || 'custom',
             name: data.name || '自动生成模板',
-            entities,
             factTypes: data.factTypes || [],
             extractPolicies: data.extractPolicies || {},
             injectionLayout: data.injectionLayout || {},
@@ -175,16 +174,15 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
  */
 const TEMPLATE_SCHEMA = {
     type: 'object',
-    required: ['worldType', 'name', 'entities', 'factTypes'],
+    required: ['worldType', 'name', 'tables', 'factTypes'],
     properties: {
         templateId: { type: 'string' },
         worldType: { type: 'string' },
         name: { type: 'string' },
-        entities: { type: 'object' },
+        tables: { type: 'array' },
         factTypes: { type: 'array' },
         extractPolicies: { type: 'object' },
         injectionLayout: { type: 'object' },
-        tables: { type: 'array' },
         fieldSynonyms: { type: 'object' },
         tableSynonyms: { type: 'object' },
         templateFamilyId: { type: 'string' },
