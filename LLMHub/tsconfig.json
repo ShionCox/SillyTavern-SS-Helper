@@ -4,6 +4,12 @@
     "module": "ESNext",
     "target": "ESNext",
     "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "zod": [
+        "../node_modules/zod"
+      ]
+    },
     "lib": [
       "ESNext",
       "DOM"
@@ -23,6 +29,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "src/**/*.d.ts",
     "../_Components/css.d.ts",
     "../SDK/css.d.ts"
   ],

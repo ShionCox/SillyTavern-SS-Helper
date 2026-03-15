@@ -1,4 +1,4 @@
-﻿import type { DiceResult } from "./diceEvent";
+import type { DiceResult } from "./diceEvent";
 
 export type CompareOperatorEvent = ">=" | ">" | "<=" | "<";
 export type EventApplyScopeSettingEvent = "protagonist_only" | "all";
@@ -122,6 +122,7 @@ export interface DiceEventSpecEvent {
   desc: string;
   dcReason?: string;
   outcomes?: EventOutcomesEvent;
+  sourceAssistantMsgId?: string;
 }
 
 export interface EventRollRecordEvent {
@@ -152,6 +153,7 @@ export interface EventRollRecordEvent {
   | "disabled_globally"
   | "downgraded_by_ai_limit";
   explodePolicyReason?: string;
+  sourceAssistantMsgId?: string;
 }
 
 export interface PendingRoundEvent {
@@ -218,6 +220,22 @@ export interface RoundSummaryEventItemEvent {
   outcomeKind: EventOutcomeKindEvent;
   outcomeText: string;
   explosionTriggered: boolean;
+  sourceAssistantMsgId?: string;
+  rollId?: string;
+  rolledAt?: number;
+  targetLabelUsed?: string;
+  statusModifiersApplied?: Array<{ name: string; modifier: number }>;
+  explodePolicyApplied?: string;
+  rollsSnapshot?: {
+    rolls: number[];
+    modifier: number;
+    total: number;
+    rawTotal: number;
+    count: number;
+    sides: number;
+    exploding?: boolean;
+    explosionTriggered?: boolean;
+  };
 }
 
 export interface RoundSummarySnapshotEvent {

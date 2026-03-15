@@ -90,6 +90,26 @@ export function createRoundSummarySnapshotEvent(
       outcomeKind: resolvedOutcome.kind,
       outcomeText: stripStatusTagsFromTextEvent(resolvedOutcome.text),
       explosionTriggered: resolvedOutcome.explosionTriggered,
+      sourceAssistantMsgId: event.sourceAssistantMsgId,
+      rollId: record?.rollId,
+      rolledAt: record?.rolledAt,
+      targetLabelUsed: record?.targetLabelUsed,
+      statusModifiersApplied: record?.statusModifiersApplied
+        ? [...record.statusModifiersApplied]
+        : undefined,
+      explodePolicyApplied: record?.explodePolicyApplied,
+      rollsSnapshot: record?.result
+        ? {
+            rolls: Array.isArray(record.result.rolls) ? [...record.result.rolls] : [],
+            modifier: Number(record.result.modifier) || 0,
+            total: Number(record.result.total) || 0,
+            rawTotal: Number(record.result.rawTotal) || 0,
+            count: Number(record.result.count) || 0,
+            sides: Number(record.result.sides) || 0,
+            exploding: record.result.exploding,
+            explosionTriggered: record.result.explosionTriggered,
+          }
+        : undefined,
     });
   }
 

@@ -30,6 +30,10 @@ import {
   syncThemeControlClassesByNodeEvent,
 } from "./uiThemeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
+import { request } from "../../../SDK/bus/rpc";
+
+const ROLLHELPER_NAMESPACE_Event = "stx_rollhelper";
+const LLMHUB_NAMESPACE_Event = "stx_llmhub";
 
 function traceRollHelperThemeInput(message: string, payload?: unknown): void {
   if (payload === undefined) {
@@ -840,7 +844,6 @@ export function bindMountedSettingsCardEvent(deps: BindMountedSettingsCardDepsEv
 }
 
 export interface SyncSettingsUiDepsEvent {
-  SETTINGS_CARD_ID_Event: string;
   getSettingsEvent: () => {
     theme: string;
     enabled: boolean;

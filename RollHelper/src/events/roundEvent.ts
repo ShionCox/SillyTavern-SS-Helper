@@ -498,6 +498,7 @@ export function mergeEventsIntoPendingRoundEvent(
     next.targetType = resolvedTarget.targetType;
     next.targetName = resolvedTarget.targetName;
     next.targetLabel = resolvedTarget.targetLabel;
+    next.sourceAssistantMsgId = assistantMsgId;
     merged.set(next.id, next);
   }
 
@@ -590,6 +591,7 @@ export function createTimeoutFailureRecordEvent(
     rolledAt: now,
     source: "timeout_auto_fail",
     timeoutAt: now,
+    sourceAssistantMsgId: event.sourceAssistantMsgId,
   };
 }
 
@@ -814,6 +816,7 @@ export function performEventRollByIdEvent(
     timeoutAt: null,
     explodePolicyApplied,
     explodePolicyReason,
+    sourceAssistantMsgId: event.sourceAssistantMsgId,
   };
 
   round.rolls.push(record);
@@ -945,6 +948,7 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
       timeoutAt: null,
       explodePolicyApplied,
       explodePolicyReason,
+      sourceAssistantMsgId: event.sourceAssistantMsgId,
     };
 
     round.rolls.push(record);

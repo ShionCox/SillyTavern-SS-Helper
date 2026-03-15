@@ -12,6 +12,13 @@ function uuid(): string {
     });
 }
 
+export interface VectorIndexStats {
+    chunkCount: number;
+    embeddingCount: number;
+    lastIndexedAt: number;
+    lastEmbeddingModel: string | null;
+}
+
 /**
  * 向量索引管理器 —— 负责文本块的切分、Embedding 生成与余弦相似度检索
  *
@@ -156,6 +163,24 @@ export class VectorManager {
             logger.warn('向量检索失败，静默降级', e);
             return [];
         }
+    }
+
+    /**
+     * 返回当前聊天的向量索引统计。
+     */
+    public async getIndexStats(): Promise<VectorIndexStats> {
+        const [chunks, embeddings, metas] = await Promise.all([
+            db.vector_chunks.where('chatKey').equals(this.chatKey).count(),
+            db.vector_embeddings.where('chatKey').equals(this.chatKey).count(),
+            db.vector_meta.where('chatKey').equals(this.chatKey).toArray(),
+        ]);
+        const lastMeta = metas.sort((left, right): number => Number(right.lastIndexedAt ?? 0) - Number(left.lastIndexedAt ?? 0))[0] ?? null;
+        return {
+            chunkCount: Number(chunks ?? 0),
+            embeddingCount: Number(embeddings ?? 0),
+            lastIndexedAt: Number(lastMeta?.lastIndexedAt ?? 0),
+            lastEmbeddingModel: lastMeta?.embeddingModel ?? null,
+        };
     }
 
     /**

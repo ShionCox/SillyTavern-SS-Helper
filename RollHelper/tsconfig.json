@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2021",
     "module": "ES2020",
     "moduleResolution": "node",
     "resolveJsonModule": true,
@@ -8,10 +8,11 @@
     "strict": false,
     "allowJs": true,
     "noEmitOnError": false,
-    "lib": ["DOM", "ES2020"]
+    "lib": ["DOM", "ES2021"]
   },
   "include": [
     "./index.ts",
-    "./src/**/*.ts"
+    "./src/**/*.ts",
+    "./src/**/*.d.ts"
   ]
 }

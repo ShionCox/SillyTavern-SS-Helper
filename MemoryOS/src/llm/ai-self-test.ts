@@ -315,12 +315,7 @@ async function testVectorEmbed(): Promise<AiSelfTestResult> {
     if (blockedResult) return blockedResult;
     const start = Date.now();
     try {
-        const result = await runEmbed([SAMPLE_EMBED_TEXT], { maxLatencyMs: 10000 }) as {
-            ok?: boolean;
-            vectors?: number[][];
-            error?: string;
-            meta?: { resourceId?: string; model?: string };
-        };
+        const result = await runEmbed([SAMPLE_EMBED_TEXT], { maxLatencyMs: 10000 });
         const duration = Date.now() - start;
         if (result?.ok !== false && Array.isArray(result?.vectors) && result.vectors.length > 0) {
             return attachRouteInfo(routeStatus, {
@@ -364,12 +359,7 @@ async function testRerank(): Promise<AiSelfTestResult> {
     if (blockedResult) return blockedResult;
     const start = Date.now();
     try {
-        const result = await runRerank(SAMPLE_RERANK_QUERY, SAMPLE_RERANK_DOCS, 2) as {
-            ok?: boolean;
-            results?: Array<unknown>;
-            error?: string;
-            meta?: { resourceId?: string; model?: string };
-        };
+        const result = await runRerank(SAMPLE_RERANK_QUERY, SAMPLE_RERANK_DOCS, 2);
         const duration = Date.now() - start;
         if (result?.ok !== false && Array.isArray(result?.results)) {
             return attachRouteInfo(routeStatus, {

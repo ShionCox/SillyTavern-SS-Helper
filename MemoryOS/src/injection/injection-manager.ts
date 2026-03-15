@@ -1,16 +1,39 @@
+import type { EventEnvelope } from '../../../SDK/stx';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
 import { SummariesManager } from '../core/summaries-manager';
-
-type SectionName = 'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY';
+import { ChatStateManager } from '../core/chat-state-manager';
+import {
+    buildIntentBudgets,
+    buildStrategyDecision,
+    collectAdaptiveMetricsFromEvents,
+    decideInjectionIntent,
+    resolveIntentSections,
+} from '../core/chat-strategy-engine';
+import type {
+    AdaptivePolicy,
+    InjectionIntent,
+    InjectionSectionName,
+    StrategyDecision,
+} from '../types';
 
 type BuildContextOptions = {
     maxTokens?: number;
-    sections?: SectionName[];
+    sections?: InjectionSectionName[];
     query?: string;
-    sectionBudgets?: Partial<Record<SectionName, number>>;
+    sectionBudgets?: Partial<Record<InjectionSectionName, number>>;
     preferSummary?: boolean;
+    intentHint?: InjectionIntent;
+    includeDecisionMeta?: boolean;
+};
+
+type BuildContextDecision = {
+    text: string;
+    sectionsUsed: InjectionSectionName[];
+    budgets: Partial<Record<InjectionSectionName, number>>;
+    intent: InjectionIntent;
+    reasonCodes: string[];
 };
 
 type AnchorPolicy = {
@@ -20,13 +43,21 @@ type AnchorPolicy = {
 };
 
 /**
- * 功能：注入管理器，按预算构建 Prompt 上下文。
+ * 功能：根据聊天画像和意图构建注入上下文。
+ * @param _chatKey 当前聊天键。
+ * @param eventsManager 事件管理器。
+ * @param factsManager 事实管理器。
+ * @param stateManager 世界状态管理器。
+ * @param summariesManager 摘要管理器。
+ * @param chatStateManager 聊天状态管理器。
+ * @returns 注入管理器实例。
  */
 export class InjectionManager {
     private eventsManager: EventsManager;
     private factsManager: FactsManager;
     private stateManager: StateManager;
     private summariesManager: SummariesManager;
+    private chatStateManager: ChatStateManager | null;
     private anchorPolicy: AnchorPolicy = {
         allowSystem: false,
         allowUser: true,
@@ -38,61 +69,90 @@ export class InjectionManager {
         eventsManager: EventsManager,
         factsManager: FactsManager,
         stateManager: StateManager,
-        summariesManager: SummariesManager
+        summariesManager: SummariesManager,
+        chatStateManager?: ChatStateManager,
     ) {
         this.eventsManager = eventsManager;
         this.factsManager = factsManager;
         this.stateManager = stateManager;
         this.summariesManager = summariesManager;
+        this.chatStateManager = chatStateManager ?? null;
     }
 
     /**
-     * 功能：构建供 Prompt 使用的上下文文本。
-     * @param opts 注入构建参数。
-     * @returns 拼接后的上下文文本。
+     * 功能：构建用于注入 Prompt 的上下文文本或决策元数据。
+     * @param opts 构建参数。
+     * @returns 上下文文本或带元数据的构建结果。
      */
-    async buildContext(opts?: BuildContextOptions): Promise<string> {
-        const maxTokens: number = Math.max(200, opts?.maxTokens ?? 1200);
-        const preferSummary: boolean = opts?.preferSummary !== false;
-        const sections: SectionName[] = this.resolveSectionOrder(opts?.sections, preferSummary);
-        const budgets: Record<SectionName, number> = await this.resolveSectionBudgets(
+    async buildContext(opts?: BuildContextOptions): Promise<string | BuildContextDecision> {
+        const maxTokens = Math.max(200, Number(opts?.maxTokens ?? 1200));
+        const recentEvents = await this.eventsManager.query({ limit: 24 });
+        const previousMetrics = this.chatStateManager ? await this.chatStateManager.getAdaptiveMetrics() : undefined;
+        const mergedMetrics = collectAdaptiveMetricsFromEvents(recentEvents, previousMetrics);
+        if (this.chatStateManager) {
+            await this.chatStateManager.updateAdaptiveMetrics({
+                avgMessageLength: mergedMetrics.avgMessageLength,
+                assistantLongMessageRatio: mergedMetrics.assistantLongMessageRatio,
+                userInfoDensity: mergedMetrics.userInfoDensity,
+                repeatedTopicRate: mergedMetrics.repeatedTopicRate,
+                recentUserTurns: mergedMetrics.recentUserTurns,
+                recentAssistantTurns: mergedMetrics.recentAssistantTurns,
+                recentGroupSpeakerCount: mergedMetrics.recentGroupSpeakerCount,
+                worldStateSignal: mergedMetrics.worldStateSignal,
+            });
+        }
+        const profile = this.chatStateManager ? await this.chatStateManager.getChatProfile() : null;
+        const policy = this.chatStateManager ? await this.chatStateManager.getAdaptivePolicy() : this.buildFallbackPolicy();
+        const intent = this.resolveIntent(opts, profile, recentEvents);
+        const explicitSections = Array.isArray(opts?.sections) && opts.sections.length > 0 ? opts.sections : null;
+        const sections = explicitSections ?? this.resolveSectionOrder(intent, opts?.preferSummary !== false);
+        const budgets = await this.resolveSectionBudgets(
             maxTokens,
             sections,
-            opts?.sectionBudgets
+            policy,
+            intent,
+            opts?.sectionBudgets,
         );
-        const keywords: string[] = this.extractKeywords(opts?.query || '');
-
-        const sectionTexts: Record<SectionName, string> = {
-            WORLD_STATE: '',
-            FACTS: '',
-            EVENTS: '',
-            SUMMARY: '',
-        };
+        const keywords = this.extractKeywords(opts?.query ?? '');
+        const sectionTexts: Partial<Record<InjectionSectionName, string>> = {};
 
         for (const section of sections) {
-            if (section === 'WORLD_STATE') {
-                sectionTexts.WORLD_STATE = await this.buildWorldStateSection(budgets.WORLD_STATE, keywords);
-            } else if (section === 'FACTS') {
-                sectionTexts.FACTS = await this.buildFactsSection(budgets.FACTS, keywords);
-            } else if (section === 'EVENTS') {
-                sectionTexts.EVENTS = await this.buildEventsSection(budgets.EVENTS);
-            } else if (section === 'SUMMARY') {
-                sectionTexts.SUMMARY = await this.buildSummarySection(budgets.SUMMARY, keywords);
-            }
+            sectionTexts[section] = await this.buildSectionText(section, budgets[section] ?? 0, keywords, recentEvents);
         }
 
-        const result: string = sections
-            .map((section: SectionName) => sectionTexts[section])
-            .filter((text: string) => text.trim().length > 0)
-            .join('\n\n')
-            .trim();
-
-        return this.trimToBudget(result, maxTokens);
+        const text = this.trimToBudget(
+            sections
+                .map((section: InjectionSectionName): string => String(sectionTexts[section] ?? '').trim())
+                .filter((chunk: string): boolean => chunk.length > 0)
+                .join('\n\n')
+                .trim(),
+            maxTokens,
+        );
+        const promptInjectionTokenRatio = maxTokens > 0 ? this.estimateTokens(text) / maxTokens : 0;
+        const reasonCodes = this.buildReasonCodes(intent, profile?.chatType, policy, sections);
+        const decision = buildStrategyDecision(intent, sections, budgets, reasonCodes);
+        if (this.chatStateManager) {
+            await this.chatStateManager.updateAdaptiveMetrics({
+                promptInjectionTokenRatio,
+            });
+            await this.chatStateManager.setLastStrategyDecision(decision);
+            await this.chatStateManager.recomputeMemoryQuality();
+        }
+        if (opts?.includeDecisionMeta === true) {
+            return {
+                text,
+                sectionsUsed: decision.sectionsUsed,
+                budgets: decision.budgets,
+                intent: decision.intent,
+                reasonCodes: decision.reasonCodes,
+            };
+        }
+        return text;
     }
 
     /**
      * 功能：设置注入锚点策略。
-     * @param opts 锚点策略参数。
+     * @param opts 锚点策略补丁。
      * @returns 无返回值。
      */
     async setAnchorPolicy(opts: {
@@ -100,99 +160,154 @@ export class InjectionManager {
         allowUser?: boolean;
         defaultInsert?: 'top' | 'beforeStart' | 'customAnchor';
     }): Promise<void> {
-        if (opts.allowSystem !== undefined) this.anchorPolicy.allowSystem = opts.allowSystem;
-        if (opts.allowUser !== undefined) this.anchorPolicy.allowUser = opts.allowUser;
-        if (opts.defaultInsert !== undefined) this.anchorPolicy.defaultInsert = opts.defaultInsert;
+        if (opts.allowSystem !== undefined) {
+            this.anchorPolicy.allowSystem = opts.allowSystem;
+        }
+        if (opts.allowUser !== undefined) {
+            this.anchorPolicy.allowUser = opts.allowUser;
+        }
+        if (opts.defaultInsert !== undefined) {
+            this.anchorPolicy.defaultInsert = opts.defaultInsert;
+        }
     }
 
     /**
      * 功能：读取当前锚点策略。
-     * @returns 锚点策略对象。
+     * @returns 锚点策略。
      */
     getAnchorPolicy(): AnchorPolicy {
         return { ...this.anchorPolicy };
     }
 
     /**
-     * 功能：解析 section 顺序。
-     * @param sections 外部指定 section 顺序。
-     * @param preferSummary 是否摘要优先。
-     * @returns 最终 section 顺序。
+     * 功能：回退构建默认策略。
+     * @returns 默认策略。
      */
-    private resolveSectionOrder(sections?: SectionName[], preferSummary = true): SectionName[] {
-        if (Array.isArray(sections) && sections.length > 0) {
-            return sections;
-        }
-        return preferSummary
-            ? ['WORLD_STATE', 'FACTS', 'SUMMARY', 'EVENTS']
-            : ['WORLD_STATE', 'FACTS', 'EVENTS', 'SUMMARY'];
+    private buildFallbackPolicy(): AdaptivePolicy {
+        return {
+            extractInterval: 12,
+            extractWindowSize: 40,
+            summaryEnabled: true,
+            summaryMode: 'layered',
+            entityResolutionLevel: 'medium',
+            speakerTrackingLevel: 'medium',
+            worldStateWeight: 0.5,
+            vectorEnabled: true,
+            vectorChunkThreshold: 240,
+            rerankThreshold: 6,
+            vectorMode: 'search_rerank',
+            vectorMinFacts: 18,
+            vectorMinSummaries: 8,
+            vectorSearchStride: 1,
+            rerankEnabled: true,
+            vectorIdleDecayDays: 14,
+            contextMaxTokensShare: 0.55,
+        };
     }
 
     /**
-     * 功能：解析 section 预算，优先外部预算，其次模板预算，最后默认比例预算。
+     * 功能：决定本轮注入意图。
+     * @param opts 构建参数。
+     * @param fallbackStyle 回退风格。
+     * @param recentEvents 最近事件。
+     * @returns 注入意图。
+     */
+    private resolveIntent(
+        opts: BuildContextOptions | undefined,
+        profile: {
+            chatType: 'solo' | 'group' | 'worldbook' | 'tool';
+            stylePreference: 'story' | 'qa' | 'trpg' | 'info';
+            memoryStrength: 'low' | 'medium' | 'high';
+            extractStrategy: 'facts_only' | 'facts_relations' | 'facts_relations_world';
+            summaryStrategy: 'short' | 'layered' | 'timeline';
+            vectorStrategy: {
+                enabled: boolean;
+                chunkThreshold: number;
+                rerankThreshold: number;
+                activationFacts: number;
+                activationSummaries: number;
+                idleDecayDays: number;
+                lowPrecisionSearchStride: number;
+            };
+            deletionStrategy: 'soft_delete' | 'immediate_purge';
+        } | null,
+        recentEvents: Array<EventEnvelope<unknown>>,
+    ): InjectionIntent {
+        if (opts?.intentHint && opts.intentHint !== 'auto') {
+            return opts.intentHint;
+        }
+        const query = String(opts?.query ?? '').trim();
+        const inferred = decideInjectionIntent({
+            query,
+            events: recentEvents,
+            profile: profile ?? {
+                chatType: 'solo',
+                stylePreference: 'story',
+                memoryStrength: 'medium',
+                extractStrategy: 'facts_relations',
+                summaryStrategy: 'layered',
+                vectorStrategy: {
+                    enabled: true,
+                    chunkThreshold: 240,
+                    rerankThreshold: 6,
+                    activationFacts: 18,
+                    activationSummaries: 8,
+                    idleDecayDays: 14,
+                    lowPrecisionSearchStride: 3,
+                },
+                deletionStrategy: 'soft_delete',
+            },
+        });
+        return inferred === 'auto' ? (profile?.stylePreference === 'qa' ? 'tool_qa' : 'story_continue') : inferred;
+    }
+
+    /**
+     * 功能：确定本轮区段顺序。
+     * @param intent 注入意图。
+     * @param preferSummary 是否偏好摘要。
+     * @returns 区段数组。
+     */
+    private resolveSectionOrder(intent: InjectionIntent, preferSummary: boolean): InjectionSectionName[] {
+        const sections = resolveIntentSections(intent);
+        if (!preferSummary && sections.includes('SUMMARY')) {
+            return sections.filter((section: InjectionSectionName): boolean => section !== 'SUMMARY').concat(['EVENTS']);
+        }
+        return sections;
+    }
+
+    /**
+     * 功能：根据意图、模板预算和外部覆盖计算区段预算。
      * @param maxTokens 总预算。
-     * @param sections 参与注入的 section。
+     * @param sections 区段数组。
+     * @param policy 自适应策略。
+     * @param intent 注入意图。
      * @param override 外部覆盖预算。
-     * @returns 每个 section 的 token 预算。
+     * @returns 预算映射。
      */
     private async resolveSectionBudgets(
         maxTokens: number,
-        sections: SectionName[],
-        override?: Partial<Record<SectionName, number>>
-    ): Promise<Record<SectionName, number>> {
-        const templateBudget: Partial<Record<SectionName, number>> = await this.readTemplateBudgets();
-        const ratioDefaults: Record<SectionName, number> = {
-            WORLD_STATE: 0.2,
-            FACTS: 0.4,
-            EVENTS: 0.1,
-            SUMMARY: 0.3,
-        };
-
-        const result: Record<SectionName, number> = {
-            WORLD_STATE: 0,
-            FACTS: 0,
-            EVENTS: 0,
-            SUMMARY: 0,
-        };
-
-        let allocated: number = 0;
-        const missing: SectionName[] = [];
-        for (const section of sections) {
-            const fromOverride = Number(override?.[section] ?? 0);
-            const fromTemplate = Number(templateBudget?.[section] ?? 0);
-            const chosen = fromOverride > 0 ? fromOverride : fromTemplate > 0 ? fromTemplate : 0;
-            if (chosen > 0) {
-                result[section] = Math.floor(chosen);
-                allocated += result[section];
-            } else {
-                missing.push(section);
-            }
-        }
-
-        if (missing.length > 0) {
-            const remaining: number = Math.max(0, maxTokens - allocated);
-            const ratioSum: number = missing.reduce((sum: number, section: SectionName) => sum + ratioDefaults[section], 0) || 1;
-            for (const section of missing) {
-                result[section] = Math.max(40, Math.floor((remaining * ratioDefaults[section]) / ratioSum));
-            }
-        }
-
-        const total: number = sections.reduce((sum: number, section: SectionName) => sum + result[section], 0);
-        if (total > maxTokens && total > 0) {
-            const scale: number = maxTokens / total;
-            for (const section of sections) {
-                result[section] = Math.max(20, Math.floor(result[section] * scale));
-            }
-        }
-
+        sections: InjectionSectionName[],
+        policy: AdaptivePolicy,
+        intent: InjectionIntent,
+        override?: Partial<Record<InjectionSectionName, number>>,
+    ): Promise<Partial<Record<InjectionSectionName, number>>> {
+        const templateBudgets = await this.readTemplateBudgets();
+        const intentBudgets = buildIntentBudgets(intent, sections, maxTokens, policy);
+        const result: Partial<Record<InjectionSectionName, number>> = {};
+        sections.forEach((section: InjectionSectionName): void => {
+            const preferred = Number(override?.[section] ?? 0)
+                || Number(templateBudgets[section] ?? 0)
+                || Number(intentBudgets[section] ?? 0);
+            result[section] = Math.max(24, Math.floor(preferred || Math.floor(maxTokens / Math.max(sections.length, 1))));
+        });
         return result;
     }
 
     /**
-     * 功能：读取当前激活模板中的 section 预算定义。
-     * @returns 模板中的 section 预算映射。
+     * 功能：读取当前模板中的注入预算。
+     * @returns 模板预算映射。
      */
-    private async readTemplateBudgets(): Promise<Partial<Record<SectionName, number>>> {
+    private async readTemplateBudgets(): Promise<Partial<Record<InjectionSectionName, number>>> {
         try {
             const stxMemory = (window as any)?.STX?.memory;
             if (!stxMemory?.template?.getActive) {
@@ -213,163 +328,333 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：构建世界状态 section。
-     * @param tokenBudget 本段 token 预算。
-     * @param keywords 相关性关键词。
-     * @returns section 文本。
+     * 功能：按区段类型构建文本。
+     * @param section 区段名。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @param recentEvents 最近事件。
+     * @returns 区段文本。
+     */
+    private async buildSectionText(
+        section: InjectionSectionName,
+        tokenBudget: number,
+        keywords: string[],
+        recentEvents: Array<EventEnvelope<unknown>>,
+    ): Promise<string> {
+        if (section === 'WORLD_STATE') {
+            return this.buildWorldStateSection(tokenBudget, keywords);
+        }
+        if (section === 'FACTS') {
+            return this.buildFactsSection(tokenBudget, keywords);
+        }
+        if (section === 'EVENTS') {
+            return this.buildEventsSection(tokenBudget, recentEvents);
+        }
+        if (section === 'SUMMARY') {
+            return this.buildSummarySection(tokenBudget, keywords);
+        }
+        if (section === 'CHARACTER_FACTS') {
+            return this.buildCharacterFactsSection(tokenBudget, keywords);
+        }
+        if (section === 'RELATIONSHIPS') {
+            return this.buildRelationshipsSection(tokenBudget, keywords);
+        }
+        if (section === 'LAST_SCENE') {
+            return this.buildLastSceneSection(tokenBudget);
+        }
+        if (section === 'SHORT_SUMMARY') {
+            return this.buildShortSummarySection(tokenBudget);
+        }
+        return '';
+    }
+
+    /**
+     * 功能：构建世界状态区段。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @returns 区段文本。
      */
     private async buildWorldStateSection(tokenBudget: number, keywords: string[]): Promise<string> {
-        if (tokenBudget <= 0) return '';
+        if (tokenBudget <= 0) {
+            return '';
+        }
         const states = await this.stateManager.query('');
-        const entries = Object.entries(states);
-        if (!entries.length) return '';
-
-        const ranked = entries
-            .map(([path, value]) => {
-                const plain = `${path} ${this.stringifyValue(value)}`.toLowerCase();
-                const hit = this.countKeywordHit(plain, keywords);
-                return { path, value, score: hit };
-            })
-            .sort((left, right) => right.score - left.score);
-
+        const ranked = Object.entries(states)
+            .map(([path, value]): { path: string; value: unknown; score: number } => ({
+                path,
+                value,
+                score: this.countKeywordHit(`${path} ${this.stringifyValue(value)}`.toLowerCase(), keywords),
+            }))
+            .sort((left, right): number => right.score - left.score);
         const lines: string[] = [];
         for (const item of ranked) {
             const line = `- ${item.path}: ${this.stringifyValue(item.value)}`;
-            if (!this.canAppend(lines, line, tokenBudget, 20)) break;
+            if (!this.canAppend(lines, line, tokenBudget, 20)) {
+                break;
+            }
             lines.push(line);
         }
-        return lines.length ? `【世界状态】\n${lines.join('\n')}` : '';
+        return lines.length > 0 ? `【世界状态】\n${lines.join('\n')}` : '';
     }
 
     /**
-     * 功能：构建事实 section，按 query 相关性优先。
-     * @param tokenBudget 本段 token 预算。
-     * @param keywords 相关性关键词。
-     * @returns section 文本。
+     * 功能：构建事实区段。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @returns 区段文本。
      */
     private async buildFactsSection(tokenBudget: number, keywords: string[]): Promise<string> {
-        if (tokenBudget <= 0) return '';
+        if (tokenBudget <= 0) {
+            return '';
+        }
         const facts = await this.factsManager.query({ limit: 120 });
-        if (!facts.length) return '';
-
-        const ranked = facts
-            .map((fact: any) => {
-                const searchable = `${fact.type} ${fact.path || ''} ${fact.entity?.kind || ''} ${fact.entity?.id || ''} ${this.stringifyValue(fact.value)}`.toLowerCase();
-                const keywordScore = this.countKeywordHit(searchable, keywords) * 3;
-                const confidenceScore = Number(fact.confidence ?? 0) * 2;
-                const updatedAt = Number(fact.updatedAt ?? 0);
-                const ageHours = Math.max(0, (Date.now() - updatedAt) / 3_600_000);
-                const recencyScore = 1 / (1 + ageHours / 24);
-                return { fact, score: keywordScore + confidenceScore + recencyScore };
+        const filteredFacts = this.chatStateManager
+            ? await Promise.all(
+                facts.map(async (fact: any): Promise<any | null> => {
+                    const factKey = String(fact.factKey ?? '').trim();
+                    if (factKey && await this.chatStateManager!.isFactArchived(factKey)) {
+                        return null;
+                    }
+                    return fact;
+                }),
+            ).then((items: Array<any | null>): any[] => items.filter((item: any | null): item is any => item != null))
+            : facts;
+        const lines = filteredFacts
+            .map((fact: any): { line: string; score: number } => {
+                const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
+                const line = `- ${entityPart}${fact.type}${fact.path ? `.${fact.path}` : ''}: ${this.stringifyValue(fact.value)}`;
+                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 3 + Number(fact.confidence ?? 0);
+                return { line, score };
             })
-            .sort((left, right) => right.score - left.score);
-
-        const lines: string[] = [];
-        for (const item of ranked) {
-            const fact = item.fact;
-            const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}]` : '';
-            const line = `- ${entityPart} ${fact.type}${fact.path ? `.${fact.path}` : ''}: ${this.stringifyValue(fact.value)}`;
-            if (!this.canAppend(lines, line, tokenBudget, 24)) break;
-            lines.push(line);
-        }
-        return lines.length ? `【关键事实】\n${lines.join('\n')}` : '';
+            .sort((left, right): number => right.score - left.score);
+        return this.assembleSection('【事实】', lines.map((item): string => item.line), tokenBudget, 24);
     }
 
     /**
-     * 功能：构建近期事件 section，仅保留最新窗口。
-     * @param tokenBudget 本段 token 预算。
-     * @returns section 文本。
+     * 功能：构建最近事件区段。
+     * @param tokenBudget 预算。
+     * @param recentEvents 最近事件。
+     * @returns 区段文本。
      */
-    private async buildEventsSection(tokenBudget: number): Promise<string> {
-        if (tokenBudget <= 0) return '';
-        const events = await this.eventsManager.query({ limit: 24 });
-        if (!events.length) return '';
-
-        const latest = [...events].sort((left, right) => right.ts - left.ts);
-        const lines: string[] = [];
-        for (const event of latest) {
-            const time = new Date(event.ts).toLocaleTimeString();
-            const line = `- [${time}] ${event.type}: ${this.readEventPayloadText(event.payload)}`;
-            if (!this.canAppend(lines, line, tokenBudget, 16)) break;
-            lines.push(line);
+    private async buildEventsSection(
+        tokenBudget: number,
+        recentEvents?: Array<EventEnvelope<unknown>>,
+    ): Promise<string> {
+        if (tokenBudget <= 0) {
+            return '';
         }
-        return lines.length ? `【近期事件】\n${lines.join('\n')}` : '';
+        const sourceEvents = Array.isArray(recentEvents) && recentEvents.length > 0
+            ? recentEvents
+            : await this.eventsManager.query({ limit: 24 });
+        const lines = sourceEvents
+            .slice(0, 12)
+            .map((event: EventEnvelope<unknown>): string => {
+                const time = new Date(event.ts).toLocaleTimeString();
+                return `- [${time}] ${event.type}: ${this.readEventPayloadText(event.payload)}`;
+            });
+        return this.assembleSection('【最近事件】', lines, tokenBudget, 16);
     }
 
     /**
-     * 功能：构建摘要 section，优先 arc/scene。
-     * @param tokenBudget 本段 token 预算。
-     * @param keywords 相关性关键词。
-     * @returns section 文本。
+     * 功能：构建摘要区段。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @returns 区段文本。
      */
     private async buildSummarySection(tokenBudget: number, keywords: string[]): Promise<string> {
-        if (tokenBudget <= 0) return '';
+        if (tokenBudget <= 0) {
+            return '';
+        }
+        const summaries = await this.loadRecentSummaries();
+        const lines = summaries
+            .map((summary: any): { line: string; score: number } => {
+                const line = `- [${summary.level}] ${summary.title ? `${summary.title}: ` : ''}${summary.content}`;
+                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + (summary.level === 'arc' ? 2 : summary.level === 'scene' ? 1 : 0);
+                return { line, score };
+            })
+            .sort((left, right): number => right.score - left.score);
+        return this.assembleSection('【摘要】', lines.map((item): string => item.line), tokenBudget, 20);
+    }
+
+    /**
+     * 功能：构建角色事实区段。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @returns 区段文本。
+     */
+    private async buildCharacterFactsSection(tokenBudget: number, keywords: string[]): Promise<string> {
+        if (tokenBudget <= 0) {
+            return '';
+        }
+        const facts = await this.factsManager.query({ limit: 120 });
+        const filtered = facts.filter((fact: any): boolean => {
+            const entityKind = String(fact.entity?.kind ?? '').toLowerCase();
+            const path = String(fact.path ?? '').toLowerCase();
+            return (
+                /character|persona|npc|player|role|人物|角色/.test(entityKind)
+                || /persona|profile|trait|identity|name|status|人设|性格|身份|名字/.test(path)
+            );
+        });
+        const lines = filtered
+            .map((fact: any): { line: string; score: number } => {
+                const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
+                const line = `- ${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
+                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + Number(fact.confidence ?? 0);
+                return { line, score };
+            })
+            .sort((left, right): number => right.score - left.score);
+        return this.assembleSection('【角色事实】', lines.map((item): string => item.line), tokenBudget, 20);
+    }
+
+    /**
+     * 功能：构建关系区段。
+     * @param tokenBudget 预算。
+     * @param keywords 关键词。
+     * @returns 区段文本。
+     */
+    private async buildRelationshipsSection(tokenBudget: number, keywords: string[]): Promise<string> {
+        if (tokenBudget <= 0) {
+            return '';
+        }
+        const facts = await this.factsManager.query({ limit: 120 });
+        const filtered = facts.filter((fact: any): boolean => {
+            const typeText = String(fact.type ?? '').toLowerCase();
+            const pathText = String(fact.path ?? '').toLowerCase();
+            return /relationship|relation|bond|ally|enemy|friend|关系|阵营|同伴|敌对/.test(`${typeText} ${pathText}`);
+        });
+        const lines = filtered
+            .map((fact: any): { line: string; score: number } => {
+                const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
+                const line = `- ${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
+                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + Number(fact.confidence ?? 0);
+                return { line, score };
+            })
+            .sort((left, right): number => right.score - left.score);
+        return this.assembleSection('【关系】', lines.map((item): string => item.line), tokenBudget, 20);
+    }
+
+    /**
+     * 功能：构建最近场景区段。
+     * @param tokenBudget 预算。
+     * @returns 区段文本。
+     */
+    private async buildLastSceneSection(tokenBudget: number): Promise<string> {
+        if (tokenBudget <= 0) {
+            return '';
+        }
+        const sceneSummaries = await this.summariesManager.query({ level: 'scene', limit: 4 });
+        const messageSummaries = await this.summariesManager.query({ level: 'message', limit: 4 });
+        const merged = [...sceneSummaries, ...messageSummaries]
+            .sort((left: any, right: any): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
+            .slice(0, 4)
+            .map((summary: any): string => `- ${summary.title ? `${summary.title}: ` : ''}${summary.content}`);
+        return this.assembleSection('【最近场景】', merged, tokenBudget, 20);
+    }
+
+    /**
+     * 功能：构建短摘要区段。
+     * @param tokenBudget 预算。
+     * @returns 区段文本。
+     */
+    private async buildShortSummarySection(tokenBudget: number): Promise<string> {
+        if (tokenBudget <= 0) {
+            return '';
+        }
+        const summaries = await this.loadRecentSummaries();
+        const lines = summaries
+            .sort((left: any, right: any): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
+            .slice(0, 3)
+            .map((summary: any): string => `- ${summary.title ? `${summary.title}: ` : ''}${summary.content}`);
+        return this.assembleSection('【短摘要】', lines, tokenBudget, 18);
+    }
+
+    /**
+     * 功能：加载最近摘要。
+     * @returns 摘要列表。
+     */
+    private async loadRecentSummaries(): Promise<any[]> {
         const [arc, scene, message] = await Promise.all([
             this.summariesManager.query({ level: 'arc', limit: 8 }),
             this.summariesManager.query({ level: 'scene', limit: 10 }),
             this.summariesManager.query({ level: 'message', limit: 10 }),
         ]);
-        const allSummaries = [...arc, ...scene, ...message];
-        if (!allSummaries.length) return '';
-
-        const levelWeight: Record<string, number> = { arc: 3, scene: 2, message: 1 };
-        const ranked = allSummaries
-            .map((summary: any) => {
-                const text = `${summary.title || ''} ${summary.content || ''}`.toLowerCase();
-                const keywordScore = this.countKeywordHit(text, keywords) * 2;
-                const levelScore = levelWeight[String(summary.level || '').toLowerCase()] || 0;
-                const createdAt = Number(summary.createdAt ?? 0);
-                const ageHours = Math.max(0, (Date.now() - createdAt) / 3_600_000);
-                const recencyScore = 1 / (1 + ageHours / 48);
-                return { summary, score: keywordScore + levelScore + recencyScore };
-            })
-            .sort((left, right) => right.score - left.score);
-
-        const lines: string[] = [];
-        for (const item of ranked) {
-            const summary = item.summary;
-            const line = `- [${summary.level}] ${summary.title ? `${summary.title}: ` : ''}${summary.content}`;
-            if (!this.canAppend(lines, line, tokenBudget, 20)) break;
-            lines.push(line);
+        const summaries = [...arc, ...scene, ...message];
+        if (!this.chatStateManager) {
+            return summaries;
         }
-        return lines.length ? `【摘要】\n${lines.join('\n')}` : '';
+        const filtered = await Promise.all(
+            summaries.map(async (summary: any): Promise<any | null> => {
+                const summaryId = String(summary.summaryId ?? '').trim();
+                if (summaryId && await this.chatStateManager!.isSummaryArchived(summaryId)) {
+                    return null;
+                }
+                return summary;
+            }),
+        );
+        return filtered.filter((item: any | null): item is any => item != null);
+    }
+
+    /**
+     * 功能：根据预算拼装区段文本。
+     * @param title 区段标题。
+     * @param lines 行列表。
+     * @param tokenBudget 预算。
+     * @param headerReserve 标题预留。
+     * @returns 区段文本。
+     */
+    private assembleSection(title: string, lines: string[], tokenBudget: number, headerReserve: number): string {
+        const kept: string[] = [];
+        for (const line of lines) {
+            if (!this.canAppend(kept, line, tokenBudget, headerReserve)) {
+                break;
+            }
+            kept.push(line);
+        }
+        return kept.length > 0 ? `${title}\n${kept.join('\n')}` : '';
     }
 
     /**
      * 功能：提取查询关键词。
-     * @param query 原始查询文本。
+     * @param query 查询文本。
      * @returns 关键词数组。
      */
     private extractKeywords(query: string): string[] {
-        const normalized = String(query || '').toLowerCase().trim();
-        if (!normalized) return [];
-        const words = normalized
-            .split(/[\s,，。！？;；:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
-            .map((item: string) => item.trim())
-            .filter((item: string) => item.length >= 2);
-        return Array.from(new Set(words)).slice(0, 12);
+        const normalized = String(query ?? '').toLowerCase().trim();
+        if (!normalized) {
+            return [];
+        }
+        return Array.from(
+            new Set(
+                normalized
+                    .split(/[\s,，。！？；:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
+                    .map((item: string): string => item.trim())
+                    .filter((item: string): boolean => item.length >= 2),
+            ),
+        ).slice(0, 12);
     }
 
     /**
-     * 功能：统计关键词命中次数。
-     * @param text 待匹配文本。
+     * 功能：计算关键词命中数。
+     * @param text 目标文本。
      * @param keywords 关键词数组。
-     * @returns 命中计数。
+     * @returns 命中数。
      */
     private countKeywordHit(text: string, keywords: string[]): number {
-        if (!keywords.length) return 0;
-        return keywords.reduce((count: number, keyword: string) => {
+        if (keywords.length === 0) {
+            return 0;
+        }
+        return keywords.reduce((count: number, keyword: string): number => {
             return count + (text.includes(keyword) ? 1 : 0);
         }, 0);
     }
 
     /**
-     * 功能：判断追加一行文本后是否超预算。
-     * @param lines 已收集文本行。
-     * @param line 新行文本。
-     * @param tokenBudget 本段预算。
-     * @param headerReserve 标题预留 token。
-     * @returns 是否允许追加。
+     * 功能：判断当前行是否还能加入区段。
+     * @param lines 已保留行。
+     * @param line 待加入行。
+     * @param tokenBudget 预算。
+     * @param headerReserve 标题预留。
+     * @returns 是否允许加入。
      */
     private canAppend(lines: string[], line: string, tokenBudget: number, headerReserve: number): boolean {
         const draft = lines.concat([line]).join('\n');
@@ -378,15 +663,18 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：按预算裁剪最终上下文文本。
+     * 功能：按预算裁剪最终文本。
      * @param text 原始文本。
-     * @param maxTokens 最大 token。
+     * @param maxTokens 总预算。
      * @returns 裁剪后的文本。
      */
     private trimToBudget(text: string, maxTokens: number): string {
-        if (!text.trim()) return '';
-        if (this.estimateTokens(text) <= maxTokens) return text;
-
+        if (!text.trim()) {
+            return '';
+        }
+        if (this.estimateTokens(text) <= maxTokens) {
+            return text;
+        }
         const lines = text.split('\n');
         const kept: string[] = [];
         for (const line of lines) {
@@ -400,29 +688,30 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：估算文本 token 数量（中英文混合近似）。
+     * 功能：估算文本 token 数。
      * @param text 文本内容。
-     * @returns 估算 token 数量。
+     * @returns 估算 token 数。
      */
     private estimateTokens(text: string): number {
-        if (!text) return 0;
+        if (!text) {
+            return 0;
+        }
         const cjkCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
         const latinWordCount = (text.match(/[A-Za-z0-9_]+/g) || []).length;
         const punctuationCount = (text.match(/[^\u4e00-\u9fffA-Za-z0-9_\s]/g) || []).length;
-        const estimate = cjkCount * 1.15 + latinWordCount * 1.35 + punctuationCount * 0.25;
-        return Math.max(1, Math.ceil(estimate));
+        return Math.max(1, Math.ceil(cjkCount * 1.15 + latinWordCount * 1.35 + punctuationCount * 0.25));
     }
 
     /**
-     * 功能：将任意值转换为可读字符串。
+     * 功能：将任意值转为可读字符串。
      * @param value 任意值。
-     * @returns 字符串表示。
+     * @returns 字符串。
      */
     private stringifyValue(value: unknown): string {
         if (typeof value === 'string') {
             return value;
         }
-        if (value === null || value === undefined) {
+        if (value == null) {
             return '';
         }
         try {
@@ -433,17 +722,52 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：读取事件 payload 的优先文本。
-     * @param payload 事件 payload。
+     * 功能：读取事件 payload 文本。
+     * @param payload 事件负载。
      * @returns 事件文本。
      */
     private readEventPayloadText(payload: unknown): string {
         if (typeof payload === 'string') {
             return payload;
         }
-        if (payload && typeof payload === 'object' && typeof (payload as { text?: unknown }).text === 'string') {
-            return String((payload as { text: string }).text);
+        if (payload && typeof payload === 'object') {
+            const text = (payload as { text?: unknown; content?: unknown }).text;
+            const content = (payload as { text?: unknown; content?: unknown }).content;
+            if (typeof text === 'string') {
+                return text;
+            }
+            if (typeof content === 'string') {
+                return content;
+            }
         }
         return this.stringifyValue(payload);
+    }
+
+    /**
+     * 功能：构建决策原因代码。
+     * @param intent 意图。
+     * @param chatType 聊天类型。
+     * @param policy 自适应策略。
+     * @param sections 区段数组。
+     * @returns 原因代码列表。
+     */
+    private buildReasonCodes(
+        intent: InjectionIntent,
+        chatType: string | undefined,
+        policy: AdaptivePolicy,
+        sections: InjectionSectionName[],
+    ): string[] {
+        const codes = [`intent:${intent}`];
+        if (chatType) {
+            codes.push(`chat_type:${chatType}`);
+        }
+        if (!policy.summaryEnabled) {
+            codes.push('summary_disabled');
+        }
+        if (!policy.vectorEnabled) {
+            codes.push('vector_disabled');
+        }
+        codes.push(`sections:${sections.join(',')}`);
+        return codes;
     }
 }

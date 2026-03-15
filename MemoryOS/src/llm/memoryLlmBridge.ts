@@ -32,6 +32,37 @@ type EmbedBudget = {
     maxLatencyMs?: number;
 };
 
+export interface EmbedTaskResult {
+    ok: boolean;
+    vectors?: number[][];
+    error?: string;
+    model?: string;
+    meta?: {
+        requestId?: string;
+        resourceId?: string;
+        model?: string;
+    };
+}
+
+export interface RerankTaskResultItem {
+    index: number;
+    score: number;
+    doc: string;
+}
+
+export interface RerankTaskResult {
+    ok: boolean;
+    results?: RerankTaskResultItem[];
+    error?: string;
+    resource?: string;
+    fallbackUsed?: boolean;
+    meta?: {
+        requestId?: string;
+        resourceId?: string;
+        model?: string;
+    };
+}
+
 const REGISTERED_LLM_INSTANCES: WeakSet<object> = new WeakSet<object>();
 
 /**
@@ -215,7 +246,7 @@ export async function runGeneration<T>(
 export async function runEmbed(
     texts: string[],
     budget?: EmbedBudget,
-): Promise<unknown> {
+): Promise<EmbedTaskResult> {
     void budget;
     const tid = MEMORY_TASKS.VECTOR_EMBED as MemoryAiTaskId;
     const startTs = Date.now();
@@ -258,7 +289,7 @@ export async function runRerank(
     query: string,
     docs: string[],
     topK?: number,
-): Promise<unknown> {
+): Promise<RerankTaskResult> {
     const tid = MEMORY_TASKS.SEARCH_RERANK as MemoryAiTaskId;
     const startTs = Date.now();
     markTaskRunning(tid);

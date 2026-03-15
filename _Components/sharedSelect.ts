@@ -7,7 +7,15 @@ export interface SharedSelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  media?: SharedSelectOptionMedia;
   attributes?: Record<string, SharedSelectAttributeValue>;
+}
+
+export interface SharedSelectOptionMedia {
+  type: "image" | "icon";
+  src?: string;
+  iconClassName?: string;
+  alt?: string;
 }
 
 export interface SharedSelectFieldOptions {
@@ -29,7 +37,7 @@ interface SharedSelectRefs {
   root: HTMLElement;
   select: HTMLSelectElement;
   trigger: HTMLButtonElement;
-  label: HTMLElement;
+  triggerCopy: HTMLElement;
   list: HTMLElement;
 }
 
@@ -115,6 +123,86 @@ function buildSharedSelectNodeId(baseId: string, suffix: string): string {
 }
 
 /**
+ * 功能：为选项媒体信息构建 data 属性。
+ * @param media 选项媒体配置。
+ * @returns 可拼接到原生 option 上的属性字符串。
+ */
+function buildSharedSelectMediaAttributes(media?: SharedSelectOptionMedia): string {
+  if (!media) return "";
+  const attributes: Record<string, SharedSelectAttributeValue> = {
+    "data-media-type": media.type,
+  };
+  if (media.type === "image") {
+    attributes["data-media-src"] = media.src ?? "";
+    attributes["data-media-alt"] = media.alt ?? "";
+  }
+  if (media.type === "icon") {
+    attributes["data-media-icon"] = media.iconClassName ?? "";
+  }
+  return buildAttributes(attributes);
+}
+
+/**
+ * 功能：把原生 option 上的媒体 data 属性解析为媒体配置。
+ * @param option 原生 option 元素。
+ * @returns 解析后的媒体配置；无媒体时返回空值。
+ */
+function readSharedSelectMediaFromOption(option: HTMLOptionElement | null): SharedSelectOptionMedia | null {
+  if (!option) return null;
+  const mediaType = String(option.dataset.mediaType ?? "").trim();
+  if (mediaType === "image") {
+    const src = String(option.dataset.mediaSrc ?? "").trim();
+    if (!src) return null;
+    return {
+      type: "image",
+      src,
+      alt: String(option.dataset.mediaAlt ?? "").trim(),
+    };
+  }
+  if (mediaType === "icon") {
+    const iconClassName = String(option.dataset.mediaIcon ?? "").trim();
+    if (!iconClassName) return null;
+    return {
+      type: "icon",
+      iconClassName,
+    };
+  }
+  return null;
+}
+
+/**
+ * 功能：渲染选项媒体节点 HTML。
+ * @param media 媒体配置。
+ * @returns 媒体节点 HTML；无媒体时返回空字符串。
+ */
+function renderSharedSelectMediaMarkup(media?: SharedSelectOptionMedia | null): string {
+  if (!media) return "";
+  if (media.type === "image" && media.src) {
+    const alt = escapeAttr(media.alt ?? "");
+    return `<span class="stx-shared-select-media is-image" aria-hidden="true"><img class="stx-shared-select-media-image" src="${escapeAttr(media.src)}" alt="${alt}" /></span>`;
+  }
+  if (media.type === "icon" && media.iconClassName) {
+    return `<span class="stx-shared-select-media is-icon" aria-hidden="true"><i class="${escapeAttr(media.iconClassName)}"></i></span>`;
+  }
+  return "";
+}
+
+/**
+ * 功能：渲染触发器或列表项中的主要文案区域。
+ * @param label 选项文本。
+ * @param media 媒体配置。
+ * @returns 组合后的内容 HTML。
+ */
+function renderSharedSelectMainMarkup(label: string, media?: SharedSelectOptionMedia | null): string {
+  return `
+    <span class="stx-shared-select-main">
+      ${renderSharedSelectMediaMarkup(media)}
+      <span class="stx-shared-select-label">${escapeHtml(label)}</span>
+    </span>
+  `.trim();
+}
+
+/**
  * 功能：构建共享选择框 HTML。
  * @param options 组件配置
  * @returns 组件 HTML 字符串
@@ -123,6 +211,7 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
   const selectedValue = String(options.value ?? "");
   const matchedOption = options.options.find((item) => String(item.value) === selectedValue);
   const buttonLabel = matchedOption?.label ?? options.options[0]?.label ?? "";
+  const buttonMedia = matchedOption?.media ?? options.options[0]?.media ?? null;
   const triggerId = buildSharedSelectNodeId(options.id, "trigger");
   const listId = buildSharedSelectNodeId(options.id, "listbox");
 
@@ -143,7 +232,7 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
             const isSelected =
               optionValue === selectedValue ||
               (!matchedOption && !selectedValue && index === 0);
-            return `<option value="${escapeAttr(optionValue)}"${item.disabled ? " disabled" : ""}${isSelected ? " selected" : ""}${buildAttributes(item.attributes)}>${escapeHtml(item.label)}</option>`;
+            return `<option value="${escapeAttr(optionValue)}"${item.disabled ? " disabled" : ""}${isSelected ? " selected" : ""}${buildSharedSelectMediaAttributes(item.media)}${buildAttributes(item.attributes)}>${escapeHtml(item.label)}</option>`;
           })
           .join("")}
       </select>
@@ -156,7 +245,7 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
         aria-expanded="false"
         aria-controls="${escapeAttr(listId)}"${buildAttributes(options.triggerAttributes)}
       >
-        <span class="${escapeAttr(joinClassNames("stx-shared-select-label", options.labelClassName))}">${escapeHtml(buttonLabel)}</span>
+        <span class="${escapeAttr(joinClassNames("stx-shared-select-trigger-copy", options.labelClassName))}">${renderSharedSelectMainMarkup(buttonLabel, buttonMedia)}</span>
         <span class="stx-shared-select-indicator" aria-hidden="true">
           <svg viewBox="0 0 16 16" fill="none">
             <path d="M4 6.5L8 10.5L12 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -182,7 +271,7 @@ export function buildSharedSelectField(options: SharedSelectFieldOptions): strin
             data-shared-select-option-value="${escapeAttr(optionValue)}"
             data-shared-select-disabled="${item.disabled ? "true" : "false"}"
           >
-            <span class="stx-shared-select-option-label">${escapeHtml(item.label)}</span>
+            ${renderSharedSelectMainMarkup(item.label, item.media)}
             <span class="stx-shared-select-option-mark" aria-hidden="true"></span>
           </div>`;
           })
@@ -201,6 +290,7 @@ function buildSharedSelectListMarkup(select: HTMLSelectElement): string {
   return Array.from(select.options)
     .map((item: HTMLOptionElement, index: number) => {
       const optionValue = String(item.value ?? "");
+      const media = readSharedSelectMediaFromOption(item);
       return `
           <div
             class="stx-shared-select-option"
@@ -210,7 +300,7 @@ function buildSharedSelectListMarkup(select: HTMLSelectElement): string {
             data-shared-select-option-value="${escapeAttr(optionValue)}"
             data-shared-select-disabled="${item.disabled ? "true" : "false"}"
           >
-            <span class="stx-shared-select-option-label">${escapeHtml(item.textContent?.trim() || "")}</span>
+            ${renderSharedSelectMainMarkup(item.textContent?.trim() || "", media)}
             <span class="stx-shared-select-option-mark" aria-hidden="true"></span>
           </div>`;
     })
@@ -260,12 +350,12 @@ function resolveSharedSelectList(
 function getSharedSelectRefs(root: HTMLElement): SharedSelectRefs | null {
   const select = root.querySelector<HTMLSelectElement>("select.stx-shared-select-native");
   const trigger = root.querySelector<HTMLButtonElement>("button.stx-shared-select-trigger");
-  const label = root.querySelector<HTMLElement>(".stx-shared-select-label");
+  const triggerCopy = root.querySelector<HTMLElement>(".stx-shared-select-trigger-copy");
   const listId = String(trigger?.getAttribute("aria-controls") ?? "").trim();
   const inlineList = root.querySelector<HTMLElement>(".stx-shared-select-list");
   const list = resolveSharedSelectList(root, listId, inlineList);
-  if (!select || !trigger || !label || !list) return null;
-  return { root, select, trigger, label, list };
+  if (!select || !trigger || !triggerCopy || !list) return null;
+  return { root, select, trigger, triggerCopy, list };
 }
 
 /**
@@ -476,7 +566,7 @@ function isSameSharedSelectRefs(
     left.root === right.root &&
     left.select === right.select &&
     left.trigger === right.trigger &&
-    left.label === right.label &&
+    left.triggerCopy === right.triggerCopy &&
     left.list === right.list
   );
 }
@@ -491,11 +581,11 @@ function isSharedSelectRuntimeAlive(refs: SharedSelectRefs): boolean {
     refs.root.isConnected &&
     refs.select.isConnected &&
     refs.trigger.isConnected &&
-    refs.label.isConnected &&
+    refs.triggerCopy.isConnected &&
     refs.list.isConnected &&
     refs.root.contains(refs.select) &&
     refs.root.contains(refs.trigger) &&
-    refs.root.contains(refs.label)
+    refs.root.contains(refs.triggerCopy)
   );
 }
 
@@ -509,10 +599,10 @@ function canRestoreSharedSelectListToRoot(refs: SharedSelectRefs): boolean {
     refs.root.isConnected &&
     refs.select.isConnected &&
     refs.trigger.isConnected &&
-    refs.label.isConnected &&
+    refs.triggerCopy.isConnected &&
     refs.root.contains(refs.select) &&
     refs.root.contains(refs.trigger) &&
-    refs.root.contains(refs.label)
+    refs.root.contains(refs.triggerCopy)
   );
 }
 
@@ -746,7 +836,9 @@ function syncSingleSharedSelect(root: HTMLElement): void {
   const selectedIndex = getSelectedOptionIndex(refs);
   const selectedOption = refs.select.options[selectedIndex] || refs.select.options[0] || null;
   const options = getSharedSelectOptions(refs);
-  refs.label.textContent = selectedOption?.textContent?.trim() || "";
+  const selectedLabel = selectedOption?.textContent?.trim() || "";
+  const selectedMedia = readSharedSelectMediaFromOption(selectedOption);
+  refs.triggerCopy.innerHTML = renderSharedSelectMainMarkup(selectedLabel, selectedMedia);
   options.forEach((item, index) => {
     const isSelected = index === selectedIndex;
     item.classList.toggle("is-selected", isSelected);
@@ -983,6 +1075,10 @@ function bindSharedSelect(root: HTMLElement): void {
     const nextIndex = Math.floor(index);
     if (nextIndex === getHighlightIndex(refs.root)) return;
     setHighlightIndex(refs, nextIndex, false);
+  });
+
+  refs.list.addEventListener("pointerleave", (): void => {
+    setHighlightIndex(refs, getSelectedOptionIndex(refs), false);
   });
 
   refs.list.addEventListener("pointerdown", (event: PointerEvent): void => {

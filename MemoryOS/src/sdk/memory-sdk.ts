@@ -20,7 +20,22 @@ import { PromptTrimmer } from '../core/prompt-trimmer';
 import { db } from '../db/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import type { TemplateTableDef } from '../template/types';
-import type { SummaryPolicyOverride, RowRefResolution, RowSeedData, LogicTableQueryOpts, LogicTableRow } from '../types';
+import type {
+    AdaptiveMetrics,
+    AdaptivePolicy,
+    AutoSchemaPolicy,
+    ChatProfile,
+    MaintenanceAdvice,
+    MemoryQualityScorecard,
+    RetentionPolicy,
+    StrategyDecision,
+    SummaryPolicyOverride,
+    VectorLifecycleState,
+    RowRefResolution,
+    RowSeedData,
+    LogicTableQueryOpts,
+    LogicTableRow,
+} from '../types';
 
 /**
  * MemorySDK 门面层 —— 将所有管理器按规范接口统一暴露
@@ -71,14 +86,16 @@ export class MemorySDKImpl implements MemorySDK {
             this.eventsManager,
             this.factsManager,
             this.stateManager,
-            this.summariesManager
+            this.summariesManager,
+            this.chatStateManager,
         );
         this.proposalManager = new ProposalManager(chatKey, this.chatStateManager);
         this.hybridSearch = new HybridSearchManager(
             chatKey,
             this.eventsManager,
             this.factsManager,
-            this.summariesManager
+            this.summariesManager,
+            this.chatStateManager,
         );
         this.compactionManager = new CompactionManager(chatKey);
         this.worldInfoWriter = new WorldInfoWriter(chatKey);
@@ -354,6 +371,51 @@ export class MemorySDKImpl implements MemorySDK {
     // ─── v2 新增：聊天级状态管理 ───
 
     chatState = {
+        getChatProfile: (): Promise<ChatProfile> => {
+            return this.chatStateManager.getChatProfile();
+        },
+        setChatProfileOverride: (override: Partial<ChatProfile>): Promise<void> => {
+            return this.chatStateManager.setChatProfileOverride(override);
+        },
+        getAdaptiveMetrics: (): Promise<AdaptiveMetrics> => {
+            return this.chatStateManager.getAdaptiveMetrics();
+        },
+        getAdaptivePolicy: (): Promise<AdaptivePolicy> => {
+            return this.chatStateManager.getAdaptivePolicy();
+        },
+        getVectorLifecycle: (): Promise<VectorLifecycleState> => {
+            return this.chatStateManager.getVectorLifecycle();
+        },
+        getIngestHealth: () => {
+            return this.chatStateManager.getIngestHealth();
+        },
+        getRetrievalHealth: () => {
+            return this.chatStateManager.getRetrievalHealth();
+        },
+        getExtractHealth: () => {
+            return this.chatStateManager.getExtractHealth();
+        },
+        getMemoryQuality: (): Promise<MemoryQualityScorecard> => {
+            return this.chatStateManager.getMemoryQuality();
+        },
+        recomputeMemoryQuality: (): Promise<MemoryQualityScorecard> => {
+            return this.chatStateManager.recomputeMemoryQuality();
+        },
+        getMaintenanceAdvice: (): Promise<MaintenanceAdvice[]> => {
+            return this.chatStateManager.getMaintenanceAdvice();
+        },
+        recomputeAdaptivePolicy: (): Promise<AdaptivePolicy> => {
+            return this.chatStateManager.recomputeAdaptivePolicy();
+        },
+        getRetentionPolicy: (): Promise<RetentionPolicy> => {
+            return this.chatStateManager.getRetentionPolicy();
+        },
+        setRetentionPolicyOverride: (override: Partial<RetentionPolicy>): Promise<void> => {
+            return this.chatStateManager.setRetentionPolicyOverride(override);
+        },
+        getLastStrategyDecision: (): Promise<StrategyDecision | null> => {
+            return this.chatStateManager.getLastStrategyDecision();
+        },
         getSummaryPolicy: () => {
             return this.chatStateManager.getSummaryPolicy();
         },
@@ -363,7 +425,7 @@ export class MemorySDKImpl implements MemorySDK {
         getAutoSchemaPolicy: () => {
             return this.chatStateManager.getAutoSchemaPolicy();
         },
-        setAutoSchemaPolicy: (policy: any) => {
+        setAutoSchemaPolicy: (policy: Partial<AutoSchemaPolicy>) => {
             return this.chatStateManager.setAutoSchemaPolicy(policy);
         },
         flush: () => {

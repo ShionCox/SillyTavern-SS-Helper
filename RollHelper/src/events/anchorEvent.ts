@@ -3,8 +3,11 @@ import type {
   DiceMetaEvent,
   EventRollRecordEvent,
   PendingRoundEvent,
+  RoundSummaryEventItemEvent,
+  RoundSummarySnapshotEvent,
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
+import type { DiceResult } from "../types/diceEvent";
 import { logger } from "../../index";
 
 const WIDGET_CONTAINER_CLASS_Event = "st-rh-widget-container";
@@ -150,7 +153,224 @@ export function unmountAllWidgetsEvent(): void {
 }
 
 /**
- * 功能：根据当前运行时状态重新挂载所有事件卡片。
+ * 功能：从历史摘要事件项的快照字段重建最小 DiceEventSpecEvent + EventRollRecordEvent，
+ *       供现有 buildEventRollResultCardEvent 模板函数渲染历史结果卡。
+ * @param item 摘要事件项。
+ * @param roundId 历史轮次 ID。
+ * @returns 重建的 event + record；若无法重建返回 null。
+ */
+function rebuildEventAndRecordFromSnapshotEvent(
+  item: RoundSummaryEventItemEvent,
+  roundId: string
+): { event: DiceEventSpecEvent; record: EventRollRecordEvent } | null {
+  if (!item.rollsSnapshot || !item.rollId) return null;
+  const snap = item.rollsSnapshot;
+
+  const event: DiceEventSpecEvent = {
+    id: item.id,
+    title: item.title,
+    checkDice: item.checkDice,
+    dc: item.dc,
+    compare: item.compare,
+    skill: item.skill,
+    targetType: "self",
+    targetLabel: item.targetLabel,
+    desc: item.desc,
+    dcReason: item.dcReason,
+    rollMode: item.rollMode,
+    advantageState: item.advantageState,
+    timeLimit: item.timeLimit,
+    outcomes: item.outcomeKind !== "none" ? { [item.outcomeKind]: item.outcomeText } : undefined,
+    sourceAssistantMsgId: item.sourceAssistantMsgId,
+  };
+
+  const diceResult: DiceResult = {
+    expr: item.checkDice,
+    rolls: snap.rolls,
+    modifier: snap.modifier,
+    rawTotal: snap.rawTotal,
+    total: snap.total,
+    count: snap.count,
+    sides: snap.sides,
+    selectionMode: "none",
+    exploding: snap.exploding,
+    explosionTriggered: snap.explosionTriggered,
+  };
+
+  const record: EventRollRecordEvent = {
+    rollId: item.rollId,
+    roundId,
+    eventId: item.id,
+    eventTitle: item.title,
+    diceExpr: item.checkDice,
+    result: diceResult,
+    success: item.success,
+    compareUsed: item.compare,
+    dcUsed: item.dc,
+    advantageStateApplied: item.advantageState,
+    resultGrade: item.resultGrade ?? undefined,
+    marginToDc: item.marginToDc,
+    skillModifierApplied: item.skillModifierApplied,
+    statusModifierApplied: item.statusModifierApplied,
+    statusModifiersApplied: item.statusModifiersApplied,
+    baseModifierUsed: item.baseModifierUsed,
+    finalModifierUsed: item.finalModifierUsed,
+    targetLabelUsed: item.targetLabelUsed ?? item.targetLabel,
+    rolledAt: item.rolledAt ?? 0,
+    source: item.resultSource ?? "manual_roll",
+    explodePolicyApplied: (item.explodePolicyApplied as EventRollRecordEvent["explodePolicyApplied"]) ?? "not_requested",
+    sourceAssistantMsgId: item.sourceAssistantMsgId,
+  };
+
+  return { event, record };
+}
+
+/**
+ * 功能：挂载当前打开轮次的卡片，按楼层分桶。
+ *   - 最新来源楼层：挂事件列表卡 + 该楼层已结算事件的结果卡
+ *   - 更早来源楼层：只挂该楼层已结算事件的结果卡
+ *   - 没有已结算结果的旧楼层：不挂卡
+ * @returns 成功挂载的楼层数。
+ */
+function mountPendingRoundWidgetsEvent(
+  round: PendingRoundEvent,
+  chat: TavernMessageEvent[],
+  deps: AnchorDepsEvent
+): { mountedCount: number; anyMounted: boolean } {
+  let mountedCount = 0;
+
+  const latestMsgId =
+    round.sourceAssistantMsgIds.length > 0
+      ? round.sourceAssistantMsgIds[round.sourceAssistantMsgIds.length - 1]
+      : undefined;
+
+  const floorBuckets = new Map<string, { events: DiceEventSpecEvent[]; records: EventRollRecordEvent[] }>();
+
+  for (const event of round.events) {
+    const msgId = event.sourceAssistantMsgId || latestMsgId || "";
+    if (!msgId) continue;
+    let bucket = floorBuckets.get(msgId);
+    if (!bucket) {
+      bucket = { events: [], records: [] };
+      floorBuckets.set(msgId, bucket);
+    }
+    bucket.events.push(event);
+    const record = deps.getLatestRollRecordForEvent(round, event.id);
+    if (record) {
+      bucket.records.push(record);
+    }
+  }
+
+  for (const [msgId, bucket] of floorBuckets) {
+    if (bucket.records.length <= 0 && msgId !== latestMsgId) continue;
+
+    const mesElement = findMesElementByMsgIdEvent(msgId, chat);
+    if (!mesElement) continue;
+
+    const cards: string[] = [];
+
+    if (msgId === latestMsgId) {
+      cards.push(deps.buildEventListCardEvent(round));
+    }
+
+    for (const event of bucket.events) {
+      const record = deps.getLatestRollRecordForEvent(round, event.id);
+      if (record) {
+        cards.push(deps.buildEventRollResultCardEvent(event, record));
+      }
+    }
+
+    if (cards.length > 0) {
+      mountWidgetToMesEvent(mesElement, cards.join(""), `round-${round.roundId}-floor-${msgId}`);
+      mountedCount += 1;
+    }
+  }
+
+  if (mountedCount <= 0 && latestMsgId) {
+    const mesElement = findMesElementByMsgIdEvent(latestMsgId, chat);
+    if (mesElement) {
+      const listCard = deps.buildEventListCardEvent(round);
+      mountWidgetToMesEvent(mesElement, listCard, `round-${round.roundId}-floor-${latestMsgId}`);
+      mountedCount += 1;
+    }
+  }
+
+  return { mountedCount, anyMounted: mountedCount > 0 };
+}
+
+/**
+ * 功能：挂载历史轮次（summaryHistory）中的结果卡，按楼层分桶。
+ *   - 只恢复有已结算结果且有快照数据的事件
+ *   - 不恢复事件列表卡
+ * @returns 成功挂载的楼层数。
+ */
+function mountHistoryRoundWidgetsEvent(
+  snapshot: RoundSummarySnapshotEvent,
+  chat: TavernMessageEvent[],
+  deps: AnchorDepsEvent
+): number {
+  let mountedCount = 0;
+
+  const floorBuckets = new Map<string, Array<{ event: DiceEventSpecEvent; record: EventRollRecordEvent }>>();
+
+  for (const item of snapshot.events) {
+    if (item.status === "pending") continue;
+    if (!item.sourceAssistantMsgId) continue;
+
+    const rebuilt = rebuildEventAndRecordFromSnapshotEvent(item, snapshot.roundId);
+    if (!rebuilt) continue;
+
+    const msgId = item.sourceAssistantMsgId;
+    let bucket = floorBuckets.get(msgId);
+    if (!bucket) {
+      bucket = [];
+      floorBuckets.set(msgId, bucket);
+    }
+    bucket.push(rebuilt);
+  }
+
+  for (const [msgId, items] of floorBuckets) {
+    if (items.length <= 0) continue;
+
+    const mesElement = findMesElementByMsgIdEvent(msgId, chat);
+    if (!mesElement) continue;
+
+    const cards: string[] = [];
+    for (const { event, record } of items) {
+      cards.push(deps.buildEventRollResultCardEvent(event, record));
+    }
+
+    if (cards.length > 0) {
+      mountWidgetToMesEvent(mesElement, cards.join(""), `history-${snapshot.roundId}-floor-${msgId}`);
+      mountedCount += 1;
+    }
+  }
+
+  return mountedCount;
+}
+
+/**
+ * 功能：判断当前待处理轮次是否已经被归档到历史摘要中。
+ * 参数：
+ *   round：当前待处理轮次。
+ *   summaryHistory：历史轮次摘要列表。
+ * 返回：
+ *   boolean：若历史中已存在同 roundId 的快照则返回 true。
+ */
+function isPendingRoundArchivedEvent(
+  round: PendingRoundEvent | undefined,
+  summaryHistory: RoundSummarySnapshotEvent[] | undefined
+): boolean {
+  if (!round || !Array.isArray(summaryHistory) || summaryHistory.length === 0) {
+    return false;
+  }
+  return summaryHistory.some((snapshot) => String(snapshot?.roundId ?? "") === String(round.roundId ?? ""));
+}
+
+/**
+ * 功能：根据当前运行时状态重新挂载所有事件卡片，按楼层分桶。
+ *   - 当前打开轮次：最新楼层挂事件列表卡 + 结果卡；更早楼层只挂结果卡
+ *   - 历史轮次：按 sourceAssistantMsgId 分组恢复结果卡
  * @param deps 事件卡片挂载依赖。
  * @returns 本次刷新结果，用于判断是否需要继续重试恢复。
  */
@@ -170,7 +390,12 @@ export function refreshAllWidgetsFromStateEvent(
   const chat = liveCtx?.chat as TavernMessageEvent[] | undefined;
   const meta = deps.getDiceMetaEvent();
 
-  if (meta.pendingRound && meta.pendingRound.events.length > 0) {
+  const shouldMountPendingRound =
+    !!meta.pendingRound &&
+    meta.pendingRound.events.length > 0 &&
+    !isPendingRoundArchivedEvent(meta.pendingRound, meta.summaryHistory);
+
+  if (shouldMountPendingRound) {
     result.hasPendingRound = true;
   }
   if (!Array.isArray(chat)) {
@@ -178,28 +403,26 @@ export function refreshAllWidgetsFromStateEvent(
     return result;
   }
 
-  if (meta.pendingRound && meta.pendingRound.events.length > 0) {
+  if (shouldMountPendingRound && meta.pendingRound) {
     const round = meta.pendingRound;
-    const mesElement = findLastMesElementEvent(round.sourceAssistantMsgIds, chat);
-    if (!mesElement) {
+    const { mountedCount, anyMounted } = mountPendingRoundWidgetsEvent(round, chat, deps);
+    result.mountedWidgetCount += mountedCount;
+    result.pendingRoundMounted = anyMounted;
+    if (!anyMounted) {
       logger.warn(
         `[卡片恢复] 未找到锚点消息 roundId=${round.roundId} sourceMsgIds=${JSON.stringify(round.sourceAssistantMsgIds)}`
       );
     }
-    if (mesElement) {
-      const cards: string[] = [];
-      cards.push(deps.buildEventListCardEvent(round));
-      for (const event of round.events) {
-        const record = deps.getLatestRollRecordForEvent(round, event.id);
-        if (record) {
-          cards.push(deps.buildEventRollResultCardEvent(event, record));
-        }
-      }
-      mountWidgetToMesEvent(mesElement, cards.join(""), `round-${round.roundId}`);
-      result.mountedWidgetCount += 1;
-      result.pendingRoundMounted = true;
+  }
+
+  if (Array.isArray(meta.summaryHistory)) {
+    for (const snapshot of meta.summaryHistory) {
+      if (!snapshot.events || snapshot.events.length <= 0) continue;
+      const historyMounted = mountHistoryRoundWidgetsEvent(snapshot, chat, deps);
+      result.mountedWidgetCount += historyMounted;
     }
   }
 
   return result;
 }
+

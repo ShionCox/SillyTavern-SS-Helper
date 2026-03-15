@@ -213,6 +213,197 @@ export interface AutoSchemaPolicy {
     descriptionSimilarityThreshold?: number;
 }
 
+export type ChatType = 'solo' | 'group' | 'worldbook' | 'tool';
+
+export type StylePreference = 'story' | 'qa' | 'trpg' | 'info';
+
+export type MemoryStrength = 'low' | 'medium' | 'high';
+
+export type ExtractStrategy = 'facts_only' | 'facts_relations' | 'facts_relations_world';
+
+export type SummaryStrategy = 'short' | 'layered' | 'timeline';
+
+export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
+
+export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
+
+export type InjectionSectionName =
+    | 'WORLD_STATE'
+    | 'FACTS'
+    | 'EVENTS'
+    | 'SUMMARY'
+    | 'CHARACTER_FACTS'
+    | 'RELATIONSHIPS'
+    | 'LAST_SCENE'
+    | 'SHORT_SUMMARY';
+
+export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
+
+export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
+
+export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup';
+
+export interface ChatProfileVectorStrategy {
+    enabled: boolean;
+    chunkThreshold: number;
+    rerankThreshold: number;
+    activationFacts: number;
+    activationSummaries: number;
+    idleDecayDays: number;
+    lowPrecisionSearchStride: number;
+}
+
+export interface ChatProfile {
+    chatType: ChatType;
+    stylePreference: StylePreference;
+    memoryStrength: MemoryStrength;
+    extractStrategy: ExtractStrategy;
+    summaryStrategy: SummaryStrategy;
+    vectorStrategy: ChatProfileVectorStrategy;
+    deletionStrategy: DeletionStrategy;
+}
+
+export interface AdaptiveMetrics {
+    windowSize: number;
+    avgMessageLength: number;
+    assistantLongMessageRatio: number;
+    userInfoDensity: number;
+    repeatedTopicRate: number;
+    factsHitRate: number;
+    factsUpdateRate: number;
+    retrievalHitRate: number;
+    promptInjectionTokenRatio: number;
+    summaryEffectiveness: number;
+    recentUserTurns: number;
+    recentAssistantTurns: number;
+    recentGroupSpeakerCount: number;
+    worldStateSignal: number;
+    duplicateRate: number;
+    retrievalPrecision: number;
+    extractAcceptance: number;
+    summaryStaleness: number;
+    tokenEfficiency: number;
+    orphanFactsRatio: number;
+    schemaHygiene: number;
+    lastVectorAccessAt: number;
+    lastVectorHitAt: number;
+    lastVectorIndexAt: number;
+    lastUpdatedAt: number;
+}
+
+export interface VectorLifecycleState {
+    vectorMode: VectorMode;
+    factCount: number;
+    summaryCount: number;
+    vectorChunkCount: number;
+    lastAccessAt: number;
+    lastHitAt: number;
+    lastIndexAt: number;
+    lowPrecisionSearchStride: number;
+    searchRequestCount: number;
+    recentPrecisionWindow: number[];
+    lastPrecision: number;
+    reasonCodes: string[];
+}
+
+export interface MemoryQualityDimensionScores {
+    duplicateRate: number;
+    retrievalPrecision: number;
+    extractAcceptance: number;
+    summaryFreshness: number;
+    tokenEfficiency: number;
+    orphanFactsRatio: number;
+    schemaHygiene: number;
+}
+
+export interface MemoryQualityScorecard {
+    totalScore: number;
+    level: MemoryQualityLevel;
+    dimensions: MemoryQualityDimensionScores;
+    computedAt: number;
+    reasonCodes: string[];
+}
+
+export interface MaintenanceAdvice {
+    action: MaintenanceActionType;
+    priority: 'low' | 'medium' | 'high';
+    reasonCodes: string[];
+    title: string;
+    detail: string;
+}
+
+export interface IngestHealthWindow {
+    totalAttempts: number;
+    duplicateDrops: number;
+    lastWriteAt: number;
+}
+
+export interface RetrievalHealthWindow {
+    totalSearches: number;
+    vectorSearches: number;
+    rerankSearches: number;
+    keywordHits: number;
+    vectorHits: number;
+    recentPrecisionWindow: number[];
+    lastAccessAt: number;
+    lastHitAt: number;
+}
+
+export interface ExtractHealthWindow {
+    recentTasks: Array<{
+        task: 'memory.summarize' | 'memory.extract';
+        accepted: boolean;
+        appliedFacts: number;
+        appliedPatches: number;
+        appliedSummaries: number;
+        ts: number;
+    }>;
+    lastAcceptedAt: number;
+}
+
+export interface AdaptivePolicy {
+    extractInterval: number;
+    extractWindowSize: number;
+    summaryEnabled: boolean;
+    summaryMode: SummaryStrategy;
+    entityResolutionLevel: 'low' | 'medium' | 'high';
+    speakerTrackingLevel: 'low' | 'medium' | 'high';
+    worldStateWeight: number;
+    vectorEnabled: boolean;
+    vectorChunkThreshold: number;
+    rerankThreshold: number;
+    vectorMode: VectorMode;
+    vectorMinFacts: number;
+    vectorMinSummaries: number;
+    vectorSearchStride: number;
+    rerankEnabled: boolean;
+    vectorIdleDecayDays: number;
+    contextMaxTokensShare: number;
+}
+
+export interface RetentionPolicy {
+    deletionStrategy: DeletionStrategy;
+    keepSummaryCount: number;
+    keepEventCount: number;
+    keepVectorDays: number;
+}
+
+export interface StrategyDecision {
+    intent: InjectionIntent;
+    sectionsUsed: InjectionSectionName[];
+    budgets: Partial<Record<InjectionSectionName, number>>;
+    reasonCodes: string[];
+    generatedAt: number;
+}
+
+export interface BuildContextDecision {
+    text: string;
+    sectionsUsed: InjectionSectionName[];
+    budgets: Partial<Record<InjectionSectionName, number>>;
+    intent: InjectionIntent;
+    reasonCodes: string[];
+}
+
 // -- v2: 行操作类型 --
 export interface RowRefResolution {
     resolved: boolean;
@@ -318,11 +509,13 @@ export interface MemorySDK {
     injection: {
         buildContext(opts?: {
             maxTokens?: number;
-            sections?: Array<'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY'>;
+            sections?: InjectionSectionName[];
             query?: string;
-            sectionBudgets?: Partial<Record<'WORLD_STATE' | 'FACTS' | 'EVENTS' | 'SUMMARY', number>>;
+            sectionBudgets?: Partial<Record<InjectionSectionName, number>>;
             preferSummary?: boolean;
-        }): Promise<string>;
+            intentHint?: InjectionIntent;
+            includeDecisionMeta?: boolean;
+        }): Promise<string | BuildContextDecision>;
         setAnchorPolicy(opts: { allowSystem?: boolean; allowUser?: boolean; defaultInsert?: 'top' | 'beforeStart' | 'customAnchor' }): Promise<void>;
     };
 
@@ -389,10 +582,25 @@ export interface MemorySDK {
 
     // ─── v2 新增：聊天级状态管理 ───
     chatState: {
+        getChatProfile(): Promise<ChatProfile>;
+        setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
+        getAdaptiveMetrics(): Promise<AdaptiveMetrics>;
+        getAdaptivePolicy(): Promise<AdaptivePolicy>;
+        getVectorLifecycle(): Promise<VectorLifecycleState>;
+        getIngestHealth(): Promise<IngestHealthWindow>;
+        getRetrievalHealth(): Promise<RetrievalHealthWindow>;
+        getExtractHealth(): Promise<ExtractHealthWindow>;
+        getMemoryQuality(): Promise<MemoryQualityScorecard>;
+        recomputeMemoryQuality(): Promise<MemoryQualityScorecard>;
+        getMaintenanceAdvice(): Promise<MaintenanceAdvice[]>;
+        recomputeAdaptivePolicy(): Promise<AdaptivePolicy>;
+        getRetentionPolicy(): Promise<RetentionPolicy>;
+        setRetentionPolicyOverride(override: Partial<RetentionPolicy>): Promise<void>;
+        getLastStrategyDecision(): Promise<StrategyDecision | null>;
         getSummaryPolicy(): Promise<SummaryPolicyOverride>;
         setSummaryPolicyOverride(override: Partial<SummaryPolicyOverride>): Promise<void>;
         getAutoSchemaPolicy(): Promise<AutoSchemaPolicy>;
-        setAutoSchemaPolicy(policy: AutoSchemaPolicy): Promise<void>;
+        setAutoSchemaPolicy(policy: Partial<AutoSchemaPolicy>): Promise<void>;
         flush(): Promise<void>;
         destroy(): Promise<void>;
     };

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ZodIssue, ZodType } from 'zod';
 
 /**
  * 校验返回结果结构
@@ -14,14 +15,14 @@ export interface ValidationResult<T = any> {
  * @param data 解析后的原始对象
  * @param schema Zod Schema 定义
  */
-export function validateZodSchema<T>(data: any, schema: z.ZodType<T>): ValidationResult<T> {
+export function validateZodSchema<T>(data: any, schema: ZodType<T>): ValidationResult<T> {
     const result = schema.safeParse(data);
 
     if (result.success) {
         return { valid: true, data: result.data, errors: [] };
     } else {
         const errors = result.error.issues.map(
-            (err: z.ZodIssue) => `字段 "${err.path.join('.')}" 校验失败: ${err.message}`
+            (err: ZodIssue) => `字段 "${err.path.join('.')}" 校验失败: ${err.message}`
         );
         return { valid: false, errors };
     }

@@ -1,9 +1,10 @@
 import { Logger } from '../../../SDK/logger';
-import { VectorManager } from './vector-manager';
+import type { ChatStateManager } from '../core/chat-state-manager';
 import type { EventsManager } from '../core/events-manager';
 import type { FactsManager } from '../core/facts-manager';
 import type { SummariesManager } from '../core/summaries-manager';
 import { runRerank } from '../llm/memoryLlmBridge';
+import { VectorManager } from './vector-manager';
 
 const logger = new Logger('HybridSearch');
 
@@ -11,256 +12,382 @@ export interface HybridSearchResult {
     content: string;
     score: number;
     source: 'vector' | 'keyword' | 'event';
-    meta?: any;
+    meta?: {
+        factKey?: string;
+        summaryId?: string;
+        level?: string;
+        chunkId?: string;
+    };
 }
 
 /**
- * 三路混合检索管理器
- *
- * 策略（可加权聚合）：
- * 1. 向量召回 (vector)：语义最近邻检索（需要 LLMHub embed 能力，降级透明）
- * 2. 关键词召回 (keyword)：在 facts/summaries 中全文关键词匹配
- * 3. 最近事件召回 (event)：取最新一批 events 作为上下文窗口
- *
- * 超时/失败时任意一路不影响其余两路
+ * 功能：执行混合检索，并受聊天级自适应策略控制。
+ * @param chatKey 当前聊天键。
+ * @param eventsManager 事件管理器。
+ * @param factsManager 事实管理器。
+ * @param summariesManager 摘要管理器。
+ * @param chatStateManager 聊天状态管理器。
+ * @returns 混合检索管理器实例。
  */
 export class HybridSearchManager {
     private vectorManager: VectorManager;
     private eventsManager: EventsManager;
     private factsManager: FactsManager;
     private summariesManager: SummariesManager;
+    private chatStateManager: ChatStateManager | null;
 
     constructor(
         chatKey: string,
         eventsManager: EventsManager,
         factsManager: FactsManager,
-        summariesManager: SummariesManager
+        summariesManager: SummariesManager,
+        chatStateManager?: ChatStateManager,
     ) {
         this.vectorManager = new VectorManager(chatKey);
         this.eventsManager = eventsManager;
         this.factsManager = factsManager;
         this.summariesManager = summariesManager;
+        this.chatStateManager = chatStateManager ?? null;
     }
 
     /**
-     * 执行三路混合检索，超时降级安全
-     * @param query 查询字符串（对话中的最新用户输入或摘要视角）
-     * @param options 配置项
+     * 功能：执行混合检索。
+     * @param query 查询文本。
+     * @param options 结果数量选项。
+     * @returns 检索结果列表。
      */
-    public async search(
+    async search(
         query: string,
-        options: {
-            maxVectorResults?: number;
-            maxKeywordResults?: number;
-            maxEventResults?: number;
-            maxTotalTokens?: number;
-        } = {}
+        options?: { maxVectorResults?: number; maxKeywordResults?: number; maxEventResults?: number },
     ): Promise<HybridSearchResult[]> {
-        const {
-            maxVectorResults = 5,
-            maxKeywordResults = 5,
-            maxEventResults = 8,
-        } = options;
+        const adaptivePolicy = this.chatStateManager
+            ? await this.chatStateManager.getAdaptivePolicy()
+            : null;
+        const vectorLifecycle = this.chatStateManager
+            ? await this.chatStateManager.getVectorLifecycle()
+            : null;
+        const maxVectorResults = Math.max(0, Number(options?.maxVectorResults ?? 6));
+        const maxKeywordResults = Math.max(1, Number(options?.maxKeywordResults ?? 8));
+        const maxEventResults = Math.max(1, Number(options?.maxEventResults ?? 4));
+        const requestCount = Number(vectorLifecycle?.searchRequestCount ?? 0) + 1;
+        const stride = Math.max(1, Number(adaptivePolicy?.vectorSearchStride ?? vectorLifecycle?.lowPrecisionSearchStride ?? 1));
+        const vectorMode = adaptivePolicy?.vectorMode ?? 'search_rerank';
+        const shouldSearchVector = vectorMode === 'search' || vectorMode === 'search_rerank';
+        const shouldThrottleVector = shouldSearchVector && stride > 1 && requestCount % stride !== 0;
+        const shouldRunVector = shouldSearchVector && !shouldThrottleVector;
 
-        // 并行执行三路召回，任意一路出错不影响其余
         const [vectorResults, keywordResults, eventResults] = await Promise.all([
-            this.runVectorSearch(query, maxVectorResults),
-            this.runKeywordSearch(query, maxKeywordResults),
-            this.runEventSearch(maxEventResults),
+            shouldRunVector ? this.searchVector(query, maxVectorResults) : Promise.resolve([]),
+            this.searchKeyword(query, maxKeywordResults),
+            this.searchEvents(maxEventResults),
         ]);
 
-        // 去重合并（按 content hash 去重）
-        const seen = new Set<string>();
-        const merged: HybridSearchResult[] = [];
+        const merged = this.mergeResults([...vectorResults, ...keywordResults, ...eventResults]);
+        const rerankThreshold = Math.max(2, Number(adaptivePolicy?.rerankThreshold ?? 6));
+        const shouldRerank = vectorMode === 'search_rerank' && adaptivePolicy?.rerankEnabled !== false && merged.length >= rerankThreshold;
+        const reranked = shouldRerank
+            ? await this.rerankResults(query, merged)
+            : merged;
+        const vectorHit = vectorResults.length > 0;
+        const keywordHit = keywordResults.length > 0;
+        const precision = reranked.length > 0 && (vectorHit || keywordHit) ? 1 : 0;
 
-        for (const item of [...vectorResults, ...keywordResults, ...eventResults]) {
-            const key = item.content.slice(0, 80);
-            if (!seen.has(key)) {
-                seen.add(key);
-                merged.push(item);
-            }
+        if (this.chatStateManager) {
+            const previousWindow = Array.isArray(vectorLifecycle?.recentPrecisionWindow) ? vectorLifecycle.recentPrecisionWindow : [];
+            const recentPrecisionWindow = [...previousWindow, precision].slice(-10);
+            const existingHealth = await this.chatStateManager.getRetrievalHealth();
+            await this.chatStateManager.recordRetrievalHealth({
+                totalSearches: Number(existingHealth.totalSearches ?? 0) + 1,
+                vectorSearches: Number(existingHealth.vectorSearches ?? 0) + Number(shouldRunVector ? 1 : 0),
+                rerankSearches: Number(existingHealth.rerankSearches ?? 0) + Number(shouldRerank ? 1 : 0),
+                keywordHits: Number(existingHealth.keywordHits ?? 0) + Number(keywordHit ? 1 : 0),
+                vectorHits: Number(existingHealth.vectorHits ?? 0) + Number(vectorHit ? 1 : 0),
+                recentPrecisionWindow,
+                lastAccessAt: shouldRunVector ? Date.now() : Number(vectorLifecycle?.lastAccessAt ?? 0),
+                lastHitAt: vectorHit ? Date.now() : Number(vectorLifecycle?.lastHitAt ?? 0),
+            });
+            await this.chatStateManager.updateVectorLifecycle({
+                searchRequestCount: requestCount,
+                recentPrecisionWindow,
+                lastPrecision: precision,
+            });
         }
 
-        // 排序：向量召回 score 最高优先，其次关键词，事件最后
-        merged.sort((a, b) => b.score - a.score);
-
-        // 可选 rerank：若 LLMHub 提供能力，则对合并结果做二次重排
-        const reranked = await this.tryRerank(query, merged);
-
-        logger.info(`混合检索完成：向量 ${vectorResults.length} 条，关键词 ${keywordResults.length} 条，事件 ${eventResults.length} 条，合并去重后 ${reranked.length} 条`);
-
+        logger.info(`混合检索完成：vector=${vectorResults.length}, keyword=${keywordResults.length}, event=${eventResults.length}, merged=${reranked.length}`);
         return reranked;
     }
 
     /**
-     * 把检索结果格式化为可注入 Prompt 的文本块
+     * 功能：按聊天策略建立向量索引。
+     * @param text 待索引文本。
+     * @param bookId 来源 bookId。
+     * @returns 写入的分块键列表。
      */
-    public formatForPrompt(results: HybridSearchResult[]): string {
-        if (results.length === 0) return '';
-        return results.map(r => {
-            const flag = r.source === 'vector' ? '🔍' : r.source === 'keyword' ? '🔑' : '📖';
-            return `${flag} [${r.source}] ${r.content}`;
-        }).join('\n\n');
+    async indexText(text: string, bookId?: string): Promise<string[]> {
+        const adaptivePolicy = this.chatStateManager
+            ? await this.chatStateManager.getAdaptivePolicy()
+            : null;
+        const vectorMode = adaptivePolicy?.vectorMode ?? 'search_rerank';
+        if (adaptivePolicy?.vectorEnabled === false || vectorMode === 'off') {
+            return [];
+        }
+        const threshold = Number(adaptivePolicy?.vectorChunkThreshold ?? 240);
+        if (String(text ?? '').trim().length < threshold) {
+            return [];
+        }
+        const chunkIds = await this.vectorManager.indexText(text, bookId);
+        if (this.chatStateManager && chunkIds.length > 0) {
+            const stats = await this.vectorManager.getIndexStats();
+            await this.chatStateManager.updateVectorLifecycle({
+                vectorChunkCount: Number(stats.chunkCount ?? 0),
+                lastIndexAt: Number(stats.lastIndexedAt ?? Date.now()),
+            });
+        }
+        return chunkIds;
     }
 
     /**
-     * 为一段文本（如世界书内容或历史摘要）建立向量索引
+     * 功能：将检索结果格式化为注入文本。
+     * @param results 检索结果列表。
+     * @returns 格式化后的文本。
      */
-    public async indexText(text: string, bookId?: string): Promise<string[]> {
-        return this.vectorManager.indexText(text, bookId);
-    }
-
-    // ==========================================
-    // 三路召回实现
-    // ==========================================
-
-    private async runVectorSearch(query: string, topK: number): Promise<HybridSearchResult[]> {
-        try {
-            const hits = await this.vectorManager.search(query, topK);
-            return hits.map(h => ({
-                content: h.content,
-                score: h.score,
-                source: 'vector' as const,
-                meta: { chunkId: h.chunkId }
-            }));
-        } catch (e) {
-            logger.warn('向量召回失败，静默降级', e);
-            return [];
+    formatForPrompt(results: HybridSearchResult[]): string {
+        if (!Array.isArray(results) || results.length === 0) {
+            return '';
         }
+        const lines = results.map((item: HybridSearchResult): string => {
+            const flag = item.source === 'vector' ? '🔍' : item.source === 'keyword' ? '🔑' : '📖';
+            return `${flag} (${item.score.toFixed(3)}) ${item.content}`;
+        });
+        return `【检索命中】\n${lines.join('\n')}`;
     }
-
-    private async runKeywordSearch(query: string, limit: number): Promise<HybridSearchResult[]> {
-        try {
-            const keywords = this.extractKeywords(query);
-            if (keywords.length === 0) return [];
-
-            const results: HybridSearchResult[] = [];
-
-            // 在 summaries 中检索
-            const allSummaries = await this.summariesManager.query({ limit: 50 });
-            for (const s of allSummaries) {
-                const text = [s.title ?? '', s.content].join(' ');
-                const score = this.keywordScore(text, keywords);
-                if (score > 0) {
-                    results.push({
-                        content: s.content,
-                        score: score * 0.8,  // keyword 权重略低于 vector
-                        source: 'keyword',
-                        meta: { summaryId: s.summaryId, level: s.level }
-                    });
-                }
-            }
-
-            // 在 facts 中检索
-            const allFacts = await this.factsManager.query({ limit: 50 });
-            for (const f of allFacts) {
-                const text = [f.type, JSON.stringify(f.value)].join(' ');
-                const score = this.keywordScore(text, keywords);
-                if (score > 0) {
-                    results.push({
-                        content: `[${f.type}] ${JSON.stringify(f.value)}`,
-                        score: score * 0.7,
-                        source: 'keyword',
-                        meta: { factKey: f.factKey }
-                    });
-                }
-            }
-
-            results.sort((a, b) => b.score - a.score);
-            return results.slice(0, limit);
-
-        } catch (e) {
-            logger.warn('关键词召回失败，静默降级', e);
-            return [];
-        }
-    }
-
-    private async runEventSearch(limit: number): Promise<HybridSearchResult[]> {
-        try {
-            const events = await this.eventsManager.query({ limit });
-            return events.map(e => ({
-                content: `[${new Date(e.ts).toLocaleTimeString()}] ${e.type}: ${this.readEventPayloadText(e.payload)}`,
-                score: 0.3,  // 事件召回基础分，用于保底上下文
-                source: 'event' as const,
-                meta: { eventId: e.id, ts: e.ts }
-            }));
-        } catch (e) {
-            logger.warn('事件召回失败，静默降级', e);
-            return [];
-        }
-    }
-
-    // ==========================================
-    // 简单关键词工具
-    // ==========================================
 
     /**
-     * 功能：把事件 payload 转成优先文本。
-     * @param payload 事件 payload。
-     * @returns 可读文本。
+     * 功能：执行向量检索。
+     * @param query 查询文本。
+     * @param topK 返回数量。
+     * @returns 检索结果列表。
+     */
+    private async searchVector(query: string, topK: number): Promise<HybridSearchResult[]> {
+        if (topK <= 0) {
+            return [];
+        }
+        const hits = await this.vectorManager.search(query, topK);
+        const results = await Promise.all(
+            hits.map(async (hit: { chunkId: string; content: string; score: number }): Promise<HybridSearchResult | null> => {
+                const archived = this.chatStateManager ? await this.chatStateManager.isVectorChunkArchived(hit.chunkId) : false;
+                if (archived) {
+                    return null;
+                }
+                return {
+                    content: hit.content,
+                    score: hit.score,
+                    source: 'vector',
+                    meta: { chunkId: hit.chunkId },
+                };
+            }),
+        );
+        return results.filter((item: HybridSearchResult | null): item is HybridSearchResult => item != null);
+    }
+
+    /**
+     * 功能：执行关键词检索。
+     * @param query 查询文本。
+     * @param limit 返回数量。
+     * @returns 结果列表。
+     */
+    private async searchKeyword(query: string, limit: number): Promise<HybridSearchResult[]> {
+        const keywords = this.extractKeywords(query);
+        if (keywords.length === 0) {
+            return [];
+        }
+
+        const [facts, summaries] = await Promise.all([
+            this.factsManager.query({ limit: 120 }),
+            this.summariesManager.query({ limit: 60 }),
+        ]);
+
+        const factResults = await Promise.all(
+            facts.map(async (fact: any): Promise<HybridSearchResult | null> => {
+                const factKey = String(fact.factKey ?? '').trim();
+                if (this.chatStateManager && factKey && await this.chatStateManager.isFactArchived(factKey)) {
+                    return null;
+                }
+                const content = `${fact.type}${fact.path ? `.${fact.path}` : ''}: ${this.stringifyValue(fact.value)}`;
+                const score = this.scoreByKeywords(content, keywords);
+                if (score <= 0) {
+                    return null;
+                }
+                return {
+                    content,
+                    score: score * 0.8,
+                    source: 'keyword',
+                    meta: { factKey },
+                };
+            }),
+        );
+
+        const summaryResults = await Promise.all(
+            summaries.map(async (summary: any): Promise<HybridSearchResult | null> => {
+                const summaryId = String(summary.summaryId ?? '').trim();
+                if (this.chatStateManager && summaryId && await this.chatStateManager.isSummaryArchived(summaryId)) {
+                    return null;
+                }
+                const content = `${summary.title ? `${summary.title}: ` : ''}${summary.content}`;
+                const score = this.scoreByKeywords(content, keywords);
+                if (score <= 0) {
+                    return null;
+                }
+                return {
+                    content,
+                    score: score * 0.9,
+                    source: 'keyword',
+                    meta: { summaryId, level: summary.level },
+                };
+            }),
+        );
+
+        return [...factResults, ...summaryResults]
+            .filter((item: HybridSearchResult | null): item is HybridSearchResult => item != null)
+            .sort((left: HybridSearchResult, right: HybridSearchResult): number => right.score - left.score)
+            .slice(0, limit);
+    }
+
+    /**
+     * 功能：取最近事件作为兜底检索结果。
+     * @param limit 返回数量。
+     * @returns 事件结果列表。
+     */
+    private async searchEvents(limit: number): Promise<HybridSearchResult[]> {
+        const events = await this.eventsManager.query({ limit });
+        return events
+            .slice(0, limit)
+            .map((event: any): HybridSearchResult => ({
+                content: this.readEventPayloadText(event.payload),
+                score: 0.35,
+                source: 'event',
+            }))
+            .filter((item: HybridSearchResult): boolean => item.content.trim().length > 0);
+    }
+
+    /**
+     * 功能：合并并去重结果。
+     * @param input 原始结果。
+     * @returns 去重后的结果。
+     */
+    private mergeResults(input: HybridSearchResult[]): HybridSearchResult[] {
+        const map = new Map<string, HybridSearchResult>();
+        for (const item of input) {
+            const key = item.content.trim();
+            if (!key) {
+                continue;
+            }
+            const existing = map.get(key);
+            if (!existing || item.score > existing.score) {
+                map.set(key, item);
+            }
+        }
+        return Array.from(map.values()).sort((left: HybridSearchResult, right: HybridSearchResult): number => right.score - left.score);
+    }
+
+    /**
+     * 功能：对结果执行重排。
+     * @param query 查询文本。
+     * @param results 原始结果。
+     * @returns 重排后的结果。
+     */
+    private async rerankResults(query: string, results: HybridSearchResult[]): Promise<HybridSearchResult[]> {
+        const rerank = await runRerank(
+            query,
+            results.map((item: HybridSearchResult): string => item.content),
+            results.length,
+        );
+        if (!rerank.ok || !Array.isArray(rerank.results) || rerank.results.length === 0) {
+            return results;
+        }
+        return rerank.results
+            .map((item: { index: number; score: number }): HybridSearchResult | null => {
+                const original = results[item.index] ?? null;
+                if (!original) {
+                    return null;
+                }
+                return {
+                    ...original,
+                    score: Number(item.score ?? original.score),
+                };
+            })
+            .filter((item: HybridSearchResult | null): item is HybridSearchResult => item != null)
+            .sort((left: HybridSearchResult, right: HybridSearchResult): number => right.score - left.score);
+    }
+
+    /**
+     * 功能：提取关键词。
+     * @param query 查询文本。
+     * @returns 关键词数组。
+     */
+    private extractKeywords(query: string): string[] {
+        return Array.from(
+            new Set(
+                String(query ?? '')
+                    .toLowerCase()
+                    .split(/[\s,，。！？；:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
+                    .map((item: string): string => item.trim())
+                    .filter((item: string): boolean => item.length >= 2),
+            ),
+        ).slice(0, 12);
+    }
+
+    /**
+     * 功能：根据关键词计算相关分数。
+     * @param content 目标文本。
+     * @param keywords 关键词数组。
+     * @returns 分数。
+     */
+    private scoreByKeywords(content: string, keywords: string[]): number {
+        const normalized = content.toLowerCase();
+        return keywords.reduce((score: number, keyword: string): number => {
+            return score + (normalized.includes(keyword) ? 1 : 0);
+        }, 0);
+    }
+
+    /**
+     * 功能：将任意值转成字符串。
+     * @param value 任意值。
+     * @returns 字符串。
+     */
+    private stringifyValue(value: unknown): string {
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (value == null) {
+            return '';
+        }
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+
+    /**
+     * 功能：读取事件负载中的文本。
+     * @param payload 事件负载。
+     * @returns 文本内容。
      */
     private readEventPayloadText(payload: unknown): string {
         if (typeof payload === 'string') {
             return payload;
         }
-        if (payload && typeof payload === 'object' && typeof (payload as { text?: unknown }).text === 'string') {
-            return String((payload as { text: string }).text);
-        }
-        try {
-            return JSON.stringify(payload);
-        } catch {
-            return String(payload ?? '');
-        }
-    }
-
-    private extractKeywords(query: string): string[] {
-        // 简单过滤：去掉停用词，保留 2+ 字符词语
-        const stopWords = new Set(['的', '了', '是', '在', '我', '你', '他', '她', '它', '们', '和', 'the', 'a', 'is', 'in', 'of', 'to']);
-        return query
-            .split(/[\s，。！？,.!?\n]+/)
-            .map(w => w.trim())
-            .filter(w => w.length >= 2 && !stopWords.has(w));
-    }
-
-    private keywordScore(text: string, keywords: string[]): number {
-        const lowerText = text.toLowerCase();
-        let hits = 0;
-        for (const kw of keywords) {
-            if (lowerText.includes(kw.toLowerCase())) hits++;
-        }
-        return keywords.length > 0 ? hits / keywords.length : 0;
-    }
-
-    /**
-     * 尝试调用 LLMHub 的 rerank，对混合召回结果二次排序。
-     * 如果失败则静默降级返回原顺序。
-     */
-    private async tryRerank(query: string, results: HybridSearchResult[]): Promise<HybridSearchResult[]> {
-        if (results.length === 0) {
-            return results;
-        }
-
-        try {
-            const docs = results.map((item) => item.content);
-            const rerankResp = await runRerank(query, docs);
-            if (!rerankResp?.ok || !Array.isArray(rerankResp.results)) {
-                return results;
+        if (payload && typeof payload === 'object') {
+            const text = (payload as { text?: unknown; content?: unknown }).text;
+            const content = (payload as { text?: unknown; content?: unknown }).content;
+            if (typeof text === 'string') {
+                return text;
             }
-
-            const sorted = rerankResp.results
-                .map((entry: any) => {
-                    const original = results[entry.index];
-                    if (!original) return null;
-                    return {
-                        ...original,
-                        score: typeof entry.score === 'number' ? entry.score : original.score,
-                    } as HybridSearchResult;
-                })
-                .filter(Boolean) as HybridSearchResult[];
-            return sorted.length > 0 ? sorted : results;
-        } catch (error) {
-            logger.warn('rerank 失败，使用原排序结果', error);
-            return results;
+            if (typeof content === 'string') {
+                return content;
+            }
         }
+        return this.stringifyValue(payload);
     }
 }

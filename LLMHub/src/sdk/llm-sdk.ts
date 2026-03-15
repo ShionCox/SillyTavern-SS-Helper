@@ -20,7 +20,7 @@ import type {
     RequestRecord,
     RequestEnqueueOptions,
 } from '../schema/types';
-import type { z } from 'zod';
+import type { ZodType } from 'zod';
 
 /**
  * LLMSDK 门面层
@@ -461,7 +461,7 @@ export class LLMSDKImpl {
     private async tryProvider(
         resourceId: string,
         req: LLMRequest,
-        schema: z.ZodType<any> | undefined,
+        schema: ZodType<any> | undefined,
         consumer: string,
         taskId: string,
         maxLatencyMs?: number,

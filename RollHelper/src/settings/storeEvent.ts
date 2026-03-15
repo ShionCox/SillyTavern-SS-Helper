@@ -81,6 +81,60 @@ interface RollHelperChatScopedStateEvent {
   summaryHistory: RoundSummarySnapshotEvent[];
 }
 
+/**
+ * 功能：从聊天级持久化状态中恢复最近一次已处理的助手消息标识。
+ * 参数：
+ *   state：当前聊天级持久化状态快照。
+ * 返回：
+ *   string | undefined：最近一次已处理的助手消息标识；不存在时返回 undefined。
+ */
+function resolveLastProcessedAssistantMsgIdFromStateEvent(
+  state: RollHelperChatScopedStateEvent
+): string | undefined {
+  const pendingRound = state.pendingRound;
+  if (pendingRound) {
+    const pendingMsgIds = Array.isArray(pendingRound.sourceAssistantMsgIds)
+      ? pendingRound.sourceAssistantMsgIds
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+      : [];
+    if (pendingMsgIds.length > 0) {
+      return pendingMsgIds[pendingMsgIds.length - 1];
+    }
+    const pendingEventMsgIds = Array.isArray(pendingRound.events)
+      ? pendingRound.events
+          .map((event) => String(event?.sourceAssistantMsgId ?? "").trim())
+          .filter(Boolean)
+      : [];
+    if (pendingEventMsgIds.length > 0) {
+      return pendingEventMsgIds[pendingEventMsgIds.length - 1];
+    }
+  }
+
+  const history = Array.isArray(state.summaryHistory) ? state.summaryHistory : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const snapshot = history[index];
+    const snapshotMsgIds = Array.isArray(snapshot?.sourceAssistantMsgIds)
+      ? snapshot.sourceAssistantMsgIds
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+      : [];
+    if (snapshotMsgIds.length > 0) {
+      return snapshotMsgIds[snapshotMsgIds.length - 1];
+    }
+    const eventMsgIds = Array.isArray(snapshot?.events)
+      ? snapshot.events
+          .map((item) => String(item?.sourceAssistantMsgId ?? "").trim())
+          .filter(Boolean)
+      : [];
+    if (eventMsgIds.length > 0) {
+      return eventMsgIds[eventMsgIds.length - 1];
+    }
+  }
+
+  return undefined;
+}
+
 var syncSettingsUiCallbackEvent: () => void = () => { };
 
 export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
@@ -416,7 +470,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
     meta.lastPromptUserMsgId = undefined;
-    meta.lastProcessedAssistantMsgId = undefined;
+    meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
     const diceMetaLegacy = getDiceMeta();
     diceMetaLegacy.last = state.lastBaseRoll ?? undefined;
     diceMetaLegacy.lastTotal = state.lastBaseRoll?.total;
@@ -842,7 +896,8 @@ export function getUniqueSkillPresetNameEvent(
 }
 
 export function normalizeSkillPresetStoreTextForSettingsEvent(
-  raw: string
+  raw: string,
+  _fallbackSkillTableText?: string
 ): string {
   const now = Date.now();
   const rawText = String(raw ?? "").trim();

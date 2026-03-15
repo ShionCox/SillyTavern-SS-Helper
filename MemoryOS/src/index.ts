@@ -58,8 +58,9 @@ export type {
 
 // v2 类型系统
 export type {
-    MemoryOSChatState, SummaryPolicyOverride, AutoSchemaPolicy,
-    SchemaDraftSession, AssistantTurnTracker,
+    AdaptiveMetrics, AdaptivePolicy, ChatProfile, ChatProfileOverride,
+    MemoryOSChatState, RetentionPolicy, StrategyDecision,
+    SummaryPolicyOverride, AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
     RowAliasIndex, RowRedirects, RowTombstones,
 } from './types/chat-state';
 export type {
@@ -615,10 +616,26 @@ class MemoryOS {
                 return;
             }
             try {
+                const currentState = (window as any).STX?.memory?.chatState;
+                const recordIngestHealth = (duplicateDrop: boolean): void => {
+                    if (typeof currentState?.getIngestHealth !== 'function' || typeof currentState?.recordIngestHealth !== 'function') {
+                        return;
+                    }
+                    void currentState.getIngestHealth()
+                        .then((health: { totalAttempts?: number; duplicateDrops?: number }) => {
+                            return currentState.recordIngestHealth({
+                                totalAttempts: Number(health?.totalAttempts ?? 0) + 1,
+                                duplicateDrops: Number(health?.duplicateDrops ?? 0) + Number(duplicateDrop),
+                            });
+                        })
+                        .catch(() => undefined);
+                };
+
                 const result = filterRecordText(msgText, readRecordFilterSettings());
                 const compactText = String(result.filteredText || '').replace(/\s+/g, '');
                 if (result.dropped || compactText.length === 0) {
                     logger.info(`记录过滤后跳过入库 type=${eventType}, msgId=${String(msgId ?? '')}, reason=${result.reasonCode}`);
+                    recordIngestHealth(false);
                     return;
                 }
 
@@ -646,6 +663,7 @@ class MemoryOS {
                         });
                         if (duplicatedByMsgId) {
                             logger.info(`命中数据库去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId}`);
+                            recordIngestHealth(true);
                             return;
                         }
                     }
@@ -660,6 +678,7 @@ class MemoryOS {
                             });
                             if (duplicatedByText) {
                                 logger.info(`命中文本签名去重，跳过重复入库 type=${eventType}`);
+                                recordIngestHealth(true);
                                 return;
                             }
                         }
@@ -671,6 +690,7 @@ class MemoryOS {
                         const nextText = normalizeTextSignature(result.filteredText);
                         if (latestText && nextText && latestText === nextText) {
                             logger.info(`bootstrap 补录命中最新文本去重，跳过 type=${eventType}`);
+                            recordIngestHealth(true);
                             return;
                         }
                     }
@@ -683,6 +703,7 @@ class MemoryOS {
                             sourceMessageId: normalizedMsgId || undefined,
                         }
                     );
+                    recordIngestHealth(false);
                 })();
                 Promise.resolve(appendTask).catch((error: unknown) => {
                     logger.error(`记忆入库失败 type=${eventType}, msgId=${String(msgId ?? '')}`, error);
@@ -1242,12 +1263,19 @@ class MemoryOS {
                     .find((item: any) => item?.role === 'user' && typeof item?.content === 'string');
                 const query = String(latestUserMessage?.content || '').trim();
                 const settingsMaxTokens = Number(readSettings().contextMaxTokens) || 1200;
-                const injectedContext = await memory.injection.buildContext({
+                const injectedContextResult = await memory.injection.buildContext({
                     maxTokens: settingsMaxTokens,
-                    sections: ["WORLD_STATE", "FACTS", "SUMMARY", "EVENTS"],
                     query,
                     preferSummary: true,
+                    intentHint: 'auto',
+                    includeDecisionMeta: true,
                 });
+                const injectedContext = typeof injectedContextResult === 'string'
+                    ? injectedContextResult
+                    : injectedContextResult?.text || '';
+                if (typeof injectedContextResult === 'object' && injectedContextResult) {
+                    logger.info(`buildContext 选用区段: ${injectedContextResult.sectionsUsed.join(', ')}`);
+                }
 
                 logger.info(`buildContext 返回内容长度: ${injectedContext?.length ?? 0}`);
 

@@ -108,6 +108,7 @@ _SCOPE_ .stx-shared-checkbox-copy {
 _SCOPE_ .stx-shared-checkbox-title,
 _SCOPE_ .stx-shared-checkbox-description {
   display: block;
+  font-size: 12px;
 }
 
 _SCOPE_ .stx-shared-checkbox-control {

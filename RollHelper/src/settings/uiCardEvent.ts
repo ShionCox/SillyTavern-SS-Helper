@@ -11,7 +11,7 @@ import { ensureSdkThemeUiBindingEvent } from "./uiThemeEvent";
  * 功能：为 RollHelper 设置区域应用共享 tooltip。
  * 返回：void。
  */
-export function applySettingsTooltipsEvent(): void {
+export function applySettingsTooltipsEvent(_root?: Element | null): void {
   ensureSharedTooltip();
 }
 
@@ -73,10 +73,12 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_GITHUB_URL_Event: string;
   SETTINGS_SEARCH_ID_Event: string;
   SETTINGS_TAB_MAIN_ID_Event: string;
+  SETTINGS_TAB_AI_ID_Event: string;
   SETTINGS_TAB_SKILL_ID_Event: string;
   SETTINGS_TAB_RULE_ID_Event: string;
   SETTINGS_TAB_ABOUT_ID_Event: string;
   SETTINGS_PANEL_MAIN_ID_Event: string;
+  SETTINGS_PANEL_AI_ID_Event: string;
   SETTINGS_PANEL_SKILL_ID_Event: string;
   SETTINGS_PANEL_RULE_ID_Event: string;
   SETTINGS_PANEL_ABOUT_ID_Event: string;
@@ -150,6 +152,9 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_RULE_SAVE_ID_Event: string;
   SETTINGS_RULE_RESET_ID_Event: string;
   SETTINGS_RULE_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event: string;
+  SETTINGS_AI_BRIDGE_REFRESH_ID_Event: string;
 }
 
 export function buildSettingsCardTemplateIdsEvent(
@@ -199,10 +204,12 @@ export function buildSettingsCardTemplateIdsEvent(
     changelogHtml,
     searchId: deps.SETTINGS_SEARCH_ID_Event,
     tabMainId: deps.SETTINGS_TAB_MAIN_ID_Event,
+    tabAiId: deps.SETTINGS_TAB_AI_ID_Event,
     tabSkillId: deps.SETTINGS_TAB_SKILL_ID_Event,
     tabRuleId: deps.SETTINGS_TAB_RULE_ID_Event,
     tabAboutId: deps.SETTINGS_TAB_ABOUT_ID_Event,
     panelMainId: deps.SETTINGS_PANEL_MAIN_ID_Event,
+    panelAiId: deps.SETTINGS_PANEL_AI_ID_Event,
     panelSkillId: deps.SETTINGS_PANEL_SKILL_ID_Event,
     panelRuleId: deps.SETTINGS_PANEL_RULE_ID_Event,
     panelAboutId: deps.SETTINGS_PANEL_ABOUT_ID_Event,
@@ -273,6 +280,9 @@ export function buildSettingsCardTemplateIdsEvent(
     ruleSaveId: deps.SETTINGS_RULE_SAVE_ID_Event,
     ruleResetId: deps.SETTINGS_RULE_RESET_ID_Event,
     ruleTextId: deps.SETTINGS_RULE_TEXT_ID_Event,
+    aiBridgeStatusLightId: deps.SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
+    aiBridgeStatusTextId: deps.SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,
+    aiBridgeRefreshId: deps.SETTINGS_AI_BRIDGE_REFRESH_ID_Event,
   };
 }
 

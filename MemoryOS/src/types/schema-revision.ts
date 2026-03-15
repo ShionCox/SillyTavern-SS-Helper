@@ -110,6 +110,8 @@ export interface EntityResolution {
     reason: string;
 }
 
+export type EntityResolutionProposal = EntityResolution;
+
 // ─── 延后 Schema 建议 ───
 
 export interface DeferredSchemaHint {

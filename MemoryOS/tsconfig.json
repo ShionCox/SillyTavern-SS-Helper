@@ -19,7 +19,9 @@
     "isolatedModules": true
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "../_Components/css.d.ts",
+    "../SDK/css.d.ts"
   ],
   "exclude": [
     "node_modules",

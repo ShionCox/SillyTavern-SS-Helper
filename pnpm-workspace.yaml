@@ -1,3 +1,4 @@
 packages:
   - "MemoryOS"
   - "LLMHub"
+  - "RollHelper"

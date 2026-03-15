@@ -381,12 +381,35 @@ export class RowOperationsManager {
      * @returns 无返回值
      */
     async deleteRow(tableKey: string, rowId: string): Promise<void> {
+        const retentionPolicy = await this.chatStateManager.getRetentionPolicy();
+        const rowFacts = await this.factsManager.query({
+            entity: { kind: tableKey, id: rowId },
+            limit: 500,
+        });
+        const factKeys = rowFacts.map((fact: DBFact): string => fact.factKey);
+        if (retentionPolicy.deletionStrategy === 'immediate_purge') {
+            await db.transaction('rw', [db.facts], async (): Promise<void> => {
+                await Promise.all(rowFacts.map((fact: DBFact): Promise<void> => db.facts.delete(fact.factKey)));
+            });
+            await this.chatStateManager.removeRowTombstone(tableKey, rowId);
+            await this.chatStateManager.unarchiveFactKeys(factKeys);
+            await this.auditManager.log({
+                action: 'row.purged',
+                actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                before: { tableKey, rowId, factKeys },
+                after: { tableKey, rowId, purged: true },
+            });
+            await this.syncSharedSignal();
+            logger.info(`立即清除行: ${tableKey}/${rowId}`);
+            return;
+        }
+        await this.chatStateManager.archiveFactKeys(factKeys);
         await this.chatStateManager.addRowTombstone(tableKey, rowId, MEMORY_OS_PLUGIN_ID);
         await this.auditManager.log({
             action: 'row.soft_deleted',
             actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
-            before: { tableKey, rowId },
-            after: { tableKey, rowId, tombstoned: true },
+            before: { tableKey, rowId, factKeys },
+            after: { tableKey, rowId, tombstoned: true, factKeys },
         });
         await this.syncSharedSignal();
         logger.info(`软删除行: ${tableKey}/${rowId}`);
@@ -399,6 +422,11 @@ export class RowOperationsManager {
      * @returns 无返回值
      */
     async restoreRow(tableKey: string, rowId: string): Promise<void> {
+        const rowFacts = await this.factsManager.query({
+            entity: { kind: tableKey, id: rowId },
+            limit: 500,
+        });
+        await this.chatStateManager.unarchiveFactKeys(rowFacts.map((fact: DBFact): string => fact.factKey));
         await this.chatStateManager.removeRowTombstone(tableKey, rowId);
         await this.auditManager.log({
             action: 'row.restored',

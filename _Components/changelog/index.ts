@@ -264,5 +264,5 @@ export function buildChangelogHtml(
  */
 export function buildChangelogStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
-  return changelogCssText.replaceAll("_SCOPE_", scope);
+  return changelogCssText.split("_SCOPE_").join(scope);
 }

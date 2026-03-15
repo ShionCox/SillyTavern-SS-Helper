@@ -1,7 +1,63 @@
-export type { MemoryOSChatState, SummaryPolicyOverride, AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker, RowAliasIndex, RowRedirects, RowTombstones, RowTombstone } from './chat-state';
-export { DEFAULT_SUMMARY_POLICY, DEFAULT_AUTO_SCHEMA_POLICY, DEFAULT_SCHEMA_DRAFT_SESSION, DEFAULT_ASSISTANT_TURN_TRACKER, TRACKER_LRU_LIMIT, TRACKER_FLUSH_INTERVAL_MS } from './chat-state';
+export type {
+    AdaptiveMetrics,
+    AdaptivePolicy,
+    AssistantTurnTracker,
+    AutoSchemaPolicy,
+    ChatProfile,
+    ChatProfileOverride,
+    ChatProfileVectorStrategy,
+    ChatType,
+    DeletionStrategy,
+    EntityResolutionLevel,
+    ExtractHealthWindow,
+    ExtractStrategy,
+    IngestHealthWindow,
+    InjectionIntent,
+    InjectionSectionName,
+    MaintenanceActionType,
+    MaintenanceAdvice,
+    ManualOverrides,
+    MemoryOSChatState,
+    MemoryQualityDimensionScores,
+    MemoryQualityLevel,
+    MemoryQualityScorecard,
+    MemoryStrength,
+    RetentionArchives,
+    RetentionPolicy,
+    RetrievalHealthWindow,
+    RowAliasIndex,
+    RowRedirects,
+    RowTombstone,
+    RowTombstones,
+    SchemaDraftSession,
+    SpeakerTrackingLevel,
+    StrategyDecision,
+    StylePreference,
+    SummaryPolicyOverride,
+    SummaryStrategy,
+    VectorLifecycleState,
+    VectorMode,
+} from './chat-state';
+export {
+    DEFAULT_ADAPTIVE_METRICS,
+    DEFAULT_ADAPTIVE_POLICY,
+    DEFAULT_ASSISTANT_TURN_TRACKER,
+    DEFAULT_AUTO_SCHEMA_POLICY,
+    DEFAULT_CHAT_PROFILE,
+    DEFAULT_EXTRACT_HEALTH,
+    DEFAULT_INGEST_HEALTH,
+    DEFAULT_MEMORY_QUALITY,
+    DEFAULT_RETENTION_ARCHIVES,
+    DEFAULT_RETENTION_POLICY,
+    DEFAULT_RETRIEVAL_HEALTH,
+    DEFAULT_SCHEMA_DRAFT_SESSION,
+    DEFAULT_SUMMARY_POLICY,
+    DEFAULT_VECTOR_LIFECYCLE,
+    TRACKER_FLUSH_INTERVAL_MS,
+    TRACKER_LRU_LIMIT,
+} from './chat-state';
 
-export type { TableDef, TableFieldDef, FieldTier, FieldSynonyms, TableSynonyms, RevisionState, TemplateRevisionMeta, SchemaChangeKind, SchemaChangeProposal, EntityResolution, DeferredSchemaHint, ChangeBudget, PromptTrimBudget, BaseTableKey } from './schema-revision';
+export type { TableDef, TableFieldDef, FieldTier, FieldSynonyms, TableSynonyms, RevisionState, TemplateRevisionMeta, SchemaChangeKind, SchemaChangeProposal, EntityResolution, EntityResolutionProposal, DeferredSchemaHint, ChangeBudget, PromptTrimBudget, BaseTableKey } from './schema-revision';
 export { BASE_TABLE_KEYS, DEFAULT_CHANGE_BUDGET, DEFAULT_PROMPT_TRIM_BUDGET } from './schema-revision';
 
 export type {

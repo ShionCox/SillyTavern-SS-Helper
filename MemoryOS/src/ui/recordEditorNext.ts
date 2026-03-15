@@ -1,4 +1,5 @@
 import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from '../db/db';
+import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { AuditManager } from '../core/audit-manager';
@@ -453,7 +454,7 @@ export async function openRecordEditor(): Promise<void> {
         const [factCount, eventCount, activeTemplateId, latestSummary] = await Promise.all([
             db.facts.where('[chatKey+updatedAt]').between([chatKey, 0], [chatKey, Infinity]).count(),
             db.events.where('[chatKey+ts]').between([chatKey, 0], [chatKey, Infinity]).count(),
-            db.meta.get(chatKey).then((meta: RawRecord | undefined): string | null => {
+            db.meta.get(chatKey).then((meta: DBMeta | undefined): string | null => {
                 return String(meta?.activeTemplateId ?? '').trim() || null;
             }),
             db.summaries
@@ -758,16 +759,21 @@ export async function openRecordEditor(): Promise<void> {
                 if (leftValue === rightValue) {
                     return 0;
                 }
-                if (leftValue === undefined) {
+                if (leftValue == null) {
                     return 1;
                 }
-                if (rightValue === undefined) {
+                if (rightValue == null) {
                     return -1;
                 }
-                if (leftValue < rightValue) {
+                const normalizedLeftValue = typeof leftValue === 'number' ? leftValue : String(leftValue);
+                const normalizedRightValue = typeof rightValue === 'number' ? rightValue : String(rightValue);
+                if (normalizedLeftValue < normalizedRightValue) {
                     return currentSort.asc ? -1 : 1;
                 }
-                return currentSort.asc ? 1 : -1;
+                if (normalizedLeftValue > normalizedRightValue) {
+                    return currentSort.asc ? 1 : -1;
+                }
+                return 0;
             });
 
             const headerCell = (label: string, column: string): string => {

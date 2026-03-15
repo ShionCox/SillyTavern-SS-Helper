@@ -9,6 +9,7 @@ export interface SdkSettingsScope {
 export interface SdkPluginSettingsBucket {
   pluginSettings: Record<string, unknown>;
   pluginUiState: Record<string, unknown>;
+  pluginChatState?: Record<string, unknown>;
   __sdkMeta?: {
     updatedAt?: number;
   };

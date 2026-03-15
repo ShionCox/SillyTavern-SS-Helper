@@ -1,0 +1,728 @@
+import type { EventEnvelope } from '../../../SDK/stx';
+import type {
+    AdaptiveMetrics,
+    AdaptivePolicy,
+    ChatProfile,
+    InjectionIntent,
+    InjectionSectionName,
+    ManualOverrides,
+    MaintenanceAdvice,
+    MemoryQualityLevel,
+    MemoryQualityScorecard,
+    RetentionPolicy,
+    StrategyDecision,
+    VectorLifecycleState,
+    VectorMode,
+} from '../types';
+import {
+    DEFAULT_ADAPTIVE_METRICS,
+    DEFAULT_ADAPTIVE_POLICY,
+    DEFAULT_CHAT_PROFILE,
+    DEFAULT_MEMORY_QUALITY,
+    DEFAULT_RETENTION_POLICY,
+    DEFAULT_VECTOR_LIFECYCLE,
+} from '../types';
+
+export interface StrategyInferenceInput {
+    query?: string;
+    events?: Array<EventEnvelope<unknown>>;
+    metrics?: AdaptiveMetrics;
+    profile?: ChatProfile;
+}
+
+/**
+ * 功能：将数值限制在给定区间内。
+ * @param value 原始值。
+ * @param min 最小值。
+ * @param max 最大值。
+ * @returns 截断后的数值。
+ */
+function clampNumber(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) {
+        return min;
+    }
+    return Math.min(max, Math.max(min, value));
+}
+
+function normalizeRatio(value: number): number {
+    return clampNumber(value, 0, 1);
+}
+
+function scoreToLevel(totalScore: number): MemoryQualityLevel {
+    if (totalScore >= 85) {
+        return 'excellent';
+    }
+    if (totalScore >= 70) {
+        return 'healthy';
+    }
+    if (totalScore >= 55) {
+        return 'watch';
+    }
+    if (totalScore >= 40) {
+        return 'poor';
+    }
+    return 'critical';
+}
+
+function pushReason(reasonCodes: string[], condition: boolean, reasonCode: string): void {
+    if (condition && !reasonCodes.includes(reasonCode)) {
+        reasonCodes.push(reasonCode);
+    }
+}
+
+function averageWindow(values: number[]): number {
+    if (!Array.isArray(values) || values.length === 0) {
+        return 0;
+    }
+    return values.reduce((sum: number, value: number): number => sum + Number(value || 0), 0) / values.length;
+}
+
+function normalizeFreshness(lastSummaryAt: number, latestSignalAt: number): number {
+    if (latestSignalAt <= 0) {
+        return 1;
+    }
+    if (lastSummaryAt <= 0) {
+        return 0;
+    }
+    const ageMs = Math.max(0, latestSignalAt - lastSummaryAt);
+    const ageDays = ageMs / (24 * 60 * 60 * 1000);
+    if (ageDays <= 3) {
+        return 1;
+    }
+    if (ageDays >= 14) {
+        return 0;
+    }
+    return normalizeRatio(1 - ((ageDays - 3) / 11));
+}
+
+export function inferVectorMode(
+    profile: ChatProfile,
+    metrics: AdaptiveMetrics,
+    vectorLifecycle?: Partial<VectorLifecycleState> | null,
+): {
+    vectorMode: VectorMode;
+    vectorSearchStride: number;
+    rerankEnabled: boolean;
+    reasonCodes: string[];
+} {
+    const normalizedProfile = {
+        ...DEFAULT_CHAT_PROFILE,
+        ...profile,
+        vectorStrategy: {
+            ...DEFAULT_CHAT_PROFILE.vectorStrategy,
+            ...(profile.vectorStrategy ?? {}),
+        },
+    };
+    const lifecycle = {
+        ...DEFAULT_VECTOR_LIFECYCLE,
+        ...(vectorLifecycle ?? {}),
+    };
+    const reasonCodes: string[] = [];
+    const facts = Math.max(0, Number(lifecycle.factCount ?? 0));
+    const summaries = Math.max(0, Number(lifecycle.summaryCount ?? 0));
+    const precisionWindow = Array.isArray(lifecycle.recentPrecisionWindow) ? lifecycle.recentPrecisionWindow : [];
+    const retrievalPrecision = precisionWindow.length > 0
+        ? averageWindow(precisionWindow)
+        : normalizeRatio(Number(metrics.retrievalPrecision ?? metrics.retrievalHitRate ?? 0));
+    const now = Date.now();
+    const lastAccessAt = Number(lifecycle.lastAccessAt ?? metrics.lastVectorAccessAt ?? 0);
+    const idleDays = lastAccessAt > 0 ? (now - lastAccessAt) / (24 * 60 * 60 * 1000) : Number.POSITIVE_INFINITY;
+    const activationFacts = Math.max(1, Number(normalizedProfile.vectorStrategy.activationFacts ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts));
+    const activationSummaries = Math.max(1, Number(normalizedProfile.vectorStrategy.activationSummaries ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationSummaries));
+    const idleDecayDays = Math.max(1, Number(normalizedProfile.vectorStrategy.idleDecayDays ?? DEFAULT_CHAT_PROFILE.vectorStrategy.idleDecayDays));
+    let vectorSearchStride = Math.max(1, Number(normalizedProfile.vectorStrategy.lowPrecisionSearchStride ?? DEFAULT_CHAT_PROFILE.vectorStrategy.lowPrecisionSearchStride));
+
+    if (!normalizedProfile.vectorStrategy.enabled) {
+        pushReason(reasonCodes, true, 'vector_disabled_by_profile');
+        return { vectorMode: 'off', vectorSearchStride, rerankEnabled: false, reasonCodes };
+    }
+
+    if (facts < activationFacts && summaries < activationSummaries) {
+        pushReason(reasonCodes, true, 'vector_not_activated');
+        return { vectorMode: 'off', vectorSearchStride, rerankEnabled: false, reasonCodes };
+    }
+
+    if (retrievalPrecision < 0.1) {
+        vectorSearchStride = 5;
+        pushReason(reasonCodes, true, 'vector_force_stride_5');
+    } else if (retrievalPrecision < 0.2) {
+        pushReason(reasonCodes, true, 'vector_low_precision_stride');
+    }
+
+    if (retrievalPrecision < 0.2 || idleDays > 30) {
+        pushReason(reasonCodes, retrievalPrecision < 0.2, 'vector_precision_too_low');
+        pushReason(reasonCodes, idleDays > 30, 'vector_long_term_idle');
+        return { vectorMode: 'index_only', vectorSearchStride, rerankEnabled: false, reasonCodes };
+    }
+
+    if (idleDays > idleDecayDays || retrievalPrecision < 0.35) {
+        pushReason(reasonCodes, idleDays > idleDecayDays, 'vector_idle_decay');
+        pushReason(reasonCodes, retrievalPrecision < 0.35, 'vector_precision_mid');
+        return { vectorMode: 'search', vectorSearchStride, rerankEnabled: false, reasonCodes };
+    }
+
+    pushReason(reasonCodes, true, 'vector_search_rerank_ready');
+    return { vectorMode: 'search_rerank', vectorSearchStride, rerankEnabled: true, reasonCodes };
+}
+
+export function computeMemoryQualityScorecard(input: {
+    metrics: AdaptiveMetrics;
+    vectorLifecycle?: Partial<VectorLifecycleState> | null;
+    latestSummaryAt?: number;
+    latestSignalAt?: number;
+}): MemoryQualityScorecard {
+    const metrics = { ...DEFAULT_ADAPTIVE_METRICS, ...(input.metrics ?? {}) };
+    const lifecycle = { ...DEFAULT_VECTOR_LIFECYCLE, ...(input.vectorLifecycle ?? {}) };
+    const reasonCodes: string[] = [];
+    const summaryFreshness = normalizeFreshness(
+        Number(input.latestSummaryAt ?? 0),
+        Math.max(Number(input.latestSignalAt ?? 0), Number(metrics.lastUpdatedAt ?? 0)),
+    );
+    const usefulSignals = (
+        0.5 * normalizeRatio(metrics.summaryEffectiveness)
+        + 0.3 * normalizeRatio(metrics.retrievalPrecision)
+        + 0.2 * normalizeRatio(metrics.factsUpdateRate)
+    );
+    const tokenEfficiency = normalizeRatio(usefulSignals / Math.max(Number(metrics.promptInjectionTokenRatio ?? 0), 0.05));
+    const duplicateScore = normalizeRatio(1 - Number(metrics.duplicateRate ?? 0));
+    const retrievalScore = normalizeRatio(Number(metrics.retrievalPrecision ?? metrics.retrievalHitRate ?? 0));
+    const extractScore = normalizeRatio(Number(metrics.extractAcceptance ?? 0));
+    const orphanScore = normalizeRatio(1 - Number(metrics.orphanFactsRatio ?? 0));
+    const schemaScore = normalizeRatio(Number(metrics.schemaHygiene ?? 0));
+    const totalScore = Math.round((
+        duplicateScore * 15
+        + retrievalScore * 20
+        + extractScore * 15
+        + summaryFreshness * 15
+        + tokenEfficiency * 15
+        + orphanScore * 10
+        + schemaScore * 10
+    ));
+    pushReason(reasonCodes, Number(metrics.duplicateRate ?? 0) >= 0.3, 'duplicate_rate_high');
+    pushReason(reasonCodes, retrievalScore < 0.2, 'retrieval_precision_low');
+    pushReason(reasonCodes, extractScore < 0.35, 'extract_acceptance_low');
+    pushReason(reasonCodes, summaryFreshness < 0.45, 'summary_freshness_low');
+    pushReason(reasonCodes, tokenEfficiency < 0.4, 'token_efficiency_low');
+    pushReason(reasonCodes, Number(metrics.orphanFactsRatio ?? 0) >= 0.22, 'orphan_facts_high');
+    pushReason(reasonCodes, schemaScore < 0.45, 'schema_hygiene_low');
+    pushReason(reasonCodes, lifecycle.vectorChunkCount <= 0 && lifecycle.vectorMode !== 'off', 'vector_chunks_missing');
+    return {
+        totalScore,
+        level: scoreToLevel(totalScore),
+        dimensions: {
+            duplicateRate: duplicateScore,
+            retrievalPrecision: retrievalScore,
+            extractAcceptance: extractScore,
+            summaryFreshness,
+            tokenEfficiency,
+            orphanFactsRatio: orphanScore,
+            schemaHygiene: schemaScore,
+        },
+        computedAt: Date.now(),
+        reasonCodes,
+    };
+}
+
+export function buildMaintenanceAdvice(input: {
+    metrics: AdaptiveMetrics;
+    quality?: MemoryQualityScorecard | null;
+    vectorLifecycle?: Partial<VectorLifecycleState> | null;
+    needsCompaction?: boolean;
+}): MaintenanceAdvice[] {
+    const metrics = { ...DEFAULT_ADAPTIVE_METRICS, ...(input.metrics ?? {}) };
+    const quality = input.quality ? { ...DEFAULT_MEMORY_QUALITY, ...input.quality } : computeMemoryQualityScorecard({ metrics, vectorLifecycle: input.vectorLifecycle });
+    const lifecycle = { ...DEFAULT_VECTOR_LIFECYCLE, ...(input.vectorLifecycle ?? {}) };
+    const advice: MaintenanceAdvice[] = [];
+
+    if (input.needsCompaction || Number(metrics.duplicateRate ?? 0) >= 0.3) {
+        advice.push({
+            action: 'compress',
+            priority: Number(metrics.duplicateRate ?? 0) >= 0.45 ? 'high' : 'medium',
+            reasonCodes: ['duplicate_rate_high'],
+            title: '建议压缩旧记忆',
+            detail: '当前聊天出现较高重复写入或已满足压缩条件，建议执行压缩以降低噪音。',
+        });
+    }
+    if (quality.dimensions.summaryFreshness < 0.45 || Number(metrics.summaryEffectiveness ?? 0) < 0.35) {
+        advice.push({
+            action: 'rebuild_summary',
+            priority: quality.dimensions.summaryFreshness < 0.25 ? 'high' : 'medium',
+            reasonCodes: ['summary_freshness_low'],
+            title: '建议重建摘要',
+            detail: '摘要已明显陈旧或摘要效果偏低，建议重建摘要提高注入质量。',
+        });
+    }
+    const vectorGrowth = Number(lifecycle.factCount ?? 0) + Number(lifecycle.summaryCount ?? 0);
+    if ((vectorGrowth >= Math.max(1, Number(lifecycle.vectorChunkCount ?? 0)) && Number(lifecycle.vectorChunkCount ?? 0) === 0)
+        || (Number(metrics.retrievalPrecision ?? 0) < 0.2 && vectorGrowth > 0)) {
+        advice.push({
+            action: 'revectorize',
+            priority: Number(lifecycle.vectorChunkCount ?? 0) === 0 ? 'high' : 'medium',
+            reasonCodes: ['vector_chunks_missing'],
+            title: '建议重建向量索引',
+            detail: '聊天已达到向量启用条件，但当前向量覆盖不足或近期检索精度偏低，建议重建索引。',
+        });
+    }
+    if (Number(metrics.orphanFactsRatio ?? 0) >= 0.22 || Number(metrics.schemaHygiene ?? 0) < 0.45) {
+        advice.push({
+            action: 'schema_cleanup',
+            priority: Number(metrics.orphanFactsRatio ?? 0) >= 0.35 ? 'high' : 'medium',
+            reasonCodes: ['schema_hygiene_low'],
+            title: '建议整理 schema',
+            detail: '存在较多孤儿事实或 schema 卫生度偏低，建议进行 schema 整理。',
+        });
+    }
+    return advice;
+}
+
+/**
+ * 功能：读取事件中的可分析文本。
+ * @param event 事件对象。
+ * @returns 归一化后的文本。
+ */
+export function readEventTextForStrategy(event: EventEnvelope<unknown>): string {
+    const payload = event?.payload as
+        | string
+        | { text?: unknown; content?: unknown; message?: unknown; summary?: unknown }
+        | null
+        | undefined;
+    if (typeof payload === 'string') {
+        return payload.trim();
+    }
+    if (payload && typeof payload === 'object') {
+        const candidates: unknown[] = [payload.text, payload.content, payload.message, payload.summary];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim().length > 0) {
+                return candidate.trim();
+            }
+        }
+    }
+    return '';
+}
+
+/**
+ * 功能：从文本中提取轻量主题词集合。
+ * @param text 输入文本。
+ * @returns 主题词数组。
+ */
+export function extractTopicTerms(text: string): string[] {
+    return Array.from(
+        new Set(
+            String(text ?? '')
+                .toLowerCase()
+                .split(/[\s,，。！？；、:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
+                .map((item: string): string => item.trim())
+                .filter((item: string): boolean => item.length >= 2),
+        ),
+    ).slice(0, 12);
+}
+
+/**
+ * 功能：根据最近事件窗口计算聊天动态指标。
+ * @param events 最近事件列表。
+ * @param previous 前一次指标，用于保留跨节点统计值。
+ * @returns 动态指标结果。
+ */
+export function collectAdaptiveMetricsFromEvents(
+    events: Array<EventEnvelope<unknown>>,
+    previous?: AdaptiveMetrics,
+): AdaptiveMetrics {
+    const recentEvents = Array.isArray(events) ? events.slice(0, DEFAULT_ADAPTIVE_METRICS.windowSize) : [];
+    const messageEvents = recentEvents.filter((event: EventEnvelope<unknown>): boolean => {
+        return (
+            event.type === 'chat.message.sent'
+            || event.type === 'chat.message.received'
+            || event.type === 'user_message_rendered'
+            || event.type === 'assistant_message_rendered'
+        );
+    });
+    const userEvents = messageEvents.filter((event: EventEnvelope<unknown>): boolean => {
+        return event.type === 'chat.message.sent' || event.type === 'user_message_rendered';
+    });
+    const assistantEvents = messageEvents.filter((event: EventEnvelope<unknown>): boolean => {
+        return event.type === 'chat.message.received' || event.type === 'assistant_message_rendered';
+    });
+    const messageLengths = messageEvents.map((event: EventEnvelope<unknown>): number => readEventTextForStrategy(event).length);
+    const avgMessageLength = messageLengths.length > 0
+        ? messageLengths.reduce((sum: number, length: number): number => sum + length, 0) / messageLengths.length
+        : 0;
+    const assistantLongMessageRatio = assistantEvents.length > 0
+        ? assistantEvents.filter((event: EventEnvelope<unknown>): boolean => readEventTextForStrategy(event).length >= 280).length / assistantEvents.length
+        : 0;
+    const userInfoDensity = userEvents.length > 0
+        ? userEvents.reduce((sum: number, event: EventEnvelope<unknown>): number => {
+            const text = readEventTextForStrategy(event);
+            const terms = extractTopicTerms(text);
+            const density = text.length > 0 ? (terms.join('').length / Math.max(text.length, 1)) : 0;
+            return sum + density;
+        }, 0) / userEvents.length
+        : 0;
+    const userTopicWindows = userEvents.map((event: EventEnvelope<unknown>): string[] => extractTopicTerms(readEventTextForStrategy(event)));
+    let repeatedTopicHits = 0;
+    let repeatedTopicBase = 0;
+    for (let index = 1; index < userTopicWindows.length; index += 1) {
+        const previousTerms = new Set(userTopicWindows[index - 1]);
+        const currentTerms = userTopicWindows[index];
+        if (currentTerms.length === 0) {
+            continue;
+        }
+        repeatedTopicBase += 1;
+        if (currentTerms.some((term: string): boolean => previousTerms.has(term))) {
+            repeatedTopicHits += 1;
+        }
+    }
+    const repeatedTopicRate = repeatedTopicBase > 0 ? repeatedTopicHits / repeatedTopicBase : 0;
+    const speakerMatches = recentEvents.reduce((speakerSet: Set<string>, event: EventEnvelope<unknown>): Set<string> => {
+        const text = readEventTextForStrategy(event);
+        const match = text.match(/^([A-Za-z\u4e00-\u9fff0-9_]{1,16})[:：]/);
+        if (match?.[1]) {
+            speakerSet.add(match[1].toLowerCase());
+        }
+        return speakerSet;
+    }, new Set<string>());
+    const worldStateSignal = clampNumber(
+        (
+            Number(previous?.worldStateSignal ?? 0) * 0.4
+            + (userEvents.some((event: EventEnvelope<unknown>): boolean => /设定|世界|规则|背景|地点|阵营|历史|年表/.test(readEventTextForStrategy(event))) ? 0.35 : 0)
+            + (assistantEvents.some((event: EventEnvelope<unknown>): boolean => /设定|世界|规则|背景|地点|阵营|历史|年表/.test(readEventTextForStrategy(event))) ? 0.25 : 0)
+        ),
+        0,
+        1,
+    );
+
+    return {
+        ...DEFAULT_ADAPTIVE_METRICS,
+        ...previous,
+        windowSize: messageEvents.length || DEFAULT_ADAPTIVE_METRICS.windowSize,
+        avgMessageLength,
+        assistantLongMessageRatio,
+        userInfoDensity,
+        repeatedTopicRate,
+        recentUserTurns: userEvents.length,
+        recentAssistantTurns: assistantEvents.length,
+        recentGroupSpeakerCount: Math.max(1, speakerMatches.size),
+        worldStateSignal,
+        lastUpdatedAt: Date.now(),
+    };
+}
+
+/**
+ * 功能：推断聊天画像。
+ * @param input 推断所需输入。
+ * @returns 推断后的聊天画像。
+ */
+export function inferChatProfile(input: StrategyInferenceInput): ChatProfile {
+    const profile = { ...DEFAULT_CHAT_PROFILE, ...(input.profile ?? {}) };
+    const metrics = { ...DEFAULT_ADAPTIVE_METRICS, ...(input.metrics ?? {}) };
+    const events = Array.isArray(input.events) ? input.events : [];
+    const query = String(input.query ?? '').trim().toLowerCase();
+
+    const groupSignal = metrics.recentGroupSpeakerCount >= 3 || events.some((event: EventEnvelope<unknown>): boolean => {
+        return /群聊|大家|众人|队伍|队友|npc们/.test(readEventTextForStrategy(event));
+    });
+    const toolSignal = /怎么|如何|步骤|命令|配置|报错|为什么|修复|说明/.test(query);
+    const worldbookSignal = metrics.worldStateSignal >= 0.45 || /设定|世界观|资料|百科|年表|势力|地图/.test(query);
+
+    const nextChatType = toolSignal
+        ? 'tool'
+        : groupSignal
+            ? 'group'
+            : worldbookSignal
+                ? 'worldbook'
+                : profile.chatType;
+
+    const nextStylePreference = toolSignal
+        ? 'qa'
+        : /跑团|检定|主持人|角色卡|dnd|coc/.test(query)
+            ? 'trpg'
+            : worldbookSignal
+                ? 'info'
+                : metrics.assistantLongMessageRatio >= 0.45
+                    ? 'story'
+                    : profile.stylePreference;
+
+    const nextMemoryStrength = metrics.userInfoDensity >= 0.18 || metrics.worldStateSignal >= 0.5
+        ? 'high'
+        : metrics.avgMessageLength <= 90 && nextStylePreference === 'qa'
+            ? 'low'
+            : 'medium';
+
+    const nextExtractStrategy = nextChatType === 'tool'
+        ? 'facts_only'
+        : nextChatType === 'worldbook' || nextStylePreference === 'trpg'
+            ? 'facts_relations_world'
+            : nextChatType === 'group'
+                ? 'facts_relations'
+                : profile.extractStrategy;
+
+    const nextSummaryStrategy = nextStylePreference === 'qa'
+        ? 'short'
+        : nextChatType === 'worldbook'
+            ? 'timeline'
+            : nextStylePreference === 'story'
+                ? 'layered'
+                : profile.summaryStrategy;
+
+    return {
+        ...profile,
+        chatType: nextChatType,
+        stylePreference: nextStylePreference,
+        memoryStrength: nextMemoryStrength,
+        extractStrategy: nextExtractStrategy,
+        summaryStrategy: nextSummaryStrategy,
+        vectorStrategy: {
+            ...profile.vectorStrategy,
+            enabled: nextChatType !== 'tool',
+            chunkThreshold: nextChatType === 'tool' ? 360 : nextMemoryStrength === 'high' ? 180 : 260,
+            rerankThreshold: nextStylePreference === 'qa' ? 8 : nextChatType === 'worldbook' ? 4 : 6,
+        },
+        deletionStrategy: profile.deletionStrategy,
+    };
+}
+
+/**
+ * 功能：根据画像与指标构建自适应策略。
+ * @param profile 聊天画像。
+ * @param metrics 动态指标。
+ * @returns 可执行自适应策略。
+ */
+export function buildAdaptivePolicy(
+    profile: ChatProfile,
+    metrics: AdaptiveMetrics,
+    vectorLifecycle?: Partial<VectorLifecycleState> | null,
+    memoryQuality?: Partial<MemoryQualityScorecard> | null,
+): AdaptivePolicy {
+    let extractInterval = profile.memoryStrength === 'high' ? 8 : profile.memoryStrength === 'low' ? 18 : 12;
+    let extractWindowSize = profile.summaryStrategy === 'timeline' ? 56 : profile.summaryStrategy === 'short' ? 24 : 40;
+    let summaryEnabled = profile.stylePreference !== 'qa' || metrics.avgMessageLength >= 120;
+    let entityResolutionLevel: AdaptivePolicy['entityResolutionLevel'] = profile.chatType === 'group' ? 'high' : 'medium';
+    let speakerTrackingLevel: AdaptivePolicy['speakerTrackingLevel'] = profile.chatType === 'group' ? 'high' : 'medium';
+    let worldStateWeight = profile.chatType === 'worldbook' ? 0.85 : profile.extractStrategy === 'facts_relations_world' ? 0.7 : 0.45;
+    let contextMaxTokensShare = profile.stylePreference === 'qa' ? 0.35 : profile.chatType === 'worldbook' ? 0.7 : 0.55;
+
+    if (metrics.userInfoDensity <= 0.08) {
+        extractInterval += 6;
+        extractWindowSize = Math.max(18, extractWindowSize - 12);
+    }
+    if (metrics.recentGroupSpeakerCount >= 3) {
+        entityResolutionLevel = 'high';
+        speakerTrackingLevel = 'high';
+        worldStateWeight = Math.max(worldStateWeight, 0.55);
+    }
+    if (metrics.worldStateSignal >= 0.5) {
+        worldStateWeight = Math.max(worldStateWeight, 0.8);
+        contextMaxTokensShare = Math.max(contextMaxTokensShare, 0.65);
+    }
+    if (profile.stylePreference === 'qa' && metrics.avgMessageLength <= 100) {
+        summaryEnabled = false;
+        extractInterval = Math.max(extractInterval, 18);
+        contextMaxTokensShare = Math.min(contextMaxTokensShare, 0.3);
+    }
+
+    const vectorDecision = inferVectorMode(profile, metrics, vectorLifecycle);
+    const quality = memoryQuality
+        ? { ...DEFAULT_MEMORY_QUALITY, ...memoryQuality }
+        : computeMemoryQualityScorecard({ metrics, vectorLifecycle });
+
+    return {
+        ...DEFAULT_ADAPTIVE_POLICY,
+        extractInterval: Math.max(4, Math.round(extractInterval)),
+        extractWindowSize: Math.max(16, Math.round(extractWindowSize)),
+        summaryEnabled,
+        summaryMode: profile.summaryStrategy,
+        entityResolutionLevel,
+        speakerTrackingLevel,
+        worldStateWeight: clampNumber(worldStateWeight, 0.1, 1),
+        vectorEnabled: profile.vectorStrategy.enabled && profile.stylePreference !== 'qa' && vectorDecision.vectorMode !== 'off',
+        vectorChunkThreshold: Math.max(120, Math.round(profile.vectorStrategy.chunkThreshold)),
+        rerankThreshold: Math.max(2, Math.round(profile.vectorStrategy.rerankThreshold)),
+        vectorMode: vectorDecision.vectorMode,
+        vectorMinFacts: Math.max(1, Math.round(profile.vectorStrategy.activationFacts)),
+        vectorMinSummaries: Math.max(1, Math.round(profile.vectorStrategy.activationSummaries)),
+        vectorSearchStride: Math.max(1, Math.round(vectorDecision.vectorSearchStride)),
+        rerankEnabled: vectorDecision.rerankEnabled && quality.dimensions.retrievalPrecision >= 0.35,
+        vectorIdleDecayDays: Math.max(1, Math.round(profile.vectorStrategy.idleDecayDays)),
+        contextMaxTokensShare: clampNumber(contextMaxTokensShare, 0.2, 0.8),
+    };
+}
+
+/**
+ * 功能：合并手动覆盖后的最终聊天画像。
+ * @param profile 自动推断画像。
+ * @param overrides 手动覆盖项。
+ * @returns 最终生效画像。
+ */
+export function applyChatProfileOverrides(profile: ChatProfile, overrides?: ManualOverrides): ChatProfile {
+    return {
+        ...profile,
+        ...(overrides?.chatProfile ?? {}),
+        vectorStrategy: {
+            ...profile.vectorStrategy,
+            ...(overrides?.chatProfile?.vectorStrategy ?? {}),
+        },
+    };
+}
+
+/**
+ * 功能：合并手动覆盖后的最终自适应策略。
+ * @param policy 自动推断策略。
+ * @param overrides 手动覆盖项。
+ * @returns 最终生效策略。
+ */
+export function applyAdaptivePolicyOverrides(policy: AdaptivePolicy, overrides?: ManualOverrides): AdaptivePolicy {
+    return {
+        ...policy,
+        ...(overrides?.adaptivePolicy ?? {}),
+    };
+}
+
+/**
+ * 功能：合并手动覆盖后的最终保留策略。
+ * @param policy 自动推断保留策略。
+ * @param overrides 手动覆盖项。
+ * @returns 最终生效保留策略。
+ */
+export function applyRetentionPolicyOverrides(policy: RetentionPolicy, overrides?: ManualOverrides): RetentionPolicy {
+    return {
+        ...policy,
+        ...(overrides?.retentionPolicy ?? {}),
+    };
+}
+
+/**
+ * 功能：根据聊天画像、指标与查询判定本轮注入意图。
+ * @param input 推断输入。
+ * @returns 注入意图。
+ */
+export function decideInjectionIntent(input: StrategyInferenceInput): InjectionIntent {
+    const query = String(input.query ?? '').trim().toLowerCase();
+    const profile = { ...DEFAULT_CHAT_PROFILE, ...(input.profile ?? {}) };
+
+    if (!query) {
+        if (profile.stylePreference === 'qa') {
+            return 'tool_qa';
+        }
+        if (profile.chatType === 'worldbook') {
+            return 'setting_qa';
+        }
+        return 'story_continue';
+    }
+    if (/设定|世界观|百科|背景|规则|资料|地点|阵营|历史|年表/.test(query)) {
+        return 'setting_qa';
+    }
+    if (/怎么|如何|修复|命令|配置|步骤|报错|api|sdk|tsc/.test(query)) {
+        return 'tool_qa';
+    }
+    if (/继续|续写|接着|然后|下一幕|下一段/.test(query)) {
+        return 'story_continue';
+    }
+    if (/扮演|以.*口吻|角色|对话|人设|互动/.test(query)) {
+        return 'roleplay';
+    }
+    if (profile.stylePreference === 'qa') {
+        return 'tool_qa';
+    }
+    if (profile.chatType === 'worldbook') {
+        return 'setting_qa';
+    }
+    if (profile.stylePreference === 'story' || profile.stylePreference === 'trpg') {
+        return 'story_continue';
+    }
+    return 'auto';
+}
+
+/**
+ * 功能：根据意图选择默认注入区段。
+ * @param intent 本轮注入意图。
+ * @returns 区段数组。
+ */
+export function resolveIntentSections(intent: InjectionIntent): InjectionSectionName[] {
+    if (intent === 'setting_qa') {
+        return ['WORLD_STATE', 'FACTS'];
+    }
+    if (intent === 'story_continue') {
+        return ['SUMMARY', 'LAST_SCENE', 'EVENTS'];
+    }
+    if (intent === 'roleplay') {
+        return ['CHARACTER_FACTS', 'RELATIONSHIPS', 'LAST_SCENE'];
+    }
+    if (intent === 'tool_qa') {
+        return ['SHORT_SUMMARY'];
+    }
+    return ['WORLD_STATE', 'FACTS', 'SUMMARY', 'EVENTS'];
+}
+
+/**
+ * 功能：根据意图与策略分配区段预算。
+ * @param intent 本轮意图。
+ * @param sections 使用区段。
+ * @param maxTokens 总预算。
+ * @param policy 自适应策略。
+ * @returns 预算映射。
+ */
+export function buildIntentBudgets(
+    intent: InjectionIntent,
+    sections: InjectionSectionName[],
+    maxTokens: number,
+    policy: AdaptivePolicy,
+): Partial<Record<InjectionSectionName, number>> {
+    const result: Partial<Record<InjectionSectionName, number>> = {};
+    const baseRatios: Record<InjectionIntent, Partial<Record<InjectionSectionName, number>>> = {
+        auto: { WORLD_STATE: 0.2, FACTS: 0.3, SUMMARY: 0.3, EVENTS: 0.2 },
+        setting_qa: { WORLD_STATE: 0.45, FACTS: 0.55 },
+        story_continue: { SUMMARY: 0.4, LAST_SCENE: 0.35, EVENTS: 0.25 },
+        roleplay: { CHARACTER_FACTS: 0.4, RELATIONSHIPS: 0.3, LAST_SCENE: 0.3 },
+        tool_qa: { SHORT_SUMMARY: 1 },
+    };
+    const ratios = baseRatios[intent] ?? baseRatios.auto;
+    const effectiveTokens = Math.max(120, Math.floor(maxTokens * policy.contextMaxTokensShare));
+    let allocated = 0;
+    sections.forEach((section: InjectionSectionName, index: number): void => {
+        const ratio = Number(ratios[section] ?? (1 / Math.max(sections.length, 1)));
+        const budget = index === sections.length - 1
+            ? Math.max(32, effectiveTokens - allocated)
+            : Math.max(32, Math.floor(effectiveTokens * ratio));
+        result[section] = budget;
+        allocated += budget;
+    });
+    return result;
+}
+
+/**
+ * 功能：构建最近一次策略决策结果。
+ * @param intent 注入意图。
+ * @param sectionsUsed 实际区段。
+ * @param budgets 区段预算。
+ * @param reasonCodes 原因代码。
+ * @returns 决策结果对象。
+ */
+export function buildStrategyDecision(
+    intent: InjectionIntent,
+    sectionsUsed: InjectionSectionName[],
+    budgets: Partial<Record<InjectionSectionName, number>>,
+    reasonCodes: string[],
+): StrategyDecision {
+    return {
+        intent,
+        sectionsUsed,
+        budgets,
+        reasonCodes,
+        generatedAt: Date.now(),
+    };
+}
+
+/**
+ * 功能：构建默认保留策略。
+ * @param profile 聊天画像。
+ * @returns 默认保留策略。
+ */
+export function buildRetentionPolicy(profile?: ChatProfile): RetentionPolicy {
+    const normalizedProfile = { ...DEFAULT_CHAT_PROFILE, ...(profile ?? {}) };
+    return {
+        ...DEFAULT_RETENTION_POLICY,
+        deletionStrategy: normalizedProfile.deletionStrategy,
+        keepSummaryCount: normalizedProfile.summaryStrategy === 'timeline' ? 180 : normalizedProfile.summaryStrategy === 'short' ? 80 : 120,
+        keepEventCount: normalizedProfile.memoryStrength === 'high' ? 1400 : normalizedProfile.memoryStrength === 'low' ? 600 : 1000,
+        keepVectorDays: normalizedProfile.vectorStrategy.enabled ? 30 : 7,
+    };
+}

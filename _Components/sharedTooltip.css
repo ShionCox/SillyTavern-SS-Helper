@@ -2,7 +2,7 @@
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 40000;
+  z-index: 2147483000;
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
@@ -70,4 +70,10 @@ html body [data-tip]:focus-visible::after {
   #stx-shared-tooltip {
     transition: none;
   }
+}
+
+/* 确保所有具有 data-tip 的元素能够响应鼠标事件，修复全局 Tooltip 无法弹出的问题 */
+[data-tip] {
+  pointer-events: auto !important;
+  cursor: help !important;
 }

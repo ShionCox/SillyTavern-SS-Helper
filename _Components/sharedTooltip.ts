@@ -5,6 +5,7 @@ const TOOLTIP_STYLE_ID = "stx-shared-tooltip-style";
 const TOOLTIP_ID = "stx-shared-tooltip";
 const TOOLTIP_RUNTIME_KEY = "__stxSharedTooltipState";
 const TOOLTIP_RUNTIME_VERSION = 1;
+const TOOLTIP_Z_INDEX = 2147483000;
 const TOOLTIP_HIDE_DELAY_MS = 90;
 const TOOLTIP_HIDE_TRANSITION_MS = 180;
 const TOOLTIP_INSTANT_DISTANCE_PX = 420;
@@ -116,17 +117,13 @@ function ensureStyle(): void {
   document.head.appendChild(style);
 }
 
-function resolveHost(target?: HTMLElement | null): HTMLElement {
-  return (
-    target?.closest<HTMLDialogElement>("dialog[open]") ||
-    document.querySelector<HTMLDialogElement>("dialog[open]") ||
-    document.body
-  );
+function resolveHost(): HTMLElement {
+  return document.body;
 }
 
-function ensureRuntime(state: TooltipGlobalState, target?: HTMLElement | null): TooltipRuntime {
+function ensureRuntime(state: TooltipGlobalState): TooltipRuntime {
   ensureStyle();
-  const host = resolveHost(target);
+  const host = resolveHost();
 
   let root = document.getElementById(TOOLTIP_ID) as HTMLDivElement | null;
   if (!root) {
@@ -136,6 +133,8 @@ function ensureRuntime(state: TooltipGlobalState, target?: HTMLElement | null): 
   } else if (root.parentElement !== host) {
     host.appendChild(root);
   }
+  // 使用内联高层级兜底，避免被其他旧样式或后注入样式覆盖。
+  root.style.setProperty("z-index", String(TOOLTIP_Z_INDEX), "important");
   markNode(root);
 
   let body = root.querySelector<HTMLDivElement>(".stx-shared-tooltip-body");
@@ -202,8 +201,16 @@ function getTooltipAnchor(node: HTMLElement): HTMLElement {
 // ---------------------------------------------------------------------------
 
 function resolveTarget(eventTarget: EventTarget | null): HTMLElement | null {
-  if (!(eventTarget instanceof HTMLElement)) return null;
-  const dataTipNode = eventTarget.closest<HTMLElement>("[data-tip]");
+  const baseElement =
+    eventTarget instanceof HTMLElement
+      ? eventTarget
+      : eventTarget instanceof Element
+        ? eventTarget
+        : eventTarget instanceof Node
+          ? eventTarget.parentElement
+          : null;
+  if (!baseElement) return null;
+  const dataTipNode = baseElement.closest<HTMLElement>("[data-tip]");
   if (!dataTipNode) return null;
   const tip = String(dataTipNode.dataset.tip ?? "").trim();
   if (!tip) return null;
@@ -325,7 +332,7 @@ function showTooltip(target: HTMLElement, state: TooltipGlobalState): void {
   if (!tip) { hideTooltip(state); return; }
   if (state.hideTimer !== null) { clearTimeout(state.hideTimer); state.hideTimer = null; }
 
-  const runtime = ensureRuntime(state, target);
+  const runtime = ensureRuntime(state);
   clearHideCleanup(state);
   releaseLayoutLock(runtime);
   mountThemeHost(runtime.root);

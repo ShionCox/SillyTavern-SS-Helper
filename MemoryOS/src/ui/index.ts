@@ -15,6 +15,7 @@ import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 import { filterRecordText, normalizeRecordFilterSettings } from '../core/record-filter';
+import { ensureChatStrategyPanel, initializeChatStrategyPanel } from './chatStrategyPanel';
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
@@ -167,7 +168,7 @@ function ensureThemeBinding(): void {
             mountThemeHost(contentRoot);
         }
         document
-            .querySelectorAll<HTMLElement>('.stx-record-editor-overlay')
+            .querySelectorAll<HTMLElement>('.stx-record-editor-overlay, .stx-memory-chat-strategy-overlay')
             .forEach((overlay: HTMLElement) => {
                 mountThemeHost(overlay);
             });
@@ -307,6 +308,10 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
+        const aiPanel = document.getElementById(IDS.panelAiId);
+        if (aiPanel instanceof HTMLElement) {
+            ensureChatStrategyPanel(aiPanel);
+        }
         upgradeSettingsSelects(cardWrapper);
         hydrateSharedSelects(cardWrapper);
         unmountThemeHost(cardWrapper);
@@ -319,6 +324,7 @@ export async function renderSettingsUi() {
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
         bindUiEvents();
+        await initializeChatStrategyPanel();
         applySettingsTooltips();
     } catch (error) {
         console.error(`[MemoryOS] UI 渲染失败:`, error);
