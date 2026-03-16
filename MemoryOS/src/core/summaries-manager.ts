@@ -23,7 +23,11 @@ export class SummariesManager {
         content: string;
         keywords?: string[];
         range?: { fromMessageId?: string; toMessageId?: string };
-        source?: { extractor?: string; provider?: string };
+        source?: {
+            extractor?: string;
+            provider?: string;
+            provenance?: Record<string, unknown>;
+        };
     }): Promise<string> {
         const summaryId = summary.summaryId || crypto.randomUUID();
         const record: DBSummary = {

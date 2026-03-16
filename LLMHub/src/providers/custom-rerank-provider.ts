@@ -1,12 +1,16 @@
 import type {
-    LLMProvider, LLMRequest, LLMResponse,
-    RerankRequest, RerankResponse,
-    ProviderConnectionResult, ProviderModelListResult,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    RerankRequest,
+    RerankResponse,
+    ProviderConnectionResult,
+    ProviderModelListResult,
 } from './types';
 
 /**
  * 独立自定义重排 Provider
- * 协议: POST {baseUrl}{rerankPath}
+ * 协议: POST {baseUrl}
  * Authorization: Bearer <apiKey>
  * Body: { model, query, documents, top_n }
  */
@@ -44,18 +48,52 @@ export class CustomRerankProvider implements LLMProvider {
         return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
     }
 
+    private buildRerankUrl(): string {
+        try {
+            const base = new URL(this.baseUrl);
+            const basePath = base.pathname.replace(/\/+$/, '');
+            const rerankPath = this.rerankPath;
+
+            if (basePath && rerankPath.toLowerCase() === basePath.toLowerCase()) {
+                return base.toString().replace(/\/+$/, '');
+            }
+
+            if (basePath && rerankPath.toLowerCase().startsWith(`${basePath.toLowerCase()}/`)) {
+                return `${base.origin}${rerankPath}`;
+            }
+
+            return `${this.baseUrl}${rerankPath}`;
+        } catch {
+            if (this.baseUrl.toLowerCase().endsWith(this.rerankPath.toLowerCase())) {
+                return this.baseUrl;
+            }
+            return `${this.baseUrl}${this.rerankPath}`;
+        }
+    }
+
     private buildCandidateUrls(): string[] {
-        const pathCandidates = [this.rerankPath];
-        const baseUrlHasVersionSegment = /\/v\d+(?:\/|$)/i.test(this.baseUrl);
+        return [this.buildRerankUrl()];
+    }
 
-        if (this.rerankPath === '/rerank' && !baseUrlHasVersionSegment) {
-            pathCandidates.push('/v1/rerank');
+    private getModelListBaseUrl(): string {
+        try {
+            const base = new URL(this.baseUrl);
+            const basePath = base.pathname.replace(/\/+$/, '');
+            const rerankPath = this.rerankPath.toLowerCase();
+            if (basePath.toLowerCase() === rerankPath) {
+                return base.origin;
+            }
+            if (basePath.toLowerCase().endsWith(rerankPath)) {
+                return `${base.origin}${basePath.slice(0, basePath.length - this.rerankPath.length)}`.replace(/\/+$/, '');
+            }
+        } catch {
+            const lowerBase = this.baseUrl.toLowerCase();
+            const lowerPath = this.rerankPath.toLowerCase();
+            if (lowerBase.endsWith(lowerPath)) {
+                return this.baseUrl.slice(0, this.baseUrl.length - this.rerankPath.length).replace(/\/+$/, '');
+            }
         }
-        if (this.rerankPath === '/v1/rerank' && /\/v1$/i.test(this.baseUrl)) {
-            pathCandidates.push('/rerank');
-        }
-
-        return Array.from(new Set(pathCandidates.map((path: string) => `${this.baseUrl}${path}`)));
+        return this.baseUrl;
     }
 
     private withCustomParams(payload: Record<string, unknown>): Record<string, unknown> {
@@ -66,7 +104,11 @@ export class CustomRerankProvider implements LLMProvider {
     }
 
     private buildPayloadVariants(req: RerankRequest): Array<Record<string, unknown>> {
-        const model = req.model || this.model || undefined;
+        const model = String(req.model || this.model || '').trim();
+        if (!model) {
+            throw new Error('Rerank 请求缺少 model。请在资源配置或路由分配中设置 rerank model。');
+        }
+
         const variants: Array<Record<string, unknown>> = [
             this.withCustomParams({
                 model,
@@ -83,11 +125,13 @@ export class CustomRerankProvider implements LLMProvider {
             this.withCustomParams({
                 model,
                 query: req.query,
+                documents: req.docs,
                 docs: req.docs,
                 topK: req.topK,
             }),
             this.withCustomParams({
                 model,
+                query: req.query,
                 input: req.query,
                 documents: req.docs,
                 top_n: req.topK,
@@ -174,7 +218,7 @@ export class CustomRerankProvider implements LLMProvider {
         }
 
         const detail = errors.slice(0, 4).join(' | ');
-        throw new Error(`Rerank 请求失败：未匹配到兼容接口或返回格式异常。请检查 Rerank 路径与服务协议。${detail ? ` 详情：${detail}` : ''}`);
+        throw new Error(`Rerank 请求失败：未匹配到兼容接口或返回格式异常。请检查 Base URL 与服务协议。${detail ? ` 详情：${detail}` : ''}`);
     }
 
     async request(_req: LLMRequest): Promise<LLMResponse> {
@@ -211,6 +255,35 @@ export class CustomRerankProvider implements LLMProvider {
     }
 
     async listModels(): Promise<ProviderModelListResult> {
-        return { ok: true, models: [], message: '重排资源不支持获取模型列表' };
+        try {
+            const res = await fetch(`${this.getModelListBaseUrl()}/models`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${this.apiKey}` },
+            });
+
+            if (!res.ok) {
+                const text = await res.text().catch(() => '');
+                return { ok: false, models: [], message: `获取模型列表失败 (${res.status})`, detail: text };
+            }
+
+            const json = await res.json();
+            const list = Array.isArray(json?.data)
+                ? json.data
+                : Array.isArray(json?.models)
+                    ? json.models
+                    : Array.isArray(json)
+                        ? json
+                        : [];
+            const models = list.map((m: any, index: number) => {
+                const rawId = m?.id ?? m?.model ?? m?.name ?? m?.value;
+                const id = String(rawId ?? `model-${index + 1}`);
+                return { id, label: String(m?.id ?? m?.model ?? m?.name ?? id) };
+            });
+
+            return { ok: true, models, message: `共 ${models.length} 个模型` };
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            return { ok: false, models: [], message: `网络错误: ${msg}`, errorCode: 'NETWORK_ERROR', detail: msg };
+        }
     }
 }

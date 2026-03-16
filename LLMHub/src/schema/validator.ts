@@ -107,6 +107,132 @@ function normalizePatchOp(value: unknown): 'add' | 'replace' | 'remove' | null {
     return null;
 }
 
+function normalizeTemplateFieldInput(item: unknown, fallbackKey?: string): Record<string, any> | null {
+    if (typeof item === 'string') {
+        const key = item.trim();
+        if (!key) return null;
+        return {
+            key,
+            label: key,
+            tier: 'extension',
+        };
+    }
+    if (!isRecord(item)) return null;
+    const key = String(item.key ?? item.name ?? fallbackKey ?? '').trim();
+    if (!key) return null;
+    const label = String(item.label ?? item.title ?? key).trim() || key;
+    const tierRaw = String(item.tier ?? 'extension').trim().toLowerCase();
+    const tier = tierRaw === 'core' ? 'core' : 'extension';
+    return {
+        key,
+        label,
+        tier,
+        ...(item.description ? { description: String(item.description) } : {}),
+        ...(item.fillSpec ? { fillSpec: String(item.fillSpec) } : {}),
+        ...(item.isPrimaryKey === true ? { isPrimaryKey: true } : {}),
+    };
+}
+
+function normalizeTemplateTableInput(item: unknown): Record<string, any> | null {
+    if (!isRecord(item)) return null;
+    const key = String(item.key ?? item.name ?? '').trim();
+    if (!key) return null;
+    const label = String(item.label ?? item.title ?? key).trim() || key;
+    const primaryKeyField = String(item.primaryKeyField ?? item.primaryKey ?? 'id').trim() || 'id';
+    const rawFields = Array.isArray(item.fields) ? item.fields : [];
+    const fields = rawFields
+        .map((field: unknown): Record<string, any> | null => normalizeTemplateFieldInput(field))
+        .filter((field: Record<string, any> | null): field is Record<string, any> => field != null);
+
+    if (!fields.some((field: Record<string, any>) => field.key === primaryKeyField)) {
+        fields.unshift({
+            key: primaryKeyField,
+            label: primaryKeyField,
+            tier: 'core',
+            isPrimaryKey: true,
+        });
+    }
+
+    return {
+        key,
+        label,
+        primaryKeyField,
+        isBase: item.isBase === true,
+        fields,
+        ...(item.description ? { description: String(item.description) } : {}),
+    };
+}
+
+function normalizeTemplateFactTypeInput(item: unknown): Record<string, any> | null {
+    if (!isRecord(item)) return null;
+    const type = String(item.type || '').trim();
+    const pathPattern = String(item.pathPattern || '').trim();
+    if (!type || !pathPattern) return null;
+    const slots = asArray(item.slots).map((slot: unknown) => String(slot || '').trim()).filter(Boolean);
+    return {
+        type,
+        pathPattern,
+        slots,
+        ...(item.defaultInjection ? { defaultInjection: String(item.defaultInjection) } : {}),
+    };
+}
+
+export function normalizeWorldTemplateInput(input: unknown): unknown {
+    if (!isRecord(input)) {
+        return input;
+    }
+
+    const normalizedTables: Record<string, any>[] = [];
+    if (Array.isArray(input.tables)) {
+        normalizedTables.push(
+            ...input.tables
+                .map((table: unknown): Record<string, any> | null => normalizeTemplateTableInput(table))
+                .filter((table: Record<string, any> | null): table is Record<string, any> => table != null),
+        );
+    }
+
+    if (normalizedTables.length === 0 && isRecord(input.entities)) {
+        for (const [entityKey, entityValue] of Object.entries(input.entities)) {
+            if (!isRecord(entityValue)) continue;
+            const primaryKeyField = String(entityValue.primaryKey || entityValue.primaryKeyField || 'id').trim() || 'id';
+            const rawFields = Array.isArray(entityValue.fields) ? entityValue.fields : [];
+            const fields = rawFields
+                .map((field: unknown): Record<string, any> | null => normalizeTemplateFieldInput(field))
+                .filter((field: Record<string, any> | null): field is Record<string, any> => field != null);
+            if (!fields.some((field: Record<string, any>) => field.key === primaryKeyField)) {
+                fields.unshift({
+                    key: primaryKeyField,
+                    label: primaryKeyField,
+                    tier: 'core',
+                    isPrimaryKey: true,
+                });
+            }
+            normalizedTables.push({
+                key: entityKey,
+                label: entityKey,
+                primaryKeyField,
+                isBase: false,
+                fields,
+            });
+        }
+    }
+
+    const factTypes = asArray(input.factTypes)
+        .map((item: unknown): Record<string, any> | null => normalizeTemplateFactTypeInput(item))
+        .filter((item: Record<string, any> | null): item is Record<string, any> => item != null);
+
+    return {
+        ...input,
+        worldType: ['fantasy', 'urban', 'custom'].includes(String(input.worldType || '').trim())
+            ? input.worldType
+            : 'custom',
+        ...(normalizedTables.length > 0 ? { tables: normalizedTables } : {}),
+        ...(factTypes.length > 0 ? { factTypes } : {}),
+        extractPolicies: isRecord(input.extractPolicies) ? input.extractPolicies : {},
+        injectionLayout: isRecord(input.injectionLayout) ? input.injectionLayout : {},
+    };
+}
+
 function normalizeKeywords(value: unknown): string[] | undefined {
     if (Array.isArray(value)) {
         const items = value.map((item: unknown) => String(item || '').trim()).filter(Boolean);
@@ -276,6 +402,24 @@ export const TemplateEntitySchema = z.object({
     indexes: z.array(z.string()).optional().describe('可选：建索引加快搜索的字段名'),
 });
 
+export const TemplateTableFieldSchema = z.object({
+    key: z.string().describe('字段 key'),
+    label: z.string().describe('字段标签'),
+    tier: z.enum(['core', 'extension']).describe('字段层级'),
+    description: z.string().optional().describe('字段说明'),
+    fillSpec: z.string().optional().describe('填充规范'),
+    isPrimaryKey: z.boolean().optional().describe('是否主键字段'),
+});
+
+export const TemplateTableSchema = z.object({
+    key: z.string().describe('表 key'),
+    label: z.string().describe('表标签'),
+    isBase: z.boolean().optional().describe('是否基础表'),
+    primaryKeyField: z.string().describe('主键字段'),
+    fields: z.array(TemplateTableFieldSchema).describe('表字段'),
+    description: z.string().optional().describe('表说明'),
+});
+
 export const TemplateFactTypeSchema = z.object({
     type: z.string().describe('事实类型的名称 (例如 user_profile, relationship)'),
     pathPattern: z.string().describe('向统一状态树(StateManager)写值时的路径规则，可以使用 :id 等占位'),
@@ -287,10 +431,21 @@ export const WorldTemplateSchema = z.object({
     templateId: z.string().describe('模板的唯一业务哈希。如果没法给就用 uuid'),
     name: z.string().describe('所提取这套字典模板的名字'),
     worldType: z.enum(['fantasy', 'urban', 'custom']).describe('世界风格定位，预置选择或 custom'),
-    entities: z.record(z.string(), TemplateEntitySchema).describe('字典里包含的重要客观实体列表，如 Characters, Locations等'),
+    entities: z.record(z.string(), TemplateEntitySchema).optional().describe('旧版实体字典（兼容字段）'),
+    tables: z.array(TemplateTableSchema).optional().describe('聊天级多表模板定义'),
     factTypes: z.array(TemplateFactTypeSchema).optional().describe('基于实体的进一步状态树类型映射，大模型可选返回'),
     extractPolicies: z.record(z.string(), z.any()).describe('针对这个世界推荐的记忆提取抽取参数配置'),
     injectionLayout: z.record(z.string(), z.any()).describe('推荐该世界下的 Token 分区占用（可选）'),
+}).superRefine((value, ctx) => {
+    const hasTables = Array.isArray(value.tables) && value.tables.length > 0;
+    const hasEntities = value.entities && Object.keys(value.entities).length > 0;
+    if (!hasTables && !hasEntities) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['tables'],
+            message: '模板必须包含 tables 或 entities 之一',
+        });
+    }
 });
 
 // ==========================================

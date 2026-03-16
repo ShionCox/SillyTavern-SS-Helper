@@ -140,6 +140,47 @@ function buildStyleSeed(systemPrompt: string, instruct: string, jailbreak: strin
     };
 }
 
+function buildLorebookSeed(activeLorebooks: string[], worldText: string): Array<{ book: string; hash: string; snippets: string[] }> {
+    const snippets = splitSeedValues(worldText).slice(0, 8);
+    return activeLorebooks
+        .map((book: string): string => normalizeText(book))
+        .filter(Boolean)
+        .slice(0, 12)
+        .map((book: string) => ({
+            book,
+            hash: hashString(book.toLowerCase()),
+            snippets: snippets.slice(0, 3),
+        }));
+}
+
+function buildCharacterAnchors(input: {
+    roleKey: string;
+    displayName: string;
+    cardName: string;
+    identitySeed: IdentitySeed;
+    firstMessage: string;
+}): Array<{ anchorId: string; label: string; value: string; confidence: number }> {
+    const anchors: Array<{ anchorId: string; label: string; value: string; confidence: number }> = [];
+    const pushAnchor = (label: string, value: string, confidence: number): void => {
+        const normalized = normalizeText(value);
+        if (!normalized) {
+            return;
+        }
+        anchors.push({
+            anchorId: `${label}:${hashString(`${label}|${normalized}`)}`,
+            label,
+            value: normalized,
+            confidence: Math.max(0, Math.min(1, confidence)),
+        });
+    };
+    pushAnchor('role_key', input.roleKey, 0.95);
+    pushAnchor('display_name', input.displayName, 0.95);
+    pushAnchor('card_name', input.cardName, 0.85);
+    pushAnchor('identity', input.identitySeed.identity[0] ?? '', 0.75);
+    pushAnchor('first_message', input.firstMessage, 0.65);
+    return anchors.slice(0, 12);
+}
+
 export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResult {
     const context = getSillyTavernContextEvent();
     if (!context) {
@@ -229,6 +270,14 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
     );
     const worldSeed = buildWorldSeed(worldText, 'sillytavern.context.world');
     const styleSeed = buildStyleSeed(systemPrompt, instruct, jailbreak);
+    const lorebookSeed = buildLorebookSeed(activeLorebooks, worldText);
+    const characterAnchors = buildCharacterAnchors({
+        roleKey: role.roleKey,
+        displayName: role.displayName,
+        cardName: normalizeText(characterCore.cardName),
+        identitySeed,
+        firstMessage,
+    });
 
     const seed: ChatSemanticSeed = {
         collectedAt: Date.now(),
@@ -239,7 +288,9 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
         jailbreak,
         instruct,
         activeLorebooks,
+        lorebookSeed,
         groupMembers,
+        characterAnchors,
         presetStyle,
         identitySeed,
         worldSeed,
@@ -260,7 +311,9 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
         jailbreak,
         instruct,
         activeLorebooks,
+        lorebookSeed,
         groupMembers,
+        characterAnchors,
         presetStyle,
         identitySeed,
         worldSeed,

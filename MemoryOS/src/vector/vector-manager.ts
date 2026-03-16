@@ -48,7 +48,7 @@ export class VectorManager {
      * @param bookId 可选的来源 bookId（用于后续按书检索）
      * @returns 写入的 chunkId 列表
      */
-    public async indexText(text: string, bookId?: string): Promise<string[]> {
+    public async indexText(text: string, bookId?: string, metadata?: Record<string, unknown>): Promise<string[]> {
         const chunks = this.splitIntoChunks(text, this.chunkSize);
         if (chunks.length === 0) return [];
 
@@ -75,7 +75,7 @@ export class VectorManager {
                     chatKey: this.chatKey,
                     bookId,
                     content: chunks[i],
-                    metadata: { index: i },
+                    metadata: { index: i, ...(metadata ?? {}) },
                     createdAt: now,
                 });
 

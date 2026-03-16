@@ -278,10 +278,11 @@ export class OpenAIProvider implements LLMProvider {
 
             const json = await res.json();
             const list = Array.isArray(json?.data) ? json.data : [];
-            const models = list
-                .map((m: any) => ({ id: String(m.id ?? ''), label: m.id }))
-                .filter((m: { id: string }) => m.id)
-                .sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id));
+            const models = list.map((m: any, index: number) => {
+                const rawId = m?.id ?? m?.model ?? m?.name ?? m?.value;
+                const id = String(rawId ?? `model-${index + 1}`);
+                return { id, label: String(m?.id ?? m?.model ?? m?.name ?? id) };
+            });
 
             return { ok: true, models, message: `共 ${models.length} 个模型` };
         } catch (error: unknown) {

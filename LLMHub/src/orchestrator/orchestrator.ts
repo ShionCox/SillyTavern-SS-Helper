@@ -49,6 +49,8 @@ export class RequestOrchestrator {
     private displayCallback: ((record: RequestRecord, result: LLMRunResult<any>) => void) | null = null;
     /** 外部注入的运行中覆层回调 */
     private pendingDisplayCallback: ((record: RequestRecord) => void) | null = null;
+    /** 澶栭儴娉ㄥ叆鐨勫綊妗ｇ洃鍚洖璋?*/
+    private archiveCallback: ((record: RequestRecord) => void) | null = null;
     /** 外部注入的 scope 变更监听注册 */
     private scopeChangeCallback: ((listener: (scope: RequestScope) => void) => () => void) | null = null;
 
@@ -73,6 +75,10 @@ export class RequestOrchestrator {
 
     setPendingDisplayCallback(cb: (record: RequestRecord) => void): void {
         this.pendingDisplayCallback = cb;
+    }
+
+    setArchiveCallback(cb: (record: RequestRecord) => void): void {
+        this.archiveCallback = cb;
     }
 
     setScopeChangeCallback(cb: (listener: (scope: RequestScope) => void) => () => void): void {
@@ -500,6 +506,13 @@ export class RequestOrchestrator {
         this.history.push(record);
         if (this.history.length > this.MAX_HISTORY) {
             this.history.shift();
+        }
+        if (this.archiveCallback) {
+            try {
+                this.archiveCallback(record);
+            } catch (error) {
+                logger.warn(`璇锋眰 ${record.requestId} 褰掓。鍥炶皟澶辫触`, error);
+            }
         }
     }
 }

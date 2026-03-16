@@ -66,6 +66,7 @@ export {
   findFirstTavernPromptSystemIndexEvent,
   findLastTavernPromptSystemIndexEvent,
   findLastTavernPromptUserIndexEvent,
+  getTavernMessageTextEvent,
   getTavernPromptMessageTextEvent,
   insertTavernPromptSystemMessageEvent,
   isTavernPromptSystemMessageEvent,

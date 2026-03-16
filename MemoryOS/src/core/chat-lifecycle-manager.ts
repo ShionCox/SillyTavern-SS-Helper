@@ -1,9 +1,11 @@
+import Dexie from 'dexie';
 import {
     db,
     deleteSdkChatDocument,
     deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     invalidateSdkChatDataCache,
+    readSdkPluginChatState,
 } from '../../../SDK/db';
 import {
     buildTavernChatScopedKeyEvent,
@@ -14,9 +16,10 @@ import {
     withChatIdForScopeEvent,
 } from '../../../SDK/tavern';
 import { Logger } from '../../../SDK/logger';
-import { clearMemoryChatData } from '../db/db';
+import { archiveMemoryChat, clearMemoryChatData } from '../db/db';
+import type { DeletionStrategy } from '../types';
 
-const logger = new Logger('记忆聊天生命周期');
+const logger = new Logger('MemoryChatLifecycle');
 
 const LLMHUB_PLUGIN_ID = 'stx_llmhub';
 const MEMORYOS_PLUGIN_ID = 'stx_memory_os';
@@ -56,11 +59,6 @@ export class ChatLifecycleManager {
     private purgingChatKeys = new Set<string>();
     private reconcilePromise: Promise<string[]> | null = null;
 
-    /**
-     * 功能：根据当前宿主作用域与删除事件 payload 反推出 chatKey。
-     * @param chatIdRaw 宿主事件传入的 chatId / 文件名。
-     * @returns 结构化 chatKey，无法解析时返回空字符串。
-     */
     resolveCurrentScopeChatKey(chatIdRaw: unknown): string {
         const scope = getTavernContextSnapshotEvent();
         const normalizedChatId = normalizeTavernChatIdEvent(chatIdRaw, '');
@@ -70,27 +68,16 @@ export class ChatLifecycleManager {
         return buildTavernChatScopedKeyEvent(withChatIdForScopeEvent(scope, normalizedChatId));
     }
 
-    /**
-     * 功能：处理宿主发出的聊天删除事件，执行 MemoryOS / LLMHub 清理闭环。
-     * @param chatIdRaw 被删除聊天的宿主 chatId。
-     * @param reason 清理原因。
-     * @returns 实际清理的 chatKey；未命中时返回 null。
-     */
     async purgeDeletedChatFromHost(chatIdRaw: unknown, reason: string = 'host_deleted'): Promise<string | null> {
         const chatKey = this.resolveCurrentScopeChatKey(chatIdRaw);
         if (!chatKey) {
-            logger.warn(`宿主删除事件未能解析 chatKey, payload=${String(chatIdRaw ?? '')}`);
+            logger.warn(`Host chat delete event could not resolve chatKey. payload=${String(chatIdRaw ?? '')}`);
             return null;
         }
-        await this.purgeChatKey(chatKey, reason);
+        await this.applyChatDeletionLifecycle(chatKey, reason);
         return chatKey;
     }
 
-    /**
-     * 功能：按当前作用域对账宿主聊天列表与本地缓存，清理已失联聊天。
-     * @param reason 触发原因。
-     * @returns 被清理的 chatKey 列表。
-     */
     async reconcileCurrentScope(reason: string = 'host_scope_reconcile'): Promise<string[]> {
         if (this.reconcilePromise) {
             return this.reconcilePromise;
@@ -106,7 +93,7 @@ export class ChatLifecycleManager {
             const hostChatKeySet = new Set(
                 (Array.isArray(hostChats) ? hostChats : [])
                     .map((item: any): string => buildTavernChatScopedKeyEvent(item.locator))
-                    .filter(Boolean)
+                    .filter(Boolean),
             );
 
             const [documents, memoryStates, llmStates] = await Promise.all([
@@ -135,12 +122,12 @@ export class ChatLifecycleManager {
                 if (hostChatKeySet.has(chatKey)) {
                     continue;
                 }
-                await this.purgeChatKey(chatKey, `${reason}:orphaned`);
+                await this.applyChatDeletionLifecycle(chatKey, `${reason}:orphaned`);
                 purgedChatKeys.push(chatKey);
             }
 
             if (purgedChatKeys.length > 0) {
-                logger.info(`已对账清理 ${purgedChatKeys.length} 个失联聊天`, purgedChatKeys);
+                logger.info(`Reconcile removed ${purgedChatKeys.length} orphan chats`, purgedChatKeys);
             }
             return purgedChatKeys;
         })().finally((): void => {
@@ -150,7 +137,7 @@ export class ChatLifecycleManager {
         return this.reconcilePromise;
     }
 
-    private async purgeChatKey(chatKey: string, reason: string): Promise<void> {
+    async applyChatDeletionLifecycle(chatKey: string, reason: string): Promise<void> {
         const normalizedChatKey = String(chatKey ?? '').trim();
         if (!normalizedChatKey || this.purgingChatKeys.has(normalizedChatKey)) {
             return;
@@ -158,38 +145,200 @@ export class ChatLifecycleManager {
 
         this.purgingChatKeys.add(normalizedChatKey);
         try {
-            const currentMemory = (window as any)?.STX?.memory;
-            const isCurrentRuntimeChat = typeof currentMemory?.getChatKey === 'function'
-                && String(currentMemory.getChatKey() ?? '').trim() === normalizedChatKey;
-
-            if (isCurrentRuntimeChat) {
-                try {
-                    await currentMemory?.chatState?.destroy?.();
-                } catch (error) {
-                    logger.warn(`销毁当前聊天 runtime 失败 chatKey=${normalizedChatKey}`, error);
-                }
-                try {
-                    currentMemory?.template?.destroy?.();
-                } catch {
-                    // noop
-                }
-                if ((window as any)?.STX?.memory === currentMemory) {
-                    (window as any).STX.memory = null;
-                }
+            const strategy = await this.resolveDeletionStrategy(normalizedChatKey);
+            await this.flushRuntimeAndDetach(normalizedChatKey);
+            await this.clearHostFacingSurfaces(normalizedChatKey);
+            await this.clearLlmHubArtifacts(normalizedChatKey);
+            if (strategy === 'immediate_purge') {
+                await clearMemoryChatData(normalizedChatKey, { includeAudit: true });
+            } else {
+                await archiveMemoryChat(normalizedChatKey, reason || 'soft_delete');
             }
-
-            await clearMemoryChatData(normalizedChatKey, { includeAudit: true });
-            await Promise.all([
-                deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, normalizedChatKey),
-                deleteSdkPluginChatRecords(LLMHUB_PLUGIN_ID, normalizedChatKey),
-                deleteSdkChatDocument(normalizedChatKey),
-            ]);
+            await this.gcOrphanedArtifacts();
             invalidateSdkChatDataCache(normalizedChatKey);
-            logger.info(`聊天删除闭环清理完成 chatKey=${normalizedChatKey}, reason=${reason}`);
+            logger.info(`Deletion lifecycle completed chatKey=${normalizedChatKey}, strategy=${strategy}, reason=${reason}`);
         } catch (error) {
-            logger.error(`聊天删除闭环清理失败 chatKey=${normalizedChatKey}, reason=${reason}`, error);
+            logger.error(`Deletion lifecycle failed chatKey=${normalizedChatKey}, reason=${reason}`, error);
         } finally {
             this.purgingChatKeys.delete(normalizedChatKey);
         }
+    }
+
+    async gcOrphanedArtifacts(): Promise<void> {
+        const [vectorChunks, vectorEmbeddings, vectorMeta, managedStates, managedRecords, documents] = await Promise.all([
+            db.vector_chunks.toArray(),
+            db.vector_embeddings.toArray(),
+            db.vector_meta.toArray(),
+            db.chat_plugin_state.where('pluginId').anyOf(getManagedPluginIds()).toArray(),
+            db.chat_plugin_records.where('pluginId').anyOf(getManagedPluginIds()).toArray(),
+            db.chat_documents.toArray(),
+        ]);
+
+        const chunkIdSet = new Set(vectorChunks.map((row) => String(row.chunkId ?? '').trim()).filter(Boolean));
+        const orphanEmbeddingIds = vectorEmbeddings
+            .filter((row) => !chunkIdSet.has(String(row.chunkId ?? '').trim()))
+            .map((row) => String(row.embeddingId ?? '').trim())
+            .filter(Boolean);
+        if (orphanEmbeddingIds.length > 0) {
+            await db.vector_embeddings.bulkDelete(orphanEmbeddingIds);
+        }
+
+        const documentSet = new Set(documents.map((row) => String(row.chatKey ?? '').trim()).filter(Boolean));
+        const stateKeySet = new Set(
+            managedStates
+                .map((row) => `${String(row.pluginId ?? '').trim()}::${String(row.chatKey ?? '').trim()}`)
+                .filter((value) => value !== '::'),
+        );
+        const candidateChatKeys = new Set<string>();
+        for (const row of [...vectorChunks, ...vectorMeta, ...managedStates, ...managedRecords, ...documents]) {
+            const chatKey = String((row as { chatKey?: unknown }).chatKey ?? '').trim();
+            if (chatKey) {
+                candidateChatKeys.add(chatKey);
+            }
+        }
+
+        const coreExistsCache = new Map<string, boolean>();
+        const hasCoreData = async (chatKey: string): Promise<boolean> => {
+            if (coreExistsCache.has(chatKey)) {
+                return coreExistsCache.get(chatKey) === true;
+            }
+            const [eventCount, factCount, worldStateCount, summaryCount, templateCount, metaExists, worldInfoCount, bindingCount] = await Promise.all([
+                db.events.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).count(),
+                db.facts.where('[chatKey+updatedAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).count(),
+                db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).count(),
+                db.summaries.where('[chatKey+level+createdAt]').between([chatKey, Dexie.minKey, Dexie.minKey], [chatKey, Dexie.maxKey, Dexie.maxKey]).count(),
+                db.templates.where('[chatKey+createdAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).count(),
+                db.meta.get(chatKey).then((row) => Boolean(row)),
+                db.worldinfo_cache.where('chatKey').equals(chatKey).count(),
+                db.template_bindings.where('chatKey').equals(chatKey).count(),
+            ]);
+            const exists = eventCount > 0
+                || factCount > 0
+                || worldStateCount > 0
+                || summaryCount > 0
+                || templateCount > 0
+                || metaExists
+                || worldInfoCount > 0
+                || bindingCount > 0;
+            coreExistsCache.set(chatKey, exists);
+            return exists;
+        };
+
+        for (const chatKey of candidateChatKeys) {
+            const [coreExists, hasDocument] = await Promise.all([
+                hasCoreData(chatKey),
+                Promise.resolve(documentSet.has(chatKey)),
+            ]);
+            if (!coreExists && !hasDocument) {
+                await Promise.all([
+                    db.vector_chunks.where('chatKey').equals(chatKey).delete(),
+                    db.vector_embeddings.where('chatKey').equals(chatKey).delete(),
+                    db.vector_meta.where('chatKey').equals(chatKey).delete(),
+                    deleteSdkPluginChatState(MEMORYOS_PLUGIN_ID, chatKey),
+                    deleteSdkPluginChatRecords(MEMORYOS_PLUGIN_ID, chatKey),
+                    deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey),
+                    deleteSdkPluginChatRecords(LLMHUB_PLUGIN_ID, chatKey),
+                ]);
+            }
+        }
+
+        for (const document of documents) {
+            const chatKey = String(document.chatKey ?? '').trim();
+            if (!chatKey) {
+                continue;
+            }
+            const nextSignals = { ...(document.shared?.signals ?? {}) };
+            let changed = false;
+            for (const pluginId of getManagedPluginIds()) {
+                const stateKey = `${pluginId}::${chatKey}`;
+                if (!stateKeySet.has(stateKey) && Object.prototype.hasOwnProperty.call(nextSignals, pluginId)) {
+                    delete nextSignals[pluginId];
+                    changed = true;
+                }
+                if (!stateKeySet.has(stateKey)) {
+                    await deleteSdkPluginChatRecords(pluginId, chatKey);
+                }
+            }
+            if (changed) {
+                await db.chat_documents.update(chatKey, {
+                    shared: {
+                        ...(document.shared ?? { labels: [], flags: {}, notes: '', signals: {} }),
+                        signals: nextSignals,
+                    },
+                });
+            }
+        }
+
+        const chunkChatBookKeySet = new Set(
+            vectorChunks.map((row) => `${String(row.chatKey ?? '').trim()}::${String(row.bookId ?? '').trim()}`),
+        );
+        const orphanMetaKeys = vectorMeta
+            .filter((row) => !chunkChatBookKeySet.has(`${String(row.chatKey ?? '').trim()}::${String(row.bookId ?? '').trim()}`))
+            .map((row) => String(row.metaKey ?? '').trim())
+            .filter(Boolean);
+        if (orphanMetaKeys.length > 0) {
+            await db.vector_meta.bulkDelete(orphanMetaKeys);
+        }
+    }
+
+    private async resolveDeletionStrategy(chatKey: string): Promise<DeletionStrategy> {
+        const row = await readSdkPluginChatState(MEMORYOS_PLUGIN_ID, chatKey).catch(() => null);
+        const state = (row?.state ?? {}) as Record<string, unknown>;
+        const retentionPolicy = (state.retentionPolicy ?? {}) as Record<string, unknown>;
+        const chatProfile = (state.chatProfile ?? {}) as Record<string, unknown>;
+        const strategy = String(retentionPolicy.deletionStrategy ?? chatProfile.deletionStrategy ?? 'soft_delete').trim();
+        return strategy === 'immediate_purge' ? 'immediate_purge' : 'soft_delete';
+    }
+
+    private async flushRuntimeAndDetach(chatKey: string): Promise<void> {
+        const currentMemory = (window as any)?.STX?.memory;
+        const isCurrentRuntimeChat = typeof currentMemory?.getChatKey === 'function'
+            && String(currentMemory.getChatKey() ?? '').trim() === chatKey;
+
+        if (!isCurrentRuntimeChat) {
+            return;
+        }
+
+        try {
+            await currentMemory?.chatState?.flush?.();
+        } catch (error) {
+            logger.warn(`Failed to flush runtime chat state before deletion. chatKey=${chatKey}`, error);
+        }
+        try {
+            await currentMemory?.chatState?.destroy?.();
+        } catch (error) {
+            logger.warn(`Failed to destroy runtime chat state. chatKey=${chatKey}`, error);
+        }
+        try {
+            currentMemory?.template?.destroy?.();
+        } catch {
+            // noop
+        }
+        if ((window as any)?.STX?.memory === currentMemory) {
+            (window as any).STX.memory = null;
+        }
+    }
+
+    private async clearHostFacingSurfaces(chatKey: string): Promise<void> {
+        const document = await db.chat_documents.get(chatKey);
+        if (document?.shared?.signals) {
+            const nextSignals = { ...(document.shared.signals ?? {}) };
+            delete nextSignals[MEMORYOS_PLUGIN_ID];
+            delete nextSignals[LLMHUB_PLUGIN_ID];
+            await db.chat_documents.update(chatKey, {
+                shared: {
+                    ...document.shared,
+                    signals: nextSignals,
+                },
+            });
+        }
+        await deleteSdkChatDocument(chatKey);
+    }
+
+    private async clearLlmHubArtifacts(chatKey: string): Promise<void> {
+        await Promise.all([
+            deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey),
+            deleteSdkPluginChatRecords(LLMHUB_PLUGIN_ID, chatKey),
+        ]);
     }
 }

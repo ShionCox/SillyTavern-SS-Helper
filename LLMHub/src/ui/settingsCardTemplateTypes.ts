@@ -120,5 +120,15 @@ export interface LLMHubSettingsIds {
     queueSnapshotListId: string;
     queueRefreshBtnId: string;
     silentPermissionsListId: string;
-    recentHistoryListId: string;
+    requestLogOpenBtnId: string;
+    requestLogModalId: string;
+    requestLogModalCloseId: string;
+    requestLogChatKeyId: string;
+    requestLogCountId: string;
+    requestLogSearchId: string;
+    requestLogStateFilterId: string;
+    requestLogRefreshBtnId: string;
+    requestLogClearBtnId: string;
+    requestLogListId: string;
+    requestLogDetailId: string;
 }

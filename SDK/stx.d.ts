@@ -602,12 +602,17 @@ export interface LogicalChatView {
     viewHash: string;
     snapshotHash: string;
     mutationKinds: ChatMutationKind[];
+    activeMessageIds: string[];
+    invalidatedMessageIds: string[];
+    repairAnchorMessageId?: string | null;
     rebuiltAt: number;
 }
 
 export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' | 'block';
 
 export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
+
+export type ColdStartStage = 'seeded' | 'prompt_primed' | 'extract_primed';
 
 export interface SeedSourceTrace {
     field: string;
@@ -649,7 +654,18 @@ export interface ChatSemanticSeed {
     jailbreak: string;
     instruct: string;
     activeLorebooks: string[];
+    lorebookSeed: Array<{
+        book: string;
+        hash: string;
+        snippets: string[];
+    }>;
     groupMembers: string[];
+    characterAnchors: Array<{
+        anchorId: string;
+        label: string;
+        value: string;
+        confidence: number;
+    }>;
     presetStyle: string;
     identitySeed: IdentitySeed;
     worldSeed: WorldSeed;
@@ -722,6 +738,33 @@ export interface ChatLifecycleState {
     lastMutationAt: number;
     lastMutationSource: string;
     mutationKinds: ChatMutationKind[];
+}
+
+export interface MutationRepairTask {
+    taskId: string;
+    viewHash: string;
+    snapshotHash: string;
+    mutationKinds: ChatMutationKind[];
+    invalidatedMessageIds: string[];
+    activeMessageIds: string[];
+    repairAnchorMessageId?: string | null;
+    repairGeneration: number;
+    enqueuedAt: number;
+    attempts: number;
+    status: 'pending' | 'running' | 'failed';
+    lastError?: string;
+}
+
+export interface MemoryOSChatState {
+    logicalChatView?: LogicalChatView;
+    semanticSeed?: ChatSemanticSeed;
+    coldStartFingerprint?: string;
+    coldStartStage?: ColdStartStage;
+    coldStartPrimedAt?: number;
+    mutationRepairQueue?: MutationRepairTask[];
+    lastMutationRepairViewHash?: string;
+    lastMutationRepairAt?: number;
+    mutationRepairGeneration?: number;
 }
 
 export interface RowRefResolution {
@@ -934,6 +977,9 @@ export interface MemorySDK {
         setAutoSchemaPolicy(policy: Partial<AutoSchemaPolicy>): Promise<void>;
         bootstrapSemanticSeed(): Promise<void>;
         getSemanticSeed(): Promise<ChatSemanticSeed | null>;
+        getColdStartStage(): Promise<ColdStartStage | null>;
+        primeColdStartPrompt(reason?: string): Promise<boolean>;
+        primeColdStartExtract(reason?: string): Promise<boolean>;
         getLorebookDecision(): Promise<LorebookGateDecision | null>;
         getGroupMemory(): Promise<GroupMemoryState | null>;
         getPromptInjectionProfile(): Promise<PromptInjectionProfile>;

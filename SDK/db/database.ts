@@ -65,7 +65,7 @@ export interface DBFact {
     path?: string;
     value: any;
     confidence?: number;
-    provenance?: any;
+    provenance?: DBFactProvenance;
     updatedAt: number;
 }
 
@@ -87,7 +87,7 @@ export interface DBSummary {
     keywords?: string[];
     range?: { fromMessageId?: string; toMessageId?: string };
     createdAt: number;
-    source?: { extractor?: string; provider?: string };
+    source?: DBSummarySource;
 }
 
 export interface DBTemplate {
@@ -166,8 +166,42 @@ export interface DBVectorChunk {
     chatKey: string;
     bookId?: string;
     content: string;
-    metadata?: any;
+    metadata?: DBVectorChunkMetadata;
     createdAt: number;
+}
+
+export interface DBDerivationSource {
+    kind?: string;
+    reason?: string;
+    viewHash?: string;
+    snapshotHash?: string;
+    messageIds?: string[];
+    anchorMessageId?: string;
+    mutationKinds?: string[];
+    repairGeneration?: number;
+    ts?: number;
+}
+
+export interface DBFactProvenance {
+    extractor?: string;
+    provider?: string;
+    pluginId?: string;
+    fingerprint?: string;
+    source?: DBDerivationSource;
+    [key: string]: unknown;
+}
+
+export interface DBSummarySource {
+    extractor?: string;
+    provider?: string;
+    provenance?: DBFactProvenance;
+    [key: string]: unknown;
+}
+
+export interface DBVectorChunkMetadata {
+    index?: number;
+    source?: DBDerivationSource;
+    [key: string]: unknown;
 }
 
 export interface DBVectorEmbedding {

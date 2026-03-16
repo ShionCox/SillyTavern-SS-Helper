@@ -183,6 +183,63 @@ export interface RequestDebugInfo {
     reasonCode?: string;
 }
 
+export interface LLMRequestLogRequestSnapshot {
+    taskKind: CapabilityKind;
+    taskDescription?: string;
+    routeHint?: unknown;
+    budget?: unknown;
+    enqueue?: unknown;
+    schemaSummary?: string;
+    generationInput?: unknown;
+    embeddingTexts?: string[];
+    rerankQuery?: string;
+    rerankDocs?: string[];
+    rerankTopK?: number;
+    metrics?: {
+        messageCount?: number;
+        embeddingTextCount?: number;
+        rerankDocCount?: number;
+    };
+}
+
+export interface LLMRequestLogResponseSnapshot {
+    meta?: Partial<LLMRunMeta>;
+    finalError?: string;
+    reasonCode?: string;
+    validationErrors?: string[];
+    rawResponseText?: string;
+    parsedResponse?: unknown;
+    normalizedResponse?: unknown;
+}
+
+export interface LLMRequestLogEntry {
+    logId: string;
+    requestId: string;
+    chatKey: string;
+    consumer: string;
+    taskId: string;
+    taskDescription?: string;
+    taskKind: CapabilityKind;
+    state: RequestState;
+    queuedAt: number;
+    startedAt?: number;
+    finishedAt?: number;
+    latencyMs?: number;
+    request: LLMRequestLogRequestSnapshot;
+    response: LLMRequestLogResponseSnapshot;
+    truncated?: Record<string, unknown>;
+}
+
+export interface LLMRequestLogQueryOptions {
+    limit?: number;
+    offset?: number;
+    order?: 'asc' | 'desc';
+    state?: RequestState | 'all';
+    search?: string;
+    fromTs?: number;
+    toTs?: number;
+}
+
 /** 内部请求记录 */
 export interface RequestRecord<T = unknown> {
     requestId: string;
@@ -195,6 +252,7 @@ export interface RequestRecord<T = unknown> {
     validity: RequestValidity;
     enqueueOptions: RequestEnqueueOptions;
     scope?: RequestScope;
+    chatKey?: string;
     queuedAt: number;
     startedAt?: number;
     finishedAt?: number;
@@ -204,6 +262,7 @@ export interface RequestRecord<T = unknown> {
     resolveOverlay?: () => void;
     meta?: LLMRunMeta;
     debug?: RequestDebugInfo;
+    requestLogSnapshot?: LLMRequestLogRequestSnapshot;
 }
 
 // ═══════════════════════════════════════════

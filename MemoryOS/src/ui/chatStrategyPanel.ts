@@ -72,6 +72,24 @@ interface ChatStrategySnapshot {
     overrides: Record<string, unknown>;
 }
 
+interface ReadableStrategyCard {
+    label: string;
+    title: string;
+    detail: string;
+    foot?: string;
+    tone?: 'soft' | 'warning' | 'accent';
+}
+
+interface ReadableStrategyDashboard {
+    meta: string;
+    intent: string;
+    scope: string;
+    role: ReadableStrategyCard;
+    world: ReadableStrategyCard;
+    relation: ReadableStrategyCard;
+    reminder: ReadableStrategyCard;
+}
+
 interface MemoryChatStateApi {
     setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
     setSummaryPolicyOverride?(override: SummaryPolicyOverride): Promise<void>;
@@ -101,12 +119,17 @@ const PANEL_IDS = {
     rootId: 'stx-memoryos-chat-strategy-panel',
     chatSelectId: 'stx-memoryos-chat-strategy-card-chat',
     summaryNameId: 'stx-memoryos-chat-strategy-summary-name',
+    summaryMetaId: 'stx-memoryos-chat-strategy-summary-meta',
     summaryIntentId: 'stx-memoryos-chat-strategy-summary-intent',
     summarySectionsId: 'stx-memoryos-chat-strategy-summary-sections',
     summaryProfileId: 'stx-memoryos-chat-strategy-summary-profile',
     summaryLifecycleId: 'stx-memoryos-chat-strategy-summary-lifecycle',
     summaryMaintenanceId: 'stx-memoryos-chat-strategy-summary-maintenance',
     summaryMaintenanceTextId: 'stx-memoryos-chat-strategy-summary-maintenance-text',
+    summaryRoleId: 'stx-memoryos-chat-strategy-summary-role',
+    summaryWorldId: 'stx-memoryos-chat-strategy-summary-world',
+    summaryRelationId: 'stx-memoryos-chat-strategy-summary-relation',
+    summaryReminderId: 'stx-memoryos-chat-strategy-summary-reminder',
     summaryMaintenanceActionId: 'stx-memoryos-chat-strategy-summary-maintenance-action',
     openBtnId: 'stx-memoryos-chat-strategy-open',
     refreshBtnId: 'stx-memoryos-chat-strategy-refresh-card',
@@ -126,6 +149,10 @@ const EDITOR_IDS = {
     currentIntentId: 'stx-memoryos-chat-strategy-current-intent',
     currentScopeId: 'stx-memoryos-chat-strategy-current-scope',
     sectionsWrapId: 'stx-memoryos-chat-strategy-current-sections',
+    overviewRoleId: 'stx-memoryos-chat-strategy-overview-role',
+    overviewWorldId: 'stx-memoryos-chat-strategy-overview-world',
+    overviewRelationId: 'stx-memoryos-chat-strategy-overview-relation',
+    overviewReminderId: 'stx-memoryos-chat-strategy-overview-reminder',
     presetId: 'stx-memoryos-chat-strategy-preset',
     presetMountId: 'stx-memoryos-chat-strategy-preset-mount',
     saveGlobalPresetBtnId: 'stx-memoryos-chat-strategy-save-global-preset',
@@ -401,7 +428,7 @@ export function ensureChatStrategyPanel(panelHost: HTMLElement): void {
         return;
     }
     const wrapper: HTMLDivElement = document.createElement('div');
-    wrapper.innerHTML = buildCompactPanelMarkup();
+    wrapper.innerHTML = buildCompactPanelMarkupV2();
     const firstElement: Element | null = wrapper.firstElementChild;
     if (firstElement instanceof HTMLElement) {
         panelHost.prepend(firstElement);
@@ -425,7 +452,7 @@ export async function initializeChatStrategyPanel(): Promise<void> {
         selectedChatKey = getCurrentChatKey() || cachedChatOptions[0]?.value || '';
     }
     if (selectedChatKey) {
-        await renderCompactPanelState(selectedChatKey);
+        await renderCompactPanelStateV2(selectedChatKey);
     }
     scheduleAutoLoadChatStrategyPanel();
 }
@@ -462,12 +489,11 @@ export async function openChatStrategyEditor(): Promise<void> {
     const overlay: HTMLDivElement = document.createElement('div');
     overlay.id = EDITOR_IDS.overlayId;
     overlay.className = 'stx-memory-chat-strategy-overlay ui-widget';
-    overlay.innerHTML = buildEditorMarkup();
+    overlay.innerHTML = buildEditorMarkupV2();
     mountThemeHost(overlay);
     document.body.appendChild(overlay);
     document.body.classList.add('stx-memory-chat-strategy-lock-scroll');
 
-    ensureEditorSections(overlay);
     hydrateSharedSelects(overlay);
     applyChatStrategyTooltips();
 
@@ -476,7 +502,7 @@ export async function openChatStrategyEditor(): Promise<void> {
     await syncEditorChatOptions(overlay, activeChatKey);
     bindEditorListeners(overlay);
     if (activeChatKey) {
-        await renderEditorState(overlay, activeChatKey);
+        await renderEditorStateV2(overlay, activeChatKey);
     }
 
     requestAnimationFrame((): void => {
@@ -852,6 +878,505 @@ function buildEditorMarkup(): string {
  * @param overlay 编辑器遮罩层根节点。
  * @returns 无返回值。
  */
+function buildCompactPanelMarkupV2(): string {
+    const selectMarkup: string = buildSharedSelectField({
+        id: PANEL_IDS.chatSelectId,
+        containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+        selectClassName: 'stx-ui-input',
+        triggerClassName: 'stx-ui-input-full',
+        triggerAttributes: {
+            'data-tip': '切换要查看的聊天策略总览。',
+        },
+        options: [{
+            value: '',
+            label: '正在加载聊天...',
+            media: {
+                type: 'icon',
+                iconClassName: 'fa-solid fa-comments',
+            },
+        }],
+    });
+    const openButtonMarkup: string = buildSharedButton({
+        id: PANEL_IDS.openBtnId,
+        label: '打开编辑器',
+        iconClassName: 'fa-solid fa-expand',
+        className: 'stx-memory-chat-strategy-open',
+        attributes: {
+            'data-tip': '打开全屏聊天策略画像编辑器。',
+        },
+    });
+    const refreshButtonMarkup: string = buildSharedButton({
+        id: PANEL_IDS.refreshBtnId,
+        label: '刷新',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-rotate',
+        attributes: {
+            'data-tip': '重新读取当前聊天的状态总览。',
+        },
+    });
+    return `
+      <div id="${PANEL_IDS.rootId}" class="stx-ui-item stx-ui-item-stack stx-memory-chat-strategy-card">
+        <div class="stx-ui-divider">
+          <i class="fa-solid fa-sliders"></i>
+          <span>聊天策略画像</span>
+          <div class="stx-ui-divider-line"></div>
+        </div>
+        <div class="stx-memory-chat-strategy-card-head">
+          <div class="stx-ui-item-main">
+            <div class="stx-ui-item-title">当前聊天总览</div>
+            <div class="stx-ui-item-desc">直接看角色、世界、关系和提醒，不用先理解专业参数。</div>
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-card-toolbar">
+          <label class="stx-memory-chat-strategy-card-field">
+            <span class="stx-memory-chat-strategy-card-label">聊天</span>
+            ${selectMarkup}
+          </label>
+          <div class="stx-memory-chat-strategy-card-actions">
+            ${refreshButtonMarkup}
+            ${openButtonMarkup}
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-dashboard-hero">
+          <div class="stx-memory-chat-strategy-dashboard-copy">
+            <strong id="${PANEL_IDS.summaryNameId}" class="stx-memory-chat-strategy-dashboard-title">未选择聊天</strong>
+            <div id="${PANEL_IDS.summaryMetaId}" class="stx-memory-chat-strategy-dashboard-meta">等待加载当前聊天状态</div>
+          </div>
+          <div class="stx-memory-chat-strategy-dashboard-intent">
+            <span class="stx-memory-chat-strategy-summary-label">当前氛围</span>
+            <strong id="${PANEL_IDS.summaryIntentId}" class="stx-memory-chat-strategy-dashboard-intent-value">暂无</strong>
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-dashboard-grid">
+          <article id="${PANEL_IDS.summaryRoleId}" class="stx-memory-chat-strategy-dashboard-card">
+            <span class="stx-memory-chat-strategy-empty">等待加载角色状态</span>
+          </article>
+          <article id="${PANEL_IDS.summaryWorldId}" class="stx-memory-chat-strategy-dashboard-card">
+            <span class="stx-memory-chat-strategy-empty">等待加载世界情况</span>
+          </article>
+          <article id="${PANEL_IDS.summaryRelationId}" class="stx-memory-chat-strategy-dashboard-card">
+            <span class="stx-memory-chat-strategy-empty">等待加载关系变化</span>
+          </article>
+          <article id="${PANEL_IDS.summaryReminderId}" class="stx-memory-chat-strategy-dashboard-card" data-tone="soft">
+            <span class="stx-memory-chat-strategy-empty">等待加载系统提醒</span>
+          </article>
+        </div>
+        <div class="stx-memory-chat-strategy-dashboard-foot">
+          <div class="stx-memory-chat-strategy-dashboard-foot-copy">
+            <span class="stx-memory-chat-strategy-card-label">系统最近在关注</span>
+            <div id="${PANEL_IDS.summarySectionsId}" class="stx-memory-chat-strategy-pill-wrap">
+              <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+            </div>
+          </div>
+          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-strategy-summary-maintenance-action">
+            打开详细调整
+          </button>
+        </div>
+      </div>
+    `.trim();
+}
+
+function buildEditorMarkupV2(): string {
+    const searchInputMarkup: string = buildSharedInputField({
+        id: EDITOR_IDS.chatSearchId,
+        type: 'search',
+        className: 'stx-memory-chat-strategy-search',
+        attributes: {
+            placeholder: '搜索聊天名',
+            'data-tip': '按聊天名搜索左侧聊天列表。',
+        },
+    });
+    const mobileToggleMarkup: string = buildSharedButton({
+        id: EDITOR_IDS.mobileToggleBtnId,
+        label: '聊天列表',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-comments',
+    });
+    const refreshButtonMarkup: string = buildSharedButton({
+        id: EDITOR_IDS.refreshBtnId,
+        label: '刷新',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-rotate',
+    });
+    const recomputeButtonMarkup: string = buildSharedButton({
+        id: EDITOR_IDS.recomputeBtnId,
+        label: '重新判断',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-wand-magic-sparkles',
+    });
+    const applyButtonMarkup: string = buildSharedButton({
+        id: EDITOR_IDS.applyBtnId,
+        label: '保存调整',
+        iconClassName: 'fa-solid fa-floppy-disk',
+    });
+    return `
+      <div class="stx-memory-chat-strategy-editor">
+        <div class="stx-memory-chat-strategy-header">
+          <div class="stx-memory-chat-strategy-title-wrap">
+            <div class="stx-memory-chat-strategy-title">
+              <i class="fa-solid fa-sliders"></i>
+              <span>聊天策略画像编辑器</span>
+            </div>
+            <div class="stx-memory-chat-strategy-subtitle">以用户体验为主，默认先看聊天状态，再做少量高频调节；技术细节统一收进高级里。</div>
+          </div>
+          <div class="stx-memory-chat-strategy-header-actions">
+            ${mobileToggleMarkup}
+            ${refreshButtonMarkup}
+            ${recomputeButtonMarkup}
+            ${applyButtonMarkup}
+            <button id="${EDITOR_IDS.closeBtnId}" type="button" class="stx-memory-chat-strategy-close" aria-label="关闭聊天策略画像编辑器">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-body">
+          <aside class="stx-memory-chat-strategy-sidebar">
+            <div class="stx-memory-chat-strategy-sidebar-head">
+              <span class="stx-memory-chat-strategy-sidebar-title">聊天列表</span>
+              ${searchInputMarkup}
+            </div>
+            <div id="${EDITOR_IDS.chatListId}" class="stx-memory-chat-strategy-chat-list">
+              <div class="stx-memory-chat-strategy-empty">正在加载聊天列表...</div>
+            </div>
+          </aside>
+          <div class="stx-memory-chat-strategy-sidebar-scrim" aria-hidden="true"></div>
+          <main class="stx-memory-chat-strategy-main">
+            <section class="stx-memory-chat-strategy-hero">
+              <div class="stx-memory-chat-strategy-hero-main">
+                <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-strategy-hero-title">未选择聊天</div>
+                <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-strategy-hero-meta">等待加载当前聊天状态</div>
+                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-strategy-hero-meta">等待加载系统工作方式</div>
+              </div>
+              <div class="stx-memory-chat-strategy-hero-side">
+                <span class="stx-memory-chat-strategy-hero-label">当前氛围</span>
+                <strong id="${EDITOR_IDS.currentIntentId}" class="stx-memory-chat-strategy-hero-intent">暂无</strong>
+              </div>
+            </section>
+            <section class="stx-memory-chat-strategy-section">
+              <div class="stx-memory-chat-strategy-section-head">
+                <div>
+                  <h3>现在这段聊天是什么状态</h3>
+                  <p>直接看角色、世界、关系和提醒，先弄清楚系统目前看到了什么。</p>
+                </div>
+              </div>
+              <div class="stx-memory-chat-strategy-hero-pills">
+                <span class="stx-memory-chat-strategy-card-label">系统最近在关注</span>
+                <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-strategy-pill-wrap">
+                  <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+                </div>
+              </div>
+              <div class="stx-memory-chat-strategy-dashboard-grid stx-memory-chat-strategy-dashboard-grid-editor">
+                <article id="${EDITOR_IDS.overviewRoleId}" class="stx-memory-chat-strategy-dashboard-card">
+                  <span class="stx-memory-chat-strategy-empty">等待加载角色状态</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewWorldId}" class="stx-memory-chat-strategy-dashboard-card">
+                  <span class="stx-memory-chat-strategy-empty">等待加载世界情况</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewRelationId}" class="stx-memory-chat-strategy-dashboard-card">
+                  <span class="stx-memory-chat-strategy-empty">等待加载关系变化</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewReminderId}" class="stx-memory-chat-strategy-dashboard-card" data-tone="soft">
+                  <span class="stx-memory-chat-strategy-empty">等待加载系统提醒</span>
+                </article>
+              </div>
+            </section>
+            <section class="stx-memory-chat-strategy-section">
+              <div class="stx-memory-chat-strategy-section-head">
+                <div>
+                  <h3>我想让它更偏向什么</h3>
+                  <p>这里只保留最常用的调整项，尽量避免让你一开始就掉进技术细节里。</p>
+                </div>
+              </div>
+              <div class="stx-memory-chat-strategy-quick-grid">
+                <article class="stx-memory-chat-strategy-quick-card">
+                  <div class="stx-memory-chat-strategy-quick-card-head">
+                    <h4>常用预设</h4>
+                    <p>先选接近的聊天用途，再做局部微调。</p>
+                  </div>
+                  <div class="stx-memory-chat-strategy-control-stack">
+                    ${buildEditorSelectField(EDITOR_IDS.presetId, '场景预设', '先选一套接近当前聊天用途的默认方案。', listUserFacingPresetOptions())}
+                    <div class="stx-memory-chat-strategy-preset-actions">
+                      ${buildSharedButton({
+                          id: EDITOR_IDS.saveGlobalPresetBtnId,
+                          label: '设为全局默认',
+                          variant: 'secondary',
+                          iconClassName: 'fa-solid fa-globe',
+                      })}
+                      ${buildSharedButton({
+                          id: EDITOR_IDS.saveRolePresetBtnId,
+                          label: '设为角色默认',
+                          variant: 'secondary',
+                          iconClassName: 'fa-solid fa-id-card',
+                      })}
+                      ${buildSharedButton({
+                          id: EDITOR_IDS.clearRolePresetBtnId,
+                          label: '清空角色默认',
+                          variant: 'secondary',
+                          iconClassName: 'fa-solid fa-eraser',
+                      })}
+                    </div>
+                  </div>
+                </article>
+                <article class="stx-memory-chat-strategy-quick-card">
+                  <div class="stx-memory-chat-strategy-quick-card-head">
+                    <h4>聊天整体感觉</h4>
+                    <p>决定它更像单聊、群聊，偏剧情还是偏说明。</p>
+                  </div>
+                  <div class="stx-memory-chat-strategy-control-grid">
+                    ${buildEditorSelectField(EDITOR_IDS.chatTypeId, '聊天类型', '切换当前聊天的整体类型。', [
+                        { value: 'solo', label: '单人' },
+                        { value: 'group', label: '群聊' },
+                        { value: 'worldbook', label: '设定问答' },
+                        { value: 'tool', label: '工具协作' },
+                    ])}
+                    ${buildEditorSelectField(EDITOR_IDS.stylePreferenceId, '风格偏好', '调整这段聊天更偏剧情、问答还是设定说明。', [
+                        { value: 'story', label: '剧情向' },
+                        { value: 'qa', label: '问答向' },
+                        { value: 'trpg', label: '跑团向' },
+                        { value: 'info', label: '信息向' },
+                    ])}
+                    ${buildEditorSelectField(EDITOR_IDS.memoryStrengthId, '记忆强度', '控制系统记住当前聊天的力度。', [
+                        { value: 'low', label: '轻' },
+                        { value: 'medium', label: '中' },
+                        { value: 'high', label: '强' },
+                    ])}
+                  </div>
+                </article>
+                <article class="stx-memory-chat-strategy-quick-card">
+                  <div class="stx-memory-chat-strategy-quick-card-head">
+                    <h4>摘要和清理方式</h4>
+                    <p>决定它怎么总结这段聊天，以及聊天删除后怎么处理数据。</p>
+                  </div>
+                  <div class="stx-memory-chat-strategy-control-grid">
+                    ${buildEditorSelectField(EDITOR_IDS.summaryStrategyId, '摘要倾向', '控制当前聊天的摘要组织方式。', [
+                        { value: 'short', label: '短摘要' },
+                        { value: 'layered', label: '分层摘要' },
+                        { value: 'timeline', label: '时间轴' },
+                    ])}
+                    ${buildEditorSelectField(EDITOR_IDS.deletionStrategyId, '聊天删除后', '控制删除聊天时保留归档还是彻底清空。', [
+                        { value: 'soft_delete', label: '保留归档' },
+                        { value: 'immediate_purge', label: '彻底清空' },
+                    ])}
+                    ${buildSharedCheckboxCard({
+                        id: EDITOR_IDS.summaryEnabledDirectId,
+                        title: '自动生成摘要',
+                        description: '关闭后会更依赖短期上下文，不主动维护历史摘要。',
+                        checkedLabel: '开启',
+                        uncheckedLabel: '关闭',
+                        containerClassName: 'stx-memory-chat-strategy-toggle',
+                    })}
+                  </div>
+                </article>
+                <article class="stx-memory-chat-strategy-quick-card">
+                  <div class="stx-memory-chat-strategy-quick-card-head">
+                    <h4>角色与世界记忆</h4>
+                    <p>控制是否联想更早的内容，以及是否跟踪多角色状态。</p>
+                  </div>
+                  <div class="stx-memory-chat-strategy-control-stack">
+                    ${buildSharedCheckboxCard({
+                        id: EDITOR_IDS.vectorEnabledId,
+                        title: '联想更早的聊天内容',
+                        description: '适合长线聊天；关闭后会更轻、更快。',
+                        checkedLabel: '开启',
+                        uncheckedLabel: '关闭',
+                        containerClassName: 'stx-memory-chat-strategy-toggle',
+                    })}
+                    <div class="stx-memory-chat-strategy-control-grid">
+                      ${buildSharedCheckboxCard({
+                          id: EDITOR_IDS.groupLaneEnabledId,
+                          title: '跟踪多个角色状态',
+                          description: '群聊时更容易记住每个角色的情绪和目标。',
+                          checkedLabel: '开启',
+                          uncheckedLabel: '关闭',
+                          containerClassName: 'stx-memory-chat-strategy-toggle',
+                      })}
+                      ${buildSharedCheckboxCard({
+                          id: EDITOR_IDS.autoBootstrapSeedId,
+                          title: '新聊天自动打底',
+                          description: '新会话会优先补角色和世界的基础锚点。',
+                          checkedLabel: '开启',
+                          uncheckedLabel: '关闭',
+                          containerClassName: 'stx-memory-chat-strategy-toggle',
+                      })}
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+            <details id="${EDITOR_IDS.advancedSettingsId}" class="stx-memory-chat-strategy-advanced">
+              <summary class="stx-memory-chat-strategy-advanced-summary">
+                <div>
+                  <h3>高级与诊断</h3>
+                  <p>详细阈值、维护动作和底层诊断都在这里，默认不打扰主流程。</p>
+                </div>
+                <span class="stx-memory-chat-strategy-pill">高级</span>
+              </summary>
+              <div class="stx-memory-chat-strategy-advanced-body">
+                <section class="stx-memory-chat-strategy-section">
+                  <div class="stx-memory-chat-strategy-section-head">
+                    <div>
+                      <h3>系统怎么帮我记</h3>
+                      <p>调节摘要节奏、抽取范围、向量阈值和保留数量。</p>
+                    </div>
+                  </div>
+                  <div class="stx-memory-chat-strategy-form-grid">
+                    ${buildEditorSelectField(EDITOR_IDS.extractStrategyId, '抽取范围', '控制事实、关系和世界状态的抽取范围。', [
+                        { value: 'facts_only', label: '只提事实' },
+                        { value: 'facts_relations', label: '事实 + 关系' },
+                        { value: 'facts_relations_world', label: '事实 + 关系 + 世界状态' },
+                    ])}
+                    ${buildEditorSelectField(EDITOR_IDS.deletionStrategyDirectId, '预设里的删除策略', '保存为预设时，默认采用保留归档还是彻底清空。', [
+                        { value: 'soft_delete', label: '保留归档' },
+                        { value: 'immediate_purge', label: '彻底清空' },
+                    ])}
+                    ${buildEditorInputField(EDITOR_IDS.summaryIntervalDirectId, '多少轮做一次摘要', '间隔越短，系统越积极地归纳最近聊天。', 'number', '1', '100', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.summaryWindowDirectId, '每次回看多少轮', '控制每次摘要会回看的聊天窗口。', 'number', '1', '200', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多久重判一次聊天状态', '重新判断聊天类型、风格和记忆强度的间隔。', 'number', '1', '100', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多久刷新一次健康度', '重新评估记忆质量和维护提醒的间隔。', 'number', '1', '100', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后开始联想', '达到这个数量后，会更积极调用长期记忆。', 'number', '1', '5000', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '向量分块阈值', '内容达到这个长度后更容易进入向量索引。', 'number', '50', '4000', '10')}
+                    ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '候选多少条后精排', '结果越多时越需要二次筛选。', 'number', '1', '50', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, 'Facts 启动阈值', '事实数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, 'Summaries 启动阈值', '摘要数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorIdleDecayDaysId, '多久不命中就降温', '长期没命中的向量内容会逐渐降权。', 'number', '1', '365', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorLowPrecisionStrideId, '低精度时的降频步长', '控制向量搜索在低命中期的节奏。', 'number', '1', '30', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.keepSummaryCountId, '保留多少条摘要', '超过上限后会优先清理较旧摘要。', 'number', '10', '1000', '10')}
+                    ${buildEditorInputField(EDITOR_IDS.keepEventCountId, '保留多少条事件', '超过上限后会优先清理较旧事件。', 'number', '50', '5000', '50')}
+                    ${buildEditorInputField(EDITOR_IDS.keepVectorDaysId, '向量保留天数', '长期记忆内容最多保留多久。', 'number', '1', '365', '1')}
+                  </div>
+                </section>
+                <section class="stx-memory-chat-strategy-section">
+                  <div class="stx-memory-chat-strategy-section-head">
+                    <div>
+                      <h3>系统正在怎么帮我记</h3>
+                      <p>主要看健康度、向量状态和需要注意的系统建议。</p>
+                    </div>
+                  </div>
+                  <div class="stx-memory-chat-strategy-quality-grid">
+                    <article class="stx-memory-chat-strategy-quality-card is-score">
+                      <span class="stx-memory-chat-strategy-quality-label">当前记忆健康度</span>
+                      <div class="stx-memory-chat-strategy-quality-score-wrap">
+                        <strong id="${EDITOR_IDS.qualityScoreId}" class="stx-memory-chat-strategy-quality-score">--</strong>
+                        <span id="${EDITOR_IDS.qualityLevelId}" class="stx-memory-chat-strategy-quality-level">--</span>
+                      </div>
+                      <div id="${EDITOR_IDS.qualityReasonsId}" class="stx-memory-chat-strategy-pill-wrap" style="margin-top: 8px;">
+                        <span class="stx-memory-chat-strategy-empty">暂无状态说明</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card">
+                      <span class="stx-memory-chat-strategy-quality-label">各项表现</span>
+                      <div id="${EDITOR_IDS.qualityDimensionsId}" class="stx-memory-chat-strategy-quality-dimensions">
+                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card">
+                      <span class="stx-memory-chat-strategy-quality-label">长期记忆状态</span>
+                      <strong id="${EDITOR_IDS.qualityVectorModeId}" class="stx-memory-chat-strategy-quality-meta" style="color: var(--stx-memory-info);">--</strong>
+                      <div class="stx-memory-chat-strategy-quality-stats">
+                        <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                        <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card">
+                      <span class="stx-memory-chat-strategy-quality-label">系统建议</span>
+                      <div id="${EDITOR_IDS.qualityAdviceId}" class="stx-memory-chat-strategy-quality-list">
+                        <span class="stx-memory-chat-strategy-empty">暂无建议，继续保持</span>
+                      </div>
+                    </article>
+                  </div>
+                </section>
+                <section class="stx-memory-chat-strategy-section">
+                  <div class="stx-memory-chat-strategy-section-head">
+                    <div>
+                      <h3>维护和阶段</h3>
+                      <p>查看这段聊天现在处在哪个阶段，以及系统建议你做什么。</p>
+                    </div>
+                  </div>
+                  <div class="stx-memory-chat-strategy-lifecycle-grid">
+                    <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-hero" data-stage="new">
+                      <div class="stx-memory-chat-strategy-lifecycle-hero-head">
+                        <span id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-lifecycle-stage-badge">new</span>
+                        <span id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-strategy-quality-subtext">--</span>
+                      </div>
+                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-strategy-lifecycle-summary">--</div>
+                      <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-strategy-lifecycle-explanation">--</div>
+                      <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-lifecycle-reasons">
+                        <span class="stx-memory-chat-strategy-empty">暂无阶段原因</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
+                      <span class="stx-memory-chat-strategy-quality-label">最近变化时间线</span>
+                      <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-strategy-lifecycle-timeline">
+                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
+                      <span class="stx-memory-chat-strategy-quality-label">当前影响</span>
+                      <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-strategy-lifecycle-impact">
+                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card">
+                      <span class="stx-memory-chat-strategy-quality-label">预设来源</span>
+                      <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card">
+                      <span class="stx-memory-chat-strategy-quality-label">角色状态跟踪</span>
+                      <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
+                      <span class="stx-memory-chat-strategy-quality-label">角色和世界状态明细</span>
+                      <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-strategy-group-memory">
+                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
+                      <span class="stx-memory-chat-strategy-quality-label">维护提醒</span>
+                      <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-strategy-quality-list">
+                        <span class="stx-memory-chat-strategy-empty">暂无维护提示</span>
+                      </div>
+                    </article>
+                  </div>
+                </section>
+                <section class="stx-memory-chat-strategy-section">
+                  <div class="stx-memory-chat-strategy-section-head">
+                    <div>
+                      <h3>完整诊断</h3>
+                      <p>需要排查底层行为时再展开，看系统自动决策和最终结果。</p>
+                    </div>
+                  </div>
+                  <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-strategy-diagnostic-group" open>
+                    <summary>
+                      <span>基础诊断</span>
+                      <small>先看最终生效方案、最近决策和前后 gate 的结果。</small>
+                    </summary>
+                    <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-basic">
+                      ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '最终生效方案', '系统当前真正采用的综合策略。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最近一次注入决策', '最近一次生成时，系统实际选用了哪些记忆模块。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', '生成前对检索、预算和注入的判断结果。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', '生成后对是否持久化、是否抽取的判断结果。')}
+                    </div>
+                  </details>
+                  <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
+                    <summary>
+                      <span>高级诊断</span>
+                      <small>深入定位时再展开：自动推断、手动覆盖和上下文指标。</small>
+                    </summary>
+                    <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-advanced">
+                      ${buildJsonCardMarkup(EDITOR_IDS.autoBlockId, '系统自动推断', '系统在没有人工干预时默认认为当前聊天该怎么记。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.overrideBlockId, '手动覆盖设置', '你对当前聊天显式保存过的覆盖项。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.metricsBlockId, '动态指标', '最近这段聊天的活跃度、密度和命中情况。')}
+                    </div>
+                  </details>
+                </section>
+              </div>
+            </details>
+          </main>
+        </div>
+      </div>
+    `.trim();
+}
+
 function ensureEditorSections(overlay: HTMLElement): void {
     if (!overlay.querySelector(`#${EDITOR_IDS.presetId}`)) {
         const presetMount: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.presetMountId}`) as HTMLElement | null;
@@ -1171,7 +1696,7 @@ function bindCompactPanelListeners(): void {
     const chatSelect: HTMLSelectElement | null = document.getElementById(PANEL_IDS.chatSelectId) as HTMLSelectElement | null;
     chatSelect?.addEventListener('change', (): void => {
         selectedChatKey = String(chatSelect.value || '').trim();
-        void renderCompactPanelState(selectedChatKey);
+        void renderCompactPanelStateV2(selectedChatKey);
     });
 
     const openBtn: HTMLButtonElement | null = document.getElementById(PANEL_IDS.openBtnId) as HTMLButtonElement | null;
@@ -1183,7 +1708,7 @@ function bindCompactPanelListeners(): void {
     refreshBtn?.addEventListener('click', (): void => {
         void refreshChatStrategyChatOptions().then(async (): Promise<void> => {
             if (selectedChatKey) {
-                await renderCompactPanelState(selectedChatKey);
+                await renderCompactPanelStateV2(selectedChatKey);
             }
         });
     });
@@ -1218,7 +1743,7 @@ async function runAutoLoadChatStrategyPanel(): Promise<void> {
     }
     await refreshChatStrategyChatOptions();
     if (selectedChatKey) {
-        await renderCompactPanelState(selectedChatKey);
+        await renderCompactPanelStateV2(selectedChatKey);
     }
     if (!shouldRetryAutoLoad()) {
         autoLoadTimerId = null;
@@ -1285,7 +1810,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
     refreshBtn?.addEventListener('click', (): void => {
         void syncEditorChatOptions(overlay, selectedChatKey).then(async (): Promise<void> => {
             if (selectedChatKey) {
-                await renderEditorState(overlay, selectedChatKey);
+                await renderEditorStateV2(overlay, selectedChatKey);
             }
         });
     });
@@ -1294,8 +1819,8 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         void recomputeSelectedChatPolicy(selectedChatKey).then(async (): Promise<void> => {
-            await renderEditorState(overlay, selectedChatKey);
-            await renderCompactPanelState(selectedChatKey);
+            await renderEditorStateV2(overlay, selectedChatKey);
+            await renderCompactPanelStateV2(selectedChatKey);
         });
     });
     applyBtn?.addEventListener('click', (): void => {
@@ -1303,8 +1828,8 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         void applySelectedChatOverrides(overlay, selectedChatKey).then(async (): Promise<void> => {
-            await renderEditorState(overlay, selectedChatKey);
-            await renderCompactPanelState(selectedChatKey);
+            await renderEditorStateV2(overlay, selectedChatKey);
+            await renderCompactPanelStateV2(selectedChatKey);
         });
     });
     presetSelect?.addEventListener('change', (): void => {
@@ -1329,7 +1854,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         void savePresetForChat(overlay, selectedChatKey, 'global').then(async (): Promise<void> => {
-            await renderEditorState(overlay, selectedChatKey);
+            await renderEditorStateV2(overlay, selectedChatKey);
         });
     });
     saveRolePresetBtn?.addEventListener('click', (): void => {
@@ -1337,7 +1862,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         void savePresetForChat(overlay, selectedChatKey, 'role').then(async (): Promise<void> => {
-            await renderEditorState(overlay, selectedChatKey);
+            await renderEditorStateV2(overlay, selectedChatKey);
         });
     });
     clearRolePresetBtn?.addEventListener('click', (): void => {
@@ -1345,7 +1870,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         void clearRolePresetForChat(selectedChatKey).then(async (): Promise<void> => {
-            await renderEditorState(overlay, selectedChatKey);
+            await renderEditorStateV2(overlay, selectedChatKey);
         });
     });
     chatSearchInput?.addEventListener('input', (): void => {
@@ -1361,8 +1886,8 @@ function bindEditorListeners(overlay: HTMLElement): void {
             return;
         }
         overlay.classList.remove('is-sidebar-open');
-        void renderEditorState(overlay, selectedChatKey).then(async (): Promise<void> => {
-            await renderCompactPanelState(selectedChatKey);
+        void renderEditorStateV2(overlay, selectedChatKey).then(async (): Promise<void> => {
+            await renderCompactPanelStateV2(selectedChatKey);
         });
     });
     overlay.addEventListener('click', (event: Event): void => {
@@ -1413,6 +1938,13 @@ function closeEditor(overlay: HTMLElement): void {
     }, 180);
 }
 
+function buildChatListMetaLabel(item: ChatOption): string {
+    const scopeLabel = item.iconClassName === 'fa-solid fa-users' ? '群聊会话' : '角色会话';
+    const suffixMatch = item.label.match(/\(([^)]+)\)\s*$/);
+    const shortRef = suffixMatch?.[1] ? String(suffixMatch[1]).trim() : '';
+    return shortRef ? `${scopeLabel} · ${shortRef}` : scopeLabel;
+}
+
 /**
  * 功能：同步编辑器中的聊天列表与当前选中项。
  * @param overlay 编辑器遮罩层根节点。
@@ -1437,11 +1969,11 @@ async function syncEditorChatOptions(overlay: HTMLElement, currentChatKey: strin
                 ? `<span class="stx-memory-chat-strategy-chat-avatar"><img src="${escapeHtml(item.avatarUrl)}" alt="${escapeHtml(item.label)}" /></span>`
                 : `<span class="stx-memory-chat-strategy-chat-avatar is-icon"><i class="${escapeHtml(item.iconClassName || 'fa-solid fa-user')}"></i></span>`;
             return `
-              <button type="button" class="stx-memory-chat-strategy-chat-item${isActive ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.value)}">
+              <button type="button" class="stx-memory-chat-strategy-chat-item${isActive ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.value)}" title="${escapeHtml(item.value)}">
                 ${mediaMarkup}
                 <span class="stx-memory-chat-strategy-chat-copy">
                   <span class="stx-memory-chat-strategy-chat-name">${escapeHtml(item.label)}</span>
-                  <span class="stx-memory-chat-strategy-chat-key">${escapeHtml(item.value)}</span>
+                  <span class="stx-memory-chat-strategy-chat-key">${escapeHtml(buildChatListMetaLabel(item))}</span>
                 </span>
               </button>
             `.trim();
@@ -1465,6 +1997,154 @@ function applyChatListFilter(overlay: HTMLElement, keyword: string): void {
     });
 }
 
+function pickPrimaryLane(snapshot: ChatStrategySnapshot): GroupMemoryState['lanes'][number] | null {
+    const groupMemory = snapshot.groupMemory;
+    const lanes = Array.isArray(groupMemory?.lanes) ? [...groupMemory.lanes] : [];
+    if (lanes.length === 0) {
+        return null;
+    }
+    const salienceMap: Map<string, number> = new Map(
+        (Array.isArray(groupMemory?.actorSalience) ? groupMemory.actorSalience : []).map((item) => [item.actorKey, Number(item.score ?? 0)]),
+    );
+    lanes.sort((left, right): number => {
+        const salienceDelta = Number(salienceMap.get(right.actorKey) ?? 0) - Number(salienceMap.get(left.actorKey) ?? 0);
+        if (salienceDelta !== 0) {
+            return salienceDelta;
+        }
+        return Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0);
+    });
+    return lanes[0] ?? null;
+}
+
+function buildDashboardCardMarkup(card: ReadableStrategyCard): string {
+    const toneAttr = card.tone ? ` data-tone="${escapeHtml(card.tone)}"` : '';
+    const footMarkup = card.foot
+        ? `<div class="stx-memory-chat-strategy-dashboard-card-foot">${escapeHtml(card.foot)}</div>`
+        : '';
+    return `
+      <div class="stx-memory-chat-strategy-dashboard-card-inner"${toneAttr}>
+        <span class="stx-memory-chat-strategy-dashboard-card-label">${escapeHtml(card.label)}</span>
+        <strong class="stx-memory-chat-strategy-dashboard-card-title">${escapeHtml(card.title)}</strong>
+        <div class="stx-memory-chat-strategy-dashboard-card-detail">${escapeHtml(card.detail)}</div>
+        ${footMarkup}
+      </div>
+    `.trim();
+}
+
+function writeDashboardCard(root: ParentNode, id: string, card: ReadableStrategyCard): void {
+    const element: HTMLElement | null = root.querySelector(`#${id}`) as HTMLElement | null;
+    if (!element) {
+        return;
+    }
+    if (card.tone) {
+        element.dataset.tone = card.tone;
+    } else {
+        delete element.dataset.tone;
+    }
+    element.innerHTML = buildDashboardCardMarkup(card);
+}
+
+function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): ReadableStrategyDashboard {
+    const primaryLane = pickPrimaryLane(snapshot);
+    const sharedScene = snapshot.groupMemory?.sharedScene;
+    const scene = String(sharedScene?.currentScene ?? '').trim();
+    const conflict = String(sharedScene?.currentConflict ?? '').trim();
+    const consensus = Array.isArray(sharedScene?.groupConsensus) ? sharedScene.groupConsensus.filter(Boolean) : [];
+    const pendingEvents = Array.isArray(sharedScene?.pendingEvents) ? sharedScene.pendingEvents.filter(Boolean) : [];
+    const topAlert = pickTopMaintenanceAlert(snapshot.maintenanceInsights);
+    const activeActors = Array.isArray(snapshot.groupMemory?.actorSalience)
+        ? snapshot.groupMemory!.actorSalience
+            .slice(0, 3)
+            .map((item) => {
+                const lane = snapshot.groupMemory?.lanes.find((candidate) => candidate.actorKey === item.actorKey);
+                return String(lane?.displayName || item.actorKey || '').trim();
+            })
+            .filter((item: string): boolean => Boolean(item))
+        : [];
+    const meta = [
+        formatChatTypeLabel(snapshot.effectiveProfile.chatType),
+        formatStyleLabel(snapshot.effectiveProfile.stylePreference),
+        `记忆${formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength)}`,
+        snapshot.effectiveProfile.vectorStrategy.enabled ? '会联想更早内容' : '偏轻量记忆',
+    ].join(' · ');
+    const scope = `${formatPresetScopeLabel(snapshot.effectivePresetBundle)} · ${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
+    const roleBits: string[] = [];
+    if (primaryLane?.lastEmotion) {
+        roleBits.push(`情绪偏 ${formatLaneEmotionLabel(primaryLane.lastEmotion)}`);
+    }
+    if (primaryLane?.recentGoal) {
+        roleBits.push(`当前目标更像 ${formatLaneGoalLabel(primaryLane.recentGoal)}`);
+    }
+    if (roleBits.length === 0) {
+        roleBits.push(`当前更偏${formatStyleLabel(snapshot.effectiveProfile.stylePreference)}，系统会按${formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength)}强度持续记住关键线索。`);
+    }
+    const roleCard: ReadableStrategyCard = {
+        label: '角色状态',
+        title: primaryLane?.displayName || (snapshot.effectiveProfile.chatType === 'group' ? '主要角色状态还在形成' : '当前角色状态'),
+        detail: roleBits.join(' · '),
+        foot: primaryLane?.relationshipDelta
+            ? `最近关系变化：${primaryLane.relationshipDelta}`
+            : `最近活跃：${formatTimestamp(Number(primaryLane?.lastActiveAt ?? 0))}`,
+        tone: 'accent',
+    };
+    const worldDetailBits: string[] = [];
+    if (scene) {
+        worldDetailBits.push(`场景：${scene}`);
+    }
+    if (conflict) {
+        worldDetailBits.push(`冲突：${conflict}`);
+    }
+    if (worldDetailBits.length === 0) {
+        worldDetailBits.push(snapshot.effectiveProfile.chatType === 'worldbook'
+            ? '当前更像设定问答，世界信息会优先以设定条目和事实形式整理。'
+            : '暂时还没有形成稳定的世界状态摘要，系统会随着聊天推进继续补全。');
+    }
+    const worldCard: ReadableStrategyCard = {
+        label: '世界情况',
+        title: conflict || scene || (snapshot.effectiveProfile.chatType === 'group' ? '共享场景还在形成' : '世界信息偏少'),
+        detail: worldDetailBits.join(' · '),
+        foot: pendingEvents[0]
+            ? `待处理：${pendingEvents[0]}`
+            : (consensus[0] ? `当前共识：${consensus[0]}` : '暂时没有明显的场景推进提醒'),
+    };
+    const relationCard: ReadableStrategyCard = {
+        label: '关系 / 冲突',
+        title: primaryLane?.relationshipDelta
+            ? '关系正在变化'
+            : (conflict ? '当前冲突仍在推进' : '关系线整体平稳'),
+        detail: primaryLane?.relationshipDelta
+            || conflict
+            || (activeActors.length > 1
+                ? `${activeActors.join(' / ')} 正在主导这段聊天。`
+                : '最近没有明显的关系或冲突变化。'),
+        foot: activeActors.length > 0 ? `活跃角色：${activeActors.join(' / ')}` : '还没有形成明显的主导角色',
+    };
+    const reminderCard: ReadableStrategyCard = topAlert
+        ? {
+            label: '系统提醒',
+            title: `[${formatMaintenanceSeverityLabel(topAlert.severity)}] ${topAlert.shortLabel}`,
+            detail: topAlert.detail,
+            foot: `建议动作：${topAlert.actionLabel || formatMaintenanceActionLabel(topAlert.action)}`,
+            tone: 'warning',
+        }
+        : {
+            label: '系统提醒',
+            title: formatLifecycleStageSummary(snapshot.lifecycleState.stage),
+            detail: formatLifecycleStageDescription(snapshot.lifecycleState),
+            foot: `当前阶段：${formatLifecycleStageLabel(snapshot.lifecycleState.stage)}`,
+            tone: 'soft',
+        };
+    return {
+        meta,
+        intent: formatIntentLabel(snapshot.decision?.intent || 'auto'),
+        scope,
+        role: roleCard,
+        world: worldCard,
+        relation: relationCard,
+        reminder: reminderCard,
+    };
+}
+
 /**
  * 功能：渲染设置页概览卡摘要。
  * @param chatKey 聊天键。
@@ -1472,34 +2152,27 @@ function applyChatListFilter(overlay: HTMLElement, keyword: string): void {
  */
 async function renderCompactPanelState(chatKey: string): Promise<void> {
     const summaryName: HTMLElement | null = document.getElementById(PANEL_IDS.summaryNameId);
+    const summaryMeta: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMetaId);
     const summaryIntent: HTMLElement | null = document.getElementById(PANEL_IDS.summaryIntentId);
     const summarySections: HTMLElement | null = document.getElementById(PANEL_IDS.summarySectionsId);
-    const summaryProfile: HTMLElement | null = document.getElementById(PANEL_IDS.summaryProfileId);
-    const summaryLifecycle: HTMLElement | null = document.getElementById(PANEL_IDS.summaryLifecycleId);
-    const summaryMaintenance: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMaintenanceId);
-    const summaryMaintenanceText: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMaintenanceTextId);
-    if (!summaryName || !summaryIntent || !summarySections || !summaryProfile || !summaryLifecycle || !summaryMaintenance || !summaryMaintenanceText) {
+    const summaryRole: HTMLElement | null = document.getElementById(PANEL_IDS.summaryRoleId);
+    const summaryWorld: HTMLElement | null = document.getElementById(PANEL_IDS.summaryWorldId);
+    const summaryRelation: HTMLElement | null = document.getElementById(PANEL_IDS.summaryRelationId);
+    const summaryReminder: HTMLElement | null = document.getElementById(PANEL_IDS.summaryReminderId);
+    if (!summaryName || !summaryMeta || !summaryIntent || !summarySections || !summaryRole || !summaryWorld || !summaryRelation || !summaryReminder) {
         return;
     }
     const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
+    const dashboard = buildReadableStrategyDashboard(snapshot);
     replaceSummaryChips(summarySections, snapshot.decision?.sectionsUsed || []);
     summaryName.textContent = formatCompactChatLabel(chatKey);
     summaryName.title = findChatLabel(chatKey);
-    summaryIntent.textContent = formatIntentLabel(snapshot.decision?.intent || 'auto');
-    summaryProfile.textContent = [
-        formatChatTypeLabel(snapshot.effectiveProfile.chatType),
-        formatStyleLabel(snapshot.effectiveProfile.stylePreference),
-        formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength),
-    ].join(' / ');
-    summaryLifecycle.textContent = formatLifecycleStageLabel(snapshot.lifecycleState.stage);
-    const topAlert = pickTopMaintenanceAlert(snapshot.maintenanceInsights);
-    if (topAlert) {
-        summaryMaintenance.style.display = 'flex';
-        summaryMaintenanceText.textContent = `[${formatMaintenanceSeverityLabel(topAlert.severity)}] ${topAlert.shortLabel}`;
-    } else {
-        summaryMaintenance.style.display = 'none';
-        summaryMaintenanceText.textContent = '暂无维护异常';
-    }
+    summaryMeta.textContent = dashboard.meta;
+    summaryIntent.textContent = dashboard.intent;
+    writeDashboardCard(document, PANEL_IDS.summaryRoleId, dashboard.role);
+    writeDashboardCard(document, PANEL_IDS.summaryWorldId, dashboard.world);
+    writeDashboardCard(document, PANEL_IDS.summaryRelationId, dashboard.relation);
+    writeDashboardCard(document, PANEL_IDS.summaryReminderId, dashboard.reminder);
     const select: HTMLSelectElement | null = document.getElementById(PANEL_IDS.chatSelectId) as HTMLSelectElement | null;
     if (select && select.value !== chatKey) {
         select.value = chatKey;
@@ -1519,6 +2192,89 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
     fillEditorForm(overlay, snapshot.effectiveProfile, snapshot.effectiveRetention);
     fillPresetAndDirectFields(overlay, snapshot);
     updateEditorHeader(overlay, snapshot);
+    updateQualityPanel(overlay, snapshot);
+    updateMaintenancePanel(overlay, snapshot);
+    updateChatListActiveState(overlay, chatKey);
+    writeJsonBlock(overlay, EDITOR_IDS.autoBlockId, {
+        chatProfile: snapshot.autoProfile,
+        adaptivePolicy: snapshot.autoPolicy,
+        retentionPolicy: snapshot.autoRetention,
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.overrideBlockId, snapshot.overrides);
+    writeJsonBlock(overlay, EDITOR_IDS.finalBlockId, {
+        chatProfile: snapshot.effectiveProfile,
+        adaptivePolicy: snapshot.effectivePolicy,
+        retentionPolicy: snapshot.effectiveRetention,
+        promptInjection: snapshot.promptInjectionProfile,
+        presetBundle: snapshot.effectivePresetBundle,
+        groupMemory: snapshot.groupMemory,
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.metricsBlockId, snapshot.metrics);
+    writeJsonBlock(overlay, EDITOR_IDS.decisionBlockId, snapshot.decision ?? {
+        tip: '暂无注入决策，下次注入后会显示在这里。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.preDecisionBlockId, snapshot.preDecision ?? {
+        tip: '暂无生成前 gate 决策。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.postDecisionBlockId, snapshot.postDecision ?? {
+        tip: '暂无生成后 gate 决策。',
+    });
+    applyChatStrategyTooltips();
+}
+
+async function renderCompactPanelStateV2(chatKey: string): Promise<void> {
+    const summaryName: HTMLElement | null = document.getElementById(PANEL_IDS.summaryNameId);
+    const summaryMeta: HTMLElement | null = document.getElementById(PANEL_IDS.summaryMetaId);
+    const summaryIntent: HTMLElement | null = document.getElementById(PANEL_IDS.summaryIntentId);
+    const summarySections: HTMLElement | null = document.getElementById(PANEL_IDS.summarySectionsId);
+    if (!summaryName || !summaryMeta || !summaryIntent || !summarySections) {
+        return;
+    }
+    const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
+    const dashboard = buildReadableStrategyDashboard(snapshot);
+    summaryName.textContent = formatCompactChatLabel(chatKey);
+    summaryName.title = findChatLabel(chatKey);
+    summaryMeta.textContent = dashboard.meta;
+    summaryIntent.textContent = dashboard.intent;
+    replaceSummaryChips(summarySections, snapshot.decision?.sectionsUsed || []);
+    writeDashboardCard(document, PANEL_IDS.summaryRoleId, dashboard.role);
+    writeDashboardCard(document, PANEL_IDS.summaryWorldId, dashboard.world);
+    writeDashboardCard(document, PANEL_IDS.summaryRelationId, dashboard.relation);
+    writeDashboardCard(document, PANEL_IDS.summaryReminderId, dashboard.reminder);
+    const select: HTMLSelectElement | null = document.getElementById(PANEL_IDS.chatSelectId) as HTMLSelectElement | null;
+    if (select && select.value !== chatKey) {
+        select.value = chatKey;
+        refreshSharedSelectOptions(document.getElementById(PANEL_IDS.rootId) || document.body);
+    }
+    applyChatStrategyTooltips();
+}
+
+function updateEditorHeaderV2(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
+    const nameElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentChatNameId}`) as HTMLElement | null;
+    const metaElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentChatMetaId}`) as HTMLElement | null;
+    const intentElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentIntentId}`) as HTMLElement | null;
+    const scopeElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.currentScopeId}`) as HTMLElement | null;
+    const sectionsWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
+    if (!nameElement || !metaElement || !intentElement || !scopeElement || !sectionsWrap) {
+        return;
+    }
+    const dashboard = buildReadableStrategyDashboard(snapshot);
+    nameElement.textContent = findChatLabel(snapshot.chatKey);
+    metaElement.textContent = dashboard.meta;
+    intentElement.textContent = dashboard.intent;
+    scopeElement.textContent = dashboard.scope;
+    replaceSummaryChips(sectionsWrap, snapshot.decision?.sectionsUsed || []);
+    writeDashboardCard(overlay, EDITOR_IDS.overviewRoleId, dashboard.role);
+    writeDashboardCard(overlay, EDITOR_IDS.overviewWorldId, dashboard.world);
+    writeDashboardCard(overlay, EDITOR_IDS.overviewRelationId, dashboard.relation);
+    writeDashboardCard(overlay, EDITOR_IDS.overviewReminderId, dashboard.reminder);
+}
+
+async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promise<void> {
+    const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
+    fillEditorForm(overlay, snapshot.effectiveProfile, snapshot.effectiveRetention);
+    fillPresetAndDirectFields(overlay, snapshot);
+    updateEditorHeaderV2(overlay, snapshot);
     updateQualityPanel(overlay, snapshot);
     updateMaintenancePanel(overlay, snapshot);
     updateChatListActiveState(overlay, chatKey);
@@ -1742,7 +2498,9 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
     setSelectValue(
         overlay,
         EDITOR_IDS.deletionStrategyId,
-        getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId) || 'soft_delete',
+        getSelectValue(overlay, EDITOR_IDS.deletionStrategyId)
+        || getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId)
+        || 'soft_delete',
     );
     const profileOverride: Partial<ChatProfile> = collectProfileOverrideFromForm(overlay);
     const retentionOverride: Partial<RetentionPolicy> = collectRetentionOverrideFromForm(overlay);
@@ -1804,6 +2562,7 @@ function updateEditorHeader(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     if (!nameElement || !metaElement || !intentElement || !scopeElement || !sectionsWrap) {
         return;
     }
+    const dashboard = buildReadableStrategyDashboard(snapshot);
     nameElement.textContent = findChatLabel(snapshot.chatKey);
     metaElement.textContent = [
         formatChatTypeLabel(snapshot.effectiveProfile.chatType),
@@ -1986,8 +2745,8 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
                         } else {
                             toast.error(`${formatMaintenanceActionLabel(action)}失败：${result.message}`);
                         }
-                        await renderEditorState(overlay, snapshot.chatKey);
-                        await renderCompactPanelState(snapshot.chatKey);
+                        await renderEditorStateV2(overlay, snapshot.chatKey);
+                        await renderCompactPanelStateV2(snapshot.chatKey);
                     })
                     .catch((error: unknown): void => {
                         toast.error(`维护动作执行异常：${String(error)}`);

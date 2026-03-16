@@ -4,6 +4,7 @@ import type {
     LogicalMessageNode,
     TurnKind,
 } from '../types';
+import { getTavernMessageTextEvent } from '../../../SDK/tavern';
 
 interface ChatViewBuildResult {
     view: LogicalChatView;
@@ -63,6 +64,20 @@ export class ChatViewManager {
         const editedRevisions = this.collectEditedRevisions(previousVisible, nextVisibleMessages);
         const deletedTurns = this.collectDeletedTurns(previousVisible, nextVisibleMessages);
         const branchRoots = this.collectBranchRoots(previousVisible, nextVisibleMessages, mutationKinds);
+        const activeMessageIds = Array.from(new Set(
+            nextVisibleMessages
+                .map((node: LogicalMessageNode): string => String(node.messageId ?? '').trim())
+                .filter(Boolean),
+        ));
+        const invalidatedMessageIds = Array.from(new Set(
+            [...supersededCandidates, ...editedRevisions, ...deletedTurns]
+                .map((node: LogicalMessageNode): string => String(node.messageId ?? '').trim())
+                .filter(Boolean),
+        ));
+        const repairAnchorMessageId = String(branchRoots[0]?.messageId ?? '').trim()
+            || String(nextVisibleMessages[nextVisibleMessages.length - 1]?.messageId ?? '').trim()
+            || String(invalidatedMessageIds[0] ?? '').trim()
+            || null;
         const snapshotHash = this.hashString(
             nextVisibleMessages
                 .map((node: LogicalMessageNode): string => `${node.messageId}|${node.role}|${node.textSignature}`)
@@ -83,6 +98,9 @@ export class ChatViewManager {
             viewHash,
             snapshotHash,
             mutationKinds,
+            activeMessageIds,
+            invalidatedMessageIds,
+            repairAnchorMessageId,
             rebuiltAt: Date.now(),
         };
         return {
@@ -116,7 +134,7 @@ export class ChatViewManager {
                     ?? source.mesid
                     ?? '',
                 ).trim();
-                const text = this.readMessageText(source);
+                const text = getTavernMessageTextEvent(source);
                 const role = this.resolveRole(source);
                 const ts = Number(source.send_date ?? source.ts ?? source.time ?? 0);
                 const createdAt = Number.isFinite(ts) && ts > 0 ? ts : now + index;
@@ -328,18 +346,6 @@ export class ChatViewManager {
             return 'user';
         }
         return 'assistant';
-    }
-
-    /**
-     * 功能：读取消息文本。
-     * 参数：
-     *   source (Record<string, unknown>)：宿主消息对象。
-     * 返回：
-     *   string：消息文本。
-     */
-    private readMessageText(source: Record<string, unknown>): string {
-        const raw = source.mes ?? source.content ?? source.text ?? source.message;
-        return typeof raw === 'string' ? raw.trim() : '';
     }
 
     /**

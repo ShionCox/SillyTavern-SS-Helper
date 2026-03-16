@@ -15,6 +15,7 @@ import type {
     AutoSchemaPolicy,
     ChatLifecycleStage,
     ChatLifecycleState,
+    ColdStartStage,
     EffectivePresetBundle,
     ChatSemanticSeed,
     ChatMutationKind,
@@ -45,6 +46,7 @@ import type {
     SchemaDraftSession,
     StrategyDecision,
     SummaryFixTask,
+    MutationRepairTask,
     SummaryPolicyOverride,
     UserFacingChatPreset,
     VectorLifecycleState,
@@ -83,6 +85,52 @@ import { SummariesManager } from './summaries-manager';
 import { VectorManager } from '../vector/vector-manager';
 
 const logger = new Logger('ChatStateManager');
+const REPAIR_TRIGGER_KINDS: ChatMutationKind[] = ['message_edited', 'message_swiped', 'message_deleted', 'chat_branched'];
+
+function shouldEnqueueMutationRepair(mutationKinds: ChatMutationKind[]): boolean {
+    const set = new Set(Array.isArray(mutationKinds) ? mutationKinds : []);
+    return REPAIR_TRIGGER_KINDS.some((kind: ChatMutationKind): boolean => set.has(kind));
+}
+
+function hasArrayIntersection(left: string[], rightSet: Set<string>): boolean {
+    for (const item of left) {
+        if (rightSet.has(item)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function readProvenanceViewHash(value: unknown): string {
+    if (!value || typeof value !== 'object') {
+        return '';
+    }
+    const record = value as Record<string, unknown>;
+    const source = (record.source ?? {}) as Record<string, unknown>;
+    return normalizeSeedText(source.viewHash);
+}
+
+function readProvenanceMessageIds(value: unknown): string[] {
+    if (!value || typeof value !== 'object') {
+        return [];
+    }
+    const record = value as Record<string, unknown>;
+    const source = (record.source ?? {}) as Record<string, unknown>;
+    const messageIdsRaw = source.messageIds;
+    if (!Array.isArray(messageIdsRaw)) {
+        return [];
+    }
+    return messageIdsRaw.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean);
+}
+
+function hasStructuredProvenance(value: unknown): boolean {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const record = value as Record<string, unknown>;
+    const source = (record.source ?? {}) as Record<string, unknown>;
+    return Boolean(normalizeSeedText(source.viewHash));
+}
 
 function averagePrecisionWindow(values: number[]): number {
     if (!Array.isArray(values) || values.length === 0) {
@@ -93,6 +141,17 @@ function averagePrecisionWindow(values: number[]): number {
 
 function normalizeSeedText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function buildManagedSummaryStableId(chatKey: string, kind: string): string {
+    const normalizeIdPart = (value: unknown, fallback: string): string => {
+        const normalized = normalizeSeedText(value)
+            .toLowerCase()
+            .replace(/[^a-z0-9._-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return normalized || fallback;
+    };
+    return `managed:${normalizeIdPart(kind, 'summary')}:${normalizeIdPart(chatKey, 'chat')}`;
 }
 
 function inferLaneStyle(text: string): string {
@@ -690,7 +749,23 @@ export class ChatStateManager {
                 ...(state.assistantTurnTracker ?? {}),
             },
             turnLedger: Array.isArray(state.turnLedger) ? state.turnLedger : [],
-            logicalChatView: state.logicalChatView ?? undefined,
+            logicalChatView: state.logicalChatView
+                ? {
+                    ...state.logicalChatView,
+                    mutationKinds: Array.isArray(state.logicalChatView.mutationKinds)
+                        ? state.logicalChatView.mutationKinds
+                        : [],
+                    activeMessageIds: Array.isArray(state.logicalChatView.activeMessageIds)
+                        ? state.logicalChatView.activeMessageIds
+                        : Array.isArray(state.logicalChatView.visibleMessages)
+                            ? state.logicalChatView.visibleMessages.map((item): string => normalizeSeedText(item.messageId)).filter(Boolean)
+                            : [],
+                    invalidatedMessageIds: Array.isArray(state.logicalChatView.invalidatedMessageIds)
+                        ? state.logicalChatView.invalidatedMessageIds
+                        : [],
+                    repairAnchorMessageId: normalizeSeedText(state.logicalChatView.repairAnchorMessageId) || undefined,
+                }
+                : undefined,
             chatLifecycle: {
                 ...DEFAULT_CHAT_LIFECYCLE_STATE,
                 ...(state.chatLifecycle ?? {}),
@@ -718,6 +793,17 @@ export class ChatStateManager {
             coldStartFingerprint: typeof state.coldStartFingerprint === 'string'
                 ? state.coldStartFingerprint
                 : undefined,
+            coldStartStage: ((): ColdStartStage | undefined => {
+                if (!state.semanticSeed && !state.coldStartFingerprint) {
+                    return undefined;
+                }
+                const stage = normalizeSeedText(state.coldStartStage);
+                if (stage === 'prompt_primed' || stage === 'extract_primed') {
+                    return stage;
+                }
+                return 'seeded';
+            })(),
+            coldStartPrimedAt: Number(state.coldStartPrimedAt ?? 0) || undefined,
             lastLorebookDecision: state.lastLorebookDecision ?? undefined,
             promptInjectionProfile: {
                 ...DEFAULT_PROMPT_INJECTION_PROFILE,
@@ -770,6 +856,27 @@ export class ChatStateManager {
                 },
             },
             summaryFixQueue: Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [],
+            mutationRepairQueue: Array.isArray(state.mutationRepairQueue)
+                ? state.mutationRepairQueue
+                    .map((task): MutationRepairTask => ({
+                        taskId: normalizeSeedText(task.taskId) || crypto.randomUUID(),
+                        viewHash: normalizeSeedText(task.viewHash),
+                        snapshotHash: normalizeSeedText(task.snapshotHash),
+                        mutationKinds: Array.isArray(task.mutationKinds) ? task.mutationKinds : [],
+                        invalidatedMessageIds: Array.isArray(task.invalidatedMessageIds) ? task.invalidatedMessageIds.map((item) => normalizeSeedText(item)).filter(Boolean) : [],
+                        activeMessageIds: Array.isArray(task.activeMessageIds) ? task.activeMessageIds.map((item) => normalizeSeedText(item)).filter(Boolean) : [],
+                        repairAnchorMessageId: normalizeSeedText(task.repairAnchorMessageId) || undefined,
+                        repairGeneration: Math.max(0, Number(task.repairGeneration ?? 0) || 0),
+                        enqueuedAt: Number(task.enqueuedAt ?? Date.now()) || Date.now(),
+                        attempts: Math.max(0, Number(task.attempts ?? 0) || 0),
+                        status: task.status === 'failed' ? 'failed' : task.status === 'running' ? 'running' : 'pending',
+                        lastError: normalizeSeedText(task.lastError) || undefined,
+                    }))
+                    .slice(-16)
+                : [],
+            lastMutationRepairViewHash: normalizeSeedText(state.lastMutationRepairViewHash) || undefined,
+            lastMutationRepairAt: Number(state.lastMutationRepairAt ?? 0) || undefined,
+            mutationRepairGeneration: Math.max(0, Number(state.mutationRepairGeneration ?? 0) || 0),
             rowAliasIndex: state.rowAliasIndex ?? {},
             rowRedirects: state.rowRedirects ?? {},
             rowTombstones: state.rowTombstones ?? {},
@@ -1305,6 +1412,25 @@ export class ChatStateManager {
      */
     async runMaintenanceAction(action: MaintenanceActionType): Promise<MaintenanceExecutionResult> {
         const state = await this.load();
+        if (state.archived === true) {
+            return {
+                action,
+                ok: false,
+                message: 'Chat is archived; maintenance actions are disabled.',
+                reasonCodes: ['chat_archived'],
+                touchedCounts: {
+                    summariesCreated: 0,
+                    eventsArchived: 0,
+                    vectorChunksRebuilt: 0,
+                    cleanedFacts: 0,
+                    cleanedStates: 0,
+                    lanesRebuilt: 0,
+                    salienceUpdated: 0,
+                },
+                executedAt: Date.now(),
+                durationMs: 0,
+            };
+        }
         const startedAt = Date.now();
         const touchedCounts: MaintenanceExecutionResult['touchedCounts'] = {
             summariesCreated: 0,
@@ -1340,11 +1466,41 @@ export class ChatStateManager {
                     .filter(Boolean);
                 const sourceLines = lines.length > 0 ? lines : fallbackLines;
                 if (sourceLines.length > 0) {
+                    const summaryId = buildManagedSummaryStableId(this.chatKey, 'maintenance_rebuild_scene');
+                    await this.deleteManagedMaintenanceSummaries(summaryId);
                     await summariesManager.upsert({
+                        summaryId,
                         level: 'scene',
                         title: '维护重建摘要',
                         content: sourceLines.slice(0, 16).join('\n'),
-                        source: { extractor: 'maintenance' },
+                        range: {
+                            fromMessageId: Array.isArray(logicalView?.visibleMessages)
+                                ? normalizeSeedText(logicalView!.visibleMessages.slice(-16)[0]?.messageId) || undefined
+                                : undefined,
+                            toMessageId: Array.isArray(logicalView?.visibleMessages)
+                                ? normalizeSeedText(logicalView!.visibleMessages.slice(-1)[0]?.messageId) || undefined
+                                : undefined,
+                        },
+                        source: {
+                            extractor: 'maintenance',
+                            provider: 'stx_memory_os',
+                            provenance: {
+                                extractor: 'maintenance',
+                                provider: 'stx_memory_os',
+                                source: {
+                                    kind: 'maintenance',
+                                    reason: 'rebuild_summary',
+                                    viewHash: normalizeSeedText(logicalView?.viewHash),
+                                    snapshotHash: normalizeSeedText(logicalView?.snapshotHash),
+                                    messageIds: Array.isArray(logicalView?.visibleMessages)
+                                        ? logicalView!.visibleMessages.slice(-16).map((item): string => normalizeSeedText(item.messageId)).filter(Boolean)
+                                        : [],
+                                    mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
+                                    repairGeneration: Number(state.mutationRepairGeneration ?? 0),
+                                    ts: Date.now(),
+                                },
+                            },
+                        },
                     });
                     touchedCounts.summariesCreated = 1;
                 }
@@ -1372,7 +1528,17 @@ export class ChatStateManager {
                     if (!text) {
                         continue;
                     }
-                    const chunkIds = await vectorManager.indexText(text, 'facts');
+                    const provenance = (fact.provenance ?? {}) as Record<string, unknown>;
+                    const chunkIds = await vectorManager.indexText(text, 'facts', {
+                        source: {
+                            kind: 'maintenance',
+                            reason: 'revectorize_fact',
+                            viewHash: readProvenanceViewHash(provenance),
+                            messageIds: readProvenanceMessageIds(provenance),
+                            repairGeneration: Number(state.mutationRepairGeneration ?? 0),
+                            ts: Date.now(),
+                        },
+                    });
                     rebuilt += chunkIds.length;
                 }
                 for (const summary of summaries) {
@@ -1380,7 +1546,18 @@ export class ChatStateManager {
                     if (!text) {
                         continue;
                     }
-                    const chunkIds = await vectorManager.indexText(text, 'summaries');
+                    const source = (summary.source ?? {}) as Record<string, unknown>;
+                    const provenance = (source.provenance ?? {}) as Record<string, unknown>;
+                    const chunkIds = await vectorManager.indexText(text, 'summaries', {
+                        source: {
+                            kind: 'maintenance',
+                            reason: 'revectorize_summary',
+                            viewHash: readProvenanceViewHash(provenance),
+                            messageIds: readProvenanceMessageIds(provenance),
+                            repairGeneration: Number(state.mutationRepairGeneration ?? 0),
+                            ts: Date.now(),
+                        },
+                    });
                     rebuilt += chunkIds.length;
                 }
                 touchedCounts.vectorChunksRebuilt = rebuilt;
@@ -2062,6 +2239,11 @@ export class ChatStateManager {
         return state.logicalChatView ?? null;
     }
 
+    async getMutationRepairGeneration(): Promise<number> {
+        const state = await this.load();
+        return Math.max(0, Number(state.mutationRepairGeneration ?? 0));
+    }
+
     /**
      * 功能：写入逻辑消息视图并同步聊天生命周期变更信息。
      * 参数：
@@ -2078,6 +2260,10 @@ export class ChatStateManager {
             Array.isArray(view.mutationKinds) ? view.mutationKinds : [],
             mutationSource,
         );
+        if (shouldEnqueueMutationRepair(Array.isArray(view.mutationKinds) ? view.mutationKinds : [])) {
+            this.enqueueMutationRepairTask(state, view);
+            await this.runMutationRepairQueue(state);
+        }
         const effectivePolicy = await this.getAdaptivePolicy();
         if (effectivePolicy.groupLaneEnabled !== false) {
             state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory ?? DEFAULT_GROUP_MEMORY, state.semanticSeed ?? null);
@@ -2085,6 +2271,355 @@ export class ChatStateManager {
         state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice ?? [], state);
         await this.refreshLifecycleState(state, 'logical_view');
         this.markDirty();
+    }
+
+    private enqueueMutationRepairTask(state: MemoryOSChatState, view: LogicalChatView): void {
+        const queue = Array.isArray(state.mutationRepairQueue) ? state.mutationRepairQueue : [];
+        if (normalizeSeedText(state.lastMutationRepairViewHash) === normalizeSeedText(view.viewHash)) {
+            state.mutationRepairQueue = queue;
+            return;
+        }
+        const latestTask = queue[queue.length - 1];
+        if (latestTask && normalizeSeedText(latestTask.viewHash) === normalizeSeedText(view.viewHash)) {
+            state.mutationRepairQueue = queue;
+            return;
+        }
+        const nextGeneration = Math.max(0, Number(state.mutationRepairGeneration ?? 0)) + 1;
+        const task: MutationRepairTask = {
+            taskId: crypto.randomUUID(),
+            viewHash: normalizeSeedText(view.viewHash),
+            snapshotHash: normalizeSeedText(view.snapshotHash),
+            mutationKinds: Array.isArray(view.mutationKinds) ? view.mutationKinds : [],
+            invalidatedMessageIds: Array.isArray(view.invalidatedMessageIds) ? view.invalidatedMessageIds.filter(Boolean) : [],
+            activeMessageIds: Array.isArray(view.activeMessageIds) ? view.activeMessageIds.filter(Boolean) : [],
+            repairAnchorMessageId: normalizeSeedText(view.repairAnchorMessageId) || undefined,
+            repairGeneration: nextGeneration,
+            enqueuedAt: Date.now(),
+            attempts: 0,
+            status: 'pending',
+        };
+        state.mutationRepairQueue = [...queue, task].slice(-16);
+        state.mutationRepairGeneration = nextGeneration;
+    }
+
+    private async runMutationRepairQueue(state: MemoryOSChatState): Promise<void> {
+        const queue = Array.isArray(state.mutationRepairQueue) ? state.mutationRepairQueue : [];
+        if (queue.length === 0 || state.archived === true) {
+            state.mutationRepairQueue = queue;
+            return;
+        }
+        while (queue.length > 0) {
+            const task = queue[0];
+            if (!task) {
+                queue.shift();
+                continue;
+            }
+            task.status = 'running';
+            task.attempts = Number(task.attempts ?? 0) + 1;
+            try {
+                await this.executeMutationRepairTask(state, task);
+                queue.shift();
+                state.lastMutationRepairViewHash = task.viewHash;
+                state.lastMutationRepairAt = Date.now();
+                state.mutationRepairGeneration = Math.max(
+                    Number(state.mutationRepairGeneration ?? 0),
+                    Number(task.repairGeneration ?? 0),
+                );
+            } catch (error) {
+                task.status = 'failed';
+                task.lastError = String((error as Error)?.message ?? error);
+                logger.warn(`Mutation repair failed chatKey=${this.chatKey}, viewHash=${task.viewHash}`, error);
+                break;
+            }
+        }
+        state.mutationRepairQueue = queue;
+    }
+
+    private async executeMutationRepairTask(state: MemoryOSChatState, task: MutationRepairTask): Promise<void> {
+        const view = state.logicalChatView;
+        if (!view || normalizeSeedText(view.viewHash) !== normalizeSeedText(task.viewHash)) {
+            return;
+        }
+
+        const hasLegacyData = await this.hasLegacyDerivationData();
+        if (hasLegacyData) {
+            await this.runMaintenanceAction('rebuild_summary');
+            await this.targetedRevectorizeByView(view, task, true);
+            state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
+            if (state.groupMemory) {
+                state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
+            }
+            await this.recomputeMemoryQuality();
+            return;
+        }
+
+        await this.archiveInvalidDerivedArtifacts(view, task);
+        await this.rebuildLatestSummaryForRepair(view, task);
+        await this.targetedRevectorizeByView(view, task, false);
+        state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
+        if (state.groupMemory) {
+            state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
+        }
+        await this.recomputeMemoryQuality();
+    }
+
+    private rebuildTurnLedgerByActiveMessages(turnLedger: TurnRecord[], activeMessageIds: string[]): TurnRecord[] {
+        const activeSet = new Set((Array.isArray(activeMessageIds) ? activeMessageIds : []).map((item) => normalizeSeedText(item)).filter(Boolean));
+        if (activeSet.size === 0) {
+            return Array.isArray(turnLedger) ? turnLedger : [];
+        }
+        return (Array.isArray(turnLedger) ? turnLedger : []).filter((turn) => {
+            const messageId = normalizeSeedText(turn.messageId);
+            if (!messageId) {
+                return true;
+            }
+            return activeSet.has(messageId);
+        });
+    }
+
+    private async hasLegacyDerivationData(): Promise<boolean> {
+        const [facts, summaries, vectorChunks] = await Promise.all([
+            db.facts
+                .where('[chatKey+updatedAt]')
+                .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                .reverse()
+                .limit(300)
+                .toArray(),
+            db.summaries
+                .where('[chatKey+level+createdAt]')
+                .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
+                .reverse()
+                .limit(120)
+                .toArray(),
+            db.vector_chunks
+                .where('chatKey')
+                .equals(this.chatKey)
+                .limit(300)
+                .toArray(),
+        ]);
+        const hasLegacyFacts = facts.some((fact): boolean => !hasStructuredProvenance(fact.provenance));
+        if (hasLegacyFacts) {
+            return true;
+        }
+        const hasLegacySummaries = summaries.some((summary): boolean => {
+            const source = (summary.source ?? {}) as Record<string, unknown>;
+            return !hasStructuredProvenance(source.provenance);
+        });
+        if (hasLegacySummaries) {
+            return true;
+        }
+        return vectorChunks.some((chunk): boolean => !hasStructuredProvenance((chunk.metadata as Record<string, unknown> | undefined)?.source
+            ? { source: (chunk.metadata as Record<string, unknown>).source }
+            : null));
+    }
+
+    private async archiveInvalidDerivedArtifacts(view: LogicalChatView, task: MutationRepairTask): Promise<void> {
+        const invalidIds = new Set(
+            (Array.isArray(task.invalidatedMessageIds) ? task.invalidatedMessageIds : [])
+                .map((id: string): string => normalizeSeedText(id))
+                .filter(Boolean),
+        );
+        if (invalidIds.size === 0) {
+            return;
+        }
+        const [facts, summaries, vectorChunks] = await Promise.all([
+            db.facts
+                .where('[chatKey+updatedAt]')
+                .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                .toArray(),
+            db.summaries
+                .where('[chatKey+level+createdAt]')
+                .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
+                .toArray(),
+            db.vector_chunks
+                .where('chatKey')
+                .equals(this.chatKey)
+                .toArray(),
+        ]);
+
+        const staleFactKeys = facts
+            .filter((fact): boolean => {
+                const viewHash = readProvenanceViewHash(fact.provenance);
+                const messageIds = readProvenanceMessageIds(fact.provenance);
+                return (viewHash && viewHash !== view.viewHash)
+                    || hasArrayIntersection(messageIds, invalidIds);
+            })
+            .map((fact): string => normalizeSeedText(fact.factKey))
+            .filter(Boolean);
+        if (staleFactKeys.length > 0) {
+            await this.archiveFactKeys(staleFactKeys);
+        }
+
+        const staleSummaryIds = summaries
+            .filter((summary): boolean => {
+                const source = (summary.source ?? {}) as Record<string, unknown>;
+                const viewHash = readProvenanceViewHash(source.provenance);
+                const messageIds = readProvenanceMessageIds(source.provenance);
+                return (viewHash && viewHash !== view.viewHash)
+                    || hasArrayIntersection(messageIds, invalidIds);
+            })
+            .map((summary): string => normalizeSeedText(summary.summaryId))
+            .filter(Boolean);
+        if (staleSummaryIds.length > 0) {
+            await this.archiveSummaryIds(staleSummaryIds);
+        }
+
+        const staleChunkIds = vectorChunks
+            .filter((chunk): boolean => {
+                const metadata = (chunk.metadata ?? {}) as Record<string, unknown>;
+                const source = (metadata.source ?? {}) as Record<string, unknown>;
+                const viewHash = normalizeSeedText(source.viewHash);
+                const messageIdsRaw = source.messageIds;
+                const messageIds = Array.isArray(messageIdsRaw)
+                    ? messageIdsRaw.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean)
+                    : [];
+                return (viewHash && viewHash !== view.viewHash)
+                    || hasArrayIntersection(messageIds, invalidIds);
+            })
+            .map((chunk): string => normalizeSeedText(chunk.chunkId))
+            .filter(Boolean);
+        if (staleChunkIds.length > 0) {
+            await Promise.all([
+                db.vector_chunks.bulkDelete(staleChunkIds),
+                db.vector_embeddings
+                    .where('chunkId')
+                    .anyOf(staleChunkIds)
+                    .delete(),
+            ]);
+            await this.archiveVectorChunkIds(staleChunkIds);
+        }
+    }
+
+    private async deleteManagedRepairSummaries(keepSummaryId: string): Promise<void> {
+        const summaries = await db.summaries
+            .where('[chatKey+level+createdAt]')
+            .between([this.chatKey, 'scene', Dexie.minKey], [this.chatKey, 'scene', Dexie.maxKey])
+            .toArray();
+        const duplicateIds = summaries
+            .filter((summary): boolean => {
+                const summaryId = normalizeSeedText(summary.summaryId);
+                if (!summaryId || summaryId === keepSummaryId) {
+                    return false;
+                }
+                const source = (summary.source ?? {}) as Record<string, unknown>;
+                const provenance = (source.provenance ?? {}) as Record<string, unknown>;
+                const derivation = (provenance.source ?? {}) as Record<string, unknown>;
+                return normalizeSeedText(source.extractor) === 'mutation_repair'
+                    || normalizeSeedText(derivation.kind) === 'logical_repair'
+                    || normalizeSeedText(summary.title).toLowerCase() === 'mutation repair summary';
+            })
+            .map((summary): string => normalizeSeedText(summary.summaryId))
+            .filter(Boolean);
+        if (duplicateIds.length > 0) {
+            await db.summaries.bulkDelete(Array.from(new Set(duplicateIds)));
+        }
+    }
+
+    private async deleteManagedMaintenanceSummaries(keepSummaryId: string): Promise<void> {
+        const summaries = await db.summaries
+            .where('[chatKey+level+createdAt]')
+            .between([this.chatKey, 'scene', Dexie.minKey], [this.chatKey, 'scene', Dexie.maxKey])
+            .toArray();
+        const duplicateIds = summaries
+            .filter((summary): boolean => {
+                const summaryId = normalizeSeedText(summary.summaryId);
+                if (!summaryId || summaryId === keepSummaryId) {
+                    return false;
+                }
+                const source = (summary.source ?? {}) as Record<string, unknown>;
+                const provenance = (source.provenance ?? {}) as Record<string, unknown>;
+                const derivation = (provenance.source ?? {}) as Record<string, unknown>;
+                return (
+                    normalizeSeedText(source.extractor) === 'maintenance'
+                    && normalizeSeedText(derivation.reason) === 'rebuild_summary'
+                ) || normalizeSeedText(summary.title) === '缁存姢閲嶅缓鎽樿';
+            })
+            .map((summary): string => normalizeSeedText(summary.summaryId))
+            .filter(Boolean);
+        if (duplicateIds.length > 0) {
+            await db.summaries.bulkDelete(Array.from(new Set(duplicateIds)));
+        }
+    }
+
+    private async rebuildLatestSummaryForRepair(view: LogicalChatView, task: MutationRepairTask): Promise<void> {
+        const summariesManager = new SummariesManager(this.chatKey);
+        const lines = view.visibleMessages
+            .slice(Math.max(0, view.visibleMessages.length - 20))
+            .map((item): string => normalizeSeedText(item.text))
+            .filter(Boolean);
+        if (lines.length === 0) {
+            return;
+        }
+        const recentVisible = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - 20));
+        const firstMessageId = normalizeSeedText(recentVisible[0]?.messageId);
+        const lastMessageId = normalizeSeedText(recentVisible[recentVisible.length - 1]?.messageId);
+        const summaryId = buildManagedSummaryStableId(this.chatKey, 'mutation_repair_scene');
+        await this.deleteManagedRepairSummaries(summaryId);
+        await summariesManager.upsert({
+            summaryId,
+            level: 'scene',
+            title: 'Mutation repair summary',
+            content: lines.join('\n'),
+            range: {
+                fromMessageId: firstMessageId || undefined,
+                toMessageId: lastMessageId || undefined,
+            },
+            source: {
+                extractor: 'mutation_repair',
+                provider: 'stx_memory_os',
+                provenance: {
+                    extractor: 'mutation_repair',
+                    provider: 'stx_memory_os',
+                    source: {
+                        kind: 'logical_repair',
+                        reason: task.mutationKinds.join('|'),
+                        viewHash: view.viewHash,
+                        snapshotHash: view.snapshotHash,
+                        messageIds: recentVisible.map((item) => normalizeSeedText(item.messageId)).filter(Boolean),
+                        anchorMessageId: task.repairAnchorMessageId || undefined,
+                        mutationKinds: task.mutationKinds,
+                        repairGeneration: task.repairGeneration,
+                        ts: Date.now(),
+                    },
+                },
+            },
+        });
+    }
+
+    private async targetedRevectorizeByView(
+        view: LogicalChatView,
+        task: MutationRepairTask,
+        conservativeFallback: boolean,
+    ): Promise<void> {
+        const vectorManager = new VectorManager(this.chatKey);
+        if (conservativeFallback) {
+            await vectorManager.clear();
+        }
+        const recentVisible = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - (conservativeFallback ? 40 : 24)));
+        if (recentVisible.length === 0) {
+            return;
+        }
+        const sourceMessageIds = recentVisible.map((item) => normalizeSeedText(item.messageId)).filter(Boolean);
+        const text = recentVisible
+            .map((item): string => normalizeSeedText(`${item.role}: ${item.text}`))
+            .filter(Boolean)
+            .join('\n');
+        if (!text) {
+            return;
+        }
+        await vectorManager.indexText(text, conservativeFallback ? 'repair_fallback' : 'repair', {
+            source: {
+                kind: conservativeFallback ? 'conservative_repair' : 'targeted_repair',
+                reason: task.mutationKinds.join('|'),
+                viewHash: view.viewHash,
+                snapshotHash: view.snapshotHash,
+                messageIds: sourceMessageIds,
+                anchorMessageId: task.repairAnchorMessageId || undefined,
+                mutationKinds: task.mutationKinds,
+                repairGeneration: task.repairGeneration,
+                ts: Date.now(),
+            },
+        });
     }
 
     /**
@@ -2112,6 +2647,42 @@ export class ChatStateManager {
         return value || null;
     }
 
+    async getColdStartStage(): Promise<ColdStartStage | null> {
+        const state = await this.load();
+        const stage = normalizeSeedText(state.coldStartStage);
+        if (stage === 'seeded' || stage === 'prompt_primed' || stage === 'extract_primed') {
+            return stage;
+        }
+        return null;
+    }
+
+    async markColdStartStage(
+        stage: ColdStartStage,
+        fingerprint: string,
+        options?: { primedAt?: number },
+    ): Promise<boolean> {
+        const state = await this.load();
+        const currentFingerprint = normalizeSeedText(state.coldStartFingerprint);
+        const incomingFingerprint = normalizeSeedText(fingerprint);
+        if (!currentFingerprint || !incomingFingerprint || currentFingerprint !== incomingFingerprint) {
+            return false;
+        }
+        const currentStage = normalizeSeedText(state.coldStartStage);
+        const stageRank = (value: string): number => {
+            if (value === 'extract_primed') return 3;
+            if (value === 'prompt_primed') return 2;
+            if (value === 'seeded') return 1;
+            return 0;
+        };
+        if (stageRank(currentStage) >= stageRank(stage)) {
+            return false;
+        }
+        state.coldStartStage = stage;
+        state.coldStartPrimedAt = Number(options?.primedAt ?? Date.now()) || Date.now();
+        this.markDirty();
+        return true;
+    }
+
     /**
      * 功能：写入冷启动语义种子并同步基础画像偏置。
      * 参数：
@@ -2124,6 +2695,8 @@ export class ChatStateManager {
         const state = await this.load();
         state.semanticSeed = seed;
         state.coldStartFingerprint = normalizeSeedText(fingerprint) || undefined;
+        state.coldStartStage = 'seeded';
+        state.coldStartPrimedAt = undefined;
 
         const nextProfile: ChatProfile = {
             ...DEFAULT_CHAT_PROFILE,
@@ -2357,7 +2930,9 @@ export class ChatStateManager {
      */
     async setCharacterBindingFingerprint(fingerprint: string): Promise<void> {
         const state = await this.load();
-        state.characterBindingFingerprint = String(fingerprint ?? '').trim() || undefined;
+        const previousFingerprint = normalizeSeedText(state.characterBindingFingerprint);
+        const nextFingerprint = normalizeSeedText(fingerprint);
+        state.characterBindingFingerprint = nextFingerprint || undefined;
         const [groupIdRaw, characterIdRaw] = String(fingerprint ?? '').split('|');
         const groupId = normalizeSeedText(groupIdRaw === '-' ? '' : groupIdRaw);
         const characterId = normalizeSeedText(characterIdRaw === '-' ? '' : characterIdRaw);
@@ -2371,6 +2946,12 @@ export class ChatStateManager {
             },
             updatedAt: Date.now(),
         };
+        if (previousFingerprint !== nextFingerprint) {
+            state.coldStartFingerprint = undefined;
+            state.coldStartStage = undefined;
+            state.coldStartPrimedAt = undefined;
+            state.semanticSeed = undefined;
+        }
         await this.recordLifecycleMutation(state, ['character_binding_changed'], 'character_binding');
         this.markDirty();
     }

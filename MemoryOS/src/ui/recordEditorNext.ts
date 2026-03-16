@@ -6,6 +6,7 @@ import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import { readPluginSignal } from '../../../SDK/db';
+import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import type { TemplateTableDef } from '../template/types';
 import type { LogicTableRow } from '../types';
 
@@ -25,6 +26,7 @@ interface CurrentSort {
 
 interface ChatItemMeta {
     chatKey: string;
+    canonicalKey: string;
     displayName: string;
     systemName: string;
     avatarHtml: string;
@@ -33,6 +35,78 @@ interface ChatItemMeta {
 }
 
 type RawRecord = Record<string, unknown>;
+
+function normalizeRecordTextSignature(value: unknown): string {
+    return String(value ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function resolveChatItemCanonicalKey(chatKey: string): string {
+    const normalizedChatKey = String(chatKey ?? '').trim();
+    if (!normalizedChatKey) {
+        return '';
+    }
+    const scope = getTavernContextSnapshotEvent();
+    const ref = parseAnyTavernChatRefEvent(normalizedChatKey, {
+        tavernInstanceId: String(scope?.tavernInstanceId ?? '').trim() || undefined,
+        scopeType: scope?.scopeType,
+        scopeId: String(scope?.scopeId ?? '').trim() || undefined,
+    });
+    return buildTavernChatEntityKeyEvent(ref) || normalizedChatKey.toLowerCase();
+}
+
+function readEventMessageId(record: RawRecord): string {
+    const refs = (record.refs as Record<string, unknown> | undefined) || {};
+    return String(refs.messageId ?? refs.sourceMessageId ?? '').trim();
+}
+
+function readEventPayloadText(record: RawRecord): string {
+    const payload = (record.payload as Record<string, unknown> | undefined) || {};
+    return String(payload.text ?? payload.content ?? '').trim();
+}
+
+function dedupeDisplayEvents(records: RawRecord[]): RawRecord[] {
+    const kept: RawRecord[] = [];
+    const seenTsByKey = new Map<string, number>();
+
+    for (const record of records) {
+        const type = String(record.type ?? '').trim();
+        if (type !== 'chat.message.received' && type !== 'chat.message.sent') {
+            kept.push(record);
+            continue;
+        }
+
+        const messageId = readEventMessageId(record);
+        const textSignature = normalizeRecordTextSignature(readEventPayloadText(record));
+        const dedupeKey = messageId
+            ? `${type}|id:${messageId}`
+            : textSignature
+                ? `${type}|text:${textSignature}`
+                : '';
+
+        if (!dedupeKey) {
+            kept.push(record);
+            continue;
+        }
+
+        const currentTs = Number(record.ts ?? 0);
+        const previousTs = seenTsByKey.get(dedupeKey);
+        const withinDuplicateWindow = previousTs != null && (
+            dedupeKey.includes('|id:')
+            || Math.abs(currentTs - previousTs) <= 5000
+        );
+        if (withinDuplicateWindow) {
+            continue;
+        }
+
+        seenTsByKey.set(dedupeKey, currentTs);
+        kept.push(record);
+    }
+
+    return kept;
+}
 
 /**
  * 功能：标准化消息发送方标签。
@@ -263,6 +337,7 @@ async function buildChatItemMeta(
 
     return {
         chatKey,
+        canonicalKey: resolveChatItemCanonicalKey(chatKey),
         displayName,
         systemName: chatKey,
         avatarHtml,
@@ -886,9 +961,17 @@ export async function openRecordEditor(): Promise<void> {
      * @returns 无返回值
      */
     function activateChatItem(chatKey: string): void {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        const activeCanonicalKey = normalizedChatKey ? resolveChatItemCanonicalKey(normalizedChatKey) : '';
         chatListContainer.querySelectorAll('.stx-re-chat-item').forEach((item: Element): void => {
             const element = item as HTMLElement;
-            element.classList.toggle('is-active', String(element.dataset.chatKey ?? '') === chatKey);
+            const itemChatKey = String(element.dataset.chatKey ?? '').trim();
+            const itemCanonicalKey = String(element.dataset.chatCanonicalKey ?? '').trim();
+            const isActive = !normalizedChatKey
+                ? itemChatKey === ''
+                : itemChatKey === normalizedChatKey
+                    || (activeCanonicalKey && itemCanonicalKey === activeCanonicalKey);
+            element.classList.toggle('is-active', isActive);
         });
     }
 
@@ -925,6 +1008,29 @@ export async function openRecordEditor(): Promise<void> {
                 const signal = await readPluginSignal(chatKey, MEMORY_OS_PLUGIN_ID);
                 return buildChatItemMeta(chatKey, signal);
             }));
+            const activeCanonicalKey = resolveChatItemCanonicalKey(currentChatKey);
+            const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta>, item: ChatItemMeta) => {
+                const dedupeKey = item.canonicalKey || item.chatKey;
+                const existing = map.get(dedupeKey);
+                if (!existing) {
+                    map.set(dedupeKey, item);
+                    return map;
+                }
+
+                const existingIsActive = Boolean(activeCanonicalKey) && existing.canonicalKey === activeCanonicalKey;
+                const nextIsActive = Boolean(activeCanonicalKey) && item.canonicalKey === activeCanonicalKey;
+                if (nextIsActive && !existingIsActive) {
+                    map.set(dedupeKey, item);
+                    return map;
+                }
+
+                const nextCreatedAt = Number(item.createdAt ?? 0);
+                const existingCreatedAt = Number(existing.createdAt ?? 0);
+                if (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal)) {
+                    map.set(dedupeKey, item);
+                }
+                return map;
+            }, new Map<string, ChatItemMeta>()).values());
 
             const allItemHtml = `
                 <div class="stx-re-chat-item${currentChatKey ? '' : ' is-active'}" data-chat-key="">
@@ -937,10 +1043,10 @@ export async function openRecordEditor(): Promise<void> {
                 </div>
             `;
 
-            const listHtml = items
+            const listHtml = dedupedItems
                 .sort((left: ChatItemMeta, right: ChatItemMeta): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
                 .map((item: ChatItemMeta): string => `
-                    <div class="stx-re-chat-item${item.chatKey === currentChatKey ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" title="${escapeHtml(item.systemName)}">
+                    <div class="stx-re-chat-item${item.chatKey === currentChatKey || (activeCanonicalKey && item.canonicalKey === activeCanonicalKey) ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" data-chat-canonical-key="${escapeHtml(item.canonicalKey)}" title="${escapeHtml(item.systemName)}">
                         ${item.avatarHtml}
                         <div class="stx-re-chat-info">
                             <div class="stx-re-chat-name">${escapeHtml(item.displayName)}</div>
@@ -1082,6 +1188,12 @@ export async function openRecordEditor(): Promise<void> {
                 updateRawSelectionState();
                 return;
             }
+            const displayData = tableName === 'events' ? dedupeDisplayEvents(data) : [...data];
+            if (displayData.length === 0) {
+                contentArea.innerHTML = '<div class="stx-re-empty">暂无数据记录。</div>';
+                updateRawSelectionState();
+                return;
+            }
 
             const defaultSortCol = tableName === 'events' || tableName === 'audit'
                 ? 'ts'
@@ -1091,7 +1203,7 @@ export async function openRecordEditor(): Promise<void> {
                         ? 'level'
                         : 'factKey';
             const sortCol = currentSort.col || defaultSortCol;
-            data.sort((left: RawRecord, right: RawRecord): number => {
+            displayData.sort((left: RawRecord, right: RawRecord): number => {
                 const leftValue = left[sortCol];
                 const rightValue = right[sortCol];
                 if (leftValue === rightValue) {
@@ -1113,7 +1225,6 @@ export async function openRecordEditor(): Promise<void> {
                 }
                 return 0;
             });
-
             const headerCell = (label: string, column: string): string => {
                 const isActive = sortCol === column;
                 const icon = isActive
@@ -1125,7 +1236,7 @@ export async function openRecordEditor(): Promise<void> {
             let theadHtml = '';
             let rowsHtml = '';
 
-            data.forEach((record: RawRecord): void => {
+            displayData.forEach((record: RawRecord): void => {
                 const recordId = getRawRecordId(tableName, record);
                 const pendingKey = makePendingKey(tableName, recordId);
                 const isPendingDelete = pendingChanges.deletes.has(pendingKey);

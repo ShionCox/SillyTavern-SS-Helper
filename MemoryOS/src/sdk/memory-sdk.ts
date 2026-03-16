@@ -20,7 +20,8 @@ import { RowOperationsManager } from '../core/row-operations';
 import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeed } from '../core/chat-semantic-bootstrap';
-import { archiveMemoryChat, db, purgeMemoryChat, restoreArchivedMemoryChat } from '../db/db';
+import { db, restoreArchivedMemoryChat } from '../db/db';
+import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import type { TemplateTableDef } from '../template/types';
@@ -49,6 +50,7 @@ import type {
     PromptRenderStyle,
     PromptSoftPersonaMode,
     RetentionPolicy,
+    SummaryPolicyOverride,
     StrategyDecision,
     UserFacingChatPreset,
     VectorLifecycleState,
@@ -194,7 +196,7 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     /**
-     * 功能：执行聊天冷启动语义建档，双写到 chatState 与 facts/state。
+     * 功能：收集并保存冷启动 seed（绑定阶段只做轻量采集，不落重写入）。
      * @returns Promise<void>
      */
     private async bootstrapSemanticSeedIfNeeded(): Promise<void> {
@@ -211,26 +213,41 @@ export class MemorySDKImpl implements MemorySDK {
             return;
         }
         const seed = bootstrap.seed;
-        await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
         if (bootstrap.bindingFingerprint) {
             await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
         }
-        await this.persistSemanticSeed(seed, bootstrap.fingerprint);
+        await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
     }
 
     /**
-     * 功能：将语义种子提炼后写入 facts/state。
+     * 功能：把 seed 做轻量落地（prompt-prime 阶段），仅写 starter facts/state。
      * @param seed 语义种子。
      * @param fingerprint 种子指纹。
+     * @param reason 触发来源。
      */
-    private async persistSemanticSeed(seed: ChatSemanticSeed, fingerprint: string): Promise<void> {
+    private async persistSemanticSeed(seed: ChatSemanticSeed, fingerprint: string, reason: string = 'prompt_prime'): Promise<void> {
         const roleKey = String(seed.identitySeed?.roleKey ?? '').trim();
         const semanticCharacterId = String((seed.characterCore as Record<string, unknown> | undefined)?.characterId ?? '').trim();
         if (!isStableTavernRoleKeyEvent(roleKey, { characterId: semanticCharacterId })) {
             return;
         }
         const roleEntity = { kind: 'character', id: roleKey };
-        const provenance = { extractor: 'semantic_seed_bootstrap', fingerprint, ts: Date.now() };
+        const provenance = {
+            extractor: 'semantic_seed_bootstrap',
+            provider: 'stx_memory_os',
+            fingerprint,
+            source: {
+                kind: 'cold_start',
+                reason,
+                viewHash: '',
+                snapshotHash: '',
+                messageIds: [],
+                mutationKinds: [],
+                repairGeneration: 0,
+                ts: Date.now(),
+            },
+            ts: Date.now(),
+        };
         await this.factsManager.upsert({
             type: 'semantic.identity',
             entity: roleEntity,
@@ -262,6 +279,93 @@ export class MemorySDKImpl implements MemorySDK {
         await this.stateManager.set('/semantic/world/hardConstraints', seed.worldSeed.hardConstraints, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/activeLorebooks', seed.activeLorebooks, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/groupMembers', seed.groupMembers, { sourceEventId: fingerprint });
+    }
+
+    private async primeColdStartPrompt(reason: string): Promise<boolean> {
+        if (await this.chatStateManager.isChatArchived()) {
+            return false;
+        }
+        const [seed, fingerprint, stage] = await Promise.all([
+            this.chatStateManager.getSemanticSeed(),
+            this.chatStateManager.getColdStartFingerprint(),
+            this.chatStateManager.getColdStartStage(),
+        ]);
+        if (!seed || !fingerprint) {
+            return false;
+        }
+        if (stage === 'prompt_primed' || stage === 'extract_primed') {
+            return false;
+        }
+        await this.persistSemanticSeed(seed, fingerprint, reason || 'prompt_prime');
+        await this.chatStateManager.markColdStartStage('prompt_primed', fingerprint, { primedAt: Date.now() });
+        return true;
+    }
+
+    private async primeColdStartExtract(reason: string): Promise<boolean> {
+        if (await this.chatStateManager.isChatArchived()) {
+            return false;
+        }
+        const [seed, fingerprint, stage] = await Promise.all([
+            this.chatStateManager.getSemanticSeed(),
+            this.chatStateManager.getColdStartFingerprint(),
+            this.chatStateManager.getColdStartStage(),
+        ]);
+        if (!seed || !fingerprint) {
+            return false;
+        }
+        if (stage === 'extract_primed') {
+            return false;
+        }
+        if (stage === 'seeded') {
+            await this.primeColdStartPrompt('auto_prompt_prime_before_extract');
+        }
+
+        const summaryLines = [
+            ...seed.identitySeed.identity.slice(0, 4),
+            ...seed.worldSeed.rules.slice(0, 4),
+            ...seed.worldSeed.hardConstraints.slice(0, 3),
+        ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);
+        if (summaryLines.length > 0) {
+            const summaryText = summaryLines.join('\n');
+            await this.summariesManager.upsert({
+                level: 'scene',
+                title: 'Cold-start prime',
+                content: summaryText,
+                source: {
+                    extractor: 'cold_start',
+                    provider: 'stx_memory_os',
+                    provenance: {
+                        extractor: 'cold_start',
+                        provider: 'stx_memory_os',
+                        fingerprint,
+                        source: {
+                            kind: 'cold_start',
+                            reason,
+                            viewHash: '',
+                            snapshotHash: '',
+                            messageIds: [],
+                            mutationKinds: [],
+                            repairGeneration: 0,
+                            ts: Date.now(),
+                        },
+                    },
+                },
+            });
+            await this.hybridSearch.indexText(summaryText, 'cold_start', {
+                source: {
+                    kind: 'cold_start',
+                    reason,
+                    viewHash: '',
+                    snapshotHash: '',
+                    messageIds: [],
+                    mutationKinds: [],
+                    repairGeneration: 0,
+                    ts: Date.now(),
+                },
+            });
+        }
+        await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
+        return true;
     }
 
     // 事件流
@@ -521,7 +625,7 @@ export class MemorySDKImpl implements MemorySDK {
         getSummaryPolicyOverride: () => {
             return this.chatStateManager.getSummaryPolicyOverride();
         },
-        setSummaryPolicyOverride: (override) => {
+        setSummaryPolicyOverride: (override: SummaryPolicyOverride) => {
             return this.chatStateManager.setSummaryPolicyOverride(override);
         },
         getAdaptiveMetrics: (): Promise<AdaptiveMetrics> => {
@@ -587,6 +691,15 @@ export class MemorySDKImpl implements MemorySDK {
         getSemanticSeed: (): Promise<ChatSemanticSeed | null> => {
             return this.chatStateManager.getSemanticSeed();
         },
+        getColdStartStage: () => {
+            return this.chatStateManager.getColdStartStage();
+        },
+        primeColdStartPrompt: async (reason: string = 'chat_completion_prompt_ready'): Promise<boolean> => {
+            return this.primeColdStartPrompt(reason);
+        },
+        primeColdStartExtract: async (reason: string = 'generation_ended'): Promise<boolean> => {
+            return this.primeColdStartExtract(reason);
+        },
         getLorebookDecision: (): Promise<LorebookGateDecision | null> => {
             return this.chatStateManager.getLorebookDecision();
         },
@@ -635,16 +748,24 @@ export class MemorySDKImpl implements MemorySDK {
             return rebuildResult.view;
         },
         archiveChat: async (): Promise<void> => {
-            await this.chatStateManager.archiveMemoryChat('soft_delete');
-            await archiveMemoryChat(this.chatKey_, 'soft_delete');
+            await this.chatStateManager.setRetentionPolicyOverride({
+                deletionStrategy: 'soft_delete',
+            });
+            await this.chatStateManager.flush();
+            const lifecycle = new ChatLifecycleManager();
+            await lifecycle.applyChatDeletionLifecycle(this.chatKey_, 'soft_delete');
         },
         restoreArchivedChat: async (): Promise<void> => {
             await this.chatStateManager.restoreArchivedMemoryChat();
             await restoreArchivedMemoryChat(this.chatKey_);
         },
         purgeChat: async (options?: { includeAudit?: boolean }): Promise<void> => {
-            await purgeMemoryChat(this.chatKey_, { includeAudit: options?.includeAudit ?? false });
-            await this.chatStateManager.destroy();
+            await this.chatStateManager.setRetentionPolicyOverride({
+                deletionStrategy: 'immediate_purge',
+            });
+            await this.chatStateManager.flush();
+            const lifecycle = new ChatLifecycleManager();
+            await lifecycle.applyChatDeletionLifecycle(this.chatKey_, 'immediate_purge');
         },
         flush: () => {
             return this.chatStateManager.flush();

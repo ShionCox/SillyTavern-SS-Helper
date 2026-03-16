@@ -90,6 +90,10 @@ export type {
     RunTaskArgs,
     EmbedArgs,
     RerankArgs,
+    LLMRequestLogEntry,
+    LLMRequestLogQueryOptions,
+    LLMRequestLogRequestSnapshot,
+    LLMRequestLogResponseSnapshot,
 } from './schema/types';
 
 // UI 层
@@ -100,9 +104,13 @@ import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
 import {
+    appendSdkPluginChatRecord,
+    deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
+    querySdkPluginChatRecords,
     readSdkPluginChatState,
+    trimSdkPluginChatRecords,
     writeSdkPluginChatState,
 } from '../../SDK/db';
 import { buildSdkChatKeyEvent } from '../../SDK/tavern';
@@ -130,11 +138,19 @@ import type {
     GlobalAssignments,
     PluginAssignment,
     TaskAssignment,
+    RequestRecord,
+    LLMRequestLogRequestSnapshot,
+    LLMRequestLogResponseSnapshot,
+    LLMRequestLogEntry,
+    LLMRequestLogQueryOptions,
+    RequestState,
 } from './schema/types';
 import manifestJson from '../manifest.json';
 
 const LLMHUB_OVERLAY_ROOT_ID = 'stx-llmhub-overlay-root';
 const LLMHUB_OVERLAY_STYLE_ID = 'stx-llmhub-overlay-style';
+const REQUEST_LOG_COLLECTION = 'request_logs_v1';
+const REQUEST_LOG_MAX_PER_CHAT = 300;
 
 export const logger = new Logger('AI 调度中枢');
 export const toast = new Toast('AI 调度中枢');
@@ -144,6 +160,68 @@ export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 type MemoryOsBridgeRuntime = {
     refreshLlmBridgeRegistration?: (reason?: string) => string | void;
 };
+
+function truncateString(value: string, max = 4000): { value: string; truncated: boolean; originalLength: number } {
+    if (value.length <= max) {
+        return { value, truncated: false, originalLength: value.length };
+    }
+    const suffix = ` ...(truncated ${value.length - max} chars)`;
+    return {
+        value: `${value.slice(0, Math.max(0, max - suffix.length))}${suffix}`,
+        truncated: true,
+        originalLength: value.length,
+    };
+}
+
+function sanitizeForLog(value: unknown, options?: { maxDepth?: number; maxArray?: number; maxKeys?: number; maxString?: number }): unknown {
+    const maxDepth = options?.maxDepth ?? 6;
+    const maxArray = options?.maxArray ?? 30;
+    const maxKeys = options?.maxKeys ?? 50;
+    const maxString = options?.maxString ?? 4000;
+    const seen = new WeakSet<object>();
+
+    const walk = (input: unknown, depth: number): unknown => {
+        if (input == null) return input;
+        if (typeof input === 'string') return truncateString(input, maxString).value;
+        if (typeof input === 'number' || typeof input === 'boolean') return input;
+        if (typeof input === 'bigint' || typeof input === 'symbol') return String(input);
+        if (typeof input === 'function') return `[Function ${(input as Function).name || 'anonymous'}]`;
+        if (depth >= maxDepth) return '[MaxDepth]';
+
+        if (Array.isArray(input)) {
+            const limited = input.slice(0, maxArray).map((item) => walk(item, depth + 1));
+            if (input.length > maxArray) {
+                limited.push(`[+${input.length - maxArray} more items]`);
+            }
+            return limited;
+        }
+
+        if (typeof input === 'object') {
+            const objectValue = input as Record<string, unknown>;
+            if (seen.has(objectValue)) return '[Circular]';
+            seen.add(objectValue);
+
+            const keys = Object.keys(objectValue);
+            const limitedKeys = keys.slice(0, maxKeys);
+            const out: Record<string, unknown> = {};
+            for (const key of limitedKeys) {
+                out[key] = walk(objectValue[key], depth + 1);
+            }
+            if (keys.length > maxKeys) {
+                out.__truncatedKeys = keys.length - maxKeys;
+            }
+            return out;
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(input));
+        } catch {
+            return String(input);
+        }
+    };
+
+    return walk(value, 0);
+}
 
 const LLMHUB_MANIFEST: PluginManifest = {
     pluginId: 'stx_llmhub',
@@ -216,6 +294,9 @@ class LLMHub {
             this.registry,
         );
         this.sdk.inspect = this.buildInspectApi();
+        this.orchestrator.setArchiveCallback((record) => {
+            void this.persistRequestLog(record);
+        });
 
         this.bindOverlayRenderer();
 
@@ -613,6 +694,124 @@ class LLMHub {
         const budgets = { ...(settings.budgets || {}) };
         delete budgets[consumer];
         this.writeSettings({ ...settings, budgets });
+    }
+
+    public async listChatRequestLogs(chatKey: string, opts?: LLMRequestLogQueryOptions): Promise<LLMRequestLogEntry[]> {
+        const key = String(chatKey || '').trim();
+        if (!key) return [];
+
+        const records = await querySdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION, {
+            limit: opts?.limit,
+            offset: opts?.offset,
+            order: opts?.order || 'desc',
+            fromTs: opts?.fromTs,
+            toTs: opts?.toTs,
+        });
+
+        let entries = records
+            .map((row) => row.payload as LLMRequestLogEntry)
+            .filter((entry) => Boolean(entry && entry.requestId));
+
+        if (opts?.state && opts.state !== 'all') {
+            entries = entries.filter((entry) => entry.state === opts.state);
+        }
+
+        const searchTerm = String(opts?.search || '').trim().toLowerCase();
+        if (searchTerm) {
+            entries = entries.filter((entry) => {
+                const content = [
+                    entry.consumer,
+                    entry.taskId,
+                    entry.taskDescription,
+                    entry.requestId,
+                    entry.response?.meta?.resourceId,
+                    entry.response?.meta?.model,
+                    entry.response?.reasonCode,
+                ]
+                    .filter(Boolean)
+                    .join(' ')
+                    .toLowerCase();
+                return content.includes(searchTerm);
+            });
+        }
+
+        return entries;
+    }
+
+    public async clearChatRequestLogs(chatKey: string): Promise<number> {
+        const key = String(chatKey || '').trim();
+        if (!key) return 0;
+        return deleteSdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION);
+    }
+
+    private buildLogResponseSnapshot(record: RequestRecord): LLMRequestLogResponseSnapshot {
+        const meta = record.meta
+            ? {
+                requestId: record.meta.requestId,
+                resourceId: record.meta.resourceId,
+                model: record.meta.model,
+                capabilityKind: record.meta.capabilityKind,
+                queuedAt: record.meta.queuedAt,
+                startedAt: record.meta.startedAt,
+                finishedAt: record.meta.finishedAt,
+                latencyMs: record.meta.latencyMs,
+                fallbackUsed: record.meta.fallbackUsed,
+            }
+            : undefined;
+
+        return {
+            meta,
+            finalError: record.debug?.finalError,
+            reasonCode: record.debug?.reasonCode,
+            validationErrors: Array.isArray(record.debug?.validationErrors) ? record.debug?.validationErrors.slice(0, 50) : undefined,
+            rawResponseText: typeof record.debug?.rawResponseText === 'string'
+                ? (sanitizeForLog(record.debug.rawResponseText, { maxString: 12000 }) as string)
+                : undefined,
+            parsedResponse: sanitizeForLog(record.debug?.parsedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
+            normalizedResponse: sanitizeForLog(record.debug?.normalizedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
+        };
+    }
+
+    private async persistRequestLog(record: RequestRecord): Promise<void> {
+        if (record.state !== 'completed' && record.state !== 'failed' && record.state !== 'cancelled' && record.state !== 'overlay_waiting') return;
+        const chatKey = String(record.chatKey || '').trim();
+        if (!chatKey) return;
+
+        const requestSnapshot = sanitizeForLog(
+            record.requestLogSnapshot || {
+                taskKind: record.taskKind,
+                taskDescription: record.taskDescription,
+            },
+            { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 },
+        ) as LLMRequestLogRequestSnapshot;
+
+        const responseSnapshot = this.buildLogResponseSnapshot(record);
+        const latencyMs = record.finishedAt && record.startedAt ? Math.max(0, record.finishedAt - record.startedAt) : undefined;
+
+        const logEntry: LLMRequestLogEntry = {
+            logId: `${record.requestId}_${record.finishedAt || Date.now()}`,
+            requestId: record.requestId,
+            chatKey,
+            consumer: record.consumer,
+            taskId: record.taskId,
+            taskDescription: record.taskDescription,
+            taskKind: record.taskKind,
+            state: record.state as RequestState,
+            queuedAt: record.queuedAt,
+            startedAt: record.startedAt,
+            finishedAt: record.finishedAt,
+            latencyMs,
+            request: requestSnapshot,
+            response: responseSnapshot,
+        };
+
+        await appendSdkPluginChatRecord('stx_llmhub', chatKey, REQUEST_LOG_COLLECTION, {
+            recordId: logEntry.logId,
+            payload: logEntry as unknown as Record<string, unknown>,
+            ts: record.finishedAt || record.queuedAt,
+        });
+
+        await trimSdkPluginChatRecords('stx_llmhub', chatKey, REQUEST_LOG_COLLECTION, REQUEST_LOG_MAX_PER_CHAT);
     }
 
     private buildInspectApi(): LLMInspectApi {

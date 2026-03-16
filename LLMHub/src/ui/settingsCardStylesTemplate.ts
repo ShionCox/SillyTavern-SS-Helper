@@ -841,6 +841,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-size: 10px;
       font-weight: 600;
       letter-spacing: 0.02em;
+      flex-shrink: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-state-badge.is-running {
@@ -962,6 +964,310 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.5;
       white-space: pre-wrap;
       word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-log-modal {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      max-width: min(1240px, 96vw);
+      width: min(1240px, 96vw);
+    }
+
+    #${cardId} .stx-ui-log-modal::backdrop {
+      background: rgba(0, 0, 0, 0.56);
+      backdrop-filter: blur(2px);
+    }
+
+    #${cardId} .stx-ui-log-modal:not([open]) {
+      display: none;
+    }
+
+    #${cardId} .stx-ui-log-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.38);
+    }
+
+    #${cardId} .stx-ui-log-modal-panel {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      min-width: 0;
+      height: min(82vh, 860px);
+      min-height: min(82vh, 860px);
+      max-height: min(82vh, 860px);
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.14));
+      background: var(--ss-theme-surface-1, rgba(0, 0, 0, 0.42));
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+    }
+
+    #${cardId} .stx-ui-log-modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.1));
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.36)) 82%, transparent);
+    }
+
+    #${cardId} .stx-ui-log-modal-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    #${cardId} .stx-ui-log-modal-body {
+      flex: 1 1 auto;
+      display: flex;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-log-layout {
+      flex: 1 1 auto;
+      height: auto;
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+    }
+
+    #${cardId} .stx-ui-log-sidebar {
+      min-width: 0;
+      border-right: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.1));
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.3)) 88%, transparent);
+    }
+
+    #${cardId} .stx-ui-log-toolbar {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      border-bottom: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.08));
+    }
+
+    #${cardId} .stx-ui-log-toolbar .stx-ui-input,
+    #${cardId} .stx-ui-log-toolbar .stx-ui-select {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-log-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 10px;
+      font-size: 11px;
+      opacity: 0.8;
+      min-width: 0;
+      border-bottom: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.08));
+    }
+
+    #${cardId} .stx-ui-log-chatkey,
+    #${cardId} .stx-ui-log-count {
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
+    #${cardId} .stx-ui-log-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      overflow: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-log-list-item {
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.12));
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.15);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      text-align: left;
+      color: inherit;
+    }
+
+    #${cardId} .stx-ui-log-list-item.is-active {
+      border-color: var(--ss-theme-border-strong, rgba(197, 160, 89, 0.72));
+      background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.24));
+    }
+
+    #${cardId} .stx-ui-log-list-head,
+    #${cardId} .stx-ui-log-list-meta,
+    #${cardId} .stx-ui-log-list-subtitle,
+    #${cardId} .stx-ui-log-list-timeline {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-log-list-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-log-list-title {
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-log-list-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11px;
+      opacity: 0.82;
+      flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-log-list-subtitle {
+      font-size: 11px;
+      line-height: 1.45;
+      opacity: 0.68;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
+    #${cardId} .stx-ui-log-list-timeline {
+      display: grid;
+      gap: 4px;
+      font-size: 11px;
+      line-height: 1.45;
+      opacity: 0.82;
+    }
+
+    #${cardId} .stx-ui-log-list-timeline span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-log-detail-wrap {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #${cardId} .stx-ui-log-actions {
+      padding: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.08));
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-log-actions .stx-ui-btn {
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-log-detail {
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #${cardId} .stx-ui-log-section {
+      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.12));
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.14);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-log-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      opacity: 0.9;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-log-pre {
+      margin: 0;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 11px;
+      line-height: 1.55;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      max-height: none;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: visible;
+    }
+
+    @media (max-width: 900px) {
+      #${cardId} .stx-ui-log-modal {
+        width: 96vw;
+      }
+
+      #${cardId} .stx-ui-log-modal-panel {
+        min-height: 88vh;
+        max-height: 88vh;
+      }
+
+      #${cardId} .stx-ui-log-layout {
+        grid-template-columns: 1fr;
+      }
+
+      #${cardId} .stx-ui-log-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.1));
+        max-height: 45vh;
+      }
     }
 
     #${cardId} .stx-ui-stale-indicator {

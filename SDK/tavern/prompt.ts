@@ -48,6 +48,37 @@ function getPromptArrayTextEvent(contentArray: unknown[]): string {
 }
 
 /**
+ * 功能：统一读取普通聊天消息文本，优先读取当前激活 swipe。
+ * @param message 任意消息对象（SillyTavern 原始消息或兼容结构）
+ * @returns 归一化后的消息文本
+ */
+export function getTavernMessageTextEvent(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const messageRecord = message as Record<string, unknown>;
+
+  const swipeId = Number(messageRecord.swipe_id ?? messageRecord.swipeId);
+  const swipes = messageRecord.swipes;
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    const activeSwipe = swipes[swipeId];
+    if (typeof activeSwipe === "string") {
+      return activeSwipe.trim();
+    }
+    if (activeSwipe && typeof activeSwipe === "object") {
+      const swipeText = getTavernPromptMessageTextEvent(activeSwipe as SdkTavernPromptMessageEvent);
+      if (swipeText.trim().length > 0) return swipeText.trim();
+      const swipeRecord = activeSwipe as Record<string, unknown>;
+      const fallbackSwipeText = swipeRecord.mes ?? swipeRecord.content ?? swipeRecord.text ?? swipeRecord.message;
+      if (typeof fallbackSwipeText === "string") return fallbackSwipeText.trim();
+    }
+  }
+
+  const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
+  if (promptText.trim().length > 0) return promptText.trim();
+  const raw = messageRecord.mes ?? messageRecord.content ?? messageRecord.text ?? messageRecord.message;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+/**
  * 功能：按原有 `content` 结构构造新文本，避免把结构化消息写坏。
  * @param currentContent 当前 `content`
  * @param nextText 新文本

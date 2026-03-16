@@ -126,7 +126,10 @@ export class HybridSearchManager {
      * @param bookId 来源 bookId。
      * @returns 写入的分块键列表。
      */
-    async indexText(text: string, bookId?: string): Promise<string[]> {
+    async indexText(text: string, bookId?: string, metadata?: Record<string, unknown>): Promise<string[]> {
+        if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
+            return [];
+        }
         const adaptivePolicy = this.chatStateManager
             ? await this.chatStateManager.getAdaptivePolicy()
             : null;
@@ -138,7 +141,7 @@ export class HybridSearchManager {
         if (String(text ?? '').trim().length < threshold) {
             return [];
         }
-        const chunkIds = await this.vectorManager.indexText(text, bookId);
+        const chunkIds = await this.vectorManager.indexText(text, bookId, metadata);
         if (this.chatStateManager && chunkIds.length > 0) {
             const stats = await this.vectorManager.getIndexStats();
             await this.chatStateManager.updateVectorLifecycle({

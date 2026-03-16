@@ -380,6 +380,40 @@ export async function deleteSdkPluginChatRecords(
     return ids.length;
 }
 
+export async function trimSdkPluginChatRecords(
+    pluginId: string,
+    chatKey: string,
+    collection: string,
+    maxRecords: number,
+): Promise<number> {
+    const safeLimit = Math.max(0, Math.floor(maxRecords));
+    if (safeLimit <= 0) {
+        return deleteSdkPluginChatRecords(pluginId, chatKey, collection);
+    }
+
+    const all = await db.chat_plugin_records
+        .where('[pluginId+chatKey+collection+ts]')
+        .between(
+            [pluginId, chatKey, collection, Dexie.minKey],
+            [pluginId, chatKey, collection, Dexie.maxKey],
+            true,
+            true,
+        )
+        .toArray();
+
+    if (all.length <= safeLimit) return 0;
+
+    all.sort((a, b) => b.ts - a.ts);
+    const toDelete = all
+        .slice(safeLimit)
+        .map((item) => item.id)
+        .filter((id): id is number => id !== undefined);
+
+    if (toDelete.length <= 0) return 0;
+    await db.chat_plugin_records.bulkDelete(toDelete);
+    return toDelete.length;
+}
+
 // ─── 缓存失效 ───
 
 /** 清除指定 chatKey 的所有内存缓存（用于聊天切换时） */

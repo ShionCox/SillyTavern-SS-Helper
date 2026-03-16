@@ -104,6 +104,10 @@ export class ExtractManager {
             return;
         }
 
+        if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
+            return;
+        }
+
         const recentEvents = await this.eventsManager.query({ limit: 120 });
         const logicalView = this.chatStateManager
             ? await this.chatStateManager.getLogicalChatView()
@@ -280,6 +284,10 @@ export class ExtractManager {
                 schemaContext,
                 { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 },
             );
+
+            if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
+                await (memory as any).chatState.primeColdStartExtract('extract_success');
+            }
 
             if (this.chatStateManager) {
                 const windowBase = Math.max(1, extractionWindow.length);

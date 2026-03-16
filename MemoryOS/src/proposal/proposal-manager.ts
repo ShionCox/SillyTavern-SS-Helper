@@ -16,6 +16,10 @@ import { Logger } from '../../../SDK/logger';
 
 const logger = new Logger('ProposalManager');
 
+function normalizeText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
 /**
  * 提议写入管理器 —— 接收 AI 或外部插件的提议，经闸门后落盘
  * v2: 支持 schemaChanges 三段闸门与变更预算
@@ -144,6 +148,29 @@ export class ProposalManager {
 
         const { facts, patches, summaries, schemaChanges, entityResolutions } = envelope.proposal;
         const deferredHints: DeferredSchemaHint[] = [];
+        const logicalView = this.chatStateManager
+            ? await this.chatStateManager.getLogicalChatView()
+            : null;
+        const repairGeneration = this.chatStateManager
+            ? await this.chatStateManager.getMutationRepairGeneration()
+            : 0;
+        const visibleMessageIds = Array.isArray(logicalView?.visibleMessages)
+            ? logicalView!.visibleMessages
+                .slice(Math.max(0, logicalView!.visibleMessages.length - 40))
+                .map((item): string => normalizeText(item.messageId))
+                .filter(Boolean)
+            : [];
+        const derivationSource = {
+            kind: 'proposal_apply',
+            reason: `consumer:${consumerPluginId}`,
+            viewHash: normalizeText(logicalView?.viewHash),
+            snapshotHash: normalizeText(logicalView?.snapshotHash),
+            messageIds: visibleMessageIds,
+            anchorMessageId: normalizeText(logicalView?.repairAnchorMessageId) || undefined,
+            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
+            repairGeneration,
+            ts: Date.now(),
+        };
 
         // 判断 facts 密度
         const factsHighDensity = (facts?.length ?? 0) > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates;
@@ -208,7 +235,12 @@ export class ProposalManager {
                     path: f.path,
                     value: f.value,
                     confidence: f.confidence,
-                    provenance: { extractor: 'ai', pluginId: consumerPluginId },
+                    provenance: {
+                        extractor: 'ai',
+                        provider: consumerPluginId,
+                        pluginId: consumerPluginId,
+                        source: derivationSource,
+                    },
                 });
                 applied.factKeys.push(factKey);
                 factCellUpdates++;
@@ -237,7 +269,20 @@ export class ProposalManager {
                     title: s.title,
                     content: s.content,
                     keywords: s.keywords,
-                    source: { extractor: 'ai', provider: consumerPluginId },
+                    range: {
+                        fromMessageId: visibleMessageIds[0] ?? undefined,
+                        toMessageId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
+                    },
+                    source: {
+                        extractor: 'ai',
+                        provider: consumerPluginId,
+                        provenance: {
+                            extractor: 'ai',
+                            provider: consumerPluginId,
+                            pluginId: consumerPluginId,
+                            source: derivationSource,
+                        },
+                    },
                 });
                 applied.summaryIds.push(summaryId);
             }

@@ -62,6 +62,7 @@ export type {
     MemoryOSChatState, RetentionPolicy, StrategyDecision,
     AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
     TurnLifecycle, TurnKind, TurnRecord, LogicalChatView, LogicalMessageNode, ChatMutationKind, ChatArchiveState,
+    ColdStartStage, MutationRepairTask,
     RowAliasIndex, RowRedirects, RowTombstones,
 } from './types/chat-state';
 export type {
@@ -113,6 +114,7 @@ import {
     extractTavernPromptMessagesEvent,
     findFirstTavernPromptSystemIndexEvent,
     findLastTavernPromptSystemIndexEvent,
+    getTavernMessageTextEvent,
     getTavernPromptMessageTextEvent,
     insertTavernPromptSystemMessageEvent,
     isTavernPromptSystemMessageEvent,
@@ -912,30 +914,43 @@ class MemoryOS {
                 if (!activeChatKey) {
                     return;
                 }
+                const nextTextSignature = normalizeTextSignature(result.filteredText);
+                const pendingEventKey = normalizedMsgId
+                    ? `${activeChatKey}|${eventType}|id:${normalizedMsgId}`
+                    : nextTextSignature
+                        ? `${activeChatKey}|${eventType}|text:${nextTextSignature}`
+                        : '';
+                if (pendingEventKey && pendingMessageEventKeys.has(pendingEventKey)) {
+                    logger.info(`命中运行时并发去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId || '(none)'}`);
+                    recordIngestHealth(true);
+                    return;
+                }
+                if (pendingEventKey) {
+                    pendingMessageEventKeys.add(pendingEventKey);
+                }
 
                 const appendTask = (async (): Promise<void> => {
-                    const recentEvents = await db.events
-                        .where('[chatKey+type+ts]')
-                        .between([activeChatKey, eventType, 0], [activeChatKey, eventType, Infinity])
-                        .reverse()
-                        .limit(200)
-                        .toArray();
+                    try {
+                        const recentEvents = await db.events
+                            .where('[chatKey+type+ts]')
+                            .between([activeChatKey, eventType, 0], [activeChatKey, eventType, Infinity])
+                            .reverse()
+                            .limit(200)
+                            .toArray();
 
-                    if (normalizedMsgId) {
-                        const duplicatedByMsgId = recentEvents.some((item) => {
-                            return normalizeMessageId(item?.refs?.messageId) === normalizedMsgId;
-                        });
-                        if (duplicatedByMsgId) {
-                            logger.info(`命中数据库去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId}`);
-                            recordIngestHealth(true);
-                            return;
+                        if (normalizedMsgId) {
+                            const duplicatedByMsgId = recentEvents.some((item) => {
+                                return normalizeMessageId(item?.refs?.messageId) === normalizedMsgId;
+                            });
+                            if (duplicatedByMsgId) {
+                                logger.info(`命中数据库去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId}`);
+                                recordIngestHealth(true);
+                                return;
+                            }
                         }
-                    }
 
-                    // 某些历史消息/欢迎语没有稳定 messageId，按文本签名兜底去重
-                    if (!normalizedMsgId) {
-                        const nextTextSignature = normalizeTextSignature(result.filteredText);
-                        if (nextTextSignature) {
+                        // 某些历史消息/欢迎语没有稳定 messageId，按文本签名兜底去重
+                        if (!normalizedMsgId && nextTextSignature) {
                             const duplicatedByText = recentEvents.some((item) => {
                                 const storedText = String((item?.payload as { text?: unknown } | undefined)?.text ?? '');
                                 return normalizeTextSignature(storedText) === nextTextSignature;
@@ -946,28 +961,32 @@ class MemoryOS {
                                 return;
                             }
                         }
-                    }
 
-                    if (ingestHint === 'bootstrap') {
-                        const latestEvent = recentEvents[0];
-                        const latestText = normalizeTextSignature(String((latestEvent?.payload as { text?: unknown } | undefined)?.text ?? ''));
-                        const nextText = normalizeTextSignature(result.filteredText);
-                        if (latestText && nextText && latestText === nextText) {
-                            logger.info(`bootstrap 补录命中最新文本去重，跳过 type=${eventType}`);
-                            recordIngestHealth(true);
-                            return;
+                        if (ingestHint === 'bootstrap') {
+                            const latestEvent = recentEvents[0];
+                            const latestText = normalizeTextSignature(String((latestEvent?.payload as { text?: unknown } | undefined)?.text ?? ''));
+                            const nextText = normalizeTextSignature(result.filteredText);
+                            if (latestText && nextText && latestText === nextText) {
+                                logger.info(`bootstrap 补录命中最新文本去重，跳过 type=${eventType}`);
+                                recordIngestHealth(true);
+                                return;
+                            }
+                        }
+
+                        await memory.events.append(
+                            eventType,
+                            { text: result.filteredText },
+                            {
+                                sourcePlugin: 'sillytavern-core',
+                                sourceMessageId: normalizedMsgId || undefined,
+                            }
+                        );
+                        recordIngestHealth(false);
+                    } finally {
+                        if (pendingEventKey) {
+                            pendingMessageEventKeys.delete(pendingEventKey);
                         }
                     }
-
-                    await memory.events.append(
-                        eventType,
-                        { text: result.filteredText },
-                        {
-                            sourcePlugin: 'sillytavern-core',
-                            sourceMessageId: normalizedMsgId || undefined,
-                        }
-                    );
-                    recordIngestHealth(false);
                 })();
                 Promise.resolve(appendTask).catch((error: unknown) => {
                     logger.error(`记忆入库失败 type=${eventType}, msgId=${String(msgId ?? '')}`, error);
@@ -979,6 +998,7 @@ class MemoryOS {
 
         // 用 Set 追踪已记录的消息 ID，切换聊天时重置，防止重复事件写入两条记录
         const processedMessageKeys = new Set<string>();
+        const pendingMessageEventKeys = new Set<string>();
         const bootstrapAssistantByChatKey = new Map<string, string>();
         const historicalMessageIdsOnBind = new Set<string>();
         let bindHydrationUntilTs = 0;
@@ -1159,12 +1179,7 @@ class MemoryOS {
         };
         // 功能：从消息对象中提取文本，兼容 mes/content/text/message 字段。
         const readMessageText = (message: unknown): string => {
-            if (!message || typeof message !== 'object') {
-                return '';
-            }
-            const source = message as Record<string, unknown>;
-            const raw = source.mes ?? source.content ?? source.text ?? source.message;
-            return typeof raw === 'string' ? raw.trim() : '';
+            return getTavernMessageTextEvent(message);
         };
         const normalizeTextSignature = (value: string): string => {
             return String(value || '')
@@ -1295,6 +1310,7 @@ class MemoryOS {
 
             // 无论是否启用，切换时都清空消息去重 Set
             processedMessageKeys.clear();
+            pendingMessageEventKeys.clear();
             historicalMessageIdsOnBind.clear();
             bindHydrationUntilTs = 0;
             lastAssistantSignature = '';
@@ -1573,10 +1589,12 @@ class MemoryOS {
             (types as any).MESSAGE_EDITED,
             (types as any).MESSAGE_SWIPED,
             (types as any).MESSAGE_DELETED,
+            (types as any).CHAT_BRANCHED,
             (types as any).CHAT_RENAMED,
             'message_edited',
             'message_swiped',
             'message_deleted',
+            'chat_branched',
             'chat_renamed',
         ]
             .map((value: unknown): string => String(value ?? '').trim())
@@ -1597,6 +1615,10 @@ class MemoryOS {
                 // 尝试补录最后一条助手回复（仅兜底）
                 appendLatestAssistantMessageFallback();
                 rebuildLogicalViewIfNeeded('generation_ended', true);
+                void Promise.resolve((memory as any)?.chatState?.primeColdStartExtract?.('generation_ended'))
+                    .catch((error: unknown) => {
+                        logger.warn('Cold-start extract prime failed on generation_ended', error);
+                    });
 
                 // 若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
                 if (isAiModeEnabled()) {
@@ -1630,6 +1652,10 @@ class MemoryOS {
             }
             lastPromptReadyTs = now;
             rebuildLogicalViewIfNeeded('prompt_ready');
+            void Promise.resolve((memory as any)?.chatState?.primeColdStartPrompt?.('chat_completion_prompt_ready'))
+                .catch((error: unknown) => {
+                    logger.warn('Cold-start prompt prime failed on prompt_ready', error);
+                });
 
             try {
                 logger.info('触发大模型注入栈，正在向 Prompt 内附加短期事件池与摘要...');

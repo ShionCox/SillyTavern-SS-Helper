@@ -70,6 +70,8 @@ export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' |
 
 export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
 
+export type ColdStartStage = 'seeded' | 'prompt_primed' | 'extract_primed';
+
 /**
  * 功能：描述聊天画像中的向量策略。
  * @param enabled 是否启用向量。
@@ -490,6 +492,9 @@ export interface LogicalChatView {
     viewHash: string;
     snapshotHash: string;
     mutationKinds: ChatMutationKind[];
+    activeMessageIds: string[];
+    invalidatedMessageIds: string[];
+    repairAnchorMessageId?: string | null;
     rebuiltAt: number;
 }
 
@@ -551,7 +556,18 @@ export interface ChatSemanticSeed {
     jailbreak: string;
     instruct: string;
     activeLorebooks: string[];
+    lorebookSeed: Array<{
+        book: string;
+        hash: string;
+        snippets: string[];
+    }>;
     groupMembers: string[];
+    characterAnchors: Array<{
+        anchorId: string;
+        label: string;
+        value: string;
+        confidence: number;
+    }>;
     presetStyle: string;
     identitySeed: IdentitySeed;
     worldSeed: WorldSeed;
@@ -648,6 +664,21 @@ export interface SummaryFixTask {
     reason: string;
     lorebookMode: LorebookGateMode;
     createdAt: number;
+}
+
+export interface MutationRepairTask {
+    taskId: string;
+    viewHash: string;
+    snapshotHash: string;
+    mutationKinds: ChatMutationKind[];
+    invalidatedMessageIds: string[];
+    activeMessageIds: string[];
+    repairAnchorMessageId?: string | null;
+    repairGeneration: number;
+    enqueuedAt: number;
+    attempts: number;
+    status: 'pending' | 'running' | 'failed';
+    lastError?: string;
 }
 
 export interface AssistantTurnTracker {
@@ -922,6 +953,8 @@ export interface MemoryOSChatState {
     characterBindingFingerprint?: string;
     semanticSeed?: ChatSemanticSeed;
     coldStartFingerprint?: string;
+    coldStartStage?: ColdStartStage;
+    coldStartPrimedAt?: number;
     lastLorebookDecision?: LorebookGateDecision;
     promptInjectionProfile?: PromptInjectionProfile;
     lastPreGenerationDecision?: PreGenerationGateDecision | null;
@@ -929,6 +962,10 @@ export interface MemoryOSChatState {
     userFacingPreset?: UserFacingChatPreset | null;
     groupMemory?: GroupMemoryState;
     summaryFixQueue?: SummaryFixTask[];
+    mutationRepairQueue?: MutationRepairTask[];
+    lastMutationRepairViewHash?: string;
+    lastMutationRepairAt?: number;
+    mutationRepairGeneration?: number;
     rowAliasIndex?: RowAliasIndex;
     rowRedirects?: RowRedirects;
     rowTombstones?: RowTombstones;

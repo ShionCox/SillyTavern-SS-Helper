@@ -1,12 +1,20 @@
 import type { LLMRequest } from '../providers/types';
 import { TaskRouter } from '../router/router';
 import { BudgetManager } from '../budget/budget-manager';
-import { parseJsonOutput, validateZodSchema, WorldTemplateSchema, ProposalEnvelopeSchema, normalizeProposalEnvelopeInput } from '../schema/validator';
+import {
+    parseJsonOutput,
+    validateZodSchema,
+    WorldTemplateSchema,
+    ProposalEnvelopeSchema,
+    normalizeProposalEnvelopeInput,
+    normalizeWorldTemplateInput,
+} from '../schema/validator';
 import { ProfileManager } from '../profile/profile-manager';
 import { inferReasonCode } from '../schema/error-codes';
 import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
 import { ConsumerRegistry } from '../registry/consumer-registry';
+import { buildSdkChatKeyEvent } from '../../../SDK/tavern';
 import type {
     LLMRunResult,
     LLMRunMeta,
@@ -19,6 +27,7 @@ import type {
     RerankArgs,
     RequestRecord,
     RequestEnqueueOptions,
+    LLMRequestLogRequestSnapshot,
 } from '../schema/types';
 import type { ZodType } from 'zod';
 
@@ -113,6 +122,65 @@ export class LLMSDKImpl {
         return registeredText || taskId;
     }
 
+    private summarizeSchema(schema: unknown): string | undefined {
+        if (!schema) return undefined;
+        if (typeof schema === 'string') return schema;
+        const value = schema as Record<string, unknown>;
+        if (typeof value.description === 'string' && value.description.trim()) {
+            return value.description.trim();
+        }
+        if (typeof value.name === 'string' && value.name.trim()) {
+            return value.name.trim();
+        }
+        const ctorName = (schema as { constructor?: { name?: string } })?.constructor?.name;
+        return ctorName && ctorName !== 'Object' ? ctorName : 'schema';
+    }
+
+    private buildRequestLogSnapshot(
+        taskKind: CapabilityKind,
+        taskDescription: string,
+        args: RunTaskArgs | EmbedArgs | RerankArgs,
+    ): LLMRequestLogRequestSnapshot {
+        if (taskKind === 'embedding') {
+            const embedArgs = args as EmbedArgs;
+            return {
+                taskKind,
+                taskDescription,
+                routeHint: embedArgs.routeHint,
+                enqueue: embedArgs.enqueue,
+                embeddingTexts: Array.isArray(embedArgs.texts) ? embedArgs.texts.slice() : [],
+                metrics: { embeddingTextCount: Array.isArray(embedArgs.texts) ? embedArgs.texts.length : 0 },
+            };
+        }
+
+        if (taskKind === 'rerank') {
+            const rerankArgs = args as RerankArgs;
+            return {
+                taskKind,
+                taskDescription,
+                routeHint: rerankArgs.routeHint,
+                enqueue: rerankArgs.enqueue,
+                rerankQuery: rerankArgs.query,
+                rerankDocs: Array.isArray(rerankArgs.docs) ? rerankArgs.docs.slice() : [],
+                rerankTopK: rerankArgs.topK,
+                metrics: { rerankDocCount: Array.isArray(rerankArgs.docs) ? rerankArgs.docs.length : 0 },
+            };
+        }
+
+        const runArgs = args as RunTaskArgs;
+        const messageCount = Array.isArray(runArgs.input?.messages) ? runArgs.input.messages.length : undefined;
+        return {
+            taskKind,
+            taskDescription,
+            routeHint: runArgs.routeHint,
+            budget: runArgs.budget,
+            enqueue: runArgs.enqueue,
+            schemaSummary: this.summarizeSchema(runArgs.schema),
+            generationInput: runArgs.input,
+            metrics: { messageCount },
+        };
+    }
+
     /**
      * 执行 AI 任务。
      * 只等待 AI 结果返回，不等待展示关闭。
@@ -133,6 +201,8 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
+        record.chatKey = buildSdkChatKeyEvent();
+        record.requestLogSnapshot = this.buildRequestLogSnapshot(taskKind, taskDescription, args);
 
         // 将执行参数附到 record 上供 executeCallback 使用
         return record.resultPromise;
@@ -156,6 +226,8 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
+        record.chatKey = buildSdkChatKeyEvent();
+        record.requestLogSnapshot = this.buildRequestLogSnapshot('embedding', taskDescription, args);
 
         return record.resultPromise;
     }
@@ -178,6 +250,8 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
+        record.chatKey = buildSdkChatKeyEvent();
+        record.requestLogSnapshot = this.buildRequestLogSnapshot('rerank', taskDescription, args);
 
         return record.resultPromise;
     }
@@ -561,7 +635,9 @@ export class LLMSDKImpl {
 
                 const normalizedInput = taskId === 'memory.extract' || taskId === 'world.update' || taskId === 'memory.summarize'
                     ? normalizeProposalEnvelopeInput(parsed.data)
-                    : parsed.data;
+                    : taskId === 'world.template.build'
+                        ? normalizeWorldTemplateInput(parsed.data)
+                        : parsed.data;
 
                 const validation = validateZodSchema(normalizedInput, runtimeSchema);
                 if (!validation.valid) {

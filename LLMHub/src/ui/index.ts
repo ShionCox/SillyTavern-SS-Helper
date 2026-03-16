@@ -9,7 +9,7 @@ import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { showSharedContextMenu } from '../../../_Components/sharedContextMenu';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
-import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
+import { buildSdkChatKeyEvent, getTavernConnectionSnapshot } from '../../../SDK/tavern';
 import type { TavernConnectionInfoItem, TavernConnectionSnapshot } from '../../../SDK/tavern';
 import { discoverConsumers } from '../discovery/consumer-discovery';
 import type { DiscoveredConsumer } from '../discovery/consumer-discovery';
@@ -27,6 +27,9 @@ import type {
     TaskDescriptor,
     LLMCapability,
     SilentPermissionGrant,
+    LLMRequestLogEntry,
+    LLMRequestLogQueryOptions,
+    RequestState,
 } from '../schema/types';
 
 let LLMHUB_THEME_BINDING_READY = false;
@@ -51,6 +54,8 @@ type LLMHubRuntime = {
     previewRoute?: (args: import('../schema/types').RouteResolveArgs) => Promise<import('../schema/types').RoutePreviewSnapshot>;
     setBudgetConfig?: (consumer: string, config: BudgetConfig) => void;
     removeBudgetConfig?: (consumer: string) => void;
+    listChatRequestLogs?: (chatKey: string, opts?: LLMRequestLogQueryOptions) => Promise<LLMRequestLogEntry[]>;
+    clearChatRequestLogs?: (chatKey: string) => Promise<number>;
     registry?: {
         listConsumerRegistrations?: () => ConsumerSnapshot[];
         subscribe?: (listener: () => void) => (() => void);
@@ -69,19 +74,6 @@ type LLMHubRuntime = {
         getQueueSnapshot?: () => {
             pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
             active: { requestId: string; consumer: string; taskId: string; state: string } | null;
-            recentHistory: Array<{
-                requestId: string;
-                consumer: string;
-                taskId: string;
-                state: string;
-                finishedAt?: number;
-                rawResponseText?: string;
-                parsedResponse?: unknown;
-                normalizedResponse?: unknown;
-                validationErrors?: string[];
-                finalError?: string;
-                reasonCode?: string;
-            }>;
         };
     };
     displayController?: {
@@ -326,6 +318,43 @@ function formatTimestamp(ts: number): string {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
 }
 
+function formatDateTime(ts?: number): string {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return [
+        d.getFullYear(),
+        `${d.getMonth() + 1}`.padStart(2, '0'),
+        `${d.getDate()}`.padStart(2, '0'),
+    ].join('-') + ` ${formatTimestamp(ts)}`;
+}
+
+function buildRequestLogSearchText(entry: LLMRequestLogEntry): string {
+    return [
+        entry.consumer,
+        entry.taskId,
+        entry.taskDescription,
+        entry.requestId,
+        entry.response?.meta?.resourceId,
+        entry.response?.meta?.model,
+        entry.response?.reasonCode,
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+}
+
+function formatRequestLogResource(resourceId?: string): string {
+    if (!resourceId) return '未设';
+    if (resourceId === '__builtin_tavern__') return '酒馆直连（内置） (__builtin_tavern__)';
+    return resourceId;
+}
+
+function inferRequestLogSource(resourceId?: string): string {
+    if (!resourceId) return '未知';
+    if (resourceId === '__builtin_tavern__') return '酒馆';
+    return '资源池';
+}
+
 function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
     return snapshot.available ? 'is-ok' : 'is-warning';
 }
@@ -490,7 +519,17 @@ const IDS: LLMHubSettingsIds = {
     queueSnapshotListId: `${NAMESPACE}-queue-snapshot-list`,
     queueRefreshBtnId: `${NAMESPACE}-queue-refresh-btn`,
     silentPermissionsListId: `${NAMESPACE}-silent-permissions-list`,
-    recentHistoryListId: `${NAMESPACE}-recent-history-list`,
+    requestLogOpenBtnId: `${NAMESPACE}-request-log-open-btn`,
+    requestLogModalId: `${NAMESPACE}-request-log-modal`,
+    requestLogModalCloseId: `${NAMESPACE}-request-log-modal-close`,
+    requestLogChatKeyId: `${NAMESPACE}-request-log-chat-key`,
+    requestLogCountId: `${NAMESPACE}-request-log-count`,
+    requestLogSearchId: `${NAMESPACE}-request-log-search`,
+    requestLogStateFilterId: `${NAMESPACE}-request-log-state`,
+    requestLogRefreshBtnId: `${NAMESPACE}-request-log-refresh-btn`,
+    requestLogClearBtnId: `${NAMESPACE}-request-log-clear-btn`,
+    requestLogListId: `${NAMESPACE}-request-log-list`,
+    requestLogDetailId: `${NAMESPACE}-request-log-detail`,
 };
 
 function getRuntime(): LLMHubRuntime | null {
@@ -618,7 +657,6 @@ function bindUiEvents(): void {
             if (panelId === IDS.panelAssignId) renderPluginAssignments();
             if (panelId === IDS.panelOrchId) {
                 renderQueueSnapshot();
-                renderRecentHistory();
                 renderSilentPermissions();
             }
         });
@@ -2012,79 +2050,229 @@ function bindUiEvents(): void {
         listEl.innerHTML = items.length > 0 ? items.join('') : '<div class="stx-ui-list-empty">队列为空</div>';
     };
 
-    const renderRecentHistory = (): void => {
-        const listEl = document.getElementById(IDS.recentHistoryListId);
-        if (!listEl) return;
-        const snapshot = runtime?.orchestrator?.getQueueSnapshot?.();
-        if (!snapshot || !snapshot.recentHistory.length) {
-            listEl.innerHTML = '<div class="stx-ui-list-empty">暂无记录</div>';
+    const requestLogModal = document.getElementById(IDS.requestLogModalId) as HTMLDialogElement | null;
+    const requestLogSearchInput = document.getElementById(IDS.requestLogSearchId) as HTMLInputElement | null;
+    const requestLogStateInput = document.getElementById(IDS.requestLogStateFilterId) as HTMLSelectElement | null;
+    const requestLogListEl = document.getElementById(IDS.requestLogListId);
+    const requestLogDetailEl = document.getElementById(IDS.requestLogDetailId);
+    const requestLogChatKeyEl = document.getElementById(IDS.requestLogChatKeyId);
+    const requestLogCountEl = document.getElementById(IDS.requestLogCountId);
+    const requestLogClearBtn = document.getElementById(IDS.requestLogClearBtnId) as HTMLButtonElement | null;
+    const requestLogOpenBtn = document.getElementById(IDS.requestLogOpenBtnId) as HTMLButtonElement | null;
+    const requestLogCloseBtn = document.getElementById(IDS.requestLogModalCloseId) as HTMLButtonElement | null;
+    const requestLogRefreshBtn = document.getElementById(IDS.requestLogRefreshBtnId) as HTMLButtonElement | null;
+    let requestLogBoundChatKey = '';
+    let requestLogAllEntries: LLMRequestLogEntry[] = [];
+    let requestLogFilteredEntries: LLMRequestLogEntry[] = [];
+    let requestLogSelectedId = '';
+
+    const buildRequestLogSectionHtml = (title: string, value: unknown): string => `
+        <section class="stx-ui-log-section">
+          <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
+          <pre class="stx-ui-log-pre">${escapeHtml(stringifyDebugValue(value))}</pre>
+        </section>
+    `;
+
+    const renderRequestLogDetail = (entry: LLMRequestLogEntry | null): void => {
+        if (!requestLogDetailEl) return;
+        if (!entry) {
+            requestLogDetailEl.innerHTML = '<div class="stx-ui-list-empty">暂无可显示的日志详情</div>';
             return;
         }
 
-                listEl.innerHTML = snapshot.recentHistory.slice().reverse().map((item) => {
-                        const debugSections: string[] = [];
-                        if (item.finalError) {
-                                debugSections.push(`
-                                        <div class="stx-ui-history-section">
-                                            <div class="stx-ui-history-label">错误信息</div>
-                                            <div class="stx-ui-history-error">${escapeHtml(item.finalError)}${item.reasonCode ? `\n原因码：${escapeHtml(item.reasonCode)}` : ''}</div>
-                                        </div>
-                                `);
-                        }
-                        if (Array.isArray(item.validationErrors) && item.validationErrors.length > 0) {
-                                debugSections.push(`
-                                        <div class="stx-ui-history-section">
-                                            <div class="stx-ui-history-label">Schema 校验详情</div>
-                                            <pre class="stx-ui-history-pre">${escapeHtml(item.validationErrors.join('\n'))}</pre>
-                                        </div>
-                                `);
-                        }
-                        if (item.normalizedResponse !== undefined) {
-                                debugSections.push(`
-                                        <div class="stx-ui-history-section">
-                                            <div class="stx-ui-history-label">归一化后 JSON</div>
-                                            <pre class="stx-ui-history-pre">${escapeHtml(stringifyDebugValue(item.normalizedResponse))}</pre>
-                                        </div>
-                                `);
-                        }
-                        if (item.parsedResponse !== undefined) {
-                                debugSections.push(`
-                                        <div class="stx-ui-history-section">
-                                            <div class="stx-ui-history-label">解析出的 JSON</div>
-                                            <pre class="stx-ui-history-pre">${escapeHtml(stringifyDebugValue(item.parsedResponse))}</pre>
-                                        </div>
-                                `);
-                        }
-                        if (item.rawResponseText) {
-                                debugSections.push(`
-                                        <div class="stx-ui-history-section">
-                                            <div class="stx-ui-history-label">AI 原始回复</div>
-                                            <pre class="stx-ui-history-pre">${escapeHtml(item.rawResponseText)}</pre>
-                                        </div>
-                                `);
-                        }
+        const resourceId = entry.response?.meta?.resourceId;
+        const routeRule = entry.response?.meta?.fallbackUsed ? '内置酒馆回退' : '正常路由';
+        const failureSummary = (entry.state === 'failed' || entry.state === 'cancelled')
+            ? {
+                任务: entry.taskDescription || entry.taskId,
+                状态: STATE_LABELS[entry.state] || entry.state,
+                耗时: entry.latencyMs !== undefined ? `${entry.latencyMs}ms` : '-',
+                资源: formatRequestLogResource(resourceId),
+                模型: entry.response?.meta?.model || '未设',
+                规则: routeRule,
+                来源: inferRequestLogSource(resourceId),
+                说明: entry.response?.reasonCode || '-',
+                阻塞原因: entry.response?.reasonCode || '-',
+                错误: entry.response?.finalError || '-',
+              }
+            : null;
+        const schemaValidationHint = entry.response?.reasonCode === 'schema_validation_failed'
+            ? {
+                诊断: '模型返回内容未通过任务 Schema 校验，通常是 JSON 结构不完整或字段类型不匹配。',
+                建议1: '给该任务绑定支持稳定 JSON 输出的资源/模型，避免长期落到内置酒馆回退。',
+                建议2: '查看“结果接收”中的 rawResponseText，确认是否返回了合法 JSON 与必填字段（例如 entities）。',
+                建议3: '若必须走酒馆源，可先降低该任务 schema 复杂度或增加重试/修复策略。',
+              }
+            : null;
 
-                        return `
-                            <div class="stx-ui-list-item stx-ui-history-item">
-                                <div class="stx-ui-history-head">
-                                    <div class="stx-ui-history-main">
-                                        <div class="stx-ui-list-title">${escapeHtml(item.consumer)} / ${escapeHtml(item.taskId)}</div>
-                                        <div class="stx-ui-list-meta">
-                                            ID: ${escapeHtml(item.requestId.slice(0, 8))}...
-                                            ${item.finishedAt ? ` | 完成 ${formatTimestamp(item.finishedAt)}` : ''}
-                                        </div>
-                                    </div>
-                                    <span class="stx-ui-state-badge ${getStateBadgeClass(item.state)}">${STATE_LABELS[item.state] || item.state}</span>
-                                </div>
-                                ${debugSections.length > 0 ? `
-                                    <details class="stx-ui-history-details">
-                                        <summary>查看 AI 回复详情</summary>
-                                        <div class="stx-ui-history-body">${debugSections.join('')}</div>
-                                    </details>
-                                ` : ''}
-                            </div>`;
-                }).join('');
+        const overview = {
+            requestId: entry.requestId,
+            consumer: entry.consumer,
+            taskId: entry.taskId,
+            taskDescription: entry.taskDescription,
+            taskKind: entry.taskKind,
+            state: entry.state,
+            chatKey: entry.chatKey,
+        };
+        const requestSent = {
+            sentAt: entry.queuedAt,
+            sentAtText: formatDateTime(entry.queuedAt),
+            request: entry.request,
+            truncated: entry.truncated,
+        };
+        const responseReceived = {
+            receivedAt: entry.finishedAt,
+            receivedAtText: entry.finishedAt ? formatDateTime(entry.finishedAt) : '等待接收',
+            meta: entry.response?.meta,
+            finalError: entry.response?.finalError,
+            reasonCode: entry.response?.reasonCode,
+            validationErrors: entry.response?.validationErrors,
+            rawResponseText: entry.response?.rawResponseText,
+            parsedResponse: entry.response?.parsedResponse,
+            normalizedResponse: entry.response?.normalizedResponse,
+        };
+        const executionTrace = {
+            startedAt: entry.startedAt,
+            startedAtText: entry.startedAt ? formatDateTime(entry.startedAt) : undefined,
+            latencyMs: entry.latencyMs,
+            fallbackUsed: entry.response?.meta?.fallbackUsed,
+        };
+
+        const sections: string[] = [];
+        if (failureSummary) {
+            sections.push(buildRequestLogSectionHtml('失败摘要', failureSummary));
+        }
+        if (schemaValidationHint) {
+            sections.push(buildRequestLogSectionHtml('诊断建议', schemaValidationHint));
+        }
+        sections.push(buildRequestLogSectionHtml('概览', overview));
+        sections.push(buildRequestLogSectionHtml('请求发出', requestSent));
+        sections.push(buildRequestLogSectionHtml('结果接收', responseReceived));
+        sections.push(buildRequestLogSectionHtml('执行轨迹', executionTrace));
+        requestLogDetailEl.innerHTML = sections.join('');
     };
+
+    const renderRequestLogList = (): void => {
+        if (!requestLogListEl) return;
+        if (!requestLogFilteredEntries.length) {
+            requestLogListEl.innerHTML = '<div class="stx-ui-list-empty">当前筛选条件下没有日志</div>';
+            renderRequestLogDetail(null);
+            return;
+        }
+
+        requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => `
+          <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}">
+            <div class="stx-ui-log-list-head">
+              <div class="stx-ui-log-list-title">${escapeHtml(entry.consumer)} / ${escapeHtml(entry.taskId)}</div>
+              <span class="stx-ui-state-badge ${getStateBadgeClass(entry.state)}">${STATE_LABELS[entry.state] || entry.state}</span>
+            </div>
+            <div class="stx-ui-log-list-subtitle">${escapeHtml(entry.requestId)}</div>
+            <div class="stx-ui-log-list-timeline">
+              <span>发出 ${escapeHtml(formatTimestamp(entry.queuedAt))}</span>
+              <span>${entry.finishedAt ? `接收 ${escapeHtml(formatTimestamp(entry.finishedAt))}` : '等待接收'}</span>
+            </div>
+          </button>
+        `).join('');
+
+        const selected = requestLogFilteredEntries.find((entry) => entry.logId === requestLogSelectedId) || requestLogFilteredEntries[0];
+        requestLogSelectedId = selected.logId;
+        renderRequestLogDetail(selected);
+    };
+
+    const applyRequestLogFilters = (): void => {
+        const search = String(requestLogSearchInput?.value || '').trim().toLowerCase();
+        const state = (String(requestLogStateInput?.value || 'all').trim() || 'all') as RequestState | 'all';
+
+        requestLogFilteredEntries = requestLogAllEntries.filter((entry) => {
+            if (state !== 'all' && entry.state !== state) return false;
+            if (!search) return true;
+            return buildRequestLogSearchText(entry).includes(search);
+        });
+
+        if (requestLogCountEl) {
+            requestLogCountEl.textContent = `共 ${requestLogFilteredEntries.length} 条`;
+        }
+        renderRequestLogList();
+        if (requestLogClearBtn) {
+            requestLogClearBtn.disabled = !requestLogBoundChatKey;
+        }
+    };
+
+    const refreshRequestLogModal = async (): Promise<void> => {
+        if (!requestLogBoundChatKey) {
+            requestLogAllEntries = [];
+            requestLogFilteredEntries = [];
+            requestLogSelectedId = '';
+            if (requestLogChatKeyEl) requestLogChatKeyEl.textContent = '聊天：当前无可解析 chatKey';
+            applyRequestLogFilters();
+            return;
+        }
+
+        const entries = await runtime?.listChatRequestLogs?.(requestLogBoundChatKey, { order: 'desc', limit: 300 });
+        requestLogAllEntries = Array.isArray(entries) ? entries : [];
+        requestLogFilteredEntries = requestLogAllEntries.slice();
+        requestLogSelectedId = requestLogAllEntries[0]?.logId || '';
+        if (requestLogChatKeyEl) requestLogChatKeyEl.textContent = `聊天：${requestLogBoundChatKey}`;
+        applyRequestLogFilters();
+    };
+
+    const closeRequestLogModal = (): void => {
+        if (!requestLogModal) return;
+        if (requestLogModal.open) {
+            try {
+                requestLogModal.close();
+            } catch {
+                requestLogModal.removeAttribute('open');
+            }
+        }
+    };
+
+    const openRequestLogModal = async (): Promise<void> => {
+        if (!requestLogModal) return;
+        requestLogBoundChatKey = String(buildSdkChatKeyEvent() || '').trim();
+        if (!requestLogModal.open) {
+            try {
+                requestLogModal.showModal();
+            } catch {
+                requestLogModal.setAttribute('open', '');
+            }
+        }
+        await refreshRequestLogModal();
+    };
+
+    requestLogOpenBtn?.addEventListener('click', () => {
+        void openRequestLogModal();
+    });
+    requestLogCloseBtn?.addEventListener('click', closeRequestLogModal);
+    requestLogModal?.addEventListener('cancel', (event: Event) => {
+        event.preventDefault();
+        closeRequestLogModal();
+    });
+    requestLogModal?.addEventListener('click', (event: Event) => {
+        const target = event.target as HTMLElement | null;
+        if (event.target === requestLogModal || target?.dataset.logModalRole === 'backdrop') {
+            closeRequestLogModal();
+        }
+    });
+
+    requestLogSearchInput?.addEventListener('input', applyRequestLogFilters);
+    requestLogStateInput?.addEventListener('change', applyRequestLogFilters);
+    requestLogRefreshBtn?.addEventListener('click', () => {
+        void refreshRequestLogModal();
+    });
+    requestLogClearBtn?.addEventListener('click', async () => {
+        if (!requestLogBoundChatKey) return;
+        if (!confirm('确定清空当前聊天的请求日志吗？此操作不可撤销。')) return;
+        await runtime?.clearChatRequestLogs?.(requestLogBoundChatKey);
+        await refreshRequestLogModal();
+    });
+    requestLogListEl?.addEventListener('click', (event: Event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-log-id]');
+        const logId = String(target?.dataset.logId || '').trim();
+        if (!logId) return;
+        requestLogSelectedId = logId;
+        renderRequestLogList();
+    });
 
     const renderSilentPermissions = (): void => {
         const listEl = document.getElementById(IDS.silentPermissionsListId);
@@ -2121,7 +2309,6 @@ function bindUiEvents(): void {
 
     document.getElementById(IDS.queueRefreshBtnId)?.addEventListener('click', () => {
         renderQueueSnapshot();
-        renderRecentHistory();
         renderSilentPermissions();
     });
 
