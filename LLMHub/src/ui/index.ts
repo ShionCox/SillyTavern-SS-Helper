@@ -168,6 +168,18 @@ function stringifyDebugValue(value: unknown): string {
     }
 }
 
+function formatRawLogText(value: unknown): string {
+    if (typeof value !== 'string') {
+        return stringifyDebugValue(value);
+    }
+
+    return value
+        .replace(/\r\n?/g, '\n')
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+}
+
 function resourceTypeToCapabilities(type: ResourceType): LLMCapability[] {
     switch (type) {
         case 'generation':
@@ -2066,12 +2078,19 @@ function bindUiEvents(): void {
     let requestLogFilteredEntries: LLMRequestLogEntry[] = [];
     let requestLogSelectedId = '';
 
-    const buildRequestLogSectionHtml = (title: string, value: unknown): string => `
+        const buildRequestLogSectionHtml = (title: string, value: unknown): string => `
         <section class="stx-ui-log-section">
           <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
           <pre class="stx-ui-log-pre">${escapeHtml(stringifyDebugValue(value))}</pre>
         </section>
     `;
+
+        const buildRequestLogTextSectionHtml = (title: string, value: unknown): string => `
+                <section class="stx-ui-log-section">
+                    <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
+                    <pre class="stx-ui-log-pre stx-ui-log-pre-raw">${escapeHtml(formatRawLogText(value))}</pre>
+                </section>
+        `;
 
     const renderRequestLogDetail = (entry: LLMRequestLogEntry | null): void => {
         if (!requestLogDetailEl) return;
@@ -2127,7 +2146,6 @@ function bindUiEvents(): void {
             finalError: entry.response?.finalError,
             reasonCode: entry.response?.reasonCode,
             validationErrors: entry.response?.validationErrors,
-            rawResponseText: entry.response?.rawResponseText,
             parsedResponse: entry.response?.parsedResponse,
             normalizedResponse: entry.response?.normalizedResponse,
         };
@@ -2148,6 +2166,9 @@ function bindUiEvents(): void {
         sections.push(buildRequestLogSectionHtml('概览', overview));
         sections.push(buildRequestLogSectionHtml('请求发出', requestSent));
         sections.push(buildRequestLogSectionHtml('结果接收', responseReceived));
+        if (entry.response?.rawResponseText) {
+            sections.push(buildRequestLogTextSectionHtml('API 原始返回', entry.response.rawResponseText));
+        }
         sections.push(buildRequestLogSectionHtml('执行轨迹', executionTrace));
         requestLogDetailEl.innerHTML = sections.join('');
     };

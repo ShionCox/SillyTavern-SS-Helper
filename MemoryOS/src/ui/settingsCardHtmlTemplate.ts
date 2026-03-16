@@ -1,6 +1,6 @@
-import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
-import { buildSharedSelectField } from '../../../_Components/sharedSelect';
-import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
+import { buildSharedCheckboxCard } from "../../../_Components/sharedCheckbox";
+import { buildSharedSelectField } from "../../../_Components/sharedSelect";
+import type { MemoryOSSettingsIds } from "./settingsCardTemplateTypes";
 
 /**
  * 功能：构建只显示开关控件的紧凑复选框。
@@ -9,14 +9,18 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
  * @param dataTip 提示文本。
  * @returns 复选框 HTML。
  */
-function buildControlOnlyCheckbox(id: string, title: string, dataTip: string): string {
+function buildControlOnlyCheckbox(
+  id: string,
+  title: string,
+  dataTip: string,
+): string {
   return buildSharedCheckboxCard({
     id,
     title,
-    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    containerClassName: "stx-ui-inline-checkbox is-control-only",
     inputAttributes: {
-      'data-tip': dataTip,
-      'aria-label': title,
+      "data-tip": dataTip,
+      "aria-label": title,
     },
   });
 }
@@ -28,14 +32,18 @@ function buildControlOnlyCheckbox(id: string, title: string, dataTip: string): s
  * @param dataTip 提示文本。
  * @returns 复选框 HTML。
  */
-function buildCompactCheckbox(id: string, title: string, dataTip: string): string {
+function buildCompactCheckbox(
+  id: string,
+  title: string,
+  dataTip: string,
+): string {
   return buildSharedCheckboxCard({
     id,
     title,
-    containerClassName: 'stx-ui-inline-checkbox is-compact',
+    containerClassName: "stx-ui-inline-checkbox is-compact",
     inputAttributes: {
-      'data-tip': dataTip,
-      'aria-label': title,
+      "data-tip": dataTip,
+      "aria-label": title,
     },
   });
 }
@@ -54,11 +62,11 @@ function buildCompactSharedSelect(
 ): string {
   return buildSharedSelectField({
     id,
-    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
-    selectClassName: 'stx-ui-input',
-    triggerClassName: 'stx-ui-input-full',
+    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    selectClassName: "stx-ui-input",
+    triggerClassName: "stx-ui-input-full",
     triggerAttributes: {
-      'data-tip': dataTip,
+      "data-tip": dataTip,
     },
     options,
   });
@@ -71,155 +79,200 @@ function buildCompactSharedSelect(
  * 返回：
  *   string：可直接挂载的 HTML 字符串。
  */
-export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string {
+export function buildSettingsCardHtmlTemplate(
+  ids: MemoryOSSettingsIds,
+): string {
   const memoryEnabledCheckbox = buildSharedCheckboxCard({
     id: ids.enabledId,
-    title: '启用 Memory OS',
-    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    title: "启用 Memory OS",
+    containerClassName: "stx-ui-inline-checkbox is-control-only",
     inputAttributes: {
-      'data-tip': 'MemoryOS 总开关。',
-      'aria-label': '启用 Memory OS',
+      "data-tip": "MemoryOS 总开关。",
+      "aria-label": "启用 Memory OS",
     },
   });
 
   const aiModeCheckbox = buildSharedCheckboxCard({
     id: ids.aiModeEnabledId,
-    title: '启用 AI 模式',
-    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    title: "启用 AI 模式",
+    containerClassName: "stx-ui-inline-checkbox is-control-only",
     inputAttributes: {
-      'data-tip': '开启后使用 AI 抽取事实。',
-      'aria-label': '启用 AI 模式',
+      "data-tip": "开启后使用 AI 抽取事实。",
+      "aria-label": "启用 AI 模式",
     },
   });
 
   const autoCompactionCheckbox = buildSharedCheckboxCard({
     id: ids.autoCompactionId,
-    title: '自动压缩历史事件',
-    containerClassName: 'stx-ui-inline-checkbox is-control-only',
+    title: "自动压缩历史事件",
+    containerClassName: "stx-ui-inline-checkbox is-control-only",
     inputAttributes: {
-      'data-tip': '自动压缩历史事件。',
-      'aria-label': '自动压缩历史事件',
+      "data-tip": "自动压缩历史事件。",
+      "aria-label": "自动压缩历史事件",
     },
   });
 
   const templateActiveSelect = buildSharedSelectField({
     id: ids.templateActiveSelectId,
-    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
-    selectClassName: 'stx-ui-input',
-    triggerClassName: 'stx-ui-input-full',
-    triggerAttributes: { 'data-tip': '选择要启用的模板。' },
-    options: [{ value: '', label: '选择要激活的模板...' }],
+    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    selectClassName: "stx-ui-input",
+    triggerClassName: "stx-ui-input-full",
+    triggerAttributes: { "data-tip": "选择要启用的模板。" },
+    options: [{ value: "", label: "选择要激活的模板..." }],
   });
 
   const logicTableEntitySelect = buildSharedSelectField({
     id: ids.logicTableEntitySelectId,
-    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
-    selectClassName: 'stx-ui-input',
-    triggerClassName: 'stx-ui-input-full',
-    triggerAttributes: { 'data-tip': '选择要查看的实体类型。' },
-    options: [{ value: '', label: '选择实体类型...' }],
+    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    selectClassName: "stx-ui-input",
+    triggerClassName: "stx-ui-input-full",
+    triggerAttributes: { "data-tip": "选择要查看的实体类型。" },
+    options: [{ value: "", label: "选择实体类型..." }],
   });
 
   const aiSelfTestSelect = buildCompactSharedSelect(
     ids.aiSelfTestSelectId,
-    '选择要运行的单项自测。',
+    "选择要运行的单项自测。",
     [
-      { value: 'memory.summarize', label: '摘要' },
-      { value: 'memory.extract', label: '抽取' },
-      { value: 'world.template.build', label: '模板构建' },
-      { value: 'memory.vector.embed', label: '向量化' },
-      { value: 'memory.search.rerank', label: '重排' },
+      { value: "memory.summarize", label: "摘要" },
+      { value: "memory.extract", label: "抽取" },
+      { value: "world.template.build", label: "模板构建" },
+      { value: "memory.vector.embed", label: "向量化" },
+      { value: "memory.search.rerank", label: "重排" },
     ],
+  );
+
+  const taskSurfaceModeOptions: Array<{ value: string; label: string }> = [
+    { value: "fullscreen_blocking", label: "全屏阻塞" },
+    { value: "toast_blocking", label: "Toast 阻塞" },
+    { value: "toast_background", label: "Toast 后台" },
+  ];
+
+  const taskSurfaceBlockingDefaultSelect = buildCompactSharedSelect(
+    ids.taskSurfaceBlockingDefaultId,
+    "设置阻塞任务的默认显示方式。",
+    taskSurfaceModeOptions.filter(
+      (option: { value: string }): boolean =>
+        option.value !== "toast_background",
+    ),
+  );
+
+  /**
+   * 功能：构建任务显示模式下拉框。
+   * @param id 控件 ID。
+   * @returns 下拉框 HTML。
+   */
+  const buildTaskSurfaceModeSelect = (id: string): string =>
+    buildCompactSharedSelect(
+      id,
+      "设置该任务的显示方式。",
+      taskSurfaceModeOptions,
+    );
+
+  const taskSurfaceSummarizeSelect = buildTaskSurfaceModeSelect(
+    ids.taskSurfaceSummarizeModeId,
+  );
+  const taskSurfaceExtractSelect = buildTaskSurfaceModeSelect(
+    ids.taskSurfaceExtractModeId,
+  );
+  const taskSurfaceTemplateBuildSelect = buildTaskSurfaceModeSelect(
+    ids.taskSurfaceTemplateBuildModeId,
+  );
+  const taskSurfaceVectorEmbedSelect = buildTaskSurfaceModeSelect(
+    ids.taskSurfaceVectorEmbedModeId,
+  );
+  const taskSurfaceSearchRerankSelect = buildTaskSurfaceModeSelect(
+    ids.taskSurfaceSearchRerankModeId,
   );
 
   const recordFilterLevelSelect = buildCompactSharedSelect(
     ids.recordFilterLevelId,
-    '设置整体过滤强度：轻度、平衡或严格。',
+    "设置整体过滤强度：轻度、平衡或严格。",
     [
-      { value: 'light', label: '轻度' },
-      { value: 'balanced', label: '平衡' },
-      { value: 'strict', label: '严格' },
+      { value: "light", label: "轻度" },
+      { value: "balanced", label: "平衡" },
+      { value: "strict", label: "严格" },
     ],
   );
 
   const recordFilterJsonModeSelect = buildCompactSharedSelect(
     ids.recordFilterJsonModeId,
-    '设置 JSON 文本提取模式。',
+    "设置 JSON 文本提取模式。",
     [
-      { value: 'off', label: '关闭' },
-      { value: 'smart', label: '智能提取' },
-      { value: 'all_strings', label: '全部字符串' },
+      { value: "off", label: "关闭" },
+      { value: "smart", label: "智能提取" },
+      { value: "all_strings", label: "全部字符串" },
     ],
   );
 
   const recordFilterPureCodePolicySelect = buildCompactSharedSelect(
     ids.recordFilterPureCodePolicyId,
-    '设置纯代码消息的处理方式：丢弃、占位或保留原文。',
+    "设置纯代码消息的处理方式：丢弃、占位或保留原文。",
     [
-      { value: 'drop', label: '丢弃' },
-      { value: 'placeholder', label: '写入占位' },
-      { value: 'keep', label: '保留原文' },
+      { value: "drop", label: "丢弃" },
+      { value: "placeholder", label: "写入占位" },
+      { value: "keep", label: "保留原文" },
     ],
   );
 
   const templateLockCheckbox = buildSharedCheckboxCard({
     id: ids.templateLockId,
-    title: '锁定模板',
-    checkedLabel: '锁定',
-    uncheckedLabel: '未锁',
-    containerClassName: 'stx-ui-inline-checkbox is-compact',
+    title: "锁定模板",
+    checkedLabel: "锁定",
+    uncheckedLabel: "未锁",
+    containerClassName: "stx-ui-inline-checkbox is-compact",
     inputAttributes: {
-      'data-tip': '锁定当前模板。',
-      'aria-label': '锁定模板',
+      "data-tip": "锁定当前模板。",
+      "aria-label": "锁定模板",
     },
   });
 
   const recordFilterEnabledCheckbox = buildControlOnlyCheckbox(
     ids.recordFilterEnabledId,
-    '启用记录过滤',
-    '启用记录过滤后，仅保留可读有效文本入库。',
+    "启用记录过滤",
+    "启用记录过滤后，仅保留可读有效文本入库。",
   );
 
   const recordFilterTypeHtmlCheckbox = buildCompactCheckbox(
     ids.recordFilterTypeHtmlId,
-    'HTML',
-    '过滤 HTML 标签内容。',
+    "HTML",
+    "过滤 HTML 标签内容。",
   );
 
   const recordFilterTypeXmlCheckbox = buildCompactCheckbox(
     ids.recordFilterTypeXmlId,
-    'XML',
-    '过滤 XML 标签内容。',
+    "XML",
+    "过滤 XML 标签内容。",
   );
 
   const recordFilterTypeJsonCheckbox = buildCompactCheckbox(
     ids.recordFilterTypeJsonId,
-    'JSON',
-    '过滤或提取结构化 JSON 文本。',
+    "JSON",
+    "过滤或提取结构化 JSON 文本。",
   );
 
   const recordFilterTypeCodeblockCheckbox = buildCompactCheckbox(
     ids.recordFilterTypeCodeblockId,
-    '代码块',
-    '过滤 Markdown 围栏代码块。',
+    "代码块",
+    "过滤 Markdown 围栏代码块。",
   );
 
   const recordFilterTypeMarkdownCheckbox = buildCompactCheckbox(
     ids.recordFilterTypeMarkdownId,
-    'Markdown',
-    '过滤 Markdown 噪声格式。',
+    "Markdown",
+    "过滤 Markdown 噪声格式。",
   );
 
   const recordFilterCustomCodeblockCheckbox = buildCompactCheckbox(
     ids.recordFilterCustomCodeblockEnabledId,
-    '启用自定义代码块过滤（仅清理指定标签）',
-    '开启后，不再清除全部代码块；仅清理下方填写标签的代码块。默认建议至少保留 rolljson。',
+    "启用自定义代码块过滤（仅清理指定标签）",
+    "开启后，不再清除全部代码块；仅清理下方填写标签的代码块。默认建议至少保留 rolljson。",
   );
 
   const recordFilterCustomRegexCheckbox = buildCompactCheckbox(
     ids.recordFilterCustomRegexEnabledId,
-    '启用自定义正则清理',
-    '开启后按规则清理自定义正则命中的文本片段。',
+    "启用自定义正则清理",
+    "开启后按规则清理自定义正则命中的文本片段。",
   );
 
   return `
@@ -233,38 +286,199 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
       </div>
 
       <div class="inline-drawer-content stx-ui-content" id="${ids.drawerContentId}" style="display:none;">
-        <div class="stx-ui-filters flex-container">
-          <input id="${ids.searchId}" data-tip="按关键词筛选设置项。" class="text_pole flex1 stx-ui-search" placeholder="搜索设置" type="search" />
-        </div>
-
-        <div class="stx-ui-tabs">
-          <button id="${ids.tabMainId}" data-tip="查看主设置。" type="button" class="stx-ui-tab is-active">
-            <i class="fa-solid fa-gear"></i>
-            <span>主设置</span>
-          </button>
-          <button id="${ids.tabAiId}" data-tip="查看 AI 规则。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-microchip"></i>
-            <span>AI 规则</span>
-          </button>
-          <button id="${ids.tabDbId}" data-tip="查看数据管理。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-database"></i>
-            <span>数据管理</span>
-          </button>
-          <button id="${ids.tabTemplateId}" data-tip="查看世界模板。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-table-columns"></i>
-            <span>世界模板</span>
-          </button>
-          <button id="${ids.tabAuditId}" data-tip="查看审计与回滚。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-clock-rotate-left"></i>
-            <span>审计回滚</span>
-          </button>
-          <button id="${ids.tabAboutId}" data-tip="查看插件信息。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-circle-info"></i>
-            <span>关于</span>
+        <div class="stx-ui-mode-bar">
+          <div class="stx-ui-mode-copy">
+            <span class="stx-ui-mode-kicker">MemoryOS</span>
+            <div class="stx-ui-mode-title">记忆视图</div>
+          </div>
+          <div class="stx-ui-mode-switch">
+            <button id="${ids.modeBasicId}" type="button" class="stx-ui-mode-chip is-active">
+              <i class="fa-solid fa-sparkles"></i>
+              <span>普通模式</span>
+            </button>
+            <button id="${ids.modeAdvancedId}" type="button" class="stx-ui-mode-chip">
+              <i class="fa-solid fa-sliders"></i>
+              <span>高级模式</span>
+            </button>
+          </div>
+          <button id="${ids.experienceRefreshBtnId}" type="button" class="stx-ui-btn secondary stx-ui-refresh-btn">
+            <i class="fa-solid fa-rotate"></i>&nbsp;刷新
           </button>
         </div>
 
-        <div id="${ids.panelMainId}" class="stx-ui-panel">
+        <div class="stx-ui-tabs stx-ui-tabs-primary">
+          <button id="${ids.tabRoleId}" data-stx-mode="basic" data-tip="查看角色当前记住了什么。" type="button" class="stx-ui-tab is-active">
+            <i class="fa-solid fa-brain"></i>
+            <span>角色记忆</span>
+          </button>
+          <button id="${ids.tabRecentId}" data-stx-mode="basic" data-tip="查看最近沉淀的事件与摘要。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-clock"></i>
+            <span>近期事件</span>
+          </button>
+          <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="查看关系状态与当前场景。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-people-arrows"></i>
+            <span>关系与状态</span>
+          </button>
+          <button id="${ids.tabInjectionId}" data-stx-mode="basic" data-tip="查看本轮注入与写回判定。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-wand-magic-sparkles"></i>
+            <span>本轮注入</span>
+          </button>
+        </div>
+
+        <div id="${ids.panelRoleId}" class="stx-ui-panel">
+          <div class="stx-ui-experience-shell">
+            <div class="stx-ui-actions stx-ui-experience-actions">
+              <button id="${ids.experienceRecordEditorBtnId}" type="button" class="stx-ui-btn" data-tip="打开记录编辑器，手动修正记忆。">
+                <i class="fa-solid fa-pen-to-square"></i>&nbsp;手动修正记忆
+              </button>
+              <button id="${ids.experienceSnapshotBtnId}" type="button" class="stx-ui-btn secondary" data-tip="创建快照，方便回滚当前记忆状态。">
+                <i class="fa-solid fa-camera"></i>&nbsp;创建快照
+              </button>
+              <button id="${ids.experienceAdvancedBtnId}" type="button" class="stx-ui-btn secondary" data-tip="切换到高级工具。">
+                <i class="fa-solid fa-sliders"></i>&nbsp;进入高级工具
+              </button>
+            </div>
+            <div id="${ids.roleOverviewMetaId}"></div>
+            <div id="${ids.rolePersonaBadgesId}"></div>
+            <div class="stx-ui-experience-grid">
+              <section class="stx-ui-experience-card">
+                <div class="stx-ui-experience-card-head">
+                  <h3>长期记住的事实</h3>
+                  <p>更稳定、会长期影响回复的记忆。</p>
+                </div>
+                <div id="${ids.rolePrimaryFactsId}"></div>
+              </section>
+              <section class="stx-ui-experience-card">
+                <div class="stx-ui-experience-card-head">
+                  <h3>近期沉淀的记忆</h3>
+                  <p>最近几轮刚写入、还在活跃使用的内容。</p>
+                </div>
+                <div id="${ids.roleRecentMemoryId}"></div>
+              </section>
+              <section class="stx-ui-experience-card">
+                <div class="stx-ui-experience-card-head">
+                  <h3>遗忘趋势</h3>
+                  <p>当前更可能被压缩、淡化或需要维护的记忆提示。</p>
+                </div>
+                <div id="${ids.roleBlurMemoryId}"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div id="${ids.panelRecentId}" class="stx-ui-panel" hidden>
+          <div class="stx-ui-experience-grid">
+            <section class="stx-ui-experience-card" style="grid-column-start: span 2;">
+              <div class="stx-ui-experience-card-head">
+                <h3>最近事件</h3>
+                <p>按时间查看刚刚入库的消息事件与结构变化。</p>
+              </div>
+              <div id="${ids.recentEventsId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>最近摘要</h3>
+                <p>系统已经压缩出的剧情段落与上下文总结。</p>
+              </div>
+              <div id="${ids.recentSummariesId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>聊天生命周期</h3>
+                <p>当前阶段、结构变动与质量提示。</p>
+              </div>
+              <div id="${ids.recentLifecycleId}"></div>
+            </section>
+          </div>
+        </div>
+
+        <div id="${ids.panelRelationId}" class="stx-ui-panel" hidden>
+          <div class="stx-ui-experience-grid">
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide">
+              <div class="stx-ui-experience-card-head">
+                <h3>关系总览</h3>
+                <p>聚焦关系变化、场景推进和当前主导角色。</p>
+              </div>
+              <div id="${ids.relationOverviewId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>角色分支</h3>
+                <p>群聊时按角色展示最近关系、目标和情绪。</p>
+              </div>
+              <div id="${ids.relationLanesId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>世界与场景状态</h3>
+                <p>当前会影响记忆和回复的状态缓存。</p>
+              </div>
+              <div id="${ids.relationStateId}"></div>
+            </section>
+          </div>
+        </div>
+
+        <div id="${ids.panelInjectionId}" class="stx-ui-panel" hidden>
+          <div class="stx-ui-experience-grid">
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide">
+              <div class="stx-ui-experience-card-head">
+                <h3>本轮注入概览</h3>
+                <p>为什么注入、怎么注入、这轮更偏向哪种记忆。</p>
+              </div>
+              <div id="${ids.injectionOverviewId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>注入区段</h3>
+                <p>当前实际用到的记忆区段与预算。</p>
+              </div>
+              <div id="${ids.injectionSectionsId}"></div>
+            </section>
+            <section class="stx-ui-experience-card">
+              <div class="stx-ui-experience-card-head">
+                <h3>生成后判定</h3>
+                <p>本轮更偏长期写入、短期处理还是摘要重建。</p>
+              </div>
+              <div id="${ids.injectionPostId}"></div>
+            </section>
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide stx-ui-experience-card-reason">
+              <div class="stx-ui-experience-card-head">
+                <h3>为什么会这样选</h3>
+                <p>当前版本可解释的原因码、世界书决策与生成后判定。</p>
+              </div>
+              <div id="${ids.injectionReasonId}"></div>
+            </section>
+          </div>
+        </div>
+
+        <div id="${ids.panelAdvancedToolsId}" class="stx-ui-panel stx-ui-advanced-panel" hidden>
+          <div class="stx-ui-advanced-head">
+            <div class="stx-ui-advanced-head-title">高级工具</div>
+            <div class="stx-ui-advanced-head-search">
+              <input id="${ids.searchId}" data-tip="按关键词筛选设置项。" class="text_pole flex1 stx-ui-search" placeholder="搜索工具" type="search" />
+            </div>
+          </div>
+
+          <div class="stx-ui-tabs stx-ui-tabs-secondary">
+            <button id="${ids.tabMainId}" data-tip="查看主设置。" type="button" class="stx-ui-tab is-active">
+              <i class="fa-solid fa-power-off"></i>
+              <span>运行控制</span>
+            </button>
+            <button id="${ids.tabAiId}" data-tip="查看 AI 规则。" type="button" class="stx-ui-tab">
+              <i class="fa-solid fa-microchip"></i>
+              <span>记忆策略</span>
+            </button>
+            <button id="${ids.tabDbId}" data-tip="查看数据管理。" type="button" class="stx-ui-tab">
+              <i class="fa-solid fa-database"></i>
+              <span>数据维护</span>
+            </button>
+            <button id="${ids.tabAboutId}" data-tip="查看插件信息。" type="button" class="stx-ui-tab">
+              <i class="fa-solid fa-circle-info"></i>
+              <span>诊断关于</span>
+            </button>
+          </div>
+
+          <div id="${ids.panelMainId}" class="stx-ui-panel stx-ui-advanced-subpanel">
           <div class="stx-ui-divider">
             <i class="fa-solid fa-power-off"></i>
             <span>基础开关</span>
@@ -295,7 +509,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </label>
         </div>
 
-        <div id="${ids.panelAiId}" class="stx-ui-panel" hidden>
+          <div id="${ids.panelAiId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-bars-staggered"></i>
             <span>上下文规则</span>
@@ -311,6 +525,66 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
               <input id="${ids.contextMaxTokensId}" data-tip="限制注入给 AI 的记忆长度。" class="text_pole stx-ui-input" type="number" min="500" max="8000" step="100" />
             </div>
           </div>
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-layer-group"></i>
+            <span>任务显示</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="task surface llm queue overlay toast composer">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">全局表现</div>
+              <div class="stx-ui-item-desc">设置后台任务是否显示右下角任务卡、阻塞任务默认呈现方式、结束后停留秒数，以及阻塞时是否锁定发送区。</div>
+            </div>
+            <div class="stx-ui-row stx-ui-grid-form">
+              <label>
+                <span style="display:block; font-size:12px; margin-bottom:4px;">阻塞默认显示</span>
+                ${taskSurfaceBlockingDefaultSelect}
+              </label>
+              <label>
+                <span style="display:block; font-size:12px; margin-bottom:4px;">结束后停留（秒）</span>
+                <input id="${ids.taskSurfaceAutoCloseSecondsId}" class="text_pole stx-ui-input" type="number" min="0" max="30" step="1" data-tip="右下角任务卡在任务完成或失败后会继续停留几秒再自动关闭，默认 3 秒。填 0 表示立即关闭。" />
+              </label>
+              <div class="stx-ui-field stx-ui-inline-toggle-field">
+                <span class="stx-ui-field-label">后台任务显示卡片</span>
+                ${buildCompactCheckbox(ids.taskSurfaceBackgroundToastId, "启用", "启用后，后台任务会在右下角任务卡中显示状态。")}
+              </div>
+              <div class="stx-ui-field stx-ui-inline-toggle-field">
+                <span class="stx-ui-field-label">阻塞时锁定发送</span>
+                ${buildCompactCheckbox(ids.taskSurfaceDisableComposerId, "启用", "启用后，阻塞任务执行期间会暂时禁用发送按钮与输入框。")}
+              </div>
+            </div>
+          </div>
+
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="task surface summarize extract template embed rerank">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">任务预设</div>
+              <div class="stx-ui-item-desc">每种任务都可以单独选择全屏阻塞、Toast 阻塞或 Toast 后台。</div>
+            </div>
+            <div class="stx-ui-form-grid stx-ui-task-surface-grid">
+              <label class="stx-ui-field">
+                <span class="stx-ui-field-label">摘要生成</span>
+                ${taskSurfaceSummarizeSelect}
+              </label>
+              <label class="stx-ui-field">
+                <span class="stx-ui-field-label">结构提取</span>
+                ${taskSurfaceExtractSelect}
+              </label>
+              <label class="stx-ui-field">
+                <span class="stx-ui-field-label">模板构建</span>
+                ${taskSurfaceTemplateBuildSelect}
+              </label>
+              <label class="stx-ui-field">
+                <span class="stx-ui-field-label">向量处理</span>
+                ${taskSurfaceVectorEmbedSelect}
+              </label>
+              <label class="stx-ui-field">
+                <span class="stx-ui-field-label">召回重排</span>
+                ${taskSurfaceSearchRerankSelect}
+              </label>
+            </div>
+          </div>
+
           <div class="stx-ui-divider">
             <i class="fa-solid fa-filter"></i>
             <span>记录过滤</span>
@@ -426,7 +700,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </div>
         </div>
 
-        <div id="${ids.panelDbId}" class="stx-ui-panel" hidden>
+          <div id="${ids.panelDbId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
 
           <label class="stx-ui-item stx-ui-search-item" data-stx-ui-search="auto compaction archive">
             <div class="stx-ui-item-main">
@@ -476,22 +750,90 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </div>
         </div>
 
-        <div id="${ids.panelTemplateId}" class="stx-ui-panel" hidden>
+          <div id="${ids.panelTuningId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
+          <div class="stx-ui-experience-grid">
+            <section class="stx-ui-experience-card" data-stx-ui-search="memory tuning migration backfill">
+              <div class="stx-ui-experience-card-head">
+                <h3>迁移状态</h3>
+                <p>这里显示当前迁移阶段、镜像准备情况和最近一次回填时间。</p>
+              </div>
+              <div id="${ids.tuningMigrationStatusId}"></div>
+              <div class="stx-ui-actions">
+                <button id="${ids.tuningRefreshBtnId}" type="button" class="stx-ui-btn secondary" data-tip="重新读取当前迁移状态与调参值。">
+                  <i class="fa-solid fa-rotate"></i>&nbsp;刷新当前参数
+                </button>
+                <button id="${ids.tuningBackfillBtnId}" type="button" class="stx-ui-btn" data-tip="执行一次迁移回填，并在完成后刷新状态。">
+                  <i class="fa-solid fa-database"></i>&nbsp;执行迁移回填
+                </button>
+              </div>
+            </section>
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide" data-stx-ui-search="memory tuning profile threshold relationship emotion recency continuity distortion retention">
+              <div class="stx-ui-experience-card-head">
+                <h3>调参设置</h3>
+                <p>这里用于调整候选阈值、召回偏置和保留数量。修改后需要手动保存。</p>
+              </div>
+              <div class="stx-ui-form-grid stx-ui-memory-tuning-grid">
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">候选阈值偏置</span>
+                  <input id="${ids.tuningCandidateAcceptThresholdBiasId}" class="text_pole stx-ui-input" type="number" min="-0.2" max="0.2" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">关系召回权重</span>
+                  <input id="${ids.tuningRecallRelationshipBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">情绪召回权重</span>
+                  <input id="${ids.tuningRecallEmotionBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">最近性权重</span>
+                  <input id="${ids.tuningRecallRecencyBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">连续性权重</span>
+                  <input id="${ids.tuningRecallContinuityBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">扭曲保护权重</span>
+                  <input id="${ids.tuningDistortionProtectionBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">候选保留上限</span>
+                  <input id="${ids.tuningCandidateRetentionLimitId}" class="text_pole stx-ui-input" type="number" min="24" max="240" step="1" />
+                </label>
+                <label class="stx-ui-field">
+                  <span class="stx-ui-field-label">召回日志上限</span>
+                  <input id="${ids.tuningRecallRetentionLimitId}" class="text_pole stx-ui-input" type="number" min="40" max="320" step="1" />
+                </label>
+              </div>
+              <div class="stx-ui-actions">
+                <button id="${ids.tuningResetBtnId}" type="button" class="stx-ui-btn secondary" data-tip="把表单值恢复到默认调参画像。">
+                  <i class="fa-solid fa-rotate-left"></i>&nbsp;恢复默认值
+                </button>
+                <button id="${ids.tuningSaveBtnId}" type="button" class="stx-ui-btn" data-tip="保存当前调参设置。">
+                  <i class="fa-solid fa-floppy-disk"></i>&nbsp;保存参数
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+          <div id="${ids.panelTemplateId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-table-columns"></i>
             <span>世界模板</span>
             <div class="stx-ui-divider-line"></div>
           </div>
 
-          <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 12px;">
+          <div class="stx-ui-item stx-ui-item-stack stx-ui-template-panel">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">当前绑定的世界 Schema</div>
               <div class="stx-ui-item-desc">这里显示当前聊天使用的模板结构。</div>
             </div>
-            <div id="${ids.templateListId}" style="width: 100%; font-size: 12px; color: var(--ss-theme-text, #ccc); background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
+            <div id="${ids.templateListId}" class="stx-ui-code-surface stx-ui-template-list">
               正在加载...
             </div>
-            <div class="stx-ui-actions">
+            <div class="stx-ui-actions stx-ui-template-toolbar">
               <button id="${ids.templateRefreshBtnId}" data-tip="刷新模板列表。" type="button" class="stx-ui-btn">
                 <i class="fa-solid fa-rotate"></i>&nbsp;刷新模板列表
               </button>
@@ -499,10 +841,14 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
                 <i class="fa-solid fa-wand-magic-sparkles"></i>&nbsp;强制重建模板（从世界书）
               </button>
             </div>
-            <div style="display:flex; gap:8px; align-items:center; width:100%;">
-              ${templateActiveSelect}
-              ${templateLockCheckbox}
-              <button id="${ids.templateSetActiveBtnId}" data-tip="应用当前选择的模板。" type="button" class="stx-ui-btn">应用</button>
+            <div class="stx-ui-template-activate-row">
+              <div class="stx-ui-template-select-wrap">
+                ${templateActiveSelect}
+              </div>
+              <div class="stx-ui-template-lock">
+                ${templateLockCheckbox}
+              </div>
+              <button id="${ids.templateSetActiveBtnId}" data-tip="应用当前选择的模板。" type="button" class="stx-ui-btn stx-ui-template-apply-btn">应用</button>
             </div>
           </div>
 
@@ -549,7 +895,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </div>
         </div>
 
-        <div id="${ids.panelAuditId}" class="stx-ui-panel" hidden>
+          <div id="${ids.panelAuditId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-clock-rotate-left"></i>
             <span>审计历史 &amp; 快照回滚</span>
@@ -583,7 +929,9 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </div>
         </div>
 
-        <div id="${ids.panelAboutId}" class="stx-ui-panel" hidden>
+        </div>
+
+        <div id="${ids.panelAboutId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-circle-info"></i>
             <span>关于插件</span>
@@ -706,4 +1054,3 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
     </div>
   `;
 }
-

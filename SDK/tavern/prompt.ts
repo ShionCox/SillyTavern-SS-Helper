@@ -3,6 +3,7 @@ import type {
   SdkTavernPromptSystemInsertOptionsEvent,
   SdkTavernPromptTargetEvent,
 } from "./types";
+import { stripRuntimePlaceholderArtifactsEvent } from "./artifacts";
 
 /**
  * 功能：把任意输入规范化为字符串文本。
@@ -61,21 +62,21 @@ export function getTavernMessageTextEvent(message: unknown): string {
   if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
     const activeSwipe = swipes[swipeId];
     if (typeof activeSwipe === "string") {
-      return activeSwipe.trim();
+      return stripRuntimePlaceholderArtifactsEvent(activeSwipe);
     }
     if (activeSwipe && typeof activeSwipe === "object") {
       const swipeText = getTavernPromptMessageTextEvent(activeSwipe as SdkTavernPromptMessageEvent);
-      if (swipeText.trim().length > 0) return swipeText.trim();
+      if (swipeText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(swipeText);
       const swipeRecord = activeSwipe as Record<string, unknown>;
       const fallbackSwipeText = swipeRecord.mes ?? swipeRecord.content ?? swipeRecord.text ?? swipeRecord.message;
-      if (typeof fallbackSwipeText === "string") return fallbackSwipeText.trim();
+      if (typeof fallbackSwipeText === "string") return stripRuntimePlaceholderArtifactsEvent(fallbackSwipeText);
     }
   }
 
   const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
-  if (promptText.trim().length > 0) return promptText.trim();
+  if (promptText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(promptText);
   const raw = messageRecord.mes ?? messageRecord.content ?? messageRecord.text ?? messageRecord.message;
-  return typeof raw === "string" ? raw.trim() : "";
+  return typeof raw === "string" ? stripRuntimePlaceholderArtifactsEvent(raw) : "";
 }
 
 /**

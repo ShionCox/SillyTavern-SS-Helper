@@ -1,3 +1,5 @@
+import { stripRuntimePlaceholderArtifactsEvent } from '../../../SDK/tavern';
+
 /**
  * 功能：记录过滤强度。
  */
@@ -121,7 +123,7 @@ function escapeRegExp(value: string): string {
  * @returns 规范化文本。
  */
 function normalizeText(rawText: string): string {
-    return String(rawText ?? '')
+    return stripRuntimePlaceholderArtifactsEvent(String(rawText ?? ''))
         .replace(/\r\n?/g, '\n')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
         .trim();

@@ -8,14 +8,22 @@ import { getHealthSnapshot, onHealthChange, refreshHealthSnapshot, setAiModeEnab
 import { runAiSelfTests, runSingleSelfTest } from '../llm/ai-self-test';
 import type { AiSelfTestResult } from '../llm/ai-self-test';
 import type { MemoryAiHealthSnapshot, MemoryAiTaskId } from '../llm/ai-health-types';
-import type { RoutePreviewSnapshot } from '../../../SDK/stx';
+import type { MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode } from '../../../SDK/stx';
 import { openRecordEditor } from './recordEditor';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 import { filterRecordText, normalizeRecordFilterSettings } from '../core/record-filter';
+import {
+    DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS,
+    DEFAULT_MEMORY_TUNING_PROFILE,
+    type MemoryTaskPresentationSettings,
+    type MemoryTaskPresentationTaskId,
+} from '../types';
 import { ensureChatStrategyPanel, initializeChatStrategyPanel } from './chatStrategyPanel';
+import { renderSettingsExperience } from './settingsCardExperience';
+import { normalizeMemoryTaskPresentationSettings } from '../llm/task-presentation-settings';
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
@@ -55,16 +63,71 @@ const IDS: MemoryOSSettingsIds = {
     githubText: (manifestJson as any).homePage ? (manifestJson as any).homePage.replace(/^https?:\/\//i, '') : 'GitHub',
     githubUrl: (manifestJson as any).homePage || '#',
     searchId: `${NAMESPACE}-search`,
+    modeBasicId: `${NAMESPACE}-mode-basic`,
+    modeAdvancedId: `${NAMESPACE}-mode-advanced`,
+    experienceRefreshBtnId: `${NAMESPACE}-experience-refresh`,
+    experienceRecordEditorBtnId: `${NAMESPACE}-experience-record-editor`,
+    experienceSnapshotBtnId: `${NAMESPACE}-experience-snapshot`,
+    experienceAdvancedBtnId: `${NAMESPACE}-experience-advanced`,
 
+    tabRoleId: `${NAMESPACE}-tab-role`,
+    tabRecentId: `${NAMESPACE}-tab-recent`,
+    tabRelationId: `${NAMESPACE}-tab-relation`,
+    tabInjectionId: `${NAMESPACE}-tab-injection`,
+    tabAdvancedToolsId: `${NAMESPACE}-tab-advanced-tools`,
     tabMainId: `${NAMESPACE}-tab-main`,
     tabAiId: `${NAMESPACE}-tab-ai`,
     tabDbId: `${NAMESPACE}-tab-db`,
+    tabTuningId: `${NAMESPACE}-tab-tuning`,
     tabAboutId: `${NAMESPACE}-tab-about`,
 
+    panelRoleId: `${NAMESPACE}-panel-role`,
+    panelRecentId: `${NAMESPACE}-panel-recent`,
+    panelRelationId: `${NAMESPACE}-panel-relation`,
+    panelInjectionId: `${NAMESPACE}-panel-injection`,
+    panelAdvancedToolsId: `${NAMESPACE}-panel-advanced-tools`,
     panelMainId: `${NAMESPACE}-panel-main`,
     panelAiId: `${NAMESPACE}-panel-ai`,
     panelDbId: `${NAMESPACE}-panel-db`,
+    panelTuningId: `${NAMESPACE}-panel-tuning`,
     panelAboutId: `${NAMESPACE}-panel-about`,
+    roleOverviewMetaId: `${NAMESPACE}-role-overview-meta`,
+    rolePersonaBadgesId: `${NAMESPACE}-role-persona-badges`,
+    rolePrimaryFactsId: `${NAMESPACE}-role-primary-facts`,
+    roleRecentMemoryId: `${NAMESPACE}-role-recent-memory`,
+    roleBlurMemoryId: `${NAMESPACE}-role-blur-memory`,
+    recentEventsId: `${NAMESPACE}-recent-events`,
+    recentSummariesId: `${NAMESPACE}-recent-summaries`,
+    recentLifecycleId: `${NAMESPACE}-recent-lifecycle`,
+    relationOverviewId: `${NAMESPACE}-relation-overview`,
+    relationLanesId: `${NAMESPACE}-relation-lanes`,
+    relationStateId: `${NAMESPACE}-relation-state`,
+    injectionOverviewId: `${NAMESPACE}-injection-overview`,
+    injectionSectionsId: `${NAMESPACE}-injection-sections`,
+    injectionReasonId: `${NAMESPACE}-injection-reason`,
+    injectionPostId: `${NAMESPACE}-injection-post`,
+    tuningMigrationStatusId: `${NAMESPACE}-tuning-migration-status`,
+    tuningCandidateAcceptThresholdBiasId: `${NAMESPACE}-tuning-candidate-threshold-bias`,
+    tuningRecallRelationshipBiasId: `${NAMESPACE}-tuning-recall-relationship-bias`,
+    tuningRecallEmotionBiasId: `${NAMESPACE}-tuning-recall-emotion-bias`,
+    tuningRecallRecencyBiasId: `${NAMESPACE}-tuning-recall-recency-bias`,
+    tuningRecallContinuityBiasId: `${NAMESPACE}-tuning-recall-continuity-bias`,
+    tuningDistortionProtectionBiasId: `${NAMESPACE}-tuning-distortion-protection-bias`,
+    tuningCandidateRetentionLimitId: `${NAMESPACE}-tuning-candidate-retention-limit`,
+    tuningRecallRetentionLimitId: `${NAMESPACE}-tuning-recall-retention-limit`,
+    tuningRefreshBtnId: `${NAMESPACE}-tuning-refresh`,
+    tuningResetBtnId: `${NAMESPACE}-tuning-reset`,
+    tuningSaveBtnId: `${NAMESPACE}-tuning-save`,
+    tuningBackfillBtnId: `${NAMESPACE}-tuning-backfill`,
+    taskSurfaceBackgroundToastId: `${NAMESPACE}-task-surface-background-toast`,
+    taskSurfaceDisableComposerId: `${NAMESPACE}-task-surface-disable-composer`,
+    taskSurfaceBlockingDefaultId: `${NAMESPACE}-task-surface-blocking-default`,
+    taskSurfaceAutoCloseSecondsId: `${NAMESPACE}-task-surface-auto-close-seconds`,
+    taskSurfaceSummarizeModeId: `${NAMESPACE}-task-surface-summarize-mode`,
+    taskSurfaceExtractModeId: `${NAMESPACE}-task-surface-extract-mode`,
+    taskSurfaceTemplateBuildModeId: `${NAMESPACE}-task-surface-template-build-mode`,
+    taskSurfaceVectorEmbedModeId: `${NAMESPACE}-task-surface-vector-embed-mode`,
+    taskSurfaceSearchRerankModeId: `${NAMESPACE}-task-surface-search-rerank-mode`,
 
     enabledId: `${NAMESPACE}-enabled`,
     aiModeEnabledId: `${NAMESPACE}-ai-mode`,
@@ -308,6 +371,12 @@ export async function renderSettingsUi() {
             }
             ssContainer.appendChild(cardWrapper);
         }
+        cardWrapper.dataset.stxUiMode = cardWrapper.dataset.stxUiMode || 'basic';
+        const tuningTab = document.getElementById(IDS.tabTuningId);
+        const templateTab = document.getElementById(IDS.tabTemplateId);
+        if (tuningTab && templateTab && tuningTab.parentElement === templateTab.parentElement) {
+            templateTab.parentElement?.insertBefore(tuningTab, templateTab);
+        }
         const aiPanel = document.getElementById(IDS.panelAiId);
         if (aiPanel instanceof HTMLElement) {
             ensureChatStrategyPanel(aiPanel);
@@ -324,6 +393,7 @@ export async function renderSettingsUi() {
 
         // 3. 绑定内部交互逻辑 (展开、切换 Tab)
         bindUiEvents();
+        await renderSettingsExperience(IDS);
         await initializeChatStrategyPanel();
         applySettingsTooltips();
     } catch (error) {
@@ -339,36 +409,343 @@ function bindUiEvents() {
     // 3.1 抽屉展开/折叠 (移除手动监听，交由 SillyTavern 核心的 .inline-drawer-toggle 自动处理)
 
     // 3.2 标签页切换
-    const tabs = [
+    type UiMode = 'basic' | 'advanced';
+
+    const cardRoot = document.getElementById(IDS.cardId) as HTMLElement | null;
+    const topTabs: Array<{ tabId: string; panelId: string }> = [
+        { tabId: IDS.tabRoleId, panelId: IDS.panelRoleId },
+        { tabId: IDS.tabRecentId, panelId: IDS.panelRecentId },
+        { tabId: IDS.tabRelationId, panelId: IDS.panelRelationId },
+        { tabId: IDS.tabInjectionId, panelId: IDS.panelInjectionId },
+    ];
+    const advancedTabs: Array<{ tabId: string; panelId: string }> = [
         { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
         { tabId: IDS.tabAiId, panelId: IDS.panelAiId },
         { tabId: IDS.tabDbId, panelId: IDS.panelDbId },
-        { tabId: IDS.tabTemplateId, panelId: IDS.panelTemplateId },
-        { tabId: IDS.tabAuditId, panelId: IDS.panelAuditId },
         { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
     ];
 
-    tabs.forEach(({ tabId, panelId }) => {
-        const tabEl = document.getElementById(tabId);
-        if (!tabEl) return;
-
-        tabEl.addEventListener('click', () => {
-            // 隐藏所有面板，移除所有 tab 的 active 态
-            tabs.forEach(t => {
-                const tEl = document.getElementById(t.tabId);
-                const pEl = document.getElementById(t.panelId);
-                if (tEl) tEl.classList.remove('is-active');
-                if (pEl) pEl.setAttribute('hidden', 'true');
-            });
-
-            // 激活当前点选的面板
-            const targetPanel = document.getElementById(panelId);
-            tabEl.classList.add('is-active');
-            if (targetPanel) {
-                targetPanel.removeAttribute('hidden');
+    /**
+     * 功能：把高级工具中的细分面板合并到四个分组页中。
+     * 参数：无。
+     * 返回：
+     *   void：无返回值。
+     */
+    const organizeAdvancedSections = (): void => {
+        const mergePanelIntoGroup = (groupPanelId: string, childPanelId: string): void => {
+            const groupPanel = document.getElementById(groupPanelId);
+            const childPanel = document.getElementById(childPanelId);
+            if (!(groupPanel instanceof HTMLElement) || !(childPanel instanceof HTMLElement) || groupPanel === childPanel) {
+                return;
             }
+            childPanel.removeAttribute('hidden');
+            childPanel.classList.add('stx-ui-advanced-section');
+            if (childPanel.parentElement !== groupPanel) {
+                groupPanel.appendChild(childPanel);
+            }
+        };
+
+        mergePanelIntoGroup(IDS.panelAiId, IDS.panelTuningId);
+        mergePanelIntoGroup(IDS.panelDbId, IDS.panelTemplateId);
+        mergePanelIntoGroup(IDS.panelDbId, IDS.panelAuditId);
+    };
+
+    /**
+     * 功能：刷新面向用户的体验面板。
+     * 参数：无。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    const refreshExperiencePanels = async (): Promise<void> => {
+        await renderSettingsExperience(IDS);
+    };
+
+    /**
+     * 功能：读取调参输入框中的数值。
+     * @param inputId 输入框 ID。
+     * @param fallback 回退值。
+     * @returns 归一化后的数值。
+     */
+    const readTuningNumberInputValue = (inputId: string, fallback: number): number => {
+        const element = document.getElementById(inputId) as HTMLInputElement | null;
+        if (!element) {
+            return fallback;
+        }
+        const parsedValue: number = Number(element.value);
+        return Number.isFinite(parsedValue) ? parsedValue : fallback;
+    };
+
+    /**
+     * 功能：把指定调参画像写回设置表单。
+     * @param profile 调参画像。
+     * @returns 无返回值。
+     */
+    const writeTuningInputs = (profile: MemoryTuningProfile): void => {
+        const tuningFields: Array<{ inputId: string; value: number }> = [
+            { inputId: IDS.tuningCandidateAcceptThresholdBiasId, value: profile.candidateAcceptThresholdBias },
+            { inputId: IDS.tuningRecallRelationshipBiasId, value: profile.recallRelationshipBias },
+            { inputId: IDS.tuningRecallEmotionBiasId, value: profile.recallEmotionBias },
+            { inputId: IDS.tuningRecallRecencyBiasId, value: profile.recallRecencyBias },
+            { inputId: IDS.tuningRecallContinuityBiasId, value: profile.recallContinuityBias },
+            { inputId: IDS.tuningDistortionProtectionBiasId, value: profile.distortionProtectionBias },
+            { inputId: IDS.tuningCandidateRetentionLimitId, value: profile.candidateRetentionLimit },
+            { inputId: IDS.tuningRecallRetentionLimitId, value: profile.recallRetentionLimit },
+        ];
+        tuningFields.forEach((field: { inputId: string; value: number }): void => {
+            const element = document.getElementById(field.inputId) as HTMLInputElement | null;
+            if (!element) {
+                return;
+            }
+            element.value = String(field.value);
+        });
+    };
+
+    /**
+     * 功能：从当前表单收集调参画像补丁。
+     * @returns 调参画像补丁。
+     */
+    const collectTuningProfilePatch = (): Partial<MemoryTuningProfile> => {
+        return {
+            candidateAcceptThresholdBias: readTuningNumberInputValue(IDS.tuningCandidateAcceptThresholdBiasId, DEFAULT_MEMORY_TUNING_PROFILE.candidateAcceptThresholdBias),
+            recallRelationshipBias: readTuningNumberInputValue(IDS.tuningRecallRelationshipBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallRelationshipBias),
+            recallEmotionBias: readTuningNumberInputValue(IDS.tuningRecallEmotionBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallEmotionBias),
+            recallRecencyBias: readTuningNumberInputValue(IDS.tuningRecallRecencyBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallRecencyBias),
+            recallContinuityBias: readTuningNumberInputValue(IDS.tuningRecallContinuityBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallContinuityBias),
+            distortionProtectionBias: readTuningNumberInputValue(IDS.tuningDistortionProtectionBiasId, DEFAULT_MEMORY_TUNING_PROFILE.distortionProtectionBias),
+            candidateRetentionLimit: readTuningNumberInputValue(IDS.tuningCandidateRetentionLimitId, DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit),
+            recallRetentionLimit: readTuningNumberInputValue(IDS.tuningRecallRetentionLimitId, DEFAULT_MEMORY_TUNING_PROFILE.recallRetentionLimit),
+        };
+    };
+
+    /**
+     * 功能：激活顶层导航面板。
+     * 参数：
+     *   tabId：目标标签 ID。
+     *   panelId：目标面板 ID。
+     * 返回：
+     *   void：无返回值。
+     */
+    const activateTopTab = (tabId: string, panelId: string): void => {
+        topTabs.forEach((entry: { tabId: string; panelId: string }): void => {
+            const tabElement = document.getElementById(entry.tabId);
+            const panelElement = document.getElementById(entry.panelId);
+            tabElement?.classList.remove('is-active');
+            panelElement?.setAttribute('hidden', 'true');
+        });
+        const nextTab = document.getElementById(tabId);
+        const nextPanel = document.getElementById(panelId);
+        nextTab?.classList.add('is-active');
+        nextPanel?.removeAttribute('hidden');
+        if (
+            panelId === IDS.panelRoleId
+            || panelId === IDS.panelRecentId
+            || panelId === IDS.panelRelationId
+            || panelId === IDS.panelInjectionId
+        ) {
+            void refreshExperiencePanels();
+        }
+    };
+
+    /**
+     * 功能：激活高级工具中的二级标签。
+     * 参数：
+     *   tabId：目标标签 ID。
+     *   panelId：目标面板 ID。
+     * 返回：
+     *   void：无返回值。
+     */
+    const activateAdvancedTab = (tabId: string, panelId: string): void => {
+        advancedTabs.forEach((entry: { tabId: string; panelId: string }): void => {
+            const tabElement = document.getElementById(entry.tabId);
+            const panelElement = document.getElementById(entry.panelId);
+            tabElement?.classList.remove('is-active');
+            panelElement?.setAttribute('hidden', 'true');
+        });
+        document.getElementById(tabId)?.classList.add('is-active');
+        document.getElementById(panelId)?.removeAttribute('hidden');
+    };
+
+    /**
+     * 功能：返回当前激活的高级工具标签，如不存在则回退到默认项。
+     * 参数：无。
+     * 返回：
+     *   { tabId: string; panelId: string }：当前应显示的高级工具标签。
+     */
+    const getActiveAdvancedTab = (): { tabId: string; panelId: string } => {
+        const activeEntry = advancedTabs.find((entry: { tabId: string; panelId: string }): boolean => {
+            const tabElement = document.getElementById(entry.tabId);
+            return Boolean(tabElement?.classList.contains('is-active'));
+        });
+        return activeEntry || advancedTabs[0];
+    };
+
+    organizeAdvancedSections();
+
+    /**
+     * 功能：应用普通模式或高级模式。
+     * 参数：
+     *   mode：目标界面模式。
+     * 返回：
+     *   void：无返回值。
+     */
+    const applyUiMode = (mode: UiMode): void => {
+        if (cardRoot) {
+            cardRoot.dataset.stxUiMode = mode;
+        }
+        const basicModeButton = document.getElementById(IDS.modeBasicId);
+        const advancedModeButton = document.getElementById(IDS.modeAdvancedId);
+        basicModeButton?.classList.toggle('is-active', mode === 'basic');
+        advancedModeButton?.classList.toggle('is-active', mode === 'advanced');
+
+        const advancedPanel = document.getElementById(IDS.panelAdvancedToolsId);
+        if (mode === 'advanced') {
+            topTabs.forEach((entry: { tabId: string; panelId: string }): void => {
+                document.getElementById(entry.tabId)?.classList.remove('is-active');
+                document.getElementById(entry.panelId)?.setAttribute('hidden', 'true');
+            });
+            advancedPanel?.removeAttribute('hidden');
+            const activeAdvancedTab = getActiveAdvancedTab();
+            activateAdvancedTab(activeAdvancedTab.tabId, activeAdvancedTab.panelId);
+            return;
+        }
+
+        advancedPanel?.setAttribute('hidden', 'true');
+        advancedTabs.forEach((entry: { tabId: string; panelId: string }): void => {
+            document.getElementById(entry.panelId)?.setAttribute('hidden', 'true');
+        });
+        const activeBasicTab = topTabs.find((entry: { tabId: string; panelId: string }): boolean => {
+            const tabElement = document.getElementById(entry.tabId);
+            return Boolean(tabElement?.classList.contains('is-active'));
+        });
+        const fallbackBasicTab = activeBasicTab || topTabs[0];
+        if (fallbackBasicTab) {
+            activateTopTab(fallbackBasicTab.tabId, fallbackBasicTab.panelId);
+        }
+    };
+
+    topTabs.forEach(({ tabId, panelId }: { tabId: string; panelId: string }): void => {
+        const tabElement = document.getElementById(tabId);
+        if (!tabElement) {
+            return;
+        }
+        tabElement.addEventListener('click', (): void => {
+            activateTopTab(tabId, panelId);
         });
     });
+
+    advancedTabs.forEach(({ tabId, panelId }: { tabId: string; panelId: string }): void => {
+        const tabElement = document.getElementById(tabId);
+        if (!tabElement) {
+            return;
+        }
+        tabElement.addEventListener('click', (): void => {
+            activateAdvancedTab(tabId, panelId);
+        });
+    });
+
+    document.getElementById(IDS.modeBasicId)?.addEventListener('click', (): void => {
+        applyUiMode('basic');
+    });
+    document.getElementById(IDS.modeAdvancedId)?.addEventListener('click', (): void => {
+        applyUiMode('advanced');
+    });
+    document.getElementById(IDS.experienceRefreshBtnId)?.addEventListener('click', (): void => {
+        void refreshExperiencePanels();
+    });
+    document.getElementById(IDS.experienceAdvancedBtnId)?.addEventListener('click', (): void => {
+        applyUiMode('advanced');
+    });
+    document.getElementById(IDS.experienceRecordEditorBtnId)?.addEventListener('click', (): void => {
+        openRecordEditor();
+    });
+    document.getElementById(IDS.tabAiId)?.addEventListener('click', (): void => {
+        void refreshExperiencePanels();
+    });
+
+    const tuningRefreshButton = document.getElementById(IDS.tuningRefreshBtnId);
+    if (tuningRefreshButton) {
+        tuningRefreshButton.addEventListener('click', async (): Promise<void> => {
+            await refreshExperiencePanels();
+        });
+    }
+
+    const tuningResetButton = document.getElementById(IDS.tuningResetBtnId);
+    if (tuningResetButton) {
+        tuningResetButton.addEventListener('click', (): void => {
+            writeTuningInputs(DEFAULT_MEMORY_TUNING_PROFILE);
+        });
+    }
+
+    const tuningSaveButton = document.getElementById(IDS.tuningSaveBtnId);
+    if (tuningSaveButton) {
+        tuningSaveButton.addEventListener('click', async (): Promise<void> => {
+            const memory = (window as any).STX?.memory;
+            if (!memory?.chatState?.setMemoryTuningProfile) {
+                alert('请先启动 Memory OS。');
+                return;
+            }
+            tuningSaveButton.setAttribute('disabled', 'true');
+            try {
+                await memory.chatState.setMemoryTuningProfile(collectTuningProfilePatch());
+                await refreshExperiencePanels();
+                alert('记忆调参已保存。');
+            } catch (error) {
+                alert('保存调参失败：' + String(error));
+            } finally {
+                tuningSaveButton.removeAttribute('disabled');
+            }
+        });
+    }
+
+    const tuningBackfillButton = document.getElementById(IDS.tuningBackfillBtnId);
+    if (tuningBackfillButton) {
+        tuningBackfillButton.addEventListener('click', async (): Promise<void> => {
+            const memory = (window as any).STX?.memory;
+            if (!memory?.chatState?.backfillMemoryMigration) {
+                alert('请先启动 Memory OS。');
+                return;
+            }
+            tuningBackfillButton.setAttribute('disabled', 'true');
+            try {
+                await memory.chatState.backfillMemoryMigration();
+                await refreshExperiencePanels();
+                alert('迁移回填已完成。');
+            } catch (error) {
+                alert('迁移回填失败：' + String(error));
+            } finally {
+                tuningBackfillButton.removeAttribute('disabled');
+            }
+        });
+    }
+
+    /**
+     * 功能：为任务显示控件绑定持久化保存。
+     * @param inputId 控件 ID。
+     * @param eventName 触发保存的事件名。
+     * @returns 无返回值。
+     */
+    const bindTaskPresentationInput = (inputId: string, eventName: 'change' | 'blur' = 'change'): void => {
+        const element = document.getElementById(inputId) as HTMLInputElement | HTMLSelectElement | null;
+        if (!element) {
+            return;
+        }
+        element.addEventListener(eventName, (): void => {
+            saveTaskPresentationSettings(collectTaskPresentationSettings());
+        });
+    };
+
+    bindTaskPresentationInput(IDS.taskSurfaceBackgroundToastId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceDisableComposerId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceBlockingDefaultId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceAutoCloseSecondsId, 'blur');
+    bindTaskPresentationInput(IDS.taskSurfaceAutoCloseSecondsId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceSummarizeModeId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceExtractModeId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceTemplateBuildModeId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceVectorEmbedModeId, 'change');
+    bindTaskPresentationInput(IDS.taskSurfaceSearchRerankModeId, 'change');
+    applyUiMode((cardRoot?.dataset.stxUiMode as UiMode | undefined) || 'basic');
+    activateAdvancedTab(IDS.tabMainId, IDS.panelMainId);
 
     // 3.3 搜索过滤 (简单文本匹配)
     const searchInput = document.getElementById(IDS.searchId) as HTMLInputElement;
@@ -405,6 +782,13 @@ function bindUiEvents() {
         return (window as any).SillyTavern?.getContext?.() || null;
     };
     const SETTINGS_NAMESPACE = 'stx_memory_os';
+    const TASK_SURFACE_FIELD_IDS: Record<MemoryTaskPresentationTaskId, string> = {
+        'memory.summarize': IDS.taskSurfaceSummarizeModeId,
+        'memory.extract': IDS.taskSurfaceExtractModeId,
+        'world.template.build': IDS.taskSurfaceTemplateBuildModeId,
+        'memory.vector.embed': IDS.taskSurfaceVectorEmbedModeId,
+        'memory.search.rerank': IDS.taskSurfaceSearchRerankModeId,
+    };
 
     /**
      * 功能：确保 MemoryOS 设置对象存在并返回引用。
@@ -425,6 +809,129 @@ function bindUiEvents() {
         ctx.extensionSettings[SETTINGS_NAMESPACE] = created;
         return created;
     };
+
+    /**
+     * 功能：读取任务显示设置。
+     * 参数：无。
+     * 返回：当前生效的任务显示设置。
+     */
+    const readTaskPresentationSettings = (): MemoryTaskPresentationSettings => {
+        const ctx = getStContext();
+        const settings = ensureMemorySettings(ctx);
+        return normalizeMemoryTaskPresentationSettings(settings.taskPresentationSettings || {});
+    };
+
+    /**
+     * 功能：保存任务显示设置。
+     * @param nextSettings 新设置。
+     * @returns 归一化后的设置结果。
+     */
+    const saveTaskPresentationSettings = (nextSettings: MemoryTaskPresentationSettings): MemoryTaskPresentationSettings => {
+        const normalized = normalizeMemoryTaskPresentationSettings(nextSettings);
+        const ctx = getStContext();
+        if (!ctx) {
+            return normalized;
+        }
+        const settings = ensureMemorySettings(ctx);
+        settings.taskPresentationSettings = normalized;
+        ctx.saveSettingsDebounced?.();
+        return normalized;
+    };
+
+    /**
+     * 功能：读取展示模式输入值。
+     * @param inputId 控件 ID。
+     * @param fallback 回退值。
+     * @returns 合法的展示模式。
+     */
+    const readTaskSurfaceModeValue = (inputId: string, fallback: TaskSurfaceMode): TaskSurfaceMode => {
+        const element = document.getElementById(inputId) as HTMLSelectElement | null;
+        const value = String(element?.value || '').trim();
+        if (value === 'fullscreen_blocking' || value === 'toast_blocking' || value === 'toast_background') {
+            return value;
+        }
+        return fallback;
+    };
+
+    /**
+     * 功能：把任务显示设置写回表单。
+     * @param settings 任务显示设置。
+     * @returns 无返回值。
+     */
+    const writeTaskPresentationInputs = (settings: MemoryTaskPresentationSettings): void => {
+        const backgroundToastEl = document.getElementById(IDS.taskSurfaceBackgroundToastId) as HTMLInputElement | null;
+        const disableComposerEl = document.getElementById(IDS.taskSurfaceDisableComposerId) as HTMLInputElement | null;
+        const blockingDefaultEl = document.getElementById(IDS.taskSurfaceBlockingDefaultId) as HTMLSelectElement | null;
+        const autoCloseSecondsEl = document.getElementById(IDS.taskSurfaceAutoCloseSecondsId) as HTMLInputElement | null;
+
+        if (backgroundToastEl) {
+            backgroundToastEl.checked = settings.showBackgroundToast;
+        }
+        if (disableComposerEl) {
+            disableComposerEl.checked = settings.disableComposerDuringBlocking;
+        }
+        if (blockingDefaultEl) {
+            blockingDefaultEl.value = settings.blockingDefaultMode;
+        }
+        if (autoCloseSecondsEl) {
+            autoCloseSecondsEl.value = String(settings.toastAutoCloseSeconds);
+        }
+
+        (Object.keys(TASK_SURFACE_FIELD_IDS) as MemoryTaskPresentationTaskId[]).forEach((taskId: MemoryTaskPresentationTaskId): void => {
+            const element = document.getElementById(TASK_SURFACE_FIELD_IDS[taskId]) as HTMLSelectElement | null;
+            if (!element) {
+                return;
+            }
+            element.value = settings.presets[taskId]?.surfaceMode || DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[taskId].surfaceMode;
+        });
+        refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
+    };
+
+    /**
+     * 功能：从表单收集任务显示设置。
+     * 参数：无。
+     * 返回：归一化后的任务显示设置。
+     */
+    const collectTaskPresentationSettings = (): MemoryTaskPresentationSettings => {
+        const current = readTaskPresentationSettings();
+        const backgroundToastEl = document.getElementById(IDS.taskSurfaceBackgroundToastId) as HTMLInputElement | null;
+        const disableComposerEl = document.getElementById(IDS.taskSurfaceDisableComposerId) as HTMLInputElement | null;
+        const autoCloseSecondsEl = document.getElementById(IDS.taskSurfaceAutoCloseSecondsId) as HTMLInputElement | null;
+        const parsedAutoCloseSeconds = Number(autoCloseSecondsEl?.value);
+
+        const nextSettings: MemoryTaskPresentationSettings = {
+            ...current,
+            blockingDefaultMode: readTaskSurfaceModeValue(
+                IDS.taskSurfaceBlockingDefaultId,
+                DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.blockingDefaultMode,
+            ) as Extract<TaskSurfaceMode, 'fullscreen_blocking' | 'toast_blocking'>,
+            showBackgroundToast: backgroundToastEl?.checked ?? DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.showBackgroundToast,
+            disableComposerDuringBlocking: disableComposerEl?.checked ?? DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.disableComposerDuringBlocking,
+            toastAutoCloseSeconds: Number.isFinite(parsedAutoCloseSeconds)
+                ? parsedAutoCloseSeconds
+                : current.toastAutoCloseSeconds,
+            presets: {
+                ...current.presets,
+            },
+            updatedAt: Date.now(),
+        };
+
+        (Object.keys(TASK_SURFACE_FIELD_IDS) as MemoryTaskPresentationTaskId[]).forEach((taskId: MemoryTaskPresentationTaskId): void => {
+            nextSettings.presets[taskId] = {
+                taskId,
+                label: current.presets[taskId]?.label || DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[taskId].label,
+                surfaceMode: readTaskSurfaceModeValue(
+                    TASK_SURFACE_FIELD_IDS[taskId],
+                    DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[taskId].surfaceMode,
+                ),
+            };
+        });
+
+        return normalizeMemoryTaskPresentationSettings(nextSettings);
+    };
+
+    writeTaskPresentationInputs(readTaskPresentationSettings());
+
     const readSettingBoolean = (settingKey: string): boolean => {
         const ctx = getStContext();
         const settings = ensureMemorySettings(ctx);
@@ -1555,17 +2062,19 @@ function bindUiEvents() {
         const activeSelectEl = document.getElementById(IDS.templateActiveSelectId) as HTMLSelectElement | null;
         const lockEl = document.getElementById(IDS.templateLockId) as HTMLInputElement | null;
         if (!listEl) return;
+        listEl.textContent = '正在加载...';
         const memory = (window as any).STX?.memory;
         if (!memory?.template?.listByChatKey) {
             listEl.textContent = '暂无可用模板，请先启动会话并开启 AI 模式。';
             return;
         }
         try {
-            const [templates, binding, activeTemplateId] = await Promise.all([
-                memory.template.listByChatKey(),
-                memory.template.getBinding?.(),
-                memory.getActiveTemplateId?.(),
+            const [templates, binding, activeTemplate] = await Promise.all([
+                memory.template.listByChatKey().catch(() => []),
+                memory.template.getBinding?.().catch(() => null),
+                memory.template.getActive?.().catch(() => null),
             ]);
+            const activeTemplateId = String(activeTemplate?.templateId || binding?.templateId || '').trim();
 
             if (activeSelectEl) {
                 activeSelectEl.innerHTML = '<option value="">选择要激活的模板...</option>';
@@ -1589,27 +2098,66 @@ function bindUiEvents() {
                 return;
             }
 
-            listEl.textContent = templates.map((template: any) => {
-                const isActive = activeTemplateId && template.templateId === activeTemplateId;
-                const mark = isActive ? '★' : ' ';
-                const hash = template.worldInfoRef?.hash || '(无 hash)';
-                return `${mark}[模板] ${template.name} (${template.worldType})\n逻辑表: ${(template.tables || []).map((item: any) => item.key).join(', ') || '(空)'}\nFactTypes: ${(template.factTypes || []).map((item: any) => item.type).join(', ') || '(空)'}\nHash: ${hash}\nID: ${template.templateId}`;
-            }).join('\n\n');
+            listEl.innerHTML = templates.map((template: any) => {
+                const isActive = Boolean(activeTemplateId && template.templateId === activeTemplateId);
+                const tableNames = (template.tables || []).map((item: any) => String(item?.key || '').trim()).filter(Boolean);
+                const factTypes = (template.factTypes || []).map((item: any) => String(item?.type || '').trim()).filter(Boolean);
+                const hash = String(template.worldInfoRef?.hash || '').trim() || '未记录';
+                const familyId = String(template.templateFamilyId || '').trim();
+                return `
+                    <article class="stx-ui-template-record${isActive ? ' is-active' : ''}">
+                        <div class="stx-ui-template-record-head">
+                            <div class="stx-ui-template-record-title">
+                                <div class="stx-ui-template-record-name">${escapeHtml(template.name || '未命名模板')}</div>
+                                <div class="stx-ui-template-record-meta">${escapeHtml(template.worldType || 'unknown')} · ID ${escapeHtml(template.templateId || 'unknown')}</div>
+                            </div>
+                            ${isActive ? '<span class="stx-ui-template-record-badge">当前启用</span>' : ''}
+                        </div>
+                        <div class="stx-ui-template-record-grid">
+                            <div class="stx-ui-template-record-cell">
+                                <strong>逻辑表</strong>
+                                <span>${escapeHtml(tableNames.join('、') || '暂无')}</span>
+                            </div>
+                            <div class="stx-ui-template-record-cell">
+                                <strong>Fact Types</strong>
+                                <span>${escapeHtml(factTypes.join('、') || '暂无')}</span>
+                            </div>
+                            <div class="stx-ui-template-record-cell">
+                                <strong>Hash</strong>
+                                <span>${escapeHtml(hash)}</span>
+                            </div>
+                            <div class="stx-ui-template-record-cell">
+                                <strong>Family</strong>
+                                <span>${escapeHtml(familyId || '未归组')}</span>
+                            </div>
+                        </div>
+                    </article>
+                `;
+            }).join('');
         } catch (e) {
             listEl.textContent = '读取模板失败: ' + String(e);
         }
     };
 
+    const refreshTemplatePanelState = async (): Promise<void> => {
+        await refreshTemplatesUI();
+        await populateEntityTypes();
+    };
+
     // 点击世界模板 Tab 时自动刺新
     const templateTabEl = document.getElementById(IDS.tabTemplateId);
     if (templateTabEl) {
-        templateTabEl.addEventListener('click', refreshTemplatesUI);
+        templateTabEl.addEventListener('click', () => {
+            void refreshTemplatePanelState();
+        });
     }
 
     // 手动刷新按鈕
     const refreshBtn = document.getElementById(IDS.templateRefreshBtnId);
     if (refreshBtn) {
-        refreshBtn.addEventListener('click', refreshTemplatesUI);
+        refreshBtn.addEventListener('click', () => {
+            void refreshTemplatePanelState();
+        });
     }
 
     // 强制重建按钮：直接调用 template.rebuildFromWorldInfo()
@@ -1624,7 +2172,7 @@ function bindUiEvents() {
             if (!confirm('将强制读取世界书并重建模板，确定吗？')) return;
             try {
                 const templateId = await memory.template.rebuildFromWorldInfo();
-                await refreshTemplatesUI();
+                await refreshTemplatePanelState();
                 alert(templateId ? `重建成功，当前模板: ${templateId}` : '未生成新模板，请检查世界书或 LLM 配置');
             } catch (error) {
                 alert('重建失败：' + String(error));
@@ -1652,7 +2200,7 @@ function bindUiEvents() {
                 if (memory.template.setLock && lockEl) {
                     await memory.template.setLock(lockEl.checked);
                 }
-                await refreshTemplatesUI();
+                await refreshTemplatePanelState();
                 alert('模板切换成功。');
             } catch (error) {
                 alert('模板切换失败：' + String(error));
@@ -1927,23 +2475,45 @@ function bindUiEvents() {
         }
     };
 
+    /**
+     * 功能：创建当前聊天快照。
+     * 参数：
+     *   triggerButton：触发按钮元素。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    const createAuditSnapshot = async (triggerButton: HTMLElement | null): Promise<void> => {
+        const memory = (window as any).STX?.memory;
+        if (!memory?.audit) {
+            alert('Memory OS 尚未就绪。');
+            return;
+        }
+        const note = prompt('为这个快照添加备注（可留空）：') ?? undefined;
+        triggerButton?.setAttribute('disabled', 'true');
+        try {
+            const snapshotId = await memory.audit.createSnapshot(note);
+            alert(`✅ 快照已创建！\nID: ${snapshotId}`);
+            await renderAuditList();
+            await refreshExperiencePanels();
+        } catch (e) {
+            alert('创建快照失败：' + String(e));
+        } finally {
+            triggerButton?.removeAttribute('disabled');
+        }
+    };
+
     // 创建快照按钮
     const auditSnapshotBtn = document.getElementById(IDS.auditCreateSnapshotBtnId);
     if (auditSnapshotBtn) {
         auditSnapshotBtn.addEventListener('click', async () => {
-            const memory = (window as any).STX?.memory;
-            if (!memory?.audit) { alert('Memory OS 尚未就绪。'); return; }
-            const note = prompt('为这个快照添加备注（可留空）：') ?? undefined;
-            auditSnapshotBtn.setAttribute('disabled', 'true');
-            try {
-                const snapshotId = await memory.audit.createSnapshot(note);
-                alert(`✅ 快照已创建！\nID: ${snapshotId}`);
-                await renderAuditList();
-            } catch (e) {
-                alert('创建快照失败：' + String(e));
-            } finally {
-                auditSnapshotBtn.removeAttribute('disabled');
-            }
+            await createAuditSnapshot(auditSnapshotBtn as HTMLElement);
+        });
+    }
+
+    const experienceSnapshotBtn = document.getElementById(IDS.experienceSnapshotBtnId);
+    if (experienceSnapshotBtn) {
+        experienceSnapshotBtn.addEventListener('click', async () => {
+            await createAuditSnapshot(experienceSnapshotBtn as HTMLElement);
         });
     }
 
@@ -1954,9 +2524,12 @@ function bindUiEvents() {
     }
 
     // 切换到审计 Tab 时自动刷新
-    const auditTabBtn = document.getElementById(IDS.tabAuditId);
+    const auditTabBtn = document.getElementById(IDS.tabDbId);
     if (auditTabBtn) {
-        auditTabBtn.addEventListener('click', renderAuditList);
+        auditTabBtn.addEventListener('click', () => {
+            void renderAuditList();
+            void refreshTemplatePanelState();
+        });
     }
 
     // ===== 世界书写回 =====
@@ -2031,6 +2604,8 @@ function bindUiEvents() {
         if (prevVal) logicTableSelect.value = prevVal;
         refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
     };
+
+    void refreshTemplatePanelState();
 
     /** 渲染逻辑表内容（按选中的实体类型加载 facts） */
     const renderLogicTable = async (entityType: string) => {
@@ -2116,7 +2691,7 @@ function bindUiEvents() {
     }
 
     // 世界模板 Tab 激活时刷新实体类型列表
-    const templateTabBtn = document.getElementById(IDS.tabTemplateId);
+    const templateTabBtn = document.getElementById(IDS.tabDbId);
     if (templateTabBtn) {
         templateTabBtn.addEventListener('click', populateEntityTypes);
     }

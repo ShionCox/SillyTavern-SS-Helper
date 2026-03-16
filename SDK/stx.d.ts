@@ -728,6 +728,210 @@ export interface GroupMemoryState {
     updatedAt: number;
 }
 
+export type MemoryLayer = 'working' | 'episodic' | 'semantic' | 'core_identity';
+
+export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
+
+export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
+
+export type MemoryDecayStage = 'clear' | 'blur' | 'distorted';
+
+export type InjectedMemoryTone = 'stable_fact' | 'clear_recall' | 'blurred_recall' | 'possible_misremember';
+
+export interface PersonaMemoryProfile {
+    profileVersion: string;
+    totalCapacity: number;
+    eventMemory: number;
+    factMemory: number;
+    emotionalBias: number;
+    relationshipSensitivity: number;
+    forgettingSpeed: number;
+    distortionTendency: number;
+    selfNarrativeBias: number;
+    privacyGuard: number;
+    allowDistortion: boolean;
+    derivedFrom: string[];
+    updatedAt: number;
+}
+
+export interface SimpleMemoryPersona {
+    memoryStrength: 'weak' | 'balanced' | 'strong';
+    emotionalMemory: 'low' | 'medium' | 'high';
+    relationshipFocus: 'low' | 'medium' | 'high';
+    forgettingRate: 'slow' | 'medium' | 'fast';
+    distortionRisk: 'low' | 'medium' | 'high';
+    updatedAt: number;
+}
+
+export interface EncodingScore {
+    totalScore: number;
+    accepted: boolean;
+    targetLayer: MemoryLayer;
+    salience: number;
+    strength: number;
+    decayStage: MemoryDecayStage;
+    emotionTag: string;
+    relationScope: string;
+    reasonCodes: string[];
+    profileVersion: string;
+}
+
+export interface MemoryCandidate {
+    candidateId: string;
+    kind: MemoryCandidateKind;
+    source: string;
+    summary: string;
+    payload: Record<string, unknown>;
+    extractedAt: number;
+    sourceEventId?: string;
+    conflictWith: string[];
+    resolvedRecordKey?: string;
+    encoding: EncodingScore;
+}
+
+export interface MemoryCandidateBufferSnapshot {
+    total: number;
+    accepted: number;
+    rejected: number;
+    latestAt: number;
+    items: MemoryCandidate[];
+}
+
+export interface MemoryLifecycleState {
+    recordKey: string;
+    recordKind: MemoryRecordKind;
+    stage: MemoryDecayStage;
+    strength: number;
+    salience: number;
+    rehearsalCount: number;
+    lastRecalledAt: number;
+    distortionRisk: number;
+    emotionTag: string;
+    relationScope: string;
+    updatedAt: number;
+}
+
+export interface RecallLogEntry {
+    recallId: string;
+    query: string;
+    section: InjectionSectionName | 'PREVIEW';
+    recordKey: string;
+    recordKind: MemoryRecordKind;
+    recordTitle: string;
+    score: number;
+    selected: boolean;
+    conflictSuppressed: boolean;
+    tone: InjectedMemoryTone;
+    reasonCodes: string[];
+    loggedAt: number;
+}
+
+export interface RecallExplanationBucket {
+    bucketKey: 'selected' | 'conflict_suppressed' | 'rejected_candidates';
+    label: string;
+    emptyText: string;
+    items: Array<{
+        itemId: string;
+        sourceKind: 'recall_log' | 'candidate';
+        recordKey: string;
+        recordKind: MemoryRecordKind | MemoryCandidateKind;
+        title: string;
+        score: number;
+        layer: MemoryLayer | null;
+        section: InjectionSectionName | 'PREVIEW' | null;
+        tone: InjectedMemoryTone | null;
+        stage: MemoryDecayStage | null;
+        reasonCodes: string[];
+        accepted: boolean | null;
+    }>;
+}
+
+export interface LatestRecallExplanation {
+    generatedAt: number;
+    query: string;
+    sectionsUsed: InjectionSectionName[];
+    selected: RecallExplanationBucket;
+    conflictSuppressed: RecallExplanationBucket;
+    rejectedCandidates: RecallExplanationBucket;
+    reasonCodes: string[];
+}
+
+export interface RelationshipDelta {
+    actorKey: string;
+    targetKey: string;
+    familiarity: number;
+    trust: number;
+    affection: number;
+    tension: number;
+    dependency: number;
+    respect: number;
+    unresolvedConflictDelta: number;
+    sharedFragment?: string;
+    reason: string;
+    updatedAt: number;
+}
+
+export interface RelationshipState {
+    relationshipKey: string;
+    actorKey: string;
+    targetKey: string;
+    scope: 'self_target' | 'group_pair';
+    participantKeys: string[];
+    familiarity: number;
+    trust: number;
+    affection: number;
+    tension: number;
+    dependency: number;
+    respect: number;
+    unresolvedConflict: number;
+    sharedFragments: string[];
+    summary: string;
+    reasonCodes: string[];
+    updatedAt: number;
+}
+
+export interface MemoryMigrationBatchStats {
+    lifecycleFacts: number;
+    lifecycleSummaries: number;
+    candidateRows: number;
+    recallRows: number;
+    relationshipRows: number;
+    updatedAt: number;
+}
+
+export type MemoryMigrationStage = 'legacy_compatible' | 'dual_write' | 'db_preferred';
+
+export interface MemoryMigrationStatus {
+    stage: MemoryMigrationStage;
+    schemaVersion: number;
+    lifecycleBackfilled: boolean;
+    candidateMirrorReady: boolean;
+    recallMirrorReady: boolean;
+    relationshipMirrorReady: boolean;
+    lastBackfillAt: number;
+    autoBackfillEnabled: boolean;
+    autoBackfillBatchSize: number;
+    lifecycleFactCursor: number;
+    lifecycleSummaryCursor: number;
+    lastAutoBackfillAt: number;
+    lastAutoBackfillReason: string;
+    lastBatchStats: MemoryMigrationBatchStats;
+    pendingBackfillReasons: string[];
+    updatedAt: number;
+}
+
+export interface MemoryTuningProfile {
+    candidateAcceptThresholdBias: number;
+    recallRelationshipBias: number;
+    recallEmotionBias: number;
+    recallRecencyBias: number;
+    recallContinuityBias: number;
+    distortionProtectionBias: number;
+    candidateRetentionLimit: number;
+    recallRetentionLimit: number;
+    updatedAt: number;
+}
+
 export interface ChatLifecycleState {
     stage: ChatLifecycleStage;
     stageReasonCodes: string[];
@@ -758,9 +962,18 @@ export interface MutationRepairTask {
 export interface MemoryOSChatState {
     logicalChatView?: LogicalChatView;
     semanticSeed?: ChatSemanticSeed;
+    personaMemoryProfile?: PersonaMemoryProfile;
+    simpleMemoryPersona?: SimpleMemoryPersona;
     coldStartFingerprint?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
+    memoryCandidateBuffer?: MemoryCandidate[];
+    memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
+    memoryRecallLog?: RecallLogEntry[];
+    latestRecallExplanation?: LatestRecallExplanation | null;
+    relationshipStateMap?: Record<string, RelationshipState>;
+    memoryMigrationStatus?: MemoryMigrationStatus;
+    memoryTuningProfile?: MemoryTuningProfile;
     mutationRepairQueue?: MutationRepairTask[];
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
@@ -977,6 +1190,21 @@ export interface MemorySDK {
         setAutoSchemaPolicy(policy: Partial<AutoSchemaPolicy>): Promise<void>;
         bootstrapSemanticSeed(): Promise<void>;
         getSemanticSeed(): Promise<ChatSemanticSeed | null>;
+        getPersonaMemoryProfile(): Promise<PersonaMemoryProfile | null>;
+        getSimpleMemoryPersona(): Promise<SimpleMemoryPersona | null>;
+        recomputePersonaMemoryProfile(): Promise<PersonaMemoryProfile>;
+        listMemoryCandidates(limit?: number): Promise<MemoryCandidate[]>;
+        getCandidateBufferSnapshot(): Promise<MemoryCandidateBufferSnapshot>;
+        getRecallLog(limit?: number): Promise<RecallLogEntry[]>;
+        getLatestRecallExplanation(): Promise<LatestRecallExplanation | null>;
+        getMemoryLifecycleSummary(limit?: number): Promise<MemoryLifecycleState[]>;
+        recomputeRecallRanking(query?: string): Promise<RecallLogEntry[]>;
+        getRelationshipState(): Promise<RelationshipState[]>;
+        recomputeRelationshipState(): Promise<RelationshipState[]>;
+        getMemoryMigrationStatus(): Promise<MemoryMigrationStatus>;
+        backfillMemoryMigration(): Promise<MemoryMigrationStatus>;
+        getMemoryTuningProfile(): Promise<MemoryTuningProfile>;
+        setMemoryTuningProfile(profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile>;
         getColdStartStage(): Promise<ColdStartStage | null>;
         primeColdStartPrompt(reason?: string): Promise<boolean>;
         primeColdStartExtract(reason?: string): Promise<boolean>;
@@ -1030,6 +1258,65 @@ export interface MemorySDK {
 export type LLMCapability = 'chat' | 'json' | 'tools' | 'embeddings' | 'rerank' | 'vision' | 'reasoning';
 export type CapabilityKind = 'generation' | 'embedding' | 'rerank';
 export type DisplayMode = 'fullscreen' | 'compact' | 'silent';
+export type TaskSurfaceMode = 'fullscreen_blocking' | 'toast_blocking' | 'toast_background';
+export type TaskVisualState = 'pending' | 'running' | 'streaming' | 'done' | 'error';
+
+export interface TaskQueueItem {
+    requestId: string;
+    taskId?: string;
+    title: string;
+    subtitle?: string;
+    description?: string;
+    source?: string;
+    state: TaskVisualState;
+    surfaceMode: TaskSurfaceMode;
+    disableComposer: boolean;
+    showToast: boolean;
+    progress?: number;
+    queueLabel?: string;
+    dedupeVisualKey?: string;
+    createdAt: number;
+    updatedAt: number;
+    completedAt?: number;
+    autoCloseAt?: number;
+    reason?: string;
+    meta?: Record<string, unknown>;
+}
+
+export interface TaskQueueSnapshot {
+    items: TaskQueueItem[];
+    currentTask: TaskQueueItem | null;
+    blockingTask: TaskQueueItem | null;
+    toastTask: TaskQueueItem | null;
+    nextTasks: TaskQueueItem[];
+    toastNextTasks: TaskQueueItem[];
+    pendingCount: number;
+    blockingCount: number;
+    backgroundCount: number;
+    composerLocked: boolean;
+    composerLockCount: number;
+    fullscreenVisible: boolean;
+    toastVisible: boolean;
+}
+
+export interface TaskPresentationConfig {
+    requestId?: string;
+    taskId?: string;
+    title: string;
+    subtitle?: string;
+    description?: string;
+    source?: string;
+    state?: TaskVisualState;
+    surfaceMode: TaskSurfaceMode;
+    disableComposer?: boolean;
+    showToast?: boolean;
+    progress?: number;
+    queueLabel?: string;
+    dedupeVisualKey?: string;
+    autoCloseMs?: number;
+    errorHoldMs?: number;
+    meta?: Record<string, unknown>;
+}
 
 export interface LLMRunMeta {
     requestId: string;
@@ -1046,6 +1333,33 @@ export interface LLMRunMeta {
 export type LLMRunResult<T> =
     | { ok: true; data: T; meta: LLMRunMeta }
     | { ok: false; error: string; retryable?: boolean; fallbackUsed?: boolean; reasonCode?: string; meta?: LLMRunMeta };
+
+export type LLMTaskLifecycleStage =
+    | 'queued'
+    | 'running'
+    | 'route_resolved'
+    | 'provider_requesting'
+    | 'fallback_started'
+    | 'completed'
+    | 'failed';
+
+export interface LLMTaskLifecycleEvent {
+    requestId: string;
+    consumer: string;
+    taskId: string;
+    taskKind: CapabilityKind;
+    stage: LLMTaskLifecycleStage;
+    ts: number;
+    message?: string;
+    resourceId?: string;
+    model?: string;
+    fallbackUsed?: boolean;
+    progress?: number;
+    error?: string;
+    reasonCode?: string;
+}
+
+export type LLMTaskLifecycleHandler = (event: LLMTaskLifecycleEvent) => void;
 
 export interface TaskDescriptor {
     taskId: string;
@@ -1093,6 +1407,10 @@ export interface RequestEnqueueOptions {
     replacePendingByKey?: string;
     cancelOnScopeChange?: boolean;
     displayMode?: DisplayMode;
+    surfaceMode?: TaskSurfaceMode;
+    disableComposer?: boolean;
+    queueLabel?: string;
+    dedupeVisualKey?: string;
     scope?: RequestScope;
     blockNextUntilOverlayClose?: boolean;
 }
@@ -1191,6 +1509,7 @@ export interface LLMSDK {
         routeHint?: { resource?: string; profile?: string; model?: string };
         budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
         enqueue?: RequestEnqueueOptions;
+        onLifecycle?: LLMTaskLifecycleHandler;
     }): Promise<LLMRunResult<T>>;
 
     /** 向量化接口 */
@@ -1201,6 +1520,7 @@ export interface LLMSDK {
         texts: string[];
         routeHint?: { resource?: string; model?: string };
         enqueue?: RequestEnqueueOptions;
+        onLifecycle?: LLMTaskLifecycleHandler;
     }): Promise<any>;
 
     /** 重排序接口 */
@@ -1213,6 +1533,7 @@ export interface LLMSDK {
         topK?: number;
         routeHint?: { resource?: string; model?: string };
         enqueue?: RequestEnqueueOptions;
+        onLifecycle?: LLMTaskLifecycleHandler;
     }): Promise<any>;
 
     /** 等待指定请求的覆层关闭。通过 meta.requestId 获取 requestId。 */

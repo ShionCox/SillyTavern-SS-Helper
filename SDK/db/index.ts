@@ -23,6 +23,9 @@ export type {
     DBVectorChunkMetadata,
     DBVectorEmbedding,
     DBVectorMeta,
+    DBRelationshipMemory,
+    DBMemoryCandidateBuffer,
+    DBMemoryRecallLog,
     DBLlmCredential,
 } from './database';
 

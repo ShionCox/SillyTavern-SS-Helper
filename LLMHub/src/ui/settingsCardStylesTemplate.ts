@@ -74,6 +74,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       border-radius: 0 0 10px 10px;
       padding: 10px;
       display: block;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
       color: var(--ss-theme-text, inherit);
       background: var(--ss-theme-surface-1, rgba(0, 0, 0, 0.16));
       backdrop-filter: var(--ss-theme-backdrop-filter, blur(3px));
@@ -137,6 +141,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 10px;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-panel[hidden] {
@@ -177,6 +183,9 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
       transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
     }
 
@@ -225,6 +234,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       gap: 8px;
       flex-wrap: wrap;
       margin-top: 6px;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-form-grid {
@@ -232,6 +243,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 8px;
       width: 100%;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-field {
@@ -413,6 +426,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-direction: column;
       gap: 8px;
       width: 100%;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-list-empty {
@@ -427,6 +442,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 14px;
       width: 100%;
+      min-width: 0;
+      max-width: 100%;
       padding: 12px 14px;
       border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.15));
       border-radius: 10px;
@@ -458,6 +475,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       justify-content: flex-end;
       flex: 0 0 auto;
       margin-left: auto;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-list-item:hover {
@@ -532,6 +551,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-list-title {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       font-size: 14px;
       font-weight: 700;
       line-height: 1.2;
@@ -598,6 +618,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-consumer-map-head {
@@ -618,6 +640,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 8px;
       width: 100%;
+      min-width: 0;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-consumer-map-actions {
@@ -1203,7 +1227,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-height: 0;
       min-width: 0;
       overflow-y: auto;
-      overflow-x: hidden;
+      overflow-x: auto;
       padding: 12px;
       display: flex;
       flex-direction: column;
@@ -1247,6 +1271,33 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       max-width: 100%;
       overflow-x: auto;
       overflow-y: visible;
+    }
+
+    #${cardId} .stx-ui-log-pre-raw {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-log-toolbar,
+    #${cardId} .stx-ui-log-detail-wrap,
+    #${cardId} .stx-ui-log-actions,
+    #${cardId} .stx-ui-log-section,
+    #${cardId} .stx-ui-log-modal-panel,
+    #${cardId} .stx-ui-log-layout {
+      box-sizing: border-box;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-log-modal-panel,
+    #${cardId} .stx-ui-log-detail-wrap,
+    #${cardId} .stx-ui-log-section,
+    #${cardId} .stx-ui-log-list-item,
+    #${cardId} .stx-ui-list-title,
+    #${cardId} .stx-ui-list-meta,
+    #${cardId} .stx-ui-item-title,
+    #${cardId} .stx-ui-item-desc {
+      overflow-wrap: anywhere;
     }
 
     @media (max-width: 900px) {

@@ -38,6 +38,7 @@ export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: 
     }
 
     let cleanStr = raw.trim();
+    let lastError = '';
 
     // 1. 尝试去除 DeepSeek / Claude 等喜欢附带的 <think> 标签内容
     cleanStr = cleanStr.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -45,7 +46,8 @@ export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: 
     // 2. 尝试直接解析
     try {
         return { ok: true, data: JSON.parse(cleanStr) };
-    } catch {
+    } catch (error) {
+        lastError = (error as Error).message;
         // 继续尝试提取代码块中的 JSON
     }
 
@@ -55,7 +57,71 @@ export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: 
         try {
             return { ok: true, data: JSON.parse(jsonBlockMatch[1].trim()) };
         } catch (e) {
-            return { ok: false, data: null, error: `代码块中的 JSON 解析失败: ${(e as Error).message}` };
+            lastError = `代码块中的 JSON 解析失败: ${(e as Error).message}`;
+        }
+    }
+
+    const extractBalancedJsonCandidate = (value: string): string | null => {
+        const start = value.search(/[\[{]/);
+        if (start < 0) return null;
+
+        const stack: string[] = [];
+        let inString = false;
+        let escaped = false;
+
+        for (let index = start; index < value.length; index += 1) {
+            const ch = value[index];
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch === '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch === '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch === '"') {
+                inString = true;
+                continue;
+            }
+
+            if (ch === '{' || ch === '[') {
+                stack.push(ch);
+                continue;
+            }
+
+            if (ch === '}' || ch === ']') {
+                if (stack.length === 0) {
+                    return null;
+                }
+                const top = stack[stack.length - 1];
+                const matched = (top === '{' && ch === '}') || (top === '[' && ch === ']');
+                if (!matched) {
+                    return null;
+                }
+                stack.pop();
+                if (stack.length === 0) {
+                    return value.slice(start, index + 1);
+                }
+            }
+        }
+
+        return null;
+    };
+
+    const balancedCandidate = extractBalancedJsonCandidate(cleanStr)
+        || (jsonBlockMatch?.[1] ? extractBalancedJsonCandidate(jsonBlockMatch[1].trim()) : null);
+    if (balancedCandidate) {
+        try {
+            return { ok: true, data: JSON.parse(balancedCandidate) };
+        } catch (e) {
+            lastError = `平衡括号提取 JSON 解析失败: ${(e as Error).message}`;
         }
     }
 
@@ -67,11 +133,19 @@ export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: 
             const manualExtract = cleanStr.substring(firstBrace, lastBrace + 1);
             return { ok: true, data: JSON.parse(manualExtract) };
         } catch (e) {
-            return { ok: false, data: null, error: `暴力括号提取 JSON 解析失败: ${(e as Error).message}` };
+            lastError = `暴力括号提取 JSON 解析失败: ${(e as Error).message}`;
         }
     }
 
-    return { ok: false, data: null, error: '无法从 LLM 输出中识别到有效的 JSON' };
+    if (/[\[{]/.test(cleanStr)) {
+        return {
+            ok: false,
+            data: null,
+            error: lastError || '疑似输出截断或 JSON 未闭合，无法提取完整结构',
+        };
+    }
+
+    return { ok: false, data: null, error: lastError || '无法从 LLM 输出中识别到有效的 JSON' };
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -436,7 +510,10 @@ export const WorldTemplateSchema = z.object({
     factTypes: z.array(TemplateFactTypeSchema).optional().describe('基于实体的进一步状态树类型映射，大模型可选返回'),
     extractPolicies: z.record(z.string(), z.any()).describe('针对这个世界推荐的记忆提取抽取参数配置'),
     injectionLayout: z.record(z.string(), z.any()).describe('推荐该世界下的 Token 分区占用（可选）'),
-}).superRefine((value, ctx) => {
+}).superRefine((
+    value: { tables?: unknown[]; entities?: Record<string, unknown> },
+    ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void },
+) => {
     const hasTables = Array.isArray(value.tables) && value.tables.length > 0;
     const hasEntities = value.entities && Object.keys(value.entities).length > 0;
     if (!hasTables && !hasEntities) {

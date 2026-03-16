@@ -20,7 +20,8 @@ export class MetaManager {
         if (!existing) {
             const initial: DBMeta = {
                 chatKey: this.chatKey,
-                schemaVersion: 1,
+                schemaVersion: 2,
+                memoryMigrationStage: 'legacy_compatible',
             };
             await db.meta.add(initial);
         }

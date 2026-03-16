@@ -5,8 +5,8 @@ import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
-import { readPluginSignal } from '../../../SDK/db';
-import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import { readPluginSignal, readSdkPluginChatState } from '../../../SDK/db';
+import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import type { TemplateTableDef } from '../template/types';
 import type { LogicTableRow } from '../types';
 
@@ -32,6 +32,9 @@ interface ChatItemMeta {
     avatarHtml: string;
     createdAt: number | null;
     signal: Record<string, unknown> | null;
+    archived: boolean;
+    hostMissing: boolean;
+    archiveReason: string;
 }
 
 type RawRecord = Record<string, unknown>;
@@ -299,6 +302,28 @@ function buildChatSummaryLabel(signal: Record<string, unknown> | null): string {
 }
 
 /**
+ * 功能：把聊天删除/归档原因转换为更友好的中文标签。
+ * @param reason 原始原因码。
+ * @returns 展示标签。
+ */
+function formatArchiveReasonLabel(reason: string): string {
+    const normalized = String(reason ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '已删除';
+    }
+    if (normalized.includes('host_chat_deleted') || normalized.includes('host_deleted')) {
+        return '已从宿主删除';
+    }
+    if (normalized.includes('orphaned')) {
+        return '原会话已不存在';
+    }
+    if (normalized.includes('soft_delete')) {
+        return '软删除归档';
+    }
+    return `已删除 · ${reason}`;
+}
+
+/**
  * 功能：构造聊天项的展示元数据。
  * @param chatKey 聊天键
  * @param signal MemoryOS 共享信号
@@ -307,42 +332,67 @@ function buildChatSummaryLabel(signal: Record<string, unknown> | null): string {
 async function buildChatItemMeta(
     chatKey: string,
     signal: Record<string, unknown> | null,
+    hostCanonicalKeySet: Set<string>,
 ): Promise<ChatItemMeta> {
     const ctx = (window as any).SillyTavern?.getContext?.() || {};
     const characters = Array.isArray(ctx.characters) ? ctx.characters : [];
     const groups = Array.isArray(ctx.groups) ? ctx.groups : [];
+    const canonicalKey = resolveChatItemCanonicalKey(chatKey);
     let displayName = chatKey;
     let avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-user"></i></div>`;
 
-    const firstEvent = await db.events.where('chatKey').equals(chatKey).first();
+    const [firstEvent, pluginStateRow] = await Promise.all([
+        db.events.where('chatKey').equals(chatKey).first(),
+        readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey).catch(() => null),
+    ]);
     const createdAt = firstEvent?.ts ? Number(firstEvent.ts) : null;
+    const pluginState = (pluginStateRow?.state ?? {}) as Record<string, unknown>;
+    const archived = pluginState.archived === true;
+    const archiveReason = String(pluginState.archiveReason ?? '').trim();
+    const hostMissing = hostCanonicalKeySet.size > 0 && Boolean(canonicalKey) && !hostCanonicalKeySet.has(canonicalKey);
 
-    if (chatKey.startsWith('Group_')) {
-        const groupId = chatKey.replace(/^Group_/, '').split('_')[0];
-        const group = groups.find((item: Record<string, unknown>): boolean => String(item.id ?? '') === groupId);
+    const parsedRef = parseAnyTavernChatRefEvent(chatKey);
+
+    if (parsedRef.scopeType === 'group' || chatKey.startsWith('Group_')) {
+        const groupId = parsedRef.scopeType === 'group' ? parsedRef.scopeId : chatKey.replace(/^Group_/, '').split('_')[0];
+        const group = groups.find((item: Record<string, unknown>): boolean => String(item.id ?? '') === groupId || String(item.name ?? '') === groupId || String(item.avatar ?? '') === groupId);
         if (group) {
-            displayName = `[群组] ${String(group.name ?? chatKey)}`;
+            displayName = `[群组] ${String(group.name ?? groupId)}`;
+            avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-users"></i></div>`;
+        } else {
+            displayName = `[群组] ${groupId}`;
             avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-users"></i></div>`;
         }
     } else {
+        const characterId = parsedRef.scopeId;
         const matchedCharacter = characters.find((item: Record<string, unknown>): boolean => {
             const avatar = String(item.avatar ?? '');
+            const name = String(item.name ?? '');
+            if (characterId && (avatar === characterId || name === characterId)) {
+                return true;
+            }
             return Boolean(avatar) && chatKey.startsWith(`${avatar}_`);
         });
+
         if (matchedCharacter) {
-            displayName = String(matchedCharacter.name ?? chatKey);
+            displayName = String(matchedCharacter.name ?? characterId);
             avatarHtml = `<img class="stx-re-chat-avatar" src="/characters/${escapeHtml(String(matchedCharacter.avatar ?? ''))}" alt="${escapeHtml(displayName)}" onerror="this.outerHTML='<div class=&quot;stx-re-chat-avatar-icon&quot;><i class=&quot;fa-solid fa-user&quot;></i></div>'">`;
+        } else if (characterId && characterId !== 'unknown_scope') {
+            displayName = characterId;
         }
     }
 
     return {
         chatKey,
-        canonicalKey: resolveChatItemCanonicalKey(chatKey),
+        canonicalKey,
         displayName,
         systemName: chatKey,
         avatarHtml,
         createdAt,
         signal,
+        archived,
+        hostMissing,
+        archiveReason,
     };
 }
 
@@ -970,7 +1020,7 @@ export async function openRecordEditor(): Promise<void> {
             const isActive = !normalizedChatKey
                 ? itemChatKey === ''
                 : itemChatKey === normalizedChatKey
-                    || (activeCanonicalKey && itemCanonicalKey === activeCanonicalKey);
+                    || Boolean(activeCanonicalKey && itemCanonicalKey === activeCanonicalKey);
             element.classList.toggle('is-active', isActive);
         });
     }
@@ -992,9 +1042,10 @@ export async function openRecordEditor(): Promise<void> {
      */
     async function loadChatKeys(): Promise<void> {
         try {
-            const [metaKeys, eventKeys] = await Promise.all([
+            const [metaKeys, eventKeys, hostChats] = await Promise.all([
                 db.meta.toCollection().primaryKeys(),
                 db.events.orderBy('chatKey').uniqueKeys(),
+                listTavernChatsForCurrentTavernEvent().catch((): unknown[] => []),
             ]);
             const allKeys = Array.from(
                 new Set(
@@ -1004,9 +1055,22 @@ export async function openRecordEditor(): Promise<void> {
                 ),
             ) as string[];
 
+            const hostCanonicalKeySet = new Set(
+                (Array.isArray(hostChats) ? hostChats : [])
+                    .map((item: unknown): string => {
+                        const locator = (item as { locator?: Record<string, unknown> })?.locator;
+                        if (!locator || typeof locator !== 'object') {
+                            return '';
+                        }
+                        const parsed = parseAnyTavernChatRefEvent(locator as any);
+                        return buildTavernChatEntityKeyEvent(parsed);
+                    })
+                    .filter(Boolean),
+            );
+
             const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<ChatItemMeta> => {
                 const signal = await readPluginSignal(chatKey, MEMORY_OS_PLUGIN_ID);
-                return buildChatItemMeta(chatKey, signal);
+                return buildChatItemMeta(chatKey, signal, hostCanonicalKeySet);
             }));
             const activeCanonicalKey = resolveChatItemCanonicalKey(currentChatKey);
             const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta>, item: ChatItemMeta) => {
@@ -1019,16 +1083,19 @@ export async function openRecordEditor(): Promise<void> {
 
                 const existingIsActive = Boolean(activeCanonicalKey) && existing.canonicalKey === activeCanonicalKey;
                 const nextIsActive = Boolean(activeCanonicalKey) && item.canonicalKey === activeCanonicalKey;
-                if (nextIsActive && !existingIsActive) {
-                    map.set(dedupeKey, item);
-                    return map;
-                }
-
                 const nextCreatedAt = Number(item.createdAt ?? 0);
                 const existingCreatedAt = Number(existing.createdAt ?? 0);
-                if (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal)) {
-                    map.set(dedupeKey, item);
-                }
+                const preferredItem = nextIsActive && !existingIsActive
+                    ? item
+                    : (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal) ? item : existing);
+                const mergedItem = {
+                    ...preferredItem,
+                    archived: existing.archived || item.archived,
+                    hostMissing: existing.hostMissing || item.hostMissing,
+                    archiveReason: preferredItem.archiveReason || existing.archiveReason || item.archiveReason,
+                    signal: preferredItem.signal || existing.signal || item.signal,
+                } as ChatItemMeta;
+                map.set(dedupeKey, mergedItem);
                 return map;
             }, new Map<string, ChatItemMeta>()).values());
 
@@ -1036,7 +1103,9 @@ export async function openRecordEditor(): Promise<void> {
                 <div class="stx-re-chat-item${currentChatKey ? '' : ' is-active'}" data-chat-key="">
                     <div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-globe"></i></div>
                     <div class="stx-re-chat-info">
-                        <div class="stx-re-chat-name">全局记录</div>
+                        <div class="stx-re-chat-name-wrap">
+                            <div class="stx-re-chat-name">全局记录</div>
+                        </div>
                         <div class="stx-re-chat-sys">Database Root</div>
                         <div class="stx-re-chat-sys">仅原始库表可查看</div>
                     </div>
@@ -1045,17 +1114,25 @@ export async function openRecordEditor(): Promise<void> {
 
             const listHtml = dedupedItems
                 .sort((left: ChatItemMeta, right: ChatItemMeta): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
-                .map((item: ChatItemMeta): string => `
-                    <div class="stx-re-chat-item${item.chatKey === currentChatKey || (activeCanonicalKey && item.canonicalKey === activeCanonicalKey) ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" data-chat-canonical-key="${escapeHtml(item.canonicalKey)}" title="${escapeHtml(item.systemName)}">
+                .map((item: ChatItemMeta): string => {
+                    const deleted = item.archived || item.hostMissing;
+                    const deletedReason = item.archiveReason || (item.hostMissing ? 'host_chat_deleted' : '');
+                    return `
+                    <div class="stx-re-chat-item${item.chatKey === currentChatKey || (activeCanonicalKey && item.canonicalKey === activeCanonicalKey) ? ' is-active' : ''}${deleted ? ' is-archived' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" data-chat-canonical-key="${escapeHtml(item.canonicalKey)}" data-archived="${deleted ? 'true' : 'false'}" title="${escapeHtml(deleted ? `${item.systemName}\n${formatArchiveReasonLabel(deletedReason)}` : item.systemName)}">
                         ${item.avatarHtml}
                         <div class="stx-re-chat-info">
-                            <div class="stx-re-chat-name">${escapeHtml(item.displayName)}</div>
-                            <div class="stx-re-chat-sys">${escapeHtml(item.systemName)}</div>
+                            <div class="stx-re-chat-name-wrap">
+                                <div class="stx-re-chat-name" title="${escapeHtml(item.displayName)}">${escapeHtml(item.displayName)}</div>
+                                ${deleted ? `<span class="stx-re-chat-status-badge">已删除</span>` : ''}
+                            </div>
+                            <div class="stx-re-chat-sys" title="${escapeHtml(item.systemName)}">${escapeHtml(item.systemName)}</div>
                             <div class="stx-re-chat-sys">${escapeHtml(buildChatSummaryLabel(item.signal))}</div>
+                            ${deleted ? `<div class="stx-re-chat-sys stx-re-chat-sys-status">${escapeHtml(formatArchiveReasonLabel(deletedReason))}</div>` : ''}
+                            ${item.createdAt ? `<div class="stx-re-chat-time">${escapeHtml(formatTimeLabel(item.createdAt))}</div>` : ''}
                         </div>
-                        ${item.createdAt ? `<div class="stx-re-chat-time">${escapeHtml(formatTimeLabel(item.createdAt))}</div>` : ''}
                     </div>
-                `)
+                `;
+                })
                 .join('');
 
             chatListContainer.innerHTML = `${allItemHtml}${listHtml}`;

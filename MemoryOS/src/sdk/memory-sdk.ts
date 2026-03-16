@@ -1,4 +1,5 @@
 import type { MemorySDK } from '../../../SDK/stx';
+import { Logger } from '../../../SDK/logger';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
@@ -35,13 +36,20 @@ import type {
     GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
+    LatestRecallExplanation,
     LorebookGateDecision,
     MaintenanceActionType,
     MaintenanceAdvice,
     MaintenanceExecutionResult,
     MaintenanceInsight,
     ChatLifecycleState,
+    MemoryCandidate,
+    MemoryCandidateBufferSnapshot,
+    MemoryLifecycleState,
+    MemoryMigrationStatus,
     MemoryQualityScorecard,
+    MemoryTuningProfile,
+    PersonaMemoryProfile,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
     PromptAnchorMode,
@@ -49,7 +57,10 @@ import type {
     PromptQueryMode,
     PromptRenderStyle,
     PromptSoftPersonaMode,
+    RecallLogEntry,
+    RelationshipState,
     RetentionPolicy,
+    SimpleMemoryPersona,
     SummaryPolicyOverride,
     StrategyDecision,
     UserFacingChatPreset,
@@ -60,6 +71,8 @@ import type {
     LogicTableRow,
     LogicalChatView,
 } from '../types';
+
+const logger = new Logger('MemorySDK');
 
 /**
  * MemorySDK 门面层 —— 将所有管理器按规范接口统一暴露
@@ -86,6 +99,8 @@ export class MemorySDKImpl implements MemorySDK {
     private rowOperations: RowOperationsManager;
     private promptTrimmer: PromptTrimmer;
     private chatViewManager: ChatViewManager;
+    private coldStartPromptPrimeTask: Promise<boolean> | null = null;
+    private coldStartExtractPrimeTask: Promise<boolean> | null = null;
 
     constructor(chatKey: string) {
         this.chatKey_ = chatKey;
@@ -282,90 +297,129 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     private async primeColdStartPrompt(reason: string): Promise<boolean> {
-        if (await this.chatStateManager.isChatArchived()) {
-            return false;
-        }
-        const [seed, fingerprint, stage] = await Promise.all([
-            this.chatStateManager.getSemanticSeed(),
-            this.chatStateManager.getColdStartFingerprint(),
-            this.chatStateManager.getColdStartStage(),
-        ]);
-        if (!seed || !fingerprint) {
-            return false;
-        }
-        if (stage === 'prompt_primed' || stage === 'extract_primed') {
-            return false;
-        }
-        await this.persistSemanticSeed(seed, fingerprint, reason || 'prompt_prime');
-        await this.chatStateManager.markColdStartStage('prompt_primed', fingerprint, { primedAt: Date.now() });
-        return true;
+        return this.runColdStartPrimeTask('prompt', async (): Promise<boolean> => {
+            if (await this.chatStateManager.isChatArchived()) {
+                return false;
+            }
+            const [seed, fingerprint, stage] = await Promise.all([
+                this.chatStateManager.getSemanticSeed(),
+                this.chatStateManager.getColdStartFingerprint(),
+                this.chatStateManager.getColdStartStage(),
+            ]);
+            if (!seed || !fingerprint) {
+                return false;
+            }
+            if (stage === 'prompt_primed' || stage === 'extract_primed') {
+                return false;
+            }
+            await this.persistSemanticSeed(seed, fingerprint, reason || 'prompt_prime');
+            await this.chatStateManager.markColdStartStage('prompt_primed', fingerprint, { primedAt: Date.now() });
+            return true;
+        });
     }
 
     private async primeColdStartExtract(reason: string): Promise<boolean> {
-        if (await this.chatStateManager.isChatArchived()) {
-            return false;
-        }
-        const [seed, fingerprint, stage] = await Promise.all([
-            this.chatStateManager.getSemanticSeed(),
-            this.chatStateManager.getColdStartFingerprint(),
-            this.chatStateManager.getColdStartStage(),
-        ]);
-        if (!seed || !fingerprint) {
-            return false;
-        }
-        if (stage === 'extract_primed') {
-            return false;
-        }
-        if (stage === 'seeded') {
-            await this.primeColdStartPrompt('auto_prompt_prime_before_extract');
-        }
+        return this.runColdStartPrimeTask('extract', async (): Promise<boolean> => {
+            if (await this.chatStateManager.isChatArchived()) {
+                logger.info(`Cold-start extract 跳过：聊天已归档，reason=${reason}, chatKey=${this.chatKey_}`);
+                return false;
+            }
+            const [seed, fingerprint, stage] = await Promise.all([
+                this.chatStateManager.getSemanticSeed(),
+                this.chatStateManager.getColdStartFingerprint(),
+                this.chatStateManager.getColdStartStage(),
+            ]);
+            if (!seed || !fingerprint) {
+                logger.info(`Cold-start extract 跳过：seed 或 fingerprint 缺失，reason=${reason}, chatKey=${this.chatKey_}, hasSeed=${Boolean(seed)}, hasFingerprint=${Boolean(fingerprint)}`);
+                return false;
+            }
+            if (stage === 'extract_primed') {
+                logger.info(`Cold-start extract 跳过：当前已是 extract_primed，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+                return false;
+            }
+            if (stage === 'seeded') {
+                logger.info(`Cold-start extract 前置触发 prompt prime，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+                await this.primeColdStartPrompt('auto_prompt_prime_before_extract');
+            }
 
-        const summaryLines = [
-            ...seed.identitySeed.identity.slice(0, 4),
-            ...seed.worldSeed.rules.slice(0, 4),
-            ...seed.worldSeed.hardConstraints.slice(0, 3),
-        ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);
-        if (summaryLines.length > 0) {
-            const summaryText = summaryLines.join('\n');
-            await this.summariesManager.upsert({
-                level: 'scene',
-                title: 'Cold-start prime',
-                content: summaryText,
-                source: {
-                    extractor: 'cold_start',
-                    provider: 'stx_memory_os',
-                    provenance: {
+            const summaryLines = [
+                ...seed.identitySeed.identity.slice(0, 4),
+                ...seed.worldSeed.rules.slice(0, 4),
+                ...seed.worldSeed.hardConstraints.slice(0, 3),
+            ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);
+            if (summaryLines.length > 0) {
+                const summaryText = summaryLines.join('\n');
+                logger.info(`Cold-start extract 准备写入索引，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}, summaryLines=${summaryLines.length}, summaryLen=${summaryText.length}`);
+                await this.summariesManager.upsert({
+                    level: 'scene',
+                    title: 'Cold-start prime',
+                    content: summaryText,
+                    source: {
                         extractor: 'cold_start',
                         provider: 'stx_memory_os',
-                        fingerprint,
-                        source: {
-                            kind: 'cold_start',
-                            reason,
-                            viewHash: '',
-                            snapshotHash: '',
-                            messageIds: [],
-                            mutationKinds: [],
-                            repairGeneration: 0,
-                            ts: Date.now(),
+                        provenance: {
+                            extractor: 'cold_start',
+                            provider: 'stx_memory_os',
+                            fingerprint,
+                            source: {
+                                kind: 'cold_start',
+                                reason,
+                                viewHash: '',
+                                snapshotHash: '',
+                                messageIds: [],
+                                mutationKinds: [],
+                                repairGeneration: 0,
+                                ts: Date.now(),
+                            },
                         },
                     },
-                },
-            });
-            await this.hybridSearch.indexText(summaryText, 'cold_start', {
-                source: {
-                    kind: 'cold_start',
-                    reason,
-                    viewHash: '',
-                    snapshotHash: '',
-                    messageIds: [],
-                    mutationKinds: [],
-                    repairGeneration: 0,
-                    ts: Date.now(),
-                },
-            });
+                });
+                await this.hybridSearch.indexText(summaryText, 'cold_start', {
+                    source: {
+                        kind: 'cold_start',
+                        reason,
+                        viewHash: '',
+                        snapshotHash: '',
+                        messageIds: [],
+                        mutationKinds: [],
+                        repairGeneration: 0,
+                        ts: Date.now(),
+                    },
+                });
+            }
+            logger.info(`Cold-start extract 完成，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+            await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
+            return true;
+        });
+    }
+
+    /**
+     * 功能：为冷启动提示或提取阶段提供单飞门闩，避免并发事件重复执行。
+     * @param kind 冷启动阶段类型。
+     * @param task 实际执行任务。
+     * @returns 当前阶段的执行结果。
+     */
+    private async runColdStartPrimeTask(kind: 'prompt' | 'extract', task: () => Promise<boolean>): Promise<boolean> {
+        const currentTask = kind === 'prompt' ? this.coldStartPromptPrimeTask : this.coldStartExtractPrimeTask;
+        if (currentTask) {
+            return currentTask;
         }
-        await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
-        return true;
+
+        const nextTask: Promise<boolean> = task().finally((): void => {
+            if (kind === 'prompt') {
+                this.coldStartPromptPrimeTask = null;
+                return;
+            }
+            this.coldStartExtractPrimeTask = null;
+        });
+
+        if (kind === 'prompt') {
+            this.coldStartPromptPrimeTask = nextTask;
+        } else {
+            this.coldStartExtractPrimeTask = nextTask;
+        }
+
+        return nextTask;
     }
 
     // 事件流
@@ -690,6 +744,51 @@ export class MemorySDKImpl implements MemorySDK {
         },
         getSemanticSeed: (): Promise<ChatSemanticSeed | null> => {
             return this.chatStateManager.getSemanticSeed();
+        },
+        getPersonaMemoryProfile: (): Promise<PersonaMemoryProfile | null> => {
+            return this.chatStateManager.getPersonaMemoryProfile();
+        },
+        getSimpleMemoryPersona: (): Promise<SimpleMemoryPersona | null> => {
+            return this.chatStateManager.getSimpleMemoryPersona();
+        },
+        recomputePersonaMemoryProfile: (): Promise<PersonaMemoryProfile> => {
+            return this.chatStateManager.recomputePersonaMemoryProfile();
+        },
+        listMemoryCandidates: (limit?: number): Promise<MemoryCandidate[]> => {
+            return this.chatStateManager.listMemoryCandidates(limit);
+        },
+        getCandidateBufferSnapshot: (): Promise<MemoryCandidateBufferSnapshot> => {
+            return this.chatStateManager.getCandidateBufferSnapshot();
+        },
+        getRecallLog: (limit?: number): Promise<RecallLogEntry[]> => {
+            return this.chatStateManager.getRecallLog(limit);
+        },
+        getLatestRecallExplanation: (): Promise<LatestRecallExplanation | null> => {
+            return this.chatStateManager.getLatestRecallExplanation();
+        },
+        getMemoryLifecycleSummary: (limit?: number): Promise<MemoryLifecycleState[]> => {
+            return this.chatStateManager.getMemoryLifecycleSummary(limit);
+        },
+        recomputeRecallRanking: (query?: string): Promise<RecallLogEntry[]> => {
+            return this.chatStateManager.recomputeRecallRanking(query);
+        },
+        getRelationshipState: (): Promise<RelationshipState[]> => {
+            return this.chatStateManager.getRelationshipState();
+        },
+        recomputeRelationshipState: (): Promise<RelationshipState[]> => {
+            return this.chatStateManager.recomputeRelationshipState();
+        },
+        getMemoryMigrationStatus: (): Promise<MemoryMigrationStatus> => {
+            return this.chatStateManager.getMemoryMigrationStatus();
+        },
+        backfillMemoryMigration: (): Promise<MemoryMigrationStatus> => {
+            return this.chatStateManager.backfillMemoryMigration();
+        },
+        getMemoryTuningProfile: (): Promise<MemoryTuningProfile> => {
+            return this.chatStateManager.getMemoryTuningProfile();
+        },
+        setMemoryTuningProfile: (profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile> => {
+            return this.chatStateManager.setMemoryTuningProfile(profile);
         },
         getColdStartStage: () => {
             return this.chatStateManager.getColdStartStage();

@@ -4,6 +4,8 @@
  * 返回：无。
  */
 
+import type { TaskSurfaceMode } from '../../../SDK/stx';
+
 export type ChatType = 'solo' | 'group' | 'worldbook' | 'tool';
 
 export type StylePreference = 'story' | 'qa' | 'trpg' | 'info';
@@ -630,6 +632,232 @@ export interface GroupMemoryState {
     updatedAt: number;
 }
 
+export type MemoryLayer = 'working' | 'episodic' | 'semantic' | 'core_identity';
+
+export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
+
+export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
+
+export type MemoryDecayStage = 'clear' | 'blur' | 'distorted';
+
+export type InjectedMemoryTone = 'stable_fact' | 'clear_recall' | 'blurred_recall' | 'possible_misremember';
+
+export interface PersonaMemoryProfile {
+    profileVersion: string;
+    totalCapacity: number;
+    eventMemory: number;
+    factMemory: number;
+    emotionalBias: number;
+    relationshipSensitivity: number;
+    forgettingSpeed: number;
+    distortionTendency: number;
+    selfNarrativeBias: number;
+    privacyGuard: number;
+    allowDistortion: boolean;
+    derivedFrom: string[];
+    updatedAt: number;
+}
+
+export interface SimpleMemoryPersona {
+    memoryStrength: 'weak' | 'balanced' | 'strong';
+    emotionalMemory: 'low' | 'medium' | 'high';
+    relationshipFocus: 'low' | 'medium' | 'high';
+    forgettingRate: 'slow' | 'medium' | 'fast';
+    distortionRisk: 'low' | 'medium' | 'high';
+    updatedAt: number;
+}
+
+export interface EncodingScore {
+    totalScore: number;
+    accepted: boolean;
+    targetLayer: MemoryLayer;
+    salience: number;
+    strength: number;
+    decayStage: MemoryDecayStage;
+    emotionTag: string;
+    relationScope: string;
+    reasonCodes: string[];
+    profileVersion: string;
+}
+
+export interface MemoryCandidate {
+    candidateId: string;
+    kind: MemoryCandidateKind;
+    source: string;
+    summary: string;
+    payload: Record<string, unknown>;
+    extractedAt: number;
+    sourceEventId?: string;
+    conflictWith: string[];
+    resolvedRecordKey?: string;
+    encoding: EncodingScore;
+}
+
+export interface MemoryCandidateBufferSnapshot {
+    total: number;
+    accepted: number;
+    rejected: number;
+    latestAt: number;
+    items: MemoryCandidate[];
+}
+
+export interface MemoryLifecycleState {
+    recordKey: string;
+    recordKind: MemoryRecordKind;
+    stage: MemoryDecayStage;
+    strength: number;
+    salience: number;
+    rehearsalCount: number;
+    lastRecalledAt: number;
+    distortionRisk: number;
+    emotionTag: string;
+    relationScope: string;
+    updatedAt: number;
+}
+
+export interface RecallLogEntry {
+    recallId: string;
+    query: string;
+    section: InjectionSectionName | 'PREVIEW';
+    recordKey: string;
+    recordKind: MemoryRecordKind;
+    recordTitle: string;
+    score: number;
+    selected: boolean;
+    conflictSuppressed: boolean;
+    tone: InjectedMemoryTone;
+    reasonCodes: string[];
+    loggedAt: number;
+}
+
+export interface RecallExplanationBucket {
+    bucketKey: 'selected' | 'conflict_suppressed' | 'rejected_candidates';
+    label: string;
+    emptyText: string;
+    items: Array<{
+        itemId: string;
+        sourceKind: 'recall_log' | 'candidate';
+        recordKey: string;
+        recordKind: MemoryRecordKind | MemoryCandidateKind;
+        title: string;
+        score: number;
+        layer: MemoryLayer | null;
+        section: InjectionSectionName | 'PREVIEW' | null;
+        tone: InjectedMemoryTone | null;
+        stage: MemoryDecayStage | null;
+        reasonCodes: string[];
+        accepted: boolean | null;
+    }>;
+}
+
+export interface LatestRecallExplanation {
+    generatedAt: number;
+    query: string;
+    sectionsUsed: InjectionSectionName[];
+    selected: RecallExplanationBucket;
+    conflictSuppressed: RecallExplanationBucket;
+    rejectedCandidates: RecallExplanationBucket;
+    reasonCodes: string[];
+}
+
+export interface RelationshipDelta {
+    actorKey: string;
+    targetKey: string;
+    familiarity: number;
+    trust: number;
+    affection: number;
+    tension: number;
+    dependency: number;
+    respect: number;
+    unresolvedConflictDelta: number;
+    sharedFragment?: string;
+    reason: string;
+    updatedAt: number;
+}
+
+export interface RelationshipState {
+    relationshipKey: string;
+    actorKey: string;
+    targetKey: string;
+    scope: 'self_target' | 'group_pair';
+    participantKeys: string[];
+    familiarity: number;
+    trust: number;
+    affection: number;
+    tension: number;
+    dependency: number;
+    respect: number;
+    unresolvedConflict: number;
+    sharedFragments: string[];
+    summary: string;
+    reasonCodes: string[];
+    updatedAt: number;
+}
+
+export interface MemoryMigrationBatchStats {
+    lifecycleFacts: number;
+    lifecycleSummaries: number;
+    candidateRows: number;
+    recallRows: number;
+    relationshipRows: number;
+    updatedAt: number;
+}
+
+export type MemoryMigrationStage = 'legacy_compatible' | 'dual_write' | 'db_preferred';
+
+export interface MemoryMigrationStatus {
+    stage: MemoryMigrationStage;
+    schemaVersion: number;
+    lifecycleBackfilled: boolean;
+    candidateMirrorReady: boolean;
+    recallMirrorReady: boolean;
+    relationshipMirrorReady: boolean;
+    lastBackfillAt: number;
+    autoBackfillEnabled: boolean;
+    autoBackfillBatchSize: number;
+    lifecycleFactCursor: number;
+    lifecycleSummaryCursor: number;
+    lastAutoBackfillAt: number;
+    lastAutoBackfillReason: string;
+    lastBatchStats: MemoryMigrationBatchStats;
+    pendingBackfillReasons: string[];
+    updatedAt: number;
+}
+
+export interface MemoryTuningProfile {
+    candidateAcceptThresholdBias: number;
+    recallRelationshipBias: number;
+    recallEmotionBias: number;
+    recallRecencyBias: number;
+    recallContinuityBias: number;
+    distortionProtectionBias: number;
+    candidateRetentionLimit: number;
+    recallRetentionLimit: number;
+    updatedAt: number;
+}
+
+export type MemoryTaskPresentationTaskId =
+    | 'memory.summarize'
+    | 'memory.extract'
+    | 'world.template.build'
+    | 'memory.vector.embed'
+    | 'memory.search.rerank';
+
+export interface MemoryTaskPresentationPreset {
+    taskId: MemoryTaskPresentationTaskId;
+    label: string;
+    surfaceMode: TaskSurfaceMode;
+}
+
+export interface MemoryTaskPresentationSettings {
+    blockingDefaultMode: Extract<TaskSurfaceMode, 'fullscreen_blocking' | 'toast_blocking'>;
+    showBackgroundToast: boolean;
+    disableComposerDuringBlocking: boolean;
+    toastAutoCloseSeconds: number;
+    presets: Record<MemoryTaskPresentationTaskId, MemoryTaskPresentationPreset>;
+    updatedAt: number;
+}
+
 export interface UserFacingChatPreset {
     presetId: UserFacingPresetId;
     label: string;
@@ -928,6 +1156,104 @@ export const DEFAULT_GROUP_MEMORY: GroupMemoryState = {
     updatedAt: 0,
 };
 
+export const DEFAULT_PERSONA_MEMORY_PROFILE: PersonaMemoryProfile = {
+    profileVersion: 'persona.v1',
+    totalCapacity: 0.6,
+    eventMemory: 0.6,
+    factMemory: 0.6,
+    emotionalBias: 0.5,
+    relationshipSensitivity: 0.5,
+    forgettingSpeed: 0.45,
+    distortionTendency: 0.2,
+    selfNarrativeBias: 0.5,
+    privacyGuard: 0.45,
+    allowDistortion: false,
+    derivedFrom: [],
+    updatedAt: 0,
+};
+
+export const DEFAULT_SIMPLE_MEMORY_PERSONA: SimpleMemoryPersona = {
+    memoryStrength: 'balanced',
+    emotionalMemory: 'medium',
+    relationshipFocus: 'medium',
+    forgettingRate: 'medium',
+    distortionRisk: 'low',
+    updatedAt: 0,
+};
+
+export const DEFAULT_MEMORY_MIGRATION_STATUS: MemoryMigrationStatus = {
+    stage: 'legacy_compatible',
+    schemaVersion: 2,
+    lifecycleBackfilled: false,
+    candidateMirrorReady: false,
+    recallMirrorReady: false,
+    relationshipMirrorReady: false,
+    lastBackfillAt: 0,
+    autoBackfillEnabled: true,
+    autoBackfillBatchSize: 48,
+    lifecycleFactCursor: 0,
+    lifecycleSummaryCursor: 0,
+    lastAutoBackfillAt: 0,
+    lastAutoBackfillReason: '',
+    lastBatchStats: {
+        lifecycleFacts: 0,
+        lifecycleSummaries: 0,
+        candidateRows: 0,
+        recallRows: 0,
+        relationshipRows: 0,
+        updatedAt: 0,
+    },
+    pendingBackfillReasons: ['lifecycle', 'candidate_buffer', 'recall_log', 'relationship_state'],
+    updatedAt: 0,
+};
+
+export const DEFAULT_MEMORY_TUNING_PROFILE: MemoryTuningProfile = {
+    candidateAcceptThresholdBias: 0,
+    recallRelationshipBias: 1,
+    recallEmotionBias: 1,
+    recallRecencyBias: 1,
+    recallContinuityBias: 1,
+    distortionProtectionBias: 1,
+    candidateRetentionLimit: 120,
+    recallRetentionLimit: 160,
+    updatedAt: 0,
+};
+
+export const DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS: MemoryTaskPresentationSettings = {
+    blockingDefaultMode: 'fullscreen_blocking',
+    showBackgroundToast: true,
+    disableComposerDuringBlocking: true,
+    toastAutoCloseSeconds: 3,
+    presets: {
+        'memory.summarize': {
+            taskId: 'memory.summarize',
+            label: '摘要生成',
+            surfaceMode: 'toast_background',
+        },
+        'memory.extract': {
+            taskId: 'memory.extract',
+            label: '结构提取',
+            surfaceMode: 'toast_background',
+        },
+        'world.template.build': {
+            taskId: 'world.template.build',
+            label: '模板构建',
+            surfaceMode: 'fullscreen_blocking',
+        },
+        'memory.vector.embed': {
+            taskId: 'memory.vector.embed',
+            label: '向量处理',
+            surfaceMode: 'toast_background',
+        },
+        'memory.search.rerank': {
+            taskId: 'memory.search.rerank',
+            label: '重排检索',
+            surfaceMode: 'toast_background',
+        },
+    },
+    updatedAt: 0,
+};
+
 export const DEFAULT_CHAT_LIFECYCLE_STATE: ChatLifecycleState = {
     stage: 'new',
     stageReasonCodes: ['stage_new'],
@@ -952,6 +1278,8 @@ export interface MemoryOSChatState {
     archiveReason?: string;
     characterBindingFingerprint?: string;
     semanticSeed?: ChatSemanticSeed;
+    personaMemoryProfile?: PersonaMemoryProfile;
+    simpleMemoryPersona?: SimpleMemoryPersona;
     coldStartFingerprint?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
@@ -961,6 +1289,14 @@ export interface MemoryOSChatState {
     lastPostGenerationDecision?: PostGenerationGateDecision | null;
     userFacingPreset?: UserFacingChatPreset | null;
     groupMemory?: GroupMemoryState;
+    memoryCandidateBuffer?: MemoryCandidate[];
+    memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
+    memoryRecallLog?: RecallLogEntry[];
+    latestRecallExplanation?: LatestRecallExplanation | null;
+    relationshipStateMap?: Record<string, RelationshipState>;
+    memoryMigrationStatus?: MemoryMigrationStatus;
+    memoryTuningProfile?: MemoryTuningProfile;
+    memoryTaskPresentationSettings?: MemoryTaskPresentationSettings;
     summaryFixQueue?: SummaryFixTask[];
     mutationRepairQueue?: MutationRepairTask[];
     lastMutationRepairViewHash?: string;

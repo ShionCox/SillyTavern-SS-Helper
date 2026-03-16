@@ -55,6 +55,15 @@ export interface DBEvent {
     refs?: Record<string, any>;
     tags?: string[];
     hash?: string;
+    salience?: number;
+    strength?: number;
+    decayStage?: 'clear' | 'blur' | 'distorted';
+    rehearsalCount?: number;
+    lastRecalledAt?: number;
+    emotionTag?: string;
+    relationScope?: string;
+    encodeScore?: number;
+    profileVersion?: string;
 }
 
 export interface DBFact {
@@ -67,6 +76,15 @@ export interface DBFact {
     confidence?: number;
     provenance?: DBFactProvenance;
     updatedAt: number;
+    salience?: number;
+    strength?: number;
+    decayStage?: 'clear' | 'blur' | 'distorted';
+    rehearsalCount?: number;
+    lastRecalledAt?: number;
+    emotionTag?: string;
+    relationScope?: string;
+    encodeScore?: number;
+    profileVersion?: string;
 }
 
 export interface DBWorldState {
@@ -88,6 +106,15 @@ export interface DBSummary {
     range?: { fromMessageId?: string; toMessageId?: string };
     createdAt: number;
     source?: DBSummarySource;
+    salience?: number;
+    strength?: number;
+    decayStage?: 'clear' | 'blur' | 'distorted';
+    rehearsalCount?: number;
+    lastRecalledAt?: number;
+    emotionTag?: string;
+    relationScope?: string;
+    encodeScore?: number;
+    profileVersion?: string;
 }
 
 export interface DBTemplate {
@@ -141,6 +168,20 @@ export interface DBMeta {
     lastQualityRefreshAssistantTurnCount?: number;
     lastCommittedTurnCursor?: string;
     lastVisibleTurnSnapshotHash?: string;
+    personaProfileVersion?: string;
+    lastCandidateFlushAt?: number;
+    lastRecallLoggedAt?: number;
+    memoryMigrationStage?: 'legacy_compatible' | 'dual_write' | 'db_preferred';
+    memoryLifecycleBackfilledAt?: number;
+    memoryCandidateMirrorAt?: number;
+    memoryRecallMirrorAt?: number;
+    memoryRelationshipMirrorAt?: number;
+    memoryAutoBackfillEnabled?: boolean;
+    memoryAutoBackfillBatchSize?: number;
+    memoryLifecycleFactCursor?: number;
+    memoryLifecycleSummaryCursor?: number;
+    memoryLastAutoBackfillAt?: number;
+    memoryLastAutoBackfillReason?: string;
 }
 
 export interface DBWorldInfoCache {
@@ -222,6 +263,57 @@ export interface DBVectorMeta {
     lastIndexedAt: number;
 }
 
+export interface DBRelationshipMemory {
+    relationshipKey: string;
+    chatKey: string;
+    actorKey: string;
+    targetKey: string;
+    scope?: 'self_target' | 'group_pair';
+    participantKeys?: string[];
+    familiarity: number;
+    trust: number;
+    affection: number;
+    tension: number;
+    dependency: number;
+    respect: number;
+    unresolvedConflict: number;
+    sharedFragments?: string[];
+    summary: string;
+    reasonCodes?: string[];
+    updatedAt: number;
+}
+
+export interface DBMemoryCandidateBuffer {
+    candidateId: string;
+    chatKey: string;
+    kind: 'fact' | 'summary' | 'state' | 'relationship';
+    source: string;
+    summary: string;
+    payload: Record<string, unknown>;
+    encoding: Record<string, unknown>;
+    conflictWith?: string[];
+    resolvedRecordKey?: string;
+    ts: number;
+    updatedAt: number;
+}
+
+export interface DBMemoryRecallLog {
+    recallId: string;
+    chatKey: string;
+    query: string;
+    section: string;
+    recordKey: string;
+    recordKind: 'fact' | 'summary' | 'state' | 'relationship';
+    recordTitle: string;
+    score: number;
+    selected: boolean;
+    conflictSuppressed: boolean;
+    tone: string;
+    reasonCodes?: string[];
+    ts: number;
+    updatedAt: number;
+}
+
 // ─── LLMHub 凭据表 ───
 
 export interface DBLlmCredential {
@@ -262,6 +354,9 @@ export class SSHelperDatabase extends Dexie {
     vector_chunks!: Table<DBVectorChunk, string>;
     vector_embeddings!: Table<DBVectorEmbedding, string>;
     vector_meta!: Table<DBVectorMeta, string>;
+    relationship_memory!: Table<DBRelationshipMemory, string>;
+    memory_candidate_buffer!: Table<DBMemoryCandidateBuffer, string>;
+    memory_recall_log!: Table<DBMemoryRecallLog, string>;
 
     // LLMHub 凭据表
     llm_credentials!: Table<DBLlmCredential, string>;
@@ -290,6 +385,28 @@ export class SSHelperDatabase extends Dexie {
             vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
 
             // ── LLMHub 凭据表 ──
+            llm_credentials: '&providerId, updatedAt',
+        });
+
+        this.version(2).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
+            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
+            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
+            world_state: '&stateKey, [chatKey+path]',
+            summaries: '&summaryId, [chatKey+level+createdAt]',
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            audit: '&auditId, chatKey, ts, action',
+            meta: '&chatKey',
+            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
+            template_bindings: '&bindingKey, chatKey',
+            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
+            vector_embeddings: '&embeddingId, chunkId, chatKey',
+            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
+            relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
+            memory_candidate_buffer: '&candidateId, [chatKey+ts], [chatKey+kind+ts], chatKey, kind, ts',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',
         });
     }

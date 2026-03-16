@@ -16,8 +16,14 @@ import type {
     GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
+    LatestRecallExplanation,
+    MemoryLifecycleState,
     LorebookGateDecision,
     LogicalChatView,
+    PersonaMemoryProfile,
+    RecallLogEntry,
+    RelationshipState,
+    MemoryTuningProfile,
     PreGenerationGateDecision,
     PromptAnchorMode,
     PromptInjectionProfile,
@@ -30,11 +36,19 @@ import {
     DEFAULT_PROMPT_INJECTION_PROFILE,
 } from '../types';
 import {
+    clamp01,
+    detectEmotionTag,
+    detectRelationScope,
+    resolveInjectedMemoryTone,
+    scoreRecallCandidate,
+} from '../core/memory-intelligence';
+import {
     buildLorebookSnippet,
     evaluateLorebookRelevance,
     loadActiveWorldInfoEntriesFromHost,
     type LorebookEntryCandidate,
 } from '../core/lorebook-relevance-gate';
+import { buildLatestRecallExplanation } from '../core/recall-explanation';
 
 type BuildContextOptions = {
     maxTokens?: number;
@@ -57,6 +71,17 @@ type BuildContextDecision = {
 
 type AnchorPolicy = PromptInjectionProfile;
 
+type RecallSectionCandidate = {
+    recordKey: string;
+    recordKind: 'fact' | 'summary' | 'state';
+    title: string;
+    line: string;
+    score: number;
+    reasonCodes: string[];
+    tone: ReturnType<typeof resolveInjectedMemoryTone>;
+    conflictSuppressed: boolean;
+};
+
 /**
  * 功能：根据聊天画像和意图构建注入上下文。
  * @param _chatKey 当前聊天键。
@@ -77,6 +102,12 @@ export class InjectionManager {
     private anchorPolicy: AnchorPolicy = {
         ...DEFAULT_PROMPT_INJECTION_PROFILE,
     };
+    private activePersonaProfile: PersonaMemoryProfile | null = null;
+    private activeLifecycleMap: Map<string, MemoryLifecycleState> = new Map();
+    private activeRelationshipWeight = 0;
+    private activeRelationships: RelationshipState[] = [];
+    private activeTuningProfile: MemoryTuningProfile | null = null;
+    private activeRecallQuery = '';
 
     constructor(
         chatKey: string,
@@ -92,6 +123,226 @@ export class InjectionManager {
         this.stateManager = stateManager;
         this.summariesManager = summariesManager;
         this.chatStateManager = chatStateManager ?? null;
+    }
+
+    /**
+     * 功能：重置本轮召回排序上下文。
+     * 参数：无。
+     * 返回：
+     *   void：无返回值。
+     */
+    private resetRecallContext(): void {
+        this.activePersonaProfile = null;
+        this.activeLifecycleMap = new Map();
+        this.activeRelationshipWeight = 0;
+        this.activeRelationships = [];
+        this.activeTuningProfile = null;
+        this.activeRecallQuery = '';
+    }
+
+    /**
+     * 功能：准备本轮召回排序所需的画像、生命周期与关系权重。
+     * 参数：
+     *   query：当前查询文本。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    private async prepareRecallContext(query: string): Promise<void> {
+        this.resetRecallContext();
+        this.activeRecallQuery = String(query ?? '');
+        if (!this.chatStateManager) {
+            return;
+        }
+        this.activePersonaProfile = await this.chatStateManager.getPersonaMemoryProfile();
+        this.activeTuningProfile = await this.chatStateManager.getMemoryTuningProfile();
+        const lifecycles = await this.chatStateManager.getMemoryLifecycleSummary(240);
+        this.activeLifecycleMap = new Map(
+            lifecycles.map((item: MemoryLifecycleState): [string, MemoryLifecycleState] => [item.recordKey, item]),
+        );
+        const relationships = await this.chatStateManager.getRelationshipState();
+        relationships.sort((left: RelationshipState, right: RelationshipState): number => {
+            const leftWeight = clamp01(left.familiarity * 0.14 + left.trust * 0.22 + left.affection * 0.22 + left.respect * 0.14 + left.dependency * 0.12 + left.unresolvedConflict * 0.16);
+            const rightWeight = clamp01(right.familiarity * 0.14 + right.trust * 0.22 + right.affection * 0.22 + right.respect * 0.14 + right.dependency * 0.12 + right.unresolvedConflict * 0.16);
+            return rightWeight - leftWeight;
+        });
+        this.activeRelationships = relationships;
+        const preferredRelationship = relationships.find((item: RelationshipState): boolean => item.scope === 'self_target') ?? relationships[0] ?? null;
+        this.activeRelationshipWeight = preferredRelationship
+            ? clamp01(preferredRelationship.familiarity * 0.14 + preferredRelationship.trust * 0.22 + preferredRelationship.affection * 0.22 + preferredRelationship.respect * 0.14 + preferredRelationship.dependency * 0.12 + preferredRelationship.unresolvedConflict * 0.16)
+            : 0;
+    }
+
+    /**
+     * 功能：读取记录对应的生命周期状态。
+     * 参数：
+     *   recordKey：记录键。
+     * 返回：
+     *   MemoryLifecycleState | null：生命周期状态。
+     */
+    private readLifecycle(recordKey: string): MemoryLifecycleState | null {
+        return this.activeLifecycleMap.get(recordKey) ?? null;
+    }
+
+    /**
+     * 功能：根据候选文本匹配最相关的关系权重。
+     * @param text 候选文本。
+     * @returns number：关系权重。
+     */
+    private resolveActiveRelationshipWeight(text: string): number {
+        const normalizedText = String(text ?? '').toLowerCase();
+        let bestWeight = 0;
+        this.activeRelationships.forEach((item: RelationshipState): void => {
+            const participantKeys = Array.isArray(item.participantKeys) ? item.participantKeys : [item.actorKey, item.targetKey];
+            const fragments = Array.isArray(item.sharedFragments) ? item.sharedFragments : [];
+            const matchedByParticipant = participantKeys.some((key: string): boolean => {
+                const token = String(key ?? '').toLowerCase().trim();
+                return token.length >= 2 && normalizedText.includes(token);
+            });
+            const matchedByFragment = fragments.some((fragment: string): boolean => {
+                const token = String(fragment ?? '').toLowerCase().trim();
+                return token.length >= 2 && normalizedText.includes(token.slice(0, Math.min(24, token.length)));
+            });
+            if (!matchedByParticipant && !matchedByFragment) {
+                return;
+            }
+            const weight = clamp01(
+                item.familiarity * 0.14
+                + item.trust * 0.22
+                + item.affection * 0.22
+                + item.respect * 0.14
+                + item.dependency * 0.12
+                + item.unresolvedConflict * 0.16,
+            );
+            bestWeight = Math.max(bestWeight, weight);
+        });
+        return bestWeight > 0 ? bestWeight : this.activeRelationshipWeight * 0.45;
+    }
+
+    /**
+     * 功能：按不同语气格式化注入行。
+     * 参数：
+     *   line：基础文本。
+     *   tone：注入语气。
+     * 返回：
+     *   string：格式化后的文本。
+     */
+    private formatLineByTone(line: string, tone: ReturnType<typeof resolveInjectedMemoryTone>): string {
+        if (tone === 'possible_misremember') {
+            return `- 也许记错了：${line}`;
+        }
+        if (tone === 'blurred_recall') {
+            return `- 依稀记得：${line}`;
+        }
+        if (tone === 'clear_recall') {
+            return `- 清晰回忆：${line}`;
+        }
+        return `- ${line}`;
+    }
+
+    /**
+     * 功能：为注入区段候选计算综合召回分。
+     * 参数：
+     *   recordKey：记录键。
+     *   recordKind：记录类型。
+     *   title：展示标题。
+     *   line：基础文本。
+     *   confidence：基础置信度。
+     *   updatedAt：更新时间。
+     * 返回：
+     *   RecallSectionCandidate：带评分的候选。
+     */
+    private scoreSectionCandidate(
+        recordKey: string,
+        recordKind: RecallSectionCandidate['recordKind'],
+        title: string,
+        line: string,
+        confidence: number,
+        updatedAt: number,
+    ): RecallSectionCandidate {
+        const lifecycle = this.readLifecycle(recordKey);
+        const keywords = String(this.activeRecallQuery ?? '')
+            .split(/[\s,，。！？；:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
+            .map((item: string): string => item.trim().toLowerCase())
+            .filter(Boolean)
+            .slice(0, 12);
+        const relationWeight = lifecycle?.relationScope ? this.resolveActiveRelationshipWeight(line) : 0;
+        const emotionWeight = lifecycle?.emotionTag || detectEmotionTag(line) ? 1 : 0;
+        const recencyScore = clamp01(1 - ((Date.now() - Number(updatedAt ?? 0)) / (1000 * 60 * 60 * 24 * 30)));
+        const result = scoreRecallCandidate({
+            text: line,
+            keywords,
+            confidence: clamp01(confidence),
+            recencyScore,
+            lifecycle,
+            profile: this.activePersonaProfile ?? {
+                profileVersion: 'persona.v1',
+                totalCapacity: 0.6,
+                eventMemory: 0.6,
+                factMemory: 0.6,
+                emotionalBias: 0.5,
+                relationshipSensitivity: 0.5,
+                forgettingSpeed: 0.45,
+                distortionTendency: 0.2,
+                selfNarrativeBias: 0.5,
+                privacyGuard: 0.45,
+                allowDistortion: false,
+                derivedFrom: [],
+                updatedAt: 0,
+            },
+            relationshipWeight: relationWeight,
+            emotionWeight,
+            continuityWeight: keywords.length > 0 && line.toLowerCase().includes(keywords[0]) ? 1 : 0.3,
+            privacyPenalty: /秘密|隐私|private|secret/.test(line) ? 1 : 0,
+            conflictPenalty: lifecycle?.stage === 'distorted' ? 0.5 : 0,
+            tuning: this.activeTuningProfile,
+        });
+        return {
+            recordKey,
+            recordKind,
+            title,
+            line: this.formatLineByTone(line, result.tone),
+            score: result.score,
+            reasonCodes: result.reasonCodes,
+            tone: result.tone,
+            conflictSuppressed: result.reasonCodes.includes('conflict_penalty'),
+        };
+    }
+
+    /**
+     * 功能：构建最近一轮召回解释快照。
+     * @param generatedAt 本轮生成时间。
+     * @param query 当前查询文本。
+     * @param sectionsUsed 当前使用的区段。
+     * @param reasonCodes 当前原因码。
+     * @param recallEntries 本轮召回条目。
+     * @returns Promise<LatestRecallExplanation>：解释快照。
+     */
+    private async buildLatestRecallExplanationSnapshot(
+        generatedAt: number,
+        query: string,
+        sectionsUsed: InjectionSectionName[],
+        reasonCodes: string[],
+        recallEntries: RecallLogEntry[],
+    ): Promise<LatestRecallExplanation> {
+        const candidateSnapshot = this.chatStateManager
+            ? await this.chatStateManager.getCandidateBufferSnapshot()
+            : { total: 0, accepted: 0, rejected: 0, latestAt: 0, items: [] };
+        const lifecycleIndex = Array.from(this.activeLifecycleMap.entries()).reduce<Record<string, MemoryLifecycleState>>(
+            (result: Record<string, MemoryLifecycleState>, [recordKey, lifecycle]: [string, MemoryLifecycleState]): Record<string, MemoryLifecycleState> => {
+                result[recordKey] = lifecycle;
+                return result;
+            },
+            {},
+        );
+        return buildLatestRecallExplanation({
+            generatedAt,
+            query,
+            sectionsUsed,
+            reasonCodes,
+            recallEntries,
+            candidates: candidateSnapshot.items,
+            lifecycleIndex,
+        });
     }
 
     /**
@@ -116,6 +367,15 @@ export class InjectionManager {
                 reasonCodes: ['chat_archived'],
                 generatedAt: Date.now(),
             };
+            await this.chatStateManager.setLatestRecallExplanation(
+                await this.buildLatestRecallExplanationSnapshot(
+                    skippedDecision.generatedAt,
+                    String(opts?.query ?? ''),
+                    [],
+                    skippedDecision.reasonCodes,
+                    [],
+                ),
+            );
             return opts?.includeDecisionMeta === true
                 ? {
                     text: '',
@@ -128,6 +388,7 @@ export class InjectionManager {
                 : '';
         }
         const maxTokens = Math.max(200, Number(opts?.maxTokens ?? 1200));
+        await this.prepareRecallContext(String(opts?.query ?? ''));
         const recentEvents = await this.eventsManager.query({ limit: 24 });
         const logicalView = this.chatStateManager ? await this.chatStateManager.getLogicalChatView() : null;
         const previousMetrics = this.chatStateManager ? await this.chatStateManager.getAdaptiveMetrics() : undefined;
@@ -211,6 +472,15 @@ export class InjectionManager {
             if (this.chatStateManager) {
                 await this.chatStateManager.setLastPreGenerationDecision(preDecision);
                 await this.chatStateManager.setLastStrategyDecision(buildStrategyDecision(intent, sections, budgets, preDecision.reasonCodes));
+                await this.chatStateManager.setLatestRecallExplanation(
+                    await this.buildLatestRecallExplanationSnapshot(
+                        preDecision.generatedAt,
+                        String(opts?.query ?? ''),
+                        sections,
+                        preDecision.reasonCodes,
+                        [],
+                    ),
+                );
             }
             return opts?.includeDecisionMeta === true
                 ? {
@@ -238,6 +508,21 @@ export class InjectionManager {
                 reasonCodes: mergedReasonCodes,
             });
             await this.chatStateManager.recomputeMemoryQuality();
+            const previewLogs: RecallLogEntry[] = await this.chatStateManager.recomputeRecallRanking(String(opts?.query ?? ''));
+            const scopedPreviewLogs: RecallLogEntry[] = previewLogs.map((entry: RecallLogEntry, index: number): RecallLogEntry => ({
+                ...entry,
+                section: sections[index] ?? 'PREVIEW',
+            }));
+            await this.chatStateManager.recordRecallLog(scopedPreviewLogs);
+            await this.chatStateManager.setLatestRecallExplanation(
+                await this.buildLatestRecallExplanationSnapshot(
+                    preDecision.generatedAt,
+                    String(opts?.query ?? ''),
+                    sections,
+                    mergedReasonCodes,
+                    scopedPreviewLogs,
+                ),
+            );
         }
         if (opts?.includeDecisionMeta === true) {
             return {
@@ -252,6 +537,7 @@ export class InjectionManager {
                 },
             };
         }
+        this.resetRecallContext();
         return renderedText;
     }
 
@@ -697,15 +983,25 @@ export class InjectionManager {
         }
         const states = await this.stateManager.query('');
         const ranked = Object.entries(states)
-            .map(([path, value]): { path: string; value: unknown; score: number } => ({
-                path,
-                value,
-                score: this.countKeywordHit(`${path} ${this.stringifyValue(value)}`.toLowerCase(), keywords),
-            }))
-            .sort((left, right): number => right.score - left.score);
+            .map(([path, value]): { path: string; value: unknown; scored: RecallSectionCandidate } => {
+                const rawLine = `${path}: ${this.stringifyValue(value)}`;
+                return {
+                    path,
+                    value,
+                    scored: this.scoreSectionCandidate(
+                        path,
+                        'state',
+                        path,
+                        rawLine,
+                        this.countKeywordHit(rawLine.toLowerCase(), keywords) / 3,
+                        Date.now(),
+                    ),
+                };
+            })
+            .sort((left, right): number => right.scored.score - left.scored.score);
         const lines: string[] = [];
         for (const item of ranked) {
-            const line = `- ${item.path}: ${this.stringifyValue(item.value)}`;
+            const line = item.scored.line;
             if (!this.canAppend(lines, line, tokenBudget, 20)) {
                 break;
             }
@@ -737,14 +1033,22 @@ export class InjectionManager {
             ).then((items: Array<any | null>): any[] => items.filter((item: any | null): item is any => item != null))
             : facts;
         const lines = filteredFacts
-            .map((fact: any): { line: string; score: number } => {
+            .map((fact: any): { candidate: RecallSectionCandidate } => {
                 const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
-                const line = `- ${entityPart}${fact.type}${fact.path ? `.${fact.path}` : ''}: ${this.stringifyValue(fact.value)}`;
-                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 3 + Number(fact.confidence ?? 0);
-                return { line, score };
+                const rawLine = `${entityPart}${fact.type}${fact.path ? `.${fact.path}` : ''}: ${this.stringifyValue(fact.value)}`;
+                return {
+                    candidate: this.scoreSectionCandidate(
+                        String(fact.factKey ?? rawLine),
+                        'fact',
+                        String(fact.type ?? fact.path ?? 'fact'),
+                        rawLine,
+                        Number(fact.confidence ?? fact.encodeScore ?? 0.55),
+                        Number(fact.updatedAt ?? 0),
+                    ),
+                };
             })
-            .sort((left, right): number => right.score - left.score);
-        return this.assembleSection('【事实】', lines.map((item): string => item.line), tokenBudget, 24);
+            .sort((left, right): number => right.candidate.score - left.candidate.score);
+        return this.assembleSection('【事实】', lines.map((item): string => item.candidate.line), tokenBudget, 24);
     }
 
     /**
@@ -822,13 +1126,21 @@ export class InjectionManager {
         }
         const summaries = await this.loadRecentSummaries();
         const lines = summaries
-            .map((summary: any): { line: string; score: number } => {
-                const line = `- [${summary.level}] ${summary.title ? `${summary.title}: ` : ''}${summary.content}`;
-                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + (summary.level === 'arc' ? 2 : summary.level === 'scene' ? 1 : 0);
-                return { line, score };
+            .map((summary: any): { candidate: RecallSectionCandidate } => {
+                const rawLine = `[${summary.level}] ${summary.title ? `${summary.title}: ` : ''}${summary.content}`;
+                return {
+                    candidate: this.scoreSectionCandidate(
+                        String(summary.summaryId ?? rawLine),
+                        'summary',
+                        String(summary.title ?? `${summary.level} summary`),
+                        rawLine,
+                        Number(summary.encodeScore ?? (summary.level === 'arc' ? 0.7 : summary.level === 'scene' ? 0.62 : 0.56)),
+                        Number(summary.createdAt ?? 0),
+                    ),
+                };
             })
-            .sort((left, right): number => right.score - left.score);
-        return this.assembleSection('【摘要】', lines.map((item): string => item.line), tokenBudget, 20);
+            .sort((left, right): number => right.candidate.score - left.candidate.score);
+        return this.assembleSection('【摘要】', lines.map((item): string => item.candidate.line), tokenBudget, 20);
     }
 
     /**
@@ -856,13 +1168,21 @@ export class InjectionManager {
             );
         });
         const lines = filtered
-            .map((fact: any): { line: string; score: number } => {
+            .map((fact: any): { candidate: RecallSectionCandidate } => {
                 const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
-                const line = `- ${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
-                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + Number(fact.confidence ?? 0);
-                return { line, score };
+                const rawLine = `${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
+                return {
+                    candidate: this.scoreSectionCandidate(
+                        String(fact.factKey ?? rawLine),
+                        'fact',
+                        String(fact.path || fact.type || 'character_fact'),
+                        rawLine,
+                        Number(fact.confidence ?? fact.encodeScore ?? 0.56),
+                        Number(fact.updatedAt ?? 0),
+                    ),
+                };
             })
-            .sort((left, right): number => right.score - left.score);
+            .sort((left, right): number => right.candidate.score - left.candidate.score);
         const laneLines = (groupMemory?.actorSalience ?? [])
             .sort((left, right): number => right.score - left.score)
             .slice(0, Math.max(1, Math.min(8, Number(policy.actorSalienceTopK ?? 3))))
@@ -878,7 +1198,7 @@ export class InjectionManager {
             .filter(Boolean);
         const laneBudget = Math.max(48, Math.floor(tokenBudget * policy.groupLaneBudgetShare));
         const laneText = this.assembleSection('【群聊车道】', laneLines, laneBudget, 16);
-        const baseText = this.assembleSection('【角色事实】', lines.map((item): string => item.line), tokenBudget, 20);
+        const baseText = this.assembleSection('【角色事实】', lines.map((item): string => item.candidate.line), tokenBudget, 20);
         if (!baseText && !laneText) {
             return '';
         }
@@ -908,14 +1228,22 @@ export class InjectionManager {
             return /relationship|relation|bond|ally|enemy|friend|关系|阵营|同伴|敌对/.test(`${typeText} ${pathText}`);
         });
         const lines = filtered
-            .map((fact: any): { line: string; score: number } => {
+            .map((fact: any): { candidate: RecallSectionCandidate } => {
                 const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
-                const line = `- ${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
-                const score = this.countKeywordHit(line.toLowerCase(), keywords) * 2 + Number(fact.confidence ?? 0);
-                return { line, score };
+                const rawLine = `${entityPart}${fact.path || fact.type}: ${this.stringifyValue(fact.value)}`;
+                return {
+                    candidate: this.scoreSectionCandidate(
+                        String(fact.factKey ?? rawLine),
+                        'fact',
+                        String(fact.path || fact.type || 'relationship'),
+                        rawLine,
+                        Number(fact.confidence ?? fact.encodeScore ?? 0.58),
+                        Number(fact.updatedAt ?? 0),
+                    ),
+                };
             })
-            .sort((left, right): number => right.score - left.score);
-        return this.assembleSection('【关系】', lines.map((item): string => item.line), tokenBudget, 20);
+            .sort((left, right): number => right.candidate.score - left.candidate.score);
+        return this.assembleSection('【关系】', lines.map((item): string => item.candidate.line), tokenBudget, 20);
     }
 
     /**

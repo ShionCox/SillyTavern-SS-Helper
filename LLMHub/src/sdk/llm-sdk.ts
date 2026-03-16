@@ -15,6 +15,7 @@ import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
 import { ConsumerRegistry } from '../registry/consumer-registry';
 import { buildSdkChatKeyEvent } from '../../../SDK/tavern';
+import { Logger } from '../../../SDK/logger';
 import type {
     LLMRunResult,
     LLMRunMeta,
@@ -28,8 +29,11 @@ import type {
     RequestRecord,
     RequestEnqueueOptions,
     LLMRequestLogRequestSnapshot,
+    LLMTaskLifecycleEvent,
 } from '../schema/types';
 import type { ZodType } from 'zod';
+
+const logger = new Logger('LLMHub-LLMSDK');
 
 /**
  * LLMSDK 门面层
@@ -110,6 +114,29 @@ export class LLMSDKImpl {
 
     getGlobalProfile(): string {
         return this.globalProfileId;
+    }
+
+    private emitLifecycle(
+        args: RunTaskArgs | EmbedArgs | RerankArgs,
+        record: Pick<RequestRecord, 'requestId' | 'consumer' | 'taskId' | 'taskKind'>,
+        event: Omit<LLMTaskLifecycleEvent, 'requestId' | 'consumer' | 'taskId' | 'taskKind' | 'ts'>,
+    ): void {
+        if (typeof args.onLifecycle !== 'function') {
+            return;
+        }
+
+        try {
+            args.onLifecycle({
+                requestId: record.requestId,
+                consumer: record.consumer,
+                taskId: record.taskId,
+                taskKind: record.taskKind,
+                ts: Date.now(),
+                ...event,
+            });
+        } catch (error) {
+            logger.warn(`生命周期回调执行失败: ${record.requestId}`, error);
+        }
     }
 
     private resolveTaskDescription(consumer: string, taskId: string, explicit?: string): string {
@@ -203,6 +230,11 @@ export class LLMSDKImpl {
         record.taskDescription = taskDescription;
         record.chatKey = buildSdkChatKeyEvent();
         record.requestLogSnapshot = this.buildRequestLogSnapshot(taskKind, taskDescription, args);
+        this.emitLifecycle(args, record, {
+            stage: 'queued',
+            message: '请求已进入队列',
+            progress: 0.1,
+        });
 
         // 将执行参数附到 record 上供 executeCallback 使用
         return record.resultPromise;
@@ -228,6 +260,11 @@ export class LLMSDKImpl {
         record.taskDescription = taskDescription;
         record.chatKey = buildSdkChatKeyEvent();
         record.requestLogSnapshot = this.buildRequestLogSnapshot('embedding', taskDescription, args);
+        this.emitLifecycle(args, record, {
+            stage: 'queued',
+            message: '向量任务已进入队列',
+            progress: 0.1,
+        });
 
         return record.resultPromise;
     }
@@ -252,6 +289,11 @@ export class LLMSDKImpl {
         record.taskDescription = taskDescription;
         record.chatKey = buildSdkChatKeyEvent();
         record.requestLogSnapshot = this.buildRequestLogSnapshot('rerank', taskDescription, args);
+        this.emitLifecycle(args, record, {
+            stage: 'queued',
+            message: '重排任务已进入队列',
+            progress: 0.1,
+        });
 
         return record.resultPromise;
     }
@@ -276,16 +318,31 @@ export class LLMSDKImpl {
                 if (!this.isGenerationArgs(args)) {
                     return { ok: false, error: 'generation 请求参数不合法', reasonCode: 'unknown' };
                 }
+                this.emitLifecycle(args, record, {
+                    stage: 'running',
+                    message: '任务开始执行',
+                    progress: 0.25,
+                });
                 return this.executeGeneration(args, record);
             case 'embedding':
                 if (!this.isEmbedArgs(args)) {
                     return { ok: false, error: 'embedding 请求参数不合法', reasonCode: 'unknown' };
                 }
+                this.emitLifecycle(args, record, {
+                    stage: 'running',
+                    message: '向量任务开始执行',
+                    progress: 0.25,
+                });
                 return this.executeEmbed(args, record);
             case 'rerank':
                 if (!this.isRerankArgs(args)) {
                     return { ok: false, error: 'rerank 请求参数不合法', reasonCode: 'unknown' };
                 }
+                this.emitLifecycle(args, record, {
+                    stage: 'running',
+                    message: '重排任务开始执行',
+                    progress: 0.25,
+                });
                 return this.executeRerank(args, record);
             default:
                 return { ok: false, error: `未知任务类型: ${record.taskKind}`, reasonCode: 'unknown' };
@@ -334,6 +391,12 @@ export class LLMSDKImpl {
         // 预算检查
         const budgetCheck = this.budgetManager.canRequest(args.consumer);
         if (!budgetCheck.allowed) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: budgetCheck.reason || '请求被限流/熔断',
+                error: budgetCheck.reason || '请求被限流/熔断',
+                reasonCode: 'circuit_open',
+            });
             return {
                 ok: false,
                 error: budgetCheck.reason || '请求被限流/熔断',
@@ -355,7 +418,20 @@ export class LLMSDKImpl {
                     profileId: args.routeHint.profile,
                 } : undefined,
             });
+            this.emitLifecycle(args, record, {
+                stage: 'route_resolved',
+                message: `已路由到资源 ${resolved.resourceId}`,
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 0.4,
+            });
         } catch (error) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: (error as Error).message,
+                error: (error as Error).message,
+                reasonCode: 'provider_unavailable',
+            });
             return {
                 ok: false,
                 error: (error as Error).message,
@@ -394,6 +470,13 @@ export class LLMSDKImpl {
         };
 
         const maxLatencyMs = args.budget?.maxLatencyMs ?? consumerBudget?.maxLatencyMs;
+        this.emitLifecycle(args, record, {
+            stage: 'provider_requesting',
+            message: '正在请求模型',
+            resourceId: resolved.resourceId,
+            model: resolved.model,
+            progress: 0.6,
+        });
 
         // 主 Provider 尝试
         const primaryResult = await this.tryProvider(
@@ -418,11 +501,34 @@ export class LLMSDKImpl {
                 finishedAt: Date.now(),
                 latencyMs: Date.now() - (record.startedAt || record.queuedAt),
             };
+            this.emitLifecycle(args, record, {
+                stage: 'completed',
+                message: '任务执行完成',
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 1,
+            });
             return { ok: true, data: primaryResult.data, meta };
         }
 
         // Fallback: 资源不可用
         if (resolved.fallbackResourceId) {
+            this.emitLifecycle(args, record, {
+                stage: 'fallback_started',
+                message: `主资源失败，切换到备用资源 ${resolved.fallbackResourceId}`,
+                resourceId: resolved.fallbackResourceId,
+                model: resolved.model,
+                fallbackUsed: true,
+                progress: 0.75,
+            });
+            this.emitLifecycle(args, record, {
+                stage: 'provider_requesting',
+                message: '正在请求备用资源',
+                resourceId: resolved.fallbackResourceId,
+                model: resolved.model,
+                fallbackUsed: true,
+                progress: 0.85,
+            });
             const fallbackResult = await this.tryProvider(
                 resolved.fallbackResourceId,
                 llmReq,
@@ -444,8 +550,23 @@ export class LLMSDKImpl {
                     latencyMs: Date.now() - (record.startedAt || record.queuedAt),
                     fallbackUsed: true,
                 };
+                this.emitLifecycle(args, record, {
+                    stage: 'completed',
+                    message: '备用资源执行完成',
+                    resourceId: resolved.fallbackResourceId,
+                    model: resolved.model,
+                    fallbackUsed: true,
+                    progress: 1,
+                });
                 return { ok: true, data: fallbackResult.data, meta };
             }
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: `主备资源均失败: ${primaryResult.error} / ${fallbackResult.error}`,
+                error: `主备资源均失败: ${primaryResult.error} / ${fallbackResult.error}`,
+                reasonCode: fallbackResult.reasonCode || primaryResult.reasonCode || 'unknown',
+                fallbackUsed: true,
+            });
             return {
                 ok: false,
                 error: `主备资源均失败: ${primaryResult.error} / ${fallbackResult.error}`,
@@ -454,6 +575,13 @@ export class LLMSDKImpl {
                 reasonCode: fallbackResult.reasonCode || primaryResult.reasonCode || 'unknown',
             };
         }
+
+        this.emitLifecycle(args, record, {
+            stage: 'failed',
+            message: primaryResult.error || '未知错误',
+            error: primaryResult.error || '未知错误',
+            reasonCode: primaryResult.reasonCode,
+        });
 
         return {
             ok: false,
@@ -498,16 +626,40 @@ export class LLMSDKImpl {
                 requiredCapabilities: ['embeddings'],
                 routeHint: args.routeHint ? { resourceId: args.routeHint.resource, model: args.routeHint.model } : undefined,
             });
+            this.emitLifecycle(args, record, {
+                stage: 'route_resolved',
+                message: `已路由到向量资源 ${resolved.resourceId}`,
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 0.4,
+            });
         } catch (error) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: (error as Error).message,
+                error: (error as Error).message,
+            });
             return { ok: false, error: (error as Error).message };
         }
 
         const provider = this.router.getProvider(resolved.resourceId);
         if (!provider?.embed) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: '当前资源不支持 embedding',
+                error: '当前资源不支持 embedding',
+            });
             return { ok: false, error: '当前资源不支持 embedding' };
         }
 
         try {
+            this.emitLifecycle(args, record, {
+                stage: 'provider_requesting',
+                message: '正在执行向量请求',
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 0.65,
+            });
             const response = await provider.embed({ texts: args.texts, model: resolved.model });
             const meta: LLMRunMeta = {
                 requestId: record.requestId,
@@ -519,8 +671,20 @@ export class LLMSDKImpl {
                 finishedAt: Date.now(),
                 latencyMs: Date.now() - (record.startedAt || record.queuedAt),
             };
+            this.emitLifecycle(args, record, {
+                stage: 'completed',
+                message: '向量任务完成',
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 1,
+            });
             return { ok: true, vectors: response.embeddings, model: resolved.model, meta };
         } catch (error) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: (error as Error).message,
+                error: (error as Error).message,
+            });
             return { ok: false, error: (error as Error).message };
         }
     }
@@ -535,13 +699,32 @@ export class LLMSDKImpl {
                 requiredCapabilities: ['rerank'],
                 routeHint: args.routeHint ? { resourceId: args.routeHint.resource, model: args.routeHint.model } : undefined,
             });
+            this.emitLifecycle(args, record, {
+                stage: 'route_resolved',
+                message: `已路由到重排资源 ${resolved.resourceId}`,
+                resourceId: resolved.resourceId,
+                model: resolved.model,
+                progress: 0.4,
+            });
         } catch (error) {
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: (error as Error).message,
+                error: (error as Error).message,
+            });
             return { ok: false, error: (error as Error).message };
         }
 
         const provider = this.router.getProvider(resolved.resourceId);
         if (provider?.rerank) {
             try {
+                this.emitLifecycle(args, record, {
+                    stage: 'provider_requesting',
+                    message: '正在执行重排请求',
+                    resourceId: resolved.resourceId,
+                    model: resolved.model,
+                    progress: 0.65,
+                });
                 const response = await provider.rerank({
                     query: args.query,
                     docs: args.docs,
@@ -558,8 +741,20 @@ export class LLMSDKImpl {
                     finishedAt: Date.now(),
                     latencyMs: Date.now() - (record.startedAt || record.queuedAt),
                 };
+                this.emitLifecycle(args, record, {
+                    stage: 'completed',
+                    message: '重排任务完成',
+                    resourceId: resolved.resourceId,
+                    model: resolved.model,
+                    progress: 1,
+                });
                 return { ok: true, results: response.results, resource: resolved.resourceId, meta };
             } catch (error) {
+                this.emitLifecycle(args, record, {
+                    stage: 'failed',
+                    message: (error as Error).message,
+                    error: (error as Error).message,
+                });
                 return { ok: false, error: (error as Error).message };
             }
         }
@@ -581,6 +776,14 @@ export class LLMSDKImpl {
             return { index, score, doc };
         });
         scored.sort((a, b) => b.score - a.score);
+        this.emitLifecycle(args, record, {
+            stage: 'completed',
+            message: '重排资源不支持原生接口，已使用关键词兜底完成',
+            resourceId: `${resolved.resourceId}:fallback`,
+            model: resolved.model,
+            fallbackUsed: true,
+            progress: 1,
+        });
         return { ok: true, results: scored, resource: `${resolved.resourceId}:fallback`, fallbackUsed: true };
     }
 

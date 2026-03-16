@@ -20,6 +20,17 @@ interface NormalizedMessage {
     updatedAt: number;
 }
 
+interface ComparableMessageNode {
+    node: LogicalMessageNode;
+    messageId: string;
+    fallbackKey: string;
+}
+
+function normalizeStableMessageId(value: unknown): string {
+    const normalized = String(value ?? '').trim();
+    return normalized === '0' ? '' : normalized;
+}
+
 /**
  * 功能：将宿主聊天快照重建为“逻辑消息视图”并产出差异分类。
  * 参数：
@@ -66,17 +77,17 @@ export class ChatViewManager {
         const branchRoots = this.collectBranchRoots(previousVisible, nextVisibleMessages, mutationKinds);
         const activeMessageIds = Array.from(new Set(
             nextVisibleMessages
-                .map((node: LogicalMessageNode): string => String(node.messageId ?? '').trim())
+                .map((node: LogicalMessageNode): string => normalizeStableMessageId(node.messageId))
                 .filter(Boolean),
         ));
         const invalidatedMessageIds = Array.from(new Set(
             [...supersededCandidates, ...editedRevisions, ...deletedTurns]
-                .map((node: LogicalMessageNode): string => String(node.messageId ?? '').trim())
+                .map((node: LogicalMessageNode): string => normalizeStableMessageId(node.messageId))
                 .filter(Boolean),
         ));
-        const repairAnchorMessageId = String(branchRoots[0]?.messageId ?? '').trim()
-            || String(nextVisibleMessages[nextVisibleMessages.length - 1]?.messageId ?? '').trim()
-            || String(invalidatedMessageIds[0] ?? '').trim()
+        const repairAnchorMessageId = normalizeStableMessageId(branchRoots[0]?.messageId)
+            || normalizeStableMessageId(nextVisibleMessages[nextVisibleMessages.length - 1]?.messageId)
+            || normalizeStableMessageId(invalidatedMessageIds[0])
             || null;
         const snapshotHash = this.hashString(
             nextVisibleMessages
@@ -127,13 +138,13 @@ export class ChatViewManager {
                     return null;
                 }
                 const source = item as Record<string, unknown>;
-                const messageId = String(
+                const messageId = normalizeStableMessageId(
                     source._id
                     ?? source.id
                     ?? source.messageId
                     ?? source.mesid
                     ?? '',
-                ).trim();
+                );
                 const text = getTavernMessageTextEvent(source);
                 const role = this.resolveRole(source);
                 const ts = Number(source.send_date ?? source.ts ?? source.time ?? 0);
@@ -169,41 +180,46 @@ export class ChatViewManager {
         }
 
         const mutationSet = new Set<ChatMutationKind>();
+        const previousComparable = this.buildComparableNodes(previous);
+        const nextComparable = this.buildComparableNodes(next);
         const previousById = new Map<string, LogicalMessageNode>();
-        for (const node of previous) {
-            if (node.messageId) {
-                previousById.set(node.messageId, node);
+        previousComparable.forEach((item: ComparableMessageNode): void => {
+            if (item.messageId) {
+                previousById.set(item.messageId, item.node);
             }
-        }
+        });
         const nextById = new Map<string, LogicalMessageNode>();
-        for (const node of next) {
-            if (node.messageId) {
-                nextById.set(node.messageId, node);
+        nextComparable.forEach((item: ComparableMessageNode): void => {
+            if (item.messageId) {
+                nextById.set(item.messageId, item.node);
             }
-        }
+        });
 
-        for (const node of next) {
-            if (!node.messageId || !previousById.has(node.messageId)) {
+        for (const item of nextComparable) {
+            if (!this.hasComparableMatch(item, previousComparable)) {
                 mutationSet.add('message_added');
                 continue;
             }
-            const prev = previousById.get(node.messageId)!;
-            if (prev.textSignature !== node.textSignature) {
+            if (!item.messageId || !previousById.has(item.messageId)) {
+                continue;
+            }
+            const prev = previousById.get(item.messageId)!;
+            if (prev.textSignature !== item.node.textSignature) {
                 mutationSet.add('message_edited');
             }
         }
 
-        for (const node of previous) {
-            if (!node.messageId || !nextById.has(node.messageId)) {
+        for (const item of previousComparable) {
+            if (!this.hasComparableMatch(item, nextComparable)) {
                 mutationSet.add('message_deleted');
             }
         }
 
-        const removedAssistant = previous.filter((node: LogicalMessageNode): boolean => {
-            return node.role === 'assistant' && Boolean(node.messageId) && !nextById.has(node.messageId);
+        const removedAssistant = previousComparable.filter((item: ComparableMessageNode): boolean => {
+            return item.node.role === 'assistant' && !this.hasComparableMatch(item, nextComparable);
         }).length;
-        const addedAssistant = next.filter((node: LogicalMessageNode): boolean => {
-            return node.role === 'assistant' && Boolean(node.messageId) && !previousById.has(node.messageId);
+        const addedAssistant = nextComparable.filter((item: ComparableMessageNode): boolean => {
+            return item.node.role === 'assistant' && !this.hasComparableMatch(item, previousComparable);
         }).length;
         if (removedAssistant > 0 && addedAssistant > 0) {
             mutationSet.add('message_swiped');
@@ -226,12 +242,13 @@ export class ChatViewManager {
      *   LogicalMessageNode[]：被覆盖候选集合。
      */
     private collectSupersededCandidates(previous: LogicalMessageNode[], next: LogicalMessageNode[]): LogicalMessageNode[] {
-        const nextIds = new Set(next.map((node: LogicalMessageNode): string => node.messageId).filter(Boolean));
-        return previous
-            .filter((node: LogicalMessageNode): boolean => {
-                return node.role === 'assistant' && Boolean(node.messageId) && !nextIds.has(node.messageId);
+        const previousComparable = this.buildComparableNodes(previous);
+        const nextComparable = this.buildComparableNodes(next);
+        return previousComparable
+            .filter((item: ComparableMessageNode): boolean => {
+                return item.node.role === 'assistant' && !this.hasComparableMatch(item, nextComparable);
             })
-            .map((node: LogicalMessageNode): LogicalMessageNode => ({ ...node, lifecycle: 'swiped_out', isVisible: false }));
+            .map((item: ComparableMessageNode): LogicalMessageNode => ({ ...item.node, lifecycle: 'swiped_out', isVisible: false }));
     }
 
     /**
@@ -269,12 +286,13 @@ export class ChatViewManager {
      *   LogicalMessageNode[]：删除节点集合。
      */
     private collectDeletedTurns(previous: LogicalMessageNode[], next: LogicalMessageNode[]): LogicalMessageNode[] {
-        const nextIds = new Set(next.map((node: LogicalMessageNode): string => node.messageId).filter(Boolean));
-        return previous
-            .filter((node: LogicalMessageNode): boolean => {
-                return Boolean(node.messageId) && !nextIds.has(node.messageId);
+        const previousComparable = this.buildComparableNodes(previous);
+        const nextComparable = this.buildComparableNodes(next);
+        return previousComparable
+            .filter((item: ComparableMessageNode): boolean => {
+                return !this.hasComparableMatch(item, nextComparable);
             })
-            .map((node: LogicalMessageNode): LogicalMessageNode => ({ ...node, lifecycle: 'deleted', isVisible: false }));
+            .map((item: ComparableMessageNode): LogicalMessageNode => ({ ...item.node, lifecycle: 'deleted', isVisible: false }));
     }
 
     /**
@@ -311,24 +329,58 @@ export class ChatViewManager {
      *   number：公共前缀长度。
      */
     private getCommonPrefixLength(left: LogicalMessageNode[], right: LogicalMessageNode[]): number {
+        const leftComparable = this.buildComparableNodes(left);
+        const rightComparable = this.buildComparableNodes(right);
         const max = Math.min(left.length, right.length);
         let count = 0;
         for (let index = 0; index < max; index += 1) {
-            const a = left[index]!;
-            const b = right[index]!;
-            if (a.messageId && b.messageId) {
-                if (a.messageId !== b.messageId || a.textSignature !== b.textSignature) {
-                    break;
-                }
-                count += 1;
-                continue;
-            }
-            if (a.role !== b.role || a.textSignature !== b.textSignature) {
+            const a = leftComparable[index]!;
+            const b = rightComparable[index]!;
+            if (!this.areComparableNodesEquivalent(a, b)) {
                 break;
             }
             count += 1;
         }
         return count;
+    }
+
+    /**
+     * 功能：为消息节点构造可比较键，兼容 messageId 缺失后补正的情况。
+     */
+    private buildComparableNodes(nodes: LogicalMessageNode[]): ComparableMessageNode[] {
+        const fallbackCounter = new Map<string, number>();
+        return nodes.map((node: LogicalMessageNode): ComparableMessageNode => {
+            const baseFallbackKey = `${node.role}|${node.textSignature}`;
+            const currentCount = (fallbackCounter.get(baseFallbackKey) ?? 0) + 1;
+            fallbackCounter.set(baseFallbackKey, currentCount);
+            return {
+                node,
+                messageId: normalizeStableMessageId(node.messageId),
+                fallbackKey: `${baseFallbackKey}|${currentCount}`,
+            };
+        });
+    }
+
+    /**
+     * 功能：判断两条消息是否可视为同一逻辑消息。
+     */
+    private areComparableNodesEquivalent(left: ComparableMessageNode, right: ComparableMessageNode): boolean {
+        if (left.messageId && right.messageId) {
+            return left.messageId === right.messageId && left.node.textSignature === right.node.textSignature;
+        }
+        return left.fallbackKey === right.fallbackKey;
+    }
+
+    /**
+     * 功能：判断指定消息是否在目标集合中存在等价匹配。
+     */
+    private hasComparableMatch(target: ComparableMessageNode, candidates: ComparableMessageNode[]): boolean {
+        return candidates.some((candidate: ComparableMessageNode): boolean => {
+            if (target.messageId && candidate.messageId && target.messageId === candidate.messageId) {
+                return true;
+            }
+            return target.fallbackKey === candidate.fallbackKey;
+        });
     }
 
     /**

@@ -35,6 +35,33 @@ export type LLMRunResult<T> =
     | { ok: true; data: T; meta: LLMRunMeta }
     | { ok: false; error: string; retryable?: boolean; fallbackUsed?: boolean; reasonCode?: string; meta?: LLMRunMeta };
 
+export type LLMTaskLifecycleStage =
+    | 'queued'
+    | 'running'
+    | 'route_resolved'
+    | 'provider_requesting'
+    | 'fallback_started'
+    | 'completed'
+    | 'failed';
+
+export interface LLMTaskLifecycleEvent {
+    requestId: string;
+    consumer: string;
+    taskId: string;
+    taskKind: CapabilityKind;
+    stage: LLMTaskLifecycleStage;
+    ts: number;
+    message?: string;
+    resourceId?: string;
+    model?: string;
+    fallbackUsed?: boolean;
+    progress?: number;
+    error?: string;
+    reasonCode?: string;
+}
+
+export type LLMTaskLifecycleHandler = (event: LLMTaskLifecycleEvent) => void;
+
 // ═══════════════════════════════════════════
 //  展示模式
 // ═══════════════════════════════════════════
@@ -475,6 +502,7 @@ export interface RunTaskArgs<T = unknown> {
     routeHint?: { resource?: string; profile?: string; model?: string };
     budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
     enqueue?: RequestEnqueueOptions;
+    onLifecycle?: LLMTaskLifecycleHandler;
 }
 
 export interface EmbedArgs {
@@ -484,6 +512,7 @@ export interface EmbedArgs {
     texts: string[];
     routeHint?: { resource?: string; model?: string };
     enqueue?: RequestEnqueueOptions;
+    onLifecycle?: LLMTaskLifecycleHandler;
 }
 
 export interface RerankArgs {
@@ -495,4 +524,5 @@ export interface RerankArgs {
     topK?: number;
     routeHint?: { resource?: string; model?: string };
     enqueue?: RequestEnqueueOptions;
+    onLifecycle?: LLMTaskLifecycleHandler;
 }

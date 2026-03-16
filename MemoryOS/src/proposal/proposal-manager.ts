@@ -11,6 +11,7 @@ import { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from '../core/chat-state-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
+import type { MemoryCandidate } from '../types';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
 import { Logger } from '../../../SDK/logger';
 
@@ -18,6 +19,45 @@ const logger = new Logger('ProposalManager');
 
 function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function hashText(value: string): string {
+    let hash = 5381;
+    for (let index = 0; index < value.length; index += 1) {
+        hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+}
+
+export function buildStableProposalSummaryId(input: {
+    chatKey: string;
+    consumerPluginId: string;
+    level: string;
+    title?: string;
+    content: string;
+    keywords?: string[];
+    visibleMessageIds?: string[];
+    viewHash?: string;
+    ordinal?: number;
+}): string {
+    const visibleMessageIds = Array.isArray(input.visibleMessageIds)
+        ? input.visibleMessageIds.map((item: unknown): string => normalizeText(item)).filter(Boolean)
+        : [];
+    const payload = [
+        normalizeText(input.chatKey),
+        normalizeText(input.consumerPluginId),
+        normalizeText(input.level),
+        visibleMessageIds[0] ?? '',
+        visibleMessageIds[visibleMessageIds.length - 1] ?? '',
+        normalizeText(input.viewHash),
+        normalizeText(input.title),
+        normalizeText(input.content),
+        Array.isArray(input.keywords)
+            ? input.keywords.map((item: unknown): string => normalizeText(item)).filter(Boolean).join('|')
+            : '',
+        String(Math.max(0, Number(input.ordinal ?? 0) || 0)),
+    ].join('::');
+    return `proposal_summary:${hashText(payload)}`;
 }
 
 /**
@@ -210,6 +250,8 @@ export class ProposalManager {
         // 写入 facts（受变更预算限制）
         let factCellUpdates = 0;
         const factEntityIds = new Set<string>();
+        const scoredCandidates: MemoryCandidate[] = [];
+        let shouldRefreshRelationshipState = false;
 
         if (facts) {
             for (const f of facts) {
@@ -225,6 +267,34 @@ export class ProposalManager {
                     if (factEntityIds.size > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates) {
                         logger.info('facts 实体行更新达到预算上限，跳过剩余');
                         break;
+                    }
+                }
+
+                let factCandidate: MemoryCandidate | null = null;
+                if (this.chatStateManager) {
+                    factCandidate = await this.chatStateManager.buildMemoryCandidate({
+                        candidateId: crypto.randomUUID(),
+                        kind: /relationship|relation|bond|trust|affection|conflict|关系|好感|信任|矛盾/.test(
+                            `${normalizeText(f.type)} ${normalizeText(f.path)} ${normalizeText(JSON.stringify(f.value ?? ''))}`,
+                        )
+                            ? 'relationship'
+                            : 'fact',
+                        source: consumerPluginId,
+                        summary: `${normalizeText(f.type)} ${normalizeText(f.path)} ${normalizeText(JSON.stringify(f.value ?? ''))}`.trim(),
+                        payload: {
+                            type: f.type,
+                            entity: f.entity,
+                            path: f.path,
+                            value: f.value,
+                            confidence: f.confidence,
+                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
+                        },
+                        extractedAt: Date.now(),
+                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
+                    });
+                    scoredCandidates.push(factCandidate);
+                    if (!factCandidate.encoding.accepted) {
+                        continue;
                     }
                 }
 
@@ -244,6 +314,13 @@ export class ProposalManager {
                 });
                 applied.factKeys.push(factKey);
                 factCellUpdates++;
+                if (factCandidate && this.chatStateManager) {
+                    factCandidate.resolvedRecordKey = factKey;
+                    await this.chatStateManager.applyEncodingToRecord(factKey, 'fact', factCandidate.encoding);
+                    shouldRefreshRelationshipState = shouldRefreshRelationshipState
+                        || factCandidate.kind === 'relationship'
+                        || Boolean(factCandidate.encoding.relationScope);
+                }
             }
         }
 
@@ -251,20 +328,81 @@ export class ProposalManager {
         if (patches) {
             for (const p of patches) {
                 if (!p) continue;
+                let stateCandidate: MemoryCandidate | null = null;
+                if (this.chatStateManager) {
+                    stateCandidate = await this.chatStateManager.buildMemoryCandidate({
+                        candidateId: crypto.randomUUID(),
+                        kind: 'state',
+                        source: consumerPluginId,
+                        summary: `${normalizeText(p.path)} ${normalizeText(JSON.stringify(p.value ?? ''))}`.trim(),
+                        payload: {
+                            op: p.op,
+                            path: p.path,
+                            value: p.value,
+                            confidence: envelope.confidence,
+                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
+                        },
+                        extractedAt: Date.now(),
+                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
+                    });
+                    scoredCandidates.push(stateCandidate);
+                    if (!stateCandidate.encoding.accepted) {
+                        continue;
+                    }
+                }
                 if (p.op === 'remove') {
                     await this.stateManager.patch([{ op: 'remove', path: p.path }]);
                 } else {
                     await this.stateManager.set(p.path, p.value);
                 }
                 applied.statePaths.push(p.path);
+                if (stateCandidate && this.chatStateManager) {
+                    stateCandidate.resolvedRecordKey = p.path;
+                    await this.chatStateManager.applyEncodingToRecord(p.path, 'state', stateCandidate.encoding);
+                }
             }
         }
 
         // 写入 summaries
         if (summaries) {
-            for (const s of summaries) {
+            for (const [summaryIndex, s] of summaries.entries()) {
                 if (!s) continue;
-                const summaryId = await this.summariesManager.upsert({
+                let summaryCandidate: MemoryCandidate | null = null;
+                if (this.chatStateManager) {
+                    summaryCandidate = await this.chatStateManager.buildMemoryCandidate({
+                        candidateId: crypto.randomUUID(),
+                        kind: 'summary',
+                        source: consumerPluginId,
+                        summary: `${normalizeText(s.title)} ${normalizeText(s.content)}`.trim(),
+                        payload: {
+                            level: s.level,
+                            title: s.title,
+                            content: s.content,
+                            keywords: s.keywords,
+                            confidence: envelope.confidence,
+                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
+                        },
+                        extractedAt: Date.now(),
+                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
+                    });
+                    scoredCandidates.push(summaryCandidate);
+                    if (!summaryCandidate.encoding.accepted) {
+                        continue;
+                    }
+                }
+                const summaryId = buildStableProposalSummaryId({
+                    chatKey: this.chatKey,
+                    consumerPluginId,
+                    level: s.level,
+                    title: s.title,
+                    content: s.content,
+                    keywords: s.keywords,
+                    visibleMessageIds,
+                    viewHash: derivationSource.viewHash,
+                    ordinal: summaryIndex,
+                });
+                const persistedSummaryId = await this.summariesManager.upsert({
+                    summaryId,
                     level: s.level,
                     title: s.title,
                     content: s.content,
@@ -284,7 +422,18 @@ export class ProposalManager {
                         },
                     },
                 });
-                applied.summaryIds.push(summaryId);
+                applied.summaryIds.push(persistedSummaryId);
+                if (summaryCandidate && this.chatStateManager) {
+                    summaryCandidate.resolvedRecordKey = persistedSummaryId;
+                    await this.chatStateManager.applyEncodingToRecord(persistedSummaryId, 'summary', summaryCandidate.encoding);
+                }
+            }
+        }
+
+        if (this.chatStateManager && scoredCandidates.length > 0) {
+            await this.chatStateManager.recordMemoryCandidates(scoredCandidates);
+            if (shouldRefreshRelationshipState) {
+                await this.chatStateManager.recomputeRelationshipState();
             }
         }
 

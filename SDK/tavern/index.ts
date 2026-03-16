@@ -62,6 +62,12 @@ export {
 } from "./runtime";
 
 export {
+  stripMvuUpdateVariableArtifactsEvent,
+  stripRollHelperArtifactsEvent,
+  stripRuntimePlaceholderArtifactsEvent,
+} from "./artifacts";
+
+export {
   extractTavernPromptMessagesEvent,
   findFirstTavernPromptSystemIndexEvent,
   findLastTavernPromptSystemIndexEvent,

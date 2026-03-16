@@ -4,6 +4,46 @@ import { runEmbed } from '../llm/memoryLlmBridge';
 
 const logger = new Logger('VectorManager');
 
+const VECTOR_INDEX_IN_FLIGHT = new Map<string, Promise<string[]>>();
+
+function hashText(value: string): string {
+    let hash = 5381;
+    for (let index = 0; index < value.length; index += 1) {
+        hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+}
+
+function pickIndexSource(metadata?: Record<string, unknown>): Record<string, unknown> {
+    const source = metadata?.source;
+    if (!source || typeof source !== 'object') {
+        return {};
+    }
+    return source as Record<string, unknown>;
+}
+
+function buildIndexTraceSummary(metadata?: Record<string, unknown>): string {
+    const source = pickIndexSource(metadata);
+    const kind = String(source.kind ?? metadata?.kind ?? 'unknown').trim() || 'unknown';
+    const reason = String(source.reason ?? metadata?.reason ?? 'unknown').trim() || 'unknown';
+    const viewHash = String(source.viewHash ?? '').trim();
+    const snapshotHash = String(source.snapshotHash ?? '').trim();
+    const anchorMessageId = String(source.anchorMessageId ?? '').trim();
+    const repairGeneration = Number(source.repairGeneration ?? 0);
+    const messageIds = Array.isArray(source.messageIds)
+        ? source.messageIds.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    return [
+        `kind=${kind}`,
+        `reason=${reason}`,
+        `viewHash=${viewHash || '-'}`,
+        `snapshotHash=${snapshotHash || '-'}`,
+        `anchor=${anchorMessageId || '-'}`,
+        `messages=${messageIds.length}`,
+        `repairGen=${repairGeneration}`,
+    ].join(', ');
+}
+
 /** 简单的 UUID v4 生成（不依赖第三方包） */
 function uuid(): string {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -38,6 +78,61 @@ export class VectorManager {
         this.chatKey = chatKey;
     }
 
+    /**
+     * 功能：构建同内容索引请求的去重签名。
+     * @param chunks 文本块列表。
+     * @param bookId 来源 bookId。
+     * @returns 去重签名。
+     */
+    private buildIndexSignature(chunks: string[], bookId?: string): string {
+        const payload = `${this.chatKey}::${String(bookId ?? '')}::${chunks.join('\u241E')}`;
+        let hash = 5381;
+        for (let index = 0; index < payload.length; index += 1) {
+            hash = ((hash << 5) + hash) ^ payload.charCodeAt(index);
+        }
+        return `vec_${(hash >>> 0).toString(16)}`;
+    }
+
+    /**
+     * 功能：尝试复用已经存在的向量块，避免对完全相同内容重复发 embedding。
+     * @param chunks 当前待索引的文本块列表。
+     * @param bookId 来源 bookId。
+     * @returns 若全部块都已存在则返回对应 chunkId 列表，否则返回 null。
+     */
+    private async tryReuseExistingChunkIds(chunks: string[], bookId?: string): Promise<string[] | null> {
+        if (chunks.length === 0) {
+            return [];
+        }
+        const existingRows = await db.vector_chunks.where('chatKey').equals(this.chatKey).toArray();
+        const contentToChunkIds = new Map<string, string[]>();
+        for (const row of existingRows) {
+            if (String(row.bookId ?? '') !== String(bookId ?? '')) {
+                continue;
+            }
+            const content = String(row.content ?? '');
+            if (!content) {
+                continue;
+            }
+            const currentIds = contentToChunkIds.get(content) || [];
+            currentIds.push(String(row.chunkId ?? '').trim());
+            contentToChunkIds.set(content, currentIds.filter(Boolean));
+        }
+
+        const reusedChunkIds: string[] = [];
+        const localConsumedCount = new Map<string, number>();
+        for (const chunk of chunks) {
+            const candidates = contentToChunkIds.get(chunk) || [];
+            const consumed = localConsumedCount.get(chunk) || 0;
+            const nextChunkId = String(candidates[consumed] ?? '').trim();
+            if (!nextChunkId) {
+                return null;
+            }
+            reusedChunkIds.push(nextChunkId);
+            localConsumedCount.set(chunk, consumed + 1);
+        }
+        return reusedChunkIds;
+    }
+
     // ==========================================
     // 公共 API
     // ==========================================
@@ -52,10 +147,37 @@ export class VectorManager {
         const chunks = this.splitIntoChunks(text, this.chunkSize);
         if (chunks.length === 0) return [];
 
-        logger.info(`开始向量索引：${chunks.length} 个文本块，bookId=${bookId ?? '(无)'}`);
+        const traceSummary = buildIndexTraceSummary(metadata);
+        const textHash = hashText(String(text ?? ''));
+        const firstChunkHash = hashText(chunks[0] ?? '');
+        logger.info(
+            `向量索引请求进入：chatKey=${this.chatKey}, bookId=${bookId ?? '(无)'}, chunks=${chunks.length}, textLen=${String(text ?? '').length}, textHash=${textHash}, firstChunkHash=${firstChunkHash}, ${traceSummary}`,
+        );
 
-        try {
-            const embedResult = await runEmbed(chunks, { maxLatencyMs: 15000 }) as any;
+        const reusableChunkIds = await this.tryReuseExistingChunkIds(chunks, bookId);
+        if (reusableChunkIds && reusableChunkIds.length === chunks.length) {
+            logger.info(`检测到重复向量索引请求，直接复用已有向量块：${reusableChunkIds.length} 个，bookId=${bookId ?? '(无)'}, textHash=${textHash}, ${traceSummary}`);
+            return reusableChunkIds;
+        }
+
+        const dedupeSignature = this.buildIndexSignature(chunks, bookId);
+        const inFlightTask = VECTOR_INDEX_IN_FLIGHT.get(dedupeSignature);
+        if (inFlightTask) {
+            logger.info(`检测到并发重复向量索引请求，复用进行中的任务，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
+            return inFlightTask;
+        }
+
+        logger.info(`开始向量索引：${chunks.length} 个文本块，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
+
+        const task = (async (): Promise<string[]> => {
+            const overlayDescription = bookId
+                ? `正在写入向量索引：${bookId}`
+                : '正在写入向量索引';
+            const embedResult = await runEmbed(chunks, {
+                maxLatencyMs: 15000,
+                showOverlay: true,
+                overlayDescription,
+            }) as any;
 
             if (!embedResult?.ok || !Array.isArray(embedResult.vectors)) {
                 logger.warn('embed 返回格式异常，向量索引跳过。');
@@ -106,13 +228,21 @@ export class VectorManager {
                 });
             }
 
-            logger.success(`向量索引完成，写入 ${chunkIds.length} 个向量块。`);
+            logger.success(`向量索引完成，写入 ${chunkIds.length} 个向量块，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
             return chunkIds;
 
-        } catch (e) {
-            logger.error('向量索引失败，静默降级', e);
+        })().catch((e) => {
+            logger.error(`向量索引失败，静默降级，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`, e);
             return [];
-        }
+        }).finally((): void => {
+            const currentTask = VECTOR_INDEX_IN_FLIGHT.get(dedupeSignature);
+            if (currentTask === task) {
+                VECTOR_INDEX_IN_FLIGHT.delete(dedupeSignature);
+            }
+        });
+
+        VECTOR_INDEX_IN_FLIGHT.set(dedupeSignature, task);
+        return task;
     }
 
     /**

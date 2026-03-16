@@ -431,7 +431,7 @@ function resolvePromptInsertIndexByAnchor(
 class MemoryOS {
     private stxBus: EventBus;
     private registry: PluginRegistry;
-    private refreshChatBindingHandler: (() => Promise<void>) | null;
+    private refreshChatBindingHandler: ((force?: boolean) => Promise<void>) | null;
     private llmBridgeRetryTimer: ReturnType<typeof setTimeout> | null;
 
     constructor() {
@@ -454,7 +454,7 @@ class MemoryOS {
             logger.warn('当前尚未建立聊天绑定处理器，跳过刷新');
             return;
         }
-        await this.refreshChatBindingHandler();
+        await this.refreshChatBindingHandler(true);
     }
     // 功能：监听注册中心变更并通过 STX.bus 广播。
     private bindRegistryEvents(): void {
@@ -783,6 +783,11 @@ class MemoryOS {
         const eventSource = initCtx.eventSource;
         const types = initCtx.event_types || {};
         const chatLifecycleManager = new ChatLifecycleManager();
+        let bindingFlightPromise: Promise<void> | null = null;
+        let bindingFlightChatKey = '';
+        let bindingSerial = 0;
+        let lastBoundChatKey = '';
+        let lastBoundAt = 0;
 
         // ======= 前置防呆：统一读取开关配置 =======
         const readSettings = (): Record<string, any> => {
@@ -1001,7 +1006,9 @@ class MemoryOS {
         const pendingMessageEventKeys = new Set<string>();
         const bootstrapAssistantByChatKey = new Map<string, string>();
         const historicalMessageIdsOnBind = new Set<string>();
+            const historicalMessageTextSignaturesOnBind = new Set<string>();
         let bindHydrationUntilTs = 0;
+            let bindHydrationTextGuardUntilTs = 0;
         let currentChatKey = '';
         let lastAssistantSignature = '';
         let lastAssistantSignatureAt = 0;
@@ -1015,11 +1022,15 @@ class MemoryOS {
         const normalizeMessageId = (msgId: unknown): string => {
             return String(msgId ?? '').trim();
         };
+            const normalizeStableMessageId = (msgId: unknown): string => {
+                const normalized = normalizeMessageId(msgId);
+                return normalized === '0' ? '' : normalized;
+            };
         const collectHistoricalMessageIdsFromChat = (chatList: unknown): Set<string> => {
             const idSet = new Set<string>();
             if (!Array.isArray(chatList)) return idSet;
             for (const item of chatList) {
-                const normalized = normalizeMessageId(
+                    const normalized = normalizeStableMessageId(
                     (item as any)?._id
                     ?? (item as any)?.id
                     ?? (item as any)?.messageId
@@ -1163,12 +1174,15 @@ class MemoryOS {
             if (eventPayload == null) {
                 return '';
             }
-            if (typeof eventPayload === 'string' || typeof eventPayload === 'number') {
-                return normalizeMessageId(eventPayload);
+            if (typeof eventPayload === 'number') {
+                return '';
+            }
+            if (typeof eventPayload === 'string') {
+                    return normalizeStableMessageId(eventPayload);
             }
             if (typeof eventPayload === 'object') {
                 const source = eventPayload as Record<string, unknown>;
-                return normalizeMessageId(
+                    return normalizeStableMessageId(
                     source._id
                     ?? source.id
                     ?? source.messageId
@@ -1176,6 +1190,20 @@ class MemoryOS {
                 );
             }
             return '';
+        };
+        // 功能：从事件参数中提取 chat 列表索引，兼容 number 或对象 index 入参。
+        const extractMessageIndex = (eventPayload: unknown): number => {
+            if (typeof eventPayload === 'number' && Number.isInteger(eventPayload) && eventPayload >= 0) {
+                return eventPayload;
+            }
+            if (eventPayload && typeof eventPayload === 'object') {
+                const source = eventPayload as Record<string, unknown>;
+                const candidate = source.index ?? source.messageIndex ?? source.idx;
+                if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 0) {
+                    return candidate;
+                }
+            }
+            return -1;
         };
         // 功能：从消息对象中提取文本，兼容 mes/content/text/message 字段。
         const readMessageText = (message: unknown): string => {
@@ -1186,12 +1214,26 @@ class MemoryOS {
                 .replace(/\s+/g, ' ')
                 .trim();
         };
+            const collectHistoricalMessageTextSignaturesFromChat = (chatList: unknown): Set<string> => {
+                const signatureSet = new Set<string>();
+                if (!Array.isArray(chatList)) return signatureSet;
+                for (const item of chatList) {
+                    if (isSystemMessage(item)) {
+                        continue;
+                    }
+                    const textSignature = normalizeTextSignature(readMessageText(item));
+                    if (textSignature) {
+                        signatureSet.add(textSignature);
+                    }
+                }
+                return signatureSet;
+            };
         // 功能：计算轻量聊天结构签名，用于快照差异兜底。
         const computeChatStructureSignature = (chatList: unknown): string => {
             if (!Array.isArray(chatList)) return '';
             const payload = chatList
                 .map((item: any, index: number): string => {
-                    const msgId = normalizeMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid ?? '');
+                        const msgId = normalizeStableMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid ?? '');
                     const role = isSystemMessage(item) ? 'system' : (isUserMessage(item) ? 'user' : 'assistant');
                     const text = normalizeTextSignature(readMessageText(item));
                     return `${index}|${msgId}|${role}|${text}`;
@@ -1229,6 +1271,20 @@ class MemoryOS {
                 const left = normalizeMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid);
                 return left === messageId;
             }) || null;
+        };
+        // 功能：按事件负载优先解析宿主消息对象，支持索引、ID、消息对象三种来源。
+        const resolveMessageFromEventPayload = (chatList: unknown, eventPayload: unknown, messageId: string): any | null => {
+            if (Array.isArray(chatList)) {
+                const messageIndex = extractMessageIndex(eventPayload);
+                if (messageIndex >= 0 && messageIndex < chatList.length) {
+                    return chatList[messageIndex];
+                }
+                const byId = findMessageById(chatList, messageId);
+                if (byId) {
+                    return byId;
+                }
+            }
+            return eventPayload && typeof eventPayload === 'object' ? eventPayload : null;
         };
         // 功能：判断消息事件是否重复。
         const isDuplicateMessageEvent = (eventType: string, msgId: unknown): boolean => {
@@ -1304,7 +1360,7 @@ class MemoryOS {
         };
 
         // 绑定聊天切换事件：初始化/切换数据库表空间
-        const onChangeConfig = async () => {
+        const onChangeConfig = async (force: boolean = false) => {
             const ctx = getCtx();
             currentChatKey = '';
 
@@ -1312,7 +1368,9 @@ class MemoryOS {
             processedMessageKeys.clear();
             pendingMessageEventKeys.clear();
             historicalMessageIdsOnBind.clear();
+                historicalMessageTextSignaturesOnBind.clear();
             bindHydrationUntilTs = 0;
+                bindHydrationTextGuardUntilTs = 0;
             lastAssistantSignature = '';
             lastAssistantSignatureAt = 0;
             lastAssistantTextSignature = '';
@@ -1353,65 +1411,119 @@ class MemoryOS {
                 logger.warn('无法构建 chatKey（上下文不可用），跳过记忆库初始化');
                 return;
             }
+
+            const currentMemory = (window as any).STX?.memory as { getChatKey?: () => string } | null;
+            const currentRuntimeChatKey = typeof currentMemory?.getChatKey === 'function'
+                ? String(currentMemory.getChatKey() ?? '').trim()
+                : '';
+
+            if (bindingFlightPromise && bindingFlightChatKey === chatKey) {
+                logger.info(`聊天绑定进行中，复用当前初始化任务 chatKey=${chatKey}`);
+                await bindingFlightPromise;
+                return;
+            }
+
+            if (!force) {
+                const recentlyBoundSameChat = lastBoundChatKey === chatKey && Date.now() - lastBoundAt <= 2000;
+                if (currentRuntimeChatKey === chatKey || recentlyBoundSameChat) {
+                    logger.info(`检测到重复聊天绑定事件，已跳过 chatKey=${chatKey}`);
+                    currentChatKey = chatKey;
+                    return;
+                }
+            }
+
             logger.info(`已切换记忆，ChatKey: ${chatKey}`);
 
             const historicalIds = collectHistoricalMessageIdsFromChat(ctx?.chat);
             for (const historyId of historicalIds) {
                 historicalMessageIdsOnBind.add(historyId);
             }
+                const historicalTextSignatures = collectHistoricalMessageTextSignaturesFromChat(ctx?.chat);
+                for (const textSignature of historicalTextSignatures) {
+                    historicalMessageTextSignaturesOnBind.add(textSignature);
+                }
             bindHydrationUntilTs = Date.now() + 1500;
+                bindHydrationTextGuardUntilTs = Date.now() + 10000;
 
-            // 初始化 SDK 实例
-            const sdkInstance = new MemorySDKImpl(chatKey);
-            await sdkInstance.init(); // 触发底层 dexie 库初始化流程
+            const currentBindingSerial = ++bindingSerial;
+            bindingFlightChatKey = chatKey;
+            const currentFlightPromise = (async (): Promise<void> => {
+                // 初始化 SDK 实例
+                const sdkInstance = new MemorySDKImpl(chatKey);
+                await sdkInstance.init(); // 触发底层 dexie 库初始化流程
 
-            // 卸载老实例拥有的监听器资源
-            if ((window as any).STX.memory) {
+                if (currentBindingSerial !== bindingSerial) {
+                    logger.info(`聊天绑定结果已过期，放弃接管 chatKey=${chatKey}`);
+                    try {
+                        sdkInstance.template.destroy();
+                    } catch {
+                        // noop
+                    }
+                    return;
+                }
+
+                // 卸载老实例拥有的监听器资源
+                if ((window as any).STX.memory) {
+                    try {
+                        (window as any).STX.memory.template.destroy();
+                    } catch (e) {
+                        // 忽略对象不存在或已销毁的情况
+                    }
+                }
+
+                (window as any).STX.memory = sdkInstance;
+                currentChatKey = chatKey;
+                const bindingFingerprint = `${binding.groupId || '-'}|${binding.characterId || '-'}`;
+                if (typeof (sdkInstance as any)?.chatState?.setCharacterBindingFingerprint === 'function') {
+                    await (sdkInstance as any).chatState.setCharacterBindingFingerprint(bindingFingerprint);
+                }
+                if (typeof (sdkInstance as any)?.chatState?.bootstrapSemanticSeed === 'function') {
+                    await (sdkInstance as any).chatState.bootstrapSemanticSeed();
+                }
+                logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
+                toast.success(`数据库已就绪`);
+
+                // 历史消息差量补录：扫描 ctx.chat，将缺失的用户/助手消息写入 events
                 try {
-                    (window as any).STX.memory.template.destroy();
-                } catch (e) {
-                    // 忽略对象不存在或已销毁的情况
+                    const backfillResult = await backfillHistoricalMessages(ctx?.chat as unknown[], chatKey);
+                    logger.info(
+                        `历史补录完成：扫描=${backfillResult.scanned}, 跳过系统=${backfillResult.skippedSystem}, ` +
+                        `过滤丢弃=${backfillResult.droppedByFilter}, ID去重=${backfillResult.deduplicatedById}, ` +
+                        `文本去重=${backfillResult.deduplicatedByText}, 实际补录=${backfillResult.backfilled}`
+                    );
+                    if (backfillResult.backfilled > 0) {
+                        toast.info(`已补录 ${backfillResult.backfilled} 条历史消息`);
+                    }
+                } catch (backfillError) {
+                    logger.error('历史消息补录异常', backfillError);
                 }
-            }
 
-            (window as any).STX.memory = sdkInstance;
-            currentChatKey = chatKey;
-            const bindingFingerprint = `${binding.groupId || '-'}|${binding.characterId || '-'}`;
-            if (typeof (sdkInstance as any)?.chatState?.setCharacterBindingFingerprint === 'function') {
-                await (sdkInstance as any).chatState.setCharacterBindingFingerprint(bindingFingerprint);
-            }
-            if (typeof (sdkInstance as any)?.chatState?.bootstrapSemanticSeed === 'function') {
-                await (sdkInstance as any).chatState.bootstrapSemanticSeed();
-            }
-            logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
-            toast.success(`数据库已就绪`);
-
-            // 历史消息差量补录：扫描 ctx.chat，将缺失的用户/助手消息写入 events
-            try {
-                const backfillResult = await backfillHistoricalMessages(ctx?.chat as unknown[], chatKey);
-                logger.info(
-                    `历史补录完成：扫描=${backfillResult.scanned}, 跳过系统=${backfillResult.skippedSystem}, ` +
-                    `过滤丢弃=${backfillResult.droppedByFilter}, ID去重=${backfillResult.deduplicatedById}, ` +
-                    `文本去重=${backfillResult.deduplicatedByText}, 实际补录=${backfillResult.backfilled}`
-                );
-                if (backfillResult.backfilled > 0) {
-                    toast.info(`已补录 ${backfillResult.backfilled} 条历史消息`);
+                try {
+                    if (typeof (sdkInstance as any)?.chatState?.rebuildLogicalChatView === 'function') {
+                        await (sdkInstance as any).chatState.rebuildLogicalChatView();
+                    }
+                } catch (rebuildError) {
+                    logger.warn('聊天绑定后重建逻辑消息视图失败', rebuildError);
                 }
-            } catch (backfillError) {
-                logger.error('历史消息补录异常', backfillError);
-            }
 
-            try {
-                if (typeof (sdkInstance as any)?.chatState?.rebuildLogicalChatView === 'function') {
-                    await (sdkInstance as any).chatState.rebuildLogicalChatView();
+                lastBoundChatKey = chatKey;
+                lastBoundAt = Date.now();
+
+                void chatLifecycleManager.reconcileCurrentScope('bind_current_chat').catch((error: unknown) => {
+                    logger.warn('聊天绑定后作用域对账失败', error);
+                });
+            })().finally((): void => {
+                if (bindingFlightChatKey === chatKey) {
+                    bindingFlightChatKey = '';
                 }
-            } catch (rebuildError) {
-                logger.warn('聊天绑定后重建逻辑消息视图失败', rebuildError);
-            }
-
-            void chatLifecycleManager.reconcileCurrentScope('bind_current_chat').catch((error: unknown) => {
-                logger.warn('聊天绑定后作用域对账失败', error);
+                if (bindingFlightPromise === currentFlightPromise) {
+                    bindingFlightPromise = null;
+                }
             });
+
+            bindingFlightPromise = currentFlightPromise;
+
+            await bindingFlightPromise;
         };
 
         this.refreshChatBindingHandler = onChangeConfig;
@@ -1458,6 +1570,7 @@ class MemoryOS {
         const onAssistantMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
             const msgId = extractMessageId(eventPayload);
+            const messageIndex = extractMessageIndex(eventPayload);
             if (msgId && historicalMessageIdsOnBind.has(msgId)) {
                 logger.info(`历史助手消息已存在，跳过入库 msgId=${msgId}`);
                 return;
@@ -1474,14 +1587,22 @@ class MemoryOS {
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory) {
-                const messageObj = findMessageById(ctx.chat, msgId)
-                    || (eventPayload && typeof eventPayload === 'object' ? eventPayload : null);
+                const messageObj = resolveMessageFromEventPayload(ctx.chat, eventPayload, msgId);
                 const text = readMessageText(messageObj);
                 logger.info(`监听到新回复进入，msgId: ${msgId}，准备记录记忆事件...`);
                 if (text && !isUserMessage(messageObj) && !isSystemMessage(messageObj)) {
                     const signature = `${msgId}|${text}`;
                     const textSignature = normalizeTextSignature(text);
                     const now = Date.now();
+                    if (
+                        !msgId
+                        && textSignature
+                        && historicalMessageTextSignaturesOnBind.has(textSignature)
+                        && now <= bindHydrationTextGuardUntilTs
+                    ) {
+                        logger.info(`绑定期历史助手文本重复已跳过，messageIndex=${messageIndex >= 0 ? messageIndex : '(none)'}`);
+                        return;
+                    }
                     if (
                         signature === lastAssistantSignature &&
                         now - lastAssistantSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
@@ -1513,6 +1634,7 @@ class MemoryOS {
         const onUserMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
             const msgId = extractMessageId(eventPayload);
+            const messageIndex = extractMessageIndex(eventPayload);
             if (msgId && historicalMessageIdsOnBind.has(msgId)) {
                 logger.info(`历史用户消息已存在，跳过入库 msgId=${msgId}`);
                 return;
@@ -1529,13 +1651,22 @@ class MemoryOS {
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory) {
-                const messageObj = findMessageById(ctx.chat, msgId)
-                    || (eventPayload && typeof eventPayload === 'object' ? eventPayload : null)
+                const messageObj = resolveMessageFromEventPayload(ctx.chat, eventPayload, msgId)
                     || findLastChatMessageByRole(ctx, 'user');
                 const text = readMessageText(messageObj);
                 logger.info(`监听到用户发言，msgId: ${msgId}，准备记录记忆事件...`);
                 if (text) {
                     const signature = `${msgId}|${text}`;
+                    const textSignature = normalizeTextSignature(text);
+                    if (
+                        !msgId
+                        && textSignature
+                        && historicalMessageTextSignaturesOnBind.has(textSignature)
+                        && Date.now() <= bindHydrationTextGuardUntilTs
+                    ) {
+                        logger.info(`绑定期历史用户文本重复已跳过，messageIndex=${messageIndex >= 0 ? messageIndex : '(none)'}`);
+                        return;
+                    }
                     if (
                         signature === lastUserSignature &&
                         Date.now() - lastUserSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
@@ -1612,6 +1743,7 @@ class MemoryOS {
             if (!ctx) return;
             const memory = (window as any).STX.memory;
             if (memory && Array.isArray(ctx.chat) && ctx.chat.length > 0) {
+                logger.info(`收到 generation_ended，准备触发后处理链路 chatKey=${currentChatKey || '(unknown)'}, aiMode=${isAiModeEnabled()}`);
                 // 尝试补录最后一条助手回复（仅兜底）
                 appendLatestAssistantMessageFallback();
                 rebuildLogicalViewIfNeeded('generation_ended', true);
@@ -1651,6 +1783,7 @@ class MemoryOS {
                 return;
             }
             lastPromptReadyTs = now;
+            logger.info(`收到 prompt_ready，准备触发 prompt prime 与注入构建 chatKey=${currentChatKey || '(unknown)'}, promptMessages=${promptMessages.length}`);
             rebuildLogicalViewIfNeeded('prompt_ready');
             void Promise.resolve((memory as any)?.chatState?.primeColdStartPrompt?.('chat_completion_prompt_ready'))
                 .catch((error: unknown) => {

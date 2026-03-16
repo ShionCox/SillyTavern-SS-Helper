@@ -66,12 +66,17 @@ export class ExtractManager {
     private chatStateManager: ChatStateManager | null;
     private readonly minUserMessageDelta: number = 3;
     private readonly minEventDelta: number = 20;
+    private readonly duplicateWindowMs: number = 8000;
     private readonly specialTriggerTypes: Set<string> = new Set([
         'memory.template.changed',
         'world.template.changed',
         'combat.end',
         'combat.round.end',
     ]);
+    private extractionFlight: Promise<void> | null = null;
+    private extractionFlightWindowHash: string = '';
+    private lastSettledWindowHash: string = '';
+    private lastSettledAt: number = 0;
 
     constructor(
         chatKey: string,
@@ -93,8 +98,10 @@ export class ExtractManager {
      * @returns 无返回值。
      */
     public async kickOffExtraction(): Promise<void> {
+        logger.info(`开始评估抽取触发条件，chatKey=${this.chatKey}`);
         const summarizeGuard = checkAiModeGuard(MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId);
         if (summarizeGuard) {
+            logger.info(`抽取跳过：AI 守卫未通过，chatKey=${this.chatKey}`);
             return;
         }
 
@@ -105,6 +112,7 @@ export class ExtractManager {
         }
 
         if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
+            logger.info(`抽取跳过：聊天已归档，chatKey=${this.chatKey}`);
             return;
         }
 
@@ -113,6 +121,7 @@ export class ExtractManager {
             ? await this.chatStateManager.getLogicalChatView()
             : null;
         if (recentEvents.length === 0 && !logicalView) {
+            logger.info(`抽取跳过：最近事件与逻辑视图都为空，chatKey=${this.chatKey}`);
             return;
         }
 
@@ -185,6 +194,7 @@ export class ExtractManager {
             const eventDelta = Math.max(0, eventCount - Number(meta?.lastExtractEventCount ?? 0));
             const userDelta = Math.max(0, userMsgCount - Number(meta?.lastExtractUserMsgCount ?? 0));
             if (eventDelta < this.minEventDelta && userDelta < this.minUserMessageDelta) {
+                logger.info(`抽取跳过：未达到触发阈值，chatKey=${this.chatKey}, eventDelta=${eventDelta}, userDelta=${userDelta}`);
                 return;
             }
             if (meta?.lastExtractWindowHash === windowHash) {
@@ -255,131 +265,159 @@ export class ExtractManager {
             await this.chatStateManager.setLastPostGenerationDecision(postGate);
         }
 
+        if (this.extractionFlight && this.extractionFlightWindowHash === windowHash) {
+            logger.info(`抽取跳过：相同窗口已在处理中，chatKey=${this.chatKey}, windowHash=${windowHash}`);
+            await this.extractionFlight;
+            return;
+        }
+
+        if (
+            this.lastSettledWindowHash === windowHash
+            && Date.now() - this.lastSettledAt <= this.duplicateWindowMs
+        ) {
+            logger.info(`抽取跳过：相同窗口刚处理完成，chatKey=${this.chatKey}, windowHash=${windowHash}`);
+            return;
+        }
+
         logger.info(`触发抽取：chatKey=${this.chatKey}, turnBased=${Boolean(this.turnTracker)}, special=${triggerBySpecialEvent}`);
+        let currentExtractionPromise: Promise<void> | null = null;
+        const extractionPromise = (async (): Promise<void> => {
+            try {
+                if (postGate.shortTermOnly && !postGate.shouldPersistLongTerm) {
+                    logger.info(`生成后 gate 判定为短期噪音，跳过长期抽取：${postGate.valueClass}`);
+                    return;
+                }
 
-        try {
-            if (postGate.shortTermOnly && !postGate.shouldPersistLongTerm) {
-                logger.info(`生成后 gate 判定为短期噪音，跳过长期抽取：${postGate.valueClass}`);
-                return;
-            }
+                const summarizePrompt = this.buildSummarizePrompt(lorebookDecision.mode, postGate);
+                const extractPrompt = this.buildExtractPrompt(lorebookDecision.mode, lorebookDecision.shouldExtractWorldFacts, postGate);
 
-            const summarizePrompt = this.buildSummarizePrompt(lorebookDecision.mode, postGate);
-            const extractPrompt = this.buildExtractPrompt(lorebookDecision.mode, lorebookDecision.shouldExtractWorldFacts, postGate);
-
-            const summarizeResult = summaryEnabled && postGate.rebuildSummary
-                ? await this.runProposalTask(
-                    'memory.summarize',
-                    '对话摘要生成',
-                    summarizePrompt,
+                const summarizeResult = summaryEnabled && postGate.rebuildSummary
+                    ? await this.runProposalTask(
+                        'memory.summarize',
+                        '对话摘要生成',
+                        summarizePrompt,
+                        windowText,
+                        schemaContext,
+                        { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
+                    )
+                    : null;
+                const extractResult = await this.runProposalTask(
+                    'memory.extract',
+                    '结构化记忆提取',
+                    extractPrompt,
                     windowText,
                     schemaContext,
-                    { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
-                )
-                : null;
-            const extractResult = await this.runProposalTask(
-                'memory.extract',
-                '结构化记忆提取',
-                extractPrompt,
-                windowText,
-                schemaContext,
-                { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 },
-            );
-
-            if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
-                await (memory as any).chatState.primeColdStartExtract('extract_success');
-            }
-
-            if (this.chatStateManager) {
-                const windowBase = Math.max(1, extractionWindow.length);
-                const factsApplied = Number(extractResult?.applied?.factKeys?.length ?? 0);
-                const patchesApplied = Number(extractResult?.applied?.statePaths?.length ?? 0);
-                const summariesApplied = Number(summarizeResult?.applied?.summaryIds?.length ?? 0)
-                    + Number(extractResult?.applied?.summaryIds?.length ?? 0);
-                const extractHealth = await this.chatStateManager.getExtractHealth();
-                const nextRecentTasks = [
-                    ...extractHealth.recentTasks,
-                    {
-                        task: 'memory.summarize' as const,
-                        accepted: Boolean(summarizeResult?.accepted),
-                        appliedFacts: 0,
-                        appliedPatches: 0,
-                        appliedSummaries: Number(summarizeResult?.applied?.summaryIds?.length ?? 0),
-                        ts: Date.now(),
-                    },
-                    {
-                        task: 'memory.extract' as const,
-                        accepted: Boolean(extractResult?.accepted),
-                        appliedFacts: factsApplied,
-                        appliedPatches: patchesApplied,
-                        appliedSummaries: Number(extractResult?.applied?.summaryIds?.length ?? 0),
-                        ts: Date.now(),
-                    },
-                ].slice(-12);
-                await this.chatStateManager.recordExtractHealth({
-                    recentTasks: nextRecentTasks,
-                    lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
-                        ? Date.now()
-                        : extractHealth.lastAcceptedAt,
-                });
-                await this.chatStateManager.updateAdaptiveMetrics({
-                    factsHitRate: Math.min(1, factsApplied / windowBase),
-                    factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
-                    summaryEffectiveness: summariesApplied > 0
-                        ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
-                        : 0,
-                    worldStateSignal: postGate.shouldUpdateWorldState
-                        ? Math.max(0, Math.min(1, lorebookDecision.score))
-                        : 0,
-                });
-                if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
-                    await this.chatStateManager.enqueueSummaryFixTask(
-                        `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
-                        lorebookDecision.mode,
-                    );
-                }
-                if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                    await this.chatStateManager.enqueueSummaryFixTask(
-                        `mutation_repair:${postGate.reasonCodes.join('|')}`,
-                        lorebookDecision.mode,
-                    );
-                }
-                if (postGate.rebuildSummary && summarizeResult?.accepted === false) {
-                    await this.chatStateManager.enqueueSummaryFixTask(
-                        `post_gate_summary_retry:${postGate.valueClass}`,
-                        lorebookDecision.mode,
-                    );
-                }
-                const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
-                const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
-                    currentAssistantTurnCount,
-                    Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
-                    Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
+                    { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 },
                 );
-                if (shouldRefreshQuality) {
-                    await this.chatStateManager.recomputeMemoryQuality();
-                    await this.metaManager.markRefreshCheckpoints({
-                        qualityAssistantTurnCount: currentAssistantTurnCount,
+
+                if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
+                    logger.info(`抽取成功后触发 cold-start extract，chatKey=${this.chatKey}, reason=extract_success, accepted=${Boolean(extractResult?.accepted)}`);
+                    await (memory as any).chatState.primeColdStartExtract('extract_success');
+                }
+
+                if (this.chatStateManager) {
+                    const windowBase = Math.max(1, extractionWindow.length);
+                    const factsApplied = Number(extractResult?.applied?.factKeys?.length ?? 0);
+                    const patchesApplied = Number(extractResult?.applied?.statePaths?.length ?? 0);
+                    const summariesApplied = Number(summarizeResult?.applied?.summaryIds?.length ?? 0)
+                        + Number(extractResult?.applied?.summaryIds?.length ?? 0);
+                    const extractHealth = await this.chatStateManager.getExtractHealth();
+                    const nextRecentTasks = [
+                        ...extractHealth.recentTasks,
+                        {
+                            task: 'memory.summarize' as const,
+                            accepted: Boolean(summarizeResult?.accepted),
+                            appliedFacts: 0,
+                            appliedPatches: 0,
+                            appliedSummaries: Number(summarizeResult?.applied?.summaryIds?.length ?? 0),
+                            ts: Date.now(),
+                        },
+                        {
+                            task: 'memory.extract' as const,
+                            accepted: Boolean(extractResult?.accepted),
+                            appliedFacts: factsApplied,
+                            appliedPatches: patchesApplied,
+                            appliedSummaries: Number(extractResult?.applied?.summaryIds?.length ?? 0),
+                            ts: Date.now(),
+                        },
+                    ].slice(-12);
+                    await this.chatStateManager.recordExtractHealth({
+                        recentTasks: nextRecentTasks,
+                        lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
+                            ? Date.now()
+                            : extractHealth.lastAcceptedAt,
                     });
-                } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                    await this.chatStateManager.recomputeMemoryQuality();
+                    await this.chatStateManager.updateAdaptiveMetrics({
+                        factsHitRate: Math.min(1, factsApplied / windowBase),
+                        factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
+                        summaryEffectiveness: summariesApplied > 0
+                            ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
+                            : 0,
+                        worldStateSignal: postGate.shouldUpdateWorldState
+                            ? Math.max(0, Math.min(1, lorebookDecision.score))
+                            : 0,
+                    });
+                    if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+                    if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `mutation_repair:${postGate.reasonCodes.join('|')}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+                    if (postGate.rebuildSummary && summarizeResult?.accepted === false) {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `post_gate_summary_retry:${postGate.valueClass}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+                    const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
+                    const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
+                        currentAssistantTurnCount,
+                        Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
+                        Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
+                    );
+                    if (shouldRefreshQuality) {
+                        await this.chatStateManager.recomputeMemoryQuality();
+                        await this.metaManager.markRefreshCheckpoints({
+                            qualityAssistantTurnCount: currentAssistantTurnCount,
+                        });
+                    } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                        await this.chatStateManager.recomputeMemoryQuality();
+                    }
+                }
+            } catch (error) {
+                logger.error('抽取流程执行失败', error);
+            } finally {
+                const extractionSnapshot = this.turnTracker
+                    ? await this.turnTracker.getExtractionSnapshot()
+                    : null;
+                await this.metaManager.markLastExtract({
+                    ts: Date.now(),
+                    eventCount,
+                    userMsgCount,
+                    windowHash,
+                    activeAssistantTurnCount: extractionSnapshot?.activeAssistantTurnCount,
+                    lastCommittedTurnCursor: extractionSnapshot?.lastCommittedTurnCursor,
+                    lastVisibleTurnSnapshotHash: extractionSnapshot?.lastVisibleTurnSnapshotHash,
+                });
+                this.lastSettledWindowHash = windowHash;
+                this.lastSettledAt = Date.now();
+                if (currentExtractionPromise && this.extractionFlight === currentExtractionPromise) {
+                    this.extractionFlight = null;
+                    this.extractionFlightWindowHash = '';
                 }
             }
-        } catch (error) {
-            logger.error('抽取流程执行失败', error);
-        } finally {
-            const extractionSnapshot = this.turnTracker
-                ? await this.turnTracker.getExtractionSnapshot()
-                : null;
-            await this.metaManager.markLastExtract({
-                ts: Date.now(),
-                eventCount,
-                userMsgCount,
-                windowHash,
-                activeAssistantTurnCount: extractionSnapshot?.activeAssistantTurnCount,
-                lastCommittedTurnCursor: extractionSnapshot?.lastCommittedTurnCursor,
-                lastVisibleTurnSnapshotHash: extractionSnapshot?.lastVisibleTurnSnapshotHash,
-            });
-        }
+        })();
+
+        currentExtractionPromise = extractionPromise;
+        this.extractionFlight = extractionPromise;
+        this.extractionFlightWindowHash = windowHash;
+        await extractionPromise;
     }
 
     /**
@@ -496,6 +534,32 @@ export class ExtractManager {
     }
 
     /**
+     * 功能：构建抽取失败后的紧凑重试提示词，降低 JSON 被截断的概率。
+     * @param basePrompt 原始提示词。
+     * @param task 当前提议任务。
+     * @returns 更严格的重试提示词。
+     */
+    private buildCompactRetryPrompt(basePrompt: string, task: ProposalTask): string {
+        if (task === 'memory.extract') {
+            return [
+                basePrompt,
+                '上一次输出因 JSON 解析失败而被丢弃；这通常意味着输出过长、未闭合或结构不够紧凑。',
+                '本次必须优先保证 JSON 完整闭合，宁可少写也不要写断。',
+                '严格限制：facts 最多 10 条，patches 最多 6 条，summaries 最多 1 条。',
+                '不要把同一角色的多个近义状态拆成很多条；优先合并为更高价值的事实。',
+                '不要把 facts 已经表达清楚的内容再次重复写进 patches。',
+                '不要输出额外解释、前后缀、Markdown、代码块，只返回单个完整 JSON 对象。',
+            ].join('\n');
+        }
+
+        return [
+            basePrompt,
+            '上一次输出因 JSON 解析失败而被丢弃。',
+            '本次请只返回一个完整闭合的 JSON 对象，不要附加解释、Markdown 或代码块。',
+        ].join('\n');
+    }
+
+    /**
      * 功能：构建抽取任务所需的 schema 上下文。
      * @param memory 当前 MemorySDK。
      * @returns schema 上下文。
@@ -538,19 +602,35 @@ export class ExtractManager {
             return null;
         }
 
-        const response = await runGeneration<ProposalEnvelope>(
-            task,
-            {
-                systemPrompt,
-                events: eventsText,
-                schemaContext: typeof schemaContext === 'string'
-                    ? schemaContext
-                    : JSON.stringify(schemaContext, null, 2),
-            },
-            budget,
-            undefined,
-            taskDescription,
-        );
+        const executeAttempt = async (
+            prompt: string,
+            attemptBudget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
+        ) => {
+            return runGeneration<ProposalEnvelope>(
+                task,
+                {
+                    systemPrompt: prompt,
+                    events: eventsText,
+                    schemaContext: typeof schemaContext === 'string'
+                        ? schemaContext
+                        : JSON.stringify(schemaContext, null, 2),
+                },
+                attemptBudget,
+                undefined,
+                taskDescription,
+            );
+        };
+
+        let response = await executeAttempt(systemPrompt, budget);
+        if (!response.ok && response.reasonCode === 'invalid_json') {
+            const retryBudget = {
+                maxTokens: Math.min(3200, Math.max(Number(budget.maxTokens ?? 0) + 400, 2200)),
+                maxLatencyMs: budget.maxLatencyMs,
+                maxCost: Math.max(Number(budget.maxCost ?? 0), task === 'memory.extract' ? 0.5 : 0.25),
+            };
+            logger.warn(`${task} 返回无效 JSON，启用紧凑模式重试一次`);
+            response = await executeAttempt(this.buildCompactRetryPrompt(systemPrompt, task), retryBudget);
+        }
         if (!response.ok) {
             logger.warn(`${task} 请求失败：${response.error} (${response.reasonCode || 'unknown'})`);
             return null;

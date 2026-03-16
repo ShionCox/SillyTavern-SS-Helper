@@ -23,6 +23,9 @@ import type {
     DBVectorChunkMetadata,
     DBVectorEmbedding,
     DBVectorMeta,
+    DBRelationshipMemory,
+    DBMemoryCandidateBuffer,
+    DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
 } from '../../../SDK/db';
@@ -46,6 +49,9 @@ export type {
     DBVectorChunkMetadata,
     DBVectorEmbedding,
     DBVectorMeta,
+    DBRelationshipMemory,
+    DBMemoryCandidateBuffer,
+    DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
 };
@@ -138,6 +144,9 @@ export async function clearMemoryChatData(
             db.vector_chunks,
             db.vector_embeddings,
             db.vector_meta,
+            db.relationship_memory,
+            db.memory_candidate_buffer,
+            db.memory_recall_log,
         ]
         : [
             db.events,
@@ -151,6 +160,9 @@ export async function clearMemoryChatData(
             db.vector_chunks,
             db.vector_embeddings,
             db.vector_meta,
+            db.relationship_memory,
+            db.memory_candidate_buffer,
+            db.memory_recall_log,
         ];
 
     await db.transaction('rw', writableTables, async (): Promise<void> => {
@@ -181,6 +193,18 @@ export async function clearMemoryChatData(
             db.vector_chunks.where('chatKey').equals(chatKey).delete(),
             db.vector_embeddings.where('chatKey').equals(chatKey).delete(),
             db.vector_meta.where('chatKey').equals(chatKey).delete(),
+            db.relationship_memory
+                .where('[chatKey+updatedAt]')
+                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
+                .delete(),
+            db.memory_candidate_buffer
+                .where('[chatKey+ts]')
+                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
+                .delete(),
+            db.memory_recall_log
+                .where('[chatKey+ts]')
+                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
+                .delete(),
         ];
 
         if (includeAudit) {
@@ -242,6 +266,9 @@ export async function clearAllMemoryData(): Promise<void> {
             db.vector_chunks,
             db.vector_embeddings,
             db.vector_meta,
+            db.relationship_memory,
+            db.memory_candidate_buffer,
+            db.memory_recall_log,
             db.chat_plugin_state,
             db.chat_plugin_records,
         ],
@@ -259,6 +286,9 @@ export async function clearAllMemoryData(): Promise<void> {
                 db.vector_chunks.clear(),
                 db.vector_embeddings.clear(),
                 db.vector_meta.clear(),
+                db.relationship_memory.clear(),
+                db.memory_candidate_buffer.clear(),
+                db.memory_recall_log.clear(),
                 db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
                 db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
             ]);

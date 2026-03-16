@@ -60,6 +60,9 @@ export type {
     ResourceConfig,
     LLMRunMeta,
     LLMRunResult,
+    LLMTaskLifecycleStage,
+    LLMTaskLifecycleEvent,
+    LLMTaskLifecycleHandler,
     DisplayMode,
     TaskDescriptor,
     RouteBinding,
@@ -709,7 +712,7 @@ class LLMHub {
         });
 
         let entries = records
-            .map((row) => row.payload as LLMRequestLogEntry)
+            .map((row) => row.payload as unknown as LLMRequestLogEntry)
             .filter((entry) => Boolean(entry && entry.requestId));
 
         if (opts?.state && opts.state !== 'all') {
