@@ -107,6 +107,185 @@ function normalizeText(value: unknown, fallback: string = '暂无'): string {
     return text || fallback;
 }
 
+const EXPERIENCE_KEY_LABELS: Record<string, string> = {
+    semantic: '语义',
+    style: '风格',
+    identity: '身份',
+    profile: '档案',
+    mode: '模式',
+    cues: '提示线索',
+    presetstyle: '预设风格',
+    displayname: '显示名称',
+    aliases: '别名',
+    catchphrases: '口头禅',
+    demand: '要求',
+    trait: '特征',
+    event: '事件',
+    relationship: '关系',
+    goal: '目标',
+    summary: '摘要',
+    value: '内容',
+    status: '状态',
+    emotion: '情绪',
+    scene: '场景',
+    preference: '偏好',
+    persona: '人物设定',
+    notes: '备注',
+    tags: '标签',
+    keywords: '关键词',
+    text: '文本',
+    content: '内容',
+    message: '消息',
+    reason: '原因',
+    outcome: '结果',
+    result: '结果',
+    source: '来源',
+    speaker: '说话方',
+    role: '角色',
+    name: '名称',
+    scope: '范围',
+    pluginid: '插件',
+    messageid: '消息ID',
+    chat: '聊天',
+    sent: '发送',
+    received: '接收',
+    system: '系统',
+    updated: '更新',
+    template: '模板',
+    changed: '变更',
+    rendered: '已渲染',
+    build: '构建',
+    vector: '向量',
+    embed: '写入',
+    search: '检索',
+    rerank: '重排',
+    extract: '抽取',
+    summarize: '摘要',
+    memory: '记忆',
+    world: '世界',
+    round: '回合',
+    combat: '战斗',
+    end: '结束',
+};
+
+const EXPERIENCE_FACT_TYPE_LABELS: Record<string, string> = {
+    'semantic.style': '风格设定',
+    'semantic.identity': '身份设定',
+    'semantic.profile': '人物档案',
+    'semantic.preference': '偏好设定',
+    'character_demand': '角色要求',
+    'character_trait': '角色特征',
+    'character_profile': '角色档案',
+    'character_identity': '角色身份',
+    'event': '事件记录',
+    'relationship': '关系线索',
+};
+
+const EXPERIENCE_EVENT_TYPE_LABELS: Record<string, string> = {
+    'chat.message.sent': '用户发言',
+    'chat.message.received': '角色回复',
+    'chat.message.system': '系统消息',
+    'chat.message.updated': '消息更新',
+    user_message_rendered: '用户发言',
+    'memory.extract': '记忆抽取',
+    'memory.summarize': '摘要生成',
+    'memory.vector.embed': '向量写入',
+    'memory.search.rerank': '检索重排',
+    'memory.template.changed': '记忆模板变更',
+    'world.template.build': '世界模板构建',
+    'world.template.changed': '世界模板变更',
+    'world_state.update': '世界状态更新',
+    'combat.end': '战斗结束',
+    'combat.round.end': '战斗回合结束',
+};
+
+/**
+ * 功能：把键名或类型片段翻成更适合展示的中文。
+ * @param value 原始片段。
+ * @returns 中文标签。
+ */
+function formatExperienceKeyLabel(value: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '未命名';
+    }
+    const lookupKey = normalized.toLowerCase();
+    if (EXPERIENCE_KEY_LABELS[lookupKey]) {
+        return EXPERIENCE_KEY_LABELS[lookupKey];
+    }
+    return normalized;
+}
+
+/**
+ * 功能：把类型或路径翻译成自然中文标题。
+ * @param value 原始值。
+ * @returns 中文标题。
+ */
+function formatExperienceTopicLabel(value: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '未命名';
+    }
+    const lookupKey = normalized.toLowerCase();
+    if (EXPERIENCE_FACT_TYPE_LABELS[lookupKey]) {
+        return EXPERIENCE_FACT_TYPE_LABELS[lookupKey];
+    }
+    const parts = normalized.split(/[._/:-]+/).filter(Boolean);
+    const translated = parts.map((part: string): string => formatExperienceKeyLabel(part));
+    return translated.join(' / ');
+}
+
+/**
+ * 功能：将事实路径压缩成适合展示的中文短标签。
+ * @param path 原始路径。
+ * @returns 中文路径标签。
+ */
+function formatExperiencePathLabel(path: string): string {
+    const normalized = String(path ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    const parts = normalized.split(/[./]+/).filter(Boolean);
+    if (parts.length === 0) {
+        return '';
+    }
+    const tail = parts.slice(-2).map((part: string): string => formatExperienceKeyLabel(part));
+    return tail.join(' / ');
+}
+
+/**
+ * 功能：把任意值概括为更适合体验卡阅读的中文短句。
+ * @param value 原始值。
+ * @returns 中文摘要。
+ */
+function summarizeExperienceValue(value: unknown): string {
+    if (typeof value === 'string') {
+        return truncateText(value, 100) || '无详细内容';
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return normalizeText(value, '无详细内容');
+    }
+    if (Array.isArray(value)) {
+        return truncateText(
+            value
+                .map((item: unknown): string => normalizeText(item, ''))
+                .filter(Boolean)
+                .join('、'),
+            100,
+        ) || '无详细内容';
+    }
+    if (value && typeof value === 'object') {
+        const entries: Array<[string, unknown]> = Object.entries(value as Record<string, unknown>).slice(0, 4);
+        return truncateText(
+            entries
+                .map(([key, item]: [string, unknown]): string => `${formatExperienceKeyLabel(key)}：${normalizeText(item, '')}`)
+                .join('；'),
+            120,
+        ) || '无详细内容';
+    }
+    return normalizeText(value, '无详细内容');
+}
+
 /**
  * 功能：限制文本长度，避免卡片内容过长。
  * 参数：
@@ -324,16 +503,14 @@ function buildInjectionOverviewMarkupNext(snapshot: ExperienceSnapshot): string 
         </div>
         <div class="stx-ui-summary-copy">
           ${escapeHtml([
-              `意图：${snapshot.preDecision.intent}`,
-              `锚点：${snapshot.preDecision.anchorMode}`,
-              `迁移：${formatMigrationStage(snapshot.migrationStatus)}`,
-              `调参：${formatTuningSummary(snapshot.tuningProfile)}`,
+                            `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
+                            `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
+                            `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                            `世界书：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
           ].join(' / '))}
         </div>
         <div class="stx-ui-summary-foot">
-          ${escapeHtml(snapshot.preDecision.reasonCodes.length > 0
-              ? `原因：${snapshot.preDecision.reasonCodes.slice(0, 4).join(' / ')}`
-              : '当前没有额外原因标签')}
+                    ${escapeHtml(`原因：${formatInjectionReasonSummary(snapshot.preDecision.reasonCodes)}`)}
         </div>
       </div>
     `;
@@ -417,6 +594,262 @@ function formatLifecycleStage(lifecycle: ChatLifecycleState): string {
         return '活跃期';
     }
     return '新会话';
+}
+
+const LIFECYCLE_REASON_LABELS: Record<string, string> = {
+    stage_long_running: '聊天已进入长聊阶段',
+    stage_stable: '聊天结构整体稳定',
+    stage_active: '近期互动较活跃',
+    stage_archived: '当前聊天已归档',
+    stage_deleted: '当前聊天已删除',
+    stage_new: '当前仍属新会话',
+    summary_recent: '最近刚生成过摘要',
+    summary_stale: '摘要已有一段时间未刷新',
+    facts_dense: '当前记忆事实较集中',
+    facts_sparse: '当前记忆事实偏少',
+    turns_low: '有效轮次较少',
+    turns_medium: '互动轮次正在增长',
+    turns_high: '互动轮次已经很多',
+};
+
+const MUTATION_KIND_LABELS: Record<string, string> = {
+    message_added: '新增了一条消息',
+    message_removed: '有消息被删除',
+    message_updated: '有消息内容被修改',
+    message_edited: '有消息内容被修改',
+    message_deleted: '有消息被删除',
+    message_swiped: '候选回复发生切换',
+    message_replaced: '有消息被替换',
+    summary_rebuilt: '摘要被重新整理',
+    branch_switched: '聊天分支发生切换',
+    chat_branched: '聊天分支发生切换',
+    history_trimmed: '历史记录被压缩或裁剪',
+    lifecycle_changed: '聊天阶段发生变化',
+};
+
+/**
+ * 功能：把生命周期原因码列表翻译为中文说明。
+ * @param reasons 原始原因码列表。
+ * @returns 中文说明文本。
+ */
+function formatLifecycleReasonSummary(reasons: string[]): string {
+    const items = Array.isArray(reasons) ? reasons : [];
+    const translated: string[] = [];
+
+    for (const reason of items) {
+        const normalized = String(reason ?? '').trim();
+        if (!normalized) {
+            continue;
+        }
+        if (LIFECYCLE_REASON_LABELS[normalized]) {
+            translated.push(LIFECYCLE_REASON_LABELS[normalized]);
+            continue;
+        }
+
+        const turnsMatch = normalized.match(/^turns_(\d+)$/i);
+        if (turnsMatch) {
+            translated.push(`当前已累计 ${turnsMatch[1]} 轮互动`);
+            continue;
+        }
+
+        const summariesMatch = normalized.match(/^summaries_(\d+)$/i);
+        if (summariesMatch) {
+            translated.push(`当前已沉淀 ${summariesMatch[1]} 条摘要`);
+            continue;
+        }
+
+        const factsMatch = normalized.match(/^facts_(\d+)$/i);
+        if (factsMatch) {
+            translated.push(`当前保留 ${factsMatch[1]} 条事实记忆`);
+            continue;
+        }
+
+        translated.push(normalized.replace(/^stage_/, '阶段：').replace(/_/g, ' '));
+    }
+
+    return translated.length > 0 ? translated.join(' · ') : '当前没有额外阶段说明';
+}
+
+/**
+ * 功能：把最近变动类型翻译成中文说明。
+ * @param mutationKinds 原始变动类型。
+ * @returns 中文说明文本。
+ */
+function formatMutationKindSummary(mutationKinds: string[]): string {
+    const items = Array.isArray(mutationKinds) ? mutationKinds : [];
+    const translated = items
+        .map((item: string): string => {
+            const normalized = String(item ?? '').trim();
+            if (!normalized) {
+                return '';
+            }
+            return MUTATION_KIND_LABELS[normalized] || normalized.replace(/_/g, ' ');
+        })
+        .filter(Boolean);
+    return translated.length > 0 ? translated.join(' · ') : '最近没有检测到明显的结构变化。';
+}
+
+const INJECTION_REASON_LABELS: Record<string, string> = {
+    setting_only_mode: '当前只在设定问答场景下注入记忆',
+    pre_gate_skip: '这一轮不适合注入额外记忆',
+    lorebook_block: '世界书策略阻止了注入',
+    chat_archived: '当前聊天已归档，暂停注入',
+    setting_query: '检测到用户正在询问设定',
+    story_progress: '当前对话更偏向推进剧情',
+    tool_query: '当前请求更像工具问答',
+    worldbook_profile: '当前聊天使用世界书导向配置',
+    entry_matched: '命中了相关世界书条目',
+    entry_not_matched: '没有命中相关世界书条目',
+    no_active_lorebook: '当前没有启用世界书',
+    world_conflict_detected: '检测到世界设定存在冲突风险',
+    summary_only_mode: '本轮只保留摘要类注入',
+    lorebook_blocked: '世界书拦截了这次注入',
+    identity_memory: '更偏向角色身份类记忆',
+    semantic_memory: '更偏向稳定语义记忆',
+    episodic_memory: '更偏向情节经历记忆',
+    working_memory: '更偏向近期上下文记忆',
+    relation_signal: '关系线索与当前对话相关',
+    emotion_signal: '情绪线索与当前对话相关',
+    privacy_penalty: '因敏感度限制而降低优先级',
+    below_threshold: '综合分数未达到采用阈值',
+    keyword_hit: '与当前关键词高度相关',
+    relation_match: '与当前关系线索匹配',
+    emotion_match: '与当前情绪线索匹配',
+    topic_continuity: '与当前话题保持连续',
+    conflict_penalty: '因冲突惩罚被压低优先级',
+    small_talk_noise: '当前内容更像闲聊噪声',
+    skip_long_term_extract: '本轮不建议沉淀为长期记忆',
+    tool_result: '当前内容属于工具结果',
+    facts_only_focus: '本轮更适合保留事实信息',
+    setting_confirmed: '本轮主要在确认设定',
+    world_state_update: '适合更新世界状态',
+    world_state_blocked: '暂不适合更新世界状态',
+    relationship_shift: '检测到关系变化',
+    relation_tracking: '需要继续跟踪关系线索',
+    mutation_repair_required: '聊天结构变化较大，需要修复型处理',
+};
+
+function formatInjectionIntentLabel(value: string): string {
+    if (value === 'setting_qa') {
+        return '设定问答';
+    }
+    if (value === 'story_continue') {
+        return '剧情续写';
+    }
+    if (value === 'roleplay') {
+        return '角色扮演';
+    }
+    if (value === 'tool_qa') {
+        return '工具问答';
+    }
+    return '自动判断';
+}
+
+function formatInjectionSectionLabel(value: string): string {
+    if (value === 'WORLD_STATE') {
+        return '世界状态';
+    }
+    if (value === 'FACTS') {
+        return '事实';
+    }
+    if (value === 'EVENTS') {
+        return '事件';
+    }
+    if (value === 'SUMMARY') {
+        return '摘要';
+    }
+    if (value === 'CHARACTER_FACTS') {
+        return '角色事实';
+    }
+    if (value === 'RELATIONSHIPS') {
+        return '关系';
+    }
+    if (value === 'LAST_SCENE') {
+        return '最近场景';
+    }
+    if (value === 'SHORT_SUMMARY') {
+        return '短摘要';
+    }
+    if (value === 'PREVIEW') {
+        return '预览';
+    }
+    return value || '未命名区段';
+}
+
+function formatAnchorModeLabel(value: string): string {
+    const dict: Record<string, string> = {
+        top: '插在最前面',
+        before_start: '放在开头之前',
+        custom_anchor: '插到自定义锚点',
+        after_first_system: '放在第一条系统提示后',
+        after_last_system: '放在最后一条系统提示后',
+        after_persona: '放在人设后面',
+        after_author_note: '放在作者注释后',
+        after_lorebook: '放在世界书后',
+        setting_query_only: '仅设定问答时插入',
+    };
+    return dict[String(value ?? '').trim()] || '按默认位置插入';
+}
+
+function formatRenderStyleLabel(value: string): string {
+    const dict: Record<string, string> = {
+        xml: '结构化片段',
+        markdown: 'Markdown 列表',
+        comment: '注释说明',
+        compact_kv: '紧凑键值',
+        minimal_bullets: '精简条目',
+    };
+    return dict[String(value ?? '').trim()] || '默认样式';
+}
+
+function formatLorebookModeLabel(value: string): string {
+    const dict: Record<string, string> = {
+        force_inject: '强制带入世界书',
+        soft_inject: '按相关性柔性带入',
+        summary_only: '只保留摘要提示',
+        block: '本轮不带入世界书',
+    };
+    return dict[String(value ?? '').trim()] || '自动判断';
+}
+
+function formatInjectionReasonCode(code: string): string {
+    const raw = String(code ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+    const normalized = raw.toLowerCase();
+    if (INJECTION_REASON_LABELS[normalized]) {
+        return INJECTION_REASON_LABELS[normalized];
+    }
+
+    const intentMatch = normalized.match(/^intent:(.+)$/i);
+    if (intentMatch) {
+        return `本轮意图偏向${formatInjectionIntentLabel(intentMatch[1])}`;
+    }
+
+    const lorebookMatch = normalized.match(/^lorebook:(.+)$/i);
+    if (lorebookMatch) {
+        return `世界书：${formatInjectionReasonCode(lorebookMatch[1])}`;
+    }
+
+    const lifecycleMatch = normalized.match(/^lifecycle_(.+)$/i);
+    if (lifecycleMatch) {
+        return `当前聊天处于${formatLifecycleStage({ stage: lifecycleMatch[1] as ChatLifecycleState['stage'] } as ChatLifecycleState)}`;
+    }
+
+    if (normalized.startsWith('mutation_repair:')) {
+        return '聊天结构变化较大，触发了修复型处理';
+    }
+
+    return raw.replace(/_/g, ' ');
+}
+
+function formatInjectionReasonSummary(reasonCodes: string[], limit: number = 4): string {
+    const items = (Array.isArray(reasonCodes) ? reasonCodes : [])
+        .map((code: string): string => formatInjectionReasonCode(code))
+        .filter(Boolean)
+        .slice(0, limit);
+    return items.length > 0 ? items.join(' · ') : '当前没有额外原因标签';
 }
 
 /**
@@ -503,17 +936,120 @@ function isLongTermFact(fact: DBFact): boolean {
  *   string：摘要文本。
  */
 function summarizeValue(value: unknown): string {
-    if (typeof value === 'string') {
-        return truncateText(value, 100) || '无详细内容';
-    }
-    if (Array.isArray(value)) {
-        return truncateText(value.map((item: unknown): string => normalizeText(item, '')).filter(Boolean).join('、'), 100) || '无详细内容';
-    }
-    if (value && typeof value === 'object') {
-        const entries: Array<[string, unknown]> = Object.entries(value as Record<string, unknown>).slice(0, 4);
-        return truncateText(entries.map(([key, item]: [string, unknown]): string => `${key}: ${normalizeText(item, '')}`).join('；'), 120) || '无详细内容';
-    }
-    return normalizeText(value, '无详细内容');
+    return summarizeExperienceValue(value);
+}
+
+interface FactCardField {
+        label: string;
+        value: string;
+        multiline?: boolean;
+}
+
+/**
+ * 功能：把事实值整理成更适合卡片阅读的字段列表。
+ * 参数：
+ *   value：事实原始值。
+ * 返回：
+ *   FactCardField[]：可读字段列表。
+ */
+function buildFactCardFields(value: unknown): FactCardField[] {
+        if (typeof value === 'string') {
+                const text = normalizeText(value, '无详细内容');
+                return text ? [{ label: '内容', value: text, multiline: text.length > 42 }] : [];
+        }
+        if (typeof value === 'number' || typeof value === 'boolean') {
+                return [{ label: '内容', value: normalizeText(value, '无详细内容') }];
+        }
+        if (Array.isArray(value)) {
+                const items = value
+                        .map((item: unknown): string => normalizeText(item, ''))
+                        .filter(Boolean)
+                        .slice(0, 8);
+                return items.length > 0
+                        ? [{ label: '内容', value: items.join('\n'), multiline: true }]
+                        : [];
+        }
+        if (value && typeof value === 'object') {
+                return Object.entries(value as Record<string, unknown>)
+                        .slice(0, 8)
+                        .map(([key, item]: [string, unknown]): FactCardField | null => {
+                                if (Array.isArray(item)) {
+                                        const lines = item
+                                                .map((entry: unknown): string => normalizeText(entry, ''))
+                                                .filter(Boolean)
+                                                .slice(0, 8);
+                                        if (lines.length === 0) {
+                                                return null;
+                                        }
+                                        return {
+                                                label: formatExperienceKeyLabel(key),
+                                                value: lines.join('\n'),
+                                                multiline: true,
+                                        };
+                                }
+                                const text = normalizeText(item, '');
+                                if (!text) {
+                                        return null;
+                                }
+                                return {
+                                        label: formatExperienceKeyLabel(key),
+                                        value: text,
+                                        multiline: text.length > 42,
+                                };
+                        })
+                        .filter((field: FactCardField | null): field is FactCardField => Boolean(field));
+        }
+        return [];
+}
+
+/**
+ * 功能：把长期事实渲染为更易读的卡片布局。
+ * 参数：
+ *   facts：长期事实列表。
+ * 返回：
+ *   string：HTML 字符串。
+ */
+function buildPrimaryFactsMarkup(facts: DBFact[]): string {
+        if (!Array.isArray(facts) || facts.length === 0) {
+                return '<div class="stx-ui-empty-hint">当前还没有稳定的长期记忆。</div>';
+        }
+        return `
+            <div class="stx-ui-fact-card-list">
+                ${facts.map((fact: DBFact): string => {
+                        const pathLabel = formatExperiencePathLabel(String(fact.path ?? ''));
+                        const entityLabel = normalizeText(fact.entity?.id, '');
+                        const fields = buildFactCardFields(fact.value);
+                        const fallbackDetail = summarizeValue(fact.value);
+                        return `
+                            <article class="stx-ui-fact-card${isRelationshipFact(fact) ? ' is-accent' : ''}">
+                                <div class="stx-ui-fact-card-head">
+                                    <div class="stx-ui-fact-card-title-wrap">
+                                        <strong class="stx-ui-fact-card-title">${escapeHtml(formatExperienceTopicLabel(String(fact.type ?? '')))}</strong>
+                                        <div class="stx-ui-fact-card-meta">
+                                            <span class="stx-ui-fact-chip">${escapeHtml(formatRelativeTime(Number(fact.updatedAt ?? 0)))}</span>
+                                            ${entityLabel ? `<span class="stx-ui-fact-chip is-soft">${escapeHtml(entityLabel)}</span>` : ''}
+                                            ${pathLabel ? `<span class="stx-ui-fact-chip is-soft">${escapeHtml(pathLabel)}</span>` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="stx-ui-fact-card-body">
+                                    ${fields.length > 0 ? fields.map((field: FactCardField): string => `
+                                        <div class="stx-ui-fact-field${field.multiline ? ' is-multiline' : ''}">
+                                            <div class="stx-ui-fact-field-label">${escapeHtml(field.label)}</div>
+                                            <div class="stx-ui-fact-field-value">${escapeHtml(field.value)}</div>
+                                        </div>
+                                    `).join('') : `
+                                        <div class="stx-ui-fact-field is-multiline">
+                                            <div class="stx-ui-fact-field-label">内容</div>
+                                            <div class="stx-ui-fact-field-value">${escapeHtml(fallbackDetail)}</div>
+                                        </div>
+                                    `}
+                                </div>
+                            </article>
+                        `;
+                }).join('')}
+            </div>
+        `;
 }
 
 /**
@@ -525,9 +1061,10 @@ function summarizeValue(value: unknown): string {
  */
 function formatFactItem(fact: DBFact): ExperienceListItem {
     const entityText: string = fact.entity?.id ? ` · ${fact.entity.id}` : '';
-    const pathText: string = fact.path ? ` · ${fact.path}` : '';
+    const pathLabel: string = formatExperiencePathLabel(String(fact.path ?? ''));
+    const pathText: string = pathLabel ? ` · ${pathLabel}` : '';
     return {
-        title: normalizeText(fact.type, '未命名事实'),
+        title: formatExperienceTopicLabel(String(fact.type ?? '')),
         detail: summarizeValue(fact.value),
         meta: `${formatRelativeTime(Number(fact.updatedAt ?? 0))}${entityText}${pathText}`,
         tone: isRelationshipFact(fact) ? 'accent' : 'soft',
@@ -555,15 +1092,35 @@ function summarizeEvent(event: DBEvent): string {
         payload.result,
     ];
     for (const candidate of preferred) {
-        const text: string = truncateText(candidate, 100);
+        const text: string = truncateText(summarizeExperienceValue(candidate), 100);
         if (text) {
             return text;
         }
     }
     if (event.payload != null) {
-        return truncateText(JSON.stringify(event.payload), 100);
+        return truncateText(summarizeExperienceValue(event.payload), 100);
     }
     return '无附加内容';
+}
+
+/**
+ * 功能：把事件里的发送方名字规范成中文展示。
+ * @param value 原始发送方名字。
+ * @returns 中文发送方名。
+ */
+function formatEventSpeakerLabel(value: unknown): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    const lookup = normalized.toLowerCase();
+    if (lookup === 'you' || lookup === 'user') {
+        return '用户';
+    }
+    if (lookup === 'system') {
+        return '系统';
+    }
+    return normalized;
 }
 
 /**
@@ -574,10 +1131,20 @@ function summarizeEvent(event: DBEvent): string {
  *   ExperienceListItem：展示项。
  */
 function formatEventItem(event: DBEvent): ExperienceListItem {
+    const payload: Record<string, unknown> = event.payload && typeof event.payload === 'object'
+        ? event.payload as Record<string, unknown>
+        : {};
+    const speaker = formatEventSpeakerLabel(payload.name ?? payload.role ?? payload.source);
+    const eventScope = formatExperiencePathLabel(String((event.refs as Record<string, unknown> | undefined)?.scope ?? ''));
+    const metaParts = [
+        formatRelativeTime(Number(event.ts ?? 0)),
+        speaker,
+        eventScope,
+    ].filter(Boolean);
     return {
-        title: normalizeText(event.type, '未命名事件'),
+        title: EXPERIENCE_EVENT_TYPE_LABELS[String(event.type ?? '').trim()] || formatExperienceTopicLabel(String(event.type ?? '')),
         detail: summarizeEvent(event),
-        meta: `${formatRelativeTime(Number(event.ts ?? 0))} · ${formatTimestamp(Number(event.ts ?? 0))}`,
+        meta: `${metaParts.join(' · ')} · ${formatTimestamp(Number(event.ts ?? 0))}`,
     };
 }
 
@@ -590,9 +1157,9 @@ function formatEventItem(event: DBEvent): ExperienceListItem {
  */
 function formatSummaryItem(summary: DBSummary): ExperienceListItem {
     return {
-        title: normalizeText(summary.title, `${summary.level} 摘要`),
+        title: normalizeText(summary.title, `${formatExperienceKeyLabel(String(summary.level ?? ''))}摘要`),
         detail: truncateText(summary.content, 120) || '暂无摘要内容',
-        meta: `${formatRelativeTime(Number(summary.createdAt ?? 0))} · ${summary.level}`,
+        meta: `${formatRelativeTime(Number(summary.createdAt ?? 0))} · ${formatExperienceKeyLabel(String(summary.level ?? ''))}`,
         tone: summary.level === 'scene' ? 'accent' : 'soft',
     };
 }
@@ -605,7 +1172,7 @@ function formatSummaryItem(summary: DBSummary): ExperienceListItem {
  *   ExperienceListItem：展示项。
  */
 function formatStateItem(state: DBWorldState): ExperienceListItem {
-    const shortPath: string = state.path.split('/').filter(Boolean).slice(-2).join(' / ') || state.path;
+    const shortPath: string = formatExperiencePathLabel(String(state.path ?? '')) || state.path;
     return {
         title: shortPath || '世界状态',
         detail: summarizeValue(state.value),
@@ -780,16 +1347,14 @@ function buildInjectionOverviewMarkup(snapshot: ExperienceSnapshot): string {
         </div>
         <div class="stx-ui-summary-copy">
           ${escapeHtml([
-              `意图：${snapshot.preDecision.intent}`,
-              `锚点：${snapshot.preDecision.anchorMode}`,
-              `渲染：${snapshot.preDecision.renderStyle}`,
-              `世界书策略：${snapshot.preDecision.lorebookMode}`,
+                            `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
+                            `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
+                            `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                            `世界书策略：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
           ].join(' · '))}
         </div>
         <div class="stx-ui-summary-foot">
-          ${escapeHtml(snapshot.preDecision.reasonCodes.length > 0
-              ? `原因：${snapshot.preDecision.reasonCodes.slice(0, 4).join(' / ')}`
-              : '当前没有额外原因标签')}
+                    ${escapeHtml(`原因：${formatInjectionReasonSummary(snapshot.preDecision.reasonCodes)}`)}
         </div>
       </div>
     `;
@@ -860,8 +1425,8 @@ function buildInjectionSectionMarkup(preDecision: PreGenerationGateDecision | nu
       <div class="stx-ui-pill-wrap">
         ${preDecision.sectionsUsed.map((section: InjectionSectionName): string => {
             const budget: number | undefined = preDecision.budgets?.[section];
-            const budgetLabel: string = Number.isFinite(Number(budget)) ? `${budget}t` : '自动';
-            return `<span class="stx-ui-pill"><strong>${escapeHtml(section)}</strong><em>${escapeHtml(budgetLabel)}</em></span>`;
+                        const budgetLabel: string = Number.isFinite(Number(budget)) ? `约 ${budget} 词元` : '自动';
+                        return `<span class="stx-ui-pill"><strong>${escapeHtml(formatInjectionSectionLabel(section))}</strong><em>${escapeHtml(budgetLabel)}</em></span>`;
         }).join('')}
       </div>
     `;
@@ -949,7 +1514,7 @@ function buildExplanationListItem(
         metaParts.push(`${Math.round(Number(item.score) * 100)} 分`);
     }
     if (item.section) {
-        metaParts.push(String(item.section));
+        metaParts.push(formatInjectionSectionLabel(String(item.section)));
     }
     if (item.layer) {
         metaParts.push(formatMemoryLayerLabel(item.layer));
@@ -963,7 +1528,7 @@ function buildExplanationListItem(
     return {
         title: normalizeText(item.title, '未命名条目'),
         detail: item.reasonCodes.length > 0
-            ? item.reasonCodes.join(' / ')
+            ? item.reasonCodes.map((code: string): string => formatInjectionReasonCode(code)).filter(Boolean).join(' / ')
             : bucketKey === 'rejected_candidates'
                 ? '这条候选没有通过当前编码评分。'
                 : bucketKey === 'conflict_suppressed'
@@ -1384,7 +1949,7 @@ function renderRolePanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot)
     ].slice(0, 4);
     setContainerHtml(ids.roleOverviewMetaId, buildRoleOverviewMarkupNext(snapshot));
     setContainerHtml(ids.rolePersonaBadgesId, buildBadgesMarkup(buildPersonaBadges(snapshot)));
-    setContainerHtml(ids.rolePrimaryFactsId, buildListMarkup(longTermFacts.map(formatFactItem), '当前还没有稳定的长期记忆。'));
+    setContainerHtml(ids.rolePrimaryFactsId, buildPrimaryFactsMarkup(longTermFacts));
     setContainerHtml(ids.roleRecentMemoryId, buildListMarkup(recentFacts.map(formatFactItem), '最近还没有新的事实沉淀。'));
     setContainerHtml(ids.roleBlurMemoryId, buildListMarkup(blurCandidates, '当前没有明显的遗忘或压缩提醒。'));
 }
@@ -1402,13 +1967,13 @@ function renderRecentPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapsho
         {
             title: '聊天阶段',
             detail: formatLifecycleStage(snapshot.lifecycle),
-            meta: snapshot.lifecycle.stageReasonCodes.join(' / ') || '无阶段原因',
+            meta: formatLifecycleReasonSummary(snapshot.lifecycle.stageReasonCodes),
             tone: 'accent',
         },
         {
             title: '最近变动',
             detail: snapshot.logicalView?.mutationKinds?.length
-                ? snapshot.logicalView.mutationKinds.join(' / ')
+                ? formatMutationKindSummary(snapshot.logicalView.mutationKinds)
                 : '最近没有检测到明显的消息结构变化。',
             meta: snapshot.logicalView ? formatRelativeTime(snapshot.logicalView.rebuiltAt) : '尚未构建逻辑视图',
         },

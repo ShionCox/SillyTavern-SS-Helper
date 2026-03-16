@@ -3,6 +3,7 @@ import {
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
+import { enhanceSemanticSeedWithAi } from './chat-semantic-ai-summary';
 import type {
     ChatSemanticSeed,
     IdentitySeed,
@@ -28,6 +29,28 @@ function hashString(value: string): string {
         hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
     }
     return `h${(hash >>> 0).toString(16)}`;
+}
+
+function buildSemanticSeedFingerprint(chatKey: string, seed: ChatSemanticSeed): string {
+    const fingerprintBase = JSON.stringify({
+        chatKey,
+        characterCore: seed.characterCore,
+        systemPrompt: seed.systemPrompt,
+        firstMessage: seed.firstMessage,
+        authorNote: seed.authorNote,
+        jailbreak: seed.jailbreak,
+        instruct: seed.instruct,
+        activeLorebooks: seed.activeLorebooks,
+        lorebookSeed: seed.lorebookSeed,
+        groupMembers: seed.groupMembers,
+        characterAnchors: seed.characterAnchors,
+        presetStyle: seed.presetStyle,
+        identitySeed: seed.identitySeed,
+        worldSeed: seed.worldSeed,
+        styleSeed: seed.styleSeed,
+        aiSummary: seed.aiSummary,
+    });
+    return hashString(fingerprintBase);
 }
 
 function splitSeedValues(...values: string[]): string[] {
@@ -302,26 +325,27 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
             buildSourceTrace('lorebook', 'global.selected_world_info', 0.8),
         ],
     };
-    const fingerprintBase = JSON.stringify({
-        chatKey,
-        characterCore,
-        systemPrompt,
-        firstMessage,
-        authorNote,
-        jailbreak,
-        instruct,
-        activeLorebooks,
-        lorebookSeed,
-        groupMembers,
-        characterAnchors,
-        presetStyle,
-        identitySeed,
-        worldSeed,
-        styleSeed,
-    });
     return {
         seed,
-        fingerprint: hashString(fingerprintBase),
+        fingerprint: buildSemanticSeedFingerprint(chatKey, seed),
         bindingFingerprint,
     };
+}
+
+export async function collectChatSemanticSeedWithAi(chatKey: string): Promise<SemanticBootstrapResult> {
+    const base = collectChatSemanticSeed(chatKey);
+    if (!base.seed) {
+        return base;
+    }
+
+    try {
+        const enhancedSeed = await enhanceSemanticSeedWithAi(base.seed);
+        return {
+            ...base,
+            seed: enhancedSeed,
+            fingerprint: buildSemanticSeedFingerprint(chatKey, enhancedSeed),
+        };
+    } catch {
+        return base;
+    }
 }

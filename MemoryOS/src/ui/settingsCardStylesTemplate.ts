@@ -418,6 +418,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       letter-spacing: 0.08em;
       text-transform: uppercase;
       opacity: 0.66;
+      margin-bottom: 6px;
     }
 
     #${cardId} .stx-ui-summary-title {
@@ -536,13 +537,121 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-size: 11px;
       line-height: 1.4;
       opacity: 0.62;
-      white-space: nowrap;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     #${cardId} .stx-ui-memory-entry-body {
       font-size: 12px;
       line-height: 1.55;
       color: color-mix(in srgb, var(--ss-theme-text, #fff) 84%, transparent);
+    }
+
+    #${cardId} .stx-ui-fact-card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-fact-card {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 13px 14px;
+      border-radius: 14px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 90%, transparent);
+      background:
+        radial-gradient(circle at top right, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 9%, transparent) 0%, transparent 44%),
+        linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 100%, transparent), color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.14)) 100%, transparent));
+      box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+    }
+
+    #${cardId} .stx-ui-fact-card.is-accent {
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 28%, transparent);
+    }
+
+    #${cardId} .stx-ui-fact-card-head,
+    #${cardId} .stx-ui-fact-card-title-wrap,
+    #${cardId} .stx-ui-fact-card-body {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-fact-card-title {
+      font-size: 14px;
+      line-height: 1.4;
+      font-weight: 800;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent);
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-fact-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-fact-chip {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      max-width: 100%;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1.25;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 76%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 20%, transparent);
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-fact-chip.is-soft {
+      background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 100%, transparent);
+      border-color: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.16)) 88%, transparent);
+    }
+
+    #${cardId} .stx-ui-fact-field {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(64px, 92px) minmax(0, 1fr);
+      gap: 8px 10px;
+      align-items: start;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.12)) 100%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.08)) 82%, transparent);
+    }
+
+    #${cardId} .stx-ui-fact-field.is-multiline {
+      align-items: stretch;
+    }
+
+    #${cardId} .stx-ui-fact-field-label {
+      font-size: 11px;
+      line-height: 1.5;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 68%, transparent);
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-fact-field-value {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.7;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 90%, transparent);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     #${cardId} .stx-ui-pill-wrap {
@@ -685,6 +794,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-panel[hidden] {
       display: none !important;
+    }
+
+    @media (max-width: 760px) {
+      #${cardId} .stx-ui-fact-field {
+        grid-template-columns: minmax(0, 1fr);
+      }
     }
 
     #${cardId} .stx-ui-divider {

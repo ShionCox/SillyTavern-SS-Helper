@@ -3328,11 +3328,15 @@ function translateDiagnosticKey(key: string): string {
         sectionsUsed: '本次激活区块',
         budgets: '详细预算分配',
         reason: '产生原因',
-        reasonCodes: '决策代码',
+        reasonCodes: '判定依据',
         generatedAt: '决策生成时间',
         shouldInject: '是否注入',
-        lorebookMode: '世界书拦截模式',
-        anchorMode: '注入锚点位置',
+        lorebookMode: '世界书策略',
+        anchorMode: '注入位置',
+        renderStyle: '注入呈现方式',
+        queryMode: '查询模式',
+        softPersonaMode: '辅助提示方式',
+        fallbackOrder: '备用插入顺序',
         shouldTrimPrompt: '是否裁剪 Prompt',
         valueClass: '生成价值等级',
         shouldPersistLongTerm: '是否永久存储',
@@ -3475,6 +3479,42 @@ function formatDiagnosticDisplayValue(key: string, value: unknown): unknown {
         if (text.startsWith('character:')) {
             return `角色卡对象 · ${text.slice('character:'.length) || '未命名角色卡'}`;
         }
+    }
+
+    if (key === 'intent') {
+        return formatIntentLabel(String(value ?? ''));
+    }
+
+    if (key === 'sectionsUsed') {
+        return formatSectionLabel(String(value ?? ''));
+    }
+
+    if (key === 'reasonCodes') {
+        return formatDecisionReasonCodeLabel(String(value ?? ''));
+    }
+
+    if (key === 'lorebookMode') {
+        return formatLorebookModeLabel(String(value ?? ''));
+    }
+
+    if (key === 'anchorMode') {
+        return formatAnchorModeLabel(String(value ?? ''));
+    }
+
+    if (key === 'renderStyle') {
+        return formatRenderStyleLabel(String(value ?? ''));
+    }
+
+    if (key === 'queryMode') {
+        return formatQueryModeLabel(String(value ?? ''));
+    }
+
+    if (key === 'softPersonaMode') {
+        return formatSoftPersonaModeLabel(String(value ?? ''));
+    }
+
+    if (key === 'fallbackOrder') {
+        return formatAnchorModeLabel(String(value ?? ''));
     }
 
     return value;
@@ -3967,6 +4007,147 @@ function formatGroupLaneActors(groupMemory: GroupMemoryState | null): string {
     return sceneSummary
         ? `高活跃角色：${topActors.join(' / ')} · 共享场景：${sceneSummary}`
         : `高活跃角色：${topActors.join(' / ')}`;
+}
+
+/**
+ * 功能：格式化世界书策略标签。
+ * @param value 原始策略值。
+ * @returns 中文标签。
+ */
+function formatLorebookModeLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        force_inject: '强制带入世界书',
+        soft_inject: '按相关性柔性带入',
+        summary_only: '只保留摘要提示',
+        block: '本轮不带入世界书',
+    };
+    return dict[normalized] || value || '自动判断';
+}
+
+/**
+ * 功能：格式化注入锚点标签。
+ * @param value 原始锚点值。
+ * @returns 中文标签。
+ */
+function formatAnchorModeLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        top: '插在最前面',
+        before_start: '放在开头之前',
+        custom_anchor: '插到自定义锚点',
+        after_first_system: '放在第一条系统提示后',
+        after_last_system: '放在最后一条系统提示后',
+        after_persona: '放在人设后面',
+        after_author_note: '放在作者注释后',
+        after_lorebook: '放在世界书后',
+        setting_query_only: '仅设定问答时插入',
+    };
+    return dict[normalized] || value || '按默认位置插入';
+}
+
+/**
+ * 功能：格式化注入渲染样式标签。
+ * @param value 原始样式值。
+ * @returns 中文标签。
+ */
+function formatRenderStyleLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        xml: '结构化片段',
+        markdown: 'Markdown 列表',
+        comment: '注释说明',
+        compact_kv: '紧凑键值',
+        minimal_bullets: '精简条目',
+    };
+    return dict[normalized] || value || '默认样式';
+}
+
+/**
+ * 功能：格式化查询模式标签。
+ * @param value 原始查询模式。
+ * @returns 中文标签。
+ */
+function formatQueryModeLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'setting_only') {
+        return '仅设定问答';
+    }
+    if (normalized === 'always') {
+        return '始终可用';
+    }
+    return value || '自动判断';
+}
+
+/**
+ * 功能：格式化辅助提示方式标签。
+ * @param value 原始模式。
+ * @returns 中文标签。
+ */
+function formatSoftPersonaModeLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    const dict: Record<string, string> = {
+        scene_note: '场景提醒',
+        continuity_note: '连续性提醒',
+        character_anchor: '角色锚点',
+        hidden_context_summary: '隐藏上下文摘要',
+    };
+    return dict[normalized] || value || '默认方式';
+}
+
+/**
+ * 功能：把决策原因码转换为更自然的中文说明。
+ * @param code 原始原因码。
+ * @returns 中文说明。
+ */
+function formatDecisionReasonCodeLabel(code: string): string {
+    const raw = String(code || '').trim();
+    const normalized = raw.toLowerCase();
+    const dict: Record<string, string> = {
+        setting_only_mode: '当前只在设定问答场景下注入记忆',
+        pre_gate_skip: '这一轮不适合注入额外记忆',
+        lorebook_block: '世界书策略阻止了注入',
+        chat_archived: '当前聊天已归档，暂停注入',
+        setting_query: '检测到用户正在询问设定',
+        story_progress: '当前对话更偏向推进剧情',
+        tool_query: '当前请求更像工具问答',
+        worldbook_profile: '当前聊天使用世界书导向配置',
+        entry_matched: '命中了相关世界书条目',
+        entry_not_matched: '没有命中相关世界书条目',
+        no_active_lorebook: '当前没有启用世界书',
+        world_conflict_detected: '检测到世界设定存在冲突风险',
+        summary_only_mode: '本轮只保留摘要类提示',
+        lorebook_blocked: '世界书拦截了这次注入',
+        identity_memory: '更偏向角色身份类记忆',
+        semantic_memory: '更偏向稳定语义记忆',
+        episodic_memory: '更偏向情节经历记忆',
+        working_memory: '更偏向近期上下文记忆',
+        relation_signal: '关系线索与当前对话相关',
+        emotion_signal: '情绪线索与当前对话相关',
+        privacy_penalty: '因敏感度限制而降低优先级',
+        below_threshold: '综合分数未达到采用阈值',
+        keyword_hit: '与当前关键词高度相关',
+        relation_match: '与当前关系线索匹配',
+        emotion_match: '与当前情绪线索匹配',
+        topic_continuity: '与当前话题保持连续',
+        conflict_penalty: '因冲突惩罚被压低优先级',
+        mutation_repair_required: '聊天结构变化较大，需要修复型处理',
+    };
+    if (dict[normalized]) {
+        return dict[normalized];
+    }
+    const intentMatch = normalized.match(/^intent:(.+)$/i);
+    if (intentMatch) {
+        return `本轮意图偏向${formatIntentLabel(intentMatch[1])}`;
+    }
+    const lorebookMatch = normalized.match(/^lorebook:(.+)$/i);
+    if (lorebookMatch) {
+        return `世界书：${formatDecisionReasonCodeLabel(lorebookMatch[1])}`;
+    }
+    if (normalized.startsWith('mutation_repair:')) {
+        return '聊天结构变化较大，触发了修复型处理';
+    }
+    return raw || '未知';
 }
 
 /**

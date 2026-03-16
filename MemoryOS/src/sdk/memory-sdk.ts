@@ -20,7 +20,7 @@ import { RowResolver } from '../core/row-resolver';
 import { RowOperationsManager } from '../core/row-operations';
 import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
-import { collectChatSemanticSeed } from '../core/chat-semantic-bootstrap';
+import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
 import { db, restoreArchivedMemoryChat } from '../db/db';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { ensureSdkChatDocument } from '../../../SDK/db';
@@ -219,12 +219,15 @@ export class MemorySDKImpl implements MemorySDK {
         if (presetBundle.autoBootstrapSemanticSeed === false) {
             return;
         }
-        const bootstrap = collectChatSemanticSeed(this.chatKey_);
-        if (!bootstrap.seed) {
+        const [existingSeed, currentFingerprint] = await Promise.all([
+            this.chatStateManager.getSemanticSeed(),
+            this.chatStateManager.getColdStartFingerprint(),
+        ]);
+        if (existingSeed || currentFingerprint) {
             return;
         }
-        const currentFingerprint = await this.chatStateManager.getColdStartFingerprint();
-        if (currentFingerprint && currentFingerprint === bootstrap.fingerprint) {
+        const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_);
+        if (!bootstrap.seed) {
             return;
         }
         const seed = bootstrap.seed;
@@ -273,6 +276,7 @@ export class MemorySDKImpl implements MemorySDK {
                 identity: seed.identitySeed.identity,
                 catchphrases: seed.identitySeed.catchphrases,
                 relationshipAnchors: seed.identitySeed.relationshipAnchors,
+                roleSummary: String(seed.aiSummary?.roleSummary ?? '').trim(),
             },
             confidence: 0.9,
             provenance,
@@ -285,6 +289,7 @@ export class MemorySDKImpl implements MemorySDK {
                 mode: seed.styleSeed.mode,
                 cues: seed.styleSeed.cues,
                 presetStyle: seed.presetStyle,
+                aiStyleCues: seed.aiSummary?.styleCues ?? [],
             },
             confidence: 0.8,
             provenance,
@@ -292,6 +297,8 @@ export class MemorySDKImpl implements MemorySDK {
         await this.stateManager.set('/semantic/world/locations', seed.worldSeed.locations, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/world/rules', seed.worldSeed.rules, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/world/hardConstraints', seed.worldSeed.hardConstraints, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/world/entities', seed.worldSeed.entities, { sourceEventId: fingerprint });
+        await this.stateManager.set('/semantic/world/overview', String(seed.aiSummary?.worldSummary ?? '').trim(), { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/activeLorebooks', seed.activeLorebooks, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/groupMembers', seed.groupMembers, { sourceEventId: fingerprint });
     }
@@ -343,7 +350,9 @@ export class MemorySDKImpl implements MemorySDK {
             }
 
             const summaryLines = [
+                String(seed.aiSummary?.roleSummary ?? '').trim(),
                 ...seed.identitySeed.identity.slice(0, 4),
+                String(seed.aiSummary?.worldSummary ?? '').trim(),
                 ...seed.worldSeed.rules.slice(0, 4),
                 ...seed.worldSeed.hardConstraints.slice(0, 3),
             ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);

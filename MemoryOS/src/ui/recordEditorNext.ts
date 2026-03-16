@@ -697,6 +697,164 @@ function buildWorldStateHeadline(path: string): string {
 }
 
 /**
+ * 功能：把摘要层级转换成更自然的中文标签。
+ * @param level 原始层级值。
+ * @returns 中文层级名。
+ */
+function formatSummaryLevelLabel(level: string): string {
+    const normalized = String(level ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '普通摘要';
+    }
+    if (normalized === 'scene') {
+        return '场景摘要';
+    }
+    if (normalized === 'conversation') {
+        return '会话摘要';
+    }
+    if (normalized === 'chapter') {
+        return '章节摘要';
+    }
+    if (normalized === 'global') {
+        return '全局摘要';
+    }
+    return `${formatRecordEditorKeyLabel(normalized)}摘要`;
+}
+
+/**
+ * 功能：把值转换成更适合用户阅读的中文短句，避免直接展示 JSON/代码结构。
+ * @param value 原始值。
+ * @param depth 当前递归深度。
+ * @returns 中文化后的文本。
+ */
+function formatReadableValueText(value: unknown, depth: number = 0): string {
+    if (value === null || value === undefined) {
+        return '未填写';
+    }
+    if (typeof value === 'string') {
+        const normalized = value.replace(/\s+/g, ' ').trim();
+        return normalized || '未填写';
+    }
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) {
+            return '未填写';
+        }
+        return Number.isInteger(value)
+            ? String(value)
+            : value.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+    }
+    if (typeof value === 'boolean') {
+        return value ? '是' : '否';
+    }
+    if (Array.isArray(value)) {
+        if (value.length === 0) {
+            return '未填写';
+        }
+        const renderedItems = value
+            .slice(0, 6)
+            .map((item: unknown): string => formatReadableValueText(item, depth + 1))
+            .filter((item: string): boolean => Boolean(item) && item !== '未填写');
+        if (renderedItems.length === 0) {
+            return '未填写';
+        }
+        return `${renderedItems.join('、')}${value.length > 6 ? ' 等内容' : ''}`;
+    }
+    if (typeof value === 'object') {
+        const entries = Object.entries(value as Record<string, unknown>).filter(([, itemValue]: [string, unknown]): boolean => itemValue !== undefined);
+        if (entries.length === 0) {
+            return '未填写';
+        }
+        return entries.slice(0, depth > 0 ? 3 : 5).map(([key, itemValue]: [string, unknown]): string => {
+            const label = formatRecordEditorKeyLabel(key);
+            const renderedValue = formatReadableValueText(itemValue, depth + 1);
+            return renderedValue === '未填写' ? label : `${label}：${renderedValue}`;
+        }).join('；');
+    }
+    return String(value);
+}
+
+/**
+ * 功能：渲染更适合展示的中文值视图；编辑态仍保留原始键值编辑能力。
+ * @param value 原始值。
+ * @param isEditing 是否处于编辑态。
+ * @returns HTML 字符串。
+ */
+function renderReadableValueHtml(value: unknown, isEditing: boolean): string {
+    if (isEditing) {
+        return renderRawValueHtml(value, true);
+    }
+
+    if (typeof value !== 'object' || value === null) {
+        return `<div style="word-break: break-word; white-space: pre-wrap;">${escapeHtml(formatReadableValueText(value))}</div>`;
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, itemValue]: [string, unknown]): boolean => itemValue !== undefined);
+    if (entries.length === 0) {
+        return '<div>未填写</div>';
+    }
+
+    return `
+        <div class="stx-re-kv">
+            ${entries.map(([key, itemValue]: [string, unknown]): string => {
+                const displayKey = formatRecordEditorKeyLabel(key);
+                const renderedValue = formatReadableValueText(itemValue);
+                return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div class="stx-re-kv-val">${escapeHtml(renderedValue)}</div></div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建摘要记录的主标题。
+ * @param record 原始摘要记录。
+ * @returns 主标题文本。
+ */
+function buildSummaryHeadline(record: RawRecord): string {
+    const title = String(record.title ?? '').trim();
+    if (title) {
+        return title;
+    }
+    return formatSummaryLevelLabel(String(record.level ?? ''));
+}
+
+/**
+ * 功能：构建摘要记录的辅助说明。
+ * @param record 原始摘要记录。
+ * @returns 辅助说明文本。
+ */
+function buildSummarySubtitle(record: RawRecord): string {
+    const keywords = Array.isArray(record.keywords)
+        ? (record.keywords as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    const parts = [
+        `层级：${formatSummaryLevelLabel(String(record.level ?? ''))}`,
+        keywords.length > 0 ? `关键词：${keywords.join('、')}` : '关键词：未提取',
+    ];
+    const createdAt = Number(record.createdAt ?? 0);
+    if (createdAt > 0) {
+        parts.push(`生成于 ${formatTimeLabel(createdAt)}`);
+    }
+    return joinReadableMeta(parts);
+}
+
+/**
+ * 功能：构建世界状态记录的辅助说明。
+ * @param record 原始状态记录。
+ * @returns 辅助说明文本。
+ */
+function buildWorldStateSubtitle(record: RawRecord): string {
+    const path = String(record.path ?? '').trim();
+    const parts = [
+        path ? `归类到：${formatHumanReadableTopic(path, '未填写路径')}` : '当前还没有填写状态主题',
+    ];
+    const updatedAt = Number(record.updatedAt ?? 0);
+    if (updatedAt > 0) {
+        parts.push(`最近更新于 ${formatTimeLabel(updatedAt)}`);
+    }
+    return joinReadableMeta(parts);
+}
+
+/**
  * 功能：把多个描述片段拼成一行辅助说明。
  * @param parts 片段列表。
  * @returns 合并后的辅助说明。
@@ -1357,7 +1515,6 @@ export async function openRecordEditor(): Promise<void> {
                     const entity = record.entity as Record<string, unknown> | undefined;
                     const pathValue = String(record.path ?? '').trim();
                     const entityLabel = formatEntityDisplayLabel(entity);
-                    const rawEntityLabel = formatEntityRawHint(entity);
                     const pathLabel = pathValue ? formatHumanReadableTopic(pathValue, '未填写路径') : '未填写路径';
                     const pathSummary = pathValue ? '这条记录会归入当前主题下' : '这条记录还没有填写路径';
                     const factTitle = buildFactHeadline(record);
@@ -1366,23 +1523,26 @@ export async function openRecordEditor(): Promise<void> {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td>${renderRecordSummaryMarkup(factTitle, factSubtitle, '内部键', recordId, isFactStructurallyIncomplete(record) ? '结构待整理' : '')}</td>
-                            <td>${renderRecordSummaryMarkup(entityLabel, entitySummary, '原始引用', rawEntityLabel === '未填写实体引用' ? '' : rawEntityLabel)}</td>
-                            <td>${renderRecordSummaryMarkup(pathLabel, pathSummary, '原始路径', pathValue)}</td>
-                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
+                            <td>${renderRecordSummaryMarkup(factTitle, factSubtitle, '', '', isFactStructurallyIncomplete(record) ? '结构待整理' : '')}</td>
+                            <td>${renderRecordSummaryMarkup(entityLabel, entitySummary, '', '')}</td>
+                            <td>${renderRecordSummaryMarkup(pathLabel, pathSummary, '', '')}</td>
+                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderReadableValueHtml(payloadValue, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
                         </tr>
                     `;
                 } else if (tableName === 'summaries') {
                     if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('层级 / 标题', 'level')}${headerCell('关键词', 'keywords')}${headerCell('摘要内容', 'content')}<th>操作</th></tr>`;
+                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('摘要主题', 'level')}${headerCell('关键词', 'keywords')}${headerCell('摘要内容', 'content')}<th>操作</th></tr>`;
                     }
+                    const keywords = Array.isArray(record.keywords)
+                        ? (record.keywords as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+                        : [];
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td><div class="stx-re-event-type">${escapeHtml(String(record.level ?? ''))}</div><div>${escapeHtml(String(record.title ?? ''))}</div></td>
-                            <td>${escapeHtml(((record.keywords as string[]) ?? []).join(', '))}</td>
-                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="string">${renderRawValueHtml(payloadValue, false)}</div></td>
+                            <td>${renderRecordSummaryMarkup(buildSummaryHeadline(record), buildSummarySubtitle(record), '', '')}</td>
+                            <td>${renderRecordSummaryMarkup(keywords.length > 0 ? keywords.join('、') : '暂无关键词', keywords.length > 0 ? '这些词会帮助系统回忆这段摘要' : '当前这条摘要还没有提取关键词', '', '')}</td>
+                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="string">${renderReadableValueHtml(payloadValue, false)}</div></td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
                         </tr>
                     `;
@@ -1394,8 +1554,8 @@ export async function openRecordEditor(): Promise<void> {
                     rowsHtml += `
                         <tr class="${rowClass}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td>${renderRecordSummaryMarkup(buildWorldStateHeadline(worldPath), worldPath ? `归类到：${formatHumanReadableTopic(worldPath, '未填写路径')}` : '这条世界状态还没有填写路径', '状态编号', recordId)}</td>
-                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(payloadValue, false)}</div></td>
+                            <td>${renderRecordSummaryMarkup(buildWorldStateHeadline(worldPath), buildWorldStateSubtitle(record), '', '')}</td>
+                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderReadableValueHtml(payloadValue, false)}</div></td>
                             <td>${escapeHtml(formatTimeLabel(record.updatedAt))}</td>
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
                         </tr>

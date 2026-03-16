@@ -64,6 +64,7 @@ export type {
     RowRedirects,
     RowTombstone,
     RowTombstones,
+    SemanticAiSummary,
     SchemaDraftSession,
     ChatArchiveState,
     ChatLifecycleStage,

@@ -549,6 +549,21 @@ export interface StyleSeed {
     sourceTrace: SeedSourceTrace[];
 }
 
+export interface SemanticAiSummary {
+    roleSummary: string;
+    worldSummary: string;
+    identityFacts: string[];
+    worldRules: string[];
+    hardConstraints: string[];
+    locations: string[];
+    entities: string[];
+    catchphrases: string[];
+    relationshipAnchors: string[];
+    styleCues: string[];
+    generatedAt: number;
+    source: 'ai';
+}
+
 export interface ChatSemanticSeed {
     collectedAt: number;
     characterCore: Record<string, unknown>;
@@ -574,6 +589,7 @@ export interface ChatSemanticSeed {
     identitySeed: IdentitySeed;
     worldSeed: WorldSeed;
     styleSeed: StyleSeed;
+    aiSummary?: SemanticAiSummary;
     sourceTrace: SeedSourceTrace[];
 }
 
