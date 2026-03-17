@@ -2,6 +2,7 @@ import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from 
 import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
+import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -17,12 +18,17 @@ import type {
     LogicTableStatus,
     LogicTableSummary,
     LogicTableViewModel,
+    MemoryLifecycleState,
+    OwnedMemoryState,
+    PersonaMemoryProfile,
     SourceRef,
+    StructuredWorldStateEntry,
     SnapshotValue,
+    WorldStateGroupingResult,
 } from '../../../SDK/stx';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
-type ViewMode = 'maintenance' | 'diagnostics' | 'raw';
+type ViewMode = 'maintenance' | 'memory' | 'diagnostics' | 'raw';
 
 interface PendingRawUpdate {
     id: string;
@@ -673,6 +679,289 @@ function buildWorldStateHeadline(path: string): string {
     return formatHumanReadableTopic(path, '未命名状态');
 }
 
+function formatWorldStateScopeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    const labels: Record<string, string> = {
+        global: '全局',
+        region: '区域',
+        city: '城市',
+        location: '地点',
+        faction: '派系',
+        item: '物品',
+        character: '角色',
+        scene: '场景',
+    };
+    return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'scene');
+}
+
+function formatWorldStateTypeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    const labels: Record<string, string> = {
+        rule: '规则',
+        constraint: '约束',
+        history: '历史',
+        status: '状态',
+        capability: '能力',
+        ownership: '归属',
+        culture: '文化',
+        danger: '危险',
+        relationship_hook: '关系钩子',
+    };
+    return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'status');
+}
+
+function matchWorldStateKeyword(entry: StructuredWorldStateEntry, keyword: string): boolean {
+    const normalizedKeyword = normalizeLookup(keyword);
+    if (!normalizedKeyword) {
+        return true;
+    }
+    const haystack = normalizeLookup([
+        entry.path,
+        entry.node.title,
+        entry.node.summary,
+        ...(entry.node.keywords ?? []),
+        ...(entry.node.tags ?? []),
+    ].join(' '));
+    return haystack.includes(normalizedKeyword);
+}
+
+function renderWorldStateRawPreview(value: unknown): string {
+    if (typeof value === 'string') {
+        return value.trim() || '暂无原始值';
+    }
+    try {
+        return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+        return String(value ?? '');
+    }
+}
+
+function formatActorKeyLabel(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '未命名角色';
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === 'role:user') return '用户';
+    if (normalized === 'role:assistant') return '助手';
+    if (normalized === 'role:system') return '系统';
+    if (normalized.startsWith('assistant:')) return trimmed.slice('assistant:'.length).trim() || '助手角色';
+    if (normalized.startsWith('character:')) return trimmed.slice('character:'.length).trim() || '角色';
+    if (normalized.startsWith('name:')) return trimmed.slice('name:'.length).trim() || '命名角色';
+    if (normalized.startsWith('role:')) return formatRecordEditorKeyLabel(trimmed.slice('role:'.length).trim() || 'role');
+    if (normalized.startsWith('msg:')) return `消息片段 ${compactInternalIdentifier(trimmed.slice('msg:'.length).trim(), 16)}`;
+    return trimmed;
+}
+
+function resolveActorDisplayLabel(actorKey: string, displayName?: string | null): string {
+    const normalizedDisplayName = String(displayName ?? '').trim();
+    if (normalizedDisplayName) {
+        return normalizedDisplayName;
+    }
+    return formatActorKeyLabel(actorKey);
+}
+
+function formatPersonaProfileVersionLabel(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '角色画像';
+    }
+    const match = trimmed.match(/^persona\.v(\d+)$/i);
+    if (match) {
+        return `角色画像 v${match[1]}`;
+    }
+    return formatRecordEditorKeyLabel(trimmed);
+}
+
+function formatMemoryReasonLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    const labels: Record<string, string> = {
+        manual_restore: '手动恢复',
+        manual_mark_forgotten: '手动标记遗忘',
+        event_reinforced: '事件强化',
+        event_invalidated: '事件覆盖或冲淡',
+        low_importance: '重要度偏低',
+        fast_forgetting: '遗忘速度较快',
+        distortion_risk: '扭曲风险偏高',
+        owner_missing: '缺少归属角色',
+    };
+    return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'reason');
+}
+
+function formatMemoryRecordCodeLabel(recordKey: string): string {
+    const trimmed = String(recordKey ?? '').trim();
+    if (!trimmed) {
+        return '暂无';
+    }
+    if (trimmed.includes('/') || trimmed.includes(':')) {
+        return formatHumanReadableTopic(trimmed.replace(/:/g, '/'), compactInternalIdentifier(trimmed, 48));
+    }
+    return compactInternalIdentifier(trimmed, 48);
+}
+
+function formatChatKeyLabel(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '全局记录';
+    }
+    return `会话 ${compactInternalIdentifier(trimmed, 24)}`;
+}
+
+function formatTemplateIdLabel(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '默认模板';
+    }
+    return `模板编号 ${compactInternalIdentifier(trimmed, 20)}`;
+}
+
+function formatLogicTableKeyLabel(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '未命名逻辑表';
+    }
+    return formatHumanReadableTopic(trimmed.replace(/_/g, '/'), compactInternalIdentifier(trimmed, 24));
+}
+
+function formatLogicRowDisplayLabel(value: string, fallback?: string | null): string {
+    const preferred = String(fallback ?? '').trim();
+    if (preferred) {
+        return preferred;
+    }
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '未命名逻辑行';
+    }
+    return formatHumanReadableTopic(trimmed.replace(/_/g, '/'), compactInternalIdentifier(trimmed, 24));
+}
+
+function formatPersonaDerivedSource(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    const labels: Record<string, string> = {
+        semantic_seed: '初始设定',
+        identity_seed: '角色身份',
+        fallback_identity_seed: '主身份兜底',
+        group_memory: '群像记忆',
+        group_lane: '角色分轨',
+        relationship_state: '关系状态',
+        active_actor: '当前主视角',
+        fallback: '兼容回填',
+    };
+    if (normalized.startsWith('actor:')) {
+        return `角色：${formatActorKeyLabel(normalized.slice('actor:'.length))}`;
+    }
+    if (normalized.startsWith('chat_type:')) {
+        return `聊天类型：${formatRecordEditorKeyLabel(normalized.slice('chat_type:'.length) || 'chat')}`;
+    }
+    if (normalized.startsWith('style:')) {
+        return `风格：${formatRecordEditorKeyLabel(normalized.slice('style:'.length) || 'style')}`;
+    }
+    return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'persona');
+}
+
+function renderPersonaProfileCardMarkup(
+    actorKey: string,
+    actorLabel: string,
+    profile: PersonaMemoryProfile,
+    options: {
+        active?: boolean;
+        extraActionsHtml?: string;
+    } = {},
+): string {
+    const derivedSources = (profile.derivedFrom ?? []).slice(0, 4).map((item: string): string => formatPersonaDerivedSource(item));
+    const resolvedActorLabel = resolveActorDisplayLabel(actorKey, actorLabel);
+    return `
+        <div class="stx-re-json" style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:10px;">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <div style="min-width:0; display:flex; flex-direction:column; gap:6px;">
+                    <div style="font-weight:700; word-break:break-word;">${escapeHtml(resolvedActorLabel)}</div>
+                    <div class="stx-re-record-code" title="${escapeHtml(actorKey)}">内部角色键：${escapeHtml(formatActorKeyLabel(actorKey))}</div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:120px;">
+                    <span class="stx-re-record-flag">${options.active ? '当前主视角' : '画像已建立'}</span>
+                    <span class="stx-re-json">${escapeHtml(formatPersonaProfileVersionLabel(profile.profileVersion || 'persona'))}</span>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px;">
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">总容量:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.totalCapacity))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">事件记忆:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.eventMemory))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">事实记忆:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.factMemory))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">遗忘速度:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.forgettingSpeed))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">扭曲倾向:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.distortionTendency))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">关系敏感:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.relationshipSensitivity))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">情绪偏置:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.emotionalBias))}</div></div>
+                <div class="stx-re-kv-row"><div class="stx-re-kv-key">隐私保护:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(profile.privacyGuard))}</div></div>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; opacity:0.84;">
+                <span class="stx-re-json">${profile.allowDistortion ? '允许产生模糊/扭曲回忆' : '优先保持稳定事实'}</span>
+                <span class="stx-re-json">更新于 ${escapeHtml(profile.updatedAt ? formatTimeLabel(profile.updatedAt) : '暂无')}</span>
+                ${(derivedSources.length > 0 ? derivedSources : ['来源待补充']).map((item: string): string => `<span class="stx-re-json">${escapeHtml(item)}</span>`).join('')}
+            </div>
+            ${options.extraActionsHtml ? `<div style="display:flex; flex-wrap:wrap; gap:8px;">${options.extraActionsHtml}</div>` : ''}
+        </div>
+    `;
+}
+
+function collectWorldStateMatchTokens(entry: StructuredWorldStateEntry): string[] {
+    const rawTokens = [
+        entry.path,
+        entry.node.title,
+        entry.node.summary,
+        entry.node.subjectId,
+        entry.node.regionId,
+        entry.node.cityId,
+        entry.node.locationId,
+        entry.node.itemId,
+        ...(entry.node.keywords ?? []),
+        ...(entry.node.tags ?? []),
+    ].flatMap((item: unknown): string[] => {
+        return String(item ?? '')
+            .split(/[^a-zA-Z0-9\u4e00-\u9fa5]+/)
+            .map((part: string): string => normalizeLookup(part))
+            .filter((part: string): boolean => part.length >= 2);
+    });
+    return Array.from(new Set(rawTokens)).slice(0, 12);
+}
+
+function doesOwnedMemoryRelateToWorldEntry(owned: OwnedMemoryState, entry: StructuredWorldStateEntry): boolean {
+    const haystack = normalizeLookup([
+        owned.recordKey,
+        owned.memoryType,
+        owned.memorySubtype,
+        owned.sourceScope,
+        owned.recordKind,
+    ].join(' '));
+    if (!haystack) {
+        return false;
+    }
+    const tokens = collectWorldStateMatchTokens(entry);
+    const matchedCount = tokens.filter((token: string): boolean => haystack.includes(token)).length;
+    if (matchedCount <= 0) {
+        return false;
+    }
+    const isWorldLinked = owned.memoryType === 'world' || owned.sourceScope === 'world' || owned.recordKind === 'state';
+    return isWorldLinked ? matchedCount >= 1 : matchedCount >= 2;
+}
+
+function getWorldStateAwareActors(
+    entry: StructuredWorldStateEntry,
+    ownedStates: OwnedMemoryState[],
+    actorLabelMap: Map<string, string>,
+): string[] {
+    const matchedActors = new Set<string>();
+    ownedStates.forEach((owned: OwnedMemoryState): void => {
+        const actorKey = String(owned.ownerActorKey ?? '').trim();
+        if (!actorKey) {
+            return;
+        }
+        if (!doesOwnedMemoryRelateToWorldEntry(owned, entry)) {
+            return;
+        }
+        matchedActors.add(actorLabelMap.get(actorKey) || actorKey);
+    });
+    return Array.from(matchedActors).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
+}
+
 /**
  * 功能：把摘要层级转换成更自然的中文标签。
  * @param level 原始层级值。
@@ -696,6 +985,241 @@ function formatSummaryLevelLabel(level: string): string {
         return '全局摘要';
     }
     return `${formatRecordEditorKeyLabel(normalized)}摘要`;
+}
+
+function formatMemoryTypeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '未分类';
+    }
+    if (normalized === 'identity') return '身份记忆';
+    if (normalized === 'event') return '事件记忆';
+    if (normalized === 'relationship') return '关系记忆';
+    if (normalized === 'world') return '世界知识';
+    if (normalized === 'status') return '状态记忆';
+    return formatRecordEditorKeyLabel(normalized);
+}
+
+function formatMemorySubtypeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '未细分';
+    }
+    const labels: Record<string, string> = {
+        identity: '身份',
+        trait: '性格特征',
+        preference: '偏好',
+        bond: '关系牵连',
+        emotion_imprint: '情绪烙印',
+        goal: '目标',
+        promise: '承诺',
+        secret: '秘密',
+        rumor: '传闻',
+        major_plot_event: '重大剧情',
+        minor_event: '普通事件',
+        combat_event: '战斗事件',
+        travel_event: '旅途事件',
+        conversation_event: '对话事件',
+        global_rule: '全局规则',
+        city_rule: '城市规则',
+        location_fact: '地点信息',
+        item_rule: '物品规则',
+        faction_rule: '派系规则',
+        world_history: '世界历史',
+        current_scene: '当前场景',
+        current_conflict: '当前冲突',
+        temporary_status: '临时状态',
+        other: '其他',
+    };
+    return labels[normalized] || formatRecordEditorKeyLabel(normalized);
+}
+
+function formatMemorySourceScopeLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'self') return '自己';
+    if (normalized === 'target') return '对象相关';
+    if (normalized === 'group') return '群体共享';
+    if (normalized === 'world') return '世界知识';
+    if (normalized === 'system') return '系统补全';
+    return formatRecordEditorKeyLabel(normalized || 'system');
+}
+
+function formatMemoryStageLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'clear') return '清晰';
+    if (normalized === 'blur') return '开始模糊';
+    if (normalized === 'distorted') return '已经偏差';
+    return formatRecordEditorKeyLabel(normalized || 'clear');
+}
+
+function formatRecordKindLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'fact') return '事实';
+    if (normalized === 'summary') return '摘要';
+    if (normalized === 'state') return '世界状态';
+    if (normalized === 'relationship') return '关系';
+    return formatRecordEditorKeyLabel(normalized || 'fact');
+}
+
+function formatMemoryRecordSegmentLabel(segment: string): string {
+    const trimmed = String(segment ?? '').trim();
+    if (!trimmed) {
+        return '';
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === 'profile') return '人物资料';
+    if (normalized === 'mode') return '风格模式';
+    if (normalized === 'style') return '风格';
+    if (normalized === 'semantic') return '语义设定';
+    if (normalized === 'identity') return '身份设定';
+    if (normalized === 'event') return '事件记录';
+    if (normalized === 'summary') return '摘要内容';
+    return formatRecordEditorKeyLabel(trimmed);
+}
+
+function buildReadableMemoryRecordHeadline(recordKey: string, owned: OwnedMemoryState): string | null {
+    const normalizedKey = String(recordKey ?? '').trim();
+    if (!normalizedKey || !normalizedKey.includes('::')) {
+        return null;
+    }
+
+    const segments = normalizedKey.split('::').map((item: string): string => item.trim()).filter(Boolean);
+    if (segments.length === 0) {
+        return null;
+    }
+
+    let actorLabel = owned.ownerActorKey ? formatActorKeyLabel(owned.ownerActorKey) : '';
+    const labels: string[] = [];
+
+    segments.forEach((segment: string, index: number): void => {
+        const normalized = segment.toLowerCase();
+        if (!normalized) {
+            return;
+        }
+        if (/^(tavern_|chat:|session:|conversation:|memory:)/i.test(segment)) {
+            return;
+        }
+        if (normalized.startsWith('character:') || normalized.startsWith('assistant:') || normalized.startsWith('name:') || normalized.startsWith('role:')) {
+            actorLabel = formatActorKeyLabel(segment);
+            return;
+        }
+
+        const previous = segments[index - 1]?.trim().toLowerCase() || '';
+        if (normalized === 'mode' && previous === 'style') {
+            labels.push('风格模式');
+            return;
+        }
+        if (normalized === 'profile' && (previous.startsWith('character:') || previous.startsWith('assistant:') || previous.startsWith('name:'))) {
+            labels.push('人物资料');
+            return;
+        }
+
+        labels.push(formatMemoryRecordSegmentLabel(segment));
+    });
+
+    const compactLabels = labels.filter(Boolean).filter((label: string, index: number, array: string[]): boolean => index === 0 || label !== array[index - 1]);
+    if (compactLabels.length >= 2 && compactLabels[compactLabels.length - 1] === '风格模式' && compactLabels[compactLabels.length - 2] === '风格') {
+        compactLabels.splice(compactLabels.length - 2, 1);
+    }
+
+    const summaryLabel = compactLabels.join(' / ');
+    const composed = [actorLabel, summaryLabel].filter(Boolean).join(' · ');
+    return composed || null;
+}
+
+function buildMemoryRecordTooltip(recordKey: string, owned: OwnedMemoryState): string {
+    const readableHeadline = buildReadableMemoryRecordHeadline(recordKey, owned);
+    return [
+        readableHeadline ? `记忆说明：${readableHeadline}` : '',
+        `内部键：${String(recordKey ?? '').trim() || '暂无'}`,
+    ].filter(Boolean).join('\n');
+}
+
+function buildMemoryRecordHeadline(recordKey: string, lifecycle: MemoryLifecycleState | undefined, owned: OwnedMemoryState): string {
+    const normalizedKey = String(recordKey ?? '').trim();
+    if (!normalizedKey) {
+        return '未命名记忆';
+    }
+    const readableHeadline = buildReadableMemoryRecordHeadline(normalizedKey, owned);
+    if (readableHeadline) {
+        return readableHeadline;
+    }
+    if (owned.recordKind === 'state' || normalizedKey.includes('/')) {
+        return formatHumanReadableTopic(normalizedKey, '未命名记忆');
+    }
+    return compactInternalIdentifier(normalizedKey, 54);
+}
+
+function renderMemoryEventRefs(eventIds: string[] | undefined, eventTitleMap: Map<string, string>, emptyLabel: string): string {
+    const items = Array.isArray(eventIds) ? eventIds.filter(Boolean) : [];
+    if (items.length <= 0) {
+        return `<span class="stx-re-json">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return items.slice(0, 4).map((eventId: string): string => {
+        const title = eventTitleMap.get(eventId) || compactInternalIdentifier(eventId, 40);
+        return `<span class="stx-re-json" title="${escapeHtml(eventId)}">${escapeHtml(title)}</span>`;
+    }).join('');
+}
+
+function formatMemoryImpactSummary(owned: OwnedMemoryState): string {
+    const reinforcedCount = Array.isArray(owned.reinforcedByEventIds) ? owned.reinforcedByEventIds.length : 0;
+    const invalidatedCount = Array.isArray(owned.invalidatedByEventIds) ? owned.invalidatedByEventIds.length : 0;
+    if (owned.memorySubtype === 'major_plot_event') {
+        return '这条记忆本身就是重大事件，会主动影响其他记忆。';
+    }
+    if (reinforcedCount <= 0 && invalidatedCount <= 0) {
+        return '当前还没有检测到重大事件对它的直接影响。';
+    }
+    const parts: string[] = [];
+    if (reinforcedCount > 0) {
+        parts.push(`被强化 ${reinforcedCount} 次`);
+    }
+    if (invalidatedCount > 0) {
+        parts.push(`被覆盖/冲淡 ${invalidatedCount} 次`);
+    }
+    return parts.join(' · ');
+}
+
+const MEMORY_SUBTYPE_OPTIONS: string[] = [
+    'identity',
+    'trait',
+    'preference',
+    'bond',
+    'emotion_imprint',
+    'goal',
+    'promise',
+    'secret',
+    'rumor',
+    'major_plot_event',
+    'minor_event',
+    'combat_event',
+    'travel_event',
+    'conversation_event',
+    'global_rule',
+    'city_rule',
+    'location_fact',
+    'item_rule',
+    'faction_rule',
+    'world_history',
+    'current_scene',
+    'current_conflict',
+    'temporary_status',
+    'other',
+];
+
+function parseImportanceInput(input: string | null, fallback: number): number | null {
+    const text = String(input ?? '').trim();
+    if (!text) {
+        return null;
+    }
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric)) {
+        return null;
+    }
+    if (numeric > 1) {
+        return Math.max(0, Math.min(1, numeric / 100));
+    }
+    return Math.max(0, Math.min(1, numeric));
 }
 
 /**
@@ -969,6 +1493,7 @@ function readRawEditedValue(editableDiv: HTMLElement, dataType: string | null): 
  */
 export async function openRecordEditor(): Promise<void> {
     initThemeKernel();
+    ensureSharedTooltip();
 
     let currentViewMode: ViewMode = 'maintenance';
     let btnSaveRef: HTMLButtonElement | null = null;
@@ -1017,6 +1542,7 @@ export async function openRecordEditor(): Promise<void> {
             <div class="stx-re-main">
                 <div class="stx-re-view-tabs" id="stx-re-view-tabs">
                     <div class="stx-re-tab is-active" data-view="maintenance">逻辑维护</div>
+                    <div class="stx-re-tab" data-view="memory">角色记忆</div>
                     <div class="stx-re-tab" data-view="diagnostics">诊断维护</div>
                     <div class="stx-re-tab" data-view="raw">原始库表</div>
                 </div>
@@ -1059,6 +1585,10 @@ export async function openRecordEditor(): Promise<void> {
     let currentChatKey = getCurrentMemoryChatKey();
     let currentSort: CurrentSort = { col: '', asc: false };
     let currentLogicTableKey = '';
+    let currentMemoryActorKey = '__all__';
+    let currentWorldStateScopeFilter = '__all__';
+    let currentWorldStateTypeFilter = '__all__';
+    let currentWorldStateKeywordFilter = '';
     let logicCreateExpanded = false;
     let recordMemory: MemorySDKImpl | null = null;
     let recordMemoryChatKey = '';
@@ -1438,12 +1968,222 @@ export async function openRecordEditor(): Promise<void> {
         }
     }
 
+    async function renderWorldStateStructuredView(): Promise<void> {
+        contentArea.innerHTML = '<div class="stx-re-empty">正在加载世界状态...</div>';
+        if (!currentChatKey) {
+            contentArea.innerHTML = '<div class="stx-re-empty">世界状态需要先选择一个具体聊天。</div>';
+            return;
+        }
+
+        const memory = await ensureRecordMemory();
+        if (!memory) {
+            contentArea.innerHTML = '<div class="stx-re-empty">无法为当前聊天建立 MemorySDK。</div>';
+            return;
+        }
+
+        const [entries, groupedEntries, experience, ownedStates] = await Promise.all([
+            memory.state.queryStructured(''),
+            memory.state.queryGrouped('') as Promise<WorldStateGroupingResult>,
+            memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
+            memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
+        ]);
+        const actorLabelMap = new Map<string, string>();
+        experience.canon.characters.forEach((character): void => {
+            const actorKey = String(character.actorKey ?? '').trim();
+            if (!actorKey) {
+                return;
+            }
+            actorLabelMap.set(actorKey, resolveActorDisplayLabel(actorKey, String(character.displayName ?? actorKey).trim() || actorKey));
+        });
+        ownedStates.forEach((item: OwnedMemoryState): void => {
+            const ownerActorKey = String(item.ownerActorKey ?? '').trim();
+            if (ownerActorKey && !actorLabelMap.has(ownerActorKey)) {
+                actorLabelMap.set(ownerActorKey, ownerActorKey);
+            }
+        });
+        const scopeStats = entries.reduce<Map<string, number>>((map, entry: StructuredWorldStateEntry): Map<string, number> => {
+            const key = String(entry.node.scopeType ?? 'scene');
+            map.set(key, (map.get(key) ?? 0) + 1);
+            return map;
+        }, new Map<string, number>());
+        const groupedSummary = Object.entries(groupedEntries ?? {})
+            .flatMap(([scopeKey, typeMap]: [string, Record<string, StructuredWorldStateEntry[]>]): Array<{ scopeKey: string; typeKey: string; count: number }> => {
+                return Object.entries(typeMap ?? {}).map(([typeKey, items]: [string, StructuredWorldStateEntry[]]) => ({
+                    scopeKey,
+                    typeKey,
+                    count: items.length,
+                }));
+            })
+            .sort((left, right): number => right.count - left.count)
+            .slice(0, 10);
+
+        const filteredByScope = entries.filter((entry: StructuredWorldStateEntry): boolean => {
+            return currentWorldStateScopeFilter === '__all__' || entry.node.scopeType === currentWorldStateScopeFilter;
+        });
+        const typeStats = filteredByScope.reduce<Map<string, number>>((map, entry: StructuredWorldStateEntry): Map<string, number> => {
+            const key = String(entry.node.stateType ?? 'status');
+            map.set(key, (map.get(key) ?? 0) + 1);
+            return map;
+        }, new Map<string, number>());
+        const filteredEntries = filteredByScope.filter((entry: StructuredWorldStateEntry): boolean => {
+            const typeMatch = currentWorldStateTypeFilter === '__all__' || entry.node.stateType === currentWorldStateTypeFilter;
+            return typeMatch && matchWorldStateKeyword(entry, currentWorldStateKeywordFilter);
+        }).sort((left: StructuredWorldStateEntry, right: StructuredWorldStateEntry): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
+
+        const scopeButtons = [
+            { key: '__all__', label: `全部 (${entries.length})` },
+            ...Array.from(scopeStats.entries()).sort((left, right): number => right[1] - left[1]).map(([key, count]: [string, number]) => ({
+                key,
+                label: `${formatWorldStateScopeLabel(key)} (${count})`,
+            })),
+        ];
+        if (currentWorldStateScopeFilter !== '__all__' && !scopeButtons.some((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)) {
+            currentWorldStateScopeFilter = '__all__';
+        }
+        const typeButtons = [
+            { key: '__all__', label: `全部类型 (${filteredByScope.length})` },
+            ...Array.from(typeStats.entries()).sort((left, right): number => right[1] - left[1]).map(([key, count]: [string, number]) => ({
+                key,
+                label: `${formatWorldStateTypeLabel(key)} (${count})`,
+            })),
+        ];
+        if (currentWorldStateTypeFilter !== '__all__' && !typeButtons.some((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)) {
+            currentWorldStateTypeFilter = '__all__';
+        }
+
+        const rowsHtml = filteredEntries.length <= 0
+            ? '<div class="stx-re-empty">当前筛选下没有世界状态。</div>'
+            : filteredEntries.map((entry: StructuredWorldStateEntry): string => {
+                const awareActors = getWorldStateAwareActors(entry, ownedStates, actorLabelMap);
+                return `
+                <div class="stx-re-json" style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:10px;">
+                    <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                        <div style="min-width:0; display:flex; flex-direction:column; gap:6px;">
+                            <div style="font-weight:700; word-break:break-word;">${escapeHtml(entry.node.title || buildWorldStateHeadline(entry.path))}</div>
+                            <div style="opacity:0.8; word-break:break-word;">${escapeHtml(entry.node.summary || '暂无说明')}</div>
+                            <div class="stx-re-record-code" title="${escapeHtml(entry.path)}">内部路径：${escapeHtml(formatHumanReadableTopic(entry.path, compactInternalIdentifier(entry.path, 48)))}</div>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:120px;">
+                            <span class="stx-re-json">${escapeHtml(formatWorldStateScopeLabel(entry.node.scopeType))}</span>
+                            <span class="stx-re-json">${escapeHtml(formatWorldStateTypeLabel(entry.node.stateType))}</span>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:8px;">
+                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">关键词:</div><div class="stx-re-kv-val">${escapeHtml((entry.node.keywords ?? []).slice(0, 6).join('、') || '暂无')}</div></div>
+                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">标签:</div><div class="stx-re-kv-val">${escapeHtml((entry.node.tags ?? []).slice(0, 6).join('、') || '暂无')}</div></div>
+                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">置信度:</div><div class="stx-re-kv-val">${escapeHtml(entry.node.confidence != null ? formatPercent(entry.node.confidence) : '暂无')}</div></div>
+                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">更新时间:</div><div class="stx-re-kv-val">${escapeHtml(entry.updatedAt ? formatTimeLabel(entry.updatedAt) : '暂无')}</div></div>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                        <strong>疑似知晓角色：</strong>
+                        ${awareActors.length > 0 ? awareActors.slice(0, 6).map((item: string): string => `<span class="stx-re-json">${escapeHtml(item)}</span>`).join('') : '<span class="stx-re-json">暂无明显角色记忆关联</span>'}
+                    </div>
+                    ${(entry.node.sourceRefs?.length ?? 0) > 0 ? `<div style="display:flex; flex-wrap:wrap; gap:8px; opacity:0.82;">${entry.node.sourceRefs!.slice(0, 6).map((item: string): string => `<span class="stx-re-json">${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+                    <details>
+                        <summary style="cursor:pointer;">查看原始值</summary>
+                        <pre class="stx-re-json compact" style="white-space:pre-wrap; margin-top:8px;">${escapeHtml(renderWorldStateRawPreview(entry.rawValue))}</pre>
+                    </details>
+                </div>
+            `;
+            }).join('');
+
+        contentArea.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">世界状态概览</div>
+                        <div>总计 ${entries.length} 条</div>
+                        <div style="margin-top:6px;">当前筛选 ${filteredEntries.length} 条</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">当前作用域</div>
+                        <div>${escapeHtml(scopeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)?.label || '全部')}</div>
+                        <div style="margin-top:6px;">当前类型 ${escapeHtml(typeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)?.label || '全部类型')}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">关键词筛选</div>
+                        <div>${escapeHtml(currentWorldStateKeywordFilter || '未设置')}</div>
+                        <div style="margin-top:6px;">支持匹配标题 / 摘要 / 关键词 / 标签</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">热门分类</div>
+                        <div>${escapeHtml(groupedSummary.length > 0 ? `${formatWorldStateScopeLabel(groupedSummary[0]!.scopeKey)} / ${formatWorldStateTypeLabel(groupedSummary[0]!.typeKey)}` : '暂无')}</div>
+                        <div style="margin-top:6px;">已识别 ${Object.keys(groupedEntries ?? {}).length} 个作用域分组</div>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr); gap:12px; align-items:start;">
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">作用域筛选</div>
+                        ${scopeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateScopeFilter ? 'save' : ''}" data-world-scope="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700; margin-top:6px;">类型筛选</div>
+                        ${typeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateTypeFilter ? 'save' : ''}" data-world-type="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                            <div style="font-weight:700; margin-bottom:6px;">关键词</div>
+                            <input class="text_pole" data-world-keyword-input placeholder="输入关键词过滤" value="${escapeHtml(currentWorldStateKeywordFilter)}">
+                            <div style="display:flex; gap:8px; margin-top:8px;">
+                                <button class="stx-re-btn" data-world-keyword-apply>应用</button>
+                                <button class="stx-re-btn" data-world-keyword-clear>清空</button>
+                            </div>
+                        </div>
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                            <div style="font-weight:700; margin-bottom:6px;">分类捷径</div>
+                            ${groupedSummary.length > 0 ? groupedSummary.map((item: { scopeKey: string; typeKey: string; count: number }): string => `<button class="stx-re-btn" data-world-group-scope="${escapeHtml(item.scopeKey)}" data-world-group-type="${escapeHtml(item.typeKey)}" style="justify-content:flex-start; margin-top:6px;">${escapeHtml(formatWorldStateScopeLabel(item.scopeKey))} / ${escapeHtml(formatWorldStateTypeLabel(item.typeKey))} · ${escapeHtml(String(item.count))} 条</button>`).join('') : '<div>暂无可用分类</div>'}
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">结构化世界状态</div>
+                        ${rowsHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        contentArea.querySelectorAll('[data-world-scope]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentWorldStateScopeFilter = String((button as HTMLElement).dataset.worldScope ?? '__all__');
+                currentWorldStateTypeFilter = '__all__';
+                void renderWorldStateStructuredView();
+            });
+        });
+
+        contentArea.querySelectorAll('[data-world-type]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentWorldStateTypeFilter = String((button as HTMLElement).dataset.worldType ?? '__all__');
+                void renderWorldStateStructuredView();
+            });
+        });
+
+        contentArea.querySelector('[data-world-keyword-apply]')?.addEventListener('click', (): void => {
+            const input = contentArea.querySelector('[data-world-keyword-input]') as HTMLInputElement | null;
+            currentWorldStateKeywordFilter = String(input?.value ?? '').trim();
+            void renderWorldStateStructuredView();
+        });
+
+        contentArea.querySelector('[data-world-keyword-clear]')?.addEventListener('click', (): void => {
+            currentWorldStateKeywordFilter = '';
+            void renderWorldStateStructuredView();
+        });
+
+        contentArea.querySelectorAll('[data-world-group-scope]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const element = button as HTMLElement;
+                currentWorldStateScopeFilter = String(element.dataset.worldGroupScope ?? '__all__');
+                currentWorldStateTypeFilter = String(element.dataset.worldGroupType ?? '__all__');
+                void renderWorldStateStructuredView();
+            });
+        });
+    }
+
     /**
      * 功能：渲染原始库表视图。
      * @param tableName 表名
      * @returns 无返回值
      */
     async function renderRawTable(tableName: RawTableName): Promise<void> {
+        if (tableName === 'world_state') {
+            await renderWorldStateStructuredView();
+            return;
+        }
         contentArea.innerHTML = '<div class="stx-re-empty">正在加载数据...</div>';
 
         try {
@@ -1848,7 +2588,7 @@ export async function openRecordEditor(): Promise<void> {
                     actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="promote" data-row-id="${escapeHtml(row.rowId)}" data-candidate-id="${escapeHtml(candidate.candidateId)}">转正</button>`);
                 }
                 if (row.rowKind === 'materialized' || row.rowKind === 'redirected') {
-                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="alias" data-row-id="${escapeHtml(row.rowId)}">设置 alias</button>`);
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="alias" data-row-id="${escapeHtml(row.rowId)}">设置别名</button>`);
                     actionButtons.push(`<button class="stx-re-btn danger" data-logic-row-action="tombstone" data-row-id="${escapeHtml(row.rowId)}">隐藏</button>`);
                 }
                 if (row.rowKind === 'tombstoned') {
@@ -1858,7 +2598,7 @@ export async function openRecordEditor(): Promise<void> {
                     const cellValue = row.values[field.key] ?? (field.isPrimaryKey ? row.rowId : '');
                     return `<td><div class="stx-re-value stx-re-logic-cell ${field.isPrimaryKey ? 'is-readonly' : ''}" data-table-key="${escapeHtml(view.tableKey)}" data-row-id="${escapeHtml(row.rowId)}" data-field-key="${escapeHtml(field.key)}" data-readonly="${field.isPrimaryKey ? 'true' : 'false'}" title="${escapeHtml(stringifyDisplayValue(cellValue))}">${escapeHtml(renderLogicCellText(cellValue))}</div></td>`;
                 }).join('');
-                return `<tr class="${row.rowKind === 'tombstoned' ? 'stx-re-row pending-delete' : 'stx-re-row'}"><td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-logic-row-check" data-row-id="${escapeHtml(row.rowId)}" ${selectedLogicRowIds.has(row.rowId) ? 'checked' : ''}></td><td><div class="stx-re-event-type">${escapeHtml(row.displayName || row.rowId)}</div><div class="stx-re-json compact">${escapeHtml(formatLogicRowKindLabel(row.rowKind))} · ${escapeHtml(statusParts.join(' · ') || `更新于 ${formatTimeLabel(row.updatedAt)}`)}</div></td>${cellsHtml}<td><div class="stx-re-actions">${actionButtons.join('')}</div></td></tr>`;
+                return `<tr class="${row.rowKind === 'tombstoned' ? 'stx-re-row pending-delete' : 'stx-re-row'}"><td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-logic-row-check" data-row-id="${escapeHtml(row.rowId)}" ${selectedLogicRowIds.has(row.rowId) ? 'checked' : ''}></td><td><div class="stx-re-event-type">${escapeHtml(formatLogicRowDisplayLabel(row.rowId, row.displayName || row.rowId))}</div><div class="stx-re-json compact">${escapeHtml(formatLogicRowKindLabel(row.rowKind))} · ${escapeHtml(statusParts.join(' · ') || `更新于 ${formatTimeLabel(row.updatedAt)}`)}</div></td>${cellsHtml}<td><div class="stx-re-actions">${actionButtons.join('')}</div></td></tr>`;
             }).join('');
 
         const topMaintenanceLabels = experience.canon.health.maintenanceLabels.slice(0, 3).join(' / ') || '当前结构状态稳定';
@@ -1873,7 +2613,7 @@ export async function openRecordEditor(): Promise<void> {
             { label: '候选行', value: String(view.sourceCoverage.derivedRows), tone: view.sourceCoverage.derivedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
             { label: '隐藏项', value: String(view.sourceCoverage.tombstonedRows), tone: view.sourceCoverage.tombstonedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #f59e0b);' : '' },
             { label: '重定向', value: String(view.sourceCoverage.redirectedRows), tone: view.sourceCoverage.redirectedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #f59e0b);' : '' },
-            { label: 'Alias', value: String(view.sourceCoverage.aliasCount), tone: view.sourceCoverage.aliasCount > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
+            { label: '别名', value: String(view.sourceCoverage.aliasCount), tone: view.sourceCoverage.aliasCount > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
             { label: '待处理来源', value: String(candidates.length), tone: candidates.length > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
         ].map((item: { label: string; value: string; tone: string }): string => `
             <div class="stx-re-json" style="padding:10px 12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); min-width:120px;">
@@ -1900,14 +2640,14 @@ export async function openRecordEditor(): Promise<void> {
                         <div style="font-weight:700; margin-bottom:6px;">逻辑维护状态</div>
                         <div>${escapeHtml(topMaintenanceLabels)}</div>
                         <div style="margin-top:6px;">角色 ${experience.canon.characters.length} / 表 ${orderedSummaries.length}</div>
-                        <div style="margin-top:6px;">事实 ${experience.canon.health.dataLayers.factsCount} / world_state ${experience.canon.health.dataLayers.worldStateCount}</div>
+                        <div style="margin-top:6px;">事实 ${experience.canon.health.dataLayers.factsCount} / 世界状态 ${experience.canon.health.dataLayers.worldStateCount}</div>
                     </div>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
-                    <div class="stx-re-json">当前聊天：${escapeHtml(currentChatKey)}</div>
-                    <div class="stx-re-json">模板：${escapeHtml(template.name)} (${escapeHtml(template.templateId)})</div>
+                    <div class="stx-re-json" title="${escapeHtml(currentChatKey)}">当前聊天：${escapeHtml(formatChatKeyLabel(currentChatKey))}</div>
+                    <div class="stx-re-json" title="${escapeHtml(template.templateId)}">模板：${escapeHtml(template.name)}（${escapeHtml(formatTemplateIdLabel(template.templateId))}）</div>
                     <div class="stx-re-json">绑定状态：${binding?.isLocked ? '已锁定' : '自动同步'}</div>
-                    <div class="stx-re-json">当前表：${escapeHtml(view.title)} · ${escapeHtml(formatLogicTableSummaryLine(tableSummary))}</div>
+                    <div class="stx-re-json" title="${escapeHtml(view.tableKey)}">当前表：${escapeHtml(view.title)}（${escapeHtml(formatLogicTableKeyLabel(view.tableKey))}） · ${escapeHtml(formatLogicTableSummaryLine(tableSummary))}</div>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px;">${summaryButtonsHtml}</div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:stretch;">${coverageCardsHtml}</div>
@@ -1918,7 +2658,7 @@ export async function openRecordEditor(): Promise<void> {
                     <button class="stx-re-btn" data-logic-merge>合并选中</button>
                     <button class="stx-re-btn danger" data-logic-delete>隐藏选中</button>
                     <button class="stx-re-btn" data-logic-restore>恢复选中</button>
-                    <button class="stx-re-btn" data-logic-repair="normalize_aliases">规范 alias</button>
+                    <button class="stx-re-btn" data-logic-repair="normalize_aliases">规范别名</button>
                     <button class="stx-re-btn" data-logic-repair="compact_tombstones">整理隐藏项</button>
                     <button class="stx-re-btn" data-logic-repair="rebuild_candidates">重建候选</button>
                     <button class="stx-re-btn" data-open-diagnostics>查看诊断</button>
@@ -2083,7 +2823,7 @@ export async function openRecordEditor(): Promise<void> {
                     await memoryInstance.logicTable.repairTable(view.tableKey, mode);
                     await loadChatKeys();
                     await renderLogicView();
-                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : 'alias 已规范');
+                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : '别名已规范');
                 }).catch((error: unknown): void => {
                     toast.error(`执行维护失败: ${String(error)}`);
                 });
@@ -2125,12 +2865,12 @@ export async function openRecordEditor(): Promise<void> {
                         await memoryInstance.logicTable.tombstoneRow(view.tableKey, rowId);
                         toast.success('逻辑行已隐藏');
                     } else if (action === 'alias') {
-                        const alias = prompt(`为 ${rowId} 输入一个 alias`, '');
+                        const alias = prompt(`为 ${formatLogicRowDisplayLabel(rowId, row?.displayName || rowId)} 输入一个别名`, '');
                         if (!alias || !alias.trim()) {
                             return;
                         }
                         await memoryInstance.logicTable.setAlias(view.tableKey, rowId, alias.trim());
-                        toast.success('alias 已设置');
+                        toast.success('别名已设置');
                     }
                     await loadChatKeys();
                     await renderLogicView();
@@ -2212,13 +2952,112 @@ export async function openRecordEditor(): Promise<void> {
             return;
         }
 
-        const [experience, summaries] = await Promise.all([
+        const [experience, summaries, ownedStates, lifecycleList, personaProfiles, activeActorKey] = await Promise.all([
             memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
             memory.logicTable.listLogicTables() as Promise<LogicTableSummary[]>,
+            memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
+            memory.chatState.getMemoryLifecycleSummary(240) as Promise<MemoryLifecycleState[]>,
+            memory.chatState.getPersonaMemoryProfiles(),
+            memory.chatState.getActiveActorKey(),
         ]);
         const canon = experience.canon;
         const health = canon.health;
         const orderedSummaries = sortLogicTableSummaries(summaries);
+        const actorLabelMap = new Map<string, string>();
+        canon.characters.forEach((character): void => {
+            const actorKey = String(character.actorKey ?? '').trim();
+            if (!actorKey) {
+                return;
+            }
+            actorLabelMap.set(actorKey, String(character.displayName ?? actorKey).trim() || actorKey);
+        });
+        const seedActorKey = String(experience.semanticSeed?.identitySeed?.roleKey ?? '').trim();
+        const seedActorName = String(experience.semanticSeed?.identitySeed?.displayName ?? '').trim();
+        if (seedActorKey) {
+            actorLabelMap.set(seedActorKey, resolveActorDisplayLabel(seedActorKey, seedActorName || actorLabelMap.get(seedActorKey) || seedActorKey));
+        }
+        ownedStates.forEach((item: OwnedMemoryState): void => {
+            const ownerActorKey = String(item.ownerActorKey ?? '').trim();
+            if (ownerActorKey && !actorLabelMap.has(ownerActorKey)) {
+                actorLabelMap.set(ownerActorKey, formatActorKeyLabel(ownerActorKey));
+            }
+        });
+        const lifecycleMap = new Map<string, MemoryLifecycleState>(
+            lifecycleList.map((item: MemoryLifecycleState): [string, MemoryLifecycleState] => [item.recordKey, item]),
+        );
+        const eventTitleMap = new Map<string, string>();
+        ownedStates.forEach((owned: OwnedMemoryState): void => {
+            if (owned.memorySubtype !== 'major_plot_event') {
+                return;
+            }
+            eventTitleMap.set(owned.recordKey, buildMemoryRecordHeadline(owned.recordKey, lifecycleMap.get(owned.recordKey), owned));
+        });
+        const forgottenCount = ownedStates.filter((item: OwnedMemoryState): boolean => item.forgotten === true).length;
+        const stageCounts = {
+            clear: lifecycleList.filter((item: MemoryLifecycleState): boolean => item.stage === 'clear').length,
+            blur: lifecycleList.filter((item: MemoryLifecycleState): boolean => item.stage === 'blur').length,
+            distorted: lifecycleList.filter((item: MemoryLifecycleState): boolean => item.stage === 'distorted').length,
+        };
+        const affectedByEvent = ownedStates.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0 || (item.invalidatedByEventIds?.length ?? 0) > 0);
+        const reinforcedCount = ownedStates.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0).length;
+        const invalidatedCount = ownedStates.filter((item: OwnedMemoryState): boolean => (item.invalidatedByEventIds?.length ?? 0) > 0).length;
+        const recentAffectedRows = affectedByEvent
+            .map((owned: OwnedMemoryState): { owned: OwnedMemoryState; lifecycle: MemoryLifecycleState | undefined } => ({
+                owned,
+                lifecycle: lifecycleMap.get(owned.recordKey),
+            }))
+            .sort((left, right): number => Number(right.lifecycle?.updatedAt ?? right.owned.updatedAt ?? 0) - Number(left.lifecycle?.updatedAt ?? left.owned.updatedAt ?? 0))
+            .slice(0, 8);
+        const sortedPersonaProfiles = Object.entries(personaProfiles ?? {})
+            .sort((left: [string, PersonaMemoryProfile], right: [string, PersonaMemoryProfile]): number => {
+                const leftLabel = actorLabelMap.get(left[0]) || left[0];
+                const rightLabel = actorLabelMap.get(right[0]) || right[0];
+                return leftLabel.localeCompare(rightLabel, 'zh-CN');
+            });
+        const activeActorLabel = activeActorKey ? (actorLabelMap.get(activeActorKey) || activeActorKey) : '自动 / 未指定';
+        const personaCardsHtml = sortedPersonaProfiles.length > 0
+            ? sortedPersonaProfiles.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
+                const actorLabel = actorLabelMap.get(actorKey) || actorKey;
+                const actionButtons = [
+                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-diag-persona-actor="${escapeHtml(actorKey)}">${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
+                ].join('');
+                return renderPersonaProfileCardMarkup(actorKey, actorLabel, profile, {
+                    active: actorKey === activeActorKey,
+                    extraActionsHtml: actionButtons,
+                });
+            }).join('')
+            : '<div class="stx-re-empty">当前还没有建立角色画像，可先刷新初始设定或重算画像。</div>';
+        const actorForgetRateRows = Array.from(ownedStates.reduce<Map<string, { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }>>((map, owned: OwnedMemoryState) => {
+            const actorKey = String(owned.ownerActorKey ?? '').trim() || '__world__';
+            const actorLabel = actorKey === '__world__' ? '世界 / 未归属' : (actorLabelMap.get(actorKey) || actorKey);
+            const current = map.get(actorKey) ?? { actorKey, actorLabel, total: 0, forgotten: 0, avgProbability: 0 };
+            current.total += 1;
+            current.avgProbability += Number(owned.forgetProbability ?? 0) || 0;
+            if (owned.forgotten) {
+                current.forgotten += 1;
+            }
+            map.set(actorKey, current);
+            return map;
+        }, new Map<string, { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }>()).values())
+            .map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }) => ({
+                ...item,
+                avgProbability: item.total > 0 ? item.avgProbability / item.total : 0,
+                forgottenRate: item.total > 0 ? item.forgotten / item.total : 0,
+            }))
+            .sort((left, right): number => right.forgottenRate - left.forgottenRate || right.total - left.total)
+            .slice(0, 8);
+        const actorForgetRateHtml = actorForgetRateRows.length > 0
+            ? actorForgetRateRows.map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number; forgottenRate: number }): string => `
+                <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                    <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                        <strong>${escapeHtml(item.actorLabel)}</strong>
+                        <span>${escapeHtml(formatPercent(item.forgottenRate))}</span>
+                    </div>
+                    <div style="margin-top:6px;">已遗忘 ${escapeHtml(String(item.forgotten))} / ${escapeHtml(String(item.total))}</div>
+                    <div style="margin-top:6px; opacity:0.78;">平均遗忘概率 ${escapeHtml(formatPercent(item.avgProbability))}</div>
+                </div>
+            `).join('')
+            : '<div class="stx-re-empty">当前没有可统计的角色遗忘分布。</div>';
 
         contentArea.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px;">
@@ -2247,13 +3086,45 @@ export async function openRecordEditor(): Promise<void> {
                         <div style="margin-top:6px;">角色 ${canon.characters.length} / 表 ${orderedSummaries.length}</div>
                     </div>
                 </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">遗忘分布</div>
+                        <div>清晰 ${stageCounts.clear} / 模糊 ${stageCounts.blur}</div>
+                        <div style="margin-top:6px;">偏差 ${stageCounts.distorted} / 已遗忘 ${forgottenCount}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">重大事件影响</div>
+                        <div>受影响记忆 ${affectedByEvent.length} 条</div>
+                        <div style="margin-top:6px;">被强化 ${reinforcedCount} 条 / 被覆盖或冲淡 ${invalidatedCount} 条</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">重大事件条目</div>
+                        <div>当前聊天共 ${ownedStates.filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event').length} 条重大事件</div>
+                        <div style="margin-top:6px;">这部分现在已经会反向影响相关记忆</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">角色画像</div>
+                        <div>已建画像 ${sortedPersonaProfiles.length} 份</div>
+                        <div style="margin-top:6px;">当前主视角：${escapeHtml(activeActorLabel)}</div>
+                    </div>
+                </div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
                     <button class="stx-re-btn" data-diag-action="rebuild-chat-view">重建结构视图</button>
                     <button class="stx-re-btn" data-diag-action="refresh-seed">刷新初始设定</button>
-                    <button class="stx-re-btn" data-diag-repair="normalize_aliases">规范 alias</button>
+                    <button class="stx-re-btn" data-diag-action="recompute-personas">重算角色画像</button>
+                    <button class="stx-re-btn" data-diag-action="clear-active-actor">清除主视角</button>
+                    <button class="stx-re-btn" data-diag-repair="normalize_aliases">规范别名</button>
                     <button class="stx-re-btn" data-diag-repair="compact_tombstones">整理隐藏项</button>
                     <button class="stx-re-btn" data-diag-repair="rebuild_candidates">重建候选</button>
                     <button class="stx-re-btn" data-diag-action="open-maintenance">打开逻辑维护</button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">多角色记忆画像</div>
+                    ${personaCardsHtml}
+                </div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">每角色遗忘率</div>
+                    ${actorForgetRateHtml}
                 </div>
                 <div style="display:grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap:12px; align-items:start;">
                     <div style="display:flex; flex-direction:column; gap:10px;">
@@ -2283,6 +3154,25 @@ export async function openRecordEditor(): Promise<void> {
                         `).join('') : '<div class="stx-re-empty">当前没有逻辑表摘要。</div>'}
                     </div>
                 </div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">最近被重大事件影响的记忆</div>
+                    ${recentAffectedRows.length > 0 ? recentAffectedRows.map(({ owned, lifecycle }): string => {
+                        const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
+                        return `
+                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:8px;">
+                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                                    <div style="font-weight:700; word-break:break-word;">${escapeHtml(title)}</div>
+                                    <span>${escapeHtml(formatMemoryStageLabel(lifecycle?.stage || 'clear'))}</span>
+                                </div>
+                                <div style="opacity:0.8;">${escapeHtml(formatMemoryImpactSummary(owned))}</div>
+                                <div style="display:flex; flex-direction:column; gap:6px;">
+                                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>强化来源：</strong>${renderMemoryEventRefs(owned.reinforcedByEventIds, eventTitleMap, '暂无')}</div>
+                                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>覆盖/冲淡来源：</strong>${renderMemoryEventRefs(owned.invalidatedByEventIds, eventTitleMap, '暂无')}</div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('') : '<div class="stx-re-empty">当前还没有被重大事件显式影响的记忆。</div>'}
+                </div>
             </div>
         `;
 
@@ -2299,6 +3189,12 @@ export async function openRecordEditor(): Promise<void> {
                     } else if (action === 'refresh-seed') {
                         await memoryInstance.editor.refreshSemanticSeed();
                         toast.success('初始设定已刷新');
+                    } else if (action === 'recompute-personas') {
+                        await memoryInstance.chatState.recomputePersonaMemoryProfiles();
+                        toast.success('角色画像已重算');
+                    } else if (action === 'clear-active-actor') {
+                        await memoryInstance.chatState.setActiveActorKey(null);
+                        toast.success('主视角已切回自动模式');
                     } else if (action === 'open-maintenance') {
                         currentViewMode = 'maintenance';
                     }
@@ -2326,7 +3222,7 @@ export async function openRecordEditor(): Promise<void> {
                     await memoryInstance.logicTable.repairTable(targetTableKey, mode);
                     await loadChatKeys();
                     await renderDiagnosticsView();
-                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : 'alias 已规范');
+                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : '别名已规范');
                 }).catch((error: unknown): void => {
                     toast.error(`执行维护失败: ${String(error)}`);
                 });
@@ -2342,6 +3238,392 @@ export async function openRecordEditor(): Promise<void> {
                 void renderActiveView();
             });
         });
+
+        contentArea.querySelectorAll('[data-diag-persona-actor]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const actorKey = String((button as HTMLElement).dataset.diagPersonaActor ?? '').trim();
+                if (!actorKey) {
+                    return;
+                }
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    await memoryInstance.chatState.setActiveActorKey(actorKey);
+                    await renderDiagnosticsView();
+                    toast.success('主视角已更新');
+                }).catch((error: unknown): void => {
+                    toast.error(`切换主视角失败: ${String(error)}`);
+                });
+            });
+        });
+    }
+
+    async function renderMemoryView(): Promise<void> {
+        contentArea.innerHTML = '<div class="stx-re-empty">正在加载角色记忆...</div>';
+        if (!currentChatKey) {
+            contentArea.innerHTML = '<div class="stx-re-empty">角色记忆需要先选择一个具体聊天。</div>';
+            return;
+        }
+
+        const memory = await ensureRecordMemory();
+        if (!memory) {
+            contentArea.innerHTML = '<div class="stx-re-empty">无法为当前聊天建立 MemorySDK。</div>';
+            return;
+        }
+
+        const [experience, ownedStates, lifecycleList, recallLog, personaProfiles, activeActorKey] = await Promise.all([
+            memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
+            memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
+            memory.chatState.getMemoryLifecycleSummary(240) as Promise<MemoryLifecycleState[]>,
+            memory.chatState.getRecallLog(120),
+            memory.chatState.getPersonaMemoryProfiles(),
+            memory.chatState.getActiveActorKey(),
+        ]);
+        const canon = experience.canon;
+        const lifecycleMap = new Map<string, MemoryLifecycleState>(
+            lifecycleList.map((item: MemoryLifecycleState): [string, MemoryLifecycleState] => [item.recordKey, item]),
+        );
+        const recallStats = recallLog.reduce<Map<string, { count: number; lastAt: number }>>((map, entry) => {
+            const current = map.get(entry.recordKey) ?? { count: 0, lastAt: 0 };
+            current.count += 1;
+            current.lastAt = Math.max(current.lastAt, Number(entry.loggedAt ?? 0));
+            map.set(entry.recordKey, current);
+            return map;
+        }, new Map<string, { count: number; lastAt: number }>());
+        const actorLabelMap = new Map<string, string>();
+        canon.characters.forEach((character): void => {
+            const actorKey = String(character.actorKey ?? '').trim();
+            if (!actorKey) {
+                return;
+            }
+            actorLabelMap.set(actorKey, resolveActorDisplayLabel(actorKey, String(character.displayName ?? actorKey).trim() || actorKey));
+        });
+        const seedActorKey = String(experience.semanticSeed?.identitySeed?.roleKey ?? '').trim();
+        const seedActorName = String(experience.semanticSeed?.identitySeed?.displayName ?? '').trim();
+        if (seedActorKey) {
+            actorLabelMap.set(seedActorKey, resolveActorDisplayLabel(seedActorKey, seedActorName || actorLabelMap.get(seedActorKey) || seedActorKey));
+        }
+        ownedStates.forEach((item: OwnedMemoryState): void => {
+            const ownerActorKey = String(item.ownerActorKey ?? '').trim();
+            if (ownerActorKey && !actorLabelMap.has(ownerActorKey)) {
+                actorLabelMap.set(ownerActorKey, formatActorKeyLabel(ownerActorKey));
+            }
+        });
+        Object.keys(personaProfiles ?? {}).forEach((actorKey: string): void => {
+            if (actorKey && !actorLabelMap.has(actorKey)) {
+                actorLabelMap.set(actorKey, formatActorKeyLabel(actorKey));
+            }
+        });
+
+        const actorFilters = [
+            { key: '__all__', label: '全部记忆' },
+            { key: '__world__', label: '世界 / 未归属' },
+            ...Array.from(actorLabelMap.entries()).map(([key, label]: [string, string]) => ({ key, label })),
+        ];
+        if (!actorFilters.some((item: { key: string; label: string }): boolean => item.key === currentMemoryActorKey)) {
+            currentMemoryActorKey = '__all__';
+        }
+
+        const filteredOwned = ownedStates.filter((item: OwnedMemoryState): boolean => {
+            if (currentMemoryActorKey === '__all__') {
+                return true;
+            }
+            if (currentMemoryActorKey === '__world__') {
+                return !item.ownerActorKey || item.sourceScope === 'world' || item.sourceScope === 'system';
+            }
+            return item.ownerActorKey === currentMemoryActorKey;
+        });
+
+        const filteredLifecycles = filteredOwned.map((item: OwnedMemoryState): MemoryLifecycleState | null => lifecycleMap.get(item.recordKey) ?? null).filter(Boolean) as MemoryLifecycleState[];
+        const eventTitleMap = new Map<string, string>();
+        ownedStates.forEach((item: OwnedMemoryState): void => {
+            if (item.memorySubtype !== 'major_plot_event') {
+                return;
+            }
+            eventTitleMap.set(item.recordKey, buildMemoryRecordHeadline(item.recordKey, lifecycleMap.get(item.recordKey), item));
+        });
+        const stageCounts = {
+            clear: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'clear').length,
+            blur: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'blur').length,
+            distorted: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'distorted').length,
+            forgotten: filteredOwned.filter((item: OwnedMemoryState): boolean => item.forgotten === true).length,
+        };
+        const majorEventCount = filteredOwned.filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event').length;
+        const reinforcedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0).length;
+        const invalidatedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.invalidatedByEventIds?.length ?? 0) > 0).length;
+        const recentAffectedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0 || (item.invalidatedByEventIds?.length ?? 0) > 0).length;
+        const topSubtypeRates = Array.from(filteredOwned.reduce<Map<string, { total: number; forgotten: number }>>((map, item: OwnedMemoryState) => {
+            const key = item.memorySubtype || 'other';
+            const current = map.get(key) ?? { total: 0, forgotten: 0 };
+            current.total += 1;
+            if (item.forgotten) {
+                current.forgotten += 1;
+            }
+            map.set(key, current);
+            return map;
+        }, new Map<string, { total: number; forgotten: number }>()).entries())
+            .sort((left, right): number => right[1].forgotten - left[1].forgotten || right[1].total - left[1].total)
+            .slice(0, 6);
+        const sortedPersonaProfiles = Object.entries(personaProfiles ?? {})
+            .sort((left: [string, PersonaMemoryProfile], right: [string, PersonaMemoryProfile]): number => {
+                const leftLabel = actorLabelMap.get(left[0]) || left[0];
+                const rightLabel = actorLabelMap.get(right[0]) || right[0];
+                return leftLabel.localeCompare(rightLabel, 'zh-CN');
+            });
+        const selectedPersonaEntries = currentMemoryActorKey.startsWith('__')
+            ? sortedPersonaProfiles
+            : sortedPersonaProfiles.filter(([actorKey]: [string, PersonaMemoryProfile]): boolean => actorKey === currentMemoryActorKey);
+        const personaPanelHtml = selectedPersonaEntries.length > 0
+            ? selectedPersonaEntries.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
+                const actorLabel = actorLabelMap.get(actorKey) || actorKey;
+                const extraActionsHtml = [
+                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-memory-persona-set-active="${escapeHtml(actorKey)}">${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
+                    `<button class="stx-re-btn" data-memory-actor-focus="${escapeHtml(actorKey)}">只看该角色</button>`,
+                ].join('');
+                return renderPersonaProfileCardMarkup(actorKey, actorLabel, profile, {
+                    active: actorKey === activeActorKey,
+                    extraActionsHtml,
+                });
+            }).join('')
+            : '<div class="stx-re-empty">当前筛选下没有角色画像。</div>';
+        const activeActorLabel = activeActorKey ? (actorLabelMap.get(activeActorKey) || activeActorKey) : '自动 / 未指定';
+
+        const memoryRowsHtml = filteredOwned.length <= 0
+            ? '<div class="stx-re-empty">当前筛选下还没有角色记忆。</div>'
+            : filteredOwned.map((owned: OwnedMemoryState): string => {
+                const lifecycle = lifecycleMap.get(owned.recordKey);
+                const recall = recallStats.get(owned.recordKey);
+                const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
+                const recordTooltip = buildMemoryRecordTooltip(owned.recordKey, owned);
+                const ownerLabel = owned.ownerActorKey ? (actorLabelMap.get(owned.ownerActorKey) || owned.ownerActorKey) : '世界 / 未归属';
+                const subtitle = joinReadableMeta([
+                    `归属：${ownerLabel}`,
+                    `类型：${formatMemoryTypeLabel(owned.memoryType)}`,
+                    `细分：${formatMemorySubtypeLabel(owned.memorySubtype)}`,
+                    `来源：${formatMemorySourceScopeLabel(owned.sourceScope)}`,
+                ]);
+                const reinforcedRefs = renderMemoryEventRefs(owned.reinforcedByEventIds, eventTitleMap, '暂无');
+                const invalidatedRefs = renderMemoryEventRefs(owned.invalidatedByEventIds, eventTitleMap, '暂无');
+                return `
+                    <div class="stx-re-json" style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:10px;">
+                        <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                            <div style="display:flex; flex-direction:column; gap:6px; min-width:0;">
+                                <div style="font-weight:700; word-break:break-word;" data-tip="${escapeHtml(recordTooltip)}">${escapeHtml(title)}</div>
+                                <div style="opacity:0.78; word-break:break-word;">${escapeHtml(subtitle)}</div>
+                                <div class="stx-re-record-code" title="${escapeHtml(owned.recordKey)}" data-tip="${escapeHtml(`完整内部键：${owned.recordKey}`)}">内部编号：${escapeHtml(compactInternalIdentifier(owned.recordKey, 32))}</div>
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:120px;">
+                                <span class="stx-re-record-flag">${owned.forgotten ? '已遗忘' : '仍可回忆'}</span>
+                                <span class="stx-re-json">${escapeHtml(formatMemoryStageLabel(lifecycle?.stage || 'clear'))}</span>
+                            </div>
+                        </div>
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px;">
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">重要度:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(owned.importance))}</div></div>
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">遗忘概率:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(owned.forgetProbability))}</div></div>
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">复述次数:</div><div class="stx-re-kv-val">${escapeHtml(String(lifecycle?.rehearsalCount ?? 0))}</div></div>
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">扭曲风险:</div><div class="stx-re-kv-val">${escapeHtml(formatPercent(lifecycle?.distortionRisk))}</div></div>
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">上次回忆:</div><div class="stx-re-kv-val">${escapeHtml(lifecycle?.lastRecalledAt ? formatTimeLabel(lifecycle.lastRecalledAt) : '暂无')}</div></div>
+                            <div class="stx-re-kv-row"><div class="stx-re-kv-key">最近命中:</div><div class="stx-re-kv-val">${escapeHtml(recall?.lastAt ? `${formatTimeLabel(recall.lastAt)} · ${recall.count} 次` : '暂无')}</div></div>
+                        </div>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; opacity:0.82;">
+                            ${(owned.forgottenReasonCodes.length > 0 ? owned.forgottenReasonCodes : ['当前没有明确遗忘原因']).slice(0, 4).map((reason: string): string => `<span class="stx-re-json">${escapeHtml(formatMemoryReasonLabel(reason))}</span>`).join('')}
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:8px; padding:10px; border-radius:10px; border:1px dashed var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 85%, transparent);">
+                            <div style="font-weight:700;">重大事件影响</div>
+                            <div style="opacity:0.82;">${escapeHtml(formatMemoryImpactSummary(owned))}</div>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>强化来源：</strong>${reinforcedRefs}</div>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>覆盖/冲淡来源：</strong>${invalidatedRefs}</div>
+                        </div>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                            <button class="stx-re-btn" data-memory-action="toggle-forgotten" data-record-key="${escapeHtml(owned.recordKey)}">${owned.forgotten ? '恢复记忆' : '标记遗忘'}</button>
+                            <button class="stx-re-btn" data-memory-action="change-owner" data-record-key="${escapeHtml(owned.recordKey)}">调整归属</button>
+                            <button class="stx-re-btn" data-memory-action="change-subtype" data-record-key="${escapeHtml(owned.recordKey)}">调整细分</button>
+                            <button class="stx-re-btn" data-memory-action="change-importance" data-record-key="${escapeHtml(owned.recordKey)}">调整重要度</button>
+                            <button class="stx-re-btn save" data-memory-action="recompute" data-record-key="${escapeHtml(owned.recordKey)}">重新计算</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+        contentArea.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">当前筛选</div>
+                        <div>${escapeHtml(actorFilters.find((item: { key: string; label: string }): boolean => item.key === currentMemoryActorKey)?.label || '全部记忆')}</div>
+                        <div style="margin-top:6px;">共 ${filteredOwned.length} 条角色记忆</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">遗忘分布</div>
+                        <div>清晰 ${stageCounts.clear} / 模糊 ${stageCounts.blur}</div>
+                        <div style="margin-top:6px;">偏差 ${stageCounts.distorted} / 已遗忘 ${stageCounts.forgotten}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">角色数量</div>
+                        <div>可切换角色 ${Math.max(0, actorFilters.length - 2)} 个</div>
+                        <div style="margin-top:6px;">当前主视角：${escapeHtml(activeActorLabel)}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">重大事件联动</div>
+                        <div>重大事件 ${majorEventCount} 条</div>
+                        <div style="margin-top:6px;">已影响 ${recentAffectedCount} 条 / 强化 ${reinforcedCount} 条 / 覆盖或冲淡 ${invalidatedCount} 条</div>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr); gap:12px; align-items:start;">
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">角色列表</div>
+                        ${actorFilters.map((item: { key: string; label: string }): string => `
+                            <button class="stx-re-btn ${item.key === currentMemoryActorKey ? 'save' : ''}" data-memory-actor="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>
+                        `).join('')}
+                        <button class="stx-re-btn" data-memory-persona-recompute>重算全部角色画像</button>
+                        <button class="stx-re-btn" data-memory-persona-clear-active>主视角切回自动</button>
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                            <div style="font-weight:700; margin-bottom:6px;">遗忘率较高的类型</div>
+                            ${topSubtypeRates.length > 0 ? topSubtypeRates.map(([key, stats]: [string, { total: number; forgotten: number }]): string => `<div style="margin-top:6px;">${escapeHtml(formatMemorySubtypeLabel(key))}：${escapeHtml(String(stats.forgotten))}/${escapeHtml(String(stats.total))}</div>`).join('') : '<div>暂无可统计项</div>'}
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">角色画像</div>
+                        ${personaPanelHtml}
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">角色记忆列表</div>
+                        ${memoryRowsHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        contentArea.querySelectorAll('[data-memory-actor]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentMemoryActorKey = String((button as HTMLElement).dataset.memoryActor ?? '__all__');
+                void renderMemoryView();
+            });
+        });
+
+        contentArea.querySelectorAll('[data-memory-actor-focus]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentMemoryActorKey = String((button as HTMLElement).dataset.memoryActorFocus ?? '__all__');
+                void renderMemoryView();
+            });
+        });
+
+        contentArea.querySelector('[data-memory-persona-recompute]')?.addEventListener('click', (): void => {
+            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                if (!memoryInstance) {
+                    return;
+                }
+                await memoryInstance.chatState.recomputePersonaMemoryProfiles();
+                await renderMemoryView();
+                toast.success('角色画像已重算');
+            }).catch((error: unknown): void => {
+                toast.error(`重算角色画像失败: ${String(error)}`);
+            });
+        });
+
+        contentArea.querySelector('[data-memory-persona-clear-active]')?.addEventListener('click', (): void => {
+            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                if (!memoryInstance) {
+                    return;
+                }
+                await memoryInstance.chatState.setActiveActorKey(null);
+                await renderMemoryView();
+                toast.success('主视角已切回自动模式');
+            }).catch((error: unknown): void => {
+                toast.error(`切换主视角失败: ${String(error)}`);
+            });
+        });
+
+        contentArea.querySelectorAll('[data-memory-persona-set-active]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const actorKey = String((button as HTMLElement).dataset.memoryPersonaSetActive ?? '').trim();
+                if (!actorKey) {
+                    return;
+                }
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    await memoryInstance.chatState.setActiveActorKey(actorKey);
+                    await renderMemoryView();
+                    toast.success('主视角已更新');
+                }).catch((error: unknown): void => {
+                    toast.error(`切换主视角失败: ${String(error)}`);
+                });
+            });
+        });
+
+        contentArea.querySelectorAll('[data-memory-action]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const element = button as HTMLElement;
+                const action = String(element.dataset.memoryAction ?? '').trim();
+                const recordKey = String(element.dataset.recordKey ?? '').trim();
+                const targetOwned = filteredOwned.find((item: OwnedMemoryState): boolean => item.recordKey === recordKey);
+                if (!action || !recordKey || !targetOwned) {
+                    return;
+                }
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    if (action === 'toggle-forgotten') {
+                        await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
+                            forgotten: !targetOwned.forgotten,
+                            forgottenReasonCodes: [targetOwned.forgotten ? 'manual_restore' : 'manual_mark_forgotten'],
+                        });
+                        toast.success(targetOwned.forgotten ? '记忆已恢复' : '已标记为遗忘');
+                    } else if (action === 'change-owner') {
+                        const ownerGuide = actorFilters
+                            .filter((item: { key: string; label: string }): boolean => !item.key.startsWith('__'))
+                            .map((item: { key: string; label: string }): string => `${item.key} = ${item.label}`)
+                            .join('\n');
+                        const input = prompt(`请输入新的角色归属键，留空表示归到世界/未归属：\n\n${ownerGuide}`, targetOwned.ownerActorKey ?? '');
+                        if (input === null) {
+                            return;
+                        }
+                        const nextOwner = String(input ?? '').trim() || null;
+                        await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
+                            ownerActorKey: nextOwner,
+                        });
+                        toast.success('记忆归属已更新');
+                    } else if (action === 'change-subtype') {
+                        const subtypeGuide = MEMORY_SUBTYPE_OPTIONS.map((item: string): string => `${item} = ${formatMemorySubtypeLabel(item)}`).join('\n');
+                        const input = prompt(`请输入新的记忆细分类型：\n\n${subtypeGuide}`, targetOwned.memorySubtype ?? 'other');
+                        if (input === null) {
+                            return;
+                        }
+                        const nextSubtype = String(input ?? '').trim();
+                        if (!MEMORY_SUBTYPE_OPTIONS.includes(nextSubtype)) {
+                            alert('输入的细分类型不在允许列表中。');
+                            return;
+                        }
+                        await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
+                            memorySubtype: nextSubtype as OwnedMemoryState['memorySubtype'],
+                        });
+                        toast.success('记忆细分已更新');
+                    } else if (action === 'change-importance') {
+                        const input = prompt('请输入新的重要度（支持 0-1 或 0-100）：', String(Math.round((targetOwned.importance ?? 0) * 100)));
+                        if (input === null) {
+                            return;
+                        }
+                        const nextImportance = parseImportanceInput(input, targetOwned.importance ?? 0);
+                        if (nextImportance == null) {
+                            alert('请输入有效数字。');
+                            return;
+                        }
+                        await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
+                            importance: nextImportance,
+                        });
+                        toast.success('记忆重要度已更新');
+                    } else if (action === 'recompute') {
+                        await memoryInstance.chatState.recomputeOwnedMemoryState(recordKey);
+                        toast.success('遗忘概率已重新计算');
+                    }
+                    await renderMemoryView();
+                }).catch((error: unknown): void => {
+                    toast.error(`角色记忆操作失败: ${String(error)}`);
+                });
+            });
+        });
     }
 
     /**
@@ -2352,6 +3634,10 @@ export async function openRecordEditor(): Promise<void> {
         updateChromeState();
         if (currentViewMode === 'raw') {
             await renderRawTable(currentRawTable);
+            return;
+        }
+        if (currentViewMode === 'memory') {
+            await renderMemoryView();
             return;
         }
         if (currentViewMode === 'diagnostics') {
@@ -2369,6 +3655,7 @@ export async function openRecordEditor(): Promise<void> {
     async function switchChat(chatKey: string): Promise<void> {
         currentChatKey = chatKey;
         currentLogicTableKey = '';
+        currentMemoryActorKey = '__all__';
         logicCreateExpanded = false;
         selectedLogicRowIds.clear();
         activateChatItem(chatKey);

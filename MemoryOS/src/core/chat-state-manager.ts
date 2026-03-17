@@ -44,6 +44,7 @@ import type {
     PersonaMemoryProfile,
     MemoryOSChatState,
     MemoryQualityScorecard,
+    OwnedMemoryState,
     RecallLogEntry,
     RelationshipDelta,
     RelationshipState,
@@ -111,11 +112,20 @@ import {
     computeRelationshipWeight,
     detectEmotionTag,
     detectRelationScope,
+    enrichLifecycleOwnedState,
     inferPersonaMemoryProfile,
+    inferPersonaMemoryProfiles,
     normalizeMemoryText,
     scoreRecallCandidate,
     type MemoryCandidateInput,
+    type OwnedMemoryInferenceInput,
 } from './memory-intelligence';
+import {
+    getPrimaryPersonaActorKey,
+    migratePersonaState,
+    resolvePersonaProfile,
+    resolveSimplePersona,
+} from './persona-compat';
 import { normalizeMemoryTuningProfile } from './memory-tuning';
 import {
     normalizeMemoryMigrationBatchStats,
@@ -798,7 +808,7 @@ export class ChatStateManager {
         try {
             const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, this.chatKey);
             const raw = (row?.state ?? {}) as MemoryOSChatState;
-            this.cache = this.normalizeState(raw);
+            this.cache = migratePersonaState(this.normalizeState(raw));
             await this.hydrateMigrationStatusFromMeta(this.cache);
             await this.refreshLifecycleState(this.cache, 'load');
             if (!Array.isArray(this.cache.maintenanceInsights) || this.cache.maintenanceInsights.length === 0) {
@@ -808,7 +818,7 @@ export class ChatStateManager {
             return this.cache;
         } catch (error) {
             logger.warn('加载聊天状态失败，已回退默认值', error);
-            this.cache = this.normalizeState({});
+            this.cache = migratePersonaState(this.normalizeState({}));
             await this.hydrateMigrationStatusFromMeta(this.cache);
             await this.refreshLifecycleState(this.cache, 'load_fallback');
             this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
@@ -1144,6 +1154,24 @@ export class ChatStateManager {
                     result[normalizedKey] = {
                         ...lifecycle,
                         recordKey: normalizedKey,
+                        ownerActorKey: lifecycle?.ownerActorKey == null ? null : normalizeMemoryText(String(lifecycle.ownerActorKey)),
+                        memoryType: (lifecycle?.memoryType ?? 'other') as MemoryLifecycleState['memoryType'],
+                        memorySubtype: (lifecycle?.memorySubtype ?? 'other') as MemoryLifecycleState['memorySubtype'],
+                        sourceScope: (lifecycle?.sourceScope ?? 'system') as MemoryLifecycleState['sourceScope'],
+                        importance: clamp01(Number(lifecycle?.importance ?? lifecycle?.salience ?? 0)),
+                        forgetProbability: clamp01(Number(lifecycle?.forgetProbability ?? 0)),
+                        forgotten: lifecycle?.forgotten === true,
+                        forgottenAt: Math.max(0, Number(lifecycle?.forgottenAt ?? 0) || 0) || undefined,
+                        forgottenReasonCodes: Array.isArray(lifecycle?.forgottenReasonCodes)
+                            ? lifecycle.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
+                        lastForgetRollAt: Math.max(0, Number(lifecycle?.lastForgetRollAt ?? 0) || 0),
+                        reinforcedByEventIds: Array.isArray(lifecycle?.reinforcedByEventIds)
+                            ? lifecycle.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
+                        invalidatedByEventIds: Array.isArray(lifecycle?.invalidatedByEventIds)
+                            ? lifecycle.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
                         emotionTag: normalizeMemoryText(lifecycle?.emotionTag),
                         relationScope: normalizeMemoryText(lifecycle?.relationScope),
                         stage: (lifecycle?.stage ?? 'clear') as MemoryLifecycleState['stage'],
@@ -1154,6 +1182,40 @@ export class ChatStateManager {
                         lastRecalledAt: Math.max(0, Number(lifecycle?.lastRecalledAt ?? 0) || 0),
                         distortionRisk: clamp01(Number(lifecycle?.distortionRisk ?? 0)),
                         updatedAt: Math.max(0, Number(lifecycle?.updatedAt ?? 0) || 0),
+                    };
+                    return result;
+                },
+                {},
+            ),
+            ownedMemoryIndex: Object.entries(state.ownedMemoryIndex ?? {}).reduce<Record<string, OwnedMemoryState>>(
+                (result: Record<string, OwnedMemoryState>, [recordKey, owned]: [string, OwnedMemoryState]): Record<string, OwnedMemoryState> => {
+                    const normalizedKey = normalizeMemoryText(recordKey);
+                    if (!normalizedKey) {
+                        return result;
+                    }
+                    result[normalizedKey] = {
+                        ...owned,
+                        recordKey: normalizedKey,
+                        ownerActorKey: owned?.ownerActorKey == null ? null : normalizeMemoryText(String(owned.ownerActorKey)),
+                        recordKind: (owned?.recordKind ?? 'fact') as OwnedMemoryState['recordKind'],
+                        memoryType: (owned?.memoryType ?? 'other') as OwnedMemoryState['memoryType'],
+                        memorySubtype: (owned?.memorySubtype ?? 'other') as OwnedMemoryState['memorySubtype'],
+                        sourceScope: (owned?.sourceScope ?? 'system') as OwnedMemoryState['sourceScope'],
+                        importance: clamp01(Number(owned?.importance ?? 0)),
+                        forgetProbability: clamp01(Number(owned?.forgetProbability ?? 0)),
+                        forgotten: owned?.forgotten === true,
+                        forgottenAt: Math.max(0, Number(owned?.forgottenAt ?? 0) || 0) || undefined,
+                        forgottenReasonCodes: Array.isArray(owned?.forgottenReasonCodes)
+                            ? owned.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
+                        lastForgetRollAt: Math.max(0, Number(owned?.lastForgetRollAt ?? 0) || 0) || undefined,
+                        reinforcedByEventIds: Array.isArray(owned?.reinforcedByEventIds)
+                            ? owned.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
+                        invalidatedByEventIds: Array.isArray(owned?.invalidatedByEventIds)
+                            ? owned.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                            : [],
+                        updatedAt: Math.max(0, Number(owned?.updatedAt ?? 0) || 0),
                     };
                     return result;
                 },
@@ -2997,7 +3059,47 @@ export class ChatStateManager {
             state.semanticSeed ?? null,
             state.chatProfile ?? DEFAULT_CHAT_PROFILE,
             state.groupMemory ?? null,
+            (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null,
         );
+    }
+
+    private rebuildPersonaProfilesFromState(state: MemoryOSChatState): Record<string, PersonaMemoryProfile> {
+        return inferPersonaMemoryProfiles(
+            state.semanticSeed ?? null,
+            state.chatProfile ?? DEFAULT_CHAT_PROFILE,
+            state.groupMemory ?? null,
+        );
+    }
+
+    private syncPersonaProfilesFromState(state: MemoryOSChatState, preferredActorKey?: string | null): PersonaMemoryProfile {
+        const nextProfiles = this.rebuildPersonaProfilesFromState(state);
+        state.personaMemoryProfiles = nextProfiles;
+        state.simpleMemoryPersonas = Object.entries(nextProfiles).reduce<Record<string, SimpleMemoryPersona>>((result: Record<string, SimpleMemoryPersona>, [actorKey, profile]: [string, PersonaMemoryProfile]): Record<string, SimpleMemoryPersona> => {
+            result[actorKey] = buildSimpleMemoryPersona(profile);
+            return result;
+        }, {});
+        const primaryActorKey = normalizeMemoryText(preferredActorKey)
+            || normalizeMemoryText(state.activeActorKey)
+            || getPrimaryPersonaActorKey({ ...state, personaMemoryProfiles: nextProfiles })
+            || Object.keys(nextProfiles)[0]
+            || '';
+        state.activeActorKey = primaryActorKey || undefined;
+        state.personaMemoryProfile = resolvePersonaProfile({ ...state, personaMemoryProfiles: nextProfiles, activeActorKey: primaryActorKey }, primaryActorKey) ?? DEFAULT_PERSONA_MEMORY_PROFILE;
+        state.simpleMemoryPersona = resolveSimplePersona({ ...state, simpleMemoryPersonas: state.simpleMemoryPersonas, activeActorKey: primaryActorKey }, primaryActorKey) ?? buildSimpleMemoryPersona(state.personaMemoryProfile);
+        return state.personaMemoryProfile;
+    }
+
+    private resolvePersonaProfileForActor(state: MemoryOSChatState, actorKey?: string | null): PersonaMemoryProfile {
+        return resolvePersonaProfile(state, (actorKey ?? state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null) ?? DEFAULT_PERSONA_MEMORY_PROFILE;
+    }
+
+    private resolvePersonaProfileForInference(state: MemoryOSChatState, input: OwnedMemoryInferenceInput): PersonaMemoryProfile {
+        const ownerActorKey = input.current?.ownerActorKey !== undefined
+            ? (input.current.ownerActorKey == null ? null : normalizeMemoryText(input.current.ownerActorKey))
+            : normalizeMemoryText(input.entityKind) === 'character'
+                ? normalizeMemoryText(input.entityId)
+                : normalizeMemoryText(input.fallbackOwnerActorKey) || normalizeMemoryText(state.activeActorKey) || null;
+        return this.resolvePersonaProfileForActor(state, ownerActorKey);
     }
 
     /**
@@ -3151,6 +3253,7 @@ export class ChatStateManager {
         if (!this.shouldPreferDbMirror(state) && Object.keys(state.memoryLifecycleIndex ?? {}).length > 0) {
             return state.memoryLifecycleIndex ?? {};
         }
+        const fallbackOwnerActorKey: string | null = normalizeMemoryText(state.semanticSeed?.identitySeed?.roleKey) || null;
         const [facts, summaries] = await Promise.all([
             db.facts
                 .where('[chatKey+updatedAt]')
@@ -3166,11 +3269,61 @@ export class ChatStateManager {
                 .toArray(),
         ]);
         const nextIndex: Record<string, MemoryLifecycleState> = {};
+        const nextOwnedIndex: Record<string, OwnedMemoryState> = {};
         facts.forEach((fact): void => {
-            nextIndex[fact.factKey] = {
+            const inferenceInput: OwnedMemoryInferenceInput = {
+                recordKey: fact.factKey,
+                recordKind: 'fact',
+                text: typeof fact.value === 'string' ? fact.value : JSON.stringify(fact.value ?? ''),
+                path: fact.path,
+                factType: fact.type,
+                entityKind: fact.entity?.kind,
+                entityId: fact.entity?.id,
+                value: fact.value,
+                fallbackOwnerActorKey,
+                current: {
+                    ownerActorKey: fact.ownerActorKey == null ? null : normalizeMemoryText(String(fact.ownerActorKey)),
+                    memoryType: (fact.memoryType ?? 'other') as MemoryLifecycleState['memoryType'],
+                    memorySubtype: (fact.memorySubtype ?? 'other') as MemoryLifecycleState['memorySubtype'],
+                    sourceScope: (fact.sourceScope ?? 'system') as MemoryLifecycleState['sourceScope'],
+                    importance: clamp01(Number(fact.importance ?? fact.salience ?? fact.encodeScore ?? fact.confidence ?? 0.5)),
+                    forgotten: fact.forgotten === true,
+                    forgottenAt: Math.max(0, Number(fact.forgottenAt ?? 0) || 0) || undefined,
+                    forgottenReasonCodes: Array.isArray(fact.forgottenReasonCodes)
+                        ? fact.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                    forgetProbability: clamp01(Number(fact.forgetProbability ?? 0)),
+                    lastForgetRollAt: Math.max(0, Number(fact.lastForgetRollAt ?? 0) || 0),
+                    reinforcedByEventIds: Array.isArray(fact.reinforcedByEventIds)
+                        ? fact.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                    invalidatedByEventIds: Array.isArray(fact.invalidatedByEventIds)
+                        ? fact.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                },
+            };
+            const lifecycle: MemoryLifecycleState = enrichLifecycleOwnedState({
                 recordKey: fact.factKey,
                 recordKind: 'fact',
                 stage: (fact.decayStage ?? 'clear') as MemoryLifecycleState['stage'],
+                ownerActorKey: fact.ownerActorKey == null ? null : normalizeMemoryText(String(fact.ownerActorKey)),
+                memoryType: (fact.memoryType ?? 'other') as MemoryLifecycleState['memoryType'],
+                memorySubtype: (fact.memorySubtype ?? 'other') as MemoryLifecycleState['memorySubtype'],
+                sourceScope: (fact.sourceScope ?? 'system') as MemoryLifecycleState['sourceScope'],
+                importance: clamp01(Number(fact.importance ?? fact.salience ?? fact.encodeScore ?? fact.confidence ?? 0.5)),
+                forgetProbability: clamp01(Number(fact.forgetProbability ?? 0)),
+                forgotten: fact.forgotten === true,
+                forgottenAt: Math.max(0, Number(fact.forgottenAt ?? 0) || 0) || undefined,
+                forgottenReasonCodes: Array.isArray(fact.forgottenReasonCodes)
+                    ? fact.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
+                lastForgetRollAt: Math.max(0, Number(fact.lastForgetRollAt ?? 0) || 0),
+                reinforcedByEventIds: Array.isArray(fact.reinforcedByEventIds)
+                    ? fact.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
+                invalidatedByEventIds: Array.isArray(fact.invalidatedByEventIds)
+                    ? fact.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
                 strength: clamp01(Number(fact.strength ?? fact.encodeScore ?? fact.confidence ?? 0.5)),
                 salience: clamp01(Number(fact.salience ?? fact.encodeScore ?? fact.confidence ?? 0.5)),
                 rehearsalCount: Math.max(0, Number(fact.rehearsalCount ?? 0) || 0),
@@ -3179,13 +3332,78 @@ export class ChatStateManager {
                 emotionTag: normalizeMemoryText(fact.emotionTag),
                 relationScope: normalizeMemoryText(fact.relationScope),
                 updatedAt: Math.max(0, Number(fact.updatedAt ?? 0) || 0),
+            }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput));
+            nextIndex[fact.factKey] = lifecycle;
+            nextOwnedIndex[fact.factKey] = {
+                recordKey: fact.factKey,
+                ownerActorKey: lifecycle.ownerActorKey ?? null,
+                recordKind: 'fact',
+                memoryType: lifecycle.memoryType ?? 'other',
+                memorySubtype: lifecycle.memorySubtype ?? 'other',
+                sourceScope: lifecycle.sourceScope ?? 'system',
+                importance: lifecycle.importance ?? lifecycle.salience,
+                forgetProbability: lifecycle.forgetProbability ?? 0,
+                forgotten: lifecycle.forgotten === true,
+                forgottenAt: lifecycle.forgottenAt,
+                forgottenReasonCodes: lifecycle.forgottenReasonCodes ?? [],
+                lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
+                reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
+                invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+                updatedAt: lifecycle.updatedAt,
             };
         });
         summaries.forEach((summary): void => {
-            nextIndex[summary.summaryId] = {
+            const inferenceInput: OwnedMemoryInferenceInput = {
+                recordKey: summary.summaryId,
+                recordKind: 'summary',
+                title: summary.title,
+                text: summary.content,
+                keywords: summary.keywords,
+                factType: summary.level,
+                fallbackOwnerActorKey,
+                current: {
+                    ownerActorKey: summary.ownerActorKey == null ? null : normalizeMemoryText(String(summary.ownerActorKey)),
+                    memoryType: (summary.memoryType ?? 'other') as MemoryLifecycleState['memoryType'],
+                    memorySubtype: (summary.memorySubtype ?? 'other') as MemoryLifecycleState['memorySubtype'],
+                    sourceScope: (summary.sourceScope ?? 'system') as MemoryLifecycleState['sourceScope'],
+                    importance: clamp01(Number(summary.importance ?? summary.salience ?? summary.encodeScore ?? 0.5)),
+                    forgotten: summary.forgotten === true,
+                    forgottenAt: Math.max(0, Number(summary.forgottenAt ?? 0) || 0) || undefined,
+                    forgottenReasonCodes: Array.isArray(summary.forgottenReasonCodes)
+                        ? summary.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                    forgetProbability: clamp01(Number(summary.forgetProbability ?? 0)),
+                    lastForgetRollAt: Math.max(0, Number(summary.lastForgetRollAt ?? 0) || 0),
+                    reinforcedByEventIds: Array.isArray(summary.reinforcedByEventIds)
+                        ? summary.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                    invalidatedByEventIds: Array.isArray(summary.invalidatedByEventIds)
+                        ? summary.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                        : [],
+                },
+            };
+            const lifecycle: MemoryLifecycleState = enrichLifecycleOwnedState({
                 recordKey: summary.summaryId,
                 recordKind: 'summary',
                 stage: (summary.decayStage ?? 'clear') as MemoryLifecycleState['stage'],
+                ownerActorKey: summary.ownerActorKey == null ? null : normalizeMemoryText(String(summary.ownerActorKey)),
+                memoryType: (summary.memoryType ?? 'other') as MemoryLifecycleState['memoryType'],
+                memorySubtype: (summary.memorySubtype ?? 'other') as MemoryLifecycleState['memorySubtype'],
+                sourceScope: (summary.sourceScope ?? 'system') as MemoryLifecycleState['sourceScope'],
+                importance: clamp01(Number(summary.importance ?? summary.salience ?? summary.encodeScore ?? 0.5)),
+                forgetProbability: clamp01(Number(summary.forgetProbability ?? 0)),
+                forgotten: summary.forgotten === true,
+                forgottenAt: Math.max(0, Number(summary.forgottenAt ?? 0) || 0) || undefined,
+                forgottenReasonCodes: Array.isArray(summary.forgottenReasonCodes)
+                    ? summary.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
+                lastForgetRollAt: Math.max(0, Number(summary.lastForgetRollAt ?? 0) || 0),
+                reinforcedByEventIds: Array.isArray(summary.reinforcedByEventIds)
+                    ? summary.reinforcedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
+                invalidatedByEventIds: Array.isArray(summary.invalidatedByEventIds)
+                    ? summary.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                    : [],
                 strength: clamp01(Number(summary.strength ?? summary.encodeScore ?? 0.5)),
                 salience: clamp01(Number(summary.salience ?? summary.encodeScore ?? 0.5)),
                 rehearsalCount: Math.max(0, Number(summary.rehearsalCount ?? 0) || 0),
@@ -3194,9 +3412,28 @@ export class ChatStateManager {
                 emotionTag: normalizeMemoryText(summary.emotionTag),
                 relationScope: normalizeMemoryText(summary.relationScope),
                 updatedAt: Math.max(0, Number(summary.createdAt ?? 0) || 0),
+            }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput));
+            nextIndex[summary.summaryId] = lifecycle;
+            nextOwnedIndex[summary.summaryId] = {
+                recordKey: summary.summaryId,
+                ownerActorKey: lifecycle.ownerActorKey ?? null,
+                recordKind: 'summary',
+                memoryType: lifecycle.memoryType ?? 'other',
+                memorySubtype: lifecycle.memorySubtype ?? 'other',
+                sourceScope: lifecycle.sourceScope ?? 'system',
+                importance: lifecycle.importance ?? lifecycle.salience,
+                forgetProbability: lifecycle.forgetProbability ?? 0,
+                forgotten: lifecycle.forgotten === true,
+                forgottenAt: lifecycle.forgottenAt,
+                forgottenReasonCodes: lifecycle.forgottenReasonCodes ?? [],
+                lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
+                reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
+                invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+                updatedAt: lifecycle.updatedAt,
             };
         });
         state.memoryLifecycleIndex = nextIndex;
+        state.ownedMemoryIndex = nextOwnedIndex;
         if (Object.keys(nextIndex).length > 0) {
             this.markDirty();
         }
@@ -3412,6 +3649,10 @@ export class ChatStateManager {
         state.personaMemoryProfile = profile;
         const updates = rows.map((fact): typeof fact => {
             const sourceText = normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
+            const ownerActorKey = fact.ownerActorKey == null
+                ? (normalizeMemoryText(fact.entity?.kind) === 'character' ? normalizeMemoryText(fact.entity?.id) : null)
+                : normalizeMemoryText(String(fact.ownerActorKey));
+            const profile = this.resolvePersonaProfileForActor(state, ownerActorKey);
             const lifecycle = buildLifecycleState(
                 fact.factKey,
                 'fact',
@@ -3472,6 +3713,7 @@ export class ChatStateManager {
         state.personaMemoryProfile = profile;
         const updates = rows.map((summary): typeof summary => {
             const sourceText = normalizeMemoryText(`${summary.title ?? ''} ${summary.content}`);
+            const profile = this.resolvePersonaProfileForActor(state, summary.ownerActorKey == null ? null : normalizeMemoryText(String(summary.ownerActorKey)));
             const lifecycle = buildLifecycleState(
                 summary.summaryId,
                 'summary',
@@ -3832,10 +4074,48 @@ export class ChatStateManager {
      */
     async getPersonaMemoryProfile(): Promise<PersonaMemoryProfile | null> {
         const state = await this.load();
-        if (!state.personaMemoryProfile) {
+        if ((!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) && !state.personaMemoryProfile) {
             await this.recomputePersonaMemoryProfile();
         }
-        return state.personaMemoryProfile ?? null;
+        return resolvePersonaProfile(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null) ?? null;
+    }
+
+    async getPersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>> {
+        const state = await this.load();
+        if (!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) {
+            await this.recomputePersonaMemoryProfiles();
+        }
+        return { ...(state.personaMemoryProfiles ?? {}) };
+    }
+
+    async getPersonaMemoryProfileForActor(actorKey: string): Promise<PersonaMemoryProfile | null> {
+        const state = await this.load();
+        if (!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) {
+            await this.recomputePersonaMemoryProfiles();
+        }
+        return resolvePersonaProfile(state, actorKey) ?? null;
+    }
+
+    async getActiveActorKey(): Promise<string | null> {
+        const state = await this.load();
+        if (!state.activeActorKey) {
+            this.syncPersonaProfilesFromState(state);
+            this.markDirty();
+        }
+        return normalizeMemoryText(state.activeActorKey) || null;
+    }
+
+    async setActiveActorKey(actorKey: string | null): Promise<string | null> {
+        const state = await this.load();
+        if (!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) {
+            this.syncPersonaProfilesFromState(state, actorKey);
+        }
+        const normalizedActorKey = normalizeMemoryText(actorKey) || getPrimaryPersonaActorKey(state) || Object.keys(state.personaMemoryProfiles ?? {})[0] || '';
+        state.activeActorKey = normalizedActorKey || undefined;
+        state.personaMemoryProfile = resolvePersonaProfile(state, normalizedActorKey || null) ?? state.personaMemoryProfile ?? DEFAULT_PERSONA_MEMORY_PROFILE;
+        state.simpleMemoryPersona = resolveSimplePersona(state, normalizedActorKey || null) ?? state.simpleMemoryPersona ?? buildSimpleMemoryPersona(state.personaMemoryProfile);
+        this.markDirty();
+        return normalizedActorKey || null;
     }
 
     /**
@@ -3847,10 +4127,10 @@ export class ChatStateManager {
      */
     async getSimpleMemoryPersona(): Promise<SimpleMemoryPersona | null> {
         const state = await this.load();
-        if (!state.simpleMemoryPersona) {
+        if ((!state.simpleMemoryPersonas || Object.keys(state.simpleMemoryPersonas).length <= 0) && !state.simpleMemoryPersona) {
             await this.recomputePersonaMemoryProfile();
         }
-        return state.simpleMemoryPersona ?? null;
+        return resolveSimplePersona(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null) ?? null;
     }
 
     /**
@@ -3862,11 +4142,16 @@ export class ChatStateManager {
      */
     async recomputePersonaMemoryProfile(): Promise<PersonaMemoryProfile> {
         const state = await this.load();
-        const nextProfile = this.rebuildPersonaFromState(state);
-        state.personaMemoryProfile = nextProfile;
-        state.simpleMemoryPersona = buildSimpleMemoryPersona(nextProfile);
+        const nextProfile = this.syncPersonaProfilesFromState(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null);
         this.markDirty();
         return nextProfile;
+    }
+
+    async recomputePersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>> {
+        const state = await this.load();
+        this.syncPersonaProfilesFromState(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null);
+        this.markDirty();
+        return { ...(state.personaMemoryProfiles ?? {}) };
     }
 
     /**
@@ -4040,8 +4325,7 @@ export class ChatStateManager {
             },
             updatedAt: Date.now(),
         };
-        state.personaMemoryProfile = this.rebuildPersonaFromState(state);
-        state.simpleMemoryPersona = buildSimpleMemoryPersona(state.personaMemoryProfile);
+        this.syncPersonaProfilesFromState(state, normalizeMemoryText(seed.identitySeed?.roleKey) || null);
         state.adaptivePolicy = await this.recomputeAdaptivePolicy();
         this.markDirty();
     }
@@ -4063,23 +4347,67 @@ export class ChatStateManager {
         updatedAt: number = Date.now(),
     ): Promise<MemoryLifecycleState> {
         const state = await this.load();
-        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
         const previous = state.memoryLifecycleIndex?.[recordKey];
-        const lifecycle = buildLifecycleState(
+        const fallbackOwnerActorKey: string | null = normalizeMemoryText(state.semanticSeed?.identitySeed?.roleKey) || null;
+        const factRow = recordKind === 'fact' ? await db.facts.get(recordKey) : null;
+        const summaryRow = recordKind === 'summary' ? await db.summaries.get(recordKey) : null;
+        const worldStateRow = recordKind === 'state' ? await db.world_state.get(`${this.chatKey}::${recordKey}`) : null;
+        const inferenceInput: OwnedMemoryInferenceInput = {
             recordKey,
             recordKind,
-            encoding.salience,
-            encoding.strength,
-            profile,
-            updatedAt,
-            Math.max(0, Number(previous?.rehearsalCount ?? 0)),
-            Math.max(0, Number(previous?.lastRecalledAt ?? 0)),
-            encoding.emotionTag,
-            encoding.relationScope,
-        );
+            title: summaryRow?.title,
+            text: recordKind === 'fact'
+                ? (typeof factRow?.value === 'string' ? factRow.value : JSON.stringify(factRow?.value ?? ''))
+                : recordKind === 'summary'
+                    ? summaryRow?.content
+                    : (typeof worldStateRow?.value === 'string' ? worldStateRow.value : JSON.stringify(worldStateRow?.value ?? '')),
+            path: factRow?.path ?? worldStateRow?.path,
+            factType: factRow?.type ?? summaryRow?.level,
+            entityKind: factRow?.entity?.kind,
+            entityId: factRow?.entity?.id,
+            keywords: summaryRow?.keywords,
+            value: factRow?.value ?? worldStateRow?.value,
+            fallbackOwnerActorKey,
+            current: previous,
+        };
+        const profile = this.resolvePersonaProfileForInference(state, inferenceInput);
+        const lifecycle = enrichLifecycleOwnedState({
+            ...buildLifecycleState(
+                recordKey,
+                recordKind,
+                encoding.salience,
+                encoding.strength,
+                profile,
+                updatedAt,
+                Math.max(0, Number(previous?.rehearsalCount ?? 0)),
+                Math.max(0, Number(previous?.lastRecalledAt ?? 0)),
+                encoding.emotionTag,
+                encoding.relationScope,
+            ),
+        }, inferenceInput, profile) satisfies MemoryLifecycleState;
         state.memoryLifecycleIndex = {
             ...(state.memoryLifecycleIndex ?? {}),
             [recordKey]: lifecycle,
+        };
+        state.ownedMemoryIndex = {
+            ...(state.ownedMemoryIndex ?? {}),
+            [recordKey]: {
+                recordKey,
+                ownerActorKey: lifecycle.ownerActorKey ?? null,
+                recordKind,
+                memoryType: lifecycle.memoryType ?? 'other',
+                memorySubtype: lifecycle.memorySubtype ?? 'other',
+                sourceScope: lifecycle.sourceScope ?? 'system',
+                importance: lifecycle.importance ?? lifecycle.salience,
+                forgetProbability: lifecycle.forgetProbability ?? 0,
+                forgotten: lifecycle.forgotten === true,
+                forgottenAt: lifecycle.forgottenAt,
+                forgottenReasonCodes: lifecycle.forgottenReasonCodes ?? [],
+                lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
+                reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
+                invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+                updatedAt: lifecycle.updatedAt,
+            },
         };
         if (recordKind === 'fact') {
             await db.facts.update(recordKey, {
@@ -4105,6 +4433,10 @@ export class ChatStateManager {
                 encodeScore: encoding.totalScore,
                 profileVersion: encoding.profileVersion,
             });
+        }
+        await this.persistOwnedMemoryToDb(lifecycle);
+        if (lifecycle.memorySubtype === 'major_plot_event') {
+            await this.applyMajorEventTrigger(state, lifecycle);
         }
         this.markDirty();
         return lifecycle;
@@ -4137,6 +4469,343 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取角色归属记忆摘要。
+     * 参数：
+     *   limit：最大条数。
+     * 返回：
+     *   Promise<OwnedMemoryState[]>：角色归属记忆列表。
+     */
+    async getOwnedMemoryStates(limit: number = 80): Promise<OwnedMemoryState[]> {
+        const state = await this.load();
+        await this.hydrateLifecycleIndexFromDb(state);
+        return Object.values(state.ownedMemoryIndex ?? {})
+            .sort((left: OwnedMemoryState, right: OwnedMemoryState): number => {
+                if ((right.forgotten ? 1 : 0) !== (left.forgotten ? 1 : 0)) {
+                    return Number(right.forgotten === true) - Number(left.forgotten === true);
+                }
+                const importanceDelta = Number(right.importance ?? 0) - Number(left.importance ?? 0);
+                if (importanceDelta !== 0) {
+                    return importanceDelta;
+                }
+                return Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
+            })
+            .slice(0, Math.max(1, Math.floor(Number(limit || 80))));
+    }
+
+    private async buildOwnedMemoryInferenceInput(
+        state: MemoryOSChatState,
+        recordKey: string,
+        recordKind: MemoryLifecycleState['recordKind'],
+        current?: Partial<MemoryLifecycleState>,
+    ): Promise<OwnedMemoryInferenceInput> {
+        const fallbackOwnerActorKey: string | null = normalizeMemoryText(state.semanticSeed?.identitySeed?.roleKey) || null;
+        const factRow = recordKind === 'fact' ? await db.facts.get(recordKey) : null;
+        const summaryRow = recordKind === 'summary' ? await db.summaries.get(recordKey) : null;
+        const worldStateRow = recordKind === 'state' ? await db.world_state.get(`${this.chatKey}::${recordKey}`) : null;
+        return {
+            recordKey,
+            recordKind,
+            title: summaryRow?.title,
+            text: recordKind === 'fact'
+                ? (typeof factRow?.value === 'string' ? factRow.value : JSON.stringify(factRow?.value ?? ''))
+                : recordKind === 'summary'
+                    ? summaryRow?.content
+                    : (typeof worldStateRow?.value === 'string' ? worldStateRow.value : JSON.stringify(worldStateRow?.value ?? '')),
+            path: factRow?.path ?? worldStateRow?.path,
+            factType: factRow?.type ?? summaryRow?.level,
+            entityKind: factRow?.entity?.kind,
+            entityId: factRow?.entity?.id,
+            keywords: summaryRow?.keywords,
+            value: factRow?.value ?? worldStateRow?.value,
+            fallbackOwnerActorKey,
+            current,
+        };
+    }
+
+    private buildOwnedMemoryStateFromLifecycle(lifecycle: MemoryLifecycleState): OwnedMemoryState {
+        return {
+            recordKey: lifecycle.recordKey,
+            ownerActorKey: lifecycle.ownerActorKey ?? null,
+            recordKind: lifecycle.recordKind,
+            memoryType: lifecycle.memoryType ?? 'other',
+            memorySubtype: lifecycle.memorySubtype ?? 'other',
+            sourceScope: lifecycle.sourceScope ?? 'system',
+            importance: lifecycle.importance ?? lifecycle.salience,
+            forgetProbability: lifecycle.forgetProbability ?? 0,
+            forgotten: lifecycle.forgotten === true,
+            forgottenAt: lifecycle.forgottenAt,
+            forgottenReasonCodes: lifecycle.forgottenReasonCodes ?? [],
+            lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
+            reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
+            invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+            updatedAt: lifecycle.updatedAt,
+        };
+    }
+
+    private dedupeMemoryIds(values: string[]): string[] {
+        return Array.from(new Set((Array.isArray(values) ? values : []).map((item: string): string => normalizeMemoryText(item)).filter(Boolean)));
+    }
+
+    private extractMemoryTopicTokens(input: OwnedMemoryInferenceInput): string[] {
+        const rawText = [
+            input.recordKey,
+            input.title,
+            input.text,
+            input.path,
+            input.factType,
+            Array.isArray(input.keywords) ? input.keywords.join(' ') : '',
+            typeof input.value === 'string' ? input.value : JSON.stringify(input.value ?? ''),
+        ].join(' ');
+        const stopWords = new Set(['record', 'summary', 'state', 'event', 'memory', 'fact', 'chat', 'current', 'scene', 'status', 'other']);
+        return this.dedupeMemoryIds(
+            normalizeMemoryText(rawText)
+                .toLowerCase()
+                .split(/[^a-z0-9\u4e00-\u9fa5]+/)
+                .map((item: string): string => item.trim())
+                .filter((item: string): boolean => item.length >= 2 && !stopWords.has(item)),
+        ).slice(0, 24);
+    }
+
+    private computeMemoryTopicOverlap(left: string[], right: string[]): number {
+        if (left.length <= 0 || right.length <= 0) {
+            return 0;
+        }
+        const rightSet = new Set(right);
+        return left.reduce((sum: number, item: string): number => sum + (rightSet.has(item) ? 1 : 0), 0);
+    }
+
+    private async persistLifecycleToDb(lifecycle: MemoryLifecycleState): Promise<void> {
+        const sharedPatch = {
+            salience: lifecycle.salience,
+            strength: lifecycle.strength,
+            decayStage: lifecycle.stage,
+            rehearsalCount: lifecycle.rehearsalCount,
+            lastRecalledAt: lifecycle.lastRecalledAt,
+            emotionTag: lifecycle.emotionTag,
+            relationScope: lifecycle.relationScope,
+            ownerActorKey: lifecycle.ownerActorKey ?? null,
+            memoryType: lifecycle.memoryType ?? 'other',
+            memorySubtype: lifecycle.memorySubtype ?? 'other',
+            sourceScope: lifecycle.sourceScope ?? 'system',
+            importance: lifecycle.importance ?? lifecycle.salience,
+            forgetProbability: lifecycle.forgetProbability ?? 0,
+            forgotten: lifecycle.forgotten === true,
+            forgottenAt: lifecycle.forgottenAt,
+            forgottenReasonCodes: lifecycle.forgottenReasonCodes ?? [],
+            lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
+            reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
+            invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+        };
+        if (lifecycle.recordKind === 'fact') {
+            await db.facts.update(lifecycle.recordKey, sharedPatch);
+            return;
+        }
+        if (lifecycle.recordKind === 'summary') {
+            await db.summaries.update(lifecycle.recordKey, sharedPatch);
+        }
+    }
+
+    private async persistOwnedMemoryToDb(lifecycle: MemoryLifecycleState): Promise<void> {
+        await this.persistLifecycleToDb(lifecycle);
+    }
+
+    private async applyMajorEventTrigger(state: MemoryOSChatState, eventLifecycle: MemoryLifecycleState): Promise<number> {
+        if (eventLifecycle.memorySubtype !== 'major_plot_event') {
+            return 0;
+        }
+        await this.hydrateLifecycleIndexFromDb(state);
+        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
+        const eventInput = await this.buildOwnedMemoryInferenceInput(state, eventLifecycle.recordKey, eventLifecycle.recordKind, eventLifecycle);
+        const eventTokens = this.extractMemoryTopicTokens(eventInput);
+        const eventOwner = normalizeMemoryText(eventLifecycle.ownerActorKey);
+        const eventRelationScope = normalizeMemoryText(eventLifecycle.relationScope);
+        let affectedCount = 0;
+
+        for (const targetLifecycle of Object.values(state.memoryLifecycleIndex ?? {})) {
+            if (!targetLifecycle || targetLifecycle.recordKey === eventLifecycle.recordKey) {
+                continue;
+            }
+            const targetInput = await this.buildOwnedMemoryInferenceInput(state, targetLifecycle.recordKey, targetLifecycle.recordKind, targetLifecycle);
+            const targetTokens = this.extractMemoryTopicTokens(targetInput);
+            const overlap = this.computeMemoryTopicOverlap(eventTokens, targetTokens);
+            const sameOwner = Boolean(eventOwner) && eventOwner === normalizeMemoryText(targetLifecycle.ownerActorKey);
+            const sameRelationScope = Boolean(eventRelationScope) && eventRelationScope === normalizeMemoryText(targetLifecycle.relationScope);
+            const sameWorldLane = eventLifecycle.sourceScope === 'world' && targetLifecycle.sourceScope === 'world';
+            if (overlap <= 0 && !sameOwner && !sameRelationScope && !sameWorldLane) {
+                continue;
+            }
+
+            let action: 'reinforce' | 'blur' | 'overwrite' | null = null;
+            if (sameRelationScope || targetLifecycle.memoryType === 'relationship' || ['bond', 'emotion_imprint', 'goal', 'promise'].includes(String(targetLifecycle.memorySubtype ?? ''))) {
+                action = 'reinforce';
+            } else if (['minor_event', 'conversation_event', 'temporary_status', 'rumor'].includes(String(targetLifecycle.memorySubtype ?? ''))) {
+                action = 'overwrite';
+            } else if (targetLifecycle.memoryType === 'event' || targetLifecycle.memoryType === 'world' || sameWorldLane) {
+                action = 'blur';
+            }
+            if (!action) {
+                continue;
+            }
+
+            const nextLifecycle: MemoryLifecycleState = {
+                ...targetLifecycle,
+                updatedAt: Date.now(),
+                lastForgetRollAt: Date.now(),
+            };
+            if (action === 'reinforce') {
+                nextLifecycle.rehearsalCount = Math.max(0, Number(nextLifecycle.rehearsalCount ?? 0)) + 2;
+                nextLifecycle.strength = clamp01(Number(nextLifecycle.strength ?? 0) + 0.14 + overlap * 0.02);
+                nextLifecycle.salience = clamp01(Number(nextLifecycle.salience ?? 0) + 0.16 + overlap * 0.02);
+                nextLifecycle.importance = clamp01(Number(nextLifecycle.importance ?? nextLifecycle.salience ?? 0) + 0.12);
+                nextLifecycle.forgetProbability = clamp01(Number(nextLifecycle.forgetProbability ?? 0) - 0.22);
+                nextLifecycle.forgotten = false;
+                nextLifecycle.forgottenAt = undefined;
+                nextLifecycle.forgottenReasonCodes = [];
+                nextLifecycle.stage = nextLifecycle.stage === 'distorted' ? 'blur' : 'clear';
+                nextLifecycle.reinforcedByEventIds = this.dedupeMemoryIds([...(nextLifecycle.reinforcedByEventIds ?? []), eventLifecycle.recordKey]);
+            } else if (action === 'blur') {
+                nextLifecycle.forgetProbability = clamp01(Number(nextLifecycle.forgetProbability ?? 0) + 0.18 + Math.min(0.08, overlap * 0.02));
+                nextLifecycle.stage = nextLifecycle.stage === 'distorted' ? 'distorted' : 'blur';
+                nextLifecycle.invalidatedByEventIds = this.dedupeMemoryIds([...(nextLifecycle.invalidatedByEventIds ?? []), eventLifecycle.recordKey]);
+            } else if (action === 'overwrite') {
+                nextLifecycle.forgetProbability = clamp01(Number(nextLifecycle.forgetProbability ?? 0) + 0.3 + Math.min(0.1, overlap * 0.03));
+                nextLifecycle.stage = 'distorted';
+                nextLifecycle.invalidatedByEventIds = this.dedupeMemoryIds([...(nextLifecycle.invalidatedByEventIds ?? []), eventLifecycle.recordKey]);
+            }
+
+            const recomputeInput = await this.buildOwnedMemoryInferenceInput(state, nextLifecycle.recordKey, nextLifecycle.recordKind, nextLifecycle);
+            const recomputedLifecycle = enrichLifecycleOwnedState(
+                nextLifecycle,
+                recomputeInput,
+                this.resolvePersonaProfileForInference(state, recomputeInput),
+            );
+            state.memoryLifecycleIndex = {
+                ...(state.memoryLifecycleIndex ?? {}),
+                [recomputedLifecycle.recordKey]: recomputedLifecycle,
+            };
+            state.ownedMemoryIndex = {
+                ...(state.ownedMemoryIndex ?? {}),
+                [recomputedLifecycle.recordKey]: this.buildOwnedMemoryStateFromLifecycle(recomputedLifecycle),
+            };
+            await this.persistLifecycleToDb(recomputedLifecycle);
+            affectedCount += 1;
+        }
+        if (affectedCount > 0) {
+            this.markDirty();
+        }
+        return affectedCount;
+    }
+
+    /**
+     * 功能：手动更新角色记忆层字段，并同步生命周期与持久化。
+     * 参数：
+     *   recordKey：记录键。
+     *   patch：待修改字段。
+     * 返回：
+     *   Promise<OwnedMemoryState | null>：更新后的角色记忆状态。
+     */
+    async updateOwnedMemoryState(
+        recordKey: string,
+        patch: Partial<Pick<OwnedMemoryState, 'ownerActorKey' | 'memoryType' | 'memorySubtype' | 'sourceScope' | 'importance' | 'forgotten' | 'forgottenReasonCodes'>>,
+    ): Promise<OwnedMemoryState | null> {
+        const state = await this.load();
+        await this.hydrateLifecycleIndexFromDb(state);
+        const currentLifecycle = state.memoryLifecycleIndex?.[recordKey];
+        if (!currentLifecycle) {
+            return null;
+        }
+        const normalizedPatch = {
+            ...patch,
+            ownerActorKey: patch.ownerActorKey == null ? null : normalizeMemoryText(String(patch.ownerActorKey)),
+            importance: patch.importance == null ? undefined : clamp01(Number(patch.importance)),
+            forgottenReasonCodes: Array.isArray(patch.forgottenReasonCodes)
+                ? patch.forgottenReasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
+                : undefined,
+        };
+        const inferenceInput = await this.buildOwnedMemoryInferenceInput(state, recordKey, currentLifecycle.recordKind, {
+            ...currentLifecycle,
+            ...normalizedPatch,
+        });
+        const nextLifecycle = enrichLifecycleOwnedState(
+            { ...currentLifecycle, updatedAt: Date.now() },
+            inferenceInput,
+            this.resolvePersonaProfileForInference(state, inferenceInput),
+        );
+        if (normalizedPatch.ownerActorKey !== undefined) {
+            nextLifecycle.ownerActorKey = normalizedPatch.ownerActorKey;
+        }
+        if (normalizedPatch.importance !== undefined) {
+            nextLifecycle.importance = normalizedPatch.importance;
+        }
+        if (normalizedPatch.forgotten !== undefined) {
+            nextLifecycle.forgotten = normalizedPatch.forgotten === true;
+            nextLifecycle.forgottenAt = normalizedPatch.forgotten ? Date.now() : undefined;
+            nextLifecycle.forgottenReasonCodes = normalizedPatch.forgotten
+                ? (normalizedPatch.forgottenReasonCodes && normalizedPatch.forgottenReasonCodes.length > 0 ? normalizedPatch.forgottenReasonCodes : ['manual_mark_forgotten'])
+                : (normalizedPatch.forgottenReasonCodes && normalizedPatch.forgottenReasonCodes.length > 0 ? normalizedPatch.forgottenReasonCodes : ['manual_restore']);
+            nextLifecycle.forgetProbability = normalizedPatch.forgotten
+                ? Math.max(0.92, Number(nextLifecycle.forgetProbability ?? 0))
+                : Math.min(0.45, Number(nextLifecycle.forgetProbability ?? 0));
+        } else if (normalizedPatch.forgottenReasonCodes) {
+            nextLifecycle.forgottenReasonCodes = normalizedPatch.forgottenReasonCodes;
+        }
+        nextLifecycle.updatedAt = Date.now();
+        state.memoryLifecycleIndex = {
+            ...(state.memoryLifecycleIndex ?? {}),
+            [recordKey]: nextLifecycle,
+        };
+        const nextOwned = this.buildOwnedMemoryStateFromLifecycle(nextLifecycle);
+        state.ownedMemoryIndex = {
+            ...(state.ownedMemoryIndex ?? {}),
+            [recordKey]: nextOwned,
+        };
+        await this.persistOwnedMemoryToDb(nextLifecycle);
+        if (nextLifecycle.memorySubtype === 'major_plot_event') {
+            await this.applyMajorEventTrigger(state, nextLifecycle);
+        }
+        this.markDirty();
+        return nextOwned;
+    }
+
+    /**
+     * 功能：按当前画像和记录内容重新计算角色记忆遗忘状态。
+     * 参数：
+     *   recordKey：记录键。
+     * 返回：
+     *   Promise<OwnedMemoryState | null>：重算后的角色记忆状态。
+     */
+    async recomputeOwnedMemoryState(recordKey: string): Promise<OwnedMemoryState | null> {
+        const state = await this.load();
+        await this.hydrateLifecycleIndexFromDb(state);
+        const currentLifecycle = state.memoryLifecycleIndex?.[recordKey];
+        if (!currentLifecycle) {
+            return null;
+        }
+        const inferenceInput = await this.buildOwnedMemoryInferenceInput(state, recordKey, currentLifecycle.recordKind, currentLifecycle);
+        const nextLifecycle = enrichLifecycleOwnedState(
+            { ...currentLifecycle, updatedAt: Date.now() },
+            inferenceInput,
+            this.resolvePersonaProfileForInference(state, inferenceInput),
+        );
+        nextLifecycle.updatedAt = Date.now();
+        state.memoryLifecycleIndex = {
+            ...(state.memoryLifecycleIndex ?? {}),
+            [recordKey]: nextLifecycle,
+        };
+        const nextOwned = this.buildOwnedMemoryStateFromLifecycle(nextLifecycle);
+        state.ownedMemoryIndex = {
+            ...(state.ownedMemoryIndex ?? {}),
+            [recordKey]: nextOwned,
+        };
+        await this.persistOwnedMemoryToDb(nextLifecycle);
+        if (nextLifecycle.memorySubtype === 'major_plot_event') {
+            await this.applyMajorEventTrigger(state, nextLifecycle);
+        }
+        this.markDirty();
+        return nextOwned;
+    }
+
+    /**
      * 功能：记录召回日志，并同步更新复述次数。
      * 参数：
      *   entries：召回日志数组。
@@ -4158,27 +4827,56 @@ export class ChatStateManager {
             }, [])
             .slice(0, retentionLimit);
         state.memoryRecallLog = merged;
-        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
         for (const entry of entries) {
             if (!entry.selected) {
                 continue;
             }
             const previousLifecycle = state.memoryLifecycleIndex?.[entry.recordKey];
-            const nextLifecycle = buildLifecycleState(
-                entry.recordKey,
-                entry.recordKind,
-                previousLifecycle?.salience ?? 0.5,
-                previousLifecycle?.strength ?? 0.5,
-                profile,
-                previousLifecycle?.updatedAt ?? Date.now(),
-                Math.max(0, Number(previousLifecycle?.rehearsalCount ?? 0)) + 1,
-                entry.loggedAt,
-                previousLifecycle?.emotionTag ?? '',
-                previousLifecycle?.relationScope ?? '',
-            );
+            const inferenceInput: OwnedMemoryInferenceInput = {
+                recordKey: entry.recordKey,
+                recordKind: entry.recordKind,
+                title: entry.recordTitle,
+                text: entry.query,
+                fallbackOwnerActorKey: normalizeMemoryText(state.semanticSeed?.identitySeed?.roleKey) || null,
+                current: previousLifecycle,
+            };
+            const nextLifecycle = enrichLifecycleOwnedState({
+                ...buildLifecycleState(
+                    entry.recordKey,
+                    entry.recordKind,
+                    previousLifecycle?.salience ?? 0.5,
+                    previousLifecycle?.strength ?? 0.5,
+                    this.resolvePersonaProfileForInference(state, inferenceInput),
+                    previousLifecycle?.updatedAt ?? Date.now(),
+                    Math.max(0, Number(previousLifecycle?.rehearsalCount ?? 0)) + 1,
+                    entry.loggedAt,
+                    previousLifecycle?.emotionTag ?? '',
+                    previousLifecycle?.relationScope ?? '',
+                ),
+            }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput)) satisfies MemoryLifecycleState;
             state.memoryLifecycleIndex = {
                 ...(state.memoryLifecycleIndex ?? {}),
                 [entry.recordKey]: nextLifecycle,
+            };
+            state.ownedMemoryIndex = {
+                ...(state.ownedMemoryIndex ?? {}),
+                [entry.recordKey]: {
+                    recordKey: entry.recordKey,
+                    ownerActorKey: nextLifecycle.ownerActorKey ?? null,
+                    recordKind: entry.recordKind,
+                    memoryType: nextLifecycle.memoryType ?? 'other',
+                    memorySubtype: nextLifecycle.memorySubtype ?? 'other',
+                    sourceScope: nextLifecycle.sourceScope ?? 'system',
+                    importance: nextLifecycle.importance ?? nextLifecycle.salience,
+                    forgetProbability: nextLifecycle.forgetProbability ?? 0,
+                    forgotten: nextLifecycle.forgotten === true,
+                    forgottenAt: nextLifecycle.forgottenAt,
+                    forgottenReasonCodes: nextLifecycle.forgottenReasonCodes ?? [],
+                    lastForgetRollAt: nextLifecycle.lastForgetRollAt || undefined,
+                    reinforcedByEventIds: nextLifecycle.reinforcedByEventIds ?? [],
+                    invalidatedByEventIds: nextLifecycle.invalidatedByEventIds ?? [],
+                    updatedAt: nextLifecycle.updatedAt,
+                },
             };
             if (entry.recordKind === 'fact') {
                 await db.facts.update(entry.recordKey, {
@@ -4751,7 +5449,10 @@ export class ChatStateManager {
             state.coldStartPrimedAt = undefined;
             state.semanticSeed = undefined;
             state.personaMemoryProfile = undefined;
+            state.personaMemoryProfiles = undefined;
             state.simpleMemoryPersona = undefined;
+            state.simpleMemoryPersonas = undefined;
+            state.activeActorKey = undefined;
             state.memoryCandidateBuffer = [];
             state.memoryLifecycleIndex = {};
             state.memoryRecallLog = [];

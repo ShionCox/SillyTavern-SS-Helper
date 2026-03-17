@@ -62,6 +62,18 @@ export interface DBEvent {
     lastRecalledAt?: number;
     emotionTag?: string;
     relationScope?: string;
+    ownerActorKey?: string | null;
+    memoryType?: string;
+    memorySubtype?: string;
+    sourceScope?: string;
+    importance?: number;
+    forgetProbability?: number;
+    forgotten?: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes?: string[];
+    lastForgetRollAt?: number;
+    reinforcedByEventIds?: string[];
+    invalidatedByEventIds?: string[];
     encodeScore?: number;
     profileVersion?: string;
 }
@@ -83,15 +95,44 @@ export interface DBFact {
     lastRecalledAt?: number;
     emotionTag?: string;
     relationScope?: string;
+    ownerActorKey?: string | null;
+    memoryType?: string;
+    memorySubtype?: string;
+    sourceScope?: string;
+    importance?: number;
+    forgetProbability?: number;
+    forgotten?: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes?: string[];
+    lastForgetRollAt?: number;
+    reinforcedByEventIds?: string[];
+    invalidatedByEventIds?: string[];
     encodeScore?: number;
     profileVersion?: string;
+}
+
+export interface DBWorldStateValue {
+    title?: string;
+    summary?: string;
+    scopeType?: string;
+    stateType?: string;
+    subjectId?: string;
+    regionId?: string;
+    cityId?: string;
+    locationId?: string;
+    itemId?: string;
+    keywords?: string[];
+    tags?: string[];
+    confidence?: number;
+    sourceRefs?: string[];
+    [key: string]: unknown;
 }
 
 export interface DBWorldState {
     stateKey: string;
     chatKey: string;
     path: string;
-    value: any;
+    value: DBWorldStateValue | Record<string, unknown> | string | number | boolean | null;
     sourceEventId?: string;
     updatedAt: number;
 }
@@ -113,6 +154,18 @@ export interface DBSummary {
     lastRecalledAt?: number;
     emotionTag?: string;
     relationScope?: string;
+    ownerActorKey?: string | null;
+    memoryType?: string;
+    memorySubtype?: string;
+    sourceScope?: string;
+    importance?: number;
+    forgetProbability?: number;
+    forgotten?: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes?: string[];
+    lastForgetRollAt?: number;
+    reinforcedByEventIds?: string[];
+    invalidatedByEventIds?: string[];
     encodeScore?: number;
     profileVersion?: string;
 }

@@ -37,9 +37,6 @@ type TooltipGlobalRef = typeof globalThis & {
 // DOM helpers
 // ---------------------------------------------------------------------------
 
-function isOwnedNode(node: Element | null): boolean {
-  return node?.hasAttribute("data-stx-shared-tooltip-runtime") === true;
-}
 
 function markNode(node: Element): void {
   node.setAttribute("data-stx-shared-tooltip-runtime", "");

@@ -5,6 +5,7 @@ import {
     buildScoredMemoryCandidate,
     buildSimpleMemoryPersona,
     inferPersonaMemoryProfile,
+    inferPersonaMemoryProfiles,
     resolveInjectedMemoryTone,
     scoreRecallCandidate,
 } from '../src/core/memory-intelligence';
@@ -36,6 +37,142 @@ describe('memory-intelligence', (): void => {
         expect(strongProfile.totalCapacity).toBeGreaterThan(weakProfile.totalCapacity);
         expect(strongProfile.relationshipSensitivity).toBeGreaterThan(weakProfile.relationshipSensitivity);
         expect(strongProfile.forgettingSpeed).toBeLessThan(weakProfile.forgettingSpeed);
+    });
+
+    it('会为多角色种子分别推导 persona map', (): void => {
+        const profiles = inferPersonaMemoryProfiles(
+            {
+                version: 'seed.v2',
+                settingSummary: '双角色共同推进剧情。',
+                identitySeed: {
+                    roleKey: 'alice',
+                    displayName: 'Alice',
+                    aliases: ['A'],
+                    identity: ['调查员'],
+                    catchphrases: ['保持冷静'],
+                    relationshipAnchors: ['信任 Bob'],
+                    sourceTrace: [],
+                },
+                identitySeeds: {
+                    alice: {
+                        roleKey: 'alice',
+                        displayName: 'Alice',
+                        aliases: ['A'],
+                        identity: ['调查员'],
+                        catchphrases: ['保持冷静'],
+                        relationshipAnchors: ['信任 Bob'],
+                        sourceTrace: [],
+                    },
+                    bob: {
+                        roleKey: 'bob',
+                        displayName: 'Bob',
+                        aliases: ['B'],
+                        identity: ['护卫'],
+                        catchphrases: ['交给我'],
+                        relationshipAnchors: ['保护 Alice'],
+                        sourceTrace: [],
+                    },
+                },
+                goals: ['调查真相'],
+                taboo: [],
+                worldRules: [],
+                userPersonaHints: [],
+                sourceRefs: [],
+                updatedAt: Date.now(),
+            },
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                stylePreference: 'story',
+                extractStrategy: 'facts_relations_world',
+            },
+            {
+                ...DEFAULT_GROUP_MEMORY,
+                lanes: [
+                    {
+                        laneId: 'lane-alice',
+                        actorKey: 'alice',
+                        displayName: 'Alice',
+                        focusWeight: 0.82,
+                        memoryWeight: 0.78,
+                        lastTone: 'calm',
+                        lastStyle: 'narrative',
+                        relationshipDelta: '更依赖 Bob',
+                        updatedAt: Date.now(),
+                    },
+                    {
+                        laneId: 'lane-bob',
+                        actorKey: 'bob',
+                        displayName: 'Bob',
+                        focusWeight: 0.74,
+                        memoryWeight: 0.69,
+                        lastTone: 'warm',
+                        lastStyle: 'dialogue',
+                        relationshipDelta: '更保护 Alice',
+                        updatedAt: Date.now(),
+                    },
+                ],
+            },
+        );
+
+        expect(Object.keys(profiles)).toEqual(expect.arrayContaining(['alice', 'bob']));
+        expect(profiles.alice?.profileVersion).toBe('persona.v2');
+        expect(profiles.bob?.profileVersion).toBe('persona.v2');
+        expect(profiles.alice?.derivedFrom.some((item: string): boolean => item.includes('identity_seed'))).toBe(true);
+        expect(profiles.bob?.derivedFrom.some((item: string): boolean => item.includes('identity_seed'))).toBe(true);
+    });
+
+    it('重算画像时会把 assistant 前缀角色归并到同一 actorKey', (): void => {
+        const profiles = inferPersonaMemoryProfiles(
+            {
+                version: 'seed.v2',
+                settingSummary: '艾莉卡是主角。',
+                identitySeed: {
+                    roleKey: '艾莉卡·暮影',
+                    displayName: '艾莉卡·暮影',
+                    aliases: [],
+                    identity: ['法师'],
+                    catchphrases: [],
+                    relationshipAnchors: [],
+                    sourceTrace: [],
+                },
+                identitySeeds: {
+                    'assistant:艾莉卡·暮影': {
+                        roleKey: 'assistant:艾莉卡·暮影',
+                        displayName: '艾莉卡·暮影',
+                        aliases: [],
+                        identity: ['法师'],
+                        catchphrases: [],
+                        relationshipAnchors: [],
+                        sourceTrace: [],
+                    },
+                },
+                goals: [],
+                taboo: [],
+                worldRules: [],
+                userPersonaHints: [],
+                sourceRefs: [],
+                updatedAt: Date.now(),
+            },
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                stylePreference: 'story',
+            },
+            {
+                ...DEFAULT_GROUP_MEMORY,
+                lanes: [
+                    {
+                        laneId: 'lane-erika',
+                        actorKey: 'assistant:艾莉卡·暮影',
+                        displayName: '艾莉卡·暮影',
+                        focusWeight: 0.8,
+                        memoryWeight: 0.8,
+                        updatedAt: Date.now(),
+                    },
+                ],
+            },
+        );
+
+        expect(Object.keys(profiles)).toEqual(['艾莉卡·暮影']);
     });
 
     it('会根据候选内容决定编码层级和是否接受', (): void => {

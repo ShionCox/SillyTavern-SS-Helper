@@ -599,6 +599,7 @@ export interface ChatSemanticSeed {
     }>;
     presetStyle: string;
     identitySeed: IdentitySeed;
+    identitySeeds?: Record<string, IdentitySeed>;
     worldSeed: WorldSeed;
     styleSeed: StyleSeed;
     aiSummary?: SemanticAiSummary;
@@ -666,6 +667,36 @@ export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
 
 export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
 
+export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
+
+export type MemorySubtype =
+    | 'identity'
+    | 'trait'
+    | 'preference'
+    | 'bond'
+    | 'emotion_imprint'
+    | 'goal'
+    | 'promise'
+    | 'secret'
+    | 'rumor'
+    | 'major_plot_event'
+    | 'minor_event'
+    | 'combat_event'
+    | 'travel_event'
+    | 'conversation_event'
+    | 'global_rule'
+    | 'city_rule'
+    | 'location_fact'
+    | 'item_rule'
+    | 'faction_rule'
+    | 'world_history'
+    | 'current_scene'
+    | 'current_conflict'
+    | 'temporary_status'
+    | 'other';
+
+export type MemorySourceScope = 'self' | 'target' | 'group' | 'world' | 'system';
+
 export type MemoryDecayStage = 'clear' | 'blur' | 'distorted';
 
 export type InjectedMemoryTone = 'stable_fact' | 'clear_recall' | 'blurred_recall' | 'possible_misremember';
@@ -686,6 +717,8 @@ export interface PersonaMemoryProfile {
     updatedAt: number;
 }
 
+export type PersonaMemoryProfileMap = Record<string, PersonaMemoryProfile>;
+
 export interface SimpleMemoryPersona {
     memoryStrength: 'weak' | 'balanced' | 'strong';
     emotionalMemory: 'low' | 'medium' | 'high';
@@ -694,6 +727,8 @@ export interface SimpleMemoryPersona {
     distortionRisk: 'low' | 'medium' | 'high';
     updatedAt: number;
 }
+
+export type SimpleMemoryPersonaMap = Record<string, SimpleMemoryPersona>;
 
 export interface EncodingScore {
     totalScore: number;
@@ -733,6 +768,18 @@ export interface MemoryLifecycleState {
     recordKey: string;
     recordKind: MemoryRecordKind;
     stage: MemoryDecayStage;
+    ownerActorKey?: string | null;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    sourceScope?: MemorySourceScope;
+    importance?: number;
+    forgetProbability?: number;
+    forgotten?: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes?: string[];
+    lastForgetRollAt?: number;
+    reinforcedByEventIds?: string[];
+    invalidatedByEventIds?: string[];
     strength: number;
     salience: number;
     rehearsalCount: number;
@@ -742,6 +789,56 @@ export interface MemoryLifecycleState {
     relationScope: string;
     updatedAt: number;
 }
+
+export interface OwnedMemoryState {
+    recordKey: string;
+    ownerActorKey: string | null;
+    recordKind: MemoryRecordKind;
+    memoryType: MemoryType;
+    memorySubtype: MemorySubtype;
+    sourceScope: MemorySourceScope;
+    importance: number;
+    forgetProbability: number;
+    forgotten: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes: string[];
+    lastForgetRollAt?: number;
+    reinforcedByEventIds: string[];
+    invalidatedByEventIds: string[];
+    updatedAt: number;
+}
+
+export type WorldStateScopeType = 'global' | 'region' | 'city' | 'location' | 'faction' | 'item' | 'character' | 'scene';
+
+export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship_hook';
+
+export interface WorldStateNodeValue {
+    title: string;
+    summary: string;
+    scopeType: WorldStateScopeType;
+    stateType: WorldStateType;
+    subjectId?: string;
+    regionId?: string;
+    cityId?: string;
+    locationId?: string;
+    itemId?: string;
+    keywords: string[];
+    tags: string[];
+    confidence?: number;
+    sourceRefs?: string[];
+    updatedAt: number;
+}
+
+export interface StructuredWorldStateEntry {
+    stateKey: string;
+    path: string;
+    rawValue: unknown;
+    node: WorldStateNodeValue;
+    sourceEventId?: string;
+    updatedAt: number;
+}
+
+export type WorldStateGroupingResult = Record<string, Record<string, StructuredWorldStateEntry[]>>;
 
 export interface RecallLogEntry {
     recallId: string;
@@ -1316,7 +1413,10 @@ export interface MemoryOSChatState {
     coldStartLorebookEntrySelection?: ColdStartLorebookEntrySelection[];
     coldStartSkipLorebookSelection?: boolean;
     personaMemoryProfile?: PersonaMemoryProfile;
+    personaMemoryProfiles?: PersonaMemoryProfileMap;
     simpleMemoryPersona?: SimpleMemoryPersona;
+    simpleMemoryPersonas?: SimpleMemoryPersonaMap;
+    activeActorKey?: string;
     coldStartFingerprint?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
@@ -1328,6 +1428,7 @@ export interface MemoryOSChatState {
     groupMemory?: GroupMemoryState;
     memoryCandidateBuffer?: MemoryCandidate[];
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
+    ownedMemoryIndex?: Record<string, OwnedMemoryState>;
     memoryRecallLog?: RecallLogEntry[];
     latestRecallExplanation?: LatestRecallExplanation | null;
     relationshipStateMap?: Record<string, RelationshipState>;

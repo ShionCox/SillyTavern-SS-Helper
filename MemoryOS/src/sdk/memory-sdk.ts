@@ -62,6 +62,7 @@ import type {
     MemoryMigrationStatus,
     MemoryQualityScorecard,
     MemoryTuningProfile,
+    OwnedMemoryState,
     PersonaMemoryProfile,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
@@ -73,11 +74,13 @@ import type {
     RecallLogEntry,
     RelationshipState,
     RetentionPolicy,
+    StructuredWorldStateEntry,
     SimpleMemoryPersona,
     SummaryPolicyOverride,
     StrategyDecision,
     UserFacingChatPreset,
     VectorLifecycleState,
+    WorldStateGroupingResult,
     RowRefResolution,
     RowSeedData,
     LogicTableQueryOpts,
@@ -582,6 +585,12 @@ export class MemorySDKImpl implements MemorySDK {
         query: (prefix: string) => {
             return this.stateManager.query(prefix);
         },
+        queryStructured: (prefix?: string): Promise<StructuredWorldStateEntry[]> => {
+            return this.stateManager.queryStructured(prefix);
+        },
+        queryGrouped: (prefix?: string): Promise<WorldStateGroupingResult> => {
+            return this.stateManager.queryGrouped(prefix);
+        },
     };
 
     // 摘要
@@ -950,11 +959,26 @@ export class MemorySDKImpl implements MemorySDK {
         getPersonaMemoryProfile: (): Promise<PersonaMemoryProfile | null> => {
             return this.chatStateManager.getPersonaMemoryProfile();
         },
+        getPersonaMemoryProfiles: (): Promise<Record<string, PersonaMemoryProfile>> => {
+            return this.chatStateManager.getPersonaMemoryProfiles();
+        },
+        getPersonaMemoryProfileForActor: (actorKey: string): Promise<PersonaMemoryProfile | null> => {
+            return this.chatStateManager.getPersonaMemoryProfileForActor(actorKey);
+        },
+        getActiveActorKey: (): Promise<string | null> => {
+            return this.chatStateManager.getActiveActorKey();
+        },
+        setActiveActorKey: (actorKey: string | null): Promise<string | null> => {
+            return this.chatStateManager.setActiveActorKey(actorKey);
+        },
         getSimpleMemoryPersona: (): Promise<SimpleMemoryPersona | null> => {
             return this.chatStateManager.getSimpleMemoryPersona();
         },
         recomputePersonaMemoryProfile: (): Promise<PersonaMemoryProfile> => {
             return this.chatStateManager.recomputePersonaMemoryProfile();
+        },
+        recomputePersonaMemoryProfiles: (): Promise<Record<string, PersonaMemoryProfile>> => {
+            return this.chatStateManager.recomputePersonaMemoryProfiles();
         },
         listMemoryCandidates: (limit?: number): Promise<MemoryCandidate[]> => {
             return this.chatStateManager.listMemoryCandidates(limit);
@@ -970,6 +994,15 @@ export class MemorySDKImpl implements MemorySDK {
         },
         getMemoryLifecycleSummary: (limit?: number): Promise<MemoryLifecycleState[]> => {
             return this.chatStateManager.getMemoryLifecycleSummary(limit);
+        },
+        getOwnedMemoryStates: (limit?: number): Promise<OwnedMemoryState[]> => {
+            return this.chatStateManager.getOwnedMemoryStates(limit);
+        },
+        updateOwnedMemoryState: (recordKey: string, patch: Partial<Pick<OwnedMemoryState, 'ownerActorKey' | 'memoryType' | 'memorySubtype' | 'sourceScope' | 'importance' | 'forgotten' | 'forgottenReasonCodes'>>): Promise<OwnedMemoryState | null> => {
+            return this.chatStateManager.updateOwnedMemoryState(recordKey, patch);
+        },
+        recomputeOwnedMemoryState: (recordKey: string): Promise<OwnedMemoryState | null> => {
+            return this.chatStateManager.recomputeOwnedMemoryState(recordKey);
         },
         recomputeRecallRanking: (query?: string): Promise<RecallLogEntry[]> => {
             return this.chatStateManager.recomputeRecallRanking(query);

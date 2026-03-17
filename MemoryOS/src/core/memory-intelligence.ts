@@ -3,13 +3,17 @@ import type {
     ChatSemanticSeed,
     EncodingScore,
     GroupMemoryState,
+    IdentitySeed,
     InjectedMemoryTone,
     MemoryCandidate,
     MemoryCandidateKind,
     MemoryDecayStage,
     MemoryLayer,
     MemoryLifecycleState,
+    MemorySourceScope,
+    MemorySubtype,
     MemoryTuningProfile,
+    MemoryType,
     RelationshipState,
     SimpleMemoryPersona,
     PersonaMemoryProfile,
@@ -18,6 +22,10 @@ import {
     DEFAULT_PERSONA_MEMORY_PROFILE,
     DEFAULT_SIMPLE_MEMORY_PERSONA,
 } from '../types';
+import {
+    areEquivalentPersonaActorKeys,
+    choosePreferredPersonaActorKey,
+} from './persona-compat';
 
 export interface MemoryCandidateInput {
     candidateId: string;
@@ -48,6 +56,21 @@ export interface RecallScoreResult {
     score: number;
     tone: InjectedMemoryTone;
     reasonCodes: string[];
+}
+
+export interface OwnedMemoryInferenceInput {
+    recordKey: string;
+    recordKind: MemoryLifecycleState['recordKind'];
+    title?: string;
+    text?: string;
+    path?: string;
+    factType?: string;
+    entityKind?: string;
+    entityId?: string;
+    keywords?: string[];
+    value?: unknown;
+    fallbackOwnerActorKey?: string | null;
+    current?: Partial<MemoryLifecycleState>;
 }
 
 /**
@@ -88,15 +111,36 @@ export function inferPersonaMemoryProfile(
     seed: ChatSemanticSeed | null,
     profile: ChatProfile,
     groupMemory: GroupMemoryState | null,
+    actorKey?: string | null,
 ): PersonaMemoryProfile {
+    const normalizedActorKey: string = normalizeMemoryText(actorKey);
+    const selectedIdentitySeed: IdentitySeed | null = (() => {
+        const identitySeeds = seed?.identitySeeds ?? {};
+        if (normalizedActorKey && identitySeeds[normalizedActorKey]) {
+            return identitySeeds[normalizedActorKey];
+        }
+        if (normalizedActorKey && normalizeMemoryText(seed?.identitySeed?.roleKey) === normalizedActorKey) {
+            return seed?.identitySeed ?? null;
+        }
+        return seed?.identitySeed ?? null;
+    })();
+    const selectedLane = Array.isArray(groupMemory?.lanes)
+        ? groupMemory!.lanes.find((lane) => normalizeMemoryText(lane.actorKey) === normalizedActorKey)
+        : undefined;
     const styleMode: string = normalizeMemoryText(seed?.styleSeed?.mode);
     const groupSize: number = Array.isArray(seed?.groupMembers) ? seed!.groupMembers.length : 0;
-    const relationAnchors: number = Array.isArray(seed?.identitySeed?.relationshipAnchors)
-        ? seed!.identitySeed.relationshipAnchors.length
+    const relationAnchors: number = Array.isArray(selectedIdentitySeed?.relationshipAnchors)
+        ? selectedIdentitySeed!.relationshipAnchors.length
         : 0;
-    const emotionalLaneCount: number = Array.isArray(groupMemory?.lanes)
-        ? groupMemory!.lanes.filter((lane) => normalizeMemoryText(lane.lastEmotion)).length
-        : 0;
+    const emotionalLaneCount: number = selectedLane
+        ? (normalizeMemoryText(selectedLane.lastEmotion) ? 1 : 0)
+        : Array.isArray(groupMemory?.lanes)
+            ? groupMemory!.lanes.filter((lane) => normalizeMemoryText(lane.lastEmotion)).length
+            : 0;
+    const identityDensity: number = Array.isArray(selectedIdentitySeed?.identity) ? selectedIdentitySeed!.identity.length : 0;
+    const catchphraseCount: number = Array.isArray(selectedIdentitySeed?.catchphrases) ? selectedIdentitySeed!.catchphrases.length : 0;
+    const relationshipDeltaSignal: number = normalizeMemoryText(selectedLane?.relationshipDelta) ? 1 : 0;
+    const goalSignal: number = normalizeMemoryText(selectedLane?.recentGoal) ? 1 : 0;
 
     const totalCapacity: number = profile.memoryStrength === 'high'
         ? 0.84
@@ -151,28 +195,68 @@ export function inferPersonaMemoryProfile(
                     ? 0.52
                     : 0.42,
     );
-
-    return {
+    const actorAdjustedProfile: PersonaMemoryProfile = {
         ...DEFAULT_PERSONA_MEMORY_PROFILE,
-        profileVersion: 'persona.v1',
-        totalCapacity,
-        eventMemory: clamp01(eventMemoryBase + (groupSize > 1 ? 0.06 : 0)),
-        factMemory: clamp01(factMemoryBase + (relationAnchors > 0 ? 0.04 : 0)),
-        emotionalBias,
-        relationshipSensitivity,
-        forgettingSpeed,
-        distortionTendency,
-        selfNarrativeBias,
-        privacyGuard,
+        profileVersion: 'persona.v2',
+        totalCapacity: clamp01(totalCapacity + Math.min(0.12, identityDensity * 0.03) + (goalSignal ? 0.04 : 0)),
+        eventMemory: clamp01(eventMemoryBase + (groupSize > 1 ? 0.06 : 0) + (relationshipDeltaSignal ? 0.04 : 0)),
+        factMemory: clamp01(factMemoryBase + (relationAnchors > 0 ? 0.04 : 0) + Math.min(0.08, catchphraseCount * 0.02)),
+        emotionalBias: clamp01(emotionalBias + (normalizeMemoryText(selectedLane?.lastEmotion) && normalizeMemoryText(selectedLane?.lastEmotion) !== 'neutral' ? 0.06 : 0)),
+        relationshipSensitivity: clamp01(relationshipSensitivity + (relationshipDeltaSignal ? 0.08 : 0)),
+        forgettingSpeed: clamp01(forgettingSpeed - Math.min(0.08, relationAnchors * 0.02) + (normalizedActorKey && !selectedIdentitySeed ? 0.04 : 0)),
+        distortionTendency: clamp01(distortionTendency + (selectedLane?.lastStyle === 'narrative' ? 0.04 : 0)),
+        selfNarrativeBias: clamp01(selfNarrativeBias + (identityDensity > 0 ? 0.04 : 0)),
+        privacyGuard: clamp01(privacyGuard + (normalizeMemoryText(selectedIdentitySeed?.alignment) ? 0.02 : 0)),
         allowDistortion: distortionTendency >= 0.55 && profile.chatType !== 'tool' && profile.chatType !== 'worldbook',
         derivedFrom: [
             seed ? 'semantic_seed' : '',
+            normalizedActorKey ? `actor:${normalizedActorKey}` : 'actor:primary',
+            selectedIdentitySeed ? 'identity_seed' : 'fallback_identity_seed',
+            selectedLane ? 'group_lane' : '',
             profile.chatType ? `chat_type:${profile.chatType}` : '',
             profile.stylePreference ? `style:${profile.stylePreference}` : '',
             groupSize > 1 ? 'group_bias' : '',
         ].filter(Boolean),
         updatedAt: Date.now(),
     };
+
+    return actorAdjustedProfile;
+}
+
+export function inferPersonaMemoryProfiles(
+    seed: ChatSemanticSeed | null,
+    profile: ChatProfile,
+    groupMemory: GroupMemoryState | null,
+): Record<string, PersonaMemoryProfile> {
+    const actorKeys: string[] = [];
+    const collectActorKey = (value: unknown): void => {
+        const normalizedActorKey = normalizeMemoryText(value);
+        if (!normalizedActorKey) {
+            return;
+        }
+        const existingIndex = actorKeys.findIndex((actorKey: string): boolean => areEquivalentPersonaActorKeys(actorKey, normalizedActorKey));
+        if (existingIndex >= 0) {
+            actorKeys[existingIndex] = choosePreferredPersonaActorKey(actorKeys[existingIndex], normalizedActorKey);
+            return;
+        }
+        actorKeys.push(normalizedActorKey);
+    };
+
+    collectActorKey(seed?.identitySeed?.roleKey);
+    Object.keys(seed?.identitySeeds ?? {}).forEach((actorKey: string): void => {
+        collectActorKey(actorKey);
+    });
+    (groupMemory?.lanes ?? []).forEach((lane): void => {
+        collectActorKey(lane.actorKey);
+    });
+    if (actorKeys.length <= 0) {
+        const fallbackProfile = inferPersonaMemoryProfile(seed, profile, groupMemory, null);
+        return { primary: fallbackProfile };
+    }
+    return actorKeys.reduce<Record<string, PersonaMemoryProfile>>((result, actorKey: string): Record<string, PersonaMemoryProfile> => {
+        result[actorKey] = inferPersonaMemoryProfile(seed, profile, groupMemory, actorKey);
+        return result;
+    }, {});
 }
 
 /**
@@ -392,6 +476,237 @@ export function buildScoredMemoryCandidate(
     };
 }
 
+function inferMemorySubtypeFromText(input: OwnedMemoryInferenceInput): MemorySubtype {
+    const text: string = normalizeMemoryText([
+        input.recordKey,
+        input.title,
+        input.text,
+        input.path,
+        input.factType,
+        Array.isArray(input.keywords) ? input.keywords.join(' ') : '',
+        typeof input.value === 'string' ? input.value : JSON.stringify(input.value ?? ''),
+    ].join(' ')).toLowerCase();
+    const path: string = normalizeMemoryText(input.path).toLowerCase();
+
+    if (/identity|persona|profile|名字|身份|角色设定/.test(text)) return 'identity';
+    if (/trait|性格|特征|习惯/.test(text)) return 'trait';
+    if (/preference|喜好|偏好|讨厌|口味/.test(text)) return 'preference';
+    if (/bond|关系|好感|信任|亲密|敌意|背叛/.test(text)) return 'bond';
+    if (/emotion|情绪|伤心|开心|愤怒|害怕|创伤/.test(text)) return 'emotion_imprint';
+    if (/goal|目标|计划|任务|想要/.test(text)) return 'goal';
+    if (/promise|约定|誓言|承诺/.test(text)) return 'promise';
+    if (/secret|隐私|秘密|不能说/.test(text)) return 'secret';
+    if (/rumor|流言|谣言|道听途说/.test(text)) return 'rumor';
+    if (/major|关键|重大|转折|决战|真相|plot/.test(text)) return 'major_plot_event';
+    if (/combat|战斗|交战|战场/.test(text)) return 'combat_event';
+    if (/travel|旅途|出发|抵达|赶路/.test(text)) return 'travel_event';
+    if (/conversation|对话|交谈|聊天/.test(text)) return 'conversation_event';
+    if (/history|历史|过去|往事|起源/.test(text)) return 'world_history';
+    if (/scene|场景|现场/.test(text) || /scene/.test(path)) return 'current_scene';
+    if (/conflict|冲突|对立|矛盾/.test(text) || /conflict/.test(path)) return 'current_conflict';
+    if (/status|状态|受伤|中毒|冷却|临时/.test(text) || /status/.test(path)) return 'temporary_status';
+    if (/city/.test(path) || /城市|城规|城内/.test(text)) return 'city_rule';
+    if (/faction/.test(path) || /派系|阵营|组织/.test(text)) return 'faction_rule';
+    if (/item/.test(path) || /物品|道具|遗物|装备/.test(text)) return 'item_rule';
+    if (/rule|constraint|规则|设定|限制/.test(text)) return 'global_rule';
+    if (/location|地点|区域|房间|地标/.test(text) || /location/.test(path)) return 'location_fact';
+    if (input.recordKind === 'summary') return 'minor_event';
+    if (input.recordKind === 'state') return 'location_fact';
+    return 'other';
+}
+
+function inferMemoryTypeFromSubtype(subtype: MemorySubtype): MemoryType {
+    if (['identity', 'trait', 'preference', 'promise', 'secret'].includes(subtype)) return 'identity';
+    if (['bond', 'emotion_imprint'].includes(subtype)) return 'relationship';
+    if (['goal', 'current_scene', 'current_conflict', 'temporary_status'].includes(subtype)) return 'status';
+    if (['major_plot_event', 'minor_event', 'combat_event', 'travel_event', 'conversation_event', 'rumor'].includes(subtype)) return 'event';
+    if (['global_rule', 'city_rule', 'location_fact', 'item_rule', 'faction_rule', 'world_history'].includes(subtype)) return 'world';
+    return 'other';
+}
+
+function inferSourceScope(memoryType: MemoryType, ownerActorKey: string | null, subtype: MemorySubtype, relationScope: string): MemorySourceScope {
+    if (memoryType === 'world') {
+        return 'world';
+    }
+    if (memoryType === 'relationship' || subtype === 'bond' || relationScope) {
+        return ownerActorKey ? 'target' : 'group';
+    }
+    if (ownerActorKey) {
+        return 'self';
+    }
+    if (memoryType === 'event') {
+        return 'group';
+    }
+    return 'system';
+}
+
+function inferImportance(memoryType: MemoryType, subtype: MemorySubtype, salience: number, strength: number, rehearsalCount: number): number {
+    let base: number = salience * 0.52 + strength * 0.3 + Math.min(0.12, rehearsalCount * 0.02);
+    if (subtype === 'major_plot_event' || subtype === 'identity' || subtype === 'global_rule') {
+        base += 0.18;
+    } else if (subtype === 'bond' || subtype === 'emotion_imprint' || subtype === 'goal') {
+        base += 0.12;
+    } else if (subtype === 'minor_event' || subtype === 'temporary_status' || subtype === 'rumor') {
+        base -= 0.08;
+    }
+    if (memoryType === 'world') {
+        base += 0.08;
+    }
+    return clamp01(base);
+}
+
+function getSubtypeForgettingBase(subtype: MemorySubtype): number {
+    switch (subtype) {
+        case 'identity':
+        case 'global_rule':
+            return 0.04;
+        case 'trait':
+        case 'city_rule':
+        case 'world_history':
+            return 0.08;
+        case 'bond':
+        case 'emotion_imprint':
+        case 'goal':
+        case 'promise':
+            return 0.18;
+        case 'major_plot_event':
+            return 0.16;
+        case 'conversation_event':
+            return 0.28;
+        case 'combat_event':
+        case 'travel_event':
+            return 0.34;
+        case 'minor_event':
+        case 'temporary_status':
+            return 0.46;
+        case 'rumor':
+            return 0.58;
+        default:
+            return 0.32;
+    }
+}
+
+function getSubtypeAgeWindowDays(subtype: MemorySubtype): number {
+    switch (subtype) {
+        case 'identity':
+        case 'global_rule':
+        case 'world_history':
+            return 180;
+        case 'trait':
+        case 'bond':
+        case 'emotion_imprint':
+        case 'goal':
+        case 'promise':
+            return 90;
+        case 'major_plot_event':
+            return 60;
+        case 'conversation_event':
+            return 21;
+        case 'combat_event':
+        case 'travel_event':
+            return 28;
+        case 'minor_event':
+        case 'temporary_status':
+            return 10;
+        case 'rumor':
+            return 7;
+        default:
+            return 30;
+    }
+}
+
+export function enrichLifecycleOwnedState(
+    lifecycle: MemoryLifecycleState,
+    input: OwnedMemoryInferenceInput,
+    profile: PersonaMemoryProfile,
+    now: number = Date.now(),
+): MemoryLifecycleState {
+    const inferredSubtype: MemorySubtype = input.current?.memorySubtype ?? lifecycle.memorySubtype ?? inferMemorySubtypeFromText(input);
+    const inferredType: MemoryType = input.current?.memoryType ?? lifecycle.memoryType ?? inferMemoryTypeFromSubtype(inferredSubtype);
+    const ownerActorKey: string | null = input.current?.ownerActorKey !== undefined
+        ? (input.current.ownerActorKey == null ? null : normalizeMemoryText(input.current.ownerActorKey))
+        : normalizeMemoryText(input.entityKind) === 'character'
+            ? normalizeMemoryText(input.entityId)
+            : normalizeMemoryText(input.fallbackOwnerActorKey) || null;
+    const relationScope: string = normalizeMemoryText(lifecycle.relationScope || input.current?.relationScope);
+    const sourceScope: MemorySourceScope = input.current?.sourceScope
+        ?? lifecycle.sourceScope
+        ?? inferSourceScope(inferredType, ownerActorKey, inferredSubtype, relationScope);
+    const importance: number = clamp01(Number(
+        input.current?.importance
+        ?? lifecycle.importance
+        ?? inferImportance(inferredType, inferredSubtype, lifecycle.salience, lifecycle.strength, lifecycle.rehearsalCount),
+    ));
+    const referenceTs: number = Math.max(Number(lifecycle.updatedAt ?? 0), Number(lifecycle.lastRecalledAt ?? 0));
+    const ageDays: number = referenceTs > 0 ? Math.max(0, (now - referenceTs) / (1000 * 60 * 60 * 24)) : 999;
+    const ageFactor: number = clamp01(ageDays / getSubtypeAgeWindowDays(inferredSubtype));
+    const baseForget: number = getSubtypeForgettingBase(inferredSubtype);
+    const stagePenalty: number = lifecycle.stage === 'distorted' ? 0.22 : lifecycle.stage === 'blur' ? 0.1 : 0;
+    const rehearsalProtection: number = Math.min(0.24, lifecycle.rehearsalCount * 0.035);
+    const relationProtection: number = inferredType === 'relationship' ? profile.relationshipSensitivity * 0.16 : 0;
+    const emotionProtection: number = lifecycle.emotionTag ? profile.emotionalBias * 0.12 : 0;
+    const knowledgeProtection: number = inferredType === 'world' || inferredType === 'identity'
+        ? profile.factMemory * 0.16
+        : inferredType === 'event'
+            ? profile.eventMemory * 0.12
+            : 0;
+    const reinforcementProtection: number = Math.min(0.18, (input.current?.reinforcedByEventIds?.length ?? lifecycle.reinforcedByEventIds?.length ?? 0) * 0.06);
+    const invalidationPenalty: number = Math.min(0.24, (input.current?.invalidatedByEventIds?.length ?? lifecycle.invalidatedByEventIds?.length ?? 0) * 0.08);
+    const forgetProbability: number = clamp01(
+        baseForget
+        + ageFactor * 0.34
+        + profile.forgettingSpeed * 0.24
+        + stagePenalty
+        + invalidationPenalty
+        - importance * 0.22
+        - lifecycle.strength * 0.16
+        - lifecycle.salience * 0.12
+        - rehearsalProtection
+        - relationProtection
+        - emotionProtection
+        - knowledgeProtection
+        - reinforcementProtection,
+    );
+    const previouslyForgotten: boolean = input.current?.forgotten === true || lifecycle.forgotten === true;
+    const canRecover: boolean = previouslyForgotten && lifecycle.stage === 'clear' && lifecycle.rehearsalCount > 0 && forgetProbability < 0.55;
+    const forgotten: boolean = canRecover
+        ? false
+        : previouslyForgotten
+            ? true
+            : forgetProbability >= 0.86 || (forgetProbability >= 0.72 && lifecycle.stage === 'distorted' && ageFactor >= 0.8);
+    const forgottenReasonCodes: string[] = forgotten
+        ? [
+            forgetProbability >= 0.86 ? 'forget_probability_high' : '',
+            lifecycle.stage === 'distorted' ? 'lifecycle_distorted' : lifecycle.stage === 'blur' ? 'lifecycle_blur' : '',
+            ageFactor >= 0.8 ? 'age_decay_high' : '',
+            ['minor_event', 'temporary_status', 'rumor'].includes(inferredSubtype) ? `subtype_${inferredSubtype}` : '',
+        ].filter(Boolean)
+        : [];
+    return {
+        ...lifecycle,
+        ownerActorKey,
+        memoryType: inferredType,
+        memorySubtype: inferredSubtype,
+        sourceScope,
+        importance,
+        forgetProbability,
+        forgotten,
+        forgottenAt: forgotten ? (input.current?.forgottenAt ?? lifecycle.forgottenAt ?? now) : undefined,
+        forgottenReasonCodes,
+        lastForgetRollAt: now,
+        reinforcedByEventIds: Array.isArray(input.current?.reinforcedByEventIds)
+            ? input.current!.reinforcedByEventIds!
+            : Array.isArray(lifecycle.reinforcedByEventIds)
+                ? lifecycle.reinforcedByEventIds
+                : [],
+        invalidatedByEventIds: Array.isArray(input.current?.invalidatedByEventIds)
+            ? input.current!.invalidatedByEventIds!
+            : Array.isArray(lifecycle.invalidatedByEventIds)
+                ? lifecycle.invalidatedByEventIds
+                : [],
+    };
+}
+
 /**
  * 功能：根据保留强度和时间推导生命周期阶段。
  * 参数：
@@ -440,6 +755,18 @@ export function buildLifecycleState(
         recordKey,
         recordKind,
         stage,
+        ownerActorKey: null,
+        memoryType: 'other',
+        memorySubtype: 'other',
+        sourceScope: 'system',
+        importance: clamp01(salience),
+        forgetProbability: 0,
+        forgotten: false,
+        forgottenAt: undefined,
+        forgottenReasonCodes: [],
+        lastForgetRollAt: 0,
+        reinforcedByEventIds: [],
+        invalidatedByEventIds: [],
         strength: clamp01(strength),
         salience: clamp01(salience),
         rehearsalCount: Math.max(0, Math.round(Number(rehearsalCount ?? 0))),
