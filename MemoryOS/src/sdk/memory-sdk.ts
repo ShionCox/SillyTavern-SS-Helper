@@ -1,4 +1,13 @@
-import type { DerivedRowCandidate, LogicTableRepairMode, LogicTableSummary, LogicTableViewModel, MemorySDK } from '../../../SDK/stx';
+import type {
+    CanonSnapshot,
+    DerivedRowCandidate,
+    EditorExperienceSnapshot,
+    EditorHealthSnapshot,
+    LogicTableRepairMode,
+    LogicTableSummary,
+    LogicTableViewModel,
+    MemorySDK,
+} from '../../../SDK/stx';
 import { Logger } from '../../../SDK/logger';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
@@ -27,15 +36,15 @@ import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
 import { LogicTableFacade } from './logic-table-facade';
+import { openWorldbookInitPanel } from '../ui/index';
 import type { TemplateTableDef } from '../template/types';
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     AutoSchemaPolicy,
-    CanonSnapshot,
     ChatSemanticSeed,
     ChatProfile,
-    EditorHealthSnapshot,
+    ColdStartLorebookSelection,
     EffectivePresetBundle,
     GroupMemoryState,
     InjectionIntent,
@@ -77,6 +86,26 @@ import type {
 } from '../types';
 
 const logger = new Logger('MemorySDK');
+const COLD_START_BOOTSTRAP_TASKS = new Map<string, Promise<void>>();
+const COLD_START_WORLD_SELECTION_TASKS = new Map<string, Promise<ColdStartLorebookSelection | null>>();
+const EMPTY_COLD_START_LOREBOOK_SELECTION: ColdStartLorebookSelection = { books: [], entries: [] };
+
+function hasColdStartLorebookSelection(selection: ColdStartLorebookSelection | null | undefined): boolean {
+    if (!selection) {
+        return false;
+    }
+    return selection.books.length > 0 || selection.entries.length > 0;
+}
+
+function resolveStoredColdStartLorebookSelection(
+    selection: ColdStartLorebookSelection,
+    skipped: boolean,
+): ColdStartLorebookSelection | undefined {
+    if (skipped) {
+        return EMPTY_COLD_START_LOREBOOK_SELECTION;
+    }
+    return hasColdStartLorebookSelection(selection) ? selection : undefined;
+}
 
 /**
  * MemorySDK 门面层 —— 将所有管理器按规范接口统一暴露
@@ -223,6 +252,21 @@ export class MemorySDKImpl implements MemorySDK {
      * @returns Promise<void>
      */
     private async bootstrapSemanticSeedIfNeeded(): Promise<void> {
+        const existingTask = COLD_START_BOOTSTRAP_TASKS.get(this.chatKey_);
+        if (existingTask) {
+            return existingTask;
+        }
+        const task = this.performBootstrapSemanticSeedIfNeeded()
+            .finally((): void => {
+                if (COLD_START_BOOTSTRAP_TASKS.get(this.chatKey_) === task) {
+                    COLD_START_BOOTSTRAP_TASKS.delete(this.chatKey_);
+                }
+            });
+        COLD_START_BOOTSTRAP_TASKS.set(this.chatKey_, task);
+        return task;
+    }
+
+    private async performBootstrapSemanticSeedIfNeeded(): Promise<void> {
         const presetBundle = await this.chatStateManager.getEffectivePresetBundle();
         if (presetBundle.autoBootstrapSemanticSeed === false) {
             return;
@@ -234,8 +278,44 @@ export class MemorySDKImpl implements MemorySDK {
         if (existingSeed || currentFingerprint) {
             return;
         }
-        const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_);
+        const [savedSelection, skipped] = await Promise.all([
+            this.chatStateManager.getColdStartLorebookSelection(),
+            this.chatStateManager.isColdStartLorebookSelectionSkipped(),
+        ]);
+        const selectedLorebooks = skipped
+            ? EMPTY_COLD_START_LOREBOOK_SELECTION
+            : await this.resolveColdStartLorebookSelection(savedSelection);
+        if (selectedLorebooks === null) {
+            return;
+        }
+        if (hasColdStartLorebookSelection(selectedLorebooks)) {
+            await this.chatStateManager.setColdStartLorebookSelection(selectedLorebooks);
+        } else {
+            await this.chatStateManager.setColdStartLorebookSelectionSkipped(true);
+        }
+        await this.chatStateManager.flush();
+        const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_, selectedLorebooks, {
+            forceAi: true,
+            taskDescription: '正在分析冷启动资料并填写初始化结果。',
+            taskPresentation: {
+                surfaceMode: 'fullscreen_blocking',
+                showToast: false,
+                disableComposer: true,
+                title: '冷启动资料分析',
+                subtitle: 'AI 正在整理角色卡、世界书和上下文资料',
+                description: `正在分析 ${selectedLorebooks.books.length} 本整书与 ${selectedLorebooks.entries.length} 条条目，并填写冷启动初始化结果。`,
+                queueLabel: '冷启动资料分析',
+                dedupeVisualKey: `cold-start-ai:${this.chatKey_}`,
+            },
+        });
         if (!bootstrap.seed) {
+            logger.warn('[ColdStart][BootstrapNoSeed]', {
+                chatKey: this.chatKey_,
+                bindingFingerprint: bootstrap.bindingFingerprint,
+                fingerprint: bootstrap.fingerprint,
+                selectedBookCount: selectedLorebooks.books.length,
+                selectedEntryCount: selectedLorebooks.entries.length,
+            });
             return;
         }
         const seed = bootstrap.seed;
@@ -243,6 +323,21 @@ export class MemorySDKImpl implements MemorySDK {
             await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
         }
         await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
+    }
+
+    private async resolveColdStartLorebookSelection(defaultSelection: ColdStartLorebookSelection): Promise<ColdStartLorebookSelection | null> {
+        const existingTask = COLD_START_WORLD_SELECTION_TASKS.get(this.chatKey_);
+        if (existingTask) {
+            return existingTask;
+        }
+        const task = openWorldbookInitPanel({ initialSelection: defaultSelection })
+            .finally((): void => {
+                if (COLD_START_WORLD_SELECTION_TASKS.get(this.chatKey_) === task) {
+                    COLD_START_WORLD_SELECTION_TASKS.delete(this.chatKey_);
+                }
+            });
+        COLD_START_WORLD_SELECTION_TASKS.set(this.chatKey_, task);
+        return task;
     }
 
     /**
@@ -731,6 +826,9 @@ export class MemorySDKImpl implements MemorySDK {
         getEditorHealth: (): Promise<EditorHealthSnapshot> => {
             return this.editorFacade.getEditorHealth();
         },
+        getExperienceSnapshot: (): Promise<EditorExperienceSnapshot> => {
+            return this.editorFacade.getExperienceSnapshot();
+        },
         refreshCanonSnapshot: (): Promise<CanonSnapshot> => {
             return this.editorFacade.getCanonSnapshot();
         },
@@ -743,7 +841,14 @@ export class MemorySDKImpl implements MemorySDK {
             return rebuildResult.view;
         },
         refreshSemanticSeed: async (): Promise<CanonSnapshot> => {
-            const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_);
+            const [savedSelection, skipped] = await Promise.all([
+                this.chatStateManager.getColdStartLorebookSelection(),
+                this.chatStateManager.isColdStartLorebookSelectionSkipped(),
+            ]);
+            const bootstrap = await collectChatSemanticSeedWithAi(
+                this.chatKey_,
+                resolveStoredColdStartLorebookSelection(savedSelection, skipped),
+            );
             if (bootstrap.seed) {
                 if (bootstrap.bindingFingerprint) {
                     await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);

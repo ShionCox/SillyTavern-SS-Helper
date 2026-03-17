@@ -253,7 +253,7 @@ function buildResourceSharedSelectHtml(
     return buildSharedSelectField({
         id: selectId,
         value: selected,
-        containerClassName: 'stx-ui-shared-select stx-ui-shared-select-fluid',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-input stx-ui-input-full',
         triggerClassName: 'stx-ui-input-full',
         selectAttributes: selectDataAttributes,
@@ -859,9 +859,9 @@ function bindUiEvents(): void {
                             ${buildSharedSelectField({
                                     id: `${NAMESPACE}-param-type-${index}`,
                                     value: row.type,
-                                    containerClassName: 'stx-ui-shared-select stx-ui-shared-select-fluid stx-ui-param-type-select',
+                                    containerClassName: 'stx-shared-select-fluid',
                                     selectClassName: 'stx-ui-input stx-ui-input-full',
-                                    triggerClassName: 'stx-ui-input-full',
+                                    triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-compact',
                                     selectAttributes: { 'data-param-type': 'true' },
                                     options: [
                                             { value: 'string', label: '字符串' },

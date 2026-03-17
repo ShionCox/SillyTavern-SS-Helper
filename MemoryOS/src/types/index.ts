@@ -4,6 +4,8 @@ export type {
     AssistantTurnTracker,
     AutoSchemaPolicy,
     ActorSalienceScore,
+    ColdStartLorebookEntrySelection,
+    ColdStartLorebookSelection,
     ChatSemanticSeed,
     ChatProfile,
     ChatProfileOverride,

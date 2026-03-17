@@ -47,6 +47,7 @@ export const SETTINGS_TIME_LIMIT_MIN_ID_Event = "st-roll-settings-Event-time-lim
 export const SETTINGS_TIME_LIMIT_ROW_ID_Event = "st-roll-settings-Event-time-limit-row";
 export const SETTINGS_SKILL_ENABLED_ID_Event = "st-roll-settings-Event-skill-enabled";
 export const SETTINGS_SKILL_EDITOR_WRAP_ID_Event = "st-roll-settings-Event-skill-editor-wrap";
+export const SETTINGS_SKILL_COLS_ID_Event = "st-roll-settings-Event-skill-cols";
 export const SETTINGS_SKILL_ROWS_ID_Event = "st-roll-settings-Event-skill-rows";
 export const SETTINGS_SKILL_ADD_ID_Event = "st-roll-settings-Event-skill-add";
 export const SETTINGS_SKILL_TEXT_ID_Event = "st-roll-settings-Event-skill-text";
@@ -181,6 +182,7 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STRIP_INTERNAL_ID_Event,
   SETTINGS_SKILL_ENABLED_ID_Event,
   SETTINGS_SKILL_EDITOR_WRAP_ID_Event,
+  SETTINGS_SKILL_COLS_ID_Event,
   SETTINGS_SKILL_ROWS_ID_Event,
   SETTINGS_SKILL_ADD_ID_Event,
   SETTINGS_SKILL_TEXT_ID_Event,
@@ -270,6 +272,7 @@ export const SETTINGS_SKILL_PRESET_ACTION_IDS_Event = {
   SETTINGS_SKILL_PRESET_RENAME_ID_Event,
 } as const;
 export const SETTINGS_SKILL_ROWS_EDIT_IDS_Event = {
+  SETTINGS_SKILL_COLS_ID_Event,
   SETTINGS_SKILL_ROWS_ID_Event,
   SETTINGS_SKILL_ADD_ID_Event,
 } as const;

@@ -5,6 +5,7 @@ import type {
     ChatContextSnapshot,
     ChatLifecycleState,
     CharacterSnapshot,
+    EditorExperienceSnapshot,
     ChatSemanticSeed,
     EditorDataLayerSnapshot,
     EditorHealthIssue,
@@ -161,6 +162,94 @@ function finalizeSnapshotValues(map: Map<string, SnapshotValue>, placeholder = t
         return values;
     }
     return [{ value: EMPTY_STABLE_LABEL, confidence: 0, sourceKinds: ['derived'] }];
+}
+
+function mergeSnapshotValuesIntoMap(target: Map<string, SnapshotValue>, values: SnapshotValue[] | undefined): void {
+    for (const value of values ?? []) {
+        const text = normalizeText(value?.value);
+        if (!text || text === EMPTY_STABLE_LABEL) {
+            continue;
+        }
+        const key = normalizeLookupKey(text);
+        const existing = target.get(key);
+        if (!existing) {
+            target.set(key, {
+                value: text,
+                confidence: Number.isFinite(value?.confidence) ? Number(value.confidence) : 0,
+                sourceKinds: Array.isArray(value?.sourceKinds) ? value.sourceKinds.slice() : ['derived'],
+                updatedAt: Number(value?.updatedAt ?? 0) || undefined,
+                sourceRefs: Array.isArray(value?.sourceRefs) ? value.sourceRefs.slice() : undefined,
+            });
+            continue;
+        }
+        existing.confidence = Math.max(Number(existing.confidence ?? 0), Number(value?.confidence ?? 0));
+        const nextKinds = Array.isArray(value?.sourceKinds) ? value.sourceKinds : [];
+        for (const kind of nextKinds) {
+            if (!existing.sourceKinds.includes(kind)) {
+                existing.sourceKinds.push(kind);
+            }
+        }
+        existing.updatedAt = Math.max(Number(existing.updatedAt ?? 0), Number(value?.updatedAt ?? 0)) || undefined;
+        for (const sourceRef of value?.sourceRefs ?? []) {
+            existing.sourceRefs = mergeSourceRefs(existing.sourceRefs, sourceRef);
+        }
+    }
+}
+
+function mergeCharacterSnapshotsByDisplayName(snapshots: CharacterSnapshot[]): CharacterSnapshot[] {
+    const merged = new Map<string, CharacterSnapshot>();
+    for (const item of snapshots) {
+        const displayKey = normalizeLookupKey(item.displayName);
+        const mergeKey = displayKey && displayKey !== normalizeLookupKey(EMPTY_STABLE_LABEL)
+            ? displayKey
+            : normalizeLookupKey(item.actorKey);
+        const existing = merged.get(mergeKey);
+        if (!existing) {
+            merged.set(mergeKey, {
+                actorKey: item.actorKey,
+                displayName: item.displayName,
+                aliases: item.aliases.slice(),
+                identities: item.identities.slice(),
+                relationshipAnchors: item.relationshipAnchors.slice(),
+                currentLocation: item.currentLocation ? { ...item.currentLocation, sourceKinds: item.currentLocation.sourceKinds.slice(), sourceRefs: item.currentLocation.sourceRefs?.slice() } : undefined,
+                lastActiveAt: item.lastActiveAt,
+                sourceRefs: item.sourceRefs?.slice(),
+            });
+            continue;
+        }
+
+        const aliasMap = new Map<string, SnapshotValue>();
+        mergeSnapshotValuesIntoMap(aliasMap, existing.aliases);
+        mergeSnapshotValuesIntoMap(aliasMap, item.aliases);
+        existing.aliases = finalizeSnapshotValues(aliasMap, false);
+
+        const identityMap = new Map<string, SnapshotValue>();
+        mergeSnapshotValuesIntoMap(identityMap, existing.identities);
+        mergeSnapshotValuesIntoMap(identityMap, item.identities);
+        existing.identities = finalizeSnapshotValues(identityMap, true);
+
+        const anchorMap = new Map<string, SnapshotValue>();
+        mergeSnapshotValuesIntoMap(anchorMap, existing.relationshipAnchors);
+        mergeSnapshotValuesIntoMap(anchorMap, item.relationshipAnchors);
+        existing.relationshipAnchors = finalizeSnapshotValues(anchorMap, true);
+
+        const locationMap = new Map<string, SnapshotValue>();
+        mergeSnapshotValuesIntoMap(locationMap, existing.currentLocation ? [existing.currentLocation] : []);
+        mergeSnapshotValuesIntoMap(locationMap, item.currentLocation ? [item.currentLocation] : []);
+        existing.currentLocation = finalizeSnapshotValues(locationMap, false)[0];
+
+        existing.lastActiveAt = Math.max(Number(existing.lastActiveAt ?? 0), Number(item.lastActiveAt ?? 0)) || undefined;
+        for (const sourceRef of item.sourceRefs ?? []) {
+            existing.sourceRefs = mergeSourceRefs(existing.sourceRefs, sourceRef);
+        }
+
+        const currentDisplay = normalizeText(existing.displayName);
+        const nextDisplay = normalizeText(item.displayName);
+        if (currentDisplay === EMPTY_STABLE_LABEL && nextDisplay && nextDisplay !== EMPTY_STABLE_LABEL) {
+            existing.displayName = nextDisplay;
+        }
+    }
+    return Array.from(merged.values());
 }
 
 function sumRecordMapEntries(value: Record<string, Record<string, unknown>>): number {
@@ -347,7 +436,8 @@ function buildCharacterSnapshots(semanticSeed: ChatSemanticSeed | null, groupMem
         });
     }
 
-    return snapshots.sort((left: CharacterSnapshot, right: CharacterSnapshot): number => Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0));
+    return mergeCharacterSnapshotsByDisplayName(snapshots)
+        .sort((left: CharacterSnapshot, right: CharacterSnapshot): number => Number(right.lastActiveAt ?? 0) - Number(left.lastActiveAt ?? 0));
 }
 
 function buildWorldSnapshot(template: WorldTemplate | null, semanticSeed: ChatSemanticSeed | null, groupMemory: GroupMemoryState | null, states: DBWorldState[], characterLocations: SnapshotValue[]): CanonSnapshot['world'] {
@@ -472,6 +562,75 @@ export class MemoryEditorFacade {
 
     async getCanonSnapshot(): Promise<CanonSnapshot> {
         const context = await this.loadContextBundle();
+        return this.buildCanonSnapshotFromContext(context);
+    }
+
+    async getExperienceSnapshot(): Promise<EditorExperienceSnapshot> {
+        const context = await this.loadContextBundle();
+        const canon = this.buildCanonSnapshotFromContext(context);
+        const [
+            profile,
+            quality,
+            retention,
+            simplePersona,
+            lorebookDecision,
+            preDecision,
+            postDecision,
+            lifecycleSummary,
+            candidateSnapshot,
+            recallLog,
+            latestRecallExplanation,
+            migrationStatus,
+            tuningProfile,
+        ] = await Promise.all([
+            this.chatStateManager.getChatProfile(),
+            this.chatStateManager.getMemoryQuality(),
+            this.chatStateManager.getRetentionPolicy(),
+            this.chatStateManager.getSimpleMemoryPersona(),
+            this.chatStateManager.getLorebookDecision(),
+            this.chatStateManager.getLastPreGenerationDecision(),
+            this.chatStateManager.getLastPostGenerationDecision(),
+            this.chatStateManager.getMemoryLifecycleSummary(),
+            this.chatStateManager.getCandidateBufferSnapshot(),
+            this.chatStateManager.getRecallLog(),
+            this.chatStateManager.getLatestRecallExplanation(),
+            this.chatStateManager.getMemoryMigrationStatus(),
+            this.chatStateManager.getMemoryTuningProfile(),
+        ]);
+
+        return {
+            chatKey: this.chatKey,
+            canon,
+            profile,
+            quality,
+            lifecycle: context.lifecycleState,
+            retention,
+            semanticSeed: context.semanticSeed,
+            simplePersona,
+            groupMemory: context.groupMemory,
+            relationshipState: context.relationshipState,
+            logicalView: context.logicalView,
+            lorebookDecision,
+            preDecision,
+            postDecision,
+            lifecycleSummary,
+            candidateSnapshot,
+            recallLog,
+            latestRecallExplanation,
+            migrationStatus,
+            tuningProfile,
+            maintenanceInsights: context.maintenanceInsights,
+            facts: context.facts.slice(0, 36),
+            summaries: context.summaries.slice(0, 18),
+            events: context.events.slice(0, 18),
+            states: context.states
+                .slice()
+                .sort((left: DBWorldState, right: DBWorldState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
+                .slice(0, 18),
+        };
+    }
+
+    private buildCanonSnapshotFromContext(context: EditorContextBundle): CanonSnapshot {
         const characters = buildCharacterSnapshots(context.semanticSeed, context.groupMemory, context.relationshipState, context.facts, context.states);
         const characterLocations = characters.map((item: CharacterSnapshot): SnapshotValue | undefined => item.currentLocation).filter((item: SnapshotValue | undefined): item is SnapshotValue => Boolean(item));
         return {

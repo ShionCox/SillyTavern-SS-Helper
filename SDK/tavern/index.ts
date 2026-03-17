@@ -1,9 +1,15 @@
 export type {
   SdkAccountStorageEvent,
   SdkTavernCharacterEvent,
+  SdkTavernCharacterCapabilitiesEvent,
+  SdkTavernCharacterDataEvent,
+  SdkTavernCharacterExtensionsEvent,
+  SdkTavernCharacterSnapshotEvent,
   SdkTavernChatListItemEvent,
   SdkTavernChatLocatorEvent,
   SdkTavernEventSourceEvent,
+  SdkTavernGroupMemberEvent,
+  SdkTavernGroupSnapshotEvent,
   SdkTavernPromptMessageEvent,
   SdkTavernPromptSystemInsertModeEvent,
   SdkTavernPromptSystemInsertOptionsEvent,
@@ -15,12 +21,17 @@ export type {
   SdkTavernRoleIdentityEvent,
   SdkTavernRuntimeContextEvent,
   SdkTavernSemanticSnapshotEvent,
+  SdkTavernCharacterWorldbookBindingEvent,
+  SdkTavernResolvedWorldbookEntryEvent,
   SdkTavernSlashCommandArgumentFactoryEvent,
   SdkTavernSlashCommandFactoryEvent,
   SdkTavernSlashCommandParserEvent,
   SdkTavernSlashCommandRuntimeEvent,
   SdkTavernScopeLocatorEvent,
   SdkTavernScopeTypeEvent,
+  SdkTavernWorldbookBookEvent,
+  SdkTavernWorldbookCapabilitiesEvent,
+  SdkTavernWorldbookEntryEvent,
   SdkUnifiedTavernChatDirectoryInputEvent,
   SdkUnifiedTavernChatDirectoryItemEvent,
   SdkUnifiedTavernHostChatEvent,
@@ -42,11 +53,44 @@ export {
 
 export {
   getSillyTavernContextEvent,
+  resolveCurrentCharacterEvent,
+  resolveCurrentChatIdEvent,
   resolveTavernRoleIdentityEvent,
   resolveCurrentGroupEvent,
   getTavernContextSnapshotEvent,
   getTavernSemanticSnapshotEvent,
 } from "./context";
+
+export {
+  getCurrentTavernCharacterEvent,
+  getCurrentTavernCharacterFilenameEvent,
+  getCurrentTavernCharacterSnapshotEvent,
+  getTavernCharacterCapabilitiesEvent,
+  getTavernCharacterExtensionFieldEvent,
+  getTavernCharacterExtensionsEvent,
+  listTavernCharacterSnapshotsEvent,
+  listTavernCharactersEvent,
+} from "./characters";
+
+export {
+  getCurrentTavernGroupEvent,
+  getCurrentTavernGroupSnapshotEvent,
+  listTavernGroupSnapshotsEvent,
+  resolveTavernGroupMembersEvent,
+} from "./groups";
+
+export {
+  deleteTavernWorldbookBookEvent,
+  deleteTavernWorldbookEntryEvent,
+  getTavernWorldbookCapabilitiesEvent,
+  listTavernActiveWorldbooksEvent,
+  listTavernAvailableWorldbooksEvent,
+  loadTavernWorldbookEntriesEvent,
+  loadTavernWorldbookEvent,
+  resolveTavernCharacterWorldbookBindingEvent,
+  saveTavernWorldbookEntryEvent,
+  updateTavernActiveWorldbooksEvent,
+} from "./worldbooks";
 
 export {
   getTavernChatMetadataEvent,

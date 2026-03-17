@@ -1,17 +1,26 @@
 import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from '../db/db';
 import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
+import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import { readPluginSignal, readSdkPluginChatState } from '../../../SDK/db';
 import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
-import type { TemplateTableDef } from '../template/types';
-import type { LogicTableRow } from '../types';
+import type {
+    DerivedRowCandidate,
+    EditorExperienceSnapshot,
+    LogicRowView,
+    LogicTableStatus,
+    LogicTableSummary,
+    LogicTableViewModel,
+    SourceRef,
+    SnapshotValue,
+} from '../../../SDK/stx';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
-type ViewMode = 'raw' | 'logic';
+type ViewMode = 'maintenance' | 'diagnostics' | 'raw';
 
 interface PendingRawUpdate {
     id: string;
@@ -58,6 +67,10 @@ function resolveChatItemCanonicalKey(chatKey: string): string {
         scopeId: String(scope?.scopeId ?? '').trim() || undefined,
     });
     return buildTavernChatEntityKeyEvent(ref) || normalizedChatKey.toLowerCase();
+}
+
+function getCurrentMemoryChatKey(): string {
+    return String((window as any)?.STX?.memory?.getChatKey?.() ?? '').trim();
 }
 
 function readEventMessageId(record: RawRecord): string {
@@ -196,6 +209,187 @@ function parseLooseValue(value: string): unknown {
         }
     }
     return trimmed;
+}
+
+function normalizeLookup(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function formatLogicStatusLabel(status: LogicTableStatus): string {
+    if (status === 'needs_attention') {
+        return '需要维护';
+    }
+    if (status === 'sparse') {
+        return '待补足';
+    }
+    if (status === 'hidden') {
+        return '仅隐藏项';
+    }
+    return '状态稳定';
+}
+
+function formatLogicRowKindLabel(kind: LogicRowView['rowKind']): string {
+    if (kind === 'materialized') {
+        return '正式行';
+    }
+    if (kind === 'derived') {
+        return '候选行';
+    }
+    if (kind === 'redirected') {
+        return '重定向';
+    }
+    return '已隐藏';
+}
+
+function formatHealthSeverityLabel(severity: 'critical' | 'warning' | 'info'): string {
+    if (severity === 'critical') {
+        return '高优先级';
+    }
+    if (severity === 'warning') {
+        return '注意';
+    }
+    return '提示';
+}
+
+function formatSourceKindLabel(kind: SourceRef['kind']): string {
+    if (kind === 'fact') {
+        return '事实层';
+    }
+    if (kind === 'world_state') {
+        return '世界状态';
+    }
+    if (kind === 'semantic_seed') {
+        return '初始设定';
+    }
+    if (kind === 'group_memory') {
+        return '群聊记忆';
+    }
+    if (kind === 'summary') {
+        return '摘要';
+    }
+    if (kind === 'manual') {
+        return '手动整理';
+    }
+    return '系统推导';
+}
+
+function formatSourceRefMeta(sourceRef: SourceRef): string {
+    const parts: string[] = [formatSourceKindLabel(sourceRef.kind), String(sourceRef.label ?? '').trim() || '未命名来源'];
+    if (sourceRef.recordId) {
+        parts.push(`记录 ${sourceRef.recordId}`);
+    }
+    if (sourceRef.path) {
+        parts.push(`路径 ${sourceRef.path}`);
+    }
+    if (sourceRef.ts) {
+        parts.push(`时间 ${formatTimeLabel(sourceRef.ts)}`);
+    }
+    return parts.join(' · ');
+}
+
+function openLogicSourceDetailsDialog(title: string, summary: string, sourceRefs: SourceRef[]): void {
+    const bodyHtml = sourceRefs.length <= 0
+        ? '<div style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor);">当前没有可展示的来源明细。</div>'
+        : sourceRefs.map((sourceRef: SourceRef, index: number): string => `
+            <div style="display:flex; flex-direction:column; gap:6px; padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 88%, transparent);">
+                <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                    <strong>来源 ${index + 1}</strong>
+                    <span style="opacity:0.72;">${escapeHtml(formatSourceKindLabel(sourceRef.kind))}</span>
+                </div>
+                <div>${escapeHtml(formatSourceRefMeta(sourceRef))}</div>
+                ${sourceRef.note ? `<div style="opacity:0.84;">说明：${escapeHtml(sourceRef.note)}</div>` : ''}
+            </div>
+        `).join('');
+
+    openSharedDialog({
+        id: 'stx-record-editor-source-details',
+        size: 'lg',
+        chrome: {
+            title,
+            description: summary,
+        },
+        bodyHtml: `<div style="display:flex; flex-direction:column; gap:10px;">${bodyHtml}</div>`,
+        closeOnBackdrop: true,
+        closeOnEscape: true,
+    });
+}
+
+function isStableSnapshotValue(value: SnapshotValue | null | undefined): boolean {
+    const text = String(value?.value ?? '').trim();
+    return Boolean(text) && text !== '尚未稳定抽取';
+}
+
+function getStableSnapshotValues(values: SnapshotValue[] | null | undefined): SnapshotValue[] {
+    return Array.isArray(values)
+        ? values.filter((item: SnapshotValue): boolean => isStableSnapshotValue(item))
+        : [];
+}
+
+function summarizeSnapshotValues(values: SnapshotValue[] | null | undefined, limit: number = 3): string {
+    const items = getStableSnapshotValues(values)
+        .slice(0, limit)
+        .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+        .filter(Boolean);
+    return items.length > 0 ? items.join(' / ') : '尚未稳定抽取';
+}
+
+function formatPercent(value: number | undefined): string {
+    if (!Number.isFinite(Number(value))) {
+        return '--';
+    }
+    return `${Math.round(Number(value) * 100)}%`;
+}
+
+function formatLogicTableSummaryLine(summary: LogicTableSummary): string {
+    return [
+        formatLogicStatusLabel(summary.status),
+        `正式 ${summary.materializedRowCount}`,
+        `候选 ${summary.derivedRowCount}`,
+        `隐藏 ${summary.tombstonedRowCount}`,
+        `重定向 ${summary.redirectedRowCount}`,
+    ].join(' · ');
+}
+
+function sortLogicTableSummaries(summaries: LogicTableSummary[]): LogicTableSummary[] {
+    const statusWeight: Record<LogicTableStatus, number> = {
+        needs_attention: 0,
+        sparse: 1,
+        hidden: 2,
+        healthy: 3,
+    };
+    return [...summaries].sort((left: LogicTableSummary, right: LogicTableSummary): number => {
+        const byStatus = statusWeight[left.status] - statusWeight[right.status];
+        if (byStatus !== 0) {
+            return byStatus;
+        }
+        const leftWeight = left.derivedRowCount + left.tombstonedRowCount + left.redirectedRowCount;
+        const rightWeight = right.derivedRowCount + right.tombstonedRowCount + right.redirectedRowCount;
+        if (rightWeight !== leftWeight) {
+            return rightWeight - leftWeight;
+        }
+        return left.title.localeCompare(right.title, 'zh-CN');
+    });
+}
+
+function resolvePreferredLogicTableKey(
+    summaries: LogicTableSummary[],
+    currentLogicTableKey: string,
+    mode?: 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates',
+): string {
+    const ordered = sortLogicTableSummaries(summaries);
+    if (currentLogicTableKey && ordered.some((item: LogicTableSummary): boolean => item.tableKey === currentLogicTableKey)) {
+        return currentLogicTableKey;
+    }
+    if (mode === 'rebuild_candidates') {
+        return ordered.find((item: LogicTableSummary): boolean => item.derivedRowCount > 0 || item.status === 'sparse' || item.status === 'needs_attention')?.tableKey || ordered[0]?.tableKey || '';
+    }
+    if (mode === 'compact_tombstones') {
+        return ordered.find((item: LogicTableSummary): boolean => item.tombstonedRowCount > 0 || item.status === 'hidden')?.tableKey || ordered[0]?.tableKey || '';
+    }
+    if (mode === 'normalize_aliases') {
+        return ordered.find((item: LogicTableSummary): boolean => item.redirectedRowCount > 0 || item.status === 'needs_attention')?.tableKey || ordered[0]?.tableKey || '';
+    }
+    return ordered[0]?.tableKey || '';
 }
 
 /**
@@ -979,17 +1173,31 @@ function readRawEditedValue(editableDiv: HTMLElement, dataType: string | null): 
 export async function openRecordEditor(): Promise<void> {
     initThemeKernel();
 
-    const overlay = document.createElement('div');
-    overlay.className = 'stx-record-editor-overlay ui-widget';
+    let currentViewMode: ViewMode = 'maintenance';
+    let btnSaveRef: HTMLButtonElement | null = null;
+
+    const dialog = openSharedDialog({
+        id: 'stx-record-editor-overlay',
+        layout: 'bare',
+        rootClassName: 'stx-record-editor-overlay ui-widget',
+        chrome: false,
+        closeOnBackdrop: true,
+        closeOnEscape: true,
+        beforeClose: (): boolean => {
+            if (currentViewMode === 'raw' && !btnSaveRef?.disabled) {
+                return confirm('当前仍有未保存的原始库表修改，关闭后将丢失。确定继续吗？');
+            }
+            return true;
+        },
+        onAfterClose: (): void => {
+            void disposeRecordMemory();
+        },
+    });
+    const overlay = dialog.root;
     mountThemeHost(overlay);
 
     const panel = document.createElement('div');
     panel.className = 'stx-record-editor';
-    overlay.style.opacity = '0';
-    overlay.style.transition = 'opacity 0.2s ease-in-out';
-    setTimeout((): void => {
-        overlay.style.opacity = '1';
-    }, 10);
 
     panel.innerHTML = `
         <div class="stx-re-header">
@@ -1011,8 +1219,9 @@ export async function openRecordEditor(): Promise<void> {
             </div>
             <div class="stx-re-main">
                 <div class="stx-re-view-tabs" id="stx-re-view-tabs">
-                    <div class="stx-re-tab is-active" data-view="raw">原始库表</div>
-                    <div class="stx-re-tab" data-view="logic">逻辑表</div>
+                    <div class="stx-re-tab is-active" data-view="maintenance">逻辑维护</div>
+                    <div class="stx-re-tab" data-view="diagnostics">诊断维护</div>
+                    <div class="stx-re-tab" data-view="raw">原始库表</div>
                 </div>
                 <div class="stx-re-tabs" id="stx-re-raw-tabs">
                     <div class="stx-re-tab is-active" data-table="events">事件流</div>
@@ -1035,8 +1244,7 @@ export async function openRecordEditor(): Promise<void> {
         </div>
     `;
 
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
+    dialog.content.appendChild(panel);
 
     const contentArea = panel.querySelector('#stx-re-content-area') as HTMLElement;
     const closeBtn = panel.querySelector('#stx-re-close-btn') as HTMLElement | null;
@@ -1044,14 +1252,14 @@ export async function openRecordEditor(): Promise<void> {
     const viewTabsContainer = panel.querySelector('#stx-re-view-tabs') as HTMLElement;
     const chatListContainer = panel.querySelector('#stx-re-chat-list') as HTMLElement;
     const btnSave = panel.querySelector('#stx-re-btn-save') as HTMLButtonElement;
+    btnSaveRef = btnSave;
     const btnBatchDelete = panel.querySelector('#stx-re-btn-batch-del') as HTMLButtonElement;
     const pendingMsg = panel.querySelector('#stx-re-pending-msg') as HTMLElement;
     const btnClearDb = panel.querySelector('#stx-re-btn-clear-db') as HTMLButtonElement;
     const footer = panel.querySelector('#stx-re-footer') as HTMLElement;
 
-    let currentViewMode: ViewMode = 'raw';
     let currentRawTable: RawTableName = 'events';
-    let currentChatKey = '';
+    let currentChatKey = getCurrentMemoryChatKey();
     let currentSort: CurrentSort = { col: '', asc: false };
     let currentLogicTableKey = '';
     let logicCreateExpanded = false;
@@ -1727,7 +1935,7 @@ export async function openRecordEditor(): Promise<void> {
         }
 
         try {
-            await memory.rows.updateCell(tableKey, rowId, fieldKey, parseLooseValue(cell.textContent ?? ''));
+            await memory.logicTable.updateCell(tableKey, rowId, fieldKey, parseLooseValue(cell.textContent ?? ''));
             cell.classList.add('is-saved');
             setTimeout((): void => cell.classList.remove('is-saved'), 800);
             await loadChatKeys();
@@ -1746,7 +1954,7 @@ export async function openRecordEditor(): Promise<void> {
     async function renderLogicView(): Promise<void> {
         contentArea.innerHTML = '<div class="stx-re-empty">正在加载逻辑表...</div>';
         if (!currentChatKey) {
-            contentArea.innerHTML = '<div class="stx-re-empty">逻辑表视图需要先选择一个具体聊天。</div>';
+            contentArea.innerHTML = '<div class="stx-re-empty">逻辑维护需要先选择一个具体聊天。</div>';
             return;
         }
 
@@ -1756,42 +1964,43 @@ export async function openRecordEditor(): Promise<void> {
             return;
         }
 
-        const [template, binding, tables] = await Promise.all([
+        const [experience, template, binding, summaries] = await Promise.all([
+            memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
             memory.template.getEffective(),
             memory.template.getBinding(),
-            memory.template.listTables(),
+            memory.logicTable.listLogicTables() as Promise<LogicTableSummary[]>,
         ]);
-        if (!template || tables.length === 0) {
-            contentArea.innerHTML = '<div class="stx-re-empty">当前聊天还没有可展示的逻辑表。</div>';
+        const orderedSummaries = sortLogicTableSummaries(summaries);
+        if (!template || orderedSummaries.length === 0) {
+            contentArea.innerHTML = '<div class="stx-re-empty">当前聊天还没有可展示的逻辑维护表。</div>';
             return;
         }
 
-        if (!currentLogicTableKey || !tables.some((table: TemplateTableDef): boolean => table.key === currentLogicTableKey)) {
-            currentLogicTableKey = tables[0].key;
-        }
-
-        const selectedTable = tables.find((table: TemplateTableDef): boolean => table.key === currentLogicTableKey) || tables[0];
-        const rows = await memory.rows.listTableRows(selectedTable.key, { includeTombstones: true, limit: 500 });
-        const visibleRowIds = new Set<string>(rows.map((row: LogicTableRow): string => row.rowId));
+        currentLogicTableKey = resolvePreferredLogicTableKey(orderedSummaries, currentLogicTableKey);
+        const [view, candidates] = await Promise.all([
+            memory.logicTable.getLogicTableView(currentLogicTableKey) as Promise<LogicTableViewModel>,
+            memory.logicTable.listBackfillCandidates(currentLogicTableKey) as Promise<DerivedRowCandidate[]>,
+        ]);
+        const visibleRowIds = new Set<string>(view.rows.map((row: LogicRowView): string => row.rowId));
         Array.from(selectedLogicRowIds).forEach((rowId: string): void => {
             if (!visibleRowIds.has(rowId)) {
                 selectedLogicRowIds.delete(rowId);
             }
         });
 
-        const tableOptionsHtml = tables.map((table: TemplateTableDef): string => {
-            return `<option value="${escapeHtml(table.key)}" ${table.key === selectedTable.key ? 'selected' : ''}>${escapeHtml(table.label)}${table.source === 'derived' ? '（派生）' : ''}</option>`;
+        const tableOptionsHtml = orderedSummaries.map((summary: LogicTableSummary): string => {
+            return `<option value="${escapeHtml(summary.tableKey)}" ${summary.tableKey === view.tableKey ? 'selected' : ''}>${escapeHtml(summary.title)} · ${escapeHtml(formatLogicStatusLabel(summary.status))}</option>`;
         }).join('');
-        const createFieldsHtml = selectedTable.fields
+        const createFieldsHtml = view.columns
             .filter((field): boolean => !field.isPrimaryKey)
             .map((field): string => `<label style="display:flex; flex-direction:column; gap:4px; min-width:180px;"><span>${escapeHtml(field.label)}</span><input class="text_pole" data-create-field="${escapeHtml(field.key)}" placeholder="可输入文本或 JSON"></label>`)
             .join('');
-        const headerHtml = selectedTable.fields.map((field): string => `<th>${escapeHtml(field.label)}</th>`).join('');
-        const rowsHtml = rows.length === 0
-            ? `<tr><td colspan="${selectedTable.fields.length + 2}"><div class="stx-re-empty">当前表暂无行数据。你可以先新建一行。</div></td></tr>`
-            : rows.map((row: LogicTableRow): string => {
+        const headerHtml = view.columns.map((field): string => `<th>${escapeHtml(field.label)}</th>`).join('');
+        const rowsHtml = view.rows.length === 0
+            ? `<tr><td colspan="${view.columns.length + 3}"><div class="stx-re-empty">当前表暂无稳定行。你可以先新建一行，或者先处理候选与隐藏项。</div></td></tr>`
+            : view.rows.map((row: LogicRowView): string => {
                 const statusParts: string[] = [];
-                if (row.tombstoned) {
+                if (row.rowKind === 'tombstoned') {
                     statusParts.push('已软删除');
                 }
                 if (row.redirectedTo) {
@@ -1800,31 +2009,101 @@ export async function openRecordEditor(): Promise<void> {
                 if (row.aliases.length > 0) {
                     statusParts.push(`别名 ${row.aliases.join(', ')}`);
                 }
-                const cellsHtml = selectedTable.fields.map((field): string => {
+                if (row.warnings.length > 0) {
+                    statusParts.push(row.warnings.join(' / '));
+                }
+                if (row.sourceRefs.length > 0) {
+                    statusParts.push(`来源 ${row.sourceRefs.length} 条`);
+                }
+                const actionButtons: string[] = [];
+                const candidate = row.rowKind === 'derived'
+                    ? candidates.find((item: DerivedRowCandidate): boolean => normalizeLookup(item.rowId) === normalizeLookup(row.rowId)) ?? null
+                    : null;
+                if (row.sourceRefs.length > 0) {
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="sources" data-row-id="${escapeHtml(row.rowId)}">来源</button>`);
+                }
+                if (row.rowKind === 'derived' && candidate) {
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="promote" data-row-id="${escapeHtml(row.rowId)}" data-candidate-id="${escapeHtml(candidate.candidateId)}">转正</button>`);
+                }
+                if (row.rowKind === 'materialized' || row.rowKind === 'redirected') {
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="alias" data-row-id="${escapeHtml(row.rowId)}">设置 alias</button>`);
+                    actionButtons.push(`<button class="stx-re-btn danger" data-logic-row-action="tombstone" data-row-id="${escapeHtml(row.rowId)}">隐藏</button>`);
+                }
+                if (row.rowKind === 'tombstoned') {
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="restore" data-row-id="${escapeHtml(row.rowId)}">恢复</button>`);
+                }
+                const cellsHtml = view.columns.map((field): string => {
                     const cellValue = row.values[field.key] ?? (field.isPrimaryKey ? row.rowId : '');
-                    return `<td><div class="stx-re-value stx-re-logic-cell ${field.isPrimaryKey ? 'is-readonly' : ''}" data-table-key="${escapeHtml(selectedTable.key)}" data-row-id="${escapeHtml(row.rowId)}" data-field-key="${escapeHtml(field.key)}" data-readonly="${field.isPrimaryKey ? 'true' : 'false'}" title="${escapeHtml(stringifyDisplayValue(cellValue))}">${escapeHtml(renderLogicCellText(cellValue))}</div></td>`;
+                    return `<td><div class="stx-re-value stx-re-logic-cell ${field.isPrimaryKey ? 'is-readonly' : ''}" data-table-key="${escapeHtml(view.tableKey)}" data-row-id="${escapeHtml(row.rowId)}" data-field-key="${escapeHtml(field.key)}" data-readonly="${field.isPrimaryKey ? 'true' : 'false'}" title="${escapeHtml(stringifyDisplayValue(cellValue))}">${escapeHtml(renderLogicCellText(cellValue))}</div></td>`;
                 }).join('');
-                return `<tr class="${row.tombstoned ? 'stx-re-row pending-delete' : 'stx-re-row'}"><td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-logic-row-check" data-row-id="${escapeHtml(row.rowId)}" ${selectedLogicRowIds.has(row.rowId) ? 'checked' : ''}></td><td><div class="stx-re-event-type">${escapeHtml(row.rowId)}</div><div class="stx-re-json compact">${escapeHtml(statusParts.join(' · ') || `更新于 ${formatTimeLabel(row.updatedAt)}`)}</div></td>${cellsHtml}</tr>`;
+                return `<tr class="${row.rowKind === 'tombstoned' ? 'stx-re-row pending-delete' : 'stx-re-row'}"><td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-logic-row-check" data-row-id="${escapeHtml(row.rowId)}" ${selectedLogicRowIds.has(row.rowId) ? 'checked' : ''}></td><td><div class="stx-re-event-type">${escapeHtml(row.displayName || row.rowId)}</div><div class="stx-re-json compact">${escapeHtml(formatLogicRowKindLabel(row.rowKind))} · ${escapeHtml(statusParts.join(' · ') || `更新于 ${formatTimeLabel(row.updatedAt)}`)}</div></td>${cellsHtml}<td><div class="stx-re-actions">${actionButtons.join('')}</div></td></tr>`;
             }).join('');
+
+        const topMaintenanceLabels = experience.canon.health.maintenanceLabels.slice(0, 3).join(' / ') || '当前结构状态稳定';
+        const worldOverview = String(experience.canon.world.overview?.value ?? '').trim() || '当前记录编辑器以维护为主，总览细节仍以设置面板为准。';
+        const quickLocation = isStableSnapshotValue(experience.canon.world.currentLocation) ? experience.canon.world.currentLocation!.value : '尚未稳定抽取';
+        const tableSummary = orderedSummaries.find((item: LogicTableSummary): boolean => item.tableKey === view.tableKey) || orderedSummaries[0];
+        const summaryButtonsHtml = orderedSummaries.slice(0, 8).map((summary: LogicTableSummary): string => `
+            <button class="stx-re-btn${summary.tableKey === view.tableKey ? ' save' : ''}" data-logic-summary-key="${escapeHtml(summary.tableKey)}">${escapeHtml(summary.title)} · ${escapeHtml(formatLogicStatusLabel(summary.status))}</button>
+        `).join('');
+        const coverageCardsHtml = [
+            { label: '正式行', value: String(view.sourceCoverage.factRows), tone: '' },
+            { label: '候选行', value: String(view.sourceCoverage.derivedRows), tone: view.sourceCoverage.derivedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
+            { label: '隐藏项', value: String(view.sourceCoverage.tombstonedRows), tone: view.sourceCoverage.tombstonedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #f59e0b);' : '' },
+            { label: '重定向', value: String(view.sourceCoverage.redirectedRows), tone: view.sourceCoverage.redirectedRows > 0 ? 'color: var(--SmartThemeQuoteColor, #f59e0b);' : '' },
+            { label: 'Alias', value: String(view.sourceCoverage.aliasCount), tone: view.sourceCoverage.aliasCount > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
+            { label: '待处理来源', value: String(candidates.length), tone: candidates.length > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
+        ].map((item: { label: string; value: string; tone: string }): string => `
+            <div class="stx-re-json" style="padding:10px 12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); min-width:120px;">
+                <div style="font-size:11px; opacity:0.7; margin-bottom:4px;">${escapeHtml(item.label)}</div>
+                <div style="font-weight:700; ${item.tone}">${escapeHtml(item.value)}</div>
+            </div>
+        `).join('');
 
         contentArea.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor, #4a90e2) 8%, transparent);">
+                        <div style="font-weight:700; margin-bottom:6px;">维护概览</div>
+                        <div>${escapeHtml(worldOverview)}</div>
+                        <div style="margin-top:6px; opacity:0.8;">地点：${escapeHtml(quickLocation)}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">世界约束</div>
+                        <div>规则：${escapeHtml(summarizeSnapshotValues(experience.canon.world.rules, 2))}</div>
+                        <div style="margin-top:6px;">硬约束：${escapeHtml(summarizeSnapshotValues(experience.canon.world.hardConstraints, 2))}</div>
+                        <div style="margin-top:6px;">活跃世界书：${escapeHtml(summarizeSnapshotValues(experience.canon.world.activeLorebooks, 2))}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">逻辑维护状态</div>
+                        <div>${escapeHtml(topMaintenanceLabels)}</div>
+                        <div style="margin-top:6px;">角色 ${experience.canon.characters.length} / 表 ${orderedSummaries.length}</div>
+                        <div style="margin-top:6px;">事实 ${experience.canon.health.dataLayers.factsCount} / world_state ${experience.canon.health.dataLayers.worldStateCount}</div>
+                    </div>
+                </div>
                 <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
                     <div class="stx-re-json">当前聊天：${escapeHtml(currentChatKey)}</div>
                     <div class="stx-re-json">模板：${escapeHtml(template.name)} (${escapeHtml(template.templateId)})</div>
-                    <div class="stx-re-json">表来源：${selectedTable.source === 'derived' ? '旧模板派生' : '持久化模板'}</div>
                     <div class="stx-re-json">绑定状态：${binding?.isLocked ? '已锁定' : '自动同步'}</div>
+                    <div class="stx-re-json">当前表：${escapeHtml(view.title)} · ${escapeHtml(formatLogicTableSummaryLine(tableSummary))}</div>
                 </div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px;">${summaryButtonsHtml}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:stretch;">${coverageCardsHtml}</div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
                     <select class="text_pole" data-logic-table-select>${tableOptionsHtml}</select>
                     <button class="stx-re-btn" data-logic-refresh>刷新</button>
                     <button class="stx-re-btn" data-logic-create-toggle>${logicCreateExpanded ? '取消新建' : '新建行'}</button>
                     <button class="stx-re-btn" data-logic-merge>合并选中</button>
-                    <button class="stx-re-btn danger" data-logic-delete>删除选中</button>
+                    <button class="stx-re-btn danger" data-logic-delete>隐藏选中</button>
                     <button class="stx-re-btn" data-logic-restore>恢复选中</button>
+                    <button class="stx-re-btn" data-logic-repair="normalize_aliases">规范 alias</button>
+                    <button class="stx-re-btn" data-logic-repair="compact_tombstones">整理隐藏项</button>
+                    <button class="stx-re-btn" data-logic-repair="rebuild_candidates">重建候选</button>
+                    <button class="stx-re-btn" data-open-diagnostics>查看诊断</button>
                 </div>
-                ${logicCreateExpanded ? `<div style="display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--SmartThemeBorderColor); border-radius:10px;"><div class="stx-re-accent-text">新建 ${escapeHtml(selectedTable.label)} 行</div><label style="display:flex; flex-direction:column; gap:4px; min-width:220px;"><span>${escapeHtml(selectedTable.primaryKeyField)}（主键）</span><input class="text_pole" data-create-row-id placeholder="请输入新的行 ID"></label><div style="display:flex; flex-wrap:wrap; gap:10px;">${createFieldsHtml || '<span class="stx-re-json">当前表暂无额外字段，可先创建空行后再编辑。</span>'}</div><div style="display:flex; gap:8px;"><button class="stx-re-btn save" data-logic-create-submit>立即创建</button><button class="stx-re-btn" data-logic-create-cancel>取消</button></div></div>` : ''}
-                <table class="stx-re-table"><thead><tr><th style="width:30px; text-align:center;"><input type="checkbox" class="stx-re-checkbox" data-logic-check-all></th><th>行 ID / 状态</th>${headerHtml}</tr></thead><tbody>${rowsHtml}</tbody></table>
+                ${view.warnings.length > 0 ? `<div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #f59e0b) 24%, transparent);">${escapeHtml(view.warnings.join(' / '))}</div>` : ''}
+                ${logicCreateExpanded ? `<div style="display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--SmartThemeBorderColor); border-radius:10px;"><div class="stx-re-accent-text">新建 ${escapeHtml(view.title)} 行</div><label style="display:flex; flex-direction:column; gap:4px; min-width:220px;"><span>行 ID（主键）</span><input class="text_pole" data-create-row-id placeholder="请输入新的行 ID"></label><div style="display:flex; flex-wrap:wrap; gap:10px;">${createFieldsHtml || '<span class="stx-re-json">当前表暂无额外字段，可先创建空行后再编辑。</span>'}</div><div style="display:flex; gap:8px;"><button class="stx-re-btn save" data-logic-create-submit>立即创建</button><button class="stx-re-btn" data-logic-create-cancel>取消</button></div></div>` : ''}
+                <table class="stx-re-table"><thead><tr><th style="width:30px; text-align:center;"><input type="checkbox" class="stx-re-checkbox" data-logic-check-all></th><th>行 / 状态</th>${headerHtml}<th style="min-width:180px;">维护动作</th></tr></thead><tbody>${rowsHtml}</tbody></table>
             </div>
         `;
 
@@ -1834,6 +2113,15 @@ export async function openRecordEditor(): Promise<void> {
             selectedLogicRowIds.clear();
             logicCreateExpanded = false;
             void renderLogicView();
+        });
+
+        contentArea.querySelectorAll('[data-logic-summary-key]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentLogicTableKey = String((button as HTMLElement).dataset.logicSummaryKey ?? '').trim();
+                selectedLogicRowIds.clear();
+                logicCreateExpanded = false;
+                void renderLogicView();
+            });
         });
 
         contentArea.querySelector('[data-logic-refresh]')?.addEventListener('click', (): void => {
@@ -1857,7 +2145,8 @@ export async function openRecordEditor(): Promise<void> {
                 alert('请先填写行 ID。');
                 return;
             }
-            const seed: Record<string, unknown> = { [selectedTable.primaryKeyField]: rowId };
+            const primaryKeyField = view.columns.find((column): boolean => Boolean(column.isPrimaryKey))?.key;
+            const seed: Record<string, unknown> = primaryKeyField ? { [primaryKeyField]: rowId } : {};
             contentArea.querySelectorAll('[data-create-field]').forEach((input: Element): void => {
                 const element = input as HTMLInputElement;
                 const fieldKey = String(element.dataset.createField ?? '').trim();
@@ -1871,12 +2160,12 @@ export async function openRecordEditor(): Promise<void> {
                 if (!memoryInstance) {
                     return;
                 }
-                await memoryInstance.rows.create(selectedTable.key, rowId, seed);
+                await memoryInstance.rows.create(view.tableKey, rowId, seed);
                 logicCreateExpanded = false;
                 selectedLogicRowIds.clear();
                 await loadChatKeys();
                 await renderLogicView();
-                toast.success(`已创建 ${selectedTable.key}/${rowId}`);
+                toast.success(`已创建 ${view.tableKey}/${rowId}`);
             }).catch((error: unknown): void => {
                 toast.error(`创建行失败: ${String(error)}`);
             });
@@ -1893,14 +2182,14 @@ export async function openRecordEditor(): Promise<void> {
                     return;
                 }
                 for (const rowId of rowIds) {
-                    await memoryInstance.rows.delete(selectedTable.key, rowId);
+                    await memoryInstance.logicTable.tombstoneRow(view.tableKey, rowId);
                 }
                 selectedLogicRowIds.clear();
                 await loadChatKeys();
                 await renderLogicView();
-                toast.success(`已删除 ${rowIds.length} 行`);
+                toast.success(`已隐藏 ${rowIds.length} 行`);
             }).catch((error: unknown): void => {
-                toast.error(`删除失败: ${String(error)}`);
+                toast.error(`隐藏失败: ${String(error)}`);
             });
         });
 
@@ -1915,7 +2204,7 @@ export async function openRecordEditor(): Promise<void> {
                     return;
                 }
                 for (const rowId of rowIds) {
-                    await memoryInstance.rows.restore(selectedTable.key, rowId);
+                    await memoryInstance.logicTable.restoreRow(view.tableKey, rowId);
                 }
                 selectedLogicRowIds.clear();
                 await loadChatKeys();
@@ -1949,10 +2238,7 @@ export async function openRecordEditor(): Promise<void> {
                 if (!memoryInstance) {
                     return;
                 }
-                const result = await memoryInstance.rows.merge(selectedTable.key, sourceRowId, normalizedTargetRowId);
-                if (!result.success) {
-                    throw new Error(result.error || '合并失败');
-                }
+                await memoryInstance.logicTable.mergeRows(view.tableKey, sourceRowId, normalizedTargetRowId);
                 selectedLogicRowIds.clear();
                 await loadChatKeys();
                 await renderLogicView();
@@ -1960,6 +2246,81 @@ export async function openRecordEditor(): Promise<void> {
             }).catch((error: unknown): void => {
                 toast.error(`合并失败: ${String(error)}`);
             });
+        });
+
+        contentArea.querySelectorAll('[data-logic-repair]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const mode = String((button as HTMLElement).dataset.logicRepair ?? '').trim() as 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates';
+                if (!mode) {
+                    return;
+                }
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    await memoryInstance.logicTable.repairTable(view.tableKey, mode);
+                    await loadChatKeys();
+                    await renderLogicView();
+                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : 'alias 已规范');
+                }).catch((error: unknown): void => {
+                    toast.error(`执行维护失败: ${String(error)}`);
+                });
+            });
+        });
+
+        contentArea.querySelectorAll('[data-logic-row-action]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const element = button as HTMLElement;
+                const action = String(element.dataset.logicRowAction ?? '').trim();
+                const rowId = String(element.dataset.rowId ?? '').trim();
+                const candidateId = String(element.dataset.candidateId ?? '').trim();
+                if (!action || !rowId) {
+                    return;
+                }
+                const row = view.rows.find((item: LogicRowView): boolean => item.rowId === rowId) ?? null;
+                if (action === 'sources') {
+                    openLogicSourceDetailsDialog(
+                        `${view.title} / ${row?.displayName || rowId}`,
+                        `${row ? formatLogicRowKindLabel(row.rowKind) : '逻辑行'} · ${row?.sourceRefs.length ?? 0} 条来源明细`,
+                        row?.sourceRefs ?? [],
+                    );
+                    return;
+                }
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    if (action === 'promote') {
+                        await memoryInstance.logicTable.promoteDerivedRow(view.tableKey, candidateId);
+                        toast.success('候选行已转正');
+                    } else if (action === 'restore') {
+                        await memoryInstance.logicTable.restoreRow(view.tableKey, rowId);
+                        toast.success('逻辑行已恢复');
+                    } else if (action === 'tombstone') {
+                        if (!confirm(`确定隐藏逻辑行 ${rowId} 吗？`)) {
+                            return;
+                        }
+                        await memoryInstance.logicTable.tombstoneRow(view.tableKey, rowId);
+                        toast.success('逻辑行已隐藏');
+                    } else if (action === 'alias') {
+                        const alias = prompt(`为 ${rowId} 输入一个 alias`, '');
+                        if (!alias || !alias.trim()) {
+                            return;
+                        }
+                        await memoryInstance.logicTable.setAlias(view.tableKey, rowId, alias.trim());
+                        toast.success('alias 已设置');
+                    }
+                    await loadChatKeys();
+                    await renderLogicView();
+                }).catch((error: unknown): void => {
+                    toast.error(`执行维护动作失败: ${String(error)}`);
+                });
+            });
+        });
+
+        contentArea.querySelector('[data-open-diagnostics]')?.addEventListener('click', (): void => {
+            currentViewMode = 'diagnostics';
+            void renderActiveView();
         });
 
         const checkAll = contentArea.querySelector('[data-logic-check-all]') as HTMLInputElement | null;
@@ -2016,6 +2377,151 @@ export async function openRecordEditor(): Promise<void> {
         });
     }
 
+    async function renderDiagnosticsView(): Promise<void> {
+        contentArea.innerHTML = '<div class="stx-re-empty">正在加载诊断维护...</div>';
+        if (!currentChatKey) {
+            contentArea.innerHTML = '<div class="stx-re-empty">诊断维护需要先选择一个具体聊天。</div>';
+            return;
+        }
+
+        const memory = await ensureRecordMemory();
+        if (!memory) {
+            contentArea.innerHTML = '<div class="stx-re-empty">无法为当前聊天建立 MemorySDK。</div>';
+            return;
+        }
+
+        const [experience, summaries] = await Promise.all([
+            memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
+            memory.logicTable.listLogicTables() as Promise<LogicTableSummary[]>,
+        ]);
+        const canon = experience.canon;
+        const health = canon.health;
+        const orderedSummaries = sortLogicTableSummaries(summaries);
+
+        contentArea.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor, #4a90e2) 8%, transparent);">
+                        <div style="font-weight:700; margin-bottom:6px;">世界观速览</div>
+                        <div>地点：${escapeHtml(isStableSnapshotValue(canon.world.currentLocation) ? canon.world.currentLocation!.value : '尚未稳定抽取')}</div>
+                        <div style="margin-top:6px;">规则：${escapeHtml(summarizeSnapshotValues(canon.world.rules, 2))}</div>
+                        <div style="margin-top:6px;">硬约束：${escapeHtml(summarizeSnapshotValues(canon.world.hardConstraints, 2))}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">数据层覆盖</div>
+                        <div>facts ${health.dataLayers.factsCount} / world_state ${health.dataLayers.worldStateCount}</div>
+                        <div style="margin-top:6px;">summary ${health.dataLayers.summaryCount} / event ${health.dataLayers.eventCount}</div>
+                        <div style="margin-top:6px;">alias ${health.dataLayers.aliasCount} / redirect ${health.dataLayers.redirectCount} / tombstone ${health.dataLayers.tombstoneCount}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">结构风险</div>
+                        <div>孤儿事实：${escapeHtml(String(health.orphanFactsCount ?? 0))} 条</div>
+                        <div style="margin-top:6px;">重复实体风险：${escapeHtml(formatPercent(health.duplicateEntityRisk))}</div>
+                        <div style="margin-top:6px;">草稿修订：${health.hasDraftRevision ? '存在' : '无'}</div>
+                    </div>
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                        <div style="font-weight:700; margin-bottom:6px;">维护提示</div>
+                        <div>${escapeHtml(health.maintenanceLabels.slice(0, 4).join(' / ') || '当前没有明显维护提示')}</div>
+                        <div style="margin-top:6px;">角色 ${canon.characters.length} / 表 ${orderedSummaries.length}</div>
+                    </div>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                    <button class="stx-re-btn" data-diag-action="rebuild-chat-view">重建结构视图</button>
+                    <button class="stx-re-btn" data-diag-action="refresh-seed">刷新初始设定</button>
+                    <button class="stx-re-btn" data-diag-repair="normalize_aliases">规范 alias</button>
+                    <button class="stx-re-btn" data-diag-repair="compact_tombstones">整理隐藏项</button>
+                    <button class="stx-re-btn" data-diag-repair="rebuild_candidates">重建候选</button>
+                    <button class="stx-re-btn" data-diag-action="open-maintenance">打开逻辑维护</button>
+                </div>
+                <div style="display:grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap:12px; align-items:start;">
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">问题列表</div>
+                        ${health.issues.length > 0 ? health.issues.map((issue) => `
+                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
+                                    <strong>${escapeHtml(issue.label)}</strong>
+                                    <span>${escapeHtml(formatHealthSeverityLabel(issue.severity))}</span>
+                                </div>
+                                <div>${escapeHtml(issue.detail)}</div>
+                                <div style="margin-top:6px; opacity:0.75;">${escapeHtml(issue.actionLabel || '建议转到逻辑维护继续处理')}</div>
+                            </div>
+                        `).join('') : '<div class="stx-re-empty">当前没有明显诊断问题。</div>'}
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">逻辑表状态</div>
+                        ${orderedSummaries.length > 0 ? orderedSummaries.map((summary: LogicTableSummary) => `
+                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
+                                    <strong>${escapeHtml(summary.title)}</strong>
+                                    <span>${escapeHtml(formatLogicStatusLabel(summary.status))}</span>
+                                </div>
+                                <div>${escapeHtml(formatLogicTableSummaryLine(summary))}</div>
+                                <div style="margin-top:8px;"><button class="stx-re-btn" data-diag-open-table="${escapeHtml(summary.tableKey)}">打开该表维护</button></div>
+                            </div>
+                        `).join('') : '<div class="stx-re-empty">当前没有逻辑表摘要。</div>'}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        contentArea.querySelectorAll('[data-diag-action]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const action = String((button as HTMLElement).dataset.diagAction ?? '').trim();
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    if (action === 'rebuild-chat-view') {
+                        await memoryInstance.editor.rebuildChatView();
+                        toast.success('聊天结构视图已重建');
+                    } else if (action === 'refresh-seed') {
+                        await memoryInstance.editor.refreshSemanticSeed();
+                        toast.success('初始设定已刷新');
+                    } else if (action === 'open-maintenance') {
+                        currentViewMode = 'maintenance';
+                    }
+                    await loadChatKeys();
+                    await renderActiveView();
+                }).catch((error: unknown): void => {
+                    toast.error(`执行诊断动作失败: ${String(error)}`);
+                });
+            });
+        });
+
+        contentArea.querySelectorAll('[data-diag-repair]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const mode = String((button as HTMLElement).dataset.diagRepair ?? '').trim() as 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates';
+                const targetTableKey = resolvePreferredLogicTableKey(orderedSummaries, currentLogicTableKey, mode);
+                if (!targetTableKey) {
+                    toast.info('当前没有可处理的逻辑表');
+                    return;
+                }
+                currentLogicTableKey = targetTableKey;
+                void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
+                    if (!memoryInstance) {
+                        return;
+                    }
+                    await memoryInstance.logicTable.repairTable(targetTableKey, mode);
+                    await loadChatKeys();
+                    await renderDiagnosticsView();
+                    toast.success(mode === 'rebuild_candidates' ? '候选已重建' : mode === 'compact_tombstones' ? '隐藏项已整理' : 'alias 已规范');
+                }).catch((error: unknown): void => {
+                    toast.error(`执行维护失败: ${String(error)}`);
+                });
+            });
+        });
+
+        contentArea.querySelectorAll('[data-diag-open-table]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                currentLogicTableKey = String((button as HTMLElement).dataset.diagOpenTable ?? '').trim();
+                currentViewMode = 'maintenance';
+                selectedLogicRowIds.clear();
+                logicCreateExpanded = false;
+                void renderActiveView();
+            });
+        });
+    }
+
     /**
      * 功能：根据当前视图重新渲染主区域。
      * @returns 无返回值
@@ -2024,6 +2530,10 @@ export async function openRecordEditor(): Promise<void> {
         updateChromeState();
         if (currentViewMode === 'raw') {
             await renderRawTable(currentRawTable);
+            return;
+        }
+        if (currentViewMode === 'diagnostics') {
+            await renderDiagnosticsView();
             return;
         }
         await renderLogicView();
@@ -2040,7 +2550,7 @@ export async function openRecordEditor(): Promise<void> {
         logicCreateExpanded = false;
         selectedLogicRowIds.clear();
         activateChatItem(chatKey);
-        if (currentViewMode === 'logic') {
+        if (currentViewMode !== 'raw') {
             await ensureRecordMemory();
         } else if (recordMemoryChatKey && recordMemoryChatKey !== chatKey) {
             await disposeRecordMemory();
@@ -2053,29 +2563,7 @@ export async function openRecordEditor(): Promise<void> {
      * @returns 无返回值
      */
     async function close(): Promise<void> {
-        if (currentViewMode === 'raw' && !btnSave.disabled) {
-            const shouldClose = confirm('当前仍有未保存的原始库表修改，关闭后将丢失。确定继续吗？');
-            if (!shouldClose) {
-                return;
-            }
-        }
-        overlay.style.opacity = '0';
-        await disposeRecordMemory();
-        setTimeout((): void => {
-            overlay.remove();
-            document.removeEventListener('keydown', onEsc);
-        }, 200);
-    }
-
-    /**
-     * 功能：处理 Esc 关闭快捷键。
-     * @param event 键盘事件
-     * @returns 无返回值
-     */
-    function onEsc(event: KeyboardEvent): void {
-        if (event.key === 'Escape') {
-            void close();
-        }
+        await dialog.close('button');
     }
 
     btnClearDb.addEventListener('click', (): void => {
@@ -2121,15 +2609,6 @@ export async function openRecordEditor(): Promise<void> {
         event.stopPropagation();
         void close();
     });
-
-    panel.addEventListener('click', (event: Event): void => event.stopPropagation());
-    overlay.addEventListener('click', (event: Event): void => {
-        if (event.target === overlay) {
-            event.stopPropagation();
-            void close();
-        }
-    });
-    document.addEventListener('keydown', onEsc);
 
     viewTabsContainer.addEventListener('click', (event: Event): void => {
         const target = (event.target as HTMLElement).closest('.stx-re-tab') as HTMLElement | null;

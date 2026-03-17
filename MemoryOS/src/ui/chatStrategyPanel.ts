@@ -3,6 +3,7 @@ import type { SdkTavernChatLocatorEvent } from '../../../SDK/tavern/types';
 import { toast } from '../index';
 import { buildSharedButton } from '../../../_Components/sharedButton';
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
+import { closeSharedDialog, openSharedDialog } from '../../../_Components/sharedDialog';
 import { buildSharedInputField } from '../../../_Components/sharedInput';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
@@ -481,18 +482,17 @@ export async function refreshChatStrategyChatOptions(): Promise<void> {
  */
 export async function openChatStrategyEditor(): Promise<void> {
     initThemeKernel();
-    const existingOverlay: HTMLElement | null = document.getElementById(EDITOR_IDS.overlayId);
-    if (existingOverlay) {
-        existingOverlay.remove();
-    }
-
-    const overlay: HTMLDivElement = document.createElement('div');
-    overlay.id = EDITOR_IDS.overlayId;
-    overlay.className = 'stx-memory-chat-strategy-overlay ui-widget';
-    overlay.innerHTML = buildEditorMarkupV2();
+    const dialog = openSharedDialog({
+        id: EDITOR_IDS.overlayId,
+        layout: 'stretch',
+        rootClassName: 'stx-memory-chat-strategy-overlay ui-widget',
+        chrome: false,
+        closeOnBackdrop: true,
+        closeOnEscape: true,
+        bodyHtml: buildEditorMarkupV2(),
+    });
+    const overlay = dialog.root;
     mountThemeHost(overlay);
-    document.body.appendChild(overlay);
-    document.body.classList.add('stx-memory-chat-strategy-lock-scroll');
 
     hydrateSharedSelects(overlay);
     applyChatStrategyTooltips();
@@ -504,10 +504,6 @@ export async function openChatStrategyEditor(): Promise<void> {
     if (activeChatKey) {
         await renderEditorStateV2(overlay, activeChatKey);
     }
-
-    requestAnimationFrame((): void => {
-        overlay.classList.add('is-visible');
-    });
 }
 
 /**
@@ -517,9 +513,9 @@ export async function openChatStrategyEditor(): Promise<void> {
 function buildCompactPanelMarkup(): string {
     const selectMarkup: string = buildSharedSelectField({
         id: PANEL_IDS.chatSelectId,
-        containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+        containerClassName: 'stx-shared-select-fluid stx-shared-select-inline',
         selectClassName: 'stx-ui-input',
-        triggerClassName: 'stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-input',
         triggerAttributes: {
             'data-tip': '切换要查看的聊天策略摘要。',
         },
@@ -881,9 +877,9 @@ function buildEditorMarkup(): string {
 function buildCompactPanelMarkupV2(): string {
     const selectMarkup: string = buildSharedSelectField({
         id: PANEL_IDS.chatSelectId,
-        containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+        containerClassName: 'stx-shared-select-fluid stx-shared-select-inline',
         selectClassName: 'stx-ui-input',
-        triggerClassName: 'stx-ui-input-full',
+        triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-input',
         triggerAttributes: {
             'data-tip': '切换要查看的聊天策略总览。',
         },
@@ -1895,15 +1891,10 @@ function bindEditorListeners(overlay: HTMLElement): void {
         if (!(target instanceof HTMLElement)) {
             return;
         }
-        if (target === overlay) {
-            closeEditor(overlay);
-            return;
-        }
         if (target.classList.contains('stx-memory-chat-strategy-sidebar-scrim')) {
             overlay.classList.remove('is-sidebar-open');
         }
     });
-    document.addEventListener('keydown', createEscHandler(overlay), { once: true });
 }
 
 /**
@@ -1911,31 +1902,8 @@ function bindEditorListeners(overlay: HTMLElement): void {
  * @param overlay 编辑器遮罩层根节点。
  * @returns 键盘事件处理函数。
  */
-function createEscHandler(overlay: HTMLElement): (event: KeyboardEvent) => void {
-    return (event: KeyboardEvent): void => {
-        if (event.key === 'Escape' && overlay.isConnected) {
-            closeEditor(overlay);
-            return;
-        }
-        if (overlay.isConnected) {
-            document.addEventListener('keydown', createEscHandler(overlay), { once: true });
-        }
-    };
-}
-
-/**
- * 功能：关闭全屏编辑器并恢复页面滚动。
- * @param overlay 编辑器遮罩层根节点。
- * @returns 无返回值。
- */
-function closeEditor(overlay: HTMLElement): void {
-    overlay.classList.remove('is-visible');
-    window.setTimeout((): void => {
-        if (overlay.isConnected) {
-            overlay.remove();
-        }
-        document.body.classList.remove('stx-memory-chat-strategy-lock-scroll');
-    }, 180);
+function closeEditor(_overlay?: HTMLElement): void {
+    void closeSharedDialog(EDITOR_IDS.overlayId, 'button');
 }
 
 function buildChatListMetaLabel(item: ChatOption): string {

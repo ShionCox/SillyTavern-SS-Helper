@@ -15,6 +15,7 @@ import { logger } from "../../index";
 export interface CreateSkillEditorRuntimeEventDeps {
   SETTINGS_SKILL_DIRTY_HINT_ID_Event: string;
   SETTINGS_SKILL_ERRORS_ID_Event: string;
+  SETTINGS_SKILL_COLS_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
   SETTINGS_SKILL_PRESET_LIST_ID_Event: string;
   SETTINGS_SKILL_PRESET_META_ID_Event: string;

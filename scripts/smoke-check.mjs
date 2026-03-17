@@ -29,9 +29,12 @@ const sdkText = readText('SDK/stx.d.ts');
 const uiIndexText = readText('LLMHub/src/ui/index.ts');
 const hubIndexText = readText('LLMHub/src/index.ts');
 const busText = readText('SDK/bus/bus.ts');
+const sdkToolbarText = readText('SDK/toolbar.ts');
 const sharedTooltipText = readText('_Components/sharedTooltip.ts');
 const sharedTooltipCssText = readText('_Components/sharedTooltip.css');
 const memoryUiText = readText('MemoryOS/src/ui/index.ts');
+const memoryToolbarText = readText('MemoryOS/src/runtime/chatToolbar.ts');
+const rollHooksText = readText('RollHelper/src/events/hooksEvent.ts');
 const rollUiText = readText('RollHelper/src/settings/uiCardEvent.ts');
 
 const checks = [
@@ -48,6 +51,18 @@ const checks = [
     runCheck('LLMHub Runtime 无旧版 setRoutePolicies', () =>
         !/setRoutePolicies/.test(hubIndexText)),
     runCheck('EventBus 默认 pluginId 使用 stx_memory_os', () => /pluginId:\s*'stx_memory_os'/.test(busText)),
+    runCheck('SDK 已导出共享聊天区 toolbar 能力', () =>
+        /export function ensureSdkFloatingToolbar/.test(sdkToolbarText) &&
+        /export function removeSdkFloatingToolbarGroup/.test(sdkToolbarText) &&
+        /export const SDK_FLOATING_TOOLBAR_ID\s*=\s*"SSHELPERTOOL"/.test(sdkToolbarText)),
+    runCheck('RollHelper 聊天区工具栏已改用 SDK', () =>
+        /ensureSdkFloatingToolbar/.test(rollHooksText) &&
+        /SDK_FLOATING_TOOLBAR_ID/.test(rollHooksText) &&
+        !/function buildSSToolbarTemplateEvent/.test(rollHooksText)),
+    runCheck('MemoryOS 聊天区工具栏已接入 SDK', () =>
+        /ensureSdkFloatingToolbar/.test(memoryToolbarText) &&
+        /openChatStrategyEditor/.test(memoryToolbarText) &&
+        /openRecordEditor/.test(memoryToolbarText)),
     runCheck('_Components 共享 tooltip 导出 ensureSharedTooltip', () =>
         /export function ensureSharedTooltip/.test(sharedTooltipText)),
     runCheck('MemoryOS UI 使用 _Components/sharedTooltip', () =>

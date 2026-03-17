@@ -4,6 +4,7 @@ type SharedBoxCheckboxAttributeValue = string | number | boolean | null | undefi
 
 export interface SharedBoxCheckboxOptions {
   id: string;
+  appearance?: 'dot' | 'check';
   containerClassName?: string;
   inputClassName?: string;
   controlClassName?: string;
@@ -41,10 +42,14 @@ function buildAttributes(attributes?: Record<string, SharedBoxCheckboxAttributeV
 }
 
 export function buildSharedBoxCheckbox(options: SharedBoxCheckboxOptions): string {
+  const attributes = {
+    'data-appearance': options.appearance ?? 'dot',
+    ...options.attributes,
+  };
   return `
     <label
       class="${escapeAttr(joinClassNames("stx-shared-box-checkbox", options.containerClassName))}"
-      data-ui="shared-box-checkbox"${buildAttributes(options.attributes)}
+      data-ui="shared-box-checkbox"${buildAttributes(attributes)}
     >
       <input
         id="${escapeAttr(options.id)}"

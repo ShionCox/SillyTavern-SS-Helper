@@ -8,7 +8,7 @@ import type {
 import { logger } from "../../index";
 import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
-import { buildSharedButton } from "../../../_Components/sharedButton";
+import { ensureSdkFloatingToolbar, SDK_FLOATING_TOOLBAR_ID } from "../../../SDK/toolbar";
 
 export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
@@ -318,12 +318,6 @@ function parseSkillPreviewItemsEvent(skillTableText: string): Array<{ name: stri
   }
 }
 
-const SSHELPER_TOOLBAR_ID_Event = "SSHELPERTOOL";
-const SSHELPER_TOOLBAR_STYLE_ID_Event = "st-roll-sshelper-toolbar-style";
-const SSHELPER_TOOLBAR_COLLAPSED_CLASS_Event = "is-collapsed";
-const SSHELPER_TOOLBAR_MARKUP_VERSION_Event = "3";
-const SSHELPER_TOOLBAR_RETRY_MAX_Event = 60;
-const SSHELPER_TOOLBAR_RETRY_DELAY_MS_Event = 500;
 const SSHELPER_TOOLBAR_TIP_EXPAND_Event = "展开工具栏";
 const SSHELPER_TOOLBAR_TIP_COLLAPSE_Event = "收起工具栏";
 const SSHELPER_TOOLBAR_TIP_SKILLS_Event = "技能预览";
@@ -333,290 +327,42 @@ const SSHELPER_TOOLBAR_ARIA_COLLAPSE_Event = "收起 SSHELPER 工具栏";
 const SSHELPER_TOOLBAR_ARIA_SKILLS_Event = "打开技能预览";
 const SSHELPER_TOOLBAR_ARIA_STATUSES_Event = "打开状态预览";
 
-/**
- * 功能：构建 SSHELPER 工具栏的内部模板。
- * 参数：无。
- * 返回：string，工具栏的 HTML 字符串。
- */
-function buildSSToolbarTemplateEvent(): string {
-  return `
-    <div class="st-rh-ss-toolbar-shell" data-sshelper-toolbar-shell="1">
-      ${buildSharedButton({
-    label: "",
-    className: "st-rh-ss-toggle",
-    iconClassName: "fa-solid fa-angles-right",
-    attributes: {
-      "data-sshelper-tool-toggle": "1",
-      "data-tip": SSHELPER_TOOLBAR_TIP_EXPAND_Event,
-      "aria-expanded": "false",
-      "aria-label": SSHELPER_TOOLBAR_ARIA_EXPAND_Event,
-    },
-  })}
-      <div class="st-rh-ss-actions" data-sshelper-tool-actions="1">
-        ${buildSharedButton({
-    label: "",
-    className: "st-rh-ss-preview-btn",
-    iconClassName: "fa-solid fa-wand-magic-sparkles",
-    attributes: {
-      "data-event-preview-open": "skills",
-      "data-tip": SSHELPER_TOOLBAR_TIP_SKILLS_Event,
-      "aria-label": SSHELPER_TOOLBAR_ARIA_SKILLS_Event,
-    },
-  })}
-        ${buildSharedButton({
-    label: "",
-    className: "st-rh-ss-preview-btn",
-    iconClassName: "fa-solid fa-heart-pulse",
-    attributes: {
-      "data-event-preview-open": "statuses",
-      "data-tip": SSHELPER_TOOLBAR_TIP_STATUSES_Event,
-      "aria-label": SSHELPER_TOOLBAR_ARIA_STATUSES_Event,
-    },
-  })}
-      </div>
-    </div>
-  `;
-}
-/**
- * 功能：确保 SSHELPER 工具栏样式只注入一次。
- * 参数：无。
- * 返回：void。
- */
-function ensureSSToolbarStyleEvent(): void {
-  if (document.getElementById(SSHELPER_TOOLBAR_STYLE_ID_Event)) return;
-  const style = document.createElement("style");
-  style.id = SSHELPER_TOOLBAR_STYLE_ID_Event;
-  style.textContent = `
-    #${SSHELPER_TOOLBAR_ID_Event} {
-      width: auto;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      margin: 0;
-      padding: 6px 8px;
-      box-sizing: border-box;
-      border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.35));
-      border-radius: 12px;
-      background-color: var(--ss-theme-panel-bg, rgba(20, 16, 14, 0.82));
-      backdrop-filter: var(--ss-theme-backdrop-filter, blur(8px));
-      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
-      pointer-events: auto;
-      position: absolute;
-      left: 8px;
-      bottom: calc(100% + 8px);
-      z-index: 45;
-      transition:
-        background-color 0.22s ease,
-        border-color 0.22s ease,
-        box-shadow 0.22s ease,
-        padding 0.22s ease,
-        opacity 0.18s ease;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event}.${SSHELPER_TOOLBAR_COLLAPSED_CLASS_Event} {
-      padding: 0;
-      border-color: transparent;
-      background-color: transparent;
-      box-shadow: none;
-      backdrop-filter: none;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toolbar-shell {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      max-width: min(100%, 480px);
-      padding: 2px 0;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toggle {
-      width: 28px;
-      height: 28px;
-      border: 1px solid rgba(197, 160, 89, 0.55);
-      border-radius: 8px;
-      background: linear-gradient(135deg, #2b1d12, #120d09);
-      color: #f1d8a1;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      line-height: 1;
-      padding: 0;
-      transition: border-color 0.2s ease, filter 0.2s ease;
-      flex: 0 0 auto;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toggle:hover {
-      border-color: #efd392;
-      filter: brightness(1.08);
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-actions {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      overflow: visible;
-      max-width: 360px;
-      opacity: 1;
-      transform: translateX(0);
-      transform-origin: left center;
-      transition: max-width 0.24s ease, transform 0.24s ease, opacity 0.18s ease;
-      white-space: nowrap;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event}.${SSHELPER_TOOLBAR_COLLAPSED_CLASS_Event} .st-rh-ss-actions {
-      max-width: 0;
-      opacity: 0;
-      transform: translateX(-18px);
-      pointer-events: none;
-      visibility: hidden;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn {
-      border: 1px solid rgba(197, 160, 89, 0.52);
-      background: linear-gradient(135deg, rgba(58, 37, 21, 0.92), rgba(22, 14, 10, 0.94));
-      color: #f1d8a1;
-      border-radius: 8px;
-      width: 30px;
-      height: 30px;
-      padding: 0;
-      font-size: 13px;
-      letter-spacing: 0.4px;
-      font-family: "Noto Serif SC", "STSong", "Georgia", serif;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: border-color 0.2s ease, filter 0.2s ease;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toggle .stx-shared-button-label,
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn .stx-shared-button-label {
-      display: none;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toggle.stx-shared-button,
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn.stx-shared-button {
-      gap: 0;
-      padding: 0;
-    }
-    #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn:hover {
-      border-color: #efd392;
-      filter: brightness(1.08);
-    }
-    @media (max-width: 768px) {
-      #${SSHELPER_TOOLBAR_ID_Event} {
-        left: 6px;
-        bottom: calc(100% + 6px);
-        padding: 5px 6px;
-      }
-      #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toolbar-shell {
-        max-width: 100%;
-      }
-      #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn {
-        width: 28px;
-        height: 28px;
-        font-size: 12px;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-actions,
-      #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-toggle,
-      #${SSHELPER_TOOLBAR_ID_Event} .st-rh-ss-preview-btn {
-        transition: none;
-      }
-    }
-  `;
-  document.head.appendChild(style);
-}
+const SSHELPER_TOOLBAR_GROUP_ID_Event = "rollhelper";
 
-/**
- * 功能：设置工具栏展开或收起状态，并同步无障碍属性。
- * 参数：
- *   toolbar (HTMLElement)：工具栏根节点。
- *   expanded (boolean)：是否展开。
- * 返回：void。
- */
-function setSSToolbarExpandedEvent(toolbar: HTMLElement, expanded: boolean): void {
-  toolbar.classList.toggle(SSHELPER_TOOLBAR_COLLAPSED_CLASS_Event, !expanded);
-  const toggleButton = toolbar.querySelector<HTMLButtonElement>("button[data-sshelper-tool-toggle=\"1\"]");
-  if (!toggleButton) return;
-  toggleButton.setAttribute("aria-expanded", expanded ? "true" : "false");
-  toggleButton.setAttribute(
-    "aria-label",
-    expanded ? SSHELPER_TOOLBAR_ARIA_COLLAPSE_Event : SSHELPER_TOOLBAR_ARIA_EXPAND_Event
-  );
-  const toggleIcon = toggleButton.querySelector("i");
-  if (toggleIcon) {
-    toggleIcon.className = expanded ? "fa-solid fa-angles-left" : "fa-solid fa-angles-right";
-  }
-  toggleButton.dataset.tip = expanded ? SSHELPER_TOOLBAR_TIP_COLLAPSE_Event : SSHELPER_TOOLBAR_TIP_EXPAND_Event;
-}
-/**
- * 功能：确保工具栏节点结构正确，并在首次创建时默认收起。
- * 参数：
- *   toolbar (HTMLElement)：工具栏根节点。
- * 返回：void。
- */
-function ensureSSToolbarMarkupEvent(toolbar: HTMLElement): void {
-  const shell = toolbar.querySelector<HTMLElement>("[data-sshelper-toolbar-shell=\"1\"]");
-  const hasSkillBtn = !!toolbar.querySelector<HTMLElement>("button[data-event-preview-open=\"skills\"]");
-  const hasStatusBtn = !!toolbar.querySelector<HTMLElement>("button[data-event-preview-open=\"statuses\"]");
-  const hasToggleTip = !!toolbar.querySelector<HTMLElement>("button[data-sshelper-tool-toggle=\"1\"][data-tip]");
-  const needsRebuild =
-    !shell ||
-    !hasSkillBtn ||
-    !hasStatusBtn ||
-    !hasToggleTip ||
-    toolbar.dataset.sshelperToolbarMarkupVersion !== SSHELPER_TOOLBAR_MARKUP_VERSION_Event;
-
-  if (needsRebuild) {
-    toolbar.innerHTML = buildSSToolbarTemplateEvent();
-    toolbar.dataset.sshelperToolbarMarkupVersion = SSHELPER_TOOLBAR_MARKUP_VERSION_Event;
-    delete toolbar.dataset.sshelperToolbarInitialized;
-  }
-  if (toolbar.dataset.sshelperToolbarInitialized !== "1") {
-    setSSToolbarExpandedEvent(toolbar, false);
-    toolbar.dataset.sshelperToolbarInitialized = "1";
-  }
-}
-
-/**
- * 功能：在输入栏尚未加载时，按次数限制重试挂载工具栏。
- * 参数：
- *   attempt (number)：下一次重试的次数。
- * 返回：void。
- */
-function scheduleSSToolbarRetryEvent(attempt: number): void {
-  if (attempt > SSHELPER_TOOLBAR_RETRY_MAX_Event) return;
-  setTimeout(() => {
-    ensureSSToolbarEvent(attempt);
-  }, SSHELPER_TOOLBAR_RETRY_DELAY_MS_Event);
-}
-
-/**
- * 功能：确保 SSHELPER 工具栏存在，并放置到 #send_form 的上方。
- * 参数：
- *   attempt (number)：当前重试次数。
- * 返回：HTMLElement | null，工具栏节点或空。
- */
-function ensureSSToolbarEvent(attempt = 0): HTMLElement | null {
-  ensureSSToolbarStyleEvent();
-  let toolbar = document.getElementById(SSHELPER_TOOLBAR_ID_Event) as HTMLElement | null;
-  if (!toolbar) {
-    toolbar = document.createElement("div");
-    toolbar.id = SSHELPER_TOOLBAR_ID_Event;
-  }
-  ensureSSToolbarMarkupEvent(toolbar);
-
-  const sendFormCompact = document.querySelector<HTMLElement>("#send_form.compact");
-  const sendForm = sendFormCompact || (document.getElementById("send_form") as HTMLElement | null);
-  if (!sendForm || !sendForm.parentElement) {
-    scheduleSSToolbarRetryEvent(attempt + 1);
-    return toolbar;
-  }
-
-  const sendFormPosition = window.getComputedStyle(sendForm).position;
-  if (sendFormPosition === "static") {
-    sendForm.style.position = "relative";
-  }
-
-  if (toolbar.parentElement !== sendForm) {
-    sendForm.appendChild(toolbar);
-  }
-  return toolbar;
+function ensureSSToolbarEvent(): HTMLElement | null {
+  return ensureSdkFloatingToolbar({
+    toolbarId: SDK_FLOATING_TOOLBAR_ID,
+    groupId: SSHELPER_TOOLBAR_GROUP_ID_Event,
+    groupClassName: "stx-sdk-toolbar-group-rollhelper",
+    toggleTipExpand: SSHELPER_TOOLBAR_TIP_EXPAND_Event,
+    toggleTipCollapse: SSHELPER_TOOLBAR_TIP_COLLAPSE_Event,
+    toggleAriaExpand: SSHELPER_TOOLBAR_ARIA_EXPAND_Event,
+    toggleAriaCollapse: SSHELPER_TOOLBAR_ARIA_COLLAPSE_Event,
+    actions: [
+      {
+        key: "skills",
+        iconClassName: "fa-solid fa-wand-magic-sparkles",
+        tooltip: SSHELPER_TOOLBAR_TIP_SKILLS_Event,
+        ariaLabel: SSHELPER_TOOLBAR_ARIA_SKILLS_Event,
+        buttonClassName: "stx-sdk-toolbar-action-rollhelper-skills",
+        attributes: {
+          "data-event-preview-open": "skills",
+        },
+        order: 10,
+      },
+      {
+        key: "statuses",
+        iconClassName: "fa-solid fa-heart-pulse",
+        tooltip: SSHELPER_TOOLBAR_TIP_STATUSES_Event,
+        ariaLabel: SSHELPER_TOOLBAR_ARIA_STATUSES_Event,
+        buttonClassName: "stx-sdk-toolbar-action-rollhelper-statuses",
+        attributes: {
+          "data-event-preview-open": "statuses",
+        },
+        order: 20,
+      },
+    ],
+  });
 }
 
 function ensurePreviewDialogStyleEvent(): void {
@@ -783,21 +529,6 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
     (event: Event) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-
-
-      const toolbarToggleButton = target.closest(
-        "button[data-sshelper-tool-toggle=\"1\"]"
-      ) as HTMLButtonElement | null;
-      if (toolbarToggleButton) {
-        event.preventDefault();
-        event.stopPropagation();
-        const toolbar = toolbarToggleButton.closest(`#${SSHELPER_TOOLBAR_ID_Event}`) as HTMLElement | null;
-        if (toolbar) {
-          const expanded = !toolbar.classList.contains(SSHELPER_TOOLBAR_COLLAPSED_CLASS_Event);
-          setSSToolbarExpandedEvent(toolbar, !expanded);
-        }
-        return;
-      }
 
       const previewOpenButton = target.closest(
         "button[data-event-preview-open]"

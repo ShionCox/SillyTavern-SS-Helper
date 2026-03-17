@@ -9,6 +9,7 @@ import { DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS } from '../types';
 const SETTINGS_NAMESPACE = 'stx_memory_os';
 
 export const MEMORY_TASK_PRESENTATION_TASK_ORDER: MemoryTaskPresentationTaskId[] = [
+    'memory.coldstart.summarize',
     'memory.summarize',
     'memory.extract',
     'world.template.build',

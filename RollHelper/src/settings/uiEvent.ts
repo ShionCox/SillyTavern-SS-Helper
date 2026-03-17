@@ -30,6 +30,11 @@ import {
   syncThemeControlClassesByNodeEvent,
 } from "./uiThemeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
+import {
+  closeSharedDialog,
+  getSharedDialogInstance,
+  openSharedDialog,
+} from "../../../_Components/sharedDialog";
 import { request } from "../../../SDK/bus/rpc";
 
 const ROLLHELPER_NAMESPACE_Event = "stx_rollhelper";
@@ -102,7 +107,21 @@ export type {
 } from "./statusEditorUiEvent";
 
 let SKILL_EDITOR_BEFORE_UNLOAD_BOUND_Event = false;
-let SKILL_EDITOR_MODAL_KEYDOWN_BOUND_Event = false;
+
+function restoreDetachedPanelEvent(
+  owner: HTMLElement,
+  panel: HTMLElement,
+  anchor: ChildNode | null
+): void {
+  if (!owner.isConnected || owner.contains(panel)) {
+    return;
+  }
+  if (anchor?.parentNode === owner) {
+    owner.insertBefore(panel, anchor);
+    return;
+  }
+  owner.appendChild(panel);
+}
 
 export interface BindSettingsTabsAndModalDepsEvent {
   drawerToggleId: string;
@@ -143,14 +162,14 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
   const panelSkill = document.getElementById(deps.SETTINGS_PANEL_SKILL_ID_Event) as HTMLElement | null;
   const panelRule = document.getElementById(deps.SETTINGS_PANEL_RULE_ID_Event) as HTMLElement | null;
   const panelAbout = document.getElementById(deps.SETTINGS_PANEL_ABOUT_ID_Event) as HTMLElement | null;
-  const skillModal = document.getElementById(deps.SETTINGS_SKILL_MODAL_ID_Event) as HTMLDialogElement | null;
+  const skillModal = document.getElementById(deps.SETTINGS_SKILL_MODAL_ID_Event) as HTMLElement | null;
   const skillEditorOpenBtn = document.getElementById(
     deps.SETTINGS_SKILL_EDITOR_OPEN_ID_Event
   ) as HTMLButtonElement | null;
   const skillModalCloseBtn = document.getElementById(
     deps.SETTINGS_SKILL_MODAL_CLOSE_ID_Event
   ) as HTMLButtonElement | null;
-  const statusModal = document.getElementById(deps.SETTINGS_STATUS_MODAL_ID_Event) as HTMLDialogElement | null;
+  const statusModal = document.getElementById(deps.SETTINGS_STATUS_MODAL_ID_Event) as HTMLElement | null;
   const statusEditorOpenBtn = document.getElementById(
     deps.SETTINGS_STATUS_EDITOR_OPEN_ID_Event
   ) as HTMLButtonElement | null;
@@ -205,71 +224,97 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     drawerContentNode.style.display = "block";
   };
 
-  const closeSkillEditorModalEvent = () => {
-    if (!skillModal) return;
-    if (skillModal.open) {
-      try {
-        skillModal.close();
-      } catch {
-        // noop
+  const skillDialogId = `${deps.SETTINGS_SKILL_MODAL_ID_Event}__shared-dialog`;
+  const statusDialogId = `${deps.SETTINGS_STATUS_MODAL_ID_Event}__shared-dialog`;
+
+  const mountEditorPanelDialogEvent = (params: {
+    dialogId: string;
+    owner: HTMLElement | null;
+    panelSelector: string;
+    rootClassName: string;
+    backdropClassName: string;
+    afterOpen?: () => void;
+  }): void => {
+    const owner = params.owner;
+    if (!owner) return;
+
+    const existing = getSharedDialogInstance(params.dialogId);
+    if (existing) {
+      if (existing.root.isConnected && existing.root.classList.contains("is-open")) {
+        existing.focusInitial();
+        return;
       }
+      existing.destroy("replace");
     }
-    if (document.body.dataset.stRollSkillModalOpen === "1") {
-      document.body.style.overflow = document.body.dataset.stRollSkillModalOverflow || "";
-      delete document.body.dataset.stRollSkillModalOpen;
-      delete document.body.dataset.stRollSkillModalOverflow;
-    }
+
+    const panel = owner.querySelector<HTMLElement>(params.panelSelector);
+    if (!panel) return;
+
+    const anchor = panel.nextSibling;
+    const hostElement = owner.parentElement instanceof HTMLElement ? owner.parentElement : null;
+
+    openSharedDialog({
+      id: params.dialogId,
+      hostElement,
+      layout: "bare",
+      chrome: false,
+      closeOnBackdrop: true,
+      closeOnEscape: true,
+      rootClassName: params.rootClassName,
+      rootAttributes: {
+        open: true,
+      },
+      surfaceAttributes: {
+        "aria-label": panel.getAttribute("aria-label") || undefined,
+      },
+      onMount: (instance) => {
+        instance.backdrop.classList.add(params.backdropClassName);
+        instance.content.style.padding = "0";
+        instance.content.style.gap = "0";
+        instance.content.style.overflow = "visible";
+        instance.content.appendChild(panel);
+        syncSharedSelects(instance.root);
+      },
+      onAfterOpen: () => {
+        params.afterOpen?.();
+      },
+      onAfterClose: () => {
+        restoreDetachedPanelEvent(owner, panel, anchor);
+      },
+    });
+  };
+
+  const closeSkillEditorModalEvent = () => {
+    void closeSharedDialog(skillDialogId);
   };
 
   const openSkillEditorModalEvent = () => {
-    if (!skillModal) return;
     ensureSettingsDrawerVisibleEvent();
-    if (!skillModal.open) {
-      try {
-        skillModal.showModal();
-      } catch {
-        skillModal.setAttribute("open", "");
-      }
-    }
-    if (document.body.dataset.stRollSkillModalOpen !== "1") {
-      document.body.dataset.stRollSkillModalOpen = "1";
-      document.body.dataset.stRollSkillModalOverflow = document.body.style.overflow || "";
-      document.body.style.overflow = "hidden";
-    }
+    mountEditorPanelDialogEvent({
+      dialogId: skillDialogId,
+      owner: skillModal,
+      panelSelector: ".st-roll-skill-modal-panel",
+      rootClassName: "st-roll-skill-modal",
+      backdropClassName: "st-roll-skill-modal-backdrop",
+    });
   };
 
   const closeStatusEditorModalEvent = () => {
-    if (!statusModal) return;
-    if (statusModal.open) {
-      try {
-        statusModal.close();
-      } catch {
-        // noop
-      }
-    }
-    if (document.body.dataset.stRollStatusModalOpen === "1") {
-      document.body.style.overflow = document.body.dataset.stRollStatusModalOverflow || "";
-      delete document.body.dataset.stRollStatusModalOpen;
-      delete document.body.dataset.stRollStatusModalOverflow;
-    }
+    void closeSharedDialog(statusDialogId);
   };
 
   const openStatusEditorModalEvent = () => {
-    if (!statusModal) return;
     ensureSettingsDrawerVisibleEvent();
-    if (!statusModal.open) {
-      try {
-        statusModal.showModal();
-      } catch {
-        statusModal.setAttribute("open", "");
-      }
-    }
-    if (document.body.dataset.stRollStatusModalOpen !== "1") {
-      document.body.dataset.stRollStatusModalOpen = "1";
-      document.body.dataset.stRollStatusModalOverflow = document.body.style.overflow || "";
-      document.body.style.overflow = "hidden";
-    }
-    document.dispatchEvent(new CustomEvent("st-roll-status-editor-opened"));
+    mountEditorPanelDialogEvent({
+      dialogId: statusDialogId,
+      owner: statusModal,
+      panelSelector: ".st-roll-status-modal-panel",
+      rootClassName: "st-roll-status-modal",
+      backdropClassName: "st-roll-status-modal-backdrop",
+      afterOpen: () => {
+        document.dispatchEvent(new CustomEvent("st-roll-status-editor-opened"));
+      },
+    });
   };
 
   const setAiBridgeStatusEvent = (
@@ -443,18 +488,6 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     closeSkillEditorModalEvent();
   });
 
-  skillModal?.addEventListener("click", (event) => {
-    const target = event.target as HTMLElement | null;
-    if (event.target === skillModal || target?.dataset.skillModalRole === "backdrop") {
-      closeSkillEditorModalEvent();
-    }
-  });
-
-  skillModal?.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    closeSkillEditorModalEvent();
-  });
-
   statusEditorOpenBtn?.addEventListener("click", () => {
     if (!tryActivateTab("main")) return;
     openStatusEditorModalEvent();
@@ -463,27 +496,6 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
   statusModalCloseBtn?.addEventListener("click", () => {
     closeStatusEditorModalEvent();
   });
-
-  statusModal?.addEventListener("click", (event) => {
-    const target = event.target as HTMLElement | null;
-    if (event.target === statusModal || target?.dataset.statusModalRole === "backdrop") {
-      closeStatusEditorModalEvent();
-    }
-  });
-
-  statusModal?.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    closeStatusEditorModalEvent();
-  });
-
-  if (!SKILL_EDITOR_MODAL_KEYDOWN_BOUND_Event) {
-    window.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
-      closeSkillEditorModalEvent();
-      closeStatusEditorModalEvent();
-    });
-    SKILL_EDITOR_MODAL_KEYDOWN_BOUND_Event = true;
-  }
 
   const drawerToggle = document.getElementById(deps.drawerToggleId) as HTMLElement | null;
   const drawerContent = document.getElementById(deps.drawerContentId) as HTMLElement | null;

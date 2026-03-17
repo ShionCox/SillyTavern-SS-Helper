@@ -1,0 +1,244 @@
+.stx-shared-dialog-host {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  pointer-events: none;
+}
+
+.stx-shared-dialog-root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  overscroll-behavior: contain;
+}
+
+.stx-shared-dialog-root.is-open,
+.stx-shared-dialog-root.is-visible {
+  opacity: 1;
+}
+
+.stx-shared-dialog-root[data-stx-dialog-size="sm"] {
+  --stx-shared-dialog-width: min(440px, calc(100vw - 40px));
+}
+
+.stx-shared-dialog-root[data-stx-dialog-size="md"] {
+  --stx-shared-dialog-width: min(640px, calc(100vw - 40px));
+}
+
+.stx-shared-dialog-root[data-stx-dialog-size="lg"] {
+  --stx-shared-dialog-width: min(880px, calc(100vw - 40px));
+}
+
+.stx-shared-dialog-root[data-stx-dialog-size="xl"] {
+  --stx-shared-dialog-width: min(1120px, calc(100vw - 40px));
+}
+
+.stx-shared-dialog-root[data-stx-dialog-size="fullscreen"] {
+  --stx-shared-dialog-width: min(100vw, 100vw);
+  --stx-shared-dialog-height: min(100vh, 100vh);
+  padding: 0;
+}
+
+.stx-shared-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 42%),
+    color-mix(in srgb, var(--ss-theme-backdrop, rgba(10, 10, 12, 0.78)) 42%, transparent);
+  backdrop-filter: blur(14px) saturate(118%);
+  -webkit-backdrop-filter: blur(14px) saturate(118%);
+}
+
+.stx-shared-dialog-surface {
+  position: relative;
+  z-index: 1;
+  width: var(--stx-shared-dialog-width, min(720px, calc(100vw - 40px)));
+  max-width: 100%;
+  max-height: var(--stx-shared-dialog-height, min(90vh, calc(100vh - 40px)));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.16)) 92%, transparent);
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent) 0%, transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 100%, black 0%), color-mix(in srgb, var(--ss-theme-surface-2, rgba(10, 10, 14, 0.96)) 100%, black 0%));
+  box-shadow: var(--ss-theme-panel-shadow, 0 24px 70px rgba(0, 0, 0, 0.52));
+  color: var(--ss-theme-text, #ececec);
+  transform: translateY(10px) scale(0.985);
+  transition: transform 0.18s ease;
+}
+
+.stx-shared-dialog-root.is-open .stx-shared-dialog-surface,
+.stx-shared-dialog-root.is-visible .stx-shared-dialog-surface {
+  transform: translateY(0) scale(1);
+}
+
+.stx-shared-dialog-surface[data-stx-dialog-layout="bare"] {
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.stx-shared-dialog-surface[data-stx-dialog-layout="stretch"] {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  align-self: stretch;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.stx-shared-dialog-chrome {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stx-shared-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.1)) 90%, transparent);
+}
+
+.stx-shared-dialog-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stx-shared-dialog-eyebrow {
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ss-theme-text, #fff) 62%, transparent);
+}
+
+.stx-shared-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.stx-shared-dialog-title-icon {
+  color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 86%, white 14%);
+}
+
+.stx-shared-dialog-description {
+  font-size: 13px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--ss-theme-text, #fff) 74%, transparent);
+}
+
+.stx-shared-dialog-close {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.18)) 94%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 100%, transparent);
+  color: var(--ss-theme-text, #ececec);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.stx-shared-dialog-close:hover {
+  border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 64%, transparent);
+}
+
+.stx-shared-dialog-content {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  justify-content: center;
+  padding: 18px;
+}
+
+.stx-shared-dialog-content > * {
+  margin-inline: auto;
+  width: 100%;
+}
+
+.stx-shared-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.1)) 90%, transparent);
+}
+
+.stx-shared-dialog-content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.stx-shared-dialog-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 42%, transparent);
+}
+
+@media (max-width: 900px) {
+  .stx-shared-dialog-root {
+    padding: 14px;
+  }
+
+  .stx-shared-dialog-surface {
+    width: min(100%, calc(100vw - 28px));
+    max-height: min(92vh, calc(100vh - 28px));
+  }
+}
+
+@media (max-width: 640px) {
+  .stx-shared-dialog-root {
+    padding: 10px;
+  }
+
+  .stx-shared-dialog-header,
+  .stx-shared-dialog-content,
+  .stx-shared-dialog-footer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .stx-shared-dialog-title {
+    font-size: 18px;
+  }
+
+  .stx-shared-dialog-footer {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+}

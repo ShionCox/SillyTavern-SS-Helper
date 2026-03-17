@@ -22,6 +22,7 @@ import {
 const logger = new Logger('MemoryLlmBridge');
 
 export const MEMORY_TASKS = {
+    COLDSTART_SUMMARIZE: 'memory.coldstart.summarize',
     SUMMARIZE: 'memory.summarize',
     EXTRACT: 'memory.extract',
     TEMPLATE_BUILD: 'world.template.build',
@@ -48,6 +49,7 @@ type GenerationBudget = {
     maxTokens?: number;
     maxLatencyMs?: number;
     maxCost?: number;
+    chatKey?: string;
     taskPresentation?: TaskPresentationOverride;
 };
 
@@ -55,10 +57,12 @@ type EmbedBudget = {
     maxLatencyMs?: number;
     showOverlay?: boolean;
     overlayDescription?: string;
+    chatKey?: string;
     taskPresentation?: TaskPresentationOverride;
 };
 
 type RerankBudget = {
+    chatKey?: string;
     taskPresentation?: TaskPresentationOverride;
 };
 
@@ -172,6 +176,8 @@ function isRegistrableLlm(value: unknown): value is LLMSDK {
  */
 function getDefaultTaskTitle(taskId: MemoryAiTaskId): string {
     switch (taskId) {
+        case MEMORY_TASKS.COLDSTART_SUMMARIZE:
+            return '冷启动摘要';
         case MEMORY_TASKS.SUMMARIZE:
             return '记忆摘要';
         case MEMORY_TASKS.EXTRACT:
@@ -199,6 +205,8 @@ function getRunningDescription(taskId: MemoryAiTaskId, taskDescription?: string)
         return trimmed;
     }
     switch (taskId) {
+        case MEMORY_TASKS.COLDSTART_SUMMARIZE:
+            return '正在生成冷启动角色卡与世界观总结。';
         case MEMORY_TASKS.SUMMARIZE:
             return '正在生成最近对话的摘要。';
         case MEMORY_TASKS.EXTRACT:
@@ -258,6 +266,13 @@ function ensureRegistered(llm: LLMSDK): BridgeInitStatus {
         displayName: 'Memory OS',
         registrationVersion: 3,
         tasks: [
+            {
+                taskId: MEMORY_TASKS.COLDSTART_SUMMARIZE,
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '冷启动角色卡与世界观总结',
+                recommendedDisplay: 'silent',
+            },
             {
                 taskId: MEMORY_TASKS.SUMMARIZE,
                 taskKind: 'generation',
@@ -589,8 +604,21 @@ export async function runGeneration<T>(
     const startTs = Date.now();
     markTaskRunning(tid);
 
+    const requestId = startTaskPresentation(
+        tid,
+        budget?.taskPresentation,
+        getRunningDescription(tid, taskDescription),
+    );
+
     const guardResult = checkAiModeGuard(tid);
     if (guardResult) {
+        logger.warn('[ColdStart][RunGenerationBlocked]', {
+            taskId,
+            reasonCode: guardResult.reasonCode,
+            error: guardResult.error,
+            hasTaskPresentation: Boolean(budget?.taskPresentation),
+        });
+        endTaskPresentation(requestId, 'error', guardResult.error || 'AI 模式未启用或 LLMHub 不可用');
         return guardResult;
     }
 
@@ -598,14 +626,14 @@ export async function runGeneration<T>(
     if (!llm) {
         const record = buildFailureRecord(tid, startTs, 'LLMHub 未就绪', 'provider_unavailable');
         recordTaskResult(record);
+        logger.warn('[ColdStart][RunGenerationUnavailable]', {
+            taskId,
+            reasonCode: 'provider_unavailable',
+            hasTaskPresentation: Boolean(budget?.taskPresentation),
+        });
+        endTaskPresentation(requestId, 'error', 'LLMHub 未就绪');
         return { ok: false, error: 'LLMHub 未就绪', reasonCode: 'provider_unavailable' };
     }
-
-    const requestId = startTaskPresentation(
-        tid,
-        budget?.taskPresentation,
-        getRunningDescription(tid, taskDescription),
-    );
 
     try {
         const normalizedInput = normalizeGenerationInput(input);
@@ -623,7 +651,7 @@ export async function runGeneration<T>(
             },
             enqueue: {
                 displayMode: 'silent',
-                scope: { pluginId: MEMORY_OS_PLUGIN_ID },
+                scope: { pluginId: MEMORY_OS_PLUGIN_ID, chatKey: budget?.chatKey },
             },
             onLifecycle: (event): void => {
                 applyLifecyclePresentation(requestId, event);
@@ -697,7 +725,7 @@ export async function runEmbed(
             texts,
             enqueue: {
                 displayMode: 'silent',
-                scope: { pluginId: MEMORY_OS_PLUGIN_ID },
+                scope: { pluginId: MEMORY_OS_PLUGIN_ID, chatKey: budget?.chatKey },
             },
             onLifecycle: (event): void => {
                 applyLifecyclePresentation(requestId, event);
@@ -764,7 +792,7 @@ export async function runRerank(
             topK,
             enqueue: {
                 displayMode: 'silent',
-                scope: { pluginId: MEMORY_OS_PLUGIN_ID },
+                scope: { pluginId: MEMORY_OS_PLUGIN_ID, chatKey: budget?.chatKey },
             },
             onLifecycle: (event): void => {
                 applyLifecyclePresentation(requestId, event);

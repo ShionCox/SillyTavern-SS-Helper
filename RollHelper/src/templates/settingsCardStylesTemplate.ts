@@ -288,39 +288,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       flex: 1;
     }
 
-    #${cardId} .st-roll-shared-select {
-      flex: 0 1 220px;
-    }
-
-    #${cardId} .st-roll-status-row .stx-shared-select,
-    #${cardId} .st-roll-status-scope-select {
-      width: 100%;
-      min-width: 0;
-    }
-
-    #${cardId} .st-roll-select {
-      background: rgba(0, 0, 0, 0.28);
-      color: inherit;
-      border: 1px solid rgba(197, 160, 89, 0.36);
-      border-radius: 8px;
-      box-sizing: border-box;
-      transition:
-        border-color 0.2s ease,
-        box-shadow 0.2s ease,
-        background-color 0.2s ease;
-    }
-
-    #${cardId} .st-roll-select {
-      padding: 4px 8px;
-      min-height: 30px;
-    }
-
-    #${cardId} .st-roll-select {
-      min-width: 182px;
-      max-width: 100%;
-      text-align: left;
-    }
-
     #${cardId} .st-roll-input {
       width: 120px;
     }
@@ -387,18 +354,65 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-skill-cols {
       display: grid;
-      grid-template-columns: minmax(280px, 1fr) 84px 124px;
+      grid-template-columns:
+        var(--st-roll-skill-col-name)
+        var(--st-roll-skill-col-modifier)
+        var(--st-roll-skill-col-actions);
       gap: 10px;
       font-size: 12px;
       font-weight: 700;
       opacity: 0.72;
       margin-bottom: 4px;
       padding: 0 2px;
+      align-items: center;
+      min-width: calc(var(--st-roll-skill-col-name) + var(--st-roll-skill-col-modifier) + var(--st-roll-skill-col-actions) + 20px);
     }
 
-    #${cardId} .st-roll-skill-cols span:nth-child(2),
-    #${cardId} .st-roll-skill-cols span:nth-child(3) {
+    #${cardId} .st-roll-skill-col-head {
+      position: relative;
+      display: block;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-right: 8px;
+    }
+
+    #${cardId} .st-roll-skill-col-head[data-skill-col-key="modifier"],
+    #${cardId} .st-roll-skill-col-head[data-skill-col-key="actions"] {
       text-align: center;
+    }
+
+    #${cardId} .st-roll-skill-col-resizer {
+      position: absolute;
+      top: 0;
+      right: -4px;
+      bottom: 0;
+      width: 8px;
+      cursor: col-resize;
+      user-select: none;
+      background: transparent;
+    }
+
+    #${cardId} .st-roll-skill-col-resizer::before {
+      content: "";
+      position: absolute;
+      top: 14%;
+      bottom: 14%;
+      left: 50%;
+      width: 1px;
+      transform: translateX(-50%);
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+    #${cardId} .st-roll-skill-col-resizer:hover,
+    #${cardId} .st-roll-skill-col-resizer.is-resizing {
+      background: rgba(197, 160, 89, 0.55);
+    }
+
+    #${cardId} .st-roll-skill-col-resizer:hover::before,
+    #${cardId} .st-roll-skill-col-resizer.is-resizing::before {
+      background: rgba(255, 236, 201, 0.72);
     }
 
     #${cardId} .st-roll-skill-rows {
@@ -409,9 +423,13 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-skill-row {
       display: grid;
-      grid-template-columns: minmax(280px, 1fr) 84px 124px;
+      grid-template-columns:
+        var(--st-roll-skill-col-name)
+        var(--st-roll-skill-col-modifier)
+        var(--st-roll-skill-col-actions);
       gap: 10px;
-      align-items: stretch;
+      align-items: center;
+      min-width: calc(var(--st-roll-skill-col-name) + var(--st-roll-skill-col-modifier) + var(--st-roll-skill-col-actions) + 20px);
     }
 
     #${cardId} .st-roll-skill-name,
@@ -421,6 +439,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-skill-modifier {
       text-align: center;
+      justify-self: stretch;
     }
 
     #${cardId} .st-roll-skill-remove {
@@ -517,6 +536,9 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       overflow: hidden;
       background: var(--ss-theme-panel-bg);
       box-shadow: var(--ss-theme-panel-shadow);
+      --st-roll-skill-col-name: 280px;
+      --st-roll-skill-col-modifier: 84px;
+      --st-roll-skill-col-actions: 124px;
     }
 
     #${cardId} .st-roll-skill-modal-head {
@@ -577,6 +599,18 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       font-size: 12px;
       line-height: 1.4;
       opacity: 0.78;
+    }
+
+    #${cardId} .st-roll-skill-preset-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #${cardId} .st-roll-skill-preset-toolbar .st-roll-skill-preset-search {
+      width: 100%;
+      min-width: 0;
     }
 
     #${cardId} .st-roll-skill-preset-list {
@@ -1214,13 +1248,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       height: 36px;
     }
 
-    #${cardId} .st-roll-status-row .stx-shared-select-trigger {
-      min-height: 36px;
-      height: 36px;
-      padding-top: 0;
-      padding-bottom: 0;
-    }
-
     #${cardId} .st-roll-status-col-head {
       position: relative;
       min-width: 0;
@@ -1356,12 +1383,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: none;
     }
 
-    #${cardId} .st-roll-select:hover {
-      border-color: var(--ss-theme-border-strong);
-      background-color: var(--ss-theme-surface-3);
-      box-shadow: 0 0 0 1px var(--ss-theme-focus-ring);
-    }
-
     #${cardId} .st-roll-textarea-wrap:hover {
       border-color: var(--ss-theme-border-strong);
       box-shadow: none;
@@ -1371,12 +1392,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       border-color: var(--ss-theme-border-strong);
       background: var(--ss-theme-list-item-hover-bg);
       box-shadow: none;
-    }
-
-    #${cardId} .st-roll-select:focus {
-      outline: none;
-      border-color: var(--ss-theme-border-strong);
-      box-shadow: 0 0 0 2px var(--ss-theme-focus-ring);
     }
 
     #${cardId} .st-roll-shell {
@@ -1412,13 +1427,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
     #${cardId} .st-roll-about-meta a {
       border-bottom-color: var(--ss-theme-border);
-    }
-
-    #${cardId} .st-roll-select,
-    #${cardId} .st-roll-select {
-      color: var(--ss-theme-text);
-      border-color: var(--ss-theme-border);
-      background: var(--ss-theme-surface-2);
     }
 
     #${cardId} .st-roll-btn {
@@ -1544,7 +1552,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: none;
     }
 
-    #${cardId} .st-roll-select:hover,
     #${cardId} .st-roll-input:hover,
     #${cardId} .st-roll-search:hover,
     #${cardId} .st-roll-textarea:hover {
@@ -1570,7 +1577,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: none;
     }
 
-    #${cardId} .st-roll-select:focus,
     #${cardId} .st-roll-input:focus,
     #${cardId} .st-roll-search:focus,
     #${cardId} .st-roll-textarea:focus {
@@ -1579,22 +1585,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: 0 0 0 2px var(--ss-theme-focus-ring);
     }
 
-    #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-select.text_pole,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-input.text_pole,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-search.text_pole,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-textarea.text_pole {
       margin: 0;
       box-shadow: none;
-    }
-
-    #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-select.text_pole {
-      background-image: none !important;
-      text-align: left;
-      text-align-last: left;
-      appearance: auto;
-      -webkit-appearance: auto;
-      -moz-appearance: auto;
-      padding-right: 20px;
     }
 
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-tab.menu_button,
@@ -1624,7 +1619,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       padding: 3px 8px;
     }
 
-    #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-select.text_pole:hover,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-input.text_pole:hover,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-search.text_pole:hover,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-textarea.text_pole:hover {
@@ -1633,7 +1627,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       box-shadow: none;
     }
 
-    #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-select.text_pole:focus,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-input.text_pole:focus,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-search.text_pole:focus,
     #${cardId} .st-roll-content[data-ss-theme="host"] .st-roll-textarea.text_pole:focus {
@@ -1779,10 +1772,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       font-size: 11px;
     }
 
-    #${cardId} .st-roll-workbench-select {
-      min-width: 132px;
-    }
-
     #${cardId} .st-roll-inline-toggle {
       display: inline-flex;
       align-items: center;
@@ -1799,10 +1788,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-status-toolbar {
       gap: 6px;
       padding: 8px 10px;
-    }
-
-    #${cardId} .st-roll-status-toolbar .st-roll-workbench-select {
-      min-width: 122px;
     }
 
     #${cardId} .st-roll-status-toolbar .st-roll-inline-toggle {
@@ -1880,15 +1865,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       grid-column: 1 / -1;
     }
 
-    #${cardId} .st-roll-status-sidebar .st-roll-workbench-select {
-      min-width: 0;
-      width: 100%;
-    }
-
-    #${cardId} .st-roll-status-sidebar .stx-shared-select {
-      width: 100%;
-    }
-
     #${cardId} .st-roll-status-sidebar .st-roll-btn {
       min-height: 30px;
       padding: 4px 10px;
@@ -1911,7 +1887,11 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       gap: 6px;
     }
 
-    #${cardId} .st-roll-skill-main,
+    #${cardId} .st-roll-skill-main {
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
     #${cardId} .st-roll-status-main {
       overflow: hidden;
     }
@@ -2138,6 +2118,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       display: grid;
       grid-template-columns: repeat(4, 28px);
       gap: 4px;
+      justify-self: center;
       justify-content: end;
       align-content: center;
     }
@@ -2194,9 +2175,15 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       }
 
       #${cardId} .st-roll-workbench-selection,
-      #${cardId} .st-roll-inline-toggle,
-      #${cardId} .st-roll-workbench-select {
+      #${cardId} .st-roll-inline-toggle {
         width: 100%;
+      }
+
+      #${cardId} .st-roll-skill-preset-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
       }
 
       #${cardId} .st-roll-skill-modal-panel {
@@ -2212,6 +2199,17 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-skill-modal-body {
         padding: 10px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+      }
+
+      #${cardId} .st-roll-workbench,
+      #${cardId} .st-roll-skill-layout {
+        height: auto;
+        min-height: max-content;
+        overflow: visible;
       }
 
       #${cardId} .st-roll-skill-layout {
@@ -2222,9 +2220,54 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
         min-height: 0;
       }
 
+      #${cardId} .st-roll-skill-main {
+        overflow: visible;
+        min-height: max-content;
+      }
+
+      #${cardId} .st-roll-skill-rows {
+        overflow: visible;
+      }
+
+      #${cardId} .st-roll-skill-toolbar {
+        flex-direction: row;
+        align-items: stretch;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+
+      #${cardId} .st-roll-skill-toolbar .st-roll-skill-row-search,
+      #${cardId} .st-roll-skill-toolbar .st-roll-workbench-selection {
+        width: 100%;
+        min-width: 0;
+        flex: 1 1 100%;
+      }
+
+      #${cardId} .st-roll-skill-toolbar .st-roll-skill-select-visible,
+      #${cardId} .st-roll-skill-toolbar .st-roll-skill-clear-selection,
+      #${cardId} .st-roll-skill-toolbar .st-roll-skill-batch-delete {
+        min-width: 0;
+        flex: 1 1 calc(33.333% - 6px);
+      }
+
       #${cardId} .st-roll-skill-head {
         flex-direction: column;
         align-items: stretch;
+      }
+
+      #${cardId} .st-roll-skill-head .st-roll-workbench-head-copy {
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-skill-head .st-roll-actions {
+        width: 100%;
+        flex-wrap: wrap;
+        overflow: hidden;
+      }
+
+      #${cardId} .st-roll-skill-head .st-roll-actions .st-roll-btn {
+        min-width: 0;
+        flex: 1 1 calc(50% - 4px);
       }
 
       #${cardId} .st-roll-skill-actions-group,
@@ -2237,11 +2280,45 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       }
 
       #${cardId} .st-roll-skill-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "name name"
+          "modifier actions";
+        gap: 6px 8px;
+        align-items: center;
+        min-width: 0;
+      }
+
+      #${cardId} .st-roll-skill-name-wrap {
+        grid-area: name;
+        gap: 4px;
       }
 
       #${cardId} .st-roll-skill-modifier {
+        grid-area: modifier;
         text-align: left;
+        min-height: 28px;
+        max-width: 96px;
+      }
+
+      #${cardId} .st-roll-skill-row-select {
+        width: 14px;
+        height: 14px;
+        --stx-box-checkbox-size: 14px;
+      }
+
+      #${cardId} .st-roll-skill-actions-group {
+        grid-area: actions;
+        width: auto;
+        justify-self: end;
+        grid-template-columns: repeat(4, 26px);
+        gap: 4px;
+      }
+
+      #${cardId} .st-roll-skill-actions-group .st-roll-btn {
+        width: 26px;
+        min-width: 26px;
+        min-height: 26px;
       }
 
       #${cardId} .st-roll-skill-remove {
@@ -2311,10 +2388,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-sidebar .st-roll-status-chat-search {
         grid-column: 1 / -1;
-      }
-
-      #${cardId} .st-roll-status-sidebar .st-roll-workbench-select {
-        min-width: 0;
       }
 
       #${cardId} .st-roll-status-sidebar .st-roll-btn {
@@ -2447,12 +2520,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-toolbar .st-roll-status-search {
         grid-column: 1 / -1;
-      }
-
-      #${cardId} .st-roll-status-toolbar .st-roll-workbench-select {
-        grid-column: span 3;
-        min-width: 0;
-        width: 100%;
       }
 
       #${cardId} .st-roll-status-toolbar .st-roll-inline-toggle {
@@ -2615,8 +2682,7 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       #${cardId} .st-roll-status-row .st-roll-status-name,
       #${cardId} .st-roll-status-row .st-roll-status-modifier,
       #${cardId} .st-roll-status-row .st-roll-status-duration,
-      #${cardId} .st-roll-status-row .st-roll-status-skills,
-      #${cardId} .st-roll-status-row .stx-shared-select {
+      #${cardId} .st-roll-status-row .st-roll-status-skills {
         width: 100%;
         min-width: 0;
       }
@@ -2625,7 +2691,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       #${cardId} .st-roll-status-row .st-roll-status-modifier,
       #${cardId} .st-roll-status-row .st-roll-status-duration,
       #${cardId} .st-roll-status-row .st-roll-status-skills,
-      #${cardId} .st-roll-status-row .stx-shared-select-trigger,
       #${cardId} .st-roll-status-enabled-wrap {
         min-height: 36px;
         height: 36px;
@@ -2633,11 +2698,6 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
 
       #${cardId} .st-roll-status-modifier {
         text-align: left;
-      }
-
-      #${cardId} .st-roll-status-field-scope .st-roll-status-scope-select,
-      #${cardId} .st-roll-status-field-scope .stx-shared-select {
-        width: 100%;
       }
 
       #${cardId} .st-roll-status-enabled-card {

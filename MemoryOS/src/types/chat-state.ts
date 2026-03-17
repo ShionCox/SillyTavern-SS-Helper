@@ -564,6 +564,18 @@ export interface SemanticAiSummary {
     source: 'ai';
 }
 
+export interface ColdStartLorebookEntrySelection {
+    book: string;
+    entryId: string;
+    entry: string;
+    keywords: string[];
+}
+
+export interface ColdStartLorebookSelection {
+    books: string[];
+    entries: ColdStartLorebookEntrySelection[];
+}
+
 export interface ChatSemanticSeed {
     collectedAt: number;
     characterCore: Record<string, unknown>;
@@ -853,6 +865,7 @@ export interface MemoryTuningProfile {
 }
 
 export type MemoryTaskPresentationTaskId =
+    | 'memory.coldstart.summarize'
     | 'memory.summarize'
     | 'memory.extract'
     | 'world.template.build'
@@ -1241,6 +1254,11 @@ export const DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS: MemoryTaskPresentationSe
     disableComposerDuringBlocking: true,
     toastAutoCloseSeconds: 3,
     presets: {
+        'memory.coldstart.summarize': {
+            taskId: 'memory.coldstart.summarize',
+            label: '冷启动摘要',
+            surfaceMode: 'fullscreen_blocking',
+        },
         'memory.summarize': {
             taskId: 'memory.summarize',
             label: '摘要生成',
@@ -1294,6 +1312,9 @@ export interface MemoryOSChatState {
     archiveReason?: string;
     characterBindingFingerprint?: string;
     semanticSeed?: ChatSemanticSeed;
+    coldStartLorebookSelection?: string[];
+    coldStartLorebookEntrySelection?: ColdStartLorebookEntrySelection[];
+    coldStartSkipLorebookSelection?: boolean;
     personaMemoryProfile?: PersonaMemoryProfile;
     simpleMemoryPersona?: SimpleMemoryPersona;
     coldStartFingerprint?: string;

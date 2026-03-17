@@ -1,10 +1,15 @@
 import {
+    getCurrentTavernCharacterSnapshotEvent,
     getSillyTavernContextEvent,
+    listTavernActiveWorldbooksEvent,
+    loadTavernWorldbookEntriesEvent,
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
-import { enhanceSemanticSeedWithAi } from './chat-semantic-ai-summary';
+import { enhanceSemanticSeedWithAiWithOptions } from './chat-semantic-ai-summary';
+import type { TaskPresentationOverride } from '../llm/memoryLlmBridge';
 import type {
+    ColdStartLorebookSelection,
     ChatSemanticSeed,
     IdentitySeed,
     SeedSourceTrace,
@@ -19,8 +24,71 @@ interface SemanticBootstrapResult {
     bindingFingerprint: string;
 }
 
+interface LoadedLorebookEntry {
+    book: string;
+    entryId: string;
+    entry: string;
+    keywords: string[];
+    content: string;
+}
+
+function normalizeLorebookNames(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(new Set(
+        value
+            .map((item: unknown): string => normalizeText(item))
+            .filter(Boolean),
+    )).slice(0, 24);
+}
+
 function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeLorebookContent(value: unknown): string {
+    return String(value ?? '').replace(/\r\n?/g, '\n').trim();
+}
+
+function truncateText(value: string, limit: number): string {
+    const normalized = normalizeText(value);
+    if (normalized.length <= limit) {
+        return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+}
+
+function buildLorebookEntryKey(book: string, entryId: string): string {
+    return `${normalizeText(book)}::${normalizeText(entryId)}`;
+}
+
+function normalizeColdStartLorebookSelection(
+    value: ColdStartLorebookSelection | string[] | undefined,
+    fallbackBooks: string[],
+): ColdStartLorebookSelection {
+    if (Array.isArray(value)) {
+        return {
+            books: normalizeLorebookNames(value.length > 0 ? value : fallbackBooks),
+            entries: [],
+        };
+    }
+    return {
+        books: normalizeLorebookNames(value?.books ?? fallbackBooks),
+        entries: Array.isArray(value?.entries)
+            ? Array.from(new Map(
+                value.entries
+                    .map((item) => ({
+                        book: normalizeText(item?.book),
+                        entryId: normalizeText(item?.entryId),
+                        entry: normalizeText(item?.entry) || '未命名条目',
+                        keywords: Array.from(new Set((item?.keywords ?? []).map((keyword) => normalizeText(keyword)).filter(Boolean))).slice(0, 12),
+                    }))
+                    .filter((item) => item.book && item.entryId)
+                    .map((item) => [buildLorebookEntryKey(item.book, item.entryId), item] as const),
+            ).values()).slice(0, 256)
+            : [],
+    };
 }
 
 function hashString(value: string): string {
@@ -51,6 +119,57 @@ function buildSemanticSeedFingerprint(chatKey: string, seed: ChatSemanticSeed): 
         aiSummary: seed.aiSummary,
     });
     return hashString(fingerprintBase);
+}
+
+async function resolveSelectedLorebookEntries(selection: ColdStartLorebookSelection): Promise<{
+    activeLorebooks: string[];
+    entries: LoadedLorebookEntry[];
+}> {
+    const requestedBooks = normalizeLorebookNames(selection.books);
+    const requestedEntryMap = new Map<string, { book: string; entryId: string }>();
+    for (const item of selection.entries) {
+        const book = normalizeText(item.book);
+        const entryId = normalizeText(item.entryId);
+        if (!book || !entryId || requestedBooks.includes(book)) {
+            continue;
+        }
+        requestedEntryMap.set(buildLorebookEntryKey(book, entryId), { book, entryId });
+    }
+
+    const activeLorebooks = normalizeLorebookNames([
+        ...requestedBooks,
+        ...selection.entries.map((item) => item.book),
+    ]);
+    const booksToLoad = normalizeLorebookNames([
+        ...requestedBooks,
+        ...Array.from(requestedEntryMap.values()).map((item) => item.book),
+    ]);
+    if (booksToLoad.length === 0) {
+        return { activeLorebooks, entries: [] };
+    }
+
+    const loadedEntries = await loadTavernWorldbookEntriesEvent(booksToLoad);
+    const resolvedEntries = new Map<string, LoadedLorebookEntry>();
+    for (const item of loadedEntries) {
+        const key = buildLorebookEntryKey(item.book, item.entryId);
+        const includeWholeBook = requestedBooks.includes(item.book);
+        const includeSingleEntry = requestedEntryMap.has(key);
+        if (!includeWholeBook && !includeSingleEntry) {
+            continue;
+        }
+        resolvedEntries.set(key, {
+            book: normalizeText(item.book),
+            entryId: normalizeText(item.entryId),
+            entry: normalizeText(item.entry) || '未命名条目',
+            keywords: Array.from(new Set(item.keywords.map((keyword: string): string => normalizeText(keyword)).filter(Boolean))).slice(0, 12),
+            content: normalizeLorebookContent(item.content),
+        });
+    }
+
+    return {
+        activeLorebooks,
+        entries: Array.from(resolvedEntries.values()),
+    };
 }
 
 function splitSeedValues(...values: string[]): string[] {
@@ -163,8 +282,25 @@ function buildStyleSeed(systemPrompt: string, instruct: string, jailbreak: strin
     };
 }
 
-function buildLorebookSeed(activeLorebooks: string[], worldText: string): Array<{ book: string; hash: string; snippets: string[] }> {
-    const snippets = splitSeedValues(worldText).slice(0, 8);
+function buildLorebookSeed(
+    activeLorebooks: string[],
+    selectedEntries: LoadedLorebookEntry[],
+    worldText: string,
+): Array<{ book: string; hash: string; snippets: string[] }> {
+    const fallbackSnippets = splitSeedValues(worldText).slice(0, 8);
+    const totalSelectedEntryCount = selectedEntries.length;
+    const perEntryCharLimit = totalSelectedEntryCount <= 3
+        ? 1200
+        : totalSelectedEntryCount <= 6
+            ? 600
+            : 220;
+    const maxSnippetsPerBook = totalSelectedEntryCount <= 6 ? 12 : 6;
+    const entryGroups = new Map<string, LoadedLorebookEntry[]>();
+    for (const entry of selectedEntries) {
+        const current = entryGroups.get(entry.book) ?? [];
+        current.push(entry);
+        entryGroups.set(entry.book, current);
+    }
     return activeLorebooks
         .map((book: string): string => normalizeText(book))
         .filter(Boolean)
@@ -172,8 +308,35 @@ function buildLorebookSeed(activeLorebooks: string[], worldText: string): Array<
         .map((book: string) => ({
             book,
             hash: hashString(book.toLowerCase()),
-            snippets: snippets.slice(0, 3),
+            snippets: (() => {
+                const selectedSnippets = Array.from(new Set(
+                    (entryGroups.get(book) ?? [])
+                        .slice(0, maxSnippetsPerBook)
+                        .map((entry: LoadedLorebookEntry): string => {
+                            const rawContent = normalizeLorebookContent(entry.content);
+                            if (!rawContent) {
+                                return '';
+                            }
+                            if (totalSelectedEntryCount <= 3) {
+                                return `${entry.entry}：${rawContent}`;
+                            }
+                            return `${entry.entry}：${truncateText(rawContent, perEntryCharLimit)}`;
+                        })
+                        .filter(Boolean),
+                ));
+                if (selectedSnippets.length > 0) {
+                    return selectedSnippets;
+                }
+                return fallbackSnippets.slice(0, 4);
+            })(),
         }));
+}
+
+function buildSelectedLorebookContextText(entries: LoadedLorebookEntry[]): string {
+    return entries
+        .slice(0, 24)
+        .map((entry: LoadedLorebookEntry): string => `${entry.book} / ${entry.entry}：${truncateText(entry.content, 220)}`)
+        .join('\n');
 }
 
 function buildCharacterAnchors(input: {
@@ -204,7 +367,10 @@ function buildCharacterAnchors(input: {
     return anchors.slice(0, 12);
 }
 
-export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResult {
+export async function collectChatSemanticSeed(
+    chatKey: string,
+    activeLorebooksOverride?: ColdStartLorebookSelection | string[],
+): Promise<SemanticBootstrapResult> {
     const context = getSillyTavernContextEvent();
     if (!context) {
         return {
@@ -216,10 +382,11 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
 
     const contextRecord = context as unknown as Record<string, unknown>;
     const role = resolveTavernRoleIdentityEvent(context);
+    const currentCharacter = getCurrentTavernCharacterSnapshotEvent(context);
     const group = resolveCurrentGroupEvent(context);
     const groupRecord = (group ?? null) as Record<string, unknown> | null;
     const groupId = normalizeText(groupRecord?.id ?? contextRecord.groupId);
-    const characterId = normalizeText(contextRecord.characterId ?? contextRecord.this_chid);
+    const characterId = normalizeText(currentCharacter?.index ?? contextRecord.characterId ?? contextRecord.this_chid);
     const bindingFingerprint = `${groupId || '-'}|${characterId || '-'}`;
 
     const characterCore: Record<string, unknown> = {
@@ -256,10 +423,9 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
     );
     const jailbreak = normalizeText(contextRecord.jailbreak ?? contextRecord.jailbreak_prompt ?? '');
     const instruct = normalizeText(contextRecord.instruct ?? contextRecord.instruct_prompt ?? '');
-    const activeLorebooksRaw = (globalThis as Record<string, unknown>).selected_world_info ?? contextRecord.selected_world_info;
-    const activeLorebooks = Array.isArray(activeLorebooksRaw)
-        ? activeLorebooksRaw.map((item: unknown): string => normalizeText(item)).filter(Boolean)
-        : [];
+    const selection = normalizeColdStartLorebookSelection(activeLorebooksOverride, listTavernActiveWorldbooksEvent(24));
+    const lorebookSelection = await resolveSelectedLorebookEntries(selection);
+    const activeLorebooks = lorebookSelection.activeLorebooks;
     const groupMembers = extractGroupMembers(contextRecord, groupRecord);
     const presetStyle = normalizeText(
         contextRecord.preset
@@ -280,6 +446,7 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
         normalizeText(contextRecord.world_info),
         normalizeText(contextRecord.description),
         systemPrompt,
+        buildSelectedLorebookContextText(lorebookSelection.entries),
     ].join('\n');
 
     const identitySeed = buildIdentitySeed(
@@ -293,7 +460,7 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
     );
     const worldSeed = buildWorldSeed(worldText, 'sillytavern.context.world');
     const styleSeed = buildStyleSeed(systemPrompt, instruct, jailbreak);
-    const lorebookSeed = buildLorebookSeed(activeLorebooks, worldText);
+    const lorebookSeed = buildLorebookSeed(activeLorebooks, lorebookSelection.entries, worldText);
     const characterAnchors = buildCharacterAnchors({
         roleKey: role.roleKey,
         displayName: role.displayName,
@@ -322,7 +489,7 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
             buildSourceTrace('character_core', 'context.character', 0.9),
             buildSourceTrace('system_prompt', 'context.system_prompt', 0.85),
             buildSourceTrace('first_message', 'context.first_mes', 0.7),
-            buildSourceTrace('lorebook', 'global.selected_world_info', 0.8),
+            buildSourceTrace('lorebook', activeLorebooksOverride ? 'memoryos.cold_start_selection' : 'global.selected_world_info', 0.8),
         ],
     };
     return {
@@ -332,14 +499,27 @@ export function collectChatSemanticSeed(chatKey: string): SemanticBootstrapResul
     };
 }
 
-export async function collectChatSemanticSeedWithAi(chatKey: string): Promise<SemanticBootstrapResult> {
-    const base = collectChatSemanticSeed(chatKey);
+export async function collectChatSemanticSeedWithAi(
+    chatKey: string,
+    activeLorebooksOverride?: ColdStartLorebookSelection | string[],
+    options?: {
+        forceAi?: boolean;
+        taskPresentation?: TaskPresentationOverride;
+        taskDescription?: string;
+    },
+): Promise<SemanticBootstrapResult> {
+    const base = await collectChatSemanticSeed(chatKey, activeLorebooksOverride);
     if (!base.seed) {
         return base;
     }
 
     try {
-        const enhancedSeed = await enhanceSemanticSeedWithAi(base.seed);
+        const enhancedSeed = await enhanceSemanticSeedWithAiWithOptions(base.seed, {
+            force: options?.forceAi === true,
+            chatKey,
+            taskPresentation: options?.taskPresentation,
+            taskDescription: options?.taskDescription,
+        });
         return {
             ...base,
             seed: enhancedSeed,

@@ -10,6 +10,7 @@ import type { AiSelfTestResult } from '../llm/ai-self-test';
 import type { MemoryAiHealthSnapshot, MemoryAiTaskId } from '../llm/ai-health-types';
 import type { DerivedRowCandidate, EditorHealthSnapshot, LogicRowView, LogicTableSummary, LogicTableViewModel, MemoryCandidate, MemoryCandidateBufferSnapshot, MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode, TemplateTableDef } from '../../../SDK/stx';
 import { openRecordEditor } from './recordEditor';
+import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
@@ -27,6 +28,10 @@ import { normalizeMemoryTaskPresentationSettings } from '../llm/task-presentatio
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
+
+function normalizeText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
 
 
 // UI 组件的唯一命名空间
@@ -388,9 +393,9 @@ function upgradeSettingsSelects(root: HTMLElement): void {
         const nextMarkup = buildSharedSelectField({
             id: nativeSelect.id,
             value: nativeSelect.value,
-            containerClassName: 'stx-ui-shared-select stx-ui-shared-select-inline',
+            containerClassName: 'stx-shared-select-fluid stx-shared-select-inline',
             selectClassName: 'stx-ui-input',
-            triggerClassName: 'stx-ui-input-full',
+            triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-input',
             triggerAttributes: dataTip ? { 'data-tip': dataTip } : undefined,
             options: Array.from(nativeSelect.options).map((option: HTMLOptionElement) => ({
                 value: option.value,
@@ -484,6 +489,8 @@ export async function renderSettingsUi() {
     }
 }
 
+export { openWorldbookInitPanel } from './worldbookInitPanel';
+
 /**
  * 绑定设置卡片的交互事件
  */
@@ -495,6 +502,8 @@ function bindUiEvents() {
     type UiMode = 'basic' | 'advanced';
 
     const cardRoot = document.getElementById(IDS.cardId) as HTMLElement | null;
+    const drawerToggle = document.getElementById(IDS.drawerToggleId) as HTMLElement | null;
+    const drawerContent = document.getElementById(IDS.drawerContentId) as HTMLElement | null;
     const topTabs: Array<{ tabId: string; panelId: string }> = [
         { tabId: IDS.tabRoleId, panelId: IDS.panelRoleId },
         { tabId: IDS.tabRecentId, panelId: IDS.panelRecentId },
@@ -550,46 +559,69 @@ function bindUiEvents() {
         }
     };
 
+    const isDrawerVisible = (element: HTMLElement | null): boolean => {
+        if (!(element instanceof HTMLElement)) {
+            return false;
+        }
+        if (element.hidden) {
+            return false;
+        }
+        const computedStyle = window.getComputedStyle(element);
+        if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') {
+            return false;
+        }
+        return element.getClientRects().length > 0;
+    };
+
+    let memoryOpenRefreshPending = false;
+    const refreshCurrentChatContextOnOpen = async (): Promise<void> => {
+        if (memoryOpenRefreshPending) {
+            return;
+        }
+        memoryOpenRefreshPending = true;
+        try {
+            const plugin = (window as any).MemoryOSPlugin as {
+                refreshCurrentChatBinding?: () => Promise<void>;
+            } | undefined;
+            await plugin?.refreshCurrentChatBinding?.();
+            await refreshExperiencePanels();
+            await initializeChatStrategyPanel();
+        } catch (error) {
+            logger.error('打开 MemoryOS 时刷新当前聊天失败', error);
+        } finally {
+            memoryOpenRefreshPending = false;
+        }
+    };
+
+    if (drawerToggle && drawerContent && drawerToggle.dataset.stxMemoryOpenRefreshBound !== '1') {
+        drawerToggle.dataset.stxMemoryOpenRefreshBound = '1';
+        drawerToggle.addEventListener('click', (): void => {
+            window.setTimeout((): void => {
+                if (!isDrawerVisible(drawerContent)) {
+                    return;
+                }
+                void refreshCurrentChatContextOnOpen();
+            }, 0);
+        });
+    }
+
     const showEditorDetailDialog = (title: string, content: string): void => {
         const dialogId = `${IDS.cardId}-detail-dialog`;
-        let overlay = document.getElementById(dialogId) as HTMLDivElement | null;
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = dialogId;
-            overlay.style.position = 'fixed';
-            overlay.style.inset = '0';
-            overlay.style.background = 'rgba(0, 0, 0, 0.45)';
-            overlay.style.zIndex = '10050';
-            overlay.style.display = 'none';
-            overlay.style.alignItems = 'center';
-            overlay.style.justifyContent = 'center';
-            overlay.style.padding = '24px';
-            overlay.innerHTML = `
-                <div style="width:min(880px, 96vw); max-height:80vh; overflow:auto; background: var(--SmartThemeBlurTintColor, #1b1b1b); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 16px; display:flex; flex-direction:column; gap:12px;">
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-                        <strong data-stx-detail-title style="font-size:16px;"></strong>
-                        <button type="button" class="stx-ui-btn secondary" data-stx-close-detail="true">关闭</button>
-                    </div>
-                    <pre data-stx-detail-body style="margin:0; white-space:pre-wrap; word-break:break-word; font-family:Consolas, 'Courier New', monospace; font-size:12px; line-height:1.6; background: rgba(255,255,255,0.03); border-radius: 12px; padding: 12px;"></pre>
-                </div>
-            `;
-            overlay.addEventListener('click', (event: Event): void => {
-                const target = event.target as HTMLElement | null;
-                if (target === overlay || target?.closest('[data-stx-close-detail="true"]')) {
-                    overlay!.style.display = 'none';
-                }
-            });
-            document.body.appendChild(overlay);
-        }
-        const titleElement = overlay.querySelector<HTMLElement>('[data-stx-detail-title]');
-        const bodyElement = overlay.querySelector<HTMLElement>('[data-stx-detail-body]');
-        if (titleElement) {
-            titleElement.textContent = title;
-        }
-        if (bodyElement) {
-            bodyElement.textContent = content;
-        }
-        overlay.style.display = 'flex';
+        openSharedDialog({
+            id: dialogId,
+            size: 'lg',
+            ariaLabel: title,
+            chrome: {
+                title,
+                description: '这里展示当前条目的来源详情或候选内容。',
+            },
+            bodyHtml: `<pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-family:Consolas, 'Courier New', monospace; font-size:12px; line-height:1.6; background: rgba(255,255,255,0.03); border-radius: 12px; padding: 12px;">${String(content ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')}</pre>`,
+            closeOnBackdrop: true,
+            closeOnEscape: true,
+        });
     };
 
     /**
@@ -1234,6 +1266,7 @@ function bindUiEvents() {
     };
     const SETTINGS_NAMESPACE = 'stx_memory_os';
     const TASK_SURFACE_FIELD_IDS: Record<MemoryTaskPresentationTaskId, string> = {
+        'memory.coldstart.summarize': IDS.taskSurfaceSummarizeModeId,
         'memory.summarize': IDS.taskSurfaceSummarizeModeId,
         'memory.extract': IDS.taskSurfaceExtractModeId,
         'world.template.build': IDS.taskSurfaceTemplateBuildModeId,
@@ -1795,18 +1828,23 @@ function bindUiEvents() {
         const initContext = getStContext();
         const initSettings = ensureMemorySettings(initContext);
         aiToggleEl.checked = initSettings['aiMode'] === true;
+        setAiModeEnabled(aiToggleEl.checked);
     }
 
     // 更新界面状态灯（提供明确的诊断级别文案）
-    const updateLinkStatus = (alive: boolean, isEnabled: boolean) => {
+    const updateLinkStatus = (alive: boolean, llmHubEnabled: boolean) => {
         if (!aiLightEl || !aiToggleEl) return;
-        if (alive && isEnabled) {
+        if (alive && llmHubEnabled) {
             const snapshot = getHealthSnapshot();
             if (snapshot.diagnosisLevel === 'fully_operational') {
                 aiLightEl.className = 'fa-solid fa-link';
                 aiLightEl.style.color = 'var(--stx-memory-success)';
                 aiLightEl.setAttribute('data-tip', snapshot.diagnosisText);
-            } else if (snapshot.diagnosisLevel === 'online_partial_capabilities') {
+            } else if (
+                snapshot.diagnosisLevel === 'online_partial_capabilities'
+                || snapshot.diagnosisLevel === 'mounted_not_registered'
+                || snapshot.diagnosisLevel === 'ai_mode_disabled'
+            ) {
                 aiLightEl.className = 'fa-solid fa-link';
                 aiLightEl.style.color = 'var(--stx-memory-warning, #ff9800)';
                 aiLightEl.setAttribute('data-tip', snapshot.diagnosisText);
@@ -1824,18 +1862,11 @@ function bindUiEvents() {
             aiLightEl.setAttribute(
                 'data-tip',
                 snapshot.diagnosisText || (alive
-                    ? 'LLMHub 已关闭，AI 模式不可用。'
-                    : '未检测到 LLMHub，AI 模式不可用。')
+                    ? 'LLMHub 当前处于关闭状态，AI 任务暂不可用；已保留当前 AI 模式开关设置。'
+                    : '未检测到 LLMHub，AI 任务暂不可用；已保留当前 AI 模式开关设置。')
             );
             aiLightEl.removeAttribute('title');
-            aiToggleEl.checked = false;
             aiToggleEl.disabled = true; // 强力闭锁
-            const currentContext = getStContext();
-            if (currentContext) {
-                const currentSettings = ensureMemorySettings(currentContext);
-                currentSettings['aiMode'] = false; // 联动存表
-                currentContext.saveSettingsDebounced?.();
-            }
         }
     };
 
@@ -1935,6 +1966,7 @@ function bindUiEvents() {
     const aiSelfTestDetailEl = document.getElementById(IDS.aiSelfTestDetailId);
 
     const TASK_ORDER: MemoryAiTaskId[] = [
+        'memory.coldstart.summarize',
         'memory.summarize',
         'memory.extract',
         'world.template.build',
@@ -1942,6 +1974,7 @@ function bindUiEvents() {
         'memory.search.rerank',
     ];
     const TASK_LABELS: Record<MemoryAiTaskId, string> = {
+        'memory.coldstart.summarize': '冷启动摘要',
         'memory.summarize': '摘要',
         'memory.extract': '抽取',
         'world.template.build': '模板构建',
@@ -2246,13 +2279,14 @@ function bindUiEvents() {
             const isFull = snapshot.diagnosisLevel === 'fully_operational';
             const isPartial = snapshot.diagnosisLevel === 'online_partial_capabilities';
             const isMounted = snapshot.diagnosisLevel === 'mounted_not_registered';
+            const isAiModeDisabled = snapshot.diagnosisLevel === 'ai_mode_disabled';
             
             const diagColor = isFull ? 'var(--stx-memory-success, #4caf50)'
-                : (isPartial || isMounted) ? 'var(--stx-memory-warning, #ff9800)'
+                : (isPartial || isMounted || isAiModeDisabled) ? 'var(--stx-memory-warning, #ff9800)'
                 : 'var(--stx-memory-danger-contrast, #f44336)';
             
             const diagIcon = isFull ? 'fa-circle-check'
-                : (isPartial || isMounted) ? 'fa-exclamation-triangle'
+                : (isPartial || isMounted || isAiModeDisabled) ? 'fa-exclamation-triangle'
                 : 'fa-circle-xmark';
 
             const html = `

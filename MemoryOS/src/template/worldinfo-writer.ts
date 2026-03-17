@@ -1,4 +1,10 @@
 import type { WorldInfoEntry } from './types';
+import {
+    deleteTavernWorldbookBookEvent,
+    deleteTavernWorldbookEntryEvent,
+    loadTavernWorldbookEvent,
+    saveTavernWorldbookEntryEvent,
+} from '../../../SDK/tavern';
 import { FactsManager } from '../core/facts-manager';
 import { SummariesManager } from '../core/summaries-manager';
 import { ChatStateManager } from '../core/chat-state-manager';
@@ -137,11 +143,6 @@ export class WorldInfoWriter {
      * @returns 成功写入的条目数量
      */
     async writebackToST(mode: 'facts' | 'summaries' | 'all' = 'all'): Promise<{ written: number; bookName: string }> {
-        const stContext = (window as any).SillyTavern?.getContext?.();
-        if (!stContext) {
-            throw new Error('SillyTavern context unavailable — cannot write back WorldInfo');
-        }
-
         // 生成写回数据
         const payload = await this.buildWritebackPayload();
         const { bookName, entries: allEntries } = payload;
@@ -186,33 +187,27 @@ export class WorldInfoWriter {
         }
 
         // 先清除同名 book 的旧条目（防止重复堆积）
-        await this.clearSTBook(bookName, stContext);
+        await this.clearSTBook(bookName);
 
         // 调用 ST 的 WorldInfo 写入接口
-        // ST 通过 context.worldInfo 或 window.createWorldInfoEntry 等方式操作
         let written = 0;
         for (const entry of entriesToWrite) {
             try {
-                // SillyTavern 标准接口：context.saveWorldInfo(bookName, entry)
-                if (stContext.saveWorldInfo) {
-                    await stContext.saveWorldInfo(bookName, {
-                        key: entry.key,
-                        keysecondary: [],
-                        comment: `${entry.comment} [gate:${lorebookDecision.mode}]`,
-                        content: entry.content,
-                        constant: false,
-                        selective: false,
-                        selectiveLogic: 0,
-                        addMemo: true,
-                        order: 100,
-                        position: 0,
-                        disable: false,
-                        excludeRecursion: false,
-                    });
-                    written++;
-                } else if ((window as any).createWorldInfoEntry) {
-                    // 降级：通过全局函数创建
-                    (window as any).createWorldInfoEntry(bookName, entry.content, entry.key);
+                const saved = await saveTavernWorldbookEntryEvent(bookName, {
+                    key: entry.key,
+                    keysecondary: [],
+                    comment: `${entry.comment} [gate:${lorebookDecision.mode}]`,
+                    content: entry.content,
+                    constant: false,
+                    selective: false,
+                    selectiveLogic: 0,
+                    addMemo: true,
+                    order: 100,
+                    position: 0,
+                    disable: false,
+                    excludeRecursion: false,
+                });
+                if (saved) {
                     written++;
                 }
             } catch { /* 单条失败不影响整体 */ }
@@ -224,22 +219,22 @@ export class WorldInfoWriter {
     /**
      * 清除 ST WorldInfo 中此 chatKey 对应的旧条目
      */
-    async clearSTBook(bookName: string, stContext?: any): Promise<void> {
-        const ctx = stContext ?? (window as any).SillyTavern?.getContext?.();
-        if (!ctx) return;
+    async clearSTBook(bookName: string): Promise<void> {
+        const clearedWholeBook = await deleteTavernWorldbookBookEvent(bookName);
+        if (clearedWholeBook) {
+            return;
+        }
+
         try {
-            // ST 可能提供 deleteWorldInfoEntry / clearWorldInfoBook 等接口
-            if (ctx.deleteWorldInfoBook) {
-                await ctx.deleteWorldInfoBook(bookName);
-            } else if (ctx.getWorldInfoBook) {
-                const book = await ctx.getWorldInfoBook(bookName);
-                if (book?.entries) {
-                    for (const entry of Object.values(book.entries) as any[]) {
-                        if (entry?.comment?.startsWith(this.PREFIX)) {
-                            ctx.deleteWorldInfoEntry?.(bookName, entry.uid);
-                        }
-                    }
+            const book = await loadTavernWorldbookEvent(bookName);
+            const entries = Object.entries(book?.entries ?? {});
+            for (const [entryId, entry] of entries) {
+                const comment = String(entry?.comment ?? '').trim();
+                const entryUid = entry?.uid ?? entryId;
+                if (!comment.startsWith(this.PREFIX) || entryUid === '') {
+                    continue;
                 }
+                await deleteTavernWorldbookEntryEvent(bookName, entryUid);
             }
         } catch { /* 清理失败静默 */ }
     }

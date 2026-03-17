@@ -305,13 +305,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-height: 32px;
     }
 
-    #${cardId} .stx-ui-param-row .stx-ui-param-type-select.stx-shared-select,
-    #${cardId} .stx-ui-param-row .stx-ui-param-type-select .stx-shared-select-trigger {
-      width: 100%;
-      min-width: 0;
-      min-height: 32px;
-    }
-
     #${cardId} .stx-ui-param-row .stx-ui-param-remove,
     #${cardId} .stx-ui-param-row .stx-ui-btn {
       align-self: stretch;
@@ -422,8 +415,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-list {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 8px;
       width: 100%;
       min-width: 0;
@@ -619,7 +612,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-direction: column;
       gap: 8px;
       min-width: 0;
-      max-width: 100%;
+      width: 100%;
     }
 
     #${cardId} .stx-ui-consumer-map-head {
@@ -628,6 +621,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       justify-content: space-between;
       gap: 8px;
       flex-wrap: wrap;
+      width: 100%;
     }
 
     #${cardId} .stx-ui-consumer-map-head-main {
@@ -1535,17 +1529,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       opacity: 0.68;
       margin-top: 2px;
       display: block;
-    }
-
-    #${cardId} .stx-shared-select {
-      max-width: 100%;
-    }
-
-    #${cardId} .stx-ui-shared-select-fluid.stx-shared-select,
-    #${cardId} .stx-ui-form-grid .stx-shared-select,
-    #${cardId} .stx-ui-consumer-map-form .stx-shared-select {
-      width: 100%;
-      min-width: 0;
     }
 
     @media (max-width: 900px) {

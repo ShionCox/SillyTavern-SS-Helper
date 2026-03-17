@@ -1,5 +1,23 @@
 [
   {
+    "version": "v1.1.7",
+    "date": "2026-03-17",
+    "sections": [
+      {
+        "type": "added",
+        "items": [
+          "为 SS-Helper-MemoryOS 插件进行了兼容。"
+        ]
+      },
+      {
+        "type": "improved",
+        "items": [
+          "优化了技能编辑器在电脑模式下的UI，修复了手机模式下无法滚动的问题。"
+        ]
+      }
+    ]
+  },
+  {
     "version": "v1.1.6",
     "date": "2026-03-13",
     "sections": [

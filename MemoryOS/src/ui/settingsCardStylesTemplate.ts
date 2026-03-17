@@ -401,6 +401,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
         linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.06)) 100%, transparent), color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.16)) 100%, transparent));
     }
 
+    #${cardId} .stx-ui-summary-callout.is-overview-hero {
+      gap: 10px;
+      padding: 12px 14px;
+    }
+
     #${cardId} .stx-ui-summary-callout.is-empty-state {
       border-style: dashed;
       border-color: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.2)) 86%, transparent);
@@ -429,6 +434,27 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       word-break: break-word;
     }
 
+    #${cardId} .stx-ui-summary-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-summary-title-icon {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 88%, white 12%);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 18%, transparent);
+      box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+      font-size: 13px;
+    }
+
     #${cardId} .stx-ui-summary-meta,
     #${cardId} .stx-ui-summary-copy,
     #${cardId} .stx-ui-summary-foot {
@@ -436,6 +462,108 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.55;
       color: color-mix(in srgb, var(--ss-theme-text, #fff) 78%, transparent);
       word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-summary-copy.is-rich,
+    #${cardId} .stx-ui-summary-foot.is-rich {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    #${cardId} .stx-ui-summary-callout.is-overview-hero .stx-ui-summary-copy.is-rich {
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-summary-caption {
+      font-size: 12px;
+      line-height: 1.45;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 78%, transparent);
+      word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-summary-tile-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-summary-tile {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 8px 9px;
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.12)) 90%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.14)) 100%, transparent);
+      box-shadow: inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
+    }
+
+    #${cardId} .stx-ui-summary-tile-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-summary-tile-icon {
+      flex: 0 0 auto;
+      width: 16px;
+      text-align: center;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 86%, white 14%);
+      font-size: 11px;
+      opacity: 0.92;
+    }
+
+    #${cardId} .stx-ui-summary-tile-label {
+      min-width: 0;
+      font-size: 10px;
+      line-height: 1.3;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 58%, transparent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #${cardId} .stx-ui-summary-tile-value {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.35;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 92%, transparent);
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    #${cardId} .stx-ui-summary-line {
+      display: grid;
+      grid-template-columns: 16px 72px minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-summary-line-icon {
+      width: 16px;
+      line-height: 1.45;
+      text-align: center;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 86%, white 14%);
+      opacity: 0.92;
+      font-size: 11px;
+      margin-top: 1px;
+    }
+
+    #${cardId} .stx-ui-summary-line-label {
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 60%, transparent);
+      white-space: nowrap;
+    }
+
+    #${cardId} .stx-ui-summary-line-value {
+      min-width: 0;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 90%, transparent);
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     #${cardId} .stx-ui-badge-grid {
@@ -489,6 +617,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
     }
 
+    #${cardId} .stx-ui-memory-list.is-overview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      align-items: stretch;
+    }
+
     #${cardId} .stx-ui-memory-entry {
       min-width: 0;
       padding: 10px 12px;
@@ -498,6 +633,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       flex-direction: column;
       gap: 6px;
+    }
+
+    #${cardId} .stx-ui-memory-entry.is-overview-tile {
+      padding: 8px 10px;
+      gap: 4px;
+      border-radius: 10px;
+      min-height: 90px;
     }
 
     #${cardId} .stx-ui-memory-entry.is-accent {
@@ -521,6 +663,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
     }
 
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-memory-entry-head {
+      gap: 1px;
+    }
+
     #${cardId} .stx-ui-memory-entry-head strong,
     #${cardId} .stx-ui-memory-entry-body {
       word-break: break-word;
@@ -530,6 +676,24 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-memory-entry-head strong {
       font-size: 13px;
       line-height: 1.35;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-memory-entry-icon {
+      flex: 0 0 auto;
+      width: 18px;
+      text-align: center;
+      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 84%, white 16%);
+      opacity: 0.9;
+      font-size: 12px;
+    }
+
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-memory-entry-head strong {
+      font-size: 12px;
+      line-height: 1.25;
+      gap: 6px;
     }
 
     #${cardId} .stx-ui-memory-entry-head span {
@@ -542,10 +706,27 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       overflow-wrap: anywhere;
     }
 
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-memory-entry-head span {
+      font-size: 10px;
+      line-height: 1.25;
+      opacity: 0.52;
+    }
+
     #${cardId} .stx-ui-memory-entry-body {
       font-size: 12px;
       line-height: 1.55;
       color: color-mix(in srgb, var(--ss-theme-text, #fff) 84%, transparent);
+    }
+
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-memory-entry-body {
+      font-size: 11px;
+      line-height: 1.38;
+    }
+
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-actions {
+      margin-top: auto;
+      gap: 4px;
+      justify-content: flex-end;
     }
 
     #${cardId} .stx-ui-fact-card-list {
@@ -953,52 +1134,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       width: 100%;
     }
 
-    #${cardId} .stx-ui-shared-select {
-      width: 100%;
-      min-width: 0;
-    }
-
-    #${cardId} .stx-ui-shared-select-inline {
-      flex: 1 1 auto;
-    }
-
-    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      min-width: 0;
-      min-height: 34px;
-      padding-top: 0;
-      padding-bottom: 0;
-      line-height: 1;
-      box-sizing: border-box;
-    }
-
-    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger-copy,
-    #${cardId} .stx-ui-shared-select .stx-shared-select-main,
-    #${cardId} .stx-ui-shared-select .stx-shared-select-label,
-    #${cardId} .stx-ui-shared-select .stx-shared-select-indicator {
-      height: 100%;
-      min-height: 0;
-      display: flex;
-      align-items: center;
-    }
-
-    #${cardId} .stx-ui-shared-select .stx-shared-select-trigger-copy,
-    #${cardId} .stx-ui-shared-select .stx-shared-select-main {
-      flex: 1 1 auto;
-      min-width: 0;
-    }
-
-    #${cardId} .stx-ui-shared-select .stx-shared-select-label {
-      line-height: 1.2;
-    }
-
-    #${cardId} .stx-ui-shared-select .stx-shared-select-indicator {
-      flex: 0 0 auto;
-    }
-
     #${cardId} .stx-ui-field-label {
       font-size: 13px;
       opacity: 0.85;
@@ -1112,6 +1247,29 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-icon-action {
+      flex: 0 0 auto;
+      width: 28px;
+      min-width: 28px;
+      height: 28px;
+      min-height: 28px;
+      padding: 0;
+      border-radius: 999px;
+      justify-content: center;
+      gap: 0;
+    }
+
+    #${cardId} .stx-ui-icon-action i {
+      font-size: 12px;
+    }
+
+    #${cardId} .stx-ui-memory-entry.is-overview-tile .stx-ui-icon-action {
+      margin-left: auto;
+      border-color: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 88%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 100%, transparent);
+      box-shadow: none;
     }
 
     #${cardId} .stx-ui-code-surface {
@@ -1561,8 +1719,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-record-editor {
-      width: 80%;
-      height: 80%;
+      width: min(1560px, 94vw);
+      height: min(92vh, 980px);
+      max-width: calc(100vw - 28px);
+      max-height: calc(100vh - 28px);
       background: var(--ss-theme-panel-bg, linear-gradient(145deg, rgba(30, 30, 34, 0.95), rgba(18, 18, 20, 0.98)));
       border: 1px solid var(--ss-theme-panel-border, rgba(197, 160, 89, 0.3));
       border-radius: 20px;
@@ -3742,12 +3902,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       max-width: 100%;
     }
 
-    .stx-memory-chat-strategy-field .stx-shared-select {
-      width: 100%;
-      min-width: 0;
-      max-width: 100%;
-    }
-
     .stx-memory-chat-strategy-search {
       width: 100%;
     }
@@ -4003,10 +4157,30 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
         grid-template-columns: 1fr;
       }
 
+      #${cardId} .stx-ui-memory-list.is-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       #${cardId} .stx-ui-summary-callout-head,
       #${cardId} .stx-ui-memory-entry-head {
         flex-direction: column;
         align-items: flex-start;
+      }
+
+      #${cardId} .stx-ui-summary-line {
+        grid-template-columns: 16px minmax(0, 1fr);
+      }
+
+      #${cardId} .stx-ui-summary-tile-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #${cardId} .stx-ui-summary-line-label {
+        white-space: normal;
+      }
+
+      #${cardId} .stx-ui-summary-line-value {
+        grid-column: 2;
       }
 
       #${cardId} .stx-memory-chat-strategy-summary-grid {
@@ -4139,6 +4313,18 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       #${cardId} .stx-ui-mode-chip {
         flex: 1 1 0;
         justify-content: center;
+      }
+
+      #${cardId} .stx-ui-summary-tile-grid {
+        grid-template-columns: 1fr;
+      }
+
+      #${cardId} .stx-ui-memory-entry.is-overview-tile {
+        min-height: 0;
+      }
+
+      #${cardId} .stx-ui-memory-list.is-overview-grid {
+        grid-template-columns: 1fr;
       }
 
       #${cardId} .stx-ui-refresh-btn {

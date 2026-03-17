@@ -5,6 +5,110 @@ export interface SdkAccountStorageEvent {
   setItem(key: string, value: string): void;
 }
 
+export interface SdkTavernGroupMemberEvent {
+  id?: string;
+  name?: string;
+  avatar?: string;
+}
+
+export interface SdkTavernCharacterExtensionsEvent {
+  world?: string;
+  extraBooks?: string[];
+  extra_books?: string[];
+  [key: string]: unknown;
+}
+
+export interface SdkTavernCharacterDataEvent {
+  extensions?: SdkTavernCharacterExtensionsEvent;
+  [key: string]: unknown;
+}
+
+export interface SdkTavernWorldbookEntryEvent {
+  uid?: string | number;
+  key?: string[];
+  keysecondary?: string[];
+  comment?: string;
+  content?: string;
+  disable?: boolean;
+  constant?: boolean;
+  selective?: boolean;
+  selectiveLogic?: number;
+  addMemo?: boolean;
+  order?: number;
+  position?: number;
+  excludeRecursion?: boolean;
+  [key: string]: unknown;
+}
+
+export interface SdkTavernWorldbookBookEvent {
+  name?: string;
+  entries?: Record<string, SdkTavernWorldbookEntryEvent>;
+  [key: string]: unknown;
+}
+
+export interface SdkTavernResolvedWorldbookEntryEvent {
+  book: string;
+  entryId: string;
+  uid?: string | number;
+  entry: string;
+  keywords: string[];
+  content: string;
+  rawEntry: SdkTavernWorldbookEntryEvent;
+}
+
+export interface SdkTavernCharacterSnapshotEvent {
+  index: number;
+  roleId: string;
+  roleKey: string;
+  displayName: string;
+  avatarName: string;
+  avatarUrl: string;
+  chatId: string;
+  characterFilename: string;
+  character: SdkTavernCharacterEvent;
+  extensions: SdkTavernCharacterExtensionsEvent | null;
+}
+
+export interface SdkTavernGroupSnapshotEvent {
+  groupId: string;
+  groupKey: string;
+  displayName: string;
+  avatarUrl: string;
+  currentChatId: string;
+  members: SdkTavernGroupMemberEvent[];
+  group: SdkTavernGroupEvent;
+}
+
+export interface SdkTavernCharacterWorldbookBindingEvent {
+  mainBook: string;
+  extraBooks: string[];
+  allBooks: string[];
+  characterFilename: string;
+  source: "character_extensions" | "host_world_info" | "dom_selectors" | "none";
+}
+
+export interface SdkTavernCharacterCapabilitiesEvent {
+  hasContext: boolean;
+  hasCharacters: boolean;
+  hasCurrentCharacter: boolean;
+  hasCharacterExtensions: boolean;
+  hasCharacterFilenameResolver: boolean;
+  canPersistCharacterChanges: boolean;
+}
+
+export interface SdkTavernWorldbookCapabilitiesEvent {
+  hasAvailableWorldbooks: boolean;
+  hasActiveWorldbooks: boolean;
+  hasCharacterWorldbookBinding: boolean;
+  hasCharacterFilenameResolver: boolean;
+  canLoadWorldbook: boolean;
+  canSaveWorldbookEntry: boolean;
+  canCreateWorldbookEntry: boolean;
+  canDeleteWorldbookBook: boolean;
+  canDeleteWorldbookEntry: boolean;
+  canUpdateActiveWorldbooks: boolean;
+}
+
 export interface SdkTavernCharacterEvent {
   name?: string;
   avatar?: string;
@@ -17,7 +121,7 @@ export interface SdkTavernCharacterEvent {
   mes_example?: string;
   creator_notes?: string;
   tags?: string[];
-  data?: Record<string, unknown>;
+  data?: SdkTavernCharacterDataEvent | Record<string, unknown>;
 }
 
 export interface SdkTavernGroupEvent {
@@ -26,7 +130,7 @@ export interface SdkTavernGroupEvent {
   chat_id?: string;
   chats?: string[];
   avatar_url?: string;
-  members?: Array<string | { id?: string; name?: string; avatar?: string }>;
+  members?: Array<string | SdkTavernGroupMemberEvent>;
   memberNames?: string[];
 }
 
@@ -65,9 +169,14 @@ export interface SdkTavernContextEvent {
   mes_example?: string;
   creator_notes?: string;
   world_info?: string;
+  world_names?: string[];
+  worldNames?: string[];
+  world_info_names?: string[];
+  worldInfoNames?: string[];
+  worldInfoBooks?: Array<string | { name?: string; title?: string; id?: string }>;
   selected_world_info?: string[];
-  groupMembers?: Array<string | { id?: string; name?: string; avatar?: string }>;
-  group_members?: Array<string | { id?: string; name?: string; avatar?: string }>;
+  groupMembers?: Array<string | SdkTavernGroupMemberEvent>;
+  group_members?: Array<string | SdkTavernGroupMemberEvent>;
   getRequestHeaders?: () => Record<string, string>;
   accountStorage?: SdkAccountStorageEvent;
 }
@@ -101,6 +210,13 @@ export interface SdkTavernRuntimeContextEvent extends SdkTavernContextEvent {
   chatMetadata?: Record<string, unknown>;
   extensionSettings?: Record<string, unknown>;
   chat?: unknown[];
+  getCharaFilename?: () => string | null;
+  loadWorldInfo?: (bookName: string) => Promise<SdkTavernWorldbookBookEvent | null | undefined>;
+  saveWorldInfo?: (bookName: string, entry: SdkTavernWorldbookEntryEvent) => Promise<unknown> | unknown;
+  getWorldInfoBook?: (bookName: string) => Promise<SdkTavernWorldbookBookEvent | null | undefined>;
+  deleteWorldInfoBook?: (bookName: string) => Promise<unknown> | unknown;
+  deleteWorldInfoEntry?: (bookName: string, entryUid: string | number) => Promise<unknown> | unknown;
+  createWorldInfoEntry?: (bookName: string, content: string, keywords?: string[]) => Promise<unknown> | unknown;
   saveMetadata?: () => void;
   saveSettingsDebounced?: () => void;
   saveChat?: () => unknown;

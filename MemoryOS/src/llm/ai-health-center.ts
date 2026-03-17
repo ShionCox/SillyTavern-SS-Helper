@@ -25,6 +25,7 @@ import type { CapabilityKind, LLMCapability, LLMSDK, RoutePreviewSnapshot } from
 const MAX_RECENT_RECORDS = 10;
 
 const ALL_TASK_IDS: MemoryAiTaskId[] = [
+    'memory.coldstart.summarize',
     'memory.summarize',
     'memory.extract',
     'world.template.build',
@@ -36,6 +37,7 @@ const ALL_TASK_IDS: MemoryAiTaskId[] = [
 const REQUIRED_CAPABILITIES: LLMCapability[] = ['chat', 'json', 'embeddings', 'rerank'];
 
 const TASK_KIND_BY_ID: Record<MemoryAiTaskId, CapabilityKind> = {
+    'memory.coldstart.summarize': 'generation',
     'memory.summarize': 'generation',
     'memory.extract': 'generation',
     'world.template.build': 'generation',
@@ -124,6 +126,7 @@ function detectCapabilities(): CapabilityStatus[] {
 function computeDiagnosis(
     mounted: boolean,
     registered: boolean,
+    aiModeEnabled: boolean,
     capabilities: CapabilityStatus[],
 ): { level: LlmHubDiagnosisLevel; text: string } {
     if (!mounted) {
@@ -131,6 +134,9 @@ function computeDiagnosis(
     }
     if (!registered) {
         return { level: 'mounted_not_registered', text: 'LLMHub 已挂载，但 MemoryOS consumer 尚未注册。' };
+    }
+    if (!aiModeEnabled) {
+        return { level: 'ai_mode_disabled', text: 'AI 模式已关闭；LLMHub 已连接，但 MemoryOS 当前不会发起 AI 任务。' };
     }
     const missing = capabilities.filter((c) => c.state === 'missing');
     if (missing.length > 0) {
@@ -177,6 +183,13 @@ function syncTaskRoutesFromOverview(): void {
         blockedReason: generationRoute?.blockedReason,
         route: generationRoute,
     };
+    _taskRoutes['memory.coldstart.summarize'] = {
+        taskId: 'memory.coldstart.summarize',
+        taskKind: 'generation',
+        available: generationRoute?.available === true,
+        blockedReason: generationRoute?.blockedReason,
+        route: generationRoute,
+    };
     _taskRoutes['memory.extract'] = {
         taskId: 'memory.extract',
         taskKind: 'generation',
@@ -214,9 +227,9 @@ function syncTaskRoutesFromOverview(): void {
 export async function refreshHealthSnapshot(): Promise<MemoryAiHealthSnapshot> {
     const llm = (window as any).STX?.llm as LLMSDK | undefined;
     const capabilities = detectCapabilities();
-    const { text } = computeDiagnosis(_llmHubMounted, _consumerRegistered, capabilities);
+    const { text } = computeDiagnosis(_llmHubMounted, _consumerRegistered, _aiModeEnabled, capabilities);
 
-    if (!llm?.inspect?.previewRoute) {
+    if (!llm?.inspect?.previewRoute || !_llmHubMounted || !_consumerRegistered || !_aiModeEnabled) {
         _routeOverview = {
             generation: buildBlockedRoutePreview('generation', ['chat', 'json'], text),
             embedding: buildBlockedRoutePreview('embedding', ['embeddings'], text),
@@ -305,7 +318,7 @@ export function recordTaskResult(record: MemoryAiTaskRecord): void {
 /** 获取当前健康快照 */
 export function getHealthSnapshot(): MemoryAiHealthSnapshot {
     const capabilities = detectCapabilities();
-    const { level, text } = computeDiagnosis(_llmHubMounted, _consumerRegistered, capabilities);
+    const { level, text } = computeDiagnosis(_llmHubMounted, _consumerRegistered, _aiModeEnabled, capabilities);
 
     return {
         ts: Date.now(),

@@ -126,6 +126,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STRIP_INTERNAL_ID_Event: string;
   SETTINGS_SKILL_ENABLED_ID_Event: string;
   SETTINGS_SKILL_EDITOR_WRAP_ID_Event: string;
+  SETTINGS_SKILL_COLS_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
   SETTINGS_SKILL_ADD_ID_Event: string;
   SETTINGS_SKILL_TEXT_ID_Event: string;
@@ -254,6 +255,7 @@ export function buildSettingsCardTemplateIdsEvent(
     timeLimitRowId: deps.SETTINGS_TIME_LIMIT_ROW_ID_Event,
     skillEnabledId: deps.SETTINGS_SKILL_ENABLED_ID_Event,
     skillEditorWrapId: deps.SETTINGS_SKILL_EDITOR_WRAP_ID_Event,
+    skillColsId: deps.SETTINGS_SKILL_COLS_ID_Event,
     skillRowsId: deps.SETTINGS_SKILL_ROWS_ID_Event,
     skillAddId: deps.SETTINGS_SKILL_ADD_ID_Event,
     skillTextId: deps.SETTINGS_SKILL_TEXT_ID_Event,

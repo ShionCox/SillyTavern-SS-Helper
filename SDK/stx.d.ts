@@ -1,3 +1,5 @@
+import type { DBEvent, DBFact, DBSummary, DBWorldState } from './db';
+
 export {}; // 确保该文件被识别为模块
 
 // -- 事件信封 --
@@ -1215,6 +1217,34 @@ export interface CanonSnapshot {
     health: EditorHealthSnapshot;
 }
 
+export interface EditorExperienceSnapshot {
+    chatKey: string;
+    canon: CanonSnapshot;
+    profile: ChatProfile;
+    quality: MemoryQualityScorecard;
+    lifecycle: ChatLifecycleState;
+    retention: RetentionPolicy;
+    semanticSeed: ChatSemanticSeed | null;
+    simplePersona: SimpleMemoryPersona | null;
+    groupMemory: GroupMemoryState | null;
+    relationshipState: RelationshipState[];
+    logicalView: LogicalChatView | null;
+    lorebookDecision: LorebookGateDecision | null;
+    preDecision: PreGenerationGateDecision | null;
+    postDecision: PostGenerationGateDecision | null;
+    lifecycleSummary: MemoryLifecycleState[];
+    candidateSnapshot: MemoryCandidateBufferSnapshot;
+    recallLog: RecallLogEntry[];
+    latestRecallExplanation: LatestRecallExplanation | null;
+    migrationStatus: MemoryMigrationStatus;
+    tuningProfile: MemoryTuningProfile;
+    maintenanceInsights: MaintenanceInsight[];
+    facts: DBFact[];
+    summaries: DBSummary[];
+    events: DBEvent[];
+    states: DBWorldState[];
+}
+
 // -- MemorySDK 接口 --
 export interface MemorySDK {
     getChatKey(): string;
@@ -1354,6 +1384,7 @@ export interface MemorySDK {
     editor: {
         getCanonSnapshot(): Promise<CanonSnapshot>;
         getEditorHealth(): Promise<EditorHealthSnapshot>;
+        getExperienceSnapshot(): Promise<EditorExperienceSnapshot>;
         refreshCanonSnapshot(): Promise<CanonSnapshot>;
         rebuildChatView(): Promise<LogicalChatView>;
         refreshSemanticSeed(): Promise<CanonSnapshot>;

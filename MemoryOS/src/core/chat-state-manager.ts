@@ -15,6 +15,8 @@ import type {
     AutoSchemaPolicy,
     ChatLifecycleStage,
     ChatLifecycleState,
+    ColdStartLorebookEntrySelection,
+    ColdStartLorebookSelection,
     ColdStartStage,
     EffectivePresetBundle,
     ChatSemanticSeed,
@@ -180,6 +182,55 @@ function averagePrecisionWindow(values: number[]): number {
 
 function normalizeSeedText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeLorebookSelection(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(new Set(
+        value
+            .map((item: unknown): string => normalizeSeedText(item))
+            .filter(Boolean),
+    )).slice(0, 24);
+}
+
+function normalizeLorebookEntrySelection(value: unknown): ColdStartLorebookEntrySelection[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const entries = new Map<string, ColdStartLorebookEntrySelection>();
+    for (const item of value) {
+        if (!item || typeof item !== 'object') {
+            continue;
+        }
+        const record = item as Record<string, unknown>;
+        const book = normalizeSeedText(record.book);
+        const entryId = normalizeSeedText(record.entryId);
+        if (!book || !entryId) {
+            continue;
+        }
+        const keywords = Array.isArray(record.keywords)
+            ? Array.from(new Set(record.keywords.map((keyword: unknown): string => normalizeSeedText(keyword)).filter(Boolean))).slice(0, 12)
+            : [];
+        entries.set(`${book}::${entryId}`, {
+            book,
+            entryId,
+            entry: normalizeSeedText(record.entry) || '未命名条目',
+            keywords,
+        });
+        if (entries.size >= 256) {
+            break;
+        }
+    }
+    return Array.from(entries.values());
+}
+
+function normalizeColdStartLorebookSelection(value: ColdStartLorebookSelection | null | undefined): ColdStartLorebookSelection {
+    return {
+        books: normalizeLorebookSelection(value?.books),
+        entries: normalizeLorebookEntrySelection(value?.entries),
+    };
 }
 
 function buildMemoryMigrationPendingReasons(status: MemoryMigrationStatus): string[] {
@@ -3695,6 +3746,84 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取冷启动初始化使用的世界书选择。
+     * 参数：
+     *   无。
+     * 返回：
+        *   Promise<ColdStartLorebookSelection>：整书与条目级选择。
+     */
+    async getColdStartLorebookSelection(): Promise<ColdStartLorebookSelection> {
+        const state = await this.load();
+        return normalizeColdStartLorebookSelection({
+            books: normalizeLorebookSelection(state.coldStartLorebookSelection),
+            entries: normalizeLorebookEntrySelection(state.coldStartLorebookEntrySelection),
+        });
+    }
+
+    /**
+     * 功能：判断当前聊天是否明确跳过世界书初始化。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<boolean>：true 表示明确不使用世界书初始化。
+     */
+    async isColdStartLorebookSelectionSkipped(): Promise<boolean> {
+        const state = await this.load();
+        return state.coldStartSkipLorebookSelection === true;
+    }
+
+    /**
+     * 功能：保存冷启动初始化使用的世界书选择。
+     * 参数：
+      *   selection：整书与条目级选择。
+     * 返回：
+      *   Promise<ColdStartLorebookSelection>：标准化后的选择结果。
+     */
+    async setColdStartLorebookSelection(selection: ColdStartLorebookSelection): Promise<ColdStartLorebookSelection> {
+        const state = await this.load();
+        const normalized = normalizeColdStartLorebookSelection(selection);
+        state.coldStartLorebookSelection = normalized.books.length > 0 ? normalized.books : undefined;
+        state.coldStartLorebookEntrySelection = normalized.entries.length > 0 ? normalized.entries : undefined;
+        if (normalized.books.length > 0 || normalized.entries.length > 0) {
+            state.coldStartSkipLorebookSelection = undefined;
+        }
+        this.markDirty();
+        return normalized;
+    }
+
+    /**
+     * 功能：设置是否跳过世界书初始化。
+     * 参数：
+     *   skipped：是否跳过。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setColdStartLorebookSelectionSkipped(skipped: boolean): Promise<void> {
+        const state = await this.load();
+        state.coldStartSkipLorebookSelection = skipped === true ? true : undefined;
+        if (skipped) {
+            state.coldStartLorebookSelection = undefined;
+            state.coldStartLorebookEntrySelection = undefined;
+        }
+        this.markDirty();
+    }
+
+    /**
+     * 功能：清除冷启动初始化使用的世界书选择。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async clearColdStartLorebookSelection(): Promise<void> {
+        const state = await this.load();
+        state.coldStartLorebookSelection = undefined;
+        state.coldStartLorebookEntrySelection = undefined;
+        state.coldStartSkipLorebookSelection = undefined;
+        this.markDirty();
+    }
+
+    /**
      * 功能：读取角色记忆画像。
      * 参数：
      *   无。
@@ -3871,6 +4000,10 @@ export class ChatStateManager {
     async saveSemanticSeed(seed: ChatSemanticSeed, fingerprint: string): Promise<void> {
         const state = await this.load();
         state.semanticSeed = seed;
+        if (!Array.isArray(state.coldStartLorebookSelection) && !Array.isArray(state.coldStartLorebookEntrySelection)) {
+            state.coldStartLorebookSelection = normalizeLorebookSelection(seed.activeLorebooks);
+            state.coldStartSkipLorebookSelection = seed.activeLorebooks.length === 0 ? true : undefined;
+        }
         state.coldStartFingerprint = normalizeSeedText(fingerprint) || undefined;
         state.coldStartStage = 'seeded';
         state.coldStartPrimedAt = undefined;
@@ -4602,6 +4735,17 @@ export class ChatStateManager {
             updatedAt: Date.now(),
         };
         if (previousFingerprint !== nextFingerprint) {
+            logger.warn('[ColdStart][BindingFingerprintChanged]', {
+                chatKey: this.chatKey,
+                previousFingerprint,
+                nextFingerprint,
+                hadSelection: Array.isArray(state.coldStartLorebookSelection) || Array.isArray(state.coldStartLorebookEntrySelection),
+                hadSeed: Boolean(state.semanticSeed),
+                hadColdStartFingerprint: Boolean(state.coldStartFingerprint),
+            });
+            state.coldStartLorebookSelection = undefined;
+            state.coldStartLorebookEntrySelection = undefined;
+            state.coldStartSkipLorebookSelection = undefined;
             state.coldStartFingerprint = undefined;
             state.coldStartStage = undefined;
             state.coldStartPrimedAt = undefined;

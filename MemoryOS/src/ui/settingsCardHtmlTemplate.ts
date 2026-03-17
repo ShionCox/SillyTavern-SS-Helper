@@ -62,9 +62,9 @@ function buildCompactSharedSelect(
 ): string {
   return buildSharedSelectField({
     id,
-    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    containerClassName: "stx-shared-select-fluid stx-shared-select-inline",
     selectClassName: "stx-ui-input",
-    triggerClassName: "stx-ui-input-full",
+    triggerClassName: "stx-ui-input-full stx-shared-select-trigger-input",
     triggerAttributes: {
       "data-tip": dataTip,
     },
@@ -114,18 +114,18 @@ export function buildSettingsCardHtmlTemplate(
 
   const templateActiveSelect = buildSharedSelectField({
     id: ids.templateActiveSelectId,
-    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    containerClassName: "stx-shared-select-fluid stx-shared-select-inline",
     selectClassName: "stx-ui-input",
-    triggerClassName: "stx-ui-input-full",
+    triggerClassName: "stx-ui-input-full stx-shared-select-trigger-input",
     triggerAttributes: { "data-tip": "选择要启用的模板。" },
     options: [{ value: "", label: "选择要激活的模板..." }],
   });
 
   const logicTableEntitySelect = buildSharedSelectField({
     id: ids.logicTableEntitySelectId,
-    containerClassName: "stx-ui-shared-select stx-ui-shared-select-inline",
+    containerClassName: "stx-shared-select-fluid stx-shared-select-inline",
     selectClassName: "stx-ui-input",
-    triggerClassName: "stx-ui-input-full",
+    triggerClassName: "stx-ui-input-full stx-shared-select-trigger-input",
     triggerAttributes: { "data-tip": "选择要查看的实体类型。" },
     options: [{ value: "", label: "选择实体类型..." }],
   });
@@ -341,7 +341,7 @@ export function buildSettingsCardHtmlTemplate(
                 <i class="fa-solid fa-sliders"></i>&nbsp;进入高级工具
               </button>
             </div>
-            <div id="${ids.roleOverviewMetaId}"></div>
+            <div id="${ids.roleOverviewMetaId}" style="display: flex; flex-direction: column; gap: 10px;"></div>
             <div class="stx-ui-experience-grid">
               <section class="stx-ui-experience-card">
                 <div class="stx-ui-experience-card-head">

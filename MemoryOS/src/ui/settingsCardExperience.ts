@@ -1,9 +1,10 @@
-import { db, type DBEvent, type DBFact, type DBSummary, type DBWorldState } from '../db/db';
+import type { DBEvent, DBFact, DBSummary, DBWorldState } from '../db/db';
 import type {
     CanonSnapshot,
     CharacterSnapshot,
     ChatLifecycleState,
     ChatProfile,
+    EditorExperienceSnapshot,
     ChatSemanticSeed,
     EditorHealthSnapshot,
     GroupMemoryState,
@@ -38,9 +39,16 @@ interface ExperienceListItem {
     detail: string;
     meta: string;
     tone?: ExperienceTone;
+    iconClassName?: string;
     sourcePayload?: string;
     detailHtml?: string;
     actionsHtml?: string;
+}
+
+interface ExperienceListMarkupOptions {
+    listClassName?: string;
+    entryClassName?: string;
+    compactSourceButton?: boolean;
 }
 
 interface ExperienceBadge {
@@ -49,32 +57,7 @@ interface ExperienceBadge {
     tone?: ExperienceTone;
 }
 
-interface ExperienceSnapshot {
-    chatKey: string;
-    profile: ChatProfile;
-    quality: MemoryQualityScorecard;
-    lifecycle: ChatLifecycleState;
-    retention: RetentionPolicy;
-    semanticSeed: ChatSemanticSeed | null;
-    simplePersona: SimpleMemoryPersona | null;
-    groupMemory: GroupMemoryState | null;
-    relationshipState: RelationshipState[];
-    logicalView: LogicalChatView | null;
-    lorebookDecision: LorebookGateDecision | null;
-    preDecision: PreGenerationGateDecision | null;
-    postDecision: PostGenerationGateDecision | null;
-    lifecycleSummary: MemoryLifecycleState[];
-    candidateSnapshot: MemoryCandidateBufferSnapshot;
-    recallLog: RecallLogEntry[];
-    latestRecallExplanation: LatestRecallExplanation | null;
-    migrationStatus: MemoryMigrationStatus;
-    tuningProfile: MemoryTuningProfile;
-    maintenanceInsights: MaintenanceInsight[];
-    facts: DBFact[];
-    summaries: DBSummary[];
-    events: DBEvent[];
-    states: DBWorldState[];
-}
+type ExperienceSnapshot = EditorExperienceSnapshot;
 
 /**
  * 功能：读取当前激活的 MemorySDK。
@@ -362,76 +345,81 @@ function truncateText(value: unknown, maxLength: number): string {
  *   string：格式化后的时间文本。
  */
 function formatTimestamp(ts: number): string {
-    if (!Number.isFinite(ts) || ts <= 0) {
-        return '暂无时间';
-    }
-    return new Date(ts).toLocaleString('zh-CN', {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-    });
+        if (!Number.isFinite(ts) || ts <= 0) {
+                return '未记录';
+        }
+        try {
+                return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+        } catch {
+                return '未记录';
+        }
 }
 
 /**
- * 功能：将时间戳转换为相对时间。
+ * 功能：格式化相对时间。
  * 参数：
  *   ts：毫秒级时间戳。
  * 返回：
- *   string：相对时间描述。
+ *   string：相对当前时间的简短描述。
  */
 function formatRelativeTime(ts: number): string {
-    if (!Number.isFinite(ts) || ts <= 0) {
-        return '尚未发生';
-    }
-    const diffMs: number = Date.now() - ts;
-    const diffMinutes: number = Math.max(0, Math.floor(diffMs / 60000));
-    if (diffMinutes < 1) {
-        return '刚刚';
-    }
-    if (diffMinutes < 60) {
-        return `${diffMinutes} 分钟前`;
-    }
-    const diffHours: number = Math.floor(diffMinutes / 60);
-    if (diffHours < 24) {
-        return `${diffHours} 小时前`;
-    }
-    const diffDays: number = Math.floor(diffHours / 24);
-    if (diffDays < 7) {
-        return `${diffDays} 天前`;
-    }
-    return formatTimestamp(ts);
+        if (!Number.isFinite(ts) || ts <= 0) {
+                return '未记录';
+        }
+        const deltaMs = Date.now() - ts;
+        if (deltaMs < 0) {
+                return '刚刚';
+        }
+        const minute = 60 * 1000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+        if (deltaMs < minute) {
+                return '刚刚';
+        }
+        if (deltaMs < hour) {
+                return `${Math.max(1, Math.floor(deltaMs / minute))} 分钟前`;
+        }
+        if (deltaMs < day) {
+                return `${Math.max(1, Math.floor(deltaMs / hour))} 小时前`;
+        }
+        if (deltaMs < 7 * day) {
+                return `${Math.max(1, Math.floor(deltaMs / day))} 天前`;
+        }
+        return formatTimestamp(ts);
 }
 
 /**
- * 功能：把 0-1 范围分数映射为百分比。
+ * 功能：把 0-1 分数格式化为百分比。
  * 参数：
- *   value：原始分数。
+ *   value：分值。
  * 返回：
- *   string：百分比文本。
+ *   string：百分比字符串。
  */
 function formatScorePercent(value: number): string {
-    const safeValue: number = Number.isFinite(value) ? value : 0;
-    const percent: number = Math.max(0, Math.min(100, Math.round(safeValue * 100)));
-    return `${percent}%`;
+        if (!Number.isFinite(value)) {
+                return '--';
+        }
+        return `${Math.round(Number(value) * 100)}%`;
 }
 
 /**
  * 功能：格式化迁移阶段标签。
- * @param status 迁移状态。
- * @returns string：阶段说明。
+ * 参数：
+ *   status：迁移状态。
+ * 返回：
+ *   string：阶段文本。
  */
 function formatMigrationStage(status: MemoryMigrationStatus | null): string {
-    if (!status) {
-        return '未记录';
-    }
-    if (status.stage === 'db_preferred') {
-        return '结构化主读';
-    }
-    if (status.stage === 'dual_write') {
-        return '双写过渡';
-    }
-    return '兼容旧状态';
+        if (!status) {
+                return '未记录';
+        }
+        if (status.stage === 'db_preferred') {
+                return '结构化主读';
+        }
+        if (status.stage === 'dual_write') {
+                return '双写过渡';
+        }
+        return '兼容旧状态';
 }
 
 /**
@@ -440,12 +428,12 @@ function formatMigrationStage(status: MemoryMigrationStatus | null): string {
  * @returns string：摘要文本。
  */
 function formatTuningSummary(tuning: MemoryTuningProfile): string {
-    return [
-        `阈值 ${tuning.candidateAcceptThresholdBias >= 0 ? '+' : ''}${tuning.candidateAcceptThresholdBias.toFixed(2)}`,
-        `关系 ${tuning.recallRelationshipBias.toFixed(2)}`,
-        `情绪 ${tuning.recallEmotionBias.toFixed(2)}`,
-        `保护 ${tuning.distortionProtectionBias.toFixed(2)}`,
-    ].join(' / ');
+        return [
+                `阈值 ${tuning.candidateAcceptThresholdBias >= 0 ? '+' : ''}${tuning.candidateAcceptThresholdBias.toFixed(2)}`,
+                `关系 ${tuning.recallRelationshipBias.toFixed(2)}`,
+                `情绪 ${tuning.recallEmotionBias.toFixed(2)}`,
+                `保护 ${tuning.distortionProtectionBias.toFixed(2)}`,
+        ].join(' / ');
 }
 
 /**
@@ -454,42 +442,42 @@ function formatTuningSummary(tuning: MemoryTuningProfile): string {
  * @returns string：HTML 片段。
  */
 function buildRoleOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
-    const primaryLane: SpeakerMemoryLane | null = pickPrimaryLane(snapshot.groupMemory);
-    const roleName: string = normalizeText(
-        primaryLane?.displayName
-        || snapshot.semanticSeed?.identitySeed?.displayName
-        || snapshot.semanticSeed?.characterAnchors?.[0]?.label
-        || '当前角色',
-        '当前角色',
-    );
-    const anchors: string[] = Array.isArray(snapshot.semanticSeed?.identitySeed?.identity)
-        ? snapshot.semanticSeed!.identitySeed.identity.slice(0, 3).map((item: string): string => normalizeText(item, '')).filter(Boolean)
-        : [];
-    const topInsight: MaintenanceInsight | null = pickTopInsight(snapshot.maintenanceInsights);
-    return `
-      <div class="stx-ui-summary-callout">
-        <div class="stx-ui-summary-callout-head">
-          <div>
-            <div class="stx-ui-summary-eyebrow">角色记忆概览</div>
-            <div class="stx-ui-summary-title">${escapeHtml(roleName)}</div>
-          </div>
-          <div class="stx-ui-summary-meta">${escapeHtml(formatLifecycleStage(snapshot.lifecycle))}</div>
-        </div>
-        <div class="stx-ui-summary-copy">
-          ${escapeHtml([
-              `${formatChatType(snapshot.profile)} / ${formatSummaryStrategy(snapshot.profile)}`,
-              snapshot.profile.vectorStrategy.enabled ? '当前会主动回想更早内容' : '当前偏轻量注入',
-              `迁移阶段：${formatMigrationStage(snapshot.migrationStatus)}`,
-              anchors.length > 0 ? `角色锚点：${anchors.join(' / ')}` : '角色锚点仍在形成',
-          ].join(' / '))}
-        </div>
-        <div class="stx-ui-summary-foot">
-          ${escapeHtml(topInsight
-              ? `当前提醒：${topInsight.shortLabel} / ${topInsight.detail}`
-              : `记忆质量 ${snapshot.quality.totalScore} 分 / 检索精度 ${formatScorePercent(snapshot.quality.dimensions.retrievalPrecision)} / ${formatTuningSummary(snapshot.tuningProfile)}`)}
-        </div>
-      </div>
-    `;
+        const primaryLane: SpeakerMemoryLane | null = pickPrimaryLane(snapshot.groupMemory);
+        const roleName: string = normalizeText(
+                primaryLane?.displayName
+                || snapshot.semanticSeed?.identitySeed?.displayName
+                || snapshot.semanticSeed?.characterAnchors?.[0]?.label
+                || '当前角色',
+                '当前角色',
+        );
+        const anchors: string[] = Array.isArray(snapshot.semanticSeed?.identitySeed?.identity)
+                ? snapshot.semanticSeed.identitySeed.identity.slice(0, 3).map((item: string): string => normalizeText(item, '')).filter(Boolean)
+                : [];
+        const topInsight: MaintenanceInsight | null = pickTopInsight(snapshot.maintenanceInsights);
+        return `
+            <div class="stx-ui-summary-callout">
+                <div class="stx-ui-summary-callout-head">
+                    <div>
+                        <div class="stx-ui-summary-eyebrow">角色记忆概览</div>
+                        <div class="stx-ui-summary-title">${escapeHtml(roleName)}</div>
+                    </div>
+                    <div class="stx-ui-summary-meta">${escapeHtml(formatLifecycleStage(snapshot.lifecycle))}</div>
+                </div>
+                <div class="stx-ui-summary-copy">
+                    ${escapeHtml([
+                            `${formatChatType(snapshot.profile)} / ${formatSummaryStrategy(snapshot.profile)}`,
+                            snapshot.profile.vectorStrategy.enabled ? '当前会主动回想更早内容' : '当前偏轻量注入',
+                            `迁移阶段：${formatMigrationStage(snapshot.migrationStatus)}`,
+                            anchors.length > 0 ? `角色锚点：${anchors.join(' / ')}` : '角色锚点仍在形成',
+                    ].join(' / '))}
+                </div>
+                <div class="stx-ui-summary-foot">
+                    ${escapeHtml(topInsight
+                            ? `当前提醒：${topInsight.shortLabel} / ${topInsight.detail}`
+                            : `记忆质量 ${snapshot.quality.totalScore} 分 / 检索精度 ${formatScorePercent(snapshot.quality.dimensions.retrievalPrecision)} / ${formatTuningSummary(snapshot.tuningProfile)}`)}
+                </div>
+            </div>
+        `;
 }
 
 /**
@@ -498,36 +486,36 @@ function buildRoleOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
  * @returns string：HTML 片段。
  */
 function buildRelationOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
-    const primaryLane: SpeakerMemoryLane | null = pickPrimaryLane(snapshot.groupMemory);
-    const sharedScene = snapshot.groupMemory?.sharedScene;
-    const sceneText: string = normalizeText(sharedScene?.currentScene, '');
-    const conflictText: string = normalizeText(sharedScene?.currentConflict, '');
-    const relationText: string = normalizeText(primaryLane?.relationshipDelta, '');
-    const topRelationship: RelationshipState | null = snapshot.relationshipState[0] ?? null;
-    const participantCount: number = Number(sharedScene?.participantActorKeys?.length ?? 0);
-    return `
-      <div class="stx-ui-summary-callout">
-        <div class="stx-ui-summary-callout-head">
-          <div>
-            <div class="stx-ui-summary-eyebrow">关系与场景</div>
-            <div class="stx-ui-summary-title">${escapeHtml(relationText || conflictText || topRelationship?.summary || '当前关系整体平稳')}</div>
-          </div>
-          <div class="stx-ui-summary-meta">${escapeHtml(participantCount > 0 ? `${participantCount} 个活跃对象` : formatChatType(snapshot.profile))}</div>
-        </div>
-        <div class="stx-ui-summary-copy">
-          ${escapeHtml([
-              sceneText ? `当前场景：${sceneText}` : '当前场景仍在形成',
-              conflictText ? `当前冲突：${conflictText}` : '暂时没有显著冲突',
-              topRelationship ? `最高关系：${normalizeText(topRelationship.targetKey, topRelationship.relationshipKey)}` : '暂时没有稳定关系对象',
-          ].join(' / '))}
-        </div>
-        <div class="stx-ui-summary-foot">
-          ${escapeHtml(topRelationship
-              ? `信任 ${Math.round(topRelationship.trust * 100)}% / 好感 ${Math.round(topRelationship.affection * 100)}% / 未解冲突 ${Math.round(topRelationship.unresolvedConflict * 100)}%`
-              : (primaryLane?.lastEmotion ? `最近情绪：${primaryLane.lastEmotion}` : '最近情绪波动较弱'))}
-        </div>
-      </div>
-    `;
+        const primaryLane: SpeakerMemoryLane | null = pickPrimaryLane(snapshot.groupMemory);
+        const sharedScene = snapshot.groupMemory?.sharedScene;
+        const sceneText: string = normalizeText(sharedScene?.currentScene, '');
+        const conflictText: string = normalizeText(sharedScene?.currentConflict, '');
+        const relationText: string = normalizeText(primaryLane?.relationshipDelta, '');
+        const topRelationship: RelationshipState | null = snapshot.relationshipState[0] ?? null;
+        const participantCount: number = Number(sharedScene?.participantActorKeys?.length ?? 0);
+        return `
+            <div class="stx-ui-summary-callout">
+                <div class="stx-ui-summary-callout-head">
+                    <div>
+                        <div class="stx-ui-summary-eyebrow">关系与场景</div>
+                        <div class="stx-ui-summary-title">${escapeHtml(relationText || conflictText || topRelationship?.summary || '当前关系整体平稳')}</div>
+                    </div>
+                    <div class="stx-ui-summary-meta">${escapeHtml(participantCount > 0 ? `${participantCount} 个活跃对象` : formatChatType(snapshot.profile))}</div>
+                </div>
+                <div class="stx-ui-summary-copy">
+                    ${escapeHtml([
+                            sceneText ? `当前场景：${sceneText}` : '当前场景仍在形成',
+                            conflictText ? `当前冲突：${conflictText}` : '暂时没有显著冲突',
+                            topRelationship ? `最高关系：${normalizeText(topRelationship.targetKey, topRelationship.relationshipKey)}` : '暂时没有稳定关系对象',
+                    ].join(' / '))}
+                </div>
+                <div class="stx-ui-summary-foot">
+                    ${escapeHtml(topRelationship
+                            ? `信任 ${Math.round(topRelationship.trust * 100)}% / 好感 ${Math.round(topRelationship.affection * 100)}% / 未解冲突 ${Math.round(topRelationship.unresolvedConflict * 100)}%`
+                            : (primaryLane?.lastEmotion ? `最近情绪：${primaryLane.lastEmotion}` : '最近情绪波动较弱'))}
+                </div>
+            </div>
+        `;
 }
 
 /**
@@ -536,36 +524,36 @@ function buildRelationOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
  * @returns string：HTML 片段。
  */
 function buildInjectionOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
-    if (!snapshot.preDecision) {
+        if (!snapshot.preDecision) {
+                return `
+                    <div class="stx-ui-summary-callout is-empty-state">
+                        <div class="stx-ui-summary-title">还没有最近一次注入决策</div>
+                        <div class="stx-ui-summary-copy">等下一次生成发生后，这里会显示本轮用了哪些记忆、为什么命中、当前迁移状态与调参偏置。</div>
+                    </div>
+                `;
+        }
         return `
-          <div class="stx-ui-summary-callout is-empty-state">
-            <div class="stx-ui-summary-title">还没有最近一次注入决策</div>
-            <div class="stx-ui-summary-copy">等下一次生成发生后，这里会显示本轮用了哪些记忆、为什么命中、当前迁移状态与调参偏置。</div>
-          </div>
-        `;
-    }
-    return `
-      <div class="stx-ui-summary-callout">
-        <div class="stx-ui-summary-callout-head">
-          <div>
-            <div class="stx-ui-summary-eyebrow">本轮注入解释</div>
-            <div class="stx-ui-summary-title">${escapeHtml(snapshot.preDecision.shouldInject ? '已生成注入上下文' : '本轮跳过注入')}</div>
-          </div>
-          <div class="stx-ui-summary-meta">${escapeHtml(formatRelativeTime(snapshot.preDecision.generatedAt))}</div>
-        </div>
-        <div class="stx-ui-summary-copy">
-          ${escapeHtml([
+            <div class="stx-ui-summary-callout">
+                <div class="stx-ui-summary-callout-head">
+                    <div>
+                        <div class="stx-ui-summary-eyebrow">本轮注入解释</div>
+                        <div class="stx-ui-summary-title">${escapeHtml(snapshot.preDecision.shouldInject ? '已生成注入上下文' : '本轮跳过注入')}</div>
+                    </div>
+                    <div class="stx-ui-summary-meta">${escapeHtml(formatRelativeTime(snapshot.preDecision.generatedAt))}</div>
+                </div>
+                <div class="stx-ui-summary-copy">
+                    ${escapeHtml([
                             `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
                             `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
                             `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
                             `世界书：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
-          ].join(' / '))}
-        </div>
-        <div class="stx-ui-summary-foot">
+                    ].join(' / '))}
+                </div>
+                <div class="stx-ui-summary-foot">
                     ${escapeHtml(`原因：${formatInjectionReasonSummary(snapshot.preDecision.reasonCodes)}`)}
-        </div>
-      </div>
-    `;
+                </div>
+            </div>
+        `;
 }
 
 /**
@@ -1443,21 +1431,21 @@ function buildBadgesMarkup(badges: ExperienceBadge[]): string {
  * 返回：
  *   string：HTML 字符串。
  */
-function buildListMarkup(items: ExperienceListItem[], emptyText: string): string {
+function buildListMarkup(items: ExperienceListItem[], emptyText: string, options: ExperienceListMarkupOptions = {}): string {
     if (!Array.isArray(items) || items.length === 0) {
         return `<div class="stx-ui-empty-hint">${escapeHtml(emptyText)}</div>`;
     }
     return `
-      <div class="stx-ui-memory-list">
+            <div class="stx-ui-memory-list${options.listClassName ? ` ${escapeHtml(options.listClassName)}` : ''}">
         ${items.map((item: ExperienceListItem): string => `
-          <article class="stx-ui-memory-entry${item.tone ? ` is-${item.tone}` : ''}">
+                        <article class="stx-ui-memory-entry${item.tone ? ` is-${item.tone}` : ''}${options.entryClassName ? ` ${escapeHtml(options.entryClassName)}` : ''}">
             <div class="stx-ui-memory-entry-head">
-                            <strong>${escapeHtml(item.title)}</strong>
+                            <strong>${item.iconClassName ? `<i class="${escapeHtml(item.iconClassName)} stx-ui-memory-entry-icon" aria-hidden="true"></i>` : ''}<span>${escapeHtml(item.title)}</span></strong>
                             <span>${escapeHtml(item.meta)}</span>
             </div>
                         <div class="stx-ui-memory-entry-body">${item.detailHtml ?? escapeHtml(item.detail)}</div>
-                        ${((item.sourcePayload ? `<button type="button" class="stx-ui-btn secondary" data-stx-source-details="${escapeHtml(item.sourcePayload)}">来源</button>` : '') + (item.actionsHtml ?? ''))
-                                ? `<div class="stx-ui-actions">${item.sourcePayload ? `<button type="button" class="stx-ui-btn secondary" data-stx-source-details="${escapeHtml(item.sourcePayload)}">来源</button>` : ''}${item.actionsHtml ?? ''}</div>`
+                        ${((item.sourcePayload ? buildSourceDetailButton(item.sourcePayload, options.compactSourceButton === true) : '') + (item.actionsHtml ?? ''))
+                            ? `<div class="stx-ui-actions">${item.sourcePayload ? buildSourceDetailButton(item.sourcePayload, options.compactSourceButton === true) : ''}${item.actionsHtml ?? ''}</div>`
                                 : ''}
           </article>
         `).join('')}
@@ -1780,7 +1768,7 @@ function setNumberInputValue(id: string, value: number): void {
  * @param snapshot 体验快照。
  * @returns 无返回值。
  */
-function renderTuningPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot): void {
+function renderTuningPanel(ids: MemoryOSSettingsIds, snapshot: EditorExperienceSnapshot): void {
     setContainerHtml(
         ids.tuningMigrationStatusId,
         buildListMarkup(buildMigrationStatusItems(snapshot), '当前还没有迁移状态。'),
@@ -1793,161 +1781,6 @@ function renderTuningPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapsho
     setNumberInputValue(ids.tuningDistortionProtectionBiasId, snapshot.tuningProfile.distortionProtectionBias);
     setNumberInputValue(ids.tuningCandidateRetentionLimitId, snapshot.tuningProfile.candidateRetentionLimit);
     setNumberInputValue(ids.tuningRecallRetentionLimitId, snapshot.tuningProfile.recallRetentionLimit);
-}
-
-/**
- * 功能：查询最近的事实记录。
- * 参数：
- *   chatKey：聊天键。
- *   limit：最大条数。
- * 返回：
- *   Promise<DBFact[]>：事实列表。
- */
-async function queryFacts(chatKey: string, limit: number): Promise<DBFact[]> {
-    return db.facts
-        .where('[chatKey+updatedAt]')
-        .between([chatKey, 0], [chatKey, Number.MAX_SAFE_INTEGER])
-        .reverse()
-        .limit(limit)
-        .toArray();
-}
-
-/**
- * 功能：查询最近的摘要记录。
- * 参数：
- *   chatKey：聊天键。
- *   limit：最大条数。
- * 返回：
- *   Promise<DBSummary[]>：摘要列表。
- */
-async function querySummaries(chatKey: string, limit: number): Promise<DBSummary[]> {
-    return db.summaries
-        .where('[chatKey+level+createdAt]')
-        .between([chatKey, '', 0], [chatKey, '\uffff', Number.MAX_SAFE_INTEGER])
-        .reverse()
-        .limit(limit)
-        .toArray();
-}
-
-/**
- * 功能：查询最近的事件记录。
- * 参数：
- *   chatKey：聊天键。
- *   limit：最大条数。
- * 返回：
- *   Promise<DBEvent[]>：事件列表。
- */
-async function queryEvents(chatKey: string, limit: number): Promise<DBEvent[]> {
-    return db.events
-        .where('[chatKey+ts]')
-        .between([chatKey, 0], [chatKey, Number.MAX_SAFE_INTEGER])
-        .reverse()
-        .limit(limit)
-        .toArray();
-}
-
-/**
- * 功能：查询当前聊天的世界状态记录。
- * 参数：
- *   chatKey：聊天键。
- *   limit：最大条数。
- * 返回：
- *   Promise<DBWorldState[]>：状态记录列表。
- */
-async function queryStates(chatKey: string, limit: number): Promise<DBWorldState[]> {
-    const records: DBWorldState[] = await db.world_state
-        .where('[chatKey+path]')
-        .between([chatKey, ''], [chatKey, '\uffff'])
-        .toArray();
-    return records
-        .sort((left: DBWorldState, right: DBWorldState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
-        .slice(0, limit);
-}
-
-/**
- * 功能：加载设置页体验面板所需的完整快照。
- * 参数：
- *   memory：当前聊天的 MemorySDK。
- * 返回：
- *   Promise<ExperienceSnapshot>：体验快照。
- */
-async function loadExperienceSnapshot(memory: MemorySDK): Promise<ExperienceSnapshot> {
-    const chatKey: string = memory.getChatKey();
-    const [
-        profile,
-        quality,
-        lifecycle,
-        retention,
-        semanticSeed,
-        simplePersona,
-        groupMemory,
-        relationshipState,
-        logicalView,
-        lorebookDecision,
-        preDecision,
-        postDecision,
-        lifecycleSummary,
-        candidateSnapshot,
-        recallLog,
-        latestRecallExplanation,
-        migrationStatus,
-        tuningProfile,
-        maintenanceInsights,
-        facts,
-        summaries,
-        events,
-        states,
-    ] = await Promise.all([
-        memory.chatState.getChatProfile(),
-        memory.chatState.getMemoryQuality(),
-        memory.chatState.getLifecycleState(),
-        memory.chatState.getRetentionPolicy(),
-        memory.chatState.getSemanticSeed(),
-        memory.chatState.getSimpleMemoryPersona(),
-        memory.chatState.getGroupMemory(),
-        memory.chatState.getRelationshipState(),
-        memory.chatState.getLogicalChatView(),
-        memory.chatState.getLorebookDecision(),
-        memory.chatState.getLastPreGenerationDecision(),
-        memory.chatState.getLastPostGenerationDecision(),
-        memory.chatState.getMemoryLifecycleSummary(),
-        memory.chatState.getCandidateBufferSnapshot(),
-        memory.chatState.getRecallLog(),
-        memory.chatState.getLatestRecallExplanation(),
-        memory.chatState.getMemoryMigrationStatus(),
-        memory.chatState.getMemoryTuningProfile(),
-        memory.chatState.getMaintenanceInsights(),
-        queryFacts(chatKey, 36),
-        querySummaries(chatKey, 18),
-        queryEvents(chatKey, 18),
-        queryStates(chatKey, 18),
-    ]);
-    return {
-        chatKey,
-        profile,
-        quality,
-        lifecycle,
-        retention,
-        semanticSeed,
-        simplePersona,
-        groupMemory,
-        relationshipState,
-        logicalView,
-        lorebookDecision,
-        preDecision,
-        postDecision,
-        lifecycleSummary,
-        candidateSnapshot,
-        recallLog,
-        latestRecallExplanation,
-        migrationStatus,
-        tuningProfile,
-        maintenanceInsights,
-        facts,
-        summaries,
-        events,
-        states,
-    };
 }
 
 /**
@@ -1983,13 +1816,13 @@ function summarizeSnapshotValues(values: SnapshotValue[], limit: number = 3): st
 }
 
 function formatSourceKindLabel(kind: SnapshotValue['sourceKinds'][number]): string {
-    if (kind === 'fact') return 'fact';
-    if (kind === 'world_state') return 'world_state';
-    if (kind === 'semantic_seed') return 'semantic_seed';
-    if (kind === 'group_memory') return 'group_memory';
-    if (kind === 'summary') return 'summary';
-    if (kind === 'manual') return 'manual';
-    return 'derived';
+    if (kind === 'fact') return '事实记录';
+    if (kind === 'world_state') return '世界状态';
+    if (kind === 'semantic_seed') return '初始设定';
+    if (kind === 'group_memory') return '群聊记忆';
+    if (kind === 'summary') return '摘要';
+    if (kind === 'manual') return '手动整理';
+    return '系统推导';
 }
 
 function formatSnapshotMeta(value: SnapshotValue | null | undefined): string {
@@ -1998,9 +1831,41 @@ function formatSnapshotMeta(value: SnapshotValue | null | undefined): string {
     }
     const sourceText = Array.isArray(value.sourceKinds) && value.sourceKinds.length > 0
         ? value.sourceKinds.map((item: SnapshotValue['sourceKinds'][number]): string => formatSourceKindLabel(item)).join(' + ')
-        : 'derived';
-    const timeText = Number(value.updatedAt ?? 0) > 0 ? formatRelativeTime(Number(value.updatedAt)) : '来源待补充';
-    return `${sourceText} · ${timeText}`;
+        : '系统推导';
+    const timeText = Number(value.updatedAt ?? 0) > 0 ? formatRelativeTime(Number(value.updatedAt)) : '时间待补充';
+    return `来自 ${sourceText} · 更新于 ${timeText}`;
+}
+
+function buildSummaryInfoLine(iconClassName: string, label: string, value: string): string {
+    return `
+      <div class="stx-ui-summary-line">
+        <i class="${escapeHtml(iconClassName)} stx-ui-summary-line-icon" aria-hidden="true"></i>
+        <span class="stx-ui-summary-line-label">${escapeHtml(label)}</span>
+        <span class="stx-ui-summary-line-value">${escapeHtml(value)}</span>
+      </div>
+    `;
+}
+
+function buildSummaryInfoTile(iconClassName: string, label: string, value: string): string {
+        return `
+            <div class="stx-ui-summary-tile">
+                <div class="stx-ui-summary-tile-head">
+                    <i class="${escapeHtml(iconClassName)} stx-ui-summary-tile-icon" aria-hidden="true"></i>
+                    <span class="stx-ui-summary-tile-label">${escapeHtml(label)}</span>
+                </div>
+                <div class="stx-ui-summary-tile-value">${escapeHtml(value)}</div>
+            </div>
+        `;
+}
+
+function buildSourceDetailButton(sourcePayload: string, compact: boolean = false): string {
+    if (!sourcePayload) {
+        return '';
+    }
+    if (compact) {
+        return `<button type="button" class="stx-ui-btn secondary stx-ui-icon-action" data-stx-source-details="${escapeHtml(sourcePayload)}" aria-label="查看来源详情" data-tip="查看来源"><i class="fa-solid fa-circle-info" aria-hidden="true"></i></button>`;
+    }
+    return `<button type="button" class="stx-ui-btn secondary" data-stx-source-details="${escapeHtml(sourcePayload)}">来源</button>`;
 }
 
 function buildSnapshotSourcePayload(value: SnapshotValue | null | undefined): string {
@@ -2031,7 +1896,7 @@ function collectSnapshotSourceCount(values: Array<SnapshotValue | null | undefin
         if (Array.isArray(value.sourceRefs) && value.sourceRefs.length > 0) {
             value.sourceRefs.forEach((ref): void => {
                 refs.add([
-                    String(ref.type ?? ''),
+                    String(ref.kind ?? ''),
                     String(ref.recordId ?? ''),
                     String(ref.path ?? ''),
                     String(ref.ts ?? ''),
@@ -2073,11 +1938,11 @@ function buildCharacterRoleButtons(chatKey: string, actorKey: string, currentRol
 function formatSuggestedActionLabel(action: string): string {
     switch (action) {
         case 'rebuild_chat_view':
-            return '重建 chat view';
+            return '重建聊天结构视图';
         case 'refresh_seed':
-            return '刷新 seed';
+            return '刷新初始设定';
         case 'normalize_rows':
-            return '检查逻辑行';
+            return '检查逻辑表';
         case 'review_candidates':
             return '查看候选来源';
         default:
@@ -2115,42 +1980,53 @@ function buildSummaryCalloutMarkup(options: {
     foot?: string;
     meta?: string;
     empty?: boolean;
+    iconClassName?: string;
+    copyHtml?: string;
+    footHtml?: string;
+        className?: string;
 }): string {
     return `
-      <div class="stx-ui-summary-callout${options.empty ? ' is-empty-state' : ''}">
+            <div class="stx-ui-summary-callout${options.empty ? ' is-empty-state' : ''}${options.className ? ` ${escapeHtml(options.className)}` : ''}">
         <div class="stx-ui-summary-callout-head">
           <div>
             <div class="stx-ui-summary-eyebrow">${escapeHtml(options.eyebrow)}</div>
-            <div class="stx-ui-summary-title">${escapeHtml(options.title)}</div>
+                        <div class="stx-ui-summary-title-wrap">
+                            ${options.iconClassName ? `<i class="${escapeHtml(options.iconClassName)} stx-ui-summary-title-icon" aria-hidden="true"></i>` : ''}
+                            <div class="stx-ui-summary-title">${escapeHtml(options.title)}</div>
+                        </div>
           </div>
           ${options.meta ? `<div class="stx-ui-summary-meta">${escapeHtml(options.meta)}</div>` : ''}
         </div>
-        <div class="stx-ui-summary-copy">${escapeHtml(options.copy)}</div>
-        ${options.foot ? `<div class="stx-ui-summary-foot">${escapeHtml(options.foot)}</div>` : ''}
+        <div class="stx-ui-summary-copy${options.copyHtml ? ' is-rich' : ''}">${options.copyHtml ?? escapeHtml(options.copy)}</div>
+        ${(options.foot || options.footHtml) ? `<div class="stx-ui-summary-foot${options.footHtml ? ' is-rich' : ''}">${options.footHtml ?? escapeHtml(options.foot ?? '')}</div>` : ''}
       </div>
     `;
 }
 
 function buildOverviewMarkup(canon: CanonSnapshot): string {
-    const worldTitle = normalizeText(canon.world.templateId, '未绑定模板');
+    const worldTitle = normalizeText(canon.world.templateId, '未绑定世界模板');
     const currentLocation = hasStableSnapshotValue(canon.world.currentLocation) ? canon.world.currentLocation!.value : '尚未稳定抽取';
-    const summaryCopy = [
-        canon.world.overview?.value || '总览仍在聚合中',
-        `主要地点：${currentLocation}`,
-        `规则：${summarizeSnapshotValues(canon.world.rules, 2)}`,
-        `硬约束：${summarizeSnapshotValues(canon.world.hardConstraints, 2)}`,
-    ].join(' / ');
-    const foot = [
-        `世界书：${summarizeSnapshotValues(canon.world.activeLorebooks, 2)}`,
-        `群组成员：${summarizeSnapshotValues(canon.world.groupMembers, 3)}`,
-        `刷新于 ${formatRelativeTime(canon.generatedAt)}`,
-    ].join(' / ');
+    const overviewText = canon.world.overview?.value || '设定总览仍在整理中，当前会先展示地点、规则和成员信息。';
+    const summaryCopyHtml = `
+      <div class="stx-ui-summary-caption">${escapeHtml(overviewText)}</div>
+      <div class="stx-ui-summary-tile-grid">
+        ${[
+            buildSummaryInfoTile('fa-solid fa-location-crosshairs', '主要地点', currentLocation),
+            buildSummaryInfoTile('fa-solid fa-scale-balanced', '规则重点', summarizeSnapshotValues(canon.world.rules, 2)),
+            buildSummaryInfoTile('fa-solid fa-shield-halved', '硬约束', summarizeSnapshotValues(canon.world.hardConstraints, 2)),
+            buildSummaryInfoTile('fa-solid fa-book-open-reader', '初始化设定书', summarizeSnapshotValues(canon.world.activeLorebooks, 2)),
+            buildSummaryInfoTile('fa-solid fa-people-group', '群组成员', summarizeSnapshotValues(canon.world.groupMembers, 3)),
+            buildSummaryInfoTile('fa-solid fa-clock-rotate-left', '最近刷新', formatRelativeTime(canon.generatedAt)),
+        ].join('')}
+      </div>
+    `;
     const detailItems: ExperienceListItem[] = [
         {
             title: '当前地点',
             detail: currentLocation,
             meta: formatSnapshotMeta(canon.world.currentLocation),
             tone: 'accent',
+            iconClassName: 'fa-solid fa-location-dot',
             sourcePayload: buildSnapshotSourcePayload(canon.world.currentLocation),
         },
         {
@@ -2158,6 +2034,7 @@ function buildOverviewMarkup(canon: CanonSnapshot): string {
             detail: summarizeSnapshotValues(canon.world.rules, 3),
             meta: formatSnapshotMeta(getStableSnapshotValues(canon.world.rules)[0]),
             tone: 'soft',
+            iconClassName: 'fa-solid fa-scale-balanced',
             sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.rules)[0]),
         },
         {
@@ -2165,13 +2042,15 @@ function buildOverviewMarkup(canon: CanonSnapshot): string {
             detail: summarizeSnapshotValues(canon.world.hardConstraints, 3),
             meta: formatSnapshotMeta(getStableSnapshotValues(canon.world.hardConstraints)[0]),
             tone: getStableSnapshotValues(canon.world.hardConstraints).length > 0 ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-shield-halved',
             sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.hardConstraints)[0]),
         },
         {
-            title: '活跃 lorebooks',
+            title: '初始化设定书',
             detail: summarizeSnapshotValues(canon.world.activeLorebooks, 3),
             meta: `${formatSnapshotMeta(getStableSnapshotValues(canon.world.activeLorebooks)[0])} · ${getStableSnapshotValues(canon.world.activeLorebooks).length} 个来源`,
             tone: 'soft',
+            iconClassName: 'fa-solid fa-book-open',
             sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.activeLorebooks)[0]),
         },
         {
@@ -2179,16 +2058,23 @@ function buildOverviewMarkup(canon: CanonSnapshot): string {
             detail: summarizeSnapshotValues(canon.world.groupMembers, 4),
             meta: `${formatSnapshotMeta(getStableSnapshotValues(canon.world.groupMembers)[0])} · ${getStableSnapshotValues(canon.world.groupMembers).length} 个成员`,
             tone: 'soft',
+            iconClassName: 'fa-solid fa-users',
             sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.groupMembers)[0]),
         },
     ];
     return buildSummaryCalloutMarkup({
         eyebrow: '设定总览',
         title: worldTitle,
-        copy: summaryCopy,
-        foot,
-        meta: canon.health.maintenanceLabels[0] || '状态正常',
-    }) + buildListMarkup(detailItems, '当前还没有稳定的世界概览条目。');
+        copy: overviewText,
+        copyHtml: summaryCopyHtml,
+        meta: canon.health.maintenanceLabels[0] || '当前状态稳定',
+        iconClassName: 'fa-solid fa-compass',
+        className: 'is-overview-hero',
+    }) + buildListMarkup(detailItems, '当前还没有稳定的世界概览条目。', {
+        listClassName: 'is-overview-grid',
+        entryClassName: 'is-overview-tile',
+        compactSourceButton: true,
+    });
 }
 
 function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[] {
@@ -2199,18 +2085,18 @@ function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[]
         const detailHtml = `
             <div>${escapeHtml([
                 summarizeSnapshotValues(item.identities, 2),
-                item.relationshipAnchors.length > 0 ? `关系：${summarizeSnapshotValues(item.relationshipAnchors, 1)}` : '',
-                item.currentLocation?.value ? `地点：${item.currentLocation.value}` : '',
+                                item.relationshipAnchors.length > 0 ? `当前关系：${summarizeSnapshotValues(item.relationshipAnchors, 1)}` : '',
+                                item.currentLocation?.value ? `所在地点：${item.currentLocation.value}` : '',
             ].filter(Boolean).join(' / ') || '当前还没有稳定角色摘要。')}</div>
             <details style="margin-top: 8px;">
-              <summary style="cursor: pointer;">展开角色详情</summary>
+                            <summary style="cursor: pointer;">展开更多角色信息</summary>
               <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
-                <div>别名：${escapeHtml(summarizeSnapshotValues(item.aliases, 3))}</div>
-                <div>身份摘要：${escapeHtml(summarizeSnapshotValues(item.identities, 3))}</div>
-                <div>关系锚点：${escapeHtml(summarizeSnapshotValues(item.relationshipAnchors, 2))}</div>
-                <div>当前所在地点：${escapeHtml(item.currentLocation?.value || '尚未稳定抽取')}</div>
+                                <div>常用称呼：${escapeHtml(summarizeSnapshotValues(item.aliases, 3))}</div>
+                                <div>身份说明：${escapeHtml(summarizeSnapshotValues(item.identities, 3))}</div>
+                                <div>关系线索：${escapeHtml(summarizeSnapshotValues(item.relationshipAnchors, 2))}</div>
+                                <div>当前地点：${escapeHtml(item.currentLocation?.value || '尚未稳定抽取')}</div>
                 <div>最近出现场景：${escapeHtml(canon.scene.currentScene?.value || '尚未稳定抽取')}</div>
-                <div>可信度：${confidence}% / 来源数：${sourceCount}</div>
+                                <div>可信度：${confidence}% · 来源 ${sourceCount} 条</div>
               </div>
             </details>
         `;
@@ -2224,6 +2110,7 @@ function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[]
                 sourceCount > 0 ? `来源 ${sourceCount} 条` : '来源待补充',
             ].join(' · '),
             tone: roleMark === 'primary' ? 'accent' : (roleMark === 'secondary' ? 'soft' : 'warning'),
+            iconClassName: roleMark === 'primary' ? 'fa-solid fa-crown' : roleMark === 'secondary' ? 'fa-solid fa-user' : 'fa-solid fa-circle-question',
             sourcePayload: buildCharacterSourcePayload(item),
             actionsHtml: [
                 buildLogicMaintenanceJumpButton('character'),
@@ -2240,6 +2127,7 @@ function buildSceneItems(canon: CanonSnapshot): ExperienceListItem[] {
         detail: canon.scene.currentScene?.value || '尚未稳定抽取',
         meta: formatSnapshotMeta(canon.scene.currentScene),
         tone: 'accent',
+        iconClassName: 'fa-solid fa-map-location-dot',
         sourcePayload: buildSnapshotSourcePayload(canon.scene.currentScene),
         actionsHtml: buildEditorActionButton('refresh-canon', '刷新场景聚合'),
     });
@@ -2248,6 +2136,7 @@ function buildSceneItems(canon: CanonSnapshot): ExperienceListItem[] {
         detail: canon.scene.currentConflict?.value || '暂时没有明确冲突',
         meta: formatSnapshotMeta(canon.scene.currentConflict),
         tone: canon.scene.currentConflict?.value ? 'warning' : 'soft',
+        iconClassName: 'fa-solid fa-bolt',
         sourcePayload: buildSnapshotSourcePayload(canon.scene.currentConflict),
     });
     items.push({
@@ -2255,6 +2144,7 @@ function buildSceneItems(canon: CanonSnapshot): ExperienceListItem[] {
         detail: summarizeSnapshotValues(canon.scene.pendingEvents, 3),
         meta: getStableSnapshotValues(canon.scene.pendingEvents).length > 0 ? `${getStableSnapshotValues(canon.scene.pendingEvents).length} 条候选` : '暂无待处理事件',
         tone: 'soft',
+        iconClassName: 'fa-solid fa-list-check',
         sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.scene.pendingEvents)[0]),
     });
     items.push({
@@ -2262,6 +2152,7 @@ function buildSceneItems(canon: CanonSnapshot): ExperienceListItem[] {
         detail: summarizeSnapshotValues(canon.scene.participants, 4),
         meta: getStableSnapshotValues(canon.scene.participants).length > 0 ? `${getStableSnapshotValues(canon.scene.participants).length} 个参与者` : '暂无参与者',
         tone: 'soft',
+        iconClassName: 'fa-solid fa-users',
         sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.scene.participants)[0]),
     });
     return items;
@@ -2272,33 +2163,38 @@ function buildChatContextItems(canon: CanonSnapshot): ExperienceListItem[] {
         {
             title: '当前有效消息',
             detail: `${canon.chat.visibleMessageCount} 条`,
-            meta: canon.chat.activeMessageIds.length > 0 ? `活动消息 ${canon.chat.activeMessageIds.length} 条` : '暂无活动消息 ID',
+            meta: canon.chat.activeMessageIds.length > 0 ? `当前追踪 ${canon.chat.activeMessageIds.length} 条活动消息` : '当前没有活动消息标记',
             tone: 'accent',
+            iconClassName: 'fa-solid fa-comments',
         },
         {
             title: '最近编辑次数',
             detail: `${canon.chat.editedRevisionCount} 次`,
             meta: canon.chat.lastMutationAt ? `最近变动 ${formatRelativeTime(canon.chat.lastMutationAt)}` : '暂无变动时间',
             tone: canon.chat.editedRevisionCount > 0 ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-pen-to-square',
         },
         {
             title: '最近删除次数',
             detail: `${canon.chat.deletedTurnCount} 次`,
             meta: canon.chat.invalidatedMessageCount > 0 ? `失效消息 ${canon.chat.invalidatedMessageCount} 条` : '当前无失效消息',
             tone: canon.chat.deletedTurnCount > 0 ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-trash-can',
         },
         {
             title: '分支根数量',
             detail: `${canon.chat.branchRootCount} 个`,
-            meta: canon.chat.mutationKinds.length > 0 ? canon.chat.mutationKinds.join(' / ') : '最近没有明显 mutation',
+            meta: canon.chat.mutationKinds.length > 0 ? formatMutationKindSummary(canon.chat.mutationKinds) : '最近没有明显结构变化',
             tone: canon.chat.branchRootCount > 0 ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-code-branch',
         },
         {
-            title: '是否建议 rebuild',
-            detail: canon.chat.rebuildRecommended ? '建议立即 rebuild logical chat view' : '当前无需强制 rebuild',
+            title: '结构视图维护',
+            detail: canon.chat.rebuildRecommended ? '建议立即重建聊天结构视图。' : '当前无需强制重建结构视图。',
             meta: canon.chat.rebuildRecommended ? '建议动作已就绪' : '当前结构稳定',
             tone: canon.chat.rebuildRecommended ? 'warning' : 'success',
-            actionsHtml: buildEditorActionButton('rebuild-chat-view', '重建 chat view'),
+            iconClassName: 'fa-solid fa-rotate',
+            actionsHtml: buildEditorActionButton('rebuild-chat-view', '重建结构视图'),
         },
     ];
 }
@@ -2310,25 +2206,29 @@ function buildHealthItems(health: EditorHealthSnapshot): ExperienceListItem[] {
         detail: issue.detail,
         meta: issue.actionLabel || '建议查看诊断页',
         tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+        iconClassName: issue.severity === 'critical' || issue.severity === 'warning' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-info',
     }));
     const headItems: ExperienceListItem[] = [
         {
             title: '孤儿事实',
             detail: `${Number(health.orphanFactsCount ?? 0)} 条`,
-            meta: health.hasDraftRevision ? '存在 schema 草稿修订' : '当前无草稿修订',
+            meta: health.hasDraftRevision ? '当前存在结构草稿修订' : '当前没有结构草稿修订',
             tone: Number(health.orphanFactsCount ?? 0) > 0 ? 'warning' : 'success',
+            iconClassName: 'fa-solid fa-link-slash',
         },
         {
             title: '一致性风险',
             detail: `${Math.round(Number(health.duplicateEntityRisk ?? 0) * 100)}%`,
             meta: health.maintenanceLabels.length > 0 ? health.maintenanceLabels.join(' / ') : '暂无额外风险标签',
             tone: Number(health.duplicateEntityRisk ?? 0) >= 0.25 ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-shield-exclamation',
         },
         {
             title: '建议动作',
             detail: health.suggestedActions.length > 0 ? health.suggestedActions.map(formatSuggestedActionLabel).join(' / ') : '当前无需额外修复动作',
             meta: '展开或点击按钮即可执行对应维护入口',
             tone: health.suggestedActions.length > 0 ? 'accent' : 'soft',
+            iconClassName: 'fa-solid fa-screwdriver-wrench',
             actionsHtml: `${suggestedActionButtons}${buildEditorActionButton('open-diagnostics', '查看诊断')}`,
         },
     ];
@@ -2359,12 +2259,13 @@ function buildLocationItems(canon: CanonSnapshot): ExperienceListItem[] {
             title: item.value,
             detail: [
                 `类型：${deriveLocationType(item.value)}`,
-                `所属模板：${normalizeText(canon.world.templateId, '未绑定模板')}`,
+                `所属模板：${normalizeText(canon.world.templateId, '未绑定世界模板')}`,
                 relatedCharacters.length > 0 ? `相关角色：${relatedCharacters.join(' / ')}` : '',
                 relatedEvents.length > 0 ? `相关事件：${relatedEvents.join(' / ')}` : '',
             ].filter(Boolean).join(' / ') || '当前还没有更多稳定地点信息。',
             meta: [formatSnapshotMeta(item), `${relatedCharacters.length} 名相关角色`, `来源 ${sourceCount} 条`].join(' · '),
             tone: relatedCharacters.length > 0 ? 'accent' : 'soft',
+            iconClassName: 'fa-solid fa-location-crosshairs',
             sourcePayload: buildSnapshotSourcePayload(item),
             actionsHtml: buildLogicMaintenanceJumpButton('location'),
         };
@@ -2385,12 +2286,21 @@ function renderRecentPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void
         buildSummaryCalloutMarkup({
             eyebrow: '角色与地点',
             title: `${canon.characters.length} 个角色 / ${getStableSnapshotValues(canon.world.locations).length} 个地点`,
-            copy: '这页是总览和逻辑表之间的浏览层，用来快速看懂角色、地点和它们的当前关系。',
-            foot: `模板 ${normalizeText(canon.world.templateId, '未绑定')} / 更新于 ${formatRelativeTime(canon.generatedAt)}`,
+            copy: '这页会把角色、地点和当前关系先整理成便于浏览的摘要。',
+            copyHtml: [
+                buildSummaryInfoLine('fa-solid fa-user-group', '角色数量', `${canon.characters.length} 个角色已进入总览`),
+                buildSummaryInfoLine('fa-solid fa-location-crosshairs', '地点数量', `${getStableSnapshotValues(canon.world.locations).length} 个地点已被整理`),
+                buildSummaryInfoLine('fa-solid fa-people-arrows', '当前关系', canon.characters.length > 0 ? '可从角色卡和地点卡快速查看彼此关系。' : '当前还没有足够角色信息。'),
+            ].join(''),
+            footHtml: [
+                buildSummaryInfoLine('fa-solid fa-layer-group', '所属模板', normalizeText(canon.world.templateId, '未绑定世界模板')),
+                buildSummaryInfoLine('fa-solid fa-clock-rotate-left', '最近刷新', formatRelativeTime(canon.generatedAt)),
+            ].join(''),
+            iconClassName: 'fa-solid fa-map',
         }),
     );
     setContainerHtml(ids.recentEventsId, buildListMarkup(buildCharacterOverviewItems(canon), '当前还没有可展示的角色卡。'));
-    setContainerHtml(ids.recentSummariesId, buildListMarkup(buildLocationItems(canon), '当前还没有稳定地点，可能仍停留在 seed 或 world_state 中。'));
+    setContainerHtml(ids.recentSummariesId, buildListMarkup(buildLocationItems(canon), '当前还没有稳定地点，地点信息可能仍停留在初始设定或世界状态里。'));
 }
 
 function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
@@ -2398,10 +2308,20 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
         ids.relationOverviewId,
         buildSummaryCalloutMarkup({
             eyebrow: '逻辑表维护',
-            title: normalizeText(canon.world.templateId, '未绑定模板'),
-            copy: `当前 facts ${canon.health.dataLayers.factsCount} 条 / alias ${canon.health.dataLayers.aliasCount} 条 / redirect ${canon.health.dataLayers.redirectCount} 条 / tombstone ${canon.health.dataLayers.tombstoneCount} 条。`,
-            foot: '这里只有稳定结构化行可以直接编辑；如果表空了，也会解释数据可能还停留在哪一层，并保留候选来源与隐藏行入口。',
+            title: normalizeText(canon.world.templateId, '未绑定世界模板'),
+            copy: '这里会集中展示稳定结构化数据的维护状态。',
+            copyHtml: [
+                buildSummaryInfoLine('fa-solid fa-brain', '事实行', `${canon.health.dataLayers.factsCount} 条已整理事实`),
+                buildSummaryInfoLine('fa-solid fa-signature', '别名映射', `${canon.health.dataLayers.aliasCount} 条别名映射`),
+                buildSummaryInfoLine('fa-solid fa-route', '重定向', `${canon.health.dataLayers.redirectCount} 条重定向`),
+                buildSummaryInfoLine('fa-solid fa-box-archive', '隐藏墓碑', `${canon.health.dataLayers.tombstoneCount} 条隐藏墓碑`),
+            ].join(''),
+            footHtml: [
+                buildSummaryInfoLine('fa-solid fa-pen-ruler', '可直接维护', '这里只能直接编辑已经稳定落库的结构化行。'),
+                buildSummaryInfoLine('fa-solid fa-magnifying-glass', '空表说明', '如果表里暂时为空，下面会继续解释数据可能停留在哪一层。'),
+            ].join(''),
             meta: canon.health.maintenanceLabels[0] || '维护页已就绪',
+            iconClassName: 'fa-solid fa-table-cells-large',
         }),
     );
     setContainerHtml(
@@ -2409,15 +2329,17 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
         buildListMarkup([
             {
                 title: '维护边界',
-                detail: 'Phase 1 继续复用现有 rows API，只维护 materialized facts，不把 derived 结果自动写回事实层。',
+                detail: '当前阶段继续复用现有逻辑行接口，只维护已经稳定落库的事实行，不会把系统推导结果自动写回事实层。',
                 meta: '保持事实写入协议不变',
                 tone: 'accent',
+                iconClassName: 'fa-solid fa-ruler-combined',
             },
             {
                 title: '空表解释',
-                detail: '当前表暂无稳定结构化行时，数据也可能存在于 semantic seed、world_state、group memory 或已隐藏逻辑行里。',
+                detail: '当前表暂时没有稳定结构化行时，数据也可能还停留在初始设定、世界状态、群聊记忆或已隐藏逻辑行里。',
                 meta: '先解释，再维护',
                 tone: 'soft',
+                iconClassName: 'fa-solid fa-circle-info',
             },
         ], '当前没有额外的维护说明。'),
     );
@@ -2428,6 +2350,7 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
             detail: issue.detail,
             meta: issue.actionLabel || '查看诊断页',
             tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+            iconClassName: issue.severity === 'critical' || issue.severity === 'warning' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-info',
         })), '当前没有明显的逻辑表风险。'),
     );
 }
@@ -2437,34 +2360,39 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
         ids.injectionOverviewId,
         buildListMarkup([
             {
-                title: 'facts',
+                title: '事实层',
                 detail: `${canon.health.dataLayers.factsCount} 条`,
-                meta: canon.health.dataLayers.activeTemplateId || '未绑定模板',
+                meta: canon.health.dataLayers.activeTemplateId || '未绑定世界模板',
                 tone: 'accent',
+                iconClassName: 'fa-solid fa-brain',
             },
             {
-                title: 'world_state',
+                title: '世界状态层',
                 detail: `${canon.health.dataLayers.worldStateCount} 条`,
-                meta: canon.health.dataLayers.hasSemanticSeed ? 'semantic seed 已存在' : 'semantic seed 缺失',
+                meta: canon.health.dataLayers.hasSemanticSeed ? '初始设定已存在' : '初始设定缺失',
                 tone: canon.health.dataLayers.hasSemanticSeed ? 'soft' : 'warning',
+                iconClassName: 'fa-solid fa-globe',
             },
             {
-                title: 'summary / event',
+                title: '摘要与事件层',
                 detail: `${canon.health.dataLayers.summaryCount} / ${canon.health.dataLayers.eventCount}`,
-                meta: canon.health.dataLayers.hasLogicalChatView ? 'logical chat view 已存在' : 'logical chat view 缺失',
+                meta: canon.health.dataLayers.hasLogicalChatView ? '聊天结构视图已存在' : '聊天结构视图缺失',
                 tone: canon.health.dataLayers.hasLogicalChatView ? 'soft' : 'warning',
+                iconClassName: 'fa-solid fa-layer-group',
             },
             {
-                title: 'group memory',
+                title: '群聊记忆层',
                 detail: canon.health.dataLayers.hasGroupMemory ? '已存在' : '缺失',
-                meta: canon.health.dataLayers.hasDraftRevision ? '存在 schema draft' : '当前无 draft',
+                meta: canon.health.dataLayers.hasDraftRevision ? '当前存在结构草稿' : '当前没有结构草稿',
                 tone: canon.health.dataLayers.hasDraftRevision ? 'warning' : 'soft',
+                iconClassName: 'fa-solid fa-users-viewfinder',
             },
             {
-                title: 'alias / redirect / tombstone',
+                title: '别名与重定向层',
                 detail: `${canon.health.dataLayers.aliasCount} / ${canon.health.dataLayers.redirectCount} / ${canon.health.dataLayers.tombstoneCount}`,
                 meta: '结构维护层状态',
                 tone: (canon.health.dataLayers.redirectCount + canon.health.dataLayers.tombstoneCount) > 0 ? 'warning' : 'soft',
+                iconClassName: 'fa-solid fa-route',
             },
         ], '当前还没有可展示的数据分层诊断。'),
     );
@@ -2473,28 +2401,29 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
         detail: issue.detail,
         meta: issue.actionLabel || '建议人工检查',
         tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+        iconClassName: issue.severity === 'critical' || issue.severity === 'warning' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-info',
     })), '当前没有问题列表。'));
     setContainerHtml(
         ids.injectionPostId,
         `
                     <div style="display:flex; flex-direction:column; gap:12px;">
                         <div class="stx-ui-actions">
-                            <button data-stx-editor-action="rebuild-chat-view" type="button" class="stx-ui-btn secondary">重建 chat view</button>
-                            <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary">刷新 seed</button>
+                            <button data-stx-editor-action="rebuild-chat-view" type="button" class="stx-ui-btn secondary">重建结构视图</button>
+                            <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary">刷新初始设定</button>
                             <button data-stx-editor-action="refresh-canon" type="button" class="stx-ui-btn secondary">刷新总览快照</button>
                         </div>
                         <div class="stx-ui-actions">
-                            <button data-stx-editor-action="repair-normalize-aliases" type="button" class="stx-ui-btn secondary">规范 alias</button>
-                            <button data-stx-editor-action="repair-compact-tombstones" type="button" class="stx-ui-btn secondary">整理 tombstone</button>
+                            <button data-stx-editor-action="repair-normalize-aliases" type="button" class="stx-ui-btn secondary">规范别名</button>
+                            <button data-stx-editor-action="repair-compact-tombstones" type="button" class="stx-ui-btn secondary">整理隐藏墓碑</button>
                             <button data-stx-editor-action="repair-rebuild-candidates" type="button" class="stx-ui-btn secondary">重建候选</button>
                         </div>
                         <div class="stx-ui-actions">
                             <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
-                            <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">world_state 候选</button>
+                            <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">查看世界状态候选</button>
                             <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
                             <button data-stx-editor-action="open-logic-maintenance" type="button" class="stx-ui-btn secondary">打开逻辑表维护</button>
                         </div>
-                        <div class="stx-ui-empty-hint">repair 动作会优先作用于当前已选逻辑表；如果还没选表，会自动挑选最需要处理的一张。</div>
+                        <div class="stx-ui-empty-hint">这些整理动作会优先作用于当前已选逻辑表；如果还没选表，系统会自动挑选最需要处理的一张。</div>
           </div>
         `,
     );
@@ -2503,9 +2432,17 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
         buildSummaryCalloutMarkup({
             eyebrow: '诊断说明',
             title: canon.health.maintenanceLabels[0] || '当前没有明显阻塞',
-            copy: canon.health.issues[0]?.detail || '如果主页面看起来很空，优先检查 semantic seed、logical chat view 和 world_state 是否都齐全。',
-            foot: canon.health.suggestedActions.length > 0 ? `建议动作：${canon.health.suggestedActions.join(' / ')}` : '当前没有额外建议动作。',
+            copy: canon.health.issues[0]?.detail || '如果主页面看起来很空，优先检查初始设定、聊天结构视图和世界状态是否都齐全。',
+            copyHtml: [
+                buildSummaryInfoLine('fa-solid fa-heart-pulse', '当前判断', canon.health.issues[0]?.detail || '当前没有明显阻塞，整体状态较稳定。'),
+                buildSummaryInfoLine('fa-solid fa-database', '数据检查', '优先确认初始设定、聊天结构视图和世界状态是否都已准备好。'),
+            ].join(''),
+            footHtml: [
+                buildSummaryInfoLine('fa-solid fa-screwdriver-wrench', '建议动作', canon.health.suggestedActions.length > 0 ? canon.health.suggestedActions.map(formatSuggestedActionLabel).join(' / ') : '当前没有额外建议动作。'),
+                buildSummaryInfoLine('fa-solid fa-clock-rotate-left', '生成时间', formatRelativeTime(canon.generatedAt)),
+            ].join(''),
             meta: `生成于 ${formatRelativeTime(canon.generatedAt)}`,
+            iconClassName: 'fa-solid fa-stethoscope',
         }),
     );
 }
@@ -2574,10 +2511,8 @@ export async function renderSettingsExperience(ids: MemoryOSSettingsIds): Promis
         return;
     }
     try {
-        const [canonSnapshot, experienceSnapshot]: [CanonSnapshot, ExperienceSnapshot] = await Promise.all([
-            memory.editor.getCanonSnapshot(),
-            loadExperienceSnapshot(memory),
-        ]);
+        const experienceSnapshot: EditorExperienceSnapshot = await memory.editor.getExperienceSnapshot();
+        const canonSnapshot: CanonSnapshot = experienceSnapshot.canon;
         renderRolePanel(ids, canonSnapshot);
         renderRecentPanel(ids, canonSnapshot);
         renderRelationPanel(ids, canonSnapshot);

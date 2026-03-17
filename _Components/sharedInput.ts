@@ -14,6 +14,7 @@ export interface SharedInputFieldOptions {
   attributes?: Record<string, SharedInputAttributeValue>;
   disabled?: boolean;
   readOnly?: boolean;
+  style?: string;
 }
 
 /**
@@ -88,14 +89,15 @@ export function buildSharedInputField(options: SharedInputFieldOptions): string 
   const idAttr = options.id ? ` id="${escapeAttr(options.id)}"` : "";
   const disabledAttr = options.disabled ? " disabled" : "";
   const readOnlyAttr = options.readOnly ? " readonly" : "";
+  const styleAttr = options.style ? ` style="${escapeAttr(options.style)}"` : "";
   const attributes = buildAttributes(options.attributes);
 
   if (tag === "textarea") {
-    return `<textarea${idAttr} class="${escapeAttr(className)}" data-ui="shared-input" data-tooltip-anchor="shared-input-control"${disabledAttr}${readOnlyAttr}${attributes}>${escapeHtml(String(options.value ?? ""))}</textarea>`;
+    return `<textarea${idAttr} class="${escapeAttr(className)}" data-ui="shared-input" data-tooltip-anchor="shared-input-control"${disabledAttr}${readOnlyAttr}${styleAttr}${attributes}>${escapeHtml(String(options.value ?? ""))}</textarea>`;
   }
 
   const valueAttr = ` value="${escapeAttr(String(options.value ?? ""))}"`;
-  return `<input${idAttr} type="${escapeAttr(type)}" class="${escapeAttr(className)}" data-ui="shared-input" data-tooltip-anchor="shared-input-control"${valueAttr}${disabledAttr}${readOnlyAttr}${attributes} />`;
+  return `<input${idAttr} type="${escapeAttr(type)}" class="${escapeAttr(className)}" data-ui="shared-input" data-tooltip-anchor="shared-input-control"${valueAttr}${disabledAttr}${readOnlyAttr}${styleAttr}${attributes} />`;
 }
 
 /**
@@ -107,4 +109,3 @@ export function buildSharedInputStyles(scopeSelector: string): string {
   const scope = scopeSelector.trim() || ":root";
   return sharedInputCssText.split("_SCOPE_").join(scope);
 }
-

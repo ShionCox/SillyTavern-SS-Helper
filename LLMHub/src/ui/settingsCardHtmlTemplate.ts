@@ -13,7 +13,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
     // ─── 基础 Panel ─────────────────────
     const globalProfileSelect = buildSharedSelectField({
         id: ids.globalProfileId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '默认参数档案' },
@@ -50,7 +50,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
     const resourceTypeSelect = buildSharedSelectField({
         id: ids.resourceTypeSelectId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '资源类型决定该资源可参与的分配范围' },
@@ -63,7 +63,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
     const resourceSourceSelect = buildSharedSelectField({
         id: ids.resourceSourceSelectId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '选择资源来源' },
@@ -206,7 +206,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
     const modelListSelect = buildSharedSelectField({
         id: ids.modelListSelectId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '从列表选择模型' },
@@ -231,7 +231,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
     // ─── 分配 Panel ─────────────────────
     const genResourceSelect = buildSharedSelectField({
         id: ids.globalAssignGenResourceId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select stx-ui-input-full',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '生成类默认资源' },
@@ -240,7 +240,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
     const embResourceSelect = buildSharedSelectField({
         id: ids.globalAssignEmbResourceId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select stx-ui-input-full',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '向量化默认资源' },
@@ -249,7 +249,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
     const rerankResourceSelect = buildSharedSelectField({
         id: ids.globalAssignRerankResourceId,
-        containerClassName: 'stx-ui-shared-select',
+        containerClassName: 'stx-shared-select-fluid',
         selectClassName: 'stx-ui-select stx-ui-input-full',
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '重排序默认资源' },

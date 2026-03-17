@@ -10,6 +10,35 @@ _SCOPE_ .stx-shared-select {
   vertical-align: middle;
 }
 
+_SCOPE_ .stx-shared-select.stx-shared-select-fluid {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+_SCOPE_ .stx-shared-select.stx-shared-select-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+_SCOPE_ .stx-shared-select.stx-shared-select-flex-220 {
+  flex: 0 1 220px;
+}
+
+_SCOPE_ .stx-shared-select.stx-shared-select-workbench {
+  min-width: 132px;
+}
+
+_SCOPE_ .stx-shared-select.stx-shared-select-workbench-compact {
+  min-width: 122px;
+}
+
+_SCOPE_ .stx-shared-select.stx-shared-select-width-sm {
+  width: 116px;
+  min-width: 116px;
+  max-width: 116px;
+}
+
 _SCOPE_ .stx-shared-select[data-shared-select-disabled="true"] {
   opacity: 0.72;
 }
@@ -45,6 +74,47 @@ _SCOPE_ .stx-shared-select-trigger {
     box-shadow 0.2s ease,
     background-color 0.2s ease,
     transform 0.2s ease;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-trigger-copy,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-main,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-label,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-indicator {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-trigger-copy,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-select-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact {
+  min-height: 32px;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-36 {
+  min-height: 36px;
+  height: 36px;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 _SCOPE_ .stx-shared-select-trigger:disabled {
@@ -336,4 +406,19 @@ _SCOPE_ .stx-shared-select-list::-webkit-scrollbar-thumb,
 .stx-shared-select-list::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
+}
+
+@media (max-width: 680px) {
+  _SCOPE_ .stx-shared-select.stx-shared-select-workbench,
+  _SCOPE_ .stx-shared-select.stx-shared-select-workbench-compact {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  _SCOPE_ .stx-shared-select.stx-shared-select-width-sm {
+    width: 108px;
+    min-width: 108px;
+    max-width: 108px;
+  }
 }

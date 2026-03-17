@@ -64,6 +64,7 @@ export interface SettingsCardTemplateIdsEvent {
   timeLimitRowId: string;
   skillEnabledId: string;
   skillEditorWrapId: string;
+  skillColsId: string;
   skillRowsId: string;
   skillAddId: string;
   skillTextId: string;

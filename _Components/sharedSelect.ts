@@ -1,5 +1,6 @@
 import sharedSelectCssText from "./sharedSelect.css?inline";
 import { mountThemeHost, subscribeTheme } from "../SDK/theme";
+import { SHARED_DIALOG_ROOT_SELECTOR } from "./sharedDialog";
 
 type SharedSelectAttributeValue = string | number | boolean | null | undefined;
 
@@ -489,6 +490,10 @@ function getBoundaryEnabledIndex(refs: SharedSelectRefs, direction: "start" | "e
  * @returns 命中的祖先节点；未命中时返回 null
  */
 function resolveSharedSelectHost(root: HTMLElement): HTMLElement {
+  const sharedDialogHost = root.closest<HTMLElement>(SHARED_DIALOG_ROOT_SELECTOR);
+  if (sharedDialogHost) {
+    return sharedDialogHost;
+  }
   const dialogHost =
     root.closest<HTMLDialogElement>("dialog[open]") ||
     document.querySelector<HTMLDialogElement>("dialog[open]");

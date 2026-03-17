@@ -94,7 +94,7 @@ export function buildSettingsCardHtmlTemplateEvent(
               ${buildSharedSelectField({
                 id: ids.themeId,
                 value: "default",
-                containerClassName: "st-roll-shared-select",
+                containerClassName: "stx-shared-select-flex-220",
                 options: [
                   { value: "default", label: "默认 UI" },
                   { value: "dark", label: "深色 UI" },
@@ -114,7 +114,7 @@ export function buildSettingsCardHtmlTemplateEvent(
               ${buildSharedSelectField({
                 id: ids.scopeId,
                 value: "protagonist_only",
-                containerClassName: "st-roll-shared-select",
+                containerClassName: "stx-shared-select-flex-220",
                 attributes: {
                   "data-tip": "设置事件作用范围。",
                 },
@@ -263,7 +263,7 @@ export function buildSettingsCardHtmlTemplateEvent(
               ${buildSharedSelectField({
                 id: ids.summaryDetailId,
                 value: "minimal",
-                containerClassName: "st-roll-shared-select",
+                containerClassName: "stx-shared-select-flex-220",
                 attributes: {
                   "data-tip": "设置摘要详细度。",
                 },
@@ -397,7 +397,7 @@ export function buildSettingsCardHtmlTemplateEvent(
               <div class="st-roll-skill-modal-body">
                 <div id="${ids.skillPresetLayoutId}" class="st-roll-workbench st-roll-skill-layout">
                   <aside id="${ids.skillPresetSidebarId}" class="st-roll-workbench-sidebar st-roll-skill-presets">
-                    <div class="st-roll-workbench-toolbar st-roll-workbench-toolbar-sidebar">
+                    <div class="st-roll-workbench-toolbar st-roll-workbench-toolbar-sidebar st-roll-skill-preset-toolbar">
                       ${buildSharedInputField({
                         id: `${ids.skillModalId}__preset_search`,
                         type: "search",
@@ -410,8 +410,9 @@ export function buildSettingsCardHtmlTemplateEvent(
                       ${buildSharedSelectField({
                         id: `${ids.skillModalId}__preset_sort`,
                         value: "recent",
-                        containerClassName: "st-roll-workbench-select",
+                        containerClassName: "stx-shared-select-width-sm",
                         selectClassName: "st-roll-skill-preset-sort",
+                        triggerClassName: "stx-shared-select-trigger-compact",
                         triggerAttributes: {
                           "data-tip": "切换预设排序方式",
                         },
@@ -497,7 +498,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                       ${buildSharedSelectField({
                         id: `${ids.skillModalId}__skill_sort`,
                         value: "manual",
-                        containerClassName: "st-roll-workbench-select",
+                        containerClassName: "stx-shared-select-workbench",
                         selectClassName: "st-roll-skill-row-sort",
                         triggerAttributes: {
                           "data-tip": "切换技能排序方式",
@@ -587,7 +588,11 @@ export function buildSettingsCardHtmlTemplateEvent(
                       </div>
                     </div>
 
-                    <div class="st-roll-skill-cols"><span>技能名称</span><span>修正值</span><span>操作</span></div>
+                    <div id="${ids.skillColsId}" class="st-roll-skill-cols">
+                      <span class="st-roll-skill-col-head" data-skill-col-key="name">技能名称<div class="st-roll-skill-col-resizer" data-skill-col-resize-key="name"></div></span>
+                      <span class="st-roll-skill-col-head" data-skill-col-key="modifier">修正值<div class="st-roll-skill-col-resizer" data-skill-col-resize-key="modifier"></div></span>
+                      <span class="st-roll-skill-col-head" data-skill-col-key="actions">操作<div class="st-roll-skill-col-resizer" data-skill-col-resize-key="actions"></div></span>
+                    </div>
                     <div id="${ids.skillRowsId}" class="st-roll-skill-rows"></div>
 
                     <div id="${ids.skillImportAreaId}" class="st-roll-skill-import" hidden>
@@ -752,7 +757,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                 ${buildSharedSelectField({
                   id: `${ids.statusModalId}__chat_source`,
                   value: "all",
-                  containerClassName: "st-roll-workbench-select",
+                  containerClassName: "stx-shared-select-fluid stx-shared-select-workbench",
                   selectClassName: "st-roll-status-chat-source",
                   triggerAttributes: {
                     "data-tip": "按聊天来源筛选。",
@@ -835,7 +840,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                 ${buildSharedSelectField({
                   id: `${ids.statusModalId}__status_scope`,
                   value: "all",
-                  containerClassName: "st-roll-workbench-select",
+                  containerClassName: "stx-shared-select-workbench-compact",
                   selectClassName: "st-roll-status-scope-filter",
                   triggerAttributes: {
                     "data-tip": "按状态作用范围筛选。",

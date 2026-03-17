@@ -169,6 +169,7 @@ export interface StaleBindingSnapshot {
 
 /** 请求作用域 —— 取消与作废判断的唯一上下文单位 */
 export interface RequestScope {
+    chatKey?: string;
     chatId?: string;
     sessionId?: string;
     pluginId?: string;
@@ -217,6 +218,10 @@ export interface LLMRequestLogRequestSnapshot {
     budget?: unknown;
     enqueue?: unknown;
     schemaSummary?: string;
+    schema?: unknown;
+    jsonMode?: boolean;
+    providerRequest?: unknown;
+    normalizeMode?: string;
     generationInput?: unknown;
     embeddingTexts?: string[];
     rerankQuery?: string;

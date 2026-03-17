@@ -163,6 +163,10 @@ export class LLMSDKImpl {
         return ctorName && ctorName !== 'Object' ? ctorName : 'schema';
     }
 
+    private isZodSchema(schema: unknown): schema is ZodType<any> {
+        return Boolean(schema) && typeof (schema as { safeParse?: unknown }).safeParse === 'function';
+    }
+
     private buildRequestLogSnapshot(
         taskKind: CapabilityKind,
         taskDescription: string,
@@ -203,9 +207,18 @@ export class LLMSDKImpl {
             budget: runArgs.budget,
             enqueue: runArgs.enqueue,
             schemaSummary: this.summarizeSchema(runArgs.schema),
+            schema: runArgs.schema,
             generationInput: runArgs.input,
             metrics: { messageCount },
         };
+    }
+
+    private resolveRequestChatKey(args: RunTaskArgs | EmbedArgs | RerankArgs): string {
+        const explicitChatKey = String(args.enqueue?.scope?.chatKey || '').trim();
+        if (explicitChatKey) {
+            return explicitChatKey;
+        }
+        return buildSdkChatKeyEvent();
     }
 
     /**
@@ -228,7 +241,7 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
-        record.chatKey = buildSdkChatKeyEvent();
+        record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot(taskKind, taskDescription, args);
         this.emitLifecycle(args, record, {
             stage: 'queued',
@@ -258,7 +271,7 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
-        record.chatKey = buildSdkChatKeyEvent();
+        record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('embedding', taskDescription, args);
         this.emitLifecycle(args, record, {
             stage: 'queued',
@@ -287,7 +300,7 @@ export class LLMSDKImpl {
             args,
         );
         record.taskDescription = taskDescription;
-        record.chatKey = buildSdkChatKeyEvent();
+        record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('rerank', taskDescription, args);
         this.emitLifecycle(args, record, {
             stage: 'queued',
@@ -444,11 +457,24 @@ export class LLMSDKImpl {
         const profile = this.profileManager.get(profileId);
         const consumerBudget = this.budgetManager.getConfig(args.consumer);
 
-        const runtimeSchema = args.taskId === 'world.template.build'
-            ? WorldTemplateSchema
-            : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
-                ? ProposalEnvelopeSchema
-                : args.schema;
+        const hasCustomSchema = Boolean(args.schema);
+        const runtimeSchema = hasCustomSchema
+            ? args.schema
+            : args.taskId === 'world.template.build'
+                ? WorldTemplateSchema
+                : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
+                    ? ProposalEnvelopeSchema
+                    : undefined;
+        const providerSchema = hasCustomSchema && !this.isZodSchema(args.schema)
+            ? args.schema
+            : undefined;
+        const normalizeMode = hasCustomSchema
+            ? 'none'
+            : args.taskId === 'world.template.build'
+                ? 'world_template'
+                : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
+                    ? 'proposal'
+                    : 'none';
 
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
@@ -466,7 +492,29 @@ export class LLMSDKImpl {
             model: resolved.model,
             maxTokens: args.budget?.maxTokens ?? consumerBudget?.maxTokens ?? profile?.maxTokens ?? 2048,
             jsonMode: !!runtimeSchema || profile?.jsonMode === true,
+            schema: providerSchema,
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
+        };
+
+        record.requestLogSnapshot = {
+            ...(record.requestLogSnapshot || {
+                taskKind: record.taskKind,
+                taskDescription: record.taskDescription,
+            }),
+            schemaSummary: this.summarizeSchema(args.schema ?? runtimeSchema),
+            schema: providerSchema ?? args.schema,
+            jsonMode: llmReq.jsonMode,
+            normalizeMode,
+            providerRequest: {
+                model: llmReq.model,
+                temperature: llmReq.temperature,
+                maxTokens: llmReq.maxTokens,
+                jsonMode: llmReq.jsonMode,
+                jsonSchema: llmReq.schema,
+                messageCount: llmReq.messages.length,
+                providerKind: this.router.getProvider(resolved.resourceId)?.kind,
+                resourceId: resolved.resourceId,
+            },
         };
 
         const maxLatencyMs = args.budget?.maxLatencyMs ?? consumerBudget?.maxLatencyMs;
@@ -483,6 +531,7 @@ export class LLMSDKImpl {
             resolved.resourceId,
             llmReq,
             runtimeSchema,
+            normalizeMode,
             args.consumer,
             args.taskId,
             maxLatencyMs,
@@ -533,6 +582,7 @@ export class LLMSDKImpl {
                 resolved.fallbackResourceId,
                 llmReq,
                 runtimeSchema,
+                normalizeMode,
                 args.consumer,
                 args.taskId,
                 maxLatencyMs,
@@ -791,7 +841,8 @@ export class LLMSDKImpl {
     private async tryProvider(
         resourceId: string,
         req: LLMRequest,
-        schema: ZodType<any> | undefined,
+        schema: unknown,
+        normalizeMode: 'proposal' | 'world_template' | 'none',
         consumer: string,
         taskId: string,
         maxLatencyMs?: number,
@@ -836,31 +887,42 @@ export class LLMSDKImpl {
                     };
                 }
 
-                const normalizedInput = taskId === 'memory.extract' || taskId === 'world.update' || taskId === 'memory.summarize'
+                const normalizedInput = normalizeMode === 'proposal'
                     ? normalizeProposalEnvelopeInput(parsed.data)
-                    : taskId === 'world.template.build'
+                    : normalizeMode === 'world_template'
                         ? normalizeWorldTemplateInput(parsed.data)
                         : parsed.data;
 
-                const validation = validateZodSchema(normalizedInput, runtimeSchema);
-                if (!validation.valid) {
-                    this.budgetManager.recordFailure(consumer);
+                if (this.isZodSchema(runtimeSchema)) {
+                    const validation = validateZodSchema(normalizedInput, runtimeSchema);
+                    if (!validation.valid) {
+                        this.budgetManager.recordFailure(consumer);
+                        return {
+                            ok: false,
+                            error: `Schema Zod 校验失败: ${validation.errors.join('; ')}`,
+                            retryable: true,
+                            reasonCode: 'schema_validation_failed',
+                            rawResponseText: response.content,
+                            parsedResponse: parsed.data,
+                            normalizedResponse: normalizedInput,
+                            validationErrors: validation.errors,
+                        };
+                    }
+
+                    this.budgetManager.recordSuccess(consumer);
                     return {
-                        ok: false,
-                        error: `Schema Zod 校验失败: ${validation.errors.join('; ')}`,
-                        retryable: true,
-                        reasonCode: 'schema_validation_failed',
+                        ok: true,
+                        data: validation.data,
                         rawResponseText: response.content,
                         parsedResponse: parsed.data,
                         normalizedResponse: normalizedInput,
-                        validationErrors: validation.errors,
                     };
                 }
 
                 this.budgetManager.recordSuccess(consumer);
                 return {
                     ok: true,
-                    data: validation.data,
+                    data: normalizedInput,
                     rawResponseText: response.content,
                     parsedResponse: parsed.data,
                     normalizedResponse: normalizedInput,

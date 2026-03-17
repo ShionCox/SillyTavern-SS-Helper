@@ -4,9 +4,11 @@ import type {
   SkillPresetEvent,
   SkillPresetStoreEvent,
 } from "../types/eventDomainEvent";
+import { readSdkPluginUiState, writeSdkPluginUiState } from "../../../SDK/settings";
 import { buildSharedBoxCheckbox } from "../../../_Components/sharedBoxCheckbox";
 import { buildSharedButton } from "../../../_Components/sharedButton";
 import { buildSharedInputField } from "../../../_Components/sharedInput";
+import { SDK_SETTINGS_NAMESPACE_Event } from "./constantsEvent";
 import { applySettingsTooltipsEvent } from "./uiCardEvent";
 import { syncThemeControlClassesByNodeEvent } from "./uiThemeEvent";
 
@@ -17,6 +19,230 @@ let SKILL_EDITOR_ROW_SORT_MODE_Event: "manual" | "name" | "modifier_desc" = "man
 const SKILL_EDITOR_SELECTED_ROW_IDS_Event = new Set<string>();
 let SKILL_PRESET_MARQUEE_RESIZE_BOUND_Event = false;
 let SKILL_PRESET_MARQUEE_RESIZE_OBSERVER_Event: ResizeObserver | null = null;
+
+type SkillEditorColKeyEvent = "name" | "modifier" | "actions";
+
+interface SkillEditorLayoutPrefsEvent {
+  columns?: Partial<Record<SkillEditorColKeyEvent, number>>;
+}
+
+const SKILL_EDITOR_LAYOUT_STORAGE_KEY_Event = "st_roll_skill_editor_layout_v1";
+const SKILL_EDITOR_COL_MIN_WIDTH_Event: Record<SkillEditorColKeyEvent, number> = {
+  name: 180,
+  modifier: 72,
+  actions: 120,
+};
+const SKILL_EDITOR_COL_VAR_MAP_Event: Record<SkillEditorColKeyEvent, string> = {
+  name: "--st-roll-skill-col-name",
+  modifier: "--st-roll-skill-col-modifier",
+  actions: "--st-roll-skill-col-actions",
+};
+
+function clampSkillEditorValueEvent(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readSkillEditorLayoutPrefsEvent(): SkillEditorLayoutPrefsEvent {
+  const parsed = readSdkPluginUiState<SkillEditorLayoutPrefsEvent | null>(
+    SDK_SETTINGS_NAMESPACE_Event,
+    SKILL_EDITOR_LAYOUT_STORAGE_KEY_Event,
+    null
+  );
+  if (!parsed || typeof parsed !== "object") return {};
+  return parsed;
+}
+
+function saveSkillEditorLayoutPrefsEvent(next: SkillEditorLayoutPrefsEvent): void {
+  writeSdkPluginUiState(
+    SDK_SETTINGS_NAMESPACE_Event,
+    SKILL_EDITOR_LAYOUT_STORAGE_KEY_Event,
+    next
+  );
+}
+
+function getSkillEditorModalPanelEvent(rowsWrapId: string): HTMLElement | null {
+  const rowsWrap = document.getElementById(rowsWrapId) as HTMLElement | null;
+  return rowsWrap?.closest(".st-roll-skill-modal-panel") as HTMLElement | null;
+}
+
+function resolveSkillEditorPanelFromElementEvent(
+  element: HTMLElement,
+  rowsWrapId: string
+): HTMLElement | null {
+  const fromElement = element.closest(".st-roll-skill-modal-panel") as HTMLElement | null;
+  if (fromElement) return fromElement;
+  return getSkillEditorModalPanelEvent(rowsWrapId);
+}
+
+function applySkillEditorLayoutPrefsEvent(rowsWrapId: string): void {
+  const panel = getSkillEditorModalPanelEvent(rowsWrapId);
+  if (!panel) return;
+  const columns = readSkillEditorLayoutPrefsEvent().columns ?? {};
+  (Object.keys(SKILL_EDITOR_COL_VAR_MAP_Event) as SkillEditorColKeyEvent[]).forEach((key) => {
+    const width = Number(columns[key]);
+    if (!Number.isFinite(width)) return;
+    const clamped = clampSkillEditorValueEvent(width, SKILL_EDITOR_COL_MIN_WIDTH_Event[key], 640);
+    panel.style.setProperty(SKILL_EDITOR_COL_VAR_MAP_Event[key], `${clamped}px`);
+  });
+}
+
+function bindSkillEditorColumnResizeEvent(colsWrap: HTMLElement, rowsWrapId: string): void {
+  if (colsWrap.dataset.skillColsResizeBound === "1") return;
+  colsWrap.dataset.skillColsResizeBound = "1";
+
+  let activePanel: HTMLElement | null = null;
+  let activeHandle: HTMLElement | null = null;
+  let activeKey: SkillEditorColKeyEvent | null = null;
+  let activePointerId: number | null = null;
+  let startX = 0;
+  let startWidth = 0;
+  let isResizing = false;
+
+  const updateWidth = (clientX: number): void => {
+    if (!isResizing || !activePanel || !activeKey) return;
+    const width = clampSkillEditorValueEvent(
+      startWidth + (clientX - startX),
+      SKILL_EDITOR_COL_MIN_WIDTH_Event[activeKey],
+      640
+    );
+    activePanel.style.setProperty(SKILL_EDITOR_COL_VAR_MAP_Event[activeKey], `${width}px`);
+  };
+
+  const persistWidth = (): void => {
+    if (!activePanel || !activeKey) return;
+    const width = Number.parseFloat(
+      getComputedStyle(activePanel).getPropertyValue(SKILL_EDITOR_COL_VAR_MAP_Event[activeKey])
+    );
+    if (!Number.isFinite(width)) return;
+    const prev = readSkillEditorLayoutPrefsEvent();
+    saveSkillEditorLayoutPrefsEvent({
+      ...prev,
+      columns: {
+        ...(prev.columns ?? {}),
+        [activeKey]: width,
+      },
+    });
+  };
+
+  const cleanup = (shouldPersist: boolean): void => {
+    if (!isResizing) return;
+    if (shouldPersist) persistWidth();
+    isResizing = false;
+    activeHandle?.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerCancel);
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+    if (activeHandle && activePointerId != null) {
+      try {
+        if (activeHandle.hasPointerCapture(activePointerId)) {
+          activeHandle.releasePointerCapture(activePointerId);
+        }
+      } catch {
+        // noop
+      }
+    }
+    activePanel = null;
+    activeHandle = null;
+    activeKey = null;
+    activePointerId = null;
+  };
+
+  const beginResize = (
+    handle: HTMLElement,
+    key: SkillEditorColKeyEvent,
+    clientX: number,
+    pointerId: number | null
+  ): void => {
+    const panel = resolveSkillEditorPanelFromElementEvent(colsWrap, rowsWrapId);
+    if (!panel) return;
+    activePanel = panel;
+    activeHandle = handle;
+    activeKey = key;
+    activePointerId = pointerId;
+    const header = colsWrap.querySelector<HTMLElement>(`[data-skill-col-key="${key}"]`);
+    startX = clientX;
+    startWidth = Math.max(
+      SKILL_EDITOR_COL_MIN_WIDTH_Event[key],
+      Math.round(header?.getBoundingClientRect().width ?? SKILL_EDITOR_COL_MIN_WIDTH_Event[key])
+    );
+    isResizing = true;
+    handle.style.touchAction = "none";
+    handle.classList.add("is-resizing");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    if (pointerId != null) {
+      try {
+        handle.setPointerCapture(pointerId);
+      } catch {
+        // noop
+      }
+    }
+  };
+
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!isResizing) return;
+    if (activePointerId != null && event.pointerId !== activePointerId) return;
+    updateWidth(event.clientX);
+  };
+
+  const onPointerUp = (event: PointerEvent): void => {
+    if (!isResizing) return;
+    if (activePointerId != null && event.pointerId !== activePointerId) return;
+    cleanup(true);
+  };
+
+  const onPointerCancel = (event: PointerEvent): void => {
+    if (!isResizing) return;
+    if (activePointerId != null && event.pointerId !== activePointerId) return;
+    cleanup(false);
+  };
+
+  const onMouseMove = (event: MouseEvent): void => {
+    if (!isResizing || activePointerId != null) return;
+    updateWidth(event.clientX);
+  };
+
+  const onMouseUp = (): void => {
+    if (!isResizing || activePointerId != null) return;
+    cleanup(true);
+  };
+
+  const findHandleAndKey = (
+    target: EventTarget | null
+  ): { handle: HTMLElement; key: SkillEditorColKeyEvent } | null => {
+    const element = target as HTMLElement | null;
+    const handle = element?.closest<HTMLElement>("[data-skill-col-resize-key]");
+    if (!handle) return null;
+    const key = String(handle.dataset.skillColResizeKey ?? "") as SkillEditorColKeyEvent;
+    if (!key || !SKILL_EDITOR_COL_VAR_MAP_Event[key]) return null;
+    return { handle, key };
+  };
+
+  colsWrap.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const matched = findHandleAndKey(event.target);
+    if (!matched) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (isResizing) cleanup(false);
+    beginResize(matched.handle, matched.key, event.clientX, event.pointerId);
+  });
+
+  colsWrap.addEventListener("mousedown", (event: MouseEvent) => {
+    if (event.button !== 0) return;
+    if (isResizing) return;
+    const matched = findHandleAndKey(event.target);
+    if (!matched) return;
+    event.preventDefault();
+    event.stopPropagation();
+    beginResize(matched.handle, matched.key, event.clientX, null);
+  });
+}
 
 function resolveSkillPresetMarqueeNodesEvent(marqueeElement: HTMLElement): {
   track: HTMLElement;
@@ -271,6 +497,7 @@ export function bindSkillPresetActionsEvent(deps: BindSkillPresetActionsDepsEven
 }
 
 export interface BindSkillRowsEditingActionsDepsEvent {
+  SETTINGS_SKILL_COLS_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
   SETTINGS_SKILL_ADD_ID_Event: string;
   skillDraftAccessorEvent: SkillDraftAccessorEvent;
@@ -310,6 +537,7 @@ export function createSkillDraftAccessorEvent(
 }
 
 export function bindSkillRowsEditingActionsEvent(deps: BindSkillRowsEditingActionsDepsEvent): void {
+  const skillColsWrap = document.getElementById(deps.SETTINGS_SKILL_COLS_ID_Event) as HTMLElement | null;
   const skillRowsWrap = document.getElementById(deps.SETTINGS_SKILL_ROWS_ID_Event) as HTMLElement | null;
   const skillAddBtn = document.getElementById(deps.SETTINGS_SKILL_ADD_ID_Event) as HTMLButtonElement | null;
   const skillModal = skillRowsWrap?.closest(".st-roll-skill-modal") as HTMLElement | null;
@@ -320,6 +548,11 @@ export function bindSkillRowsEditingActionsEvent(deps: BindSkillRowsEditingActio
   const selectVisibleBtn = skillModal?.querySelector(".st-roll-skill-select-visible") as HTMLButtonElement | null;
   const clearSelectionBtn = skillModal?.querySelector(".st-roll-skill-clear-selection") as HTMLButtonElement | null;
   const batchDeleteBtn = skillModal?.querySelector(".st-roll-skill-batch-delete") as HTMLButtonElement | null;
+
+  applySkillEditorLayoutPrefsEvent(deps.SETTINGS_SKILL_ROWS_ID_Event);
+  if (skillColsWrap) {
+    bindSkillEditorColumnResizeEvent(skillColsWrap, deps.SETTINGS_SKILL_ROWS_ID_Event);
+  }
 
   if (skillRowsWrap?.dataset.skillWorkbenchBound !== "1") {
     skillRowsWrap?.setAttribute("data-skill-workbench-bound", "1");
@@ -921,83 +1154,83 @@ export function renderSkillRowsEvent(
       <div class="st-roll-skill-row" data-row-id="${rowId}">
         <div class="st-roll-skill-name-wrap">
           ${buildSharedBoxCheckbox({
-            id: `st-roll-skill-row-select-${rowId}`,
-            containerClassName: "st-roll-skill-row-select",
-            attributes: {
-              "data-tip": "选择这条技能",
-            },
-            inputAttributes: {
-              "data-skill-select-id": rowId,
-              checked: SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")),
-            },
-          })}
+        id: `st-roll-skill-row-select-${rowId}`,
+        containerClassName: "st-roll-skill-row-select",
+        attributes: {
+          "data-tip": "选择这条技能",
+        },
+        inputAttributes: {
+          "data-skill-select-id": rowId,
+          checked: SKILL_EDITOR_SELECTED_ROW_IDS_Event.has(String(row.rowId ?? "")),
+        },
+      })}
           ${buildSharedInputField({
-            value: skillName,
-            className: "st-roll-skill-name",
-            attributes: {
-              placeholder: "例如：察觉",
-              "data-skill-row-id": rowId,
-              "data-skill-field": "name",
-              "data-tip": "技能名称。",
-            },
-          })}
+        value: skillName,
+        className: "st-roll-skill-name",
+        attributes: {
+          placeholder: "例如：察觉",
+          "data-skill-row-id": rowId,
+          "data-skill-field": "name",
+          "data-tip": "技能名称。",
+        },
+      })}
         </div>
         ${buildSharedInputField({
-          value: modifierText,
-          type: "number",
-          className: "st-roll-skill-modifier",
-          attributes: {
-            inputmode: "numeric",
-            step: 1,
-            placeholder: "例如：15",
-            "data-skill-row-id": rowId,
-            "data-skill-field": "modifier",
-            "data-tip": "技能加值（整数）。",
-          },
-        })}
+        value: modifierText,
+        type: "number",
+        className: "st-roll-skill-modifier",
+        attributes: {
+          inputmode: "numeric",
+          step: 1,
+          placeholder: "例如：15",
+          "data-skill-row-id": rowId,
+          "data-skill-field": "modifier",
+          "data-tip": "技能加值（整数）。",
+        },
+      })}
         <div class="st-roll-skill-actions-group">
           ${buildSharedButton({
-            label: "复制",
-            variant: "secondary",
-            iconClassName: "fa-solid fa-copy",
-            className: "st-roll-skill-duplicate st-roll-toolbar-icon-btn",
-            attributes: {
-              "data-skill-duplicate-id": rowId,
-              "data-tip": "复制这条技能",
-            },
-          })}
+        label: "复制",
+        variant: "secondary",
+        iconClassName: "fa-solid fa-copy",
+        className: "st-roll-skill-duplicate st-roll-toolbar-icon-btn",
+        attributes: {
+          "data-skill-duplicate-id": rowId,
+          "data-tip": "复制这条技能",
+        },
+      })}
           ${buildSharedButton({
-            label: "上移",
-            variant: "secondary",
-            iconClassName: "fa-solid fa-arrow-up",
-            className: "st-roll-skill-move-up st-roll-toolbar-icon-btn",
-            attributes: {
-              "data-skill-move-id": rowId,
-              "data-skill-move-direction": "up",
-              "data-tip": "上移这条技能",
-            },
-          })}
+        label: "上移",
+        variant: "secondary",
+        iconClassName: "fa-solid fa-arrow-up",
+        className: "st-roll-skill-move-up st-roll-toolbar-icon-btn",
+        attributes: {
+          "data-skill-move-id": rowId,
+          "data-skill-move-direction": "up",
+          "data-tip": "上移这条技能",
+        },
+      })}
           ${buildSharedButton({
-            label: "下移",
-            variant: "secondary",
-            iconClassName: "fa-solid fa-arrow-down",
-            className: "st-roll-skill-move-down st-roll-toolbar-icon-btn",
-            attributes: {
-              "data-skill-move-id": rowId,
-              "data-skill-move-direction": "down",
-              "data-tip": "下移这条技能",
-            },
-          })}
+        label: "下移",
+        variant: "secondary",
+        iconClassName: "fa-solid fa-arrow-down",
+        className: "st-roll-skill-move-down st-roll-toolbar-icon-btn",
+        attributes: {
+          "data-skill-move-id": rowId,
+          "data-skill-move-direction": "down",
+          "data-tip": "下移这条技能",
+        },
+      })}
           ${buildSharedButton({
-            label: "删除",
-            variant: "danger",
-            iconClassName: "fa-solid fa-trash",
-            className: "st-roll-skill-remove st-roll-toolbar-icon-btn",
-            attributes: {
-              "data-skill-remove-id": rowId,
-              "data-tip": "删除这条技能",
-            },
-          })}
+        label: "删除",
+        variant: "danger",
+        iconClassName: "fa-solid fa-trash",
+        className: "st-roll-skill-remove st-roll-toolbar-icon-btn",
+        attributes: {
+          "data-skill-remove-id": rowId,
+          "data-tip": "删除这条技能",
+        },
+      })}
         </div>
       </div>
     `;

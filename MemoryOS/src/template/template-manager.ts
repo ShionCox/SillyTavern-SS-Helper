@@ -1,6 +1,7 @@
 import { db, type DBTemplate, type DBTemplateBinding } from '../db/db';
 import type { WorldTemplate, WorldInfoEntry, WorldContextBundle } from './types';
 import { Logger } from '../../../SDK/logger';
+import { listTavernActiveWorldbooksEvent, loadTavernWorldbookEntriesEvent } from '../../../SDK/tavern';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateBuilder } from './template-builder';
@@ -77,15 +78,10 @@ export class TemplateManager {
      */
     public async syncWorldInfoState(): Promise<void> {
         try {
-            const globalST = window as any;
-            const stSelectedWorldInfo = globalST?.selected_world_info;
-            if (!Array.isArray(stSelectedWorldInfo)) {
+            const normalizedNames = listTavernActiveWorldbooksEvent(64);
+            if (normalizedNames.length <= 0) {
                 return;
             }
-
-            const normalizedNames = [...stSelectedWorldInfo]
-                .map((name: unknown): string => String(name ?? '').trim())
-                .filter(Boolean);
 
             const stNamesStr = JSON.stringify([...normalizedNames].sort());
             const myNamesStr = JSON.stringify([...this.activeWorldNames].sort());
@@ -296,37 +292,13 @@ export class TemplateManager {
      * @returns 规范化后的世界书条目列表
      */
     private async collectWorldInfoEntries(): Promise<WorldInfoEntry[]> {
-        const globalST = window as any;
-        const entries: WorldInfoEntry[] = [];
-
-        for (const bookName of this.activeWorldNames) {
-            try {
-                if (typeof globalST?.loadWorldInfo !== 'function') {
-                    continue;
-                }
-                const bookData = await globalST.loadWorldInfo(bookName);
-                const rawEntries = Object.values(bookData?.entries || {}) as Array<Record<string, any>>;
-                for (const item of rawEntries) {
-                    const keywords = Array.isArray(item.key)
-                        ? item.key.map((key: unknown): string => String(key ?? '').trim()).filter(Boolean)
-                        : [];
-                    const content = String(item.content ?? '').trim();
-                    if (!content) {
-                        continue;
-                    }
-                    entries.push({
-                        book: String(bookName),
-                        entry: String(item.comment || keywords[0] || 'untitled'),
-                        keywords,
-                        content,
-                    });
-                }
-            } catch (error) {
-                logger.warn(`尝试解包世界书 ${bookName} 失败`, error);
-            }
-        }
-
-        return entries;
+        const rows = await loadTavernWorldbookEntriesEvent(this.activeWorldNames);
+        return rows.map((item): WorldInfoEntry => ({
+            book: item.book,
+            entry: item.entry,
+            keywords: item.keywords,
+            content: item.content,
+        }));
     }
 
     /**

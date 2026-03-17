@@ -898,10 +898,11 @@ async function runTavernDirectChatCompletion(
   }
 
   try {
+    const requestBody = buildChatCompletionRequestBody(messages, options);
     const response = await fetch("/api/backends/chat-completions/generate", {
       method: "POST",
       headers: getRequestHeaders(),
-      body: JSON.stringify(buildChatCompletionRequestBody(messages, options)),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {

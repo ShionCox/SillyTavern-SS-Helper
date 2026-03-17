@@ -1,4 +1,5 @@
 import type { EventEnvelope } from '../../../SDK/stx';
+import { loadTavernWorldbookEntriesEvent } from '../../../SDK/tavern';
 import type { LorebookGateDecision, LorebookGateMode, LogicalChatView } from '../types';
 
 export interface LorebookEntryCandidate {
@@ -189,44 +190,13 @@ export function evaluateLorebookRelevance(input: LorebookGateInput): LorebookGat
 }
 
 export async function loadActiveWorldInfoEntriesFromHost(): Promise<LorebookEntryCandidate[]> {
-    const globalRef = globalThis as Record<string, unknown>;
-    const selectedRaw = (globalRef.selected_world_info ?? (globalRef as any)?.SillyTavern?.selected_world_info) as unknown;
-    const selectedNames = Array.isArray(selectedRaw)
-        ? selectedRaw.map((name: unknown): string => normalizeText(name)).filter(Boolean)
-        : [];
-    const loader = (globalRef.loadWorldInfo ?? (globalRef as any)?.SillyTavern?.loadWorldInfo) as
-        | ((bookName: string) => Promise<unknown>)
-        | undefined;
-    if (selectedNames.length === 0 || typeof loader !== 'function') {
-        return [];
-    }
-
-    const entries: LorebookEntryCandidate[] = [];
-    for (const bookName of selectedNames) {
-        try {
-            const payload = await loader(bookName);
-            const rawEntries = Object.values((payload as { entries?: Record<string, unknown> } | null)?.entries ?? {});
-            for (const rawEntry of rawEntries) {
-                const source = rawEntry as Record<string, unknown>;
-                const content = normalizeText(source.content);
-                if (!content) {
-                    continue;
-                }
-                const keywords = Array.isArray(source.key)
-                    ? source.key.map((item: unknown): string => normalizeText(item)).filter(Boolean)
-                    : [];
-                entries.push({
-                    book: bookName,
-                    entry: normalizeText(source.comment ?? keywords[0] ?? 'untitled'),
-                    keywords,
-                    content,
-                });
-            }
-        } catch {
-            // 忽略单本读取失败，避免影响其他世界书
-        }
-    }
-    return entries;
+    const entries = await loadTavernWorldbookEntriesEvent();
+    return entries.map((entry): LorebookEntryCandidate => ({
+        book: entry.book,
+        entry: entry.entry,
+        keywords: entry.keywords,
+        content: entry.content,
+    }));
 }
 
 export function buildLorebookSnippet(

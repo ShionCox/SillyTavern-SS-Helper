@@ -34,7 +34,7 @@ export function getSillyTavernContextEvent(): SdkTavernContextEvent | null {
  * @param context 宿主上下文
  * @returns 当前角色与索引
  */
-function resolveCurrentCharacterEvent(
+export function resolveCurrentCharacterEvent(
   context: SdkTavernContextEvent | null
 ): ResolvedCurrentCharacterEvent {
   const characters = Array.isArray(context?.characters) ? context.characters : [];
@@ -79,7 +79,7 @@ function resolveCurrentCharacterEvent(
  * @param currentCharacter 当前角色
  * @returns 当前聊天 ID
  */
-function resolveCurrentChatIdEvent(
+export function resolveCurrentChatIdEvent(
   context: SdkTavernContextEvent | null,
   currentCharacter: SdkTavernCharacterEvent | null
 ): string {

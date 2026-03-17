@@ -114,6 +114,7 @@ import {
     extractTavernPromptMessagesEvent,
     findFirstTavernPromptSystemIndexEvent,
     findLastTavernPromptSystemIndexEvent,
+    getCurrentTavernCharacterSnapshotEvent,
     getTavernMessageTextEvent,
     getTavernPromptMessageTextEvent,
     insertTavernPromptSystemMessageEvent,
@@ -125,6 +126,7 @@ import { PluginRegistry } from './registry/registry';
 import { filterRecordText } from './core/record-filter';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
+import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
 import type { PreGenerationGateDecision, PromptAnchorMode } from './types';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
@@ -446,6 +448,7 @@ class MemoryOS {
         this.registerSelfManifest();
         this.setupPluginBusEndpoints();
         this.initLlmBridgeOnReady();
+        bindMemoryChatToolbarActions();
         this.bindHostEvents();
     }
     // 功能：在运行中手动刷新当前聊天与 MemorySDK 绑定。
@@ -803,6 +806,7 @@ class MemoryOS {
             setAiModeEnabled(enabled);
             return enabled;
         };
+        setAiModeEnabled(readSettings().aiMode === true);
         const resolveRecordableChatBinding = (ctx: any): {
             valid: boolean;
             chatId: string;
@@ -812,14 +816,9 @@ class MemoryOS {
         } => {
             const rawChatId = String(ctx?.chatId ?? '').trim();
             const rawGroupId = String(ctx?.groupId ?? '').trim();
-            const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
-            const characterIndex = Number(ctx?.characterId);
+            const currentCharacter = getCurrentTavernCharacterSnapshotEvent(ctx);
             const hasGroupBinding = rawGroupId.length > 0;
-            const hasCharacterBinding =
-                Number.isInteger(characterIndex) &&
-                characterIndex >= 0 &&
-                characterIndex < characters.length &&
-                !!characters[characterIndex];
+            const hasCharacterBinding = Boolean(currentCharacter);
             const hasChatId = rawChatId.length > 0 && rawChatId !== '0' && rawChatId !== '(未知)' && rawChatId !== '(unknown)';
             if (!hasChatId) {
                 return {
@@ -841,7 +840,7 @@ class MemoryOS {
             }
             const characterId = hasGroupBinding
                 ? ''
-                : String(characters[characterIndex]?.avatar || characters[characterIndex]?.name || characterIndex).trim();
+                : String(currentCharacter?.avatarName || currentCharacter?.roleId || currentCharacter?.index || '').trim();
             if (!hasGroupBinding && !characterId) {
                 return {
                     valid: false,
@@ -1363,6 +1362,7 @@ class MemoryOS {
         const onChangeConfig = async (force: boolean = false) => {
             const ctx = getCtx();
             currentChatKey = '';
+            removeMemoryChatToolbar();
 
             // 无论是否启用，切换时都清空消息去重 Set
             processedMessageKeys.clear();
@@ -1473,13 +1473,7 @@ class MemoryOS {
 
                 (window as any).STX.memory = sdkInstance;
                 currentChatKey = chatKey;
-                const bindingFingerprint = `${binding.groupId || '-'}|${binding.characterId || '-'}`;
-                if (typeof (sdkInstance as any)?.chatState?.setCharacterBindingFingerprint === 'function') {
-                    await (sdkInstance as any).chatState.setCharacterBindingFingerprint(bindingFingerprint);
-                }
-                if (typeof (sdkInstance as any)?.chatState?.bootstrapSemanticSeed === 'function') {
-                    await (sdkInstance as any).chatState.bootstrapSemanticSeed();
-                }
+                ensureMemoryChatToolbar();
                 logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
                 toast.success(`数据库已就绪`);
 

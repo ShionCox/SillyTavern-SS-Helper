@@ -9,6 +9,7 @@ import type { CapabilityKind, LLMCapability, RoutePreviewSnapshot } from '../../
 // ── 任务标识 ──
 
 export type MemoryAiTaskId =
+    | 'memory.coldstart.summarize'
     | 'memory.summarize'
     | 'memory.extract'
     | 'world.template.build'
@@ -72,6 +73,7 @@ export interface CapabilityStatus {
 export type LlmHubDiagnosisLevel =
     | 'not_detected'
     | 'mounted_not_registered'
+    | 'ai_mode_disabled'
     | 'online_partial_capabilities'
     | 'fully_operational';
 
@@ -90,7 +92,7 @@ export interface MemoryAiHealthSnapshot {
     /** 当前可用能力列表 */
     capabilities: CapabilityStatus[];
 
-    /** AI 模式生效状态 */
+    /** 用户 AI 模式开关状态 */
     aiModeEnabled: boolean;
 
     /** 综合诊断级别 */

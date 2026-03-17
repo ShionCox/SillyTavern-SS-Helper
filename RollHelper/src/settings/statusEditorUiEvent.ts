@@ -56,8 +56,9 @@ function buildStatusScopeSelectEvent(rowId: string, scope: StatusScopeEvent): st
   return buildSharedSelectField({
     id: "st-roll-status-scope-" + rowId,
     value: scope === "all" ? "all" : "skills",
-    containerClassName: "st-roll-status-scope-select",
+    containerClassName: "stx-shared-select-fluid",
     selectClassName: "st-roll-status-scope",
+    triggerClassName: "stx-shared-select-trigger-36",
     selectAttributes: {
       "data-status-row-id": rowId,
       "data-status-field": "scope",
