@@ -8,6 +8,7 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import { readPluginSignal, readSdkPluginChatState } from '../../../SDK/db';
 import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import { escapeHtml, formatSourceKindLabel, formatSourceRefMeta, formatTimeLabel, normalizeLookup, parseLooseValue } from './editorShared';
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
@@ -158,20 +159,6 @@ function normalizeSenderLabel(senderType: string): '助手' | '用户' | '系统
 }
 
 /**
- * 功能：对文本进行 HTML 转义。
- * @param value 原始文本
- * @returns 转义后的文本
- */
-function escapeHtml(value: string): string {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-/**
  * 功能：把任意值转换为适合展示的字符串。
  * @param value 任意值
  * @returns 展示字符串
@@ -191,46 +178,6 @@ function stringifyDisplayValue(value: unknown): string {
     } catch {
         return String(value);
     }
-}
-
-/**
- * 功能：尝试把输入文本解析为 JSON、数字或布尔值。
- * @param value 输入文本
- * @returns 解析后的值
- */
-function parseLooseValue(value: string): unknown {
-    const trimmed = String(value ?? '').trim();
-    if (!trimmed) {
-        return '';
-    }
-    if (trimmed === 'true') {
-        return true;
-    }
-    if (trimmed === 'false') {
-        return false;
-    }
-    if (trimmed === 'null') {
-        return null;
-    }
-    if (!Number.isNaN(Number(trimmed))) {
-        return Number(trimmed);
-    }
-    if (
-        (trimmed.startsWith('{') && trimmed.endsWith('}'))
-        || (trimmed.startsWith('[') && trimmed.endsWith(']'))
-        || (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    ) {
-        try {
-            return JSON.parse(trimmed);
-        } catch {
-            return trimmed;
-        }
-    }
-    return trimmed;
-}
-
-function normalizeLookup(value: unknown): string {
-    return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function formatLogicStatusLabel(status: LogicTableStatus): string {
@@ -267,42 +214,6 @@ function formatHealthSeverityLabel(severity: 'critical' | 'warning' | 'info'): s
         return '注意';
     }
     return '提示';
-}
-
-function formatSourceKindLabel(kind: SourceRef['kind']): string {
-    if (kind === 'fact') {
-        return '事实层';
-    }
-    if (kind === 'world_state') {
-        return '世界状态';
-    }
-    if (kind === 'semantic_seed') {
-        return '初始设定';
-    }
-    if (kind === 'group_memory') {
-        return '群聊记忆';
-    }
-    if (kind === 'summary') {
-        return '摘要';
-    }
-    if (kind === 'manual') {
-        return '手动整理';
-    }
-    return '系统推导';
-}
-
-function formatSourceRefMeta(sourceRef: SourceRef): string {
-    const parts: string[] = [formatSourceKindLabel(sourceRef.kind), String(sourceRef.label ?? '').trim() || '未命名来源'];
-    if (sourceRef.recordId) {
-        parts.push(`记录 ${sourceRef.recordId}`);
-    }
-    if (sourceRef.path) {
-        parts.push(`路径 ${sourceRef.path}`);
-    }
-    if (sourceRef.ts) {
-        parts.push(`时间 ${formatTimeLabel(sourceRef.ts)}`);
-    }
-    return parts.join(' · ');
 }
 
 function openLogicSourceDetailsDialog(title: string, summary: string, sourceRefs: SourceRef[]): void {
@@ -474,19 +385,6 @@ function parsePendingKey(pendingKey: string): { tableName: RawTableName | null; 
         tableName: pendingKey.slice(0, separatorIndex) as RawTableName,
         id: pendingKey.slice(separatorIndex + 2),
     };
-}
-
-/**
- * 功能：格式化时间展示。
- * @param value 时间戳
- * @returns 展示文本
- */
-function formatTimeLabel(value: unknown): string {
-    const timestamp = Number(value ?? 0);
-    if (!timestamp) {
-        return '暂无';
-    }
-    return new Date(timestamp).toLocaleString();
 }
 
 /**

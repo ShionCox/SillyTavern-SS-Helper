@@ -8,8 +8,8 @@ import { getHealthSnapshot, onHealthChange, refreshHealthSnapshot, setAiModeEnab
 import { runAiSelfTests, runSingleSelfTest } from '../llm/ai-self-test';
 import type { AiSelfTestResult } from '../llm/ai-self-test';
 import type { MemoryAiHealthSnapshot, MemoryAiTaskId } from '../llm/ai-health-types';
-import type { DerivedRowCandidate, EditorHealthSnapshot, LogicRowView, LogicTableSummary, LogicTableViewModel, MemoryCandidate, MemoryCandidateBufferSnapshot, MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode, TemplateTableDef } from '../../../SDK/stx';
-import { openRecordEditor } from './recordEditor';
+import type { EditorHealthSnapshot, LogicTableSummary, MemoryCandidate, MemoryCandidateBufferSnapshot, MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode } from '../../../SDK/stx';
+import { openRecordEditor } from './recordEditorNext';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
@@ -25,6 +25,7 @@ import {
 import { ensureChatStrategyPanel, initializeChatStrategyPanel } from './chatStrategyPanel';
 import { renderSettingsExperience } from './settingsCardExperience';
 import { normalizeMemoryTaskPresentationSettings } from '../llm/task-presentation-settings';
+import { escapeHtml, formatSourceRefMeta, normalizeSourceRefRecord } from './editorShared';
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
@@ -191,9 +192,6 @@ const IDS: MemoryOSSettingsIds = {
     wiWritebackBtnId: `${NAMESPACE}-wi-writeback`,
     wiWriteSummaryBtnId: `${NAMESPACE}-wi-write-summary`,
     // 逻辑表可编辑
-    logicTableEntitySelectId: `${NAMESPACE}-logic-table-entity`,
-    logicTableRefreshBtnId: `${NAMESPACE}-logic-table-refresh`,
-    logicTableContainerId: `${NAMESPACE}-logic-table-container`,
     recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
     // AI 诊断面板
     aiDiagOverviewId: `${NAMESPACE}-ai-diag-overview`,
@@ -269,65 +267,6 @@ function waitForElement(selector: string, timeout = 5000): Promise<Element> {
             reject(new Error(`Timeout waiting for ${selector}`));
         }, timeout);
     });
-}
-
-/**
- * 功能：转义 HTML 文本，避免将测试结果中的原始内容直接注入页面。
- * 参数：
- *   input：待转义的原始文本。
- * 返回：
- *   string：可安全插入 HTML 的文本。
- */
-function escapeHtml(input: string): string {
-    return String(input ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-function normalizeLookup(value: unknown): string {
-    return String(value ?? '').trim().toLowerCase();
-}
-
-function formatTimestampLabel(value: unknown): string {
-    const timestamp = Number(value ?? 0);
-    if (!Number.isFinite(timestamp) || timestamp <= 0) {
-        return '更新时间未知';
-    }
-    return new Date(timestamp).toLocaleString();
-}
-
-function parseLooseValue(value: string): unknown {
-    const trimmed = String(value ?? '').trim();
-    if (!trimmed) {
-        return '';
-    }
-    if (trimmed === 'true') {
-        return true;
-    }
-    if (trimmed === 'false') {
-        return false;
-    }
-    if (trimmed === 'null') {
-        return null;
-    }
-    if (!Number.isNaN(Number(trimmed))) {
-        return Number(trimmed);
-    }
-    if (
-        (trimmed.startsWith('{') && trimmed.endsWith('}'))
-        || (trimmed.startsWith('[') && trimmed.endsWith(']'))
-        || (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    ) {
-        try {
-            return JSON.parse(trimmed);
-        } catch {
-            return trimmed;
-        }
-    }
-    return trimmed;
 }
 
 function readCharacterRoleMarks(chatKey: string): Record<string, string> {
@@ -550,13 +489,6 @@ function bindUiEvents() {
      */
     const refreshExperiencePanels = async (): Promise<void> => {
         await renderSettingsExperience(IDS);
-        const relationPanel = document.getElementById(IDS.panelRelationId);
-        if (!relationPanel?.hasAttribute('hidden')) {
-            await populateEntityTypes();
-            if (logicTableSelect?.value) {
-                await renderLogicTable(logicTableSelect.value);
-            }
-        }
     };
 
     const isDrawerVisible = (element: HTMLElement | null): boolean => {
@@ -659,16 +591,14 @@ function bindUiEvents() {
             if (Array.isArray(parsed.sourceRefs) && parsed.sourceRefs.length > 0) {
                 lines.push('来源记录:');
                 parsed.sourceRefs.slice(0, 6).forEach((ref, index): void => {
-                    const label = typeof ref.label === 'string' && ref.label ? ref.label : '未命名来源';
-                    const kind = typeof ref.kind === 'string' && ref.kind ? ref.kind : 'unknown';
-                    const recordId = typeof ref.recordId === 'string' && ref.recordId ? ref.recordId : '';
-                    const path = typeof ref.path === 'string' && ref.path ? ref.path : '';
-                    const note = typeof ref.note === 'string' && ref.note ? ref.note : '';
-                    const ts = typeof ref.ts === 'number' && Number.isFinite(ref.ts) && ref.ts > 0
-                        ? new Date(ref.ts).toLocaleString()
-                        : '';
-                    const parts = [label, kind, path, recordId, note, ts].filter(Boolean);
-                    lines.push(`${index + 1}. ${parts.join(' / ')}`);
+                    const normalizedRef = normalizeSourceRefRecord(ref);
+                    if (!normalizedRef) {
+                        return;
+                    }
+                    lines.push(`${index + 1}. ${formatSourceRefMeta(normalizedRef)}`);
+                    if (normalizedRef.note) {
+                        lines.push(`   说明: ${normalizedRef.note}`);
+                    }
                 });
             }
             showEditorDetailDialog('来源详情', lines.join('\n') || '当前条目没有可用的来源详情。');
@@ -729,54 +659,6 @@ function bindUiEvents() {
         const health = await memory.editor.getEditorHealth() as EditorHealthSnapshot;
         openRecordEditor();
         toast.info(`已打开记录编辑器，可进一步查看 alias ${health.dataLayers.aliasCount} / redirect ${health.dataLayers.redirectCount} / tombstone ${health.dataLayers.tombstoneCount}。`);
-    };
-
-    const resolveLogicRepairTargetTable = async (mode: 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates'): Promise<string | null> => {
-        const memory = (window as any).STX?.memory;
-        const currentTableKey = String(logicTableSelect?.value ?? '').trim();
-        if (currentTableKey) {
-            return currentTableKey;
-        }
-        if (!memory?.logicTable?.listLogicTables) {
-            return null;
-        }
-        const summaries = await memory.logicTable.listLogicTables() as LogicTableSummary[];
-        if (!Array.isArray(summaries) || summaries.length === 0) {
-            return null;
-        }
-        const preferredStatuses = mode === 'rebuild_candidates'
-            ? ['sparse', 'hidden', 'needs_attention', 'healthy']
-            : ['needs_attention', 'hidden', 'sparse', 'healthy'];
-        const ordered = summaries.slice().sort((left: LogicTableSummary, right: LogicTableSummary): number => {
-            const leftPriority = preferredStatuses.indexOf(left.status);
-            const rightPriority = preferredStatuses.indexOf(right.status);
-            if (leftPriority !== rightPriority) {
-                return leftPriority - rightPriority;
-            }
-            const leftWeight = left.redirectedRowCount + left.tombstonedRowCount + left.derivedRowCount;
-            const rightWeight = right.redirectedRowCount + right.tombstonedRowCount + right.derivedRowCount;
-            return rightWeight - leftWeight;
-        });
-        return ordered[0]?.tableKey ?? null;
-    };
-
-    const executeGlobalLogicRepair = async (mode: 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates'): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.logicTable?.repairTable) {
-            alert('当前版本未提供逻辑表修复能力。');
-            return;
-        }
-        const tableKey = await resolveLogicRepairTargetTable(mode);
-        if (!tableKey) {
-            alert('当前没有可修复的逻辑表。');
-            return;
-        }
-        await memory.logicTable.repairTable(tableKey, mode);
-        if (logicTableSelect) {
-            logicTableSelect.value = tableKey;
-        }
-        toast.success(`诊断修复动作已执行：${mode} / ${tableKey}`);
-        await refreshExperiencePanels();
     };
 
     /**
@@ -850,16 +732,8 @@ function bindUiEvents() {
                 await showHiddenRowsEntry();
                 return;
             }
-            if (action === 'repair-normalize-aliases') {
-                await executeGlobalLogicRepair('normalize_aliases');
-                return;
-            }
-            if (action === 'repair-compact-tombstones') {
-                await executeGlobalLogicRepair('compact_tombstones');
-                return;
-            }
-            if (action === 'repair-rebuild-candidates') {
-                await executeGlobalLogicRepair('rebuild_candidates');
+            if (action === 'open-record-editor') {
+                openRecordEditor();
                 return;
             }
             if (action === 'open-diagnostics') {
@@ -1094,41 +968,6 @@ function bindUiEvents() {
                 String(characterRoleTarget.dataset.stxCharacterRole ?? ''),
             );
             void refreshExperiencePanels();
-            return;
-        }
-        const logicTableTarget = eventTarget?.closest<HTMLElement>('[data-stx-logic-table-select]') ?? null;
-        if (logicTableTarget) {
-            event.preventDefault();
-            const tableKey = String(logicTableTarget.dataset.stxLogicTableSelect ?? '').trim();
-            if (logicTableSelect && tableKey) {
-                logicTableSelect.value = tableKey;
-                currentSelectedLogicRowId = '';
-                void renderLogicTable(tableKey);
-            }
-            return;
-        }
-        const logicRowSelectTarget = eventTarget?.closest<HTMLElement>('[data-stx-logic-row-select]') ?? null;
-        if (logicRowSelectTarget) {
-            event.preventDefault();
-            currentSelectedLogicRowId = String(logicRowSelectTarget.dataset.stxLogicRowSelect ?? '').trim();
-            renderLogicDetailDrawer(currentSelectedLogicRowId || undefined);
-            return;
-        }
-        const logicRepairTarget = eventTarget?.closest<HTMLElement>('[data-stx-logic-table-repair]') ?? null;
-        if (logicRepairTarget) {
-            event.preventDefault();
-            const mode = String(logicRepairTarget.dataset.stxLogicTableRepair ?? '').trim() as 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates';
-            void executeLogicTableRepair(mode);
-            return;
-        }
-        const logicActionTarget = eventTarget?.closest<HTMLElement>('[data-stx-logic-row-action]') ?? null;
-        if (logicActionTarget) {
-            event.preventDefault();
-            void executeLogicRowAction(
-                String(logicActionTarget.dataset.stxLogicRowAction ?? '').trim(),
-                String(logicActionTarget.dataset.stxRowId ?? '').trim(),
-                String(logicActionTarget.dataset.stxCandidateId ?? '').trim() || undefined,
-            );
             return;
         }
         const actionTarget = eventTarget?.closest<HTMLElement>('[data-stx-editor-action]') ?? null;
@@ -2620,7 +2459,6 @@ function bindUiEvents() {
 
     const refreshTemplatePanelState = async (): Promise<void> => {
         await refreshTemplatesUI();
-        await populateEntityTypes();
     };
 
     // 点击世界模板 Tab 时自动刺新
@@ -2878,7 +2716,6 @@ function bindUiEvents() {
             const chatKey = memory.getChatKey?.() ?? '(未知)';
             if (!confirm(`确定要清空 [${chatKey}] 的所有记忆数据吗？\n此操作不可撤销！`)) return;
             try {
-                // 通过 IndexedDB 的 db 单例直接按 chatKey 批量删除
                 const { clearMemoryChatData } = await import('../db/db');
                 await clearMemoryChatData(chatKey);
                 alert(`已清空 [${chatKey}] 的所有记忆数据。`);
@@ -2929,7 +2766,6 @@ function bindUiEvents() {
                     </span>
                     ${isSnapshot ? `<button class="stx-ui-audit-rollback" data-snapshot-id="${r.auditId}" data-tip="回滚到这个快照。">回滚</button>` : ''}
                 `;
-                // 绑定回滚按钮
                 if (isSnapshot) {
                     const rollbackBtn = row.querySelector<HTMLButtonElement>(`[data-snapshot-id="${r.auditId}"]`);
                     rollbackBtn?.addEventListener('click', async () => {
@@ -2981,7 +2817,6 @@ function bindUiEvents() {
         }
     };
 
-    // 创建快照按钮
     const auditSnapshotBtn = document.getElementById(IDS.auditCreateSnapshotBtnId);
     if (auditSnapshotBtn) {
         auditSnapshotBtn.addEventListener('click', async () => {
@@ -2989,13 +2824,11 @@ function bindUiEvents() {
         });
     }
 
-    // 刷新审计记录按钮
     const auditRefreshBtn = document.getElementById(IDS.auditRefreshBtnId);
     if (auditRefreshBtn) {
         auditRefreshBtn.addEventListener('click', renderAuditList);
     }
 
-    // 切换到审计 Tab 时自动刷新
     const auditTabBtn = document.getElementById(IDS.tabDbId);
     if (auditTabBtn) {
         auditTabBtn.addEventListener('click', () => {
@@ -3042,456 +2875,5 @@ function bindUiEvents() {
 
     bindWriteback(IDS.wiWritebackBtnId, 'all');
     bindWriteback(IDS.wiWriteSummaryBtnId, 'summaries');
-
-    // ===== 逻辑表可编辑 =====
-
-    const logicTableSelect = document.getElementById(IDS.logicTableEntitySelectId) as HTMLSelectElement;
-    const logicTableContainer = document.getElementById(IDS.logicTableContainerId);
-    const relationLanesContainer = document.getElementById(IDS.relationLanesId);
-    const relationStateContainer = document.getElementById(IDS.relationStateId);
-    let currentLogicTableSummaries: LogicTableSummary[] = [];
-    let currentLogicTableView: LogicTableViewModel | null = null;
-    let currentBackfillCandidates: DerivedRowCandidate[] = [];
-    let currentSelectedLogicRowId = '';
-
-    const getDisplayTables = async (): Promise<TemplateTableDef[]> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.template?.listTables) {
-            return [];
-        }
-        const tables = await memory.template.listTables();
-        return Array.isArray(tables) ? tables : [];
-    };
-
-    const getLogicDetailControlValue = (selector: string): string => {
-        const element = relationStateContainer?.querySelector(selector) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
-        return String(element?.value ?? '').trim();
-    };
-
-        const formatLogicStatusLabel = (status: LogicTableSummary['status'] | LogicTableViewModel['status']): string => {
-                if (status === 'healthy') return '健康';
-                if (status === 'sparse') return '稀疏';
-                if (status === 'hidden') return '隐藏';
-                return '需处理';
-        };
-
-        const formatLogicRowKindLabel = (kind: LogicRowView['rowKind']): string => {
-                if (kind === 'materialized') return '事实行';
-                if (kind === 'derived') return '候选行';
-                if (kind === 'redirected') return '已重定向';
-                return '已删除';
-        };
-
-        const getCurrentCandidateByRowId = (rowId: string): DerivedRowCandidate | null => {
-                return currentBackfillCandidates.find((candidate: DerivedRowCandidate): boolean => normalizeLookup(candidate.rowId) === normalizeLookup(rowId)) ?? null;
-        };
-
-        const renderLogicTableSummaries = (selectedTableKey: string): void => {
-                if (!relationLanesContainer) {
-            return;
-        }
-                if (!currentLogicTableSummaries.length) {
-                        relationLanesContainer.innerHTML = '<div class="stx-ui-empty-hint">当前模板下没有可展示的逻辑表。</div>';
-            return;
-        }
-                relationLanesContainer.innerHTML = `
-            <div class="stx-ui-memory-list">
-                            ${currentLogicTableSummaries.map((summary: LogicTableSummary): string => `
-                                <article class="stx-ui-memory-entry${summary.tableKey === selectedTableKey ? ' is-accent' : ' is-soft'}">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>${escapeHtml(summary.title)}</strong>
-                                        <span>${escapeHtml(formatLogicStatusLabel(summary.status))}</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">事实 ${summary.materializedRowCount} / 候选 ${summary.derivedRowCount} / redirect ${summary.redirectedRowCount} / tombstone ${summary.tombstonedRowCount}</div>
-                                    <div class="stx-ui-actions">
-                                        <button type="button" class="stx-ui-btn secondary" data-stx-logic-table-select="${escapeHtml(summary.tableKey)}">切换到这张表</button>
-                                    </div>
-                                </article>
-                            `).join('')}
-                        </div>
-        `;
-    };
-
-        const renderLogicDetailDrawer = (rowId?: string): void => {
-                if (!relationStateContainer) {
-                        return;
-                }
-                if (!currentLogicTableView) {
-                        relationStateContainer.innerHTML = '<div class="stx-ui-empty-hint">请选择逻辑表后查看详情。</div>';
-                        return;
-                }
-                if (!rowId) {
-                        relationStateContainer.innerHTML = `
-                                <div class="stx-ui-memory-list">
-                                    <article class="stx-ui-memory-entry is-accent">
-                                        <div class="stx-ui-memory-entry-head">
-                                            <strong>${escapeHtml(currentLogicTableView.title)}</strong>
-                                            <span>${escapeHtml(formatLogicStatusLabel(currentLogicTableView.status))}</span>
-                                        </div>
-                                        <div class="stx-ui-memory-entry-body">facts ${currentLogicTableView.sourceCoverage.factRows} / derived ${currentLogicTableView.sourceCoverage.derivedRows} / alias ${currentLogicTableView.sourceCoverage.aliasCount}</div>
-                                    </article>
-                                    ${currentLogicTableView.warnings.map((warning: string): string => `
-                                        <article class="stx-ui-memory-entry is-warning">
-                                            <div class="stx-ui-memory-entry-head">
-                                                <strong>表级提示</strong>
-                                                <span>诊断</span>
-                                            </div>
-                                            <div class="stx-ui-memory-entry-body">${escapeHtml(warning)}</div>
-                                        </article>
-                                    `).join('') || '<div class="stx-ui-empty-hint">当前表没有额外告警。</div>'}
-                                </div>
-                                <div class="stx-ui-actions" style="margin-top: 8px;">
-                                    <button type="button" class="stx-ui-btn secondary" data-stx-logic-table-repair="normalize_aliases">规范 alias</button>
-                                    <button type="button" class="stx-ui-btn secondary" data-stx-logic-table-repair="compact_tombstones">整理 tombstone</button>
-                                    <button type="button" class="stx-ui-btn secondary" data-stx-logic-table-repair="rebuild_candidates">重建候选</button>
-                                </div>
-                        `;
-                        return;
-                }
-                const row = currentLogicTableView.rows.find((item: LogicRowView): boolean => normalizeLookup(item.rowId) === normalizeLookup(rowId)) ?? null;
-                if (!row) {
-                        relationStateContainer.innerHTML = '<div class="stx-ui-empty-hint">当前行详情不可用。</div>';
-                        return;
-                }
-                const candidate = row.rowKind === 'derived' ? getCurrentCandidateByRowId(row.rowId) : null;
-                const editableColumns = currentLogicTableView.columns.filter((column) => column.editable);
-                const fieldMarkup = currentLogicTableView.columns.map((column) => {
-                        const cell = row.values[column.key];
-                        const sourceKinds = Array.isArray(cell?.sourceKinds) ? cell.sourceKinds.join(' / ') : 'unknown';
-                        const valueText = typeof cell?.value === 'object' ? JSON.stringify(cell?.value) : String(cell?.value ?? '');
-                        return `
-                                <article class="stx-ui-memory-entry is-soft">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>${escapeHtml(column.label)}</strong>
-                                        <span>${escapeHtml(sourceKinds)}</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">${escapeHtml(valueText || '暂无')}</div>
-                                </article>
-                        `;
-                }).join('');
-                const sourceMarkup = row.sourceRefs.length > 0
-                        ? row.sourceRefs.map((source, index) => `${index + 1}. ${source.label} / ${source.kind}${source.path ? ` / ${source.path}` : ''}${source.recordId ? ` / ${source.recordId}` : ''}`).join('\n')
-                        : '当前行没有稳定来源记录。';
-                const actionButtons: string[] = [
-                        `<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="detail-sources" data-stx-row-id="${escapeHtml(row.rowId)}">查看来源</button>`,
-                ];
-                if (row.rowKind === 'materialized') {
-                        actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="tombstone" data-stx-row-id="${escapeHtml(row.rowId)}">删除</button>`);
-                }
-                if (row.rowKind === 'tombstoned') {
-                        actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="restore" data-stx-row-id="${escapeHtml(row.rowId)}">恢复</button>`);
-                }
-                if (row.rowKind === 'derived' && candidate) {
-                        actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="promote" data-stx-row-id="${escapeHtml(row.rowId)}" data-stx-candidate-id="${escapeHtml(candidate.candidateId)}">提升为正式行</button>`);
-                }
-                const maintenanceMarkup = row.rowKind === 'materialized'
-                        ? `
-                            <div class="stx-ui-memory-list" style="margin-top: 8px;">
-                                <article class="stx-ui-memory-entry is-soft">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>Alias 维护</strong>
-                                        <span>为这条逻辑行追加可识别别名</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">
-                                        <div class="stx-ui-field">
-                                            <label class="stx-ui-field-label">新 alias</label>
-                                            <input class="stx-ui-input" type="text" data-stx-logic-alias-input="${escapeHtml(row.rowId)}" placeholder="输入新的别名" />
-                                        </div>
-                                        <div class="stx-ui-actions" style="margin-top: 8px;">
-                                            <button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="alias-apply" data-stx-row-id="${escapeHtml(row.rowId)}">保存 alias</button>
-                                        </div>
-                                    </div>
-                                </article>
-                                <article class="stx-ui-memory-entry is-soft">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>字段修复</strong>
-                                        <span>支持字符串 / 数字 / 布尔 / JSON</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">
-                                        <div class="stx-ui-field">
-                                            <label class="stx-ui-field-label">字段</label>
-                                            <select class="stx-ui-select" data-stx-logic-edit-field-key="${escapeHtml(row.rowId)}">
-                                                ${editableColumns.map((column) => `<option value="${escapeHtml(column.key)}">${escapeHtml(column.label)} (${escapeHtml(column.key)})</option>`).join('')}
-                                            </select>
-                                        </div>
-                                        <div class="stx-ui-field" style="margin-top: 8px;">
-                                            <label class="stx-ui-field-label">新值</label>
-                                            <input class="stx-ui-input" type="text" data-stx-logic-edit-field-value="${escapeHtml(row.rowId)}" placeholder="输入新值；支持 JSON / 布尔 / 数字" />
-                                        </div>
-                                        <div class="stx-ui-actions" style="margin-top: 8px;">
-                                            <button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="edit-field-apply" data-stx-row-id="${escapeHtml(row.rowId)}">保存字段</button>
-                                        </div>
-                                    </div>
-                                </article>
-                                <article class="stx-ui-memory-entry is-soft">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>合并到其他行</strong>
-                                        <span>当前行会被 redirect 到目标行</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">
-                                        <div class="stx-ui-field">
-                                            <label class="stx-ui-field-label">目标 rowId</label>
-                                            <input class="stx-ui-input" type="text" data-stx-logic-merge-target-input="${escapeHtml(row.rowId)}" placeholder="输入目标 rowId" />
-                                        </div>
-                                        <div class="stx-ui-actions" style="margin-top: 8px;">
-                                            <button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="merge-apply" data-stx-row-id="${escapeHtml(row.rowId)}">执行合并</button>
-                                        </div>
-                                    </div>
-                                </article>
-                            </div>
-                        `
-                        : '';
-                relationStateContainer.innerHTML = `
-                        <div class="stx-ui-memory-list">
-                            <article class="stx-ui-memory-entry is-accent">
-                                <div class="stx-ui-memory-entry-head">
-                                    <strong>${escapeHtml(row.displayName)}</strong>
-                                    <span>${escapeHtml(formatLogicRowKindLabel(row.rowKind))}</span>
-                                </div>
-                                <div class="stx-ui-memory-entry-body">rowId=${escapeHtml(row.rowId)}${row.redirectedTo ? ` / redirect -> ${escapeHtml(row.redirectedTo)}` : ''}${row.aliases.length > 0 ? ` / alias=${escapeHtml(row.aliases.join(', '))}` : ''}</div>
-                            </article>
-                            ${fieldMarkup}
-                            ${row.warnings.map((warning: string): string => `
-                                <article class="stx-ui-memory-entry is-warning">
-                                    <div class="stx-ui-memory-entry-head">
-                                        <strong>行告警</strong>
-                                        <span>${escapeHtml(formatTimestampLabel(row.updatedAt))}</span>
-                                    </div>
-                                    <div class="stx-ui-memory-entry-body">${escapeHtml(warning)}</div>
-                                </article>
-                            `).join('')}
-                        </div>
-                        <div class="stx-ui-actions" style="margin-top: 8px;">${actionButtons.join('')}</div>
-                        ${maintenanceMarkup}
-                        <div style="display:none;" data-stx-logic-row-source-text="${escapeHtml(sourceMarkup)}"></div>
-                `;
-        };
-
-    /** 从当前激活模板的逻辑表中构建实体类型列表 */
-    const populateEntityTypes = async () => {
-        if (!logicTableSelect) return;
-        const tables = await getDisplayTables();
-        const prevVal = logicTableSelect.value;
-        logicTableSelect.innerHTML = '<option value="">选择实体类型...</option>';
-        for (const table of tables) {
-            const entityType = String(table?.key ?? '').trim();
-            if (!entityType) {
-                continue;
-            }
-            const opt = document.createElement('option');
-            opt.value = entityType;
-            opt.textContent = table.label ? `${table.label} (${entityType})` : entityType;
-            logicTableSelect.appendChild(opt);
-        }
-        if (prevVal && Array.from(logicTableSelect.options).some((option: HTMLOptionElement): boolean => option.value === prevVal)) {
-            logicTableSelect.value = prevVal;
-        } else if (logicTableSelect.options.length > 1) {
-            logicTableSelect.value = logicTableSelect.options[1].value;
-        }
-        refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
-    };
-
-    void refreshTemplatePanelState();
-
-    const executeLogicTableRepair = async (mode: 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates'): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        const tableKey = logicTableSelect?.value;
-        if (!memory?.logicTable?.repairTable || !tableKey) {
-            alert('当前版本未提供逻辑表修复能力。');
-            return;
-        }
-        await memory.logicTable.repairTable(tableKey, mode);
-        toast.success(`逻辑表维护动作已执行：${mode}`);
-        await refreshExperiencePanels();
-    };
-
-    const executeLogicRowAction = async (action: string, rowId: string, candidateId?: string): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        const tableKey = logicTableSelect?.value;
-        if (!memory?.logicTable || !tableKey) {
-            alert('Memory OS 尚未就绪。');
-            return;
-        }
-        if (action === 'detail-sources') {
-            const row = currentLogicTableView?.rows.find((item: LogicRowView): boolean => normalizeLookup(item.rowId) === normalizeLookup(rowId)) ?? null;
-            const content = row?.sourceRefs.length
-                ? row.sourceRefs.map((source, index) => `${index + 1}. ${source.label} / ${source.kind}${source.path ? ` / ${source.path}` : ''}${source.recordId ? ` / ${source.recordId}` : ''}${source.note ? ` / ${source.note}` : ''}`).join('\n')
-                : '当前行没有稳定来源记录。';
-            showEditorDetailDialog(`${row?.displayName || rowId} · 来源`, content);
-            return;
-        }
-        if (action === 'promote') {
-            if (!candidateId) {
-                alert('候选行缺少 candidateId。');
-                return;
-            }
-            await memory.logicTable.promoteDerivedRow(tableKey, candidateId);
-            toast.success('候选行已转正');
-        } else if (action === 'alias') {
-            currentSelectedLogicRowId = rowId;
-            renderLogicDetailDrawer(rowId);
-            toast.info('已打开 alias 维护表单');
-            return;
-        } else if (action === 'merge') {
-            currentSelectedLogicRowId = rowId;
-            renderLogicDetailDrawer(rowId);
-            toast.info('已打开合并表单');
-            return;
-        } else if (action === 'edit-field') {
-            currentSelectedLogicRowId = rowId;
-            renderLogicDetailDrawer(rowId);
-            toast.info('已打开字段修复表单');
-            return;
-        } else if (action === 'alias-apply') {
-            const alias = getLogicDetailControlValue(`[data-stx-logic-alias-input="${CSS.escape(rowId)}"]`);
-            if (!alias) {
-                alert('请输入 alias。');
-                return;
-            }
-            await memory.logicTable.setAlias(tableKey, rowId, alias);
-            toast.success('alias 已设置');
-        } else if (action === 'merge-apply') {
-            const targetRowId = getLogicDetailControlValue(`[data-stx-logic-merge-target-input="${CSS.escape(rowId)}"]`);
-            if (!targetRowId || normalizeLookup(targetRowId) === normalizeLookup(rowId)) {
-                alert('请输入有效的目标 rowId。');
-                return;
-            }
-            await memory.logicTable.mergeRows(tableKey, rowId, targetRowId);
-            toast.success('逻辑行已合并');
-        } else if (action === 'edit-field-apply') {
-            const fieldKey = getLogicDetailControlValue(`[data-stx-logic-edit-field-key="${CSS.escape(rowId)}"]`);
-            if (!fieldKey) {
-                alert('请选择要修复的字段。');
-                return;
-            }
-            const nextValue = getLogicDetailControlValue(`[data-stx-logic-edit-field-value="${CSS.escape(rowId)}"]`);
-            await memory.logicTable.updateCell(tableKey, rowId, fieldKey, parseLooseValue(nextValue));
-            toast.success('字段已更新');
-        } else if (action === 'restore') {
-            await memory.logicTable.restoreRow(tableKey, rowId);
-            toast.success('逻辑行已恢复');
-        } else if (action === 'tombstone') {
-            if (!confirm(`确定删除逻辑行 ${rowId} 吗？`)) {
-                return;
-            }
-            await memory.logicTable.tombstoneRow(tableKey, rowId);
-            toast.success('逻辑行已删除');
-        }
-        currentSelectedLogicRowId = rowId;
-        await renderLogicTable(tableKey);
-    };
-
-    /** 渲染逻辑表内容（按选中的实体类型加载 Phase 2 ViewModel） */
-    const renderLogicTable = async (entityType: string) => {
-        if (!logicTableContainer) return;
-        if (!entityType) { logicTableContainer.innerHTML = '<span class="stx-ui-empty-hint">请选择实体类型查看。</span>'; return; }
-        const memory = (window as any).STX?.memory;
-        if (!memory?.logicTable?.getLogicTableView || !memory?.logicTable?.listLogicTables) { logicTableContainer.textContent = '当前版本未提供 Phase 2 逻辑表维护能力。'; return; }
-        logicTableContainer.textContent = '加载中...';
-        try {
-            const [view, summaries, candidates] = await Promise.all([
-                memory.logicTable.getLogicTableView(entityType) as Promise<LogicTableViewModel>,
-                memory.logicTable.listLogicTables() as Promise<LogicTableSummary[]>,
-                memory.logicTable.listBackfillCandidates(entityType) as Promise<DerivedRowCandidate[]>,
-            ]);
-            currentLogicTableView = view;
-            currentLogicTableSummaries = summaries;
-            currentBackfillCandidates = candidates;
-            renderLogicTableSummaries(view.tableKey);
-            currentSelectedLogicRowId = currentSelectedLogicRowId && view.rows.some((row: LogicRowView): boolean => normalizeLookup(row.rowId) === normalizeLookup(currentSelectedLogicRowId))
-                ? currentSelectedLogicRowId
-                : (view.rows[0]?.rowId ?? '');
-            renderLogicDetailDrawer(currentSelectedLogicRowId || undefined);
-            if (!view.rows?.length) {
-                logicTableContainer.innerHTML = `
-                    <div class="stx-ui-empty-hint">
-                        <div style="font-weight: 700; margin-bottom: 6px;">当前表暂无稳定结构化行</div>
-                        <div style="margin-bottom: 8px;">${entityType} 可能仍停留在语义种子、world_state、group memory，或者已经被 redirect / tombstone 隐藏。</div>
-                        <div class="stx-ui-actions">
-                            <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
-                            <button data-stx-editor-action="refresh-seed-candidates" type="button" class="stx-ui-btn secondary">从 seed 生成候选</button>
-                            <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">从 world_state 回填候选</button>
-                            <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
-                            <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary">查看诊断</button>
-                        </div>
-                    </div>
-                `;
-                return;
-            }
-            logicTableContainer.innerHTML = `
-                <div class="stx-ui-memory-list">
-                  <article class="stx-ui-memory-entry is-accent">
-                    <div class="stx-ui-memory-entry-head">
-                      <strong>${escapeHtml(view.title)}</strong>
-                      <span>${escapeHtml(formatLogicStatusLabel(view.status))}</span>
-                    </div>
-                    <div class="stx-ui-memory-entry-body">facts ${view.sourceCoverage.factRows} / derived ${view.sourceCoverage.derivedRows} / redirect ${view.sourceCoverage.redirectedRows} / tombstone ${view.sourceCoverage.tombstonedRows} / alias ${view.sourceCoverage.aliasCount}</div>
-                  </article>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:10px; margin-top: 10px;">
-                  ${view.rows.map((row: LogicRowView): string => {
-                      const previewFields = view.columns
-                          .map((column) => ({ column, cell: row.values[column.key] }))
-                          .filter(({ cell }) => Boolean(normalizeText(cell?.value)))
-                          .slice(0, 4)
-                          .map(({ column, cell }) => `<div style="display:flex; gap:8px;"><span style="min-width:88px; color: var(--SmartThemeBodyColor); opacity:0.72;">${escapeHtml(column.label)}</span><span>${escapeHtml(typeof cell?.value === 'object' ? JSON.stringify(cell?.value) : String(cell?.value ?? ''))}</span></div>`)
-                          .join('');
-                      const actionButtons: string[] = [
-                          `<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-select="${escapeHtml(row.rowId)}">详情</button>`,
-                      ];
-                      const candidate = row.rowKind === 'derived' ? getCurrentCandidateByRowId(row.rowId) : null;
-                      if (row.rowKind === 'derived' && candidate) {
-                          actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="promote" data-stx-row-id="${escapeHtml(row.rowId)}" data-stx-candidate-id="${escapeHtml(candidate.candidateId)}">转正</button>`);
-                      }
-                      if (row.rowKind === 'materialized') {
-                          actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="alias" data-stx-row-id="${escapeHtml(row.rowId)}">维护</button>`);
-                          actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="tombstone" data-stx-row-id="${escapeHtml(row.rowId)}">删除</button>`);
-                      }
-                      if (row.rowKind === 'tombstoned') {
-                          actionButtons.push(`<button type="button" class="stx-ui-btn secondary" data-stx-logic-row-action="restore" data-stx-row-id="${escapeHtml(row.rowId)}">恢复</button>`);
-                      }
-                      return `
-                        <article class="stx-ui-memory-entry${normalizeLookup(row.rowId) === normalizeLookup(currentSelectedLogicRowId) ? ' is-accent' : ' is-soft'}">
-                          <div class="stx-ui-memory-entry-head">
-                            <strong>${escapeHtml(row.displayName)}</strong>
-                            <span>${escapeHtml(formatLogicRowKindLabel(row.rowKind))} · ${escapeHtml(formatTimestampLabel(row.updatedAt))}</span>
-                          </div>
-                          <div class="stx-ui-memory-entry-body">${previewFields || '当前行还没有可展示的稳定字段。'}${row.aliases.length > 0 ? `<div style="margin-top:6px;">alias: ${escapeHtml(row.aliases.join(', '))}</div>` : ''}${row.redirectedTo ? `<div style="margin-top:6px;">redirect -> ${escapeHtml(row.redirectedTo)}</div>` : ''}${row.warnings.length > 0 ? `<div style="margin-top:6px; color: var(--stx-memory-warning);">${escapeHtml(row.warnings.join(' / '))}</div>` : ''}</div>
-                          <div class="stx-ui-actions">${actionButtons.join('')}</div>
-                        </article>
-                      `;
-                  }).join('')}
-                </div>
-            `;
-        } catch (e) {
-            logicTableContainer.textContent = '加载失败：' + String(e);
-        }
-    };
-
-    if (logicTableSelect) {
-        logicTableSelect.addEventListener('change', async (): Promise<void> => {
-            currentSelectedLogicRowId = '';
-            await renderLogicTable(logicTableSelect.value);
-        });
-    }
-
-    const logicTableRefreshBtn = document.getElementById(IDS.logicTableRefreshBtnId);
-    if (logicTableRefreshBtn) {
-        logicTableRefreshBtn.addEventListener('click', async () => {
-            await populateEntityTypes();
-            if (logicTableSelect?.value) await renderLogicTable(logicTableSelect.value);
-        });
-    }
-
-    // 逻辑表维护 Tab 激活时刷新实体类型列表
-    const logicMaintenanceTabBtn = document.getElementById(IDS.tabRelationId);
-    if (logicMaintenanceTabBtn) {
-        logicMaintenanceTabBtn.addEventListener('click', async (): Promise<void> => {
-            await populateEntityTypes();
-            if (logicTableSelect?.value) {
-                await renderLogicTable(logicTableSelect.value);
-            }
-        });
-    }
 
 }

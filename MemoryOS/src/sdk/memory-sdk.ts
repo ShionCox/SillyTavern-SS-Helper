@@ -765,17 +765,23 @@ export class MemorySDKImpl implements MemorySDK {
             return this.worldInfoWriter.previewWriteback();
         },
         /**
-         * @deprecated 仅保留给旧世界书/事实表兼容调用；新编辑器请改用 logicTable.* / rows.*。
+         * @deprecated 仅保留给旧世界书/事实表兼容调用；计划在 v0.8 移除。
+         * 新编辑器请改用 logicTable.* / rows.*。
          */
         getLogicTable: async (entityType: string, opts?: LogicTableQueryOpts) => {
-            const facts = await this.factsManager.query({
-                type: entityType,
-                limit: opts?.limit ?? 200,
-            });
-            if (opts?.includeTombstones) return facts;
-            // 过滤 tombstone 行
-            const tombstones = await this.chatStateManager.getRowTombstones();
-            return facts.filter(f => !tombstones[entityType]?.[f.entity?.id ?? '']);
+            const rows = await this.rowOperations.listTableRows(entityType, opts);
+            return rows.map((row: LogicTableRow) => ({
+                factKey: row.factKeys?.['__primary__'] || row.factKeys?.[Object.keys(row.factKeys || {})[0] || ''] || undefined,
+                type: row.tableKey,
+                entity: { kind: row.tableKey, id: row.rowId },
+                path: '',
+                value: row.values,
+                tombstoned: row.tombstoned,
+                redirectedTo: row.redirectedTo,
+                aliases: row.aliases,
+                updatedAt: row.updatedAt,
+                _legacyRow: row,
+            }));
         },
         updateFact: (factKey: string | undefined, type: string, entity: { kind: string; id: string }, path: string, value: any) => {
             return this.factsManager.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });

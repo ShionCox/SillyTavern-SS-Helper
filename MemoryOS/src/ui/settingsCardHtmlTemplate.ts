@@ -121,15 +121,6 @@ export function buildSettingsCardHtmlTemplate(
     options: [{ value: "", label: "选择要激活的模板..." }],
   });
 
-  const logicTableEntitySelect = buildSharedSelectField({
-    id: ids.logicTableEntitySelectId,
-    containerClassName: "stx-shared-select-fluid stx-shared-select-inline",
-    selectClassName: "stx-ui-input",
-    triggerClassName: "stx-ui-input-full stx-shared-select-trigger-input",
-    triggerAttributes: { "data-tip": "选择要查看的实体类型。" },
-    options: [{ value: "", label: "选择实体类型..." }],
-  });
-
   const aiSelfTestSelect = buildCompactSharedSelect(
     ids.aiSelfTestSelectId,
     "选择要运行的单项自测。",
@@ -407,34 +398,22 @@ export function buildSettingsCardHtmlTemplate(
             </section>
             <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>当前稳定结构表</h3>
-                <p>选择实体类型后可查看当前 materialized rows；更完整的逐行维护与来源排查请进入记录编辑器。</p>
+                <h3>维护入口</h3>
+                <p>设置页只保留关系/状态摘要；需要查看逻辑维护、诊断维护或原始库表时，请统一进入记录编辑器。</p>
               </div>
-              <div class="stx-ui-actions" style="justify-content: space-between; align-items: center; width: 100%;">
-                <div style="display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1 1 auto;">
-                  <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
-                  <div style="flex: 1 1 auto; min-width: 180px;">${logicTableEntitySelect}</div>
-                  <button id="${ids.logicTableRefreshBtnId}" data-tip="刷新当前逻辑表。" type="button" class="stx-ui-btn secondary" style="padding: 4px 10px; font-size: 12px;">
-                    <i class="fa-solid fa-rotate"></i>
-                  </button>
-                </div>
-                <div class="stx-ui-actions">
-                  <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary" data-tip="刷新 semantic seed 后再回看逻辑表。">
-                    <i class="fa-solid fa-seedling"></i>&nbsp;刷新 seed
-                  </button>
-                  <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary" data-tip="跳到诊断页查看为什么数据对不上。">
-                    <i class="fa-solid fa-stethoscope"></i>&nbsp;去诊断
-                  </button>
-                </div>
-              </div>
-              <div id="${ids.logicTableContainerId}" class="stx-ui-code-surface" data-tip="显示逻辑表；支持双击单元格编辑。">
-                <span style="color: #aaa;">请选择实体类型查看。</span>
+              <div class="stx-ui-actions">
+                <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn">
+                  <i class="fa-solid fa-pen-to-square"></i>&nbsp;打开记录编辑器
+                </button>
+                <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary">
+                  <i class="fa-solid fa-stethoscope"></i>&nbsp;查看诊断
+                </button>
               </div>
             </section>
             <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>表状态与空表解释</h3>
-                <p>展示当前表的 alias / redirect / tombstone 状态；表为空时也会解释数据可能停留在哪一层。</p>
+                <h3>关系风险与空态解释</h3>
+                <p>这里继续说明 alias / redirect / tombstone 风险，以及为什么当前可能看起来“没有数据”。</p>
               </div>
               <div id="${ids.relationStateId}"></div>
             </section>

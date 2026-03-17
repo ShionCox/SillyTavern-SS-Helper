@@ -1956,7 +1956,7 @@ function buildSuggestedActionButtons(actions: string[]): string {
             return buildEditorActionButton('refresh-seed', formatSuggestedActionLabel(action));
         }
         if (action === 'normalize_rows') {
-            return buildEditorActionButton('view-hidden-rows', '打开记录编辑器');
+            return buildEditorActionButton('open-record-editor', '打开记录编辑器');
         }
         if (action === 'review_candidates') {
             return buildEditorActionButton('view-candidate-sources', formatSuggestedActionLabel(action));
@@ -2109,7 +2109,7 @@ function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[]
             iconClassName: roleMark === 'primary' ? 'fa-solid fa-crown' : roleMark === 'secondary' ? 'fa-solid fa-user' : 'fa-solid fa-circle-question',
             sourcePayload: buildCharacterSourcePayload(item),
             actionsHtml: [
-                buildEditorActionButton('view-hidden-rows', '打开记录编辑器'),
+                buildEditorActionButton('open-record-editor', '打开记录编辑器'),
                 buildCharacterRoleButtons(canon.chatKey, item.actorKey, roleMark),
             ].join(''),
         };
@@ -2263,7 +2263,7 @@ function buildLocationItems(canon: CanonSnapshot): ExperienceListItem[] {
             tone: relatedCharacters.length > 0 ? 'accent' : 'soft',
             iconClassName: 'fa-solid fa-location-crosshairs',
             sourcePayload: buildSnapshotSourcePayload(item),
-            actionsHtml: buildEditorActionButton('view-hidden-rows', '打开记录编辑器'),
+            actionsHtml: buildEditorActionButton('open-record-editor', '打开记录编辑器'),
         };
     });
 }
@@ -2409,17 +2409,16 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
                             <button data-stx-editor-action="refresh-canon" type="button" class="stx-ui-btn secondary">刷新总览快照</button>
                         </div>
                         <div class="stx-ui-actions">
-                            <button data-stx-editor-action="repair-normalize-aliases" type="button" class="stx-ui-btn secondary">规范别名</button>
-                            <button data-stx-editor-action="repair-compact-tombstones" type="button" class="stx-ui-btn secondary">整理隐藏墓碑</button>
-                            <button data-stx-editor-action="repair-rebuild-candidates" type="button" class="stx-ui-btn secondary">重建候选</button>
+                            <button data-stx-editor-action="open-record-editor" type="button" class="stx-ui-btn secondary">打开记录编辑器</button>
+                            <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary">查看诊断</button>
                         </div>
                         <div class="stx-ui-actions">
                             <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
                             <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">查看世界状态候选</button>
                             <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
-                            <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">打开记录编辑器</button>
+                            <button data-stx-editor-action="open-record-editor" type="button" class="stx-ui-btn secondary">打开记录编辑器</button>
                         </div>
-                        <div class="stx-ui-empty-hint">这些整理动作会优先作用于当前已选逻辑表；如果还没选表，系统会自动挑选最需要处理的一张。</div>
+                        <div class="stx-ui-empty-hint">结构修复与行级维护统一收敛到记录编辑器；这里保留总览刷新与诊断入口，避免 settings 与 editor 双轨漂移。</div>
           </div>
         `,
     );

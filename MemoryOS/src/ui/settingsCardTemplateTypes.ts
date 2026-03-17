@@ -137,10 +137,6 @@ export interface MemoryOSSettingsIds {
     wiPreviewBtnId: string;
     wiWritebackBtnId: string;
     wiWriteSummaryBtnId: string;
-    // 逻辑表可编辑
-    logicTableEntitySelectId: string;
-    logicTableRefreshBtnId: string;
-    logicTableContainerId: string;
 
     // AI 诊断面板
     aiDiagOverviewId: string;
