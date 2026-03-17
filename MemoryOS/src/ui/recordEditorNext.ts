@@ -6,9 +6,10 @@ import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
-import { readPluginSignal, readSdkPluginChatState } from '../../../SDK/db';
-import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import { readPluginSignal } from '../../../SDK/db';
+import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { escapeHtml, formatSourceKindLabel, formatSourceRefMeta, formatTimeLabel, normalizeLookup, parseLooseValue } from './editorShared';
+import { buildChatItemMeta, buildChatSummaryLabel, ChatItemMeta, formatArchiveReasonLabel, getCurrentMemoryChatKey, hasMeaningfulChatContent, resolveChatItemCanonicalKey } from './recordEditorChatList';
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
@@ -34,37 +35,6 @@ interface CurrentSort {
     asc: boolean;
 }
 
-interface ChatItemMeta {
-    chatKey: string;
-    canonicalKey: string;
-    displayName: string;
-    systemName: string;
-    avatarHtml: string;
-    createdAt: number | null;
-    signal: Record<string, unknown> | null;
-    archived: boolean;
-    hostMissing: boolean;
-    archiveReason: string;
-}
-
-async function hasMeaningfulChatContent(chatKey: string): Promise<boolean> {
-    const normalizedChatKey = String(chatKey ?? '').trim();
-    if (!normalizedChatKey) {
-        return false;
-    }
-
-    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow] = await Promise.all([
-        db.events.where('chatKey').equals(normalizedChatKey).first(),
-        db.facts.where('[chatKey+updatedAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
-        db.world_state.where('[chatKey+path]').between([normalizedChatKey, ''], [normalizedChatKey, '\uffff']).first(),
-        db.summaries.where('[chatKey+level+createdAt]').between([normalizedChatKey, '', 0], [normalizedChatKey, '\uffff', Infinity]).first(),
-        db.templates.where('[chatKey+createdAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
-        db.audit.where('chatKey').equals(normalizedChatKey).first(),
-    ]);
-
-    return Boolean(eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow);
-}
-
 type RawRecord = Record<string, unknown>;
 
 function normalizeRecordTextSignature(value: unknown): string {
@@ -72,24 +42,6 @@ function normalizeRecordTextSignature(value: unknown): string {
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase();
-}
-
-function resolveChatItemCanonicalKey(chatKey: string): string {
-    const normalizedChatKey = String(chatKey ?? '').trim();
-    if (!normalizedChatKey) {
-        return '';
-    }
-    const scope = getTavernContextSnapshotEvent();
-    const ref = parseAnyTavernChatRefEvent(normalizedChatKey, {
-        tavernInstanceId: String(scope?.tavernInstanceId ?? '').trim() || undefined,
-        scopeType: scope?.scopeType,
-        scopeId: String(scope?.scopeId ?? '').trim() || undefined,
-    });
-    return buildTavernChatEntityKeyEvent(ref) || normalizedChatKey.toLowerCase();
-}
-
-function getCurrentMemoryChatKey(): string {
-    return String((window as any)?.STX?.memory?.getChatKey?.() ?? '').trim();
 }
 
 function readEventMessageId(record: RawRecord): string {
@@ -387,128 +339,13 @@ function parsePendingKey(pendingKey: string): { tableName: RawTableName | null; 
     };
 }
 
-/**
- * 功能：构建聊天摘要文本。
- * @param signal MemoryOS 共享信号
- * @returns 摘要文本
- */
-function buildChatSummaryLabel(signal: Record<string, unknown> | null): string {
-    if (!signal) {
-        return '尚无共享摘要';
-    }
-    const factCount = Number(signal.factCount ?? 0);
-    const eventCount = Number(signal.eventCount ?? 0);
-    const activeTemplate = String(signal.activeTemplate ?? '').trim();
-    const lastSummaryAt = Number(signal.lastSummaryAt ?? 0);
-    const parts = [
-        activeTemplate ? `模板 ${activeTemplate}` : '模板未绑定',
-        `事实 ${factCount}`,
-        `事件 ${eventCount}`,
-    ];
-    if (lastSummaryAt > 0) {
-        parts.push(`摘要 ${formatTimeLabel(lastSummaryAt)}`);
-    }
-    return parts.join(' · ');
-}
-
-/**
- * 功能：把聊天删除/归档原因转换为更友好的中文标签。
- * @param reason 原始原因码。
- * @returns 展示标签。
- */
-function formatArchiveReasonLabel(reason: string): string {
-    const normalized = String(reason ?? '').trim().toLowerCase();
-    if (!normalized) {
-        return '已删除';
-    }
-    if (normalized.includes('host_chat_deleted') || normalized.includes('host_deleted')) {
-        return '已从宿主删除';
-    }
-    if (normalized.includes('orphaned')) {
-        return '原会话已不存在';
-    }
-    if (normalized.includes('soft_delete')) {
-        return '软删除归档';
-    }
-    return `已删除 · ${reason}`;
-}
-
-/**
- * 功能：构造聊天项的展示元数据。
- * @param chatKey 聊天键
- * @param signal MemoryOS 共享信号
- * @returns 界面展示需要的元数据
- */
-async function buildChatItemMeta(
-    chatKey: string,
-    signal: Record<string, unknown> | null,
-    hostCanonicalKeySet: Set<string>,
-): Promise<ChatItemMeta> {
-    const ctx = (window as any).SillyTavern?.getContext?.() || {};
-    const characters = Array.isArray(ctx.characters) ? ctx.characters : [];
-    const groups = Array.isArray(ctx.groups) ? ctx.groups : [];
-    const canonicalKey = resolveChatItemCanonicalKey(chatKey);
-    let displayName = chatKey;
-    let avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-user"></i></div>`;
-
-    const [firstEvent, pluginStateRow] = await Promise.all([
-        db.events.where('chatKey').equals(chatKey).first(),
-        readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey).catch(() => null),
-    ]);
-    const createdAt = firstEvent?.ts ? Number(firstEvent.ts) : null;
-    const pluginState = (pluginStateRow?.state ?? {}) as Record<string, unknown>;
-    const archived = pluginState.archived === true;
-    const archiveReason = String(pluginState.archiveReason ?? '').trim();
-    const hostMissing = hostCanonicalKeySet.size > 0 && Boolean(canonicalKey) && !hostCanonicalKeySet.has(canonicalKey);
-
-    const parsedRef = parseAnyTavernChatRefEvent(chatKey);
-
-    if (parsedRef.scopeType === 'group' || chatKey.startsWith('Group_')) {
-        const groupId = parsedRef.scopeType === 'group' ? parsedRef.scopeId : chatKey.replace(/^Group_/, '').split('_')[0];
-        const group = groups.find((item: Record<string, unknown>): boolean => String(item.id ?? '') === groupId || String(item.name ?? '') === groupId || String(item.avatar ?? '') === groupId);
-        if (group) {
-            displayName = `[群组] ${String(group.name ?? groupId)}`;
-            avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-users"></i></div>`;
-        } else {
-            displayName = `[群组] ${groupId}`;
-            avatarHtml = `<div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-users"></i></div>`;
-        }
-    } else {
-        const characterId = parsedRef.scopeId;
-        const matchedCharacter = characters.find((item: Record<string, unknown>): boolean => {
-            const avatar = String(item.avatar ?? '');
-            const name = String(item.name ?? '');
-            if (characterId && (avatar === characterId || name === characterId)) {
-                return true;
-            }
-            return Boolean(avatar) && chatKey.startsWith(`${avatar}_`);
-        });
-
-        if (matchedCharacter) {
-            displayName = String(matchedCharacter.name ?? characterId);
-            avatarHtml = `<img class="stx-re-chat-avatar" src="/characters/${escapeHtml(String(matchedCharacter.avatar ?? ''))}" alt="${escapeHtml(displayName)}" onerror="this.outerHTML='<div class=&quot;stx-re-chat-avatar-icon&quot;><i class=&quot;fa-solid fa-user&quot;></i></div>'">`;
-        } else if (characterId && characterId !== 'unknown_scope') {
-            displayName = characterId;
-        }
-    }
-
-    return {
-        chatKey,
-        canonicalKey,
-        displayName,
-        systemName: chatKey,
-        avatarHtml,
-        createdAt,
-        signal,
-        archived,
-        hostMissing,
-        archiveReason,
-    };
-}
-
 const RE_KEY_I18N: Record<string, string> = {
     role: '角色',
     name: '名称',
+    mode: '风格模式',
+    profile: '人物资料',
+    semantic: '整理结果',
+    meta: '基本信息',
     content: '内容正文',
     text: '普通文本',
     summary: '摘要内容',
@@ -536,12 +373,39 @@ const RE_KEY_I18N: Record<string, string> = {
     inventory: '物品',
     location: '位置',
     notes: '备注',
+    style: '风格',
+    identity: '人物信息',
+    aliases: '别名',
+    displayname: '显示名称',
+    catchphrases: '口头禅',
+    relationshipanchors: '关系线索',
+    presetstyle: '预设风格',
+    aistylecues: 'AI整理出的风格线索',
+    cues: '风格线索',
     relationship: '关系',
     relationships: '关系',
     scene: '场景',
     status: '状态',
     value: '值',
+    world: '世界设定',
+    overview: '总体说明',
+    locations: '地点',
+    rules: '规则',
+    'semantic.style': '整理结果 / 风格',
+    'semantic.identity': '整理结果 / 人物信息',
+    activelorebooks: '启用中的设定书',
+    groupmembers: '群成员',
+    hardconstraints: '不能改的规则',
     world_state: '世界状态',
+};
+
+const RE_VALUE_I18N: Record<string, string> = {
+    balanced: '平衡',
+    creative: '更有发挥',
+    precise: '更严谨',
+    strict: '严格',
+    auto: '自动',
+    manual: '手动',
 };
 
 const RE_ENTITY_KIND_I18N: Record<string, string> = {
@@ -602,7 +466,10 @@ function formatRecordEditorKeyLabel(key: string): string {
         return RE_KEY_I18N[normalized];
     }
 
-    const parts = trimmed.split(/[_./-]+/).filter(Boolean);
+    const parts = trimmed
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .split(/[_./-]+/)
+        .filter(Boolean);
     if (parts.length === 0) {
         return trimmed;
     }
@@ -832,6 +699,20 @@ function formatSummaryLevelLabel(level: string): string {
 }
 
 /**
+ * 功能：把少量固定英文值转换成更易懂的中文。
+ * @param value 原始值。
+ * @returns 中文化后的值。
+ */
+function formatReadableScalarText(value: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return '未填写';
+    }
+    const normalized = trimmed.toLowerCase();
+    return RE_VALUE_I18N[normalized] || trimmed;
+}
+
+/**
  * 功能：把值转换成更适合用户阅读的中文短句，避免直接展示 JSON/代码结构。
  * @param value 原始值。
  * @param depth 当前递归深度。
@@ -843,7 +724,7 @@ function formatReadableValueText(value: unknown, depth: number = 0): string {
     }
     if (typeof value === 'string') {
         const normalized = value.replace(/\s+/g, ' ').trim();
-        return normalized || '未填写';
+        return normalized ? formatReadableScalarText(normalized) : '未填写';
     }
     if (typeof value === 'number') {
         if (!Number.isFinite(value)) {
@@ -2350,9 +2231,9 @@ export async function openRecordEditor(): Promise<void> {
                     </div>
                     <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
                         <div style="font-weight:700; margin-bottom:6px;">数据层覆盖</div>
-                        <div>facts ${health.dataLayers.factsCount} / world_state ${health.dataLayers.worldStateCount}</div>
-                        <div style="margin-top:6px;">summary ${health.dataLayers.summaryCount} / event ${health.dataLayers.eventCount}</div>
-                        <div style="margin-top:6px;">alias ${health.dataLayers.aliasCount} / redirect ${health.dataLayers.redirectCount} / tombstone ${health.dataLayers.tombstoneCount}</div>
+                        <div>事实 ${health.dataLayers.factsCount ?? 0} / 世界状态 ${health.dataLayers.worldStateCount ?? 0}</div>
+                        <div style="margin-top:6px;">摘要 ${health.dataLayers.summaryCount ?? 0} / 事件 ${health.dataLayers.eventCount ?? 0}</div>
+                        <div style="margin-top:6px;">别名 ${health.dataLayers.aliasCount ?? 0} / 重定向 ${health.dataLayers.redirectCount ?? 0} / 已隐藏 ${health.dataLayers.tombstoneCount ?? 0}</div>
                     </div>
                     <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
                         <div style="font-weight:700; margin-bottom:6px;">结构风险</div>

@@ -116,7 +116,7 @@ import {
     trimSdkPluginChatRecords,
     writeSdkPluginChatState,
 } from '../../SDK/db';
-import { buildSdkChatKeyEvent } from '../../SDK/tavern';
+import { buildSdkChatKeyEvent, buildTavernChatScopedKeyEvent, parseTavernChatScopedKeyEvent } from '../../SDK/tavern';
 import { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
@@ -224,6 +224,35 @@ function sanitizeForLog(value: unknown, options?: { maxDepth?: number; maxArray?
     };
 
     return walk(value, 0);
+}
+
+function resolveRequestLogChatKeys(chatKey: string): string[] {
+    const normalized = String(chatKey || '').trim();
+    if (!normalized) {
+        return [];
+    }
+
+    const keys = new Set<string>([normalized]);
+    if (!normalized.includes('::')) {
+        return Array.from(keys);
+    }
+
+    try {
+        const parsed = parseTavernChatScopedKeyEvent(normalized);
+        const fallbackKey = buildTavernChatScopedKeyEvent({
+            tavernInstanceId: parsed.tavernInstanceId,
+            scopeType: parsed.scopeType,
+            scopeId: parsed.scopeId,
+            chatId: 'fallback_chat',
+        });
+        if (fallbackKey) {
+            keys.add(fallbackKey);
+        }
+    } catch {
+        // 兼容旧键格式；解析失败时只查询原始 chatKey。
+    }
+
+    return Array.from(keys);
 }
 
 const LLMHUB_MANIFEST: PluginManifest = {
@@ -700,20 +729,36 @@ class LLMHub {
     }
 
     public async listChatRequestLogs(chatKey: string, opts?: LLMRequestLogQueryOptions): Promise<LLMRequestLogEntry[]> {
-        const key = String(chatKey || '').trim();
-        if (!key) return [];
+        const keys = resolveRequestLogChatKeys(chatKey);
+        if (keys.length <= 0) return [];
 
-        const records = await querySdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION, {
-            limit: opts?.limit,
-            offset: opts?.offset,
-            order: opts?.order || 'desc',
-            fromTs: opts?.fromTs,
-            toTs: opts?.toTs,
-        });
+        const recordGroups = await Promise.all(keys.map((key: string) => {
+            return querySdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION, {
+                order: opts?.order || 'desc',
+                fromTs: opts?.fromTs,
+                toTs: opts?.toTs,
+            });
+        }));
 
-        let entries = records
+        let entries = recordGroups
+            .flat()
             .map((row) => row.payload as unknown as LLMRequestLogEntry)
             .filter((entry) => Boolean(entry && entry.requestId));
+
+        const seenLogIds = new Set<string>();
+        entries = entries.filter((entry) => {
+            if (seenLogIds.has(entry.logId)) {
+                return false;
+            }
+            seenLogIds.add(entry.logId);
+            return true;
+        });
+
+        entries.sort((left: LLMRequestLogEntry, right: LLMRequestLogEntry): number => {
+            const leftTs = Number(left.finishedAt ?? left.startedAt ?? left.queuedAt ?? 0);
+            const rightTs = Number(right.finishedAt ?? right.startedAt ?? right.queuedAt ?? 0);
+            return (opts?.order || 'desc') === 'asc' ? leftTs - rightTs : rightTs - leftTs;
+        });
 
         if (opts?.state && opts.state !== 'all') {
             entries = entries.filter((entry) => entry.state === opts.state);
@@ -738,13 +783,25 @@ class LLMHub {
             });
         }
 
+        const offset = Math.max(0, Number(opts?.offset || 0));
+        const limit = Math.max(0, Number(opts?.limit || 0));
+        if (offset > 0) {
+            entries = entries.slice(offset);
+        }
+        if (limit > 0) {
+            entries = entries.slice(0, limit);
+        }
+
         return entries;
     }
 
     public async clearChatRequestLogs(chatKey: string): Promise<number> {
-        const key = String(chatKey || '').trim();
-        if (!key) return 0;
-        return deleteSdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION);
+        const keys = resolveRequestLogChatKeys(chatKey);
+        if (keys.length <= 0) return 0;
+        const results = await Promise.all(keys.map((key: string) => {
+            return deleteSdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION);
+        }));
+        return results.reduce((sum: number, count: number): number => sum + Number(count || 0), 0);
     }
 
     private buildLogResponseSnapshot(record: RequestRecord): LLMRequestLogResponseSnapshot {

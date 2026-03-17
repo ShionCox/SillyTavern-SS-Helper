@@ -8,9 +8,8 @@ import { getHealthSnapshot, onHealthChange, refreshHealthSnapshot, setAiModeEnab
 import { runAiSelfTests, runSingleSelfTest } from '../llm/ai-self-test';
 import type { AiSelfTestResult } from '../llm/ai-self-test';
 import type { MemoryAiHealthSnapshot, MemoryAiTaskId } from '../llm/ai-health-types';
-import type { EditorHealthSnapshot, LogicTableSummary, MemoryCandidate, MemoryCandidateBufferSnapshot, MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode } from '../../../SDK/stx';
+import type { LogicTableSummary, MemoryTuningProfile, RoutePreviewSnapshot, TaskSurfaceMode } from '../../../SDK/stx';
 import { openRecordEditor } from './recordEditorNext';
-import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
@@ -25,7 +24,12 @@ import {
 import { ensureChatStrategyPanel, initializeChatStrategyPanel } from './chatStrategyPanel';
 import { renderSettingsExperience } from './settingsCardExperience';
 import { normalizeMemoryTaskPresentationSettings } from '../llm/task-presentation-settings';
-import { escapeHtml, formatSourceRefMeta, normalizeSourceRefRecord } from './editorShared';
+import { escapeHtml } from './editorShared';
+import { showSnapshotSourceDetails } from './candidateSourceDialogs';
+import { createEditorActionExecutor } from './editorActions';
+import { bindSettingsAuditPanel } from './settingsAuditPanel';
+import { bindSettingsTemplatePanel } from './settingsTemplatePanel';
+import { bindSettingsWorldInfoPanel } from './settingsWorldInfoPanel';
 
 
 let MEMORYOS_THEME_BINDING_READY = false;
@@ -537,216 +541,6 @@ function bindUiEvents() {
         });
     }
 
-    const showEditorDetailDialog = (title: string, content: string): void => {
-        const dialogId = `${IDS.cardId}-detail-dialog`;
-        openSharedDialog({
-            id: dialogId,
-            size: 'lg',
-            ariaLabel: title,
-            chrome: {
-                title,
-                description: '这里展示当前条目的来源详情或候选内容。',
-            },
-            bodyHtml: `<pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-family:Consolas, 'Courier New', monospace; font-size:12px; line-height:1.6; background: rgba(255,255,255,0.03); border-radius: 12px; padding: 12px;">${String(content ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')}</pre>`,
-            closeOnBackdrop: true,
-            closeOnEscape: true,
-        });
-    };
-
-    /**
-     * 功能：展示快照来源详情。
-     * 参数：
-     *   payload：编码后的来源详情。
-     * 返回：无。
-     */
-    const showSnapshotSourceDetails = (payload: string): void => {
-        if (!payload) {
-            alert('当前条目没有可用的来源详情。');
-            return;
-        }
-        try {
-            const parsed = JSON.parse(decodeURIComponent(payload)) as {
-                value?: string;
-                confidence?: number;
-                updatedAt?: number | null;
-                sourceKinds?: string[];
-                sourceRefs?: Array<Record<string, unknown>>;
-            };
-            const lines: string[] = [];
-            if (parsed.value) {
-                lines.push(`当前值: ${String(parsed.value)}`);
-            }
-            if (typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence)) {
-                lines.push(`置信度: ${Math.round(parsed.confidence * 100)}%`);
-            }
-            if (typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt) && parsed.updatedAt > 0) {
-                lines.push(`更新时间: ${new Date(parsed.updatedAt).toLocaleString()}`);
-            }
-            if (Array.isArray(parsed.sourceKinds) && parsed.sourceKinds.length > 0) {
-                lines.push(`来源类型: ${parsed.sourceKinds.join(' / ')}`);
-            }
-            if (Array.isArray(parsed.sourceRefs) && parsed.sourceRefs.length > 0) {
-                lines.push('来源记录:');
-                parsed.sourceRefs.slice(0, 6).forEach((ref, index): void => {
-                    const normalizedRef = normalizeSourceRefRecord(ref);
-                    if (!normalizedRef) {
-                        return;
-                    }
-                    lines.push(`${index + 1}. ${formatSourceRefMeta(normalizedRef)}`);
-                    if (normalizedRef.note) {
-                        lines.push(`   说明: ${normalizedRef.note}`);
-                    }
-                });
-            }
-            showEditorDetailDialog('来源详情', lines.join('\n') || '当前条目没有可用的来源详情。');
-        } catch {
-            alert('来源详情解析失败。');
-        }
-    };
-
-    /**
-     * 功能：展示当前聊天的候选来源入口说明。
-     * 参数：无。
-     * 返回：Promise<void>
-     */
-    const showCandidateSources = async (filterKind?: 'fact' | 'summary' | 'state' | 'relationship'): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.editor?.getEditorHealth || !memory?.chatState?.getCandidateBufferSnapshot) {
-            alert('当前版本未提供候选来源诊断。');
-            return;
-        }
-        const [health, snapshot] = await Promise.all([
-            memory.editor.getEditorHealth() as Promise<EditorHealthSnapshot>,
-            memory.chatState.getCandidateBufferSnapshot() as Promise<MemoryCandidateBufferSnapshot>,
-        ]);
-        const items = Array.isArray(snapshot.items) ? snapshot.items : [];
-        const filteredItems = filterKind ? items.filter((item: MemoryCandidate): boolean => item.kind === filterKind) : items;
-        const lines = filteredItems.slice(0, 8).map((item: MemoryCandidate, index: number): string => {
-            const targetLayer = String(item.encoding?.targetLayer ?? 'unknown');
-            const accepted = item.encoding?.accepted ? 'accepted' : 'rejected';
-            return `${index + 1}. [${formatCandidateKindLabel(item.kind)} / ${accepted} / ${targetLayer}] ${String(item.summary ?? '').trim() || '(无摘要)'}`;
-        });
-        showEditorDetailDialog(filterKind === 'state' ? 'world_state 候选' : '候选来源', [
-            filterKind === 'state' ? 'world_state 候选：' : '候选来源分布：',
-            `facts: ${health.dataLayers.factsCount}`,
-            `world_state: ${health.dataLayers.worldStateCount}`,
-            `summary: ${health.dataLayers.summaryCount}`,
-            `semantic seed: ${health.dataLayers.hasSemanticSeed ? '已存在' : '缺失'}`,
-            `group memory: ${health.dataLayers.hasGroupMemory ? '已存在' : '缺失'}`,
-            `logical chat view: ${health.dataLayers.hasLogicalChatView ? '已存在' : '缺失'}`,
-            `candidate buffer: total=${snapshot.total}, accepted=${snapshot.accepted}, rejected=${snapshot.rejected}`,
-            '',
-            ...(lines.length > 0 ? lines : [filterKind === 'state' ? '当前没有 world_state 候选，可先刷新总览或检查 state 层写入。' : '当前没有候选缓冲区条目。']),
-            '',
-            '建议优先检查：semantic seed、world_state、group memory，以及被 redirect / tombstone 隐藏的逻辑行。',
-        ].join('\n'));
-    };
-
-    /**
-     * 功能：展示隐藏行查看入口。
-     * 参数：无。
-     * 返回：Promise<void>
-     */
-    const showHiddenRowsEntry = async (): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.editor?.getEditorHealth) {
-            openRecordEditor();
-            return;
-        }
-        const health = await memory.editor.getEditorHealth() as EditorHealthSnapshot;
-        openRecordEditor();
-        toast.info(`已打开记录编辑器，可进一步查看 alias ${health.dataLayers.aliasCount} / redirect ${health.dataLayers.redirectCount} / tombstone ${health.dataLayers.tombstoneCount}。`);
-    };
-
-    /**
-     * 功能：执行 Phase 1 编辑器动作按钮。
-     * 参数：
-     *   action：动作类型。
-     *   triggerButton：触发按钮元素。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    const executeEditorAction = async (action: string, triggerButton?: HTMLElement | null): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory) {
-            alert('Memory OS 尚未就绪。');
-            return;
-        }
-        if (triggerButton) {
-            triggerButton.setAttribute('disabled', 'true');
-        }
-        try {
-            if (action === 'refresh-seed') {
-                if (!memory.editor?.refreshSemanticSeed) {
-                    alert('当前版本未提供 semantic seed 刷新入口。');
-                    return;
-                }
-                await memory.editor.refreshSemanticSeed();
-                await refreshExperiencePanels();
-                toast.success('semantic seed 已刷新');
-                return;
-            }
-            if (action === 'rebuild-chat-view') {
-                if (!memory.editor?.rebuildChatView) {
-                    alert('当前版本未提供 logical chat view 重建入口。');
-                    return;
-                }
-                await memory.editor.rebuildChatView();
-                await refreshExperiencePanels();
-                toast.success('logical chat view 已重建');
-                return;
-            }
-            if (action === 'refresh-canon') {
-                if (!memory.editor?.refreshCanonSnapshot) {
-                    alert('当前版本未提供总览快照刷新入口。');
-                    return;
-                }
-                await memory.editor.refreshCanonSnapshot();
-                await refreshExperiencePanels();
-                toast.success('总览快照已刷新');
-                return;
-            }
-            if (action === 'view-candidate-sources') {
-                await showCandidateSources();
-                return;
-            }
-            if (action === 'view-world-state-candidates') {
-                await showCandidateSources('state');
-                return;
-            }
-            if (action === 'refresh-seed-candidates') {
-                if (!memory.editor?.refreshSemanticSeed) {
-                    alert('当前版本未提供 semantic seed 刷新入口。');
-                    return;
-                }
-                await memory.editor.refreshSemanticSeed();
-                await refreshExperiencePanels();
-                await showCandidateSources();
-                toast.success('semantic seed 已刷新，并已显示候选来源');
-                return;
-            }
-            if (action === 'view-hidden-rows') {
-                await showHiddenRowsEntry();
-                return;
-            }
-            if (action === 'open-record-editor') {
-                openRecordEditor();
-                return;
-            }
-            if (action === 'open-diagnostics') {
-                activateTopTab(IDS.tabInjectionId, IDS.panelInjectionId);
-                return;
-            }
-        } catch (error) {
-            alert('操作失败：' + String(error));
-        } finally {
-            triggerButton?.removeAttribute('disabled');
-        }
-    };
-
     /**
      * 功能：读取调参输入框中的数值。
      * @param inputId 输入框 ID。
@@ -832,6 +626,15 @@ function bindUiEvents() {
             void refreshExperiencePanels();
         }
     };
+
+    const executeEditorAction = createEditorActionExecutor({
+        dialogIdPrefix: IDS.cardId,
+        formatCandidateKindLabel,
+        openRecordEditor,
+        openDiagnostics: (): void => activateTopTab(IDS.tabInjectionId, IDS.panelInjectionId),
+        refreshExperiencePanels,
+        toast,
+    });
 
     /**
      * 功能：激活高级工具中的二级标签。
@@ -956,7 +759,7 @@ function bindUiEvents() {
         const sourceTarget = eventTarget?.closest<HTMLElement>('[data-stx-source-details]') ?? null;
         if (sourceTarget) {
             event.preventDefault();
-            showSnapshotSourceDetails(String(sourceTarget.dataset.stxSourceDetails ?? ''));
+            showSnapshotSourceDetails(String(sourceTarget.dataset.stxSourceDetails ?? ''), IDS.cardId);
             return;
         }
         const characterRoleTarget = eventTarget?.closest<HTMLElement>('[data-stx-character-role]') ?? null;
@@ -2374,156 +2177,11 @@ function bindUiEvents() {
         );
     }, 300);
 
-    // ===== 世界模板面板交互 =====
-    const refreshTemplatesUI = async (): Promise<void> => {
-        const listEl = document.getElementById(IDS.templateListId);
-        const activeSelectEl = document.getElementById(IDS.templateActiveSelectId) as HTMLSelectElement | null;
-        const lockEl = document.getElementById(IDS.templateLockId) as HTMLInputElement | null;
-        if (!listEl) return;
-        listEl.textContent = '正在加载...';
-        const memory = (window as any).STX?.memory;
-        if (!memory?.template?.listByChatKey) {
-            listEl.textContent = '暂无可用模板，请先启动会话并开启 AI 模式。';
-            return;
-        }
-        try {
-            const [templates, binding, activeTemplate] = await Promise.all([
-                memory.template.listByChatKey().catch(() => []),
-                memory.template.getBinding?.().catch(() => null),
-                memory.template.getActive?.().catch(() => null),
-            ]);
-            const activeTemplateId = String(activeTemplate?.templateId || binding?.templateId || '').trim();
-
-            if (activeSelectEl) {
-                activeSelectEl.innerHTML = '<option value="">选择要激活的模板...</option>';
-                for (const template of templates) {
-                    const option = document.createElement('option');
-                    option.value = template.templateId;
-                    option.textContent = `${template.name} (${template.worldType})`;
-                    activeSelectEl.appendChild(option);
-                }
-                if (activeTemplateId) {
-                    activeSelectEl.value = activeTemplateId;
-                }
-            }
-            refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
-            if (lockEl) {
-                lockEl.checked = binding?.isLocked === true;
-            }
-
-            if (templates.length === 0) {
-                listEl.textContent = '未找到绑定模板。';
-                return;
-            }
-
-            listEl.innerHTML = templates.map((template: any) => {
-                const isActive = Boolean(activeTemplateId && template.templateId === activeTemplateId);
-                const tableNames = (template.tables || []).map((item: any) => String(item?.key || '').trim()).filter(Boolean);
-                const factTypes = (template.factTypes || []).map((item: any) => String(item?.type || '').trim()).filter(Boolean);
-                const hash = String(template.worldInfoRef?.hash || '').trim() || '未记录';
-                const familyId = String(template.templateFamilyId || '').trim();
-                return `
-                    <article class="stx-ui-template-record${isActive ? ' is-active' : ''}">
-                        <div class="stx-ui-template-record-head">
-                            <div class="stx-ui-template-record-title">
-                                <div class="stx-ui-template-record-name">${escapeHtml(template.name || '未命名模板')}</div>
-                                <div class="stx-ui-template-record-meta">${escapeHtml(template.worldType || 'unknown')} · ID ${escapeHtml(template.templateId || 'unknown')}</div>
-                            </div>
-                            ${isActive ? '<span class="stx-ui-template-record-badge">当前启用</span>' : ''}
-                        </div>
-                        <div class="stx-ui-template-record-grid">
-                            <div class="stx-ui-template-record-cell">
-                                <strong>逻辑表</strong>
-                                <span>${escapeHtml(tableNames.join('、') || '暂无')}</span>
-                            </div>
-                            <div class="stx-ui-template-record-cell">
-                                <strong>Fact Types</strong>
-                                <span>${escapeHtml(factTypes.join('、') || '暂无')}</span>
-                            </div>
-                            <div class="stx-ui-template-record-cell">
-                                <strong>Hash</strong>
-                                <span>${escapeHtml(hash)}</span>
-                            </div>
-                            <div class="stx-ui-template-record-cell">
-                                <strong>Family</strong>
-                                <span>${escapeHtml(familyId || '未归组')}</span>
-                            </div>
-                        </div>
-                    </article>
-                `;
-            }).join('');
-        } catch (e) {
-            listEl.textContent = '读取模板失败: ' + String(e);
-        }
-    };
-
-    const refreshTemplatePanelState = async (): Promise<void> => {
-        await refreshTemplatesUI();
-    };
-
-    // 点击世界模板 Tab 时自动刺新
-    const templateTabEl = document.getElementById(IDS.tabTemplateId);
-    if (templateTabEl) {
-        templateTabEl.addEventListener('click', () => {
-            void refreshTemplatePanelState();
-        });
-    }
-
-    // 手动刷新按鈕
-    const refreshBtn = document.getElementById(IDS.templateRefreshBtnId);
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', () => {
-            void refreshTemplatePanelState();
-        });
-    }
-
-    // 强制重建按钮：直接调用 template.rebuildFromWorldInfo()
-    const forceRebuildBtn = document.getElementById(IDS.templateForceRebuildBtnId);
-    if (forceRebuildBtn) {
-        forceRebuildBtn.addEventListener('click', async () => {
-            const memory = (window as any).STX?.memory;
-            if (!memory?.template?.rebuildFromWorldInfo) {
-                alert('请先启动 Memory OS');
-                return;
-            }
-            if (!confirm('将强制读取世界书并重建模板，确定吗？')) return;
-            try {
-                const templateId = await memory.template.rebuildFromWorldInfo();
-                await refreshTemplatePanelState();
-                alert(templateId ? `重建成功，当前模板: ${templateId}` : '未生成新模板，请检查世界书或 LLM 配置');
-            } catch (error) {
-                alert('重建失败：' + String(error));
-            }
-        });
-    }
-
-    const templateSetActiveBtn = document.getElementById(IDS.templateSetActiveBtnId);
-    if (templateSetActiveBtn) {
-        templateSetActiveBtn.addEventListener('click', async () => {
-            const memory = (window as any).STX?.memory;
-            const activeSelectEl = document.getElementById(IDS.templateActiveSelectId) as HTMLSelectElement | null;
-            const lockEl = document.getElementById(IDS.templateLockId) as HTMLInputElement | null;
-            if (!memory?.template?.setActive || !activeSelectEl) {
-                alert('模板管理器未就绪。');
-                return;
-            }
-            const templateId = activeSelectEl.value;
-            if (!templateId) {
-                alert('请先选择一个模板。');
-                return;
-            }
-            try {
-                await memory.template.setActive(templateId, { lock: lockEl?.checked === true });
-                if (memory.template.setLock && lockEl) {
-                    await memory.template.setLock(lockEl.checked);
-                }
-                await refreshTemplatePanelState();
-                alert('模板切换成功。');
-            } catch (error) {
-                alert('模板切换失败：' + String(error));
-            }
-        });
-    }
+    const { refreshTemplatePanelState } = bindSettingsTemplatePanel({
+        ids: IDS,
+        cardId: IDS.cardId,
+        refreshSharedSelectOptions,
+    });
 
     // ===== 数据库操作按钮联通 =====
 
@@ -2733,147 +2391,12 @@ function bindUiEvents() {
         });
     }
 
-    // ===== 审计历史 & 快照回滚面板 =====
+    bindSettingsAuditPanel({
+        ids: IDS,
+        refreshExperiencePanels,
+        refreshTemplatePanelState,
+    });
 
-    /** 渲染审计列表到 #auditList 容器 */
-    const renderAuditList = async () => {
-        const listEl = document.getElementById(IDS.auditListId);
-        if (!listEl) return;
-        const memory = (window as any).STX?.memory;
-        if (!memory?.audit) {
-            listEl.textContent = 'Memory OS 尚未就绪。';
-            return;
-        }
-        listEl.textContent = '加载中...';
-        try {
-            const records = await memory.audit.list({ limit: 50 });
-            if (records.length === 0) {
-                listEl.textContent = '暂无审计记录。';
-                return;
-            }
-            listEl.innerHTML = '';
-            for (const r of records) {
-                const isSnapshot = r.action === 'snapshot';
-                const time = new Date(r.ts).toLocaleString();
-                const note = r.after?.note ? ` — ${r.after.note}` : '';
-                const row = document.createElement('div');
-                row.className = 'stx-ui-audit-row';
-                row.innerHTML = `
-                    <span class="stx-ui-audit-main">
-                        <b class="stx-ui-audit-action${isSnapshot ? ' is-snapshot' : ''}">[${r.action}]</b>
-                        <span class="stx-ui-audit-time">${time}</span>
-                        <span>${note}</span>
-                    </span>
-                    ${isSnapshot ? `<button class="stx-ui-audit-rollback" data-snapshot-id="${r.auditId}" data-tip="回滚到这个快照。">回滚</button>` : ''}
-                `;
-                if (isSnapshot) {
-                    const rollbackBtn = row.querySelector<HTMLButtonElement>(`[data-snapshot-id="${r.auditId}"]`);
-                    rollbackBtn?.addEventListener('click', async () => {
-                        if (!confirm(`确定回滚到快照 [${time}] 的状态吗？\n当前 facts/state/summaries 将被覆盖！`)) return;
-                        rollbackBtn.disabled = true;
-                        rollbackBtn.textContent = '回滚中...';
-                        try {
-                            await memory.audit.rollbackToSnapshot(r.auditId);
-                            alert(`✅ 已成功回滚到 [${time}] 的状态。`);
-                            await renderAuditList();
-                        } catch (e) {
-                            alert('回滚失败：' + String(e));
-                            rollbackBtn.disabled = false;
-                            rollbackBtn.textContent = '回滚';
-                        }
-                    });
-                }
-                listEl.appendChild(row);
-            }
-        } catch (e) {
-            listEl.textContent = '加载失败：' + String(e);
-        }
-    };
-
-    /**
-     * 功能：创建当前聊天快照。
-     * 参数：
-     *   triggerButton：触发按钮元素。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    const createAuditSnapshot = async (triggerButton: HTMLElement | null): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.audit) {
-            alert('Memory OS 尚未就绪。');
-            return;
-        }
-        const note = prompt('为这个快照添加备注（可留空）：') ?? undefined;
-        triggerButton?.setAttribute('disabled', 'true');
-        try {
-            const snapshotId = await memory.audit.createSnapshot(note);
-            alert(`✅ 快照已创建！\nID: ${snapshotId}`);
-            await renderAuditList();
-            await refreshExperiencePanels();
-        } catch (e) {
-            alert('创建快照失败：' + String(e));
-        } finally {
-            triggerButton?.removeAttribute('disabled');
-        }
-    };
-
-    const auditSnapshotBtn = document.getElementById(IDS.auditCreateSnapshotBtnId);
-    if (auditSnapshotBtn) {
-        auditSnapshotBtn.addEventListener('click', async () => {
-            await createAuditSnapshot(auditSnapshotBtn as HTMLElement);
-        });
-    }
-
-    const auditRefreshBtn = document.getElementById(IDS.auditRefreshBtnId);
-    if (auditRefreshBtn) {
-        auditRefreshBtn.addEventListener('click', renderAuditList);
-    }
-
-    const auditTabBtn = document.getElementById(IDS.tabDbId);
-    if (auditTabBtn) {
-        auditTabBtn.addEventListener('click', () => {
-            void renderAuditList();
-            void refreshTemplatePanelState();
-        });
-    }
-
-    // ===== 世界书写回 =====
-
-    const wiPreviewEl = document.getElementById(IDS.wiPreviewId);
-
-    const wiPreviewBtn = document.getElementById(IDS.wiPreviewBtnId);
-    if (wiPreviewBtn) {
-        wiPreviewBtn.addEventListener('click', async () => {
-            const memory = (window as any).STX?.memory;
-            if (!memory?.worldInfo) { alert('Memory OS 尚未就绪。'); return; }
-            if (!wiPreviewEl) return;
-            wiPreviewEl.textContent = '预览中...';
-            try {
-                const items = await memory.worldInfo.preview();
-                if (items.length === 0) { wiPreviewEl.textContent = '暂无可写回的内容（facts/summaries 为空）。'; return; }
-                wiPreviewEl.textContent = items.map((i: any) => `[${i.entry}] 关键词: ${i.keywords.join(', ')} | ${i.contentLength} 字`).join('\n');
-            } catch (e) { wiPreviewEl.textContent = '预览失败：' + String(e); }
-        });
-    }
-
-    const bindWriteback = (btnId: string, mode: 'all' | 'summaries') => {
-        const btn = document.getElementById(btnId);
-        if (!btn) return;
-        btn.addEventListener('click', async () => {
-            const memory = (window as any).STX?.memory;
-            if (!memory?.worldInfo) { alert('Memory OS 尚未就绪。'); return; }
-            if (!confirm(`确定将 ${mode === 'all' ? '事实+摘要' : '摘要'} 写回到 SillyTavern WorldInfo？\n已有旧条目将被替换。`)) return;
-            btn.setAttribute('disabled', 'true');
-            try {
-                const result = await memory.worldInfo.writeback(mode);
-                alert(`✅ 写回完成！\n世界书名: ${result.bookName}\n成功写入: ${result.written} 条`);
-                if (wiPreviewEl) wiPreviewEl.textContent = '';
-            } catch (e) { alert('写回失败：' + String(e)); }
-            finally { btn.removeAttribute('disabled'); }
-        });
-    };
-
-    bindWriteback(IDS.wiWritebackBtnId, 'all');
-    bindWriteback(IDS.wiWriteSummaryBtnId, 'summaries');
+    bindSettingsWorldInfoPanel({ ids: IDS });
 
 }

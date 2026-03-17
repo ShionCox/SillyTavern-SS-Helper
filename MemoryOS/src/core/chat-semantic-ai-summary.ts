@@ -304,7 +304,7 @@ export async function enhanceSemanticSeedWithAiWithOptions(
         options?.taskDescription || '角色卡与世界观总结',
     );
 
-    if (!result.ok || !result.data) {
+    if (!result.ok) {
         logger.warn('[ColdStart][AiSummaryFailed]', {
             forced: options?.force === true,
             error: result.error || 'no_data',
