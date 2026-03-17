@@ -659,13 +659,16 @@ function bindUiEvents() {
             if (Array.isArray(parsed.sourceRefs) && parsed.sourceRefs.length > 0) {
                 lines.push('来源记录:');
                 parsed.sourceRefs.slice(0, 6).forEach((ref, index): void => {
-                    const type = typeof ref.type === 'string' ? ref.type : 'unknown';
-                    const recordId = typeof ref.recordId === 'string' && ref.recordId ? ref.recordId : 'n/a';
-                    const field = typeof ref.field === 'string' && ref.field ? ref.field : 'n/a';
-                    const score = typeof ref.score === 'number' && Number.isFinite(ref.score)
-                        ? `, score=${ref.score.toFixed(2)}`
+                    const label = typeof ref.label === 'string' && ref.label ? ref.label : '未命名来源';
+                    const kind = typeof ref.kind === 'string' && ref.kind ? ref.kind : 'unknown';
+                    const recordId = typeof ref.recordId === 'string' && ref.recordId ? ref.recordId : '';
+                    const path = typeof ref.path === 'string' && ref.path ? ref.path : '';
+                    const note = typeof ref.note === 'string' && ref.note ? ref.note : '';
+                    const ts = typeof ref.ts === 'number' && Number.isFinite(ref.ts) && ref.ts > 0
+                        ? new Date(ref.ts).toLocaleString()
                         : '';
-                    lines.push(`${index + 1}. ${type} / ${field} / ${recordId}${score}`);
+                    const parts = [label, kind, path, recordId, note, ts].filter(Boolean);
+                    lines.push(`${index + 1}. ${parts.join(' / ')}`);
                 });
             }
             showEditorDetailDialog('来源详情', lines.join('\n') || '当前条目没有可用的来源详情。');
@@ -862,9 +865,6 @@ function bindUiEvents() {
             if (action === 'open-diagnostics') {
                 activateTopTab(IDS.tabInjectionId, IDS.panelInjectionId);
                 return;
-            }
-            if (action === 'open-logic-maintenance') {
-                await openLogicMaintenance();
             }
         } catch (error) {
             alert('操作失败：' + String(error));
@@ -1094,12 +1094,6 @@ function bindUiEvents() {
                 String(characterRoleTarget.dataset.stxCharacterRole ?? ''),
             );
             void refreshExperiencePanels();
-            return;
-        }
-        const jumpLogicTarget = eventTarget?.closest<HTMLElement>('[data-stx-jump-logic-table]') ?? null;
-        if (jumpLogicTarget) {
-            event.preventDefault();
-            void openLogicMaintenance(String(jumpLogicTarget.dataset.stxJumpLogicTable ?? ''));
             return;
         }
         const logicTableTarget = eventTarget?.closest<HTMLElement>('[data-stx-logic-table-select]') ?? null;
@@ -3295,32 +3289,6 @@ function bindUiEvents() {
             logicTableSelect.value = logicTableSelect.options[1].value;
         }
         refreshSharedSelectOptions(document.getElementById(IDS.cardId) || document.body);
-    };
-
-    const selectLogicTableByHint = (hint?: string): void => {
-        if (!logicTableSelect || !hint) {
-            return;
-        }
-        const normalizedHint = normalizeLookup(hint);
-        const option = Array.from(logicTableSelect.options).find((candidate: HTMLOptionElement): boolean => {
-            const value = normalizeLookup(candidate.value);
-            const label = normalizeLookup(candidate.textContent ?? '');
-            return value.includes(normalizedHint) || label.includes(normalizedHint)
-                || (normalizedHint === 'character' && (value.includes('角色') || label.includes('角色')))
-                || (normalizedHint === 'location' && (value.includes('地点') || label.includes('地点')));
-        });
-        if (option) {
-            logicTableSelect.value = option.value;
-        }
-    };
-
-    const openLogicMaintenance = async (hint?: string): Promise<void> => {
-        activateTopTab(IDS.tabRelationId, IDS.panelRelationId);
-        await populateEntityTypes();
-        selectLogicTableByHint(hint);
-        if (logicTableSelect?.value) {
-            await renderLogicTable(logicTableSelect.value);
-        }
     };
 
     void refreshTemplatePanelState();

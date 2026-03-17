@@ -1358,6 +1358,7 @@ export interface MemorySDK {
     worldInfo: {
         writeback(mode?: 'facts' | 'summaries' | 'all'): Promise<{ written: number; bookName: string }>;
         preview(): Promise<Array<{ entry: string; keywords: string[]; contentLength: number }>>;
+        /** @deprecated 仅保留给旧世界书/事实表兼容调用；新编辑器请改用 `logicTable.getLogicTableView()`、`logicTable.listLogicTables()` 或 `rows.listTableRows()`。 */
         getLogicTable(entityType: string, opts?: LogicTableQueryOpts): Promise<any[]>;
         updateFact(
             factKey: string | undefined,

@@ -315,9 +315,9 @@ export function buildSettingsCardHtmlTemplate(
             <i class="fa-solid fa-map-location-dot"></i>
             <span>角色与地点</span>
           </button>
-          <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="维护逻辑表、查看空态解释和记录编辑入口。" type="button" class="stx-ui-tab">
+          <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="查看关系与结构状态、空态解释，以及记录编辑入口。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-table-cells-large"></i>
-            <span>逻辑表维护</span>
+            <span>关系与结构</span>
           </button>
           <button id="${ids.tabInjectionId}" data-stx-mode="basic" data-tip="查看数据分层诊断、问题列表与维护动作。" type="button" class="stx-ui-tab">
             <i class="fa-solid fa-stethoscope"></i>
@@ -400,15 +400,15 @@ export function buildSettingsCardHtmlTemplate(
           <div class="stx-ui-experience-grid">
             <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>逻辑表说明</h3>
-                <p>当前页用于维护稳定结构化行，空表时会解释可能来源。</p>
+                <h3>结构状态说明</h3>
+                <p>当前页用于解释稳定结构化行的状态；空表时也会提示数据可能停留在哪一层。</p>
               </div>
               <div id="${ids.relationLanesId}"></div>
             </section>
             <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>逻辑表维护</h3>
-                <p>选择实体类型后可查看当前 materialized rows，并继续使用原有双击编辑能力。</p>
+                <h3>当前稳定结构表</h3>
+                <p>选择实体类型后可查看当前 materialized rows；更完整的逐行维护与来源排查请进入记录编辑器。</p>
               </div>
               <div class="stx-ui-actions" style="justify-content: space-between; align-items: center; width: 100%;">
                 <div style="display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1 1 auto;">
@@ -898,13 +898,10 @@ export function buildSettingsCardHtmlTemplate(
 
           <div class="stx-ui-item stx-ui-item-stack" style="margin-top: 8px;">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">逻辑表维护入口已迁移</div>
-              <div class="stx-ui-item-desc">基础模式现在提供独立的“逻辑表维护”页；这里保留模板、世界书写回和审计工具。</div>
+              <div class="stx-ui-item-title">记录编辑器入口</div>
+              <div class="stx-ui-item-desc">结构化维护与来源排查现在统一从记录编辑器进入；这里保留模板、世界书写回和审计工具。</div>
             </div>
             <div class="stx-ui-actions">
-              <button data-stx-editor-action="open-logic-maintenance" type="button" class="stx-ui-btn secondary" data-tip="跳到基础模式中的逻辑表维护页。">
-                <i class="fa-solid fa-table-cells-large"></i>&nbsp;打开逻辑表维护页
-              </button>
               <button id="${ids.recordEditorBtnId}" type="button" class="stx-ui-btn" data-tip="继续使用记录编辑器查看原始数据。">
                 <i class="fa-solid fa-pen-to-square"></i>&nbsp;打开记录编辑器
               </button>

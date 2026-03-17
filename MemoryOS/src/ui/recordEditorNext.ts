@@ -7,7 +7,7 @@ import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import { readPluginSignal, readSdkPluginChatState } from '../../../SDK/db';
-import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
@@ -44,6 +44,24 @@ interface ChatItemMeta {
     archived: boolean;
     hostMissing: boolean;
     archiveReason: string;
+}
+
+async function hasMeaningfulChatContent(chatKey: string): Promise<boolean> {
+    const normalizedChatKey = String(chatKey ?? '').trim();
+    if (!normalizedChatKey) {
+        return false;
+    }
+
+    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow] = await Promise.all([
+        db.events.where('chatKey').equals(normalizedChatKey).first(),
+        db.facts.where('[chatKey+updatedAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
+        db.world_state.where('[chatKey+path]').between([normalizedChatKey, ''], [normalizedChatKey, '\uffff']).first(),
+        db.summaries.where('[chatKey+level+createdAt]').between([normalizedChatKey, '', 0], [normalizedChatKey, '\uffff', Infinity]).first(),
+        db.templates.where('[chatKey+createdAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
+        db.audit.where('chatKey').equals(normalizedChatKey).first(),
+    ]);
+
+    return Boolean(eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow);
 }
 
 type RawRecord = Record<string, unknown>;
@@ -1434,12 +1452,33 @@ export async function openRecordEditor(): Promise<void> {
                     .filter(Boolean),
             );
 
-            const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<ChatItemMeta> => {
+            const hostChatKeySet = new Set(
+                (Array.isArray(hostChats) ? hostChats : [])
+                    .map((item: unknown): string => {
+                        const locator = (item as { locator?: Record<string, unknown> })?.locator;
+                        if (!locator || typeof locator !== 'object') {
+                            return '';
+                        }
+                        return String(buildTavernChatScopedKeyEvent(locator as any) || '').trim();
+                    })
+                    .filter(Boolean),
+            );
+
+            const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }> => {
                 const signal = await readPluginSignal(chatKey, MEMORY_OS_PLUGIN_ID);
-                return buildChatItemMeta(chatKey, signal, hostCanonicalKeySet);
+                const [item, hasMeaningfulData] = await Promise.all([
+                    buildChatItemMeta(chatKey, signal, hostCanonicalKeySet),
+                    hasMeaningfulChatContent(chatKey),
+                ]);
+                const hostPresent = hostChatKeySet.has(chatKey) || Boolean(item.canonicalKey && hostCanonicalKeySet.has(item.canonicalKey));
+                return {
+                    ...item,
+                    hostPresent,
+                    hasMeaningfulData,
+                };
             }));
             const activeCanonicalKey = resolveChatItemCanonicalKey(currentChatKey);
-            const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta>, item: ChatItemMeta) => {
+            const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }>, item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }) => {
                 const dedupeKey = item.canonicalKey || item.chatKey;
                 const existing = map.get(dedupeKey);
                 if (!existing) {
@@ -1458,12 +1497,16 @@ export async function openRecordEditor(): Promise<void> {
                     ...preferredItem,
                     archived: existing.archived || item.archived,
                     hostMissing: existing.hostMissing || item.hostMissing,
+                    hostPresent: existing.hostPresent || item.hostPresent,
+                    hasMeaningfulData: existing.hasMeaningfulData || item.hasMeaningfulData,
                     archiveReason: preferredItem.archiveReason || existing.archiveReason || item.archiveReason,
                     signal: preferredItem.signal || existing.signal || item.signal,
-                } as ChatItemMeta;
+                } as ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean };
                 map.set(dedupeKey, mergedItem);
                 return map;
-            }, new Map<string, ChatItemMeta>()).values());
+            }, new Map<string, ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }>()).values()).filter((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): boolean => {
+                return item.hostPresent || item.hasMeaningfulData || item.archived;
+            });
 
             const allItemHtml = `
                 <div class="stx-re-chat-item${currentChatKey ? '' : ' is-active'}" data-chat-key="">
@@ -1479,8 +1522,8 @@ export async function openRecordEditor(): Promise<void> {
             `;
 
             const listHtml = dedupedItems
-                .sort((left: ChatItemMeta, right: ChatItemMeta): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
-                .map((item: ChatItemMeta): string => {
+                .sort((left: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }, right: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
+                .map((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): string => {
                     const deleted = item.archived || item.hostMissing;
                     const deletedReason = item.archiveReason || (item.hostMissing ? 'host_chat_deleted' : '');
                     return `

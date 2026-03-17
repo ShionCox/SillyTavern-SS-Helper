@@ -1924,10 +1924,6 @@ function buildEditorActionButton(action: string, label: string, tone: 'primary' 
     return `<button type="button" class="stx-ui-btn${tone === 'secondary' ? ' secondary' : ''}" data-stx-editor-action="${escapeHtml(action)}">${escapeHtml(label)}</button>`;
 }
 
-function buildLogicMaintenanceJumpButton(hint: string, label: string = '跳到逻辑维护'): string {
-    return `<button type="button" class="stx-ui-btn secondary" data-stx-jump-logic-table="${escapeHtml(hint)}">${escapeHtml(label)}</button>`;
-}
-
 function buildCharacterRoleButtons(chatKey: string, actorKey: string, currentRole: CharacterRoleMark): string {
     return (['primary', 'secondary', 'pending'] as CharacterRoleMark[]).map((role: CharacterRoleMark): string => {
         const tone = currentRole === role ? 'primary' : 'secondary';
@@ -1942,7 +1938,7 @@ function formatSuggestedActionLabel(action: string): string {
         case 'refresh_seed':
             return '刷新初始设定';
         case 'normalize_rows':
-            return '检查逻辑表';
+            return '检查结构化行';
         case 'review_candidates':
             return '查看候选来源';
         default:
@@ -1960,7 +1956,7 @@ function buildSuggestedActionButtons(actions: string[]): string {
             return buildEditorActionButton('refresh-seed', formatSuggestedActionLabel(action));
         }
         if (action === 'normalize_rows') {
-            return buildEditorActionButton('open-logic-maintenance', formatSuggestedActionLabel(action));
+            return buildEditorActionButton('view-hidden-rows', '打开记录编辑器');
         }
         if (action === 'review_candidates') {
             return buildEditorActionButton('view-candidate-sources', formatSuggestedActionLabel(action));
@@ -2113,7 +2109,7 @@ function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[]
             iconClassName: roleMark === 'primary' ? 'fa-solid fa-crown' : roleMark === 'secondary' ? 'fa-solid fa-user' : 'fa-solid fa-circle-question',
             sourcePayload: buildCharacterSourcePayload(item),
             actionsHtml: [
-                buildLogicMaintenanceJumpButton('character'),
+                buildEditorActionButton('view-hidden-rows', '打开记录编辑器'),
                 buildCharacterRoleButtons(canon.chatKey, item.actorKey, roleMark),
             ].join(''),
         };
@@ -2267,7 +2263,7 @@ function buildLocationItems(canon: CanonSnapshot): ExperienceListItem[] {
             tone: relatedCharacters.length > 0 ? 'accent' : 'soft',
             iconClassName: 'fa-solid fa-location-crosshairs',
             sourcePayload: buildSnapshotSourcePayload(item),
-            actionsHtml: buildLogicMaintenanceJumpButton('location'),
+            actionsHtml: buildEditorActionButton('view-hidden-rows', '打开记录编辑器'),
         };
     });
 }
@@ -2307,9 +2303,9 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
     setContainerHtml(
         ids.relationOverviewId,
         buildSummaryCalloutMarkup({
-            eyebrow: '逻辑表维护',
+            eyebrow: '关系与结构状态',
             title: normalizeText(canon.world.templateId, '未绑定世界模板'),
-            copy: '这里会集中展示稳定结构化数据的维护状态。',
+            copy: '这里先解释当前稳定结构、隐藏行与候选层的状态；需要逐行维护时请从记录编辑器进入。',
             copyHtml: [
                 buildSummaryInfoLine('fa-solid fa-brain', '事实行', `${canon.health.dataLayers.factsCount} 条已整理事实`),
                 buildSummaryInfoLine('fa-solid fa-signature', '别名映射', `${canon.health.dataLayers.aliasCount} 条别名映射`),
@@ -2317,7 +2313,7 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
                 buildSummaryInfoLine('fa-solid fa-box-archive', '隐藏墓碑', `${canon.health.dataLayers.tombstoneCount} 条隐藏墓碑`),
             ].join(''),
             footHtml: [
-                buildSummaryInfoLine('fa-solid fa-pen-ruler', '可直接维护', '这里只能直接编辑已经稳定落库的结构化行。'),
+                buildSummaryInfoLine('fa-solid fa-pen-ruler', '维护入口', '逐行编辑与来源排查请从记录编辑器进入。'),
                 buildSummaryInfoLine('fa-solid fa-magnifying-glass', '空表说明', '如果表里暂时为空，下面会继续解释数据可能停留在哪一层。'),
             ].join(''),
             meta: canon.health.maintenanceLabels[0] || '维护页已就绪',
@@ -2421,7 +2417,7 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
                             <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
                             <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">查看世界状态候选</button>
                             <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
-                            <button data-stx-editor-action="open-logic-maintenance" type="button" class="stx-ui-btn secondary">打开逻辑表维护</button>
+                            <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">打开记录编辑器</button>
                         </div>
                         <div class="stx-ui-empty-hint">这些整理动作会优先作用于当前已选逻辑表；如果还没选表，系统会自动挑选最需要处理的一张。</div>
           </div>

@@ -538,13 +538,30 @@ class MemoryOS {
                     db.meta.toCollection().primaryKeys(),
                     db.events.orderBy('chatKey').uniqueKeys(),
                 ]);
-                const chatKeys = Array.from(
+                const allKeys = Array.from(
                     new Set(
                         [...metaKeys, ...eventKeys]
                             .map((item) => String(item ?? '').trim())
                             .filter(Boolean)
                     )
                 );
+
+                const chatKeys = (await Promise.all(allKeys.map(async (chatKey: string): Promise<string | null> => {
+                    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow, bindingRow] = await Promise.all([
+                        db.events.where('chatKey').equals(chatKey).first(),
+                        db.facts.where('[chatKey+updatedAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
+                        db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).first(),
+                        db.summaries.where('[chatKey+level+createdAt]').between([chatKey, '', 0], [chatKey, '\uffff', Infinity]).first(),
+                        db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
+                        db.audit.where('chatKey').equals(chatKey).first(),
+                        db.template_bindings.where('chatKey').equals(chatKey).first(),
+                    ]);
+
+                    return eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow || bindingRow
+                        ? chatKey
+                        : null;
+                }))).filter((item): item is string => Boolean(item));
+
                 return {
                     chatKeys,
                     updatedAt: Date.now(),

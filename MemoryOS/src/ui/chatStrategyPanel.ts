@@ -1,5 +1,6 @@
 import { buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent } from '../../../SDK/tavern';
 import type { SdkTavernChatLocatorEvent } from '../../../SDK/tavern/types';
+import { readSdkPluginChatState } from '../../../SDK/db';
 import { toast } from '../index';
 import { buildSharedButton } from '../../../_Components/sharedButton';
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
@@ -8,12 +9,17 @@ import { buildSharedInputField } from '../../../_Components/sharedInput';
 import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
+import { db } from '../db/db';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { ChatStateManager } from '../core/chat-state-manager';
 import { buildAdaptivePolicy, buildRetentionPolicy } from '../core/chat-strategy-engine';
 import {
     DEFAULT_ADAPTIVE_METRICS,
+    DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_CHAT_PROFILE,
+    DEFAULT_EFFECTIVE_PRESET_BUNDLE,
     DEFAULT_MEMORY_QUALITY,
+    DEFAULT_PROMPT_INJECTION_PROFILE,
     DEFAULT_RETENTION_POLICY,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
@@ -417,6 +423,95 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
  */
 function applyChatStrategyTooltips(): void {
     ensureSharedTooltip();
+}
+
+async function hasPersistedChatStrategyData(chatKey: string): Promise<boolean> {
+    const normalizedChatKey: string = String(chatKey ?? '').trim();
+    if (!normalizedChatKey) {
+        return false;
+    }
+
+    const [
+        eventRow,
+        factRow,
+        worldStateRow,
+        summaryRow,
+        templateRow,
+        auditRow,
+        bindingRow,
+        pluginStateRow,
+    ] = await Promise.all([
+        db.events.where('chatKey').equals(normalizedChatKey).first(),
+        db.facts.where('[chatKey+updatedAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
+        db.world_state.where('[chatKey+path]').between([normalizedChatKey, ''], [normalizedChatKey, '\uffff']).first(),
+        db.summaries.where('[chatKey+level+createdAt]').between([normalizedChatKey, '', 0], [normalizedChatKey, '\uffff', Infinity]).first(),
+        db.templates.where('[chatKey+createdAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
+        db.audit.where('chatKey').equals(normalizedChatKey).first(),
+        db.template_bindings.where('chatKey').equals(normalizedChatKey).first(),
+        readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizedChatKey).catch(() => null),
+    ]);
+
+    return Boolean(
+        eventRow
+        || factRow
+        || worldStateRow
+        || summaryRow
+        || templateRow
+        || auditRow
+        || bindingRow
+        || pluginStateRow,
+    );
+}
+
+function buildEphemeralChatStrategySnapshot(chatKey: string): ChatStrategySnapshot {
+    const effectiveProfile: ChatProfile = {
+        ...DEFAULT_CHAT_PROFILE,
+        vectorStrategy: {
+            ...DEFAULT_CHAT_PROFILE.vectorStrategy,
+        },
+    };
+    const effectiveRetention: RetentionPolicy = {
+        ...DEFAULT_RETENTION_POLICY,
+    };
+    const vectorLifecycle: VectorLifecycleState = {
+        ...DEFAULT_VECTOR_LIFECYCLE,
+    };
+    const memoryQuality: MemoryQualityScorecard = {
+        ...DEFAULT_MEMORY_QUALITY,
+        dimensions: {
+            ...DEFAULT_MEMORY_QUALITY.dimensions,
+        },
+    };
+    const effectivePolicy: AdaptivePolicy = buildAdaptivePolicy(
+        effectiveProfile,
+        { ...DEFAULT_ADAPTIVE_METRICS },
+        vectorLifecycle,
+        memoryQuality,
+    );
+
+    return {
+        chatKey,
+        autoProfile: effectiveProfile,
+        autoPolicy: effectivePolicy,
+        autoRetention: effectiveRetention,
+        effectiveProfile,
+        effectivePolicy,
+        effectiveRetention,
+        metrics: { ...DEFAULT_ADAPTIVE_METRICS },
+        vectorLifecycle,
+        memoryQuality,
+        maintenanceAdvice: [],
+        maintenanceInsights: [],
+        lifecycleState: { ...DEFAULT_CHAT_LIFECYCLE_STATE },
+        decision: null,
+        preDecision: null,
+        postDecision: null,
+        promptInjectionProfile: { ...DEFAULT_PROMPT_INJECTION_PROFILE },
+        effectivePresetBundle: { ...DEFAULT_EFFECTIVE_PRESET_BUNDLE },
+        userFacingPreset: null,
+        groupMemory: null,
+        overrides: {},
+    };
 }
 
 /**
@@ -2279,6 +2374,10 @@ async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promi
  * @returns 聊天策略快照。
  */
 async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySnapshot> {
+    if (!(await hasPersistedChatStrategyData(chatKey))) {
+        return buildEphemeralChatStrategySnapshot(chatKey);
+    }
+
     const manager: ChatStateManager = new ChatStateManager(chatKey);
     try {
         const state = await manager.load();

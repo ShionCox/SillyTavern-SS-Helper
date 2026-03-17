@@ -764,6 +764,9 @@ export class MemorySDKImpl implements MemorySDK {
         preview: () => {
             return this.worldInfoWriter.previewWriteback();
         },
+        /**
+         * @deprecated 仅保留给旧世界书/事实表兼容调用；新编辑器请改用 logicTable.* / rows.*。
+         */
         getLogicTable: async (entityType: string, opts?: LogicTableQueryOpts) => {
             const facts = await this.factsManager.query({
                 type: entityType,

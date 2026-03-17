@@ -1707,6 +1707,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       left: 0;
       width: 100vw;
       height: 100vh;
+      padding: 20px;
+      box-sizing: border-box;
       background: var(--ss-theme-backdrop, rgba(10, 10, 12, 0.85));
       backdrop-filter: var(--ss-theme-backdrop-filter, blur(12px));
       -webkit-backdrop-filter: var(--ss-theme-backdrop-filter, blur(12px));
@@ -1718,8 +1720,38 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-family: inherit;
     }
 
+    .stx-record-editor-overlay .stx-shared-dialog-surface[data-stx-dialog-layout="bare"] {
+      width: 100%;
+      max-width: calc(100vw - 40px);
+      height: 100%;
+      max-height: calc(100vh - 40px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;
+    }
+
+    .stx-record-editor-overlay .stx-shared-dialog-content {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      overflow: visible;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .stx-record-editor-overlay .stx-shared-dialog-content > * {
+      margin-inline: 0;
+    }
+
+    .stx-record-editor-overlay .stx-shared-dialog-content > .stx-record-editor {
+      width: 80%;
+      margin-inline: auto;
+    }
+
     .stx-record-editor {
-      width: min(1560px, 94vw);
+      width: 80%;
       height: min(92vh, 980px);
       max-width: calc(100vw - 28px);
       max-height: calc(100vh - 28px);
@@ -1736,6 +1768,168 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     @keyframes stxPopIn {
       to { transform: scale(1); }
+    }
+
+    @media (max-width: 960px) {
+      .stx-record-editor-overlay {
+        padding: 14px;
+      }
+
+      .stx-record-editor-overlay .stx-shared-dialog-surface[data-stx-dialog-layout="bare"] {
+        max-width: calc(100vw - 28px);
+        max-height: calc(100vh - 28px);
+      }
+
+      .stx-record-editor-overlay .stx-shared-dialog-content > .stx-record-editor,
+      .stx-record-editor {
+        width: 100%;
+        height: calc(100vh - 28px);
+        max-width: calc(100vw - 28px);
+        max-height: calc(100vh - 28px);
+      }
+
+      .stx-re-sidebar {
+        width: 240px;
+      }
+
+      .stx-re-header,
+      .stx-re-view-tabs,
+      .stx-re-tabs,
+      .stx-re-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .stx-record-editor-overlay {
+        padding: 0;
+      }
+
+      .stx-record-editor-overlay .stx-shared-dialog-surface[data-stx-dialog-layout="bare"] {
+        width: 100vw;
+        max-width: 100vw;
+        height: 100dvh;
+        max-height: 100dvh;
+      }
+
+      .stx-record-editor-overlay .stx-shared-dialog-content {
+        width: 100vw;
+        height: 100dvh;
+      }
+
+      .stx-record-editor-overlay .stx-shared-dialog-content > .stx-record-editor,
+      .stx-record-editor {
+        width: 100vw;
+        height: 100dvh;
+        max-width: 100vw;
+        max-height: 100dvh;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+      }
+
+      .stx-re-header {
+        padding: 12px 14px;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .stx-re-title {
+        min-width: 0;
+        font-size: 16px;
+        gap: 8px;
+      }
+
+      .stx-re-header-actions {
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .stx-re-header-actions .stx-re-btn {
+        max-width: 148px;
+        padding: 4px 8px;
+        font-size: 10px;
+        line-height: 1.35;
+        white-space: normal;
+        text-align: center;
+      }
+
+      .stx-re-body {
+        flex-direction: column;
+      }
+
+      .stx-re-sidebar {
+        width: 100%;
+        max-height: 34vh;
+        border-right: 0;
+        border-bottom: 1px solid var(--ss-theme-border, rgba(255,255,255,0.06));
+      }
+
+      .stx-re-sidebar-title {
+        padding: 10px 14px;
+      }
+
+      .stx-re-sidebar-list {
+        padding: 8px 10px;
+      }
+
+      .stx-re-main {
+        min-height: 0;
+      }
+
+      .stx-re-view-tabs,
+      .stx-re-tabs {
+        padding: 10px 12px 8px;
+        gap: 8px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .stx-re-view-tabs::-webkit-scrollbar,
+      .stx-re-tabs::-webkit-scrollbar {
+        display: none;
+      }
+
+      .stx-re-tab,
+      .stx-re-view-tabs .stx-re-tab {
+        min-width: max-content;
+        flex: 0 0 auto;
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+
+      .stx-re-table th,
+      .stx-re-table td {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .stx-re-actions {
+        flex-wrap: wrap;
+      }
+
+      .stx-re-footer {
+        padding: 12px 14px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+
+      .stx-re-footer-left,
+      .stx-re-footer-right {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .stx-re-footer-right {
+        justify-content: stretch;
+      }
+
+      .stx-re-pending-msg,
+      .stx-re-btn.save {
+        width: 100%;
+      }
     }
 
     .stx-re-header {
