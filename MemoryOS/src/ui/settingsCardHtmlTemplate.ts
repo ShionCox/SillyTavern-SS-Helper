@@ -307,58 +307,67 @@ export function buildSettingsCardHtmlTemplate(
         </div>
 
         <div class="stx-ui-tabs stx-ui-tabs-primary">
-          <button id="${ids.tabRoleId}" data-stx-mode="basic" data-tip="查看角色当前记住了什么。" type="button" class="stx-ui-tab is-active">
-            <i class="fa-solid fa-brain"></i>
-            <span>角色记忆</span>
+          <button id="${ids.tabRoleId}" data-stx-mode="basic" data-tip="查看当前聊天的世界观总览、场景和健康度。" type="button" class="stx-ui-tab is-active">
+            <i class="fa-solid fa-compass"></i>
+            <span>总览</span>
           </button>
-          <button id="${ids.tabRecentId}" data-stx-mode="basic" data-tip="查看最近沉淀的事件与摘要。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-clock"></i>
-            <span>近期事件</span>
+          <button id="${ids.tabRecentId}" data-stx-mode="basic" data-tip="按角色和地点浏览当前聊天的实体。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-map-location-dot"></i>
+            <span>角色与地点</span>
           </button>
-          <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="查看关系状态与当前场景。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-people-arrows"></i>
-            <span>关系与状态</span>
+          <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="维护逻辑表、查看空态解释和记录编辑入口。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-table-cells-large"></i>
+            <span>逻辑表维护</span>
           </button>
-          <button id="${ids.tabInjectionId}" data-stx-mode="basic" data-tip="查看本轮注入与写回判定。" type="button" class="stx-ui-tab">
-            <i class="fa-solid fa-wand-magic-sparkles"></i>
-            <span>本轮注入</span>
+          <button id="${ids.tabInjectionId}" data-stx-mode="basic" data-tip="查看数据分层诊断、问题列表与维护动作。" type="button" class="stx-ui-tab">
+            <i class="fa-solid fa-stethoscope"></i>
+            <span>诊断</span>
           </button>
         </div>
 
         <div id="${ids.panelRoleId}" class="stx-ui-panel">
           <div class="stx-ui-experience-shell">
             <div class="stx-ui-actions stx-ui-experience-actions">
-              <button id="${ids.experienceRecordEditorBtnId}" type="button" class="stx-ui-btn" data-tip="打开记录编辑器，手动修正记忆。">
-                <i class="fa-solid fa-pen-to-square"></i>&nbsp;手动修正记忆
+              <button id="${ids.experienceRecordEditorBtnId}" type="button" class="stx-ui-btn" data-tip="打开记录编辑器，直接查看 facts、state、summary 与事件。">
+                <i class="fa-solid fa-pen-to-square"></i>&nbsp;打开记录编辑器
               </button>
-              <button id="${ids.experienceSnapshotBtnId}" type="button" class="stx-ui-btn secondary" data-tip="创建快照，方便回滚当前记忆状态。">
-                <i class="fa-solid fa-camera"></i>&nbsp;创建快照
+              <button id="${ids.experienceSnapshotBtnId}" type="button" class="stx-ui-btn secondary" data-tip="立即重建 logical chat view。">
+                <i class="fa-solid fa-rotate"></i>&nbsp;重建 chat view
+              </button>
+              <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary" data-tip="重新提取并刷新 semantic seed。">
+                <i class="fa-solid fa-seedling"></i>&nbsp;刷新 seed
               </button>
               <button id="${ids.experienceAdvancedBtnId}" type="button" class="stx-ui-btn secondary" data-tip="切换到高级工具。">
                 <i class="fa-solid fa-sliders"></i>&nbsp;进入高级工具
               </button>
             </div>
             <div id="${ids.roleOverviewMetaId}"></div>
-            <div id="${ids.rolePersonaBadgesId}"></div>
             <div class="stx-ui-experience-grid">
               <section class="stx-ui-experience-card">
                 <div class="stx-ui-experience-card-head">
-                  <h3>长期记住的事实</h3>
-                  <p>更稳定、会长期影响回复的记忆。</p>
+                  <h3>角色概览</h3>
+                  <p>主要角色、别名、身份摘要和最近活跃情况。</p>
+                </div>
+                <div id="${ids.rolePersonaBadgesId}"></div>
+              </section>
+              <section class="stx-ui-experience-card">
+                <div class="stx-ui-experience-card-head">
+                  <h3>当前场景</h3>
+                  <p>当前场景、冲突、待处理事件和参与者。</p>
                 </div>
                 <div id="${ids.rolePrimaryFactsId}"></div>
               </section>
               <section class="stx-ui-experience-card">
                 <div class="stx-ui-experience-card-head">
-                  <h3>近期沉淀的记忆</h3>
-                  <p>最近几轮刚写入、还在活跃使用的内容。</p>
+                  <h3>聊天上下文</h3>
+                  <p>可见消息、最近变动与是否建议重建视图。</p>
                 </div>
                 <div id="${ids.roleRecentMemoryId}"></div>
               </section>
               <section class="stx-ui-experience-card">
                 <div class="stx-ui-experience-card-head">
-                  <h3>遗忘趋势</h3>
-                  <p>当前更可能被压缩、淡化或需要维护的记忆提示。</p>
+                  <h3>健康度</h3>
+                  <p>孤儿事实、草稿修订、问题标签与建议动作。</p>
                 </div>
                 <div id="${ids.roleBlurMemoryId}"></div>
               </section>
@@ -367,51 +376,65 @@ export function buildSettingsCardHtmlTemplate(
         </div>
 
         <div id="${ids.panelRecentId}" class="stx-ui-panel" hidden>
+          <div id="${ids.recentLifecycleId}"></div>
           <div class="stx-ui-experience-grid">
-            <section class="stx-ui-experience-card" style="grid-column-start: span 2;">
+            <section class="stx-ui-experience-card">
               <div class="stx-ui-experience-card-head">
-                <h3>最近事件</h3>
-                <p>按时间查看刚刚入库的消息事件与结构变化。</p>
+                <h3>角色列</h3>
+                <p>按角色浏览身份、关系、地点和活跃时间。</p>
               </div>
               <div id="${ids.recentEventsId}"></div>
             </section>
             <section class="stx-ui-experience-card">
               <div class="stx-ui-experience-card-head">
-                <h3>最近摘要</h3>
-                <p>系统已经压缩出的剧情段落与上下文总结。</p>
+                <h3>地点列</h3>
+                <p>按地点浏览类型、相关角色和最近事件。</p>
               </div>
               <div id="${ids.recentSummariesId}"></div>
-            </section>
-            <section class="stx-ui-experience-card">
-              <div class="stx-ui-experience-card-head">
-                <h3>聊天生命周期</h3>
-                <p>当前阶段、结构变动与质量提示。</p>
-              </div>
-              <div id="${ids.recentLifecycleId}"></div>
             </section>
           </div>
         </div>
 
         <div id="${ids.panelRelationId}" class="stx-ui-panel" hidden>
+          <div id="${ids.relationOverviewId}"></div>
           <div class="stx-ui-experience-grid">
             <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>关系总览</h3>
-                <p>聚焦关系变化、场景推进和当前主导角色。</p>
-              </div>
-              <div id="${ids.relationOverviewId}"></div>
-            </section>
-            <section class="stx-ui-experience-card">
-              <div class="stx-ui-experience-card-head">
-                <h3>角色分支</h3>
-                <p>群聊时按角色展示最近关系、目标和情绪。</p>
+                <h3>逻辑表说明</h3>
+                <p>当前页用于维护稳定结构化行，空表时会解释可能来源。</p>
               </div>
               <div id="${ids.relationLanesId}"></div>
             </section>
-            <section class="stx-ui-experience-card">
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide">
               <div class="stx-ui-experience-card-head">
-                <h3>世界与场景状态</h3>
-                <p>当前会影响记忆和回复的状态缓存。</p>
+                <h3>逻辑表维护</h3>
+                <p>选择实体类型后可查看当前 materialized rows，并继续使用原有双击编辑能力。</p>
+              </div>
+              <div class="stx-ui-actions" style="justify-content: space-between; align-items: center; width: 100%;">
+                <div style="display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1 1 auto;">
+                  <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
+                  <div style="flex: 1 1 auto; min-width: 180px;">${logicTableEntitySelect}</div>
+                  <button id="${ids.logicTableRefreshBtnId}" data-tip="刷新当前逻辑表。" type="button" class="stx-ui-btn secondary" style="padding: 4px 10px; font-size: 12px;">
+                    <i class="fa-solid fa-rotate"></i>
+                  </button>
+                </div>
+                <div class="stx-ui-actions">
+                  <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary" data-tip="刷新 semantic seed 后再回看逻辑表。">
+                    <i class="fa-solid fa-seedling"></i>&nbsp;刷新 seed
+                  </button>
+                  <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary" data-tip="跳到诊断页查看为什么数据对不上。">
+                    <i class="fa-solid fa-stethoscope"></i>&nbsp;去诊断
+                  </button>
+                </div>
+              </div>
+              <div id="${ids.logicTableContainerId}" class="stx-ui-code-surface" data-tip="显示逻辑表；支持双击单元格编辑。">
+                <span style="color: #aaa;">请选择实体类型查看。</span>
+              </div>
+            </section>
+            <section class="stx-ui-experience-card stx-ui-experience-card-wide">
+              <div class="stx-ui-experience-card-head">
+                <h3>表状态与空表解释</h3>
+                <p>展示当前表的 alias / redirect / tombstone 状态；表为空时也会解释数据可能停留在哪一层。</p>
               </div>
               <div id="${ids.relationStateId}"></div>
             </section>
@@ -420,31 +443,31 @@ export function buildSettingsCardHtmlTemplate(
 
         <div id="${ids.panelInjectionId}" class="stx-ui-panel" hidden>
           <div class="stx-ui-experience-grid">
-            <section class="stx-ui-experience-card stx-ui-experience-card-wide">
+            <section class="stx-ui-experience-card">
               <div class="stx-ui-experience-card-head">
-                <h3>本轮注入概览</h3>
-                <p>为什么注入、怎么注入、这轮更偏向哪种记忆。</p>
+                <h3>数据分层诊断</h3>
+                <p>核对 facts、state、summary、template、seed 和 logical view 的存在情况。</p>
               </div>
               <div id="${ids.injectionOverviewId}"></div>
             </section>
             <section class="stx-ui-experience-card">
               <div class="stx-ui-experience-card-head">
-                <h3>注入区段</h3>
-                <p>当前实际用到的记忆区段与预算。</p>
+                <h3>问题列表</h3>
+                <p>聚合维护洞察、健康标签和结构风险提示。</p>
               </div>
               <div id="${ids.injectionSectionsId}"></div>
             </section>
             <section class="stx-ui-experience-card">
               <div class="stx-ui-experience-card-head">
-                <h3>生成后判定</h3>
-                <p>本轮更偏长期写入、短期处理还是摘要重建。</p>
+                <h3>修复动作</h3>
+                <p>优先提供 Phase 1 已有的 rebuild、refresh 和查看动作。</p>
               </div>
               <div id="${ids.injectionPostId}"></div>
             </section>
             <section class="stx-ui-experience-card stx-ui-experience-card-wide stx-ui-experience-card-reason">
               <div class="stx-ui-experience-card-head">
-                <h3>为什么会这样选</h3>
-                <p>当前版本可解释的原因码、世界书决策与生成后判定。</p>
+                <h3>诊断说明</h3>
+                <p>解释当前为什么会空、为什么建议修复，以及下一步维护入口。</p>
               </div>
               <div id="${ids.injectionReasonId}"></div>
             </section>
@@ -873,24 +896,18 @@ export function buildSettingsCardHtmlTemplate(
             </div>
           </div>
 
-          <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 8px;">
+          <div class="stx-ui-item stx-ui-item-stack" style="margin-top: 8px;">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">逻辑表（可编辑）
-                <span style="font-size: 10px; color: #aaa; font-weight: normal; margin-left: 6px;">（双击内容进入编辑）</span>
-              </div>
-              <div class="stx-ui-item-desc">可直接编辑事实，改完会立刻保存。</div>
+              <div class="stx-ui-item-title">逻辑表维护入口已迁移</div>
+              <div class="stx-ui-item-desc">基础模式现在提供独立的“逻辑表维护”页；这里保留模板、世界书写回和审计工具。</div>
             </div>
-            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-              <label style="font-size: 12px; white-space: nowrap;">实体类型：</label>
-              ${logicTableEntitySelect}
-              <button id="${ids.logicTableRefreshBtnId}" data-tip="刷新当前逻辑表。" type="button" class="stx-ui-btn" style="padding: 4px 10px; font-size: 12px;">
-                <i class="fa-solid fa-rotate"></i>
+            <div class="stx-ui-actions">
+              <button data-stx-editor-action="open-logic-maintenance" type="button" class="stx-ui-btn secondary" data-tip="跳到基础模式中的逻辑表维护页。">
+                <i class="fa-solid fa-table-cells-large"></i>&nbsp;打开逻辑表维护页
               </button>
-            </div>
-            <div id="${ids.logicTableContainerId}"
-              style="width: 100%; font-size: 12px; background: rgba(0,0,0,0.15); border-radius: 6px; padding: 6px; max-height: 320px; overflow-y: auto;"
-              data-tip="显示逻辑表；支持双击单元格编辑。">
-              <span style="color: #aaa;">请选择实体类型查看。</span>
+              <button id="${ids.recordEditorBtnId}" type="button" class="stx-ui-btn" data-tip="继续使用记录编辑器查看原始数据。">
+                <i class="fa-solid fa-pen-to-square"></i>&nbsp;打开记录编辑器
+              </button>
             </div>
           </div>
         </div>

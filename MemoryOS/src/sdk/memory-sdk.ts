@@ -1,4 +1,4 @@
-import type { MemorySDK } from '../../../SDK/stx';
+import type { DerivedRowCandidate, LogicTableRepairMode, LogicTableSummary, LogicTableViewModel, MemorySDK } from '../../../SDK/stx';
 import { Logger } from '../../../SDK/logger';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
@@ -25,13 +25,17 @@ import { db, restoreArchivedMemoryChat } from '../db/db';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
+import { MemoryEditorFacade } from './editor-facade';
+import { LogicTableFacade } from './logic-table-facade';
 import type { TemplateTableDef } from '../template/types';
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     AutoSchemaPolicy,
+    CanonSnapshot,
     ChatSemanticSeed,
     ChatProfile,
+    EditorHealthSnapshot,
     EffectivePresetBundle,
     GroupMemoryState,
     InjectionIntent,
@@ -99,6 +103,8 @@ export class MemorySDKImpl implements MemorySDK {
     private rowOperations: RowOperationsManager;
     private promptTrimmer: PromptTrimmer;
     private chatViewManager: ChatViewManager;
+    private editorFacade: MemoryEditorFacade;
+    private logicTableFacade: LogicTableFacade;
     private coldStartPromptPrimeTask: Promise<boolean> | null = null;
     private coldStartExtractPrimeTask: Promise<boolean> | null = null;
 
@@ -143,6 +149,8 @@ export class MemorySDKImpl implements MemorySDK {
         this.rowOperations = new RowOperationsManager(chatKey, this.chatStateManager, this.factsManager, this.auditManager);
         this.promptTrimmer = new PromptTrimmer(chatKey, this.templateManager, this.chatStateManager, this.factsManager);
         this.chatViewManager = new ChatViewManager(chatKey);
+        this.editorFacade = new MemoryEditorFacade(chatKey, this.templateManager, this.chatStateManager);
+        this.logicTableFacade = new LogicTableFacade(chatKey, this.templateManager, this.chatStateManager, this.rowOperations);
     }
 
     /**
@@ -673,6 +681,77 @@ export class MemorySDKImpl implements MemorySDK {
         },
         updateFact: (factKey: string | undefined, type: string, entity: { kind: string; id: string }, path: string, value: any) => {
             return this.factsManager.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });
+        },
+    };
+
+    logicTable = {
+        listLogicTables: (): Promise<LogicTableSummary[]> => {
+            return this.logicTableFacade.listLogicTables();
+        },
+        getLogicTableView: (tableKey: string): Promise<LogicTableViewModel> => {
+            return this.logicTableFacade.getLogicTableView(tableKey);
+        },
+        listBackfillCandidates: (tableKey: string): Promise<DerivedRowCandidate[]> => {
+            return this.logicTableFacade.listBackfillCandidates(tableKey);
+        },
+        promoteDerivedRow: async (tableKey: string, candidateId: string): Promise<void> => {
+            await this.logicTableFacade.promoteDerivedRow(tableKey, candidateId);
+        },
+        mergeRows: async (tableKey: string, sourceRowId: string, targetRowId: string): Promise<void> => {
+            const result = await this.rowOperations.mergeRows(tableKey, sourceRowId, targetRowId);
+            if (!result.success) {
+                throw new Error(result.error || '行合并失败');
+            }
+        },
+        restoreRow: async (tableKey: string, rowId: string): Promise<void> => {
+            await this.rowOperations.restoreRow(tableKey, rowId);
+        },
+        tombstoneRow: async (tableKey: string, rowId: string): Promise<void> => {
+            await this.rowOperations.deleteRow(tableKey, rowId);
+        },
+        setAlias: async (tableKey: string, rowId: string, alias: string): Promise<void> => {
+            await this.chatStateManager.setRowAlias(tableKey, alias, rowId);
+        },
+        updateCell: async (tableKey: string, rowId: string, columnKey: string, value: unknown): Promise<void> => {
+            await this.rowOperations.updateCell(tableKey, rowId, columnKey, value);
+        },
+        repairTable: async (_tableKey: string, mode: LogicTableRepairMode): Promise<void> => {
+            if (mode === 'rebuild_candidates') {
+                await this.editor.refreshSemanticSeed();
+                return;
+            }
+            await this.chatStateManager.runMaintenanceAction('schema_cleanup');
+        },
+    };
+
+    editor = {
+        getCanonSnapshot: (): Promise<CanonSnapshot> => {
+            return this.editorFacade.getCanonSnapshot();
+        },
+        getEditorHealth: (): Promise<EditorHealthSnapshot> => {
+            return this.editorFacade.getEditorHealth();
+        },
+        refreshCanonSnapshot: (): Promise<CanonSnapshot> => {
+            return this.editorFacade.getCanonSnapshot();
+        },
+        rebuildChatView: async (): Promise<LogicalChatView> => {
+            const context = (window as any)?.SillyTavern?.getContext?.();
+            const previous = await this.chatStateManager.getLogicalChatView();
+            const rebuildResult = this.chatViewManager.rebuildFromChat(context?.chat, previous);
+            await this.chatStateManager.setLogicalChatView(rebuildResult.view, 'sdk.editor.rebuild');
+            await this.turnTrackerManager.rebuildFromLogicalView(rebuildResult.view);
+            return rebuildResult.view;
+        },
+        refreshSemanticSeed: async (): Promise<CanonSnapshot> => {
+            const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_);
+            if (bootstrap.seed) {
+                if (bootstrap.bindingFingerprint) {
+                    await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
+                }
+                await this.chatStateManager.saveSemanticSeed(bootstrap.seed, bootstrap.fingerprint);
+                await this.persistSemanticSeed(bootstrap.seed, bootstrap.fingerprint, 'editor_refresh');
+            }
+            return this.editorFacade.getCanonSnapshot();
         },
     };
 

@@ -1,8 +1,11 @@
 import { db, type DBEvent, type DBFact, type DBSummary, type DBWorldState } from '../db/db';
 import type {
+    CanonSnapshot,
+    CharacterSnapshot,
     ChatLifecycleState,
     ChatProfile,
     ChatSemanticSeed,
+    EditorHealthSnapshot,
     GroupMemoryState,
     LatestRecallExplanation,
     MemoryCandidateBufferSnapshot,
@@ -22,17 +25,22 @@ import type {
     RetentionPolicy,
     RelationshipState,
     SimpleMemoryPersona,
+    SnapshotValue,
     SpeakerMemoryLane,
 } from '../../../SDK/stx';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 
 type ExperienceTone = 'accent' | 'soft' | 'warning' | 'success';
+type CharacterRoleMark = 'primary' | 'secondary' | 'pending';
 
 interface ExperienceListItem {
     title: string;
     detail: string;
     meta: string;
     tone?: ExperienceTone;
+    sourcePayload?: string;
+    detailHtml?: string;
+    actionsHtml?: string;
 }
 
 interface ExperienceBadge {
@@ -105,6 +113,50 @@ function escapeHtml(input: unknown): string {
 function normalizeText(value: unknown, fallback: string = '暂无'): string {
     const text: string = String(value ?? '').replace(/\s+/g, ' ').trim();
     return text || fallback;
+}
+
+const CHARACTER_ROLE_LABELS: Record<CharacterRoleMark, string> = {
+    primary: '主角色',
+    secondary: '次角色',
+    pending: '待确认',
+};
+
+const CHARACTER_ROLE_STORAGE_PREFIX = 'stx-memoryos-character-role:';
+
+function getCharacterRoleStorageKey(chatKey: string): string {
+    return `${CHARACTER_ROLE_STORAGE_PREFIX}${String(chatKey ?? '').trim()}`;
+}
+
+function readCharacterRoleMarks(chatKey: string): Record<string, CharacterRoleMark> {
+    if (typeof window === 'undefined' || !window.localStorage || !chatKey) {
+        return {};
+    }
+    try {
+        const raw = window.localStorage.getItem(getCharacterRoleStorageKey(chatKey));
+        if (!raw) {
+            return {};
+        }
+        const parsed = JSON.parse(raw) as Record<string, CharacterRoleMark>;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function deriveDefaultCharacterRole(item: CharacterSnapshot, index: number): CharacterRoleMark {
+    if (index === 0) {
+        return 'primary';
+    }
+    if (item.lastActiveAt) {
+        return 'secondary';
+    }
+    return 'pending';
+}
+
+function resolveCharacterRoleMark(chatKey: string, item: CharacterSnapshot, index: number): CharacterRoleMark {
+    const marks = readCharacterRoleMarks(chatKey);
+    const stored = marks[String(item.actorKey ?? '').trim()];
+    return stored || deriveDefaultCharacterRole(item, index);
 }
 
 const EXPERIENCE_KEY_LABELS: Record<string, string> = {
@@ -1400,10 +1452,13 @@ function buildListMarkup(items: ExperienceListItem[], emptyText: string): string
         ${items.map((item: ExperienceListItem): string => `
           <article class="stx-ui-memory-entry${item.tone ? ` is-${item.tone}` : ''}">
             <div class="stx-ui-memory-entry-head">
-              <strong>${escapeHtml(item.title)}</strong>
-              <span>${escapeHtml(item.meta)}</span>
+                            <strong>${escapeHtml(item.title)}</strong>
+                            <span>${escapeHtml(item.meta)}</span>
             </div>
-            <div class="stx-ui-memory-entry-body">${escapeHtml(item.detail)}</div>
+                        <div class="stx-ui-memory-entry-body">${item.detailHtml ?? escapeHtml(item.detail)}</div>
+                        ${((item.sourcePayload ? `<button type="button" class="stx-ui-btn secondary" data-stx-source-details="${escapeHtml(item.sourcePayload)}">来源</button>` : '') + (item.actionsHtml ?? ''))
+                                ? `<div class="stx-ui-actions">${item.sourcePayload ? `<button type="button" class="stx-ui-btn secondary" data-stx-source-details="${escapeHtml(item.sourcePayload)}">来源</button>` : ''}${item.actionsHtml ?? ''}</div>`
+                                : ''}
           </article>
         `).join('')}
       </div>
@@ -1911,212 +1966,597 @@ function setContainerHtml(id: string, html: string): void {
     element.innerHTML = html;
 }
 
-/**
- * 功能：渲染角色记忆面板。
- * 参数：
- *   ids：设置面板 ID 集。
- *   snapshot：体验快照。
- * 返回：
- *   void：无返回值。
- */
-function renderRolePanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot): void {
-    const longTermFacts: DBFact[] = snapshot.facts.filter(isLongTermFact).slice(0, 5);
-    const recentFacts: DBFact[] = snapshot.facts.filter((fact: DBFact): boolean => !isLongTermFact(fact)).slice(0, 5);
-    const blurCandidates: ExperienceListItem[] = [
-        ...snapshot.lifecycleSummary
-            .filter((item: MemoryLifecycleState): boolean => item.stage === 'blur' || item.stage === 'distorted')
-            .slice(0, 3)
-            .map((item: MemoryLifecycleState): ExperienceListItem => ({
-                title: item.recordKey,
-                detail: item.stage === 'distorted'
-                    ? '这条记忆已经接近“可能误记”区间，后续注入会更谨慎。'
-                    : '这条记忆正在从清晰回忆走向模糊回忆。',
-                meta: `强度 ${Math.round(item.strength * 100)}% · 复述 ${item.rehearsalCount} 次`,
-                tone: item.stage === 'distorted' ? 'warning' : 'soft',
-            })),
-        ...snapshot.maintenanceInsights.slice(0, 2).map((insight: MaintenanceInsight): ExperienceListItem => ({
-            title: insight.shortLabel,
-            detail: insight.detail,
-            meta: insight.actionLabel,
-            tone: insight.severity === 'critical' || insight.severity === 'warning' ? 'warning' : 'soft',
-        })),
-        ...snapshot.summaries.slice(-2).map((summary: DBSummary): ExperienceListItem => ({
-            title: normalizeText(summary.title, '旧摘要'),
-            detail: '如果长期不再提起，这类摘要会先被压缩或归档，属于当前版本里的“遗忘趋势”入口。',
-            meta: `${formatRelativeTime(summary.createdAt)} · 保留上限 ${snapshot.retention.keepSummaryCount}`,
-            tone: 'soft',
-        })),
-    ].slice(0, 4);
-    setContainerHtml(ids.roleOverviewMetaId, buildRoleOverviewMarkupNext(snapshot));
-    setContainerHtml(ids.rolePersonaBadgesId, buildBadgesMarkup(buildPersonaBadges(snapshot)));
-    setContainerHtml(ids.rolePrimaryFactsId, buildPrimaryFactsMarkup(longTermFacts));
-    setContainerHtml(ids.roleRecentMemoryId, buildListMarkup(recentFacts.map(formatFactItem), '最近还没有新的事实沉淀。'));
-    setContainerHtml(ids.roleBlurMemoryId, buildListMarkup(blurCandidates, '当前没有明显的遗忘或压缩提醒。'));
+function hasStableSnapshotValue(value: SnapshotValue | null | undefined): boolean {
+    const normalized = normalizeText(value?.value, '');
+    return Boolean(normalized) && normalized !== '尚未稳定抽取';
 }
 
-/**
- * 功能：渲染近期事件面板。
- * 参数：
- *   ids：设置面板 ID 集。
- *   snapshot：体验快照。
- * 返回：
- *   void：无返回值。
- */
-function renderRecentPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot): void {
-    const lifecycleItems: ExperienceListItem[] = [
+function getStableSnapshotValues(values: SnapshotValue[]): SnapshotValue[] {
+    return Array.isArray(values)
+        ? values.filter((item: SnapshotValue): boolean => hasStableSnapshotValue(item))
+        : [];
+}
+
+function summarizeSnapshotValues(values: SnapshotValue[], limit: number = 3): string {
+    const stableValues = getStableSnapshotValues(values).slice(0, limit).map((item: SnapshotValue): string => item.value);
+    return stableValues.length > 0 ? stableValues.join(' / ') : '尚未稳定抽取';
+}
+
+function formatSourceKindLabel(kind: SnapshotValue['sourceKinds'][number]): string {
+    if (kind === 'fact') return 'fact';
+    if (kind === 'world_state') return 'world_state';
+    if (kind === 'semantic_seed') return 'semantic_seed';
+    if (kind === 'group_memory') return 'group_memory';
+    if (kind === 'summary') return 'summary';
+    if (kind === 'manual') return 'manual';
+    return 'derived';
+}
+
+function formatSnapshotMeta(value: SnapshotValue | null | undefined): string {
+    if (!value) {
+        return '来源待补充';
+    }
+    const sourceText = Array.isArray(value.sourceKinds) && value.sourceKinds.length > 0
+        ? value.sourceKinds.map((item: SnapshotValue['sourceKinds'][number]): string => formatSourceKindLabel(item)).join(' + ')
+        : 'derived';
+    const timeText = Number(value.updatedAt ?? 0) > 0 ? formatRelativeTime(Number(value.updatedAt)) : '来源待补充';
+    return `${sourceText} · ${timeText}`;
+}
+
+function buildSnapshotSourcePayload(value: SnapshotValue | null | undefined): string {
+    if (!value) {
+        return '';
+    }
+    const payload = {
+        value: value.value,
+        confidence: value.confidence,
+        updatedAt: Number(value.updatedAt ?? 0) || null,
+        sourceKinds: Array.isArray(value.sourceKinds) ? value.sourceKinds : [],
+        sourceRefs: Array.isArray(value.sourceRefs) ? value.sourceRefs : [],
+    };
+    try {
+        return encodeURIComponent(JSON.stringify(payload));
+    } catch {
+        return '';
+    }
+}
+
+function collectSnapshotSourceCount(values: Array<SnapshotValue | null | undefined>): number {
+    const refs = new Set<string>();
+    let fallbackCount = 0;
+    values.forEach((value: SnapshotValue | null | undefined): void => {
+        if (!value) {
+            return;
+        }
+        if (Array.isArray(value.sourceRefs) && value.sourceRefs.length > 0) {
+            value.sourceRefs.forEach((ref): void => {
+                refs.add([
+                    String(ref.type ?? ''),
+                    String(ref.recordId ?? ''),
+                    String(ref.path ?? ''),
+                    String(ref.ts ?? ''),
+                    String(ref.note ?? ''),
+                ].join('|'));
+            });
+            return;
+        }
+        fallbackCount += Math.max(1, Array.isArray(value.sourceKinds) ? value.sourceKinds.length : 0);
+    });
+    return refs.size > 0 ? refs.size : fallbackCount;
+}
+
+function collectSnapshotConfidence(values: Array<SnapshotValue | null | undefined>): number {
+    const scores = values
+        .filter((value: SnapshotValue | null | undefined): value is SnapshotValue => Boolean(value) && Number.isFinite(value!.confidence))
+        .map((value: SnapshotValue): number => Number(value.confidence));
+    if (scores.length === 0) {
+        return 0;
+    }
+    return Math.round((scores.reduce((total: number, score: number): number => total + score, 0) / scores.length) * 100);
+}
+
+function buildEditorActionButton(action: string, label: string, tone: 'primary' | 'secondary' = 'secondary'): string {
+    return `<button type="button" class="stx-ui-btn${tone === 'secondary' ? ' secondary' : ''}" data-stx-editor-action="${escapeHtml(action)}">${escapeHtml(label)}</button>`;
+}
+
+function buildLogicMaintenanceJumpButton(hint: string, label: string = '跳到逻辑维护'): string {
+    return `<button type="button" class="stx-ui-btn secondary" data-stx-jump-logic-table="${escapeHtml(hint)}">${escapeHtml(label)}</button>`;
+}
+
+function buildCharacterRoleButtons(chatKey: string, actorKey: string, currentRole: CharacterRoleMark): string {
+    return (['primary', 'secondary', 'pending'] as CharacterRoleMark[]).map((role: CharacterRoleMark): string => {
+        const tone = currentRole === role ? 'primary' : 'secondary';
+        return `<button type="button" class="stx-ui-btn${tone === 'secondary' ? ' secondary' : ''}" data-stx-character-role="${role}" data-stx-chat-key="${escapeHtml(chatKey)}" data-stx-actor-key="${escapeHtml(actorKey)}" aria-pressed="${currentRole === role ? 'true' : 'false'}">${escapeHtml(CHARACTER_ROLE_LABELS[role])}</button>`;
+    }).join('');
+}
+
+function formatSuggestedActionLabel(action: string): string {
+    switch (action) {
+        case 'rebuild_chat_view':
+            return '重建 chat view';
+        case 'refresh_seed':
+            return '刷新 seed';
+        case 'normalize_rows':
+            return '检查逻辑行';
+        case 'review_candidates':
+            return '查看候选来源';
+        default:
+            return normalizeText(action, '人工检查');
+    }
+}
+
+function buildSuggestedActionButtons(actions: string[]): string {
+    const uniqueActions = Array.from(new Set(actions.filter(Boolean)));
+    return uniqueActions.map((action: string): string => {
+        if (action === 'rebuild_chat_view') {
+            return buildEditorActionButton('rebuild-chat-view', formatSuggestedActionLabel(action));
+        }
+        if (action === 'refresh_seed') {
+            return buildEditorActionButton('refresh-seed', formatSuggestedActionLabel(action));
+        }
+        if (action === 'normalize_rows') {
+            return buildEditorActionButton('open-logic-maintenance', formatSuggestedActionLabel(action));
+        }
+        if (action === 'review_candidates') {
+            return buildEditorActionButton('view-candidate-sources', formatSuggestedActionLabel(action));
+        }
+        return '';
+    }).join('');
+}
+
+function buildCharacterSourcePayload(item: CharacterSnapshot): string {
+    return buildSnapshotSourcePayload(item.identities[0] || item.currentLocation || item.aliases[0] || item.relationshipAnchors[0]);
+}
+
+function buildSummaryCalloutMarkup(options: {
+    eyebrow: string;
+    title: string;
+    copy: string;
+    foot?: string;
+    meta?: string;
+    empty?: boolean;
+}): string {
+    return `
+      <div class="stx-ui-summary-callout${options.empty ? ' is-empty-state' : ''}">
+        <div class="stx-ui-summary-callout-head">
+          <div>
+            <div class="stx-ui-summary-eyebrow">${escapeHtml(options.eyebrow)}</div>
+            <div class="stx-ui-summary-title">${escapeHtml(options.title)}</div>
+          </div>
+          ${options.meta ? `<div class="stx-ui-summary-meta">${escapeHtml(options.meta)}</div>` : ''}
+        </div>
+        <div class="stx-ui-summary-copy">${escapeHtml(options.copy)}</div>
+        ${options.foot ? `<div class="stx-ui-summary-foot">${escapeHtml(options.foot)}</div>` : ''}
+      </div>
+    `;
+}
+
+function buildOverviewMarkup(canon: CanonSnapshot): string {
+    const worldTitle = normalizeText(canon.world.templateId, '未绑定模板');
+    const currentLocation = hasStableSnapshotValue(canon.world.currentLocation) ? canon.world.currentLocation!.value : '尚未稳定抽取';
+    const summaryCopy = [
+        canon.world.overview?.value || '总览仍在聚合中',
+        `主要地点：${currentLocation}`,
+        `规则：${summarizeSnapshotValues(canon.world.rules, 2)}`,
+        `硬约束：${summarizeSnapshotValues(canon.world.hardConstraints, 2)}`,
+    ].join(' / ');
+    const foot = [
+        `世界书：${summarizeSnapshotValues(canon.world.activeLorebooks, 2)}`,
+        `群组成员：${summarizeSnapshotValues(canon.world.groupMembers, 3)}`,
+        `刷新于 ${formatRelativeTime(canon.generatedAt)}`,
+    ].join(' / ');
+    const detailItems: ExperienceListItem[] = [
         {
-            title: '聊天阶段',
-            detail: formatLifecycleStage(snapshot.lifecycle),
-            meta: formatLifecycleReasonSummary(snapshot.lifecycle.stageReasonCodes),
+            title: '当前地点',
+            detail: currentLocation,
+            meta: formatSnapshotMeta(canon.world.currentLocation),
+            tone: 'accent',
+            sourcePayload: buildSnapshotSourcePayload(canon.world.currentLocation),
+        },
+        {
+            title: '世界规则',
+            detail: summarizeSnapshotValues(canon.world.rules, 3),
+            meta: formatSnapshotMeta(getStableSnapshotValues(canon.world.rules)[0]),
+            tone: 'soft',
+            sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.rules)[0]),
+        },
+        {
+            title: '硬约束',
+            detail: summarizeSnapshotValues(canon.world.hardConstraints, 3),
+            meta: formatSnapshotMeta(getStableSnapshotValues(canon.world.hardConstraints)[0]),
+            tone: getStableSnapshotValues(canon.world.hardConstraints).length > 0 ? 'warning' : 'soft',
+            sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.hardConstraints)[0]),
+        },
+        {
+            title: '活跃 lorebooks',
+            detail: summarizeSnapshotValues(canon.world.activeLorebooks, 3),
+            meta: `${formatSnapshotMeta(getStableSnapshotValues(canon.world.activeLorebooks)[0])} · ${getStableSnapshotValues(canon.world.activeLorebooks).length} 个来源`,
+            tone: 'soft',
+            sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.activeLorebooks)[0]),
+        },
+        {
+            title: '群组成员',
+            detail: summarizeSnapshotValues(canon.world.groupMembers, 4),
+            meta: `${formatSnapshotMeta(getStableSnapshotValues(canon.world.groupMembers)[0])} · ${getStableSnapshotValues(canon.world.groupMembers).length} 个成员`,
+            tone: 'soft',
+            sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.world.groupMembers)[0]),
+        },
+    ];
+    return buildSummaryCalloutMarkup({
+        eyebrow: '设定总览',
+        title: worldTitle,
+        copy: summaryCopy,
+        foot,
+        meta: canon.health.maintenanceLabels[0] || '状态正常',
+    }) + buildListMarkup(detailItems, '当前还没有稳定的世界概览条目。');
+}
+
+function buildCharacterOverviewItems(canon: CanonSnapshot): ExperienceListItem[] {
+    return canon.characters.slice(0, 8).map((item: CharacterSnapshot, index: number): ExperienceListItem => {
+        const roleMark = resolveCharacterRoleMark(canon.chatKey, item, index);
+        const sourceCount = collectSnapshotSourceCount([...item.identities, ...item.aliases, ...item.relationshipAnchors, item.currentLocation]);
+        const confidence = collectSnapshotConfidence([...item.identities, ...item.aliases, ...item.relationshipAnchors, item.currentLocation]);
+        const detailHtml = `
+            <div>${escapeHtml([
+                summarizeSnapshotValues(item.identities, 2),
+                item.relationshipAnchors.length > 0 ? `关系：${summarizeSnapshotValues(item.relationshipAnchors, 1)}` : '',
+                item.currentLocation?.value ? `地点：${item.currentLocation.value}` : '',
+            ].filter(Boolean).join(' / ') || '当前还没有稳定角色摘要。')}</div>
+            <details style="margin-top: 8px;">
+              <summary style="cursor: pointer;">展开角色详情</summary>
+              <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                <div>别名：${escapeHtml(summarizeSnapshotValues(item.aliases, 3))}</div>
+                <div>身份摘要：${escapeHtml(summarizeSnapshotValues(item.identities, 3))}</div>
+                <div>关系锚点：${escapeHtml(summarizeSnapshotValues(item.relationshipAnchors, 2))}</div>
+                <div>当前所在地点：${escapeHtml(item.currentLocation?.value || '尚未稳定抽取')}</div>
+                <div>最近出现场景：${escapeHtml(canon.scene.currentScene?.value || '尚未稳定抽取')}</div>
+                <div>可信度：${confidence}% / 来源数：${sourceCount}</div>
+              </div>
+            </details>
+        `;
+        return {
+            title: item.displayName,
+            detail: '',
+            detailHtml,
+            meta: [
+                CHARACTER_ROLE_LABELS[roleMark],
+                item.lastActiveAt ? formatRelativeTime(item.lastActiveAt) : '最近未活跃',
+                sourceCount > 0 ? `来源 ${sourceCount} 条` : '来源待补充',
+            ].join(' · '),
+            tone: roleMark === 'primary' ? 'accent' : (roleMark === 'secondary' ? 'soft' : 'warning'),
+            sourcePayload: buildCharacterSourcePayload(item),
+            actionsHtml: [
+                buildLogicMaintenanceJumpButton('character'),
+                buildCharacterRoleButtons(canon.chatKey, item.actorKey, roleMark),
+            ].join(''),
+        };
+    });
+}
+
+function buildSceneItems(canon: CanonSnapshot): ExperienceListItem[] {
+    const items: ExperienceListItem[] = [];
+    items.push({
+        title: '当前场景',
+        detail: canon.scene.currentScene?.value || '尚未稳定抽取',
+        meta: formatSnapshotMeta(canon.scene.currentScene),
+        tone: 'accent',
+        sourcePayload: buildSnapshotSourcePayload(canon.scene.currentScene),
+        actionsHtml: buildEditorActionButton('refresh-canon', '刷新场景聚合'),
+    });
+    items.push({
+        title: '当前冲突',
+        detail: canon.scene.currentConflict?.value || '暂时没有明确冲突',
+        meta: formatSnapshotMeta(canon.scene.currentConflict),
+        tone: canon.scene.currentConflict?.value ? 'warning' : 'soft',
+        sourcePayload: buildSnapshotSourcePayload(canon.scene.currentConflict),
+    });
+    items.push({
+        title: '待处理事件',
+        detail: summarizeSnapshotValues(canon.scene.pendingEvents, 3),
+        meta: getStableSnapshotValues(canon.scene.pendingEvents).length > 0 ? `${getStableSnapshotValues(canon.scene.pendingEvents).length} 条候选` : '暂无待处理事件',
+        tone: 'soft',
+        sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.scene.pendingEvents)[0]),
+    });
+    items.push({
+        title: '当前参与者',
+        detail: summarizeSnapshotValues(canon.scene.participants, 4),
+        meta: getStableSnapshotValues(canon.scene.participants).length > 0 ? `${getStableSnapshotValues(canon.scene.participants).length} 个参与者` : '暂无参与者',
+        tone: 'soft',
+        sourcePayload: buildSnapshotSourcePayload(getStableSnapshotValues(canon.scene.participants)[0]),
+    });
+    return items;
+}
+
+function buildChatContextItems(canon: CanonSnapshot): ExperienceListItem[] {
+    return [
+        {
+            title: '当前有效消息',
+            detail: `${canon.chat.visibleMessageCount} 条`,
+            meta: canon.chat.activeMessageIds.length > 0 ? `活动消息 ${canon.chat.activeMessageIds.length} 条` : '暂无活动消息 ID',
             tone: 'accent',
         },
         {
-            title: '最近变动',
-            detail: snapshot.logicalView?.mutationKinds?.length
-                ? formatMutationKindSummary(snapshot.logicalView.mutationKinds)
-                : '最近没有检测到明显的消息结构变化。',
-            meta: snapshot.logicalView ? formatRelativeTime(snapshot.logicalView.rebuiltAt) : '尚未构建逻辑视图',
+            title: '最近编辑次数',
+            detail: `${canon.chat.editedRevisionCount} 次`,
+            meta: canon.chat.lastMutationAt ? `最近变动 ${formatRelativeTime(canon.chat.lastMutationAt)}` : '暂无变动时间',
+            tone: canon.chat.editedRevisionCount > 0 ? 'warning' : 'soft',
         },
         {
-            title: '记忆质量',
-            detail: `${snapshot.quality.totalScore} 分 · 命中率 ${formatScorePercent(snapshot.quality.dimensions.retrievalPrecision)}`,
-            meta: `抽取接受 ${formatScorePercent(snapshot.quality.dimensions.extractAcceptance)} · 摘要新鲜度 ${formatScorePercent(snapshot.quality.dimensions.summaryFreshness)}`,
-            tone: snapshot.quality.level === 'watch' || snapshot.quality.level === 'poor' || snapshot.quality.level === 'critical'
-                ? 'warning'
-                : 'success',
+            title: '最近删除次数',
+            detail: `${canon.chat.deletedTurnCount} 次`,
+            meta: canon.chat.invalidatedMessageCount > 0 ? `失效消息 ${canon.chat.invalidatedMessageCount} 条` : '当前无失效消息',
+            tone: canon.chat.deletedTurnCount > 0 ? 'warning' : 'soft',
+        },
+        {
+            title: '分支根数量',
+            detail: `${canon.chat.branchRootCount} 个`,
+            meta: canon.chat.mutationKinds.length > 0 ? canon.chat.mutationKinds.join(' / ') : '最近没有明显 mutation',
+            tone: canon.chat.branchRootCount > 0 ? 'warning' : 'soft',
+        },
+        {
+            title: '是否建议 rebuild',
+            detail: canon.chat.rebuildRecommended ? '建议立即 rebuild logical chat view' : '当前无需强制 rebuild',
+            meta: canon.chat.rebuildRecommended ? '建议动作已就绪' : '当前结构稳定',
+            tone: canon.chat.rebuildRecommended ? 'warning' : 'success',
+            actionsHtml: buildEditorActionButton('rebuild-chat-view', '重建 chat view'),
         },
     ];
-    setContainerHtml(ids.recentEventsId, buildListMarkup(snapshot.events.map(formatEventItem).slice(0, 8), '最近还没有新的事件入库。'));
-    setContainerHtml(ids.recentSummariesId, buildListMarkup(snapshot.summaries.map(formatSummaryItem).slice(0, 6), '最近还没有新的摘要。'));
-    setContainerHtml(ids.recentLifecycleId, buildListMarkup(lifecycleItems, '暂无生命周期信息。'));
 }
 
-/**
- * 功能：渲染关系与状态面板。
- * 参数：
- *   ids：设置面板 ID 集。
- *   snapshot：体验快照。
- * 返回：
- *   void：无返回值。
- */
-function renderRelationPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot): void {
-    const laneItems: ExperienceListItem[] = (Array.isArray(snapshot.groupMemory?.lanes) ? snapshot.groupMemory!.lanes : [])
-        .slice(0, 6)
-        .map((lane: SpeakerMemoryLane): ExperienceListItem => ({
-            title: normalizeText(lane.displayName, lane.actorKey),
+function buildHealthItems(health: EditorHealthSnapshot): ExperienceListItem[] {
+    const suggestedActionButtons = buildSuggestedActionButtons(health.suggestedActions);
+    const issueItems = health.issues.slice(0, 4).map((issue): ExperienceListItem => ({
+        title: issue.label,
+        detail: issue.detail,
+        meta: issue.actionLabel || '建议查看诊断页',
+        tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+    }));
+    const headItems: ExperienceListItem[] = [
+        {
+            title: '孤儿事实',
+            detail: `${Number(health.orphanFactsCount ?? 0)} 条`,
+            meta: health.hasDraftRevision ? '存在 schema 草稿修订' : '当前无草稿修订',
+            tone: Number(health.orphanFactsCount ?? 0) > 0 ? 'warning' : 'success',
+        },
+        {
+            title: '一致性风险',
+            detail: `${Math.round(Number(health.duplicateEntityRisk ?? 0) * 100)}%`,
+            meta: health.maintenanceLabels.length > 0 ? health.maintenanceLabels.join(' / ') : '暂无额外风险标签',
+            tone: Number(health.duplicateEntityRisk ?? 0) >= 0.25 ? 'warning' : 'soft',
+        },
+        {
+            title: '建议动作',
+            detail: health.suggestedActions.length > 0 ? health.suggestedActions.map(formatSuggestedActionLabel).join(' / ') : '当前无需额外修复动作',
+            meta: '展开或点击按钮即可执行对应维护入口',
+            tone: health.suggestedActions.length > 0 ? 'accent' : 'soft',
+            actionsHtml: `${suggestedActionButtons}${buildEditorActionButton('open-diagnostics', '查看诊断')}`,
+        },
+    ];
+    return headItems.concat(issueItems).slice(0, 6);
+}
+
+function deriveLocationType(name: string): string {
+    if (/城|市|都|镇|村/.test(name)) return '城市';
+    if (/学院|学校|大学|研究所/.test(name)) return '机构';
+    if (/基地|要塞|据点|营地/.test(name)) return '据点';
+    if (/区域|大陆|王国|帝国|联邦/.test(name)) return '区域';
+    return '地点';
+}
+
+function buildLocationItems(canon: CanonSnapshot): ExperienceListItem[] {
+    const stableLocations = getStableSnapshotValues(canon.world.locations);
+    return stableLocations.slice(0, 8).map((item: SnapshotValue): ExperienceListItem => {
+        const relatedCharacters = canon.characters
+            .filter((character: CharacterSnapshot): boolean => normalizeText(character.currentLocation?.value, '') === item.value)
+            .map((character: CharacterSnapshot): string => character.displayName)
+            .slice(0, 3);
+        const relatedEvents = getStableSnapshotValues(canon.scene.pendingEvents)
+            .filter((eventItem: SnapshotValue): boolean => eventItem.value.includes(item.value))
+            .map((eventItem: SnapshotValue): string => eventItem.value)
+            .slice(0, 2);
+        const sourceCount = collectSnapshotSourceCount([item]);
+        return {
+            title: item.value,
             detail: [
-                lane.relationshipDelta ? `关系：${lane.relationshipDelta}` : '',
-                lane.recentGoal ? `目标：${lane.recentGoal}` : '',
-                lane.lastEmotion ? `情绪：${lane.lastEmotion}` : '',
-            ].filter(Boolean).join(' · ') || '当前还没有形成足够的关系线索。',
-            meta: `${formatRelativeTime(Number(lane.lastActiveAt ?? 0))} · 最近消息 ${Number(lane.recentMessageIds?.length ?? 0)} 条`,
-            tone: lane.relationshipDelta ? 'accent' : 'soft',
-        }));
-    const relationshipItems: ExperienceListItem[] = snapshot.relationshipState
-        .slice(0, 6)
-        .map((item: RelationshipState): ExperienceListItem => ({
-            title: item.scope === 'group_pair'
-                ? normalizeText((Array.isArray(item.participantKeys) ? item.participantKeys.join(' / ') : ''), item.relationshipKey)
-                : normalizeText(item.targetKey, item.relationshipKey),
-            detail: item.summary || '关系仍在形成。',
-            meta: [
-                item.scope === 'group_pair' ? '群聊对象对' : '主角色关系',
-                `信任 ${Math.round(item.trust * 100)}%`,
-                `好感 ${Math.round(item.affection * 100)}%`,
-                item.unresolvedConflict > 0 ? `冲突 ${Math.round(item.unresolvedConflict * 100)}%` : '',
-            ].filter(Boolean).join(' · '),
-            tone: item.unresolvedConflict >= 0.35 ? 'warning' : item.affection >= 0.35 || item.trust >= 0.35 ? 'accent' : 'soft',
-        }));
-    const relationFacts: ExperienceListItem[] = snapshot.facts
-        .filter(isRelationshipFact)
-        .slice(0, 6)
-        .map(formatFactItem);
-    const stateItems: ExperienceListItem[] = snapshot.states
-        .filter((state: DBWorldState): boolean => state.path.startsWith('/semantic/world') || state.path.startsWith('/scene') || state.path.startsWith('/semantic/meta'))
-        .slice(0, 6)
-        .map(formatStateItem);
-    setContainerHtml(ids.relationOverviewId, buildRelationOverviewMarkupNext(snapshot));
-    setContainerHtml(ids.relationLanesId, buildListMarkup(relationshipItems.length > 0 ? relationshipItems : laneItems.length > 0 ? laneItems : relationFacts, '当前还没有形成明显的关系或群聊分支。'));
-    setContainerHtml(ids.relationStateId, buildListMarkup(stateItems, '当前还没有可展示的场景与世界状态。'));
+                `类型：${deriveLocationType(item.value)}`,
+                `所属模板：${normalizeText(canon.world.templateId, '未绑定模板')}`,
+                relatedCharacters.length > 0 ? `相关角色：${relatedCharacters.join(' / ')}` : '',
+                relatedEvents.length > 0 ? `相关事件：${relatedEvents.join(' / ')}` : '',
+            ].filter(Boolean).join(' / ') || '当前还没有更多稳定地点信息。',
+            meta: [formatSnapshotMeta(item), `${relatedCharacters.length} 名相关角色`, `来源 ${sourceCount} 条`].join(' · '),
+            tone: relatedCharacters.length > 0 ? 'accent' : 'soft',
+            sourcePayload: buildSnapshotSourcePayload(item),
+            actionsHtml: buildLogicMaintenanceJumpButton('location'),
+        };
+    });
 }
 
-/**
- * 功能：渲染本轮注入面板。
- * 参数：
- *   ids：设置面板 ID 集。
- *   snapshot：体验快照。
- * 返回：
- *   void：无返回值。
- */
-function renderInjectionPanel(ids: MemoryOSSettingsIds, snapshot: ExperienceSnapshot): void {
-    setContainerHtml(ids.injectionOverviewId, buildInjectionOverviewMarkupNext(snapshot));
-    setContainerHtml(ids.injectionSectionsId, buildInjectionSectionMarkup(snapshot.preDecision));
-    setContainerHtml(ids.injectionReasonId, buildInjectionReasonMarkup(snapshot.latestRecallExplanation));
-    setContainerHtml(ids.injectionPostId, buildListMarkup(buildPostDecisionItems(snapshot.postDecision), '最近还没有生成后的写回判定。'));
+function renderRolePanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
+    setContainerHtml(ids.roleOverviewMetaId, buildOverviewMarkup(canon));
+    setContainerHtml(ids.rolePersonaBadgesId, buildListMarkup(buildCharacterOverviewItems(canon), '当前还没有稳定角色概览。'));
+    setContainerHtml(ids.rolePrimaryFactsId, buildListMarkup(buildSceneItems(canon), '当前还没有稳定场景摘要。'));
+    setContainerHtml(ids.roleRecentMemoryId, buildListMarkup(buildChatContextItems(canon), '当前还没有稳定聊天上下文。'));
+    setContainerHtml(ids.roleBlurMemoryId, buildListMarkup(buildHealthItems(canon.health), '当前没有明显的健康风险。'));
 }
 
-/**
- * 功能：渲染未绑定聊天时的空状态。
- * 参数：
- *   ids：设置面板 ID 集。
- * 返回：
- *   void：无返回值。
- */
+function renderRecentPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
+    setContainerHtml(
+        ids.recentLifecycleId,
+        buildSummaryCalloutMarkup({
+            eyebrow: '角色与地点',
+            title: `${canon.characters.length} 个角色 / ${getStableSnapshotValues(canon.world.locations).length} 个地点`,
+            copy: '这页是总览和逻辑表之间的浏览层，用来快速看懂角色、地点和它们的当前关系。',
+            foot: `模板 ${normalizeText(canon.world.templateId, '未绑定')} / 更新于 ${formatRelativeTime(canon.generatedAt)}`,
+        }),
+    );
+    setContainerHtml(ids.recentEventsId, buildListMarkup(buildCharacterOverviewItems(canon), '当前还没有可展示的角色卡。'));
+    setContainerHtml(ids.recentSummariesId, buildListMarkup(buildLocationItems(canon), '当前还没有稳定地点，可能仍停留在 seed 或 world_state 中。'));
+}
+
+function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
+    setContainerHtml(
+        ids.relationOverviewId,
+        buildSummaryCalloutMarkup({
+            eyebrow: '逻辑表维护',
+            title: normalizeText(canon.world.templateId, '未绑定模板'),
+            copy: `当前 facts ${canon.health.dataLayers.factsCount} 条 / alias ${canon.health.dataLayers.aliasCount} 条 / redirect ${canon.health.dataLayers.redirectCount} 条 / tombstone ${canon.health.dataLayers.tombstoneCount} 条。`,
+            foot: '这里只有稳定结构化行可以直接编辑；如果表空了，也会解释数据可能还停留在哪一层，并保留候选来源与隐藏行入口。',
+            meta: canon.health.maintenanceLabels[0] || '维护页已就绪',
+        }),
+    );
+    setContainerHtml(
+        ids.relationLanesId,
+        buildListMarkup([
+            {
+                title: '维护边界',
+                detail: 'Phase 1 继续复用现有 rows API，只维护 materialized facts，不把 derived 结果自动写回事实层。',
+                meta: '保持事实写入协议不变',
+                tone: 'accent',
+            },
+            {
+                title: '空表解释',
+                detail: '当前表暂无稳定结构化行时，数据也可能存在于 semantic seed、world_state、group memory 或已隐藏逻辑行里。',
+                meta: '先解释，再维护',
+                tone: 'soft',
+            },
+        ], '当前没有额外的维护说明。'),
+    );
+    setContainerHtml(
+        ids.relationStateId,
+        buildListMarkup(canon.health.issues.slice(0, 4).map((issue) => ({
+            title: issue.label,
+            detail: issue.detail,
+            meta: issue.actionLabel || '查看诊断页',
+            tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+        })), '当前没有明显的逻辑表风险。'),
+    );
+}
+
+function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
+    setContainerHtml(
+        ids.injectionOverviewId,
+        buildListMarkup([
+            {
+                title: 'facts',
+                detail: `${canon.health.dataLayers.factsCount} 条`,
+                meta: canon.health.dataLayers.activeTemplateId || '未绑定模板',
+                tone: 'accent',
+            },
+            {
+                title: 'world_state',
+                detail: `${canon.health.dataLayers.worldStateCount} 条`,
+                meta: canon.health.dataLayers.hasSemanticSeed ? 'semantic seed 已存在' : 'semantic seed 缺失',
+                tone: canon.health.dataLayers.hasSemanticSeed ? 'soft' : 'warning',
+            },
+            {
+                title: 'summary / event',
+                detail: `${canon.health.dataLayers.summaryCount} / ${canon.health.dataLayers.eventCount}`,
+                meta: canon.health.dataLayers.hasLogicalChatView ? 'logical chat view 已存在' : 'logical chat view 缺失',
+                tone: canon.health.dataLayers.hasLogicalChatView ? 'soft' : 'warning',
+            },
+            {
+                title: 'group memory',
+                detail: canon.health.dataLayers.hasGroupMemory ? '已存在' : '缺失',
+                meta: canon.health.dataLayers.hasDraftRevision ? '存在 schema draft' : '当前无 draft',
+                tone: canon.health.dataLayers.hasDraftRevision ? 'warning' : 'soft',
+            },
+            {
+                title: 'alias / redirect / tombstone',
+                detail: `${canon.health.dataLayers.aliasCount} / ${canon.health.dataLayers.redirectCount} / ${canon.health.dataLayers.tombstoneCount}`,
+                meta: '结构维护层状态',
+                tone: (canon.health.dataLayers.redirectCount + canon.health.dataLayers.tombstoneCount) > 0 ? 'warning' : 'soft',
+            },
+        ], '当前还没有可展示的数据分层诊断。'),
+    );
+    setContainerHtml(ids.injectionSectionsId, buildListMarkup(canon.health.issues.map((issue) => ({
+        title: issue.label,
+        detail: issue.detail,
+        meta: issue.actionLabel || '建议人工检查',
+        tone: issue.severity === 'critical' || issue.severity === 'warning' ? 'warning' : 'soft',
+    })), '当前没有问题列表。'));
+    setContainerHtml(
+        ids.injectionPostId,
+        `
+                    <div style="display:flex; flex-direction:column; gap:12px;">
+                        <div class="stx-ui-actions">
+                            <button data-stx-editor-action="rebuild-chat-view" type="button" class="stx-ui-btn secondary">重建 chat view</button>
+                            <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary">刷新 seed</button>
+                            <button data-stx-editor-action="refresh-canon" type="button" class="stx-ui-btn secondary">刷新总览快照</button>
+                        </div>
+                        <div class="stx-ui-actions">
+                            <button data-stx-editor-action="repair-normalize-aliases" type="button" class="stx-ui-btn secondary">规范 alias</button>
+                            <button data-stx-editor-action="repair-compact-tombstones" type="button" class="stx-ui-btn secondary">整理 tombstone</button>
+                            <button data-stx-editor-action="repair-rebuild-candidates" type="button" class="stx-ui-btn secondary">重建候选</button>
+                        </div>
+                        <div class="stx-ui-actions">
+                            <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
+                            <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">world_state 候选</button>
+                            <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
+                            <button data-stx-editor-action="open-logic-maintenance" type="button" class="stx-ui-btn secondary">打开逻辑表维护</button>
+                        </div>
+                        <div class="stx-ui-empty-hint">repair 动作会优先作用于当前已选逻辑表；如果还没选表，会自动挑选最需要处理的一张。</div>
+          </div>
+        `,
+    );
+    setContainerHtml(
+        ids.injectionReasonId,
+        buildSummaryCalloutMarkup({
+            eyebrow: '诊断说明',
+            title: canon.health.maintenanceLabels[0] || '当前没有明显阻塞',
+            copy: canon.health.issues[0]?.detail || '如果主页面看起来很空，优先检查 semantic seed、logical chat view 和 world_state 是否都齐全。',
+            foot: canon.health.suggestedActions.length > 0 ? `建议动作：${canon.health.suggestedActions.join(' / ')}` : '当前没有额外建议动作。',
+            meta: `生成于 ${formatRelativeTime(canon.generatedAt)}`,
+        }),
+    );
+}
+
 function renderEmptyState(ids: MemoryOSSettingsIds): void {
-    const emptyMarkup: string = `
-      <div class="stx-ui-summary-callout is-empty-state">
-        <div class="stx-ui-summary-title">当前还没有绑定聊天</div>
-        <div class="stx-ui-summary-copy">切换到一个可记录的聊天后，这里会显示角色记忆、近期事件、关系状态和本轮注入解释。</div>
-      </div>
-    `;
+    const emptyMarkup: string = buildSummaryCalloutMarkup({
+        eyebrow: '记录编辑器',
+        title: '当前还没有绑定聊天',
+        copy: '切换到一个可记录的聊天后，这里会显示设定总览、角色与地点、逻辑表维护和诊断信息。',
+        empty: true,
+    });
     setContainerHtml(ids.roleOverviewMetaId, emptyMarkup);
-    setContainerHtml(ids.rolePersonaBadgesId, '<div class="stx-ui-empty-hint">等待聊天绑定后生成画像标签。</div>');
-    setContainerHtml(ids.rolePrimaryFactsId, '<div class="stx-ui-empty-hint">暂无长期记忆。</div>');
-    setContainerHtml(ids.roleRecentMemoryId, '<div class="stx-ui-empty-hint">暂无近期记忆。</div>');
-    setContainerHtml(ids.roleBlurMemoryId, '<div class="stx-ui-empty-hint">暂无遗忘趋势。</div>');
-    setContainerHtml(ids.recentEventsId, '<div class="stx-ui-empty-hint">暂无近期事件。</div>');
-    setContainerHtml(ids.recentSummariesId, '<div class="stx-ui-empty-hint">暂无摘要。</div>');
-    setContainerHtml(ids.recentLifecycleId, '<div class="stx-ui-empty-hint">暂无生命周期状态。</div>');
+    setContainerHtml(ids.rolePersonaBadgesId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示角色概览。</div>');
+    setContainerHtml(ids.rolePrimaryFactsId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示当前场景。</div>');
+    setContainerHtml(ids.roleRecentMemoryId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示聊天上下文。</div>');
+    setContainerHtml(ids.roleBlurMemoryId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示健康度和建议动作。</div>');
+    setContainerHtml(ids.recentLifecycleId, emptyMarkup);
+    setContainerHtml(ids.recentEventsId, '<div class="stx-ui-empty-hint">暂无角色卡。</div>');
+    setContainerHtml(ids.recentSummariesId, '<div class="stx-ui-empty-hint">暂无地点卡。</div>');
     setContainerHtml(ids.relationOverviewId, emptyMarkup);
-    setContainerHtml(ids.relationLanesId, '<div class="stx-ui-empty-hint">暂无关系状态。</div>');
-    setContainerHtml(ids.relationStateId, '<div class="stx-ui-empty-hint">暂无世界状态。</div>');
+    setContainerHtml(ids.relationLanesId, '<div class="stx-ui-empty-hint">暂无逻辑表说明。</div>');
+    setContainerHtml(ids.relationStateId, '<div class="stx-ui-empty-hint">暂无维护问题。</div>');
     setContainerHtml(ids.injectionOverviewId, emptyMarkup);
-    setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">暂无注入区段。</div>');
-    setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">暂无注入说明。</div>');
-    setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">暂无生成后判定。</div>');
+    setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">暂无问题列表。</div>');
+    setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">暂无诊断说明。</div>');
+    setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">暂无修复动作。</div>');
     setContainerHtml(ids.tuningMigrationStatusId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示迁移状态。</div>');
 }
 
-/**
- * 功能：渲染加载失败时的错误状态。
- * 参数：
- *   ids：设置面板 ID 集。
- *   message：错误消息。
- * 返回：
- *   void：无返回值。
- */
 function renderLoadErrorState(ids: MemoryOSSettingsIds, message: string): void {
-    const errorMarkup: string = `
-      <div class="stx-ui-summary-callout is-empty-state">
-        <div class="stx-ui-summary-title">体验面板加载失败</div>
-        <div class="stx-ui-summary-copy">${escapeHtml(message)}</div>
-      </div>
-    `;
+    const errorMarkup: string = buildSummaryCalloutMarkup({
+        eyebrow: '记录编辑器',
+        title: 'Phase 1 面板加载失败',
+        copy: message,
+        empty: true,
+    });
     setContainerHtml(ids.roleOverviewMetaId, errorMarkup);
-    setContainerHtml(ids.rolePersonaBadgesId, '<div class="stx-ui-empty-hint">角色画像暂时不可用。</div>');
-    setContainerHtml(ids.rolePrimaryFactsId, '<div class="stx-ui-empty-hint">长期记忆暂时无法读取。</div>');
-    setContainerHtml(ids.roleRecentMemoryId, '<div class="stx-ui-empty-hint">近期记忆暂时无法读取。</div>');
-    setContainerHtml(ids.roleBlurMemoryId, '<div class="stx-ui-empty-hint">遗忘趋势暂时无法读取。</div>');
-    setContainerHtml(ids.recentEventsId, '<div class="stx-ui-empty-hint">近期事件暂时无法读取。</div>');
-    setContainerHtml(ids.recentSummariesId, '<div class="stx-ui-empty-hint">摘要暂时无法读取。</div>');
-    setContainerHtml(ids.recentLifecycleId, '<div class="stx-ui-empty-hint">生命周期暂时无法读取。</div>');
+    setContainerHtml(ids.rolePersonaBadgesId, '<div class="stx-ui-empty-hint">角色概览暂时不可用。</div>');
+    setContainerHtml(ids.rolePrimaryFactsId, '<div class="stx-ui-empty-hint">场景卡暂时不可用。</div>');
+    setContainerHtml(ids.roleRecentMemoryId, '<div class="stx-ui-empty-hint">聊天上下文卡暂时不可用。</div>');
+    setContainerHtml(ids.roleBlurMemoryId, '<div class="stx-ui-empty-hint">健康度卡暂时不可用。</div>');
+    setContainerHtml(ids.recentLifecycleId, errorMarkup);
+    setContainerHtml(ids.recentEventsId, '<div class="stx-ui-empty-hint">角色与地点页暂时不可用。</div>');
+    setContainerHtml(ids.recentSummariesId, '<div class="stx-ui-empty-hint">角色与地点页暂时不可用。</div>');
     setContainerHtml(ids.relationOverviewId, errorMarkup);
-    setContainerHtml(ids.relationLanesId, '<div class="stx-ui-empty-hint">关系状态暂时无法读取。</div>');
-    setContainerHtml(ids.relationStateId, '<div class="stx-ui-empty-hint">世界状态暂时无法读取。</div>');
+    setContainerHtml(ids.relationLanesId, '<div class="stx-ui-empty-hint">逻辑表维护页暂时不可用。</div>');
+    setContainerHtml(ids.relationStateId, '<div class="stx-ui-empty-hint">逻辑表维护页暂时不可用。</div>');
     setContainerHtml(ids.injectionOverviewId, errorMarkup);
-    setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">注入区段暂时无法读取。</div>');
-    setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">注入说明暂时无法读取。</div>');
-    setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">生成后判定暂时无法读取。</div>');
+    setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
+    setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
+    setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
     setContainerHtml(ids.tuningMigrationStatusId, '<div class="stx-ui-empty-hint">迁移状态暂时无法读取。</div>');
 }
 
@@ -2134,12 +2574,15 @@ export async function renderSettingsExperience(ids: MemoryOSSettingsIds): Promis
         return;
     }
     try {
-        const snapshot: ExperienceSnapshot = await loadExperienceSnapshot(memory);
-        renderRolePanel(ids, snapshot);
-        renderRecentPanel(ids, snapshot);
-        renderRelationPanel(ids, snapshot);
-        renderInjectionPanel(ids, snapshot);
-        renderTuningPanel(ids, snapshot);
+        const [canonSnapshot, experienceSnapshot]: [CanonSnapshot, ExperienceSnapshot] = await Promise.all([
+            memory.editor.getCanonSnapshot(),
+            loadExperienceSnapshot(memory),
+        ]);
+        renderRolePanel(ids, canonSnapshot);
+        renderRecentPanel(ids, canonSnapshot);
+        renderRelationPanel(ids, canonSnapshot);
+        renderInjectionPanel(ids, canonSnapshot);
+        renderTuningPanel(ids, experienceSnapshot);
     } catch (error) {
         const message: string = normalizeText(error instanceof Error ? error.message : error, '未知错误');
         renderLoadErrorState(ids, message);

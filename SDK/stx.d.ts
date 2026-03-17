@@ -1018,6 +1018,75 @@ export interface LogicTableQueryOpts {
     keywords?: string[];
 }
 
+export type LogicTableStatus = 'healthy' | 'sparse' | 'hidden' | 'needs_attention';
+
+export interface LogicColumnDef {
+    key: string;
+    label: string;
+    editable: boolean;
+    tier?: 'core' | 'extension';
+    isPrimaryKey?: boolean;
+}
+
+export interface LogicCellValue {
+    value: unknown;
+    editable: boolean;
+    sourceKinds: EditorSourceKind[];
+    confidence?: number;
+}
+
+export interface LogicRowView {
+    rowId: string;
+    displayName: string;
+    rowKind: 'materialized' | 'derived' | 'redirected' | 'tombstoned';
+    values: Record<string, LogicCellValue>;
+    aliases: string[];
+    redirectedTo?: string | null;
+    warnings: string[];
+    sourceRefs: SourceRef[];
+    updatedAt?: number;
+}
+
+export interface DerivedRowCandidate {
+    candidateId: string;
+    tableKey: string;
+    title: string;
+    rowId: string;
+    values: Record<string, LogicCellValue>;
+    aliases: string[];
+    warnings: string[];
+    sourceRefs: SourceRef[];
+    updatedAt?: number;
+}
+
+export interface LogicTableSummary {
+    tableKey: string;
+    title: string;
+    status: LogicTableStatus;
+    materializedRowCount: number;
+    derivedRowCount: number;
+    tombstonedRowCount: number;
+    redirectedRowCount: number;
+}
+
+export interface LogicTableViewModel {
+    tableKey: string;
+    title: string;
+    columns: LogicColumnDef[];
+    status: LogicTableStatus;
+    sourceCoverage: {
+        factRows: number;
+        derivedRows: number;
+        redirectedRows: number;
+        tombstonedRows: number;
+        aliasCount: number;
+    };
+    rows: LogicRowView[];
+    warnings: string[];
+}
+
+export type LogicTableRepairMode = 'normalize_aliases' | 'compact_tombstones' | 'rebuild_candidates';
+
 export interface SchemaContextResult {
     source: 'active_draft' | 'active_final' | 'base_schema' | 'fallback_prompt';
     schemaSummary: string;
@@ -1041,6 +1110,109 @@ export interface RegistryChangeEvent {
     degraded: boolean;
     reason?: string;
     ts: number;
+}
+
+export type EditorSourceKind = 'fact' | 'world_state' | 'semantic_seed' | 'group_memory' | 'summary' | 'manual' | 'derived';
+
+export interface SourceRef {
+    kind: EditorSourceKind;
+    label: string;
+    recordId?: string;
+    path?: string;
+    ts?: number;
+    note?: string;
+}
+
+export interface SnapshotValue {
+    value: string;
+    confidence: number;
+    sourceKinds: EditorSourceKind[];
+    updatedAt?: number;
+    sourceRefs?: SourceRef[];
+}
+
+export interface CharacterSnapshot {
+    actorKey: string;
+    displayName: string;
+    aliases: SnapshotValue[];
+    identities: SnapshotValue[];
+    relationshipAnchors: SnapshotValue[];
+    currentLocation?: SnapshotValue;
+    lastActiveAt?: number;
+    sourceRefs?: SourceRef[];
+}
+
+export interface SceneSnapshot {
+    currentScene?: SnapshotValue | null;
+    currentConflict?: SnapshotValue | null;
+    pendingEvents: SnapshotValue[];
+    participants: SnapshotValue[];
+}
+
+export interface ChatContextSnapshot {
+    visibleMessageCount: number;
+    invalidatedMessageCount: number;
+    activeMessageIds: string[];
+    editedRevisionCount: number;
+    deletedTurnCount: number;
+    branchRootCount: number;
+    mutationKinds: string[];
+    lastMutationAt?: number;
+    rebuildRecommended: boolean;
+}
+
+export type EditorHealthSuggestedAction = 'rebuild_chat_view' | 'refresh_seed' | 'normalize_rows' | 'review_candidates';
+
+export interface EditorHealthIssue {
+    id: string;
+    severity: MaintenanceSeverity;
+    label: string;
+    detail: string;
+    actionLabel?: string;
+}
+
+export interface EditorDataLayerSnapshot {
+    factsCount: number;
+    worldStateCount: number;
+    summaryCount: number;
+    eventCount: number;
+    activeTemplateId?: string | null;
+    hasSemanticSeed: boolean;
+    hasLogicalChatView: boolean;
+    hasGroupMemory: boolean;
+    hasDraftRevision: boolean;
+    aliasCount: number;
+    redirectCount: number;
+    tombstoneCount: number;
+}
+
+export interface EditorHealthSnapshot {
+    orphanFactsCount?: number;
+    duplicateEntityRisk?: number;
+    hasDraftRevision: boolean;
+    maintenanceLabels: string[];
+    suggestedActions: EditorHealthSuggestedAction[];
+    issues: EditorHealthIssue[];
+    dataLayers: EditorDataLayerSnapshot;
+}
+
+export interface CanonSnapshot {
+    chatKey: string;
+    generatedAt: number;
+    world: {
+        templateId?: string | null;
+        currentLocation?: SnapshotValue | null;
+        overview?: SnapshotValue | null;
+        locations: SnapshotValue[];
+        rules: SnapshotValue[];
+        hardConstraints: SnapshotValue[];
+        activeLorebooks: SnapshotValue[];
+        groupMembers: SnapshotValue[];
+    };
+    characters: CharacterSnapshot[];
+    scene: SceneSnapshot;
+    chat: ChatContextSnapshot;
+    health: EditorHealthSnapshot;
 }
 
 // -- MemorySDK 接口 --
@@ -1164,6 +1336,27 @@ export interface MemorySDK {
             path: string,
             value: any
         ): Promise<string>;
+    };
+
+    logicTable: {
+        listLogicTables(): Promise<LogicTableSummary[]>;
+        getLogicTableView(tableKey: string): Promise<LogicTableViewModel>;
+        listBackfillCandidates(tableKey: string): Promise<DerivedRowCandidate[]>;
+        promoteDerivedRow(tableKey: string, candidateId: string): Promise<void>;
+        mergeRows(tableKey: string, sourceRowId: string, targetRowId: string): Promise<void>;
+        restoreRow(tableKey: string, rowId: string): Promise<void>;
+        tombstoneRow(tableKey: string, rowId: string): Promise<void>;
+        setAlias(tableKey: string, rowId: string, alias: string): Promise<void>;
+        updateCell(tableKey: string, rowId: string, columnKey: string, value: unknown): Promise<void>;
+        repairTable(tableKey: string, mode: LogicTableRepairMode): Promise<void>;
+    };
+
+    editor: {
+        getCanonSnapshot(): Promise<CanonSnapshot>;
+        getEditorHealth(): Promise<EditorHealthSnapshot>;
+        refreshCanonSnapshot(): Promise<CanonSnapshot>;
+        rebuildChatView(): Promise<LogicalChatView>;
+        refreshSemanticSeed(): Promise<CanonSnapshot>;
     };
 
     // ─── v2 新增：聊天级状态管理 ───
