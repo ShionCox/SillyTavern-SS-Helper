@@ -23,11 +23,14 @@ const logger = new Logger('MemoryChatLifecycle');
 
 const LLMHUB_PLUGIN_ID = 'stx_llmhub';
 const MEMORYOS_PLUGIN_ID = 'stx_memory_os';
+const ORPHAN_ARTIFACT_BOOTSTRAP_GRACE_MS = 2 * 60 * 1000;
 
-type ManagedPluginId = typeof LLMHUB_PLUGIN_ID | typeof MEMORYOS_PLUGIN_ID;
-
-function getManagedPluginIds(): ManagedPluginId[] {
+function getManagedStatePluginIds(): string[] {
     return [MEMORYOS_PLUGIN_ID, LLMHUB_PLUGIN_ID];
+}
+
+function getManagedRecordPluginIds(): string[] {
+    return [MEMORYOS_PLUGIN_ID];
 }
 
 function buildCurrentScopeEntityKey(): string {
@@ -165,12 +168,21 @@ export class ChatLifecycleManager {
     }
 
     async gcOrphanedArtifacts(): Promise<void> {
+        const hostChats = await listTavernChatsForCurrentScopeEvent().catch((): unknown[] => []);
+        const hostChatKeySet = new Set(
+            (Array.isArray(hostChats) ? hostChats : [])
+                .map((item: any): string => buildTavernChatScopedKeyEvent(item.locator))
+                .filter(Boolean),
+        );
+        const activeRuntimeChatKey = typeof (window as any)?.STX?.memory?.getChatKey === 'function'
+            ? String((window as any).STX.memory.getChatKey() ?? '').trim()
+            : '';
         const [vectorChunks, vectorEmbeddings, vectorMeta, managedStates, managedRecords, documents] = await Promise.all([
             db.vector_chunks.toArray(),
             db.vector_embeddings.toArray(),
             db.vector_meta.toArray(),
-            db.chat_plugin_state.where('pluginId').anyOf(getManagedPluginIds()).toArray(),
-            db.chat_plugin_records.where('pluginId').anyOf(getManagedPluginIds()).toArray(),
+            db.chat_plugin_state.where('pluginId').anyOf(getManagedStatePluginIds()).toArray(),
+            db.chat_plugin_records.where('pluginId').anyOf(getManagedRecordPluginIds()).toArray(),
             db.chat_documents.toArray(),
         ]);
 
@@ -230,6 +242,35 @@ export class ChatLifecycleManager {
                 Promise.resolve(documentSet.has(chatKey)),
             ]);
             if (!coreExists && !hasDocument) {
+                const belongsToCurrentScope = isChatInCurrentScope(chatKey);
+                const hostStillOwnsChat = belongsToCurrentScope && hostChatKeySet.has(chatKey);
+                const isActiveRuntimeChat = Boolean(activeRuntimeChatKey) && activeRuntimeChatKey === chatKey;
+                const freshestArtifactAt = Math.max(
+                    0,
+                    ...managedStates
+                        .filter((row) => String(row.chatKey ?? '').trim() === chatKey)
+                        .map((row) => Number(row.updatedAt ?? 0)),
+                    ...managedRecords
+                        .filter((row) => String(row.chatKey ?? '').trim() === chatKey)
+                        .map((row) => Number(row.updatedAt ?? row.ts ?? 0)),
+                );
+                const isBootstrapGraceWindow = freshestArtifactAt > 0
+                    && (Date.now() - freshestArtifactAt) <= ORPHAN_ARTIFACT_BOOTSTRAP_GRACE_MS;
+
+                if (hostStillOwnsChat || isActiveRuntimeChat || isBootstrapGraceWindow) {
+                    logger.info('[GC][SkipChatArtifacts]', {
+                        chatKey,
+                        reason: hostStillOwnsChat
+                            ? 'host_chat_present'
+                            : isActiveRuntimeChat
+                                ? 'active_runtime_chat'
+                                : 'bootstrap_grace_window',
+                        freshestArtifactAt,
+                        ageMs: freshestArtifactAt > 0 ? Date.now() - freshestArtifactAt : null,
+                    });
+                    continue;
+                }
+
                 await Promise.all([
                     db.vector_chunks.where('chatKey').equals(chatKey).delete(),
                     db.vector_embeddings.where('chatKey').equals(chatKey).delete(),
@@ -237,7 +278,6 @@ export class ChatLifecycleManager {
                     deleteSdkPluginChatState(MEMORYOS_PLUGIN_ID, chatKey),
                     deleteSdkPluginChatRecords(MEMORYOS_PLUGIN_ID, chatKey),
                     deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey),
-                    deleteSdkPluginChatRecords(LLMHUB_PLUGIN_ID, chatKey),
                 ]);
             }
         }
@@ -249,12 +289,15 @@ export class ChatLifecycleManager {
             }
             const nextSignals = { ...(document.shared?.signals ?? {}) };
             let changed = false;
-            for (const pluginId of getManagedPluginIds()) {
+            for (const pluginId of getManagedStatePluginIds()) {
                 const stateKey = `${pluginId}::${chatKey}`;
                 if (!stateKeySet.has(stateKey) && Object.prototype.hasOwnProperty.call(nextSignals, pluginId)) {
                     delete nextSignals[pluginId];
                     changed = true;
                 }
+            }
+            for (const pluginId of getManagedRecordPluginIds()) {
+                const stateKey = `${pluginId}::${chatKey}`;
                 if (!stateKeySet.has(stateKey)) {
                     await deleteSdkPluginChatRecords(pluginId, chatKey);
                 }
@@ -336,9 +379,6 @@ export class ChatLifecycleManager {
     }
 
     private async clearLlmHubArtifacts(chatKey: string): Promise<void> {
-        await Promise.all([
-            deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey),
-            deleteSdkPluginChatRecords(LLMHUB_PLUGIN_ID, chatKey),
-        ]);
+        await deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey);
     }
 }

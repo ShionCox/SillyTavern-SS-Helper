@@ -127,6 +127,7 @@ export interface LLMHubSettingsIds {
     requestLogCountId: string;
     requestLogSearchId: string;
     requestLogStateFilterId: string;
+    requestLogSourceFilterId: string;
     requestLogRefreshBtnId: string;
     requestLogClearBtnId: string;
     requestLogListId: string;

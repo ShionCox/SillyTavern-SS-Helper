@@ -107,16 +107,12 @@ import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
 import { Toast } from '../../SDK/toast';
 import {
-    appendSdkPluginChatRecord,
-    deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
-    querySdkPluginChatRecords,
     readSdkPluginChatState,
-    trimSdkPluginChatRecords,
     writeSdkPluginChatState,
 } from '../../SDK/db';
-import { buildSdkChatKeyEvent, buildTavernChatScopedKeyEvent, parseTavernChatScopedKeyEvent } from '../../SDK/tavern';
+import { buildSdkChatKeyEvent } from '../../SDK/tavern';
 import { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
@@ -146,14 +142,12 @@ import type {
     LLMRequestLogResponseSnapshot,
     LLMRequestLogEntry,
     LLMRequestLogQueryOptions,
-    RequestState,
 } from './schema/types';
+import { RequestLogService } from './log/requestLogService';
 import manifestJson from '../manifest.json';
 
 const LLMHUB_OVERLAY_ROOT_ID = 'stx-llmhub-overlay-root';
 const LLMHUB_OVERLAY_STYLE_ID = 'stx-llmhub-overlay-style';
-const REQUEST_LOG_COLLECTION = 'request_logs_v1';
-const REQUEST_LOG_MAX_PER_CHAT = 300;
 
 export const logger = new Logger('AI 调度中枢');
 export const toast = new Toast('AI 调度中枢');
@@ -163,117 +157,6 @@ export { broadcast, subscribe } from '../../SDK/bus/broadcast';
 type MemoryOsBridgeRuntime = {
     refreshLlmBridgeRegistration?: (reason?: string) => string | void;
 };
-
-function truncateString(value: string, max = 4000): { value: string; truncated: boolean; originalLength: number } {
-    if (value.length <= max) {
-        return { value, truncated: false, originalLength: value.length };
-    }
-    const suffix = ` ...(truncated ${value.length - max} chars)`;
-    return {
-        value: `${value.slice(0, Math.max(0, max - suffix.length))}${suffix}`,
-        truncated: true,
-        originalLength: value.length,
-    };
-}
-
-function sanitizeForLog(value: unknown, options?: { maxDepth?: number; maxArray?: number; maxKeys?: number; maxString?: number }): unknown {
-    const maxDepth = options?.maxDepth ?? 6;
-    const maxArray = options?.maxArray ?? 30;
-    const maxKeys = options?.maxKeys ?? 50;
-    const maxString = options?.maxString ?? 4000;
-    const seen = new WeakSet<object>();
-
-    const walk = (input: unknown, depth: number): unknown => {
-        if (input == null) return input;
-        if (typeof input === 'string') return truncateString(input, maxString).value;
-        if (typeof input === 'number' || typeof input === 'boolean') return input;
-        if (typeof input === 'bigint' || typeof input === 'symbol') return String(input);
-        if (typeof input === 'function') return `[Function ${(input as Function).name || 'anonymous'}]`;
-        if (depth >= maxDepth) return '[MaxDepth]';
-
-        if (Array.isArray(input)) {
-            const limited = input.slice(0, maxArray).map((item) => walk(item, depth + 1));
-            if (input.length > maxArray) {
-                limited.push(`[+${input.length - maxArray} more items]`);
-            }
-            return limited;
-        }
-
-        if (typeof input === 'object') {
-            const objectValue = input as Record<string, unknown>;
-            if (seen.has(objectValue)) return '[Circular]';
-            seen.add(objectValue);
-
-            const keys = Object.keys(objectValue);
-            const limitedKeys = keys.slice(0, maxKeys);
-            const out: Record<string, unknown> = {};
-            for (const key of limitedKeys) {
-                out[key] = walk(objectValue[key], depth + 1);
-            }
-            if (keys.length > maxKeys) {
-                out.__truncatedKeys = keys.length - maxKeys;
-            }
-            return out;
-        }
-
-        try {
-            return JSON.parse(JSON.stringify(input));
-        } catch {
-            return String(input);
-        }
-    };
-
-    return walk(value, 0);
-}
-
-function resolveRequestLogChatKeys(chatKey: string): string[] {
-    const normalized = String(chatKey || '').trim();
-    if (!normalized) {
-        return [];
-    }
-
-    const keys = new Set<string>([normalized]);
-    if (!normalized.includes('::')) {
-        return Array.from(keys);
-    }
-
-    try {
-        const parsed = parseTavernChatScopedKeyEvent(normalized);
-        const fallbackKey = buildTavernChatScopedKeyEvent({
-            tavernInstanceId: parsed.tavernInstanceId,
-            scopeType: parsed.scopeType,
-            scopeId: parsed.scopeId,
-            chatId: 'fallback_chat',
-        });
-        if (fallbackKey) {
-            keys.add(fallbackKey);
-        }
-        if (parsed.scopeType === 'character' && parsed.scopeId !== 'unknown_scope') {
-            const unknownScopeKey = buildTavernChatScopedKeyEvent({
-                tavernInstanceId: parsed.tavernInstanceId,
-                scopeType: parsed.scopeType,
-                scopeId: 'unknown_scope',
-                chatId: parsed.chatId,
-            });
-            if (unknownScopeKey) {
-                keys.add(unknownScopeKey);
-            }
-            const unknownScopeFallbackKey = buildTavernChatScopedKeyEvent({
-                tavernInstanceId: parsed.tavernInstanceId,
-                scopeType: parsed.scopeType,
-                scopeId: 'unknown_scope',
-                chatId: 'fallback_chat',
-            });
-            if (unknownScopeFallbackKey) {
-                keys.add(unknownScopeFallbackKey);
-            }
-        }
-    } catch {
-        // 兼容旧键格式；解析失败时只查询原始 chatKey。
-    }
-
-    return Array.from(keys);
-}
 
 const LLMHUB_MANIFEST: PluginManifest = {
     pluginId: 'stx_llmhub',
@@ -322,6 +205,7 @@ class LLMHub {
     public budgetManager: BudgetManager;
     public sdk: LLMSDKImpl;
     public vault: VaultManager;
+    public requestLogService: RequestLogService;
     private managedResourceIds: Set<string>;
 
     constructor() {
@@ -333,6 +217,7 @@ class LLMHub {
 
         this.budgetManager = new BudgetManager();
         this.vault = new VaultManager();
+        this.requestLogService = new RequestLogService();
         this.managedResourceIds = new Set<string>();
 
         this.orchestrator = new RequestOrchestrator();
@@ -347,7 +232,25 @@ class LLMHub {
         );
         this.sdk.inspect = this.buildInspectApi();
         this.orchestrator.setArchiveCallback((record) => {
-            void this.persistRequestLog(record);
+            logger.info('[RequestLog][ArchiveTrigger]', {
+                requestId: record.requestId,
+                consumer: record.consumer,
+                taskId: record.taskId,
+                state: record.state,
+                chatKey: record.chatKey,
+                reasonCode: record.debug?.reasonCode,
+                finishedAt: record.finishedAt,
+            });
+            void this.requestLogService.archiveRecord(record).catch((error: unknown) => {
+                logger.error('[RequestLog][ArchivePersistFailed]', {
+                    requestId: record.requestId,
+                    consumer: record.consumer,
+                    taskId: record.taskId,
+                    state: record.state,
+                    chatKey: record.chatKey,
+                    error: String((error as Error)?.message || error),
+                });
+            });
         });
 
         this.bindOverlayRenderer();
@@ -748,150 +651,12 @@ class LLMHub {
         this.writeSettings({ ...settings, budgets });
     }
 
-    public async listChatRequestLogs(chatKey: string, opts?: LLMRequestLogQueryOptions): Promise<LLMRequestLogEntry[]> {
-        const keys = resolveRequestLogChatKeys(chatKey);
-        if (keys.length <= 0) return [];
-
-        const recordGroups = await Promise.all(keys.map((key: string) => {
-            return querySdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION, {
-                order: opts?.order || 'desc',
-                fromTs: opts?.fromTs,
-                toTs: opts?.toTs,
-            });
-        }));
-
-        let entries = recordGroups
-            .flat()
-            .map((row) => row.payload as unknown as LLMRequestLogEntry)
-            .filter((entry) => Boolean(entry && entry.requestId));
-
-        const seenLogIds = new Set<string>();
-        entries = entries.filter((entry) => {
-            if (seenLogIds.has(entry.logId)) {
-                return false;
-            }
-            seenLogIds.add(entry.logId);
-            return true;
-        });
-
-        entries.sort((left: LLMRequestLogEntry, right: LLMRequestLogEntry): number => {
-            const leftTs = Number(left.finishedAt ?? left.startedAt ?? left.queuedAt ?? 0);
-            const rightTs = Number(right.finishedAt ?? right.startedAt ?? right.queuedAt ?? 0);
-            return (opts?.order || 'desc') === 'asc' ? leftTs - rightTs : rightTs - leftTs;
-        });
-
-        if (opts?.state && opts.state !== 'all') {
-            entries = entries.filter((entry) => entry.state === opts.state);
-        }
-
-        const searchTerm = String(opts?.search || '').trim().toLowerCase();
-        if (searchTerm) {
-            entries = entries.filter((entry) => {
-                const content = [
-                    entry.consumer,
-                    entry.taskId,
-                    entry.taskDescription,
-                    entry.requestId,
-                    entry.response?.meta?.resourceId,
-                    entry.response?.meta?.model,
-                    entry.response?.reasonCode,
-                ]
-                    .filter(Boolean)
-                    .join(' ')
-                    .toLowerCase();
-                return content.includes(searchTerm);
-            });
-        }
-
-        const offset = Math.max(0, Number(opts?.offset || 0));
-        const limit = Math.max(0, Number(opts?.limit || 0));
-        if (offset > 0) {
-            entries = entries.slice(offset);
-        }
-        if (limit > 0) {
-            entries = entries.slice(0, limit);
-        }
-
-        return entries;
+    public async listRequestLogs(opts?: LLMRequestLogQueryOptions): Promise<LLMRequestLogEntry[]> {
+        return this.requestLogService.listLogs(opts);
     }
 
-    public async clearChatRequestLogs(chatKey: string): Promise<number> {
-        const keys = resolveRequestLogChatKeys(chatKey);
-        if (keys.length <= 0) return 0;
-        const results = await Promise.all(keys.map((key: string) => {
-            return deleteSdkPluginChatRecords('stx_llmhub', key, REQUEST_LOG_COLLECTION);
-        }));
-        return results.reduce((sum: number, count: number): number => sum + Number(count || 0), 0);
-    }
-
-    private buildLogResponseSnapshot(record: RequestRecord): LLMRequestLogResponseSnapshot {
-        const meta = record.meta
-            ? {
-                requestId: record.meta.requestId,
-                resourceId: record.meta.resourceId,
-                model: record.meta.model,
-                capabilityKind: record.meta.capabilityKind,
-                queuedAt: record.meta.queuedAt,
-                startedAt: record.meta.startedAt,
-                finishedAt: record.meta.finishedAt,
-                latencyMs: record.meta.latencyMs,
-                fallbackUsed: record.meta.fallbackUsed,
-            }
-            : undefined;
-
-        return {
-            meta,
-            finalError: record.debug?.finalError,
-            reasonCode: record.debug?.reasonCode,
-            validationErrors: Array.isArray(record.debug?.validationErrors) ? record.debug?.validationErrors.slice(0, 50) : undefined,
-            rawResponseText: typeof record.debug?.rawResponseText === 'string'
-                ? (sanitizeForLog(record.debug.rawResponseText, { maxString: 12000 }) as string)
-                : undefined,
-            parsedResponse: sanitizeForLog(record.debug?.parsedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
-            normalizedResponse: sanitizeForLog(record.debug?.normalizedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
-        };
-    }
-
-    private async persistRequestLog(record: RequestRecord): Promise<void> {
-        if (record.state !== 'completed' && record.state !== 'failed' && record.state !== 'cancelled' && record.state !== 'overlay_waiting') return;
-        const chatKey = String(record.chatKey || '').trim();
-        if (!chatKey) return;
-
-        const requestSnapshot = sanitizeForLog(
-            record.requestLogSnapshot || {
-                taskKind: record.taskKind,
-                taskDescription: record.taskDescription,
-            },
-            { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 },
-        ) as LLMRequestLogRequestSnapshot;
-
-        const responseSnapshot = this.buildLogResponseSnapshot(record);
-        const latencyMs = record.finishedAt && record.startedAt ? Math.max(0, record.finishedAt - record.startedAt) : undefined;
-
-        const logEntry: LLMRequestLogEntry = {
-            logId: `${record.requestId}_${record.finishedAt || Date.now()}`,
-            requestId: record.requestId,
-            chatKey,
-            consumer: record.consumer,
-            taskId: record.taskId,
-            taskDescription: record.taskDescription,
-            taskKind: record.taskKind,
-            state: record.state as RequestState,
-            queuedAt: record.queuedAt,
-            startedAt: record.startedAt,
-            finishedAt: record.finishedAt,
-            latencyMs,
-            request: requestSnapshot,
-            response: responseSnapshot,
-        };
-
-        await appendSdkPluginChatRecord('stx_llmhub', chatKey, REQUEST_LOG_COLLECTION, {
-            recordId: logEntry.logId,
-            payload: logEntry as unknown as Record<string, unknown>,
-            ts: record.finishedAt || record.queuedAt,
-        });
-
-        await trimSdkPluginChatRecords('stx_llmhub', chatKey, REQUEST_LOG_COLLECTION, REQUEST_LOG_MAX_PER_CHAT);
+    public async clearRequestLogs(): Promise<number> {
+        return this.requestLogService.clearLogs();
     }
 
     private buildInspectApi(): LLMInspectApi {

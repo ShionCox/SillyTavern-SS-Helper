@@ -307,7 +307,15 @@ export async function appendSdkPluginChatRecord(
         updatedAt: now,
     };
 
-    await db.chat_plugin_records.add(row);
+    const insertedId = await db.chat_plugin_records.add(row);
+    logger.info('[ChatRecords][Append]', {
+        pluginId,
+        chatKey,
+        collection,
+        recordId: record.recordId,
+        insertedId,
+        ts: row.ts,
+    });
     notifyChange('chat_plugin_records', pluginId, chatKey);
 }
 
@@ -351,6 +359,76 @@ export async function querySdkPluginChatRecords(
     if (opts?.limit && opts.limit > 0) {
         results = results.slice(0, opts.limit);
     }
+
+    logger.info('[ChatRecords][QueryByChat]', {
+        pluginId,
+        chatKey,
+        collection,
+        count: results.length,
+        order,
+        fromTs,
+        toTs,
+        offset: Number(opts?.offset || 0),
+        limit: Number(opts?.limit || 0),
+        sample: results.slice(0, 5).map((row: DBChatPluginRecord) => ({
+            id: row.id,
+            recordId: row.recordId,
+            ts: row.ts,
+        })),
+    });
+
+    return results;
+}
+
+export async function queryAllSdkPluginChatRecords(
+    pluginId: string,
+    collection: string,
+    opts?: QuerySdkPluginChatRecordsOptions,
+): Promise<DBChatPluginRecord[]> {
+    const order = opts?.order ?? 'desc';
+    const fromTs = opts?.fromTs ?? 0;
+    const toTs = opts?.toTs ?? Infinity;
+
+    const allPluginRows = await db.chat_plugin_records
+        .where('pluginId')
+        .equals(pluginId)
+        .toArray();
+
+    let results = allPluginRows.filter((row: DBChatPluginRecord): boolean => {
+        return row.collection === collection && row.ts >= fromTs && row.ts <= toTs;
+    });
+
+    if (order === 'desc') {
+        results.sort((a, b) => b.ts - a.ts);
+    } else {
+        results.sort((a, b) => a.ts - b.ts);
+    }
+
+    if (opts?.offset && opts.offset > 0) {
+        results = results.slice(opts.offset);
+    }
+    if (opts?.limit && opts.limit > 0) {
+        results = results.slice(0, opts.limit);
+    }
+
+    logger.info('[ChatRecords][QueryAll]', {
+        pluginId,
+        collection,
+        totalPluginRows: allPluginRows.length,
+        matchedCount: results.length,
+        order,
+        fromTs,
+        toTs,
+        offset: Number(opts?.offset || 0),
+        limit: Number(opts?.limit || 0),
+        sample: results.slice(0, 5).map((row: DBChatPluginRecord) => ({
+            id: row.id,
+            chatKey: row.chatKey,
+            recordId: row.recordId,
+            ts: row.ts,
+            collection: row.collection,
+        })),
+    });
 
     return results;
 }

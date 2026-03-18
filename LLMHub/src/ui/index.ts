@@ -8,8 +8,9 @@ import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOption
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { showSharedContextMenu } from '../../../_Components/sharedContextMenu';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
+import { Logger } from '../../../SDK/logger';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
-import { buildSdkChatKeyEvent, getTavernConnectionSnapshot } from '../../../SDK/tavern';
+import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
 import type { TavernConnectionInfoItem, TavernConnectionSnapshot } from '../../../SDK/tavern';
 import { discoverConsumers } from '../discovery/consumer-discovery';
 import type { DiscoveredConsumer } from '../discovery/consumer-discovery';
@@ -35,6 +36,7 @@ import type {
 let LLMHUB_THEME_BINDING_READY = false;
 let LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE: (() => void) | null = null;
 let LLMHUB_CONSUMER_DISCOVERY_SEQ = 0;
+const logger = new Logger('LLMHub-UI');
 
 type ProviderLite = { id: string };
 
@@ -54,8 +56,8 @@ type LLMHubRuntime = {
     previewRoute?: (args: import('../schema/types').RouteResolveArgs) => Promise<import('../schema/types').RoutePreviewSnapshot>;
     setBudgetConfig?: (consumer: string, config: BudgetConfig) => void;
     removeBudgetConfig?: (consumer: string) => void;
-    listChatRequestLogs?: (chatKey: string, opts?: LLMRequestLogQueryOptions) => Promise<LLMRequestLogEntry[]>;
-    clearChatRequestLogs?: (chatKey: string) => Promise<number>;
+    listRequestLogs?: (opts?: LLMRequestLogQueryOptions) => Promise<LLMRequestLogEntry[]>;
+    clearRequestLogs?: () => Promise<number>;
     registry?: {
         listConsumerRegistrations?: () => ConsumerSnapshot[];
         subscribe?: (listener: () => void) => (() => void);
@@ -178,6 +180,75 @@ function formatRawLogText(value: unknown): string {
         .replace(/\\r\\n/g, '\n')
         .replace(/\\n/g, '\n')
         .replace(/\\t/g, '\t');
+}
+
+function buildRequestLogOutboundPreview(entry: LLMRequestLogEntry): string {
+    let outbound: unknown = null;
+
+    if (entry.taskKind === 'generation') {
+        outbound = entry.request?.providerRequest ?? null;
+    } else if (entry.taskKind === 'embedding') {
+        outbound = {
+            resourceId: entry.response?.meta?.resourceId,
+            model: entry.response?.meta?.model,
+            texts: Array.isArray(entry.request?.embeddingTexts) ? entry.request.embeddingTexts : [],
+        };
+    } else if (entry.taskKind === 'rerank') {
+        outbound = {
+            resourceId: entry.response?.meta?.resourceId,
+            model: entry.response?.meta?.model,
+            query: entry.request?.rerankQuery,
+            docs: Array.isArray(entry.request?.rerankDocs) ? entry.request.rerankDocs : [],
+            topK: entry.request?.rerankTopK,
+        };
+    }
+
+    if (outbound == null) {
+        return '无原始发送内容';
+    }
+    return typeof outbound === 'string' ? formatRawLogText(outbound) : stringifyDebugValue(outbound);
+}
+
+function buildRequestLogInboundPreview(entry: LLMRequestLogEntry): string {
+    const inbound = entry.response?.rawResponseText
+        ?? entry.response?.parsedResponse
+        ?? entry.response?.finalError
+        ?? entry.response;
+    if (inbound == null || inbound === '') {
+        return '无原始返回内容';
+    }
+    return typeof inbound === 'string' ? formatRawLogText(inbound) : stringifyDebugValue(inbound);
+}
+
+async function writeClipboardText(value: string): Promise<boolean> {
+    const text = String(value || '');
+    if (!text) return false;
+
+    try {
+        if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch {
+        // fallback below
+    }
+
+    try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return ok;
+    } catch {
+        return false;
+    }
 }
 
 function resourceTypeToCapabilities(type: ResourceType): LLMCapability[] {
@@ -342,6 +413,10 @@ function formatDateTime(ts?: number): string {
 
 function buildRequestLogSearchText(entry: LLMRequestLogEntry): string {
     return [
+        entry.sourcePluginId,
+        entry.sessionId,
+        formatRequestLogChatKey(entry.chatKey),
+        entry.chatKey,
         entry.consumer,
         entry.taskId,
         entry.taskDescription,
@@ -355,16 +430,12 @@ function buildRequestLogSearchText(entry: LLMRequestLogEntry): string {
         .toLowerCase();
 }
 
-function formatRequestLogResource(resourceId?: string): string {
-    if (!resourceId) return '未设';
-    if (resourceId === '__builtin_tavern__') return '酒馆直连（内置） (__builtin_tavern__)';
-    return resourceId;
-}
-
-function inferRequestLogSource(resourceId?: string): string {
-    if (!resourceId) return '未知';
-    if (resourceId === '__builtin_tavern__') return '酒馆';
-    return '资源池';
+function formatRequestLogChatKey(chatKey?: string): string {
+    const normalized = String(chatKey || '').trim();
+    if (!normalized) {
+        return '未附带聊天上下文';
+    }
+    return normalized;
 }
 
 function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
@@ -538,6 +609,7 @@ const IDS: LLMHubSettingsIds = {
     requestLogCountId: `${NAMESPACE}-request-log-count`,
     requestLogSearchId: `${NAMESPACE}-request-log-search`,
     requestLogStateFilterId: `${NAMESPACE}-request-log-state`,
+    requestLogSourceFilterId: `${NAMESPACE}-request-log-source`,
     requestLogRefreshBtnId: `${NAMESPACE}-request-log-refresh-btn`,
     requestLogClearBtnId: `${NAMESPACE}-request-log-clear-btn`,
     requestLogListId: `${NAMESPACE}-request-log-list`,
@@ -2065,6 +2137,7 @@ function bindUiEvents(): void {
     const requestLogModal = document.getElementById(IDS.requestLogModalId) as HTMLDialogElement | null;
     const requestLogSearchInput = document.getElementById(IDS.requestLogSearchId) as HTMLInputElement | null;
     const requestLogStateInput = document.getElementById(IDS.requestLogStateFilterId) as HTMLSelectElement | null;
+    const requestLogSourceInput = document.getElementById(IDS.requestLogSourceFilterId) as HTMLSelectElement | null;
     const requestLogListEl = document.getElementById(IDS.requestLogListId);
     const requestLogDetailEl = document.getElementById(IDS.requestLogDetailId);
     const requestLogChatKeyEl = document.getElementById(IDS.requestLogChatKeyId);
@@ -2073,24 +2146,37 @@ function bindUiEvents(): void {
     const requestLogOpenBtn = document.getElementById(IDS.requestLogOpenBtnId) as HTMLButtonElement | null;
     const requestLogCloseBtn = document.getElementById(IDS.requestLogModalCloseId) as HTMLButtonElement | null;
     const requestLogRefreshBtn = document.getElementById(IDS.requestLogRefreshBtnId) as HTMLButtonElement | null;
-    let requestLogBoundChatKey = '';
     let requestLogAllEntries: LLMRequestLogEntry[] = [];
     let requestLogFilteredEntries: LLMRequestLogEntry[] = [];
     let requestLogSelectedId = '';
+    let requestLogCopyFeedbackTimer: number | null = null;
 
-        const buildRequestLogSectionHtml = (title: string, value: unknown): string => `
+    const syncRequestLogSourceOptions = (): void => {
+        if (!requestLogSourceInput) return;
+        const currentValue = String(requestLogSourceInput.value || 'all').trim() || 'all';
+        const sourcePluginIds = Array.from(new Set(
+            requestLogAllEntries
+                .map((entry: LLMRequestLogEntry): string => String(entry.sourcePluginId || '').trim())
+                .filter(Boolean),
+        )).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
+
+        requestLogSourceInput.innerHTML = [
+            '<option value="all">全部来源插件</option>',
+            ...sourcePluginIds.map((sourcePluginId: string): string => `<option value="${escapeHtml(sourcePluginId)}">${escapeHtml(sourcePluginId)}</option>`),
+        ].join('');
+
+        requestLogSourceInput.value = sourcePluginIds.includes(currentValue) ? currentValue : 'all';
+    };
+
+    const buildRequestLogPreviewSectionHtml = (title: string, value: string, copyKind: 'outbound' | 'inbound'): string => `
         <section class="stx-ui-log-section">
-          <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
-          <pre class="stx-ui-log-pre">${escapeHtml(stringifyDebugValue(value))}</pre>
+          <div class="stx-ui-log-section-head">
+            <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
+            <button type="button" class="stx-ui-log-copy-btn" data-log-copy-kind="${escapeHtml(copyKind)}">快速复制</button>
+          </div>
+          <pre class="stx-ui-log-pre stx-ui-log-pre-raw">${escapeHtml(value)}</pre>
         </section>
     `;
-
-        const buildRequestLogTextSectionHtml = (title: string, value: unknown): string => `
-                <section class="stx-ui-log-section">
-                    <div class="stx-ui-log-section-title">${escapeHtml(title)}</div>
-                    <pre class="stx-ui-log-pre stx-ui-log-pre-raw">${escapeHtml(formatRawLogText(value))}</pre>
-                </section>
-        `;
 
     const renderRequestLogDetail = (entry: LLMRequestLogEntry | null): void => {
         if (!requestLogDetailEl) return;
@@ -2099,78 +2185,10 @@ function bindUiEvents(): void {
             return;
         }
 
-        const resourceId = entry.response?.meta?.resourceId;
-        const routeRule = entry.response?.meta?.fallbackUsed ? '内置酒馆回退' : '正常路由';
-        const failureSummary = (entry.state === 'failed' || entry.state === 'cancelled')
-            ? {
-                任务: entry.taskDescription || entry.taskId,
-                状态: STATE_LABELS[entry.state] || entry.state,
-                耗时: entry.latencyMs !== undefined ? `${entry.latencyMs}ms` : '-',
-                资源: formatRequestLogResource(resourceId),
-                模型: entry.response?.meta?.model || '未设',
-                规则: routeRule,
-                来源: inferRequestLogSource(resourceId),
-                说明: entry.response?.reasonCode || '-',
-                阻塞原因: entry.response?.reasonCode || '-',
-                错误: entry.response?.finalError || '-',
-              }
-            : null;
-        const schemaValidationHint = entry.response?.reasonCode === 'schema_validation_failed'
-            ? {
-                诊断: '模型返回内容未通过任务 Schema 校验，通常是 JSON 结构不完整或字段类型不匹配。',
-                建议1: '给该任务绑定支持稳定 JSON 输出的资源/模型，避免长期落到内置酒馆回退。',
-                建议2: '查看“结果接收”中的 rawResponseText，确认是否返回了合法 JSON 与必填字段（例如 entities）。',
-                建议3: '若必须走酒馆源，可先降低该任务 schema 复杂度或增加重试/修复策略。',
-              }
-            : null;
-
-        const overview = {
-            requestId: entry.requestId,
-            consumer: entry.consumer,
-            taskId: entry.taskId,
-            taskDescription: entry.taskDescription,
-            taskKind: entry.taskKind,
-            state: entry.state,
-            chatKey: entry.chatKey,
-        };
-        const requestSent = {
-            sentAt: entry.queuedAt,
-            sentAtText: formatDateTime(entry.queuedAt),
-            request: entry.request,
-            truncated: entry.truncated,
-        };
-        const responseReceived = {
-            receivedAt: entry.finishedAt,
-            receivedAtText: entry.finishedAt ? formatDateTime(entry.finishedAt) : '等待接收',
-            meta: entry.response?.meta,
-            finalError: entry.response?.finalError,
-            reasonCode: entry.response?.reasonCode,
-            validationErrors: entry.response?.validationErrors,
-            parsedResponse: entry.response?.parsedResponse,
-            normalizedResponse: entry.response?.normalizedResponse,
-        };
-        const executionTrace = {
-            startedAt: entry.startedAt,
-            startedAtText: entry.startedAt ? formatDateTime(entry.startedAt) : undefined,
-            latencyMs: entry.latencyMs,
-            fallbackUsed: entry.response?.meta?.fallbackUsed,
-        };
-
-        const sections: string[] = [];
-        if (failureSummary) {
-            sections.push(buildRequestLogSectionHtml('失败摘要', failureSummary));
-        }
-        if (schemaValidationHint) {
-            sections.push(buildRequestLogSectionHtml('诊断建议', schemaValidationHint));
-        }
-        sections.push(buildRequestLogSectionHtml('概览', overview));
-        sections.push(buildRequestLogSectionHtml('请求发出', requestSent));
-        sections.push(buildRequestLogSectionHtml('结果接收', responseReceived));
-        if (entry.response?.rawResponseText) {
-            sections.push(buildRequestLogTextSectionHtml('API 原始返回', entry.response.rawResponseText));
-        }
-        sections.push(buildRequestLogSectionHtml('执行轨迹', executionTrace));
-        requestLogDetailEl.innerHTML = sections.join('');
+        requestLogDetailEl.innerHTML = [
+            buildRequestLogPreviewSectionHtml('原始发送内容', buildRequestLogOutboundPreview(entry), 'outbound'),
+            buildRequestLogPreviewSectionHtml('原始返回内容', buildRequestLogInboundPreview(entry), 'inbound'),
+        ].join('');
     };
 
     const renderRequestLogList = (): void => {
@@ -2184,13 +2202,12 @@ function bindUiEvents(): void {
         requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => `
           <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}">
             <div class="stx-ui-log-list-head">
-              <div class="stx-ui-log-list-title">${escapeHtml(entry.consumer)} / ${escapeHtml(entry.taskId)}</div>
+                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(entry.taskId)}</div>
               <span class="stx-ui-state-badge ${getStateBadgeClass(entry.state)}">${STATE_LABELS[entry.state] || entry.state}</span>
             </div>
-            <div class="stx-ui-log-list-subtitle">${escapeHtml(entry.requestId)}</div>
+                        ${entry.taskDescription ? `<div class="stx-ui-log-list-subtitle">${escapeHtml(entry.taskDescription)}</div>` : ''}
             <div class="stx-ui-log-list-timeline">
-              <span>发出 ${escapeHtml(formatTimestamp(entry.queuedAt))}</span>
-              <span>${entry.finishedAt ? `接收 ${escapeHtml(formatTimestamp(entry.finishedAt))}` : '等待接收'}</span>
+                            <span>${entry.finishedAt ? `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 返回 ${escapeHtml(formatTimestamp(entry.finishedAt))}` : `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 等待返回`}</span>
             </div>
           </button>
         `).join('');
@@ -2203,9 +2220,11 @@ function bindUiEvents(): void {
     const applyRequestLogFilters = (): void => {
         const search = String(requestLogSearchInput?.value || '').trim().toLowerCase();
         const state = (String(requestLogStateInput?.value || 'all').trim() || 'all') as RequestState | 'all';
+        const sourcePluginId = String(requestLogSourceInput?.value || 'all').trim() || 'all';
 
         requestLogFilteredEntries = requestLogAllEntries.filter((entry) => {
             if (state !== 'all' && entry.state !== state) return false;
+            if (sourcePluginId !== 'all' && entry.sourcePluginId !== sourcePluginId) return false;
             if (!search) return true;
             return buildRequestLogSearchText(entry).includes(search);
         });
@@ -2215,25 +2234,30 @@ function bindUiEvents(): void {
         }
         renderRequestLogList();
         if (requestLogClearBtn) {
-            requestLogClearBtn.disabled = !requestLogBoundChatKey;
+            requestLogClearBtn.disabled = requestLogAllEntries.length <= 0;
         }
     };
 
     const refreshRequestLogModal = async (): Promise<void> => {
-        if (!requestLogBoundChatKey) {
-            requestLogAllEntries = [];
-            requestLogFilteredEntries = [];
-            requestLogSelectedId = '';
-            if (requestLogChatKeyEl) requestLogChatKeyEl.textContent = '聊天：当前无可解析 chatKey';
-            applyRequestLogFilters();
-            return;
-        }
-
-        const entries = await runtime?.listChatRequestLogs?.(requestLogBoundChatKey, { order: 'desc', limit: 300 });
+        const entries = await runtime?.listRequestLogs?.({ order: 'desc', limit: 500 });
         requestLogAllEntries = Array.isArray(entries) ? entries : [];
         requestLogFilteredEntries = requestLogAllEntries.slice();
         requestLogSelectedId = requestLogAllEntries[0]?.logId || '';
-        if (requestLogChatKeyEl) requestLogChatKeyEl.textContent = `聊天：${requestLogBoundChatKey}`;
+        syncRequestLogSourceOptions();
+        logger.info('[RequestLogUI][Refresh]', {
+            source: 'listRequestLogs',
+            count: requestLogAllEntries.length,
+            sample: requestLogAllEntries.slice(0, 5).map((entry: LLMRequestLogEntry) => ({
+                requestId: entry.requestId,
+                sourcePluginId: entry.sourcePluginId,
+                taskId: entry.taskId,
+                state: entry.state,
+                chatKey: entry.chatKey,
+            })),
+        });
+        if (requestLogChatKeyEl) {
+            requestLogChatKeyEl.textContent = '范围：全部插件请求日志';
+        }
         applyRequestLogFilters();
     };
 
@@ -2250,7 +2274,6 @@ function bindUiEvents(): void {
 
     const openRequestLogModal = async (): Promise<void> => {
         if (!requestLogModal) return;
-        requestLogBoundChatKey = String(buildSdkChatKeyEvent() || '').trim();
         if (!requestLogModal.open) {
             try {
                 requestLogModal.showModal();
@@ -2278,14 +2301,44 @@ function bindUiEvents(): void {
 
     requestLogSearchInput?.addEventListener('input', applyRequestLogFilters);
     requestLogStateInput?.addEventListener('change', applyRequestLogFilters);
+    requestLogSourceInput?.addEventListener('change', applyRequestLogFilters);
     requestLogRefreshBtn?.addEventListener('click', () => {
         void refreshRequestLogModal();
     });
     requestLogClearBtn?.addEventListener('click', async () => {
-        if (!requestLogBoundChatKey) return;
-        if (!confirm('确定清空当前聊天的请求日志吗？此操作不可撤销。')) return;
-        await runtime?.clearChatRequestLogs?.(requestLogBoundChatKey);
+        if (requestLogAllEntries.length <= 0) return;
+        if (!confirm('确定清空全部请求日志吗？此操作不可撤销。')) return;
+        await runtime?.clearRequestLogs?.();
         await refreshRequestLogModal();
+    });
+    requestLogDetailEl?.addEventListener('click', async (event: Event) => {
+        const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-log-copy-kind]');
+        if (!button) return;
+
+        const selectedEntry = requestLogFilteredEntries.find((entry: LLMRequestLogEntry) => entry.logId === requestLogSelectedId)
+            || requestLogAllEntries.find((entry: LLMRequestLogEntry) => entry.logId === requestLogSelectedId)
+            || null;
+        if (!selectedEntry) return;
+
+        const copyKind = String(button.dataset.logCopyKind || '').trim();
+        const text = copyKind === 'outbound'
+            ? buildRequestLogOutboundPreview(selectedEntry)
+            : buildRequestLogInboundPreview(selectedEntry);
+        const ok = await writeClipboardText(text);
+
+        if (requestLogCopyFeedbackTimer) {
+            window.clearTimeout(requestLogCopyFeedbackTimer);
+            requestLogCopyFeedbackTimer = null;
+        }
+
+        const originalText = button.textContent || '快速复制';
+        button.textContent = ok ? '已复制' : '复制失败';
+        button.classList.toggle('is-copied', ok);
+        requestLogCopyFeedbackTimer = window.setTimeout((): void => {
+            button.textContent = originalText;
+            button.classList.remove('is-copied');
+            requestLogCopyFeedbackTimer = null;
+        }, 1200);
     });
     requestLogListEl?.addEventListener('click', (event: Event) => {
         const target = (event.target as HTMLElement).closest<HTMLElement>('[data-log-id]');

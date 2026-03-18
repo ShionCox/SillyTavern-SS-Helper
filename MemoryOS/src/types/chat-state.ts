@@ -555,13 +555,19 @@ export interface SemanticAiSummary {
     identityFacts: string[];
     worldRules: string[];
     hardConstraints: string[];
+    cities: string[];
     locations: string[];
     entities: string[];
     nations: string[];
     regions: string[];
     factions: string[];
+    calendarSystems: string[];
+    currencySystems: string[];
+    socialSystems: string[];
+    culturalPractices: string[];
     historicalEvents: string[];
     dangers: string[];
+    otherWorldDetails: string[];
     characterGoals: string[];
     relationshipFacts: string[];
     catchphrases: string[];
@@ -870,7 +876,7 @@ export interface OwnedMemoryState {
 
 export type WorldStateScopeType = 'global' | 'nation' | 'region' | 'city' | 'location' | 'faction' | 'item' | 'character' | 'scene' | 'unclassified';
 
-export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship' | 'goal' | 'relationship_hook' | 'anomaly';
+export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship' | 'goal' | 'relationship_hook' | 'other' | 'anomaly';
 
 export interface WorldStateNodeValue {
     title: string;

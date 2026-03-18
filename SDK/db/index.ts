@@ -26,6 +26,7 @@ export type {
     DBRelationshipMemory,
     DBMemoryRecallLog,
     DBLlmCredential,
+    DBLlmRequestLog,
 } from './database';
 
 // 聊天数据 API
@@ -40,6 +41,7 @@ export {
     listSdkPluginChatStateSummaries,
     appendSdkPluginChatRecord,
     querySdkPluginChatRecords,
+    queryAllSdkPluginChatRecords,
     deleteSdkPluginChatRecords,
     trimSdkPluginChatRecords,
     invalidateSdkChatDataCache,
@@ -53,6 +55,17 @@ export type {
     AppendSdkPluginChatRecordPayload,
     QuerySdkPluginChatRecordsOptions,
 } from './chat-data';
+
+export {
+    appendLlmRequestLog,
+    queryLlmRequestLogs,
+    clearLlmRequestLogs,
+    trimLlmRequestLogs,
+} from './llm-request-logs';
+export type {
+    AppendLlmRequestLogInput,
+    QueryLlmRequestLogsOptions,
+} from './llm-request-logs';
 
 // 跨插件访问控制
 export {

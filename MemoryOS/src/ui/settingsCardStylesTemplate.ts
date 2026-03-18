@@ -1746,13 +1746,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-record-editor-overlay .stx-shared-dialog-content > .stx-record-editor {
-      width: 80%;
+      width: 90%;
       margin-inline: auto;
     }
 
     .stx-record-editor {
-      width: 80%;
-      height: min(92vh, 980px);
+      width: 90%;
+      height: 95%;
       max-width: calc(100vw - 28px);
       max-height: calc(100vh - 28px);
       background: var(--ss-theme-panel-bg, linear-gradient(145deg, rgba(30, 30, 34, 0.95), rgba(18, 18, 20, 0.98)));
@@ -3021,6 +3021,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
       overflow-x: auto;
       overflow-y: visible;
+      overscroll-behavior-y: auto;
       padding-bottom: 4px;
       scrollbar-width: thin;
       position: relative;
@@ -3028,6 +3029,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     .stx-re-world-table-wrap.is-scrollable {
       overflow-y: auto;
+      overscroll-behavior-y: auto;
       padding-right: 4px;
       border-radius: 12px;
       border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.06)) 100%, transparent);

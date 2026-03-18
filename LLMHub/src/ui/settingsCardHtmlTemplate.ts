@@ -637,7 +637,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="history log request records manager">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">请求日志管理</div>
-              <div class="stx-ui-item-desc">打开日志管理窗口，查看当前聊天每次 AI 请求的完整参数与响应详情。</div>
+              <div class="stx-ui-item-desc">打开日志管理窗口，查看全部插件经由 LLMHub 发起的请求记录、来源插件与响应详情。</div>
             </div>
             <div class="stx-ui-actions">
               <button id="${ids.requestLogOpenBtnId}" type="button" class="stx-ui-btn secondary" data-tip="打开请求日志管理窗口">
@@ -697,16 +697,21 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-log-layout">
             <aside class="stx-ui-log-sidebar">
               <div class="stx-ui-log-toolbar">
-                <input id="${ids.requestLogSearchId}" class="stx-ui-input stx-ui-input-full" type="search" placeholder="搜索 consumer / task / requestId / model" />
-                <select id="${ids.requestLogStateFilterId}" class="stx-ui-select">
-                  <option value="all">全部状态</option>
-                  <option value="completed">已完成</option>
-                  <option value="failed">失败</option>
-                  <option value="cancelled">已取消</option>
-                </select>
+                <input id="${ids.requestLogSearchId}" class="stx-ui-input stx-ui-input-full" type="search" placeholder="搜索 plugin / consumer / task / requestId / model" />
+                <div class="stx-ui-log-filter-row">
+                  <select id="${ids.requestLogStateFilterId}" class="stx-ui-select">
+                    <option value="all">全部状态</option>
+                    <option value="completed">已完成</option>
+                    <option value="failed">失败</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                  <select id="${ids.requestLogSourceFilterId}" class="stx-ui-select">
+                    <option value="all">全部来源插件</option>
+                  </select>
+                </div>
               </div>
               <div class="stx-ui-log-meta">
-                <span id="${ids.requestLogChatKeyId}" class="stx-ui-log-chatkey">聊天：-</span>
+                <span id="${ids.requestLogChatKeyId}" class="stx-ui-log-chatkey">范围：全部插件请求日志</span>
                 <span id="${ids.requestLogCountId}" class="stx-ui-log-count">共 0 条</span>
               </div>
               <div id="${ids.requestLogListId}" class="stx-ui-log-list"></div>
@@ -716,7 +721,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
                 <button id="${ids.requestLogRefreshBtnId}" type="button" class="stx-ui-btn secondary">
                   <i class="fa-solid fa-rotate"></i> 刷新
                 </button>
-                <button id="${ids.requestLogClearBtnId}" type="button" class="stx-ui-btn secondary">清空当前聊天日志</button>
+                <button id="${ids.requestLogClearBtnId}" type="button" class="stx-ui-btn secondary">清空全部日志</button>
               </div>
               <div id="${ids.requestLogDetailId}" class="stx-ui-log-detail"></div>
             </section>

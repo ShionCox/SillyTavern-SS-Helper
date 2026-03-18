@@ -25,10 +25,9 @@ import type {
     OwnedMemoryState,
     PersonaMemoryProfile,
     SourceRef,
-    StructuredWorldStateEntry,
     SnapshotValue,
-    WorldStateGroupingResult,
 } from '../../../SDK/stx';
+import type { StructuredWorldStateEntry, WorldStateGroupingResult } from '../types';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
 type ViewMode = 'world' | 'maintenance' | 'memory' | 'diagnostics' | 'raw';
@@ -437,7 +436,7 @@ function renderWorldStateSectionTable<T>(options: {
     }).join('');
 
     return `
-        <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="${escapeHtml(options.sectionKey)}" id="stx-re-world-section-${escapeHtml(options.sectionKey)}" open>
+        <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="${escapeHtml(options.sectionKey)}" id="stx-re-world-section-${escapeHtml(options.sectionKey)}">
             <summary class="stx-re-world-section-summary"${buildTipAttr(`点击展开或收起 ${options.title} 分区。`)}>
                 <div class="stx-re-world-section-head">
                     <div>
@@ -581,6 +580,33 @@ function updateWorldOverviewStripState(strip: HTMLElement): void {
             button.disabled = !(strip.scrollLeft < (maxScrollLeft - threshold));
         }
     });
+}
+
+function bindNestedVerticalScrollBridge(inner: HTMLElement, outer: HTMLElement, signal: AbortSignal): void {
+    inner.addEventListener('wheel', (event: WheelEvent): void => {
+        if (Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
+            return;
+        }
+        if (inner.scrollHeight <= inner.clientHeight + 1) {
+            return;
+        }
+
+        const direction = Math.sign(event.deltaY);
+        if (!direction) {
+            return;
+        }
+
+        const threshold = 1;
+        const atTop = inner.scrollTop <= threshold;
+        const atBottom = (inner.scrollTop + inner.clientHeight) >= (inner.scrollHeight - threshold);
+        const shouldForward = (direction < 0 && atTop) || (direction > 0 && atBottom);
+        if (!shouldForward) {
+            return;
+        }
+
+        event.preventDefault();
+        outer.scrollBy({ top: event.deltaY, behavior: 'auto' });
+    }, { signal, passive: false });
 }
 
 type HorizontalScrollAnimationState = {
@@ -1482,6 +1508,7 @@ function formatWorldStateTypeLabel(value: string): string {
         relationship: '关系',
         goal: '目标',
         relationship_hook: '关系钩子',
+        other: '其他设定',
         anomaly: '结构异常',
     };
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'status');
@@ -3942,6 +3969,14 @@ export async function openRecordEditor(): Promise<void> {
                 columns: ruleColumns,
             }),
             pickStateSection({
+                sectionKey: 'other-world',
+                title: '其他设定',
+                description: '合法但不属于主分类的世界设定细节。',
+                iconClass: 'fa-solid fa-compass-drafting',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.stateType === 'other',
+                columns: otherColumns,
+            }),
+            pickStateSection({
                 sectionKey: 'faction',
                 title: '阵营与组织',
                 description: '派系、组织、归属、持有关系与对象控制链。',
@@ -3998,7 +4033,7 @@ export async function openRecordEditor(): Promise<void> {
         ].filter(Boolean).join('');
 
         const majorEventPanelHtml = majorPlotEvents.length > 0 ? `
-            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events" open>
+            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events">
                 <summary class="stx-re-world-section-summary"${buildTipAttr('点击展开或收起重大事件分区。')}>
                     <div class="stx-re-world-section-head">
                         <div>
@@ -4232,9 +4267,9 @@ export async function openRecordEditor(): Promise<void> {
                         <div class="stx-re-panel-card">
                             <div class="stx-re-world-section-title"><span>分区导航</span></div>
                             <div class="stx-re-world-action-row">
-                                <button class="stx-re-btn" data-world-sections-expand${buildTipAttr('展开当前页面所有世界状态分区。')}><i class="fa-solid fa-up-right-and-down-left-from-center" aria-hidden="true"></i> 全部展开</button>
-                                <button class="stx-re-btn" data-world-sections-collapse${buildTipAttr('收起当前页面所有世界状态分区。')}><i class="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true"></i> 全部收起</button>
-                                <button class="stx-re-btn" data-world-scroll-top${buildTipAttr('回到世界状态页顶部。')}><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> 回到顶部</button>
+                                <button class="stx-re-btn" data-world-sections-expand${buildTipAttr('展开当前页面所有世界状态分区。')}><i class="fa-solid fa-up-right-and-down-left-from-center" aria-hidden="true"></i> 展开</button>
+                                <button class="stx-re-btn" data-world-sections-collapse${buildTipAttr('收起当前页面所有世界状态分区。')}><i class="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true"></i> 收起</button>
+                                <button class="stx-re-btn" data-world-scroll-top${buildTipAttr('回到世界状态页顶部。')}><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> 顶部</button>
                             </div>
                             <div class="stx-re-world-filter-list stx-re-world-section-nav-list">
                                 ${renderedSectionNavItems.length > 0 ? renderedSectionNavItems.map((item: { key: string; title: string; iconClass: string; badgeText: string }): string => `<button class="stx-re-btn stx-re-world-section-nav" data-world-section-nav="${escapeHtml(item.key)}"${buildTipAttr(`跳转到 ${item.title} 分区。`)}><span class="stx-re-world-section-nav-main"><i class="${escapeHtml(item.iconClass)}" aria-hidden="true"></i><span>${escapeHtml(item.title)}</span></span><span class="stx-re-world-section-nav-badge">${escapeHtml(item.badgeText)}</span></button>`).join('') : '<div class="stx-re-record-sub">当前筛选下暂无可跳转分区</div>'}
@@ -4446,7 +4481,9 @@ export async function openRecordEditor(): Promise<void> {
             node.addEventListener('toggle', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal });
         });
         contentArea.querySelectorAll('.stx-re-world-table-wrap.is-scrollable').forEach((node: Element): void => {
-            (node as HTMLElement).addEventListener('scroll', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal, passive: true });
+            const wrap = node as HTMLElement;
+            wrap.addEventListener('scroll', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal, passive: true });
+            bindNestedVerticalScrollBridge(wrap, contentArea, worldUiSignal);
         });
 
         requestAnimationFrame((): void => {

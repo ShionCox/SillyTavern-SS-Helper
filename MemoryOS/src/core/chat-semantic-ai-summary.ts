@@ -13,6 +13,24 @@ export interface EnhanceSemanticSeedWithAiOptions {
 
 type SemanticSeedAiSummary = Omit<SemanticAiSummary, 'generatedAt' | 'source'>;
 
+const NATION_PATTERN = /国家|政体|王国|帝国|联邦|共和国|王朝|nation|country|kingdom|empire|republic|federation|realm/i;
+const REGION_PATTERN = /区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领|region|area|province|territory|continent|frontier/i;
+const CITY_PATTERN = /城市|都城|城邦|主城|镇|村|聚落|港口|港城|城镇|city|capital|metropolis|town|village|settlement|harbor/i;
+const LOCATION_PATTERN = /地点|场所|遗迹|据点|神殿|学院|基地|空间站|房间|森林|峡谷|湖泊|location|place|site|ruin|outpost|temple|academy|base|station|room|forest|canyon|lake/i;
+const FACTION_PATTERN = /组织|阵营|派系|公会|教团|军团|学派|议会|协会|结社|faction|guild|order|clan|alliance|council|union/i;
+const RULE_PATTERN = /规则|法则|法律|法典|条例|机制|运作规律|法理|rule|law|canon|principle|system/i;
+const CONSTRAINT_PATTERN = /限制|禁忌|不能|不可|不得|禁止|绝不|唯一|固定|必须遵守|constraint|taboo|restriction|forbidden|must not/i;
+const CALENDAR_PATTERN = /历法|纪年|历年|年号|月相|节气|calendar|chronology|era|dating system/i;
+const CURRENCY_PATTERN = /货币|钱币|金币|银币|铜币|纸钞|税制|汇兑|面额|currency|coin|money|tax|exchange/i;
+const SOCIAL_PATTERN = /阶级|等级|身份制度|政治制度|社会制度|贵族制|君主制|共和制|议会制|social system|hierarchy|caste|class/i;
+const CULTURE_PATTERN = /文化|习俗|风俗|礼仪|传统|节庆|祭典|成年礼|婚俗|葬礼|culture|custom|tradition|ritual|festival/i;
+const HISTORY_PATTERN = /历史|往事|旧日|起源|战争|历史事件|history|origin|past|war/i;
+const DANGER_PATTERN = /危险|威胁|风险|灾难|危机|danger|threat|risk|crisis/i;
+const GOAL_PATTERN = /目标|想要|必须|计划|打算|任务|goal|objective|intent|mission|plan/i;
+const RELATIONSHIP_PATTERN = /关系|信任|敌对|盟友|同伴|羁绊|恋人|导师|relationship|bond|trust|ally|enemy/i;
+const IDENTITY_PATTERN = /身份|血统|别名|称号|职业|来历|出身|identity|alias|title|background|lineage/i;
+const ENTITY_PATTERN = /机构|设施|装置|神器|遗物|系统核心|核心装置|entity|artifact|relic|device|institution/i;
+
 const SEMANTIC_SEED_SUMMARY_SCHEMA = {
     type: 'object',
     additionalProperties: false,
@@ -22,13 +40,19 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         'identityFacts',
         'worldRules',
         'hardConstraints',
+        'cities',
         'locations',
         'entities',
         'nations',
         'regions',
         'factions',
+        'calendarSystems',
+        'currencySystems',
+        'socialSystems',
+        'culturalPractices',
         'historicalEvents',
         'dangers',
+        'otherWorldDetails',
         'characterGoals',
         'relationshipFacts',
         'catchphrases',
@@ -41,13 +65,19 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         identityFacts: { type: 'array', items: { type: 'string' } },
         worldRules: { type: 'array', items: { type: 'string' } },
         hardConstraints: { type: 'array', items: { type: 'string' } },
+        cities: { type: 'array', items: { type: 'string' } },
         locations: { type: 'array', items: { type: 'string' } },
         entities: { type: 'array', items: { type: 'string' } },
         nations: { type: 'array', items: { type: 'string' } },
         regions: { type: 'array', items: { type: 'string' } },
         factions: { type: 'array', items: { type: 'string' } },
+        calendarSystems: { type: 'array', items: { type: 'string' } },
+        currencySystems: { type: 'array', items: { type: 'string' } },
+        socialSystems: { type: 'array', items: { type: 'string' } },
+        culturalPractices: { type: 'array', items: { type: 'string' } },
         historicalEvents: { type: 'array', items: { type: 'string' } },
         dangers: { type: 'array', items: { type: 'string' } },
+        otherWorldDetails: { type: 'array', items: { type: 'string' } },
         characterGoals: { type: 'array', items: { type: 'string' } },
         relationshipFacts: { type: 'array', items: { type: 'string' } },
         catchphrases: { type: 'array', items: { type: 'string' } },
@@ -107,6 +137,11 @@ function filterTexts(limit: number, values: string[], pattern: RegExp): string[]
     return uniqueTexts(limit, values.filter((item: string): boolean => pattern.test(item)));
 }
 
+function excludeTexts(limit: number, values: string[], ...classifiedGroups: Array<ArrayLike<unknown> | null | undefined>): string[] {
+    const excluded = new Set(uniqueTexts(256, ...classifiedGroups.map((group) => Array.from(group ?? []))));
+    return uniqueTexts(limit, values.filter((item: string): boolean => !excluded.has(normalizeText(item))));
+}
+
 export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
@@ -120,9 +155,15 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
         || directWorldSummary
         || Array.isArray(direct.identityFacts)
         || Array.isArray(direct.worldRules)
+        || Array.isArray(direct.cities)
         || Array.isArray(direct.nations)
         || Array.isArray(direct.regions)
         || Array.isArray(direct.factions)
+        || Array.isArray(direct.calendarSystems)
+        || Array.isArray(direct.currencySystems)
+        || Array.isArray(direct.socialSystems)
+        || Array.isArray(direct.culturalPractices)
+        || Array.isArray(direct.otherWorldDetails)
     ) {
         return {
             roleSummary: directRoleSummary,
@@ -130,13 +171,19 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
             identityFacts: toStringArray(direct.identityFacts, 12),
             worldRules: toStringArray(direct.worldRules, 16),
             hardConstraints: toStringArray(direct.hardConstraints, 12),
+            cities: toStringArray(direct.cities, 12),
             locations: toStringArray(direct.locations, 12),
             entities: toStringArray(direct.entities, 12),
             nations: toStringArray(direct.nations, 12),
             regions: toStringArray(direct.regions, 12),
             factions: toStringArray(direct.factions, 12),
+            calendarSystems: toStringArray(direct.calendarSystems, 12),
+            currencySystems: toStringArray(direct.currencySystems, 12),
+            socialSystems: toStringArray(direct.socialSystems, 12),
+            culturalPractices: toStringArray(direct.culturalPractices, 12),
             historicalEvents: toStringArray(direct.historicalEvents, 12),
             dangers: toStringArray(direct.dangers, 12),
+            otherWorldDetails: toStringArray(direct.otherWorldDetails, 12),
             characterGoals: toStringArray(direct.characterGoals, 8),
             relationshipFacts: toStringArray(direct.relationshipFacts, 8),
             catchphrases: toStringArray(direct.catchphrases, 8),
@@ -192,48 +239,152 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
     const goalTexts = uniqueTexts(
         8,
         toStringArray(characterSummary?.goals, 6),
-        filterTexts(8, seedTexts, /目标|想要|必须|计划|打算|任务|goal|objective|intent|mission|plan/i),
+        filterTexts(8, seedTexts, GOAL_PATTERN),
     );
     const nationTexts = uniqueTexts(
         12,
         pickTexts(worldSummary, ['nations', 'polities', 'countries', 'kingdoms'], 8),
-        filterTexts(12, seedTexts, /国家|政体|王国|帝国|联邦|共和国|王朝|nation|country|kingdom|empire|republic|federation|realm/i),
+        filterTexts(12, seedTexts, NATION_PATTERN),
     );
     const regionTexts = uniqueTexts(
         12,
         pickTexts(worldSummary, ['regions', 'areas', 'territories', 'provinces'], 8),
-        filterTexts(12, seedTexts, /区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领|region|area|province|territory|continent|frontier/i),
+        filterTexts(12, seedTexts, REGION_PATTERN),
+    );
+    const cityTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['cities', 'settlements', 'towns', 'villages', 'capitals'], 8),
+        filterTexts(12, seedTexts, CITY_PATTERN),
     );
     const factionTexts = uniqueTexts(
         12,
         pickTexts(worldSummary, ['factions', 'organizations', 'groups'], 8),
-        filterTexts(12, seedTexts, /组织|阵营|派系|公会|教团|军团|学派|议会|协会|结社|faction|guild|order|clan|alliance|council|union/i),
+        filterTexts(12, seedTexts, FACTION_PATTERN),
+    );
+    const worldRuleTexts = uniqueTexts(
+        16,
+        pickTexts(worldSummary, ['world_rules', 'worldRules', 'rules', 'laws', 'rule_notes', 'rules_notes', 'rulesNotes'], 8),
+        filterTexts(16, seedTexts, RULE_PATTERN),
+    );
+    const hardConstraintTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['constraints', 'hard_constraints', 'hardConstraints', 'taboos'], 8),
+        filterTexts(12, seedTexts, CONSTRAINT_PATTERN),
+    );
+    const calendarTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['calendar_systems', 'calendarSystems', 'calendars', 'chronology'], 8),
+        filterTexts(12, seedTexts, CALENDAR_PATTERN),
+    );
+    const currencyTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['currency_systems', 'currencySystems', 'currencies', 'economy'], 8),
+        filterTexts(12, seedTexts, CURRENCY_PATTERN),
+    );
+    const socialTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['social_systems', 'socialSystems', 'institutions', 'hierarchy'], 8),
+        filterTexts(12, seedTexts, SOCIAL_PATTERN),
+    );
+    const culturalTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['cultural_practices', 'culturalPractices', 'cultures', 'customs', 'traditions'], 8),
+        filterTexts(12, seedTexts, CULTURE_PATTERN),
     );
     const historyTexts = uniqueTexts(
         12,
         pickTexts(worldSummary, ['historical_events', 'historicalEvents', 'history'], 8),
-        filterTexts(12, seedTexts, /历史|往事|旧日|起源|战争|历史事件|history|origin|past|war/i),
+        filterTexts(12, seedTexts, HISTORY_PATTERN),
     );
     const dangerTexts = uniqueTexts(
         12,
         pickTexts(worldSummary, ['threats', 'dangers', 'conflicts'], 8),
-        filterTexts(12, seedTexts, /危险|威胁|风险|灾难|危机|danger|threat|risk|crisis/i),
+        filterTexts(12, seedTexts, DANGER_PATTERN),
     );
-    const relationshipFacts = uniqueTexts(8, relationshipAnchors);
+    const identityFacts = uniqueTexts(
+        12,
+        toStringArray(characterSummary?.aliases, 6),
+        filterTexts(12, seedTexts, IDENTITY_PATTERN),
+    );
+    const relationshipFacts = uniqueTexts(8, relationshipAnchors, filterTexts(8, seedTexts, RELATIONSHIP_PATTERN));
+    const locationTexts = excludeTexts(
+        12,
+        uniqueTexts(
+            24,
+            toStringArray(worldSummary?.key_locations ?? worldSummary?.keyLocations, 8),
+            pickTexts(worldSummary, ['locations', 'places', 'sites', 'landmarks', 'districts'], 8),
+            filterTexts(24, seedTexts, LOCATION_PATTERN),
+        ),
+        nationTexts,
+        regionTexts,
+        cityTexts,
+        factionTexts,
+        calendarTexts,
+        currencyTexts,
+        socialTexts,
+        culturalTexts,
+        historyTexts,
+        dangerTexts,
+    );
+    const entityTexts = excludeTexts(
+        12,
+        uniqueTexts(
+            16,
+            pickTexts(worldSummary, ['entities', 'objects', 'artifacts', 'institutions'], 8),
+            filterTexts(16, seedTexts, ENTITY_PATTERN),
+        ),
+        nationTexts,
+        regionTexts,
+        cityTexts,
+        locationTexts,
+        factionTexts,
+        calendarTexts,
+        currencyTexts,
+        socialTexts,
+        culturalTexts,
+    );
+    const otherWorldDetails = excludeTexts(
+        12,
+        seedTexts,
+        identityFacts,
+        worldRuleTexts,
+        hardConstraintTexts,
+        nationTexts,
+        regionTexts,
+        cityTexts,
+        locationTexts,
+        entityTexts,
+        factionTexts,
+        calendarTexts,
+        currencyTexts,
+        socialTexts,
+        culturalTexts,
+        historyTexts,
+        dangerTexts,
+        goalTexts,
+        relationshipFacts,
+        relationshipAnchors,
+    );
 
     return {
         roleSummary: roleSummaryParts.join('；'),
         worldSummary: worldSummaryParts.join('；'),
-        identityFacts: uniqueTexts(12, seedTexts, toStringArray(characterSummary?.aliases, 6)),
-        worldRules: uniqueTexts(16, seedTexts, toStringArray(worldSummary?.factions, 8)),
-        hardConstraints: uniqueTexts(12, seedTexts),
-        locations: uniqueTexts(12, toStringArray(worldSummary?.key_locations ?? worldSummary?.keyLocations, 8)),
-        entities: uniqueTexts(12, toStringArray(worldSummary?.factions, 8), factionTexts, nationTexts),
+        identityFacts,
+        worldRules: worldRuleTexts,
+        hardConstraints: hardConstraintTexts,
+        cities: cityTexts,
+        locations: locationTexts,
+        entities: entityTexts,
         nations: nationTexts,
         regions: regionTexts,
         factions: factionTexts,
+        calendarSystems: calendarTexts,
+        currencySystems: currencyTexts,
+        socialSystems: socialTexts,
+        culturalPractices: culturalTexts,
         historicalEvents: historyTexts,
         dangers: dangerTexts,
+        otherWorldDetails,
         characterGoals: goalTexts,
         relationshipFacts,
         catchphrases: [],
@@ -299,13 +450,19 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         identityFacts: uniqueTexts(12, summary.identityFacts),
         worldRules: uniqueTexts(16, summary.worldRules),
         hardConstraints: uniqueTexts(12, summary.hardConstraints),
+        cities: uniqueTexts(12, summary.cities),
         locations: uniqueTexts(12, summary.locations),
         entities: uniqueTexts(12, summary.entities),
         nations: uniqueTexts(12, summary.nations),
         regions: uniqueTexts(12, summary.regions),
         factions: uniqueTexts(12, summary.factions),
+        calendarSystems: uniqueTexts(12, summary.calendarSystems),
+        currencySystems: uniqueTexts(12, summary.currencySystems),
+        socialSystems: uniqueTexts(12, summary.socialSystems),
+        culturalPractices: uniqueTexts(12, summary.culturalPractices),
         historicalEvents: uniqueTexts(12, summary.historicalEvents),
         dangers: uniqueTexts(12, summary.dangers),
+        otherWorldDetails: uniqueTexts(12, summary.otherWorldDetails),
         characterGoals: uniqueTexts(8, summary.characterGoals),
         relationshipFacts: uniqueTexts(8, summary.relationshipFacts),
         catchphrases: uniqueTexts(8, summary.catchphrases),
@@ -326,10 +483,10 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         },
         worldSeed: {
             ...seed.worldSeed,
-            locations: uniqueTexts(12, aiSummary.locations, aiSummary.regions, aiSummary.nations, seed.worldSeed.locations),
+            locations: uniqueTexts(12, aiSummary.locations, seed.worldSeed.locations),
             rules: uniqueTexts(16, worldSummary ? [worldSummary] : [], aiSummary.worldRules, seed.worldSeed.rules),
             hardConstraints: uniqueTexts(12, aiSummary.hardConstraints, seed.worldSeed.hardConstraints),
-            entities: uniqueTexts(12, aiSummary.entities, aiSummary.factions, aiSummary.nations, seed.worldSeed.entities),
+            entities: uniqueTexts(12, aiSummary.entities, seed.worldSeed.entities),
         },
         styleSeed: {
             ...seed.styleSeed,
@@ -363,7 +520,18 @@ export async function enhanceSemanticSeedWithAiWithOptions(
         '只输出符合 schema 的 JSON，不要输出额外说明。',
         '所有自然语言内容使用简体中文。',
         '内容要简洁、可复用、避免编造；如果资料里没有，就返回空字符串或空数组。',
-        '严格使用以下 JSON 键名：roleSummary, worldSummary, identityFacts, worldRules, hardConstraints, locations, entities, nations, regions, factions, historicalEvents, dangers, characterGoals, relationshipFacts, catchphrases, relationshipAnchors, styleCues。',
+        '严格使用以下 JSON 键名：roleSummary, worldSummary, identityFacts, worldRules, hardConstraints, nations, regions, cities, locations, factions, entities, calendarSystems, currencySystems, socialSystems, culturalPractices, historicalEvents, dangers, otherWorldDetails, characterGoals, relationshipFacts, catchphrases, relationshipAnchors, styleCues。',
+        'roleSummary 和 worldSummary 是字符串；其余键都必须是字符串数组。没有内容时返回空字符串或空数组。',
+        'nations 只放国家、王国、帝国、联邦、共和国、政体实体。',
+        'regions 只放大区、边境、行省、州郡、大陆分区。',
+        'cities 只放城市、都城、主城、镇、村、聚落、港口城等聚居地。',
+        'locations 只放神殿、遗迹、房间、据点、学院、基地、空间站、森林、峡谷等具体地点节点，不要放国家、区域、城市。',
+        'factions 只放组织、派系、公会、教团、军团、家族势力。entities 只放不属于前述分类、但可单独索引的对象或机构。',
+        'worldRules 放普遍规则与运行机制；hardConstraints 放绝对禁忌和硬限制。',
+        'calendarSystems 放历法、纪年、节气与月份体系；currencySystems 放货币、面额、税制、交易度量；socialSystems 放阶级、身份等级、社会制度；culturalPractices 放礼俗、传统、节庆、仪式习惯。',
+        'historicalEvents 放历史事件；dangers 放危险和威胁；characterGoals 放角色目标；relationshipFacts 与 relationshipAnchors 放稳定关系事实与检索锚点。',
+        'otherWorldDetails 只放明确属于世界设定、但不适合放入上述任一分类的合法条目；不要把无法理解、残缺或噪音文本放进去。',
+        '同一条内容只能进入一个最合适的字段。nation > region > city > location，系统类内容不要放入地点类字段。',
         '不要返回 character_summary、world_summary、seed_key_entries 或任何其他替代键名。',
     ].join('\n');
 

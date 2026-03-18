@@ -247,12 +247,14 @@ export interface LLMRequestLogResponseSnapshot {
 export interface LLMRequestLogEntry {
     logId: string;
     requestId: string;
-    chatKey: string;
+    sourcePluginId: string;
     consumer: string;
     taskId: string;
     taskDescription?: string;
     taskKind: CapabilityKind;
     state: RequestState;
+    chatKey?: string;
+    sessionId?: string;
     queuedAt: number;
     startedAt?: number;
     finishedAt?: number;
@@ -270,6 +272,7 @@ export interface LLMRequestLogQueryOptions {
     search?: string;
     fromTs?: number;
     toTs?: number;
+    sourcePluginId?: string;
 }
 
 /** 内部请求记录 */

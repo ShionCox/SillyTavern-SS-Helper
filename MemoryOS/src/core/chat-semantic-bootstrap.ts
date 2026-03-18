@@ -260,10 +260,10 @@ function buildIdentitySeed(
 function buildWorldSeed(worldText: string, source: string): WorldSeed {
     const all = splitSeedValues(worldText);
     return {
-        locations: all.filter((item: string): boolean => /城|镇|村|国|大陆|区域|地点|学院|基地|空间站/.test(item)).slice(0, 12),
-        rules: all.filter((item: string): boolean => /规则|法则|必须|不能|禁止|限制|流程|约定/.test(item)).slice(0, 16),
+        locations: all.filter((item: string): boolean => /城|镇|村|地点|神殿|遗迹|据点|学院|基地|空间站|房间|森林|峡谷/.test(item)).slice(0, 12),
+        rules: all.filter((item: string): boolean => /规则|法则|必须|不能|禁止|限制|流程|约定|制度|历法|货币|税制|习俗|传统/.test(item)).slice(0, 16),
         hardConstraints: all.filter((item: string): boolean => /不得|禁止|绝不|必须|唯一|固定/.test(item)).slice(0, 12),
-        entities: all.filter((item: string): boolean => /组织|势力|阵营|宗派|家族|公会/.test(item)).slice(0, 12),
+        entities: all.filter((item: string): boolean => /组织|势力|阵营|宗派|家族|公会|议会|机构|装置|遗物/.test(item)).slice(0, 12),
         sourceTrace: [buildSourceTrace('world', source, 0.75)],
     };
 }

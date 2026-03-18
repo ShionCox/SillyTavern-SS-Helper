@@ -1084,6 +1084,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       max-width: 100%;
     }
 
+    #${cardId} .stx-ui-log-filter-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      min-width: 0;
+    }
+
     #${cardId} .stx-ui-log-meta {
       display: flex;
       flex-direction: column;
@@ -1249,6 +1256,42 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       word-break: break-word;
     }
 
+    #${cardId} .stx-ui-log-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-log-section-head .stx-ui-log-section-title {
+      flex: 1 1 auto;
+    }
+
+    #${cardId} .stx-ui-log-copy-btn {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      min-height: 28px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    #${cardId} .stx-ui-log-copy-btn:hover {
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 55%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 16%, transparent);
+    }
+
+    #${cardId} .stx-ui-log-copy-btn.is-copied {
+      border-color: rgba(88, 211, 106, 0.38);
+      background: rgba(88, 211, 106, 0.16);
+    }
+
     #${cardId} .stx-ui-log-pre {
       margin: 0;
       border-radius: 8px;
@@ -1260,11 +1303,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       word-break: break-word;
-      max-height: none;
+      max-height: min(280px, 34vh);
       min-width: 0;
       max-width: 100%;
       overflow-x: auto;
-      overflow-y: visible;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
 
     #${cardId} .stx-ui-log-pre-raw {
@@ -1297,6 +1341,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     @media (max-width: 900px) {
       #${cardId} .stx-ui-log-modal {
         width: 96vw;
+      }
+
+      #${cardId} .stx-ui-log-filter-row {
+        grid-template-columns: 1fr;
       }
 
       #${cardId} .stx-ui-log-modal-panel {

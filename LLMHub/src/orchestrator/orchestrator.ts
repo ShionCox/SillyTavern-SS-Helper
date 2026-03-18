@@ -311,6 +311,14 @@ export class RequestOrchestrator {
         this.activeRequest = record;
         record.state = 'running';
         record.startedAt = Date.now();
+        logger.info('[RequestLifecycle][Running]', {
+            requestId: record.requestId,
+            consumer: record.consumer,
+            taskId: record.taskId,
+            displayMode: record.enqueueOptions.displayMode || 'fullscreen',
+            blockNextUntilOverlayClose: Boolean(record.enqueueOptions.blockNextUntilOverlayClose),
+            chatKey: record.chatKey,
+        });
 
         if ((record.enqueueOptions.displayMode || 'fullscreen') === 'fullscreen' && this.pendingDisplayCallback) {
             this.pendingDisplayCallback(record);
@@ -338,6 +346,15 @@ export class RequestOrchestrator {
 
             record.state = 'result_ready';
             record.finishedAt = Date.now();
+            logger.info('[RequestLifecycle][ResultReady]', {
+                requestId: record.requestId,
+                consumer: record.consumer,
+                taskId: record.taskId,
+                ok: result.ok !== false,
+                hasMeta: Boolean(result.meta),
+                reasonCode: result.reasonCode,
+                latencyMs: record.finishedAt - (record.startedAt || record.queuedAt),
+            });
             if (!result.ok) {
                 record.debug = {
                     ...(record.debug || {}),
@@ -374,12 +391,24 @@ export class RequestOrchestrator {
             if (displayMode === 'silent') {
                 // 静默：直接完成
                 record.state = 'completed';
+                logger.info('[RequestLifecycle][CompletedSilent]', {
+                    requestId: record.requestId,
+                    consumer: record.consumer,
+                    taskId: record.taskId,
+                    reasonCode: result.reasonCode,
+                });
                 record.resolveOverlay?.();
                 this.activeRequest = null;
                 this.archiveRecord(record);
             } else {
                 // 需要展示
                 record.state = 'overlay_waiting';
+                logger.info('[RequestLifecycle][OverlayWaiting]', {
+                    requestId: record.requestId,
+                    consumer: record.consumer,
+                    taskId: record.taskId,
+                    blockNextUntilOverlayClose: Boolean(record.enqueueOptions.blockNextUntilOverlayClose),
+                });
                 if (this.displayCallback) {
                     this.displayCallback(record, result);
                 }
@@ -395,6 +424,12 @@ export class RequestOrchestrator {
             record.state = 'failed';
             record.finishedAt = Date.now();
             const errMsg = (error as Error).message;
+            logger.error('[RequestLifecycle][Failed]', {
+                requestId: record.requestId,
+                consumer: record.consumer,
+                taskId: record.taskId,
+                error: errMsg,
+            });
             record.debug = {
                 ...(record.debug || {}),
                 finalError: errMsg,
@@ -503,6 +538,15 @@ export class RequestOrchestrator {
     }
 
     private archiveRecord(record: RequestRecord): void {
+        logger.info('[RequestLifecycle][ArchiveRecord]', {
+            requestId: record.requestId,
+            consumer: record.consumer,
+            taskId: record.taskId,
+            state: record.state,
+            chatKey: record.chatKey,
+            reasonCode: record.debug?.reasonCode,
+            hasArchiveCallback: Boolean(this.archiveCallback),
+        });
         this.history.push(record);
         if (this.history.length > this.MAX_HISTORY) {
             this.history.shift();

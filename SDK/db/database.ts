@@ -350,6 +350,28 @@ export interface DBLlmCredential {
     updatedAt: number;
 }
 
+export interface DBLlmRequestLog {
+    logId: string;
+    requestId: string;
+    sourcePluginId: string;
+    consumer: string;
+    taskId: string;
+    taskKind: string;
+    state: string;
+    taskDescription?: string;
+    chatKey?: string;
+    sessionId?: string;
+    reasonCode?: string;
+    sortTs: number;
+    queuedAt: number;
+    startedAt?: number;
+    finishedAt?: number;
+    latencyMs?: number;
+    payload: Record<string, unknown>;
+    createdAt: number;
+    updatedAt: number;
+}
+
 // ─── 统一数据库定义 ───
 
 /**
@@ -386,6 +408,7 @@ export class SSHelperDatabase extends Dexie {
 
     // LLMHub 凭据表
     llm_credentials!: Table<DBLlmCredential, string>;
+    llm_request_logs!: Table<DBLlmRequestLog, string>;
 
     constructor() {
         super('ss-helper-db');
@@ -433,6 +456,28 @@ export class SSHelperDatabase extends Dexie {
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
             memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',
+        });
+
+        this.version(4).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
+            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
+            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
+            world_state: '&stateKey, [chatKey+path]',
+            summaries: '&summaryId, [chatKey+level+createdAt]',
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            audit: '&auditId, chatKey, ts, action',
+            meta: '&chatKey',
+            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
+            template_bindings: '&bindingKey, chatKey',
+            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
+            vector_embeddings: '&embeddingId, chunkId, chatKey',
+            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
+            relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, consumer, taskId, taskKind, state, reasonCode, sortTs, queuedAt, finishedAt, createdAt, [sourcePluginId+sortTs], [state+sortTs]',
         });
     }
 }
