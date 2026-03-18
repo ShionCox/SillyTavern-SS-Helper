@@ -248,6 +248,26 @@ function resolveRequestLogChatKeys(chatKey: string): string[] {
         if (fallbackKey) {
             keys.add(fallbackKey);
         }
+        if (parsed.scopeType === 'character' && parsed.scopeId !== 'unknown_scope') {
+            const unknownScopeKey = buildTavernChatScopedKeyEvent({
+                tavernInstanceId: parsed.tavernInstanceId,
+                scopeType: parsed.scopeType,
+                scopeId: 'unknown_scope',
+                chatId: parsed.chatId,
+            });
+            if (unknownScopeKey) {
+                keys.add(unknownScopeKey);
+            }
+            const unknownScopeFallbackKey = buildTavernChatScopedKeyEvent({
+                tavernInstanceId: parsed.tavernInstanceId,
+                scopeType: parsed.scopeType,
+                scopeId: 'unknown_scope',
+                chatId: 'fallback_chat',
+            });
+            if (unknownScopeFallbackKey) {
+                keys.add(unknownScopeFallbackKey);
+            }
+        }
     } catch {
         // 兼容旧键格式；解析失败时只查询原始 chatKey。
     }

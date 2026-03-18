@@ -1,7 +1,6 @@
 import type {
     InjectionSectionName,
     LatestRecallExplanation,
-    MemoryCandidate,
     MemoryCandidateKind,
     MemoryDecayStage,
     MemoryLayer,
@@ -86,57 +85,38 @@ function buildRecallLogBucket(
 }
 
 /**
- * 功能：挑选最接近当前批次的未通过候选。
- * @param candidates 候选记忆数组。
- * @returns 最近一批未通过的候选数组。
- */
-export function pickRecentRejectedCandidates(candidates: MemoryCandidate[]): MemoryCandidate[] {
-    const rejectedCandidates: MemoryCandidate[] = Array.isArray(candidates)
-        ? candidates.filter((item: MemoryCandidate): boolean => item.encoding?.accepted !== true)
-        : [];
-    if (rejectedCandidates.length === 0) {
-        return [];
-    }
-    const latestAt: number = rejectedCandidates.reduce((maxValue: number, item: MemoryCandidate): number => {
-        return Math.max(maxValue, Number(item.extractedAt ?? 0) || 0);
-    }, 0);
-    const recentWindowMs: number = 5 * 60 * 1000;
-    return rejectedCandidates
-        .filter((item: MemoryCandidate): boolean => {
-            if (latestAt <= 0) {
-                return true;
-            }
-            return latestAt - (Number(item.extractedAt ?? 0) || 0) <= recentWindowMs;
-        })
-        .sort((left: MemoryCandidate, right: MemoryCandidate): number => Number(right.extractedAt ?? 0) - Number(left.extractedAt ?? 0));
-}
-
-/**
- * 功能：构建编码拦下分组。
- * @param candidates 候选记忆数组。
+ * 功能：构建未入选候选分组。
+ * @param entries 召回日志数组。
+ * @param lifecycleIndex 生命周期索引。
  * @returns 解释分组。
  */
-function buildRejectedCandidateBucket(candidates: MemoryCandidate[]): RecallExplanationBucket {
+function buildRejectedCandidateBucket(
+    entries: RecallLogEntry[],
+    lifecycleIndex: ExplanationLifecycleIndex,
+): RecallExplanationBucket {
     return {
         bucketKey: 'rejected_candidates',
-        label: '编码拦下',
-        emptyText: '这次没有候选被编码评分拦下。',
-        items: pickRecentRejectedCandidates(candidates).map((item: MemoryCandidate) => ({
-            itemId: normalizeExplanationText(item.candidateId),
-            sourceKind: 'candidate' as const,
-            recordKey: normalizeExplanationText(item.resolvedRecordKey ?? item.candidateId),
-            recordKind: item.kind as ExplanationBucketItemKind,
-            title: normalizeExplanationText(item.summary) || normalizeExplanationText(item.candidateId) || '未命名候选',
-            score: Number(item.encoding?.totalScore ?? 0) || 0,
-            layer: (item.encoding?.targetLayer ?? null) as MemoryLayer | null,
-            section: null,
-            tone: null,
-            stage: (item.encoding?.decayStage ?? null) as MemoryDecayStage | null,
-            reasonCodes: Array.isArray(item.encoding?.reasonCodes)
-                ? item.encoding.reasonCodes.map((reasonCode: string): string => normalizeExplanationText(reasonCode)).filter(Boolean)
-                : [],
-            accepted: item.encoding?.accepted === true,
-        })).slice(0, 8),
+        label: '未入选候选',
+        emptyText: '这次没有被预算、去重或其他规则淘汰的候选。',
+        items: entries
+            .map((entry: RecallLogEntry) => ({
+                itemId: normalizeExplanationText(entry.recallId),
+                sourceKind: 'recall_log' as const,
+                recordKey: normalizeExplanationText(entry.recordKey),
+                recordKind: entry.recordKind as ExplanationBucketItemKind,
+                title: normalizeExplanationText(entry.recordTitle) || normalizeExplanationText(entry.recordKey) || '未命名候选',
+                score: Number(entry.score ?? 0) || 0,
+                layer: null as MemoryLayer | null,
+                section: (entry.section ?? 'PREVIEW') as InjectionSectionName | 'PREVIEW',
+                tone: entry.tone ?? null,
+                stage: readLifecycleStage(entry.recordKey, lifecycleIndex),
+                reasonCodes: Array.isArray(entry.reasonCodes)
+                    ? entry.reasonCodes.map((reasonCode: string): string => normalizeExplanationText(reasonCode)).filter(Boolean)
+                    : [],
+                accepted: entry.selected,
+            }))
+            .sort((left, right): number => right.score - left.score)
+            .slice(0, 8),
     };
 }
 
@@ -198,13 +178,12 @@ export function normalizeLatestRecallExplanation(
 }
 
 /**
- * 功能：根据最近一轮召回和候选缓冲构建解释快照。
+ * 功能：根据最近一轮实际召回结果构建解释快照。
  * @param generatedAt 生成时间。
  * @param query 本轮查询文本。
  * @param sectionsUsed 本轮使用的区段。
  * @param reasonCodes 原因码。
  * @param recallEntries 本轮召回条目。
- * @param candidates 当前候选缓冲。
  * @param lifecycleIndex 生命周期索引。
  * @returns 最近一轮解释快照。
  */
@@ -214,7 +193,6 @@ export function buildLatestRecallExplanation(params: {
     sectionsUsed: InjectionSectionName[];
     reasonCodes: string[];
     recallEntries: RecallLogEntry[];
-    candidates: MemoryCandidate[];
     lifecycleIndex?: ExplanationLifecycleIndex;
 }): LatestRecallExplanation {
     const selectedEntries: RecallLogEntry[] = Array.isArray(params.recallEntries)
@@ -222,6 +200,9 @@ export function buildLatestRecallExplanation(params: {
         : [];
     const conflictSuppressedEntries: RecallLogEntry[] = Array.isArray(params.recallEntries)
         ? params.recallEntries.filter((entry: RecallLogEntry): boolean => entry.conflictSuppressed)
+        : [];
+    const rejectedEntries: RecallLogEntry[] = Array.isArray(params.recallEntries)
+        ? params.recallEntries.filter((entry: RecallLogEntry): boolean => !entry.selected && !entry.conflictSuppressed)
         : [];
     return normalizeLatestRecallExplanation({
         generatedAt: params.generatedAt,
@@ -241,7 +222,7 @@ export function buildLatestRecallExplanation(params: {
             conflictSuppressedEntries,
             params.lifecycleIndex,
         ),
-        rejectedCandidates: buildRejectedCandidateBucket(params.candidates),
+        rejectedCandidates: buildRejectedCandidateBucket(rejectedEntries, params.lifecycleIndex),
         reasonCodes: Array.isArray(params.reasonCodes)
             ? params.reasonCodes.map((item: string): string => normalizeExplanationText(item)).filter(Boolean)
             : [],

@@ -674,6 +674,10 @@ export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
 
 export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
 
+export type RecallCandidateRecordKind = MemoryRecordKind | 'event' | 'lorebook';
+
+export type RecallCandidateSource = 'facts' | 'summaries' | 'state' | 'relationships' | 'events' | 'vector' | 'lorebook';
+
 export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
 
 export type MemorySubtype =
@@ -779,12 +783,43 @@ export interface MemoryCandidate {
     encoding: EncodingScore;
 }
 
-export interface MemoryCandidateBufferSnapshot {
-    total: number;
-    accepted: number;
-    rejected: number;
-    latestAt: number;
-    items: MemoryCandidate[];
+export interface RecallCandidate {
+    candidateId: string;
+    recordKey: string;
+    recordKind: RecallCandidateRecordKind;
+    source: RecallCandidateSource;
+    sectionHint: InjectionSectionName | null;
+    title: string;
+    rawText: string;
+    renderedLine?: string;
+    confidence: number;
+    updatedAt: number;
+    keywordScore: number;
+    vectorScore: number;
+    recencyScore: number;
+    continuityScore: number;
+    relationshipScore: number;
+    emotionScore: number;
+    conflictPenalty: number;
+    privacyPenalty: number;
+    finalScore: number;
+    tone: InjectedMemoryTone;
+    selected: boolean;
+    suppressedBy?: string[];
+    reasonCodes: string[];
+}
+
+export interface RecallPlan {
+    intent: InjectionIntent;
+    sections: InjectionSectionName[];
+    sectionBudgets: Partial<Record<InjectionSectionName, number>>;
+    maxTokens: number;
+    sourceWeights: Record<RecallCandidateSource, number>;
+    sourceLimits: Partial<Record<RecallCandidateSource, number>>;
+    sectionWeights: Partial<Record<InjectionSectionName, number>>;
+    coarseTopK: number;
+    fineTopK: number;
+    reasonCodes: string[];
 }
 
 export interface MemoryLifecycleState {
@@ -890,7 +925,7 @@ export interface RecallExplanationBucket {
         itemId: string;
         sourceKind: 'recall_log' | 'candidate';
         recordKey: string;
-        recordKind: MemoryRecordKind | MemoryCandidateKind;
+        recordKind: MemoryRecordKind | MemoryCandidateKind | RecallCandidateRecordKind;
         title: string;
         score: number;
         layer: MemoryLayer | null;
@@ -946,36 +981,6 @@ export interface RelationshipState {
     updatedAt: number;
 }
 
-export interface MemoryMigrationBatchStats {
-    lifecycleFacts: number;
-    lifecycleSummaries: number;
-    candidateRows: number;
-    recallRows: number;
-    relationshipRows: number;
-    updatedAt: number;
-}
-
-export type MemoryMigrationStage = 'legacy_compatible' | 'dual_write' | 'db_preferred';
-
-export interface MemoryMigrationStatus {
-    stage: MemoryMigrationStage;
-    schemaVersion: number;
-    lifecycleBackfilled: boolean;
-    candidateMirrorReady: boolean;
-    recallMirrorReady: boolean;
-    relationshipMirrorReady: boolean;
-    lastBackfillAt: number;
-    autoBackfillEnabled: boolean;
-    autoBackfillBatchSize: number;
-    lifecycleFactCursor: number;
-    lifecycleSummaryCursor: number;
-    lastAutoBackfillAt: number;
-    lastAutoBackfillReason: string;
-    lastBatchStats: MemoryMigrationBatchStats;
-    pendingBackfillReasons: string[];
-    updatedAt: number;
-}
-
 export interface MemoryTuningProfile {
     candidateAcceptThresholdBias: number;
     recallRelationshipBias: number;
@@ -983,7 +988,6 @@ export interface MemoryTuningProfile {
     recallRecencyBias: number;
     recallContinuityBias: number;
     distortionProtectionBias: number;
-    candidateRetentionLimit: number;
     recallRetentionLimit: number;
     updatedAt: number;
 }
@@ -1334,32 +1338,6 @@ export const DEFAULT_SIMPLE_MEMORY_PERSONA: SimpleMemoryPersona = {
     updatedAt: 0,
 };
 
-export const DEFAULT_MEMORY_MIGRATION_STATUS: MemoryMigrationStatus = {
-    stage: 'legacy_compatible',
-    schemaVersion: 2,
-    lifecycleBackfilled: false,
-    candidateMirrorReady: false,
-    recallMirrorReady: false,
-    relationshipMirrorReady: false,
-    lastBackfillAt: 0,
-    autoBackfillEnabled: true,
-    autoBackfillBatchSize: 48,
-    lifecycleFactCursor: 0,
-    lifecycleSummaryCursor: 0,
-    lastAutoBackfillAt: 0,
-    lastAutoBackfillReason: '',
-    lastBatchStats: {
-        lifecycleFacts: 0,
-        lifecycleSummaries: 0,
-        candidateRows: 0,
-        recallRows: 0,
-        relationshipRows: 0,
-        updatedAt: 0,
-    },
-    pendingBackfillReasons: ['lifecycle', 'candidate_buffer', 'recall_log', 'relationship_state'],
-    updatedAt: 0,
-};
-
 export const DEFAULT_MEMORY_TUNING_PROFILE: MemoryTuningProfile = {
     candidateAcceptThresholdBias: 0,
     recallRelationshipBias: 1,
@@ -1367,7 +1345,6 @@ export const DEFAULT_MEMORY_TUNING_PROFILE: MemoryTuningProfile = {
     recallRecencyBias: 1,
     recallContinuityBias: 1,
     distortionProtectionBias: 1,
-    candidateRetentionLimit: 120,
     recallRetentionLimit: 160,
     updatedAt: 0,
 };
@@ -1453,13 +1430,9 @@ export interface MemoryOSChatState {
     lastPostGenerationDecision?: PostGenerationGateDecision | null;
     userFacingPreset?: UserFacingChatPreset | null;
     groupMemory?: GroupMemoryState;
-    memoryCandidateBuffer?: MemoryCandidate[];
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
-    memoryRecallLog?: RecallLogEntry[];
     latestRecallExplanation?: LatestRecallExplanation | null;
-    relationshipStateMap?: Record<string, RelationshipState>;
-    memoryMigrationStatus?: MemoryMigrationStatus;
     memoryTuningProfile?: MemoryTuningProfile;
     memoryTaskPresentationSettings?: MemoryTaskPresentationSettings;
     summaryFixQueue?: SummaryFixTask[];

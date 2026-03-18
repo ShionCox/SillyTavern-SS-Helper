@@ -754,21 +754,6 @@ export function buildSettingsCardHtmlTemplate(
 
           <div id="${ids.panelTuningId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-experience-grid">
-            <section class="stx-ui-experience-card" data-stx-ui-search="memory tuning migration backfill">
-              <div class="stx-ui-experience-card-head">
-                <h3>迁移状态</h3>
-                <p>这里显示当前迁移阶段、镜像准备情况和最近一次回填时间。</p>
-              </div>
-              <div id="${ids.tuningMigrationStatusId}"></div>
-              <div class="stx-ui-actions">
-                <button id="${ids.tuningRefreshBtnId}" type="button" class="stx-ui-btn secondary" data-tip="重新读取当前迁移状态与调参值。">
-                  <i class="fa-solid fa-rotate"></i>&nbsp;刷新当前参数
-                </button>
-                <button id="${ids.tuningBackfillBtnId}" type="button" class="stx-ui-btn" data-tip="执行一次迁移回填，并在完成后刷新状态。">
-                  <i class="fa-solid fa-database"></i>&nbsp;执行迁移回填
-                </button>
-              </div>
-            </section>
             <section class="stx-ui-experience-card stx-ui-experience-card-wide" data-stx-ui-search="memory tuning profile threshold relationship emotion recency continuity distortion retention">
               <div class="stx-ui-experience-card-head">
                 <h3>调参设置</h3>
@@ -800,15 +785,14 @@ export function buildSettingsCardHtmlTemplate(
                   <input id="${ids.tuningDistortionProtectionBiasId}" class="text_pole stx-ui-input" type="number" min="0" max="1" step="0.01" />
                 </label>
                 <label class="stx-ui-field">
-                  <span class="stx-ui-field-label">候选保留上限</span>
-                  <input id="${ids.tuningCandidateRetentionLimitId}" class="text_pole stx-ui-input" type="number" min="24" max="240" step="1" />
-                </label>
-                <label class="stx-ui-field">
                   <span class="stx-ui-field-label">召回日志上限</span>
                   <input id="${ids.tuningRecallRetentionLimitId}" class="text_pole stx-ui-input" type="number" min="40" max="320" step="1" />
                 </label>
               </div>
               <div class="stx-ui-actions">
+                <button id="${ids.tuningRefreshBtnId}" type="button" class="stx-ui-btn secondary" data-tip="重新读取当前调参值。">
+                  <i class="fa-solid fa-rotate"></i>&nbsp;刷新当前参数
+                </button>
                 <button id="${ids.tuningResetBtnId}" type="button" class="stx-ui-btn secondary" data-tip="把表单值恢复到默认调参画像。">
                   <i class="fa-solid fa-rotate-left"></i>&nbsp;恢复默认值
                 </button>

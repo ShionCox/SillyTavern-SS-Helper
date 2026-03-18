@@ -21,7 +21,9 @@ import type {
     LorebookGateDecision,
     LogicalChatView,
     PersonaMemoryProfile,
+    RecallCandidate,
     RecallLogEntry,
+    RecallPlan,
     RelationshipState,
     MemoryTuningProfile,
     PreGenerationGateDecision,
@@ -49,6 +51,9 @@ import {
     type LorebookEntryCandidate,
 } from '../core/lorebook-relevance-gate';
 import { buildLatestRecallExplanation } from '../core/recall-explanation';
+import { collectRecallCandidates } from '../recall/recall-assembler';
+import { planRecall } from '../recall/recall-planner';
+import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
 
 type BuildContextOptions = {
     maxTokens?: number;
@@ -324,9 +329,6 @@ export class InjectionManager {
         reasonCodes: string[],
         recallEntries: RecallLogEntry[],
     ): Promise<LatestRecallExplanation> {
-        const candidateSnapshot = this.chatStateManager
-            ? await this.chatStateManager.getCandidateBufferSnapshot()
-            : { total: 0, accepted: 0, rejected: 0, latestAt: 0, items: [] };
         const lifecycleIndex = Array.from(this.activeLifecycleMap.entries()).reduce<Record<string, MemoryLifecycleState>>(
             (result: Record<string, MemoryLifecycleState>, [recordKey, lifecycle]: [string, MemoryLifecycleState]): Record<string, MemoryLifecycleState> => {
                 result[recordKey] = lifecycle;
@@ -340,7 +342,6 @@ export class InjectionManager {
             sectionsUsed,
             reasonCodes,
             recallEntries,
-            candidates: candidateSnapshot.items,
             lifecycleIndex,
         });
     }
@@ -434,20 +435,60 @@ export class InjectionManager {
             intent,
             opts?.sectionBudgets,
         );
-        const keywords = this.extractKeywords(opts?.query ?? '');
+        const recallPlan: RecallPlan = planRecall({
+            intent,
+            sections,
+            sectionBudgets: budgets,
+            maxTokens,
+            policy,
+            lorebookDecision,
+        });
+        const collectedCandidates: RecallCandidate[] = await collectRecallCandidates({
+            chatKey: this.chatKey,
+            plan: recallPlan,
+            query: String(opts?.query ?? ''),
+            recentEvents,
+            logicalView,
+            groupMemory,
+            policy,
+            lorebookDecision,
+            lorebookEntries,
+            factsManager: this.factsManager,
+            stateManager: this.stateManager,
+            summariesManager: this.summariesManager,
+            chatStateManager: this.chatStateManager,
+            lifecycleIndex: this.activeLifecycleMap,
+            personaProfile: this.activePersonaProfile,
+            tuningProfile: this.activeTuningProfile,
+            relationships: this.activeRelationships,
+            fallbackRelationshipWeight: this.activeRelationshipWeight,
+        });
+        const rankedCandidates: RecallCandidate[] = rankRecallCandidates({
+            candidates: collectedCandidates,
+            plan: recallPlan,
+            recentVisibleMessages: logicalView?.visibleMessages.map((item) => item.text) ?? [],
+            worldStateText,
+            lorebookConflictDetected: lorebookDecision.conflictDetected,
+        });
+        const finalizedCandidates: RecallCandidate[] = cutRecallCandidatesByBudget({
+            candidates: rankedCandidates,
+            plan: recallPlan,
+            estimateTokens: (value: string): number => this.estimateTokens(value),
+        });
+        const selectedCandidates: RecallCandidate[] = finalizedCandidates.filter((candidate: RecallCandidate): boolean => candidate.selected);
+        const recallEntries: RecallLogEntry[] = this.buildRecallLogEntries(
+            finalizedCandidates,
+            String(opts?.query ?? ''),
+            Date.now(),
+        );
         const sectionTexts: Partial<Record<InjectionSectionName, string>> = {};
 
         for (const section of sections) {
-            sectionTexts[section] = await this.buildSectionText(
+            sectionTexts[section] = this.buildSectionText(
                 section,
+                selectedCandidates.filter((candidate: RecallCandidate): boolean => candidate.sectionHint === section),
                 budgets[section] ?? 0,
-                keywords,
-                recentEvents,
-                logicalView,
-                policy,
-                lorebookDecision,
-                lorebookEntries,
-                groupMemory,
+                promptProfile,
             );
         }
 
@@ -482,6 +523,7 @@ export class InjectionManager {
                     ),
                 );
             }
+            this.resetRecallContext();
             return opts?.includeDecisionMeta === true
                 ? {
                     text: '',
@@ -508,19 +550,14 @@ export class InjectionManager {
                 reasonCodes: mergedReasonCodes,
             });
             await this.chatStateManager.recomputeMemoryQuality();
-            const previewLogs: RecallLogEntry[] = await this.chatStateManager.recomputeRecallRanking(String(opts?.query ?? ''));
-            const scopedPreviewLogs: RecallLogEntry[] = previewLogs.map((entry: RecallLogEntry, index: number): RecallLogEntry => ({
-                ...entry,
-                section: sections[index] ?? 'PREVIEW',
-            }));
-            await this.chatStateManager.recordRecallLog(scopedPreviewLogs);
+            await this.chatStateManager.recordRecallLog(recallEntries);
             await this.chatStateManager.setLatestRecallExplanation(
                 await this.buildLatestRecallExplanationSnapshot(
                     preDecision.generatedAt,
                     String(opts?.query ?? ''),
                     sections,
                     mergedReasonCodes,
-                    scopedPreviewLogs,
+                    recallEntries,
                 ),
             );
         }
@@ -539,6 +576,33 @@ export class InjectionManager {
         }
         this.resetRecallContext();
         return renderedText;
+    }
+
+    private buildRecallLogEntries(candidates: RecallCandidate[], query: string, loggedAt: number): RecallLogEntry[] {
+        return candidates.map((candidate: RecallCandidate, index: number): RecallLogEntry => ({
+            recallId: `actual:${loggedAt}:${index}:${candidate.candidateId}`,
+            query,
+            section: candidate.sectionHint ?? 'PREVIEW',
+            recordKey: candidate.recordKey,
+            recordKind: this.toRecallLogRecordKind(candidate),
+            recordTitle: candidate.title,
+            score: candidate.finalScore,
+            selected: candidate.selected,
+            conflictSuppressed: candidate.reasonCodes.includes('conflict_suppressed'),
+            tone: candidate.tone,
+            reasonCodes: [...candidate.reasonCodes],
+            loggedAt,
+        }));
+    }
+
+    private toRecallLogRecordKind(candidate: RecallCandidate): RecallLogEntry['recordKind'] {
+        if (candidate.recordKind === 'event') {
+            return 'summary';
+        }
+        if (candidate.recordKind === 'lorebook') {
+            return 'state';
+        }
+        return candidate.recordKind;
     }
 
     /**
@@ -933,42 +997,63 @@ export class InjectionManager {
      * @param recentEvents 最近事件。
      * @returns 区段文本。
      */
-    private async buildSectionText(
+    private buildSectionText(
         section: InjectionSectionName,
+        candidates: RecallCandidate[],
         tokenBudget: number,
-        keywords: string[],
-        recentEvents: Array<EventEnvelope<unknown>>,
-        logicalView: LogicalChatView | null,
-        policy: AdaptivePolicy,
-        lorebookDecision: LorebookGateDecision,
-        lorebookEntries: LorebookEntryCandidate[],
-        groupMemory: GroupMemoryState | null,
-    ): Promise<string> {
+        _promptProfile: PromptInjectionProfile,
+    ): string {
+        if (tokenBudget <= 0 || candidates.length <= 0) {
+            return '';
+        }
+        const title = this.readSectionTitle(section);
+        const headerReserve = this.readSectionHeaderReserve(section);
+        const sortedCandidates = [...candidates].sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+        const lines = sortedCandidates
+            .map((candidate: RecallCandidate): string => String(candidate.renderedLine ?? candidate.rawText).trim())
+            .filter((line: string): boolean => line.length > 0);
+        return this.assembleSection(title, lines, tokenBudget, headerReserve);
+    }
+
+    private readSectionTitle(section: InjectionSectionName): string {
         if (section === 'WORLD_STATE') {
-            return this.buildWorldStateSectionV2(tokenBudget, keywords, policy, lorebookDecision, lorebookEntries);
+            return '【世界状态】';
         }
         if (section === 'FACTS') {
-            return this.buildFactsSection(tokenBudget, keywords);
+            return '【事实】';
         }
         if (section === 'EVENTS') {
-            return this.buildEventsSection(tokenBudget, recentEvents, logicalView);
+            return '【最近事件】';
         }
         if (section === 'SUMMARY') {
-            return this.buildSummarySection(tokenBudget, keywords);
+            return '【摘要】';
         }
         if (section === 'CHARACTER_FACTS') {
-            return this.buildCharacterFactsSection(tokenBudget, keywords, groupMemory, policy);
+            return '【角色事实】';
         }
         if (section === 'RELATIONSHIPS') {
-            return this.buildRelationshipsSection(tokenBudget, keywords);
+            return '【关系】';
         }
         if (section === 'LAST_SCENE') {
-            return this.buildLastSceneSection(tokenBudget, groupMemory);
+            return '【最近场景】';
+        }
+        return '【短摘要】';
+    }
+
+    private readSectionHeaderReserve(section: InjectionSectionName): number {
+        if (section === 'WORLD_STATE') {
+            return 20;
+        }
+        if (section === 'FACTS') {
+            return 24;
+        }
+        if (section === 'EVENTS') {
+            return 16;
         }
         if (section === 'SHORT_SUMMARY') {
-            return this.buildShortSummarySection(tokenBudget);
+            return 18;
         }
-        return '';
+        return 20;
     }
 
     /**

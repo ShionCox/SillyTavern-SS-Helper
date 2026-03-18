@@ -577,10 +577,8 @@ export class MemoryEditorFacade {
             preDecision,
             postDecision,
             lifecycleSummary,
-            candidateSnapshot,
             recallLog,
             latestRecallExplanation,
-            migrationStatus,
             tuningProfile,
         ] = await Promise.all([
             this.chatStateManager.getChatProfile(),
@@ -591,10 +589,8 @@ export class MemoryEditorFacade {
             this.chatStateManager.getLastPreGenerationDecision(),
             this.chatStateManager.getLastPostGenerationDecision(),
             this.chatStateManager.getMemoryLifecycleSummary(),
-            this.chatStateManager.getCandidateBufferSnapshot(),
             this.chatStateManager.getRecallLog(),
             this.chatStateManager.getLatestRecallExplanation(),
-            this.chatStateManager.getMemoryMigrationStatus(),
             this.chatStateManager.getMemoryTuningProfile(),
         ]);
 
@@ -614,10 +610,8 @@ export class MemoryEditorFacade {
             preDecision,
             postDecision,
             lifecycleSummary,
-            candidateSnapshot,
             recallLog,
             latestRecallExplanation,
-            migrationStatus,
             tuningProfile,
             maintenanceInsights: context.maintenanceInsights,
             facts: context.facts.slice(0, 36),

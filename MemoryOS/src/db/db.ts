@@ -24,7 +24,6 @@ import type {
     DBVectorEmbedding,
     DBVectorMeta,
     DBRelationshipMemory,
-    DBMemoryCandidateBuffer,
     DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
@@ -50,7 +49,6 @@ export type {
     DBVectorEmbedding,
     DBVectorMeta,
     DBRelationshipMemory,
-    DBMemoryCandidateBuffer,
     DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
@@ -145,7 +143,6 @@ export async function clearMemoryChatData(
             db.vector_embeddings,
             db.vector_meta,
             db.relationship_memory,
-            db.memory_candidate_buffer,
             db.memory_recall_log,
         ]
         : [
@@ -161,7 +158,6 @@ export async function clearMemoryChatData(
             db.vector_embeddings,
             db.vector_meta,
             db.relationship_memory,
-            db.memory_candidate_buffer,
             db.memory_recall_log,
         ];
 
@@ -195,10 +191,6 @@ export async function clearMemoryChatData(
             db.vector_meta.where('chatKey').equals(chatKey).delete(),
             db.relationship_memory
                 .where('[chatKey+updatedAt]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
-            db.memory_candidate_buffer
-                .where('[chatKey+ts]')
                 .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
                 .delete(),
             db.memory_recall_log
@@ -267,7 +259,6 @@ export async function clearAllMemoryData(): Promise<void> {
             db.vector_embeddings,
             db.vector_meta,
             db.relationship_memory,
-            db.memory_candidate_buffer,
             db.memory_recall_log,
             db.chat_plugin_state,
             db.chat_plugin_records,
@@ -287,7 +278,6 @@ export async function clearAllMemoryData(): Promise<void> {
                 db.vector_embeddings.clear(),
                 db.vector_meta.clear(),
                 db.relationship_memory.clear(),
-                db.memory_candidate_buffer.clear(),
                 db.memory_recall_log.clear(),
                 db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
                 db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),

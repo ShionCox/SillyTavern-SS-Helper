@@ -222,19 +222,7 @@ export interface DBMeta {
     lastCommittedTurnCursor?: string;
     lastVisibleTurnSnapshotHash?: string;
     personaProfileVersion?: string;
-    lastCandidateFlushAt?: number;
     lastRecallLoggedAt?: number;
-    memoryMigrationStage?: 'legacy_compatible' | 'dual_write' | 'db_preferred';
-    memoryLifecycleBackfilledAt?: number;
-    memoryCandidateMirrorAt?: number;
-    memoryRecallMirrorAt?: number;
-    memoryRelationshipMirrorAt?: number;
-    memoryAutoBackfillEnabled?: boolean;
-    memoryAutoBackfillBatchSize?: number;
-    memoryLifecycleFactCursor?: number;
-    memoryLifecycleSummaryCursor?: number;
-    memoryLastAutoBackfillAt?: number;
-    memoryLastAutoBackfillReason?: string;
 }
 
 export interface DBWorldInfoCache {
@@ -336,20 +324,6 @@ export interface DBRelationshipMemory {
     updatedAt: number;
 }
 
-export interface DBMemoryCandidateBuffer {
-    candidateId: string;
-    chatKey: string;
-    kind: 'fact' | 'summary' | 'state' | 'relationship';
-    source: string;
-    summary: string;
-    payload: Record<string, unknown>;
-    encoding: Record<string, unknown>;
-    conflictWith?: string[];
-    resolvedRecordKey?: string;
-    ts: number;
-    updatedAt: number;
-}
-
 export interface DBMemoryRecallLog {
     recallId: string;
     chatKey: string;
@@ -408,7 +382,6 @@ export class SSHelperDatabase extends Dexie {
     vector_embeddings!: Table<DBVectorEmbedding, string>;
     vector_meta!: Table<DBVectorMeta, string>;
     relationship_memory!: Table<DBRelationshipMemory, string>;
-    memory_candidate_buffer!: Table<DBMemoryCandidateBuffer, string>;
     memory_recall_log!: Table<DBMemoryRecallLog, string>;
 
     // LLMHub 凭据表
@@ -441,7 +414,7 @@ export class SSHelperDatabase extends Dexie {
             llm_credentials: '&providerId, updatedAt',
         });
 
-        this.version(2).stores({
+        this.version(3).stores({
             chat_documents: '&chatKey, entityKey, updatedAt',
             chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
             chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
@@ -458,7 +431,6 @@ export class SSHelperDatabase extends Dexie {
             vector_embeddings: '&embeddingId, chunkId, chatKey',
             vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
-            memory_candidate_buffer: '&candidateId, [chatKey+ts], [chatKey+kind+ts], chatKey, kind, ts',
             memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',
         });

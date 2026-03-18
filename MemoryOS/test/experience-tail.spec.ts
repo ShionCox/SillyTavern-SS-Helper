@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MEMORY_TUNING_PROFILE } from '../src/types';
 import { normalizeMemoryTuningProfile } from '../src/core/memory-tuning';
-import { buildLatestRecallExplanation, pickRecentRejectedCandidates } from '../src/core/recall-explanation';
-import { normalizeMemoryMigrationStatus, shouldRunAutomaticMemoryMigration } from '../src/core/memory-migration';
+import { buildLatestRecallExplanation } from '../src/core/recall-explanation';
 import { buildGroupRelationshipSeeds } from '../src/core/relationship-graph';
 
 describe('experience-tail', (): void => {
-    it('会把命中、冲突压制和编码拦下分到不同解释分组', (): void => {
+    it('会把命中、冲突压制和未入选候选分到不同解释分组', (): void => {
         const now: number = Date.now();
         const explanation = buildLatestRecallExplanation({
             generatedAt: now,
@@ -42,28 +41,19 @@ describe('experience-tail', (): void => {
                     reasonCodes: ['conflict_penalty'],
                     loggedAt: now,
                 },
-            ],
-            candidates: [
                 {
-                    candidateId: 'candidate-rejected',
-                    kind: 'relationship',
-                    source: 'extract',
-                    summary: '她还有一点迟疑，不愿完全放下戒备。',
-                    payload: {},
-                    extractedAt: now,
-                    conflictWith: [],
-                    encoding: {
-                        totalScore: 0.32,
-                        accepted: false,
-                        targetLayer: 'working',
-                        salience: 0.3,
-                        strength: 0.25,
-                        decayStage: 'blur',
-                        emotionTag: 'hesitation',
-                        relationScope: 'user',
-                        reasonCodes: ['threshold_blocked'],
-                        profileVersion: 'persona.v1',
-                    },
+                    recallId: 'rejected-1',
+                    query: '用户还信任我吗',
+                    section: 'RELATIONSHIPS',
+                    recordKey: 'relationship:hesitation',
+                    recordKind: 'relationship',
+                    recordTitle: '迟疑关系',
+                    score: 0.32,
+                    selected: false,
+                    conflictSuppressed: false,
+                    tone: 'blurred_recall',
+                    reasonCodes: ['budget_dropped'],
+                    loggedAt: now,
                 },
             ],
             lifecycleIndex: {
@@ -93,6 +83,19 @@ describe('experience-tail', (): void => {
                     relationScope: 'user',
                     updatedAt: now,
                 },
+                'relationship:hesitation': {
+                    recordKey: 'relationship:hesitation',
+                    recordKind: 'relationship',
+                    stage: 'blur',
+                    strength: 0.25,
+                    salience: 0.3,
+                    rehearsalCount: 0,
+                    lastRecalledAt: 0,
+                    distortionRisk: 0.42,
+                    emotionTag: 'hesitation',
+                    relationScope: 'user',
+                    updatedAt: now,
+                },
             },
         });
 
@@ -101,58 +104,36 @@ describe('experience-tail', (): void => {
         expect(explanation.conflictSuppressed.items).toHaveLength(1);
         expect(explanation.conflictSuppressed.items[0]?.stage).toBe('distorted');
         expect(explanation.rejectedCandidates.items).toHaveLength(1);
-        expect(explanation.rejectedCandidates.items[0]?.layer).toBe('working');
+        expect(explanation.rejectedCandidates.items[0]?.recordKey).toBe('relationship:hesitation');
+        expect(explanation.rejectedCandidates.items[0]?.stage).toBe('blur');
     });
 
-    it('会只保留最近一批被编码拦下的候选', (): void => {
+    it('会按 score 保留最相关的未入选候选', (): void => {
         const now: number = Date.now();
-        const rejected = pickRecentRejectedCandidates([
-            {
-                candidateId: 'old-rejected',
-                kind: 'fact',
-                source: 'extract',
-                summary: '很早之前的落选候选',
-                payload: {},
-                extractedAt: now - 10 * 60 * 1000,
-                conflictWith: [],
-                encoding: {
-                    totalScore: 0.21,
-                    accepted: false,
-                    targetLayer: 'working',
-                    salience: 0.2,
-                    strength: 0.2,
-                    decayStage: 'clear',
-                    emotionTag: '',
-                    relationScope: '',
-                    reasonCodes: ['threshold_blocked'],
-                    profileVersion: 'persona.v1',
-                },
-            },
-            {
-                candidateId: 'fresh-rejected',
-                kind: 'fact',
-                source: 'extract',
-                summary: '最新一批落选候选',
-                payload: {},
-                extractedAt: now,
-                conflictWith: [],
-                encoding: {
-                    totalScore: 0.24,
-                    accepted: false,
-                    targetLayer: 'working',
-                    salience: 0.24,
-                    strength: 0.22,
-                    decayStage: 'blur',
-                    emotionTag: '',
-                    relationScope: '',
-                    reasonCodes: ['threshold_blocked'],
-                    profileVersion: 'persona.v1',
-                },
-            },
-        ]);
+        const explanation = buildLatestRecallExplanation({
+            generatedAt: now,
+            query: '港口',
+            sectionsUsed: ['FACTS'],
+            reasonCodes: ['intent:story_continue'],
+            recallEntries: Array.from({ length: 10 }, (_, index: number) => ({
+                recallId: `rejected-${index}`,
+                query: '港口',
+                section: 'FACTS' as const,
+                recordKey: `fact:${index}`,
+                recordKind: 'fact' as const,
+                recordTitle: `候选 ${index}`,
+                score: 1 - index * 0.05,
+                selected: false,
+                conflictSuppressed: false,
+                tone: 'stable_fact' as const,
+                reasonCodes: ['budget_dropped'],
+                loggedAt: now,
+            })),
+        });
 
-        expect(rejected).toHaveLength(1);
-        expect(rejected[0]?.candidateId).toBe('fresh-rejected');
+        expect(explanation.rejectedCandidates.items).toHaveLength(8);
+        expect(explanation.rejectedCandidates.items[0]?.recordKey).toBe('fact:0');
+        expect(explanation.rejectedCandidates.items[7]?.recordKey).toBe('fact:7');
     });
 
     it('会裁剪调参画像并支持默认值恢复', (): void => {
@@ -163,7 +144,6 @@ describe('experience-tail', (): void => {
             recallRecencyBias: 0.66,
             recallContinuityBias: 9,
             distortionProtectionBias: -2,
-            candidateRetentionLimit: 999,
             recallRetentionLimit: 1,
         });
         const restored = normalizeMemoryTuningProfile(DEFAULT_MEMORY_TUNING_PROFILE);
@@ -173,7 +153,6 @@ describe('experience-tail', (): void => {
         expect(normalized.recallEmotionBias).toBe(0);
         expect(normalized.recallContinuityBias).toBe(1);
         expect(normalized.distortionProtectionBias).toBe(0);
-        expect(normalized.candidateRetentionLimit).toBe(240);
         expect(normalized.recallRetentionLimit).toBe(40);
         expect(restored.candidateAcceptThresholdBias).toBe(DEFAULT_MEMORY_TUNING_PROFILE.candidateAcceptThresholdBias);
         expect(restored.recallRetentionLimit).toBe(DEFAULT_MEMORY_TUNING_PROFILE.recallRetentionLimit);
@@ -186,7 +165,6 @@ describe('experience-tail', (): void => {
             sectionsUsed: ['EVENTS', 'SUMMARY'],
             reasonCodes: ['intent:story_continue', 'sections:EVENTS,SUMMARY'],
             recallEntries: [],
-            candidates: [],
         });
 
         expect(explanation.query).toBe('当前场景');
@@ -195,31 +173,6 @@ describe('experience-tail', (): void => {
         expect(explanation.selected.items).toHaveLength(0);
         expect(explanation.conflictSuppressed.items).toHaveLength(0);
         expect(explanation.rejectedCandidates.items).toHaveLength(0);
-    });
-
-    it('会归一化迁移状态并在条件满足时切到结构化主读', (): void => {
-        const status = normalizeMemoryMigrationStatus({
-            lifecycleBackfilled: true,
-            candidateMirrorReady: true,
-            recallMirrorReady: true,
-            relationshipMirrorReady: true,
-            autoBackfillBatchSize: 999,
-            lastBatchStats: {
-                lifecycleFacts: 4,
-                lifecycleSummaries: 2,
-                candidateRows: 1,
-                recallRows: 3,
-                relationshipRows: 5,
-                updatedAt: 456,
-            },
-            pendingBackfillReasons: [],
-        });
-
-        expect(status.stage).toBe('db_preferred');
-        expect(status.autoBackfillBatchSize).toBe(120);
-        expect(status.lastBatchStats.relationshipRows).toBe(5);
-        expect(shouldRunAutomaticMemoryMigration(status, status.lastAutoBackfillAt + 1000, false)).toBe(false);
-        expect(shouldRunAutomaticMemoryMigration(status, status.lastAutoBackfillAt + 1000 * 60 * 11, false)).toBe(true);
     });
 
     it('会为群聊构建主角色关系和对象对关系种子', (): void => {

@@ -429,7 +429,7 @@ function renderWorldStateSectionTable<T>(options: {
             ? `<span class="stx-re-world-section-colhead-badge" aria-hidden="true"><em>${escapeHtml(options.badgeText)}</em></span>`
             : '';
         const sectionTitleAttr = index === 0 ? ` class="stx-re-world-section-colhead" data-world-section-title="${escapeHtml(options.title)}"` : '';
-        return `<th${sectionTitleAttr}${widthAttr}${buildTipAttr(column.tip)}>${firstColumnPrefix}<span>${escapeHtml(column.label)}</span></th>`;
+        return `<th${sectionTitleAttr}${widthAttr}${buildTipAttr(column.tip)}><span class="stx-re-world-section-colhead-content">${firstColumnPrefix}<span>${escapeHtml(column.label)}</span></span></th>`;
     }).join('');
     const bodyHtml = options.rows.map((item: T, index: number): string => {
         const cellsHtml = options.columns.map((column: WorldStateSectionColumn<T>): string => `<td class="${escapeHtml(column.cellClassName || '')}">${column.render(item)}</td>`).join('');
@@ -1781,7 +1781,7 @@ function formatPersonaDerivedSource(value: string): string {
         group_lane: '角色分轨',
         relationship_state: '关系状态',
         active_actor: '当前主视角',
-        fallback: '兼容回填',
+        fallback: '结构补全',
     };
     if (normalized.startsWith('actor:')) {
         return `角色：${formatActorKeyLabel(normalized.slice('actor:'.length))}`;
@@ -2013,30 +2013,70 @@ function formatMemoryRecordSegmentLabel(segment: string): string {
     return formatRecordEditorKeyLabel(trimmed);
 }
 
-function buildReadableMemoryRecordHeadline(recordKey: string, owned: OwnedMemoryState): string | null {
+function splitMemoryRecordSegments(recordKey: string): string[] {
     const normalizedKey = String(recordKey ?? '').trim();
-    if (!normalizedKey || !normalizedKey.includes('::')) {
-        return null;
+    if (!normalizedKey) {
+        return [];
     }
+    if (normalizedKey.includes('::')) {
+        return normalizedKey.split('::').map((item: string): string => item.trim()).filter(Boolean);
+    }
+    if (normalizedKey.includes('/')) {
+        return normalizedKey.split('/').map((item: string): string => item.trim()).filter(Boolean);
+    }
+    return [normalizedKey];
+}
 
-    const segments = normalizedKey.split('::').map((item: string): string => item.trim()).filter(Boolean);
-    if (segments.length === 0) {
+function isGeneratedMemoryRecordSegment(segment: string, actorLabel: string): boolean {
+    const trimmed = String(segment ?? '').trim();
+    if (!trimmed) {
+        return true;
+    }
+    if (actorLabel && trimmed === actorLabel) {
+        return true;
+    }
+    return /(?:^|[_\.\-])20\d{2}[-_]\d{2}[-_]\d{2}(?:$|[@_\.\-])/.test(trimmed)
+        || /\b\d{1,2}h\d{1,2}m\d{1,2}s\d*ms\b/i.test(trimmed)
+        || /\b\d{13,}\b/.test(trimmed);
+}
+
+function collectMemoryRecordDisplayParts(recordKey: string, owned: OwnedMemoryState): { actorLabel: string; labels: string[] } | null {
+    const segments = splitMemoryRecordSegments(recordKey);
+    if (segments.length <= 0) {
         return null;
     }
 
     let actorLabel = owned.ownerActorKey ? formatActorKeyLabel(owned.ownerActorKey) : '';
     const labels: string[] = [];
+    const skipIndexes = new Set<number>();
 
     segments.forEach((segment: string, index: number): void => {
-        const normalized = segment.toLowerCase();
+        if (skipIndexes.has(index)) {
+            return;
+        }
+        const trimmed = String(segment ?? '').trim();
+        const normalized = trimmed.toLowerCase();
         if (!normalized) {
             return;
         }
-        if (/^(tavern_|chat:|session:|conversation:|memory:)/i.test(segment)) {
+        if (/^(tavern_|chat:|session:|conversation:|memory:)/i.test(trimmed)) {
+            return;
+        }
+        if (['character', 'assistant', 'name'].includes(normalized) && segments[index + 1]) {
+            actorLabel = formatActorKeyLabel(`${normalized}:${segments[index + 1]}`);
+            skipIndexes.add(index + 1);
+            return;
+        }
+        if (normalized === 'role' && segments[index + 1]) {
+            actorLabel = formatActorKeyLabel(`${normalized}:${segments[index + 1]}`);
+            skipIndexes.add(index + 1);
             return;
         }
         if (normalized.startsWith('character:') || normalized.startsWith('assistant:') || normalized.startsWith('name:') || normalized.startsWith('role:')) {
-            actorLabel = formatActorKeyLabel(segment);
+            actorLabel = formatActorKeyLabel(trimmed);
+            return;
+        }
+        if (isGeneratedMemoryRecordSegment(trimmed, actorLabel)) {
             return;
         }
 
@@ -2045,28 +2085,61 @@ function buildReadableMemoryRecordHeadline(recordKey: string, owned: OwnedMemory
             labels.push('风格模式');
             return;
         }
-        if (normalized === 'profile' && (previous.startsWith('character:') || previous.startsWith('assistant:') || previous.startsWith('name:'))) {
+        if (normalized === 'profile' && (previous === 'character' || previous === 'assistant' || previous === 'name' || previous.startsWith('character:') || previous.startsWith('assistant:') || previous.startsWith('name:'))) {
             labels.push('人物资料');
             return;
         }
 
-        labels.push(formatMemoryRecordSegmentLabel(segment));
+        const label = formatMemoryRecordSegmentLabel(trimmed);
+        if (!label || label === actorLabel) {
+            return;
+        }
+        labels.push(label);
     });
 
     const compactLabels = labels.filter(Boolean).filter((label: string, index: number, array: string[]): boolean => index === 0 || label !== array[index - 1]);
     if (compactLabels.length >= 2 && compactLabels[compactLabels.length - 1] === '风格模式' && compactLabels[compactLabels.length - 2] === '风格') {
         compactLabels.splice(compactLabels.length - 2, 1);
     }
+    if (!actorLabel && compactLabels.length <= 0) {
+        return null;
+    }
+    return { actorLabel, labels: compactLabels };
+}
 
-    const summaryLabel = compactLabels.join(' / ');
-    const composed = [actorLabel, summaryLabel].filter(Boolean).join(' · ');
-    return composed || null;
+function buildReadableMemoryRecordHeadline(recordKey: string, owned: OwnedMemoryState): string | null {
+    const parts = collectMemoryRecordDisplayParts(recordKey, owned);
+    if (!parts) {
+        return null;
+    }
+
+    const summaryLabel = parts.labels[parts.labels.length - 1] || '';
+    if (parts.actorLabel && summaryLabel) {
+        return parts.actorLabel === summaryLabel ? parts.actorLabel : `${parts.actorLabel} · ${summaryLabel}`;
+    }
+    if (parts.actorLabel) {
+        return parts.actorLabel;
+    }
+    if (parts.labels.length >= 2) {
+        return parts.labels.slice(-2).join(' / ');
+    }
+    return parts.labels[0] || null;
+}
+
+function buildReadableMemoryRecordContext(recordKey: string, owned: OwnedMemoryState): string | null {
+    const parts = collectMemoryRecordDisplayParts(recordKey, owned);
+    if (!parts || parts.labels.length <= 1) {
+        return null;
+    }
+    return parts.labels.join(' / ');
 }
 
 function buildMemoryRecordTooltip(recordKey: string, owned: OwnedMemoryState): string {
     const readableHeadline = buildReadableMemoryRecordHeadline(recordKey, owned);
+    const readableContext = buildReadableMemoryRecordContext(recordKey, owned);
     return [
         readableHeadline ? `记忆说明：${readableHeadline}` : '',
+        readableContext ? `记忆层级：${readableContext}` : '',
         `内部键：${String(recordKey ?? '').trim() || '暂无'}`,
     ].filter(Boolean).join('\n');
 }
@@ -5631,8 +5704,8 @@ export async function openRecordEditor(): Promise<void> {
                     <div class="stx-re-panel-card stx-re-memory-entry"${buildTipAttr('角色记忆条目：显示归属、遗忘状态、重大事件影响与手动维护入口。')}>
                         <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div style="display:flex; flex-direction:column; gap:6px; min-width:0;">
-                                <div style="font-weight:700; word-break:break-word;" data-tip="${escapeHtml(recordTooltip)}">${escapeHtml(title)}</div>
-                                <div style="opacity:0.78; word-break:break-word;">${escapeHtml(subtitle)}</div>
+                                <div class="stx-re-record-title" data-tip="${escapeHtml(recordTooltip)}">${escapeHtml(title)}</div>
+                                <div class="stx-re-record-sub">${escapeHtml(subtitle)}</div>
                                 <div class="stx-re-record-code" title="${escapeHtml(owned.recordKey)}" data-tip="${escapeHtml(`完整内部键：${owned.recordKey}`)}">内部编号：${escapeHtml(compactInternalIdentifier(owned.recordKey, 32))}</div>
                             </div>
                             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:120px;">

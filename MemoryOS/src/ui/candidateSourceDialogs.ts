@@ -1,5 +1,4 @@
 import { openSharedDialog } from '../../../_Components/sharedDialog';
-import type { EditorHealthSnapshot, MemoryCandidate, MemoryCandidateBufferSnapshot } from '../../../SDK/stx';
 import { formatSourceRefMeta, normalizeSourceRefRecord, escapeHtml } from './editorShared';
 
 interface DetailDialogOptions {
@@ -7,12 +6,6 @@ interface DetailDialogOptions {
     title: string;
     content: string;
     description?: string;
-}
-
-interface ShowCandidateSourcesOptions {
-    dialogIdPrefix: string;
-    formatCandidateKindLabel: (kind: string) => string;
-    filterKind?: 'fact' | 'summary' | 'state' | 'relationship';
 }
 
 /**
@@ -90,44 +83,3 @@ export function showSnapshotSourceDetails(payload: string, dialogIdPrefix: strin
     }
 }
 
-/**
- * 功能：展示当前聊天的候选来源入口说明。
- * @param options 展示参数。
- * @returns Promise<void>
- */
-export async function showCandidateSources(options: ShowCandidateSourcesOptions): Promise<void> {
-    const memory = (window as any).STX?.memory;
-    if (!memory?.editor?.getEditorHealth || !memory?.chatState?.getCandidateBufferSnapshot) {
-        alert('当前版本未提供候选来源诊断。');
-        return;
-    }
-    const [health, snapshot] = await Promise.all([
-        memory.editor.getEditorHealth() as Promise<EditorHealthSnapshot>,
-        memory.chatState.getCandidateBufferSnapshot() as Promise<MemoryCandidateBufferSnapshot>,
-    ]);
-    const items = Array.isArray(snapshot.items) ? snapshot.items : [];
-    const filteredItems = options.filterKind ? items.filter((item: MemoryCandidate): boolean => item.kind === options.filterKind) : items;
-    const lines = filteredItems.slice(0, 8).map((item: MemoryCandidate, index: number): string => {
-        const targetLayer = String(item.encoding?.targetLayer ?? 'unknown');
-        const accepted = item.encoding?.accepted ? 'accepted' : 'rejected';
-        return `${index + 1}. [${options.formatCandidateKindLabel(item.kind)} / ${accepted} / ${targetLayer}] ${String(item.summary ?? '').trim() || '(无摘要)'}`;
-    });
-    showEditorDetailDialog({
-        dialogId: `${options.dialogIdPrefix}-detail-dialog`,
-        title: options.filterKind === 'state' ? 'world_state 候选' : '候选来源',
-        content: [
-            options.filterKind === 'state' ? 'world_state 候选：' : '候选来源分布：',
-            `facts: ${health.dataLayers.factsCount}`,
-            `world_state: ${health.dataLayers.worldStateCount}`,
-            `summary: ${health.dataLayers.summaryCount}`,
-            `semantic seed: ${health.dataLayers.hasSemanticSeed ? '已存在' : '缺失'}`,
-            `group memory: ${health.dataLayers.hasGroupMemory ? '已存在' : '缺失'}`,
-            `logical chat view: ${health.dataLayers.hasLogicalChatView ? '已存在' : '缺失'}`,
-            `candidate buffer: total=${snapshot.total}, accepted=${snapshot.accepted}, rejected=${snapshot.rejected}`,
-            '',
-            ...(lines.length > 0 ? lines : [options.filterKind === 'state' ? '当前没有 world_state 候选，可先刷新总览或检查 state 层写入。' : '当前没有候选缓冲区条目。']),
-            '',
-            '建议优先检查：semantic seed、world_state、group memory，以及被 redirect / tombstone 隐藏的逻辑行。',
-        ].join('\n'),
-    });
-}

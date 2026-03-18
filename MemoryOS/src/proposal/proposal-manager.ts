@@ -434,11 +434,8 @@ export class ProposalManager {
             }
         }
 
-        if (this.chatStateManager && scoredCandidates.length > 0) {
-            await this.chatStateManager.recordMemoryCandidates(scoredCandidates);
-            if (shouldRefreshRelationshipState) {
-                await this.chatStateManager.recomputeRelationshipState();
-            }
+        if (this.chatStateManager && scoredCandidates.length > 0 && shouldRefreshRelationshipState) {
+            await this.chatStateManager.recomputeRelationshipState();
         }
 
         // Apply Gate: schemaChanges 落盘（仅记录审计，模板修订由外部管理）

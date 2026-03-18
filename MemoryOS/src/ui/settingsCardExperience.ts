@@ -9,9 +9,7 @@ import type {
     EditorHealthSnapshot,
     GroupMemoryState,
     LatestRecallExplanation,
-    MemoryCandidateBufferSnapshot,
     MemoryLifecycleState,
-    MemoryMigrationStatus,
     MemoryTuningProfile,
     LogicalChatView,
     LorebookGateDecision,
@@ -403,26 +401,6 @@ function formatScorePercent(value: number): string {
 }
 
 /**
- * 功能：格式化迁移阶段标签。
- * 参数：
- *   status：迁移状态。
- * 返回：
- *   string：阶段文本。
- */
-function formatMigrationStage(status: MemoryMigrationStatus | null): string {
-        if (!status) {
-                return '未记录';
-        }
-        if (status.stage === 'db_preferred') {
-                return '结构化主读';
-        }
-        if (status.stage === 'dual_write') {
-                return '双写过渡';
-        }
-        return '兼容旧状态';
-}
-
-/**
  * 功能：格式化调参摘要。
  * @param tuning 调参画像。
  * @returns string：摘要文本。
@@ -467,7 +445,7 @@ function buildRoleOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
                     ${escapeHtml([
                             `${formatChatType(snapshot.profile)} / ${formatSummaryStrategy(snapshot.profile)}`,
                             snapshot.profile.vectorStrategy.enabled ? '当前会主动回想更早内容' : '当前偏轻量注入',
-                            `迁移阶段：${formatMigrationStage(snapshot.migrationStatus)}`,
+                            '召回日志与解释已直连当前主链',
                             anchors.length > 0 ? `角色锚点：${anchors.join(' / ')}` : '角色锚点仍在形成',
                     ].join(' / '))}
                 </div>
@@ -1624,7 +1602,7 @@ function buildInjectionReasonMarkup(explanation: LatestRecallExplanation | null)
             </section>
             <section class="stx-ui-explanation-group">
               <div class="stx-ui-explanation-group-head">
-                <strong>编码拦下</strong>
+                                <strong>未入选候选</strong>
                 <span>0 条</span>
               </div>
               <div class="stx-ui-empty-hint">最近一轮还没有解释快照。</div>
@@ -1681,74 +1659,6 @@ function buildPostDecisionItems(postDecision: PostGenerationGateDecision | null)
 }
 
 /**
- * 功能：构建迁移状态摘要列表。
- * @param snapshot 体验快照。
- * @returns 迁移状态列表。
- */
-function buildMigrationStatusItems(snapshot: ExperienceSnapshot): ExperienceListItem[] {
-    return [
-        {
-            title: '当前迁移阶段',
-            detail: formatMigrationStage(snapshot.migrationStatus),
-            meta: `Schema v${snapshot.migrationStatus.schemaVersion}`,
-            tone: snapshot.migrationStatus.stage === 'db_preferred' ? 'success' : snapshot.migrationStatus.stage === 'dual_write' ? 'accent' : 'soft',
-        },
-        {
-            title: '生命周期回填',
-            detail: snapshot.migrationStatus.lifecycleBackfilled ? '已完成生命周期回填。' : '还没有完成生命周期回填。',
-            meta: snapshot.migrationStatus.lifecycleBackfilled ? '已完成' : '待处理',
-            tone: snapshot.migrationStatus.lifecycleBackfilled ? 'success' : 'warning',
-        },
-        {
-            title: '镜像准备情况',
-            detail: [
-                `候选 ${snapshot.migrationStatus.candidateMirrorReady ? '已就绪' : '未就绪'}`,
-                `召回 ${snapshot.migrationStatus.recallMirrorReady ? '已就绪' : '未就绪'}`,
-                `关系 ${snapshot.migrationStatus.relationshipMirrorReady ? '已就绪' : '未就绪'}`,
-            ].join(' / '),
-            meta: snapshot.migrationStatus.pendingBackfillReasons.length > 0
-                ? `待回填：${snapshot.migrationStatus.pendingBackfillReasons.join(' / ')}`
-                : '当前没有待回填项',
-            tone: snapshot.migrationStatus.pendingBackfillReasons.length > 0 ? 'warning' : 'success',
-        },
-        {
-            title: '最近回填时间',
-            detail: snapshot.migrationStatus.lastBackfillAt > 0
-                ? formatTimestamp(snapshot.migrationStatus.lastBackfillAt)
-                : '还没有执行过迁移回填。',
-            meta: snapshot.migrationStatus.lastBackfillAt > 0
-                ? formatRelativeTime(snapshot.migrationStatus.lastBackfillAt)
-                : '尚未执行',
-            tone: 'soft',
-        },
-        {
-            title: '自动回填维护',
-            detail: snapshot.migrationStatus.autoBackfillEnabled
-                ? `已开启，单批 ${snapshot.migrationStatus.autoBackfillBatchSize} 条`
-                : '当前已关闭自动回填维护。',
-            meta: snapshot.migrationStatus.lastAutoBackfillAt > 0
-                ? `最近一次：${formatRelativeTime(snapshot.migrationStatus.lastAutoBackfillAt)} / ${snapshot.migrationStatus.lastAutoBackfillReason || '自动维护'}`
-                : '还没有执行过自动回填。',
-            tone: snapshot.migrationStatus.autoBackfillEnabled ? 'accent' : 'soft',
-        },
-        {
-            title: '最近一批处理量',
-            detail: [
-                `事实 ${snapshot.migrationStatus.lastBatchStats.lifecycleFacts}`,
-                `摘要 ${snapshot.migrationStatus.lastBatchStats.lifecycleSummaries}`,
-                `候选 ${snapshot.migrationStatus.lastBatchStats.candidateRows}`,
-                `召回 ${snapshot.migrationStatus.lastBatchStats.recallRows}`,
-                `关系 ${snapshot.migrationStatus.lastBatchStats.relationshipRows}`,
-            ].join(' / '),
-            meta: snapshot.migrationStatus.lastBatchStats.updatedAt > 0
-                ? formatRelativeTime(snapshot.migrationStatus.lastBatchStats.updatedAt)
-                : '还没有批次统计',
-            tone: 'soft',
-        },
-    ];
-}
-
-/**
  * 功能：把调参值写回到输入框。
  * @param id 输入框 ID。
  * @param value 待写入的数值。
@@ -1769,17 +1679,12 @@ function setNumberInputValue(id: string, value: number): void {
  * @returns 无返回值。
  */
 function renderTuningPanel(ids: MemoryOSSettingsIds, snapshot: EditorExperienceSnapshot): void {
-    setContainerHtml(
-        ids.tuningMigrationStatusId,
-        buildListMarkup(buildMigrationStatusItems(snapshot), '当前还没有迁移状态。'),
-    );
     setNumberInputValue(ids.tuningCandidateAcceptThresholdBiasId, snapshot.tuningProfile.candidateAcceptThresholdBias);
     setNumberInputValue(ids.tuningRecallRelationshipBiasId, snapshot.tuningProfile.recallRelationshipBias);
     setNumberInputValue(ids.tuningRecallEmotionBiasId, snapshot.tuningProfile.recallEmotionBias);
     setNumberInputValue(ids.tuningRecallRecencyBiasId, snapshot.tuningProfile.recallRecencyBias);
     setNumberInputValue(ids.tuningRecallContinuityBiasId, snapshot.tuningProfile.recallContinuityBias);
     setNumberInputValue(ids.tuningDistortionProtectionBiasId, snapshot.tuningProfile.distortionProtectionBias);
-    setNumberInputValue(ids.tuningCandidateRetentionLimitId, snapshot.tuningProfile.candidateRetentionLimit);
     setNumberInputValue(ids.tuningRecallRetentionLimitId, snapshot.tuningProfile.recallRetentionLimit);
 }
 
@@ -1940,7 +1845,7 @@ function formatSuggestedActionLabel(action: string): string {
         case 'normalize_rows':
             return '检查结构化行';
         case 'review_candidates':
-            return '查看候选来源';
+            return '检查结构化来源';
         default:
             return normalizeText(action, '人工检查');
     }
@@ -1959,7 +1864,7 @@ function buildSuggestedActionButtons(actions: string[]): string {
             return buildEditorActionButton('open-record-editor', '打开记录编辑器');
         }
         if (action === 'review_candidates') {
-            return buildEditorActionButton('view-candidate-sources', formatSuggestedActionLabel(action));
+            return buildEditorActionButton('review-structured-sources', formatSuggestedActionLabel(action));
         }
         return '';
     }).join('');
@@ -2413,8 +2318,6 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
                             <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary">查看诊断</button>
                         </div>
                         <div class="stx-ui-actions">
-                            <button data-stx-editor-action="view-candidate-sources" type="button" class="stx-ui-btn secondary">查看候选来源</button>
-                            <button data-stx-editor-action="view-world-state-candidates" type="button" class="stx-ui-btn secondary">查看世界状态候选</button>
                             <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn secondary">查看已隐藏行</button>
                             <button data-stx-editor-action="open-record-editor" type="button" class="stx-ui-btn secondary">打开记录编辑器</button>
                         </div>
@@ -2464,7 +2367,6 @@ function renderEmptyState(ids: MemoryOSSettingsIds): void {
     setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">暂无问题列表。</div>');
     setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">暂无诊断说明。</div>');
     setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">暂无修复动作。</div>');
-    setContainerHtml(ids.tuningMigrationStatusId, '<div class="stx-ui-empty-hint">绑定聊天后这里会显示迁移状态。</div>');
 }
 
 function renderLoadErrorState(ids: MemoryOSSettingsIds, message: string): void {
@@ -2489,7 +2391,6 @@ function renderLoadErrorState(ids: MemoryOSSettingsIds, message: string): void {
     setContainerHtml(ids.injectionSectionsId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
     setContainerHtml(ids.injectionReasonId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
     setContainerHtml(ids.injectionPostId, '<div class="stx-ui-empty-hint">诊断页暂时不可用。</div>');
-    setContainerHtml(ids.tuningMigrationStatusId, '<div class="stx-ui-empty-hint">迁移状态暂时无法读取。</div>');
 }
 
 /**

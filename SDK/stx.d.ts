@@ -842,14 +842,6 @@ export interface MemoryCandidate {
     encoding: EncodingScore;
 }
 
-export interface MemoryCandidateBufferSnapshot {
-    total: number;
-    accepted: number;
-    rejected: number;
-    latestAt: number;
-    items: MemoryCandidate[];
-}
-
 export interface MemoryLifecycleState {
     recordKey: string;
     recordKind: MemoryRecordKind;
@@ -1009,36 +1001,6 @@ export interface RelationshipState {
     updatedAt: number;
 }
 
-export interface MemoryMigrationBatchStats {
-    lifecycleFacts: number;
-    lifecycleSummaries: number;
-    candidateRows: number;
-    recallRows: number;
-    relationshipRows: number;
-    updatedAt: number;
-}
-
-export type MemoryMigrationStage = 'legacy_compatible' | 'dual_write' | 'db_preferred';
-
-export interface MemoryMigrationStatus {
-    stage: MemoryMigrationStage;
-    schemaVersion: number;
-    lifecycleBackfilled: boolean;
-    candidateMirrorReady: boolean;
-    recallMirrorReady: boolean;
-    relationshipMirrorReady: boolean;
-    lastBackfillAt: number;
-    autoBackfillEnabled: boolean;
-    autoBackfillBatchSize: number;
-    lifecycleFactCursor: number;
-    lifecycleSummaryCursor: number;
-    lastAutoBackfillAt: number;
-    lastAutoBackfillReason: string;
-    lastBatchStats: MemoryMigrationBatchStats;
-    pendingBackfillReasons: string[];
-    updatedAt: number;
-}
-
 export interface MemoryTuningProfile {
     candidateAcceptThresholdBias: number;
     recallRelationshipBias: number;
@@ -1046,7 +1008,6 @@ export interface MemoryTuningProfile {
     recallRecencyBias: number;
     recallContinuityBias: number;
     distortionProtectionBias: number;
-    candidateRetentionLimit: number;
     recallRetentionLimit: number;
     updatedAt: number;
 }
@@ -1089,13 +1050,9 @@ export interface MemoryOSChatState {
     coldStartFingerprint?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
-    memoryCandidateBuffer?: MemoryCandidate[];
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
-    memoryRecallLog?: RecallLogEntry[];
     latestRecallExplanation?: LatestRecallExplanation | null;
-    relationshipStateMap?: Record<string, RelationshipState>;
-    memoryMigrationStatus?: MemoryMigrationStatus;
     memoryTuningProfile?: MemoryTuningProfile;
     mutationRepairQueue?: MutationRepairTask[];
     lastMutationRepairViewHash?: string;
@@ -1354,10 +1311,8 @@ export interface EditorExperienceSnapshot {
     preDecision: PreGenerationGateDecision | null;
     postDecision: PostGenerationGateDecision | null;
     lifecycleSummary: MemoryLifecycleState[];
-    candidateSnapshot: MemoryCandidateBufferSnapshot;
     recallLog: RecallLogEntry[];
     latestRecallExplanation: LatestRecallExplanation | null;
-    migrationStatus: MemoryMigrationStatus;
     tuningProfile: MemoryTuningProfile;
     maintenanceInsights: MaintenanceInsight[];
     facts: DBFact[];
@@ -1546,19 +1501,14 @@ export interface MemorySDK {
         getSimpleMemoryPersona(): Promise<SimpleMemoryPersona | null>;
         recomputePersonaMemoryProfile(): Promise<PersonaMemoryProfile>;
         recomputePersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>>;
-        listMemoryCandidates(limit?: number): Promise<MemoryCandidate[]>;
-        getCandidateBufferSnapshot(): Promise<MemoryCandidateBufferSnapshot>;
         getRecallLog(limit?: number): Promise<RecallLogEntry[]>;
         getLatestRecallExplanation(): Promise<LatestRecallExplanation | null>;
         getMemoryLifecycleSummary(limit?: number): Promise<MemoryLifecycleState[]>;
         getOwnedMemoryStates(limit?: number): Promise<OwnedMemoryState[]>;
         updateOwnedMemoryState(recordKey: string, patch: Partial<Pick<OwnedMemoryState, 'ownerActorKey' | 'memoryType' | 'memorySubtype' | 'sourceScope' | 'importance' | 'forgotten' | 'forgottenReasonCodes'>>): Promise<OwnedMemoryState | null>;
         recomputeOwnedMemoryState(recordKey: string): Promise<OwnedMemoryState | null>;
-        recomputeRecallRanking(query?: string): Promise<RecallLogEntry[]>;
         getRelationshipState(): Promise<RelationshipState[]>;
         recomputeRelationshipState(): Promise<RelationshipState[]>;
-        getMemoryMigrationStatus(): Promise<MemoryMigrationStatus>;
-        backfillMemoryMigration(): Promise<MemoryMigrationStatus>;
         getMemoryTuningProfile(): Promise<MemoryTuningProfile>;
         setMemoryTuningProfile(profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile>;
         getColdStartStage(): Promise<ColdStartStage | null>;

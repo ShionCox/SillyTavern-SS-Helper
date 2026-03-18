@@ -40,7 +40,6 @@ export function normalizeMemoryTuningProfile(
         recallRecencyBias: clamp01(readFiniteNumber(mergedProfile.recallRecencyBias, DEFAULT_MEMORY_TUNING_PROFILE.recallRecencyBias)),
         recallContinuityBias: clamp01(readFiniteNumber(mergedProfile.recallContinuityBias, DEFAULT_MEMORY_TUNING_PROFILE.recallContinuityBias)),
         distortionProtectionBias: clamp01(readFiniteNumber(mergedProfile.distortionProtectionBias, DEFAULT_MEMORY_TUNING_PROFILE.distortionProtectionBias)),
-        candidateRetentionLimit: Math.max(24, Math.min(240, Math.floor(readFiniteNumber(mergedProfile.candidateRetentionLimit, DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit)))),
         recallRetentionLimit: Math.max(40, Math.min(320, Math.floor(readFiniteNumber(mergedProfile.recallRetentionLimit, DEFAULT_MEMORY_TUNING_PROFILE.recallRetentionLimit)))),
         updatedAt,
     };

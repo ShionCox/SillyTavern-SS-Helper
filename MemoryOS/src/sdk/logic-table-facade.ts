@@ -13,8 +13,6 @@ import type {
     LogicTableStatus,
     LogicTableSummary,
     LogicTableViewModel,
-    MemoryCandidate,
-    MemoryCandidateBufferSnapshot,
     SourceRef,
 } from '../../../SDK/stx';
 import { ChatStateManager } from '../core/chat-state-manager';
@@ -28,7 +26,6 @@ interface LogicTableContext {
     rows: LogicTableRow[];
     semanticSeed: ChatSemanticSeed | null;
     groupMemory: GroupMemoryState | null;
-    candidateSnapshot: MemoryCandidateBufferSnapshot;
     rowAliasIndex: Record<string, Record<string, string>>;
     rowRedirects: Record<string, Record<string, string>>;
     rowTombstones: Record<string, Record<string, unknown>>;
@@ -181,17 +178,6 @@ function inferLogicStatus(summary: LogicTableSummary, warnings: string[]): Logic
 
 function getPrimaryField(table: TemplateTableDef): string {
     return normalizeText(table.primaryKeyField, 'id');
-}
-
-function getCandidateTitleFromPayload(payload: Record<string, unknown>, fallback: string): string {
-    const keys = ['displayName', 'name', 'title', 'label', 'entityId', 'id', 'location', 'value'];
-    for (const key of keys) {
-        const text = normalizeText(payload[key]);
-        if (text) {
-            return text;
-        }
-    }
-    return normalizeText(fallback, '候选行');
 }
 
 function buildColumns(table: TemplateTableDef): LogicColumnDef[] {
@@ -349,13 +335,12 @@ export class LogicTableFacade {
         if (!table) {
             throw new Error(`未找到逻辑表：${tableKey}`);
         }
-        const [facts, states, rows, semanticSeed, groupMemory, candidateSnapshot, rowAliasIndex, rowRedirects, rowTombstones] = await Promise.all([
+        const [facts, states, rows, semanticSeed, groupMemory, rowAliasIndex, rowRedirects, rowTombstones] = await Promise.all([
             db.facts.where('[chatKey+type]').equals([this.chatKey, table.key]).toArray(),
             db.world_state.where('[chatKey+path]').between([this.chatKey, ''], [this.chatKey, '\uffff']).toArray(),
             this.rowOperations.listTableRows(table.key, { includeTombstones: true, limit: 500 }),
             this.chatStateManager.getSemanticSeed(),
             this.chatStateManager.getGroupMemory(),
-            this.chatStateManager.getCandidateBufferSnapshot(),
             this.chatStateManager.getRowAliasIndex(),
             this.chatStateManager.getRowRedirects(),
             this.chatStateManager.getRowTombstones(),
@@ -367,7 +352,6 @@ export class LogicTableFacade {
             rows,
             semanticSeed,
             groupMemory,
-            candidateSnapshot,
             rowAliasIndex,
             rowRedirects,
             rowTombstones,
@@ -498,41 +482,6 @@ export class LogicTableFacade {
             }
             candidate.values[normalizedFieldKey] = toCellValue(value, false, ['derived', sourceKind], confidence);
         };
-
-        const candidateItems = Array.isArray(context.candidateSnapshot.items) ? context.candidateSnapshot.items : [];
-        candidateItems.forEach((item: MemoryCandidate): void => {
-            const payload = item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
-                ? item.payload as Record<string, unknown>
-                : {};
-            const directFieldMatches = Object.keys(payload).filter((key: string): boolean => fieldLookup.has(normalizeLookup(key)));
-            const tableRelevant = directFieldMatches.length > 0
-                || (isCharacterTable(context.table) && ['fact', 'relationship'].includes(item.kind))
-                || (isLocationTable(context.table) && ['state', 'fact'].includes(item.kind))
-                || (isEventTable(context.table) && ['summary', 'state'].includes(item.kind));
-            if (!tableRelevant) {
-                return;
-            }
-            const title = getCandidateTitleFromPayload(payload, item.summary);
-            const rowId = normalizeText(payload[primaryField] ?? title);
-            if (!rowId) {
-                return;
-            }
-            const candidate = ensureCandidate(rowId, title, 'derived', makeSourceRef('derived', '候选缓冲区', {
-                recordId: item.candidateId,
-                note: item.source,
-                ts: item.extractedAt,
-            }), item.extractedAt);
-            directFieldMatches.forEach((fieldKey: string): void => {
-                writeCandidateCell(candidate, fieldKey, payload[fieldKey], 'derived', item.encoding?.totalScore);
-            });
-            writeCandidateCell(candidate, nameField, title, 'derived', item.encoding?.totalScore);
-            if (summaryField) {
-                writeCandidateCell(candidate, summaryField, item.summary, 'derived', item.encoding?.totalScore);
-            }
-            if (!item.encoding?.accepted) {
-                candidate.warnings.add('该候选尚未通过自动写入阈值。');
-            }
-        });
 
         if (isCharacterTable(context.table)) {
             const seed = context.semanticSeed?.identitySeed;

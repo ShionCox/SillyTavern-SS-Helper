@@ -21,7 +21,6 @@ export class MetaManager {
             const initial: DBMeta = {
                 chatKey: this.chatKey,
                 schemaVersion: 2,
-                memoryMigrationStage: 'legacy_compatible',
             };
             await db.meta.add(initial);
         }

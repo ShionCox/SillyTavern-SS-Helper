@@ -28,11 +28,8 @@ import type {
     MemoryActorRetentionMap,
     MemoryActorRetentionState,
     MemoryCandidate,
-    MemoryCandidateBufferSnapshot,
     MemoryCandidateKind,
     MemoryLifecycleState,
-    MemoryMigrationBatchStats,
-    MemoryMigrationStatus,
     IngestHealthWindow,
     InjectedMemoryTone,
     LorebookGateDecision,
@@ -81,7 +78,6 @@ import {
     DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
     DEFAULT_MEMORY_QUALITY,
-    DEFAULT_MEMORY_MIGRATION_STATUS,
     DEFAULT_MEMORY_TUNING_PROFILE,
     DEFAULT_PERSONA_MEMORY_PROFILE,
     DEFAULT_PROMPT_INJECTION_PROFILE,
@@ -119,7 +115,6 @@ import {
     inferPersonaMemoryProfile,
     inferPersonaMemoryProfiles,
     normalizeMemoryText,
-    scoreRecallCandidate,
     type MemoryCandidateInput,
     type OwnedMemoryInferenceInput,
 } from './memory-intelligence';
@@ -130,11 +125,6 @@ import {
     resolveSimplePersona,
 } from './persona-compat';
 import { normalizeMemoryTuningProfile } from './memory-tuning';
-import {
-    normalizeMemoryMigrationBatchStats,
-    normalizeMemoryMigrationStatus,
-    shouldRunAutomaticMemoryMigration,
-} from './memory-migration';
 import { normalizeLatestRecallExplanation } from './recall-explanation';
 import { buildGroupRelationshipSeeds } from './relationship-graph';
 
@@ -275,62 +265,6 @@ function normalizeColdStartLorebookSelection(value: ColdStartLorebookSelection |
     };
 }
 
-function buildMemoryMigrationPendingReasons(status: MemoryMigrationStatus): string[] {
-    const reasons: string[] = [];
-    if (!status.lifecycleBackfilled) {
-        reasons.push('lifecycle');
-    }
-    if (!status.candidateMirrorReady) {
-        reasons.push('candidate_buffer');
-    }
-    if (!status.recallMirrorReady) {
-        reasons.push('recall_log');
-    }
-    if (!status.relationshipMirrorReady) {
-        reasons.push('relationship_state');
-    }
-    return reasons;
-}
-
-/**
- * 功能：根据当前迁移状态推导应使用的阶段。
- * @param status 当前迁移状态。
- * @returns 迁移阶段。
- */
-function resolveMemoryMigrationStage(status: MemoryMigrationStatus): MemoryMigrationStatus['stage'] {
-    if (status.lifecycleBackfilled && status.candidateMirrorReady && status.recallMirrorReady && status.relationshipMirrorReady) {
-        return 'db_preferred';
-    }
-    if (status.lifecycleBackfilled || status.candidateMirrorReady || status.recallMirrorReady || status.relationshipMirrorReady) {
-        return 'dual_write';
-    }
-    return 'legacy_compatible';
-}
-
-/**
- * 功能：合并迁移状态补丁并补齐派生字段。
- * @param current 当前迁移状态。
- * @param patch 本次补丁。
- * @returns 合并后的迁移状态。
- */
-function mergeMemoryMigrationStatus(
-    current: MemoryMigrationStatus | null | undefined,
-    patch: Partial<MemoryMigrationStatus>,
-): MemoryMigrationStatus {
-    const merged: MemoryMigrationStatus = normalizeMemoryMigrationStatus({
-        ...(current ?? DEFAULT_MEMORY_MIGRATION_STATUS),
-        ...(patch ?? {}),
-        lastBatchStats: normalizeMemoryMigrationBatchStats({
-            ...((current?.lastBatchStats ?? DEFAULT_MEMORY_MIGRATION_STATUS.lastBatchStats) as MemoryMigrationBatchStats),
-            ...((patch?.lastBatchStats ?? {}) as Partial<MemoryMigrationBatchStats>),
-        }),
-    });
-    merged.pendingBackfillReasons = buildMemoryMigrationPendingReasons(merged);
-    merged.stage = resolveMemoryMigrationStage(merged);
-    merged.updatedAt = Math.max(0, Number(patch.updatedAt ?? Date.now()) || Date.now());
-    return merged;
-}
-
 function buildManagedSummaryStableId(chatKey: string, kind: string): string {
     const normalizeIdPart = (value: unknown, fallback: string): string => {
         const normalized = normalizeSeedText(value)
@@ -345,33 +279,7 @@ function buildManagedSummaryStableId(chatKey: string, kind: string): string {
 function inferLaneStyle(text: string): string {
     const normalized = normalizeSeedText(text);
     if (!normalized) {
-        return '';
-    }
-    if (/怎么|如何|步骤|配置|命令|修复|why|how/i.test(normalized)) {
-        return 'tool_like';
-    }
-    if (/设定|世界观|规则|百科|资料/.test(normalized)) {
-        return 'setting_explain';
-    }
-    if (normalized.length >= 120) {
-        return 'narrative';
-    }
-    if (/^\s*["“”'「」]/.test(normalized) || /（.*）|\(.*\)/.test(normalized)) {
-        return 'rp_dialog';
-    }
-    return 'chat';
-}
-
-function inferLaneEmotion(text: string): string {
-    const normalized = normalizeSeedText(text);
-    if (!normalized) {
-        return '';
-    }
-    if (/生气|愤怒|怒|恼火|敌意/.test(normalized)) {
-        return 'angry';
-    }
-    if (/开心|高兴|喜悦|兴奋|轻松/.test(normalized)) {
-        return 'happy';
+        return 'neutral';
     }
     if (/担心|害怕|恐惧|紧张/.test(normalized)) {
         return 'anxious';
@@ -502,7 +410,6 @@ export class ChatStateManager {
     private chatKey: string;
     private cache: MemoryOSChatState | null = null;
     private dirty = false;
-    private migrationMaintenancePromise: Promise<MemoryMigrationStatus> | null = null;
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly flushIntervalMs = 1000;
 
@@ -841,109 +748,18 @@ export class ChatStateManager {
             const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, this.chatKey);
             const raw = (row?.state ?? {}) as MemoryOSChatState;
             this.cache = migratePersonaState(this.normalizeState(raw));
-            await this.hydrateMigrationStatusFromMeta(this.cache);
             await this.refreshLifecycleState(this.cache, 'load');
             if (!Array.isArray(this.cache.maintenanceInsights) || this.cache.maintenanceInsights.length === 0) {
                 this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
             }
-            await this.maybeRunAutomaticMigrationMaintenance(this.cache, 'load');
             return this.cache;
         } catch (error) {
             logger.warn('加载聊天状态失败，已回退默认值', error);
             this.cache = migratePersonaState(this.normalizeState({}));
-            await this.hydrateMigrationStatusFromMeta(this.cache);
             await this.refreshLifecycleState(this.cache, 'load_fallback');
             this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
-            await this.maybeRunAutomaticMigrationMaintenance(this.cache, 'load_fallback');
             return this.cache;
         }
-    }
-
-    /**
-     * 功能：确保当前聊天存在 meta 记录。
-     * @returns Promise<Record<string, unknown>>：当前聊天的 meta 信息。
-     */
-    private async ensureMetaRow(): Promise<Record<string, unknown>> {
-        const existing = await db.meta.get(this.chatKey);
-        if (existing) {
-            return existing as unknown as Record<string, unknown>;
-        }
-        const initial: Record<string, unknown> = {
-            chatKey: this.chatKey,
-            schemaVersion: 2,
-            memoryMigrationStage: DEFAULT_MEMORY_MIGRATION_STATUS.stage,
-        };
-        await db.meta.put(initial as never);
-        return initial;
-    }
-
-    /**
-     * 功能：从 meta 记录恢复当前迁移状态。
-     * @param state 当前聊天状态。
-     * @returns Promise<MemoryMigrationStatus>：迁移状态。
-     */
-    private async hydrateMigrationStatusFromMeta(state: MemoryOSChatState): Promise<MemoryMigrationStatus> {
-        const meta = await this.ensureMetaRow();
-        const status: MemoryMigrationStatus = normalizeMemoryMigrationStatus({
-            ...(state.memoryMigrationStatus ?? {}),
-            stage: String(meta.memoryMigrationStage ?? state.memoryMigrationStatus?.stage ?? DEFAULT_MEMORY_MIGRATION_STATUS.stage) as MemoryMigrationStatus['stage'],
-            schemaVersion: Math.max(1, Number(meta.schemaVersion ?? state.memoryMigrationStatus?.schemaVersion ?? 2) || 2),
-            lifecycleBackfilled: Number(meta.memoryLifecycleBackfilledAt ?? 0) > 0 || state.memoryMigrationStatus?.lifecycleBackfilled === true,
-            candidateMirrorReady: Number(meta.memoryCandidateMirrorAt ?? 0) > 0 || state.memoryMigrationStatus?.candidateMirrorReady === true,
-            recallMirrorReady: Number(meta.memoryRecallMirrorAt ?? 0) > 0 || state.memoryMigrationStatus?.recallMirrorReady === true,
-            relationshipMirrorReady: Number(meta.memoryRelationshipMirrorAt ?? 0) > 0 || state.memoryMigrationStatus?.relationshipMirrorReady === true,
-            lastBackfillAt: Math.max(
-                Number(meta.memoryLifecycleBackfilledAt ?? 0),
-                Number(meta.memoryCandidateMirrorAt ?? 0),
-                Number(meta.memoryRecallMirrorAt ?? 0),
-                Number(meta.memoryRelationshipMirrorAt ?? 0),
-                Number(state.memoryMigrationStatus?.lastBackfillAt ?? 0),
-            ),
-            autoBackfillEnabled: meta.memoryAutoBackfillEnabled !== false && state.memoryMigrationStatus?.autoBackfillEnabled !== false,
-            autoBackfillBatchSize: Math.max(
-                8,
-                Number(meta.memoryAutoBackfillBatchSize ?? state.memoryMigrationStatus?.autoBackfillBatchSize ?? DEFAULT_MEMORY_MIGRATION_STATUS.autoBackfillBatchSize) || DEFAULT_MEMORY_MIGRATION_STATUS.autoBackfillBatchSize,
-            ),
-            lifecycleFactCursor: Math.max(0, Number(meta.memoryLifecycleFactCursor ?? state.memoryMigrationStatus?.lifecycleFactCursor ?? 0) || 0),
-            lifecycleSummaryCursor: Math.max(0, Number(meta.memoryLifecycleSummaryCursor ?? state.memoryMigrationStatus?.lifecycleSummaryCursor ?? 0) || 0),
-            lastAutoBackfillAt: Math.max(0, Number(meta.memoryLastAutoBackfillAt ?? state.memoryMigrationStatus?.lastAutoBackfillAt ?? 0) || 0),
-            lastAutoBackfillReason: normalizeSeedText(meta.memoryLastAutoBackfillReason ?? state.memoryMigrationStatus?.lastAutoBackfillReason),
-            lastBatchStats: normalizeMemoryMigrationBatchStats(state.memoryMigrationStatus?.lastBatchStats ?? null),
-            pendingBackfillReasons: buildMemoryMigrationPendingReasons(state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS),
-            updatedAt: Date.now(),
-        });
-        status.pendingBackfillReasons = buildMemoryMigrationPendingReasons(status);
-        status.stage = resolveMemoryMigrationStage(status);
-        state.memoryMigrationStatus = status;
-        return status;
-    }
-
-    /**
-     * 功能：把迁移状态持久化到 meta。
-     * @param state 当前聊天状态。
-     * @returns Promise<MemoryMigrationStatus>：最新迁移状态。
-     */
-    private async persistMigrationStatus(state: MemoryOSChatState): Promise<MemoryMigrationStatus> {
-        const current = state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS;
-        const nextStatus: MemoryMigrationStatus = mergeMemoryMigrationStatus(current, {
-            updatedAt: Date.now(),
-        });
-        state.memoryMigrationStatus = nextStatus;
-        await db.meta.update(this.chatKey, {
-            schemaVersion: Math.max(2, Number(nextStatus.schemaVersion ?? 2) || 2),
-            memoryMigrationStage: nextStatus.stage,
-            memoryLifecycleBackfilledAt: nextStatus.lifecycleBackfilled ? (nextStatus.lastBackfillAt || Date.now()) : undefined,
-            memoryCandidateMirrorAt: nextStatus.candidateMirrorReady ? (nextStatus.lastBackfillAt || Date.now()) : undefined,
-            memoryRecallMirrorAt: nextStatus.recallMirrorReady ? (nextStatus.lastBackfillAt || Date.now()) : undefined,
-            memoryRelationshipMirrorAt: nextStatus.relationshipMirrorReady ? (nextStatus.lastBackfillAt || Date.now()) : undefined,
-            memoryAutoBackfillEnabled: nextStatus.autoBackfillEnabled,
-            memoryAutoBackfillBatchSize: nextStatus.autoBackfillBatchSize,
-            memoryLifecycleFactCursor: nextStatus.lifecycleFactCursor,
-            memoryLifecycleSummaryCursor: nextStatus.lifecycleSummaryCursor,
-            memoryLastAutoBackfillAt: nextStatus.lastAutoBackfillAt || undefined,
-            memoryLastAutoBackfillReason: nextStatus.lastAutoBackfillReason || undefined,
-        });
-        return nextStatus;
     }
 
     /**
@@ -1150,33 +966,6 @@ export class ChatStateManager {
                         : [],
                 },
             },
-            memoryCandidateBuffer: Array.isArray(state.memoryCandidateBuffer)
-                ? state.memoryCandidateBuffer
-                    .map((candidate: MemoryCandidate): MemoryCandidate => ({
-                        ...candidate,
-                        summary: normalizeMemoryText(candidate.summary),
-                        source: normalizeMemoryText(candidate.source),
-                        conflictWith: Array.isArray(candidate.conflictWith) ? candidate.conflictWith.map((item: string): string => normalizeMemoryText(item)).filter(Boolean) : [],
-                        payload: candidate.payload && typeof candidate.payload === 'object'
-                            ? candidate.payload
-                            : {},
-                        encoding: {
-                            totalScore: clamp01(Number(candidate.encoding?.totalScore ?? 0)),
-                            accepted: candidate.encoding?.accepted === true,
-                            targetLayer: (candidate.encoding?.targetLayer ?? 'working') as MemoryCandidate['encoding']['targetLayer'],
-                            salience: clamp01(Number(candidate.encoding?.salience ?? 0)),
-                            strength: clamp01(Number(candidate.encoding?.strength ?? 0)),
-                            decayStage: (candidate.encoding?.decayStage ?? 'clear') as MemoryCandidate['encoding']['decayStage'],
-                            emotionTag: normalizeMemoryText(candidate.encoding?.emotionTag),
-                            relationScope: normalizeMemoryText(candidate.encoding?.relationScope),
-                            reasonCodes: Array.isArray(candidate.encoding?.reasonCodes)
-                                ? candidate.encoding.reasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                                : [],
-                            profileVersion: normalizeMemoryText(candidate.encoding?.profileVersion) || DEFAULT_PERSONA_MEMORY_PROFILE.profileVersion,
-                        },
-                    }))
-                    .slice(-120)
-                : [],
             memoryLifecycleIndex: Object.entries(state.memoryLifecycleIndex ?? {}).reduce<Record<string, MemoryLifecycleState>>(
                 (result: Record<string, MemoryLifecycleState>, [recordKey, lifecycle]: [string, MemoryLifecycleState]): Record<string, MemoryLifecycleState> => {
                     const normalizedKey = normalizeMemoryText(recordKey);
@@ -1255,63 +1044,7 @@ export class ChatStateManager {
                 },
                 {},
             ),
-            memoryRecallLog: Array.isArray(state.memoryRecallLog)
-                ? state.memoryRecallLog
-                    .map((entry: RecallLogEntry): RecallLogEntry => ({
-                        ...entry,
-                        query: normalizeMemoryText(entry.query),
-                        section: (entry.section ?? 'PREVIEW') as RecallLogEntry['section'],
-                        recordKey: normalizeMemoryText(entry.recordKey),
-                        recordKind: (entry.recordKind ?? 'fact') as RecallLogEntry['recordKind'],
-                        recordTitle: normalizeMemoryText(entry.recordTitle),
-                        score: clamp01(Number(entry.score ?? 0)),
-                        selected: entry.selected === true,
-                        conflictSuppressed: entry.conflictSuppressed === true,
-                        tone: (entry.tone ?? 'stable_fact') as RecallLogEntry['tone'],
-                        reasonCodes: Array.isArray(entry.reasonCodes)
-                            ? entry.reasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                            : [],
-                        loggedAt: Math.max(0, Number(entry.loggedAt ?? 0) || 0),
-                    }))
-                    .slice(-160)
-                : [],
             latestRecallExplanation: normalizeLatestRecallExplanation(state.latestRecallExplanation ?? null),
-            relationshipStateMap: Object.entries(state.relationshipStateMap ?? {}).reduce<Record<string, RelationshipState>>(
-                (result: Record<string, RelationshipState>, [relationshipKey, relationship]: [string, RelationshipState]): Record<string, RelationshipState> => {
-                    const normalizedKey = normalizeMemoryText(relationshipKey);
-                    if (!normalizedKey) {
-                        return result;
-                    }
-                    result[normalizedKey] = {
-                        ...relationship,
-                        relationshipKey: normalizedKey,
-                        actorKey: normalizeMemoryText(relationship?.actorKey),
-                        targetKey: normalizeMemoryText(relationship?.targetKey),
-                        scope: relationship?.scope === 'group_pair' ? 'group_pair' : 'self_target',
-                        participantKeys: Array.isArray(relationship?.participantKeys)
-                            ? relationship.participantKeys.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                            : [normalizeMemoryText(relationship?.actorKey), normalizeMemoryText(relationship?.targetKey)].filter(Boolean),
-                        familiarity: clamp01(Number(relationship?.familiarity ?? 0)),
-                        trust: clamp01(Number(relationship?.trust ?? 0)),
-                        affection: clamp01(Number(relationship?.affection ?? 0)),
-                        tension: clamp01(Number(relationship?.tension ?? 0)),
-                        dependency: clamp01(Number(relationship?.dependency ?? 0)),
-                        respect: clamp01(Number(relationship?.respect ?? 0)),
-                        unresolvedConflict: clamp01(Number(relationship?.unresolvedConflict ?? 0)),
-                        sharedFragments: Array.isArray(relationship?.sharedFragments)
-                            ? relationship.sharedFragments.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                            : [],
-                        summary: normalizeMemoryText(relationship?.summary),
-                        reasonCodes: Array.isArray(relationship?.reasonCodes)
-                            ? relationship.reasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                            : [],
-                        updatedAt: Math.max(0, Number(relationship?.updatedAt ?? 0) || 0),
-                    };
-                    return result;
-                },
-                {},
-            ),
-            memoryMigrationStatus: normalizeMemoryMigrationStatus(state.memoryMigrationStatus ?? null),
             memoryTuningProfile: normalizeMemoryTuningProfile(state.memoryTuningProfile ?? null),
             summaryFixQueue: Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [],
             mutationRepairQueue: Array.isArray(state.mutationRepairQueue)
@@ -3158,55 +2891,6 @@ export class ChatStateManager {
     }
 
     /**
-     * 功能：按需从结构化表恢复候选缓冲。
-     * 参数：
-     *   state：当前聊天状态。
-     * 返回：
-     *   Promise<MemoryCandidate[]>：候选缓冲。
-     */
-    private async hydrateCandidateBufferFromDb(state: MemoryOSChatState): Promise<MemoryCandidate[]> {
-        if (!this.shouldPreferDbMirror(state) && Array.isArray(state.memoryCandidateBuffer) && state.memoryCandidateBuffer.length > 0) {
-            return state.memoryCandidateBuffer;
-        }
-        const limit = Math.max(24, Math.floor(Number(state.memoryTuningProfile?.candidateRetentionLimit ?? DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit)));
-        const rows = await db.memory_candidate_buffer
-            .where('[chatKey+ts]')
-            .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
-            .reverse()
-            .limit(limit)
-            .toArray();
-        state.memoryCandidateBuffer = rows.map((row): MemoryCandidate => ({
-            candidateId: row.candidateId,
-            kind: row.kind,
-            source: normalizeMemoryText(row.source),
-            summary: normalizeMemoryText(row.summary),
-            payload: row.payload ?? {},
-            extractedAt: Number(row.ts ?? row.updatedAt ?? 0) || Date.now(),
-            sourceEventId: normalizeMemoryText((row.payload as Record<string, unknown> | undefined)?.sourceEventId) || undefined,
-            conflictWith: Array.isArray(row.conflictWith) ? row.conflictWith.map((item: string): string => normalizeMemoryText(item)).filter(Boolean) : [],
-            resolvedRecordKey: normalizeMemoryText(row.resolvedRecordKey) || undefined,
-            encoding: {
-                totalScore: clamp01(Number((row.encoding as Record<string, unknown>)?.totalScore ?? 0)),
-                accepted: Boolean((row.encoding as Record<string, unknown>)?.accepted),
-                targetLayer: String((row.encoding as Record<string, unknown>)?.targetLayer ?? 'working') as MemoryCandidate['encoding']['targetLayer'],
-                salience: clamp01(Number((row.encoding as Record<string, unknown>)?.salience ?? 0)),
-                strength: clamp01(Number((row.encoding as Record<string, unknown>)?.strength ?? 0)),
-                decayStage: String((row.encoding as Record<string, unknown>)?.decayStage ?? 'clear') as MemoryCandidate['encoding']['decayStage'],
-                emotionTag: normalizeMemoryText((row.encoding as Record<string, unknown>)?.emotionTag),
-                relationScope: normalizeMemoryText((row.encoding as Record<string, unknown>)?.relationScope),
-                reasonCodes: Array.isArray((row.encoding as Record<string, unknown>)?.reasonCodes)
-                    ? ((row.encoding as Record<string, unknown>).reasonCodes as string[]).map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
-                    : [],
-                profileVersion: normalizeMemoryText((row.encoding as Record<string, unknown>)?.profileVersion) || DEFAULT_PERSONA_MEMORY_PROFILE.profileVersion,
-            },
-        }));
-        if (rows.length > 0) {
-            this.markDirty();
-        }
-        return state.memoryCandidateBuffer;
-    }
-
-    /**
      * 功能：按需从结构化表恢复召回日志。
      * 参数：
      *   state：当前聊天状态。
@@ -3214,9 +2898,6 @@ export class ChatStateManager {
      *   Promise<RecallLogEntry[]>：召回日志。
      */
     private async hydrateRecallLogFromDb(state: MemoryOSChatState): Promise<RecallLogEntry[]> {
-        if (!this.shouldPreferDbMirror(state) && Array.isArray(state.memoryRecallLog) && state.memoryRecallLog.length > 0) {
-            return state.memoryRecallLog;
-        }
         const limit = Math.max(40, Math.floor(Number(state.memoryTuningProfile?.recallRetentionLimit ?? DEFAULT_MEMORY_TUNING_PROFILE.recallRetentionLimit)));
         const rows = await db.memory_recall_log
             .where('[chatKey+ts]')
@@ -3224,7 +2905,7 @@ export class ChatStateManager {
             .reverse()
             .limit(limit)
             .toArray();
-        state.memoryRecallLog = rows.map((row): RecallLogEntry => ({
+        return rows.map((row): RecallLogEntry => ({
             recallId: row.recallId,
             query: normalizeMemoryText(row.query),
             section: (row.section || 'PREVIEW') as RecallLogEntry['section'],
@@ -3238,10 +2919,6 @@ export class ChatStateManager {
             reasonCodes: Array.isArray(row.reasonCodes) ? row.reasonCodes.map((item: string): string => normalizeMemoryText(item)).filter(Boolean) : [],
             loggedAt: Number(row.ts ?? row.updatedAt ?? 0) || Date.now(),
         }));
-        if (rows.length > 0) {
-            this.markDirty();
-        }
-        return state.memoryRecallLog;
     }
 
     /**
@@ -3251,10 +2928,7 @@ export class ChatStateManager {
      * 返回：
      *   Promise<Record<string, RelationshipState>>：关系状态映射。
      */
-    private async hydrateRelationshipStateFromDb(state: MemoryOSChatState): Promise<Record<string, RelationshipState>> {
-        if (!this.shouldPreferDbMirror(state) && state.relationshipStateMap && Object.keys(state.relationshipStateMap).length > 0) {
-            return state.relationshipStateMap;
-        }
+    private async hydrateRelationshipStateFromDb(): Promise<Record<string, RelationshipState>> {
         const rows = await db.relationship_memory
             .where('[chatKey+updatedAt]')
             .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
@@ -3283,20 +2957,7 @@ export class ChatStateManager {
                 updatedAt: Number(row.updatedAt ?? 0) || Date.now(),
             };
         });
-        state.relationshipStateMap = nextMap;
-        if (rows.length > 0) {
-            this.markDirty();
-        }
-        return state.relationshipStateMap;
-    }
-
-    /**
-     * 功能：判断当前是否优先从结构化镜像读取。
-     * @param state 当前聊天状态。
-     * @returns boolean：是否优先读取数据库镜像。
-     */
-    private shouldPreferDbMirror(state: MemoryOSChatState): boolean {
-        return state.memoryMigrationStatus?.stage === 'db_preferred';
+        return nextMap;
     }
 
     /**
@@ -3305,9 +2966,6 @@ export class ChatStateManager {
      * @returns Promise<Record<string, MemoryLifecycleState>>：生命周期索引。
      */
     private async hydrateLifecycleIndexFromDb(state: MemoryOSChatState): Promise<Record<string, MemoryLifecycleState>> {
-        if (!this.shouldPreferDbMirror(state) && Object.keys(state.memoryLifecycleIndex ?? {}).length > 0) {
-            return state.memoryLifecycleIndex ?? {};
-        }
         const fallbackOwnerActorKey: string | null = normalizeMemoryText(state.semanticSeed?.identitySeed?.roleKey) || null;
         const [facts, summaries] = await Promise.all([
             db.facts
@@ -3323,6 +2981,9 @@ export class ChatStateManager {
                 .limit(120)
                 .toArray(),
         ]);
+            if (facts.length <= 0 && summaries.length <= 0 && Object.keys(state.memoryLifecycleIndex ?? {}).length > 0) {
+                return state.memoryLifecycleIndex ?? {};
+            }
         const nextIndex: Record<string, MemoryLifecycleState> = {};
         const nextOwnedIndex: Record<string, OwnedMemoryState> = {};
         facts.forEach((fact): void => {
@@ -3493,59 +3154,7 @@ export class ChatStateManager {
         });
         state.memoryLifecycleIndex = nextIndex;
         state.ownedMemoryIndex = nextOwnedIndex;
-        if (Object.keys(nextIndex).length > 0) {
-            this.markDirty();
-        }
         return nextIndex;
-    }
-
-    /**
-     * 功能：把候选缓冲双写到结构化表。
-     * 参数：
-     *   candidates：候选缓冲数组。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    private async persistCandidateRows(candidates: MemoryCandidate[]): Promise<void> {
-        const state = await this.load();
-        const limit = Math.max(24, Math.floor(Number(state.memoryTuningProfile?.candidateRetentionLimit ?? DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit)));
-        if (candidates.length > 0) {
-            await db.memory_candidate_buffer.bulkPut(candidates.map((candidate) => ({
-                candidateId: candidate.candidateId,
-                chatKey: this.chatKey,
-                kind: candidate.kind,
-                source: candidate.source,
-                summary: candidate.summary,
-                payload: candidate.payload,
-                encoding: candidate.encoding as unknown as Record<string, unknown>,
-                conflictWith: candidate.conflictWith,
-                resolvedRecordKey: candidate.resolvedRecordKey,
-                ts: Number(candidate.extractedAt ?? Date.now()) || Date.now(),
-                updatedAt: Date.now(),
-            })));
-        }
-        const staleRows = await db.memory_candidate_buffer
-            .where('[chatKey+ts]')
-            .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
-            .reverse()
-            .offset(limit)
-            .toArray();
-        if (staleRows.length > 0) {
-            await db.memory_candidate_buffer.bulkDelete(staleRows.map((row) => row.candidateId));
-        }
-        state.memoryMigrationStatus = mergeMemoryMigrationStatus(state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS, {
-            candidateMirrorReady: true,
-            lastBackfillAt: Date.now(),
-            lastBatchStats: normalizeMemoryMigrationBatchStats({
-                ...(state.memoryMigrationStatus?.lastBatchStats ?? DEFAULT_MEMORY_MIGRATION_STATUS.lastBatchStats),
-                candidateRows: candidates.length,
-                updatedAt: Date.now(),
-            }),
-        });
-        await db.meta.update(this.chatKey, {
-            lastCandidateFlushAt: Date.now(),
-        });
-        await this.persistMigrationStatus(state);
     }
 
     /**
@@ -3585,19 +3194,9 @@ export class ChatStateManager {
         if (staleRows.length > 0) {
             await db.memory_recall_log.bulkDelete(staleRows.map((row) => row.recallId));
         }
-        state.memoryMigrationStatus = mergeMemoryMigrationStatus(state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS, {
-            recallMirrorReady: true,
-            lastBackfillAt: Date.now(),
-            lastBatchStats: normalizeMemoryMigrationBatchStats({
-                ...(state.memoryMigrationStatus?.lastBatchStats ?? DEFAULT_MEMORY_MIGRATION_STATUS.lastBatchStats),
-                recallRows: entries.length,
-                updatedAt: Date.now(),
-            }),
-        });
         await db.meta.update(this.chatKey, {
             lastRecallLoggedAt: Date.now(),
         });
-        await this.persistMigrationStatus(state);
     }
 
     /**
@@ -3608,7 +3207,6 @@ export class ChatStateManager {
      *   Promise<void>：异步完成。
      */
     private async persistRelationshipRows(states: RelationshipState[]): Promise<void> {
-        const state = await this.load();
         const existingRows = await db.relationship_memory
             .where('[chatKey+updatedAt]')
             .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
@@ -3637,18 +3235,6 @@ export class ChatStateManager {
                 updatedAt: item.updatedAt,
             })));
         }
-        state.memoryMigrationStatus = {
-            ...mergeMemoryMigrationStatus(state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS, {
-                relationshipMirrorReady: true,
-                lastBackfillAt: Date.now(),
-                lastBatchStats: normalizeMemoryMigrationBatchStats({
-                    ...(state.memoryMigrationStatus?.lastBatchStats ?? DEFAULT_MEMORY_MIGRATION_STATUS.lastBatchStats),
-                    relationshipRows: states.length,
-                    updatedAt: Date.now(),
-                }),
-            }),
-        };
-        await this.persistMigrationStatus(state);
     }
 
     /**
@@ -3658,222 +3244,6 @@ export class ChatStateManager {
      * 返回：
      *   string：自身角色键。
      */
-    /**
-     * 功能：按需触发自动迁移维护。
-     * 参数：
-     *   state：当前聊天状态。
-     *   reason：触发原因。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    private async maybeRunAutomaticMigrationMaintenance(state: MemoryOSChatState, reason: string): Promise<void> {
-        const status = await this.hydrateMigrationStatusFromMeta(state);
-        if (!shouldRunAutomaticMemoryMigration(status, Date.now(), false)) {
-            return;
-        }
-        if (this.migrationMaintenancePromise) {
-            await this.migrationMaintenancePromise;
-            return;
-        }
-        this.migrationMaintenancePromise = this.runMemoryMigrationMaintenanceInternal(state, reason, false)
-            .finally((): void => {
-                this.migrationMaintenancePromise = null;
-            });
-        await this.migrationMaintenancePromise;
-    }
-
-    /**
-     * 功能：批量回填事实记录的生命周期字段。
-     * 参数：
-     *   state：当前聊天状态。
-     *   batchSize：单批处理条数。
-     * 返回：
-     *   Promise<{ count: number; complete: boolean }>：本批处理数量与是否完成。
-     */
-    private async backfillFactLifecycleBatch(
-        state: MemoryOSChatState,
-        batchSize: number,
-    ): Promise<{ count: number; complete: boolean }> {
-        const status = state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS;
-        const rows = await db.facts
-            .where('[chatKey+updatedAt]')
-            .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
-            .offset(Math.max(0, Number(status.lifecycleFactCursor ?? 0) || 0))
-            .limit(batchSize)
-            .toArray();
-        if (rows.length === 0) {
-            return { count: 0, complete: true };
-        }
-        const profile = state.personaMemoryProfile ?? this.rebuildPersonaFromState(state);
-        state.personaMemoryProfile = profile;
-        const updates = rows.map((fact): typeof fact => {
-            const sourceText = normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
-            const ownerActorKey = fact.ownerActorKey == null
-                ? (normalizeMemoryText(fact.entity?.kind) === 'character' ? normalizeMemoryText(fact.entity?.id) : null)
-                : normalizeMemoryText(String(fact.ownerActorKey));
-            const profile = this.resolvePersonaProfileForActor(state, ownerActorKey);
-            const lifecycle = buildLifecycleState(
-                fact.factKey,
-                'fact',
-                Number(fact.strength ?? fact.encodeScore ?? fact.confidence ?? 0.5),
-                Number(fact.salience ?? fact.encodeScore ?? fact.confidence ?? 0.5),
-                profile,
-                Number(fact.updatedAt ?? Date.now()) || Date.now(),
-                Math.max(0, Number(fact.rehearsalCount ?? 0) || 0),
-                Math.max(0, Number(fact.lastRecalledAt ?? 0) || 0),
-                normalizeMemoryText(fact.emotionTag) || detectEmotionTag(sourceText),
-                normalizeMemoryText(fact.relationScope) || detectRelationScope(sourceText),
-            );
-            state.memoryLifecycleIndex = state.memoryLifecycleIndex ?? {};
-            state.memoryLifecycleIndex[fact.factKey] = lifecycle;
-            return {
-                ...fact,
-                salience: lifecycle.salience,
-                strength: lifecycle.strength,
-                decayStage: lifecycle.stage,
-                rehearsalCount: lifecycle.rehearsalCount,
-                lastRecalledAt: lifecycle.lastRecalledAt,
-                emotionTag: lifecycle.emotionTag,
-                relationScope: lifecycle.relationScope,
-                encodeScore: clamp01((lifecycle.salience + lifecycle.strength) / 2),
-                profileVersion: profile.profileVersion,
-            };
-        });
-        await db.facts.bulkPut(updates);
-        return {
-            count: updates.length,
-            complete: updates.length < batchSize,
-        };
-    }
-
-    /**
-     * 功能：批量回填摘要记录的生命周期字段。
-     * 参数：
-     *   state：当前聊天状态。
-     *   batchSize：单批处理条数。
-     * 返回：
-     *   Promise<{ count: number; complete: boolean }>：本批处理数量与是否完成。
-     */
-    private async backfillSummaryLifecycleBatch(
-        state: MemoryOSChatState,
-        batchSize: number,
-    ): Promise<{ count: number; complete: boolean }> {
-        const status = state.memoryMigrationStatus ?? DEFAULT_MEMORY_MIGRATION_STATUS;
-        const rows = await db.summaries
-            .where('[chatKey+level+createdAt]')
-            .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
-            .offset(Math.max(0, Number(status.lifecycleSummaryCursor ?? 0) || 0))
-            .limit(batchSize)
-            .toArray();
-        if (rows.length === 0) {
-            return { count: 0, complete: true };
-        }
-        const profile = state.personaMemoryProfile ?? this.rebuildPersonaFromState(state);
-        state.personaMemoryProfile = profile;
-        const updates = rows.map((summary): typeof summary => {
-            const sourceText = normalizeMemoryText(`${summary.title ?? ''} ${summary.content}`);
-            const profile = this.resolvePersonaProfileForActor(state, summary.ownerActorKey == null ? null : normalizeMemoryText(String(summary.ownerActorKey)));
-            const lifecycle = buildLifecycleState(
-                summary.summaryId,
-                'summary',
-                Number(summary.strength ?? summary.encodeScore ?? 0.5),
-                Number(summary.salience ?? summary.encodeScore ?? 0.5),
-                profile,
-                Number(summary.createdAt ?? Date.now()) || Date.now(),
-                Math.max(0, Number(summary.rehearsalCount ?? 0) || 0),
-                Math.max(0, Number(summary.lastRecalledAt ?? 0) || 0),
-                normalizeMemoryText(summary.emotionTag) || detectEmotionTag(sourceText),
-                normalizeMemoryText(summary.relationScope) || detectRelationScope(sourceText),
-            );
-            state.memoryLifecycleIndex = state.memoryLifecycleIndex ?? {};
-            state.memoryLifecycleIndex[summary.summaryId] = lifecycle;
-            return {
-                ...summary,
-                salience: lifecycle.salience,
-                strength: lifecycle.strength,
-                decayStage: lifecycle.stage,
-                rehearsalCount: lifecycle.rehearsalCount,
-                lastRecalledAt: lifecycle.lastRecalledAt,
-                emotionTag: lifecycle.emotionTag,
-                relationScope: lifecycle.relationScope,
-                encodeScore: clamp01((lifecycle.salience + lifecycle.strength) / 2),
-                profileVersion: profile.profileVersion,
-            };
-        });
-        await db.summaries.bulkPut(updates);
-        return {
-            count: updates.length,
-            complete: updates.length < batchSize,
-        };
-    }
-
-    /**
-     * 功能：执行一次迁移维护批次，并在完成后切换到结构化主读。
-     * 参数：
-     *   state：当前聊天状态。
-     *   reason：触发原因。
-     *   force：是否强制执行。
-     * 返回：
-     *   Promise<MemoryMigrationStatus>：执行后的迁移状态。
-     */
-    private async runMemoryMigrationMaintenanceInternal(
-        state: MemoryOSChatState,
-        reason: string,
-        force: boolean,
-    ): Promise<MemoryMigrationStatus> {
-        const currentStatus = await this.hydrateMigrationStatusFromMeta(state);
-        const now = Date.now();
-        if (!shouldRunAutomaticMemoryMigration(currentStatus, now, force)) {
-            return currentStatus;
-        }
-        const batchSize = Math.max(
-            8,
-            Number(currentStatus.autoBackfillBatchSize ?? DEFAULT_MEMORY_MIGRATION_STATUS.autoBackfillBatchSize) || DEFAULT_MEMORY_MIGRATION_STATUS.autoBackfillBatchSize,
-        );
-        const factBatch = await this.backfillFactLifecycleBatch(state, batchSize);
-        const summaryBatch = await this.backfillSummaryLifecycleBatch(state, batchSize);
-        let candidateRows = 0;
-        if (force || !currentStatus.candidateMirrorReady) {
-            const candidates = await this.hydrateCandidateBufferFromDb(state);
-            candidateRows = candidates.length;
-            await this.persistCandidateRows(candidates);
-        }
-        let recallRows = 0;
-        if (force || !currentStatus.recallMirrorReady) {
-            const recalls = await this.hydrateRecallLogFromDb(state);
-            recallRows = recalls.length;
-            await this.persistRecallRows(recalls);
-        }
-        let relationshipRows = 0;
-        if (force || !currentStatus.relationshipMirrorReady || Object.keys(state.relationshipStateMap ?? {}).length === 0) {
-            relationshipRows = (await this.recomputeRelationshipState()).length;
-        }
-        state.memoryMigrationStatus = mergeMemoryMigrationStatus(state.memoryMigrationStatus ?? currentStatus, {
-            lifecycleBackfilled: factBatch.complete && summaryBatch.complete,
-            candidateMirrorReady: true,
-            recallMirrorReady: true,
-            relationshipMirrorReady: true,
-            lifecycleFactCursor: currentStatus.lifecycleFactCursor + factBatch.count,
-            lifecycleSummaryCursor: currentStatus.lifecycleSummaryCursor + summaryBatch.count,
-            lastBackfillAt: now,
-            lastAutoBackfillAt: now,
-            lastAutoBackfillReason: normalizeSeedText(reason) || 'auto_maintenance',
-            lastBatchStats: {
-                lifecycleFacts: factBatch.count,
-                lifecycleSummaries: summaryBatch.count,
-                candidateRows,
-                recallRows,
-                relationshipRows,
-                updatedAt: now,
-            },
-            updatedAt: now,
-        });
-        state.memoryMigrationStatus.pendingBackfillReasons = buildMemoryMigrationPendingReasons(state.memoryMigrationStatus);
-        state.memoryMigrationStatus.stage = resolveMemoryMigrationStage(state.memoryMigrationStatus);
-        await this.persistMigrationStatus(state);
-        this.markDirty();
-        return state.memoryMigrationStatus;
-    }
 
     private resolveSelfActorKey(state: MemoryOSChatState): string {
         const semanticRoleKey = normalizeSeedText(state.semanticSeed?.identitySeed?.roleKey);
@@ -4224,64 +3594,6 @@ export class ChatStateManager {
         const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
         const tuning = await this.getMemoryTuningProfile();
         return buildScoredMemoryCandidate(input, profile, tuning);
-    }
-
-    /**
-     * 功能：记录候选记忆缓冲。
-     * 参数：
-     *   candidates：候选记忆数组。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    async recordMemoryCandidates(candidates: MemoryCandidate[]): Promise<void> {
-        const state = await this.load();
-        const retentionLimit = Math.max(24, Math.floor(Number(state.memoryTuningProfile?.candidateRetentionLimit ?? DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit)));
-        const previous = await this.hydrateCandidateBufferFromDb(state);
-        const merged = [...candidates, ...previous]
-            .sort((left: MemoryCandidate, right: MemoryCandidate): number => Number(right.extractedAt ?? 0) - Number(left.extractedAt ?? 0))
-            .reduce<MemoryCandidate[]>((result: MemoryCandidate[], item: MemoryCandidate): MemoryCandidate[] => {
-                if (result.some((existing: MemoryCandidate): boolean => existing.candidateId === item.candidateId)) {
-                    return result;
-                }
-                result.push(item);
-                return result;
-            }, [])
-            .slice(0, retentionLimit);
-        state.memoryCandidateBuffer = merged;
-        await this.persistCandidateRows(merged);
-        this.markDirty();
-    }
-
-    /**
-     * 功能：列出候选记忆缓冲。
-     * 参数：
-     *   limit：最大条数。
-     * 返回：
-     *   Promise<MemoryCandidate[]>：候选记忆列表。
-     */
-    async listMemoryCandidates(limit: number = 40): Promise<MemoryCandidate[]> {
-        const state = await this.load();
-        const items = await this.hydrateCandidateBufferFromDb(state);
-        return items.slice(0, Math.max(1, Math.floor(Number(limit || 40))));
-    }
-
-    /**
-     * 功能：读取候选缓冲快照。
-     * 参数：
-     *   无。
-     * 返回：
-     *   Promise<MemoryCandidateBufferSnapshot>：候选缓冲摘要。
-     */
-    async getCandidateBufferSnapshot(): Promise<MemoryCandidateBufferSnapshot> {
-        const state = await this.load();
-        const items = await this.hydrateCandidateBufferFromDb(state);
-        return {
-            total: items.length,
-            accepted: items.filter((item: MemoryCandidate): boolean => item.encoding.accepted).length,
-            rejected: items.filter((item: MemoryCandidate): boolean => !item.encoding.accepted).length,
-            latestAt: Math.max(0, ...items.map((item: MemoryCandidate): number => Number(item.extractedAt ?? 0))),
-            items: items.slice(0, 24),
-        };
     }
 
     /**
@@ -4888,7 +4200,6 @@ export class ChatStateManager {
                 return result;
             }, [])
             .slice(0, retentionLimit);
-        state.memoryRecallLog = merged;
         for (const entry of entries) {
             if (!entry.selected) {
                 continue;
@@ -4998,144 +4309,6 @@ export class ChatStateManager {
     }
 
     /**
-     * 功能：根据记录文本匹配最相关的关系权重。
-     * @param text 记录文本。
-     * @param relationships 关系状态列表。
-     * @returns number：匹配到的关系权重。
-     */
-    private resolveRelationshipWeightForText(text: string, relationships: RelationshipState[]): number {
-        const normalizedText = normalizeMemoryText(text).toLowerCase();
-        let bestWeight = 0;
-        relationships.forEach((item: RelationshipState): void => {
-            const participantKeys = Array.isArray(item.participantKeys) ? item.participantKeys : [item.actorKey, item.targetKey];
-            const fragments = Array.isArray(item.sharedFragments) ? item.sharedFragments : [];
-            const matchedByParticipant = participantKeys.some((key: string): boolean => {
-                const normalizedKey = normalizeMemoryText(key).toLowerCase();
-                return normalizedKey.length >= 2 && normalizedText.includes(normalizedKey);
-            });
-            const matchedByFragment = fragments.some((fragment: string): boolean => {
-                const token = normalizeMemoryText(fragment).toLowerCase();
-                return token.length >= 2 && normalizedText.includes(token.slice(0, Math.min(24, token.length)));
-            });
-            if (matchedByParticipant || matchedByFragment) {
-                bestWeight = Math.max(bestWeight, computeRelationshipWeight(item));
-            }
-        });
-        if (bestWeight > 0) {
-            return bestWeight;
-        }
-        return relationships.length > 0 ? computeRelationshipWeight(relationships[0] ?? null) * 0.45 : 0;
-    }
-
-    /**
-     * 功能：基于当前记忆数据重算召回预览。
-     * 参数：
-     *   query：查询文本。
-     * 返回：
-     *   Promise<RecallLogEntry[]>：召回预览结果。
-     */
-    async recomputeRecallRanking(query: string = ''): Promise<RecallLogEntry[]> {
-        const state = await this.load();
-        const lifecycleIndex = await this.hydrateLifecycleIndexFromDb(state);
-        const normalizedQuery = normalizeMemoryText(query);
-        const keywords = normalizedQuery
-            .split(/[\s,，。！？；:：()\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
-            .map((item: string): string => normalizeMemoryText(item).toLowerCase())
-            .filter(Boolean)
-            .slice(0, 12);
-        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
-        const tuning = await this.getMemoryTuningProfile();
-        const relationships = (await this.getRelationshipState())
-            .sort((left: RelationshipState, right: RelationshipState): number => computeRelationshipWeight(right) - computeRelationshipWeight(left));
-        const facts = await db.facts
-            .where('[chatKey+updatedAt]')
-            .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
-            .reverse()
-            .limit(20)
-            .toArray();
-        const summaries = await db.summaries
-            .where('[chatKey+level+createdAt]')
-            .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
-            .reverse()
-            .limit(12)
-            .toArray();
-        return [
-            ...facts.map((fact): RecallLogEntry => {
-                const lifecycle = lifecycleIndex?.[fact.factKey] ?? null;
-                const factText = normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
-                const recencyScore = clamp01(1 - ((Date.now() - Number(fact.updatedAt ?? 0)) / (1000 * 60 * 60 * 24 * 30)));
-                const result = scoreRecallCandidate({
-                    text: factText,
-                    keywords,
-                    confidence: clamp01(Number(fact.confidence ?? fact.encodeScore ?? 0.55)),
-                    recencyScore,
-                    lifecycle,
-                    profile,
-                    relationshipWeight: lifecycle?.relationScope ? this.resolveRelationshipWeightForText(factText, relationships) : 0,
-                    emotionWeight: lifecycle?.emotionTag ? 1 : 0,
-                    continuityWeight: normalizedQuery && factText.toLowerCase().includes(normalizedQuery.toLowerCase()) ? 1 : 0.25,
-                    privacyPenalty: /秘密|隐私|private|secret/.test(factText) ? 1 : 0,
-                    conflictPenalty: lifecycle?.stage === 'distorted' ? 0.5 : 0,
-                    tuning,
-                });
-                return {
-                    recallId: `preview:${fact.factKey}`,
-                    query: normalizedQuery,
-                    section: 'PREVIEW',
-                    recordKey: fact.factKey,
-                    recordKind: 'fact',
-                    recordTitle: normalizeMemoryText(fact.type || fact.path || fact.factKey),
-                    score: result.score,
-                    selected: false,
-                    conflictSuppressed: result.reasonCodes.includes('conflict_penalty'),
-                    tone: result.tone,
-                    reasonCodes: result.reasonCodes,
-                    loggedAt: Date.now(),
-                };
-            }),
-            ...summaries.map((summary): RecallLogEntry => {
-                const lifecycle = lifecycleIndex?.[summary.summaryId] ?? null;
-                const summaryText = normalizeMemoryText(`${summary.title ?? ''} ${summary.content ?? ''}`);
-                const recencyScore = clamp01(1 - ((Date.now() - Number(summary.createdAt ?? 0)) / (1000 * 60 * 60 * 24 * 21)));
-                const result = scoreRecallCandidate({
-                    text: summaryText,
-                    keywords,
-                    confidence: clamp01(Number(summary.encodeScore ?? 0.56)),
-                    recencyScore,
-                    lifecycle,
-                    profile,
-                    relationshipWeight: lifecycle?.relationScope ? this.resolveRelationshipWeightForText(summaryText, relationships) : 0,
-                    emotionWeight: lifecycle?.emotionTag ? 1 : 0,
-                    continuityWeight: normalizedQuery && summaryText.toLowerCase().includes(normalizedQuery.toLowerCase()) ? 1 : 0.3,
-                    privacyPenalty: /秘密|隐私|private|secret/.test(summaryText) ? 1 : 0,
-                    conflictPenalty: lifecycle?.stage === 'distorted' ? 0.4 : 0,
-                    tuning,
-                });
-                return {
-                    recallId: `preview:${summary.summaryId}`,
-                    query: normalizedQuery,
-                    section: 'PREVIEW',
-                    recordKey: summary.summaryId,
-                    recordKind: 'summary',
-                    recordTitle: normalizeMemoryText(summary.title || `${summary.level} 摘要`),
-                    score: result.score,
-                    selected: false,
-                    conflictSuppressed: result.reasonCodes.includes('conflict_penalty'),
-                    tone: result.tone,
-                    reasonCodes: result.reasonCodes,
-                    loggedAt: Date.now(),
-                };
-            }),
-        ]
-            .sort((left: RecallLogEntry, right: RecallLogEntry): number => right.score - left.score)
-            .slice(0, 12)
-            .map((entry: RecallLogEntry, index: number): RecallLogEntry => ({
-                ...entry,
-                selected: index < 6,
-            }));
-    }
-
-    /**
      * 功能：读取关系状态列表。
      * 参数：
      *   无。
@@ -5143,8 +4316,8 @@ export class ChatStateManager {
      *   Promise<RelationshipState[]>：关系状态列表。
      */
     async getRelationshipState(): Promise<RelationshipState[]> {
-        const state = await this.load();
-        const map = await this.hydrateRelationshipStateFromDb(state);
+        await this.load();
+        const map = await this.hydrateRelationshipStateFromDb();
         if (Object.keys(map).length === 0) {
             return this.recomputeRelationshipState();
         }
@@ -5224,41 +4397,8 @@ export class ChatStateManager {
                 return Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
             })
             .slice(0, 48);
-        state.relationshipStateMap = values.reduce<Record<string, RelationshipState>>((result: Record<string, RelationshipState>, item: RelationshipState): Record<string, RelationshipState> => {
-            result[item.relationshipKey] = item;
-            return result;
-        }, {});
         await this.persistRelationshipRows(values);
-        this.markDirty();
         return values;
-    }
-
-    /**
-     * 功能：读取当前记忆迁移状态。
-     * @returns Promise<MemoryMigrationStatus>：迁移状态。
-     */
-    async getMemoryMigrationStatus(): Promise<MemoryMigrationStatus> {
-        const state = await this.load();
-        await this.maybeRunAutomaticMigrationMaintenance(state, 'status_read');
-        return this.hydrateMigrationStatusFromMeta(state);
-    }
-
-    /**
-     * 功能：执行首版记忆迁移回填，并将读取策略切到数据库优先。
-     * @returns Promise<MemoryMigrationStatus>：回填后的迁移状态。
-     */
-    async backfillMemoryMigration(): Promise<MemoryMigrationStatus> {
-        const state = await this.load();
-        for (let index = 0; index < 32; index += 1) {
-            const nextStatus = await this.runMemoryMigrationMaintenanceInternal(state, 'manual_backfill', true);
-            if (nextStatus.pendingBackfillReasons.length === 0 && nextStatus.stage === 'db_preferred') {
-                return nextStatus;
-            }
-            if (nextStatus.lastBatchStats.lifecycleFacts === 0 && nextStatus.lastBatchStats.lifecycleSummaries === 0) {
-                return nextStatus;
-            }
-        }
-        return this.persistMigrationStatus(state);
     }
 
     /**
@@ -5516,12 +4656,8 @@ export class ChatStateManager {
             state.simpleMemoryPersona = undefined;
             state.simpleMemoryPersonas = undefined;
             state.activeActorKey = undefined;
-            state.memoryCandidateBuffer = [];
             state.memoryLifecycleIndex = {};
-            state.memoryRecallLog = [];
             state.latestRecallExplanation = null;
-            state.relationshipStateMap = {};
-            state.memoryMigrationStatus = { ...DEFAULT_MEMORY_MIGRATION_STATUS, updatedAt: Date.now() };
             state.memoryTuningProfile = { ...DEFAULT_MEMORY_TUNING_PROFILE, updatedAt: Date.now() };
         }
         await this.recordLifecycleMutation(state, ['character_binding_changed'], 'character_binding');
@@ -5762,14 +4898,12 @@ export class ChatStateManager {
                 const conflictBonus = sharedScene.currentConflict && normalizeSeedText(sharedScene.currentConflict).includes(lane.displayName)
                     ? 0.12
                     : 0;
-                const recency = Math.max(0, 1 - ((Date.now() - Number(lane.lastActiveAt ?? 0)) / (1000 * 60 * 60 * 12)));
-                const score = Math.max(0, Math.min(1, msgCount * 0.12 + mentionCount * 0.04 + goalBonus + conflictBonus + recency * 0.24));
                 const reasonCodes: string[] = [];
                 if (msgCount > 0) {
-                    reasonCodes.push('recent_speaker');
+                    reasonCodes.push('recent_messages');
                 }
                 if (mentionCount > 0) {
-                    reasonCodes.push('mentioned');
+                    reasonCodes.push('mentioned_recently');
                 }
                 if (goalBonus > 0) {
                     reasonCodes.push('goal_pending');
@@ -5777,6 +4911,12 @@ export class ChatStateManager {
                 if (conflictBonus > 0) {
                     reasonCodes.push('conflict_related');
                 }
+                const score = clamp01(
+                    Math.min(0.48, msgCount * 0.08)
+                    + Math.min(0.28, mentionCount * 0.06)
+                    + goalBonus
+                    + conflictBonus,
+                );
                 return {
                     actorKey: lane.actorKey,
                     score,

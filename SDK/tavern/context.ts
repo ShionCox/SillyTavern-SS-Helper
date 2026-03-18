@@ -123,6 +123,27 @@ export function resolveTavernRoleIdentityEvent(
   };
 }
 
+function resolveCharacterScopeIdEvent(
+  context: SdkTavernContextEvent | null,
+  currentCharacter: SdkTavernCharacterEvent | null,
+  role: SdkTavernRoleIdentityEvent
+): string {
+  const stableRoleKey = normalizeTavernKeyPartEvent(role.roleKey, "");
+  if (stableRoleKey) {
+    return stableRoleKey;
+  }
+
+  return normalizeTavernKeyPartEvent(
+    role.roleId
+    || currentCharacter?.avatar
+    || currentCharacter?.name
+    || context?.characterName
+    || context?.name2
+    || context?.name1,
+    "unknown_scope"
+  );
+}
+
 /**
  * 功能：获取当前群组对象。
  * @param context 宿主上下文
@@ -169,7 +190,7 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
   return {
     tavernInstanceId,
     scopeType: "character",
-    scopeId: role.roleKey || "unknown_scope",
+    scopeId: resolveCharacterScopeIdEvent(context, resolved.character, role),
     roleKey: role.roleKey,
     roleId: role.roleId,
     displayName: role.displayName,

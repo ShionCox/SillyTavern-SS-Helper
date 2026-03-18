@@ -57,10 +57,7 @@ import type {
     MaintenanceExecutionResult,
     MaintenanceInsight,
     ChatLifecycleState,
-    MemoryCandidate,
-    MemoryCandidateBufferSnapshot,
     MemoryLifecycleState,
-    MemoryMigrationStatus,
     MemoryQualityScorecard,
     MemoryTuningProfile,
     OwnedMemoryState,
@@ -985,12 +982,6 @@ export class MemorySDKImpl implements MemorySDK {
         recomputePersonaMemoryProfiles: (): Promise<Record<string, PersonaMemoryProfile>> => {
             return this.chatStateManager.recomputePersonaMemoryProfiles();
         },
-        listMemoryCandidates: (limit?: number): Promise<MemoryCandidate[]> => {
-            return this.chatStateManager.listMemoryCandidates(limit);
-        },
-        getCandidateBufferSnapshot: (): Promise<MemoryCandidateBufferSnapshot> => {
-            return this.chatStateManager.getCandidateBufferSnapshot();
-        },
         getRecallLog: (limit?: number): Promise<RecallLogEntry[]> => {
             return this.chatStateManager.getRecallLog(limit);
         },
@@ -1009,20 +1000,11 @@ export class MemorySDKImpl implements MemorySDK {
         recomputeOwnedMemoryState: (recordKey: string): Promise<OwnedMemoryState | null> => {
             return this.chatStateManager.recomputeOwnedMemoryState(recordKey);
         },
-        recomputeRecallRanking: (query?: string): Promise<RecallLogEntry[]> => {
-            return this.chatStateManager.recomputeRecallRanking(query);
-        },
         getRelationshipState: (): Promise<RelationshipState[]> => {
             return this.chatStateManager.getRelationshipState();
         },
         recomputeRelationshipState: (): Promise<RelationshipState[]> => {
             return this.chatStateManager.recomputeRelationshipState();
-        },
-        getMemoryMigrationStatus: (): Promise<MemoryMigrationStatus> => {
-            return this.chatStateManager.getMemoryMigrationStatus();
-        },
-        backfillMemoryMigration: (): Promise<MemoryMigrationStatus> => {
-            return this.chatStateManager.backfillMemoryMigration();
         },
         getMemoryTuningProfile: (): Promise<MemoryTuningProfile> => {
             return this.chatStateManager.getMemoryTuningProfile();

@@ -1,5 +1,4 @@
 import type { EditorHealthSnapshot } from '../../../SDK/stx';
-import { showCandidateSources } from './candidateSourceDialogs';
 
 interface EditorActionToastLike {
     success(message: string): void;
@@ -70,33 +69,9 @@ export function createEditorActionExecutor(options: EditorActionExecutorOptions)
                 options.toast.success('总览快照已刷新');
                 return;
             }
-            if (action === 'view-candidate-sources') {
-                await showCandidateSources({
-                    dialogIdPrefix: options.dialogIdPrefix,
-                    formatCandidateKindLabel: options.formatCandidateKindLabel,
-                });
-                return;
-            }
-            if (action === 'view-world-state-candidates') {
-                await showCandidateSources({
-                    dialogIdPrefix: options.dialogIdPrefix,
-                    formatCandidateKindLabel: options.formatCandidateKindLabel,
-                    filterKind: 'state',
-                });
-                return;
-            }
-            if (action === 'refresh-seed-candidates') {
-                if (!memory.editor?.refreshSemanticSeed) {
-                    alert('当前版本未提供 semantic seed 刷新入口。');
-                    return;
-                }
-                await memory.editor.refreshSemanticSeed();
-                await options.refreshExperiencePanels();
-                await showCandidateSources({
-                    dialogIdPrefix: options.dialogIdPrefix,
-                    formatCandidateKindLabel: options.formatCandidateKindLabel,
-                });
-                options.toast.success('semantic seed 已刷新，并已显示候选来源');
+            if (action === 'review-structured-sources') {
+                options.openRecordEditor();
+                options.toast.info('已打开记录编辑器，请从逻辑维护与诊断页查看当前主链来源。');
                 return;
             }
             if (action === 'view-hidden-rows') {

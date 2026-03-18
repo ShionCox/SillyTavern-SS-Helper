@@ -116,19 +116,16 @@ const IDS: MemoryOSSettingsIds = {
     injectionSectionsId: `${NAMESPACE}-injection-sections`,
     injectionReasonId: `${NAMESPACE}-injection-reason`,
     injectionPostId: `${NAMESPACE}-injection-post`,
-    tuningMigrationStatusId: `${NAMESPACE}-tuning-migration-status`,
     tuningCandidateAcceptThresholdBiasId: `${NAMESPACE}-tuning-candidate-threshold-bias`,
     tuningRecallRelationshipBiasId: `${NAMESPACE}-tuning-recall-relationship-bias`,
     tuningRecallEmotionBiasId: `${NAMESPACE}-tuning-recall-emotion-bias`,
     tuningRecallRecencyBiasId: `${NAMESPACE}-tuning-recall-recency-bias`,
     tuningRecallContinuityBiasId: `${NAMESPACE}-tuning-recall-continuity-bias`,
     tuningDistortionProtectionBiasId: `${NAMESPACE}-tuning-distortion-protection-bias`,
-    tuningCandidateRetentionLimitId: `${NAMESPACE}-tuning-candidate-retention-limit`,
     tuningRecallRetentionLimitId: `${NAMESPACE}-tuning-recall-retention-limit`,
     tuningRefreshBtnId: `${NAMESPACE}-tuning-refresh`,
     tuningResetBtnId: `${NAMESPACE}-tuning-reset`,
     tuningSaveBtnId: `${NAMESPACE}-tuning-save`,
-    tuningBackfillBtnId: `${NAMESPACE}-tuning-backfill`,
     taskSurfaceBackgroundToastId: `${NAMESPACE}-task-surface-background-toast`,
     taskSurfaceDisableComposerId: `${NAMESPACE}-task-surface-disable-composer`,
     taskSurfaceBlockingDefaultId: `${NAMESPACE}-task-surface-blocking-default`,
@@ -569,7 +566,6 @@ function bindUiEvents() {
             { inputId: IDS.tuningRecallRecencyBiasId, value: profile.recallRecencyBias },
             { inputId: IDS.tuningRecallContinuityBiasId, value: profile.recallContinuityBias },
             { inputId: IDS.tuningDistortionProtectionBiasId, value: profile.distortionProtectionBias },
-            { inputId: IDS.tuningCandidateRetentionLimitId, value: profile.candidateRetentionLimit },
             { inputId: IDS.tuningRecallRetentionLimitId, value: profile.recallRetentionLimit },
         ];
         tuningFields.forEach((field: { inputId: string; value: number }): void => {
@@ -593,7 +589,6 @@ function bindUiEvents() {
             recallRecencyBias: readTuningNumberInputValue(IDS.tuningRecallRecencyBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallRecencyBias),
             recallContinuityBias: readTuningNumberInputValue(IDS.tuningRecallContinuityBiasId, DEFAULT_MEMORY_TUNING_PROFILE.recallContinuityBias),
             distortionProtectionBias: readTuningNumberInputValue(IDS.tuningDistortionProtectionBiasId, DEFAULT_MEMORY_TUNING_PROFILE.distortionProtectionBias),
-            candidateRetentionLimit: readTuningNumberInputValue(IDS.tuningCandidateRetentionLimitId, DEFAULT_MEMORY_TUNING_PROFILE.candidateRetentionLimit),
             recallRetentionLimit: readTuningNumberInputValue(IDS.tuningRecallRetentionLimitId, DEFAULT_MEMORY_TUNING_PROFILE.recallRetentionLimit),
         };
     };
@@ -812,27 +807,6 @@ function bindUiEvents() {
                 alert('保存调参失败：' + String(error));
             } finally {
                 tuningSaveButton.removeAttribute('disabled');
-            }
-        });
-    }
-
-    const tuningBackfillButton = document.getElementById(IDS.tuningBackfillBtnId);
-    if (tuningBackfillButton) {
-        tuningBackfillButton.addEventListener('click', async (): Promise<void> => {
-            const memory = (window as any).STX?.memory;
-            if (!memory?.chatState?.backfillMemoryMigration) {
-                alert('请先启动 Memory OS。');
-                return;
-            }
-            tuningBackfillButton.setAttribute('disabled', 'true');
-            try {
-                await memory.chatState.backfillMemoryMigration();
-                await refreshExperiencePanels();
-                alert('迁移回填已完成。');
-            } catch (error) {
-                alert('迁移回填失败：' + String(error));
-            } finally {
-                tuningBackfillButton.removeAttribute('disabled');
             }
         });
     }

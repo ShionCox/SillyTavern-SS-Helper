@@ -3043,9 +3043,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       margin-bottom: calc((var(--stx-world-head-height, 44px) + 14px) * -1);
       background:
         linear-gradient(180deg,
-          color-mix(in srgb, var(--ss-theme-panel-bg, #1a1a1e) 96%, black 4%) 0%,
-          color-mix(in srgb, var(--ss-theme-panel-bg, #1a1a1e) 94%, black 6%) calc(100% - 12px),
-          color-mix(in srgb, var(--ss-theme-shadow, rgba(0,0,0,0.24)) 24%, transparent) 100%);
+          color-mix(in srgb, var(--ss-theme-backdrop, var(--SmartThemeBlurTintColor, rgba(10, 10, 12, 0.84))) 72%, transparent) 0%,
+          color-mix(in srgb, var(--ss-theme-backdrop, var(--SmartThemeBlurTintColor, rgba(10, 10, 12, 0.84))) 68%, transparent) calc(100% - 12px),
+          color-mix(in srgb, var(--ss-theme-shadow, rgba(0,0,0,0.28)) 28%, transparent) 100%);
+      backdrop-filter: blur(16px) saturate(118%);
+      -webkit-backdrop-filter: blur(16px) saturate(118%);
       z-index: 2;
       pointer-events: none;
     }
@@ -3078,9 +3080,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       white-space: nowrap;
       font-size: 12px;
       transform: translateY(var(--stx-world-head-offset, 0px));
-      transition: transform 0.08s linear, box-shadow 0.16s ease, background-color 0.16s ease;
-      background: color-mix(in srgb, var(--ss-theme-panel-bg, #1a1a1e) 94%, black 6%);
+      transition: transform 0.08s linear, box-shadow 0.16s ease, color 0.16s ease;
+      background: color-mix(in srgb, var(--ss-theme-backdrop, var(--SmartThemeBlurTintColor, rgba(10, 10, 12, 0.84))) 70%, transparent);
       background-clip: padding-box;
+      isolation: isolate;
+      overflow: hidden;
       position: sticky;
     }
 
@@ -3090,8 +3094,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       left: 0;
       right: 0;
       top: -14px;
-      height: 14px;
+      bottom: 0;
       background: inherit;
+      backdrop-filter: blur(14px) saturate(114%);
+      -webkit-backdrop-filter: blur(14px) saturate(114%);
+      z-index: 0;
       pointer-events: none;
     }
 
@@ -3105,15 +3112,31 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: linear-gradient(180deg,
         color-mix(in srgb, var(--ss-theme-shadow, rgba(0,0,0,0.34)) 42%, transparent) 0%,
         transparent 100%);
+      z-index: 0;
       pointer-events: none;
       opacity: 0.72;
+    }
+
+    .stx-re-world-section-colhead-content {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      min-width: 0;
     }
 
     .stx-re-world-section.is-head-sticky .stx-re-world-table thead th {
       box-shadow:
         0 2px 0 color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.06)) 72%, transparent),
         0 12px 18px -14px color-mix(in srgb, var(--ss-theme-shadow, rgba(0,0,0,0.84)) 88%, transparent);
-      background: color-mix(in srgb, var(--ss-theme-panel-bg, #1a1a1e) 96%, black 4%);
+      background: color-mix(in srgb, var(--ss-theme-backdrop, var(--SmartThemeBlurTintColor, rgba(10, 10, 12, 0.84))) 76%, transparent);
+    }
+
+    .stx-re-world-section.is-head-sticky .stx-re-world-table thead th::before {
+      background: inherit;
+      backdrop-filter: blur(16px) saturate(118%);
+      -webkit-backdrop-filter: blur(16px) saturate(118%);
     }
 
     .stx-re-world-section-colhead {
@@ -3160,8 +3183,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     .stx-re-world-section.is-current-section .stx-re-world-table thead th {
-      background: color-mix(in srgb, var(--ss-theme-panel-bg, #1a1a1e) 94%, black 6%);
+      background: color-mix(in srgb, var(--ss-theme-backdrop, var(--SmartThemeBlurTintColor, rgba(10, 10, 12, 0.84))) 74%, transparent);
       color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 88%, var(--ss-theme-text, #fff) 12%);
+    }
+
+    .stx-re-world-section.is-current-section .stx-re-world-table thead th::before {
+      background: inherit;
     }
 
     .stx-re-world-section-nav-list {
