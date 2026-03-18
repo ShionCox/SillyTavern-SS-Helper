@@ -25,6 +25,8 @@ import type {
     ExtractHealthWindow,
     GroupMemoryState,
     LatestRecallExplanation,
+    MemoryActorRetentionMap,
+    MemoryActorRetentionState,
     MemoryCandidate,
     MemoryCandidateBufferSnapshot,
     MemoryCandidateKind,
@@ -105,6 +107,7 @@ import { CompactionManager } from './compaction-manager';
 import { SummariesManager } from './summaries-manager';
 import { VectorManager } from '../vector/vector-manager';
 import {
+    buildPerActorRetentionMap,
     buildLifecycleState,
     buildScoredMemoryCandidate,
     buildSimpleMemoryPersona,
@@ -192,6 +195,35 @@ function averagePrecisionWindow(values: number[]): number {
 
 function normalizeSeedText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeMemoryActorRetentionMap(value: unknown): MemoryActorRetentionMap {
+    if (!value || typeof value !== 'object') {
+        return {};
+    }
+    return Object.entries(value as Record<string, unknown>).reduce<MemoryActorRetentionMap>((result: MemoryActorRetentionMap, [actorKey, item]: [string, unknown]): MemoryActorRetentionMap => {
+        const normalizedActorKey = normalizeSeedText(actorKey);
+        if (!normalizedActorKey || !item || typeof item !== 'object') {
+            return result;
+        }
+        const record = item as Record<string, unknown>;
+        result[normalizedActorKey] = {
+            actorKey: normalizedActorKey,
+            stage: (record.stage ?? 'clear') as MemoryActorRetentionState['stage'],
+            forgetProbability: clamp01(Number(record.forgetProbability ?? 0)),
+            forgotten: record.forgotten === true,
+            forgottenAt: Math.max(0, Number(record.forgottenAt ?? 0) || 0) || undefined,
+            forgottenReasonCodes: Array.isArray(record.forgottenReasonCodes)
+                ? record.forgottenReasonCodes.map((reason: unknown): string => normalizeSeedText(reason)).filter(Boolean)
+                : [],
+            rehearsalCount: Math.max(0, Number(record.rehearsalCount ?? 0) || 0),
+            lastRecalledAt: Math.max(0, Number(record.lastRecalledAt ?? 0) || 0),
+            retentionBias: Number(record.retentionBias ?? 0) || 0,
+            confidence: clamp01(Number(record.confidence ?? 0)),
+            updatedAt: Math.max(0, Number(record.updatedAt ?? 0) || 0),
+        };
+        return result;
+    }, {});
 }
 
 function normalizeLorebookSelection(value: unknown): string[] {
@@ -1181,6 +1213,7 @@ export class ChatStateManager {
                         rehearsalCount: Math.max(0, Number(lifecycle?.rehearsalCount ?? 0) || 0),
                         lastRecalledAt: Math.max(0, Number(lifecycle?.lastRecalledAt ?? 0) || 0),
                         distortionRisk: clamp01(Number(lifecycle?.distortionRisk ?? 0)),
+                        perActorMetrics: normalizeMemoryActorRetentionMap(lifecycle?.perActorMetrics),
                         updatedAt: Math.max(0, Number(lifecycle?.updatedAt ?? 0) || 0),
                     };
                     return result;
@@ -1215,6 +1248,7 @@ export class ChatStateManager {
                         invalidatedByEventIds: Array.isArray(owned?.invalidatedByEventIds)
                             ? owned.invalidatedByEventIds.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)
                             : [],
+                        roleBasedRetentionOverrides: normalizeMemoryActorRetentionMap(owned?.roleBasedRetentionOverrides),
                         updatedAt: Math.max(0, Number(owned?.updatedAt ?? 0) || 0),
                     };
                     return result;
@@ -3102,6 +3136,27 @@ export class ChatStateManager {
         return this.resolvePersonaProfileForActor(state, ownerActorKey);
     }
 
+    private ensurePersonaProfiles(state: MemoryOSChatState): Record<string, PersonaMemoryProfile> {
+        if (state.personaMemoryProfiles && Object.keys(state.personaMemoryProfiles).length > 0) {
+            return state.personaMemoryProfiles;
+        }
+        this.syncPersonaProfilesFromState(state, state.activeActorKey);
+        return state.personaMemoryProfiles ?? {};
+    }
+
+    private buildPerActorRetentionMetrics(
+        state: MemoryOSChatState,
+        lifecycle: MemoryLifecycleState,
+        input: OwnedMemoryInferenceInput,
+    ): MemoryActorRetentionMap {
+        return buildPerActorRetentionMap(
+            lifecycle,
+            input,
+            this.ensurePersonaProfiles(state),
+            Date.now(),
+        );
+    }
+
     /**
      * 功能：按需从结构化表恢复候选缓冲。
      * 参数：
@@ -3333,6 +3388,7 @@ export class ChatStateManager {
                 relationScope: normalizeMemoryText(fact.relationScope),
                 updatedAt: Math.max(0, Number(fact.updatedAt ?? 0) || 0),
             }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput));
+            lifecycle.perActorMetrics = this.buildPerActorRetentionMetrics(state, lifecycle, inferenceInput);
             nextIndex[fact.factKey] = lifecycle;
             nextOwnedIndex[fact.factKey] = {
                 recordKey: fact.factKey,
@@ -3349,6 +3405,7 @@ export class ChatStateManager {
                 lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
                 reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
                 invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+                roleBasedRetentionOverrides: lifecycle.perActorMetrics ?? {},
                 updatedAt: lifecycle.updatedAt,
             };
         });
@@ -3413,6 +3470,7 @@ export class ChatStateManager {
                 relationScope: normalizeMemoryText(summary.relationScope),
                 updatedAt: Math.max(0, Number(summary.createdAt ?? 0) || 0),
             }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput));
+            lifecycle.perActorMetrics = this.buildPerActorRetentionMetrics(state, lifecycle, inferenceInput);
             nextIndex[summary.summaryId] = lifecycle;
             nextOwnedIndex[summary.summaryId] = {
                 recordKey: summary.summaryId,
@@ -3429,6 +3487,7 @@ export class ChatStateManager {
                 lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
                 reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
                 invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+                roleBasedRetentionOverrides: lifecycle.perActorMetrics ?? {},
                 updatedAt: lifecycle.updatedAt,
             };
         });
@@ -4538,6 +4597,7 @@ export class ChatStateManager {
             lastForgetRollAt: lifecycle.lastForgetRollAt || undefined,
             reinforcedByEventIds: lifecycle.reinforcedByEventIds ?? [],
             invalidatedByEventIds: lifecycle.invalidatedByEventIds ?? [],
+            roleBasedRetentionOverrides: lifecycle.perActorMetrics ?? {},
             updatedAt: lifecycle.updatedAt,
         };
     }
@@ -4750,6 +4810,7 @@ export class ChatStateManager {
             nextLifecycle.forgottenReasonCodes = normalizedPatch.forgottenReasonCodes;
         }
         nextLifecycle.updatedAt = Date.now();
+        nextLifecycle.perActorMetrics = this.buildPerActorRetentionMetrics(state, nextLifecycle, inferenceInput);
         state.memoryLifecycleIndex = {
             ...(state.memoryLifecycleIndex ?? {}),
             [recordKey]: nextLifecycle,
@@ -4788,6 +4849,7 @@ export class ChatStateManager {
             this.resolvePersonaProfileForInference(state, inferenceInput),
         );
         nextLifecycle.updatedAt = Date.now();
+        nextLifecycle.perActorMetrics = this.buildPerActorRetentionMetrics(state, nextLifecycle, inferenceInput);
         state.memoryLifecycleIndex = {
             ...(state.memoryLifecycleIndex ?? {}),
             [recordKey]: nextLifecycle,
@@ -4854,6 +4916,7 @@ export class ChatStateManager {
                     previousLifecycle?.relationScope ?? '',
                 ),
             }, inferenceInput, this.resolvePersonaProfileForInference(state, inferenceInput)) satisfies MemoryLifecycleState;
+            nextLifecycle.perActorMetrics = this.buildPerActorRetentionMetrics(state, nextLifecycle, inferenceInput);
             state.memoryLifecycleIndex = {
                 ...(state.memoryLifecycleIndex ?? {}),
                 [entry.recordKey]: nextLifecycle,

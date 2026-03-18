@@ -557,6 +557,13 @@ export interface SemanticAiSummary {
     hardConstraints: string[];
     locations: string[];
     entities: string[];
+    nations: string[];
+    regions: string[];
+    factions: string[];
+    historicalEvents: string[];
+    dangers: string[];
+    characterGoals: string[];
+    relationshipFacts: string[];
     catchphrases: string[];
     relationshipAnchors: string[];
     styleCues: string[];
@@ -701,6 +708,22 @@ export type MemoryDecayStage = 'clear' | 'blur' | 'distorted';
 
 export type InjectedMemoryTone = 'stable_fact' | 'clear_recall' | 'blurred_recall' | 'possible_misremember';
 
+export interface MemoryActorRetentionState {
+    actorKey: string;
+    stage: MemoryDecayStage;
+    forgetProbability: number;
+    forgotten: boolean;
+    forgottenAt?: number;
+    forgottenReasonCodes: string[];
+    rehearsalCount: number;
+    lastRecalledAt: number;
+    retentionBias: number;
+    confidence: number;
+    updatedAt: number;
+}
+
+export type MemoryActorRetentionMap = Record<string, MemoryActorRetentionState>;
+
 export interface PersonaMemoryProfile {
     profileVersion: string;
     totalCapacity: number;
@@ -787,6 +810,7 @@ export interface MemoryLifecycleState {
     distortionRisk: number;
     emotionTag: string;
     relationScope: string;
+    perActorMetrics?: MemoryActorRetentionMap;
     updatedAt: number;
 }
 
@@ -805,12 +829,13 @@ export interface OwnedMemoryState {
     lastForgetRollAt?: number;
     reinforcedByEventIds: string[];
     invalidatedByEventIds: string[];
+    roleBasedRetentionOverrides?: MemoryActorRetentionMap;
     updatedAt: number;
 }
 
-export type WorldStateScopeType = 'global' | 'region' | 'city' | 'location' | 'faction' | 'item' | 'character' | 'scene';
+export type WorldStateScopeType = 'global' | 'nation' | 'region' | 'city' | 'location' | 'faction' | 'item' | 'character' | 'scene' | 'unclassified';
 
-export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship_hook';
+export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship' | 'goal' | 'relationship_hook' | 'anomaly';
 
 export interface WorldStateNodeValue {
     title: string;
@@ -818,10 +843,12 @@ export interface WorldStateNodeValue {
     scopeType: WorldStateScopeType;
     stateType: WorldStateType;
     subjectId?: string;
+    nationId?: string;
     regionId?: string;
     cityId?: string;
     locationId?: string;
     itemId?: string;
+    anomalyFlags?: string[];
     keywords: string[];
     tags: string[];
     confidence?: number;

@@ -24,6 +24,13 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         'hardConstraints',
         'locations',
         'entities',
+        'nations',
+        'regions',
+        'factions',
+        'historicalEvents',
+        'dangers',
+        'characterGoals',
+        'relationshipFacts',
         'catchphrases',
         'relationshipAnchors',
         'styleCues',
@@ -36,6 +43,13 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         hardConstraints: { type: 'array', items: { type: 'string' } },
         locations: { type: 'array', items: { type: 'string' } },
         entities: { type: 'array', items: { type: 'string' } },
+        nations: { type: 'array', items: { type: 'string' } },
+        regions: { type: 'array', items: { type: 'string' } },
+        factions: { type: 'array', items: { type: 'string' } },
+        historicalEvents: { type: 'array', items: { type: 'string' } },
+        dangers: { type: 'array', items: { type: 'string' } },
+        characterGoals: { type: 'array', items: { type: 'string' } },
+        relationshipFacts: { type: 'array', items: { type: 'string' } },
         catchphrases: { type: 'array', items: { type: 'string' } },
         relationshipAnchors: { type: 'array', items: { type: 'string' } },
         styleCues: { type: 'array', items: { type: 'string' } },
@@ -85,7 +99,15 @@ function pickText(...values: unknown[]): string {
     return '';
 }
 
-function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary | null {
+function pickTexts(record: Record<string, unknown> | null | undefined, keys: string[], limit: number): string[] {
+    return uniqueTexts(limit, ...keys.map((key: string): unknown[] => toStringArray(record?.[key], limit)));
+}
+
+function filterTexts(limit: number, values: string[], pattern: RegExp): string[] {
+    return uniqueTexts(limit, values.filter((item: string): boolean => pattern.test(item)));
+}
+
+export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
     }
@@ -93,7 +115,15 @@ function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary |
     const direct = value as Record<string, unknown>;
     const directRoleSummary = normalizeText(direct.roleSummary);
     const directWorldSummary = normalizeText(direct.worldSummary);
-    if (directRoleSummary || directWorldSummary || Array.isArray(direct.identityFacts) || Array.isArray(direct.worldRules)) {
+    if (
+        directRoleSummary
+        || directWorldSummary
+        || Array.isArray(direct.identityFacts)
+        || Array.isArray(direct.worldRules)
+        || Array.isArray(direct.nations)
+        || Array.isArray(direct.regions)
+        || Array.isArray(direct.factions)
+    ) {
         return {
             roleSummary: directRoleSummary,
             worldSummary: directWorldSummary,
@@ -102,6 +132,13 @@ function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary |
             hardConstraints: toStringArray(direct.hardConstraints, 12),
             locations: toStringArray(direct.locations, 12),
             entities: toStringArray(direct.entities, 12),
+            nations: toStringArray(direct.nations, 12),
+            regions: toStringArray(direct.regions, 12),
+            factions: toStringArray(direct.factions, 12),
+            historicalEvents: toStringArray(direct.historicalEvents, 12),
+            dangers: toStringArray(direct.dangers, 12),
+            characterGoals: toStringArray(direct.characterGoals, 8),
+            relationshipFacts: toStringArray(direct.relationshipFacts, 8),
             catchphrases: toStringArray(direct.catchphrases, 8),
             relationshipAnchors: toStringArray(direct.relationshipAnchors, 8),
             styleCues: toStringArray(direct.styleCues, 10),
@@ -152,6 +189,38 @@ function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary |
         )
         : [];
 
+    const goalTexts = uniqueTexts(
+        8,
+        toStringArray(characterSummary?.goals, 6),
+        filterTexts(8, seedTexts, /目标|想要|必须|计划|打算|任务|goal|objective|intent|mission|plan/i),
+    );
+    const nationTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['nations', 'polities', 'countries', 'kingdoms'], 8),
+        filterTexts(12, seedTexts, /国家|政体|王国|帝国|联邦|共和国|王朝|nation|country|kingdom|empire|republic|federation|realm/i),
+    );
+    const regionTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['regions', 'areas', 'territories', 'provinces'], 8),
+        filterTexts(12, seedTexts, /区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领|region|area|province|territory|continent|frontier/i),
+    );
+    const factionTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['factions', 'organizations', 'groups'], 8),
+        filterTexts(12, seedTexts, /组织|阵营|派系|公会|教团|军团|学派|议会|协会|结社|faction|guild|order|clan|alliance|council|union/i),
+    );
+    const historyTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['historical_events', 'historicalEvents', 'history'], 8),
+        filterTexts(12, seedTexts, /历史|往事|旧日|起源|战争|历史事件|history|origin|past|war/i),
+    );
+    const dangerTexts = uniqueTexts(
+        12,
+        pickTexts(worldSummary, ['threats', 'dangers', 'conflicts'], 8),
+        filterTexts(12, seedTexts, /危险|威胁|风险|灾难|危机|danger|threat|risk|crisis/i),
+    );
+    const relationshipFacts = uniqueTexts(8, relationshipAnchors);
+
     return {
         roleSummary: roleSummaryParts.join('；'),
         worldSummary: worldSummaryParts.join('；'),
@@ -159,7 +228,14 @@ function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSummary |
         worldRules: uniqueTexts(16, seedTexts, toStringArray(worldSummary?.factions, 8)),
         hardConstraints: uniqueTexts(12, seedTexts),
         locations: uniqueTexts(12, toStringArray(worldSummary?.key_locations ?? worldSummary?.keyLocations, 8)),
-        entities: uniqueTexts(12, toStringArray(worldSummary?.factions, 8)),
+        entities: uniqueTexts(12, toStringArray(worldSummary?.factions, 8), factionTexts, nationTexts),
+        nations: nationTexts,
+        regions: regionTexts,
+        factions: factionTexts,
+        historicalEvents: historyTexts,
+        dangers: dangerTexts,
+        characterGoals: goalTexts,
+        relationshipFacts,
         catchphrases: [],
         relationshipAnchors,
         styleCues: uniqueTexts(10, [pickText(worldSummary?.tone_style, worldSummary?.toneStyle)]),
@@ -214,7 +290,7 @@ function buildPromptPayload(seed: ChatSemanticSeed): string {
     ].join('\n');
 }
 
-function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSummary): ChatSemanticSeed {
+export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSummary): ChatSemanticSeed {
     const roleSummary = normalizeText(summary.roleSummary);
     const worldSummary = normalizeText(summary.worldSummary);
     const aiSummary = {
@@ -225,6 +301,13 @@ function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSummary):
         hardConstraints: uniqueTexts(12, summary.hardConstraints),
         locations: uniqueTexts(12, summary.locations),
         entities: uniqueTexts(12, summary.entities),
+        nations: uniqueTexts(12, summary.nations),
+        regions: uniqueTexts(12, summary.regions),
+        factions: uniqueTexts(12, summary.factions),
+        historicalEvents: uniqueTexts(12, summary.historicalEvents),
+        dangers: uniqueTexts(12, summary.dangers),
+        characterGoals: uniqueTexts(8, summary.characterGoals),
+        relationshipFacts: uniqueTexts(8, summary.relationshipFacts),
         catchphrases: uniqueTexts(8, summary.catchphrases),
         relationshipAnchors: uniqueTexts(8, summary.relationshipAnchors),
         styleCues: uniqueTexts(10, summary.styleCues),
@@ -239,14 +322,14 @@ function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSummary):
             ...seed.identitySeed,
             identity: uniqueTexts(16, roleSummary ? [roleSummary] : [], aiSummary.identityFacts, seed.identitySeed.identity),
             catchphrases: uniqueTexts(8, aiSummary.catchphrases, seed.identitySeed.catchphrases),
-            relationshipAnchors: uniqueTexts(8, aiSummary.relationshipAnchors, seed.identitySeed.relationshipAnchors),
+            relationshipAnchors: uniqueTexts(8, aiSummary.relationshipAnchors, aiSummary.relationshipFacts, seed.identitySeed.relationshipAnchors),
         },
         worldSeed: {
             ...seed.worldSeed,
-            locations: uniqueTexts(12, aiSummary.locations, seed.worldSeed.locations),
+            locations: uniqueTexts(12, aiSummary.locations, aiSummary.regions, aiSummary.nations, seed.worldSeed.locations),
             rules: uniqueTexts(16, worldSummary ? [worldSummary] : [], aiSummary.worldRules, seed.worldSeed.rules),
             hardConstraints: uniqueTexts(12, aiSummary.hardConstraints, seed.worldSeed.hardConstraints),
-            entities: uniqueTexts(12, aiSummary.entities, seed.worldSeed.entities),
+            entities: uniqueTexts(12, aiSummary.entities, aiSummary.factions, aiSummary.nations, seed.worldSeed.entities),
         },
         styleSeed: {
             ...seed.styleSeed,
@@ -280,7 +363,7 @@ export async function enhanceSemanticSeedWithAiWithOptions(
         '只输出符合 schema 的 JSON，不要输出额外说明。',
         '所有自然语言内容使用简体中文。',
         '内容要简洁、可复用、避免编造；如果资料里没有，就返回空字符串或空数组。',
-        '严格使用以下 JSON 键名：roleSummary, worldSummary, identityFacts, worldRules, hardConstraints, locations, entities, catchphrases, relationshipAnchors, styleCues。',
+        '严格使用以下 JSON 键名：roleSummary, worldSummary, identityFacts, worldRules, hardConstraints, locations, entities, nations, regions, factions, historicalEvents, dangers, characterGoals, relationshipFacts, catchphrases, relationshipAnchors, styleCues。',
         '不要返回 character_summary、world_summary、seed_key_entries 或任何其他替代键名。',
     ].join('\n');
 

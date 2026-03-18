@@ -20,6 +20,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "src/**/*.d.ts",
     "../_Components/css.d.ts",
     "../SDK/css.d.ts"
   ],

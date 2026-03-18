@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
     applyCandidateThresholdBias,
+    buildPerActorRetentionMap,
     buildLifecycleState,
     buildScoredMemoryCandidate,
     buildSimpleMemoryPersona,
+    computeActorRetentionState,
     inferPersonaMemoryProfile,
     inferPersonaMemoryProfiles,
     resolveInjectedMemoryTone,
@@ -312,6 +314,7 @@ describe('memory-intelligence', (): void => {
         expect(matched.score).toBeGreaterThan(plain.score);
         expect(buildSimpleMemoryPersona(persona).relationshipFocus === 'medium' || buildSimpleMemoryPersona(persona).relationshipFocus === 'high').toBe(true);
     });
+
     it('会根据调参画像收紧或放宽候选阈值', (): void => {
         const strictThreshold = applyCandidateThresholdBias(0.5, {
             ...DEFAULT_MEMORY_TUNING_PROFILE,
@@ -393,5 +396,156 @@ describe('memory-intelligence', (): void => {
         expect(softProtected.score).toBeGreaterThan(strictProtected.score);
         expect(resolveInjectedMemoryTone(distortedLifecycle, { ...persona, allowDistortion: true })).toBe('possible_misremember');
         expect(resolveInjectedMemoryTone(distortedLifecycle, { ...persona, allowDistortion: false })).not.toBe('possible_misremember');
+    });
+
+    it('会为同一条记录生成按角色区分的遗忘指标', (): void => {
+        const ownerProfile = inferPersonaMemoryProfile(
+            null,
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                memoryStrength: 'high',
+                stylePreference: 'story',
+                extractStrategy: 'facts_relations_world',
+            },
+            DEFAULT_GROUP_MEMORY,
+            'alice',
+        );
+        const observerProfile = inferPersonaMemoryProfile(
+            null,
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                memoryStrength: 'low',
+                stylePreference: 'qa',
+                extractStrategy: 'facts_only',
+            },
+            DEFAULT_GROUP_MEMORY,
+            'bob',
+        );
+        const lifecycle = buildLifecycleState(
+            'fact:goal',
+            'fact',
+            0.48,
+            0.44,
+            ownerProfile,
+            Date.now() - 1000 * 60 * 60 * 24 * 48,
+            0,
+            0,
+            'attachment',
+            'trust',
+        );
+        lifecycle.ownerActorKey = 'alice';
+        lifecycle.memoryType = 'relationship';
+        lifecycle.memorySubtype = 'goal';
+        lifecycle.sourceScope = 'self';
+        lifecycle.importance = 0.52;
+
+        const perActor = buildPerActorRetentionMap(
+            lifecycle,
+            {
+                recordKey: 'fact:goal',
+                recordKind: 'fact',
+                text: 'Alice 仍然记得自己要保护 Bob 的目标。',
+                fallbackOwnerActorKey: 'alice',
+                current: lifecycle,
+            },
+            {
+                alice: ownerProfile,
+                bob: observerProfile,
+            },
+        );
+
+        expect(perActor.alice).toBeDefined();
+        expect(perActor.bob).toBeDefined();
+        expect(perActor.alice.forgetProbability).toBeLessThan(perActor.bob.forgetProbability);
+        expect(perActor.alice.retentionBias).toBeLessThan(perActor.bob.retentionBias);
+    });
+
+    it('会在角色侧对已遗忘或高遗忘风险记忆进行召回抑制', (): void => {
+        const persona = inferPersonaMemoryProfile(
+            null,
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                memoryStrength: 'medium',
+                stylePreference: 'story',
+            },
+            DEFAULT_GROUP_MEMORY,
+        );
+        const lifecycle = buildLifecycleState(
+            'summary:forgotten',
+            'summary',
+            0.74,
+            0.68,
+            persona,
+            Date.now() - 1000 * 60 * 60 * 24 * 90,
+            0,
+            0,
+            'fear',
+            'conflict',
+        );
+        lifecycle.forgotten = true;
+        lifecycle.forgetProbability = 0.93;
+
+        const forgottenScore = scoreRecallCandidate({
+            text: '她依稀记得那场背叛。',
+            keywords: ['背叛'],
+            confidence: 0.9,
+            recencyScore: 0.9,
+            lifecycle,
+            profile: persona,
+            relationshipWeight: 0.8,
+            emotionWeight: 1,
+            continuityWeight: 0.8,
+            privacyPenalty: 0,
+            conflictPenalty: 0,
+        });
+
+        expect(forgottenScore.score).toBeLessThanOrEqual(0.05);
+        expect(forgottenScore.reasonCodes).toContain('forgotten_memory_marked');
+        expect(forgottenScore.tone).toBe('possible_misremember');
+    });
+
+    it('会限制 importance 对遗忘率的抵消，避免变成永久记忆', (): void => {
+        const persona = inferPersonaMemoryProfile(
+            null,
+            {
+                ...DEFAULT_CHAT_PROFILE,
+                memoryStrength: 'high',
+                stylePreference: 'story',
+            },
+            DEFAULT_GROUP_MEMORY,
+            'alice',
+        );
+        const lifecycle = buildLifecycleState(
+            'fact:rumor',
+            'fact',
+            0.52,
+            0.48,
+            persona,
+            Date.now() - 1000 * 60 * 60 * 24 * 30,
+            0,
+            0,
+            '',
+            '',
+        );
+        lifecycle.ownerActorKey = 'alice';
+        lifecycle.memoryType = 'event';
+        lifecycle.memorySubtype = 'rumor';
+        lifecycle.sourceScope = 'group';
+        lifecycle.importance = 1;
+
+        const actorState = computeActorRetentionState(
+            lifecycle,
+            {
+                recordKey: 'fact:rumor',
+                recordKind: 'fact',
+                text: '这是一个容易失真的流言。',
+                fallbackOwnerActorKey: 'alice',
+                current: lifecycle,
+            },
+            'alice',
+            persona,
+        );
+
+        expect(actorState.forgetProbability).toBeGreaterThan(0);
     });
 });

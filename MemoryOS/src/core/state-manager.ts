@@ -1,80 +1,9 @@
 import { db, type DBWorldState } from '../db/db';
-import type { StructuredWorldStateEntry, WorldStateGroupingResult, WorldStateNodeValue, WorldStateScopeType, WorldStateType } from '../types';
+import type { StructuredWorldStateEntry, WorldStateGroupingResult, WorldStateNodeValue } from '../types';
+import { buildWorldStateNodeFromRaw, normalizeWorldStateText } from './world-state-node';
 
-function normalizeStateText(value: unknown): string {
-    return String(value ?? '').replace(/\s+/g, ' ').trim();
-}
-
-function inferWorldStateScopeType(path: string, text: string): WorldStateScopeType {
-    const normalizedPath = normalizeStateText(path).toLowerCase();
-    const normalizedText = normalizeStateText(text).toLowerCase();
-    if (/^global\//.test(normalizedPath) || /global|world\//.test(normalizedPath)) return 'global';
-    if (/^region\//.test(normalizedPath) || /region|区域/.test(normalizedText)) return 'region';
-    if (/^city\//.test(normalizedPath) || /city|城市/.test(normalizedText)) return 'city';
-    if (/^location\//.test(normalizedPath) || /location|地点|场所/.test(normalizedText)) return 'location';
-    if (/^faction\//.test(normalizedPath) || /faction|派系|阵营|组织/.test(normalizedText)) return 'faction';
-    if (/^item\//.test(normalizedPath) || /item|物品|装备|道具|遗物/.test(normalizedText)) return 'item';
-    if (/^character\//.test(normalizedPath) || /character|角色|人物/.test(normalizedText)) return 'character';
-    return 'scene';
-}
-
-function inferWorldStateType(path: string, text: string): WorldStateType {
-    const normalizedPath = normalizeStateText(path).toLowerCase();
-    const normalizedText = normalizeStateText(text).toLowerCase();
-    if (/rule|规则|law|法则/.test(normalizedPath + ' ' + normalizedText)) return 'rule';
-    if (/constraint|限制|禁忌|不能|不可/.test(normalizedPath + ' ' + normalizedText)) return 'constraint';
-    if (/history|历史|往事|起源/.test(normalizedPath + ' ' + normalizedText)) return 'history';
-    if (/capability|能力|技能|效果/.test(normalizedPath + ' ' + normalizedText)) return 'capability';
-    if (/ownership|归属|拥有|持有/.test(normalizedPath + ' ' + normalizedText)) return 'ownership';
-    if (/culture|文化|习俗|风俗/.test(normalizedPath + ' ' + normalizedText)) return 'culture';
-    if (/danger|危险|风险|威胁/.test(normalizedPath + ' ' + normalizedText)) return 'danger';
-    if (/relationship|关系|牵连|钩子/.test(normalizedPath + ' ' + normalizedText)) return 'relationship_hook';
-    return 'status';
-}
-
-function extractWorldStateKeywords(path: string, text: string, value: unknown): string[] {
-    const source = `${normalizeStateText(path)} ${normalizeStateText(text)} ${typeof value === 'string' ? value : JSON.stringify(value ?? '')}`.toLowerCase();
-    return Array.from(new Set(source.split(/[^a-z0-9\u4e00-\u9fa5]+/).map((item: string): string => item.trim()).filter((item: string): boolean => item.length >= 2))).slice(0, 16);
-}
-
-function buildWorldStateNodeValue(record: DBWorldState): WorldStateNodeValue {
-    const rawValue = record.value as Record<string, unknown> | string | number | boolean | null | undefined;
-    const rawObject = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)
-        ? rawValue as Record<string, unknown>
-        : null;
-    const rawText = typeof rawValue === 'string'
-        ? rawValue
-        : rawObject
-            ? JSON.stringify(rawObject)
-            : String(rawValue ?? '');
-    const scopeType = (rawObject?.scopeType as WorldStateScopeType | undefined) ?? inferWorldStateScopeType(record.path, rawText);
-    const stateType = (rawObject?.stateType as WorldStateType | undefined) ?? inferWorldStateType(record.path, rawText);
-    const keywords = Array.isArray(rawObject?.keywords)
-        ? rawObject!.keywords.map((item: unknown): string => normalizeStateText(item)).filter(Boolean).slice(0, 16)
-        : extractWorldStateKeywords(record.path, rawText, rawValue);
-    const tags = Array.isArray(rawObject?.tags)
-        ? rawObject!.tags.map((item: unknown): string => normalizeStateText(item)).filter(Boolean).slice(0, 16)
-        : record.path.split('/').map((item: string): string => normalizeStateText(item)).filter(Boolean).slice(0, 8);
-    const title = normalizeStateText(rawObject?.title) || record.path.split('/').filter(Boolean).slice(-1)[0] || '未命名状态';
-    const summary = normalizeStateText(rawObject?.summary)
-        || (typeof rawValue === 'string' ? normalizeStateText(rawValue) : normalizeStateText(JSON.stringify(rawValue ?? '')))
-        || '暂无说明';
-    return {
-        title,
-        summary,
-        scopeType,
-        stateType,
-        subjectId: normalizeStateText(rawObject?.subjectId) || undefined,
-        regionId: normalizeStateText(rawObject?.regionId) || undefined,
-        cityId: normalizeStateText(rawObject?.cityId) || undefined,
-        locationId: normalizeStateText(rawObject?.locationId) || undefined,
-        itemId: normalizeStateText(rawObject?.itemId) || undefined,
-        keywords,
-        tags,
-        confidence: Number(rawObject?.confidence ?? 0) || undefined,
-        sourceRefs: Array.isArray(rawObject?.sourceRefs) ? rawObject!.sourceRefs.map((item: unknown): string => normalizeStateText(item)).filter(Boolean).slice(0, 24) : undefined,
-        updatedAt: Math.max(0, Number(rawObject?.updatedAt ?? record.updatedAt ?? 0) || 0),
-    };
+export function buildWorldStateNodeValue(record: DBWorldState): WorldStateNodeValue {
+    return buildWorldStateNodeFromRaw(record.path, record.value, record.updatedAt);
 }
 
 /**
@@ -180,8 +109,8 @@ export class StateManager {
     async queryGrouped(prefix: string = ''): Promise<WorldStateGroupingResult> {
         const structured = await this.queryStructured(prefix);
         return structured.reduce<WorldStateGroupingResult>((result: WorldStateGroupingResult, entry: StructuredWorldStateEntry): WorldStateGroupingResult => {
-            const scopeKey = normalizeStateText(entry.node.scopeType) || 'scene';
-            const typeKey = normalizeStateText(entry.node.stateType) || 'status';
+            const scopeKey = normalizeWorldStateText(entry.node.scopeType) || 'unclassified';
+            const typeKey = normalizeWorldStateText(entry.node.stateType) || 'status';
             result[scopeKey] = result[scopeKey] ?? {};
             result[scopeKey][typeKey] = result[scopeKey][typeKey] ?? [];
             result[scopeKey][typeKey].push(entry);

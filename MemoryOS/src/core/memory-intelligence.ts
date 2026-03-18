@@ -8,6 +8,8 @@ import type {
     MemoryCandidate,
     MemoryCandidateKind,
     MemoryDecayStage,
+    MemoryActorRetentionMap,
+    MemoryActorRetentionState,
     MemoryLayer,
     MemoryLifecycleState,
     MemorySourceScope,
@@ -615,6 +617,166 @@ function getSubtypeAgeWindowDays(subtype: MemorySubtype): number {
     }
 }
 
+function computeDecayStageForProfile(
+    salience: number,
+    strength: number,
+    profile: PersonaMemoryProfile,
+    updatedAt: number,
+    rehearsalCount: number,
+    lastRecalledAt: number,
+    now: number,
+): MemoryDecayStage {
+    const referenceTs: number = Math.max(Number(updatedAt ?? 0), Number(lastRecalledAt ?? 0));
+    const ageDays: number = referenceTs > 0 ? Math.max(0, (now - referenceTs) / (1000 * 60 * 60 * 24)) : 999;
+    const blurThreshold: number = 5 + (1 - profile.forgettingSpeed) * 16 + rehearsalCount * 3;
+    const distortedThreshold: number = blurThreshold + 6 + salience * 5 + strength * 4;
+    return ageDays >= distortedThreshold
+        ? 'distorted'
+        : ageDays >= blurThreshold
+            ? 'blur'
+            : 'clear';
+}
+
+function computeActorRetentionBias(
+    lifecycle: MemoryLifecycleState,
+    actorKey: string,
+    profile: PersonaMemoryProfile,
+): number {
+    const normalizedActorKey = normalizeMemoryText(actorKey);
+    const normalizedOwnerActorKey = normalizeMemoryText(lifecycle.ownerActorKey);
+    let bias = 0;
+    if (normalizedActorKey && normalizedOwnerActorKey && normalizedActorKey === normalizedOwnerActorKey) {
+        bias -= 0.18;
+        if (lifecycle.sourceScope === 'self') {
+            bias -= 0.08;
+        }
+        bias -= profile.selfNarrativeBias * 0.06;
+    }
+    if (lifecycle.memoryType === 'relationship' || lifecycle.relationScope) {
+        bias -= profile.relationshipSensitivity * 0.06;
+    }
+    if (lifecycle.emotionTag) {
+        bias -= profile.emotionalBias * 0.04;
+    }
+    if (lifecycle.memoryType === 'world' && normalizedActorKey && normalizedOwnerActorKey && normalizedActorKey !== normalizedOwnerActorKey) {
+        bias += 0.04;
+    }
+    return Math.max(-0.3, Math.min(0.2, bias));
+}
+
+export function computeActorRetentionState(
+    lifecycle: MemoryLifecycleState,
+    input: OwnedMemoryInferenceInput,
+    actorKey: string,
+    profile: PersonaMemoryProfile,
+    current: MemoryActorRetentionState | null = null,
+    now: number = Date.now(),
+): MemoryActorRetentionState {
+    const normalizedActorKey = normalizeMemoryText(actorKey);
+    const inferredSubtype: MemorySubtype = input.current?.memorySubtype ?? lifecycle.memorySubtype ?? inferMemorySubtypeFromText(input);
+    const inferredType: MemoryType = input.current?.memoryType ?? lifecycle.memoryType ?? inferMemoryTypeFromSubtype(inferredSubtype);
+    const rehearsalCount: number = Math.max(0, Number(current?.rehearsalCount ?? lifecycle.rehearsalCount ?? 0) || 0);
+    const lastRecalledAt: number = Math.max(0, Number(current?.lastRecalledAt ?? lifecycle.lastRecalledAt ?? 0) || 0);
+    const stage = computeDecayStageForProfile(
+        clamp01(Number(lifecycle.salience ?? 0)),
+        clamp01(Number(lifecycle.strength ?? 0)),
+        profile,
+        Math.max(0, Number(lifecycle.updatedAt ?? 0) || 0),
+        rehearsalCount,
+        lastRecalledAt,
+        now,
+    );
+    const importance: number = clamp01(Number(
+        input.current?.importance
+        ?? lifecycle.importance
+        ?? inferImportance(inferredType, inferredSubtype, lifecycle.salience, lifecycle.strength, rehearsalCount),
+    ));
+    const referenceTs: number = Math.max(Number(lifecycle.updatedAt ?? 0), Number(lastRecalledAt ?? 0));
+    const ageDays: number = referenceTs > 0 ? Math.max(0, (now - referenceTs) / (1000 * 60 * 60 * 24)) : 999;
+    const ageFactor: number = clamp01(ageDays / getSubtypeAgeWindowDays(inferredSubtype));
+    const baseForget: number = getSubtypeForgettingBase(inferredSubtype);
+    const stagePenalty: number = stage === 'distorted' ? 0.22 : stage === 'blur' ? 0.1 : 0;
+    const rehearsalProtection: number = Math.min(0.24, rehearsalCount * 0.035);
+    const relationProtection: number = inferredType === 'relationship' ? profile.relationshipSensitivity * 0.16 : 0;
+    const emotionProtection: number = lifecycle.emotionTag ? profile.emotionalBias * 0.12 : 0;
+    const knowledgeProtection: number = inferredType === 'world' || inferredType === 'identity'
+        ? profile.factMemory * 0.16
+        : inferredType === 'event'
+            ? profile.eventMemory * 0.12
+            : 0;
+    const reinforcementProtection: number = Math.min(0.18, (lifecycle.reinforcedByEventIds?.length ?? 0) * 0.06);
+    const invalidationPenalty: number = Math.min(0.24, (lifecycle.invalidatedByEventIds?.length ?? 0) * 0.08);
+    const importanceProtection: number = Math.min(importance * 0.22, baseForget * 0.6);
+    const retentionBias = computeActorRetentionBias(lifecycle, normalizedActorKey, profile);
+    const forgetProbability: number = clamp01(
+        baseForget
+        + ageFactor * 0.34
+        + profile.forgettingSpeed * 0.24
+        + stagePenalty
+        + invalidationPenalty
+        + retentionBias
+        - importanceProtection
+        - lifecycle.strength * 0.16
+        - lifecycle.salience * 0.12
+        - rehearsalProtection
+        - relationProtection
+        - emotionProtection
+        - knowledgeProtection
+        - reinforcementProtection,
+    );
+    const previouslyForgotten: boolean = current?.forgotten === true;
+    const canRecover: boolean = previouslyForgotten && stage === 'clear' && rehearsalCount > 0 && forgetProbability < 0.55;
+    const forgotten: boolean = canRecover
+        ? false
+        : previouslyForgotten
+            ? true
+            : forgetProbability >= 0.86 || (forgetProbability >= 0.72 && stage === 'distorted' && ageFactor >= 0.8);
+    const forgottenReasonCodes: string[] = forgotten
+        ? [
+            forgetProbability >= 0.86 ? 'forget_probability_high' : '',
+            stage === 'distorted' ? 'lifecycle_distorted' : stage === 'blur' ? 'lifecycle_blur' : '',
+            ageFactor >= 0.8 ? 'age_decay_high' : '',
+            ['minor_event', 'temporary_status', 'rumor'].includes(inferredSubtype) ? `subtype_${inferredSubtype}` : '',
+        ].filter(Boolean)
+        : [];
+    return {
+        actorKey: normalizedActorKey,
+        stage,
+        forgetProbability,
+        forgotten,
+        forgottenAt: forgotten ? (current?.forgottenAt ?? now) : undefined,
+        forgottenReasonCodes,
+        rehearsalCount,
+        lastRecalledAt,
+        retentionBias,
+        confidence: clamp01(1 - forgetProbability),
+        updatedAt: now,
+    };
+}
+
+export function buildPerActorRetentionMap(
+    lifecycle: MemoryLifecycleState,
+    input: OwnedMemoryInferenceInput,
+    profiles: Record<string, PersonaMemoryProfile> | null | undefined,
+    now: number = Date.now(),
+): MemoryActorRetentionMap {
+    const entries = Object.entries(profiles ?? {}).filter(([actorKey, profile]: [string, PersonaMemoryProfile]): boolean => Boolean(normalizeMemoryText(actorKey)) && Boolean(profile));
+    if (entries.length <= 0) {
+        return lifecycle.perActorMetrics ?? {};
+    }
+    return entries.reduce<MemoryActorRetentionMap>((result: MemoryActorRetentionMap, [actorKey, profile]: [string, PersonaMemoryProfile]): MemoryActorRetentionMap => {
+        result[actorKey] = computeActorRetentionState(
+            lifecycle,
+            input,
+            actorKey,
+            profile,
+            lifecycle.perActorMetrics?.[actorKey] ?? null,
+            now,
+        );
+        return result;
+    }, {});
+}
+
 export function enrichLifecycleOwnedState(
     lifecycle: MemoryLifecycleState,
     input: OwnedMemoryInferenceInput,
@@ -652,13 +814,14 @@ export function enrichLifecycleOwnedState(
             : 0;
     const reinforcementProtection: number = Math.min(0.18, (input.current?.reinforcedByEventIds?.length ?? lifecycle.reinforcedByEventIds?.length ?? 0) * 0.06);
     const invalidationPenalty: number = Math.min(0.24, (input.current?.invalidatedByEventIds?.length ?? lifecycle.invalidatedByEventIds?.length ?? 0) * 0.08);
+    const importanceProtection: number = Math.min(importance * 0.22, baseForget * 0.6);
     const forgetProbability: number = clamp01(
         baseForget
         + ageFactor * 0.34
         + profile.forgettingSpeed * 0.24
         + stagePenalty
         + invalidationPenalty
-        - importance * 0.22
+        - importanceProtection
         - lifecycle.strength * 0.16
         - lifecycle.salience * 0.12
         - rehearsalProtection
@@ -736,15 +899,15 @@ export function buildLifecycleState(
     relationScope: string,
 ): MemoryLifecycleState {
     const now: number = Date.now();
-    const referenceTs: number = Math.max(Number(updatedAt ?? 0), Number(lastRecalledAt ?? 0));
-    const ageDays: number = referenceTs > 0 ? Math.max(0, (now - referenceTs) / (1000 * 60 * 60 * 24)) : 999;
-    const blurThreshold: number = 5 + (1 - profile.forgettingSpeed) * 16 + rehearsalCount * 3;
-    const distortedThreshold: number = blurThreshold + 6 + salience * 5 + strength * 4;
-    const stage: MemoryDecayStage = ageDays >= distortedThreshold
-        ? 'distorted'
-        : ageDays >= blurThreshold
-            ? 'blur'
-            : 'clear';
+    const stage: MemoryDecayStage = computeDecayStageForProfile(
+        clamp01(salience),
+        clamp01(strength),
+        profile,
+        updatedAt,
+        rehearsalCount,
+        lastRecalledAt,
+        now,
+    );
     const distortionRisk: number = clamp01(
         profile.distortionTendency * 0.6
         + (stage === 'distorted' ? 0.3 : stage === 'blur' ? 0.14 : 0)
@@ -774,6 +937,7 @@ export function buildLifecycleState(
         distortionRisk,
         emotionTag: normalizeMemoryText(emotionTag),
         relationScope: normalizeMemoryText(relationScope),
+        perActorMetrics: {},
         updatedAt: Math.max(0, Number(updatedAt ?? now)),
     };
 }
@@ -792,6 +956,12 @@ export function resolveInjectedMemoryTone(
 ): InjectedMemoryTone {
     if (!lifecycle) {
         return 'stable_fact';
+    }
+    if (lifecycle.forgotten === true) {
+        return 'possible_misremember';
+    }
+    if ((lifecycle.forgetProbability ?? 0) >= 0.72 && lifecycle.stage !== 'clear') {
+        return 'possible_misremember';
     }
     if (lifecycle.stage === 'distorted' && profile.allowDistortion) {
         return 'possible_misremember';
@@ -813,6 +983,13 @@ export function resolveInjectedMemoryTone(
  *   RecallScoreResult：召回评分结果。
  */
 export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult {
+    if (input.lifecycle?.forgotten === true) {
+        return {
+            score: 0.05,
+            tone: 'possible_misremember',
+            reasonCodes: ['forgotten_memory_marked'],
+        };
+    }
     const normalizedText: string = normalizeMemoryText(input.text).toLowerCase();
     const keywordHits: number = input.keywords.reduce((sum: number, keyword: string): number => {
         const normalizedKeyword: string = normalizeMemoryText(keyword).toLowerCase();
@@ -836,7 +1013,10 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
     const emotionBonus: number = input.emotionWeight * emotionBias * input.profile.emotionalBias * 0.16;
     const continuityBonus: number = input.continuityWeight * continuityBias * 0.14;
     const keywordBonus: number = Math.min(0.32, keywordHits * 0.08);
-    const score: number = clamp01(
+    const forgetRiskPenaltyFactor: number = (input.lifecycle?.forgetProbability ?? 0) >= 0.75
+        ? (1 - clamp01(input.lifecycle?.forgetProbability ?? 0))
+        : 1;
+    const score: number = clamp01(clamp01(
         input.confidence * 0.2
         + input.recencyScore * recencyBias * 0.16
         + keywordBonus
@@ -846,7 +1026,7 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
         - lifecyclePenalty * distortionProtectionBias
         - input.privacyPenalty * input.profile.privacyGuard * 0.12
         - input.conflictPenalty * distortionProtectionBias * 0.18,
-    );
+    ) * forgetRiskPenaltyFactor);
     const reasonCodes: string[] = [];
     if (keywordHits > 0) {
         reasonCodes.push('keyword_hit');
@@ -865,6 +1045,9 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
     }
     if (input.conflictPenalty > 0) {
         reasonCodes.push('conflict_penalty');
+    }
+    if ((input.lifecycle?.forgetProbability ?? 0) >= 0.75) {
+        reasonCodes.push('forget_risk_penalty');
     }
     return {
         score,

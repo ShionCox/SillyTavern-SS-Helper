@@ -4,6 +4,7 @@ import { logger, toast } from '../index';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
+import WORLD_INFO_HERO_ICON_URL from '../../../assets/images/icon/woridifo.png';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
@@ -18,6 +19,8 @@ import type {
     LogicTableStatus,
     LogicTableSummary,
     LogicTableViewModel,
+    MemoryActorRetentionMap,
+    MemoryActorRetentionState,
     MemoryLifecycleState,
     OwnedMemoryState,
     PersonaMemoryProfile,
@@ -28,7 +31,21 @@ import type {
 } from '../../../SDK/stx';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
-type ViewMode = 'maintenance' | 'memory' | 'diagnostics' | 'raw';
+type ViewMode = 'world' | 'maintenance' | 'memory' | 'diagnostics' | 'raw';
+type VisibleRawTableName = Exclude<RawTableName, 'world_state'>;
+
+interface RecordEditorViewMeta {
+    label: string;
+    icon: string;
+    title: string;
+    subtitle: string;
+    tip: string;
+}
+
+interface RecordEditorRawTabMeta {
+    label: string;
+    tip: string;
+}
 
 interface PendingRawUpdate {
     id: string;
@@ -42,6 +59,703 @@ interface CurrentSort {
 }
 
 type RawRecord = Record<string, unknown>;
+
+const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
+    world: {
+        label: '世界状态',
+        icon: 'fa-solid fa-scroll-old',
+        title: '世界状态总览',
+        subtitle: '按城市、地点、规则与局势拆分显示，只呈现已经识别并生效的内容。',
+        tip: '按结构化分类查看当前聊天的世界状态，包括城市、地点、规则与局势变化。',
+    },
+    maintenance: {
+        label: '逻辑维护',
+        icon: 'fa-solid fa-sword',
+        title: '逻辑维护工坊',
+        subtitle: '集中处理逻辑表、候选行、别名、合并和隐藏项。',
+        tip: '维护逻辑表结构，处理候选、别名、合并、恢复与隐藏项。',
+    },
+    memory: {
+        label: '角色记忆',
+        icon: 'fa-solid fa-user-helmet-safety',
+        title: '角色记忆面板',
+        subtitle: '用 RPG 角色卡方式查看记忆、遗忘、重大事件影响和角色画像。',
+        tip: '查看每个角色的记忆状态、遗忘阶段、主视角与重大事件影响。',
+    },
+    diagnostics: {
+        label: '系统诊断',
+        icon: 'fa-solid fa-heart-pulse',
+        title: '系统诊断终端',
+        subtitle: '汇总结构风险、遗忘分布、角色画像健康度与修复入口。',
+        tip: '查看结构风险、维护建议、遗忘热度和角色画像健康状况。',
+    },
+    raw: {
+        label: '原始数据表',
+        icon: 'fa-solid fa-table-list',
+        title: '原始数据表台',
+        subtitle: '直接查看底层事件、事实、摘要和审计表，并支持内联编辑。',
+        tip: '用于高级调试和底层编辑，直接查看原始事件、事实、摘要与审计数据。',
+    },
+};
+
+const RECORD_EDITOR_RAW_TAB_META: Record<VisibleRawTableName, RecordEditorRawTabMeta> = {
+    events: {
+        label: '事件流',
+        tip: '查看当前聊天的原始事件流，适合核对消息事件、来源与写入顺序。',
+    },
+    facts: {
+        label: '事实表',
+        tip: '查看底层事实记录，包括主题路径、绑定对象与当前值。',
+    },
+    summaries: {
+        label: '摘要集',
+        tip: '查看摘要层原始记录，核对标题、层级、关键词与摘要正文。',
+    },
+    audit: {
+        label: '审计日志',
+        tip: '查看数据层的人工和系统修改痕迹，适合排查谁改了什么。',
+    },
+};
+
+function buildTipAttr(text: string): string {
+    const normalized = String(text ?? '').trim();
+    return normalized ? ` data-tip="${escapeHtml(normalized)}"` : '';
+}
+
+function formatWorldStateAnchorSummary(entry: StructuredWorldStateEntry): string {
+    const parts = [
+        entry.node.subjectId ? `主体：${entry.node.subjectId}` : '',
+        entry.node.regionId ? `区域：${entry.node.regionId}` : '',
+        entry.node.cityId ? `城市：${entry.node.cityId}` : '',
+        entry.node.locationId ? `地点：${entry.node.locationId}` : '',
+        entry.node.itemId ? `物品：${entry.node.itemId}` : '',
+    ].filter(Boolean);
+    return parts.join(' · ') || '未绑定额外锚点';
+}
+
+interface WorldStateSectionColumn<T> {
+    label: string;
+    tip: string;
+    width?: string;
+    cellClassName?: string;
+    render: (item: T) => string;
+}
+
+interface WorldQuestBoardRow {
+    rowKey: string;
+    title: string;
+    kind: string;
+    summary: string;
+    objective: string;
+    relatedActors: string[];
+    sourceLabel: string;
+    statusLabel: string;
+    updatedAt: number;
+}
+
+interface WorldMacroCardViewModel {
+    title: string;
+    iconClass: string;
+    tip: string;
+    className?: string;
+    bodyHtml: string;
+}
+
+function getWorldStateRawObject(entry: StructuredWorldStateEntry): Record<string, unknown> {
+    if (entry.rawValue && typeof entry.rawValue === 'object' && !Array.isArray(entry.rawValue)) {
+        return entry.rawValue as Record<string, unknown>;
+    }
+    return {};
+}
+
+function hasExplicitWorldStateKeywords(entry: StructuredWorldStateEntry): boolean {
+    const raw = getWorldStateRawObject(entry);
+    return Array.isArray(raw.keywords) && raw.keywords.some((item: unknown): boolean => Boolean(String(item ?? '').trim()));
+}
+
+function pickWorldStateText(source: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+        const value = source[key];
+        const text = String(value ?? '').trim();
+        if (text) {
+            return text;
+        }
+    }
+    return '';
+}
+
+function pickWorldStateValue(source: Record<string, unknown>, keys: string[]): unknown {
+    for (const key of keys) {
+        const value = source[key];
+        if (value == null) {
+            continue;
+        }
+        if (typeof value === 'string' && !value.trim()) {
+            continue;
+        }
+        if (Array.isArray(value) && value.length <= 0) {
+            continue;
+        }
+        return value;
+    }
+    return undefined;
+}
+
+function pickWorldStateTextList(source: Record<string, unknown>, keys: string[]): string[] {
+    const values = keys.flatMap((key: string): string[] => {
+        const raw = source[key];
+        if (Array.isArray(raw)) {
+            return raw.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+        }
+        const text = String(raw ?? '').trim();
+        if (!text) {
+            return [];
+        }
+        return text.split(/[、,，/｜|\n]+/).map((item: string): string => item.trim()).filter(Boolean);
+    });
+    return Array.from(new Set(values));
+}
+
+function extractWorldStateListItems(entry: StructuredWorldStateEntry, preferredKeys: string[] = []): string[] {
+    const raw = getWorldStateRawObject(entry);
+    const directKeys = preferredKeys.length > 0
+        ? preferredKeys
+        : ['items', 'entries', 'rules', 'constraints', 'points', 'bullets', 'list', 'content'];
+    const keyedItems = pickWorldStateTextList(raw, directKeys);
+    if (keyedItems.length > 0) {
+        return keyedItems;
+    }
+    if (Array.isArray(entry.rawValue)) {
+        return entry.rawValue.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+    }
+    const summary = String(entry.node.summary ?? '').trim();
+    if (!summary) {
+        return [];
+    }
+    if ((summary.startsWith('[') && summary.endsWith(']')) || (summary.startsWith('{') && summary.endsWith('}'))) {
+        try {
+            const parsed = JSON.parse(summary);
+            if (Array.isArray(parsed)) {
+                return parsed.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+            }
+        } catch {
+            // ignore
+        }
+    }
+    return summary
+        .split(/[；;\n]+/)
+        .map((item: string): string => item.replace(/^[-•·\d.\s]+/, '').trim())
+        .filter((item: string): boolean => item.length >= 2)
+        .slice(0, 8);
+}
+
+function formatWorldStateDisplayTitle(entry: StructuredWorldStateEntry): string {
+    const rawTitle = String(entry.node.title || '').trim();
+    if (!rawTitle) {
+        return buildWorldStateHeadline(entry.path);
+    }
+    const normalized = formatRecordEditorKeyLabel(rawTitle);
+    return normalized || rawTitle;
+}
+
+function buildWorldStateLeadSummary(entry: StructuredWorldStateEntry, fallback?: string): string {
+    const listItems = extractWorldStateListItems(entry);
+    if (listItems.length > 0) {
+        if (listItems.length === 1) {
+            return listItems[0]!;
+        }
+        return `共 ${listItems.length} 条：${listItems.slice(0, 2).join(' / ')}`;
+    }
+    return String(fallback ?? entry.node.summary ?? '').trim() || '暂无说明';
+}
+
+function renderWorldStateCodexList(items: string[], emptyLabel: string = '暂无条目'): string {
+    if (items.length <= 0) {
+        return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return `<ol class="stx-re-world-codex-list">${items.slice(0, 6).map((item: string): string => `<li class="stx-re-world-codex-item">${escapeHtml(item)}</li>`).join('')}</ol>`;
+}
+
+function renderWorldStateKeywordGroup(entry: StructuredWorldStateEntry): string {
+    const keywords = (entry.node.keywords ?? []).filter(Boolean);
+    const tags = (entry.node.tags ?? []).filter(Boolean);
+    const keywordSourceLabel = hasExplicitWorldStateKeywords(entry) ? '来源：结构化结果 / AI 提取' : '来源：系统自动抽词';
+    return `
+        <div class="stx-re-world-keyword-groups">
+            <div class="stx-re-world-keyword-group">
+                <div class="stx-re-world-keyword-group-label">关键词</div>
+                ${renderWorldStatePillList(keywords, '暂无')}
+            </div>
+            <div class="stx-re-world-keyword-group">
+                <div class="stx-re-world-keyword-group-label">路径标签</div>
+                ${renderWorldStatePillList(tags, '暂无')}
+            </div>
+            <div class="stx-re-world-keyword-source">${escapeHtml(keywordSourceLabel)}</div>
+        </div>
+    `;
+}
+
+function renderWorldMacroCard(card: WorldMacroCardViewModel): string {
+    const className = card.className ? ` ${card.className}` : '';
+    return `
+        <div class="stx-re-panel-card stx-re-world-macro-card${className}"${buildTipAttr(card.tip)}>
+            <div class="stx-re-world-section-title"><span>${escapeHtml(card.title)}</span></div>
+            <div class="stx-re-world-macro-body">${card.bodyHtml}</div>
+        </div>
+    `;
+}
+
+function renderWorldStatePillList(items: string[], emptyLabel: string = '暂无'): string {
+    if (items.length <= 0) {
+        return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return `<div class="stx-re-world-pill-list">${items.slice(0, 6).map((item: string): string => `<span class="stx-re-world-pill">${escapeHtml(item)}</span>`).join('')}</div>`;
+}
+
+function renderWorldStateFlagList(items: string[], emptyLabel: string = '暂无'): string {
+    if (items.length <= 0) {
+        return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return `<div class="stx-re-world-pill-list">${items.slice(0, 6).map((item: string): string => `<span class="stx-re-record-flag">${escapeHtml(item)}</span>`).join('')}</div>`;
+}
+
+function renderWorldStateMiniMeta(label: string, value: string, emptyLabel: string = '暂无'): string {
+    return `
+        <div class="stx-re-world-meta-line">
+            <span class="stx-re-world-meta-label">${escapeHtml(label)}</span>
+            <span class="stx-re-world-meta-value">${escapeHtml(value || emptyLabel)}</span>
+        </div>
+    `;
+}
+
+function renderWorldStateFlagMeta(label: string, value: unknown, emptyLabel: string = '暂无'): string {
+    const hasValue = value != null && (!(typeof value === 'string') || Boolean(value.trim()));
+    const contentHtml = hasValue
+        ? renderWorldStateFlagMetaContent(value)
+        : `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
+    return `
+        <div class="stx-re-world-flag-meta-line">
+            <span class="stx-re-record-flag">${escapeHtml(label)}</span>
+            <div class="stx-re-world-flag-meta-value">${contentHtml}</div>
+        </div>
+    `;
+}
+
+function renderWorldStateFlagMetaContent(value: unknown): string {
+    const listItems = extractDisplayListItems(value);
+    if (listItems.length > 0) {
+        return `
+            <div class="stx-re-world-detail-list">
+                ${listItems.slice(0, 8).map((item: string): string => `<div class="stx-re-world-detail-item">${escapeHtml(item)}</div>`).join('')}
+            </div>
+        `;
+    }
+
+    const text = formatReadableValueText(value);
+    if (!text || text === '未填写') {
+        return `<span class="stx-re-record-sub">暂无</span>`;
+    }
+
+    return `<div class="stx-re-world-detail-text">${escapeHtml(text)}</div>`;
+}
+
+function renderWorldStateCompactInfoCard(label: string, value: unknown, emptyLabel: string = '暂无'): string {
+    const hasValue = value != null && (!(typeof value === 'string') || Boolean(value.trim()));
+    const listItems = hasValue ? extractDisplayListItems(value) : [];
+    const text = hasValue ? formatReadableValueText(value) : '';
+    const contentHtml = listItems.length > 0
+        ? `<div class="stx-re-world-compact-card-list">${listItems.slice(0, 6).map((item: string): string => `<div class="stx-re-world-compact-card-item">${escapeHtml(item)}</div>`).join('')}</div>`
+        : `<div class="stx-re-world-compact-card-text">${escapeHtml(text && text !== '未填写' ? text : emptyLabel)}</div>`;
+    return `
+        <article class="stx-re-world-compact-card">
+            <div class="stx-re-world-compact-card-head">
+                <span class="stx-re-record-flag">${escapeHtml(label)}</span>
+            </div>
+            <div class="stx-re-world-compact-card-body">${contentHtml}</div>
+        </article>
+    `;
+}
+
+function renderWorldStateEntryPrimaryCell(
+    entry: StructuredWorldStateEntry,
+    subtitle: string,
+    metaLines: string[],
+): string {
+    return `
+        <div class="stx-re-record-main">
+            <div class="stx-re-record-title-row">
+                <div class="stx-re-record-title">${escapeHtml(formatWorldStateDisplayTitle(entry))}</div>
+                <span class="stx-re-record-flag">${escapeHtml(formatWorldStateTypeLabel(entry.node.stateType))}</span>
+            </div>
+            <div class="stx-re-record-sub">${escapeHtml(subtitle || entry.node.summary || '暂无说明')}</div>
+            <div class="stx-re-world-meta-stack">${metaLines.join('')}</div>
+            <div class="stx-re-record-code" title="${escapeHtml(entry.path)}"${buildTipAttr(`原始路径：${entry.path}`)}>内部路径：${escapeHtml(formatHumanReadableTopic(entry.path, compactInternalIdentifier(entry.path, 48)))}</div>
+            <details class="stx-re-world-details">
+                <summary${buildTipAttr('展开查看这条世界状态的原始值，便于核对结构化结果是否准确。')}>查看原始值</summary>
+                <pre class="stx-re-json compact">${escapeHtml(renderWorldStateRawPreview(entry.rawValue))}</pre>
+            </details>
+        </div>
+    `;
+}
+
+function renderWorldStateActorList(entry: StructuredWorldStateEntry, ownedStates: OwnedMemoryState[], actorLabelMap: Map<string, string>, emptyLabel: string = '暂无关联角色'): string {
+    return renderWorldStatePillList(getWorldStateAwareActors(entry, ownedStates, actorLabelMap), emptyLabel);
+}
+
+function renderWorldStateUpdateCell(entry: StructuredWorldStateEntry): string {
+    return `
+        <div class="stx-re-record-sub">${escapeHtml(entry.updatedAt ? formatTimeLabel(entry.updatedAt) : '暂无')}</div>
+        <div class="stx-re-record-code">置信度：${escapeHtml(entry.node.confidence != null ? formatPercent(entry.node.confidence) : '暂无')}</div>
+    `;
+}
+
+function renderWorldStateSectionTable<T>(options: {
+    sectionKey: string;
+    title: string;
+    description: string;
+    iconClass: string;
+    badgeText: string;
+    badgeTip: string;
+    rows: T[];
+    rowKey: (item: T, index: number) => string;
+    columns: WorldStateSectionColumn<T>[];
+}): string {
+    if (options.rows.length <= 0) {
+        return '';
+    }
+    const headerHtml = options.columns.map((column: WorldStateSectionColumn<T>, index: number): string => {
+        const widthAttr = column.width ? ` style="width:${escapeHtml(column.width)};"` : '';
+        const firstColumnPrefix = index === 0
+            ? `<span class="stx-re-world-section-colhead-badge" aria-hidden="true"><em>${escapeHtml(options.badgeText)}</em></span>`
+            : '';
+        const sectionTitleAttr = index === 0 ? ` class="stx-re-world-section-colhead" data-world-section-title="${escapeHtml(options.title)}"` : '';
+        return `<th${sectionTitleAttr}${widthAttr}${buildTipAttr(column.tip)}>${firstColumnPrefix}<span>${escapeHtml(column.label)}</span></th>`;
+    }).join('');
+    const bodyHtml = options.rows.map((item: T, index: number): string => {
+        const cellsHtml = options.columns.map((column: WorldStateSectionColumn<T>): string => `<td class="${escapeHtml(column.cellClassName || '')}">${column.render(item)}</td>`).join('');
+        return `<tr class="stx-re-row" data-world-row-key="${escapeHtml(options.rowKey(item, index))}">${cellsHtml}</tr>`;
+    }).join('');
+
+    return `
+        <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="${escapeHtml(options.sectionKey)}" id="stx-re-world-section-${escapeHtml(options.sectionKey)}" open>
+            <summary class="stx-re-world-section-summary"${buildTipAttr(`点击展开或收起 ${options.title} 分区。`)}>
+                <div class="stx-re-world-section-head">
+                    <div>
+                        <div class="stx-re-world-section-title"><span>${escapeHtml(options.title)}</span></div>
+                        <div class="stx-re-world-section-sub">${escapeHtml(options.description)}</div>
+                    </div>
+                    <div class="stx-re-world-section-head-side">
+                        <div class="stx-re-rpg-badge"${buildTipAttr(options.badgeTip)}>${escapeHtml(options.badgeText)}</div>
+                        <div class="stx-re-world-section-toggle"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i><span>展开 / 收起</span></div>
+                    </div>
+                </div>
+            </summary>
+            <div class="stx-re-world-section-body">
+                <div class="stx-re-world-table-wrap" data-world-table-limit="10">
+                    <table class="stx-re-table stx-re-world-table stx-re-world-table-compact">
+                        <thead><tr>${headerHtml}</tr></thead>
+                        <tbody>${bodyHtml}</tbody>
+                    </table>
+                </div>
+            </div>
+        </details>
+    `;
+}
+
+function buildWorldQuestBoardRows(
+    experience: EditorExperienceSnapshot,
+    ownedStates: OwnedMemoryState[],
+    actorLabelMap: Map<string, string>,
+): WorldQuestBoardRow[] {
+    const rows: WorldQuestBoardRow[] = [];
+    const currentConflict = String(experience.canon.scene.currentConflict?.value ?? '').trim();
+    const pendingEvents = getStableSnapshotValues(experience.canon.scene.pendingEvents);
+    const participants = getStableSnapshotValues(experience.canon.scene.participants).map((item: SnapshotValue): string => String(item.value ?? '').trim()).filter(Boolean);
+
+    if (currentConflict) {
+        rows.push({
+            rowKey: `scene-conflict:${currentConflict}`,
+            title: currentConflict,
+            kind: '当前冲突',
+            summary: String(experience.canon.scene.currentScene?.value ?? '').trim() || '当前场景正在推进中的主冲突。',
+            objective: pendingEvents.slice(0, 3).map((item: SnapshotValue): string => String(item.value ?? '').trim()).filter(Boolean).join(' / ') || '等待进一步推进',
+            relatedActors: participants,
+            sourceLabel: '场景快照',
+            statusLabel: '进行中',
+            updatedAt: Number(experience.canon.generatedAt ?? Date.now()),
+        });
+    }
+
+    pendingEvents.forEach((item: SnapshotValue, index: number): void => {
+        const title = String(item.value ?? '').trim();
+        if (!title) {
+            return;
+        }
+        rows.push({
+            rowKey: `pending:${index}:${title}`,
+            title,
+            kind: '待处理事件',
+            summary: currentConflict || '当前场景中被挂起、待推进的事件。',
+            objective: '等待触发 / 等待角色推进',
+            relatedActors: participants,
+            sourceLabel: '场景待办',
+            statusLabel: '待推进',
+            updatedAt: Number(item.updatedAt ?? experience.canon.generatedAt ?? Date.now()),
+        });
+    });
+
+    ownedStates
+        .filter((item: OwnedMemoryState): boolean => ['goal', 'promise', 'current_conflict'].includes(String(item.memorySubtype ?? '')))
+        .forEach((item: OwnedMemoryState): void => {
+            const ownerLabel = item.ownerActorKey ? (actorLabelMap.get(item.ownerActorKey) || item.ownerActorKey) : '世界 / 未归属';
+            rows.push({
+                rowKey: `memory:${item.recordKey}`,
+                title: buildMemoryRecordHeadline(item.recordKey, undefined, item),
+                kind: formatMemorySubtypeLabel(item.memorySubtype),
+                summary: formatMemoryImpactSummary(item),
+                objective: item.forgotten ? '已淡出当前焦点' : '仍在推进中',
+                relatedActors: [ownerLabel],
+                sourceLabel: '记忆索引',
+                statusLabel: item.forgotten ? '已搁置' : '追踪中',
+                updatedAt: Number(item.updatedAt ?? 0),
+            });
+        });
+
+    const seen = new Set<string>();
+    return rows.filter((row: WorldQuestBoardRow): boolean => {
+        const key = normalizeLookup(`${row.kind}|${row.title}|${row.sourceLabel}`);
+        if (!key || seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    }).sort((left: WorldQuestBoardRow, right: WorldQuestBoardRow): number => right.updatedAt - left.updatedAt);
+}
+
+function applyWorldTableViewportLimits(root: ParentNode): void {
+    root.querySelectorAll('.stx-re-world-table-wrap').forEach((node: Element): void => {
+        const wrap = node as HTMLElement;
+        const limit = Number(wrap.dataset.worldTableLimit ?? 0);
+        const table = wrap.querySelector('.stx-re-world-table') as HTMLElement | null;
+        const header = table?.querySelector('thead') as HTMLElement | null;
+        const rows = Array.from(wrap.querySelectorAll('tbody tr')) as HTMLElement[];
+
+        wrap.classList.remove('is-scrollable');
+        wrap.style.removeProperty('max-height');
+        wrap.style.removeProperty('overflow-y');
+
+        if (!limit || rows.length <= limit) {
+            return;
+        }
+
+        const headerHeight = Math.ceil(header?.getBoundingClientRect().height || 0);
+        const visibleRows = rows.slice(0, limit);
+        const rowsHeight = visibleRows.reduce((sum: number, row: HTMLElement): number => {
+            return sum + Math.ceil(row.getBoundingClientRect().height || 0);
+        }, 0);
+        const maxHeight = headerHeight + rowsHeight + 12;
+        if (maxHeight > 0) {
+            wrap.classList.add('is-scrollable');
+            wrap.style.maxHeight = `${maxHeight}px`;
+            wrap.style.overflowY = 'auto';
+        }
+    });
+}
+
+function updateWorldOverviewStripState(strip: HTMLElement): void {
+    const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+    const threshold = 6;
+    const shell = strip.closest('.stx-re-world-overview-shell') as HTMLElement | null;
+    strip.classList.toggle('is-scrollable', maxScrollLeft > threshold);
+    strip.classList.toggle('can-scroll-left', strip.scrollLeft > threshold);
+    strip.classList.toggle('can-scroll-right', strip.scrollLeft < (maxScrollLeft - threshold));
+    shell?.classList.toggle('can-scroll-left', strip.scrollLeft > threshold);
+    shell?.classList.toggle('can-scroll-right', strip.scrollLeft < (maxScrollLeft - threshold));
+    shell?.classList.toggle('is-scrollable', maxScrollLeft > threshold);
+    shell?.querySelectorAll('[data-world-strip-nav]').forEach((node: Element): void => {
+        const button = node as HTMLButtonElement;
+        const direction = String(button.dataset.worldStripNav ?? '').trim();
+        if (direction === 'prev') {
+            button.disabled = !(strip.scrollLeft > threshold);
+        } else if (direction === 'next') {
+            button.disabled = !(strip.scrollLeft < (maxScrollLeft - threshold));
+        }
+    });
+}
+
+type HorizontalScrollAnimationState = {
+    rafId: number;
+    startLeft: number;
+    targetLeft: number;
+    startedAt: number;
+    duration: number;
+    onFrame?: () => void;
+};
+
+const horizontalScrollAnimations = new WeakMap<HTMLElement, HorizontalScrollAnimationState>();
+
+function easeInOutCubic(progress: number): number {
+    if (progress <= 0) {
+        return 0;
+    }
+    if (progress >= 1) {
+        return 1;
+    }
+    return progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
+
+function stopAnimatedHorizontalScroll(element: HTMLElement, syncState = false): void {
+    const state = horizontalScrollAnimations.get(element);
+    if (!state) {
+        return;
+    }
+    window.cancelAnimationFrame(state.rafId);
+    horizontalScrollAnimations.delete(element);
+    element.classList.remove('is-animating');
+    if (syncState) {
+        state.onFrame?.();
+    }
+}
+
+function animateHorizontalScrollBy(element: HTMLElement, delta: number, options?: { duration?: number; onFrame?: () => void }): void {
+    if (!delta) {
+        return;
+    }
+    const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+    if (maxScrollLeft <= 0) {
+        options?.onFrame?.();
+        return;
+    }
+
+    const currentLeft = element.scrollLeft;
+    const previousState = horizontalScrollAnimations.get(element);
+    const baseTarget = previousState ? previousState.targetLeft : currentLeft;
+    const nextTarget = Math.min(maxScrollLeft, Math.max(0, baseTarget + delta));
+    const onFrame = options?.onFrame;
+
+    if (Math.abs(nextTarget - currentLeft) < 1) {
+        element.scrollLeft = nextTarget;
+        element.classList.remove('is-animating');
+        onFrame?.();
+        return;
+    }
+
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        stopAnimatedHorizontalScroll(element);
+        element.scrollLeft = nextTarget;
+        element.classList.remove('is-animating');
+        onFrame?.();
+        return;
+    }
+
+    if (previousState) {
+        window.cancelAnimationFrame(previousState.rafId);
+    }
+
+    const state: HorizontalScrollAnimationState = {
+        rafId: 0,
+        startLeft: currentLeft,
+        targetLeft: nextTarget,
+        startedAt: performance.now(),
+        duration: Math.max(140, options?.duration ?? 280),
+        onFrame,
+    };
+
+    const tick = (timestamp: number): void => {
+        const activeState = horizontalScrollAnimations.get(element);
+        if (activeState !== state) {
+            return;
+        }
+
+        const progress = Math.min(1, (timestamp - state.startedAt) / state.duration);
+        const easedProgress = easeInOutCubic(progress);
+        element.scrollLeft = state.startLeft + (state.targetLeft - state.startLeft) * easedProgress;
+        state.onFrame?.();
+
+        if (progress >= 1) {
+            element.scrollLeft = state.targetLeft;
+            state.onFrame?.();
+            horizontalScrollAnimations.delete(element);
+            element.classList.remove('is-animating');
+            return;
+        }
+
+        state.rafId = window.requestAnimationFrame(tick);
+    };
+
+    element.classList.add('is-animating');
+    horizontalScrollAnimations.set(element, state);
+    state.rafId = window.requestAnimationFrame(tick);
+}
+
+function updateWorldStickyTableHeaders(root: ParentNode, scrollContainer: HTMLElement): void {
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const stickyTop = containerRect.top + 10;
+    let currentSection: Element | null = null;
+    let currentSectionScore = Number.POSITIVE_INFINITY;
+
+    root.querySelectorAll('.stx-re-world-section').forEach((node: Element): void => {
+        const section = node as HTMLElement;
+        const wrap = section.querySelector('.stx-re-world-table-wrap') as HTMLElement | null;
+        const firstHeadCell = section.querySelector('.stx-re-world-table thead th') as HTMLElement | null;
+        if (!wrap || !firstHeadCell) {
+            section.style.removeProperty('--stx-world-head-offset');
+            section.classList.remove('is-head-sticky');
+            section.classList.remove('is-current-section');
+            return;
+        }
+
+        const sectionRect = section.getBoundingClientRect();
+        if (!section.dataset.worldHeaderNaturalTop) {
+            const naturalTop = Math.max(0, Math.round(firstHeadCell.getBoundingClientRect().top - sectionRect.top));
+            section.dataset.worldHeaderNaturalTop = String(naturalTop);
+        }
+
+        const naturalTop = Number(section.dataset.worldHeaderNaturalTop ?? 0);
+        const naturalViewportTop = sectionRect.top + naturalTop;
+        const headHeight = Math.ceil(firstHeadCell.getBoundingClientRect().height || 0);
+        wrap.style.setProperty('--stx-world-head-height', `${headHeight}px`);
+        const maxViewportTop = sectionRect.bottom - headHeight - 14;
+
+        let offset = 0;
+        if (maxViewportTop > naturalViewportTop && stickyTop > naturalViewportTop) {
+            offset = Math.min(stickyTop, maxViewportTop) - naturalViewportTop;
+        }
+
+        const normalizedOffset = Math.max(0, Math.round(offset));
+        section.style.setProperty('--stx-world-head-offset', `${normalizedOffset}px`);
+        section.classList.toggle('is-head-sticky', normalizedOffset > 0);
+        wrap.classList.toggle('is-head-sticky', normalizedOffset > 0);
+
+        const intersectsViewport = sectionRect.bottom > (containerRect.top + 32) && sectionRect.top < (containerRect.bottom - 32);
+        if (intersectsViewport) {
+            const score = Math.abs((sectionRect.top + naturalTop + normalizedOffset) - stickyTop);
+            if (score < currentSectionScore) {
+                currentSectionScore = score;
+                currentSection = section;
+            }
+        }
+    });
+
+    root.querySelectorAll('.stx-re-world-section.is-current-section').forEach((node: Element): void => {
+        if (node !== currentSection) {
+            node.classList.remove('is-current-section');
+        }
+    });
+    root.querySelectorAll('[data-world-section-nav].is-active').forEach((node: Element): void => {
+        node.classList.remove('is-active');
+    });
+    const currentSectionElement = currentSection as HTMLElement | null;
+    if (currentSectionElement) {
+        currentSectionElement.classList.add('is-current-section');
+        const sectionKey = String(currentSectionElement.dataset.worldSectionKey ?? '').trim();
+        if (sectionKey) {
+            root.querySelector(`[data-world-section-nav="${CSS.escape(sectionKey)}"]`)?.classList.add('is-active');
+        }
+    }
+}
 
 function normalizeRecordTextSignature(value: unknown): string {
     return String(value ?? '')
@@ -136,6 +850,64 @@ function stringifyDisplayValue(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+function extractDisplayListItems(value: unknown, depth: number = 0): string[] {
+    if (depth > 2 || value === null || value === undefined) {
+        return [];
+    }
+
+    const collect = (items: string[]): string[] => Array.from(new Set(items.map((item: string): string => String(item ?? '').trim()).filter(Boolean)));
+
+    if (Array.isArray(value)) {
+        return collect(value.flatMap((item: unknown): string[] => {
+            const nested = extractDisplayListItems(item, depth + 1);
+            if (nested.length > 0) {
+                return nested;
+            }
+            const text = formatReadableValueText(item, depth + 1);
+            return text && text !== '未填写' ? [text] : [];
+        }));
+    }
+
+    if (typeof value !== 'string') {
+        return [];
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed || !trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            return collect(parsed.map((item: unknown): string => formatReadableValueText(item, depth + 1)).filter((item: string): boolean => item !== '未填写'));
+        }
+    } catch {
+        // ignore and fallback to loose split
+    }
+
+    const looseItems = trimmed.slice(1, -1)
+        .split(/[、,，;；|｜/\n]+/)
+        .map((item: string): string => item.trim().replace(/^['"]|['"]$/g, ''))
+        .filter(Boolean);
+    return collect(looseItems);
+}
+
+function renderReadableListHtml(items: string[], emptyLabel: string = '未填写'): string {
+    if (items.length <= 0) {
+        return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
+    }
+    return `<div class="stx-re-readable-list">${items.slice(0, 10).map((item: string): string => `<span class="stx-re-readable-list-item">${escapeHtml(item)}</span>`).join('')}</div>`;
+}
+
+function renderReadableValueFragmentHtml(value: unknown): string {
+    const listItems = extractDisplayListItems(value);
+    if (listItems.length > 0) {
+        return renderReadableListHtml(listItems);
+    }
+    return escapeHtml(formatReadableValueText(value));
 }
 
 function formatLogicStatusLabel(status: LogicTableStatus): string {
@@ -683,6 +1455,7 @@ function formatWorldStateScopeLabel(value: string): string {
     const normalized = String(value ?? '').trim().toLowerCase();
     const labels: Record<string, string> = {
         global: '全局',
+        nation: '国家/政体',
         region: '区域',
         city: '城市',
         location: '地点',
@@ -690,6 +1463,7 @@ function formatWorldStateScopeLabel(value: string): string {
         item: '物品',
         character: '角色',
         scene: '场景',
+        unclassified: '待归类',
     };
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'scene');
 }
@@ -705,9 +1479,36 @@ function formatWorldStateTypeLabel(value: string): string {
         ownership: '归属',
         culture: '文化',
         danger: '危险',
+        relationship: '关系',
+        goal: '目标',
         relationship_hook: '关系钩子',
+        anomaly: '结构异常',
     };
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'status');
+}
+
+function hasWorldStateStructuralAnomaly(entry: StructuredWorldStateEntry): boolean {
+    const raw = getWorldStateRawObject(entry);
+    const anomalyFlags = Array.isArray(entry.node.anomalyFlags) ? entry.node.anomalyFlags : [];
+    if (anomalyFlags.length > 0) {
+        return true;
+    }
+    const hasAnyAnchor = Boolean(
+        entry.node.subjectId
+        || entry.node.nationId
+        || entry.node.regionId
+        || entry.node.cityId
+        || entry.node.locationId
+        || entry.node.itemId
+        || pickWorldStateText(raw, ['subject', 'character', 'actor', 'nation', 'country', 'region', 'city', 'location', 'item']),
+    );
+    if (entry.node.scopeType === 'unclassified') {
+        return true;
+    }
+    if (!hasAnyAnchor && !['global', 'scene'].includes(String(entry.node.scopeType ?? ''))) {
+        return true;
+    }
+    return entry.node.stateType === 'anomaly';
 }
 
 function matchWorldStateKeyword(entry: StructuredWorldStateEntry, keyword: string): boolean {
@@ -759,6 +1560,141 @@ function resolveActorDisplayLabel(actorKey: string, displayName?: string | null)
         return normalizedDisplayName;
     }
     return formatActorKeyLabel(actorKey);
+}
+
+function formatRetentionBiasLabel(value: number | undefined): string {
+    const numeric = Number(value ?? 0);
+    if (!Number.isFinite(numeric) || Math.abs(numeric) < 0.001) {
+        return '±0%';
+    }
+    const sign = numeric > 0 ? '+' : '';
+    return `${sign}${Math.round(numeric * 100)}%`;
+}
+
+function buildFallbackMemoryActorRetentionMap(
+    owned: OwnedMemoryState,
+    lifecycle?: MemoryLifecycleState,
+): MemoryActorRetentionMap {
+    const actorKey = String(owned.ownerActorKey ?? '').trim() || '__world__';
+    const distortionRisk = Number(lifecycle?.distortionRisk ?? 0);
+    return {
+        [actorKey]: {
+            actorKey,
+            stage: lifecycle?.stage || 'clear',
+            forgetProbability: Math.max(0, Math.min(1, Number(owned.forgetProbability ?? lifecycle?.forgetProbability ?? 0) || 0)),
+            forgotten: owned.forgotten === true || lifecycle?.forgotten === true,
+            forgottenAt: owned.forgottenAt ?? lifecycle?.forgottenAt,
+            forgottenReasonCodes: Array.from(new Set([...(owned.forgottenReasonCodes ?? []), ...(lifecycle?.forgottenReasonCodes ?? [])])).filter(Boolean),
+            rehearsalCount: Number(lifecycle?.rehearsalCount ?? 0) || 0,
+            lastRecalledAt: Number(lifecycle?.lastRecalledAt ?? 0) || 0,
+            retentionBias: 0,
+            confidence: Math.max(0, Math.min(1, 1 - Math.max(0, Math.min(1, distortionRisk)))),
+            updatedAt: Number(owned.updatedAt ?? lifecycle?.updatedAt ?? Date.now()) || Date.now(),
+        },
+    };
+}
+
+function resolveMemoryActorRetentionMap(
+    owned: OwnedMemoryState,
+    lifecycle?: MemoryLifecycleState,
+): MemoryActorRetentionMap {
+    const ownedMap = owned.roleBasedRetentionOverrides;
+    if (ownedMap && Object.keys(ownedMap).length > 0) {
+        return ownedMap;
+    }
+    const lifecycleMap = lifecycle?.perActorMetrics;
+    if (lifecycleMap && Object.keys(lifecycleMap).length > 0) {
+        return lifecycleMap;
+    }
+    return buildFallbackMemoryActorRetentionMap(owned, lifecycle);
+}
+
+interface MemoryActorRetentionRowViewModel {
+    actorKey: string;
+    actorLabel: string;
+    state: MemoryActorRetentionState;
+    isActive: boolean;
+}
+
+function buildMemoryActorRetentionRows(
+    owned: OwnedMemoryState,
+    lifecycle: MemoryLifecycleState | undefined,
+    actorLabelMap: Map<string, string>,
+    activeActorKey: string | null = null,
+): MemoryActorRetentionRowViewModel[] {
+    const retentionMap = resolveMemoryActorRetentionMap(owned, lifecycle);
+    return Object.values(retentionMap)
+        .filter((item: MemoryActorRetentionState | undefined): item is MemoryActorRetentionState => Boolean(item && String(item.actorKey ?? '').trim()))
+        .map((item: MemoryActorRetentionState): MemoryActorRetentionRowViewModel => {
+            const actorKey = String(item.actorKey ?? '').trim();
+            const fallbackLabel = actorKey === '__world__' ? '世界 / 未归属' : actorLabelMap.get(actorKey);
+            return {
+                actorKey,
+                actorLabel: resolveActorDisplayLabel(actorKey, fallbackLabel || actorKey),
+                state: item,
+                isActive: Boolean(activeActorKey && actorKey === activeActorKey),
+            };
+        })
+        .sort((left: MemoryActorRetentionRowViewModel, right: MemoryActorRetentionRowViewModel): number => {
+            if (left.isActive !== right.isActive) {
+                return left.isActive ? -1 : 1;
+            }
+            if (left.state.forgotten !== right.state.forgotten) {
+                return left.state.forgotten ? -1 : 1;
+            }
+            return left.actorLabel.localeCompare(right.actorLabel, 'zh-CN');
+        });
+}
+
+function renderMemoryActorRetentionRowsMarkup(
+    rows: MemoryActorRetentionRowViewModel[],
+    options: {
+        compact?: boolean;
+        maxRows?: number;
+    } = {},
+): string {
+    if (rows.length <= 0) {
+        return '<div class="stx-re-empty">当前没有按角色细分的遗忘指标。</div>';
+    }
+    const maxRows = Math.max(1, options.maxRows ?? rows.length);
+    const visibleRows = rows.slice(0, maxRows);
+    const hiddenCount = Math.max(0, rows.length - visibleRows.length);
+    return `
+        <div class="stx-re-retention-list${options.compact ? ' is-compact' : ''}">
+            ${visibleRows.map((row: MemoryActorRetentionRowViewModel): string => {
+                const probability = Math.max(0, Math.min(1, Number(row.state.forgetProbability ?? 0) || 0));
+                const fillWidth = `${Math.max(4, Math.round(probability * 1000) / 10)}%`;
+                const rowClassName = [
+                    'stx-re-retention-row',
+                    `is-stage-${escapeHtml(row.state.stage || 'clear')}`,
+                    row.state.forgotten ? 'is-forgotten' : '',
+                    row.isActive ? 'is-active' : '',
+                ].filter(Boolean).join(' ');
+                const reasonText = (row.state.forgottenReasonCodes ?? []).slice(0, 2).map((reason: string): string => formatMemoryReasonLabel(reason)).join(' · ');
+                return `
+                    <div class="${rowClassName}">
+                        <div class="stx-re-retention-head">
+                            <div class="stx-re-retention-title-wrap">
+                                <strong>${escapeHtml(row.actorLabel)}</strong>
+                                ${row.isActive ? '<span class="stx-re-record-flag">主视角</span>' : ''}
+                                ${row.state.forgotten ? '<span class="stx-re-json">已遗忘</span>' : ''}
+                            </div>
+                            <span class="stx-re-retention-value">${escapeHtml(formatPercent(probability))}</span>
+                        </div>
+                        <div class="stx-re-retention-bar"><div class="stx-re-retention-fill" style="width:${fillWidth}"></div></div>
+                        <div class="stx-re-retention-meta">
+                            <span>${escapeHtml(formatMemoryStageLabel(row.state.stage || 'clear'))}</span>
+                            <span>置信 ${escapeHtml(formatPercent(row.state.confidence))}</span>
+                            <span>偏置 ${escapeHtml(formatRetentionBiasLabel(row.state.retentionBias))}</span>
+                            ${row.state.lastRecalledAt ? `<span>回忆于 ${escapeHtml(formatTimeLabel(row.state.lastRecalledAt))}</span>` : ''}
+                            ${reasonText ? `<span>${escapeHtml(reasonText)}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+            ${hiddenCount > 0 ? `<div class="stx-re-json">另有 ${hiddenCount} 个角色视角已折叠。</div>` : ''}
+        </div>
+    `;
 }
 
 function formatPersonaProfileVersionLabel(value: string): string {
@@ -1248,6 +2184,10 @@ function formatReadableValueText(value: unknown, depth: number = 0): string {
     }
     if (typeof value === 'string') {
         const normalized = value.replace(/\s+/g, ' ').trim();
+        const listItems = extractDisplayListItems(normalized, depth + 1);
+        if (listItems.length > 0) {
+            return listItems.join('、');
+        }
         return normalized ? formatReadableScalarText(normalized) : '未填写';
     }
     if (typeof value === 'number') {
@@ -1300,7 +2240,7 @@ function renderReadableValueHtml(value: unknown, isEditing: boolean): string {
     }
 
     if (typeof value !== 'object' || value === null) {
-        return `<div style="word-break: break-word; white-space: pre-wrap;">${escapeHtml(formatReadableValueText(value))}</div>`;
+        return `<div style="word-break: break-word; white-space: pre-wrap;">${renderReadableValueFragmentHtml(value)}</div>`;
     }
 
     const entries = Object.entries(value as Record<string, unknown>).filter(([, itemValue]: [string, unknown]): boolean => itemValue !== undefined);
@@ -1312,8 +2252,8 @@ function renderReadableValueHtml(value: unknown, isEditing: boolean): string {
         <div class="stx-re-kv">
             ${entries.map(([key, itemValue]: [string, unknown]): string => {
                 const displayKey = formatRecordEditorKeyLabel(key);
-                const renderedValue = formatReadableValueText(itemValue);
-                return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div class="stx-re-kv-val">${escapeHtml(renderedValue)}</div></div>`;
+                const renderedValueHtml = renderReadableValueFragmentHtml(itemValue);
+                return `<div class="stx-re-kv-row"><div class="stx-re-kv-key" title="${escapeHtml(key)}">${escapeHtml(displayKey)}:</div><div class="stx-re-kv-val">${renderedValueHtml}</div></div>`;
             }).join('')}
         </div>
     `;
@@ -1495,8 +2435,9 @@ export async function openRecordEditor(): Promise<void> {
     initThemeKernel();
     ensureSharedTooltip();
 
-    let currentViewMode: ViewMode = 'maintenance';
+    let currentViewMode: ViewMode = 'world';
     let btnSaveRef: HTMLButtonElement | null = null;
+    let worldUiInteractionController: AbortController | null = null;
 
     const dialog = openSharedDialog({
         id: 'stx-record-editor-overlay',
@@ -1528,8 +2469,8 @@ export async function openRecordEditor(): Promise<void> {
                 <span>MemoryOS 记录编辑器</span>
             </div>
             <div class="stx-re-header-actions">
-                <button class="stx-re-btn danger" id="stx-re-btn-clear-db"><i class="fa-solid fa-radiation"></i> 一键清空数据库</button>
-                <div class="stx-re-close" id="stx-re-close-btn" title="关闭 (Esc)">
+                <button class="stx-re-btn danger" id="stx-re-btn-clear-db"${buildTipAttr('清空整个 MemoryOS 数据库。危险操作，不可恢复。')}><i class="fa-solid fa-radiation"></i> 一键清空数据库</button>
+                <div class="stx-re-close" id="stx-re-close-btn" title="关闭 (Esc)"${buildTipAttr('关闭记录编辑器。若当前还在原始数据表中且有未保存修改，会再次确认。')}>
                     <i class="fa-solid fa-xmark"></i>
                 </div>
             </div>
@@ -1541,26 +2482,27 @@ export async function openRecordEditor(): Promise<void> {
             </div>
             <div class="stx-re-main">
                 <div class="stx-re-view-tabs" id="stx-re-view-tabs">
-                    <div class="stx-re-tab is-active" data-view="maintenance">逻辑维护</div>
-                    <div class="stx-re-tab" data-view="memory">角色记忆</div>
-                    <div class="stx-re-tab" data-view="diagnostics">诊断维护</div>
-                    <div class="stx-re-tab" data-view="raw">原始库表</div>
+                    <div class="stx-re-tab is-active" data-view="world"${buildTipAttr(RECORD_EDITOR_VIEW_META.world.tip)}><span>${RECORD_EDITOR_VIEW_META.world.label}</span></div>
+                    <div class="stx-re-tab" data-view="memory"${buildTipAttr(RECORD_EDITOR_VIEW_META.memory.tip)}><span>${RECORD_EDITOR_VIEW_META.memory.label}</span></div>
+                    <div class="stx-re-tab" data-view="maintenance"${buildTipAttr(RECORD_EDITOR_VIEW_META.maintenance.tip)}><span>${RECORD_EDITOR_VIEW_META.maintenance.label}</span></div>
+                    <div class="stx-re-tab" data-view="diagnostics"${buildTipAttr(RECORD_EDITOR_VIEW_META.diagnostics.tip)}><span>${RECORD_EDITOR_VIEW_META.diagnostics.label}</span></div>
+                    <div class="stx-re-tab" data-view="raw"${buildTipAttr(RECORD_EDITOR_VIEW_META.raw.tip)}><span>${RECORD_EDITOR_VIEW_META.raw.label}</span></div>
                 </div>
+                <div class="stx-re-view-hero" id="stx-re-view-hero"></div>
                 <div class="stx-re-tabs" id="stx-re-raw-tabs">
-                    <div class="stx-re-tab is-active" data-table="events">事件流</div>
-                    <div class="stx-re-tab" data-table="facts">事实表</div>
-                    <div class="stx-re-tab" data-table="summaries">摘要集</div>
-                    <div class="stx-re-tab" data-table="world_state">世界状态</div>
-                    <div class="stx-re-tab" data-table="audit">审计日志</div>
+                    <div class="stx-re-tab is-active" data-table="events"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.events.tip)}>${RECORD_EDITOR_RAW_TAB_META.events.label}</div>
+                    <div class="stx-re-tab" data-table="facts"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.facts.tip)}>${RECORD_EDITOR_RAW_TAB_META.facts.label}</div>
+                    <div class="stx-re-tab" data-table="summaries"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.summaries.tip)}>${RECORD_EDITOR_RAW_TAB_META.summaries.label}</div>
+                    <div class="stx-re-tab" data-table="audit"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.audit.tip)}>${RECORD_EDITOR_RAW_TAB_META.audit.label}</div>
                 </div>
                 <div class="stx-re-content" id="stx-re-content-area"><div class="stx-re-empty">正在加载数据...</div></div>
                 <div class="stx-re-footer" id="stx-re-footer">
                     <div class="stx-re-footer-left">
-                        <button class="stx-re-btn danger is-hidden" id="stx-re-btn-batch-del">批量删除选中</button>
+                        <button class="stx-re-btn danger is-hidden" id="stx-re-btn-batch-del"${buildTipAttr('删除当前勾选的原始记录。只有在原始数据表视图中可用。')}>批量删除选中</button>
                     </div>
                     <div class="stx-re-footer-right">
                         <div class="stx-re-pending-msg" id="stx-re-pending-msg"><i class="fa-solid fa-triangle-exclamation"></i> 有未保存的修改</div>
-                        <button class="stx-re-btn save" id="stx-re-btn-save" disabled>保存修改</button>
+                        <button class="stx-re-btn save" id="stx-re-btn-save" disabled${buildTipAttr('将当前原始数据表中的挂起编辑与删除操作写回数据库。')}>保存修改</button>
                     </div>
                 </div>
             </div>
@@ -1573,6 +2515,7 @@ export async function openRecordEditor(): Promise<void> {
     const closeBtn = panel.querySelector('#stx-re-close-btn') as HTMLElement | null;
     const rawTabsContainer = panel.querySelector('#stx-re-raw-tabs') as HTMLElement;
     const viewTabsContainer = panel.querySelector('#stx-re-view-tabs') as HTMLElement;
+    const viewHero = panel.querySelector('#stx-re-view-hero') as HTMLElement;
     const chatListContainer = panel.querySelector('#stx-re-chat-list') as HTMLElement;
     const btnSave = panel.querySelector('#stx-re-btn-save') as HTMLButtonElement;
     btnSaveRef = btnSave;
@@ -1681,6 +2624,36 @@ export async function openRecordEditor(): Promise<void> {
         pendingMsg.classList.toggle('visible', hasChanges);
     }
 
+    function updateViewHeroState(): void {
+        const meta = RECORD_EDITOR_VIEW_META[currentViewMode];
+        const rawMeta = currentViewMode === 'raw'
+            ? RECORD_EDITOR_RAW_TAB_META[(currentRawTable === 'world_state' ? 'events' : currentRawTable) as VisibleRawTableName]
+            : null;
+        const currentChatLabel = currentChatKey ? formatChatKeyLabel(currentChatKey) : '全局记录';
+        const subtitle = currentViewMode === 'raw' && rawMeta
+            ? `${meta.subtitle} · 当前子表：${rawMeta.label}`
+            : meta.subtitle;
+        const statusLabel = currentViewMode === 'raw'
+            ? (rawMeta?.label || '原始数据表')
+            : meta.label;
+        const glyphHtml = currentViewMode === 'world'
+            ? `<img class="stx-re-view-hero-glyph-img" src="${escapeHtml(WORLD_INFO_HERO_ICON_URL)}" alt="" />`
+            : `<i class="${meta.icon}"></i>`;
+        viewHero.dataset.viewMode = currentViewMode;
+        viewHero.innerHTML = `
+            <div class="stx-re-view-hero-glyph" aria-hidden="true">${glyphHtml}</div>
+            <div class="stx-re-view-hero-main">
+                <div class="stx-re-view-hero-title"><span>${escapeHtml(meta.title)}</span></div>
+                <div class="stx-re-view-hero-sub">${escapeHtml(subtitle)}</div>
+            </div>
+            <div class="stx-re-view-hero-meta">
+                <span class="stx-re-rpg-badge"${buildTipAttr(`当前查看的主区域：${statusLabel}`)}>${escapeHtml(statusLabel)}</span>
+                <span class="stx-re-rpg-badge"${buildTipAttr(`当前绑定聊天：${currentChatKey || '全局记录'}`)}>${escapeHtml(currentChatLabel)}</span>
+                <span class="stx-re-rpg-badge"${buildTipAttr('界面样式会自动跟随 SDK/theme 的主题变量变化。')}>主题联动已启用</span>
+            </div>
+        `;
+    }
+
     /**
      * 功能：根据当前视图模式更新界面显隐。
      * @returns 无返回值
@@ -1688,6 +2661,7 @@ export async function openRecordEditor(): Promise<void> {
     function updateChromeState(): void {
         rawTabsContainer.style.display = currentViewMode === 'raw' ? '' : 'none';
         footer.style.display = currentViewMode === 'raw' ? '' : 'none';
+        updateViewHeroState();
         viewTabsContainer.querySelectorAll('.stx-re-tab').forEach((tab: Element): void => {
             const element = tab as HTMLElement;
             element.classList.toggle('is-active', element.dataset.view === currentViewMode);
@@ -2029,6 +3003,88 @@ export async function openRecordEditor(): Promise<void> {
             const typeMatch = currentWorldStateTypeFilter === '__all__' || entry.node.stateType === currentWorldStateTypeFilter;
             return typeMatch && matchWorldStateKeyword(entry, currentWorldStateKeywordFilter);
         }).sort((left: StructuredWorldStateEntry, right: StructuredWorldStateEntry): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
+        const majorPlotEvents = ownedStates
+            .filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event' && item.forgotten !== true)
+            .sort((left: OwnedMemoryState, right: OwnedMemoryState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
+            .slice(0, 8);
+        const currentLocationValue = isStableSnapshotValue(experience.canon.world.currentLocation)
+            ? String(experience.canon.world.currentLocation?.value ?? '').trim()
+            : '';
+        const currentSceneValue = isStableSnapshotValue(experience.canon.scene.currentScene)
+            ? String(experience.canon.scene.currentScene?.value ?? '').trim()
+            : '';
+        const currentConflictValue = String(experience.canon.scene.currentConflict?.value ?? '').trim();
+        const worldOverviewRaw = String(experience.canon.world.overview?.value ?? '').trim();
+        const participantLabels = getStableSnapshotValues(experience.canon.scene.participants)
+            .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+            .filter(Boolean);
+        const pendingEventLabels = getStableSnapshotValues(experience.canon.scene.pendingEvents)
+            .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+            .filter(Boolean);
+        const lorebookLabels = getStableSnapshotValues(experience.canon.world.activeLorebooks)
+            .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+            .filter(Boolean);
+        const ruleSummaryItems = getStableSnapshotValues(experience.canon.world.rules)
+            .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+            .filter(Boolean);
+        const hardConstraintItems = getStableSnapshotValues(experience.canon.world.hardConstraints)
+            .map((item: SnapshotValue): string => String(item.value ?? '').trim())
+            .filter(Boolean);
+        const uniqueCities = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
+            const raw = getWorldStateRawObject(entry);
+            return String(entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city']) || '').trim();
+        }).filter(Boolean));
+        const uniqueLocations = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
+            const raw = getWorldStateRawObject(entry);
+            return String(entry.node.locationId || pickWorldStateText(raw, ['locationName', 'location', 'scene']) || '').trim();
+        }).filter(Boolean));
+        const uniqueRegions = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
+            const raw = getWorldStateRawObject(entry);
+            return String(entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region', 'area']) || '').trim();
+        }).filter(Boolean));
+        const uniqueNations = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
+            const raw = getWorldStateRawObject(entry);
+            return String(entry.node.nationId || pickWorldStateText(raw, ['nationName', 'nation', 'country', 'kingdom', 'empire', 'polity']) || '').trim();
+        }).filter(Boolean));
+        const boundSubjects = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
+            const raw = getWorldStateRawObject(entry);
+            return String(entry.node.subjectId || pickWorldStateText(raw, ['subject', 'actor', 'character']) || '').trim();
+        }).filter(Boolean));
+        const ruleEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => ['rule', 'constraint', 'culture', 'capability'].includes(String(entry.node.stateType ?? ''))).length;
+        const factionEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'faction' || entry.node.stateType === 'ownership').length;
+        const anomalyEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => hasWorldStateStructuralAnomaly(entry)).length;
+        const explicitKeywordEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => hasExplicitWorldStateKeywords(entry)).length;
+        const autoKeywordEntryCount = Math.max(0, entries.length - explicitKeywordEntryCount);
+        const keywordCoveredCount = entries.filter((entry: StructuredWorldStateEntry): boolean => ((entry.node.keywords?.length ?? 0) > 0) || ((entry.node.tags?.length ?? 0) > 0)).length;
+        const confidenceValues = entries
+            .map((entry: StructuredWorldStateEntry): number => Number(entry.node.confidence))
+            .filter((value: number): boolean => Number.isFinite(value));
+        const averageConfidence = confidenceValues.length > 0
+            ? confidenceValues.reduce((sum: number, value: number): number => sum + value, 0) / confidenceValues.length
+            : null;
+        const recentThreshold = Date.now() - (24 * 60 * 60 * 1000);
+        const recentlyUpdatedCount = entries.filter((entry: StructuredWorldStateEntry): boolean => Number(entry.updatedAt ?? 0) >= recentThreshold).length;
+        const recognizedGroupCount = groupedSummary.length;
+        const readinessChecks = [
+            Boolean(worldOverviewRaw),
+            Boolean(currentLocationValue),
+            Boolean(currentSceneValue),
+            Boolean(currentConflictValue),
+            ruleSummaryItems.length > 0,
+            participantLabels.length > 0,
+            uniqueCities.size > 0 || uniqueLocations.size > 0,
+        ];
+        const readinessScore = Math.round((readinessChecks.filter(Boolean).length / readinessChecks.length) * 100);
+        const coldStartRecommendations = [
+            !worldOverviewRaw ? '补 1 句世界背景总览' : '',
+            !currentLocationValue ? '补当前位置锚点' : '',
+            !currentSceneValue ? '补当前场景摘要' : '',
+            !currentConflictValue ? '补主冲突线索' : '',
+            ruleSummaryItems.length <= 0 ? '补世界基础规则' : '',
+            hardConstraintItems.length <= 0 ? '补不可违背硬约束' : '',
+            participantLabels.length <= 0 ? '补场景参与者' : '',
+            uniqueCities.size <= 0 && uniqueLocations.size <= 0 ? '补城市 / 地点图鉴' : '',
+        ].filter(Boolean);
 
         const scopeButtons = [
             { key: '__all__', label: `全部 (${entries.length})` },
@@ -2051,88 +3107,1096 @@ export async function openRecordEditor(): Promise<void> {
             currentWorldStateTypeFilter = '__all__';
         }
 
-        const rowsHtml = filteredEntries.length <= 0
-            ? '<div class="stx-re-empty">当前筛选下没有世界状态。</div>'
-            : filteredEntries.map((entry: StructuredWorldStateEntry): string => {
-                const awareActors = getWorldStateAwareActors(entry, ownedStates, actorLabelMap);
-                return `
-                <div class="stx-re-json" style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:10px;">
-                    <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-                        <div style="min-width:0; display:flex; flex-direction:column; gap:6px;">
-                            <div style="font-weight:700; word-break:break-word;">${escapeHtml(entry.node.title || buildWorldStateHeadline(entry.path))}</div>
-                            <div style="opacity:0.8; word-break:break-word;">${escapeHtml(entry.node.summary || '暂无说明')}</div>
-                            <div class="stx-re-record-code" title="${escapeHtml(entry.path)}">内部路径：${escapeHtml(formatHumanReadableTopic(entry.path, compactInternalIdentifier(entry.path, 48)))}</div>
+        const assignedSectionKeys = new Set<string>();
+        const renderedSectionNavItems: Array<{ key: string; title: string; iconClass: string; badgeText: string }> = [];
+        const pickStateSection = (options: {
+            sectionKey: string;
+            title: string;
+            description: string;
+            iconClass: string;
+            predicate: (entry: StructuredWorldStateEntry) => boolean;
+            columns: WorldStateSectionColumn<StructuredWorldStateEntry>[];
+        }): string => {
+            const sectionEntries = filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => {
+                if (assignedSectionKeys.has(entry.stateKey)) {
+                    return false;
+                }
+                return options.predicate(entry);
+            });
+            sectionEntries.forEach((entry: StructuredWorldStateEntry): void => {
+                assignedSectionKeys.add(entry.stateKey);
+            });
+            if (sectionEntries.length > 0) {
+                renderedSectionNavItems.push({
+                    key: options.sectionKey,
+                    title: options.title,
+                    iconClass: options.iconClass,
+                    badgeText: `${sectionEntries.length} 条`,
+                });
+            }
+            return renderWorldStateSectionTable<StructuredWorldStateEntry>({
+                sectionKey: options.sectionKey,
+                title: options.title,
+                description: options.description,
+                iconClass: options.iconClass,
+                badgeText: `${sectionEntries.length} 条`,
+                badgeTip: `${options.title} 当前共有 ${sectionEntries.length} 条生效记录。`,
+                rows: sectionEntries,
+                rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
+                columns: options.columns,
+            });
+        };
+
+        const cityColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '城市 / 区域',
+                tip: '城市状态主卡，显示城市、区域与摘要。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前城市的主状态说明。', [
+                        renderWorldStateMiniMeta('城市', entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city', 'name']) || '未标记'),
+                        renderWorldStateMiniMeta('区域', entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region']) || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '城市局势',
+                tip: '展示城市当前的状态、阶段、危险或文化气质。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const statePills = [
+                        formatWorldStateTypeLabel(entry.node.stateType),
+                        pickWorldStateText(raw, ['status', 'phase', 'mood', 'tone']),
+                        ...pickWorldStateTextList(raw, ['states', 'conditions', 'hazards']),
+                    ].filter(Boolean);
+                    return `${renderWorldStatePillList(statePills, '暂无局势标签')}${renderWorldStateMiniMeta('摘要', entry.node.summary || '暂无说明')}`;
+                },
+            },
+            {
+                label: '地标 / 规则',
+                tip: '展示城市关联的地标、规则或特殊约束。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const items = [
+                        ...pickWorldStateTextList(raw, ['landmarks', 'districts', 'locations', 'rules']),
+                        entry.node.locationId || '',
+                    ].filter(Boolean);
+                    return `${renderWorldStatePillList(items, '暂无地标或规则')}${renderWorldStateMiniMeta('锚点', formatWorldStateAnchorSummary(entry))}`;
+                },
+            },
+            {
+                label: '关联角色',
+                tip: '哪些角色对这条城市状态有明显关联。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateActorList(entry, ownedStates, actorLabelMap),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const nationColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '国家 / 政体',
+                tip: '国家、王国、帝国、联邦等高层政治实体主卡。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前国家/政体说明。', [
+                        renderWorldStateMiniMeta('国家', entry.node.nationId || pickWorldStateText(raw, ['nationName', 'nation', 'country', 'kingdom', 'empire']) || '未标记'),
+                        renderWorldStateMiniMeta('政体', pickWorldStateText(raw, ['government', 'regime', 'polity', '政体']) || formatWorldStateTypeLabel(entry.node.stateType)),
+                    ]);
+                },
+            },
+            {
+                label: '治理 / 权力',
+                tip: '统治者、权力结构、法统或制度性标签。',
+                width: '22%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        pickWorldStateText(raw, ['ruler', 'leader', 'government', 'regime']),
+                        pickWorldStateText(raw, ['capital', 'capitalCity']),
+                        ...pickWorldStateTextList(raw, ['laws', 'institutions', 'traits']),
+                    ].filter(Boolean), '暂无治理信息');
+                },
+            },
+            {
+                label: '疆域 / 附属',
+                tip: '国家名下的区域、城市与属地。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        entry.node.regionId || '',
+                        entry.node.cityId || '',
+                        ...pickWorldStateTextList(raw, ['regions', 'cities', 'territories']),
+                    ].filter(Boolean), '暂无疆域信息');
+                },
+            },
+            {
+                label: '关键词 / 标签',
+                tip: '国家/政体的检索标签。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateKeywordGroup(entry),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const regionColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '区域 / 地理',
+                tip: '区域、地理带、地貌与广域环境主卡。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前区域/地理说明。', [
+                        renderWorldStateMiniMeta('区域', entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region', 'area']) || '未标记'),
+                        renderWorldStateMiniMeta('国家', entry.node.nationId || pickWorldStateText(raw, ['nation', 'country']) || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '地貌 / 气候',
+                tip: '地形、生态、气候等宏观地理信息。',
+                width: '22%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        pickWorldStateText(raw, ['terrain', 'geography', 'climate', 'biome']),
+                        ...pickWorldStateTextList(raw, ['traits', 'features', 'landmarks']),
+                    ].filter(Boolean), '暂无地理信息');
+                },
+            },
+            {
+                label: '城市 / 地点',
+                tip: '该区域下挂接的城市和地点。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        entry.node.cityId || '',
+                        entry.node.locationId || '',
+                        ...pickWorldStateTextList(raw, ['cities', 'locations', 'districts']),
+                    ].filter(Boolean), '暂无下属锚点');
+                },
+            },
+            {
+                label: '关联角色',
+                tip: '与这片区域明显相关的角色。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateActorList(entry, ownedStates, actorLabelMap),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const locationColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '地点 / 场景',
+                tip: '地点主卡，适合展示场景、位置、房间、区域节点。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前地点的状态说明。', [
+                        renderWorldStateMiniMeta('地点', entry.node.locationId || pickWorldStateText(raw, ['locationName', 'location', 'scene']) || '未标记'),
+                        renderWorldStateMiniMeta('城市', entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city']) || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '场景状态',
+                tip: '当前地点的状态、氛围、限制或危险信息。',
+                width: '22%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const cards = [
+                        renderWorldStateCompactInfoCard('状态', pickWorldStateValue(raw, ['status', 'phase', 'condition', 'conditions']) ?? formatWorldStateTypeLabel(entry.node.stateType), '暂无'),
+                        renderWorldStateCompactInfoCard('氛围', pickWorldStateValue(raw, ['mood', 'tone', 'trait', 'traits']), '暂无'),
+                        renderWorldStateCompactInfoCard('危险 / 限制', pickWorldStateValue(raw, ['hazards', 'hazard', 'restrictions', 'restriction']), entry.node.summary || '暂无'),
+                    ];
+                    return `<div class="stx-re-world-compact-card-grid">${cards.join('')}</div>`;
+                },
+            },
+            {
+                label: '相关对象',
+                tip: '显示地点内关联的人物、物品或主体。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const related = [
+                        entry.node.subjectId || '',
+                        entry.node.itemId || '',
+                        ...pickWorldStateTextList(raw, ['actors', 'participants', 'items', 'subjects']),
+                    ].filter(Boolean);
+                    return renderWorldStatePillList(related, '暂无相关对象');
+                },
+            },
+            {
+                label: '关键词 / 线索',
+                tip: '地点相关的关键词、标签和线索。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([...(entry.node.keywords ?? []), ...(entry.node.tags ?? [])], '暂无线索'),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const ruleColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '规则 / 法典',
+                tip: '规则条目主卡，展示规则名、摘要和规则类型。',
+                width: '24%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, buildWorldStateLeadSummary(entry, '当前规则的核心说明。'), [
+                        renderWorldStateMiniMeta('规则类型', formatWorldStateTypeLabel(entry.node.stateType)),
+                        renderWorldStateMiniMeta('适用对象', entry.node.subjectId || pickWorldStateText(raw, ['subject', 'target', 'appliesTo']) || '未指定'),
+                    ]);
+                },
+            },
+            {
+                label: '适用范围',
+                tip: '规则会影响到哪个城市、地点、角色或全局范围。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const scopeItems = [
+                        formatWorldStateScopeLabel(entry.node.scopeType),
+                        entry.node.cityId || '',
+                        entry.node.locationId || '',
+                        entry.node.regionId || '',
+                        pickWorldStateText(raw, ['scopeLabel', 'region', 'area']),
+                    ].filter(Boolean);
+                    return renderWorldStatePillList(scopeItems, '暂无范围信息');
+                },
+            },
+            {
+                label: '法典要点',
+                tip: '把规则正文拆成更可读的法典条目列表。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const listItems = extractWorldStateListItems(entry, ['rules', 'constraints', 'entries', 'items', 'content']);
+                    const exception = pickWorldStateText(raw, ['exception', 'exceptionRule', 'override']);
+                    return `
+                        <div class="stx-re-world-codex-card">
+                            ${renderWorldStateCodexList(listItems, '暂无规则要点')}
+                            ${exception ? `<div class="stx-re-world-codex-note">例外：${escapeHtml(exception)}</div>` : ''}
                         </div>
-                        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:120px;">
-                            <span class="stx-re-json">${escapeHtml(formatWorldStateScopeLabel(entry.node.scopeType))}</span>
-                            <span class="stx-re-json">${escapeHtml(formatWorldStateTypeLabel(entry.node.stateType))}</span>
+                    `;
+                },
+            },
+            {
+                label: '检索线索',
+                tip: '用于索引该规则的关键词和路径标签。关键词可能来自上游结构化结果，也可能是系统自动抽词。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateKeywordGroup(entry),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '10%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const factionColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '对象 / 阵营',
+                tip: '展示归属对象、阵营或物品主卡。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '归属关系说明。', [
+                        renderWorldStateMiniMeta('主体', entry.node.subjectId || pickWorldStateText(raw, ['subject', 'owner', 'holder']) || '未标记'),
+                        renderWorldStateMiniMeta('派系 / 归属', pickWorldStateText(raw, ['faction', 'ownerFaction', 'ownership']) || entry.node.itemId || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '归属关系',
+                tip: '对象当前的归属或控制关系。',
+                width: '22%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const items = [
+                        formatWorldStateTypeLabel(entry.node.stateType),
+                        pickWorldStateText(raw, ['status', 'ownership', 'relation', 'alignment']),
+                        ...pickWorldStateTextList(raw, ['relations', 'owners', 'affiliations']),
+                    ].filter(Boolean);
+                    return renderWorldStatePillList(items, '暂无归属信息');
+                },
+            },
+            {
+                label: '关联角色 / 物件',
+                tip: '与该归属关系有关的角色和物品。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const related = [
+                        ...getWorldStateAwareActors(entry, ownedStates, actorLabelMap),
+                        ...pickWorldStateTextList(raw, ['items', 'characters', 'participants']),
+                    ];
+                    return renderWorldStatePillList(Array.from(new Set(related)), '暂无关联对象');
+                },
+            },
+            {
+                label: '标签 / 线索',
+                tip: '用来快速识别归属关系的标签与关键词。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([...(entry.node.keywords ?? []), ...(entry.node.tags ?? [])], '暂无线索'),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const characterColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '角色 / 状态',
+                tip: '角色主卡，显示角色名、状态说明与主键。',
+                width: '28%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '角色相关状态说明。', [
+                        renderWorldStateMiniMeta('角色', entry.node.subjectId || pickWorldStateText(raw, ['character', 'actor', 'subject']) || '未标记'),
+                        renderWorldStateMiniMeta('状态', pickWorldStateText(raw, ['status', 'condition', 'emotion']) || formatWorldStateTypeLabel(entry.node.stateType)),
+                    ]);
+                },
+            },
+            {
+                label: '当前状态',
+                tip: '角色当前的状态、情绪、伤势或阶段。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const stateItems = [
+                        pickWorldStateText(raw, ['status', 'condition', 'emotion', 'phase']),
+                        ...pickWorldStateTextList(raw, ['states', 'conditions', 'traits']),
+                    ].filter(Boolean);
+                    return renderWorldStatePillList(stateItems, '暂无状态标签');
+                },
+            },
+            {
+                label: '位置 / 目标',
+                tip: '角色当前位置和当前目标。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const lines = [
+                        renderWorldStateMiniMeta('位置', entry.node.locationId || pickWorldStateText(raw, ['location', 'currentLocation']) || '未知'),
+                        renderWorldStateMiniMeta('目标', pickWorldStateText(raw, ['goal', 'objective', 'intent']) || '暂无'),
+                    ];
+                    return `<div class="stx-re-world-meta-stack">${lines.join('')}</div>`;
+                },
+            },
+            {
+                label: '关联局势',
+                tip: '角色当前卷入的事件、冲突或规则。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList(pickWorldStateTextList(raw, ['conflicts', 'relations', 'events', 'rules']), '暂无局势挂钩');
+                },
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const characterGoalColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '角色 / 目标关系',
+                tip: '角色目标、意图、关系链与绑定对象。',
+                width: '30%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '角色目标/关系说明。', [
+                        renderWorldStateMiniMeta('角色', entry.node.subjectId || pickWorldStateText(raw, ['character', 'actor', 'subject']) || '未标记'),
+                        renderWorldStateMiniMeta('类型', formatWorldStateTypeLabel(entry.node.stateType)),
+                    ]);
+                },
+            },
+            {
+                label: '目标 / 意图',
+                tip: '角色当前目标、任务和推进方向。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        pickWorldStateText(raw, ['goal', 'objective', 'intent', 'mission']),
+                        ...pickWorldStateTextList(raw, ['goals', 'objectives']),
+                    ].filter(Boolean), '暂无目标');
+                },
+            },
+            {
+                label: '关系 / 对象',
+                tip: '角色与谁存在关系、依赖、冲突或绑定。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        pickWorldStateText(raw, ['target', 'counterpart', 'bondTarget']),
+                        ...pickWorldStateTextList(raw, ['relations', 'relationships', 'allies', 'enemies']),
+                    ].filter(Boolean), '暂无关系对象');
+                },
+            },
+            {
+                label: '相关线索',
+                tip: '当前目标/关系挂接的事件、地点或规则。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        entry.node.locationId || '',
+                        ...pickWorldStateTextList(raw, ['events', 'conflicts', 'rules']),
+                    ].filter(Boolean), '暂无挂接线索');
+                },
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const dangerColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '危险 / 威胁',
+                tip: '显式危险、威胁、风险与危机条目。',
+                width: '30%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前危险/威胁说明。', [
+                        renderWorldStateMiniMeta('范围', formatWorldStateScopeLabel(entry.node.scopeType)),
+                        renderWorldStateMiniMeta('强度', pickWorldStateText(raw, ['severity', 'level', 'threatLevel']) || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '影响对象',
+                tip: '这条威胁正影响哪些区域、城市、地点或角色。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([
+                    entry.node.regionId || '',
+                    entry.node.cityId || '',
+                    entry.node.locationId || '',
+                    entry.node.subjectId || '',
+                ].filter(Boolean), '暂无影响对象'),
+            },
+            {
+                label: '危险要点',
+                tip: '危险来源、触发条件和后果。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStatePillList([
+                        pickWorldStateText(raw, ['source', 'trigger', 'cause']),
+                        pickWorldStateText(raw, ['effect', 'impact', 'result']),
+                        ...pickWorldStateTextList(raw, ['hazards', 'risks']),
+                    ].filter(Boolean), '暂无危险要点');
+                },
+            },
+            {
+                label: '关联角色',
+                tip: '与这条危险直接相关的角色。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateActorList(entry, ownedStates, actorLabelMap),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const anomalyColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '待归类 / 异常',
+                tip: '未被正确识别、锚点不完整或结构可疑的条目。',
+                width: '30%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '结构异常或待归类。', [
+                    renderWorldStateMiniMeta('作用域', formatWorldStateScopeLabel(entry.node.scopeType)),
+                    renderWorldStateMiniMeta('类型', formatWorldStateTypeLabel(entry.node.stateType)),
+                ]),
+            },
+            {
+                label: '异常标记',
+                tip: '系统发现的结构异常原因。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList(entry.node.anomalyFlags ?? [], '暂无异常标记'),
+            },
+            {
+                label: '锚点状态',
+                tip: '条目当前可识别的锚点。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => `<div class="stx-re-record-sub">${escapeHtml(formatWorldStateAnchorSummary(entry))}</div>`,
+            },
+            {
+                label: '标签',
+                tip: '便于后续人工整理的标签和关键词。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([...(entry.node.keywords ?? []), ...(entry.node.tags ?? [])], '暂无标签'),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const historyColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '事件 / 局势',
+                tip: '局势与历史主卡，适合查看大事件、危险、历史变动。',
+                width: '30%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前局势或历史信息说明。', [
+                        renderWorldStateMiniMeta('类型', formatWorldStateTypeLabel(entry.node.stateType)),
+                        renderWorldStateMiniMeta('范围', formatWorldStateScopeLabel(entry.node.scopeType)),
+                        renderWorldStateMiniMeta('阶段', pickWorldStateText(raw, ['phase', 'status', 'stage']) || '未标记'),
+                    ]);
+                },
+            },
+            {
+                label: '影响范围',
+                tip: '事件主要影响哪些区域、城市、地点或对象。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const scopeItems = [
+                        entry.node.regionId || '',
+                        entry.node.cityId || '',
+                        entry.node.locationId || '',
+                        entry.node.subjectId || '',
+                        formatWorldStateScopeLabel(entry.node.scopeType),
+                    ].filter(Boolean);
+                    return renderWorldStatePillList(scopeItems, '暂无影响范围');
+                },
+            },
+            {
+                label: '当前影响',
+                tip: '当前局势产生的后果、危险或推进影响。',
+                width: '22%',
+                render: (entry: StructuredWorldStateEntry): string => {
+                    const raw = getWorldStateRawObject(entry);
+                    const cards = [
+                        renderWorldStateCompactInfoCard('影响', pickWorldStateValue(raw, ['impact', 'effect', 'result']) ?? entry.node.summary, '暂无'),
+                        renderWorldStateCompactInfoCard('危险', pickWorldStateValue(raw, ['danger', 'risk']), '暂无'),
+                    ];
+                    return `<div class="stx-re-world-compact-card-grid">${cards.join('')}</div>`;
+                },
+            },
+            {
+                label: '相关角色',
+                tip: '与该局势相关的角色列表。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateActorList(entry, ownedStates, actorLabelMap),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const otherColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
+            {
+                label: '状态条目',
+                tip: '未被前面分类命中的剩余世界状态条目。',
+                width: '32%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '剩余状态说明。', [
+                    renderWorldStateMiniMeta('作用域', formatWorldStateScopeLabel(entry.node.scopeType)),
+                    renderWorldStateMiniMeta('锚点', formatWorldStateAnchorSummary(entry)),
+                ]),
+            },
+            {
+                label: '分类',
+                tip: '当前条目的作用域、状态类型与结构标签。',
+                width: '18%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([formatWorldStateScopeLabel(entry.node.scopeType), formatWorldStateTypeLabel(entry.node.stateType)], '暂无分类'),
+            },
+            {
+                label: '说明',
+                tip: '剩余状态的摘要说明。',
+                width: '20%',
+                render: (entry: StructuredWorldStateEntry): string => `<div class="stx-re-record-sub">${escapeHtml(entry.node.summary || '暂无说明')}</div>`,
+            },
+            {
+                label: '标签',
+                tip: '剩余状态的标签与关键词。',
+                width: '16%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStatePillList([...(entry.node.keywords ?? []), ...(entry.node.tags ?? [])], '暂无标签'),
+            },
+            {
+                label: '更新时间',
+                tip: '最近更新时间和置信度。',
+                width: '14%',
+                render: (entry: StructuredWorldStateEntry): string => renderWorldStateUpdateCell(entry),
+            },
+        ];
+
+        const questRows = buildWorldQuestBoardRows(experience, ownedStates, actorLabelMap).filter((row: WorldQuestBoardRow): boolean => {
+            if (!currentWorldStateKeywordFilter) {
+                return true;
+            }
+            return normalizeLookup([row.title, row.kind, row.summary, row.objective, row.relatedActors.join(' ')].join(' ')).includes(normalizeLookup(currentWorldStateKeywordFilter));
+        });
+        const showQuestSection = currentWorldStateScopeFilter === '__all__' || currentWorldStateScopeFilter === 'scene' || currentWorldStateScopeFilter === 'global';
+
+        const sectionHtml = [
+            pickStateSection({
+                sectionKey: 'nation',
+                title: '国家与政体',
+                description: '国家、王国、帝国、联邦与高层治理结构。',
+                iconClass: 'fa-solid fa-crown',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'nation' || Boolean(entry.node.nationId),
+                columns: nationColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'region',
+                title: '区域地理',
+                description: '区域、地貌、气候与广域地理结构。',
+                iconClass: 'fa-solid fa-mountain-sun',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'region',
+                columns: regionColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'city',
+                title: '城市志',
+                description: '城市状态、区域氛围、城市规则与地标情报。',
+                iconClass: 'fa-solid fa-city',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'city' || Boolean(entry.node.cityId),
+                columns: cityColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'location',
+                title: '地点图鉴',
+                description: '地点、场景、房间与具体位置的即时状态。',
+                iconClass: 'fa-solid fa-location-dot',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'location' || entry.node.scopeType === 'scene' || Boolean(entry.node.locationId),
+                columns: locationColumns,
+            }),
+            showQuestSection ? renderWorldStateSectionTable<WorldQuestBoardRow>({
+                sectionKey: 'quest',
+                title: '任务委托',
+                description: '把当前冲突、待处理事件和关键目标整理成更像任务板的委托视图。',
+                iconClass: 'fa-solid fa-list-check',
+                badgeText: `${questRows.length} 条`,
+                badgeTip: `当前共整理出 ${questRows.length} 条任务 / 冲突线索。`,
+                rows: questRows,
+                rowKey: (row: WorldQuestBoardRow): string => row.rowKey,
+                columns: [
+                    {
+                        label: '任务 / 冲突',
+                        tip: '任务板主标题，显示当前任务或冲突名称。',
+                        width: '28%',
+                        render: (row: WorldQuestBoardRow): string => `
+                            <div class="stx-re-record-main">
+                                <div class="stx-re-record-title-row">
+                                    <div class="stx-re-record-title">${escapeHtml(row.title)}</div>
+                                    <span class="stx-re-record-flag">${escapeHtml(row.kind)}</span>
+                                </div>
+                                <div class="stx-re-record-sub">${escapeHtml(row.summary || '暂无说明')}</div>
+                            </div>
+                        `,
+                    },
+                    {
+                        label: '目标 / 推进',
+                        tip: '当前任务的推进方向、目标或下一步。',
+                        width: '24%',
+                        render: (row: WorldQuestBoardRow): string => `
+                            <div class="stx-re-record-sub">${escapeHtml(row.objective || '等待推进')}</div>
+                            <div class="stx-re-record-code">来源：${escapeHtml(row.sourceLabel)}</div>
+                        `,
+                    },
+                    {
+                        label: '相关角色',
+                        tip: '跟这条任务或冲突相关的角色。',
+                        width: '18%',
+                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList(row.relatedActors, '暂无角色'),
+                    },
+                    {
+                        label: '状态',
+                        tip: '当前任务状态。',
+                        width: '16%',
+                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList([row.statusLabel, row.kind], '暂无状态'),
+                    },
+                    {
+                        label: '更新时间',
+                        tip: '任务线索的最近更新时间。',
+                        width: '14%',
+                        render: (row: WorldQuestBoardRow): string => `<div class="stx-re-record-sub">${escapeHtml(row.updatedAt ? formatTimeLabel(row.updatedAt) : '暂无')}</div>`,
+                    },
+                ],
+            }) : '',
+            pickStateSection({
+                sectionKey: 'rules',
+                title: '规则法典',
+                description: '规则、约束、文化与能力类条目集中查看。',
+                iconClass: 'fa-solid fa-book-open',
+                predicate: (entry: StructuredWorldStateEntry): boolean => ['rule', 'constraint', 'culture', 'capability'].includes(String(entry.node.stateType ?? '')),
+                columns: ruleColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'faction',
+                title: '阵营与组织',
+                description: '派系、组织、归属、持有关系与对象控制链。',
+                iconClass: 'fa-solid fa-flag',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'faction' || entry.node.scopeType === 'item' || entry.node.stateType === 'ownership',
+                columns: factionColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'character',
+                title: '角色状态',
+                description: '跟角色直接绑定的状态、目标、位置与局势挂钩。',
+                iconClass: 'fa-solid fa-user',
+                predicate: (entry: StructuredWorldStateEntry): boolean => (entry.node.scopeType === 'character' || Boolean(entry.node.subjectId)) && !['goal', 'relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
+                columns: characterColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'character-goal',
+                title: '角色目标 / 关系',
+                description: '角色目标、关系、羁绊和对象导向的结构条目。',
+                iconClass: 'fa-solid fa-people-arrows',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'character' && ['goal', 'relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
+                columns: characterGoalColumns,
+            }),
+            renderWorldStateSectionTable<StructuredWorldStateEntry>({
+                sectionKey: 'danger',
+                title: '危险 / 威胁',
+                description: '危险、风险、威胁与危机状态。',
+                iconClass: 'fa-solid fa-triangle-exclamation',
+                badgeText: `${filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey) && entry.node.stateType === 'danger').length} 条`,
+                badgeTip: '显式危险/威胁条目。',
+                rows: filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey) && entry.node.stateType === 'danger'),
+                rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
+                columns: dangerColumns,
+            }),
+            pickStateSection({
+                sectionKey: 'history',
+                title: '历史事件',
+                description: '历史、局势推进与已形成背景影响的事件。',
+                iconClass: 'fa-solid fa-landmark-flag',
+                predicate: (entry: StructuredWorldStateEntry): boolean => ['history'].includes(String(entry.node.stateType ?? '')),
+                columns: historyColumns,
+            }),
+            renderWorldStateSectionTable<StructuredWorldStateEntry>({
+                sectionKey: 'other',
+                title: '待归类 / 结构异常',
+                description: '未命中特定分区、缺锚点或结构可疑的剩余世界状态。',
+                iconClass: 'fa-solid fa-layer-group',
+                badgeText: `${filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey)).length} 条`,
+                badgeTip: '归类规则之外，或结构需要人工整理的状态条目。',
+                rows: filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey)),
+                rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
+                columns: anomalyColumns,
+            }),
+        ].filter(Boolean).join('');
+
+        const majorEventPanelHtml = majorPlotEvents.length > 0 ? `
+            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events" open>
+                <summary class="stx-re-world-section-summary"${buildTipAttr('点击展开或收起重大事件分区。')}>
+                    <div class="stx-re-world-section-head">
+                        <div>
+                            <div class="stx-re-world-section-title"><span>重大事件</span></div>
+                            <div class="stx-re-world-section-sub">只在当前聊天已识别到重大剧情事件时显示，用来提醒哪些事件正在反向影响记忆系统。</div>
+                        </div>
+                        <div class="stx-re-world-section-head-side">
+                            <div class="stx-re-rpg-badge"${buildTipAttr(`当前已识别 ${majorPlotEvents.length} 条重大事件。`)}>${escapeHtml(String(majorPlotEvents.length))} 条</div>
+                            <div class="stx-re-world-section-toggle"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i><span>展开 / 收起</span></div>
                         </div>
                     </div>
-                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:8px;">
-                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">关键词:</div><div class="stx-re-kv-val">${escapeHtml((entry.node.keywords ?? []).slice(0, 6).join('、') || '暂无')}</div></div>
-                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">标签:</div><div class="stx-re-kv-val">${escapeHtml((entry.node.tags ?? []).slice(0, 6).join('、') || '暂无')}</div></div>
-                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">置信度:</div><div class="stx-re-kv-val">${escapeHtml(entry.node.confidence != null ? formatPercent(entry.node.confidence) : '暂无')}</div></div>
-                        <div class="stx-re-kv-row"><div class="stx-re-kv-key">更新时间:</div><div class="stx-re-kv-val">${escapeHtml(entry.updatedAt ? formatTimeLabel(entry.updatedAt) : '暂无')}</div></div>
+                </summary>
+                <div class="stx-re-world-section-body">
+                    <div class="stx-re-world-event-list">
+                        ${majorPlotEvents.map((item: OwnedMemoryState): string => {
+                            const ownerLabel = item.ownerActorKey ? (actorLabelMap.get(item.ownerActorKey) || item.ownerActorKey) : '世界 / 未归属';
+                            return `
+                                <div class="stx-re-world-event-card">
+                                    <div class="stx-re-record-title"><i class="fa-solid fa-star" aria-hidden="true" style="margin-right:6px;"></i>${escapeHtml(buildMemoryRecordHeadline(item.recordKey, undefined, item))}</div>
+                                    <div class="stx-re-record-sub">归属：${escapeHtml(ownerLabel)} · 类型：${escapeHtml(formatMemorySubtypeLabel(item.memorySubtype))}</div>
+                                    <div class="stx-re-record-code"${buildTipAttr(`完整内部键：${item.recordKey}`)}>内部键：${escapeHtml(compactInternalIdentifier(item.recordKey, 28))}</div>
+                                    <div class="stx-re-record-sub">${escapeHtml(formatMemoryImpactSummary(item))}</div>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
-                    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                        <strong>疑似知晓角色：</strong>
-                        ${awareActors.length > 0 ? awareActors.slice(0, 6).map((item: string): string => `<span class="stx-re-json">${escapeHtml(item)}</span>`).join('') : '<span class="stx-re-json">暂无明显角色记忆关联</span>'}
-                    </div>
-                    ${(entry.node.sourceRefs?.length ?? 0) > 0 ? `<div style="display:flex; flex-wrap:wrap; gap:8px; opacity:0.82;">${entry.node.sourceRefs!.slice(0, 6).map((item: string): string => `<span class="stx-re-json">${escapeHtml(item)}</span>`).join('')}</div>` : ''}
-                    <details>
-                        <summary style="cursor:pointer;">查看原始值</summary>
-                        <pre class="stx-re-json compact" style="white-space:pre-wrap; margin-top:8px;">${escapeHtml(renderWorldStateRawPreview(entry.rawValue))}</pre>
-                    </details>
                 </div>
-            `;
-            }).join('');
+            </details>
+        ` : '';
+        if (majorPlotEvents.length > 0) {
+            renderedSectionNavItems.unshift({
+                key: 'major-events',
+                title: '重大事件',
+                iconClass: 'fa-solid fa-burst',
+                badgeText: `${majorPlotEvents.length} 条`,
+            });
+        }
+        if (showQuestSection && questRows.length > 0) {
+            renderedSectionNavItems.splice(Math.min(renderedSectionNavItems.length, 3), 0, {
+                key: 'quest',
+                title: '任务委托',
+                iconClass: 'fa-solid fa-list-check',
+                badgeText: `${questRows.length} 条`,
+            });
+        }
+        const otherCount = filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey)).length;
+        if (otherCount > 0 && !renderedSectionNavItems.some((item: { key: string }): boolean => item.key === 'other')) {
+            renderedSectionNavItems.push({
+                key: 'other',
+                title: '其他状态',
+                iconClass: 'fa-solid fa-layer-group',
+                badgeText: `${otherCount} 条`,
+            });
+        }
+
+        const locationSummary = currentLocationValue || '尚未稳定抽取';
+        const worldOverview = worldOverviewRaw || '当前聊天暂未形成稳定世界总览。';
+        const overviewLeadCardHtml = renderWorldMacroCard({
+                title: '世界总览',
+                iconClass: 'fa-solid fa-earth-asia',
+                tip: '固定在左侧的世界总览卡，概括当前聊天中已经提取出的世界背景、场景锚点与冷启动成熟度。',
+                className: 'stx-re-world-overview-card stx-re-world-overview-lead-card',
+                bodyHtml: `
+                    <div class="stx-re-record-sub">${escapeHtml(worldOverview)}</div>
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('当前位置', locationSummary, '尚未稳定抽取')}
+                        ${renderWorldStateMiniMeta('当前场景', currentSceneValue || '尚未稳定抽取', '尚未稳定抽取')}
+                        ${renderWorldStateMiniMeta('冷启动成熟度', `${readinessScore}%`, '0%')}
+                    </div>
+                    <div class="stx-re-world-pill-list">
+                        <span class="stx-re-world-pill">世界状态：${escapeHtml(String(entries.length))} 条</span>
+                        <span class="stx-re-world-pill">任务线索：${escapeHtml(String(questRows.length))} 条</span>
+                        <span class="stx-re-world-pill">重大事件：${escapeHtml(String(majorPlotEvents.length))} 条</span>
+                    </div>
+                `,
+            });
+        const overviewDeckCardsHtml = [
+            renderWorldMacroCard({
+                title: '时空锚点',
+                iconClass: 'fa-solid fa-compass-drafting',
+                tip: '集中显示当前位置、当前场景和主冲突，方便快速进入当前世界局面。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('当前位置', locationSummary, '尚未稳定抽取')}
+                        ${renderWorldStateMiniMeta('当前场景', currentSceneValue || '尚未稳定抽取', '尚未稳定抽取')}
+                        ${renderWorldStateMiniMeta('主冲突', currentConflictValue || '未识别', '未识别')}
+                    </div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '状态统计',
+                iconClass: 'fa-solid fa-chart-line',
+                tip: '显示当前世界状态总数、筛选后剩余条目以及近 24 小时内更新情况。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-kpi-value">${escapeHtml(String(filteredEntries.length))}</div>
+                    <div class="stx-re-record-sub">筛选后条目 / 总计 ${escapeHtml(String(entries.length))}</div>
+                    <div class="stx-re-record-code">近 24h 更新：${escapeHtml(String(recentlyUpdatedCount))} 条</div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '场景推进',
+                iconClass: 'fa-solid fa-swords',
+                tip: '查看当前冲突、待处理事件与场景参与者，适合做剧情推进速览。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('主冲突', currentConflictValue || '未识别', '未识别')}
+                        ${renderWorldStateMiniMeta('待处理事件', pendingEventLabels.slice(0, 3).join(' / ') || '暂无', '暂无')}
+                        ${renderWorldStateMiniMeta('场景参与者', participantLabels.slice(0, 4).join(' / ') || '暂无', '暂无')}
+                    </div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '世界法则',
+                iconClass: 'fa-solid fa-book-open-reader',
+                tip: '集中显示规则、硬约束与启用中的设定书，方便做世界观校准。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('世界规则', ruleSummaryItems.slice(0, 2).join(' / ') || '暂无', '暂无')}
+                        ${renderWorldStateMiniMeta('硬约束', hardConstraintItems.slice(0, 2).join(' / ') || '暂无', '暂无')}
+                        ${renderWorldStateMiniMeta('启用设定书', lorebookLabels.slice(0, 3).join(' / ') || '暂无', '暂无')}
+                    </div>
+                    <div class="stx-re-record-code">规则条目：${escapeHtml(String(ruleEntryCount))} 条</div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '版图覆盖',
+                iconClass: 'fa-solid fa-map',
+                tip: '汇总当前识别到的城市、地点、区域和归属关系，方便判断世界建模覆盖度。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('城市', String(uniqueCities.size), '0')}
+                        ${renderWorldStateMiniMeta('地点', String(uniqueLocations.size), '0')}
+                        ${renderWorldStateMiniMeta('国家 / 区域', `${uniqueNations.size} / ${uniqueRegions.size}`, '0 / 0')}
+                        ${renderWorldStateMiniMeta('阵营 / 异常', `${factionEntryCount} / ${anomalyEntryCount}`, '0 / 0')}
+                    </div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '人物联动',
+                iconClass: 'fa-solid fa-people-group',
+                tip: '展示角色、参与者和世界条目之间的绑定程度。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('绑定主体', String(boundSubjects.size), '0')}
+                        ${renderWorldStateMiniMeta('场景参与者', participantLabels.slice(0, 4).join(' / ') || '暂无', '暂无')}
+                        ${renderWorldStateMiniMeta('重大事件', String(majorPlotEvents.length), '0')}
+                    </div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '数据新鲜度',
+                iconClass: 'fa-solid fa-stopwatch',
+                tip: '统计最近更新条目、平均置信度和已识别分组数量，用来看当前世界状态是不是够“热”。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-kpi-value">${escapeHtml(averageConfidence != null ? formatPercent(averageConfidence) : '--')}</div>
+                    <div class="stx-re-record-sub">平均置信度</div>
+                    <div class="stx-re-record-code">近 24h 更新 ${escapeHtml(String(recentlyUpdatedCount))} 条 · 分组 ${escapeHtml(String(recognizedGroupCount))} 个</div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '关键词来源',
+                iconClass: 'fa-solid fa-key',
+                tip: '区分关键词究竟来自结构化结果 / AI 提取，还是系统自动抽词。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-world-meta-stack">
+                        ${renderWorldStateMiniMeta('结构化 / AI', `${explicitKeywordEntryCount} 条`, '0 条')}
+                        ${renderWorldStateMiniMeta('系统抽词', `${autoKeywordEntryCount} 条`, '0 条')}
+                        ${renderWorldStateMiniMeta('已带线索', `${keywordCoveredCount} / ${entries.length}`, '0 / 0')}
+                    </div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '当前过滤',
+                iconClass: 'fa-solid fa-filter',
+                tip: '显示当前过滤条件，方便确认为什么某些条目没有显示。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-record-sub">作用域：${escapeHtml(scopeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)?.label || '全部')}</div>
+                    <div class="stx-re-record-code">类型：${escapeHtml(typeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)?.label || '全部类型')}</div>
+                    <div class="stx-re-record-code">关键词：${escapeHtml(currentWorldStateKeywordFilter || '未设置')}</div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '热门分类',
+                iconClass: 'fa-solid fa-compass',
+                tip: '这里显示目前最常见的世界状态分组。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-record-sub">${escapeHtml(groupedSummary.length > 0 ? `${formatWorldStateScopeLabel(groupedSummary[0]!.scopeKey)} / ${formatWorldStateTypeLabel(groupedSummary[0]!.typeKey)}` : '暂无')}</div>
+                    <div class="stx-re-record-code">已识别 ${escapeHtml(String(Object.keys(groupedEntries ?? {}).length))} 个作用域 / ${escapeHtml(String(recognizedGroupCount))} 个热门分组</div>
+                `,
+            }),
+            renderWorldMacroCard({
+                title: '冷启动建议',
+                iconClass: 'fa-solid fa-wand-magic-sparkles',
+                tip: '如果当前世界宏观信息还不够，可以把这些建议交给 AI 摘要阶段或冷启动模板预填。',
+                className: 'stx-re-world-kpi-card',
+                bodyHtml: `
+                    <div class="stx-re-record-sub">${escapeHtml(coldStartRecommendations.length > 0 ? '以下信息建议在 AI 摘要或冷启动阶段优先补齐。' : '当前宏观世界信息已经具备基础冷启动条件。')}</div>
+                    ${renderReadableListHtml(coldStartRecommendations.length > 0 ? coldStartRecommendations : ['已具备基础背景总览', '已具备位置/场景锚点', '已具备规则或冲突线索'], '暂无建议')}
+                `,
+            }),
+        ].join('');
+        const contentHtml = sectionHtml || '<div class="stx-re-empty">当前筛选下没有世界状态。</div>';
+
+        const previousOverviewStrip = contentArea.querySelector('.stx-re-world-overview-strip') as HTMLElement | null;
+        if (previousOverviewStrip) {
+            stopAnimatedHorizontalScroll(previousOverviewStrip);
+        }
 
         contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px;">
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">世界状态概览</div>
-                        <div>总计 ${entries.length} 条</div>
-                        <div style="margin-top:6px;">当前筛选 ${filteredEntries.length} 条</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">当前作用域</div>
-                        <div>${escapeHtml(scopeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)?.label || '全部')}</div>
-                        <div style="margin-top:6px;">当前类型 ${escapeHtml(typeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)?.label || '全部类型')}</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">关键词筛选</div>
-                        <div>${escapeHtml(currentWorldStateKeywordFilter || '未设置')}</div>
-                        <div style="margin-top:6px;">支持匹配标题 / 摘要 / 关键词 / 标签</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">热门分类</div>
-                        <div>${escapeHtml(groupedSummary.length > 0 ? `${formatWorldStateScopeLabel(groupedSummary[0]!.scopeKey)} / ${formatWorldStateTypeLabel(groupedSummary[0]!.typeKey)}` : '暂无')}</div>
-                        <div style="margin-top:6px;">已识别 ${Object.keys(groupedEntries ?? {}).length} 个作用域分组</div>
-                    </div>
+            <div class="stx-re-world-overview-top">
+                <div class="stx-re-world-overview-lead">${overviewLeadCardHtml}</div>
+                <div class="stx-re-world-overview-shell">
+                    <button class="stx-re-world-overview-nav stx-re-world-overview-nav-prev" type="button" data-world-strip-nav="prev"${buildTipAttr('向左滚动顶部世界情报带。')}><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+                    <div class="stx-re-world-overview-strip">${overviewDeckCardsHtml}</div>
+                    <button class="stx-re-world-overview-nav stx-re-world-overview-nav-next" type="button" data-world-strip-nav="next"${buildTipAttr('向右滚动顶部世界情报带。')}><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
                 </div>
-                <div style="display:grid; grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr); gap:12px; align-items:start;">
-                    <div style="display:flex; flex-direction:column; gap:10px;">
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">作用域筛选</div>
-                        ${scopeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateScopeFilter ? 'save' : ''}" data-world-scope="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700; margin-top:6px;">类型筛选</div>
-                        ${typeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateTypeFilter ? 'save' : ''}" data-world-type="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                            <div style="font-weight:700; margin-bottom:6px;">关键词</div>
-                            <input class="text_pole" data-world-keyword-input placeholder="输入关键词过滤" value="${escapeHtml(currentWorldStateKeywordFilter)}">
-                            <div style="display:flex; gap:8px; margin-top:8px;">
-                                <button class="stx-re-btn" data-world-keyword-apply>应用</button>
-                                <button class="stx-re-btn" data-world-keyword-clear>清空</button>
+            </div>
+            <div class="stx-re-panel-grid stx-re-world-overview-grid">
+                <div class="stx-re-world-layout">
+                    <div class="stx-re-world-sidebar">
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title"><span>分区导航</span></div>
+                            <div class="stx-re-world-action-row">
+                                <button class="stx-re-btn" data-world-sections-expand${buildTipAttr('展开当前页面所有世界状态分区。')}><i class="fa-solid fa-up-right-and-down-left-from-center" aria-hidden="true"></i> 全部展开</button>
+                                <button class="stx-re-btn" data-world-sections-collapse${buildTipAttr('收起当前页面所有世界状态分区。')}><i class="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true"></i> 全部收起</button>
+                                <button class="stx-re-btn" data-world-scroll-top${buildTipAttr('回到世界状态页顶部。')}><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> 回到顶部</button>
+                            </div>
+                            <div class="stx-re-world-filter-list stx-re-world-section-nav-list">
+                                ${renderedSectionNavItems.length > 0 ? renderedSectionNavItems.map((item: { key: string; title: string; iconClass: string; badgeText: string }): string => `<button class="stx-re-btn stx-re-world-section-nav" data-world-section-nav="${escapeHtml(item.key)}"${buildTipAttr(`跳转到 ${item.title} 分区。`)}><span class="stx-re-world-section-nav-main"><i class="${escapeHtml(item.iconClass)}" aria-hidden="true"></i><span>${escapeHtml(item.title)}</span></span><span class="stx-re-world-section-nav-badge">${escapeHtml(item.badgeText)}</span></button>`).join('') : '<div class="stx-re-record-sub">当前筛选下暂无可跳转分区</div>'}
                             </div>
                         </div>
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                            <div style="font-weight:700; margin-bottom:6px;">分类捷径</div>
-                            ${groupedSummary.length > 0 ? groupedSummary.map((item: { scopeKey: string; typeKey: string; count: number }): string => `<button class="stx-re-btn" data-world-group-scope="${escapeHtml(item.scopeKey)}" data-world-group-type="${escapeHtml(item.typeKey)}" style="justify-content:flex-start; margin-top:6px;">${escapeHtml(formatWorldStateScopeLabel(item.scopeKey))} / ${escapeHtml(formatWorldStateTypeLabel(item.typeKey))} · ${escapeHtml(String(item.count))} 条</button>`).join('') : '<div>暂无可用分类</div>'}
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title"><span>作用域筛选</span></div>
+                            <div class="stx-re-world-filter-list">
+                                ${scopeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateScopeFilter ? 'save' : ''}" data-world-scope="${escapeHtml(item.key)}"${buildTipAttr(`只显示作用域为 ${item.label} 的世界状态。`)} style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
+                            </div>
+                        </div>
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title"><span>类型筛选</span></div>
+                            <div class="stx-re-world-filter-list">
+                                ${typeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateTypeFilter ? 'save' : ''}" data-world-type="${escapeHtml(item.key)}"${buildTipAttr(`只显示类型为 ${item.label} 的世界状态。`)} style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
+                            </div>
+                        </div>
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title"><span>关键词过滤</span></div>
+                            <input class="text_pole" data-world-keyword-input placeholder="输入关键词过滤" value="${escapeHtml(currentWorldStateKeywordFilter)}">
+                            <div class="stx-re-world-action-row">
+                                <button class="stx-re-btn" data-world-keyword-apply${buildTipAttr('应用关键词过滤，匹配标题、摘要、关键词与标签。')}><i class="fa-solid fa-check" aria-hidden="true"></i> 应用</button>
+                                <button class="stx-re-btn" data-world-keyword-clear${buildTipAttr('清空关键词过滤，重新显示全部命中条目。')}><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> 清空</button>
+                            </div>
+                        </div>
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title"><span>分类捷径</span></div>
+                            <div class="stx-re-world-filter-list">
+                                ${groupedSummary.length > 0 ? groupedSummary.map((item: { scopeKey: string; typeKey: string; count: number }): string => `<button class="stx-re-btn" data-world-group-scope="${escapeHtml(item.scopeKey)}" data-world-group-type="${escapeHtml(item.typeKey)}"${buildTipAttr(`快速切换到 ${formatWorldStateScopeLabel(item.scopeKey)} / ${formatWorldStateTypeLabel(item.typeKey)} 分类。`)} style="justify-content:flex-start;">${escapeHtml(formatWorldStateScopeLabel(item.scopeKey))} / ${escapeHtml(formatWorldStateTypeLabel(item.typeKey))} · ${escapeHtml(String(item.count))} 条</button>`).join('') : '<div class="stx-re-record-sub">暂无可用分类</div>'}
+                            </div>
                         </div>
                     </div>
-                    <div style="display:flex; flex-direction:column; gap:10px;">
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">结构化世界状态</div>
-                        ${rowsHtml}
+                    <div class="stx-re-world-sections">
+                        ${majorEventPanelHtml}
+                        ${contentHtml}
                     </div>
                 </div>
             </div>
@@ -2172,6 +4236,152 @@ export async function openRecordEditor(): Promise<void> {
                 void renderWorldStateStructuredView();
             });
         });
+
+        contentArea.querySelector('[data-world-sections-expand]')?.addEventListener('click', (): void => {
+            contentArea.querySelectorAll('.stx-re-world-section-collapsible').forEach((node: Element): void => {
+                (node as HTMLDetailsElement).open = true;
+            });
+            requestAnimationFrame((): void => updateWorldStickyTableHeaders(contentArea, contentArea));
+        });
+
+        contentArea.querySelector('[data-world-sections-collapse]')?.addEventListener('click', (): void => {
+            contentArea.querySelectorAll('.stx-re-world-section-collapsible').forEach((node: Element): void => {
+                (node as HTMLDetailsElement).open = false;
+            });
+            requestAnimationFrame((): void => updateWorldStickyTableHeaders(contentArea, contentArea));
+        });
+
+        contentArea.querySelector('[data-world-scroll-top]')?.addEventListener('click', (): void => {
+            contentArea.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        contentArea.querySelectorAll('[data-world-section-nav]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const sectionKey = String((button as HTMLElement).dataset.worldSectionNav ?? '').trim();
+                const target = contentArea.querySelector(`#stx-re-world-section-${sectionKey}`) as HTMLElement | null;
+                if (!target) {
+                    return;
+                }
+                if (target instanceof HTMLDetailsElement) {
+                    target.open = true;
+                }
+                const targetRect = target.getBoundingClientRect();
+                const contentRect = contentArea.getBoundingClientRect();
+                const nextTop = contentArea.scrollTop + (targetRect.top - contentRect.top) - 12;
+                contentArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+                requestAnimationFrame((): void => updateWorldStickyTableHeaders(contentArea, contentArea));
+            });
+        });
+
+        worldUiInteractionController?.abort();
+        worldUiInteractionController = new AbortController();
+        const worldUiSignal = worldUiInteractionController.signal;
+
+        const overviewStrip = contentArea.querySelector('.stx-re-world-overview-strip') as HTMLElement | null;
+        const scheduleWorldUiRefresh = (() => {
+            let rafId = 0;
+            return (): void => {
+                if (rafId) {
+                    return;
+                }
+                rafId = window.requestAnimationFrame((): void => {
+                    rafId = 0;
+                    if (overviewStrip) {
+                        updateWorldOverviewStripState(overviewStrip);
+                    }
+                    updateWorldStickyTableHeaders(contentArea, contentArea);
+                });
+            };
+        })();
+
+        if (overviewStrip) {
+            updateWorldOverviewStripState(overviewStrip);
+            let draggingPointerId: number | null = null;
+            let dragStartX = 0;
+            let dragStartScrollLeft = 0;
+            const stopStripDragging = (): void => {
+                draggingPointerId = null;
+                overviewStrip.classList.remove('is-dragging');
+            };
+
+            contentArea.querySelectorAll('[data-world-strip-nav]').forEach((node: Element): void => {
+                node.addEventListener('click', (): void => {
+                    const direction = String((node as HTMLElement).dataset.worldStripNav ?? '').trim();
+                    const delta = direction === 'prev' ? -360 : 360;
+                    animateHorizontalScrollBy(overviewStrip, delta, {
+                        duration: 320,
+                        onFrame: scheduleWorldUiRefresh,
+                    });
+                }, { signal: worldUiSignal });
+            });
+
+            overviewStrip.addEventListener('scroll', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal, passive: true });
+            overviewStrip.addEventListener('pointerdown', (event: PointerEvent): void => {
+                if (event.button !== 0) {
+                    return;
+                }
+                const target = event.target as HTMLElement | null;
+                if (target?.closest('[data-world-strip-nav]')) {
+                    return;
+                }
+                if (overviewStrip.scrollWidth <= overviewStrip.clientWidth) {
+                    return;
+                }
+                stopAnimatedHorizontalScroll(overviewStrip, true);
+                draggingPointerId = event.pointerId;
+                dragStartX = event.clientX;
+                dragStartScrollLeft = overviewStrip.scrollLeft;
+                overviewStrip.classList.add('is-dragging');
+                overviewStrip.setPointerCapture(event.pointerId);
+            }, { signal: worldUiSignal });
+            overviewStrip.addEventListener('pointermove', (event: PointerEvent): void => {
+                if (draggingPointerId == null || event.pointerId !== draggingPointerId) {
+                    return;
+                }
+                const deltaX = event.clientX - dragStartX;
+                overviewStrip.scrollLeft = dragStartScrollLeft - deltaX;
+                scheduleWorldUiRefresh();
+                event.preventDefault();
+            }, { signal: worldUiSignal });
+            overviewStrip.addEventListener('pointerup', (event: PointerEvent): void => {
+                if (draggingPointerId != null && event.pointerId === draggingPointerId) {
+                    stopStripDragging();
+                }
+            }, { signal: worldUiSignal });
+            overviewStrip.addEventListener('pointercancel', (): void => stopStripDragging(), { signal: worldUiSignal });
+            overviewStrip.addEventListener('lostpointercapture', (): void => stopStripDragging(), { signal: worldUiSignal });
+            overviewStrip.addEventListener('wheel', (event: WheelEvent): void => {
+                const horizontalIntent = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+                const delta = horizontalIntent ? event.deltaX : event.deltaY;
+                if (!delta) {
+                    return;
+                }
+                const canScroll = overviewStrip.scrollWidth > overviewStrip.clientWidth;
+                if (!canScroll) {
+                    return;
+                }
+                event.preventDefault();
+                animateHorizontalScrollBy(overviewStrip, delta, {
+                    duration: horizontalIntent ? 220 : 280,
+                    onFrame: scheduleWorldUiRefresh,
+                });
+            }, { signal: worldUiSignal, passive: false });
+        }
+
+        contentArea.addEventListener('scroll', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal, passive: true });
+        contentArea.querySelectorAll('.stx-re-world-section-collapsible').forEach((node: Element): void => {
+            node.addEventListener('toggle', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal });
+        });
+        contentArea.querySelectorAll('.stx-re-world-table-wrap.is-scrollable').forEach((node: Element): void => {
+            (node as HTMLElement).addEventListener('scroll', (): void => scheduleWorldUiRefresh(), { signal: worldUiSignal, passive: true });
+        });
+
+        requestAnimationFrame((): void => {
+            applyWorldTableViewportLimits(contentArea);
+            scheduleWorldUiRefresh();
+            window.setTimeout((): void => applyWorldTableViewportLimits(contentArea), 120);
+            window.setTimeout((): void => scheduleWorldUiRefresh(), 120);
+        });
     }
 
     /**
@@ -2202,9 +4412,7 @@ export async function openRecordEditor(): Promise<void> {
 
             const defaultSortCol = tableName === 'events' || tableName === 'audit'
                 ? 'ts'
-                : tableName === 'world_state'
-                    ? 'updatedAt'
-                    : tableName === 'summaries'
+                : tableName === 'summaries'
                         ? 'level'
                         : 'factKey';
             const sortCol = currentSort.col || defaultSortCol;
@@ -2316,20 +4524,6 @@ export async function openRecordEditor(): Promise<void> {
                             <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
                         </tr>
                     `;
-                } else if (tableName === 'world_state') {
-                    if (!theadHtml) {
-                        theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('状态主题', 'path')}${headerCell('当前状态', 'value')}${headerCell('最近更新时间', 'updatedAt')}<th>操作</th></tr>`;
-                    }
-                    const worldPath = String(record.path ?? '').trim();
-                    rowsHtml += `
-                        <tr class="${rowClass}">
-                            <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
-                            <td>${renderRecordSummaryMarkup(buildWorldStateHeadline(worldPath), buildWorldStateSubtitle(record), '', '')}</td>
-                            <td><div class="stx-re-value editable" data-id="${escapeHtml(recordId)}" data-type="object">${renderReadableValueHtml(payloadValue, false)}</div></td>
-                            <td>${escapeHtml(formatTimeLabel(record.updatedAt))}</td>
-                            <td><div class="stx-re-actions"><button class="stx-re-btn edit" data-id="${escapeHtml(recordId)}">编辑</button><button class="stx-re-btn delete" data-id="${escapeHtml(recordId)}">删除</button></div></td>
-                        </tr>
-                    `;
                 } else {
                     if (!theadHtml) {
                         theadHtml = `<tr><th style="width:30px; text-align:center"><input type="checkbox" class="stx-re-checkbox stx-re-select-all"></th>${headerCell('变更动作', 'action')}${headerCell('执行来源', 'actor')}${headerCell('变更内容', 'after')}${headerCell('发生时间', 'ts')}<th>操作</th></tr>`;
@@ -2362,6 +4556,7 @@ export async function openRecordEditor(): Promise<void> {
             contentArea.appendChild(tableEl);
 
             tableEl.querySelectorAll('.stx-re-th-sortable').forEach((header: Element): void => {
+                (header as HTMLElement).dataset.tip = '点击按这一列排序，再点一次切换升序/降序。';
                 header.addEventListener('click', (): void => {
                     const column = String((header as HTMLElement).dataset.col ?? '');
                     if (!column) {
@@ -2390,6 +4585,7 @@ export async function openRecordEditor(): Promise<void> {
             });
 
             tableEl.querySelectorAll('.stx-re-btn.delete').forEach((button: Element): void => {
+                (button as HTMLElement).dataset.tip = '把这条原始记录加入待删除列表，保存后才会真正写回数据库。';
                 button.addEventListener('click', (): void => {
                     const id = String((button as HTMLElement).dataset.id ?? '');
                     if (!id) {
@@ -2403,6 +4599,7 @@ export async function openRecordEditor(): Promise<void> {
             });
 
             tableEl.querySelectorAll('.stx-re-btn.edit').forEach((button: Element): void => {
+                (button as HTMLElement).dataset.tip = '进入编辑态后可修改当前载荷，再次点击会把修改加入待保存列表。';
                 button.addEventListener('click', (): void => {
                     const buttonElement = button as HTMLButtonElement;
                     const id = String(buttonElement.dataset.id ?? '');
@@ -2582,17 +4779,17 @@ export async function openRecordEditor(): Promise<void> {
                     ? candidates.find((item: DerivedRowCandidate): boolean => normalizeLookup(item.rowId) === normalizeLookup(row.rowId)) ?? null
                     : null;
                 if (row.sourceRefs.length > 0) {
-                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="sources" data-row-id="${escapeHtml(row.rowId)}">来源</button>`);
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="sources" data-row-id="${escapeHtml(row.rowId)}"${buildTipAttr('查看这条逻辑行的来源明细。')}>来源</button>`);
                 }
                 if (row.rowKind === 'derived' && candidate) {
-                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="promote" data-row-id="${escapeHtml(row.rowId)}" data-candidate-id="${escapeHtml(candidate.candidateId)}">转正</button>`);
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="promote" data-row-id="${escapeHtml(row.rowId)}" data-candidate-id="${escapeHtml(candidate.candidateId)}"${buildTipAttr('把这条候选行转为正式逻辑行。')}>转正</button>`);
                 }
                 if (row.rowKind === 'materialized' || row.rowKind === 'redirected') {
-                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="alias" data-row-id="${escapeHtml(row.rowId)}">设置别名</button>`);
-                    actionButtons.push(`<button class="stx-re-btn danger" data-logic-row-action="tombstone" data-row-id="${escapeHtml(row.rowId)}">隐藏</button>`);
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="alias" data-row-id="${escapeHtml(row.rowId)}"${buildTipAttr('为这条逻辑行补充别名。')}>设置别名</button>`);
+                    actionButtons.push(`<button class="stx-re-btn danger" data-logic-row-action="tombstone" data-row-id="${escapeHtml(row.rowId)}"${buildTipAttr('隐藏这条逻辑行，但不会立即物理删除。')}>隐藏</button>`);
                 }
                 if (row.rowKind === 'tombstoned') {
-                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="restore" data-row-id="${escapeHtml(row.rowId)}">恢复</button>`);
+                    actionButtons.push(`<button class="stx-re-btn" data-logic-row-action="restore" data-row-id="${escapeHtml(row.rowId)}"${buildTipAttr('恢复这条已隐藏的逻辑行。')}>恢复</button>`);
                 }
                 const cellsHtml = view.columns.map((field): string => {
                     const cellValue = row.values[field.key] ?? (field.isPrimaryKey ? row.rowId : '');
@@ -2606,7 +4803,7 @@ export async function openRecordEditor(): Promise<void> {
         const quickLocation = isStableSnapshotValue(experience.canon.world.currentLocation) ? experience.canon.world.currentLocation!.value : '尚未稳定抽取';
         const tableSummary = orderedSummaries.find((item: LogicTableSummary): boolean => item.tableKey === view.tableKey) || orderedSummaries[0];
         const summaryButtonsHtml = orderedSummaries.slice(0, 8).map((summary: LogicTableSummary): string => `
-            <button class="stx-re-btn${summary.tableKey === view.tableKey ? ' save' : ''}" data-logic-summary-key="${escapeHtml(summary.tableKey)}">${escapeHtml(summary.title)} · ${escapeHtml(formatLogicStatusLabel(summary.status))}</button>
+            <button class="stx-re-btn${summary.tableKey === view.tableKey ? ' save' : ''}" data-logic-summary-key="${escapeHtml(summary.tableKey)}"${buildTipAttr(`切换到 ${summary.title} 逻辑表。当前状态：${formatLogicStatusLabel(summary.status)}。`)}>${escapeHtml(summary.title)} · ${escapeHtml(formatLogicStatusLabel(summary.status))}</button>
         `).join('');
         const coverageCardsHtml = [
             { label: '正式行', value: String(view.sourceCoverage.factRows), tone: '' },
@@ -2616,56 +4813,76 @@ export async function openRecordEditor(): Promise<void> {
             { label: '别名', value: String(view.sourceCoverage.aliasCount), tone: view.sourceCoverage.aliasCount > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
             { label: '待处理来源', value: String(candidates.length), tone: candidates.length > 0 ? 'color: var(--SmartThemeQuoteColor, #4a90e2);' : '' },
         ].map((item: { label: string; value: string; tone: string }): string => `
-            <div class="stx-re-json" style="padding:10px 12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); min-width:120px;">
+            <div class="stx-re-panel-card stx-re-panel-chip"${buildTipAttr(`${item.label}：${item.value}`)}>
                 <div style="font-size:11px; opacity:0.7; margin-bottom:4px;">${escapeHtml(item.label)}</div>
                 <div style="font-weight:700; ${item.tone}">${escapeHtml(item.value)}</div>
             </div>
         `).join('');
 
         contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px;">
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor, #4a90e2) 8%, transparent);">
-                        <div style="font-weight:700; margin-bottom:6px;">维护概览</div>
-                        <div>${escapeHtml(worldOverview)}</div>
-                        <div style="margin-top:6px; opacity:0.8;">地点：${escapeHtml(quickLocation)}</div>
+            <div class="stx-re-shell-stack">
+                <div class="stx-re-panel-grid">
+                    <div class="stx-re-panel-card stx-re-panel-card-emphasis">
+                        <div class="stx-re-world-section-title">维护概览</div>
+                        <div class="stx-re-record-sub">${escapeHtml(worldOverview)}</div>
+                        <div class="stx-re-record-code">地点：${escapeHtml(quickLocation)}</div>
                     </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">世界约束</div>
-                        <div>规则：${escapeHtml(summarizeSnapshotValues(experience.canon.world.rules, 2))}</div>
-                        <div style="margin-top:6px;">硬约束：${escapeHtml(summarizeSnapshotValues(experience.canon.world.hardConstraints, 2))}</div>
-                        <div style="margin-top:6px;">活跃世界书：${escapeHtml(summarizeSnapshotValues(experience.canon.world.activeLorebooks, 2))}</div>
+                    <div class="stx-re-panel-card">
+                        <div class="stx-re-world-section-title">世界约束</div>
+                        <div class="stx-re-record-sub">规则：${escapeHtml(summarizeSnapshotValues(experience.canon.world.rules, 2))}</div>
+                        <div class="stx-re-record-code">硬约束：${escapeHtml(summarizeSnapshotValues(experience.canon.world.hardConstraints, 2))}</div>
+                        <div class="stx-re-record-code">活跃世界书：${escapeHtml(summarizeSnapshotValues(experience.canon.world.activeLorebooks, 2))}</div>
                     </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">逻辑维护状态</div>
-                        <div>${escapeHtml(topMaintenanceLabels)}</div>
-                        <div style="margin-top:6px;">角色 ${experience.canon.characters.length} / 表 ${orderedSummaries.length}</div>
-                        <div style="margin-top:6px;">事实 ${experience.canon.health.dataLayers.factsCount} / 世界状态 ${experience.canon.health.dataLayers.worldStateCount}</div>
+                    <div class="stx-re-panel-card">
+                        <div class="stx-re-world-section-title">逻辑维护状态</div>
+                        <div class="stx-re-record-sub">${escapeHtml(topMaintenanceLabels)}</div>
+                        <div class="stx-re-record-code">角色 ${experience.canon.characters.length} / 表 ${orderedSummaries.length}</div>
+                        <div class="stx-re-record-code">事实 ${experience.canon.health.dataLayers.factsCount} / 世界状态 ${experience.canon.health.dataLayers.worldStateCount}</div>
                     </div>
                 </div>
-                <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
-                    <div class="stx-re-json" title="${escapeHtml(currentChatKey)}">当前聊天：${escapeHtml(formatChatKeyLabel(currentChatKey))}</div>
-                    <div class="stx-re-json" title="${escapeHtml(template.templateId)}">模板：${escapeHtml(template.name)}（${escapeHtml(formatTemplateIdLabel(template.templateId))}）</div>
-                    <div class="stx-re-json">绑定状态：${binding?.isLocked ? '已锁定' : '自动同步'}</div>
-                    <div class="stx-re-json" title="${escapeHtml(view.tableKey)}">当前表：${escapeHtml(view.title)}（${escapeHtml(formatLogicTableKeyLabel(view.tableKey))}） · ${escapeHtml(formatLogicTableSummaryLine(tableSummary))}</div>
+                <div class="stx-re-split-layout">
+                    <div class="stx-re-side-column">
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title">当前目标</div>
+                            <div class="stx-re-record-sub">当前聊天：${escapeHtml(formatChatKeyLabel(currentChatKey))}</div>
+                            <div class="stx-re-record-code">模板：${escapeHtml(template.name)}（${escapeHtml(formatTemplateIdLabel(template.templateId))}）</div>
+                            <div class="stx-re-record-code">绑定状态：${binding?.isLocked ? '已锁定' : '自动同步'}</div>
+                            <div class="stx-re-record-code">当前表：${escapeHtml(view.title)}（${escapeHtml(formatLogicTableKeyLabel(view.tableKey))}）</div>
+                            <div class="stx-re-record-sub">${escapeHtml(formatLogicTableSummaryLine(tableSummary))}</div>
+                        </div>
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title">逻辑表切换</div>
+                            <select class="text_pole" data-logic-table-select>${tableOptionsHtml}</select>
+                            <div class="stx-re-world-filter-list stx-re-chip-list">${summaryButtonsHtml}</div>
+                        </div>
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title">维护动作</div>
+                            <div class="stx-re-action-grid">
+                                <button class="stx-re-btn" data-logic-refresh${buildTipAttr('重新读取当前聊天的逻辑表状态和候选来源。')}>刷新</button>
+                                <button class="stx-re-btn" data-logic-create-toggle${buildTipAttr(logicCreateExpanded ? '收起新建表单。' : '展开新建行表单，用于手动补录逻辑行。')}>${logicCreateExpanded ? '取消新建' : '新建行'}</button>
+                                <button class="stx-re-btn" data-logic-merge${buildTipAttr('将当前勾选的两行逻辑记录合并为一行。')}>合并选中</button>
+                                <button class="stx-re-btn danger" data-logic-delete${buildTipAttr('将当前勾选的逻辑行标记为隐藏，不会立即物理删除。')}>隐藏选中</button>
+                                <button class="stx-re-btn" data-logic-restore${buildTipAttr('恢复当前勾选的已隐藏逻辑行。')}>恢复选中</button>
+                                <button class="stx-re-btn" data-logic-repair="normalize_aliases"${buildTipAttr('扫描并整理当前逻辑表中的别名与重定向关系。')}>规范别名</button>
+                                <button class="stx-re-btn" data-logic-repair="compact_tombstones"${buildTipAttr('整理隐藏项，压缩逻辑表中无效或已废弃的记录。')}>整理隐藏项</button>
+                                <button class="stx-re-btn" data-logic-repair="rebuild_candidates"${buildTipAttr('根据当前数据层重新生成待处理候选行。')}>重建候选</button>
+                                <button class="stx-re-btn" data-open-diagnostics${buildTipAttr('跳转到系统诊断面板，查看当前聊天的结构风险和健康状态。')}>查看诊断</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stx-re-main-column">
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title">表覆盖统计</div>
+                            <div class="stx-re-chip-wrap">${coverageCardsHtml}</div>
+                        </div>
+                        ${view.warnings.length > 0 ? `<div class="stx-re-panel-card stx-re-panel-card-warning"><div class="stx-re-world-section-title">当前预警</div><div class="stx-re-record-sub">${escapeHtml(view.warnings.join(' / '))}</div></div>` : ''}
+                        ${logicCreateExpanded ? `<div class="stx-re-panel-card"><div class="stx-re-world-section-title">新建 ${escapeHtml(view.title)} 行</div><label style="display:flex; flex-direction:column; gap:4px; min-width:220px;"><span>行 ID（主键）</span><input class="text_pole" data-create-row-id placeholder="请输入新的行 ID"></label><div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:8px;">${createFieldsHtml || '<span class="stx-re-json">当前表暂无额外字段，可先创建空行后再编辑。</span>'}</div><div class="stx-re-action-row"><button class="stx-re-btn save" data-logic-create-submit>立即创建</button><button class="stx-re-btn" data-logic-create-cancel>取消</button></div></div>` : ''}
+                        <div class="stx-re-panel-card">
+                            <div class="stx-re-world-section-title">逻辑行清单</div>
+                            <table class="stx-re-table"><thead><tr><th style="width:30px; text-align:center;"><input type="checkbox" class="stx-re-checkbox" data-logic-check-all></th><th>行 / 状态</th>${headerHtml}<th style="min-width:180px;">维护动作</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+                        </div>
+                    </div>
                 </div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px;">${summaryButtonsHtml}</div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:stretch;">${coverageCardsHtml}</div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                    <select class="text_pole" data-logic-table-select>${tableOptionsHtml}</select>
-                    <button class="stx-re-btn" data-logic-refresh>刷新</button>
-                    <button class="stx-re-btn" data-logic-create-toggle>${logicCreateExpanded ? '取消新建' : '新建行'}</button>
-                    <button class="stx-re-btn" data-logic-merge>合并选中</button>
-                    <button class="stx-re-btn danger" data-logic-delete>隐藏选中</button>
-                    <button class="stx-re-btn" data-logic-restore>恢复选中</button>
-                    <button class="stx-re-btn" data-logic-repair="normalize_aliases">规范别名</button>
-                    <button class="stx-re-btn" data-logic-repair="compact_tombstones">整理隐藏项</button>
-                    <button class="stx-re-btn" data-logic-repair="rebuild_candidates">重建候选</button>
-                    <button class="stx-re-btn" data-open-diagnostics>查看诊断</button>
-                </div>
-                ${view.warnings.length > 0 ? `<div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #f59e0b) 24%, transparent);">${escapeHtml(view.warnings.join(' / '))}</div>` : ''}
-                ${logicCreateExpanded ? `<div style="display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--SmartThemeBorderColor); border-radius:10px;"><div class="stx-re-accent-text">新建 ${escapeHtml(view.title)} 行</div><label style="display:flex; flex-direction:column; gap:4px; min-width:220px;"><span>行 ID（主键）</span><input class="text_pole" data-create-row-id placeholder="请输入新的行 ID"></label><div style="display:flex; flex-wrap:wrap; gap:10px;">${createFieldsHtml || '<span class="stx-re-json">当前表暂无额外字段，可先创建空行后再编辑。</span>'}</div><div style="display:flex; gap:8px;"><button class="stx-re-btn save" data-logic-create-submit>立即创建</button><button class="stx-re-btn" data-logic-create-cancel>取消</button></div></div>` : ''}
-                <table class="stx-re-table"><thead><tr><th style="width:30px; text-align:center;"><input type="checkbox" class="stx-re-checkbox" data-logic-check-all></th><th>行 / 状态</th>${headerHtml}<th style="min-width:180px;">维护动作</th></tr></thead><tbody>${rowsHtml}</tbody></table>
             </div>
         `;
 
@@ -3019,7 +5236,7 @@ export async function openRecordEditor(): Promise<void> {
             ? sortedPersonaProfiles.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
                 const actorLabel = actorLabelMap.get(actorKey) || actorKey;
                 const actionButtons = [
-                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-diag-persona-actor="${escapeHtml(actorKey)}">${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
+                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-diag-persona-actor="${escapeHtml(actorKey)}"${buildTipAttr(actorKey === activeActorKey ? '当前已经是诊断主视角。' : '将这个角色设为诊断面板里的当前主视角。')}>${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
                 ].join('');
                 return renderPersonaProfileCardMarkup(actorKey, actorLabel, profile, {
                     active: actorKey === activeActorKey,
@@ -3028,15 +5245,18 @@ export async function openRecordEditor(): Promise<void> {
             }).join('')
             : '<div class="stx-re-empty">当前还没有建立角色画像，可先刷新初始设定或重算画像。</div>';
         const actorForgetRateRows = Array.from(ownedStates.reduce<Map<string, { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }>>((map, owned: OwnedMemoryState) => {
-            const actorKey = String(owned.ownerActorKey ?? '').trim() || '__world__';
-            const actorLabel = actorKey === '__world__' ? '世界 / 未归属' : (actorLabelMap.get(actorKey) || actorKey);
-            const current = map.get(actorKey) ?? { actorKey, actorLabel, total: 0, forgotten: 0, avgProbability: 0 };
-            current.total += 1;
-            current.avgProbability += Number(owned.forgetProbability ?? 0) || 0;
-            if (owned.forgotten) {
-                current.forgotten += 1;
-            }
-            map.set(actorKey, current);
+            const retentionRows = buildMemoryActorRetentionRows(owned, lifecycleMap.get(owned.recordKey), actorLabelMap, activeActorKey);
+            retentionRows.forEach((row: MemoryActorRetentionRowViewModel): void => {
+                const actorKey = row.actorKey;
+                const actorLabel = row.actorLabel;
+                const current = map.get(actorKey) ?? { actorKey, actorLabel, total: 0, forgotten: 0, avgProbability: 0 };
+                current.total += 1;
+                current.avgProbability += Number(row.state.forgetProbability ?? 0) || 0;
+                if (row.state.forgotten) {
+                    current.forgotten += 1;
+                }
+                map.set(actorKey, current);
+            });
             return map;
         }, new Map<string, { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }>()).values())
             .map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number }) => ({
@@ -3048,11 +5268,12 @@ export async function openRecordEditor(): Promise<void> {
             .slice(0, 8);
         const actorForgetRateHtml = actorForgetRateRows.length > 0
             ? actorForgetRateRows.map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number; forgottenRate: number }): string => `
-                <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div class="stx-re-panel-card stx-re-panel-chip">
                     <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
                         <strong>${escapeHtml(item.actorLabel)}</strong>
                         <span>${escapeHtml(formatPercent(item.forgottenRate))}</span>
                     </div>
+                    <div class="stx-re-retention-bar is-compact"><div class="stx-re-retention-fill" style="width:${Math.max(4, Math.round(item.forgottenRate * 1000) / 10)}%"></div></div>
                     <div style="margin-top:6px;">已遗忘 ${escapeHtml(String(item.forgotten))} / ${escapeHtml(String(item.total))}</div>
                     <div style="margin-top:6px; opacity:0.78;">平均遗忘概率 ${escapeHtml(formatPercent(item.avgProbability))}</div>
                 </div>
@@ -3109,14 +5330,14 @@ export async function openRecordEditor(): Promise<void> {
                     </div>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                    <button class="stx-re-btn" data-diag-action="rebuild-chat-view">重建结构视图</button>
-                    <button class="stx-re-btn" data-diag-action="refresh-seed">刷新初始设定</button>
-                    <button class="stx-re-btn" data-diag-action="recompute-personas">重算角色画像</button>
-                    <button class="stx-re-btn" data-diag-action="clear-active-actor">清除主视角</button>
-                    <button class="stx-re-btn" data-diag-repair="normalize_aliases">规范别名</button>
-                    <button class="stx-re-btn" data-diag-repair="compact_tombstones">整理隐藏项</button>
-                    <button class="stx-re-btn" data-diag-repair="rebuild_candidates">重建候选</button>
-                    <button class="stx-re-btn" data-diag-action="open-maintenance">打开逻辑维护</button>
+                    <button class="stx-re-btn" data-diag-action="rebuild-chat-view"${buildTipAttr('重新构建当前聊天的编辑器结构视图，适合结构不同步时使用。')}>重建结构视图</button>
+                    <button class="stx-re-btn" data-diag-action="refresh-seed"${buildTipAttr('重新拉取或刷新当前聊天的初始设定种子。')}>刷新初始设定</button>
+                    <button class="stx-re-btn" data-diag-action="recompute-personas"${buildTipAttr('重新计算所有角色画像，用于修正角色记忆面板。')}>重算角色画像</button>
+                    <button class="stx-re-btn" data-diag-action="clear-active-actor"${buildTipAttr('取消手动指定的主视角，让系统自动选择活跃角色。')}>清除主视角</button>
+                    <button class="stx-re-btn" data-diag-repair="normalize_aliases"${buildTipAttr('针对合适的逻辑表执行别名规范化修复。')}>规范别名</button>
+                    <button class="stx-re-btn" data-diag-repair="compact_tombstones"${buildTipAttr('针对合适的逻辑表执行隐藏项整理。')}>整理隐藏项</button>
+                    <button class="stx-re-btn" data-diag-repair="rebuild_candidates"${buildTipAttr('针对合适的逻辑表重新生成候选。')}>重建候选</button>
+                    <button class="stx-re-btn" data-diag-action="open-maintenance"${buildTipAttr('跳转回逻辑维护视图，继续处理具体逻辑表。')}>打开逻辑维护</button>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:10px;">
                     <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">多角色记忆画像</div>
@@ -3130,7 +5351,7 @@ export async function openRecordEditor(): Promise<void> {
                     <div style="display:flex; flex-direction:column; gap:10px;">
                         <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">问题列表</div>
                         ${health.issues.length > 0 ? health.issues.map((issue) => `
-                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                            <div class="stx-re-panel-card stx-re-panel-chip">
                                 <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
                                     <strong>${escapeHtml(issue.label)}</strong>
                                     <span>${escapeHtml(formatHealthSeverityLabel(issue.severity))}</span>
@@ -3143,13 +5364,13 @@ export async function openRecordEditor(): Promise<void> {
                     <div style="display:flex; flex-direction:column; gap:10px;">
                         <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">逻辑表状态</div>
                         ${orderedSummaries.length > 0 ? orderedSummaries.map((summary: LogicTableSummary) => `
-                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                            <div class="stx-re-panel-card stx-re-panel-chip">
                                 <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
                                     <strong>${escapeHtml(summary.title)}</strong>
                                     <span>${escapeHtml(formatLogicStatusLabel(summary.status))}</span>
                                 </div>
                                 <div>${escapeHtml(formatLogicTableSummaryLine(summary))}</div>
-                                <div style="margin-top:8px;"><button class="stx-re-btn" data-diag-open-table="${escapeHtml(summary.tableKey)}">打开该表维护</button></div>
+                                <div style="margin-top:8px;"><button class="stx-re-btn" data-diag-open-table="${escapeHtml(summary.tableKey)}"${buildTipAttr(`切换到 ${summary.title} 逻辑表继续维护。`)}>打开该表维护</button></div>
                             </div>
                         `).join('') : '<div class="stx-re-empty">当前没有逻辑表摘要。</div>'}
                     </div>
@@ -3159,7 +5380,7 @@ export async function openRecordEditor(): Promise<void> {
                     ${recentAffectedRows.length > 0 ? recentAffectedRows.map(({ owned, lifecycle }): string => {
                         const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
                         return `
-                            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:8px;">
+                            <div class="stx-re-panel-card stx-re-panel-chip"${buildTipAttr('这条记忆最近受到了重大事件的强化或冲淡影响。')}>
                                 <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                                     <div style="font-weight:700; word-break:break-word;">${escapeHtml(title)}</div>
                                     <span>${escapeHtml(formatMemoryStageLabel(lifecycle?.stage || 'clear'))}</span>
@@ -3378,8 +5599,8 @@ export async function openRecordEditor(): Promise<void> {
             ? selectedPersonaEntries.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
                 const actorLabel = actorLabelMap.get(actorKey) || actorKey;
                 const extraActionsHtml = [
-                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-memory-persona-set-active="${escapeHtml(actorKey)}">${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
-                    `<button class="stx-re-btn" data-memory-actor-focus="${escapeHtml(actorKey)}">只看该角色</button>`,
+                    `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-memory-persona-set-active="${escapeHtml(actorKey)}"${buildTipAttr(actorKey === activeActorKey ? '当前已经是主视角角色。' : '将这个角色设为当前主视角。')}>${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
+                    `<button class="stx-re-btn" data-memory-actor-focus="${escapeHtml(actorKey)}"${buildTipAttr('只显示这个角色的记忆与画像。')}>只看该角色</button>`,
                 ].join('');
                 return renderPersonaProfileCardMarkup(actorKey, actorLabel, profile, {
                     active: actorKey === activeActorKey,
@@ -3393,6 +5614,7 @@ export async function openRecordEditor(): Promise<void> {
             ? '<div class="stx-re-empty">当前筛选下还没有角色记忆。</div>'
             : filteredOwned.map((owned: OwnedMemoryState): string => {
                 const lifecycle = lifecycleMap.get(owned.recordKey);
+                const retentionRows = buildMemoryActorRetentionRows(owned, lifecycle, actorLabelMap, activeActorKey);
                 const recall = recallStats.get(owned.recordKey);
                 const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
                 const recordTooltip = buildMemoryRecordTooltip(owned.recordKey, owned);
@@ -3406,7 +5628,7 @@ export async function openRecordEditor(): Promise<void> {
                 const reinforcedRefs = renderMemoryEventRefs(owned.reinforcedByEventIds, eventTitleMap, '暂无');
                 const invalidatedRefs = renderMemoryEventRefs(owned.invalidatedByEventIds, eventTitleMap, '暂无');
                 return `
-                    <div class="stx-re-json" style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor); display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-panel-card stx-re-memory-entry"${buildTipAttr('角色记忆条目：显示归属、遗忘状态、重大事件影响与手动维护入口。')}>
                         <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div style="display:flex; flex-direction:column; gap:6px; min-width:0;">
                                 <div style="font-weight:700; word-break:break-word;" data-tip="${escapeHtml(recordTooltip)}">${escapeHtml(title)}</div>
@@ -3429,6 +5651,13 @@ export async function openRecordEditor(): Promise<void> {
                         <div style="display:flex; flex-wrap:wrap; gap:8px; opacity:0.82;">
                             ${(owned.forgottenReasonCodes.length > 0 ? owned.forgottenReasonCodes : ['当前没有明确遗忘原因']).slice(0, 4).map((reason: string): string => `<span class="stx-re-json">${escapeHtml(formatMemoryReasonLabel(reason))}</span>`).join('')}
                         </div>
+                        <div style="display:flex; flex-direction:column; gap:8px; padding:10px; border-radius:10px; border:1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.1)) 88%, transparent); background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255,255,255,0.04)) 100%, transparent);">
+                            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                                <div style="font-weight:700;">角色遗忘矩阵</div>
+                                <span class="stx-re-json">${escapeHtml(String(retentionRows.length))} 个视角</span>
+                            </div>
+                            ${renderMemoryActorRetentionRowsMarkup(retentionRows, { maxRows: 8 })}
+                        </div>
                         <div style="display:flex; flex-direction:column; gap:8px; padding:10px; border-radius:10px; border:1px dashed var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 85%, transparent);">
                             <div style="font-weight:700;">重大事件影响</div>
                             <div style="opacity:0.82;">${escapeHtml(formatMemoryImpactSummary(owned))}</div>
@@ -3436,11 +5665,11 @@ export async function openRecordEditor(): Promise<void> {
                             <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>覆盖/冲淡来源：</strong>${invalidatedRefs}</div>
                         </div>
                         <div style="display:flex; flex-wrap:wrap; gap:8px;">
-                            <button class="stx-re-btn" data-memory-action="toggle-forgotten" data-record-key="${escapeHtml(owned.recordKey)}">${owned.forgotten ? '恢复记忆' : '标记遗忘'}</button>
-                            <button class="stx-re-btn" data-memory-action="change-owner" data-record-key="${escapeHtml(owned.recordKey)}">调整归属</button>
-                            <button class="stx-re-btn" data-memory-action="change-subtype" data-record-key="${escapeHtml(owned.recordKey)}">调整细分</button>
-                            <button class="stx-re-btn" data-memory-action="change-importance" data-record-key="${escapeHtml(owned.recordKey)}">调整重要度</button>
-                            <button class="stx-re-btn save" data-memory-action="recompute" data-record-key="${escapeHtml(owned.recordKey)}">重新计算</button>
+                            <button class="stx-re-btn" data-memory-action="toggle-forgotten" data-record-key="${escapeHtml(owned.recordKey)}"${buildTipAttr(owned.forgotten ? '恢复这条已遗忘记忆。' : '手动把这条记忆标记为已遗忘。')}>${owned.forgotten ? '恢复记忆' : '标记遗忘'}</button>
+                            <button class="stx-re-btn" data-memory-action="change-owner" data-record-key="${escapeHtml(owned.recordKey)}"${buildTipAttr('调整这条记忆归属到哪个角色，留空则归入世界/未归属。')}>调整归属</button>
+                            <button class="stx-re-btn" data-memory-action="change-subtype" data-record-key="${escapeHtml(owned.recordKey)}"${buildTipAttr('修改这条记忆的细分类型，例如重大剧情、地点信息或偏好。')}>调整细分</button>
+                            <button class="stx-re-btn" data-memory-action="change-importance" data-record-key="${escapeHtml(owned.recordKey)}"${buildTipAttr('手动调整重要度，这会影响遗忘概率。')}>调整重要度</button>
+                            <button class="stx-re-btn save" data-memory-action="recompute" data-record-key="${escapeHtml(owned.recordKey)}"${buildTipAttr('根据当前参数重新计算这条记忆的遗忘状态。')}>重新计算</button>
                         </div>
                     </div>
                 `;
@@ -3474,10 +5703,10 @@ export async function openRecordEditor(): Promise<void> {
                     <div style="display:flex; flex-direction:column; gap:10px;">
                         <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">角色列表</div>
                         ${actorFilters.map((item: { key: string; label: string }): string => `
-                            <button class="stx-re-btn ${item.key === currentMemoryActorKey ? 'save' : ''}" data-memory-actor="${escapeHtml(item.key)}" style="justify-content:flex-start;">${escapeHtml(item.label)}</button>
+                            <button class="stx-re-btn ${item.key === currentMemoryActorKey ? 'save' : ''}" data-memory-actor="${escapeHtml(item.key)}"${buildTipAttr(`筛选为 ${item.label} 的角色记忆。`)} style="justify-content:flex-start;">${escapeHtml(item.label)}</button>
                         `).join('')}
-                        <button class="stx-re-btn" data-memory-persona-recompute>重算全部角色画像</button>
-                        <button class="stx-re-btn" data-memory-persona-clear-active>主视角切回自动</button>
+                        <button class="stx-re-btn" data-memory-persona-recompute${buildTipAttr('重新计算当前聊天下全部角色的画像。')}>重算全部角色画像</button>
+                        <button class="stx-re-btn" data-memory-persona-clear-active${buildTipAttr('清除手动指定的主视角，回到自动选择模式。')}>主视角切回自动</button>
                         <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
                             <div style="font-weight:700; margin-bottom:6px;">遗忘率较高的类型</div>
                             ${topSubtypeRates.length > 0 ? topSubtypeRates.map(([key, stats]: [string, { total: number; forgotten: number }]): string => `<div style="margin-top:6px;">${escapeHtml(formatMemorySubtypeLabel(key))}：${escapeHtml(String(stats.forgotten))}/${escapeHtml(String(stats.total))}</div>`).join('') : '<div>暂无可统计项</div>'}
@@ -3631,7 +5860,13 @@ export async function openRecordEditor(): Promise<void> {
      * @returns 无返回值
      */
     async function renderActiveView(): Promise<void> {
+        worldUiInteractionController?.abort();
+        worldUiInteractionController = null;
         updateChromeState();
+        if (currentViewMode === 'world') {
+            await renderWorldStateStructuredView();
+            return;
+        }
         if (currentViewMode === 'raw') {
             await renderRawTable(currentRawTable);
             return;

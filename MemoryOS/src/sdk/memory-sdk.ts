@@ -30,6 +30,7 @@ import { RowOperationsManager } from '../core/row-operations';
 import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
+import { inferStructuredSeedWorldStateEntries } from '../core/world-state-seed';
 import { db, restoreArchivedMemoryChat } from '../db/db';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { ensureSdkChatDocument } from '../../../SDK/db';
@@ -407,6 +408,10 @@ export class MemorySDKImpl implements MemorySDK {
         await this.stateManager.set('/semantic/world/overview', String(seed.aiSummary?.worldSummary ?? '').trim(), { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/activeLorebooks', seed.activeLorebooks, { sourceEventId: fingerprint });
         await this.stateManager.set('/semantic/meta/groupMembers', seed.groupMembers, { sourceEventId: fingerprint });
+        const structuredSeedEntries = inferStructuredSeedWorldStateEntries(seed);
+        for (const entry of structuredSeedEntries) {
+            await this.stateManager.set(entry.path, entry.value, { sourceEventId: fingerprint });
+        }
     }
 
     private async primeColdStartPrompt(reason: string): Promise<boolean> {

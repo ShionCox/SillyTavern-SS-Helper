@@ -9,6 +9,7 @@ import { AuditManager } from '../core/audit-manager';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from '../core/chat-state-manager';
+import { normalizeWorldStatePatchValue } from '../core/world-state-patch-normalizer';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
 import type { MemoryCandidate } from '../types';
@@ -328,17 +329,20 @@ export class ProposalManager {
         if (patches) {
             for (const p of patches) {
                 if (!p) continue;
+                const normalizedPatchValue = p.op === 'remove'
+                    ? p.value
+                    : normalizeWorldStatePatchValue(p.path, p.value);
                 let stateCandidate: MemoryCandidate | null = null;
                 if (this.chatStateManager) {
                     stateCandidate = await this.chatStateManager.buildMemoryCandidate({
                         candidateId: crypto.randomUUID(),
                         kind: 'state',
                         source: consumerPluginId,
-                        summary: `${normalizeText(p.path)} ${normalizeText(JSON.stringify(p.value ?? ''))}`.trim(),
+                        summary: `${normalizeText(p.path)} ${normalizeText(JSON.stringify(normalizedPatchValue ?? ''))}`.trim(),
                         payload: {
                             op: p.op,
                             path: p.path,
-                            value: p.value,
+                            value: normalizedPatchValue,
                             confidence: envelope.confidence,
                             sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
                         },
@@ -353,7 +357,7 @@ export class ProposalManager {
                 if (p.op === 'remove') {
                     await this.stateManager.patch([{ op: 'remove', path: p.path }]);
                 } else {
-                    await this.stateManager.set(p.path, p.value);
+                    await this.stateManager.set(p.path, normalizedPatchValue);
                 }
                 applied.statePaths.push(p.path);
                 if (stateCandidate && this.chatStateManager) {
