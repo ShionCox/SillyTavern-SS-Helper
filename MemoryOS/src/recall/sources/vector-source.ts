@@ -9,11 +9,11 @@ import {
     loadRecentSummaries,
     normalizeText,
     readSourceLimit,
-    stringifyValue,
     type FactRecord,
     type RecallSourceContext,
     type SummaryRecord,
 } from './shared';
+import { formatFactMemoryText } from '../../core/memory-card-text';
 
 type VectorHit = {
     chunkId: string;
@@ -175,8 +175,7 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
             if (!fact) {
                 continue;
             }
-            const entityPart = fact.entity ? `[${fact.entity.kind}:${fact.entity.id}] ` : '';
-            const rawText = `${entityPart}${fact.type}${fact.path ? `.${fact.path}` : ''}: ${stringifyValue(fact.value)}`;
+            const rawText = formatFactMemoryText(fact as FactRecord);
             const candidate = buildScoredCandidate(context, {
                 candidateId: `vector:${hit.chunkId}`,
                 recordKey: normalizeText(fact.factKey || hit.chunkId),

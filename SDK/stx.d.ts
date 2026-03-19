@@ -672,6 +672,55 @@ export interface VectorMemoryUsageSnapshot {
     lastScore: number | null;
 }
 
+export type MemoryCardScope = 'chat' | 'character' | 'world';
+export type MemoryCardLane = 'identity' | 'style' | 'relationship' | 'rule' | 'event' | 'state' | 'other';
+export type MemoryCardStatus = 'active' | 'superseded' | 'invalidated';
+export type MemoryCardTtl = 'short' | 'medium' | 'long';
+
+export interface RawContextBlock {
+    sourceKind: string;
+    rawText: string;
+    hints: string[];
+    sourceRefs: string[];
+    sourceRecordKey: string | null;
+    sourceRecordKind: string | null;
+}
+
+export interface MemoryCardDraft {
+    scope: MemoryCardScope;
+    lane: MemoryCardLane;
+    subject: string;
+    title: string;
+    memoryText: string;
+    evidenceText?: string | null;
+    entityKeys: string[];
+    keywords: string[];
+    importance: number;
+    confidence: number;
+    ttl: MemoryCardTtl;
+    replaceKey?: string | null;
+    sourceRefs: string[];
+    sourceRecordKey: string | null;
+    sourceRecordKind: string | null;
+    ownerActorKey?: string | null;
+    participantActorKeys: string[];
+    validFrom?: number;
+    validTo?: number;
+}
+
+export interface MemoryCard extends MemoryCardDraft {
+    cardId: string;
+    chatKey: string;
+    status: MemoryCardStatus;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface MemorySummaryEnvelope {
+    summary: string;
+    memoryCards: MemoryCardDraft[];
+}
+
 export interface VectorMemoryRecordSummary {
     chunkId: string;
     chatKey: string;
@@ -711,6 +760,19 @@ export interface VectorMemoryRecordSummary {
     usage: VectorMemoryUsageSnapshot;
 }
 
+export interface MemoryCardSummary extends VectorMemoryRecordSummary {
+    cardId: string;
+    lane: MemoryCardLane;
+    subject: string;
+    title: string;
+    memoryText: string;
+    evidenceText: string | null;
+    ttl: MemoryCardTtl;
+    replaceKey: string | null;
+    status: MemoryCardStatus;
+    cardChunkIds: string[];
+}
+
 export interface VectorMemorySearchTestHit {
     chunkId: string;
     sourceRecordKey: string | null;
@@ -726,6 +788,15 @@ export interface VectorMemorySearchTestHit {
     reasonCodes: string[];
 }
 
+export interface MemoryRecallPreviewHit extends VectorMemorySearchTestHit {
+    cardId: string;
+    lane: MemoryCardLane;
+    subject: string;
+    title: string;
+    ttl: MemoryCardTtl;
+    status: MemoryCardStatus;
+}
+
 export interface VectorMemorySearchTestResult {
     query: string;
     testedAt: number;
@@ -733,6 +804,10 @@ export interface VectorMemorySearchTestResult {
     hitCount: number;
     selectedCount: number;
     hits: VectorMemorySearchTestHit[];
+}
+
+export interface MemoryRecallPreviewResult extends VectorMemorySearchTestResult {
+    hits: MemoryRecallPreviewHit[];
 }
 
 export interface VectorMemoryViewerSnapshot {
@@ -745,6 +820,18 @@ export interface VectorMemoryViewerSnapshot {
     recentHitCount: number;
     longUnusedCount: number;
     items: VectorMemoryRecordSummary[];
+}
+
+export interface MemoryCardViewerSnapshot {
+    chatKey: string;
+    generatedAt: number;
+    totalCount: number;
+    archivedCount: number;
+    sourceMissingCount: number;
+    needsRebuildCount: number;
+    recentHitCount: number;
+    longUnusedCount: number;
+    items: MemoryCardSummary[];
 }
 
 export interface AdaptivePolicy {
@@ -1822,8 +1909,8 @@ export interface MemorySDK {
         getCanonSnapshot(): Promise<CanonSnapshot>;
         getEditorHealth(): Promise<EditorHealthSnapshot>;
         getExperienceSnapshot(): Promise<EditorExperienceSnapshot>;
-        getVectorMemorySnapshot(): Promise<VectorMemoryViewerSnapshot>;
-        runVectorMemorySearchTest(query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult>;
+        getMemoryCardSnapshot(): Promise<MemoryCardViewerSnapshot>;
+        runMemoryRecallPreview(query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult>;
         refreshCanonSnapshot(): Promise<CanonSnapshot>;
         rebuildChatView(): Promise<LogicalChatView>;
         refreshSemanticSeed(): Promise<CanonSnapshot>;

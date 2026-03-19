@@ -1376,7 +1376,7 @@ class MemoryOS {
                 rebuildLogicalViewIfNeeded('generation_ended', true);
                 void Promise.resolve((memory as any)?.chatState?.primeColdStartExtract?.('generation_ended'))
                     .catch((error: unknown) => {
-                        logger.warn('Cold-start extract prime failed on generation_ended', error);
+                        logger.warn('冷启动提取触发失败（generation_ended）', error);
                     });
 
                 // 若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
@@ -1410,11 +1410,11 @@ class MemoryOS {
                 return;
             }
             lastPromptReadyTs = now;
-            logger.info(`收到 prompt_ready，准备触发 prompt prime 与注入构建 chatKey=${currentChatKey || '(unknown)'}, promptMessages=${promptMessages.length}`);
+            logger.info(`收到 prompt_ready，准备触发冷启动提示初始化与注入构建，chatKey=${currentChatKey || '(unknown)'}, promptMessages=${promptMessages.length}`);
             rebuildLogicalViewIfNeeded('prompt_ready');
             void Promise.resolve((memory as any)?.chatState?.primeColdStartPrompt?.('chat_completion_prompt_ready'))
                 .catch((error: unknown) => {
-                    logger.warn('Cold-start prompt prime failed on prompt_ready', error);
+                    logger.warn('冷启动提示触发失败（prompt_ready）', error);
                 });
 
             try {

@@ -584,7 +584,8 @@ export class ExtractManager {
             `Should rebuild summary: ${postGate.rebuildSummary}.`,
             lorebookHint,
             '短总结只描述当前窗口里真正推动后续生成的内容，不要复写长历史。',
-            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+            'memoryCards 鏁扮粍鏄笌 summaries 鍚屾簮鐨勮蹇嗗崱鑽夌锛屾瘡椤瑰繀椤诲崟涓珯鐐瑰寲锛屼笉瑕佹媶鎴愬涓棤鍏宠蹇嗐€?',
+            '{ "ok": true, "proposal": { "summaries": [...], "memoryCards": [...] }, "confidence": 0.0~1.0 }',
         ].join('\n');
     }
 
@@ -614,7 +615,8 @@ export class ExtractManager {
             lorebookHint,
             '长总结可以归并重复信息，整合阶段变化，并保留时间线上的稳定锚点。',
             '不要输出 markdown，不要输出解释性正文，只返回单个 JSON 对象。',
-            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+            'memoryCards 鏁扮粍鏄笌 summaries 鍚屾簮鐨勮蹇嗗崱鑽夌锛屽彲浠ュ皢鏁撮噺姒傚康鍜屽悓绫诲瀷浼犻€掑埌鍗曟潯鍗★紝涓嶈鎶婃暣涓憳瑕佹媶鎴愬お澶氬崱銆?',
+            '{ "ok": true, "proposal": { "summaries": [...], "memoryCards": [...] }, "confidence": 0.0~1.0 }',
         ].join('\n');
     }
 

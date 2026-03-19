@@ -1,3 +1,4 @@
+import type { MemoryCardDraft } from '../../../SDK/stx';
 import type { MemoryMutationPlanSnapshot, MemoryTraceContext } from '../types';
 
 /**
@@ -35,6 +36,7 @@ export interface SummaryProposal {
     title?: string;
     content: string;
     keywords?: string[];
+    memoryCards?: MemoryCardDraft[];
     messageId?: string;
     range?: { fromMessageId?: string; toMessageId?: string };
     source?: {
@@ -76,6 +78,7 @@ export interface ProposalEnvelope {
         facts?: FactProposal[];
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
+        memoryCards?: MemoryCardDraft[];
         notes?: string;
         schemaChanges?: SchemaChangeProposal[];
         entityResolutions?: EntityResolutionProposal[];

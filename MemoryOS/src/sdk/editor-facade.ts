@@ -22,8 +22,8 @@ import type {
     SummarySettingsOverride,
     EffectiveSummarySettings,
     SummarySettingsSource,
-    VectorMemorySearchTestResult,
-    VectorMemoryViewerSnapshot,
+    MemoryCardViewerSnapshot,
+    MemoryRecallPreviewResult,
     WorldTemplate,
 } from '../../../SDK/stx';
 import { ChatStateManager } from '../core/chat-state-manager';
@@ -668,20 +668,33 @@ export class MemoryEditorFacade {
      * 功能：读取当前聊天的向量记忆查看器快照。
      * @returns 向量记忆查看器快照。
      */
-    async getVectorMemorySnapshot(): Promise<VectorMemoryViewerSnapshot> {
-        return this.vectorMemoryViewer.getSnapshot();
+    async getMemoryCardSnapshot(): Promise<MemoryCardViewerSnapshot> {
+        return this.vectorMemoryViewer.getMemoryCardSnapshot();
     }
 
+    /**
+     * 功能：读取当前聊天的向量记忆查看器快照。
+     * 返回：
+     *   Promise<VectorMemoryViewerSnapshot>：向量记忆查看器快照。
+     */
     /**
      * 功能：模拟一次向量检索测试，返回命中顺序与最终入选情况。
      * @param query 测试语句。
      * @param opts 额外配置。
      * @returns 检索测试结果。
      */
-    async runVectorMemorySearchTest(query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult> {
-        return this.vectorMemoryViewer.runVectorMemorySearchTest(query, opts);
+    async runMemoryRecallPreview(query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult> {
+        return this.vectorMemoryViewer.runMemoryRecallPreview(query, opts);
     }
 
+    /**
+     * 功能：模拟一次向量检索测试并返回结果。
+     * 参数：
+     *   query (string)：测试语句。
+     *   opts ({ maxTokens?: number })：附加配置。
+     * 返回：
+     *   Promise<VectorMemorySearchTestResult>：检索测试结果。
+     */
     private buildCanonSnapshotFromContext(context: EditorContextBundle): CanonSnapshot {
         const characters = buildCharacterSnapshots(context.semanticSeed, context.groupMemory, context.relationshipState, context.facts, context.states);
         const characterLocations = characters.map((item: CharacterSnapshot): SnapshotValue | undefined => item.currentLocation).filter((item: SnapshotValue | undefined): item is SnapshotValue => Boolean(item));

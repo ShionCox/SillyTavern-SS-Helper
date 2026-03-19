@@ -6,9 +6,9 @@ import type {
     LogicTableRepairMode,
     LogicTableSummary,
     LogicTableViewModel,
+    MemoryCardViewerSnapshot,
+    MemoryRecallPreviewResult,
     MemorySDK,
-    VectorMemorySearchTestResult,
-    VectorMemoryViewerSnapshot,
 } from '../../../SDK/stx';
 import { Logger } from '../../../SDK/logger';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
@@ -26,6 +26,7 @@ import { HybridSearchManager } from '../vector/hybrid-search';
 import { CompactionManager } from '../core/compaction-manager';
 import { WorldInfoWriter } from '../template/worldinfo-writer';
 import { ChatStateManager } from '../core/chat-state-manager';
+import { formatFactMemoryText } from '../core/memory-card-text';
 import { TurnTracker } from '../core/turn-tracker';
 import { RowResolver } from '../core/row-resolver';
 import { RowOperationsManager } from '../core/row-operations';
@@ -33,13 +34,14 @@ import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
 import { inferStructuredSeedWorldStateEntries } from '../core/world-state-seed';
-import { db, restoreArchivedMemoryChat } from '../db/db';
+import { db, restoreArchivedMemoryChat, type DBFact } from '../db/db';
 import manifestJson from '../../manifest.json';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
+import { buildMemorySummaryEnvelope } from '../core/memory-summary-envelope';
 import { LogicTableFacade } from './logic-table-facade';
 import { openWorldbookInitPanel } from '../ui/index';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
@@ -521,7 +523,7 @@ export class MemorySDKImpl implements MemorySDK {
     private async primeColdStartExtract(reason: string): Promise<boolean> {
         return this.runColdStartPrimeTask('extract', async (): Promise<boolean> => {
             if (await this.chatStateManager.isChatArchived()) {
-                logger.info(`Cold-start extract 跳过：聊天已归档，reason=${reason}, chatKey=${this.chatKey_}`);
+                logger.info(`冷启动提取已跳过：聊天已归档，reason=${reason}, chatKey=${this.chatKey_}`);
                 return false;
             }
             const [seed, fingerprint, stage] = await Promise.all([
@@ -530,15 +532,15 @@ export class MemorySDKImpl implements MemorySDK {
                 this.chatStateManager.getColdStartStage(),
             ]);
             if (!seed || !fingerprint) {
-                logger.info(`Cold-start extract 跳过：seed 或 fingerprint 缺失，reason=${reason}, chatKey=${this.chatKey_}, hasSeed=${Boolean(seed)}, hasFingerprint=${Boolean(fingerprint)}`);
+                logger.info(`冷启动提取已跳过：seed 或 fingerprint 缺失，reason=${reason}, chatKey=${this.chatKey_}, hasSeed=${Boolean(seed)}, hasFingerprint=${Boolean(fingerprint)}`);
                 return false;
             }
             if (stage === 'extract_primed') {
-                logger.info(`Cold-start extract 跳过：当前已是 extract_primed，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+                logger.info(`冷启动提取已跳过：当前已是 extract_primed，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
                 return false;
             }
             if (stage === 'seeded') {
-                logger.info(`Cold-start extract 前置触发 prompt prime，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+                logger.info(`冷启动提取前先触发提示初始化，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
                 await this.primeColdStartPrompt('auto_prompt_prime_before_extract');
             }
 
@@ -551,78 +553,9 @@ export class MemorySDKImpl implements MemorySDK {
             ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);
             if (summaryLines.length > 0) {
                 const summaryText = summaryLines.join('\n');
-                logger.info(`Cold-start extract 准备写入索引，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}, summaryLines=${summaryLines.length}, summaryLen=${summaryText.length}`);
-                const summaryId = buildStableProposalSummaryId({
-                    chatKey: this.chatKey_,
-                    consumerPluginId: MEMORY_OS_PLUGIN_ID,
-                    level: 'scene',
-                    title: 'Cold-start prime',
-                    content: summaryText,
-                    visibleMessageIds: [],
-                    viewHash: '',
-                    ordinal: 0,
-                });
-                const trace = createMemoryTraceContext({
-                    chatKey: this.chatKey_,
-                    source: 'trusted_write',
-                    stage: 'memory_trusted_write_started',
-                    requestId: `cold_start_extract:${reason}`,
-                });
-                const writeResult = await this.requestTrustedWrite({
-                    summaries: [{
-                        summaryId,
-                        targetRecordKey: summaryId,
-                        action: 'auto',
-                        level: 'scene',
-                        title: 'Cold-start prime',
-                        content: summaryText,
-                        source: {
-                            extractor: 'cold_start',
-                            provider: 'stx_memory_os',
-                            provenance: {
-                                extractor: 'cold_start',
-                                provider: 'stx_memory_os',
-                                fingerprint,
-                                source: {
-                                    kind: 'cold_start',
-                                    reason,
-                                    viewHash: '',
-                                    snapshotHash: '',
-                                    messageIds: [],
-                                    mutationKinds: [],
-                                    repairGeneration: 0,
-                                    ts: Date.now(),
-                                },
-                            },
-                        },
-                    }],
-                }, `cold_start_extract:${reason}`, trace);
-                if (this.chatStateManager) {
-                    const candidate = await this.chatStateManager.buildMemoryCandidate({
-                        candidateId: writeResult.applied.summaryIds[0] ?? summaryId,
-                        kind: 'summary',
-                        source: 'cold_start',
-                        summary: `Cold-start prime ${summaryText}`.trim(),
-                        payload: {
-                            level: 'scene',
-                            title: 'Cold-start prime',
-                            content: summaryText,
-                            source: {
-                                extractor: 'cold_start',
-                                provider: 'stx_memory_os',
-                                provenance: {
-                                    extractor: 'cold_start',
-                                    provider: 'stx_memory_os',
-                                    fingerprint,
-                                },
-                            },
-                        },
-                        extractedAt: Date.now(),
-                    });
-                    await this.chatStateManager.applyEncodingToRecord(writeResult.applied.summaryIds[0] ?? summaryId, 'summary', candidate.encoding);
-                }
+                logger.info(`冷启动提取仅保留观察值，不再写入旧链路，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}, summaryLines=${summaryLines.length}, summaryLen=${summaryText.length}`);
             }
-            logger.info(`Cold-start extract 完成，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
+            logger.info(`冷启动提取完成，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
             await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
             return true;
         });
@@ -697,7 +630,7 @@ export class MemorySDKImpl implements MemorySDK {
                     candidateId: factKey,
                     kind: 'fact',
                     source: 'memory_sdk',
-                    summary: `${String(fact.type ?? '').trim()} ${String(fact.path ?? '').trim()} ${JSON.stringify(fact.value ?? '')}`.trim(),
+                    summary: formatFactMemoryText(fact as DBFact),
                     payload: {
                         type: fact.type,
                         entity: fact.entity,
@@ -781,6 +714,24 @@ export class MemorySDKImpl implements MemorySDK {
                 viewHash: '',
                 ordinal: 0,
             });
+            const summaryRecord = {
+                summaryId,
+                chatKey: this.chatKey_,
+                level: summary.level,
+                title: summary.title,
+                content: summary.content,
+                keywords: summary.keywords,
+                createdAt: Date.now(),
+                source: {
+                    extractor: 'memory_sdk',
+                    provider: 'stx_memory_os',
+                    provenance: {
+                        extractor: 'memory_sdk',
+                        provider: 'stx_memory_os',
+                    },
+                },
+            } as const;
+            const memoryEnvelope = buildMemorySummaryEnvelope(summaryRecord);
             await this.requestTrustedWrite({
                 summaries: [{
                     summaryId,
@@ -791,6 +742,15 @@ export class MemorySDKImpl implements MemorySDK {
                     title: summary.title,
                     content: summary.content,
                     keywords: summary.keywords,
+                    source: {
+                        extractor: 'memory_sdk',
+                        provider: 'stx_memory_os',
+                        provenance: {
+                            extractor: 'memory_sdk',
+                            provider: 'stx_memory_os',
+                            memorySummaryEnvelope: memoryEnvelope,
+                        },
+                    },
                 }],
             }, 'sdk.summaries.upsert');
             if (this.chatStateManager) {
@@ -798,13 +758,14 @@ export class MemorySDKImpl implements MemorySDK {
                     candidateId: summaryId,
                     kind: 'summary',
                     source: 'memory_sdk',
-                    summary: `${String(summary.title ?? '').trim()} ${String(summary.content ?? '').trim()}`.trim(),
+                    summary: memoryEnvelope.summary,
                     payload: {
                         level: summary.level,
                         messageId: summary.messageId,
                         title: summary.title,
                         content: summary.content,
                         keywords: summary.keywords,
+                        memoryCards: memoryEnvelope.memoryCards,
                     },
                     extractedAt: Date.now(),
                 });
@@ -1063,11 +1024,11 @@ export class MemorySDKImpl implements MemorySDK {
         getExperienceSnapshot: (): Promise<EditorExperienceSnapshot> => {
             return this.editorFacade.getExperienceSnapshot();
         },
-        getVectorMemorySnapshot: (): Promise<VectorMemoryViewerSnapshot> => {
-            return this.editorFacade.getVectorMemorySnapshot();
+        getMemoryCardSnapshot: (): Promise<MemoryCardViewerSnapshot> => {
+            return this.editorFacade.getMemoryCardSnapshot();
         },
-        runVectorMemorySearchTest: (query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult> => {
-            return this.editorFacade.runVectorMemorySearchTest(query, opts);
+        runMemoryRecallPreview: (query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult> => {
+            return this.editorFacade.runMemoryRecallPreview(query, opts);
         },
         refreshCanonSnapshot: (): Promise<CanonSnapshot> => {
             return this.editorFacade.getCanonSnapshot();

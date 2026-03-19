@@ -1,6 +1,8 @@
 import { db, type DBDerivationSource, type DBFact, type DBSummary, type DBWorldState } from '../db/db';
 import type { FactProposal, SummaryProposal } from '../proposal/types';
 import { normalizeWorldStatePatchValue } from './world-state-patch-normalizer';
+import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
+import { formatSummaryMemoryText } from './memory-card-text';
 import type { ChatStateManager } from './chat-state-manager';
 import { FactsManager } from './facts-manager';
 import { StateManager } from './state-manager';
@@ -126,12 +128,21 @@ async function buildSummaryCandidate(
         candidateId: crypto.randomUUID(),
         kind: 'summary',
         source: input.consumerPluginId,
-        summary: `${String(mutation.nextTitle ?? '').trim()} ${String(mutation.nextContent ?? '').trim()}`.trim(),
+        summary: formatSummaryMemoryText({
+            summaryId: mutation.target?.summaryId ?? mutation.proposal.summaryId ?? crypto.randomUUID(),
+            chatKey: input.chatKey,
+            level: mutation.proposal.level,
+            title: mutation.nextTitle,
+            content: mutation.nextContent,
+            keywords: mutation.nextKeywords,
+            createdAt: Date.now(),
+        }),
         payload: {
             level: mutation.proposal.level,
             title: mutation.nextTitle,
             content: mutation.nextContent,
             keywords: mutation.nextKeywords,
+            memoryCards: mutation.proposal.memoryCards ?? [],
             confidence: input.envelopeConfidence,
             sourceEventId: input.visibleMessageIds[input.visibleMessageIds.length - 1] ?? '',
         },
@@ -400,6 +411,15 @@ async function executeSummaryMutation(
                     provider: input.consumerPluginId,
                     pluginId: input.consumerPluginId,
                     source: input.derivationSource,
+                    memorySummaryEnvelope: buildMemorySummaryEnvelope({
+                        summaryId,
+                        chatKey: input.chatKey,
+                        level: mutation.proposal.level,
+                        title: mutation.nextTitle,
+                        content: mutation.nextContent,
+                        keywords: mutation.nextKeywords,
+                        createdAt: Date.now(),
+                    }, mutation.proposal.memoryCards ?? []),
                 },
             },
         });
@@ -445,6 +465,15 @@ async function executeSummaryMutation(
                 provider: input.consumerPluginId,
                 pluginId: input.consumerPluginId,
                 source: input.derivationSource,
+                memorySummaryEnvelope: buildMemorySummaryEnvelope({
+                    summaryId,
+                    chatKey: input.chatKey,
+                    level: mutation.proposal.level,
+                    title: mutation.nextTitle,
+                    content: mutation.nextContent,
+                    keywords: mutation.nextKeywords,
+                    createdAt: Date.now(),
+                }, mutation.proposal.memoryCards ?? []),
             },
         },
     });

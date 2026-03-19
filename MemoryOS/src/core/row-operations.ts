@@ -1,6 +1,7 @@
 import { db, patchSdkChatShared, type DBFact } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { ChatStateManager } from './chat-state-manager';
+import { formatFactMemoryText } from './memory-card-text';
 import { FactsManager } from './facts-manager';
 import { AuditManager } from './audit-manager';
 import { MemoryMutationHistoryManager } from './memory-mutation-history';
@@ -107,7 +108,7 @@ export class RowOperationsManager {
             candidateId: fact.factKey,
             kind: 'fact',
             source: 'row_operations',
-            summary: `${String(fact.type ?? '').trim()} ${String(fact.path ?? '').trim()} ${JSON.stringify(fact.value ?? '')}`.trim(),
+            summary: formatFactMemoryText(fact as DBFact),
             payload: {
                 type: fact.type,
                 entity: fact.entity,

@@ -120,11 +120,11 @@ const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
         tip: '查看每个角色的记忆状态、遗忘阶段、主视角与重大事件影响。',
     },
     vector: {
-        label: '向量记忆',
+        label: '记忆卡',
         icon: 'fa-solid fa-vector-square',
-        title: '向量记忆查看器',
-        subtitle: '集中查看当前聊天的向量记忆、来源回溯、检索测试和单条维护动作。',
-        tip: '查看向量记忆、检索测试结果、来源跳转与异常状态。',
+        title: '记忆卡检索台',
+        subtitle: '集中查看当前聊天的记忆卡、来源回溯、召回预演和单条维护动作。',
+        tip: '查看记忆卡、预演结果、来源跳转与异常状态。',
     },
     diagnostics: {
         label: '系统诊断',
@@ -6520,7 +6520,7 @@ const selectedLogicRowIds = new Set<string>();
         }
         if (currentViewMode === 'vector') {
             if (!currentChatKey) {
-                contentArea.innerHTML = '<div class="stx-re-empty">请先在左侧选择一个聊天，再查看向量记忆。</div>';
+                contentArea.innerHTML = '<div class="stx-re-empty">请先在左侧选择一个聊天，再查看记忆卡。</div>';
                 return;
             }
             await vectorViewerController?.render();

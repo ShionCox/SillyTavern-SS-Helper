@@ -122,6 +122,7 @@ import {
 import { CompactionManager } from './compaction-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
+import { formatFactMemoryText, formatSummaryMemoryText } from './memory-card-text';
 import {
     buildPerActorRetentionMap,
     buildLifecycleState,
@@ -172,11 +173,9 @@ function readStrictVectorSourceTrace(record: DBFact | DBSummary, recordKind: 'fa
  */
 function buildStrictVectorText(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): string {
     if (recordKind === 'fact') {
-        const fact = record as DBFact;
-        return normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
+        return normalizeMemoryText(formatFactMemoryText(record as DBFact));
     }
-    const summary = record as DBSummary;
-    return normalizeMemoryText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
+    return normalizeMemoryText(formatSummaryMemoryText(record as DBSummary));
 }
 
 /**
@@ -3385,7 +3384,7 @@ export class ChatStateManager {
             const inferenceInput: OwnedMemoryInferenceInput = {
                 recordKey: fact.factKey,
                 recordKind: 'fact',
-                text: typeof fact.value === 'string' ? fact.value : JSON.stringify(fact.value ?? ''),
+                text: normalizeMemoryText(formatFactMemoryText(fact)),
                 path: fact.path,
                 factType: fact.type,
                 entityKind: fact.entity?.kind,
@@ -4802,7 +4801,7 @@ export class ChatStateManager {
         relationshipFacts.forEach((fact): void => {
             const typeText = normalizeMemoryText(fact.type).toLowerCase();
             const pathText = normalizeMemoryText(fact.path).toLowerCase();
-            const summaryText = normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
+            const summaryText = normalizeMemoryText(formatFactMemoryText(fact));
             if (!/relationship|relation|bond|trust|affection|conflict|关系|好感|信任|矛盾/.test(`${typeText} ${pathText} ${summaryText}`)) {
                 return;
             }
