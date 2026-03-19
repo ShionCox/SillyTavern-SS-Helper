@@ -149,7 +149,7 @@ export class HybridSearchManager {
         const hits = await this.vectorManager.search(query, topK);
         const results = await Promise.all(
             hits.map(async (hit: { chunkId: string; content: string; score: number }): Promise<HybridSearchResult | null> => {
-                const archived = this.chatStateManager ? await this.chatStateManager.isVectorChunkArchived(hit.chunkId) : false;
+                const archived = this.chatStateManager ? await this.chatStateManager.isMemoryCardArchived(hit.chunkId) : false;
                 if (archived) {
                     return null;
                 }

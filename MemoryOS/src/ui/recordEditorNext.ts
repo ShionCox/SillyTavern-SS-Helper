@@ -3130,7 +3130,7 @@ const selectedLogicRowIds = new Set<string>();
             const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }> => {
                 const signal = await readPluginSignal(chatKey, MEMORY_OS_PLUGIN_ID);
                 const [item, hasMeaningfulData] = await Promise.all([
-                    buildChatItemMeta(chatKey, signal, hostCanonicalKeySet),
+                    buildChatItemMeta(chatKey, signal, hostCanonicalKeySet, hostChatKeySet),
                     hasMeaningfulChatContent(chatKey),
                 ]);
                 const hostPresent = hostChatKeySet.has(chatKey) || Boolean(item.canonicalKey && hostCanonicalKeySet.has(item.canonicalKey));
@@ -3156,11 +3156,12 @@ const selectedLogicRowIds = new Set<string>();
                 const preferredItem = nextIsActive && !existingIsActive
                     ? item
                     : (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal) ? item : existing);
+                const mergedHostPresent = existing.hostPresent || item.hostPresent;
                 const mergedItem = {
                     ...preferredItem,
                     archived: existing.archived || item.archived,
-                    hostMissing: existing.hostMissing || item.hostMissing,
-                    hostPresent: existing.hostPresent || item.hostPresent,
+                    hostMissing: !mergedHostPresent && (existing.hostMissing || item.hostMissing),
+                    hostPresent: mergedHostPresent,
                     hasMeaningfulData: existing.hasMeaningfulData || item.hasMeaningfulData,
                     archiveReason: preferredItem.archiveReason || existing.archiveReason || item.archiveReason,
                     signal: preferredItem.signal || existing.signal || item.signal,

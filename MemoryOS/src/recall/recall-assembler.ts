@@ -12,6 +12,7 @@ import type {
     MemoryLifecycleState,
     MemoryTuningProfile,
     PersonaMemoryProfile,
+    RecallGateDecision,
     RecallCandidate,
     RecallPlan,
     RelationshipState,
@@ -26,7 +27,7 @@ import {
     uniqueCandidates,
     type RecallSourceContext,
 } from './sources/shared';
-import { collectVectorRecallCandidates } from './sources/vector-source';
+import { collectMemoryCardRecallCandidates } from './sources/memory-card-source';
 
 type RecallAssemblerInput = {
     chatKey: string;
@@ -49,6 +50,7 @@ type RecallAssemblerInput = {
     tuningProfile: MemoryTuningProfile | null;
     relationships: RelationshipState[];
     fallbackRelationshipWeight: number;
+    vectorGate?: RecallGateDecision | null;
 };
 
 export async function collectRecallCandidates(input: RecallAssemblerInput): Promise<RecallCandidate[]> {
@@ -73,6 +75,7 @@ export async function collectRecallCandidates(input: RecallAssemblerInput): Prom
         tuningProfile: input.tuningProfile,
         relationships: input.relationships,
         fallbackRelationshipWeight: input.fallbackRelationshipWeight,
+        vectorGate: input.vectorGate ?? null,
     };
 
     const batches = await Promise.all([
@@ -82,7 +85,7 @@ export async function collectRecallCandidates(input: RecallAssemblerInput): Prom
         collectStateRecallCandidates(context),
         collectRelationshipRecallCandidates(context),
         collectLorebookRecallCandidates(context),
-        collectVectorRecallCandidates(context),
+        context.vectorGate?.enabled === true ? collectMemoryCardRecallCandidates(context) : Promise.resolve([]),
     ]);
 
     return uniqueCandidates(batches.flat());

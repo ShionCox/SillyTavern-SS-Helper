@@ -379,9 +379,9 @@ MemoryOS 拥有 12 张专属高索引表，仍通过 `db.*` 直接操作。
 | `meta` | `chatKey` | 元数据（每聊天一条） |
 | `worldinfo_cache` | `cacheKey` | WorldInfo 缓存 |
 | `template_bindings` | `bindingKey` | 模板绑定 |
-| `vector_chunks` | `chunkId` | 向量分块 |
-| `vector_embeddings` | `embeddingId` | 向量嵌入 |
-| `vector_meta` | `metaKey` | 向量元数据 |
+| `memory_cards` | `cardId` | 记忆卡 |
+| `memory_card_embeddings` | `embeddingId` | 记忆卡向量 |
+| `memory_card_meta` | `metaKey` | 记忆卡元数据 |
 
 ---
 

@@ -8,7 +8,7 @@ export { MemoryOSDatabase, db } from './db/db';
 export type {
     DBEvent, DBFact, DBWorldState, DBSummary, DBTemplate, DBAudit, DBMeta,
     DBWorldInfoCache, DBTemplateBinding,
-    DBVectorChunk, DBVectorEmbedding, DBVectorMeta,
+    DBVectorChunkMetadata,
 } from './db/db';
 
 // 事件总线

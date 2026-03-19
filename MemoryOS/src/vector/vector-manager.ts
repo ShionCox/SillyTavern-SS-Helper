@@ -1,12 +1,39 @@
-import { db } from '../db/db';
-import type { DBVectorChunkMetadata } from '../db/db';
+import { db, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryCardMeta, type DBVectorChunkMetadata } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { runEmbed } from '../llm/memoryLlmBridge';
 
 const logger = new Logger('VectorManager');
 
-const VECTOR_INDEX_IN_FLIGHT = new Map<string, Promise<string[]>>();
+export interface VectorIndexStats {
+    cardCount: number;
+    embeddingCount: number;
+    lastIndexedAt: number;
+    lastEmbeddingModel: string | null;
+}
 
+export interface MemoryCardSearchHit {
+    chunkId: string;
+    cardId: string;
+    content: string;
+    score: number;
+    metadata?: DBVectorChunkMetadata;
+    createdAt?: number;
+}
+
+/**
+ * 功能：将任意值规整为紧凑文本。
+ * @param value 原始值。
+ * @returns 去除多余空白后的文本。
+ */
+function normalizeText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 功能：构建稳定的哈希文本。
+ * @param value 原始文本。
+ * @returns 哈希结果。
+ */
 function hashText(value: string): string {
     let hash = 5381;
     for (let index = 0; index < value.length; index += 1) {
@@ -15,370 +42,281 @@ function hashText(value: string): string {
     return `h${(hash >>> 0).toString(16)}`;
 }
 
-function pickIndexSource(metadata?: Record<string, unknown>): Record<string, unknown> {
-    const source = metadata?.source;
-    if (!source || typeof source !== 'object') {
-        return {};
-    }
-    return source as Record<string, unknown>;
-}
-
-function buildIndexTraceSummary(metadata?: DBVectorChunkMetadata | undefined): string {
-    const source = pickIndexSource(metadata);
-    const kind = String(source.kind ?? metadata?.kind ?? 'unknown').trim() || 'unknown';
-    const reason = String(source.reason ?? metadata?.reason ?? 'unknown').trim() || 'unknown';
-    const sourceRecordKey = String(metadata?.sourceRecordKey ?? '').trim();
-    const sourceRecordKind = String(metadata?.sourceRecordKind ?? '').trim();
-    const viewHash = String(source.viewHash ?? '').trim();
-    const snapshotHash = String(source.snapshotHash ?? '').trim();
-    const anchorMessageId = String(source.anchorMessageId ?? '').trim();
-    const repairGeneration = Number(source.repairGeneration ?? 0);
-    const messageIds = Array.isArray(source.messageIds)
-        ? source.messageIds.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
-        : [];
-    return [
-        `kind=${kind}`,
-        `reason=${reason}`,
-        `sourceRecordKind=${sourceRecordKind || '-'}`,
-        `sourceRecordKey=${sourceRecordKey || '-'}`,
-        `viewHash=${viewHash || '-'}`,
-        `snapshotHash=${snapshotHash || '-'}`,
-        `anchor=${anchorMessageId || '-'}`,
-        `messages=${messageIds.length}`,
-        `repairGen=${repairGeneration}`,
-    ].join(', ');
-}
-
 /**
- * 功能：把向量索引 metadata 规整成稳定的签名片段。
- * @param metadata 向量索引 metadata。
- * @returns 稳定签名片段。
+ * 功能：为卡片 embedding 生成稳定编号。
+ * @param chatKey 聊天键。
+ * @param cardId 记忆卡编号。
+ * @param model 嵌入模型名。
+ * @returns 稳定的 embedding 编号。
  */
-function buildMetadataSignature(metadata?: DBVectorChunkMetadata | undefined): string {
-    if (!metadata) {
-        return '';
-    }
-    const source = pickIndexSource(metadata);
-    const payload = {
-        sourceRecordKey: String(metadata.sourceRecordKey ?? '').trim(),
-        sourceRecordKind: String(metadata.sourceRecordKind ?? '').trim(),
-        ownerActorKey: String(metadata.ownerActorKey ?? '').trim(),
-        sourceScope: String(metadata.sourceScope ?? '').trim(),
-        memoryType: String(metadata.memoryType ?? '').trim(),
-        memorySubtype: String(metadata.memorySubtype ?? '').trim(),
-        participantActorKeys: Array.isArray(metadata.participantActorKeys)
-            ? [...metadata.participantActorKeys].map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
-            : [],
-        sourceKind: String(source.kind ?? '').trim(),
-        sourceReason: String(source.reason ?? '').trim(),
-        sourceViewHash: String(source.viewHash ?? '').trim(),
-        sourceSnapshotHash: String(source.snapshotHash ?? '').trim(),
-        sourceAnchorMessageId: String(source.anchorMessageId ?? '').trim(),
-        sourceRepairGeneration: Number(source.repairGeneration ?? 0),
-    };
-    return JSON.stringify(payload);
-}
-
-/** 简单的 UUID v4 生成（不依赖第三方包） */
-function uuid(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0;
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    });
-}
-
-export interface VectorIndexStats {
-    chunkCount: number;
-    embeddingCount: number;
-    lastIndexedAt: number;
-    lastEmbeddingModel: string | null;
+function buildEmbeddingId(chatKey: string, cardId: string, model: string): string {
+    return `memory_card_embedding:${hashText(`${normalizeText(chatKey)}::${normalizeText(cardId)}::${normalizeText(model)}`)}`;
 }
 
 /**
- * 向量索引管理器 —— 负责文本块的切分、Embedding 生成与余弦相似度检索
+ * 功能：把记忆卡转换成兼容旧检索结果结构的 metadata。
+ * @param card 记忆卡。
+ * @returns 检索结果 metadata。
+ */
+function buildCardMetadata(card: DBMemoryCard): DBVectorChunkMetadata {
+    return {
+        index: 0,
+        sourceRecordKey: card.sourceRecordKey ?? undefined,
+        sourceRecordKind: card.sourceRecordKind,
+        ownerActorKey: card.ownerActorKey ?? null,
+        sourceScope: card.scope,
+        memoryType: card.lane,
+        memorySubtype: card.ttl,
+        participantActorKeys: card.participantActorKeys,
+        source: {
+            kind: 'memory_card',
+            reason: 'memory_card_embedding',
+            viewHash: card.cardId,
+            snapshotHash: card.sourceRecordKey ?? '',
+            messageIds: [],
+            mutationKinds: [],
+            repairGeneration: 0,
+            ts: Number(card.updatedAt ?? card.createdAt ?? Date.now()),
+        },
+    };
+}
+
+/**
+ * 功能：计算余弦相似度。
+ * @param left 向量 A。
+ * @param right 向量 B。
+ * @returns 相似度分数。
+ */
+function cosineSimilarity(left: number[], right: number[]): number {
+    if (left.length !== right.length || left.length === 0) {
+        return 0;
+    }
+    let dot = 0;
+    let normLeft = 0;
+    let normRight = 0;
+    for (let index = 0; index < left.length; index += 1) {
+        dot += left[index] * right[index];
+        normLeft += left[index] * left[index];
+        normRight += right[index] * right[index];
+    }
+    const denominator = Math.sqrt(normLeft) * Math.sqrt(normRight);
+    return denominator > 0 ? dot / denominator : 0;
+}
+
+/**
+ * 功能：更新当前会话的记忆卡索引元信息。
+ * @param chatKey 聊天键。
+ * @param model 嵌入模型名。
+ * @returns 元信息记录。
+ */
+async function refreshMeta(chatKey: string): Promise<DBMemoryCardMeta> {
+    const now = Date.now();
+    const [activeCardCount, activeEmbeddingCount] = await Promise.all([
+        db.memory_cards.where('[chatKey+status]').equals([chatKey, 'active']).count(),
+        db.memory_card_embeddings.where('chatKey').equals(chatKey).count(),
+    ]);
+    const nextMeta: DBMemoryCardMeta = {
+        metaKey: `memory_cards:${chatKey}`,
+        chatKey,
+        updatedAt: now,
+        activeCardCount,
+        activeEmbeddingCount,
+        lastIndexedAt: now,
+    };
+    await db.memory_card_meta.put(nextMeta);
+    return nextMeta;
+}
+
+/**
+ * 功能：纯记忆卡向量索引管理器。
  *
- * 整体策略：
- * 1. 待索引文本 → 切块 (chunk) → 调用 LLMHub rag.embed → 存入 vector_embeddings
- * 2. 查询时 → embed 查询串 → 计算余弦相似度 → 取 TopK 候选
- * 3. 若 LLMHub 不可用或超时 → 静默返回空结果（不报错）
+ * 参数：
+ *   chatKey (string)：当前聊天键。
+ *
+ * 返回：
+ *   VectorManager：记忆卡 embedding 的写入、删除、查询与统计能力。
  */
 export class VectorManager {
     private chatKey: string;
-    /** 每个文本块的最大字符数 */
-    private chunkSize = 400;
-    /** 每次检索的最大候选数量 */
-    private defaultTopK = 5;
+    private defaultTopK: number = 5;
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
     }
 
     /**
-     * 功能：构建向量索引请求的去重签名。
-     * @param chunks 文本块列表。
-     * @param bookId 来源 bookId。
-     * @param metadata 索引 metadata。
-     * @returns 去重签名。
+     * 功能：为 active 记忆卡批量生成并写入 embedding。
+     * @param cards 记忆卡列表。
+     * @returns 成功写入 embedding 的卡片编号列表。
      */
-    private buildIndexSignature(chunks: string[], bookId?: string, metadata?: DBVectorChunkMetadata): string {
-        const payload = `${this.chatKey}::${String(bookId ?? '')}::${chunks.join('\u241E')}::${buildMetadataSignature(metadata)}`;
-        let hash = 5381;
-        for (let index = 0; index < payload.length; index += 1) {
-            hash = ((hash << 5) + hash) ^ payload.charCodeAt(index);
+    public async upsertMemoryCardEmbeddings(cards: DBMemoryCard[]): Promise<string[]> {
+        const activeCards = cards.filter((card: DBMemoryCard): boolean => {
+            return normalizeText(card.chatKey) === this.chatKey
+                && card.status === 'active'
+                && normalizeText(card.memoryText).length > 0;
+        });
+        const targetCardIds = activeCards.map((card: DBMemoryCard): string => card.cardId);
+        if (targetCardIds.length <= 0) {
+            await refreshMeta(this.chatKey);
+            return [];
         }
-        return `vec_${(hash >>> 0).toString(16)}`;
-    }
 
-    // ==========================================
-    // 公共 API
-    // ==========================================
+        await db.memory_card_embeddings.where('cardId').anyOf(targetCardIds).delete();
 
-    /**
-     * 为一段文本建立向量索引，按块切分后批量 embed 并写入 IndexedDB
-     * @param text 整段原文
-     * @param bookId 可选的来源 bookId（用于后续按书检索）
-     * @returns 写入的 chunkId 列表
-     */
-    public async indexText(text: string, bookId?: string, metadata?: DBVectorChunkMetadata): Promise<string[]> {
-        const chunks = this.splitIntoChunks(text, this.chunkSize);
-        if (chunks.length === 0) return [];
-
-        const traceSummary = buildIndexTraceSummary(metadata);
-        const textHash = hashText(String(text ?? ''));
-        const firstChunkHash = hashText(chunks[0] ?? '');
-        logger.info(
-            `向量索引请求进入：chatKey=${this.chatKey}, bookId=${bookId ?? '(无)'}, chunks=${chunks.length}, textLen=${String(text ?? '').length}, textHash=${textHash}, firstChunkHash=${firstChunkHash}, ${traceSummary}`,
+        const embedResult = await runEmbed(
+            activeCards.map((card: DBMemoryCard): string => card.memoryText),
+            {
+                chatKey: this.chatKey,
+                showOverlay: false,
+                maxLatencyMs: 15000,
+            },
         );
 
-        const dedupeSignature = this.buildIndexSignature(chunks, bookId, metadata);
-        const inFlightTask = VECTOR_INDEX_IN_FLIGHT.get(dedupeSignature);
-        if (inFlightTask) {
-            logger.info(`检测到并发重复向量索引请求，复用进行中的任务，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
-            return inFlightTask;
+        if (!embedResult?.ok || !Array.isArray(embedResult.vectors) || embedResult.vectors.length <= 0) {
+            logger.warn(`记忆卡向量写入失败，chatKey=${this.chatKey}, cardCount=${activeCards.length}`);
+            await refreshMeta(this.chatKey);
+            return [];
         }
 
-        logger.info(`开始向量索引：${chunks.length} 个文本块，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
+        const model = normalizeText(embedResult.model) || 'unknown';
+        const now = Date.now();
+        const vectors = Array.isArray(embedResult.vectors) ? embedResult.vectors : [];
+        const embeddings: DBMemoryCardEmbedding[] = activeCards
+            .slice(0, vectors.length)
+            .map((card: DBMemoryCard, index: number): DBMemoryCardEmbedding => ({
+                embeddingId: buildEmbeddingId(this.chatKey, card.cardId, model),
+                cardId: card.cardId,
+                chatKey: this.chatKey,
+                vector: Array.isArray(vectors[index]) ? vectors[index] : [],
+                model,
+                createdAt: now,
+            }))
+            .filter((embedding: DBMemoryCardEmbedding): boolean => embedding.vector.length > 0);
 
-        const task = (async (): Promise<string[]> => {
-            const overlayDescription = bookId
-                ? `正在写入向量索引：${bookId}`
-                : '正在写入向量索引';
-            const embedResult = await runEmbed(chunks, {
-                maxLatencyMs: 15000,
-                showOverlay: true,
-                overlayDescription,
-            }) as any;
-
-            if (!embedResult?.ok || !Array.isArray(embedResult.vectors)) {
-                logger.warn('embed 返回格式异常，向量索引跳过。');
-                return [];
-            }
-
-            const chunkIds: string[] = [];
-            const now = Date.now();
-
-            for (let i = 0; i < chunks.length; i++) {
-                const chunkId = uuid();
-                const vector: number[] = embedResult.vectors[i] ?? [];
-
-                // 写入 chunk 原文
-                await db.vector_chunks.put({
-                    chunkId,
-                    chatKey: this.chatKey,
-                    bookId,
-                    content: chunks[i],
-                    metadata: { index: i, ...(metadata ?? {}) },
-                    createdAt: now,
-                });
-
-                // 写入对应 embedding
-                await db.vector_embeddings.put({
-                    embeddingId: uuid(),
-                    chunkId,
-                    chatKey: this.chatKey,
-                    vector,
-                    model: embedResult.model ?? 'unknown',
-                    createdAt: now,
-                });
-
-                chunkIds.push(chunkId);
-            }
-
-            // 更新 vector_meta
-            if (bookId) {
-                const metaKey = `${this.chatKey}::${bookId}`;
-                const existing = await db.vector_meta.get(metaKey);
-                await db.vector_meta.put({
-                    metaKey,
-                    chatKey: this.chatKey,
-                    bookId,
-                    totalChunks: (existing?.totalChunks ?? 0) + chunkIds.length,
-                    embeddingModel: embedResult.model ?? 'unknown',
-                    lastIndexedAt: now,
-                });
-            }
-
-            logger.success(`向量索引完成，写入 ${chunkIds.length} 个向量块，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);
-            return chunkIds;
-
-        })().catch((e) => {
-            logger.error(`向量索引失败，静默降级，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`, e);
-            return [];
-        }).finally((): void => {
-            const currentTask = VECTOR_INDEX_IN_FLIGHT.get(dedupeSignature);
-            if (currentTask === task) {
-                VECTOR_INDEX_IN_FLIGHT.delete(dedupeSignature);
-            }
-        });
-
-        VECTOR_INDEX_IN_FLIGHT.set(dedupeSignature, task);
-        return task;
+        if (embeddings.length > 0) {
+            await db.memory_card_embeddings.bulkPut(embeddings);
+        }
+        await refreshMeta(this.chatKey);
+        return embeddings.map((item: DBMemoryCardEmbedding): string => item.cardId);
     }
 
     /**
-     * 语义相似度检索 —— 向量召回
-     * @param query 查询串
-     * @param topK 最多返回条数（默认 5）
-     * @returns 按相似度排序的文本块列表
+     * 功能：删除指定记忆卡的 embedding。
+     * @param cardIds 记忆卡编号列表。
+     * @returns 实际删除的 embedding 数量。
      */
-    public async search(query: string, topK = this.defaultTopK): Promise<Array<{
-        chunkId: string;
-        content: string;
-        score: number;
-        bookId?: string;
-        metadata?: DBVectorChunkMetadata;
-        createdAt?: number;
-    }>> {
-        try {
-            const embedResult = await runEmbed([query], { maxLatencyMs: 8000 }) as any;
+    public async deleteMemoryCardEmbeddings(cardIds: string[]): Promise<number> {
+        const normalizedCardIds = Array.from(new Set(cardIds.map((item: string): string => normalizeText(item)).filter(Boolean)));
+        if (normalizedCardIds.length <= 0) {
+            return 0;
+        }
+        const existing = await db.memory_card_embeddings.where('cardId').anyOf(normalizedCardIds).toArray();
+        await db.memory_card_embeddings.where('cardId').anyOf(normalizedCardIds).delete();
+        await refreshMeta(this.chatKey);
+        return existing.length;
+    }
 
-            if (!embedResult?.ok || !Array.isArray(embedResult.vectors?.[0])) {
+    /**
+     * 功能：按语义相似度搜索 active 记忆卡。
+     * @param query 查询文本。
+     * @param topK 返回数量。
+     * @param opts 额外过滤条件。
+     * @returns 记忆卡命中列表。
+     */
+    public async search(
+        query: string,
+        topK: number = this.defaultTopK,
+        opts: {
+            lanes?: Array<string | null | undefined>;
+            activeOnly?: boolean;
+        } = {},
+    ): Promise<MemoryCardSearchHit[]> {
+        const normalizedQuery = normalizeText(query);
+        if (!normalizedQuery || topK <= 0) {
+            return [];
+        }
+        try {
+            const embedResult = await runEmbed([normalizedQuery], {
+                chatKey: this.chatKey,
+                showOverlay: false,
+                maxLatencyMs: 8000,
+            });
+            const queryVector = Array.isArray(embedResult?.vectors?.[0]) ? embedResult.vectors[0] : null;
+            if (!embedResult?.ok || !queryVector) {
                 return [];
             }
 
-            const queryVec: number[] = embedResult.vectors[0];
-
-            // 取出当前 chatKey 下所有向量 Embedding
-            const allEmbeddings = await db.vector_embeddings
-                .where('chatKey')
-                .equals(this.chatKey)
-                .toArray();
-
-            if (allEmbeddings.length === 0) return [];
-
-            // 计算余弦相似度并排序
-            const scored = allEmbeddings.map(emb => ({
-                chunkId: emb.chunkId,
-                score: this.cosineSimilarity(queryVec, emb.vector)
-            }));
-
-            scored.sort((a, b) => b.score - a.score);
-            const topHits = scored.slice(0, topK);
-
-            // 批量查 chunk 原文
-            const results: Array<{
-                chunkId: string;
-                content: string;
-                score: number;
-                bookId?: string;
-                metadata?: DBVectorChunkMetadata;
-                createdAt?: number;
-            }> = [];
-            for (const hit of topHits) {
-                const chunk = await db.vector_chunks.get(hit.chunkId);
-                if (chunk) {
-                    results.push({
-                        chunkId: hit.chunkId,
-                        content: chunk.content,
-                        score: hit.score,
-                        bookId: chunk.bookId,
-                        metadata: chunk.metadata,
-                        createdAt: Number(chunk.createdAt ?? 0) || undefined,
-                    });
-                }
+            const allowedLanes = Array.isArray(opts.lanes)
+                ? new Set(opts.lanes.map((item: string | null | undefined): string => normalizeText(item).toLowerCase()).filter(Boolean))
+                : null;
+            const [embeddings, cards] = await Promise.all([
+                db.memory_card_embeddings.where('chatKey').equals(this.chatKey).toArray(),
+                db.memory_cards.where('[chatKey+status]').equals([this.chatKey, 'active']).toArray(),
+            ]);
+            if (embeddings.length <= 0 || cards.length <= 0) {
+                return [];
             }
 
-            return results;
-
-        } catch (e) {
-            logger.warn('向量检索失败，静默降级', e);
+            const cardMap = new Map<string, DBMemoryCard>(cards.map((card: DBMemoryCard): [string, DBMemoryCard] => [card.cardId, card]));
+            return embeddings
+                .map((embedding: DBMemoryCardEmbedding): MemoryCardSearchHit | null => {
+                    const card = cardMap.get(embedding.cardId);
+                    if (!card || !Array.isArray(embedding.vector) || embedding.vector.length <= 0) {
+                        return null;
+                    }
+                    if (allowedLanes && allowedLanes.size > 0) {
+                        const lane = normalizeText(card.lane).toLowerCase();
+                        if (!lane || !allowedLanes.has(lane)) {
+                            return null;
+                        }
+                    }
+                    return {
+                        chunkId: card.cardId,
+                        cardId: card.cardId,
+                        content: card.memoryText,
+                        score: cosineSimilarity(queryVector, embedding.vector),
+                        metadata: buildCardMetadata(card),
+                        createdAt: Number(card.updatedAt ?? card.createdAt ?? 0) || undefined,
+                    };
+                })
+                .filter((item: MemoryCardSearchHit | null): item is MemoryCardSearchHit => item != null)
+                .sort((left: MemoryCardSearchHit, right: MemoryCardSearchHit): number => right.score - left.score)
+                .slice(0, topK);
+        } catch (error) {
+            logger.warn('记忆卡向量搜索失败，已静默降级', error);
             return [];
         }
     }
 
     /**
-     * 返回当前聊天的向量索引统计。
+     * 功能：读取当前会话的记忆卡索引统计。
+     * @returns 记忆卡口径的索引统计。
      */
     public async getIndexStats(): Promise<VectorIndexStats> {
-        const [chunks, embeddings, metas] = await Promise.all([
-            db.vector_chunks.where('chatKey').equals(this.chatKey).count(),
-            db.vector_embeddings.where('chatKey').equals(this.chatKey).count(),
-            db.vector_meta.where('chatKey').equals(this.chatKey).toArray(),
+        const [activeCardCount, activeEmbeddingCount, meta, latestEmbedding] = await Promise.all([
+            db.memory_cards.where('[chatKey+status]').equals([this.chatKey, 'active']).count(),
+            db.memory_card_embeddings.where('chatKey').equals(this.chatKey).count(),
+            db.memory_card_meta.get(`memory_cards:${this.chatKey}`),
+            db.memory_card_embeddings.where('chatKey').equals(this.chatKey).last(),
         ]);
-        const lastMeta = metas.sort((left, right): number => Number(right.lastIndexedAt ?? 0) - Number(left.lastIndexedAt ?? 0))[0] ?? null;
         return {
-            chunkCount: Number(chunks ?? 0),
-            embeddingCount: Number(embeddings ?? 0),
-            lastIndexedAt: Number(lastMeta?.lastIndexedAt ?? 0),
-            lastEmbeddingModel: lastMeta?.embeddingModel ?? null,
+            cardCount: Number(activeCardCount ?? 0),
+            embeddingCount: Number(activeEmbeddingCount ?? 0),
+            lastIndexedAt: Number(meta?.lastIndexedAt ?? 0),
+            lastEmbeddingModel: normalizeText(latestEmbedding?.model) || null,
         };
     }
 
     /**
-     * 删除 chatKey 下的全部向量数据（清理用）
+     * 功能：清空当前会话的向量相关数据。
+     * @returns Promise<void>
      */
     public async clear(): Promise<void> {
-        await db.vector_chunks.where('chatKey').equals(this.chatKey).delete();
-        await db.vector_embeddings.where('chatKey').equals(this.chatKey).delete();
-        await db.vector_meta.where('chatKey').equals(this.chatKey).delete();
-        logger.info('已清除当前会话的所有向量数据。');
-    }
-
-    // ==========================================
-    // 私有工具方法
-    // ==========================================
-
-    /**
-     * 余弦相似度计算
-     */
-    private cosineSimilarity(a: number[], b: number[]): number {
-        if (a.length !== b.length || a.length === 0) return 0;
-        let dot = 0, normA = 0, normB = 0;
-        for (let i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-        const denom = Math.sqrt(normA) * Math.sqrt(normB);
-        return denom === 0 ? 0 : dot / denom;
-    }
-
-    /**
-     * 将长文本拆分为固定大小的块（按段落/句子边界优先切分）
-     */
-    private splitIntoChunks(text: string, maxLen: number): string[] {
-        const paragraphs = text.split(/\n{2,}/).filter(p => p.trim().length > 0);
-        const chunks: string[] = [];
-        let current = '';
-
-        for (const para of paragraphs) {
-            if ((current + '\n\n' + para).length <= maxLen) {
-                current = current ? current + '\n\n' + para : para;
-            } else {
-                if (current) chunks.push(current.trim());
-                // 如果单个段落本身超过 maxLen，按 maxLen 硬切
-                if (para.length > maxLen) {
-                    for (let i = 0; i < para.length; i += maxLen) {
-                        chunks.push(para.slice(i, i + maxLen).trim());
-                    }
-                    current = '';
-                } else {
-                    current = para;
-                }
-            }
-        }
-
-        if (current) chunks.push(current.trim());
-        return chunks.filter(c => c.length > 10);
+        await Promise.all([
+            db.memory_cards.where('chatKey').equals(this.chatKey).delete(),
+            db.memory_card_embeddings.where('chatKey').equals(this.chatKey).delete(),
+            db.memory_card_meta.where('chatKey').equals(this.chatKey).delete(),
+        ]);
+        logger.info(`已清空记忆卡向量索引，chatKey=${this.chatKey}`);
     }
 }

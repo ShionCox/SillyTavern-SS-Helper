@@ -182,6 +182,7 @@ const SOURCE_WEIGHT_PRESETS: Record<Exclude<InjectionIntent, 'auto'>, Record<Rec
         state: 0.66,
         lorebook: 0.5,
         vector: 0.55,
+        memory_card: 0.55,
     },
     setting_qa: {
         lorebook: 1,
@@ -189,6 +190,7 @@ const SOURCE_WEIGHT_PRESETS: Record<Exclude<InjectionIntent, 'auto'>, Record<Rec
         facts: 0.82,
         summaries: 0.62,
         vector: 0.56,
+        memory_card: 0.56,
         events: 0.32,
         relationships: 0.28,
     },
@@ -198,6 +200,7 @@ const SOURCE_WEIGHT_PRESETS: Record<Exclude<InjectionIntent, 'auto'>, Record<Rec
         facts: 0.72,
         state: 0.52,
         vector: 0.48,
+        memory_card: 0.48,
         relationships: 0.22,
         lorebook: 0.18,
     },
@@ -208,6 +211,7 @@ const SOURCE_WEIGHT_PRESETS: Record<Exclude<InjectionIntent, 'auto'>, Record<Rec
         state: 0.66,
         facts: 0.58,
         vector: 0.5,
+        memory_card: 0.5,
         lorebook: 0.28,
     },
 };

@@ -435,7 +435,7 @@ export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
-export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup' | 'group_maintenance';
+export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'memory_card_rebuild' | 'schema_cleanup' | 'group_maintenance';
 
 export type MaintenanceSeverity = 'info' | 'warning' | 'critical';
 
@@ -499,7 +499,7 @@ export interface VectorLifecycleState {
     vectorMode: VectorMode;
     factCount: number;
     summaryCount: number;
-    vectorChunkCount: number;
+    memoryCardCount: number;
     lastAccessAt: number;
     lastHitAt: number;
     lastIndexAt: number;
@@ -723,6 +723,7 @@ export interface MemorySummaryEnvelope {
 
 export interface VectorMemoryRecordSummary {
     chunkId: string;
+    cardId?: string;
     chatKey: string;
     content: string;
     preview: string;
@@ -770,11 +771,12 @@ export interface MemoryCardSummary extends VectorMemoryRecordSummary {
     ttl: MemoryCardTtl;
     replaceKey: string | null;
     status: MemoryCardStatus;
-    cardChunkIds: string[];
+    cardIds: string[];
 }
 
 export interface VectorMemorySearchTestHit {
     chunkId: string;
+    cardId?: string;
     sourceRecordKey: string | null;
     sourceRecordKind: VectorMemorySourceKind;
     sourceLabel: string;
@@ -797,14 +799,17 @@ export interface MemoryRecallPreviewHit extends VectorMemorySearchTestHit {
     status: MemoryCardStatus;
 }
 
-export interface VectorMemorySearchTestResult {
-    query: string;
-    testedAt: number;
-    rerankApplied: boolean;
-    hitCount: number;
-    selectedCount: number;
-    hits: VectorMemorySearchTestHit[];
-}
+  export interface VectorMemorySearchTestResult {
+      query: string;
+      testedAt: number;
+      rerankApplied: boolean;
+      hitCount: number;
+      selectedCount: number;
+      hits: VectorMemorySearchTestHit[];
+      vectorGate?: LatestRecallExplanation['vectorGate'];
+      cache?: LatestRecallExplanation['cache'];
+      cheapRecall?: CheapRecallSnapshot | null;
+  }
 
 export interface MemoryRecallPreviewResult extends VectorMemorySearchTestResult {
     hits: MemoryRecallPreviewHit[];
@@ -1336,20 +1341,60 @@ export interface StructuredWorldStateEntry {
 
 export type WorldStateGroupingResult = Record<string, Record<string, StructuredWorldStateEntry[]>>;
 
-export interface RecallLogEntry {
-    recallId: string;
-    query: string;
-    section: InjectionSectionName | 'PREVIEW';
-    recordKey: string;
+  export interface RecallLogEntry {
+      recallId: string;
+      query: string;
+      section: InjectionSectionName | 'PREVIEW';
+      recordKey: string;
     recordKind: MemoryRecordKind;
     recordTitle: string;
     score: number;
     selected: boolean;
     conflictSuppressed: boolean;
     tone: InjectedMemoryTone;
-    reasonCodes: string[];
-    loggedAt: number;
-}
+      reasonCodes: string[];
+      loggedAt: number;
+  }
+
+  export type RecallNeedKind =
+      | 'identity_direct'
+      | 'relationship_direct'
+      | 'rule_direct'
+      | 'state_direct'
+      | 'historical_event'
+      | 'causal_trace'
+      | 'style_inference'
+      | 'ambiguous_recall'
+      | 'mixed';
+
+  export interface RecallGateDecision {
+      enabled: boolean;
+      lanes: MemoryCardLane[];
+      reasonCodes: string[];
+      primaryNeed: RecallNeedKind;
+      vectorMode: VectorMode;
+  }
+
+  export interface RecallCacheEntry {
+      topicHash: string;
+      intent: InjectionIntent;
+      entityKeys: string[];
+      laneSet: MemoryCardLane[];
+      selectedCardIds: string[];
+      generatedAt: number;
+      expiresAt: number;
+      generatedTurn: number;
+      expiresTurn: number;
+      baseVersion: number;
+  }
+
+  export interface CheapRecallSnapshot {
+      primaryNeed: RecallNeedKind;
+      coveredLanes: MemoryCardLane[];
+      structuredCount: number;
+      recentEventCount: number;
+      enough: boolean;
+  }
 
 export interface RecallExplanationBucket {
     bucketKey: 'selected' | 'conflict_suppressed' | 'rejected_candidates';
@@ -1371,15 +1416,30 @@ export interface RecallExplanationBucket {
     }>;
 }
 
-export interface LatestRecallExplanation {
-    generatedAt: number;
-    query: string;
-    sectionsUsed: InjectionSectionName[];
-    selected: RecallExplanationBucket;
-    conflictSuppressed: RecallExplanationBucket;
-    rejectedCandidates: RecallExplanationBucket;
-    reasonCodes: string[];
-}
+  export interface LatestRecallExplanation {
+      generatedAt: number;
+      query: string;
+      sectionsUsed: InjectionSectionName[];
+      selected: RecallExplanationBucket;
+      conflictSuppressed: RecallExplanationBucket;
+      rejectedCandidates: RecallExplanationBucket;
+      reasonCodes: string[];
+      vectorGate?: {
+          enabled: boolean;
+          reasonCodes: string[];
+          lanes: MemoryCardLane[];
+          primaryNeed: RecallNeedKind;
+          vectorMode: VectorMode;
+      } | null;
+      cache?: {
+          hit: boolean;
+          reasonCodes: string[];
+          topicHash: string;
+          entityKeys: string[];
+          expiresTurn: number;
+      } | null;
+      cheapRecall?: CheapRecallSnapshot | null;
+  }
 
 export interface RelationshipDelta {
     actorKey: string;
@@ -1467,6 +1527,8 @@ export interface MemoryOSChatState {
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
     latestRecallExplanation?: LatestRecallExplanation | null;
+    lastRecallCache?: RecallCacheEntry | null;
+    recallCacheVersion?: number;
     mainlineTraceSnapshot?: MemoryMainlineTraceSnapshot | null;
     summarySettingsOverride?: SummarySettingsOverride | null;
     memoryTuningProfile?: MemoryTuningProfile;
@@ -1966,9 +2028,9 @@ export interface MemorySDK {
         setMemoryTuningProfile(profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile>;
         getMutationHistory(opts?: { limit?: number; recordKey?: string; targetKind?: MemoryMutationTargetKind; action?: MemoryMutationHistoryAction }): Promise<MemoryMutationHistoryEntry[]>;
         getMainlineTraceSnapshot(): Promise<MemoryMainlineTraceSnapshot>;
-        rebuildVectorRecord(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]>;
-        deleteVectorChunk(chunkId: string): Promise<boolean>;
-        setVectorChunkArchived(chunkId: string, archived: boolean): Promise<void>;
+        rebuildMemoryCardsFromSource(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]>;
+        deleteMemoryCard(cardId: string): Promise<boolean>;
+        setMemoryCardArchived(cardId: string, archived: boolean): Promise<void>;
         getColdStartStage(): Promise<ColdStartStage | null>;
         primeColdStartPrompt(reason?: string): Promise<boolean>;
         primeColdStartExtract(reason?: string): Promise<boolean>;

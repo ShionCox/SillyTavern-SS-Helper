@@ -24,6 +24,7 @@ import type {
     MemoryType,
     MemoryTuningProfile,
     PersonaMemoryProfile,
+    RecallGateDecision,
     RecallCandidate,
     RecallCandidateRecordKind,
     RecallCandidateSource,
@@ -71,6 +72,7 @@ export type RecallSourceContext = {
     chatKey: string;
     plan: RecallPlan;
     query: string;
+    vectorGate?: RecallGateDecision | null;
     recentEvents: Array<EventEnvelope<unknown>>;
     logicalView: LogicalChatView | null;
     groupMemory: GroupMemoryState | null;

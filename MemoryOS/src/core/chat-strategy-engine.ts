@@ -3,6 +3,7 @@ import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     ChatProfile,
+    MemoryCardLane,
     InjectionIntent,
     InjectionSectionName,
     LogicalChatView,
@@ -10,6 +11,8 @@ import type {
     MaintenanceAdvice,
     MemoryQualityLevel,
     MemoryQualityScorecard,
+    RecallGateDecision,
+    RecallNeedKind,
     RetentionPolicy,
     StrategyDecision,
     VectorLifecycleState,
@@ -33,6 +36,21 @@ export interface StrategyInferenceInput {
     logicalView?: LogicalChatView | null;
 }
 
+export interface RecallNeedInput {
+    query?: string;
+    intent?: InjectionIntent;
+    structuredCount?: number;
+    coveredLanes?: MemoryCardLane[];
+    recentEventCount?: number;
+}
+
+export interface RecallGateInput extends RecallNeedInput {
+    policy: AdaptivePolicy;
+    structuredEnough?: boolean;
+    recentEventsEnough?: boolean;
+    cacheHit?: boolean;
+}
+
 /**
  * 功能：将数值限制在给定区间内。
  * @param value 原始值。
@@ -49,6 +67,134 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function normalizeRatio(value: number): number {
     return clampNumber(value, 0, 1);
+}
+
+function normalizeRecallText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function dedupeMemoryCardLanes(lanes: MemoryCardLane[]): MemoryCardLane[] {
+    return Array.from(new Set((Array.isArray(lanes) ? lanes : []).map((lane: MemoryCardLane): MemoryCardLane => lane))).filter(Boolean);
+}
+
+/**
+ * 功能：判断当前 query 更像哪一类召回需求。
+ * @param input 召回需求输入。
+ * @returns 召回需求类型。
+ */
+export function classifyRecallNeed(input: RecallNeedInput): RecallNeedKind {
+    const query = normalizeRecallText(input.query);
+    if (!query) {
+        return 'mixed';
+    }
+    if (/谁|是谁|身份|什么人|什么身份|哪位|介绍一下/.test(query)) {
+        return 'identity_direct';
+    }
+    if (/关系|什么关系|和我|对我|对他的关系|对她的关系|你们之间/.test(query)) {
+        return 'relationship_direct';
+    }
+    if (/规则|设定|规矩|限制|世界观|世界规则|法则|约束/.test(query)) {
+        return 'rule_direct';
+    }
+    if (/现在|当前|此刻|在哪|在哪里|什么情况|局势|状态|处境|正在/.test(query)) {
+        return 'state_direct';
+    }
+    if (/之前|过去|曾经|回忆|有没有提过|提到过|发生过什么|后来怎样|后面/.test(query)) {
+        return /为什么|原因|怎么会|为何|因果|伏笔/.test(query) ? 'causal_trace' : 'historical_event';
+    }
+    if (/为什么|怎么会|原因|因果|伏笔|导致|突然这样/.test(query)) {
+        return 'causal_trace';
+    }
+    if (/风格|语气|通常怎么说|怎么说话|习惯|偏好|会怎么做|一般会/.test(query)) {
+        return 'style_inference';
+    }
+    if ((input.structuredCount ?? 0) > 0 && (input.coveredLanes ?? []).length > 1) {
+        return 'mixed';
+    }
+    return 'ambiguous_recall';
+}
+
+/**
+ * 功能：根据召回需求解析允许搜索的记忆卡层。
+ * @param input 召回需求输入。
+ * @returns 允许搜索的记忆卡层列表。
+ */
+export function resolveVectorRecallLanes(input: RecallNeedInput): MemoryCardLane[] {
+    const need = classifyRecallNeed(input);
+    if (need === 'identity_direct') {
+        return ['identity'];
+    }
+    if (need === 'relationship_direct') {
+        return ['relationship'];
+    }
+    if (need === 'rule_direct') {
+        return ['rule'];
+    }
+    if (need === 'state_direct') {
+        return ['state'];
+    }
+    if (need === 'style_inference') {
+        return ['style'];
+    }
+    if (need === 'historical_event' || need === 'causal_trace') {
+        return ['event', 'relationship', 'state'];
+    }
+    if (need === 'mixed') {
+        return dedupeMemoryCardLanes([...(input.coveredLanes ?? []), 'event', 'style', 'relationship', 'state']);
+    }
+    return ['event', 'style'];
+}
+
+/**
+ * 功能：统一判断本轮是否允许触发向量召回。
+ * @param input 召回门控输入。
+ * @returns 门控结果。
+ */
+export function shouldRunVectorRecall(input: RecallGateInput): RecallGateDecision {
+    const primaryNeed = classifyRecallNeed(input);
+    const reasonCodes: string[] = [];
+    const lanes = dedupeMemoryCardLanes(resolveVectorRecallLanes(input));
+    const policyAllows = input.policy.vectorEnabled === true && ['search', 'search_rerank'].includes(input.policy.vectorMode);
+    const intentAllows = input.intent !== 'tool_qa'
+        && (input.intent === 'story_continue'
+            || input.intent === 'roleplay'
+            || (input.intent === 'setting_qa' && (primaryNeed === 'historical_event' || primaryNeed === 'causal_trace' || primaryNeed === 'ambiguous_recall' || primaryNeed === 'mixed')));
+    const structuredEnough = input.structuredEnough === true
+        || (
+            (primaryNeed === 'identity_direct'
+                || primaryNeed === 'relationship_direct'
+                || primaryNeed === 'rule_direct'
+                || primaryNeed === 'state_direct')
+            && (input.structuredCount ?? 0) > 0
+        );
+    const recentEventsEnough = input.recentEventsEnough === true;
+    const cacheHit = input.cacheHit === true;
+
+    if (!policyAllows) {
+        reasonCodes.push(input.policy.vectorEnabled !== true ? 'vector_disabled' : `vector_mode:${input.policy.vectorMode}`);
+        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
+    }
+    if (!intentAllows) {
+        reasonCodes.push(`intent:${input.intent ?? 'auto'}`);
+        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
+    }
+    if (cacheHit) {
+        reasonCodes.push('recall_cache_hit');
+        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
+    }
+    if (structuredEnough && (primaryNeed === 'identity_direct' || primaryNeed === 'relationship_direct' || primaryNeed === 'rule_direct' || primaryNeed === 'state_direct')) {
+        reasonCodes.push('structured_enough');
+        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
+    }
+    if (recentEventsEnough && (primaryNeed === 'historical_event' || primaryNeed === 'causal_trace' || primaryNeed === 'mixed')) {
+        reasonCodes.push('recent_events_enough');
+        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
+    }
+    if (input.structuredCount != null && input.structuredCount <= 0 && input.recentEventCount != null && input.recentEventCount <= 0) {
+        reasonCodes.push('cheap_layer_empty');
+    }
+    reasonCodes.push(`recall_need:${primaryNeed}`);
+    return { enabled: true, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
 }
 
 function scoreToLevel(totalScore: number): MemoryQualityLevel {
@@ -208,7 +354,7 @@ export function computeMemoryQualityScorecard(input: {
     pushReason(reasonCodes, tokenEfficiency < 0.4, 'token_efficiency_low');
     pushReason(reasonCodes, Number(metrics.orphanFactsRatio ?? 0) >= 0.22, 'orphan_facts_high');
     pushReason(reasonCodes, schemaScore < 0.45, 'schema_hygiene_low');
-    pushReason(reasonCodes, lifecycle.vectorChunkCount <= 0 && lifecycle.vectorMode !== 'off', 'vector_chunks_missing');
+    pushReason(reasonCodes, lifecycle.memoryCardCount <= 0 && lifecycle.vectorMode !== 'off', 'memory_card_embeddings_missing');
     return {
         totalScore,
         level: scoreToLevel(totalScore),
@@ -256,12 +402,12 @@ export function buildMaintenanceAdvice(input: {
         });
     }
     const vectorGrowth = Number(lifecycle.factCount ?? 0) + Number(lifecycle.summaryCount ?? 0);
-    if ((vectorGrowth >= Math.max(1, Number(lifecycle.vectorChunkCount ?? 0)) && Number(lifecycle.vectorChunkCount ?? 0) === 0)
+    if ((vectorGrowth >= Math.max(1, Number(lifecycle.memoryCardCount ?? 0)) && Number(lifecycle.memoryCardCount ?? 0) === 0)
         || (Number(metrics.retrievalPrecision ?? 0) < 0.2 && vectorGrowth > 0)) {
         advice.push({
-            action: 'revectorize',
-            priority: Number(lifecycle.vectorChunkCount ?? 0) === 0 ? 'high' : 'medium',
-            reasonCodes: ['vector_chunks_missing'],
+            action: 'memory_card_rebuild',
+            priority: Number(lifecycle.memoryCardCount ?? 0) === 0 ? 'high' : 'medium',
+            reasonCodes: ['memory_card_embeddings_missing'],
             title: '建议重建向量索引',
             detail: '聊天已达到向量启用条件，但当前向量覆盖不足或近期检索精度偏低，建议重建索引。',
         });

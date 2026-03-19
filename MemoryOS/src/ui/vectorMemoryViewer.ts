@@ -15,7 +15,7 @@ type VectorMemoryTimeFilter = '__all__' | 'indexed_7d' | 'indexed_30d' | 'hit_7d
 interface VectorMemoryViewerState {
     snapshot: MemoryCardViewerSnapshot | null;
     testResult: MemoryRecallPreviewResult | null;
-    selectedChunkId: string | null;
+    selectedCardId: string | null;
     activeActorKey: string | null;
     keyword: string;
     sourceKind: 'all' | 'fact' | 'summary' | 'unknown';
@@ -411,9 +411,9 @@ function buildActorOptions(snapshot: MemoryCardViewerSnapshot | null): VectorMem
 function buildSearchHitMap(result: MemoryRecallPreviewResult | null): Map<string, MemoryRecallPreviewHit> {
     const map = new Map<string, MemoryRecallPreviewHit>();
     (result?.hits ?? []).forEach((hit: MemoryRecallPreviewHit): void => {
-        const chunkId = String(hit.chunkId ?? '').trim();
-        if (chunkId) {
-            map.set(chunkId, hit);
+        const cardId = String(hit.cardId ?? hit.chunkId ?? '').trim();
+        if (cardId) {
+            map.set(cardId, hit);
         }
     });
     return map;
@@ -437,13 +437,13 @@ export function deriveVectorMemoryViewerItems(
     const itemMap = new Map<string, MemoryCardSummary>();
     const cardHitMap = new Map<string, MemoryRecallPreviewHit>();
     snapshot.items.forEach((item: MemoryCardSummary): void => {
-        itemMap.set(item.chunkId, item);
         itemMap.set(item.cardId, item);
-        item.cardChunkIds.forEach((chunkId: string): void => {
-            itemMap.set(chunkId, item);
+        const cardIds = Array.isArray(item.cardIds) && item.cardIds.length > 0 ? item.cardIds : [item.cardId];
+        cardIds.forEach((cardId: string): void => {
+            itemMap.set(cardId, item);
         });
-        const matchedHits = item.cardChunkIds
-            .map((chunkId: string): MemoryRecallPreviewHit | null => searchHitMap.get(chunkId) ?? null)
+        const matchedHits = cardIds
+            .map((cardId: string): MemoryRecallPreviewHit | null => searchHitMap.get(cardId) ?? null)
             .filter((hit: MemoryRecallPreviewHit | null): hit is MemoryRecallPreviewHit => hit != null)
             .sort((left: MemoryRecallPreviewHit, right: MemoryRecallPreviewHit): number => Number(right.vectorScore ?? 0) - Number(left.vectorScore ?? 0));
         if (matchedHits.length > 0) {
@@ -452,7 +452,7 @@ export function deriveVectorMemoryViewerItems(
     });
     const orderedItems = state.testResult
         ? state.testResult.hits
-            .map((hit: MemoryRecallPreviewHit): MemoryCardSummary | null => itemMap.get(String(hit.chunkId ?? '').trim()) ?? null)
+            .map((hit: MemoryRecallPreviewHit): MemoryCardSummary | null => itemMap.get(String(hit.cardId ?? hit.chunkId ?? '').trim()) ?? null)
             .filter((item: MemoryCardSummary | null): item is MemoryCardSummary => item != null)
         : [...snapshot.items];
     const filtered = orderedItems.filter((item: MemoryCardSummary): boolean => {
@@ -562,18 +562,17 @@ function renderValue(value: unknown): string {
 /**
  * 功能：选择当前详情项。
  * @param items 当前列表项。
- * @param selectedChunkId 已选分块键。
+ * @param selectedCardId 已选记忆卡编号。
  * @returns 选中的列表项。
  */
-function pickSelectedItem(items: VectorMemoryViewerDerivedItem[], selectedChunkId: string | null): VectorMemoryViewerDerivedItem | null {
+function pickSelectedItem(items: VectorMemoryViewerDerivedItem[], selectedCardId: string | null): VectorMemoryViewerDerivedItem | null {
     if (items.length <= 0) {
         return null;
     }
-    const normalizedSelected = normalizeLookup(selectedChunkId);
+    const normalizedSelected = normalizeLookup(selectedCardId);
     return items.find((entry: VectorMemoryViewerDerivedItem): boolean => {
         return normalizeLookup(entry.item.cardId) === normalizedSelected
-            || normalizeLookup(entry.item.chunkId) === normalizedSelected
-            || entry.item.cardChunkIds.some((chunkId: string): boolean => normalizeLookup(chunkId) === normalizedSelected);
+            || (Array.isArray(entry.item.cardIds) && entry.item.cardIds.some((cardId: string): boolean => normalizeLookup(cardId) === normalizedSelected));
     }) ?? items[0] ?? null;
 }
 
@@ -595,7 +594,7 @@ export class VectorMemoryViewerController {
         this.state = {
             snapshot: null,
             testResult: null,
-            selectedChunkId: null,
+            selectedCardId: null,
             activeActorKey: null,
             keyword: '',
             sourceKind: 'all',
@@ -622,7 +621,7 @@ export class VectorMemoryViewerController {
         this.state = {
             snapshot: null,
             testResult: null,
-            selectedChunkId: null,
+            selectedCardId: null,
             activeActorKey: null,
             keyword: '',
             sourceKind: 'all',
@@ -643,11 +642,11 @@ export class VectorMemoryViewerController {
 
     /**
      * 功能：聚焦指定向量片段。
-     * @param chunkId 分块键。
+     * @param cardId 记忆卡编号。
      * @returns 无返回值。
      */
-    public focusChunk(chunkId: string | null): void {
-        this.state.selectedChunkId = String(chunkId ?? '').trim() || null;
+    public focusCard(cardId: string | null): void {
+        this.state.selectedCardId = String(cardId ?? '').trim() || null;
         this.paint();
     }
 
@@ -707,10 +706,10 @@ export class VectorMemoryViewerController {
         if (queryToRerun) {
             this.state.testQuery = queryToRerun;
         }
-        this.state.selectedChunkId = pickSelectedItem(
+        this.state.selectedCardId = pickSelectedItem(
             deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-            this.state.selectedChunkId,
-        )?.item.chunkId ?? null;
+            this.state.selectedCardId,
+        )?.item.cardId ?? null;
     }
 
     /**
@@ -726,10 +725,10 @@ export class VectorMemoryViewerController {
         const field = String(target.dataset.field ?? '').trim();
         if (field === 'keyword') {
             this.state.keyword = target.value;
-            this.state.selectedChunkId = pickSelectedItem(
+            this.state.selectedCardId = pickSelectedItem(
                 deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedChunkId,
-            )?.item.chunkId ?? null;
+                this.state.selectedCardId,
+            )?.item.cardId ?? null;
             this.paint();
         }
         if (field === 'testQuery') {
@@ -753,10 +752,10 @@ export class VectorMemoryViewerController {
         if (field === 'actorKey') this.state.actorKey = target.value as VectorMemoryViewerState['actorKey'];
         if (field === 'sortMode') this.state.sortMode = target.value as VectorMemorySortMode;
         if (field === 'timeFilter') this.state.timeFilter = target.value as VectorMemoryTimeFilter;
-        this.state.selectedChunkId = pickSelectedItem(
+        this.state.selectedCardId = pickSelectedItem(
             deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-            this.state.selectedChunkId,
-        )?.item.chunkId ?? null;
+            this.state.selectedCardId,
+        )?.item.cardId ?? null;
         this.paint();
     }
 
@@ -771,9 +770,9 @@ export class VectorMemoryViewerController {
             return;
         }
         const action = String(target.dataset.action ?? '').trim();
-        const chunkId = String(target.dataset.chunkId ?? '').trim() || null;
-        if (action === 'select-item' && chunkId) {
-            this.state.selectedChunkId = chunkId;
+        const cardId = String(target.dataset.cardId ?? '').trim() || null;
+        if (action === 'select-item' && cardId) {
+            this.state.selectedCardId = cardId;
             this.paint();
             return;
         }
@@ -783,20 +782,20 @@ export class VectorMemoryViewerController {
             if (key === 'unused') this.state.quickLongUnused = !this.state.quickLongUnused;
             if (key === 'abnormal') this.state.quickAbnormal = !this.state.quickAbnormal;
             if (key === 'current') this.state.quickCurrentActor = !this.state.quickCurrentActor;
-            this.state.selectedChunkId = pickSelectedItem(
+            this.state.selectedCardId = pickSelectedItem(
                 deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedChunkId,
-            )?.item.chunkId ?? null;
+                this.state.selectedCardId,
+            )?.item.cardId ?? null;
             this.paint();
             return;
         }
         if (action === 'clear-test') {
             this.state.testQuery = '';
             this.state.testResult = null;
-            this.state.selectedChunkId = pickSelectedItem(
+            this.state.selectedCardId = pickSelectedItem(
                 deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedChunkId,
-            )?.item.chunkId ?? null;
+                this.state.selectedCardId,
+            )?.item.cardId ?? null;
             this.paint();
             return;
         }
@@ -818,10 +817,10 @@ export class VectorMemoryViewerController {
         }
         const selected = pickSelectedItem(
             deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-            this.state.selectedChunkId,
+            this.state.selectedCardId,
         );
         const item = selected?.item ?? null;
-        if (!item || !chunkId || item.chunkId !== chunkId) {
+        if (!item || !cardId || item.cardId !== cardId) {
             return;
         }
         if (action === 'jump-source') {
@@ -869,10 +868,10 @@ export class VectorMemoryViewerController {
         this.paint();
         try {
             this.state.testResult = await memory.editor.runMemoryRecallPreview(query);
-            this.state.selectedChunkId = pickSelectedItem(
+            this.state.selectedCardId = pickSelectedItem(
                 deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedChunkId,
-            )?.item.chunkId ?? null;
+                this.state.selectedCardId,
+            )?.item.cardId ?? null;
             toast.success(`召回预演完成，命中 ${this.state.testResult.hitCount} 张。`);
         } catch (error) {
             toast.error(`召回预演失败：${String(error)}`);
@@ -924,11 +923,11 @@ export class VectorMemoryViewerController {
         }
         const memory = await this.getMemory();
         try {
-            const chunkIds = await memory.chatState.rebuildVectorRecord(item.sourceRecordKey, item.sourceRecordKind);
+            const cardIds = await memory.chatState.rebuildMemoryCardsFromSource(item.sourceRecordKey, item.sourceRecordKind);
             await this.render();
-            this.state.selectedChunkId = chunkIds[0] || item.chunkId;
+            this.state.selectedCardId = cardIds[0] || item.cardId;
             this.paint();
-            toast.success(chunkIds.length > 0 ? `已重新建立 ${chunkIds.length} 个记忆片段` : '来源记录存在，但没有生成新的记忆片段');
+            toast.success(cardIds.length > 0 ? `已重新建立 ${cardIds.length} 张记忆卡` : '来源记录存在，但没有生成新的记忆卡');
         } catch (error) {
             toast.error(`重新建立失败：${String(error)}`);
         }
@@ -940,24 +939,24 @@ export class VectorMemoryViewerController {
      * @returns 无返回值。
      */
     private async deleteSelectedItem(item: MemoryCardSummary): Promise<void> {
-        if (!confirm('确定删除这张记忆卡吗？这只会删除当前记忆片段，不会删除来源记录。')) {
+        if (!confirm('确定删除这张记忆卡吗？这只会删除当前记忆卡，不会删除来源记录。')) {
             return;
         }
         const memory = await this.getMemory();
         try {
-            const chunkIds = item.cardChunkIds.length > 0 ? item.cardChunkIds : [item.chunkId];
+            const cardIds = item.cardIds.length > 0 ? item.cardIds : [item.cardId];
             let removedCount = 0;
-            for (const chunkId of chunkIds) {
-                const removed = await memory.chatState.deleteVectorChunk(chunkId);
+            for (const cardId of cardIds) {
+                const removed = await memory.chatState.deleteMemoryCard(cardId);
                 if (removed) {
                     removedCount += 1;
                 }
             }
             if (removedCount <= 0) {
-                toast.info('这张记忆卡对应的片段已经不存在了。');
+                toast.info('这张记忆卡已经不存在了。');
                 return;
             }
-            this.state.selectedChunkId = null;
+            this.state.selectedCardId = null;
             await this.render();
             toast.success('已删除当前记忆卡');
         } catch (error) {
@@ -973,12 +972,12 @@ export class VectorMemoryViewerController {
     private async toggleArchive(item: MemoryCardSummary): Promise<void> {
         const memory = await this.getMemory();
         try {
-            const chunkIds = item.cardChunkIds.length > 0 ? item.cardChunkIds : [item.chunkId];
-            for (const chunkId of chunkIds) {
-                await memory.chatState.setVectorChunkArchived(chunkId, !item.isArchived);
+            const cardIds = item.cardIds.length > 0 ? item.cardIds : [item.cardId];
+            for (const cardId of cardIds) {
+                await memory.chatState.setMemoryCardArchived(cardId, !item.isArchived);
             }
             await this.render();
-            this.state.selectedChunkId = item.cardId;
+            this.state.selectedCardId = item.cardId;
             this.paint();
             toast.success(item.isArchived ? '已取消忽略这张记忆卡' : '已标记忽略这张记忆卡');
         } catch (error) {
@@ -1006,11 +1005,11 @@ export class VectorMemoryViewerController {
         const memory = await this.getMemory();
         let rebuiltChunkCount = 0;
         for (const item of uniqueRecords) {
-            const chunkIds = await memory.chatState.rebuildVectorRecord(item.sourceRecordKey!, item.sourceRecordKind as 'fact' | 'summary');
-            rebuiltChunkCount += chunkIds.length;
+            const cardIds = await memory.chatState.rebuildMemoryCardsFromSource(item.sourceRecordKey!, item.sourceRecordKind as 'fact' | 'summary');
+            rebuiltChunkCount += cardIds.length;
         }
         await this.render();
-        toast.success(`已批量重建 ${uniqueRecords.length} 条来源记录，写回 ${rebuiltChunkCount} 个记忆片段。`);
+        toast.success(`已批量重建 ${uniqueRecords.length} 条来源记录，写回 ${rebuiltChunkCount} 张记忆卡。`);
     }
 
     /**
@@ -1031,9 +1030,9 @@ export class VectorMemoryViewerController {
         }
         const memory = await this.getMemory();
         for (const item of currentItems) {
-            const chunkIds = item.cardChunkIds.length > 0 ? item.cardChunkIds : [item.chunkId];
-            for (const chunkId of chunkIds) {
-                await memory.chatState.setVectorChunkArchived(chunkId, true);
+            const cardIds = item.cardIds.length > 0 ? item.cardIds : [item.cardId];
+            for (const cardId of cardIds) {
+                await memory.chatState.setMemoryCardArchived(cardId, true);
             }
         }
         await this.render();
@@ -1081,9 +1080,9 @@ export class VectorMemoryViewerController {
         const chatKeyTitleAttr = rawChatKey && rawChatKey !== compactChatLabel
             ? ` title="${escapeHtml(rawChatKey)}"`
             : '';
-        const selected = pickSelectedItem(items, this.state.selectedChunkId);
-        if (selected && selected.item.cardId !== this.state.selectedChunkId) {
-            this.state.selectedChunkId = selected.item.cardId;
+        const selected = pickSelectedItem(items, this.state.selectedCardId);
+        if (selected && selected.item.cardId !== this.state.selectedCardId) {
+            this.state.selectedCardId = selected.item.cardId;
         }
         const selectedItem = selected?.item ?? null;
         const selectedHit = selected?.testHit ?? null;
@@ -1190,10 +1189,10 @@ export class VectorMemoryViewerController {
             ? `测试顺位：原始 ${hit.initialRank ?? '-'} · 整理后 ${hit.rerankedRank ?? '-'} · 最终 ${hit.finalRank ?? '-'}`
             : `累计命中 ${item.usage.totalHits} 次`;
         return `
-            <article class="stx-vmv-card ${item.cardId === this.state.selectedChunkId ? 'is-selected' : ''}" data-action="select-item" data-chunk-id="${escapeHtml(item.chunkId)}">
+            <article class="stx-vmv-card ${item.cardId === this.state.selectedCardId ? 'is-selected' : ''}" data-action="select-item" data-card-id="${escapeHtml(item.cardId)}">
                 <div class="stx-vmv-card-topline">
                     <div class="stx-vmv-chip-row">${topBadges}</div>
-                    <button class="stx-vmv-icon-btn" type="button" data-action="select-item" data-chunk-id="${escapeHtml(item.chunkId)}">查看详情</button>
+                    <button class="stx-vmv-icon-btn" type="button" data-action="select-item" data-card-id="${escapeHtml(item.cardId)}">查看详情</button>
                 </div>
                 <div class="stx-vmv-card-preview">${escapeHtml(item.preview)}</div>
                 <div class="stx-vmv-card-meta">
@@ -1242,10 +1241,10 @@ export class VectorMemoryViewerController {
                     <span class="stx-vmv-pill ${buildStatusToneClass(item)}">${escapeHtml(item.statusLabel)}</span>
                 </div>
                 <div class="stx-vmv-actions">
-                    <button class="stx-re-btn" type="button" data-action="jump-source" data-chunk-id="${escapeHtml(item.chunkId)}">查看来源</button>
-                    <button class="stx-re-btn save" type="button" data-action="rebuild-item" data-chunk-id="${escapeHtml(item.chunkId)}">重新建立</button>
-                    <button class="stx-re-btn" type="button" data-action="copy-content" data-chunk-id="${escapeHtml(item.chunkId)}">复制内容</button>
-                    <button class="stx-re-btn" type="button" data-action="jump-anchor" data-chunk-id="${escapeHtml(item.chunkId)}"${item.anchorMessageId ? '' : ' disabled'}>跳到消息锚点</button>
+                    <button class="stx-re-btn" type="button" data-action="jump-source" data-card-id="${escapeHtml(item.cardId)}">查看来源</button>
+                    <button class="stx-re-btn save" type="button" data-action="rebuild-item" data-card-id="${escapeHtml(item.cardId)}">重新建立</button>
+                    <button class="stx-re-btn" type="button" data-action="copy-content" data-card-id="${escapeHtml(item.cardId)}">复制内容</button>
+                    <button class="stx-re-btn" type="button" data-action="jump-anchor" data-card-id="${escapeHtml(item.cardId)}"${item.anchorMessageId ? '' : ' disabled'}>跳到消息锚点</button>
                 </div>
                 <article class="stx-vmv-card">
                     <h4>记忆正文</h4>
@@ -1267,7 +1266,7 @@ export class VectorMemoryViewerController {
                         <dt>原始锚点</dt><dd>${escapeHtml(item.anchorMessageId || (item.sourceMessageIds.length > 0 ? `关联消息 ${item.sourceMessageIds.length} 条` : '暂无'))}</dd>
                         <dt>来源说明</dt><dd>${escapeHtml(item.sourceDetail)}</dd>
                         <dt>卡片编号</dt><dd>${escapeHtml(item.cardId)}</dd>
-                        <dt>片段数量</dt><dd>${escapeHtml(String(item.cardChunkIds.length))}</dd>
+                        <dt>关联记忆卡</dt><dd>${escapeHtml(String(item.cardIds.length))}</dd>
                     </dl>
                 </article>
                 <article class="stx-vmv-card">
@@ -1315,10 +1314,10 @@ export class VectorMemoryViewerController {
                             <summary>更多操作</summary>
                             <div class="stx-vmv-details-body">
                                 <div class="stx-vmv-actions">
-                                    <button class="stx-re-btn" type="button" data-action="toggle-archive" data-chunk-id="${escapeHtml(item.chunkId)}">${escapeHtml(item.isArchived ? '取消忽略' : '标记忽略')}</button>
-                                    <button class="stx-re-btn danger" type="button" data-action="delete-item" data-chunk-id="${escapeHtml(item.chunkId)}">删除记忆</button>
+                                    <button class="stx-re-btn" type="button" data-action="toggle-archive" data-card-id="${escapeHtml(item.cardId)}">${escapeHtml(item.isArchived ? '取消忽略' : '标记忽略')}</button>
+                                    <button class="stx-re-btn danger" type="button" data-action="delete-item" data-card-id="${escapeHtml(item.cardId)}">删除记忆</button>
                                 </div>
-                                <div class="stx-vmv-inline-note">危险操作只会影响当前记忆卡对应的片段，不会直接删除来源记录。</div>
+                                <div class="stx-vmv-inline-note">危险操作只会影响当前这张记忆卡，不会直接删除来源记录。</div>
                             </div>
                         </details>
                     </div>

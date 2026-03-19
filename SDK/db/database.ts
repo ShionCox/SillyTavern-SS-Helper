@@ -262,15 +262,6 @@ export interface DBTemplateBinding {
     boundAt: number;
 }
 
-export interface DBVectorChunk {
-    chunkId: string;
-    chatKey: string;
-    bookId?: string;
-    content: string;
-    metadata?: DBVectorChunkMetadata;
-    createdAt: number;
-}
-
 export interface DBDerivationSource {
     kind?: string;
     reason?: string;
@@ -312,21 +303,48 @@ export interface DBVectorChunkMetadata {
     [key: string]: unknown;
 }
 
-export interface DBVectorEmbedding {
+export interface DBMemoryCard {
+    cardId: string;
+    chatKey: string;
+    scope: 'chat' | 'character' | 'world';
+    lane: 'identity' | 'style' | 'relationship' | 'rule' | 'event' | 'state' | 'other';
+    subject: string;
+    title: string;
+    memoryText: string;
+    evidenceText?: string | null;
+    entityKeys: string[];
+    keywords: string[];
+    importance: number;
+    confidence: number;
+    ttl: 'short' | 'medium' | 'long';
+    replaceKey?: string | null;
+    sourceRefs: string[];
+    sourceRecordKey: string | null;
+    sourceRecordKind: 'fact' | 'summary' | 'state' | 'event' | 'relationship' | 'unknown';
+    ownerActorKey?: string | null;
+    participantActorKeys: string[];
+    validFrom?: number;
+    validTo?: number;
+    status: 'active' | 'superseded' | 'invalidated';
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface DBMemoryCardEmbedding {
     embeddingId: string;
-    chunkId: string;
+    cardId: string;
     chatKey: string;
     vector: number[];
     model: string;
     createdAt: number;
 }
 
-export interface DBVectorMeta {
+export interface DBMemoryCardMeta {
     metaKey: string;
     chatKey: string;
-    bookId: string;
-    totalChunks: number;
-    embeddingModel: string;
+    updatedAt: number;
+    activeCardCount: number;
+    activeEmbeddingCount: number;
     lastIndexedAt: number;
 }
 
@@ -405,7 +423,7 @@ export interface DBLlmRequestLog {
  *
  * 所有插件的聊天级数据统一存储在 `ss-helper-db` 中。
  * - 公共三张表: chat_documents / chat_plugin_state / chat_plugin_records
- * - MemoryOS 专属高索引表: events / facts / world_state / summaries / templates / audit / memory_mutation_history / meta / worldinfo_cache / template_bindings / vector_chunks / vector_embeddings / vector_meta
+ * - MemoryOS 专属高索引表: events / facts / world_state / summaries / templates / audit / memory_mutation_history / meta / worldinfo_cache / template_bindings / memory_cards / memory_card_embeddings / memory_card_meta
  * - LLMHub 凭据表: llm_credentials
  *
  * 全新数据库，版本从 v1 开始一次性定义所有表。
@@ -427,9 +445,9 @@ export class SSHelperDatabase extends Dexie {
     meta!: Table<DBMeta, string>;
     worldinfo_cache!: Table<DBWorldInfoCache, string>;
     template_bindings!: Table<DBTemplateBinding, string>;
-    vector_chunks!: Table<DBVectorChunk, string>;
-    vector_embeddings!: Table<DBVectorEmbedding, string>;
-    vector_meta!: Table<DBVectorMeta, string>;
+    memory_cards!: Table<DBMemoryCard, string>;
+    memory_card_embeddings!: Table<DBMemoryCardEmbedding, string>;
+    memory_card_meta!: Table<DBMemoryCardMeta, string>;
     relationship_memory!: Table<DBRelationshipMemory, string>;
     memory_recall_log!: Table<DBMemoryRecallLog, string>;
 
@@ -457,9 +475,6 @@ export class SSHelperDatabase extends Dexie {
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
-            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
-            vector_embeddings: '&embeddingId, chunkId, chatKey',
-            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
 
             // ── LLMHub 凭据表 ──
             llm_credentials: '&providerId, updatedAt',
@@ -479,9 +494,6 @@ export class SSHelperDatabase extends Dexie {
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
-            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
-            vector_embeddings: '&embeddingId, chunkId, chatKey',
-            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
             memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',
@@ -501,9 +513,6 @@ export class SSHelperDatabase extends Dexie {
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
-            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
-            vector_embeddings: '&embeddingId, chunkId, chatKey',
-            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
             memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',
@@ -524,9 +533,29 @@ export class SSHelperDatabase extends Dexie {
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
-            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
-            vector_embeddings: '&embeddingId, chunkId, chatKey',
-            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
+            relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, consumer, taskId, taskKind, state, reasonCode, sortTs, queuedAt, finishedAt, createdAt, [sourcePluginId+sortTs], [state+sortTs]',
+        });
+
+        this.version(6).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
+            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
+            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
+            world_state: '&stateKey, [chatKey+path]',
+            summaries: '&summaryId, [chatKey+level+createdAt]',
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
+            meta: '&chatKey',
+            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
+            template_bindings: '&bindingKey, chatKey',
+            memory_cards: '&cardId, chatKey, [chatKey+status], [chatKey+sourceRecordKey], [chatKey+lane], [chatKey+updatedAt]',
+            memory_card_embeddings: '&embeddingId, cardId, chatKey',
+            memory_card_meta: '&metaKey, chatKey, [chatKey+updatedAt]',
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
             memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
             llm_credentials: '&providerId, updatedAt',

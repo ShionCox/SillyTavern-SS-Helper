@@ -2,7 +2,8 @@ import { db, type DBDerivationSource, type DBFact, type DBSummary, type DBWorldS
 import type { FactProposal, SummaryProposal } from '../proposal/types';
 import { normalizeWorldStatePatchValue } from './world-state-patch-normalizer';
 import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
-import { formatSummaryMemoryText } from './memory-card-text';
+import { deleteMemoryCardsBySource, saveMemoryCardsFromEnvelope, saveMemoryCardsFromFactRecord } from './memory-card-store';
+import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from './memory-card-text';
 import type { ChatStateManager } from './chat-state-manager';
 import { FactsManager } from './facts-manager';
 import { StateManager } from './state-manager';
@@ -12,6 +13,7 @@ import type { MemoryMutationPlan, PlannedFactMutation, PlannedStateMutation, Pla
 import { buildMemoryMutationPlanSnapshot } from './memory-mutation-planner';
 import type { MemoryCandidate, MemoryMutationHistoryAction, MemoryMutationHistoryEntry, MemoryMutationTargetKind } from '../types';
 import type { MemoryMutationPlanSnapshot } from '../types';
+import type { MemoryCardDraft } from '../../../SDK/stx';
 
 /**
  * 功能：描述 mutation executor 的依赖输入。
@@ -93,11 +95,27 @@ async function buildFactCandidate(
     if (!input.chatStateManager) {
         return null;
     }
+    const syntheticFact: DBFact = {
+        factKey: mutation.target?.factKey ?? mutation.proposal.factKey ?? crypto.randomUUID(),
+        chatKey: input.chatKey,
+        type: mutation.proposal.type,
+        entity: mutation.proposal.entity,
+        path: mutation.proposal.path,
+        value: mutation.nextValue,
+        confidence: mutation.proposal.confidence,
+        provenance: {
+            extractor: 'ai',
+            provider: input.consumerPluginId,
+            pluginId: input.consumerPluginId,
+            source: input.derivationSource,
+        },
+        updatedAt: Date.now(),
+    };
     return input.chatStateManager.buildMemoryCandidate({
         candidateId: crypto.randomUUID(),
         kind: isRelationshipFactMutation(mutation) ? 'relationship' : 'fact',
         source: input.consumerPluginId,
-        summary: `${String(mutation.proposal.type ?? '').trim()} ${String(mutation.proposal.path ?? '').trim()} ${JSON.stringify(mutation.nextValue ?? '')}`.trim(),
+        summary: buildMemoryCardDraftsFromFact(syntheticFact).map((item: MemoryCardDraft): string => item.memoryText).join('\n') || formatFactMemoryTextForDisplay(syntheticFact),
         payload: {
             type: mutation.proposal.type,
             entity: mutation.proposal.entity,
@@ -279,6 +297,7 @@ async function executeFactMutation(
         if (input.chatStateManager) {
             await input.chatStateManager.archiveFactKeys([factKey]);
         }
+        await deleteMemoryCardsBySource(input.chatKey, factKey);
         await db.facts.delete(factKey);
         await appendMutationHistory(historyManager, input, mutation, beforeRecord, null, factKey, 'fact');
         return { applied: true, factKey, refreshRelationshipState: false };
@@ -312,6 +331,7 @@ async function executeFactMutation(
         if (input.chatStateManager) {
             await input.chatStateManager.archiveFactKeys([factKey]);
         }
+        await deleteMemoryCardsBySource(input.chatKey, factKey);
         const persistedFact = await input.factsManager.get(factKey);
         await appendMutationHistory(historyManager, input, mutation, beforeRecord, snapshotFactRecord(persistedFact), factKey, 'fact');
         return {
@@ -336,11 +356,14 @@ async function executeFactMutation(
         },
     });
     mutation.item.targetRecordKey = factKey;
+    const persistedFact = await input.factsManager.get(factKey);
+    if (persistedFact) {
+        await saveMemoryCardsFromFactRecord(input.chatKey, persistedFact);
+    }
     if (candidate && input.chatStateManager) {
         candidate.resolvedRecordKey = factKey;
         await input.chatStateManager.applyEncodingToRecord(factKey, 'fact', candidate.encoding);
     }
-    const persistedFact = await input.factsManager.get(factKey);
     await appendMutationHistory(historyManager, input, mutation, beforeRecord, snapshotFactRecord(persistedFact), factKey, 'fact');
     return {
         applied: true,
@@ -478,6 +501,20 @@ async function executeSummaryMutation(
         },
     });
     mutation.item.targetRecordKey = persistedSummaryId;
+    await saveMemoryCardsFromEnvelope(
+        input.chatKey,
+        persistedSummaryId,
+        'summary',
+        buildMemorySummaryEnvelope({
+            summaryId: persistedSummaryId,
+            chatKey: input.chatKey,
+            level: mutation.proposal.level,
+            title: mutation.nextTitle,
+            content: mutation.nextContent,
+            keywords: mutation.nextKeywords,
+            createdAt: Date.now(),
+        }, mutation.proposal.memoryCards ?? []),
+    );
     if (candidate && input.chatStateManager) {
         candidate.resolvedRecordKey = persistedSummaryId;
         await input.chatStateManager.applyEncodingToRecord(persistedSummaryId, 'summary', candidate.encoding);

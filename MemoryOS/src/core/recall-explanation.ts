@@ -1,13 +1,16 @@
 import type {
+    CheapRecallSnapshot,
     InjectionSectionName,
     LatestRecallExplanation,
     MemoryCandidateKind,
+    MemoryCardLane,
     MemoryDecayStage,
     MemoryLayer,
     MemoryLifecycleState,
     MemoryRecordKind,
     RecallExplanationBucket,
     RecallLogEntry,
+    VectorMode,
 } from '../types';
 
 type ExplanationBucketKey = 'selected' | 'conflict_suppressed' | 'rejected_candidates';
@@ -40,6 +43,79 @@ function readLifecycleStage(
         return null;
     }
     return lifecycleIndex[normalizedKey]?.stage ?? null;
+}
+
+/**
+ * 功能：归一化向量门控快照。
+ * 参数：
+ *   value：原始快照。
+ * 返回：
+ *   LatestRecallExplanation['vectorGate']：归一化结果。
+ */
+function normalizeRecallGateSnapshot(value: unknown): LatestRecallExplanation['vectorGate'] {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    return {
+        enabled: Boolean(record.enabled),
+        lanes: Array.isArray(record.lanes)
+            ? record.lanes.map((item: unknown): string => normalizeExplanationText(item).toLowerCase()).filter(Boolean) as MemoryCardLane[]
+            : [],
+        reasonCodes: Array.isArray(record.reasonCodes)
+            ? record.reasonCodes.map((item: string): string => normalizeExplanationText(item)).filter(Boolean)
+            : [],
+        primaryNeed: normalizeExplanationText(record.primaryNeed) as LatestRecallExplanation['vectorGate'] extends { primaryNeed: infer T } ? T : never,
+        vectorMode: normalizeExplanationText(record.vectorMode) as VectorMode,
+    };
+}
+
+/**
+ * 功能：归一化缓存快照。
+ * 参数：
+ *   value：原始快照。
+ * 返回：
+ *   LatestRecallExplanation['cache']：归一化结果。
+ */
+function normalizeRecallCacheSnapshot(value: unknown): LatestRecallExplanation['cache'] {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    return {
+        hit: Boolean(record.hit),
+        reasonCodes: Array.isArray(record.reasonCodes)
+            ? record.reasonCodes.map((item: string): string => normalizeExplanationText(item)).filter(Boolean)
+            : [],
+        topicHash: normalizeExplanationText(record.topicHash),
+        entityKeys: Array.isArray(record.entityKeys)
+            ? record.entityKeys.map((item: unknown): string => normalizeExplanationText(item)).filter(Boolean)
+            : [],
+        expiresTurn: Math.max(0, Number(record.expiresTurn ?? 0) || 0),
+    };
+}
+
+/**
+ * 功能：归一化便宜召回快照。
+ * 参数：
+ *   value：原始快照。
+ * 返回：
+ *   LatestRecallExplanation['cheapRecall']：归一化结果。
+ */
+function normalizeCheapRecallSnapshot(value: unknown): LatestRecallExplanation['cheapRecall'] {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    return {
+        primaryNeed: normalizeExplanationText(record.primaryNeed) as CheapRecallSnapshot['primaryNeed'],
+        coveredLanes: Array.isArray(record.coveredLanes)
+            ? record.coveredLanes.map((item: unknown): string => normalizeExplanationText(item).toLowerCase()).filter(Boolean) as MemoryCardLane[]
+            : [],
+        structuredCount: Math.max(0, Number(record.structuredCount ?? 0) || 0),
+        recentEventCount: Math.max(0, Number(record.recentEventCount ?? 0) || 0),
+        enough: Boolean(record.enough),
+    };
 }
 
 /**
@@ -174,6 +250,9 @@ export function normalizeLatestRecallExplanation(
         reasonCodes: Array.isArray(explanation.reasonCodes)
             ? explanation.reasonCodes.map((item: string): string => normalizeExplanationText(item)).filter(Boolean)
             : [],
+        vectorGate: normalizeRecallGateSnapshot(explanation.vectorGate ?? null),
+        cache: normalizeRecallCacheSnapshot(explanation.cache ?? null),
+        cheapRecall: normalizeCheapRecallSnapshot(explanation.cheapRecall ?? null),
     };
 }
 
@@ -194,6 +273,9 @@ export function buildLatestRecallExplanation(params: {
     reasonCodes: string[];
     recallEntries: RecallLogEntry[];
     lifecycleIndex?: ExplanationLifecycleIndex;
+    vectorGate?: LatestRecallExplanation['vectorGate'];
+    cache?: LatestRecallExplanation['cache'];
+    cheapRecall?: LatestRecallExplanation['cheapRecall'];
 }): LatestRecallExplanation {
     const selectedEntries: RecallLogEntry[] = Array.isArray(params.recallEntries)
         ? params.recallEntries.filter((entry: RecallLogEntry): boolean => entry.selected)
@@ -208,6 +290,9 @@ export function buildLatestRecallExplanation(params: {
         generatedAt: params.generatedAt,
         query: params.query,
         sectionsUsed: params.sectionsUsed,
+        vectorGate: params.vectorGate ?? null,
+        cache: params.cache ?? null,
+        cheapRecall: params.cheapRecall ?? null,
         selected: buildRecallLogBucket(
             'selected',
             '命中的记忆',

@@ -1,5 +1,5 @@
-import { readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db';
-import { db, type DBFact, type DBSummary, type DBDerivationSource, type DBVectorChunkMetadata } from '../db/db';
+import { flushSdkChatDataNow, readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db';
+import { db, type DBFact, type DBMemoryCard, type DBSummary } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import {
@@ -55,6 +55,7 @@ import type {
     MemoryOSChatState,
     MemoryQualityScorecard,
     OwnedMemoryState,
+    RecallCacheEntry,
     RecallLogEntry,
     RelationshipDelta,
     RelationshipState,
@@ -122,7 +123,8 @@ import {
 import { CompactionManager } from './compaction-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
-import { formatFactMemoryText, formatSummaryMemoryText } from './memory-card-text';
+import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from './memory-card-text';
+import { deleteMemoryCardsBySource, rebuildMemoryCardsFromSource, saveMemoryCardsFromFactRecord, saveMemoryCardsFromSummaryEnvelope } from './memory-card-store';
 import {
     buildPerActorRetentionMap,
     buildLifecycleState,
@@ -140,76 +142,6 @@ import {
     type OwnedMemoryInferenceInput,
 } from './memory-intelligence';
 
-/**
- * 功能：把记录类型规整为严格向量链允许的类型。
- * @param recordKind 记录类型。
- * @returns 严格向量链允许的记录类型；如果不支持则返回 null。
- */
-function normalizeStrictVectorRecordKind(recordKind: MemoryLifecycleState['recordKind']): 'fact' | 'summary' | null {
-    if (recordKind === 'fact' || recordKind === 'summary') {
-        return recordKind;
-    }
-    return null;
-}
-
-/**
- * 功能：从事实或摘要记录里读取来源追踪信息。
- * @param record 事实或摘要记录。
- * @param recordKind 记录类型。
- * @returns 来源追踪信息；若没有则返回 null。
- */
-function readStrictVectorSourceTrace(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): DBDerivationSource | null {
-    if (recordKind === 'fact') {
-        return (record as DBFact).provenance?.source ?? null;
-    }
-    return (record as DBSummary).source?.provenance?.source ?? null;
-}
-
-/**
- * 功能：构建严格向量索引所需的稳定文本。
- * @param record 事实或摘要记录。
- * @param recordKind 记录类型。
- * @returns 用于向量化的规范文本。
- */
-function buildStrictVectorText(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): string {
-    if (recordKind === 'fact') {
-        return normalizeMemoryText(formatFactMemoryText(record as DBFact));
-    }
-    return normalizeMemoryText(formatSummaryMemoryText(record as DBSummary));
-}
-
-/**
- * 功能：为严格向量索引构建 metadata。
- * @param record 事实或摘要记录。
- * @param recordKind 记录类型。
- * @param reason 触发原因。
- * @returns 严格向量 metadata。
- */
-function buildStrictVectorMetadata(record: DBFact | DBSummary, recordKind: 'fact' | 'summary', reason: string): DBVectorChunkMetadata {
-    const trace = readStrictVectorSourceTrace(record, recordKind);
-    const source: DBDerivationSource = {
-        kind: String(trace?.kind ?? `strict_${recordKind}_sync`),
-        reason: String(trace?.reason ?? reason),
-        viewHash: String(trace?.viewHash ?? ''),
-        snapshotHash: String(trace?.snapshotHash ?? ''),
-        messageIds: Array.isArray(trace?.messageIds) ? trace?.messageIds : [],
-        anchorMessageId: trace?.anchorMessageId,
-        mutationKinds: Array.isArray(trace?.mutationKinds) ? trace?.mutationKinds : [],
-        repairGeneration: Number(trace?.repairGeneration ?? 0),
-        ts: Number(trace?.ts ?? Date.now()),
-    };
-    return {
-        index: 0,
-        source,
-        sourceRecordKey: recordKind === 'fact' ? (record as DBFact).factKey : (record as DBSummary).summaryId,
-        sourceRecordKind: recordKind,
-        ownerActorKey: record.ownerActorKey ?? null,
-        sourceScope: normalizeMemoryText(record.sourceScope ?? 'system') || 'system',
-        memoryType: normalizeMemoryText(record.memoryType ?? 'other') || 'other',
-        memorySubtype: normalizeMemoryText(record.memorySubtype ?? 'other') || 'other',
-        participantActorKeys: [],
-    };
-}
 import {
     getPrimaryPersonaActorKey,
     migratePersonaState,
@@ -276,6 +208,38 @@ function averagePrecisionWindow(values: number[]): number {
 
 function normalizeSeedText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeRecallCacheEntry(value: unknown): RecallCacheEntry | null {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    const entityKeys = Array.isArray(record.entityKeys)
+        ? record.entityKeys.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean)
+        : [];
+    const laneSet = Array.isArray(record.laneSet)
+        ? record.laneSet.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean) as RecallCacheEntry['laneSet']
+        : [];
+    const selectedCardIds = Array.isArray(record.selectedCardIds)
+        ? record.selectedCardIds.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean)
+        : [];
+    const intent = normalizeSeedText(record.intent) as RecallCacheEntry['intent'];
+    if (!intent) {
+        return null;
+    }
+    return {
+        topicHash: normalizeSeedText(record.topicHash),
+        intent,
+        entityKeys,
+        laneSet,
+        selectedCardIds,
+        generatedAt: Math.max(0, Number(record.generatedAt ?? 0) || 0),
+        expiresAt: Math.max(0, Number(record.expiresAt ?? 0) || 0),
+        generatedTurn: Math.max(0, Number(record.generatedTurn ?? 0) || 0),
+        expiresTurn: Math.max(0, Number(record.expiresTurn ?? 0) || 0),
+        baseVersion: Math.max(0, Number(record.baseVersion ?? 0) || 0),
+    };
 }
 
 /**
@@ -826,17 +790,17 @@ export class ChatStateManager {
             medium: 'warning',
             high: 'critical',
         };
-        const actionLabelMap: Record<MaintenanceActionType, string> = {
+        const actionLabelMap: Record<string, string> = {
             compress: '执行压缩',
             rebuild_summary: '重建摘要',
-            revectorize: '严格重建索引',
+            memory_card_rebuild: '严格重建记忆卡',
             schema_cleanup: '整理设定',
             group_maintenance: '群聊维护',
         };
-        const shortLabelMap: Record<MaintenanceActionType, string> = {
+        const shortLabelMap: Record<string, string> = {
             compress: '记忆过载',
             rebuild_summary: '摘要老化',
-            revectorize: '严格向量链',
+            memory_card_rebuild: '严格记忆卡链',
             schema_cleanup: '失效设定偏多',
             group_maintenance: '群聊状态分裂',
         };
@@ -1224,6 +1188,8 @@ export class ChatStateManager {
                 {},
             ),
             latestRecallExplanation: normalizeLatestRecallExplanation(state.latestRecallExplanation ?? null),
+            lastRecallCache: normalizeRecallCacheEntry(state.lastRecallCache ?? null),
+            recallCacheVersion: Math.max(0, Number(state.recallCacheVersion ?? 0) || 0),
             memoryTuningProfile: normalizeMemoryTuningProfile(state.memoryTuningProfile ?? null),
             summaryFixQueue: Array.isArray(state.summaryFixQueue) ? state.summaryFixQueue : [],
             mutationRepairQueue: Array.isArray(state.mutationRepairQueue)
@@ -1368,6 +1334,7 @@ export class ChatStateManager {
         }
         try {
             await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, this.chatKey, this.cache as Record<string, unknown>);
+            await flushSdkChatDataNow();
             this.dirty = false;
         } catch (error) {
             logger.warn('聊天状态写回失败', error);
@@ -1806,8 +1773,8 @@ export class ChatStateManager {
                     touchedCounts.summariesCreated = 1;
                 }
                 state.summaryFixQueue = [];
-            } else if (action === 'revectorize') {
-                touchedCounts.vectorChunksRebuilt = await this.rebuildStrictVectorIndex();
+            } else if (action === 'memory_card_rebuild') {
+                touchedCounts.vectorChunksRebuilt = await this.rebuildMemoryCardIndex();
             } else if (action === 'schema_cleanup') {
                 const rowRedirects = state.rowRedirects ?? {};
                 const rowAliasIndex = state.rowAliasIndex ?? {};
@@ -1913,11 +1880,11 @@ export class ChatStateManager {
         quality: MemoryQualityScorecard,
     ): string {
         if (action !== 'schema_cleanup') {
-            if (action === 'revectorize') {
+            if (action === 'memory_card_rebuild') {
                 const rebuilt = Number(touchedCounts.vectorChunksRebuilt ?? 0);
                 return rebuilt > 0
-                    ? `已完成严格向量重建，重建了 ${rebuilt} 个向量块`
-                    : '已完成严格向量重建，但没有找到可重建的事实或摘要';
+                    ? `已完成记忆卡重建，重建了 ${rebuilt} 张记忆卡`
+                    : '已完成记忆卡重建，但没有找到可重建的事实或摘要';
             }
             return '维护动作已完成';
         }
@@ -2363,7 +2330,7 @@ export class ChatStateManager {
             ...archives,
             archivedFactKeys: Array.from(new Set([...archives.archivedFactKeys, ...factKeys.filter(Boolean)])),
         };
-        await this.removeStrictVectorChunksByRecordKeys(factKeys);
+        await this.removeMemoryCardsByRecordKeys(factKeys);
         this.markDirty();
     }
 
@@ -2395,7 +2362,7 @@ export class ChatStateManager {
             ...archives,
             archivedSummaryIds: Array.from(new Set([...archives.archivedSummaryIds, ...summaryIds.filter(Boolean)])),
         };
-        await this.removeStrictVectorChunksByRecordKeys(summaryIds);
+        await this.removeMemoryCardsByRecordKeys(summaryIds);
         this.markDirty();
     }
 
@@ -2417,32 +2384,34 @@ export class ChatStateManager {
 
     /**
      * 功能：批量记录软删除向量分块键。
-     * @param chunkIds 分块键列表。
+     * @param cardIds 记忆卡 ID 列表。
      * @returns 无返回值。
      */
-    async archiveVectorChunkIds(chunkIds: string[]): Promise<void> {
+    async archiveMemoryCardIds(cardIds: string[]): Promise<void> {
         const state = await this.load();
         const archives = await this.getRetentionArchives();
         state.retentionArchives = {
             ...archives,
-            archivedVectorChunkIds: Array.from(new Set([...archives.archivedVectorChunkIds, ...chunkIds.filter(Boolean)])),
+            archivedVectorChunkIds: Array.from(new Set([...archives.archivedVectorChunkIds, ...cardIds.filter(Boolean)])),
         };
+        await this.bumpRecallCacheVersion('memory_card_archived');
         this.markDirty();
     }
 
     /**
      * 功能：取消软删除向量分块键。
-     * @param chunkIds 分块键列表。
+     * @param cardIds 记忆卡 ID 列表。
      * @returns 无返回值。
      */
-    async unarchiveVectorChunkIds(chunkIds: string[]): Promise<void> {
+    async unarchiveMemoryCardIds(cardIds: string[]): Promise<void> {
         const state = await this.load();
         const archives = await this.getRetentionArchives();
-        const removed = new Set(chunkIds.filter(Boolean));
+        const removed = new Set(cardIds.filter(Boolean));
         state.retentionArchives = {
             ...archives,
-            archivedVectorChunkIds: archives.archivedVectorChunkIds.filter((chunkId: string): boolean => !removed.has(chunkId)),
+            archivedVectorChunkIds: archives.archivedVectorChunkIds.filter((cardId: string): boolean => !removed.has(cardId)),
         };
+        await this.bumpRecallCacheVersion('memory_card_unarchived');
         this.markDirty();
     }
 
@@ -2451,29 +2420,17 @@ export class ChatStateManager {
      * @param recordKeys 记录键列表。
      * @returns 被删除的分块数量。
      */
-    private async removeStrictVectorChunksByRecordKeys(recordKeys: string[]): Promise<number> {
+    private async removeMemoryCardsByRecordKeys(recordKeys: string[]): Promise<number> {
         const normalizedKeys = Array.from(new Set((Array.isArray(recordKeys) ? recordKeys : []).map((item: string): string => normalizeMemoryText(item)).filter(Boolean)));
         if (normalizedKeys.length <= 0) {
             return 0;
         }
-        const chunks = await db.vector_chunks.where('chatKey').equals(this.chatKey).toArray();
-        const chunkIds = chunks
-            .filter((chunk): boolean => {
-                const metadata = (chunk.metadata ?? {}) as Record<string, unknown>;
-                const sourceRecordKey = normalizeMemoryText(metadata.sourceRecordKey);
-                return sourceRecordKey.length > 0 && normalizedKeys.includes(sourceRecordKey);
-            })
-            .map((chunk): string => normalizeMemoryText(chunk.chunkId))
-            .filter(Boolean);
-        if (chunkIds.length <= 0) {
-            return 0;
+        let removedCount = 0;
+        for (const recordKey of normalizedKeys) {
+            const removedCardIds = await deleteMemoryCardsBySource(this.chatKey, recordKey);
+            removedCount += removedCardIds.length;
         }
-        await Promise.all([
-            db.vector_chunks.bulkDelete(chunkIds),
-            db.vector_embeddings.where('chunkId').anyOf(chunkIds).delete(),
-        ]);
-        await this.unarchiveVectorChunkIds(chunkIds);
-        return chunkIds.length;
+        return removedCount;
     }
 
     /**
@@ -2481,22 +2438,11 @@ export class ChatStateManager {
      * @param recordKey 记录键。
      * @param recordKind 记录类型。
      * @param reason 触发原因。
-     * @returns 新写入的 chunkId 列表。
+     * @returns 新写入的 cardId 列表。
      */
-    private async syncStrictVectorRecord(recordKey: string, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
-        const normalizedRecordKey = normalizeMemoryText(recordKey);
-        const normalizedKind = normalizeStrictVectorRecordKind(recordKind);
-        if (!normalizedRecordKey || !normalizedKind) {
-            return [];
-        }
-        await this.removeStrictVectorChunksByRecordKeys([normalizedRecordKey]);
-        const record = normalizedKind === 'fact'
-            ? await db.facts.get(normalizedRecordKey)
-            : await db.summaries.get(normalizedRecordKey);
-        if (!record || String(record.chatKey ?? '').trim() !== this.chatKey) {
-            return [];
-        }
-        return this.indexStrictVectorRecord(record, normalizedKind, reason);
+    private async syncMemoryCardRecord(recordKey: string, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
+        void reason;
+        return rebuildMemoryCardsFromSource(this.chatKey, recordKey, recordKind);
     }
 
     /**
@@ -2504,31 +2450,37 @@ export class ChatStateManager {
      * @param record 事实或摘要记录。
      * @param recordKind 记录类型。
      * @param reason 触发原因。
-     * @returns 新写入的 chunkId 列表。
+     * @returns 新写入的 cardId 列表。
      */
-    private async indexStrictVectorRecord(record: DBFact | DBSummary, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
-        const text = buildStrictVectorText(record, recordKind);
-        if (!text) {
-            return [];
+    private async indexMemoryCardRecord(record: DBFact | DBSummary, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
+        void reason;
+        if (recordKind === 'fact') {
+            const cards = await saveMemoryCardsFromFactRecord(this.chatKey, record as DBFact);
+            if (cards.length > 0) {
+                const state = await this.load();
+                if (state.vectorIndexVersion !== 'memory_card_v1') {
+                    state.vectorIndexVersion = 'memory_card_v1';
+                    this.markDirty();
+                }
+            }
+            return cards.map((item): string => item.cardId);
         }
-        const metadata = buildStrictVectorMetadata(record, recordKind, reason);
-        const vectorManager = new VectorManager(this.chatKey);
-        const chunkIds = await vectorManager.indexText(text, recordKind === 'fact' ? 'facts' : 'summaries', metadata);
-        if (chunkIds.length > 0) {
+        const cards = await saveMemoryCardsFromSummaryEnvelope(this.chatKey, record as DBSummary);
+        if (cards.length > 0) {
             const state = await this.load();
-            if (state.vectorIndexVersion !== 'source_metadata_v3') {
-                state.vectorIndexVersion = 'source_metadata_v3';
+            if (state.vectorIndexVersion !== 'memory_card_v1') {
+                state.vectorIndexVersion = 'memory_card_v1';
                 this.markDirty();
             }
         }
-        return chunkIds;
+        return cards.map((item): string => item.cardId);
     }
 
     /**
      * 功能：对当前聊天的事实与摘要执行严格向量全量重建。
      * @returns 新写入的 chunk 总数。
      */
-    public async rebuildStrictVectorIndex(): Promise<number> {
+    public async rebuildMemoryCardIndex(): Promise<number> {
         const vectorManager = new VectorManager(this.chatKey);
         await vectorManager.clear();
         const [facts, summaries] = await Promise.all([
@@ -2540,18 +2492,18 @@ export class ChatStateManager {
             if (!fact || String(fact.chatKey ?? '').trim() !== this.chatKey) {
                 continue;
             }
-            const chunkIds = await this.indexStrictVectorRecord(fact, 'fact', 'maintenance_revectorize');
-            rebuilt += chunkIds.length;
+            const cardIds = await this.indexMemoryCardRecord(fact, 'fact', 'maintenance_memory_card_rebuild');
+            rebuilt += cardIds.length;
         }
         for (const summary of summaries) {
             if (!summary || String(summary.chatKey ?? '').trim() !== this.chatKey) {
                 continue;
             }
-            const chunkIds = await this.indexStrictVectorRecord(summary, 'summary', 'maintenance_revectorize');
-            rebuilt += chunkIds.length;
+            const cardIds = await this.indexMemoryCardRecord(summary, 'summary', 'maintenance_memory_card_rebuild');
+            rebuilt += cardIds.length;
         }
         const state = await this.load();
-        state.vectorIndexVersion = 'source_metadata_v3';
+        state.vectorIndexVersion = 'memory_card_v1';
         state.vectorMetadataRebuiltAt = Date.now();
         this.markDirty();
         return rebuilt;
@@ -2561,50 +2513,70 @@ export class ChatStateManager {
      * 功能：对单条严格向量记录执行重建。
      * @param recordKey 记录键。
      * @param recordKind 记录类型。
-     * @returns 新写入的 chunkId 列表。
+     * @returns 新写入的 cardId 列表。
      */
-    public async rebuildVectorRecord(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> {
-        return this.syncStrictVectorRecord(recordKey, recordKind, 'viewer_rebuild');
+    public async rebuildMemoryCardsFromSource(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> {
+        return this.syncMemoryCardRecord(recordKey, recordKind, 'viewer_rebuild');
     }
 
     /**
      * 功能：删除单条向量片段及其 embedding。
-     * @param chunkId 分块键。
+     * @param cardId 记忆卡 ID。
      * @returns 是否实际删除成功。
      */
-    public async deleteVectorChunk(chunkId: string): Promise<boolean> {
-        const normalizedChunkId = normalizeMemoryText(chunkId);
-        if (!normalizedChunkId) {
+    public async deleteMemoryCard(cardId: string): Promise<boolean> {
+        const normalizedCardId = normalizeMemoryText(cardId);
+        if (!normalizedCardId) {
             return false;
         }
-        const existing = await db.vector_chunks.get(normalizedChunkId);
-        if (!existing || String(existing.chatKey ?? '').trim() !== this.chatKey) {
-            return false;
+        const card = await db.memory_cards.get(normalizedCardId);
+        if (card && String(card.chatKey ?? '').trim() === this.chatKey) {
+            await Promise.all([
+                db.memory_cards.delete(normalizedCardId),
+                db.memory_card_embeddings.where('cardId').equals(normalizedCardId).delete(),
+            ]);
+            await this.unarchiveMemoryCardIds([normalizedCardId]);
+            return true;
         }
-        await Promise.all([
-            db.vector_chunks.delete(normalizedChunkId),
-            db.vector_embeddings.where('chunkId').equals(normalizedChunkId).delete(),
-        ]);
-        await this.unarchiveVectorChunkIds([normalizedChunkId]);
-        return true;
+        return false;
     }
 
     /**
      * 功能：切换单条向量片段的忽略状态。
-     * @param chunkId 分块键。
+     * @param cardId 记忆卡 ID。
      * @param archived 是否标记为忽略。
      * @returns 无返回值。
      */
-    public async setVectorChunkArchived(chunkId: string, archived: boolean): Promise<void> {
-        const normalizedChunkId = normalizeMemoryText(chunkId);
-        if (!normalizedChunkId) {
+    public async setMemoryCardArchived(cardId: string, archived: boolean): Promise<void> {
+        const normalizedCardId = normalizeMemoryText(cardId);
+        if (!normalizedCardId) {
+            return;
+        }
+        const card = await db.memory_cards.get(normalizedCardId);
+        if (card && String(card.chatKey ?? '').trim() === this.chatKey) {
+            await db.memory_cards.update(normalizedCardId, {
+                status: archived ? 'invalidated' : 'active',
+                updatedAt: Date.now(),
+            } as Partial<DBMemoryCard>);
+            const vectorManager = new VectorManager(this.chatKey);
+            if (archived) {
+                await vectorManager.deleteMemoryCardEmbeddings([normalizedCardId]);
+                await this.archiveMemoryCardIds([normalizedCardId]);
+                return;
+            }
+            await vectorManager.upsertMemoryCardEmbeddings([{
+                ...card,
+                status: 'active',
+                updatedAt: Date.now(),
+            }]);
+            await this.unarchiveMemoryCardIds([normalizedCardId]);
             return;
         }
         if (archived) {
-            await this.archiveVectorChunkIds([normalizedChunkId]);
+            await this.archiveMemoryCardIds([normalizedCardId]);
             return;
         }
-        await this.unarchiveVectorChunkIds([normalizedChunkId]);
+        await this.unarchiveMemoryCardIds([normalizedCardId]);
     }
 
     /**
@@ -2629,12 +2601,20 @@ export class ChatStateManager {
 
     /**
      * 功能：判断指定向量分块是否已软删除。
-     * @param chunkId 分块键。
+     * @param cardId 记忆卡 ID。
      * @returns 是否已软删除。
      */
-    async isVectorChunkArchived(chunkId: string): Promise<boolean> {
+    async isMemoryCardArchived(cardId: string): Promise<boolean> {
+        const normalizedCardId = normalizeMemoryText(cardId);
+        if (!normalizedCardId) {
+            return false;
+        }
+        const card = await db.memory_cards.get(normalizedCardId);
+        if (card && String(card.chatKey ?? '').trim() === this.chatKey) {
+            return card.status !== 'active';
+        }
         const archives = await this.getRetentionArchives();
-        return archives.archivedVectorChunkIds.includes(String(chunkId ?? '').trim());
+        return archives.archivedVectorChunkIds.includes(normalizedCardId);
     }
 
     /**
@@ -2903,7 +2883,7 @@ export class ChatStateManager {
         const hasLegacyData = await this.hasLegacyDerivationData();
         if (hasLegacyData) {
             await this.runMaintenanceAction('rebuild_summary');
-            await this.rebuildStrictVectorIndex();
+            await this.rebuildMemoryCardIndex();
             state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
             if (state.groupMemory) {
                 state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
@@ -2914,7 +2894,7 @@ export class ChatStateManager {
 
         await this.archiveInvalidDerivedArtifacts(view, task);
         await this.rebuildLatestSummaryForRepair(view, task);
-        await this.rebuildStrictVectorIndex();
+        await this.rebuildMemoryCardIndex();
         state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
         if (state.groupMemory) {
             state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
@@ -2937,7 +2917,7 @@ export class ChatStateManager {
     }
 
     private async hasLegacyDerivationData(): Promise<boolean> {
-        const [facts, summaries, vectorChunks] = await Promise.all([
+        const [facts, summaries] = await Promise.all([
             db.facts
                 .where('[chatKey+updatedAt]')
                 .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
@@ -2950,11 +2930,6 @@ export class ChatStateManager {
                 .reverse()
                 .limit(120)
                 .toArray(),
-            db.vector_chunks
-                .where('chatKey')
-                .equals(this.chatKey)
-                .limit(300)
-                .toArray(),
         ]);
         const hasLegacyFacts = facts.some((fact): boolean => !hasStructuredProvenance(fact.provenance));
         if (hasLegacyFacts) {
@@ -2964,12 +2939,7 @@ export class ChatStateManager {
             const source = (summary.source ?? {}) as Record<string, unknown>;
             return !hasStructuredProvenance(source.provenance);
         });
-        if (hasLegacySummaries) {
-            return true;
-        }
-        return vectorChunks.some((chunk): boolean => !hasStructuredProvenance((chunk.metadata as Record<string, unknown> | undefined)?.source
-            ? { source: (chunk.metadata as Record<string, unknown>).source }
-            : null));
+        return hasLegacySummaries;
     }
 
     private async archiveInvalidDerivedArtifacts(view: LogicalChatView, task: MutationRepairTask): Promise<void> {
@@ -2981,7 +2951,7 @@ export class ChatStateManager {
         if (invalidIds.size === 0) {
             return;
         }
-        const [facts, summaries, vectorChunks] = await Promise.all([
+        const [facts, summaries] = await Promise.all([
             db.facts
                 .where('[chatKey+updatedAt]')
                 .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
@@ -2989,10 +2959,6 @@ export class ChatStateManager {
             db.summaries
                 .where('[chatKey+level+createdAt]')
                 .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
-                .toArray(),
-            db.vector_chunks
-                .where('chatKey')
-                .equals(this.chatKey)
                 .toArray(),
         ]);
 
@@ -3023,30 +2989,6 @@ export class ChatStateManager {
             await this.archiveSummaryIds(staleSummaryIds);
         }
 
-        const staleChunkIds = vectorChunks
-            .filter((chunk): boolean => {
-                const metadata = (chunk.metadata ?? {}) as Record<string, unknown>;
-                const source = (metadata.source ?? {}) as Record<string, unknown>;
-                const viewHash = normalizeSeedText(source.viewHash);
-                const messageIdsRaw = source.messageIds;
-                const messageIds = Array.isArray(messageIdsRaw)
-                    ? messageIdsRaw.map((item: unknown): string => normalizeSeedText(item)).filter(Boolean)
-                    : [];
-                return (viewHash && viewHash !== view.viewHash)
-                    || hasArrayIntersection(messageIds, invalidIds);
-            })
-            .map((chunk): string => normalizeSeedText(chunk.chunkId))
-            .filter(Boolean);
-        if (staleChunkIds.length > 0) {
-            await Promise.all([
-                db.vector_chunks.bulkDelete(staleChunkIds),
-                db.vector_embeddings
-                    .where('chunkId')
-                    .anyOf(staleChunkIds)
-                    .delete(),
-            ]);
-            await this.archiveVectorChunkIds(staleChunkIds);
-        }
     }
 
     private async deleteManagedRepairSummaries(keepSummaryId: string): Promise<void> {
@@ -3384,7 +3326,7 @@ export class ChatStateManager {
             const inferenceInput: OwnedMemoryInferenceInput = {
                 recordKey: fact.factKey,
                 recordKind: 'fact',
-                text: normalizeMemoryText(formatFactMemoryText(fact)),
+                text: normalizeMemoryText(buildMemoryCardDraftsFromFact(fact).map((item) => item.memoryText).join('\n') || formatFactMemoryTextForDisplay(fact)),
                 path: fact.path,
                 factType: fact.type,
                 entityKind: fact.entity?.kind,
@@ -4369,13 +4311,13 @@ export class ChatStateManager {
         if (lifecycle.recordKind === 'summary') {
             await db.summaries.update(lifecycle.recordKey, sharedPatch);
         }
+        await this.bumpRecallCacheVersion('lifecycle_persisted');
     }
 
     private async persistOwnedMemoryToDb(lifecycle: MemoryLifecycleState): Promise<void> {
         await this.persistLifecycleToDb(lifecycle);
-        const normalizedKind = normalizeStrictVectorRecordKind(lifecycle.recordKind);
-        if (normalizedKind) {
-            await this.syncStrictVectorRecord(lifecycle.recordKey, normalizedKind, 'lifecycle_persist');
+        if (lifecycle.recordKind === 'fact' || lifecycle.recordKind === 'summary') {
+            await this.syncMemoryCardRecord(lifecycle.recordKey, lifecycle.recordKind, 'lifecycle_persist');
         }
     }
 
@@ -4723,6 +4665,77 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取当前召回缓存。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<RecallCacheEntry | null>：召回缓存快照。
+     */
+    async getRecallCache(): Promise<RecallCacheEntry | null> {
+        const state = await this.load();
+        state.lastRecallCache = normalizeRecallCacheEntry(state.lastRecallCache ?? null);
+        state.recallCacheVersion = Math.max(0, Number(state.recallCacheVersion ?? 0) || 0);
+        return state.lastRecallCache ?? null;
+    }
+
+    /**
+     * 功能：读取当前召回缓存版本号。
+     * 参数：
+     *   无。
+     * 返回：
+     *   Promise<number>：当前版本号。
+     */
+    async getRecallCacheVersion(): Promise<number> {
+        const state = await this.load();
+        state.recallCacheVersion = Math.max(0, Number(state.recallCacheVersion ?? 0) || 0);
+        return state.recallCacheVersion;
+    }
+
+    /**
+     * 功能：写入当前召回缓存。
+     * 参数：
+     *   cache：召回缓存内容。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async setRecallCache(cache: RecallCacheEntry | null): Promise<void> {
+        const state = await this.load();
+        state.recallCacheVersion = Math.max(0, Number(state.recallCacheVersion ?? 0) || 0);
+        state.lastRecallCache = cache ? normalizeRecallCacheEntry(cache) : null;
+        this.markDirty();
+    }
+
+    /**
+     * 功能：让当前召回缓存失效。
+     * 参数：
+     *   reason：失效原因。
+     * 返回：
+     *   Promise<void>：异步完成。
+     */
+    async invalidateRecallCache(reason: string = 'manual_invalidation'): Promise<void> {
+        void reason;
+        const state = await this.load();
+        state.lastRecallCache = null;
+        this.markDirty();
+    }
+
+    /**
+     * 功能：提升召回缓存版本，并让旧缓存立即失效。
+     * 参数：
+     *   reason：版本提升原因。
+     * 返回：
+     *   Promise<number>：提升后的版本号。
+     */
+    async bumpRecallCacheVersion(reason: string = 'state_changed'): Promise<number> {
+        void reason;
+        const state = await this.load();
+        state.recallCacheVersion = Math.max(0, Number(state.recallCacheVersion ?? 0) || 0) + 1;
+        state.lastRecallCache = null;
+        this.markDirty();
+        return state.recallCacheVersion;
+    }
+
+    /**
      * 功能：读取主链 trace 快照。
      * @returns Promise<MemoryMainlineTraceSnapshot>：主链 trace 快照。
      */
@@ -4801,7 +4814,7 @@ export class ChatStateManager {
         relationshipFacts.forEach((fact): void => {
             const typeText = normalizeMemoryText(fact.type).toLowerCase();
             const pathText = normalizeMemoryText(fact.path).toLowerCase();
-            const summaryText = normalizeMemoryText(formatFactMemoryText(fact));
+            const summaryText = normalizeMemoryText(buildMemoryCardDraftsFromFact(fact).map((item) => item.memoryText).join('\n') || formatFactMemoryTextForDisplay(fact));
             if (!/relationship|relation|bond|trust|affection|conflict|关系|好感|信任|矛盾/.test(`${typeText} ${pathText} ${summaryText}`)) {
                 return;
             }

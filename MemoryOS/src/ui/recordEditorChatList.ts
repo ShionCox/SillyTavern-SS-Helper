@@ -125,6 +125,7 @@ export async function buildChatItemMeta(
     chatKey: string,
     signal: Record<string, unknown> | null,
     hostCanonicalKeySet: Set<string>,
+    hostChatKeySet: Set<string>,
 ): Promise<ChatItemMeta> {
     const ctx = (window as any).SillyTavern?.getContext?.() || {};
     const characters = Array.isArray(ctx.characters) ? ctx.characters : [];
@@ -141,7 +142,8 @@ export async function buildChatItemMeta(
     const pluginState = (pluginStateRow?.state ?? {}) as Record<string, unknown>;
     const archived = pluginState.archived === true;
     const archiveReason = String(pluginState.archiveReason ?? '').trim();
-    const hostMissing = hostCanonicalKeySet.size > 0 && Boolean(canonicalKey) && !hostCanonicalKeySet.has(canonicalKey);
+    const hostPresent = hostChatKeySet.has(chatKey) || (hostCanonicalKeySet.size > 0 && Boolean(canonicalKey) && hostCanonicalKeySet.has(canonicalKey));
+    const hostMissing = (hostChatKeySet.size > 0 || hostCanonicalKeySet.size > 0) && !hostPresent;
 
     const parsedRef = parseAnyTavernChatRefEvent(chatKey);
 

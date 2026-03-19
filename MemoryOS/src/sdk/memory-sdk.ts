@@ -26,7 +26,7 @@ import { HybridSearchManager } from '../vector/hybrid-search';
 import { CompactionManager } from '../core/compaction-manager';
 import { WorldInfoWriter } from '../template/worldinfo-writer';
 import { ChatStateManager } from '../core/chat-state-manager';
-import { formatFactMemoryText } from '../core/memory-card-text';
+import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay } from '../core/memory-card-text';
 import { TurnTracker } from '../core/turn-tracker';
 import { RowResolver } from '../core/row-resolver';
 import { RowOperationsManager } from '../core/row-operations';
@@ -34,7 +34,7 @@ import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
 import { inferStructuredSeedWorldStateEntries } from '../core/world-state-seed';
-import { db, restoreArchivedMemoryChat, type DBFact } from '../db/db';
+import { db, restoreArchivedMemoryChat, type DBFact, type DBSummary } from '../db/db';
 import manifestJson from '../../manifest.json';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -42,6 +42,7 @@ import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
 import { buildMemorySummaryEnvelope } from '../core/memory-summary-envelope';
+import { saveMemoryCardsFromSummaryEnvelope } from '../core/memory-card-store';
 import { LogicTableFacade } from './logic-table-facade';
 import { openWorldbookInitPanel } from '../ui/index';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
@@ -630,7 +631,7 @@ export class MemorySDKImpl implements MemorySDK {
                     candidateId: factKey,
                     kind: 'fact',
                     source: 'memory_sdk',
-                    summary: formatFactMemoryText(fact as DBFact),
+                    summary: buildMemoryCardDraftsFromFact(fact as DBFact).map((item) => item.memoryText).join('\n') || formatFactMemoryTextForDisplay(fact as DBFact),
                     payload: {
                         type: fact.type,
                         entity: fact.entity,
@@ -753,6 +754,7 @@ export class MemorySDKImpl implements MemorySDK {
                     },
                 }],
             }, 'sdk.summaries.upsert');
+            await saveMemoryCardsFromSummaryEnvelope(this.chatKey_, summaryRecord as DBSummary, memoryEnvelope);
             if (this.chatStateManager) {
                 const candidate = await this.chatStateManager.buildMemoryCandidate({
                     candidateId: summaryId,
@@ -1211,14 +1213,14 @@ export class MemorySDKImpl implements MemorySDK {
         getMainlineTraceSnapshot: (): Promise<import('../types').MemoryMainlineTraceSnapshot> => {
             return this.chatStateManager.getMainlineTraceSnapshot();
         },
-        rebuildVectorRecord: (recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> => {
-            return this.chatStateManager.rebuildVectorRecord(recordKey, recordKind);
+        rebuildMemoryCardsFromSource: (recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> => {
+            return this.chatStateManager.rebuildMemoryCardsFromSource(recordKey, recordKind);
         },
-        deleteVectorChunk: (chunkId: string): Promise<boolean> => {
-            return this.chatStateManager.deleteVectorChunk(chunkId);
+        deleteMemoryCard: (cardId: string): Promise<boolean> => {
+            return this.chatStateManager.deleteMemoryCard(cardId);
         },
-        setVectorChunkArchived: (chunkId: string, archived: boolean): Promise<void> => {
-            return this.chatStateManager.setVectorChunkArchived(chunkId, archived);
+        setMemoryCardArchived: (cardId: string, archived: boolean): Promise<void> => {
+            return this.chatStateManager.setMemoryCardArchived(cardId, archived);
         },
         getColdStartStage: () => {
             return this.chatStateManager.getColdStartStage();

@@ -1,4 +1,4 @@
-import { db, type DBFact, type DBMemoryRecallLog, type DBSummary, type DBVectorChunk, type DBVectorChunkMetadata, type DBVectorEmbedding } from '../db/db';
+import { db, type DBFact, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryRecallLog, type DBSummary, type DBVectorChunkMetadata } from '../db/db';
 import type {
     MemoryCardLane,
     MemoryCardStatus,
@@ -21,12 +21,11 @@ import type {
 import { ChatStateManager } from '../core/chat-state-manager';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
-import { formatFactMemoryText, formatSummaryMemoryText } from '../core/memory-card-text';
+import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from '../core/memory-card-text';
 import { StateManager } from '../core/state-manager';
 import { SummariesManager } from '../core/summaries-manager';
 import { VectorManager } from '../vector/vector-manager';
-import { readVectorSourceMetadata, type StrictVectorSourceMetadata } from '../recall/sources/vector-source';
-import { buildIntentBudgets, collectAdaptiveMetricsFromEvents, decideInjectionIntent, resolveIntentSections } from '../core/chat-strategy-engine';
+import { buildIntentBudgets, collectAdaptiveMetricsFromEvents, decideInjectionIntent, resolveIntentSections, shouldRunVectorRecall } from '../core/chat-strategy-engine';
 import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from '../core/lorebook-relevance-gate';
 import { buildPreparedRecallContext } from '../injection/recall-context-builder';
 import { buildViewpointPolicyInput } from '../injection/viewpoint-policy';
@@ -34,13 +33,12 @@ import { collectRecallCandidates } from '../recall/recall-assembler';
 import { planRecall } from '../recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
 import { runRerank } from '../llm/memoryLlmBridge';
+import { buildRecallTopicHash, collectCheapRecall, resolveRecallGateLanes } from '../injection/recall-gate';
 
 type VectorHit = {
     chunkId: string;
     content: string;
     score: number;
-    bookId?: string;
-    metadata?: DBVectorChunkMetadata;
     createdAt?: number;
 };
 
@@ -60,6 +58,17 @@ function normalizeText(value: unknown): string {
  */
 function normalizeLookup(value: unknown): string {
     return normalizeText(value).toLowerCase();
+}
+
+/**
+ * 功能：归一化字符串数组，便于比较缓存键。
+ * 参数：
+ *   values：原始字符串数组。
+ * 返回：
+ *   string[]：去重并排序后的数组。
+ */
+function normalizeStringList(values: Array<string | null | undefined>): string[] {
+    return Array.from(new Set((Array.isArray(values) ? values : []).map((item: string | null | undefined): string => normalizeText(item)).filter(Boolean))).sort();
 }
 
 /**
@@ -129,13 +138,6 @@ function formatActorLabel(actorKey: string): string {
  * @param recordKind 记录类型。
  * @returns 标准化后的索引文本。
  */
-function buildStrictVectorText(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): string {
-    if (recordKind === 'fact') {
-        return normalizeText(formatFactMemoryText(record as DBFact));
-    }
-    return normalizeText(formatSummaryMemoryText(record as DBSummary));
-}
-
 /**
  * 功能：构建列表预览文本。
  * @param text 完整文本。
@@ -352,7 +354,7 @@ function buildMemoryCardSnapshotItems(
 ): MemoryCardSummary[] {
     const groups = new Map<string, MemoryCardSummary[]>();
     for (const item of items) {
-        const sourceKey = normalizeText(item.sourceRecordKey) || normalizeText(item.chunkId);
+        const sourceKey = normalizeText(item.sourceRecordKey) || normalizeText(item.cardId) || normalizeText(item.chunkId);
         const groupKey = `${normalizeText(item.sourceRecordKind)}:${sourceKey}`;
         const bucket = groups.get(groupKey) ?? [];
         bucket.push(item as MemoryCardSummary);
@@ -362,7 +364,7 @@ function buildMemoryCardSnapshotItems(
     const cardItems = Array.from(groups.entries()).map(([groupKey, groupItems]): MemoryCardSummary => {
         const sortedItems = [...groupItems].sort((left: MemoryCardSummary, right: MemoryCardSummary): number => Number(left.createdAt ?? 0) - Number(right.createdAt ?? 0));
         const representative = sortedItems[sortedItems.length - 1] ?? groupItems[0];
-        const cardChunkIds = sortedItems.map((item: MemoryCardSummary): string => normalizeText(item.chunkId)).filter(Boolean);
+        const cardIds = sortedItems.map((item: MemoryCardSummary): string => normalizeText(item.cardId) || normalizeText(item.chunkId)).filter(Boolean);
         const memoryText = sortedItems
             .map((item: MemoryCardSummary): string => normalizeText(item.content))
             .filter(Boolean)
@@ -387,7 +389,7 @@ function buildMemoryCardSnapshotItems(
             .join(' · ');
         return {
             ...representative,
-            chunkId: cardChunkIds[0] ?? representative.chunkId,
+            chunkId: cardIds[0] ?? representative.cardId ?? representative.chunkId,
             cardId,
             lane,
             subject,
@@ -397,7 +399,7 @@ function buildMemoryCardSnapshotItems(
             ttl,
             replaceKey: lane === 'state' ? (sourceRecordKey || cardId) : null,
             status: inferMemoryCardStatus(representative.statusKind, representative.sourceMissing),
-            cardChunkIds,
+            cardIds,
             content: memoryText,
             preview: buildPreview(memoryText),
             contentHash,
@@ -413,6 +415,158 @@ function buildMemoryCardSnapshotItems(
     }, new Map<string, number>());
 
     return cardItems.map((item: MemoryCardSummary): MemoryCardSummary => {
+        const duplicateCount = Number(duplicateMap.get(normalizeText(item.contentHash)) ?? 0);
+        const statusReasons = duplicateCount > 1
+            ? [...item.statusReasons, `检测到 ${duplicateCount} 条重复记忆内容`]
+            : item.statusReasons;
+        return {
+            ...item,
+            duplicateCount,
+            statusReasons,
+        };
+    });
+}
+
+/**
+ * 功能：把记忆卡表直接转成查看器卡片。
+ * @param cards 记忆卡表数据。
+ * @param recallMap 命中日志映射。
+ * @param embeddings 记忆卡向量映射。
+ * @param facts 事实表数据。
+ * @param summaries 摘要表数据。
+ * @param state 当前聊天状态。
+ * @returns 记忆卡视图项。
+ */
+function buildMemoryCardSnapshotItemsFromCards(
+    cards: DBMemoryCard[],
+    recallMap: Map<string, DBMemoryRecallLog[]>,
+    embeddings: Map<string, DBMemoryCardEmbedding>,
+    facts: DBFact[],
+    summaries: DBSummary[],
+    state: Awaited<ReturnType<ChatStateManager['load']>> | null,
+): MemoryCardSummary[] {
+    const factMap = new Map<string, DBFact>(facts.map((item: DBFact): [string, DBFact] => [normalizeText(item.factKey), item]));
+    const summaryMap = new Map<string, DBSummary>(summaries.map((item: DBSummary): [string, DBSummary] => [normalizeText(item.summaryId), item]));
+    const actorLabelMap = state ? buildActorLabelMap(state) : new Map<string, string>();
+    const now = Date.now();
+    const items = cards
+        .slice()
+        .sort((left: DBMemoryCard, right: DBMemoryCard): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
+        .map((card: DBMemoryCard): MemoryCardSummary => {
+            const sourceRecordKey = normalizeText(card.sourceRecordKey) || null;
+            const sourceRecordKind = normalizeText(card.sourceRecordKind) as MemoryCardSummary['sourceRecordKind'];
+            const sourceRecord = sourceRecordKind === 'fact'
+                ? (sourceRecordKey ? factMap.get(sourceRecordKey) ?? null : null)
+                : sourceRecordKind === 'summary'
+                    ? (sourceRecordKey ? summaryMap.get(sourceRecordKey) ?? null : null)
+                    : null;
+            const usage = buildUsageSnapshot(sourceRecordKey ? (recallMap.get(sourceRecordKey) ?? []) : []);
+            const embedding = embeddings.get(card.cardId) ?? null;
+            const content = normalizeText(card.memoryText);
+            const isArchived = card.status !== 'active';
+            const lastHitAt = Number(usage.lastHitAt ?? 0) || 0;
+            const recentHit = lastHitAt > 0 && now - lastHitAt <= 7 * 24 * 60 * 60 * 1000;
+            const longUnused = ((lastHitAt <= 0 && now - Number(card.createdAt ?? 0) > 14 * 24 * 60 * 60 * 1000) || (lastHitAt > 0 && now - lastHitAt > 30 * 24 * 60 * 60 * 1000));
+            const sourceMissing = Boolean(sourceRecordKey && !sourceRecord);
+            const statusKind = sourceMissing
+                ? 'source_missing'
+                : isArchived
+                    ? 'archived_residual'
+                    : recentHit
+                        ? 'recent_hit'
+                        : longUnused
+                            ? 'long_unused'
+                            : 'normal';
+            const statusLabel = statusKind === 'source_missing'
+                ? '来源丢失'
+                : statusKind === 'archived_residual'
+                    ? '已归档残留'
+                    : statusKind === 'recent_hit'
+                        ? '最近命中'
+                        : statusKind === 'long_unused'
+                            ? '长期未用'
+                            : '正常使用';
+            const statusTone = statusKind === 'source_missing'
+                ? 'danger'
+                : statusKind === 'archived_residual'
+                    ? 'muted'
+                    : statusKind === 'recent_hit'
+                        ? 'success'
+                        : statusKind === 'long_unused'
+                            ? 'warning'
+                            : 'success';
+            const ownerActorKey = normalizeText(card.ownerActorKey ?? null) || null;
+            const participantActorKeys = Array.isArray(card.participantActorKeys)
+                ? card.participantActorKeys.map((item: string): string => normalizeText(item)).filter(Boolean)
+                : [];
+            const sourceLabel = sourceRecordKind === 'fact'
+                ? (sourceRecord ? `${normalizeText((sourceRecord as DBFact).type) || '未命名事实'}${normalizeText((sourceRecord as DBFact).path) ? ` · ${normalizeText((sourceRecord as DBFact).path)}` : ''}` : '事实来源缺失')
+                : sourceRecordKind === 'summary'
+                    ? (sourceRecord ? (normalizeText((sourceRecord as DBSummary).title) || `${normalizeText((sourceRecord as DBSummary).level) || 'scene'} 摘要`) : '摘要来源缺失')
+                    : normalizeText(card.title) || normalizeText(card.subject) || '记忆卡';
+            const sourceDetail = [
+                `记忆层级 · ${normalizeText(card.lane) || 'other'}`,
+                `有效期 · ${normalizeText(card.ttl)}`,
+                sourceRecordKey ? `来源 · ${sourceRecordKey}` : '',
+            ].filter(Boolean).join(' · ');
+            const chunkId = normalizeText(card.cardId) || `memory-card:${hashText(content)}`;
+            return {
+                chunkId,
+                chatKey: card.chatKey,
+                content,
+                preview: buildPreview(content),
+                contentHash: hashText(content),
+                contentLength: content.length,
+                createdAt: Number(card.createdAt ?? 0) || 0,
+                sourceRecordKey,
+                sourceRecordKind: sourceRecordKind || 'unknown',
+                sourceLabel,
+                sourceDetail,
+                ownerActorKey,
+                ownerActorLabel: ownerActorKey ? (actorLabelMap.get(ownerActorKey) || formatActorLabel(ownerActorKey)) : null,
+                sourceScope: normalizeText(card.scope) || null,
+                memoryType: normalizeText(card.lane) || null,
+                memorySubtype: normalizeText(card.ttl) || null,
+                participantActorKeys,
+                participantActorLabels: participantActorKeys.map((item: string): string => actorLabelMap.get(item) || formatActorLabel(item)),
+                anchorMessageId: null,
+                sourceMessageIds: [],
+                sourceTraceKind: null,
+                sourceReason: null,
+                sourceViewHash: null,
+                sourceSnapshotHash: null,
+                sourceRepairGeneration: null,
+                embeddingModel: normalizeText(embedding?.model) || null,
+                embeddingDimensions: Array.isArray(embedding?.vector) ? embedding!.vector.length : null,
+                statusKind,
+                statusLabel,
+                statusTone,
+                statusReasons: sourceMissing ? ['来源记录缺失'] : isArchived ? [`记忆卡状态：${card.status}`] : [],
+                isArchived,
+                sourceMissing,
+                needsRebuild: sourceMissing || isArchived,
+                duplicateCount: 1,
+                usage,
+                cardId: card.cardId,
+                lane: card.lane,
+                subject: card.subject,
+                title: card.title,
+                memoryText: content,
+                evidenceText: card.evidenceText ?? null,
+                ttl: card.ttl,
+                replaceKey: card.replaceKey ?? null,
+                status: card.status,
+                cardIds: [card.cardId],
+            } as MemoryCardSummary;
+        });
+
+    const duplicateMap = items.reduce<Map<string, number>>((map: Map<string, number>, item: MemoryCardSummary): Map<string, number> => {
+        const key = normalizeText(item.contentHash);
+        map.set(key, Number(map.get(key) ?? 0) + 1);
+        return map;
+    }, new Map<string, number>());
+
+    return items.map((item: MemoryCardSummary): MemoryCardSummary => {
         const duplicateCount = Number(duplicateMap.get(normalizeText(item.contentHash)) ?? 0);
         const statusReasons = duplicateCount > 1
             ? [...item.statusReasons, `检测到 ${duplicateCount} 条重复记忆内容`]
@@ -535,8 +689,20 @@ function buildActorLabelMap(state: Awaited<ReturnType<ChatStateManager['load']>>
  * @returns 重建检查结果。
  */
 function inspectRebuildNeed(
-    chunk: DBVectorChunk,
-    sourceMeta: StrictVectorSourceMetadata | null,
+    chunk: {
+        chunkId: string;
+        content: string;
+        metadata?: DBVectorChunkMetadata | null;
+    },
+    sourceMeta: {
+        sourceRecordKey: string;
+        sourceRecordKind: 'fact' | 'summary';
+        ownerActorKey: string | null;
+        sourceScope?: string;
+        memoryType?: string;
+        memorySubtype?: string;
+        participantActorKeys: string[];
+    } | null,
     sourceRecord: DBFact | DBSummary | null,
 ): { needsRebuild: boolean; reasons: string[] } {
     const reasons: string[] = [];
@@ -551,7 +717,10 @@ function inspectRebuildNeed(
     if (!sourceRecord) {
         return { needsRebuild: false, reasons };
     }
-    if (buildStrictVectorText(sourceRecord, sourceMeta.sourceRecordKind) !== content) {
+    const expectedContent = sourceMeta.sourceRecordKind === 'fact'
+        ? normalizeText(formatFactMemoryTextForDisplay(sourceRecord as DBFact))
+        : normalizeText(formatSummaryMemoryText(sourceRecord as DBSummary));
+    if (expectedContent && expectedContent !== content) {
         reasons.push('来源记录已更新，但片段尚未同步');
     }
     const metadata = chunk.metadata ?? {};
@@ -612,21 +781,14 @@ export class VectorMemoryViewerFacade {
      * @returns 查看器快照。
      */
     async getMemoryCardSnapshot(): Promise<MemoryCardViewerSnapshot> {
-        const [state, archives, chunks, embeddings, facts, summaries, recallRows] = await Promise.all([
+        const [state, memoryCards, memoryCardEmbeddings, facts, summaries, recallRows] = await Promise.all([
             this.chatStateManager.load(),
-            this.chatStateManager.getRetentionArchives(),
-            db.vector_chunks.where('chatKey').equals(this.chatKey).toArray(),
-            db.vector_embeddings.where('chatKey').equals(this.chatKey).toArray(),
+            db.memory_cards.where('[chatKey+updatedAt]').between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER]).reverse().toArray(),
+            db.memory_card_embeddings.where('chatKey').equals(this.chatKey).toArray(),
             db.facts.where('[chatKey+updatedAt]').between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER]).reverse().toArray(),
             db.summaries.where('[chatKey+level+createdAt]').between([this.chatKey, '', 0], [this.chatKey, '\uffff', Number.MAX_SAFE_INTEGER]).reverse().toArray(),
             db.memory_recall_log.where('chatKey').equals(this.chatKey).toArray(),
         ]);
-        const factMap = new Map<string, DBFact>(facts.map((item: DBFact): [string, DBFact] => [normalizeText(item.factKey), item]));
-        const summaryMap = new Map<string, DBSummary>(summaries.map((item: DBSummary): [string, DBSummary] => [normalizeText(item.summaryId), item]));
-        const actorLabelMap = buildActorLabelMap(state);
-        const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
-        const archivedFactSet = new Set((archives.archivedFactKeys ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
-        const archivedSummarySet = new Set((archives.archivedSummaryIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
         const recallMap = recallRows.reduce<Map<string, DBMemoryRecallLog[]>>((map: Map<string, DBMemoryRecallLog[]>, row: DBMemoryRecallLog): Map<string, DBMemoryRecallLog[]> => {
             const key = normalizeText(row.recordKey);
             if (!key) {
@@ -637,17 +799,14 @@ export class VectorMemoryViewerFacade {
             map.set(key, bucket);
             return map;
         }, new Map<string, DBMemoryRecallLog[]>());
-        const duplicateMap = chunks.reduce<Map<string, number>>((map: Map<string, number>, item: DBVectorChunk): Map<string, number> => {
-            const contentHash = hashText(normalizeText(item.content));
-            map.set(contentHash, Number(map.get(contentHash) ?? 0) + 1);
-            return map;
-        }, new Map<string, number>());
-        const embeddingMap = new Map<string, DBVectorEmbedding>(embeddings.map((item: DBVectorEmbedding): [string, DBVectorEmbedding] => [normalizeText(item.chunkId), item]));
-
-        const items: VectorMemoryRecordSummary[] = chunks
-            .slice()
-            .sort((left: DBVectorChunk, right: DBVectorChunk): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
-            .map((chunk: DBVectorChunk): VectorMemoryRecordSummary => {
+        const memoryEmbeddingMap = new Map<string, DBMemoryCardEmbedding>(memoryCardEmbeddings.map((item: DBMemoryCardEmbedding): [string, DBMemoryCardEmbedding] => [normalizeText(item.cardId), item]));
+        const cardItems = buildMemoryCardSnapshotItemsFromCards(memoryCards, recallMap, memoryEmbeddingMap, facts, summaries, state);
+        /*
+        if (false) {
+            chunks
+                .slice()
+                .sort((left: DBVectorChunk, right: DBVectorChunk): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
+                .map((chunk: DBVectorChunk): VectorMemoryRecordSummary => {
                 const chunkId = normalizeText(chunk.chunkId);
                 const sourceMeta = readVectorSourceMetadata({
                     chunkId,
@@ -764,9 +923,10 @@ export class VectorMemoryViewerFacade {
                     duplicateCount,
                     usage,
                 };
-            });
+                });
+        }
 
-        const cardItems = buildMemoryCardSnapshotItems(items, recallMap);
+        */
 
         return {
             chatKey: this.chatKey,
@@ -818,10 +978,10 @@ export class VectorMemoryViewerFacade {
         ]);
         const itemMap = new Map<string, MemoryCardSummary>();
         snapshot.items.forEach((item: MemoryCardSummary): void => {
-            itemMap.set(item.chunkId, item);
             itemMap.set(item.cardId, item);
-            item.cardChunkIds.forEach((chunkId: string): void => {
-                itemMap.set(chunkId, item);
+            itemMap.set(item.chunkId, item);
+            item.cardIds.forEach((cardId: string): void => {
+                itemMap.set(cardId, item);
             });
         });
         const mergedMetrics = collectAdaptiveMetricsFromEvents(recentEvents, await this.chatStateManager.getAdaptiveMetrics());
@@ -852,23 +1012,15 @@ export class VectorMemoryViewerFacade {
             lorebookDecision,
             ...buildViewpointPolicyInput(recallContext, logicalView, groupMemory),
         });
-        const vectorManager = new VectorManager(this.chatKey);
-        const rawHits = await vectorManager.search(normalizedQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? 5) * 2, Number(recallPlan.fineTopK ?? 8)));
-        const archives = await this.chatStateManager.getRetentionArchives();
-        const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
-        const activeHits = rawHits.filter((item: VectorHit): boolean => !archivedChunkSet.has(normalizeText(item.chunkId)));
-        const rerankEnabled = policy.vectorMode === 'search_rerank' && policy.rerankEnabled !== false;
-        const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(policy.rerankThreshold ?? 6)));
-        const beforeRankMap = new Map<string, number>(activeHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
-        const afterRankMap = new Map<string, number>(rerankedHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
-        const candidates = await collectRecallCandidates({
+        const cheapRecall = await collectCheapRecall({
             chatKey: this.chatKey,
-            plan: recallPlan,
             query: normalizedQuery,
+            intent,
+            plan: recallPlan,
             recentEvents,
             logicalView,
             groupMemory,
-            policy,
+            policy: policy as AdaptivePolicy,
             lorebookDecision,
             lorebookEntries,
             factsManager: new FactsManager(this.chatKey),
@@ -882,7 +1034,80 @@ export class VectorMemoryViewerFacade {
             tuningProfile: recallContext.tuningProfile,
             relationships: recallContext.relationships,
             fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+            preparedContext: recallContext,
         });
+        const currentTurnTracker = await this.chatStateManager.getAssistantTurnTracker();
+        const currentTurn = Math.max(0, Number(currentTurnTracker?.activeAssistantTurnCount ?? 0) || 0);
+        const recallCache = await this.chatStateManager.getRecallCache();
+        const recallCacheVersion = await this.chatStateManager.getRecallCacheVersion();
+        const cheapTopicHash = buildRecallTopicHash(cheapRecall);
+        const cacheActiveCards = recallCache?.selectedCardIds?.length
+            ? await db.memory_cards.bulkGet(recallCache.selectedCardIds)
+            : [];
+        const cacheHit = Boolean(
+            recallCache
+            && recallCache.intent === intent
+            && recallCache.baseVersion === recallCacheVersion
+            && currentTurn <= recallCache.expiresTurn
+            && normalizeStringList(recallCache.entityKeys).join('|') === normalizeStringList(cheapRecall.entityKeys).join('|')
+            && String(recallCache.topicHash ?? '').trim() === String(cheapTopicHash ?? '').trim()
+            && cacheActiveCards.length > 0
+            && cacheActiveCards.every((card): boolean => Boolean(card && card.status === 'active' && String(card.chatKey ?? '').trim() === this.chatKey)),
+        );
+        const vectorGate = shouldRunVectorRecall({
+            query: normalizedQuery,
+            intent,
+            policy: policy as AdaptivePolicy,
+            structuredCount: cheapRecall.structuredCount,
+            coveredLanes: cheapRecall.coveredLanes,
+            recentEventCount: cheapRecall.recentEventCount,
+            structuredEnough: cheapRecall.enough,
+            recentEventsEnough: cheapRecall.recentEventCount > 0 && (cheapRecall.primaryNeed === 'historical_event' || cheapRecall.primaryNeed === 'causal_trace' || cheapRecall.primaryNeed === 'mixed'),
+            cacheHit,
+        });
+        const effectiveVectorGate = {
+            ...vectorGate,
+            lanes: resolveRecallGateLanes(cheapRecall, vectorGate),
+        };
+        const vectorManager = new VectorManager(this.chatKey);
+        const rawHits = vectorGate.enabled
+            ? await vectorManager.search(normalizedQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? 5) * 2, Number(recallPlan.fineTopK ?? 8)), {
+                lanes: effectiveVectorGate.lanes,
+                activeOnly: true,
+            })
+            : [];
+        const archives = await this.chatStateManager.getRetentionArchives();
+        const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
+        const activeHits = rawHits.filter((item: VectorHit): boolean => !archivedChunkSet.has(normalizeText(item.chunkId)));
+        const rerankEnabled = policy.vectorMode === 'search_rerank' && policy.rerankEnabled !== false;
+        const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(policy.rerankThreshold ?? 6)));
+        const beforeRankMap = new Map<string, number>(activeHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
+        const afterRankMap = new Map<string, number>(rerankedHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
+        const candidates = vectorGate.enabled
+            ? await collectRecallCandidates({
+                chatKey: this.chatKey,
+                plan: recallPlan,
+                query: normalizedQuery,
+                recentEvents,
+                logicalView,
+                groupMemory,
+                policy,
+                lorebookDecision,
+                lorebookEntries,
+                factsManager: new FactsManager(this.chatKey),
+                stateManager: new StateManager(this.chatKey),
+                summariesManager: new SummariesManager(this.chatKey),
+                chatStateManager: this.chatStateManager,
+                lifecycleIndex: recallContext.lifecycleMap,
+                activeActorKey: recallContext.activeActorKey,
+                personaProfiles: recallContext.personaProfiles,
+                personaProfile: recallContext.personaProfile,
+                tuningProfile: recallContext.tuningProfile,
+                relationships: recallContext.relationships,
+                fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+                vectorGate: effectiveVectorGate,
+            })
+            : [...cheapRecall.candidates];
         const ranked = rankRecallCandidates({
             candidates,
             plan: recallPlan,
@@ -896,16 +1121,16 @@ export class VectorMemoryViewerFacade {
             estimateTokens,
         });
         const vectorCandidateMap = new Map<string, RecallCandidate>();
-        ranked.filter((item: RecallCandidate): boolean => item.source === 'vector').forEach((item: RecallCandidate): void => {
-            const chunkId = normalizeText(String(item.candidateId ?? '').replace(/^vector:/, ''));
+        ranked.filter((item: RecallCandidate): boolean => item.source === 'memory_card').forEach((item: RecallCandidate): void => {
+            const chunkId = normalizeText(String(item.candidateId ?? '').replace(/^memory-card:/, ''));
             if (chunkId) {
                 vectorCandidateMap.set(chunkId, item);
             }
         });
         const selectedVectorCandidates = finalized
-            .filter((item: RecallCandidate): boolean => item.source === 'vector' && item.selected)
+            .filter((item: RecallCandidate): boolean => item.source === 'memory_card' && item.selected)
             .sort((left: RecallCandidate, right: RecallCandidate): number => Number(right.finalScore ?? 0) - Number(left.finalScore ?? 0));
-        const finalRankMap = new Map<string, number>(selectedVectorCandidates.map((item: RecallCandidate, index: number): [string, number] => [normalizeText(String(item.candidateId ?? '').replace(/^vector:/, '')), index + 1]));
+        const finalRankMap = new Map<string, number>(selectedVectorCandidates.map((item: RecallCandidate, index: number): [string, number] => [normalizeText(String(item.candidateId ?? '').replace(/^memory-card:/, '')), index + 1]));
         const hits: MemoryRecallPreviewHit[] = rerankedHits.map((hit: VectorHit): MemoryRecallPreviewHit => {
             const chunkId = normalizeText(hit.chunkId);
             const item = itemMap.get(chunkId);
@@ -934,10 +1159,25 @@ export class VectorMemoryViewerFacade {
         return {
             query: normalizedQuery,
             testedAt: Date.now(),
-            rerankApplied: rerankEnabled && activeHits.length >= Math.max(2, Number(policy.rerankThreshold ?? 6)),
+            rerankApplied: vectorGate.enabled && rerankEnabled && activeHits.length >= Math.max(2, Number(policy.rerankThreshold ?? 6)),
             hitCount: hits.length,
             selectedCount: selectedVectorCandidates.length,
             hits,
+            vectorGate: effectiveVectorGate,
+            cache: {
+                hit: cacheHit,
+                reasonCodes: cacheHit ? ['recall_cache_hit'] : [],
+                topicHash: cheapTopicHash,
+                entityKeys: normalizeStringList(cheapRecall.entityKeys),
+                expiresTurn: recallCache?.expiresTurn ?? 0,
+            },
+            cheapRecall: {
+                primaryNeed: cheapRecall.primaryNeed,
+                coveredLanes: cheapRecall.coveredLanes,
+                structuredCount: cheapRecall.structuredCount,
+                recentEventCount: cheapRecall.recentEventCount,
+                enough: cheapRecall.enough,
+            },
         };
     }
 

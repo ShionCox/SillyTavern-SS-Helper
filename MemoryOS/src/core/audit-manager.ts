@@ -58,7 +58,7 @@ export class AuditManager {
      * @returns 快照 ID。
      */
     async createSnapshot(note?: string): Promise<string> {
-        const [events, facts, states, summaries, templates, meta, binding, worldInfoCache, vectorChunks, vectorEmbeddings, vectorMeta, mutationHistory] = await Promise.all([
+        const [events, facts, states, summaries, templates, meta, binding, worldInfoCache, mutationHistory] = await Promise.all([
             db.events.where('chatKey').equals(this.chatKey).toArray(),
             db.facts.where('chatKey').equals(this.chatKey).toArray(),
             db.world_state.where('[chatKey+path]').between([this.chatKey, ''], [this.chatKey, '\uffff']).toArray(),
@@ -67,9 +67,6 @@ export class AuditManager {
             db.meta.get(this.chatKey),
             db.template_bindings.get(this.chatKey),
             db.worldinfo_cache.where('chatKey').equals(this.chatKey).toArray(),
-            db.vector_chunks.where('chatKey').equals(this.chatKey).toArray(),
-            db.vector_embeddings.where('chatKey').equals(this.chatKey).toArray(),
-            db.vector_meta.where('chatKey').equals(this.chatKey).toArray(),
             db.memory_mutation_history.where('chatKey').equals(this.chatKey).toArray(),
         ]);
 
@@ -89,9 +86,6 @@ export class AuditManager {
                 meta,
                 binding,
                 worldInfoCache,
-                vectorChunks,
-                vectorEmbeddings,
-                vectorMeta,
                 mutationHistory,
             },
         });
@@ -117,9 +111,6 @@ export class AuditManager {
         const meta = data.meta || null;
         const binding = data.binding || null;
         const worldInfoCache = Array.isArray(data.worldInfoCache) ? data.worldInfoCache : [];
-        const vectorChunks = Array.isArray(data.vectorChunks) ? data.vectorChunks : [];
-        const vectorEmbeddings = Array.isArray(data.vectorEmbeddings) ? data.vectorEmbeddings : [];
-        const vectorMeta = Array.isArray(data.vectorMeta) ? data.vectorMeta : [];
         const mutationHistory = Array.isArray(data.mutationHistory) ? data.mutationHistory : [];
 
         await clearMemoryChatData(this.chatKey, { includeAudit: false });
@@ -135,9 +126,6 @@ export class AuditManager {
                 db.meta,
                 db.template_bindings,
                 db.worldinfo_cache,
-                db.vector_chunks,
-                db.vector_embeddings,
-                db.vector_meta,
                 db.memory_mutation_history,
             ],
             async () => {
@@ -171,25 +159,6 @@ export class AuditManager {
                         ...item,
                         chatKey: this.chatKey,
                         cacheKey: `${this.chatKey}::${String(item.bookName ?? '')}`,
-                    })));
-                }
-                if (vectorChunks.length) {
-                    await db.vector_chunks.bulkPut(vectorChunks.map((item: any) => ({
-                        ...item,
-                        chatKey: this.chatKey,
-                    })));
-                }
-                if (vectorEmbeddings.length) {
-                    await db.vector_embeddings.bulkPut(vectorEmbeddings.map((item: any) => ({
-                        ...item,
-                        chatKey: this.chatKey,
-                    })));
-                }
-                if (vectorMeta.length) {
-                    await db.vector_meta.bulkPut(vectorMeta.map((item: any) => ({
-                        ...item,
-                        chatKey: this.chatKey,
-                        metaKey: `${this.chatKey}::${String(item.bookId ?? '')}`,
                     })));
                 }
                 if (mutationHistory.length) {

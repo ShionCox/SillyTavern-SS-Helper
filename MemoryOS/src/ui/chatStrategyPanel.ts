@@ -1240,7 +1240,7 @@ function buildEditorMarkup(): string {
                 })}
               </div>
               <div class="stx-memory-chat-strategy-form-grid">
-                ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '分块阈值', '达到该长度后才更积极地进入向量索引。', 'number', '50', '4000', '10')}
+                ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '记忆提炼阈值', '达到该长度后才更积极地进入记忆卡提炼。', 'number', '50', '4000', '10')}
                 ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '重排阈值', '候选数量达到该值后再触发 rerank。', 'number', '1', '50', '1')}
                 ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, 'Facts 启用阈值', 'facts 数量达到该值后优先进入向量检索阶段。', 'number', '1', '5000', '1')}
                 ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, 'Summaries 启用阈值', 'summaries 数量达到该值后优先进入向量检索阶段。', 'number', '1', '5000', '1')}
@@ -1668,7 +1668,7 @@ function buildEditorMarkupV2(): string {
                     ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多久重判一次聊天状态', '重新判断聊天类型、风格和记忆强度的间隔。', 'number', '1', '100', '1')}
                     ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多久刷新一次健康度', '重新评估记忆质量和维护提醒的间隔。', 'number', '1', '100', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后开始联想', '达到这个数量后，会更积极调用长期记忆。', 'number', '1', '5000', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '向量分块阈值', '内容达到这个长度后更容易进入向量索引。', 'number', '50', '4000', '10')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '记忆提炼阈值', '内容达到这个长度后更容易进入记忆卡提炼。', 'number', '50', '4000', '10')}
                     ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '候选多少条后精排', '结果越多时越需要二次筛选。', 'number', '1', '50', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, 'Facts 启动阈值', '事实数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, 'Summaries 启动阈值', '摘要数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
@@ -2966,7 +2966,7 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
         String(lifecycle.vectorMode ?? snapshot.effectivePolicy.vectorMode ?? 'off'),
         snapshot.effectiveProfile.vectorStrategy.enabled
     );
-    vectorStatsElement.innerHTML = `<span class="stx-memory-vector-stat"><i class="fa-solid fa-brain"></i> 事实: ${Number(lifecycle.factCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-list-check"></i> 摘要: ${Number(lifecycle.summaryCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-cubes"></i> 检索分块: ${Number(lifecycle.vectorChunkCount ?? 0)}</span>`;
+    vectorStatsElement.innerHTML = `<span class="stx-memory-vector-stat"><i class="fa-solid fa-brain"></i> 事实: ${Number(lifecycle.factCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-list-check"></i> 摘要: ${Number(lifecycle.summaryCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-cubes"></i> 记忆卡: ${Number(lifecycle.memoryCardCount ?? 0)}</span>`;
     vectorTimesElement.innerHTML = `<strong>最近激活</strong>: 访问 ${formatTimestamp(lifecycle.lastAccessAt)} · 命中 ${formatTimestamp(lifecycle.lastHitAt)} · 索引 ${formatTimestamp(lifecycle.lastIndexAt)}`;
     traceEvidenceElement.innerHTML = buildMainlineTraceEvidenceMarkup(snapshot.mainlineTraceSnapshot);
 
@@ -3523,7 +3523,7 @@ function translateDiagnosticKey(key: string): string {
         // 向量/质量统计
         factCount: '事实总数',
         summaryCount: '摘要总数',
-        vectorChunkCount: '向量分块总数',
+        memoryCardCount: '记忆卡总数',
         lastAccessAt: '最后访问时间',
         lastHitAt: '最后命中时间',
         lastIndexAt: '最后索引时间',
@@ -3753,7 +3753,7 @@ function buildDiagnosticKeyTip(key: string): string {
         summaryMode: '当前使用的总结算法和格式布局，如分层架构或线性时间轴。',
         factCount: '当前语境下已持久化存储的离散事实点总数。',
         summaryCount: '已生成的用于长周期理解的历史摘要总数。',
-        vectorChunkCount: '经过分块并存储在向量检索库中的高维张量数量。',
+        memoryCardCount: '经过准入并存储在记忆卡索引中的卡片数量。',
         lastAccessAt: '该组件或指标最后一次被系统访问执行的操作时刻。',
         lastHitAt: '该组件（如检索库）最后一次成功产生有效返回值的时刻。',
         lastIndexAt: '该组件最后一次接收并处理新数据索引的时刻。',
@@ -4727,8 +4727,8 @@ function formatMaintenanceActionLabel(action: MaintenanceActionType): string {
     if (action === 'rebuild_summary') {
         return '摘要重建';
     }
-    if (action === 'revectorize') {
-        return '严格向量重建';
+    if (action === 'memory_card_rebuild') {
+        return '记忆卡重建';
     }
     if (action === 'schema_cleanup') {
         return '设定整理';

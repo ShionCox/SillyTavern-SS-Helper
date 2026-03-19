@@ -83,6 +83,9 @@ export async function buildLatestRecallExplanationSnapshot(params: {
     reasonCodes: string[];
     recallEntries: RecallLogEntry[];
     lifecycleIndex?: LifecycleIndexInput;
+    vectorGate?: LatestRecallExplanation['vectorGate'];
+    cache?: LatestRecallExplanation['cache'];
+    cheapRecall?: LatestRecallExplanation['cheapRecall'];
 }): Promise<LatestRecallExplanation> {
     const lifecycleIndex = params.lifecycleIndex ?? null;
     return buildLatestRecallExplanation({
@@ -91,6 +94,9 @@ export async function buildLatestRecallExplanationSnapshot(params: {
         sectionsUsed: params.sectionsUsed,
         reasonCodes: params.reasonCodes,
         recallEntries: params.recallEntries,
+        vectorGate: params.vectorGate ?? null,
+        cache: params.cache ?? null,
+        cheapRecall: params.cheapRecall ?? null,
         lifecycleIndex: lifecycleIndex instanceof Map
             ? Array.from(lifecycleIndex.entries()).reduce<Record<string, MemoryLifecycleState>>((result, [recordKey, lifecycle]) => {
                 result[recordKey] = lifecycle;

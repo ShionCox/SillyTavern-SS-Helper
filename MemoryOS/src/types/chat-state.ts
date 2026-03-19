@@ -310,7 +310,7 @@ export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
-export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'revectorize' | 'schema_cleanup' | 'group_maintenance';
+export type MaintenanceActionType = 'compress' | 'rebuild_summary' | 'memory_card_rebuild' | 'schema_cleanup' | 'group_maintenance';
 
 export type MaintenanceSeverity = 'info' | 'warning' | 'critical';
 
@@ -322,7 +322,7 @@ export interface VectorLifecycleState {
     vectorMode: VectorMode;
     factCount: number;
     summaryCount: number;
-    vectorChunkCount: number;
+    memoryCardCount: number;
     lastAccessAt: number;
     lastHitAt: number;
     lastIndexAt: number;
@@ -960,9 +960,11 @@ export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
 
 export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
 
+export type MemoryCardLane = 'identity' | 'style' | 'relationship' | 'rule' | 'event' | 'state' | 'other';
+
 export type RecallCandidateRecordKind = MemoryRecordKind | 'event' | 'lorebook';
 
-export type RecallCandidateSource = 'facts' | 'summaries' | 'state' | 'relationships' | 'events' | 'vector' | 'lorebook';
+export type RecallCandidateSource = 'facts' | 'summaries' | 'state' | 'relationships' | 'events' | 'vector' | 'memory_card' | 'lorebook';
 
 export type RecallVisibilityPool = 'global' | 'actor' | 'blocked';
 
@@ -1244,6 +1246,46 @@ export interface RecallLogEntry {
     loggedAt: number;
 }
 
+export type RecallNeedKind =
+    | 'identity_direct'
+    | 'relationship_direct'
+    | 'rule_direct'
+    | 'state_direct'
+    | 'historical_event'
+    | 'causal_trace'
+    | 'style_inference'
+    | 'ambiguous_recall'
+    | 'mixed';
+
+export interface RecallGateDecision {
+    enabled: boolean;
+    lanes: MemoryCardLane[];
+    reasonCodes: string[];
+    primaryNeed: RecallNeedKind;
+    vectorMode: VectorMode;
+}
+
+export interface RecallCacheEntry {
+    topicHash: string;
+    intent: InjectionIntent;
+    entityKeys: string[];
+    laneSet: MemoryCardLane[];
+    selectedCardIds: string[];
+    generatedAt: number;
+    expiresAt: number;
+    generatedTurn: number;
+    expiresTurn: number;
+    baseVersion: number;
+}
+
+export interface CheapRecallSnapshot {
+    primaryNeed: RecallNeedKind;
+    coveredLanes: MemoryCardLane[];
+    structuredCount: number;
+    recentEventCount: number;
+    enough: boolean;
+}
+
 export interface RecallExplanationBucket {
     bucketKey: 'selected' | 'conflict_suppressed' | 'rejected_candidates';
     label: string;
@@ -1272,6 +1314,21 @@ export interface LatestRecallExplanation {
     conflictSuppressed: RecallExplanationBucket;
     rejectedCandidates: RecallExplanationBucket;
     reasonCodes: string[];
+    vectorGate?: {
+        enabled: boolean;
+        reasonCodes: string[];
+        lanes: MemoryCardLane[];
+        primaryNeed: RecallNeedKind;
+        vectorMode: VectorMode;
+    } | null;
+    cache?: {
+        hit: boolean;
+        reasonCodes: string[];
+        topicHash: string;
+        entityKeys: string[];
+        expiresTurn: number;
+    } | null;
+    cheapRecall?: CheapRecallSnapshot | null;
 }
 
 export interface RelationshipDelta {
@@ -1499,7 +1556,7 @@ export const DEFAULT_VECTOR_LIFECYCLE: VectorLifecycleState = {
     vectorMode: 'off',
     factCount: 0,
     summaryCount: 0,
-    vectorChunkCount: 0,
+    memoryCardCount: 0,
     lastAccessAt: 0,
     lastHitAt: 0,
     lastIndexAt: 0,
@@ -1744,6 +1801,8 @@ export interface MemoryOSChatState {
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
     latestRecallExplanation?: LatestRecallExplanation | null;
+    lastRecallCache?: RecallCacheEntry | null;
+    recallCacheVersion?: number;
     memoryTuningProfile?: MemoryTuningProfile;
     memoryTaskPresentationSettings?: MemoryTaskPresentationSettings;
     summaryFixQueue?: SummaryFixTask[];

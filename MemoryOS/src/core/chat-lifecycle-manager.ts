@@ -177,23 +177,11 @@ export class ChatLifecycleManager {
         const activeRuntimeChatKey = typeof (window as any)?.STX?.memory?.getChatKey === 'function'
             ? String((window as any).STX.memory.getChatKey() ?? '').trim()
             : '';
-        const [vectorChunks, vectorEmbeddings, vectorMeta, managedStates, managedRecords, documents] = await Promise.all([
-            db.vector_chunks.toArray(),
-            db.vector_embeddings.toArray(),
-            db.vector_meta.toArray(),
+        const [managedStates, managedRecords, documents] = await Promise.all([
             db.chat_plugin_state.where('pluginId').anyOf(getManagedStatePluginIds()).toArray(),
             db.chat_plugin_records.where('pluginId').anyOf(getManagedRecordPluginIds()).toArray(),
             db.chat_documents.toArray(),
         ]);
-
-        const chunkIdSet = new Set(vectorChunks.map((row) => String(row.chunkId ?? '').trim()).filter(Boolean));
-        const orphanEmbeddingIds = vectorEmbeddings
-            .filter((row) => !chunkIdSet.has(String(row.chunkId ?? '').trim()))
-            .map((row) => String(row.embeddingId ?? '').trim())
-            .filter(Boolean);
-        if (orphanEmbeddingIds.length > 0) {
-            await db.vector_embeddings.bulkDelete(orphanEmbeddingIds);
-        }
 
         const documentSet = new Set(documents.map((row) => String(row.chatKey ?? '').trim()).filter(Boolean));
         const stateKeySet = new Set(
@@ -202,7 +190,7 @@ export class ChatLifecycleManager {
                 .filter((value) => value !== '::'),
         );
         const candidateChatKeys = new Set<string>();
-        for (const row of [...vectorChunks, ...vectorMeta, ...managedStates, ...managedRecords, ...documents]) {
+        for (const row of [...managedStates, ...managedRecords, ...documents]) {
             const chatKey = String((row as { chatKey?: unknown }).chatKey ?? '').trim();
             if (chatKey) {
                 candidateChatKeys.add(chatKey);
@@ -272,9 +260,6 @@ export class ChatLifecycleManager {
                 }
 
                 await Promise.all([
-                    db.vector_chunks.where('chatKey').equals(chatKey).delete(),
-                    db.vector_embeddings.where('chatKey').equals(chatKey).delete(),
-                    db.vector_meta.where('chatKey').equals(chatKey).delete(),
                     deleteSdkPluginChatState(MEMORYOS_PLUGIN_ID, chatKey),
                     deleteSdkPluginChatRecords(MEMORYOS_PLUGIN_ID, chatKey),
                     deleteSdkPluginChatState(LLMHUB_PLUGIN_ID, chatKey),
@@ -310,17 +295,6 @@ export class ChatLifecycleManager {
                     },
                 });
             }
-        }
-
-        const chunkChatBookKeySet = new Set(
-            vectorChunks.map((row) => `${String(row.chatKey ?? '').trim()}::${String(row.bookId ?? '').trim()}`),
-        );
-        const orphanMetaKeys = vectorMeta
-            .filter((row) => !chunkChatBookKeySet.has(`${String(row.chatKey ?? '').trim()}::${String(row.bookId ?? '').trim()}`))
-            .map((row) => String(row.metaKey ?? '').trim())
-            .filter(Boolean);
-        if (orphanMetaKeys.length > 0) {
-            await db.vector_meta.bulkDelete(orphanMetaKeys);
         }
     }
 

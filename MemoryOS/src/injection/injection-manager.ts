@@ -1,4 +1,5 @@
 import type { EventEnvelope } from '../../../SDK/stx';
+import { db } from '../db/db';
 import { ChatStateManager } from '../core/chat-state-manager';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
@@ -11,6 +12,7 @@ import {
     collectAdaptiveMetricsFromEvents,
     decideInjectionIntent,
     resolveIntentSections,
+    shouldRunVectorRecall,
 } from '../core/chat-strategy-engine';
 import {
     evaluateLorebookRelevance,
@@ -30,6 +32,7 @@ import type {
     PromptInjectionProfile,
     PromptQueryMode,
     RecallCandidate,
+    RecallGateDecision,
     RecallLogEntry,
     RecallPlan,
     StrategyDecision,
@@ -37,14 +40,15 @@ import type {
 import {
     DEFAULT_PROMPT_INJECTION_PROFILE,
 } from '../types';
-import { collectRecallCandidates } from '../recall/recall-assembler';
 import { planRecall } from '../recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
 import { buildPreparedRecallContext } from './recall-context-builder';
+import { buildRecallTopicHash, collectCheapRecall, resolveRecallGateLanes } from './recall-gate';
 import { buildLayeredMemoryContext } from './prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries } from './recall-log-mapper';
 import { buildViewpointPolicyInput } from './viewpoint-policy';
 import { findLastTavernPromptUserIndexEvent } from '../../../SDK/tavern';
+import { collectRecallCandidates } from '../recall/recall-assembler';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 
 type BuildContextOptions = {
@@ -67,6 +71,34 @@ type BuildContextDecision = {
 };
 
 type PromptInjectionPolicy = PromptInjectionProfile;
+
+/**
+ * 功能：归一化字符串数组，便于比较和存储。
+ * 参数：
+ *   values：原始字符串数组。
+ * 返回：
+ *   string[]：去重并排序后的结果。
+ */
+function normalizeStringList(values: string[]): string[] {
+    return Array.from(new Set((Array.isArray(values) ? values : []).map((item: string): string => String(item ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean))).sort();
+}
+
+/**
+ * 功能：根据意图获取召回缓存的默认轮次寿命。
+ * 参数：
+ *   intent：注入意图。
+ * 返回：
+ *   number：默认存活轮次。
+ */
+function resolveRecallCacheTtl(intent: InjectionIntent): number {
+    if (intent === 'setting_qa') {
+        return 5;
+    }
+    if (intent === 'story_continue' || intent === 'roleplay') {
+        return 3;
+    }
+    return 2;
+}
 
 /**
  * 功能：计算应插入到最后一条真实 user 消息前的位置。
@@ -529,10 +561,11 @@ export class InjectionManager {
             lorebookDecision,
             ...viewpointInput,
         });
-        const collectedCandidates: RecallCandidate[] = await collectRecallCandidates({
+        const cheapRecall = await collectCheapRecall({
             chatKey: this.chatKey,
-            plan: recallPlan,
             query: String(opts?.query ?? ''),
+            intent,
+            plan: recallPlan,
             recentEvents,
             logicalView,
             groupMemory,
@@ -550,7 +583,66 @@ export class InjectionManager {
             tuningProfile: recallContext.tuningProfile,
             relationships: recallContext.relationships,
             fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+            preparedContext: recallContext,
         });
+        const currentTurnTracker = this.chatStateManager ? await this.chatStateManager.getAssistantTurnTracker() : null;
+        const currentTurn = Math.max(0, Number(currentTurnTracker?.activeAssistantTurnCount ?? 0) || 0);
+        const recallCache = this.chatStateManager ? await this.chatStateManager.getRecallCache() : null;
+        const recallCacheVersion = this.chatStateManager ? await this.chatStateManager.getRecallCacheVersion() : 0;
+        const cheapTopicHash = buildRecallTopicHash(cheapRecall);
+        const cacheActiveCards = recallCache?.selectedCardIds?.length
+            ? await db.memory_cards.bulkGet(recallCache.selectedCardIds)
+            : [];
+        const cacheHit = Boolean(
+            recallCache
+            && recallCache.intent === intent
+            && recallCache.baseVersion === recallCacheVersion
+            && currentTurn <= recallCache.expiresTurn
+            && normalizeStringList(recallCache.entityKeys).join('|') === normalizeStringList(cheapRecall.entityKeys).join('|')
+            && String(recallCache.topicHash ?? '').trim() === String(cheapTopicHash ?? '').trim()
+            && cacheActiveCards.length > 0
+            && cacheActiveCards.every((card): boolean => Boolean(card && card.status === 'active' && String(card.chatKey ?? '').trim() === this.chatKey)),
+        );
+        const vectorGate = shouldRunVectorRecall({
+            query: String(opts?.query ?? ''),
+            intent,
+            policy,
+            structuredCount: cheapRecall.structuredCount,
+            coveredLanes: cheapRecall.coveredLanes,
+            recentEventCount: cheapRecall.recentEventCount,
+            structuredEnough: cheapRecall.enough,
+            recentEventsEnough: cheapRecall.recentEventCount > 0 && (cheapRecall.primaryNeed === 'historical_event' || cheapRecall.primaryNeed === 'causal_trace' || cheapRecall.primaryNeed === 'mixed'),
+            cacheHit,
+        });
+        const effectiveVectorGate: RecallGateDecision = {
+            ...vectorGate,
+            lanes: resolveRecallGateLanes(cheapRecall, vectorGate),
+        };
+        const collectedCandidates: RecallCandidate[] = vectorGate.enabled
+            ? await collectRecallCandidates({
+                chatKey: this.chatKey,
+                plan: recallPlan,
+                query: String(opts?.query ?? ''),
+                recentEvents,
+                logicalView,
+                groupMemory,
+                policy,
+                lorebookDecision,
+                lorebookEntries,
+                factsManager: this.factsManager,
+                stateManager: this.stateManager,
+                summariesManager: this.summariesManager,
+                chatStateManager: this.chatStateManager,
+                lifecycleIndex: recallContext.lifecycleMap,
+                activeActorKey: recallContext.activeActorKey,
+                personaProfiles: recallContext.personaProfiles,
+                personaProfile: recallContext.personaProfile,
+                tuningProfile: recallContext.tuningProfile,
+                relationships: recallContext.relationships,
+                fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+                vectorGate: effectiveVectorGate,
+            })
+            : [...cheapRecall.candidates];
         const rankedCandidates: RecallCandidate[] = rankRecallCandidates({
             candidates: collectedCandidates,
             plan: recallPlan,
@@ -564,6 +656,23 @@ export class InjectionManager {
             estimateTokens: (value: string): number => this.estimateTokens(value),
         });
         const selectedCandidates: RecallCandidate[] = finalizedCandidates.filter((candidate: RecallCandidate): boolean => candidate.selected);
+        const selectedMemoryCardCandidates: RecallCandidate[] = finalizedCandidates.filter((candidate: RecallCandidate): boolean => candidate.selected && candidate.source === 'memory_card');
+        if (this.chatStateManager && vectorGate.enabled && selectedMemoryCardCandidates.length > 0) {
+            const generatedAt = Date.now();
+            const expiresTurn = currentTurn + resolveRecallCacheTtl(intent);
+            await this.chatStateManager.setRecallCache({
+                topicHash: cheapTopicHash,
+                intent,
+                entityKeys: normalizeStringList(cheapRecall.entityKeys),
+                laneSet: resolveRecallGateLanes(cheapRecall, vectorGate),
+                selectedCardIds: normalizeStringList(selectedMemoryCardCandidates.map((candidate: RecallCandidate): string => String(candidate.candidateId ?? '').replace(/^memory-card:/, '').trim()).filter(Boolean)),
+                generatedAt,
+                expiresAt: generatedAt + (resolveRecallCacheTtl(intent) * 60 * 1000),
+                generatedTurn: currentTurn,
+                expiresTurn,
+                baseVersion: recallCacheVersion,
+            });
+        }
         const recallEntries: RecallLogEntry[] = buildRecallLogEntries(
             finalizedCandidates,
             String(opts?.query ?? ''),
@@ -595,6 +704,21 @@ export class InjectionManager {
                         sectionsUsed: sections,
                         reasonCodes: preDecision.reasonCodes,
                         recallEntries: [],
+                        vectorGate: effectiveVectorGate,
+                        cache: {
+                            hit: cacheHit,
+                            reasonCodes: cacheHit ? ['recall_cache_hit'] : [],
+                            topicHash: cheapTopicHash,
+                            entityKeys: normalizeStringList(cheapRecall.entityKeys),
+                            expiresTurn: recallCache?.expiresTurn ?? 0,
+                        },
+                        cheapRecall: {
+                            primaryNeed: cheapRecall.primaryNeed,
+                            coveredLanes: cheapRecall.coveredLanes,
+                            structuredCount: cheapRecall.structuredCount,
+                            recentEventCount: cheapRecall.recentEventCount,
+                            enough: cheapRecall.enough,
+                        },
                     }),
                 );
             }
@@ -639,6 +763,21 @@ export class InjectionManager {
                     sectionsUsed: sections,
                     reasonCodes: mergedReasonCodes,
                     recallEntries,
+                    vectorGate: effectiveVectorGate,
+                    cache: {
+                        hit: cacheHit,
+                        reasonCodes: cacheHit ? ['recall_cache_hit'] : [],
+                        topicHash: cheapTopicHash,
+                        entityKeys: normalizeStringList(cheapRecall.entityKeys),
+                        expiresTurn: recallCache?.expiresTurn ?? 0,
+                    },
+                    cheapRecall: {
+                        primaryNeed: cheapRecall.primaryNeed,
+                        coveredLanes: cheapRecall.coveredLanes,
+                        structuredCount: cheapRecall.structuredCount,
+                        recentEventCount: cheapRecall.recentEventCount,
+                        enough: cheapRecall.enough,
+                    },
                 }),
             );
         }
