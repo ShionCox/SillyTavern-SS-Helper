@@ -3,7 +3,9 @@ import { Logger } from '../../../SDK/logger';
 import { ChatStateManager } from './chat-state-manager';
 import { FactsManager } from './facts-manager';
 import { AuditManager } from './audit-manager';
+import { MemoryMutationHistoryManager } from './memory-mutation-history';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import type { ProposalResult, WriteRequest } from '../proposal/types';
 import type { RowMergeResult, RowSeedData, LogicTableQueryOpts, LogicTableRow } from '../types';
 
 const logger = new Logger('RowOperations');
@@ -25,17 +27,22 @@ export class RowOperationsManager {
     private chatStateManager: ChatStateManager;
     private factsManager: FactsManager;
     private auditManager: AuditManager;
+    private mutationHistoryManager: MemoryMutationHistoryManager;
+    private writeGateway: { requestWrite(request: WriteRequest): Promise<ProposalResult> };
 
     constructor(
         chatKey: string,
         chatStateManager: ChatStateManager,
         factsManager: FactsManager,
         auditManager: AuditManager,
+        writeGateway: { requestWrite(request: WriteRequest): Promise<ProposalResult> },
     ) {
         this.chatKey = chatKey;
         this.chatStateManager = chatStateManager;
         this.factsManager = factsManager;
         this.auditManager = auditManager;
+        this.mutationHistoryManager = new MemoryMutationHistoryManager(chatKey);
+        this.writeGateway = writeGateway;
     }
 
     /**
@@ -84,6 +91,73 @@ export class RowOperationsManager {
     }
 
     /**
+     * 功能：把一条手动写入的事实同步到严格向量链。
+     * @param factKey 事实键。
+     * @returns 无返回值。
+     */
+    private async syncFactVectorAfterWrite(factKey: string): Promise<void> {
+        if (!this.chatStateManager) {
+            return;
+        }
+        const fact = await this.factsManager.get(factKey);
+        if (!fact) {
+            return;
+        }
+        const candidate = await this.chatStateManager.buildMemoryCandidate({
+            candidateId: fact.factKey,
+            kind: 'fact',
+            source: 'row_operations',
+            summary: `${String(fact.type ?? '').trim()} ${String(fact.path ?? '').trim()} ${JSON.stringify(fact.value ?? '')}`.trim(),
+            payload: {
+                type: fact.type,
+                entity: fact.entity,
+                path: fact.path,
+                value: fact.value,
+                confidence: fact.confidence,
+                provenance: fact.provenance,
+            },
+            extractedAt: Number(fact.updatedAt ?? Date.now()),
+        });
+        await this.chatStateManager.applyEncodingToRecord(fact.factKey, 'fact', candidate.encoding);
+    }
+
+    /**
+     * 功能：把单条 fact 的手工变更写入 mutation history。
+     * @param action 变更动作。
+     * @param title 变更标题。
+     * @param compareKey 变更比较键。
+     * @param factKey 目标 factKey。
+     * @param before 执行前快照。
+     * @param after 执行后快照。
+     * @param reasonCodes 原因码。
+     * @returns void。
+     */
+    private async appendFactHistory(
+        action: 'ADD' | 'MERGE' | 'UPDATE' | 'INVALIDATE' | 'DELETE',
+        title: string,
+        compareKey: string,
+        factKey: string,
+        before: unknown,
+        after: unknown,
+        reasonCodes: string[],
+    ): Promise<void> {
+        await this.mutationHistoryManager.append({
+            source: 'row_operations',
+            consumerPluginId: MEMORY_OS_PLUGIN_ID,
+            targetKind: 'fact',
+            action,
+            title,
+            compareKey,
+            targetRecordKey: factKey,
+            existingRecordKeys: [factKey],
+            reasonCodes,
+            before,
+            after,
+            visibleMessageIds: [],
+        });
+    }
+
+    /**
      * 功能：创建新逻辑行并立即写入初始字段。
      * @param tableKey 目标表
      * @param rowId 新行 ID
@@ -112,6 +186,16 @@ export class RowOperationsManager {
                 provenance: { extractor: 'manual' },
             });
             factKeys.push(factKey);
+            await this.syncFactVectorAfterWrite(factKey);
+            await this.appendFactHistory(
+                'ADD',
+                `${tableKey}/${normalizedRowId}.${normalizedFieldKey}`,
+                `${tableKey}::${normalizedRowId}::${normalizedFieldKey}`,
+                factKey,
+                null,
+                await this.factsManager.get(factKey),
+                ['manual_row_create'],
+            );
         }
 
         await this.auditManager.log({
@@ -120,7 +204,6 @@ export class RowOperationsManager {
             before: {},
             after: { tableKey, rowId: normalizedRowId, factKeys, seed: normalizedSeed },
         });
-
         await this.syncSharedSignal();
         return normalizedRowId;
     }
@@ -271,6 +354,7 @@ export class RowOperationsManager {
             provenance: { extractor: 'manual' },
         });
 
+        const beforeSnapshot = currentFact ? { ...currentFact } : null;
         await this.auditManager.log({
             action: 'row.cell_updated',
             actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
@@ -289,6 +373,16 @@ export class RowOperationsManager {
             },
         });
 
+        await this.syncFactVectorAfterWrite(factKey);
+        await this.appendFactHistory(
+            currentFact ? 'UPDATE' : 'ADD',
+            `${tableKey}/${normalizedRowId}.${normalizedFieldKey}`,
+            `${tableKey}::${normalizedRowId}::${normalizedFieldKey}`,
+            factKey,
+            beforeSnapshot,
+            await this.factsManager.get(factKey),
+            currentFact ? ['manual_cell_update'] : ['manual_cell_create'],
+        );
         await this.syncSharedSignal();
         return factKey;
     }
@@ -309,6 +403,95 @@ export class RowOperationsManager {
                 updatedAliases: 0,
                 error: '来源行和目标行不能相同',
             };
+        }
+
+        if (this.writeGateway) {
+            try {
+                const fromFacts = await this.factsManager.query({
+                    entity: { kind: tableKey, id: fromRowId },
+                    limit: 500,
+                });
+                const migratedFactKeys: string[] = [];
+
+                for (const fact of fromFacts) {
+                    const targetFactKey = `${this.chatKey}::${fact.type}::${tableKey}:${toRowId}::${fact.path ?? '_'}`;
+                    const result = await this.writeGateway.requestWrite({
+                        source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                        chatKey: this.chatKey,
+                        reason: 'logic_table.merge_rows',
+                        proposal: {
+                            facts: [{
+                                factKey: targetFactKey,
+                                targetRecordKey: targetFactKey,
+                                action: 'auto',
+                                type: fact.type,
+                                entity: { kind: tableKey, id: toRowId },
+                                path: fact.path,
+                                value: fact.value,
+                                confidence: fact.confidence,
+                                provenance: fact.provenance,
+                            }],
+                        },
+                    });
+                    migratedFactKeys.push(result.applied.factKeys[0] ?? targetFactKey);
+                    await this.writeGateway.requestWrite({
+                        source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                        chatKey: this.chatKey,
+                        reason: 'logic_table.merge_rows_cleanup',
+                        proposal: {
+                            facts: [{
+                                factKey: fact.factKey,
+                                targetRecordKey: fact.factKey,
+                                action: 'delete',
+                                type: fact.type,
+                                entity: fact.entity,
+                                path: fact.path,
+                                value: fact.value,
+                                confidence: fact.confidence,
+                                provenance: fact.provenance,
+                            }],
+                        },
+                    });
+                }
+
+                await this.chatStateManager.setRowRedirect(tableKey, fromRowId, toRowId);
+                const aliasIndex = await this.chatStateManager.getRowAliasIndex();
+                const tableAliases = aliasIndex[tableKey] ?? {};
+                let updatedAliases = 0;
+                for (const [alias, targetId] of Object.entries(tableAliases)) {
+                    if (targetId !== fromRowId) {
+                        continue;
+                    }
+                    await this.chatStateManager.setRowAlias(tableKey, alias, toRowId);
+                    updatedAliases += 1;
+                }
+
+                const auditId = await this.auditManager.log({
+                    action: 'row.merged',
+                    actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                    before: { tableKey, fromRowId, factCount: fromFacts.length },
+                    after: { tableKey, toRowId, migratedFactKeys, updatedAliases },
+                });
+
+                await this.syncSharedSignal();
+                logger.success(`行合并完成 ${tableKey}/${fromRowId} -> ${toRowId}，迁移 ${migratedFactKeys.length} 条事实`);
+                return {
+                    success: true,
+                    migratedFactKeys,
+                    updatedRedirects: 1,
+                    updatedAliases,
+                    auditId,
+                };
+            } catch (error) {
+                logger.error(`行合并失败 ${tableKey}/${fromRowId} -> ${toRowId}`, error);
+                return {
+                    success: false,
+                    migratedFactKeys: [],
+                    updatedRedirects: 0,
+                    updatedAliases: 0,
+                    error: String(error),
+                };
+            }
         }
 
         try {
@@ -332,6 +515,7 @@ export class RowOperationsManager {
                 }
             });
 
+            await this.chatStateManager.archiveFactKeys(fromFacts.map((fact: DBFact): string => fact.factKey));
             await this.chatStateManager.setRowRedirect(tableKey, fromRowId, toRowId);
 
             const aliasIndex = await this.chatStateManager.getRowAliasIndex();
@@ -343,6 +527,21 @@ export class RowOperationsManager {
                 }
                 await this.chatStateManager.setRowAlias(tableKey, alias, toRowId);
                 updatedAliases += 1;
+            }
+
+            for (let index = 0; index < migratedFactKeys.length; index += 1) {
+                const factKey = migratedFactKeys[index];
+                const sourceFact = fromFacts[index];
+                await this.syncFactVectorAfterWrite(factKey);
+                await this.appendFactHistory(
+                    'MERGE',
+                    `${tableKey}/${toRowId}.${String(sourceFact?.path ?? '_')}`,
+                    `${tableKey}::${toRowId}::${String(sourceFact?.path ?? '_')}`,
+                    factKey,
+                    sourceFact ? { ...sourceFact } : null,
+                    await this.factsManager.get(factKey),
+                    ['manual_row_merge'],
+                );
             }
 
             const auditId = await this.auditManager.log({
@@ -387,7 +586,85 @@ export class RowOperationsManager {
             limit: 500,
         });
         const factKeys = rowFacts.map((fact: DBFact): string => fact.factKey);
+        if (this.writeGateway) {
+            if (retentionPolicy.deletionStrategy === 'immediate_purge') {
+                for (const fact of rowFacts) {
+                    await this.writeGateway.requestWrite({
+                        source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                        chatKey: this.chatKey,
+                        reason: 'logic_table.delete_row_purge',
+                        proposal: {
+                            facts: [{
+                                factKey: fact.factKey,
+                                targetRecordKey: fact.factKey,
+                                action: 'delete',
+                                type: fact.type,
+                                entity: fact.entity,
+                                path: fact.path,
+                                value: fact.value,
+                                confidence: fact.confidence,
+                                provenance: fact.provenance,
+                            }],
+                        },
+                    });
+                }
+                await this.chatStateManager.removeRowTombstone(tableKey, rowId);
+                await this.chatStateManager.unarchiveFactKeys(factKeys);
+                await this.auditManager.log({
+                    action: 'row.purged',
+                    actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                    before: { tableKey, rowId, factKeys },
+                    after: { tableKey, rowId, purged: true },
+                });
+                await this.syncSharedSignal();
+                logger.info(`立即清除行 ${tableKey}/${rowId}`);
+                return;
+            }
+
+            await this.chatStateManager.addRowTombstone(tableKey, rowId, MEMORY_OS_PLUGIN_ID);
+            for (const fact of rowFacts) {
+                await this.writeGateway.requestWrite({
+                    source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                    chatKey: this.chatKey,
+                    reason: 'logic_table.delete_row_soft',
+                    proposal: {
+                        facts: [{
+                            factKey: fact.factKey,
+                            targetRecordKey: fact.factKey,
+                            action: 'invalidate',
+                            type: fact.type,
+                            entity: fact.entity,
+                            path: fact.path,
+                            value: fact.value,
+                            confidence: fact.confidence,
+                            provenance: fact.provenance,
+                        }],
+                    },
+                });
+            }
+            await this.auditManager.log({
+                action: 'row.soft_deleted',
+                actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                before: { tableKey, rowId, factKeys },
+                after: { tableKey, rowId, tombstoned: true, factKeys },
+            });
+            await this.syncSharedSignal();
+            logger.info(`软删除行: ${tableKey}/${rowId}`);
+            return;
+        }
         if (retentionPolicy.deletionStrategy === 'immediate_purge') {
+            await this.chatStateManager.archiveFactKeys(factKeys);
+            for (const fact of rowFacts) {
+                await this.appendFactHistory(
+                    'DELETE',
+                    `${tableKey}/${rowId}.${String(fact.path ?? '_')}`,
+                    `${tableKey}::${rowId}::${String(fact.path ?? '_')}`,
+                    fact.factKey,
+                    { ...fact },
+                    null,
+                    ['manual_row_purge'],
+                );
+            }
             await db.transaction('rw', [db.facts], async (): Promise<void> => {
                 await Promise.all(rowFacts.map((fact: DBFact): Promise<void> => db.facts.delete(fact.factKey)));
             });
@@ -405,6 +682,21 @@ export class RowOperationsManager {
         }
         await this.chatStateManager.archiveFactKeys(factKeys);
         await this.chatStateManager.addRowTombstone(tableKey, rowId, MEMORY_OS_PLUGIN_ID);
+        for (const fact of rowFacts) {
+            await this.appendFactHistory(
+                'INVALIDATE',
+                `${tableKey}/${rowId}.${String(fact.path ?? '_')}`,
+                `${tableKey}::${rowId}::${String(fact.path ?? '_')}`,
+                fact.factKey,
+                { ...fact },
+                {
+                    ...fact,
+                    tombstoned: true,
+                    archived: true,
+                },
+                ['manual_row_soft_delete'],
+            );
+        }
         await this.auditManager.log({
             action: 'row.soft_deleted',
             actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
@@ -426,8 +718,57 @@ export class RowOperationsManager {
             entity: { kind: tableKey, id: rowId },
             limit: 500,
         });
+        if (this.writeGateway) {
+            for (const fact of rowFacts) {
+                await this.writeGateway.requestWrite({
+                    source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                    chatKey: this.chatKey,
+                    reason: 'logic_table.restore_row',
+                    proposal: {
+                        facts: [{
+                            factKey: fact.factKey,
+                            targetRecordKey: fact.factKey,
+                            action: 'update',
+                            type: fact.type,
+                            entity: fact.entity,
+                            path: fact.path,
+                            value: fact.value,
+                            confidence: fact.confidence,
+                            provenance: fact.provenance,
+                        }],
+                    },
+                });
+            }
+            await this.chatStateManager.unarchiveFactKeys(rowFacts.map((fact: DBFact): string => fact.factKey));
+            await this.chatStateManager.removeRowTombstone(tableKey, rowId);
+            await this.auditManager.log({
+                action: 'row.restored',
+                actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
+                before: { tableKey, rowId, tombstoned: true },
+                after: { tableKey, rowId, tombstoned: false },
+            });
+            await this.syncSharedSignal();
+            logger.info(`恢复行 ${tableKey}/${rowId}`);
+            return;
+        }
         await this.chatStateManager.unarchiveFactKeys(rowFacts.map((fact: DBFact): string => fact.factKey));
         await this.chatStateManager.removeRowTombstone(tableKey, rowId);
+        for (const fact of rowFacts) {
+            await this.syncFactVectorAfterWrite(fact.factKey);
+            await this.appendFactHistory(
+                'UPDATE',
+                `${tableKey}/${rowId}.${String(fact.path ?? '_')}`,
+                `${tableKey}::${rowId}::${String(fact.path ?? '_')}`,
+                fact.factKey,
+                {
+                    ...fact,
+                    tombstoned: true,
+                    archived: true,
+                },
+                { ...fact },
+                ['manual_row_restore'],
+            );
+        }
         await this.auditManager.log({
             action: 'row.restored',
             actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },

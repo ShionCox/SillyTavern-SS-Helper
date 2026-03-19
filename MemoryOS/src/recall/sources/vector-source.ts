@@ -24,6 +24,16 @@ type VectorHit = {
     createdAt?: number;
 };
 
+export interface StrictVectorSourceMetadata {
+    sourceRecordKey: string;
+    sourceRecordKind: 'fact' | 'summary';
+    ownerActorKey: string | null;
+    sourceScope?: MemorySourceScope;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    participantActorKeys: string[];
+}
+
 function buildFactRecordKeyMap(facts: FactRecord[]): Map<string, FactRecord> {
     return facts.reduce<Map<string, FactRecord>>((result: Map<string, FactRecord>, fact: FactRecord): Map<string, FactRecord> => {
         const key = normalizeText(fact.factKey);
@@ -44,22 +54,26 @@ function buildSummaryRecordKeyMap(summaries: SummaryRecord[]): Map<string, Summa
     }, new Map<string, SummaryRecord>());
 }
 
-function readVectorSourceMetadata(hit: VectorHit): {
-    sourceRecordKey: string;
-    sourceRecordKind: string;
-    ownerActorKey: string | null;
-    sourceScope?: MemorySourceScope;
-    memoryType?: MemoryType;
-    memorySubtype?: MemorySubtype;
-    participantActorKeys: string[];
-} {
+/**
+ * 功能：从向量命中里读取严格源记录 metadata。
+ * 参数：
+ *   hit：向量命中。
+ * 返回：
+ *   StrictVectorSourceMetadata | null：严格来源 metadata；若缺少源记录或类型不合法则返回 null。
+ */
+export function readVectorSourceMetadata(hit: VectorHit): StrictVectorSourceMetadata | null {
     const metadata = (hit.metadata ?? {}) as Record<string, unknown>;
     const sourceScope = normalizeText(metadata.sourceScope).toLowerCase();
     const memoryType = normalizeText(metadata.memoryType).toLowerCase();
     const memorySubtype = normalizeText(metadata.memorySubtype).toLowerCase();
+    const sourceRecordKey = normalizeText(metadata.sourceRecordKey);
+    const sourceRecordKind = normalizeText(metadata.sourceRecordKind).toLowerCase();
+    if (!sourceRecordKey || (sourceRecordKind !== 'fact' && sourceRecordKind !== 'summary')) {
+        return null;
+    }
     return {
-        sourceRecordKey: normalizeText(metadata.sourceRecordKey),
-        sourceRecordKind: normalizeText(metadata.sourceRecordKind).toLowerCase(),
+        sourceRecordKey,
+        sourceRecordKind,
         ownerActorKey: normalizeText(metadata.ownerActorKey) || null,
         sourceScope: ['self', 'target', 'group', 'world', 'system'].includes(sourceScope) ? (sourceScope as MemorySourceScope) : undefined,
         memoryType: ['identity', 'event', 'relationship', 'world', 'status', 'other'].includes(memoryType) ? (memoryType as MemoryType) : undefined,
@@ -153,10 +167,10 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
 
     for (const hit of hits.slice(0, sourceLimit)) {
         const sourceMeta = readVectorSourceMetadata(hit);
-        if (hit.bookId === 'facts') {
-            if (!sourceMeta.sourceRecordKey || sourceMeta.sourceRecordKind !== 'fact') {
-                continue;
-            }
+        if (!sourceMeta) {
+            continue;
+        }
+        if (sourceMeta.sourceRecordKind === 'fact') {
             const fact = factMap.get(sourceMeta.sourceRecordKey);
             if (!fact) {
                 continue;
@@ -187,69 +201,35 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
             }
             continue;
         }
-        if (hit.bookId === 'summaries') {
-            if (!sourceMeta.sourceRecordKey || sourceMeta.sourceRecordKind !== 'summary') {
-                continue;
-            }
-            const summary = summaryMap.get(sourceMeta.sourceRecordKey);
-            if (!summary) {
-                continue;
-            }
-            const targetSection = context.plan.sections.includes('SUMMARY')
-                ? 'SUMMARY'
-                : context.plan.sections.includes('SHORT_SUMMARY')
-                    ? 'SHORT_SUMMARY'
-                    : context.plan.sections.includes('LAST_SCENE')
-                        ? 'LAST_SCENE'
-                        : context.plan.sections[0] ?? null;
-            const candidate = buildScoredCandidate(context, {
-                candidateId: `vector:${hit.chunkId}`,
-                recordKey: normalizeText(summary.summaryId || hit.chunkId),
-                recordKind: 'summary',
-                source: 'vector',
-                sectionHint: targetSection,
-                title: normalizeText(summary.title || `${summary.level ?? 'summary'} vector`),
-                rawText: `${summary.title ? `${summary.title}: ` : ''}${summary.content ?? ''}`,
-                confidence: Number(summary.encodeScore ?? 0.62),
-                updatedAt: Number(summary.createdAt ?? Date.now()),
-                vectorScore: clamp01(hit.score),
-                continuityScore: 0.86,
-                memoryType: summary.memoryType,
-                memorySubtype: summary.memorySubtype,
-                sourceScope: summary.sourceScope,
-                ownerActorKey: summary.ownerActorKey ?? null,
-                participantActorKeys: sourceMeta.participantActorKeys,
-                extraReasonCodes: ['vector_hit', 'vector_source_metadata', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
-            });
-            if (candidate) {
-                candidates.push(candidate);
-            }
+        const summary = summaryMap.get(sourceMeta.sourceRecordKey);
+        if (!summary) {
             continue;
         }
-        const rawText = normalizeText(hit.content);
-        if (!rawText) {
-            continue;
-        }
+        const targetSection = context.plan.sections.includes('SUMMARY')
+            ? 'SUMMARY'
+            : context.plan.sections.includes('SHORT_SUMMARY')
+                ? 'SHORT_SUMMARY'
+                : context.plan.sections.includes('LAST_SCENE')
+                    ? 'LAST_SCENE'
+                    : context.plan.sections[0] ?? null;
         const candidate = buildScoredCandidate(context, {
             candidateId: `vector:${hit.chunkId}`,
-            recordKey: `vector:${hit.chunkId}`,
-            recordKind: 'event',
+            recordKey: normalizeText(summary.summaryId || hit.chunkId),
+            recordKind: 'summary',
             source: 'vector',
-            sectionHint: context.plan.sections.includes('EVENTS') ? 'EVENTS' : context.plan.sections[0] ?? null,
-            title: hit.bookId || 'vector_chunk',
-            rawText,
-            confidence: 0.58,
-            updatedAt: Number(hit.createdAt ?? Date.now()),
+            sectionHint: targetSection,
+            title: normalizeText(summary.title || `${summary.level ?? 'summary'} vector`),
+            rawText: `${summary.title ? `${summary.title}: ` : ''}${summary.content ?? ''}`,
+            confidence: Number(summary.encodeScore ?? 0.62),
+            updatedAt: Number(summary.createdAt ?? Date.now()),
             vectorScore: clamp01(hit.score),
-            continuityScore: 0.75,
-            sourceScope: sourceMeta.sourceScope === 'self' || sourceMeta.sourceScope === 'target' || sourceMeta.sourceScope === 'group' || sourceMeta.sourceScope === 'world' || sourceMeta.sourceScope === 'system'
-                ? sourceMeta.sourceScope as 'self' | 'target' | 'group' | 'world' | 'system'
-                : 'group',
-            ownerActorKey: sourceMeta.ownerActorKey,
-            memoryType: sourceMeta.memoryType,
-            memorySubtype: sourceMeta.memorySubtype,
+            continuityScore: 0.86,
+            memoryType: summary.memoryType,
+            memorySubtype: summary.memorySubtype,
+            sourceScope: summary.sourceScope,
+            ownerActorKey: summary.ownerActorKey ?? null,
             participantActorKeys: sourceMeta.participantActorKeys,
-            extraReasonCodes: ['vector_fallback_chunk', sourceMeta.sourceRecordKey ? 'vector_source_metadata' : 'vector_source_weak', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
+            extraReasonCodes: ['vector_hit', 'vector_source_metadata', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
         });
         if (candidate) {
             candidates.push(candidate);

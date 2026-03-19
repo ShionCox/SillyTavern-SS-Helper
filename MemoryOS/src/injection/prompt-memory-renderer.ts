@@ -1,9 +1,8 @@
 import type {
-    InjectionIntent,
     InjectionSectionName,
-    PromptInjectionProfile,
-    PromptSoftPersonaMode,
+    MemoryContextBlockUsage,
     RecallCandidate,
+    RecallPlan,
 } from '../types';
 
 function countTokens(text: string): number {
@@ -14,11 +13,6 @@ function countTokens(text: string): number {
     const latinWordCount = (text.match(/[A-Za-z0-9_]+/g) || []).length;
     const punctuationCount = (text.match(/[^\u4e00-\u9fffA-Za-z0-9_\s]/g) || []).length;
     return Math.max(1, Math.ceil(cjkCount * 1.15 + latinWordCount * 1.35 + punctuationCount * 0.25));
-}
-
-function canAppend(lines: string[], line: string, tokenBudget: number, headerReserve: number): boolean {
-    const draft = lines.concat([line]).join('\n');
-    return countTokens(draft) + headerReserve <= tokenBudget;
 }
 
 /**
@@ -74,67 +68,9 @@ export function readSectionHeaderReserve(section: InjectionSectionName): number 
     return 20;
 }
 
-/**
- * 功能：根据软注入模式生成引导标题。
- * 参数：
- *   mode：软注入模式。
- *   intent：当前注入意图。
- * 返回：引导标题。
- */
-export function buildSoftLead(mode: PromptSoftPersonaMode, intent: InjectionIntent): string {
-    if (mode === 'scene_note') {
-        return '场景注记';
-    }
-    if (mode === 'character_anchor') {
-        return '角色锚点';
-    }
-    if (mode === 'hidden_context_summary') {
-        return intent === 'tool_qa' ? '隐藏工作上下文' : '隐藏上下文摘要';
-    }
-    return '连续性注记';
-}
-
-/**
- * 功能：按照不同注入风格渲染最终注入文本。
- * 参数：
- *   rawText：原始文本。
- *   promptProfile：注入画像。
- *   intent：当前意图。
- * 返回：渲染后的文本。
- */
-export function renderInjectedContext(
-    rawText: string,
-    promptProfile: PromptInjectionProfile,
-    intent: InjectionIntent,
-): string {
-    const body = String(rawText ?? '').trim();
-    if (!body) {
-        return '';
-    }
-    const lead = buildSoftLead(promptProfile.softPersonaMode, intent);
-    if (promptProfile.renderStyle === 'markdown') {
-        return [`## ${lead}`, body].filter(Boolean).join('\n\n');
-    }
-    if (promptProfile.renderStyle === 'comment') {
-        return `/* ${lead}\n${body}\n*/`;
-    }
-    if (promptProfile.renderStyle === 'compact_kv') {
-        const compactBody = body
-            .split('\n')
-            .map((line: string): string => line.replace(/^\s*[-*#]+\s*/, '').trim())
-            .filter(Boolean)
-            .join(' | ');
-        return `${lead}: ${compactBody}`;
-    }
-    if (promptProfile.renderStyle === 'minimal_bullets') {
-        const bulletBody = body
-            .split('\n')
-            .map((line: string): string => line.trim())
-            .filter(Boolean)
-            .map((line: string): string => (line.startsWith('-') ? line : `- ${line}`));
-        return [`${lead}:`, ...bulletBody].join('\n');
-    }
-    return `\n<${promptProfile.wrapTag}>\n<MODE>${lead}</MODE>\n${body}\n</${promptProfile.wrapTag}>\n`;
+function canAppend(lines: string[], line: string, tokenBudget: number, headerReserve: number): boolean {
+    const draft = lines.concat([line]).join('\n');
+    return countTokens(draft) + headerReserve <= tokenBudget;
 }
 
 /**
@@ -165,19 +101,17 @@ export function assembleSection(title: string, lines: string[], tokenBudget: num
 }
 
 /**
- * 功能：根据候选列表构建最终分区文本。
+ * 功能：根据候选列表构建单个分区文本。
  * 参数：
  *   section：分区名称。
  *   candidates：候选列表。
  *   tokenBudget：分区预算。
- *   promptProfile：注入画像。
  * 返回：分区文本。
  */
 export function buildSectionText(
     section: InjectionSectionName,
     candidates: RecallCandidate[],
     tokenBudget: number,
-    _promptProfile: PromptInjectionProfile,
 ): string {
     if (tokenBudget <= 0 || candidates.length <= 0) {
         return '';
@@ -190,3 +124,133 @@ export function buildSectionText(
         .filter((line: string): boolean => line.length > 0);
     return assembleSection(title, lines, tokenBudget, headerReserve);
 }
+
+function hasCandidateInPool(candidates: RecallCandidate[], pool: 'global' | 'actor'): boolean {
+    return candidates.some((candidate: RecallCandidate): boolean => candidate.visibilityPool === pool && candidate.selected);
+}
+
+function collectSectionHints(candidates: RecallCandidate[]): InjectionSectionName[] {
+    const seen = new Set<InjectionSectionName>();
+    const hints: InjectionSectionName[] = [];
+    for (const candidate of candidates) {
+        if (!candidate.sectionHint || seen.has(candidate.sectionHint)) {
+            continue;
+        }
+        seen.add(candidate.sectionHint);
+        hints.push(candidate.sectionHint);
+    }
+    return hints;
+}
+
+function buildBlockHeader(kind: 'director_context' | 'active_character_memory', actorKey: string | null): string {
+    if (kind === 'director_context') {
+        return '<director_context>';
+    }
+    const normalizedActorKey = String(actorKey ?? '').trim();
+    return `<active_character_memory actor="${normalizedActorKey}">`;
+}
+
+function buildBlockFooter(kind: 'director_context' | 'active_character_memory'): string {
+    return kind === 'director_context' ? '</director_context>' : '</active_character_memory>';
+}
+
+function resolveBlockBudget(plan: RecallPlan, kind: 'director_context' | 'active_character_memory'): number {
+    const focusShare = plan.viewpoint.focus.budgetShare;
+    const share = kind === 'director_context'
+        ? Number(focusShare.global ?? 0)
+        : Number(focusShare.primaryActor ?? 0) + Number(focusShare.secondaryActors ?? 0);
+    return Math.max(0, Math.floor(plan.maxTokens * share));
+}
+
+/**
+ * 功能：按 director / actor 两层渲染 Memory Context。
+ * 参数：
+ *   input：渲染输入。
+ * 返回：最终渲染结果。
+ */
+export function buildLayeredMemoryContext(input: {
+    candidates: RecallCandidate[];
+    plan: RecallPlan;
+}): {
+    text: string;
+    blocksUsed: MemoryContextBlockUsage[];
+} {
+    const globalCandidates = input.candidates.filter((candidate: RecallCandidate): boolean => candidate.selected && candidate.visibilityPool === 'global');
+    const actorCandidates = input.candidates.filter((candidate: RecallCandidate): boolean => candidate.selected && candidate.visibilityPool === 'actor');
+    const blocks: Array<{ kind: 'director_context' | 'active_character_memory'; actorKey: string | null; candidates: RecallCandidate[] }> = [];
+
+    if (hasCandidateInPool(globalCandidates, 'global')) {
+        blocks.push({
+            kind: 'director_context',
+            actorKey: null,
+            candidates: globalCandidates,
+        });
+    }
+    if (input.plan.viewpoint.mode === 'actor_bounded' && hasCandidateInPool(actorCandidates, 'actor')) {
+        blocks.push({
+            kind: 'active_character_memory',
+            actorKey: input.plan.viewpoint.activeActorKey ?? input.plan.viewpoint.focus.primaryActorKey ?? null,
+            candidates: actorCandidates,
+        });
+    }
+
+    const renderedBlocks: string[] = [];
+    const blocksUsed: MemoryContextBlockUsage[] = [];
+
+    for (const block of blocks) {
+        const sectionMap = new Map<InjectionSectionName, RecallCandidate[]>();
+        for (const candidate of block.candidates) {
+            if (!candidate.sectionHint) {
+                continue;
+            }
+            const bucket = sectionMap.get(candidate.sectionHint) ?? [];
+            bucket.push(candidate);
+            sectionMap.set(candidate.sectionHint, bucket);
+        }
+        const sectionHints = collectSectionHints(block.candidates);
+        const blockBudget = resolveBlockBudget(input.plan, block.kind);
+        const sectionTexts: string[] = [];
+        let spentBudget = 0;
+        for (const section of input.plan.sections) {
+            const sectionCandidates = sectionMap.get(section) ?? [];
+            if (sectionCandidates.length <= 0) {
+                continue;
+            }
+            const sectionBudget = Math.max(24, Math.floor(blockBudget / Math.max(1, sectionHints.length || 1)));
+            const text = buildSectionText(section, sectionCandidates, sectionBudget);
+            if (!text) {
+                continue;
+            }
+            spentBudget += countTokens(text);
+            sectionTexts.push(text);
+        }
+        const body = sectionTexts.join('\n\n').trim();
+        if (!body) {
+            continue;
+        }
+        renderedBlocks.push([
+            buildBlockHeader(block.kind, block.actorKey),
+            body,
+            buildBlockFooter(block.kind),
+        ].join('\n'));
+        blocksUsed.push({
+            kind: block.kind,
+            actorKey: block.actorKey,
+            candidateCount: block.candidates.length,
+            sectionHints,
+            reasonCodes: [
+                block.kind === 'director_context' ? 'block:director_context' : 'block:active_character_memory',
+                ...(block.actorKey ? [`actor:${block.actorKey}`] : []),
+                `candidates:${block.candidates.length}`,
+                `sections:${sectionHints.join(',') || 'none'}`,
+                `budget:${spentBudget}`,
+            ],
+        });
+    }
+
+    return {
+        text: renderedBlocks.length > 0 ? ['[Memory Context]', ...renderedBlocks].join('\n') : '',
+        blocksUsed,
+    };
+}
+

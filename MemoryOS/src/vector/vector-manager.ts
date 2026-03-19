@@ -49,6 +49,36 @@ function buildIndexTraceSummary(metadata?: DBVectorChunkMetadata | undefined): s
     ].join(', ');
 }
 
+/**
+ * 功能：把向量索引 metadata 规整成稳定的签名片段。
+ * @param metadata 向量索引 metadata。
+ * @returns 稳定签名片段。
+ */
+function buildMetadataSignature(metadata?: DBVectorChunkMetadata | undefined): string {
+    if (!metadata) {
+        return '';
+    }
+    const source = pickIndexSource(metadata);
+    const payload = {
+        sourceRecordKey: String(metadata.sourceRecordKey ?? '').trim(),
+        sourceRecordKind: String(metadata.sourceRecordKind ?? '').trim(),
+        ownerActorKey: String(metadata.ownerActorKey ?? '').trim(),
+        sourceScope: String(metadata.sourceScope ?? '').trim(),
+        memoryType: String(metadata.memoryType ?? '').trim(),
+        memorySubtype: String(metadata.memorySubtype ?? '').trim(),
+        participantActorKeys: Array.isArray(metadata.participantActorKeys)
+            ? [...metadata.participantActorKeys].map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+            : [],
+        sourceKind: String(source.kind ?? '').trim(),
+        sourceReason: String(source.reason ?? '').trim(),
+        sourceViewHash: String(source.viewHash ?? '').trim(),
+        sourceSnapshotHash: String(source.snapshotHash ?? '').trim(),
+        sourceAnchorMessageId: String(source.anchorMessageId ?? '').trim(),
+        sourceRepairGeneration: Number(source.repairGeneration ?? 0),
+    };
+    return JSON.stringify(payload);
+}
+
 /** 简单的 UUID v4 生成（不依赖第三方包） */
 function uuid(): string {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -84,58 +114,19 @@ export class VectorManager {
     }
 
     /**
-     * 功能：构建同内容索引请求的去重签名。
+     * 功能：构建向量索引请求的去重签名。
      * @param chunks 文本块列表。
      * @param bookId 来源 bookId。
+     * @param metadata 索引 metadata。
      * @returns 去重签名。
      */
-    private buildIndexSignature(chunks: string[], bookId?: string): string {
-        const payload = `${this.chatKey}::${String(bookId ?? '')}::${chunks.join('\u241E')}`;
+    private buildIndexSignature(chunks: string[], bookId?: string, metadata?: DBVectorChunkMetadata): string {
+        const payload = `${this.chatKey}::${String(bookId ?? '')}::${chunks.join('\u241E')}::${buildMetadataSignature(metadata)}`;
         let hash = 5381;
         for (let index = 0; index < payload.length; index += 1) {
             hash = ((hash << 5) + hash) ^ payload.charCodeAt(index);
         }
         return `vec_${(hash >>> 0).toString(16)}`;
-    }
-
-    /**
-     * 功能：尝试复用已经存在的向量块，避免对完全相同内容重复发 embedding。
-     * @param chunks 当前待索引的文本块列表。
-     * @param bookId 来源 bookId。
-     * @returns 若全部块都已存在则返回对应 chunkId 列表，否则返回 null。
-     */
-    private async tryReuseExistingChunkIds(chunks: string[], bookId?: string): Promise<string[] | null> {
-        if (chunks.length === 0) {
-            return [];
-        }
-        const existingRows = await db.vector_chunks.where('chatKey').equals(this.chatKey).toArray();
-        const contentToChunkIds = new Map<string, string[]>();
-        for (const row of existingRows) {
-            if (String(row.bookId ?? '') !== String(bookId ?? '')) {
-                continue;
-            }
-            const content = String(row.content ?? '');
-            if (!content) {
-                continue;
-            }
-            const currentIds = contentToChunkIds.get(content) || [];
-            currentIds.push(String(row.chunkId ?? '').trim());
-            contentToChunkIds.set(content, currentIds.filter(Boolean));
-        }
-
-        const reusedChunkIds: string[] = [];
-        const localConsumedCount = new Map<string, number>();
-        for (const chunk of chunks) {
-            const candidates = contentToChunkIds.get(chunk) || [];
-            const consumed = localConsumedCount.get(chunk) || 0;
-            const nextChunkId = String(candidates[consumed] ?? '').trim();
-            if (!nextChunkId) {
-                return null;
-            }
-            reusedChunkIds.push(nextChunkId);
-            localConsumedCount.set(chunk, consumed + 1);
-        }
-        return reusedChunkIds;
     }
 
     // ==========================================
@@ -159,13 +150,7 @@ export class VectorManager {
             `向量索引请求进入：chatKey=${this.chatKey}, bookId=${bookId ?? '(无)'}, chunks=${chunks.length}, textLen=${String(text ?? '').length}, textHash=${textHash}, firstChunkHash=${firstChunkHash}, ${traceSummary}`,
         );
 
-        const reusableChunkIds = await this.tryReuseExistingChunkIds(chunks, bookId);
-        if (reusableChunkIds && reusableChunkIds.length === chunks.length) {
-            logger.info(`检测到重复向量索引请求，直接复用已有向量块：${reusableChunkIds.length} 个，bookId=${bookId ?? '(无)'}, textHash=${textHash}, ${traceSummary}`);
-            return reusableChunkIds;
-        }
-
-        const dedupeSignature = this.buildIndexSignature(chunks, bookId);
+        const dedupeSignature = this.buildIndexSignature(chunks, bookId, metadata);
         const inFlightTask = VECTOR_INDEX_IN_FLIGHT.get(dedupeSignature);
         if (inFlightTask) {
             logger.info(`检测到并发重复向量索引请求，复用进行中的任务，bookId=${bookId ?? '(无)'}, signature=${dedupeSignature}, textHash=${textHash}, ${traceSummary}`);

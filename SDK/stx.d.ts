@@ -64,11 +64,14 @@ export interface TemplateBinding {
 
 export interface FactProposal {
     factKey?: string;
+    targetRecordKey?: string;
+    action?: 'auto' | 'update' | 'merge' | 'delete' | 'invalidate';
     type: string;
     entity?: { kind: string; id: string };
     path?: string;
     value: any;
     confidence?: number;
+    provenance?: any;
 }
 
 export interface PatchProposal {
@@ -79,9 +82,19 @@ export interface PatchProposal {
 
 export interface SummaryProposal {
     level: 'message' | 'scene' | 'arc';
+    summaryId?: string;
+    targetRecordKey?: string;
+    action?: 'auto' | 'update' | 'merge' | 'delete' | 'invalidate';
     title?: string;
     content: string;
     keywords?: string[];
+    messageId?: string;
+    range?: { fromMessageId?: string; toMessageId?: string };
+    source?: {
+        extractor?: string;
+        provider?: string;
+        provenance?: Record<string, unknown>;
+    };
 }
 
 export interface ProposalEnvelope {
@@ -147,6 +160,7 @@ export interface ProposalResult {
     gateResults: GateResult[];
     /** v2: 本轮产生的延迟 schema 提示 */
     deferredSchemaHints?: DeferredSchemaHint[];
+    mutationPlan?: MemoryMutationPlanSnapshot | null;
 }
 
 export interface WriteRequest {
@@ -220,20 +234,11 @@ export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
 
-export type PromptAnchorMode =
-    | 'top'
-    | 'before_start'
-    | 'custom_anchor'
-    | 'after_first_system'
-    | 'after_last_system'
-    | 'after_persona'
-    | 'after_author_note'
-    | 'after_lorebook'
-    | 'setting_query_only';
+export type PromptLayoutMode = 'layered_memory_context';
 
-export type PromptRenderStyle = 'xml' | 'markdown' | 'comment' | 'compact_kv' | 'minimal_bullets';
+export type PromptInsertionRole = 'user';
 
-export type PromptSoftPersonaMode = 'scene_note' | 'continuity_note' | 'character_anchor' | 'hidden_context_summary';
+export type PromptInsertionPosition = 'before_last_user';
 
 export type PromptQueryMode = 'always' | 'setting_only';
 
@@ -429,6 +434,61 @@ export interface ExtractHealthWindow {
     lastAcceptedAt: number;
 }
 
+export type MemoryMutationAction = 'ADD' | 'MERGE' | 'UPDATE' | 'INVALIDATE' | 'DELETE' | 'NOOP';
+export type MemoryMutationHistoryAction = Exclude<MemoryMutationAction, 'NOOP'>;
+
+export type MemoryMutationTargetKind = 'fact' | 'summary' | 'state';
+
+export interface MemoryMutationActionCounts {
+    ADD: number;
+    MERGE: number;
+    UPDATE: number;
+    INVALIDATE: number;
+    DELETE: number;
+    NOOP: number;
+}
+
+export interface MemoryMutationPlanItem {
+    itemId: string;
+    targetKind: MemoryMutationTargetKind;
+    action: MemoryMutationAction;
+    title: string;
+    compareKey: string;
+    normalizedText: string;
+    targetRecordKey?: string;
+    existingRecordKeys: string[];
+    reasonCodes: string[];
+}
+
+export interface MemoryMutationPlanSnapshot {
+    source: string;
+    consumerPluginId: string;
+    generatedAt: number;
+    totalItems: number;
+    appliedItems: number;
+    actionCounts: MemoryMutationActionCounts;
+    items: MemoryMutationPlanItem[];
+}
+
+export interface MemoryMutationHistoryEntry {
+    mutationId: string;
+    chatKey: string;
+    ts: number;
+    source: string;
+    consumerPluginId: string;
+    targetKind: MemoryMutationTargetKind;
+    action: MemoryMutationHistoryAction;
+    title: string;
+    compareKey: string;
+    targetRecordKey?: string;
+    existingRecordKeys: string[];
+    reasonCodes: string[];
+    before: unknown;
+    after: unknown;
+    visibleMessageIds: string[];
+    derivation?: DBDerivationSource;
+}
+
 export interface AdaptivePolicy {
     extractInterval: number;
     extractWindowSize: number;
@@ -456,15 +516,19 @@ export interface AdaptivePolicy {
 }
 
 export interface PromptInjectionProfile {
-    allowSystem: boolean;
-    allowUser: boolean;
-    defaultInsert: PromptAnchorMode;
-    fallbackOrder: PromptAnchorMode[];
+    layoutMode: PromptLayoutMode;
+    insertionRole: PromptInsertionRole;
+    insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
-    renderStyle: PromptRenderStyle;
-    softPersonaMode: PromptSoftPersonaMode;
-    wrapTag: string;
     settingOnlyMinScore: number;
+}
+
+export interface MemoryContextBlockUsage {
+    kind: 'director_context' | 'active_character_memory';
+    actorKey: string | null;
+    candidateCount: number;
+    sectionHints: InjectionSectionName[];
+    reasonCodes: string[];
 }
 
 export interface PreGenerationGateDecision {
@@ -473,12 +537,12 @@ export interface PreGenerationGateDecision {
     sectionsUsed: InjectionSectionName[];
     budgets: Partial<Record<InjectionSectionName, number>>;
     lorebookMode: LorebookGateMode;
-    anchorMode: PromptAnchorMode;
-    fallbackOrder: PromptAnchorMode[];
+    layoutMode: PromptLayoutMode;
+    insertionRole: PromptInsertionRole;
+    insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
-    renderStyle: PromptRenderStyle;
-    softPersonaMode: PromptSoftPersonaMode;
     shouldTrimPrompt: boolean;
+    blocksUsed: MemoryContextBlockUsage[];
     reasonCodes: string[];
     generatedAt: number;
 }
@@ -1095,6 +1159,7 @@ export interface MemoryOSChatState {
     mutationRepairGeneration?: number;
     vectorIndexVersion?: string;
     vectorMetadataRebuiltAt?: number;
+    lastMutationPlan?: MemoryMutationPlanSnapshot | null;
 }
 
 export interface RowRefResolution {
@@ -1353,10 +1418,12 @@ export interface EditorExperienceSnapshot {
     latestRecallExplanation: LatestRecallExplanation | null;
     tuningProfile: MemoryTuningProfile;
     maintenanceInsights: MaintenanceInsight[];
+    mutationHistory: MemoryMutationHistoryEntry[];
     facts: DBFact[];
     summaries: DBSummary[];
     events: DBEvent[];
     states: DBWorldState[];
+    lastMutationPlan: MemoryMutationPlanSnapshot | null;
     vectorIndexVersion: string | null;
     vectorMetadataRebuiltAt: number | null;
 }
@@ -1411,18 +1478,11 @@ export interface MemorySDK {
             intentHint?: InjectionIntent;
             includeDecisionMeta?: boolean;
         }): Promise<string | BuildContextDecision>;
-        setAnchorPolicy(opts: {
-            allowSystem?: boolean;
-            allowUser?: boolean;
-            defaultInsert?: PromptAnchorMode;
-            fallbackOrder?: PromptAnchorMode[];
+        setPromptInjectionProfile(opts: {
             queryMode?: PromptQueryMode;
-            renderStyle?: PromptRenderStyle;
-            softPersonaMode?: PromptSoftPersonaMode;
-            wrapTag?: string;
             settingOnlyMinScore?: number;
         }): Promise<void>;
-        getAnchorPolicy(): PromptInjectionProfile;
+        getPromptInjectionProfile(): PromptInjectionProfile;
     };
 
     audit: {
@@ -1463,7 +1523,6 @@ export interface MemorySDK {
 
     vector: {
         search(query: string, options?: { maxVectorResults?: number; maxKeywordResults?: number; maxEventResults?: number }): Promise<HybridSearchResult[]>;
-        indexText(text: string, bookId?: string): Promise<string[]>;
         formatForPrompt(results: HybridSearchResult[]): string;
     };
 
@@ -1551,6 +1610,7 @@ export interface MemorySDK {
         recomputeRelationshipState(): Promise<RelationshipState[]>;
         getMemoryTuningProfile(): Promise<MemoryTuningProfile>;
         setMemoryTuningProfile(profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile>;
+        getMutationHistory(opts?: { limit?: number; recordKey?: string; targetKind?: MemoryMutationTargetKind; action?: MemoryMutationHistoryAction }): Promise<MemoryMutationHistoryEntry[]>;
         getColdStartStage(): Promise<ColdStartStage | null>;
         primeColdStartPrompt(reason?: string): Promise<boolean>;
         primeColdStartExtract(reason?: string): Promise<boolean>;

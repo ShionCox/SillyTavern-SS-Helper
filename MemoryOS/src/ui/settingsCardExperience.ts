@@ -14,6 +14,7 @@ import type {
     LogicalChatView,
     LorebookGateDecision,
     MaintenanceInsight,
+    MemoryMutationPlanSnapshot,
     MemoryQualityScorecard,
     MemorySDK,
     InjectionSectionName,
@@ -523,9 +524,11 @@ function buildInjectionOverviewMarkupNext(snapshot: ExperienceSnapshot): string 
                 <div class="stx-ui-summary-copy">
                     ${escapeHtml([
                             `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
-                            `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
-                            `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                            `布局：${formatLayoutModeLabel(snapshot.preDecision.layoutMode)}`,
+                            `插入角色：${formatInsertionRoleLabel(snapshot.preDecision.insertionRole)}`,
+                            `插入位置：${formatInsertionPositionLabel(snapshot.preDecision.insertionPosition)}`,
                             `世界书：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
+                            `分层块：${(snapshot.preDecision.blocksUsed ?? []).map((block) => `${block.kind}${block.actorKey ? `(${block.actorKey})` : ''}`).join(' / ') || '无'}`,
                     ].join(' / '))}
                 </div>
                 <div class="stx-ui-summary-foot">
@@ -554,11 +557,12 @@ function buildRecallInjectionOverviewMarkup(snapshot: ExperienceSnapshot): strin
         const subtitleText = snapshot.preDecision
                 ? [
                         `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
-                        `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
-                        `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                        `布局：${snapshot.preDecision.layoutMode}`,
+                        `插入角色：${snapshot.preDecision.insertionRole}`,
+                        `插入位置：${snapshot.preDecision.insertionPosition}`,
                         `世界书：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
                 ].join(' / ')
-                : '最近还没有新的注入决策，这里仍会持续显示角色边界与向量回源状态。';
+                : '最近还没有新的注入决策，这里仍会持续显示角色边界与严格向量回源状态。';
         const secondaryActorsText = recallSummary.secondaryActorLabels.length > 0
                 ? recallSummary.secondaryActorLabels.join(' / ')
                 : '当前以共享池为主';
@@ -582,7 +586,8 @@ function buildRecallInjectionOverviewMarkup(snapshot: ExperienceSnapshot): strin
                                 buildSummaryInfoTile('fa-solid fa-users-viewfinder', '次角色', secondaryActorsText),
                                 buildSummaryInfoTile('fa-solid fa-layer-group', '共享 / 角色池', `${recallSummary.globalPoolSelectedCount} / ${recallSummary.actorPoolSelectedCount}`),
                                 buildSummaryInfoTile('fa-solid fa-shield', '边界压制', `${recallSummary.blockedCount} 条`),
-                                buildSummaryInfoTile('fa-solid fa-link', '向量回源', recallSummary.vectorIndexLabel),
+                                buildSummaryInfoTile('fa-solid fa-link', '严格回源', recallSummary.vectorIndexLabel),
+                                buildSummaryInfoTile('fa-solid fa-diagram-project', 'Memory Context', (snapshot.preDecision?.blocksUsed ?? []).map((block) => `${block.kind}${block.actorKey ? `(${block.actorKey})` : ''}`).join(' / ') || '无分层块'),
                         ].join('')}
                     </div>
                 `,
@@ -854,30 +859,26 @@ function formatInjectionSectionLabel(value: string): string {
     return value || '未命名区段';
 }
 
-function formatAnchorModeLabel(value: string): string {
+function formatLayoutModeLabel(value: string): string {
     const dict: Record<string, string> = {
-        top: '插在最前面',
-        before_start: '放在开头之前',
-        custom_anchor: '插到自定义锚点',
-        after_first_system: '放在第一条系统提示后',
-        after_last_system: '放在最后一条系统提示后',
-        after_persona: '放在人设后面',
-        after_author_note: '放在作者注释后',
-        after_lorebook: '放在世界书后',
-        setting_query_only: '仅设定问答时插入',
+        layered_memory_context: '固定三层记忆布局',
     };
-    return dict[String(value ?? '').trim()] || '按默认位置插入';
+    return dict[String(value ?? '').trim().toLowerCase()] || '固定分层布局';
 }
 
-function formatRenderStyleLabel(value: string): string {
+function formatInsertionRoleLabel(value: string): string {
     const dict: Record<string, string> = {
-        xml: '结构化片段',
-        markdown: 'Markdown 列表',
-        comment: '注释说明',
-        compact_kv: '紧凑键值',
-        minimal_bullets: '精简条目',
+        user: 'user 消息',
     };
-    return dict[String(value ?? '').trim()] || '默认样式';
+    return dict[String(value ?? '').trim().toLowerCase()] || '固定角色';
+}
+
+function formatInsertionPositionLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'before_last_user') {
+        return '最后一条真实用户消息之前';
+    }
+    return '固定位置';
 }
 
 function formatLorebookModeLabel(value: string): string {
@@ -915,6 +916,19 @@ function formatInjectionReasonCode(code: string): string {
     }
     if (INJECTION_REASON_LABELS[normalized]) {
         return INJECTION_REASON_LABELS[normalized];
+    }
+
+    if (normalized.startsWith('layout:')) {
+        return `布局：${formatLayoutModeLabel(normalized.slice('layout:'.length))}`;
+    }
+    if (normalized.startsWith('insertion_role:')) {
+        return `插入角色：${formatInsertionRoleLabel(normalized.slice('insertion_role:'.length))}`;
+    }
+    if (normalized.startsWith('insertion_position:')) {
+        return `插入位置：${formatInsertionPositionLabel(normalized.slice('insertion_position:'.length))}`;
+    }
+    if (normalized.startsWith('block:')) {
+        return `分层块：${normalized.slice('block:'.length)}`;
     }
 
     const intentMatch = normalized.match(/^intent:(.+)$/i);
@@ -1443,9 +1457,11 @@ function buildInjectionOverviewMarkup(snapshot: ExperienceSnapshot): string {
         <div class="stx-ui-summary-copy">
           ${escapeHtml([
                             `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
-                            `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
-                            `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                            `布局：${formatLayoutModeLabel(snapshot.preDecision.layoutMode)}`,
+                            `插入角色：${formatInsertionRoleLabel(snapshot.preDecision.insertionRole)}`,
+                            `插入位置：${formatInsertionPositionLabel(snapshot.preDecision.insertionPosition)}`,
                             `世界书策略：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
+                            `分层块：${(snapshot.preDecision.blocksUsed ?? []).map((block) => `${block.kind}${block.actorKey ? `(${block.actorKey})` : ''}`).join(' / ') || '无'}`,
           ].join(' · '))}
         </div>
         <div class="stx-ui-summary-foot">
@@ -1709,9 +1725,9 @@ function buildPostDecisionItems(postDecision: PostGenerationGateDecision | null)
     }
     return [
         {
-            title: '长期写入',
-            detail: postDecision.shouldPersistLongTerm ? '本轮内容允许沉淀为更长期的记忆。' : '本轮内容更偏向短期处理。',
-            meta: postDecision.shouldPersistLongTerm ? '已开启' : '未开启',
+            title: '长期记忆 CRUD',
+            detail: postDecision.shouldPersistLongTerm ? '本轮内容允许进入 mutation planner，继续走长期记忆 CRUD 主链。' : '本轮内容更偏向短期处理，不会进入长期记忆 CRUD。',
+            meta: postDecision.shouldPersistLongTerm ? 'mutation planner 已开启' : 'mutation planner 未开启',
             tone: postDecision.shouldPersistLongTerm ? 'accent' : 'soft',
         },
         {
@@ -1733,6 +1749,91 @@ function buildPostDecisionItems(postDecision: PostGenerationGateDecision | null)
             tone: postDecision.rebuildSummary ? 'warning' : 'soft',
         },
     ];
+}
+
+/**
+ * 功能：把最近一次 mutation planner 快照格式化成便于界面展示的动作统计。
+ * @param snapshot 最近一次 mutation planner 快照。
+ * @returns 用于界面展示的动作统计文案。
+ */
+function formatMutationPlanActionCounts(snapshot: MemoryMutationPlanSnapshot | null): string {
+    if (!snapshot) {
+        return '最近还没有 mutation planner 记录。';
+    }
+    const parts = [
+        ['ADD', snapshot.actionCounts.ADD],
+        ['MERGE', snapshot.actionCounts.MERGE],
+        ['UPDATE', snapshot.actionCounts.UPDATE],
+        ['INVALIDATE', snapshot.actionCounts.INVALIDATE],
+        ['DELETE', snapshot.actionCounts.DELETE],
+        ['NOOP', snapshot.actionCounts.NOOP],
+    ].filter((entry): boolean => Number(entry[1] ?? 0) > 0)
+        .map((entry): string => `${entry[0]} ${entry[1]}`);
+    return parts.length > 0 ? parts.join(' / ') : '最近一轮没有产生有效动作。';
+}
+
+/**
+ * 功能：构建 mutation planner 的体验面板条目。
+ * @param snapshot 最近一次 mutation planner 快照。
+ * @returns 可直接渲染到体验面板的列表条目。
+ */
+function buildMutationPlanItems(snapshot: MemoryMutationPlanSnapshot | null): ExperienceListItem[] {
+    if (!snapshot) {
+        return [{
+            title: '长期记忆 CRUD',
+            detail: '最近还没有 mutation planner 记录。',
+            meta: '等待新的提议进入长期记忆 CRUD 主链',
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-shuffle',
+        }];
+    }
+    const sourceLabel = normalizeText(snapshot.consumerPluginId || snapshot.source, 'unknown_plugin');
+    const preview = snapshot.items
+        .slice(0, 3)
+        .map((item): string => `${item.action} ${item.title}`)
+        .join(' / ');
+    return [{
+        title: '长期记忆 CRUD',
+        detail: formatMutationPlanActionCounts(snapshot),
+        meta: `执行 ${snapshot.appliedItems} / ${snapshot.totalItems} · ${sourceLabel} · ${snapshot.generatedAt > 0 ? formatRelativeTime(snapshot.generatedAt) : '刚刚'}`,
+        tone: snapshot.appliedItems > 0 ? 'accent' : 'soft',
+        iconClassName: 'fa-solid fa-shuffle',
+        detailHtml: preview
+            ? `<div class="stx-ui-body-text">${escapeHtml(preview)}</div>`
+            : undefined,
+    }];
+}
+
+/**
+ * 功能：构建 mutation history 的体验面板条目。
+ * @param history 最近执行的长期记忆变更历史。
+ * @returns 可直接渲染到体验面板的列表条目。
+ */
+function buildMutationHistoryItems(history: EditorExperienceSnapshot['mutationHistory']): ExperienceListItem[] {
+    if (!Array.isArray(history) || history.length === 0) {
+        return [{
+            title: '最近变更',
+            detail: '最近还没有变更历史记录。',
+            meta: '等待新的长期记忆变更写入 history',
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-clock-rotate-left',
+        }];
+    }
+    const latest = history[0];
+    const preview = history
+        .slice(0, 3)
+        .map((item): string => `${item.action} ${item.targetKind} ${item.title}`)
+        .join(' / ');
+    return [{
+        title: '最近变更',
+        detail: `${history.length} 条已执行变更`,
+        meta: `${normalizeText(latest.consumerPluginId || latest.source, 'unknown_plugin')} · ${latest.ts > 0 ? formatRelativeTime(latest.ts) : '刚刚'}`,
+        tone: history.length > 0 ? 'accent' : 'soft',
+        iconClassName: 'fa-solid fa-clock-rotate-left',
+        detailHtml: preview
+            ? `<div class="stx-ui-body-text">${escapeHtml(preview)}</div>`
+            : undefined,
+    }];
 }
 
 /**
@@ -2303,8 +2404,8 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
         buildListMarkup([
             {
                 title: '维护边界',
-                detail: '当前阶段继续复用现有逻辑行接口，只维护已经稳定落库的事实行，不会把系统推导结果自动写回事实层。',
-                meta: '保持事实写入协议不变',
+                detail: '抽取结果、摘要和状态提议现在都会先进入长期记忆 CRUD 主链，统一经过 mutation planner 决策后再执行。',
+                meta: '旧的直接写入链路已删除',
                 tone: 'accent',
                 iconClassName: 'fa-solid fa-ruler-combined',
             },
@@ -2334,6 +2435,8 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, snapshot: EditorExperien
     setContainerHtml(
         ids.injectionOverviewId,
         `${buildRecallInjectionOverviewMarkup(snapshot)}${buildListMarkup([
+            ...buildMutationPlanItems(snapshot.lastMutationPlan),
+            ...buildMutationHistoryItems(snapshot.mutationHistory),
             {
                 title: '事实层',
                 detail: `${canon.health.dataLayers.factsCount} 条`,

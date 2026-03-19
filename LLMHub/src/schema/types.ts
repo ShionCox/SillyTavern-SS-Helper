@@ -206,6 +206,7 @@ export interface RequestDebugInfo {
     rawResponseText?: string;
     parsedResponse?: unknown;
     normalizedResponse?: unknown;
+    providerResponse?: unknown;
     validationErrors?: string[];
     finalError?: string;
     reasonCode?: string;
@@ -245,6 +246,7 @@ export interface LLMRequestLogResponseSnapshot {
     reasonCode?: string;
     validationErrors?: string[];
     rawResponseText?: string;
+    providerResponse?: unknown;
     parsedResponse?: unknown;
     normalizedResponse?: unknown;
 }

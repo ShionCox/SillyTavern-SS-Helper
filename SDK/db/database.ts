@@ -204,6 +204,25 @@ export interface DBAudit {
     refs?: any;
 }
 
+export interface DBMemoryMutationHistory {
+    mutationId: string;
+    chatKey: string;
+    ts: number;
+    source: string;
+    consumerPluginId: string;
+    targetKind: 'fact' | 'summary' | 'state';
+    action: 'ADD' | 'MERGE' | 'UPDATE' | 'INVALIDATE' | 'DELETE';
+    title: string;
+    compareKey: string;
+    targetRecordKey?: string;
+    existingRecordKeys: string[];
+    reasonCodes: string[];
+    before: any;
+    after: any;
+    visibleMessageIds: string[];
+    derivation?: DBDerivationSource;
+}
+
 export interface DBMeta {
     chatKey: string;
     schemaVersion: number;
@@ -386,7 +405,7 @@ export interface DBLlmRequestLog {
  *
  * 所有插件的聊天级数据统一存储在 `ss-helper-db` 中。
  * - 公共三张表: chat_documents / chat_plugin_state / chat_plugin_records
- * - MemoryOS 专属高索引表: events / facts / world_state / summaries / templates / audit / meta / worldinfo_cache / template_bindings / vector_chunks / vector_embeddings / vector_meta
+ * - MemoryOS 专属高索引表: events / facts / world_state / summaries / templates / audit / memory_mutation_history / meta / worldinfo_cache / template_bindings / vector_chunks / vector_embeddings / vector_meta
  * - LLMHub 凭据表: llm_credentials
  *
  * 全新数据库，版本从 v1 开始一次性定义所有表。
@@ -404,6 +423,7 @@ export class SSHelperDatabase extends Dexie {
     summaries!: Table<DBSummary, string>;
     templates!: Table<DBTemplate, string>;
     audit!: Table<DBAudit, string>;
+    memory_mutation_history!: Table<DBMemoryMutationHistory, string>;
     meta!: Table<DBMeta, string>;
     worldinfo_cache!: Table<DBWorldInfoCache, string>;
     template_bindings!: Table<DBTemplateBinding, string>;
@@ -433,6 +453,7 @@ export class SSHelperDatabase extends Dexie {
             summaries: '&summaryId, [chatKey+level+createdAt]',
             templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
             audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
@@ -454,6 +475,7 @@ export class SSHelperDatabase extends Dexie {
             summaries: '&summaryId, [chatKey+level+createdAt]',
             templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
             audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',
@@ -475,6 +497,30 @@ export class SSHelperDatabase extends Dexie {
             summaries: '&summaryId, [chatKey+level+createdAt]',
             templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
             audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
+            meta: '&chatKey',
+            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
+            template_bindings: '&bindingKey, chatKey',
+            vector_chunks: '&chunkId, chatKey, [chatKey+bookId]',
+            vector_embeddings: '&embeddingId, chunkId, chatKey',
+            vector_meta: '&metaKey, chatKey, [chatKey+bookId]',
+            relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, consumer, taskId, taskKind, state, reasonCode, sortTs, queuedAt, finishedAt, createdAt, [sourcePluginId+sortTs], [state+sortTs]',
+        });
+
+        this.version(5).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
+            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
+            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
+            world_state: '&stateKey, [chatKey+path]',
+            summaries: '&summaryId, [chatKey+level+createdAt]',
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
             meta: '&chatKey',
             worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
             template_bindings: '&bindingKey, chatKey',

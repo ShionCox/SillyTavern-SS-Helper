@@ -55,16 +55,17 @@ export async function hasMeaningfulChatContent(chatKey: string): Promise<boolean
         return false;
     }
 
-    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow] = await Promise.all([
+    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow, mutationHistoryRow] = await Promise.all([
         db.events.where('chatKey').equals(normalizedChatKey).first(),
         db.facts.where('[chatKey+updatedAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
         db.world_state.where('[chatKey+path]').between([normalizedChatKey, ''], [normalizedChatKey, '\uffff']).first(),
         db.summaries.where('[chatKey+level+createdAt]').between([normalizedChatKey, '', 0], [normalizedChatKey, '\uffff', Infinity]).first(),
         db.templates.where('[chatKey+createdAt]').between([normalizedChatKey, 0], [normalizedChatKey, Infinity]).first(),
         db.audit.where('chatKey').equals(normalizedChatKey).first(),
+        db.memory_mutation_history.where('chatKey').equals(normalizedChatKey).first(),
     ]);
 
-    return Boolean(eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow);
+    return Boolean(eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow || mutationHistoryRow);
 }
 
 /**

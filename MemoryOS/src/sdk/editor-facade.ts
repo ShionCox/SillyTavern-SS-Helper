@@ -583,6 +583,7 @@ export class MemoryEditorFacade {
             tuningProfile,
             activeActorKey,
             chatState,
+            mutationHistory,
         ] = await Promise.all([
             this.chatStateManager.getChatProfile(),
             this.chatStateManager.getMemoryQuality(),
@@ -597,6 +598,7 @@ export class MemoryEditorFacade {
             this.chatStateManager.getMemoryTuningProfile(),
             this.chatStateManager.getActiveActorKey(),
             this.chatStateManager.load(),
+            this.chatStateManager.getMutationHistory({ limit: 24 }),
         ]);
 
         return {
@@ -619,7 +621,9 @@ export class MemoryEditorFacade {
             recallLog,
             latestRecallExplanation,
             tuningProfile,
+            lastMutationPlan: chatState.lastMutationPlan ?? null,
             maintenanceInsights: context.maintenanceInsights,
+            mutationHistory,
             facts: context.facts.slice(0, 36),
             summaries: context.summaries.slice(0, 18),
             events: context.events.slice(0, 18),

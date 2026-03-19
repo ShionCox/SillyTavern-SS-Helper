@@ -5,6 +5,7 @@
  */
 
 import type { TaskSurfaceMode } from '../../../SDK/stx';
+import type { DBDerivationSource } from '../../../SDK/db';
 
 export type ChatType = 'solo' | 'group' | 'worldbook' | 'tool';
 
@@ -20,20 +21,11 @@ export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
 
-export type PromptAnchorMode =
-    | 'top'
-    | 'before_start'
-    | 'custom_anchor'
-    | 'after_first_system'
-    | 'after_last_system'
-    | 'after_persona'
-    | 'after_author_note'
-    | 'after_lorebook'
-    | 'setting_query_only';
+export type PromptLayoutMode = 'layered_memory_context';
 
-export type PromptRenderStyle = 'xml' | 'markdown' | 'comment' | 'compact_kv' | 'minimal_bullets';
+export type PromptInsertionRole = 'user';
 
-export type PromptSoftPersonaMode = 'scene_note' | 'continuity_note' | 'character_anchor' | 'hidden_context_summary';
+export type PromptInsertionPosition = 'before_last_user';
 
 export type PromptQueryMode = 'always' | 'setting_only';
 
@@ -276,6 +268,95 @@ export interface ExtractHealthWindow {
     lastAcceptedAt: number;
 }
 
+export type MemoryMutationAction = 'ADD' | 'MERGE' | 'UPDATE' | 'INVALIDATE' | 'DELETE' | 'NOOP';
+export type MemoryMutationHistoryAction = Exclude<MemoryMutationAction, 'NOOP'>;
+
+export type MemoryMutationTargetKind = 'fact' | 'summary' | 'state';
+
+export interface MemoryMutationHistoryEntry {
+    mutationId: string;
+    chatKey: string;
+    ts: number;
+    source: string;
+    consumerPluginId: string;
+    targetKind: MemoryMutationTargetKind;
+    action: MemoryMutationHistoryAction;
+    title: string;
+    compareKey: string;
+    targetRecordKey?: string;
+    existingRecordKeys: string[];
+    reasonCodes: string[];
+    before: unknown;
+    after: unknown;
+    visibleMessageIds: string[];
+    derivation?: DBDerivationSource;
+}
+
+/**
+ * 功能：记录一次长期记忆变更规划中各动作的数量。
+ * @param ADD 新增动作数量。
+ * @param MERGE 合并动作数量。
+ * @param UPDATE 覆盖更新动作数量。
+ * @param INVALIDATE 失效替换动作数量。
+ * @param DELETE 删除动作数量。
+ * @param NOOP 跳过动作数量。
+ * @returns 变更动作计数对象。
+ */
+export interface MemoryMutationActionCounts {
+    ADD: number;
+    MERGE: number;
+    UPDATE: number;
+    INVALIDATE: number;
+    DELETE: number;
+    NOOP: number;
+}
+
+/**
+ * 功能：描述单条提议在 mutation planner 中的决策结果。
+ * @param itemId 规划项唯一标识。
+ * @param targetKind 目标记录类型。
+ * @param action 最终动作。
+ * @param title 面向界面的短标题。
+ * @param compareKey 用于命中旧记录的规范比较键。
+ * @param normalizedText 归一化后的比较文本。
+ * @param targetRecordKey 执行时命中的目标记录键。
+ * @param existingRecordKeys 规划时参与比较的旧记录键列表。
+ * @param reasonCodes 决策原因码。
+ * @returns mutation planner 单项快照。
+ */
+export interface MemoryMutationPlanItem {
+    itemId: string;
+    targetKind: MemoryMutationTargetKind;
+    action: MemoryMutationAction;
+    title: string;
+    compareKey: string;
+    normalizedText: string;
+    targetRecordKey?: string;
+    existingRecordKeys: string[];
+    reasonCodes: string[];
+}
+
+/**
+ * 功能：保存最近一次长期记忆 mutation planner 的执行快照。
+ * @param source 触发来源。
+ * @param consumerPluginId 触发插件标识。
+ * @param generatedAt 规划时间。
+ * @param totalItems 本轮进入规划的总条数。
+ * @param appliedItems 本轮真正落库的条数。
+ * @param actionCounts 各类动作数量。
+ * @param items 最近若干条规划项快照。
+ * @returns mutation planner 摘要快照。
+ */
+export interface MemoryMutationPlanSnapshot {
+    source: string;
+    consumerPluginId: string;
+    generatedAt: number;
+    totalItems: number;
+    appliedItems: number;
+    actionCounts: MemoryMutationActionCounts;
+    items: MemoryMutationPlanItem[];
+}
+
 /**
  * 功能：描述自适应策略的可执行结果。
  * @param extractInterval 抽取触发间隔。
@@ -324,15 +405,28 @@ export interface SummaryPolicyOverride {
 }
 
 export interface PromptInjectionProfile {
-    allowSystem: boolean;
-    allowUser: boolean;
-    defaultInsert: PromptAnchorMode;
-    fallbackOrder: PromptAnchorMode[];
+    layoutMode: PromptLayoutMode;
+    insertionRole: PromptInsertionRole;
+    insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
-    renderStyle: PromptRenderStyle;
-    softPersonaMode: PromptSoftPersonaMode;
-    wrapTag: string;
     settingOnlyMinScore: number;
+}
+
+/**
+ * 功能：描述本轮 Memory Context 实际使用了哪些分层块。
+ * @param kind 分层块类型。
+ * @param actorKey 关联角色键。
+ * @param candidateCount 进入该分层块的候选数量。
+ * @param sectionHints 命中的区段列表。
+ * @param reasonCodes 形成该分层块的原因码。
+ * @returns 分层块使用记录。
+ */
+export interface MemoryContextBlockUsage {
+    kind: 'director_context' | 'active_character_memory';
+    actorKey: string | null;
+    candidateCount: number;
+    sectionHints: InjectionSectionName[];
+    reasonCodes: string[];
 }
 
 /**
@@ -358,12 +452,12 @@ export interface PreGenerationGateDecision {
     sectionsUsed: InjectionSectionName[];
     budgets: Partial<Record<InjectionSectionName, number>>;
     lorebookMode: LorebookGateMode;
-    anchorMode: PromptAnchorMode;
-    fallbackOrder: PromptAnchorMode[];
+    layoutMode: PromptLayoutMode;
+    insertionRole: PromptInsertionRole;
+    insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
-    renderStyle: PromptRenderStyle;
-    softPersonaMode: PromptSoftPersonaMode;
     shouldTrimPrompt: boolean;
+    blocksUsed: MemoryContextBlockUsage[];
     reasonCodes: string[];
     generatedAt: number;
 }
@@ -1208,14 +1302,10 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
 };
 
 export const DEFAULT_PROMPT_INJECTION_PROFILE: PromptInjectionProfile = {
-    allowSystem: false,
-    allowUser: true,
-    defaultInsert: 'after_last_system',
-    fallbackOrder: ['after_last_system', 'top'],
+    layoutMode: 'layered_memory_context',
+    insertionRole: 'user',
+    insertionPosition: 'before_last_user',
     queryMode: 'always',
-    renderStyle: 'xml',
-    softPersonaMode: 'continuity_note',
-    wrapTag: 'MEMORY_OS_CONTEXT',
     settingOnlyMinScore: 0.35,
 };
 
@@ -1300,6 +1390,15 @@ export const DEFAULT_RETRIEVAL_HEALTH: RetrievalHealthWindow = {
 export const DEFAULT_EXTRACT_HEALTH: ExtractHealthWindow = {
     recentTasks: [],
     lastAcceptedAt: 0,
+};
+
+export const DEFAULT_MEMORY_MUTATION_ACTION_COUNTS: MemoryMutationActionCounts = {
+    ADD: 0,
+    MERGE: 0,
+    UPDATE: 0,
+    INVALIDATE: 0,
+    DELETE: 0,
+    NOOP: 0,
 };
 
 export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
@@ -1503,6 +1602,7 @@ export interface MemoryOSChatState {
     ingestHealth?: IngestHealthWindow;
     retrievalHealth?: RetrievalHealthWindow;
     extractHealth?: ExtractHealthWindow;
+    lastMutationPlan?: MemoryMutationPlanSnapshot | null;
     retentionPolicy?: RetentionPolicy;
     retentionArchives?: RetentionArchives;
     manualOverrides?: ManualOverrides;

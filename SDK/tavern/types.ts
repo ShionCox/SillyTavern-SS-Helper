@@ -321,15 +321,16 @@ export interface SdkTavernPromptTargetEvent<
   messages: TMessage[];
 }
 
-export type SdkTavernPromptSystemInsertModeEvent =
+export type SdkTavernPromptInsertModeEvent =
   | "append"
   | "before_index"
   | "before_end_offset";
 
-export interface SdkTavernPromptSystemInsertOptionsEvent {
+export interface SdkTavernPromptInsertOptionsEvent {
+  role: "system" | "user" | "assistant";
   text?: string;
   template?: SdkTavernPromptMessageEvent | null;
-  insertMode?: SdkTavernPromptSystemInsertModeEvent;
+  insertMode?: SdkTavernPromptInsertModeEvent;
   insertBeforeIndex?: number;
   offsetFromEnd?: number;
 }

@@ -19,7 +19,7 @@ import { MetaManager } from '../core/meta-manager';
 import { ExtractManager } from '../core/extract-manager';
 import { InjectionManager } from '../injection/injection-manager';
 import { TemplateManager } from '../template/template-manager';
-import { ProposalManager } from '../proposal/proposal-manager';
+import { ProposalManager, buildStableProposalSummaryId } from '../proposal/proposal-manager';
 import { HybridSearchManager } from '../vector/hybrid-search';
 import { CompactionManager } from '../core/compaction-manager';
 import { WorldInfoWriter } from '../template/worldinfo-writer';
@@ -32,7 +32,9 @@ import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
 import { inferStructuredSeedWorldStateEntries } from '../core/world-state-seed';
 import { db, restoreArchivedMemoryChat } from '../db/db';
+import manifestJson from '../../manifest.json';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
@@ -59,15 +61,13 @@ import type {
     MemoryLifecycleState,
     MemoryQualityScorecard,
     MemoryTuningProfile,
+    MemoryMutationHistoryAction,
+    MemoryMutationTargetKind,
     OwnedMemoryState,
     PersonaMemoryProfile,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
-    PromptAnchorMode,
     PromptInjectionProfile,
-    PromptQueryMode,
-    PromptRenderStyle,
-    PromptSoftPersonaMode,
     RecallLogEntry,
     RelationshipState,
     RetentionPolicy,
@@ -84,6 +84,10 @@ import type {
     LogicTableRow,
     LogicalChatView,
 } from '../types';
+import type {
+    ProposalResult,
+    WriteRequest,
+} from '../proposal/types';
 import type { LatestRecallExplanation as SDKLatestRecallExplanation } from '../../../SDK/stx';
 
 const logger = new Logger('MemorySDK');
@@ -106,6 +110,36 @@ function resolveStoredColdStartLorebookSelection(
         return EMPTY_COLD_START_LOREBOOK_SELECTION;
     }
     return hasColdStartLorebookSelection(selection) ? selection : undefined;
+}
+
+/**
+ * 功能：构建长期记忆结构化写入时使用的稳定 factKey。
+ * @param chatKey 当前聊天键。
+ * @param type 事实类型。
+ * @param entity 绑定实体。
+ * @param path 路径。
+ * @returns 稳定 factKey。
+ */
+function buildStableFactKey(
+    chatKey: string,
+    type: string,
+    entity?: { kind: string; id: string },
+    path?: string,
+): string {
+    const entityPart = entity ? `${String(entity.kind ?? '').trim()}:${String(entity.id ?? '').trim()}` : '_';
+    const pathPart = String(path ?? '_').trim() || '_';
+    return `${String(chatKey ?? '').trim()}::${String(type ?? '').trim()}::${entityPart}::${pathPart}`;
+}
+
+/**
+ * 功能：构建统一写请求时使用的来源描述。
+ * @returns 写请求来源。
+ */
+function buildMemoryWriteSource(): { pluginId: string; version: string } {
+    return {
+        pluginId: MEMORY_OS_PLUGIN_ID,
+        version: String(manifestJson.version ?? '1.0.0').trim() || '1.0.0',
+    };
 }
 
 /**
@@ -166,6 +200,9 @@ export class MemorySDKImpl implements MemorySDK {
             this.chatStateManager,
         );
         this.proposalManager = new ProposalManager(chatKey, this.chatStateManager);
+        const writeGateway = {
+            requestWrite: (request: WriteRequest): Promise<ProposalResult> => this.proposalManager.processWriteRequest(request),
+        };
         this.hybridSearch = new HybridSearchManager(
             chatKey,
             this.eventsManager,
@@ -176,11 +213,29 @@ export class MemorySDKImpl implements MemorySDK {
         this.compactionManager = new CompactionManager(chatKey);
         this.worldInfoWriter = new WorldInfoWriter(chatKey);
         this.rowResolver = new RowResolver(this.chatStateManager, this.factsManager);
-        this.rowOperations = new RowOperationsManager(chatKey, this.chatStateManager, this.factsManager, this.auditManager);
+        this.rowOperations = new RowOperationsManager(chatKey, this.chatStateManager, this.factsManager, this.auditManager, writeGateway);
         this.promptTrimmer = new PromptTrimmer(chatKey, this.templateManager, this.chatStateManager, this.factsManager);
         this.chatViewManager = new ChatViewManager(chatKey);
         this.editorFacade = new MemoryEditorFacade(chatKey, this.templateManager, this.chatStateManager);
         this.logicTableFacade = new LogicTableFacade(chatKey, this.templateManager, this.chatStateManager, this.rowOperations);
+    }
+
+    /**
+     * 功能：向 proposal 主链发起一次受信任的结构化写请求。
+     * @param proposal 写入提议。
+     * @param reason 写入原因。
+     * @returns 写请求执行结果。
+     */
+    private async requestTrustedWrite(
+        proposal: WriteRequest['proposal'],
+        reason: string,
+    ): Promise<ProposalResult> {
+        return this.proposalManager.processWriteRequest({
+            source: buildMemoryWriteSource(),
+            chatKey: this.chatKey_,
+            proposal,
+            reason,
+        });
     }
 
     /**
@@ -373,44 +428,58 @@ export class MemorySDKImpl implements MemorySDK {
             },
             ts: Date.now(),
         };
-        await this.factsManager.upsert({
-            type: 'semantic.identity',
-            entity: roleEntity,
-            path: 'profile',
-            value: {
-                displayName: seed.identitySeed.displayName,
-                aliases: seed.identitySeed.aliases,
-                identity: seed.identitySeed.identity,
-                catchphrases: seed.identitySeed.catchphrases,
-                relationshipAnchors: seed.identitySeed.relationshipAnchors,
-                roleSummary: String(seed.aiSummary?.roleSummary ?? '').trim(),
-            },
-            confidence: 0.9,
-            provenance,
-        });
-        await this.factsManager.upsert({
-            type: 'semantic.style',
-            entity: roleEntity,
-            path: 'mode',
-            value: {
-                mode: seed.styleSeed.mode,
-                cues: seed.styleSeed.cues,
-                presetStyle: seed.presetStyle,
-                aiStyleCues: seed.aiSummary?.styleCues ?? [],
-            },
-            confidence: 0.8,
-            provenance,
-        });
-        await this.stateManager.set('/semantic/world/locations', seed.worldSeed.locations, { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/world/rules', seed.worldSeed.rules, { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/world/hardConstraints', seed.worldSeed.hardConstraints, { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/world/entities', seed.worldSeed.entities, { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/world/overview', String(seed.aiSummary?.worldSummary ?? '').trim(), { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/meta/activeLorebooks', seed.activeLorebooks, { sourceEventId: fingerprint });
-        await this.stateManager.set('/semantic/meta/groupMembers', seed.groupMembers, { sourceEventId: fingerprint });
+        await this.requestTrustedWrite({
+            facts: [
+                {
+                    factKey: buildStableFactKey(this.chatKey_, 'semantic.identity', roleEntity, 'profile'),
+                    targetRecordKey: buildStableFactKey(this.chatKey_, 'semantic.identity', roleEntity, 'profile'),
+                    action: 'auto',
+                    type: 'semantic.identity',
+                    entity: roleEntity,
+                    path: 'profile',
+                    value: {
+                        displayName: seed.identitySeed.displayName,
+                        aliases: seed.identitySeed.aliases,
+                        identity: seed.identitySeed.identity,
+                        catchphrases: seed.identitySeed.catchphrases,
+                        relationshipAnchors: seed.identitySeed.relationshipAnchors,
+                        roleSummary: String(seed.aiSummary?.roleSummary ?? '').trim(),
+                    },
+                    confidence: 0.9,
+                    provenance,
+                },
+                {
+                    factKey: buildStableFactKey(this.chatKey_, 'semantic.style', roleEntity, 'mode'),
+                    targetRecordKey: buildStableFactKey(this.chatKey_, 'semantic.style', roleEntity, 'mode'),
+                    action: 'auto',
+                    type: 'semantic.style',
+                    entity: roleEntity,
+                    path: 'mode',
+                    value: {
+                        mode: seed.styleSeed.mode,
+                        cues: seed.styleSeed.cues,
+                        presetStyle: seed.presetStyle,
+                        aiStyleCues: seed.aiSummary?.styleCues ?? [],
+                    },
+                    confidence: 0.8,
+                    provenance,
+                },
+            ],
+            patches: [
+                { op: 'replace', path: '/semantic/world/locations', value: seed.worldSeed.locations },
+                { op: 'replace', path: '/semantic/world/rules', value: seed.worldSeed.rules },
+                { op: 'replace', path: '/semantic/world/hardConstraints', value: seed.worldSeed.hardConstraints },
+                { op: 'replace', path: '/semantic/world/entities', value: seed.worldSeed.entities },
+                { op: 'replace', path: '/semantic/world/overview', value: String(seed.aiSummary?.worldSummary ?? '').trim() },
+                { op: 'replace', path: '/semantic/meta/activeLorebooks', value: seed.activeLorebooks },
+                { op: 'replace', path: '/semantic/meta/groupMembers', value: seed.groupMembers },
+            ],
+        }, `semantic_seed:${reason}`);
         const structuredSeedEntries = inferStructuredSeedWorldStateEntries(seed);
         for (const entry of structuredSeedEntries) {
-            await this.stateManager.set(entry.path, entry.value, { sourceEventId: fingerprint });
+            await this.requestTrustedWrite({
+                patches: [{ op: 'replace', path: entry.path, value: entry.value }],
+            }, `semantic_seed:structured:${reason}`);
         }
     }
 
@@ -470,49 +539,69 @@ export class MemorySDKImpl implements MemorySDK {
             if (summaryLines.length > 0) {
                 const summaryText = summaryLines.join('\n');
                 logger.info(`Cold-start extract 准备写入索引，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}, summaryLines=${summaryLines.length}, summaryLen=${summaryText.length}`);
-                await this.summariesManager.upsert({
+                const summaryId = buildStableProposalSummaryId({
+                    chatKey: this.chatKey_,
+                    consumerPluginId: MEMORY_OS_PLUGIN_ID,
                     level: 'scene',
                     title: 'Cold-start prime',
                     content: summaryText,
-                    source: {
-                        extractor: 'cold_start',
-                        provider: 'stx_memory_os',
-                        provenance: {
+                    visibleMessageIds: [],
+                    viewHash: '',
+                    ordinal: 0,
+                });
+                const writeResult = await this.requestTrustedWrite({
+                    summaries: [{
+                        summaryId,
+                        targetRecordKey: summaryId,
+                        action: 'auto',
+                        level: 'scene',
+                        title: 'Cold-start prime',
+                        content: summaryText,
+                        source: {
                             extractor: 'cold_start',
                             provider: 'stx_memory_os',
-                            fingerprint,
-                            source: {
-                                kind: 'cold_start',
-                                reason,
-                                viewHash: '',
-                                snapshotHash: '',
-                                messageIds: [],
-                                mutationKinds: [],
-                                repairGeneration: 0,
-                                ts: Date.now(),
+                            provenance: {
+                                extractor: 'cold_start',
+                                provider: 'stx_memory_os',
+                                fingerprint,
+                                source: {
+                                    kind: 'cold_start',
+                                    reason,
+                                    viewHash: '',
+                                    snapshotHash: '',
+                                    messageIds: [],
+                                    mutationKinds: [],
+                                    repairGeneration: 0,
+                                    ts: Date.now(),
+                                },
                             },
                         },
-                    },
-                });
-                await this.hybridSearch.indexText(summaryText, 'cold_start', {
-                    sourceRecordKey: fingerprint,
-                    sourceRecordKind: 'summary',
-                    ownerActorKey: null,
-                    sourceScope: 'world',
-                    memoryType: 'world',
-                    memorySubtype: 'global_rule',
-                    participantActorKeys: [],
-                    source: {
-                        kind: 'cold_start',
-                        reason,
-                        viewHash: '',
-                        snapshotHash: '',
-                        messageIds: [],
-                        mutationKinds: [],
-                        repairGeneration: 0,
-                        ts: Date.now(),
-                    },
-                });
+                    }],
+                }, `cold_start_extract:${reason}`);
+                if (this.chatStateManager) {
+                    const candidate = await this.chatStateManager.buildMemoryCandidate({
+                        candidateId: writeResult.applied.summaryIds[0] ?? summaryId,
+                        kind: 'summary',
+                        source: 'cold_start',
+                        summary: `Cold-start prime ${summaryText}`.trim(),
+                        payload: {
+                            level: 'scene',
+                            title: 'Cold-start prime',
+                            content: summaryText,
+                            source: {
+                                extractor: 'cold_start',
+                                provider: 'stx_memory_os',
+                                provenance: {
+                                    extractor: 'cold_start',
+                                    provider: 'stx_memory_os',
+                                    fingerprint,
+                                },
+                            },
+                        },
+                        extractedAt: Date.now(),
+                    });
+                    await this.chatStateManager.applyEncodingToRecord(writeResult.applied.summaryIds[0] ?? summaryId, 'summary', candidate.encoding);
+                }
             }
             logger.info(`Cold-start extract 完成，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
             await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
@@ -561,7 +650,7 @@ export class MemorySDKImpl implements MemorySDK {
 
     // 事实
     facts = {
-        upsert: (fact: {
+        upsert: async (fact: {
             factKey?: string;
             type: string;
             entity?: { kind: string; id: string };
@@ -570,7 +659,39 @@ export class MemorySDKImpl implements MemorySDK {
             confidence?: number;
             provenance?: any;
         }) => {
-            return this.factsManager.upsert(fact);
+            const factKey = String(fact.factKey ?? '').trim() || buildStableFactKey(this.chatKey_, fact.type, fact.entity, fact.path);
+            await this.requestTrustedWrite({
+                facts: [{
+                    factKey,
+                    targetRecordKey: factKey,
+                    action: fact.factKey ? 'update' : 'auto',
+                    type: fact.type,
+                    entity: fact.entity,
+                    path: fact.path,
+                    value: fact.value,
+                    confidence: fact.confidence,
+                    provenance: fact.provenance,
+                }],
+            }, 'sdk.facts.upsert');
+            if (this.chatStateManager) {
+                const candidate = await this.chatStateManager.buildMemoryCandidate({
+                    candidateId: factKey,
+                    kind: 'fact',
+                    source: 'memory_sdk',
+                    summary: `${String(fact.type ?? '').trim()} ${String(fact.path ?? '').trim()} ${JSON.stringify(fact.value ?? '')}`.trim(),
+                    payload: {
+                        type: fact.type,
+                        entity: fact.entity,
+                        path: fact.path,
+                        value: fact.value,
+                        confidence: fact.confidence,
+                        provenance: fact.provenance,
+                    },
+                    extractedAt: Date.now(),
+                });
+                await this.chatStateManager.applyEncodingToRecord(factKey, 'fact', candidate.encoding);
+            }
+            return factKey;
         },
         get: (factKey: string) => {
             return this.factsManager.get(factKey);
@@ -578,8 +699,24 @@ export class MemorySDKImpl implements MemorySDK {
         query: (opts: { type?: string; entity?: { kind: string; id: string }; pathPrefix?: string; limit?: number }) => {
             return this.factsManager.query(opts);
         },
-        remove: (factKey: string) => {
-            return this.factsManager.remove(factKey);
+        remove: async (factKey: string) => {
+            const existing = await this.factsManager.get(factKey);
+            if (!existing) {
+                return;
+            }
+            await this.requestTrustedWrite({
+                facts: [{
+                    factKey,
+                    targetRecordKey: factKey,
+                    action: 'delete',
+                    type: existing.type,
+                    entity: existing.entity,
+                    path: existing.path,
+                    value: existing.value,
+                    confidence: existing.confidence,
+                    provenance: existing.provenance,
+                }],
+            }, 'sdk.facts.remove');
         },
     };
 
@@ -589,10 +726,16 @@ export class MemorySDKImpl implements MemorySDK {
             return this.stateManager.get(path);
         },
         set: (path: string, value: any, meta?: { sourceEventId?: string }) => {
-            return this.stateManager.set(path, value, meta);
+            void meta;
+            return this.requestTrustedWrite({
+                patches: [{ op: 'replace', path, value }],
+            }, 'sdk.state.set').then((): void => undefined);
         },
         patch: (patches: Array<{ op: "add" | "replace" | "remove"; path: string; value?: any }>, meta?: any) => {
-            return this.stateManager.patch(patches, meta);
+            void meta;
+            return this.requestTrustedWrite({
+                patches,
+            }, 'sdk.state.patch').then((): void => undefined);
         },
         query: (prefix: string) => {
             return this.stateManager.query(prefix);
@@ -607,8 +750,48 @@ export class MemorySDKImpl implements MemorySDK {
 
     // 摘要
     summaries = {
-        upsert: (summary: { level: "message" | "scene" | "arc"; messageId?: string; title?: string; content: string; keywords?: string[] }) => {
-            return this.summariesManager.upsert(summary);
+        upsert: async (summary: { level: "message" | "scene" | "arc"; messageId?: string; title?: string; content: string; keywords?: string[] }) => {
+            const summaryId = buildStableProposalSummaryId({
+                chatKey: this.chatKey_,
+                consumerPluginId: MEMORY_OS_PLUGIN_ID,
+                level: summary.level,
+                title: summary.title,
+                content: summary.content,
+                keywords: summary.keywords,
+                visibleMessageIds: summary.messageId ? [summary.messageId] : [],
+                viewHash: '',
+                ordinal: 0,
+            });
+            await this.requestTrustedWrite({
+                summaries: [{
+                    summaryId,
+                    targetRecordKey: summaryId,
+                    action: 'auto',
+                    level: summary.level,
+                    messageId: summary.messageId,
+                    title: summary.title,
+                    content: summary.content,
+                    keywords: summary.keywords,
+                }],
+            }, 'sdk.summaries.upsert');
+            if (this.chatStateManager) {
+                const candidate = await this.chatStateManager.buildMemoryCandidate({
+                    candidateId: summaryId,
+                    kind: 'summary',
+                    source: 'memory_sdk',
+                    summary: `${String(summary.title ?? '').trim()} ${String(summary.content ?? '').trim()}`.trim(),
+                    payload: {
+                        level: summary.level,
+                        messageId: summary.messageId,
+                        title: summary.title,
+                        content: summary.content,
+                        keywords: summary.keywords,
+                    },
+                    extractedAt: Date.now(),
+                });
+                await this.chatStateManager.applyEncodingToRecord(summaryId, 'summary', candidate.encoding);
+            }
+            return summaryId;
         },
         query: (opts: { level?: string; sinceTs?: number; limit?: number }) => {
             return this.summariesManager.query(opts);
@@ -628,21 +811,14 @@ export class MemorySDKImpl implements MemorySDK {
         }) => {
             return this.injectionManager.buildContext(opts);
         },
-        setAnchorPolicy: (opts: {
-            allowSystem?: boolean;
-            allowUser?: boolean;
-            defaultInsert?: PromptAnchorMode;
-            fallbackOrder?: PromptAnchorMode[];
-            queryMode?: PromptQueryMode;
-            renderStyle?: PromptRenderStyle;
-            softPersonaMode?: PromptSoftPersonaMode;
-            wrapTag?: string;
+        setPromptInjectionProfile: (opts: {
+            queryMode?: 'always' | 'setting_only';
             settingOnlyMinScore?: number;
         }) => {
-            return this.injectionManager.setAnchorPolicy(opts);
+            return this.injectionManager.setPromptInjectionProfile(opts);
         },
-        getAnchorPolicy: (): PromptInjectionProfile => {
-            return this.injectionManager.getAnchorPolicy();
+        getPromptInjectionProfile: (): PromptInjectionProfile => {
+            return this.injectionManager.getPromptInjectionProfile();
         },
     };
 
@@ -742,12 +918,6 @@ export class MemorySDKImpl implements MemorySDK {
             return this.hybridSearch.search(query, options);
         },
         /**
-         * 为一段文本建立向量索引（异步，不阻塞主流程）
-         */
-        indexText: (text: string, bookId?: string) => {
-            return this.hybridSearch.indexText(text, bookId);
-        },
-        /**
          * 将混合检索结果格式化为可注入 Prompt 的字符串
          */
         formatForPrompt: (results: any[]) => {
@@ -805,7 +975,7 @@ export class MemorySDKImpl implements MemorySDK {
             }));
         },
         updateFact: (factKey: string | undefined, type: string, entity: { kind: string; id: string }, path: string, value: any) => {
-            return this.factsManager.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });
+            return this.facts.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });
         },
     };
 
@@ -1021,6 +1191,9 @@ export class MemorySDKImpl implements MemorySDK {
         },
         setMemoryTuningProfile: (profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile> => {
             return this.chatStateManager.setMemoryTuningProfile(profile);
+        },
+        getMutationHistory: (opts?: { limit?: number; recordKey?: string; targetKind?: MemoryMutationTargetKind; action?: MemoryMutationHistoryAction }) => {
+            return this.chatStateManager.getMutationHistory(opts);
         },
         getColdStartStage: () => {
             return this.chatStateManager.getColdStartStage();

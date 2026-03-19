@@ -1,446 +1,495 @@
-# 最优先的优化方向
+# MemoryOS 融合 Mem0 思路 + 提示词分层方案
 
-## 1. 把 recall 分成“全局池”和“角色池”
+## 一、目标
 
-这是我认为收益最高的一步。
+这份方案的目标不是把 MemoryOS 改成 Mem0，而是：
 
-你现在的 `RecallSourceContext` 已经包含：
+**保留你现在这套更强的 recall / rank / injection 主链，把 Mem0 最值得借鉴的“记忆演化能力”接进来，同时把动态记忆从 system 中剥离，改成分层注入。**
 
-* `logicalView`
-* `groupMemory`
-* `relationships`
-* `personaProfile`
-* `lifecycleIndex`
-* `chatStateManager` 
+也就是两件事一起做：
 
-这已经足够支持你做双池 recall。
-
-### 我建议怎么拆
-
-#### 全局池
-
-只放共享上下文：
-
-* recent events
-* shared scene / groupMemory
-* world state
-* lorebook
-* 共享 summary
-* 公共 relationship 变化
-
-这部分给“导演层”。
-
-#### 角色池
-
-只放当前 active actor 相关：
-
-* `ownerActorKey === activeActorKey` 的记忆
-* `perActorMetrics[activeActorKey]` 仍未 forgotten 的记忆
-* 当前 actor 对他人的 relationship
-* 当前 actor 的目标 / 情绪 /偏见
-
-这部分给“角色边界层”。
-
-### 为什么现在就适合做
-
-你类型里已经有：
-
-* `activeActorKey`
-* `personaMemoryProfiles`
-* `ownerActorKey`
-* `perActorMetrics`
-* `MemoryActorRetentionState` 
-
-所以不用重做模型，只是 recall planner / assembler 要学会按 actor 过滤。
+1. **融入 Mem0 风格的长期记忆 CRUD 流程**
+2. **把提示词改成“system 固定规则 + dynamic memory block + user raw input”的分层结构**
 
 ---
 
-## 2. 在 `RecallPlan` 里加一个“viewpoint”
+# 二、Mem0 能借鉴的核心，不是“查三条记忆塞 prompt”
 
-你现在 `RecallPlan` 已经有：
+Mem0 最值得借的是这条链：
 
-* intent
-* sections
-* budgets
-* sourceWeights
-* sourceLimits
-* sectionWeights
-* coarseTopK/fineTopK 
+1. 从对话里抽取事实
+2. 用新事实去召回近似旧记忆
+3. 让 LLM 决定 `ADD / UPDATE / DELETE / NONE`
+4. 当前有效记忆放向量库
+5. 变更历史单独记录 
 
-下一步最应该加的是：
+它的公开用法虽然看起来是 `search -> 拼 prompt -> add`，但真正强的地方其实是**记忆的演化流程**，不是 prompt 拼接本身 
 
-```ts
-viewpoint: {
-  mode: 'omniscient_director' | 'actor_bounded';
-  activeActorKey?: string | null;
-  allowSharedScene: boolean;
-  allowWorldState: boolean;
-  allowForeignPrivateMemory: boolean;
-}
-```
+对你来说，最合适的融合方式是：
 
-### 作用
-
-这样 planner 不只是决定“找哪些 source”，还决定“这轮用谁的视角找”。
-
-### 最实用的默认规则
-
-* narrator / scene continuation：`omniscient_director`
-* 角色台词 / 角色行动：`actor_bounded`
-
-这样模型还是一个，但 recall 不再是一锅炖。
+* **保留 MemoryOS 作为“召回与注入中枢”**
+* **引入 Mem0 风格的“记忆变更规划器”**
 
 ---
 
-## 3. 在 `buildScoredCandidate()` 里加入 actor 可见性特征
+# 三、建议新增一层：Memory Mutation Planner
 
-现在 `buildScoredCandidate()` 主要看：
+## 作用
 
-* keywordScore
-* vectorScore
-* recencyScore
-* continuityScore
-* relationshipScore
-* emotionScore
-* privacyPenalty
-* conflictPenalty
-* persona/tuning influence 
-
-这已经很好了，但还缺一个关键维度：
-
-### `actorVisibilityScore`
-
-比如：
-
-* 该条记忆 owner 就是当前 actor → 1.0
-* 该条记忆在 `perActorMetrics[currentActor]` 中且未 forgotten → 0.85
-* 共享场景 / 公共世界信息 → 0.7
-* 其他角色私人记忆 → 0 或极低
-
-然后把它并入 roughScore / fineScore。
-
-### 这样做的好处
-
-你就不是“最后在 prompt 提醒模型别乱用”，而是**在召回阶段就不让不该出现的私人记忆进来**。
-
----
-
-## 4. 把 `perActorMetrics` 真正接进 recall source
-
-这是目前最大机会点之一。
-
-现在 `MemoryLifecycleState` 明明已经有 `perActorMetrics?: MemoryActorRetentionMap` 
-但从 `shared.ts` 和各 source 的建 candidate 逻辑看，主要还是在读：
-
-* lifecycle.stage
-* relationScope
-* emotionTag
-* personaProfile
-* relationshipWeight 
-
-### 也就是说
-
-“每个 actor 的遗忘状态”这张好牌，当前还没真正成为 recall 主逻辑的一等特征。
-
-### 我建议
-
-在 `readLifecycle()` 基础上，再加：
-
-```ts
-readActorRetention(context, recordKey, actorKey)
-```
-
-然后在 candidate 里新增：
-
-* `actorForgetProbability`
-* `actorForgotten`
-* `actorRetentionBias`
-
-然后排序里做：
-
-* actorForgotten → 强抑制
-* forgetProbability 高 → 降分或改 tone
-* blur/distorted → uncertain tone
-
-这样“角色有自己的记性”才会真正体现在输出里。
-
----
-
-# 第二优先级优化
-
-## 5. 明确“共享记忆”和“私人记忆”的规则
+放在“抽取结果入库”这一段，不放在 recall 主链里。
 
 你现在已经有：
 
+* facts
+* summaries
+* state
+* lifecycle
+* vector recall
+* ranker
+* recall log
+
+但还缺一层明确的：
+
+**“新信息进来后，旧记忆要怎么演化”**
+
+---
+
+## 建议的数据流
+
+### 当前流
+
+用户消息 / 对话结果
+→ 抽取 facts / summaries / state
+→ 直接落库或更新部分状态
+
+### 改造后
+
+用户消息 / 对话结果
+→ 抽取 facts / summaries / state
+→ **Memory Mutation Planner**
+
+* 检索近似旧记录
+* 判断冲突 / 冗余 / 覆盖 / 补充
+* 输出 mutation actions
+  → 执行 mutation
+  → 更新 lifecycle / vector / history
+
+---
+
+## 建议的动作类型
+
+比 Mem0 多一点，更适合你当前结构：
+
+* `ADD`：新增独立记忆
+* `MERGE`：并入旧记忆但不替换主键
+* `UPDATE`：直接更新现有记录
+* `INVALIDATE`：旧记忆失效但保历史
+* `DELETE`：硬删，仅少数场景
+* `NOOP`：不处理
+
+Mem0 现在主要做 `ADD / UPDATE / DELETE / NONE` 
+你这里更适合把 `MERGE / INVALIDATE` 加进去，因为你本身 already 有 lifecycle、distorted、forgotten 这些更细状态。
+
+---
+
+# 四、建议加的模块
+
+基于你现在的主链结构，我建议新增 4 个模块。
+
+## 1. `memory-mutation-planner.ts`
+
+职责：
+
+* 输入：新抽取 facts / summaries / state
+* 输出：mutation actions
+
+内部流程：
+
+* 为每个新记忆构造 canonical text
+* 去向量层 / facts / summaries 召回近似旧记录
+* 汇总 lifecycle / relation / owner / sourceScope
+* 交给 LLM 或规则层决定动作
+
+---
+
+## 2. `memory-mutation-executor.ts`
+
+职责：
+
+* 真正执行 `ADD / MERGE / UPDATE / INVALIDATE / DELETE`
+* 更新 facts/summaries/state
+* 更新 lifecycle
+* 更新向量索引
+* 写 mutation history
+
+---
+
+## 3. `memory-mutation-history.ts`
+
+职责：
+
+* 记录每条长期记忆的变化史
+* 区分 recall log 和 mutation history
+
+### 注意
+
+`recall log` 记录的是：
+
+* 这轮检索选中了什么
+
+`mutation history` 记录的是：
+
+* 某条长期记忆什么时候新增、合并、失效、删除
+
+这两者不要混。
+
+---
+
+## 4. `memory-record-normalizer.ts`
+
+职责：
+
+* 给事实 / 摘要 / 状态生成稳定的 canonical form
+* 避免 vector reverse lookup 完全靠 normalize text 的脆弱映射
+
+---
+
+# 五、向量层要怎么借鉴 Mem0
+
+Mem0 的 vector store 很强调 metadata filter。默认就会围绕 `user_id / agent_id / run_id / actor_id` 做过滤，Qdrant 适配层甚至专门给这些字段建 payload index 
+
+这对你特别有价值，因为你正要做“角色边界”。
+
+---
+
+## 你这边建议给 vector chunk 增加的 metadata
+
+现在最应该补的是这些字段：
+
+* `sourceRecordKey`
+* `sourceRecordKind`
 * `ownerActorKey`
 * `sourceScope`
 * `memoryType`
-* `memorySubtype` 
-
-但系统还缺一个更直观的 recall 规则表。
-
-### 我建议直接定死
-
-#### 共享记忆
-
-可进入全局池：
-
-* world
-* current_scene
-* current_conflict
-* public event
-* shared relationship shift
-
-#### 私人记忆
-
-只进入角色池：
-
-* secret
-* promise
-* emotion_imprint
-* bond
-* self-identity detail
-* private preference
-
-#### 模糊地带
-
-按 `sourceScope` 和 `ownerActorKey` 判：
-
-* `sourceScope = group/world` → 偏共享
-* `sourceScope = self/target` → 偏私人
-
-这样后续 source provider 写起来会非常清楚。
+* `memorySubtype`
+* `isShared`
+* `createdAt`
+* `updatedAt`
+* `visibilityActors`（可选）
 
 ---
 
-## 6. 给 ranker 增加“角色边界压制”
+## 这样有什么用
 
-`rankRecallCandidates()` 现在已经有：
+### 1. 不再靠 normalized text 反查原记录
 
-* priority
-* duplicate suppression
-* visible duplicate suppression
-* contradiction penalty
-* token cost penalty
-* scene continuity bonus 等 
+你现在的向量链里，命中后回 facts/summaries 很大程度还是靠文本归一化映射，这块脆。
+有了 `sourceRecordKey` 之后，hit 一回来就能精准回源。
 
-下一步再加一个规则就会非常强：
+### 2. 角色边界能前移到向量检索层
 
-### `foreign_private_memory_suppressed`
+以后 actor-bounded 模式下，你就能先过滤：
 
-触发条件：
+* owner 是当前 actor 的
+* 或 shared memory
+* 或当前 actor 有可见性
 
-* actor-bounded mode
-* candidate 属于其他 actor 的私人记忆
-* 且不是共享 scene/world
+而不是向量全召回回来，再靠 ranker 压。
 
-那么：
+### 3. Mutation Planner 更容易用
 
-* 降分
-* 标记 reasonCodes
-* 默认不 selected
+新 fact 来了，直接：
 
-### 这样效果会很明显
-
-模型还是用统一 prompt，但不会再轻易表现成“所有角色共享脑子”。
+* embed
+* 搜近似
+* 看 sourceRecordKey / ownerActorKey / memorySubtype
+* 再决定 UPDATE / MERGE / INVALIDATE
 
 ---
 
-## 7. 让 explanation 直接展示“为什么这条记忆能被当前角色看到”
+# 六、MemoryOS 融合 Mem0 的完整新流程
 
-`LatestRecallExplanation` 现在已经很好了，但它更偏：
+## A. 写入链（长期记忆演化链）
 
-* selected
-* conflictSuppressed
-* rejectedCandidates 
+### Step 1
 
-下一步如果你真要把“角色边界”做成系统卖点，解释层最好加两个 reason 方向：
+新一轮消息 / outcome 进入抽取层
 
-* `viewpoint:shared`
-* `viewpoint:owned_by_actor`
-* `viewpoint:retained_for_actor`
-* `viewpoint:foreign_private_suppressed`
+### Step 2
 
-这样你调试的时候会特别直观。
+抽取出：
 
----
+* facts
+* summaries
+* state mutations
 
-# 第三优先级优化
+### Step 3
 
-## 8. 让 `groupMemory.actorSalience` 真正驱动 active actor
+进入 `MemoryMutationPlanner`
+对每条抽取结果：
 
-你现在 `groupMemory` 已经有：
+* 去 vector / facts / summaries 找近似旧记录
+* 结合 lifecycle / ownerActorKey / sourceScope / relation scope
+* 判断动作：
 
-* lanes
-* sharedScene
-* actorSalience 
+  * ADD
+  * MERGE
+  * UPDATE
+  * INVALIDATE
+  * NOOP
 
-而 `ChatStateManager` 里也会根据 view 重建 lanes 和 salience 
+### Step 4
 
-### 但下一步应该更进一步
+`MemoryMutationExecutor` 执行动作
 
-每轮生成前先决定：
+### Step 5
 
-* 当前主视角 actorKey
-* 次要相关 actorKeys
-* 全局池和角色池各自的 budget
+写：
 
-比如：
-
-* 当前说话人 actor → 主
-* salience top1/2 → 辅
-* 其他人只走共享信息
-
-这样 recall 会更像“场上谁在活跃，就优先给谁的脑子”。
+* structured store
+* vector index
+* mutation history
+* lifecycle delta
 
 ---
 
-## 9. relationship 也该逐步接入统一遗忘/可见性
+## B. 读取链（你现在已经比较成熟）
 
-这是现在还不够统一的一层。
+保留现有：
 
-`RelationshipState` 目前是结构化状态，没有原生 `forgetProbability / forgotten` 字段 
-所以你现在虽然能用 relationship 做 recall weight，但还不够像“角色自己的关系记忆”。
+* `planRecall`
+* `collectRecallCandidates`
+* `rankRecallCandidates`
+* `cutRecallCandidatesByBudget`
+* `render`
 
-### 建议
+只要再补两个特性：
 
-短期先不改表结构太猛，可以先：
+### 1. actor visibility
 
-* 保留 `relationship_memory` 作为关系真相源
-* 在 recall 阶段根据 active actor 和生命周期，临时映射出“该 actor 对这段关系的可见性/记忆强度”
-* 后面再决定要不要把遗忘字段真正写回 relationship rows
+把 `ownerActorKey / perActorMetrics / actorForgetProbability` 接进 candidate scoring
 
----
+### 2. vector direct source mapping
 
-## 10. vector source 要改成“直接回源记录”，别再靠文本反查
-
-这是架构外但非常值的一刀。
-
-现在 `vector-source.ts` 还是：
-
-* search hits
-* normalized content
-* 去 factMap/summaryMap 反查原记录 
-
-### 问题
-
-这会有偶发错配/丢配。
-
-### 最值得改的方式
-
-索引时直接在 chunk metadata 里带：
-
-* sourceRecordKey
-* sourceRecordKind
-* ownerActorKey
-* sourceScope
-* maybe memoryType / memorySubtype
-
-这样向量 hit 一回来，就直接知道：
-
-* 它是谁的记忆
-* 它是不是私人记忆
-* 当前 actor 能不能看
-
-这个改动和“角色边界 recall”是强耦合的，收益很大。
+向量候选直接基于 `sourceRecordKey` 回源
 
 ---
 
-# 冗余和结构清理建议
+# 七、提示词分层方案
 
-## 11. 把 `InjectionManager` 里的旧 section builder 残留删掉
-
-这是现在最明显的技术债。
-
-当前主链已经是 candidate 驱动，但文件里还残留大量旧函数：
-
-* `buildFactsSection`
-* `buildSummarySection`
-* `buildWorldStateSectionV2`
-* `buildRelationshipsSection`
-* `buildLastSceneSection`
-* `scoreSectionCandidate`
-* `RecallSectionCandidate` 等 
-
-### 我的建议
-
-这批东西如果确认不再走主链，就：
-
-* 直接删
-* 不要再留在主注入文件里
-
-因为现在最大的可维护性负担，就是“新架构已经成立，但旧流还躺在一个大文件里”。
+你前面说“动态记忆不要放 system，放用户内容尾部更好”，我认同方向，但我建议你**不要简单拼在用户原文后面**，而是做成清晰的三层。
 
 ---
 
-## 12. 再把 `InjectionManager` 瘦一层
+## 分层目标
 
-我会继续拆出：
+### system
 
-* `recall-context-builder.ts`
-* `prompt-memory-renderer.ts`
-* `recall-log-mapper.ts`
-* `viewpoint-policy.ts`
+只放固定规则，不放动态记忆。
 
-这样以后你调“角色边界”时，只改 recall 层和 viewpoint 层，不会碰太多 prompt orchestration。
+### dynamic memory block
 
----
+放本轮召回内容，结构化表达。
 
-# 如果你要一套最实际的优化落地顺序
+### user raw input
 
-我建议按下面顺序做，性价比最高：
-
-## 第一步
-
-**引入 viewpoint 模式**
-
-* 在 `RecallPlan` 里加 active actor / viewpoint
-* planner 决定这轮是 director 还是 actor-bounded
-
-## 第二步
-
-**candidate 增加 actor 可见性**
-
-* 读取 ownerActorKey / perActorMetrics
-* 加 `actorVisibilityScore`
-* ranker 加 `foreign_private_memory_suppressed`
-
-## 第三步
-
-**双池注入**
-
-* Global Director Context
-* Active Character Memory
-
-## 第四步
-
-**vector metadata 直连回源**
-
-* 不再靠文本反查
-
-## 第五步
-
-**清理旧 section builder / 瘦身 InjectionManager**
-
-* 收技术债
+保留用户原始输入，不被污染。
 
 ---
 
-# 最后的整体判断
+## 推荐结构
 
-你这套系统最新版已经不需要“重新设计一遍”，而是应该进入：
+## 第一层：System Rules
 
-**从“主链正确”升级到“视角正确”。**
+只放稳定约束，例如：
 
-也就是：
+* 你负责导演整体输出，但角色不能全知
+* 角色台词必须符合自身已知记忆
+* 私人记忆不能跨角色直接借用
+* 已遗忘内容只能以模糊、不确定口吻表现
+* narrator 可以更接近全局视角，角色发言必须角色视角
 
-* 现在已经会找记忆了
-* 下一步要学会“按谁的脑子找记忆”
+这部分尽量短，长期稳定。
 
-这是最关键的升级方向。
+---
 
-一句话总结：
+## 第二层：Dynamic Memory Context
 
-**保留 AI 的上帝视角调度能力，但把角色边界前移到 recall/rank 阶段，而不是等 prompt 最后再口头提醒。**
+这是每轮动态渲染的 block，不属于 system。
 
-如果你愿意，我下一条可以直接给你一份 **“按文件修改的具体优化 patch 方案”**。
+建议拆成两块：
+
+### Global Director Context
+
+内容包括：
+
+* 当前场景
+* 最近公开事件
+* 世界规则相关约束
+* 共享关系变化
+
+### Active Character Memory
+
+内容包括：
+
+* 当前主角色记得的内容
+* 当前主角色对他人的态度
+* 当前角色忘记/模糊的内容
+* 当前角色目标或情绪
+
+---
+
+## 第三层：User Input
+
+只保留用户当前这句话。
+
+---
+
+# 八、推荐的提示词排布
+
+我建议最终变成：
+
+```text id="8vw0n4"
+[System Rules]
+...固定规则...
+
+[Dynamic Memory Context]
+<director_context>
+...共享上下文...
+</director_context>
+
+<active_character_memory actor="xxx">
+...当前角色可见记忆...
+</active_character_memory>
+
+[User Message]
+...用户原话...
+```
+
+### 为什么这样比“直接放 system”更好
+
+因为动态记忆不是规则，而是本轮证据。
+system 应该只保稳定规则，不应该每轮被 recall 内容污染。
+
+---
+
+# 九、怎么接到你现在的代码上
+
+## 1. `RecallPlan` 增加 viewpoint
+
+新增：
+
+* `mode: 'omniscient_director' | 'actor_bounded'`
+* `activeActorKey`
+* `allowSharedScene`
+* `allowWorldState`
+* `allowForeignPrivateMemory`
+
+这样 planner 不只是决定 sourceWeights，还决定“这轮按谁的脑子取记忆”。
+
+---
+
+## 2. `RecallAssembler` 产出双池候选
+
+不是只出一个大池，而是：
+
+* `globalCandidates`
+* `actorCandidates`
+
+然后各自 rank / budget cut。
+
+---
+
+## 3. `RecallRanker` 增加 actor visibility 规则
+
+新特征：
+
+* `actorVisibilityScore`
+* `actorForgotten`
+* `foreignPrivatePenalty`
+
+让不该被当前角色看到的记忆，在 recall 阶段就降掉。
+
+---
+
+## 4. `PromptMemoryRenderer` 分层渲染
+
+把现在的一坨 injected text 改成两块：
+
+* `renderDirectorContext(...)`
+* `renderActiveCharacterMemory(...)`
+
+然后最后统一封装成 memory block。
+
+---
+
+# 十、建议的落地顺序
+
+## 第一阶段
+
+先做提示词分层，不动 mutation planner。
+
+目标：
+
+* system 变短
+* dynamic memory block 脱离 system
+* 支持 global + actor 两块上下文
+
+这个改动快，收益立刻可见。
+
+---
+
+## 第二阶段
+
+补 vector metadata：
+
+* `sourceRecordKey`
+* `ownerActorKey`
+* `sourceScope`
+* `memorySubtype`
+
+目标：
+
+* 让 vector recall 更稳
+* 为角色边界过滤打底
+
+---
+
+## 第三阶段
+
+上 `MemoryMutationPlanner`
+
+目标：
+
+* 新信息不再只是“直接写入”
+* 而是进入长期记忆 CRUD 流
+
+---
+
+## 第四阶段
+
+补 `memory mutation history`
+
+目标：
+
+* 让长期记忆演化可追踪、可解释
+
+---
+
+# 十一、我给你的最终建议
+
+如果只用一句话概括这份方案：
+
+**MemoryOS 不要学 Mem0 的“简化 prompt 用法”，而要学它的“长期记忆 CRUD 机制”；同时把动态记忆从 system 中拿出来，改成“固定规则在 system、动态记忆做独立 memory block、用户原话单独保留”的三层提示词结构。**
+
+---
+
+# 十二、你可以直接采用的版本
+
+## 融合 Mem0 的一句话架构
+
+**Extract → Retrieve similar old memory → Decide mutation → Apply mutation → Recall → Rank → Layered prompt injection**
+
+## 提示词分层的一句话架构
+
+**System Rules + Director Context + Active Character Memory + User Raw Input**

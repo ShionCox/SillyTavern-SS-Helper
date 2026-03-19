@@ -1,6 +1,8 @@
 import { db, type DBEvent } from '../db/db';
 import { SummariesManager } from './summaries-manager';
 import { StateManager } from './state-manager';
+import { ProposalManager } from '../proposal/proposal-manager';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
  * Compaction 管理器 —— 解决事件流越用越大的问题
@@ -14,6 +16,7 @@ export class CompactionManager {
     private chatKey: string;
     private summariesManager: SummariesManager;
     private stateManager: StateManager;
+    private proposalManager: ProposalManager;
 
     /** 默认触发阈值（可通过 setThresholds 覆盖） */
     private eventThreshold = 5000;
@@ -23,6 +26,7 @@ export class CompactionManager {
         this.chatKey = chatKey;
         this.summariesManager = new SummariesManager(chatKey);
         this.stateManager = new StateManager(chatKey);
+        this.proposalManager = new ProposalManager(chatKey);
     }
 
     /**
@@ -95,16 +99,30 @@ export class CompactionManager {
             const firstEvent = groupEvents[0]!;
             const lastEvent = groupEvents[groupEvents.length - 1]!;
 
-            await this.summariesManager.upsert({
-                level: 'scene',
-                title: `${type} 事件聚合 (${groupEvents.length} 条)`,
-                content,
-                keywords: [type, ...this.extractKeywords(groupEvents)],
-                range: {
-                    fromMessageId: firstEvent.refs?.messageId,
-                    toMessageId: lastEvent.refs?.messageId,
+            const summaryId = this.buildRuleSummaryId(type, groupEvents);
+            await this.proposalManager.processWriteRequest({
+                source: {
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    version: '1.0.0',
                 },
-                source: { extractor: 'rule' },
+                chatKey: this.chatKey,
+                reason: 'compaction.rule_summary',
+                proposal: {
+                    summaries: [{
+                        summaryId,
+                        targetRecordKey: summaryId,
+                        action: 'auto',
+                        level: 'scene',
+                        title: `${type} 事件聚合 (${groupEvents.length} 条)`,
+                        content,
+                        keywords: [type, ...this.extractKeywords(groupEvents)],
+                        range: {
+                            fromMessageId: firstEvent.refs?.messageId,
+                            toMessageId: lastEvent.refs?.messageId,
+                        },
+                        source: { extractor: 'rule' },
+                    }],
+                },
             });
             summariesCreated++;
         }
@@ -193,9 +211,22 @@ export class CompactionManager {
         }
 
         // 将回放结果写入 world_state
-        for (const [path, value] of Object.entries(currentState)) {
-            await this.stateManager.set(path, value);
-            statesUpdated++;
+        const patches = Object.entries(currentState).map(([path, value]) => ({
+            op: 'replace' as const,
+            path,
+            value,
+        }));
+        if (patches.length > 0) {
+            await this.proposalManager.processWriteRequest({
+                source: {
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    version: '1.0.0',
+                },
+                chatKey: this.chatKey,
+                reason: 'compaction.replay_to_state',
+                proposal: { patches },
+            });
+            statesUpdated = patches.length;
         }
 
         return { statesUpdated };
@@ -235,5 +266,28 @@ export class CompactionManager {
             if (e.source?.pluginId) keywords.add(e.source.pluginId);
         }
         return Array.from(keywords).slice(0, 10);
+    }
+
+    /**
+     * 功能：为压缩生成稳定摘要 ID。
+     * @param type 事件类型。
+     * @param events 事件分组。
+     * @returns 稳定摘要 ID。
+     */
+    private buildRuleSummaryId(type: string, events: DBEvent[]): string {
+        const first = events[0]!;
+        const last = events[events.length - 1]!;
+        const payload = [
+            this.chatKey,
+            String(type ?? '').trim(),
+            String(first.refs?.messageId ?? '').trim(),
+            String(last.refs?.messageId ?? '').trim(),
+            String(events.length),
+        ].join('::');
+        let hash = 5381;
+        for (let index = 0; index < payload.length; index += 1) {
+            hash = ((hash << 5) + hash) ^ payload.charCodeAt(index);
+        }
+        return `managed:compaction:${(hash >>> 0).toString(16)}`;
     }
 }

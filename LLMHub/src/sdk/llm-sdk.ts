@@ -882,6 +882,7 @@ export class LLMSDKImpl {
 
     private attachRecordDebug(record: RequestRecord, result: {
         rawResponseText?: string;
+        providerResponse?: unknown;
         parsedResponse?: unknown;
         normalizedResponse?: unknown;
         validationErrors?: string[];
@@ -889,6 +890,7 @@ export class LLMSDKImpl {
         reasonCode?: string;
     }): void {
         const hasDebug = result.rawResponseText != null
+            || result.providerResponse !== undefined
             || result.parsedResponse !== undefined
             || result.normalizedResponse !== undefined
             || (Array.isArray(result.validationErrors) && result.validationErrors.length > 0)
@@ -897,6 +899,7 @@ export class LLMSDKImpl {
 
         record.debug = {
             rawResponseText: result.rawResponseText,
+            providerResponse: result.providerResponse,
             parsedResponse: result.parsedResponse,
             normalizedResponse: result.normalizedResponse,
             validationErrors: result.validationErrors,
@@ -979,6 +982,10 @@ export class LLMSDKImpl {
 
         const provider = this.router.getProvider(resolved.resourceId);
         if (!provider?.embed) {
+            this.attachRecordDebug(record, {
+                error: '当前资源不支持 embedding',
+                reasonCode: 'provider_unavailable',
+            });
             this.emitLifecycle(args, record, {
                 stage: 'failed',
                 message: '当前资源不支持 embedding',
@@ -988,6 +995,10 @@ export class LLMSDKImpl {
         }
 
         try {
+            this.attachProviderRequestSnapshot(record, {
+                texts: args.texts,
+                model: resolved.model,
+            });
             this.emitLifecycle(args, record, {
                 stage: 'provider_requesting',
                 message: '正在执行向量请求',
@@ -996,6 +1007,9 @@ export class LLMSDKImpl {
                 progress: 0.65,
             });
             const response = await provider.embed({ texts: args.texts, model: resolved.model });
+            this.attachRecordDebug(record, {
+                providerResponse: response,
+            });
             const meta: LLMRunMeta = {
                 requestId: record.requestId,
                 resourceId: resolved.resourceId,
@@ -1013,8 +1027,12 @@ export class LLMSDKImpl {
                 model: resolved.model,
                 progress: 1,
             });
-            return { ok: true, vectors: response.embeddings, model: resolved.model, meta };
+            return { ok: true, vectors: response.embeddings, model: resolved.model, meta, providerResponse: response };
         } catch (error) {
+            this.attachRecordDebug(record, {
+                error: (error as Error).message,
+                reasonCode: 'exception',
+            });
             this.emitLifecycle(args, record, {
                 stage: 'failed',
                 message: (error as Error).message,
@@ -1053,6 +1071,12 @@ export class LLMSDKImpl {
         const provider = this.router.getProvider(resolved.resourceId);
         if (provider?.rerank) {
             try {
+                this.attachProviderRequestSnapshot(record, {
+                    query: args.query,
+                    docs: args.docs,
+                    topK: args.topK,
+                    model: resolved.model,
+                });
                 this.emitLifecycle(args, record, {
                     stage: 'provider_requesting',
                     message: '正在执行重排请求',
@@ -1065,6 +1089,9 @@ export class LLMSDKImpl {
                     docs: args.docs,
                     topK: args.topK,
                     model: resolved.model,
+                });
+                this.attachRecordDebug(record, {
+                    providerResponse: response,
                 });
                 const meta: LLMRunMeta = {
                     requestId: record.requestId,
@@ -1083,8 +1110,12 @@ export class LLMSDKImpl {
                     model: resolved.model,
                     progress: 1,
                 });
-                return { ok: true, results: response.results, resource: resolved.resourceId, meta };
+                return { ok: true, results: response.results, resource: resolved.resourceId, meta, providerResponse: response };
             } catch (error) {
+                this.attachRecordDebug(record, {
+                    error: (error as Error).message,
+                    reasonCode: 'exception',
+                });
                 this.emitLifecycle(args, record, {
                     stage: 'failed',
                     message: (error as Error).message,
@@ -1119,7 +1150,16 @@ export class LLMSDKImpl {
             fallbackUsed: true,
             progress: 1,
         });
-        return { ok: true, results: scored, resource: `${resolved.resourceId}:fallback`, fallbackUsed: true };
+        this.attachRecordDebug(record, {
+            providerResponse: { results: scored },
+        });
+        return {
+            ok: true,
+            results: scored,
+            resource: `${resolved.resourceId}:fallback`,
+            fallbackUsed: true,
+            providerResponse: { results: scored },
+        };
     }
 
     /** 尝试单个资源执行请求 */
@@ -1139,6 +1179,7 @@ export class LLMSDKImpl {
         cost?: number;
         reasonCode?: string;
         rawResponseText?: string;
+        providerResponse?: unknown;
         parsedResponse?: unknown;
         normalizedResponse?: unknown;
         validationErrors?: string[];
@@ -1170,6 +1211,7 @@ export class LLMSDKImpl {
                         retryable: true,
                         reasonCode: 'invalid_json',
                         rawResponseText: response.content,
+                        providerResponse: response,
                         providerRequest: response.debugRequest,
                     };
                 }
@@ -1191,6 +1233,7 @@ export class LLMSDKImpl {
                             retryable: true,
                             reasonCode: 'schema_validation_failed',
                             rawResponseText: response.content,
+                            providerResponse: response,
                             parsedResponse: parsed.data,
                             normalizedResponse: postProcessedInput,
                             validationErrors: validation.errors,
@@ -1203,6 +1246,7 @@ export class LLMSDKImpl {
                         ok: true,
                         data: validation.data,
                         rawResponseText: response.content,
+                        providerResponse: response,
                         parsedResponse: parsed.data,
                         normalizedResponse: postProcessedInput,
                         providerRequest: response.debugRequest,
@@ -1211,13 +1255,14 @@ export class LLMSDKImpl {
 
                 this.budgetManager.recordSuccess(consumer);
                 return {
-                    ok: true,
-                    data: postProcessedInput,
-                    rawResponseText: response.content,
-                    parsedResponse: parsed.data,
-                    normalizedResponse: postProcessedInput,
-                    providerRequest: response.debugRequest,
-                };
+                ok: true,
+                data: postProcessedInput,
+                rawResponseText: response.content,
+                providerResponse: response,
+                parsedResponse: parsed.data,
+                normalizedResponse: postProcessedInput,
+                providerRequest: response.debugRequest,
+            };
             }
 
             this.budgetManager.recordSuccess(consumer);
@@ -1225,6 +1270,7 @@ export class LLMSDKImpl {
                 ok: true,
                 data: response.content,
                 rawResponseText: response.content,
+                providerResponse: response,
                 providerRequest: response.debugRequest,
             };
         } catch (error) {

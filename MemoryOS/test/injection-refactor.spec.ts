@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatStateManager } from '../src/core/chat-state-manager';
 import { buildPreparedRecallContext } from '../src/injection/recall-context-builder';
-import { buildSectionText, renderInjectedContext } from '../src/injection/prompt-memory-renderer';
+import { buildLayeredMemoryContext, buildSectionText } from '../src/injection/prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries, toRecallLogRecordKind } from '../src/injection/recall-log-mapper';
-import type { RecallCandidate } from '../src/types';
+import type { RecallCandidate, RecallPlan } from '../src/types';
+import { insertTavernPromptMessageEvent, findLastTavernPromptUserIndexEvent } from '../../SDK/tavern';
 
 describe('注入重构模块', (): void => {
     it('可以准备稳定的召回上下文', async (): Promise<void> => {
@@ -113,11 +114,88 @@ describe('注入重构模块', (): void => {
             selected: true,
             reasonCodes: [],
         };
-        const sectionText = buildSectionText('FACTS', [candidate], 120, { renderStyle: 'markdown', softPersonaMode: 'scene_note', defaultInsert: 'after_last_system', fallbackOrder: ['after_last_system'], queryMode: 'always', allowSystem: true, allowUser: true, wrapTag: 'memory', settingOnlyMinScore: 0.2 });
+        const sectionText = buildSectionText('FACTS', [candidate], 120);
         expect(sectionText).toContain('【事实】');
         expect(sectionText).toContain('旧城门');
-        const renderedText = renderInjectedContext('第一行\n第二行', { renderStyle: 'compact_kv', softPersonaMode: 'hidden_context_summary', defaultInsert: 'after_last_system', fallbackOrder: ['after_last_system'], queryMode: 'always', allowSystem: true, allowUser: true, wrapTag: 'memory', settingOnlyMinScore: 0.2 }, 'story_continue');
-        expect(renderedText).toContain('隐藏上下文摘要');
+        const layeredPlan: RecallPlan = {
+            intent: 'story_continue',
+            sections: ['FACTS'],
+            sectionBudgets: { FACTS: 120 },
+            maxTokens: 240,
+            sourceWeights: {
+                facts: 1,
+                summaries: 0.8,
+                state: 0.7,
+                relationships: 0.5,
+                events: 1,
+                vector: 0.6,
+                lorebook: 0.3,
+            },
+            sourceLimits: {},
+            sectionWeights: { FACTS: 1 },
+            coarseTopK: 8,
+            fineTopK: 4,
+            viewpoint: {
+                mode: 'actor_bounded',
+                activeActorKey: 'actor_a',
+                allowSharedScene: true,
+                allowWorldState: true,
+                allowForeignPrivateMemory: false,
+                focus: {
+                    primaryActorKey: 'actor_a',
+                    secondaryActorKeys: [],
+                    budgetShare: {
+                        global: 0.5,
+                        primaryActor: 0.5,
+                        secondaryActors: 0,
+                    },
+                    reasonCodes: ['focus:explicit_active_actor'],
+                },
+            },
+            reasonCodes: [],
+        };
+        const layeredContext = buildLayeredMemoryContext({
+            candidates: [
+                { ...candidate, visibilityPool: 'global', selected: true },
+                {
+                    ...candidate,
+                    candidateId: 'c2',
+                    recordKey: 'fact-2',
+                    rawText: '角色 a 记得旧约定',
+                    renderedLine: '- 角色 a 记得旧约定',
+                    visibilityPool: 'actor',
+                    selected: true,
+                    sectionHint: 'FACTS',
+                    finalScore: 0.82,
+                },
+            ],
+            plan: layeredPlan,
+        });
+        expect(layeredContext.text).toContain('[Memory Context]');
+        expect(layeredContext.text).toContain('<director_context>');
+        expect(layeredContext.text).toContain('<active_character_memory actor="actor_a">');
+        expect(layeredContext.blocksUsed.map((block) => block.kind)).toEqual(['director_context', 'active_character_memory']);
+        expect(layeredContext.text).not.toContain('不存在的块');
+    });
+
+    it('可以把 Memory Context 插入到最后一条真实用户消息之前', (): void => {
+        const promptMessages = [
+            { role: 'system', is_system: true, content: '系统' },
+            { role: 'user', is_user: true, content: '第一句' },
+            { role: 'assistant', content: '回答一' },
+            { role: 'user', is_user: true, content: '最后一句' },
+        ];
+        const insertIndex = findLastTavernPromptUserIndexEvent(promptMessages);
+        insertTavernPromptMessageEvent(promptMessages, {
+            role: 'user',
+            text: '[Memory Context]\n<director_context>\n【事实】\n- 旧城门\n</director_context>',
+            insertMode: 'before_index',
+            insertBeforeIndex: insertIndex,
+            template: promptMessages[Math.max(0, insertIndex - 1)] ?? promptMessages[0],
+        });
+
+        expect(promptMessages[insertIndex]?.content ?? promptMessages[insertIndex]?.mes).toContain('[Memory Context]');
+        expect(promptMessages[insertIndex + 1]?.content ?? promptMessages[insertIndex + 1]?.mes).toBe('最后一句');
     });
 
     it('可以映射召回日志与解释快照', async (): Promise<void> => {

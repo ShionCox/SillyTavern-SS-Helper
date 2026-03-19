@@ -62,7 +62,7 @@ export type {
     MemoryOSChatState, RetentionPolicy, StrategyDecision,
     AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
     TurnLifecycle, TurnKind, TurnRecord, LogicalChatView, LogicalMessageNode, ChatMutationKind, ChatArchiveState,
-    ColdStartStage, MutationRepairTask,
+    ColdStartStage, MutationRepairTask, MemoryMutationAction, MemoryMutationActionCounts, MemoryMutationPlanItem, MemoryMutationPlanSnapshot, MemoryMutationTargetKind,
     RowAliasIndex, RowRedirects, RowTombstones,
 } from './types/chat-state';
 export type {
@@ -112,12 +112,11 @@ import { ChatLifecycleManager } from './core/chat-lifecycle-manager';
 import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
-    findFirstTavernPromptSystemIndexEvent,
-    findLastTavernPromptSystemIndexEvent,
+    findLastTavernPromptUserIndexEvent,
     getCurrentTavernCharacterSnapshotEvent,
     getTavernMessageTextEvent,
     getTavernPromptMessageTextEvent,
-    insertTavernPromptSystemMessageEvent,
+    insertTavernPromptMessageEvent,
     isTavernPromptSystemMessageEvent,
 } from '../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../SDK/tavern';
@@ -127,7 +126,7 @@ import { filterRecordText } from './core/record-filter';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
-import type { PreGenerationGateDecision, PromptAnchorMode } from './types';
+import type { PreGenerationGateDecision } from './types';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -147,7 +146,7 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
             'plugin:request:memory_append_outcome',
             'plugin:broadcast:registry_changed',
         ],
-        memory: ['events', 'facts', 'state', 'summaries', 'template', 'audit'],
+        memory: ['events', 'facts', 'state', 'summaries', 'memory_mutation_history', 'template', 'audit'],
         llm: [],
     },
     scopes: ['chat', 'memory', 'registry'],
@@ -175,259 +174,18 @@ type MemoryOutcomeWriteResponse = {
     storedTextLength?: number;
 };
 
-type PromptBlockKind = 'system' | 'persona' | 'author_note' | 'lorebook' | 'other';
 
 /**
- * 功能：归一化 Prompt 分段文本，降低空白和换行带来的噪声。
- * @param text 原始文本。
- * @returns 归一化后的文本。
- */
-function normalizePromptSegmentText(text: unknown): string {
-    return String(text ?? '').replace(/\s+/g, ' ').trim();
-}
-
-/**
- * 功能：提取 Prompt 消息中的辅助元信息，提高分段分类精度。
- * @param message Prompt 消息对象。
- * @returns 可用于分类的元信息文本。
- */
-function getPromptMessageMetaText(message: SdkTavernPromptMessageEvent | null | undefined): string {
-    if (!message || typeof message !== 'object') {
-        return '';
-    }
-    const record = message as Record<string, unknown>;
-    const candidates: unknown[] = [
-        record.name,
-        record.title,
-        record.label,
-        record.identifier,
-        record.source,
-        record.type,
-        record.prompt_name,
-        record.promptName,
-        record.comment,
-        record.note,
-    ];
-    return candidates
-        .map((item: unknown): string => normalizePromptSegmentText(item))
-        .filter((item: string): boolean => Boolean(item))
-        .join(' ');
-}
-
-/**
- * 功能：按启发式规则对 Prompt 分段类型进行打分。
- * @param analysisText 合并后的分析文本。
- * @param headText 文本前缀，用于识别标题式模板。
- * @param isSystemMessage 当前消息是否为 system。
- * @returns 各候选类型分数。
- */
-function scorePromptBlockHints(
-    analysisText: string,
-    headText: string,
-    isSystemMessage: boolean,
-): Record<'author_note' | 'lorebook' | 'persona' | 'system', number> {
-    const score: Record<'author_note' | 'lorebook' | 'persona' | 'system', number> = {
-        author_note: 0,
-        lorebook: 0,
-        persona: 0,
-        system: 0,
-    };
-
-    if (isSystemMessage) {
-        score.system += 2;
-    }
-
-    if (/^(?:[#\-\*\s\[]*)?(author'?s?\s*note|a\/n|作者注释|作者注记|创作注释|作者说明)/i.test(headText)) {
-        score.author_note += 4;
-    }
-    if (/(author'?s?\s*note|a\/n|creator\s*notes?|作者注释|作者注记|创作注释|作者说明)/i.test(analysisText)) {
-        score.author_note += 2;
-    }
-
-    if (/^(?:[#\-\*\s\[]*)?(lorebook|world\s*info(?:rmation)?|worldinfo|世界书|世界信息|设定词条|百科设定)/i.test(headText)) {
-        score.lorebook += 4;
-    }
-    if (/(lorebook|world\s*info(?:rmation)?|worldinfo|wi\s*entry|wi\s*entries|世界书|世界信息|世界观设定|设定词条|背景设定)/i.test(analysisText)) {
-        score.lorebook += 2;
-    }
-    if (/(keywords?|secondary\s*keys?|entry|constant|position|comment)\s*[:：]/i.test(headText) && /(lore|world|设定|世界)/i.test(analysisText)) {
-        score.lorebook += 2;
-    }
-
-    if (/^(?:[#\-\*\s\[]*)?(persona|character\s*card|character\s*persona|角色卡|角色设定|人物设定|人设)/i.test(headText)) {
-        score.persona += 4;
-    }
-    if (/(persona|character\s*card|character\s*persona|character\s*description|角色卡|角色设定|人物设定|人设|身份设定|扮演设定)/i.test(analysisText)) {
-        score.persona += 2;
-    }
-    if (/(description|personality|scenario|example|示例对话|性格设定|世界观)\s*[:：]/i.test(headText) && /(character|persona|角色|人设)/i.test(analysisText)) {
-        score.persona += 2;
-    }
-
-    if (/^(you are|you'?re|system|instruction|guideline|规则|系统提示|你是)/i.test(headText)) {
-        score.system += 2;
-    }
-    if (/(system\s*prompt|system\s*instruction|必须遵守|core\s*instruction|global\s*rule)/i.test(analysisText)) {
-        score.system += 1;
-    }
-
-    return score;
-}
-
-/**
- * 功能：按文本和元信息特征推断 Prompt 区块类型。
- * @param text 当前消息文本。
- * @param message 当前 Prompt 消息对象。
- * @returns 归类后的 Prompt 区块类型。
- */
-function inferPromptBlockKind(text: string, message?: SdkTavernPromptMessageEvent): PromptBlockKind {
-    const normalized = normalizePromptSegmentText(text);
-    if (!normalized) {
-        return 'other';
-    }
-    const metaText = getPromptMessageMetaText(message);
-    const isSystemMessage = isTavernPromptSystemMessageEvent(message);
-    const analysisText = `${normalized} ${metaText}`.toLowerCase();
-    const headText = analysisText.slice(0, 320);
-    const score = scorePromptBlockHints(analysisText, headText, isSystemMessage);
-    const rankedKinds: Array<{ kind: PromptBlockKind; score: number }> = [
-        { kind: 'author_note', score: score.author_note },
-        { kind: 'lorebook', score: score.lorebook },
-        { kind: 'persona', score: score.persona },
-    ];
-    rankedKinds.sort((left, right): number => right.score - left.score);
-    const bestKind = rankedKinds[0];
-    if (bestKind && (bestKind.score >= 3 || (isSystemMessage && bestKind.score >= 2))) {
-        return bestKind.kind;
-    }
-    if (score.system >= 3) {
-        return 'system';
-    }
-    if (isSystemMessage) {
-        return 'system';
-    }
-    return 'other';
-}
-
-/**
- * 功能：在 Prompt 消息数组中查找目标区块。
+ * 功能：计算 Memory Context 在 Prompt 中的插入位置。
  * @param chat Prompt 消息数组。
- * @param kind 目标区块类型。
- * @param direction 查找方向。
- * @returns 命中的索引；未命中时返回 -1。
+ * @returns 应插入到最后一条真实 user 消息之前的位置索引。
  */
-function findPromptBlockIndexByKind(
-    chat: SdkTavernPromptMessageEvent[],
-    kind: PromptBlockKind,
-    direction: 'first' | 'last' = 'last',
-): number {
+function resolveMemoryContextInsertIndex(chat: SdkTavernPromptMessageEvent[]): number {
     if (!Array.isArray(chat) || chat.length === 0) {
-        return -1;
-    }
-    const shouldPreferSystem = kind === 'persona' || kind === 'author_note' || kind === 'lorebook';
-    const probe = (strictSystemOnly: boolean): number => {
-        const start = direction === 'first' ? 0 : chat.length - 1;
-        const end = direction === 'first' ? chat.length : -1;
-        const step = direction === 'first' ? 1 : -1;
-        for (let index = start; index !== end; index += step) {
-            const message = chat[index];
-            if (strictSystemOnly && shouldPreferSystem && !isTavernPromptSystemMessageEvent(message)) {
-                continue;
-            }
-            const text = getTavernPromptMessageTextEvent(message);
-            if (inferPromptBlockKind(text, message) === kind) {
-                return index;
-            }
-        }
-        return -1;
-    };
-    const strictIndex = probe(true);
-    if (strictIndex >= 0) {
-        return strictIndex;
-    }
-    return probe(false);
-}
-
-/**
- * 功能：根据锚点模式计算插入位置。
- * @param chat Prompt 消息数组。
- * @param anchorMode 目标锚点。
- * @param intent 当前注入意图。
- * @returns 可用插入位置；无法定位时返回 null。
- */
-function resolvePromptIndexBySingleAnchor(
-    chat: SdkTavernPromptMessageEvent[],
-    anchorMode: PromptAnchorMode,
-    intent: string,
-): number | null {
-    if (!Array.isArray(chat)) {
-        return null;
-    }
-    if (anchorMode === 'top') {
         return 0;
     }
-    if (anchorMode === 'custom_anchor') {
-        return chat.length;
-    }
-    if (anchorMode === 'before_start') {
-        const firstUserIndex = chat.findIndex((message: SdkTavernPromptMessageEvent): boolean => {
-            return String(message?.role ?? '').trim().toLowerCase() === 'user' || message?.is_user === true;
-        });
-        return firstUserIndex >= 0 ? firstUserIndex : Math.min(1, chat.length);
-    }
-    if (anchorMode === 'after_first_system') {
-        const index = findFirstTavernPromptSystemIndexEvent(chat);
-        return index >= 0 ? index + 1 : null;
-    }
-    if (anchorMode === 'after_last_system') {
-        const index = findLastTavernPromptSystemIndexEvent(chat);
-        return index >= 0 ? index + 1 : null;
-    }
-    if (anchorMode === 'after_persona') {
-        const index = findPromptBlockIndexByKind(chat, 'persona');
-        return index >= 0 ? index + 1 : null;
-    }
-    if (anchorMode === 'after_author_note') {
-        const index = findPromptBlockIndexByKind(chat, 'author_note');
-        return index >= 0 ? index + 1 : null;
-    }
-    if (anchorMode === 'after_lorebook') {
-        const index = findPromptBlockIndexByKind(chat, 'lorebook');
-        return index >= 0 ? index + 1 : null;
-    }
-    if (anchorMode === 'setting_query_only') {
-        if (intent !== 'setting_qa') {
-            return null;
-        }
-        const lorebookIndex = findPromptBlockIndexByKind(chat, 'lorebook');
-        if (lorebookIndex >= 0) {
-            return lorebookIndex + 1;
-        }
-        const lastSystemIndex = findLastTavernPromptSystemIndexEvent(chat);
-        return lastSystemIndex >= 0 ? lastSystemIndex + 1 : 0;
-    }
-    return null;
-}
-
-/**
- * 功能：按主锚点和回退链解析最终插入位置。
- * @param chat Prompt 消息数组。
- * @param decision 生成前 gate 决策。
- * @returns 可用插入位置。
- */
-function resolvePromptInsertIndexByAnchor(
-    chat: SdkTavernPromptMessageEvent[],
-    decision: PreGenerationGateDecision,
-): number {
-    const orderedAnchors = [decision.anchorMode, ...decision.fallbackOrder].filter(Boolean);
-    const uniqueAnchors = Array.from(new Set(orderedAnchors));
-    for (const anchorMode of uniqueAnchors) {
-        const index = resolvePromptIndexBySingleAnchor(chat, anchorMode, decision.intent);
-        if (index != null) {
-            return Math.max(0, Math.min(index, chat.length));
-        }
-    }
-    return Math.max(0, chat.length);
+    const lastUserIndex = findLastTavernPromptUserIndexEvent(chat);
+    return lastUserIndex >= 0 ? lastUserIndex : chat.length;
 }
 
 class MemoryOS {
@@ -547,17 +305,18 @@ class MemoryOS {
                 );
 
                 const chatKeys = (await Promise.all(allKeys.map(async (chatKey: string): Promise<string | null> => {
-                    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow, bindingRow] = await Promise.all([
+                    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow, mutationHistoryRow, bindingRow] = await Promise.all([
                         db.events.where('chatKey').equals(chatKey).first(),
                         db.facts.where('[chatKey+updatedAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
                         db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).first(),
                         db.summaries.where('[chatKey+level+createdAt]').between([chatKey, '', 0], [chatKey, '\uffff', Infinity]).first(),
                         db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
                         db.audit.where('chatKey').equals(chatKey).first(),
+                        db.memory_mutation_history.where('chatKey').equals(chatKey).first(),
                         db.template_bindings.where('chatKey').equals(chatKey).first(),
                     ]);
 
-                    return eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow || bindingRow
+                    return eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow || mutationHistoryRow || bindingRow
                         ? chatKey
                         : null;
                 }))).filter((item): item is string => Boolean(item));
@@ -1834,14 +1593,15 @@ class MemoryOS {
                     return;
                 }
 
-                const insertIndex = resolvePromptInsertIndexByAnchor(promptMessages, preDecision);
-                insertTavernPromptSystemMessageEvent(promptMessages, {
+                const insertIndex = resolveMemoryContextInsertIndex(promptMessages);
+                insertTavernPromptMessageEvent(promptMessages, {
+                    role: 'user',
                     text: injectedContext,
                     insertMode: 'before_index',
                     insertBeforeIndex: insertIndex,
                     template: promptMessages[Math.max(0, Math.min(insertIndex - 1, promptMessages.length - 1))] ?? promptMessages[0],
                 });
-                logger.success(`记忆注入完成，已按锚点 ${preDecision.anchorMode} 插入到 Prompt 结构中。`);
+                logger.success(`记忆注入完成，已将独立 Memory Context 插入到最后一条用户消息之前。`);
 
             } catch (error) {
                 logger.error('Prompt Context 构建或注入失败', error);

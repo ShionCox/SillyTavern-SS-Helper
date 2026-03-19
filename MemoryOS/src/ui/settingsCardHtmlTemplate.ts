@@ -908,6 +908,37 @@ export function buildSettingsCardHtmlTemplate(
 
         </div>
 
+        <div id="${ids.panelMutationHistoryId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
+          <div class="stx-ui-divider">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+            <span>长期记忆变更历史</span>
+            <div class="stx-ui-divider-line"></div>
+          </div>
+
+          <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 12px;">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">变更历史总览</div>
+              <div class="stx-ui-item-desc">按时间倒序查看已执行的长期记忆变更，只用于追踪和解释，不支持直接修改。</div>
+            </div>
+            <div class="stx-ui-actions">
+              <button id="${ids.mutationHistoryRefreshBtnId}" data-tip="刷新长期记忆变更历史。" type="button" class="stx-ui-btn secondary">
+                <i class="fa-solid fa-rotate"></i>&nbsp;刷新历史
+              </button>
+            </div>
+          </div>
+
+          <div class="stx-ui-item" style="flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 4px;">
+            <div class="stx-ui-item-title" style="font-size: 13px;">最近 50 条变更记录</div>
+            <div id="${ids.mutationHistoryListId}"
+              style="width: 100%; font-size: 12px; color: var(--ss-theme-text, #ccc);
+                     background: rgba(0,0,0,0.2); border-radius: 6px; padding: 10px;
+                     max-height: 360px; overflow-y: auto; font-family: monospace;"
+              data-tip="显示长期记忆变更历史；仅查看，不支持编辑。">
+              正在加载变更历史...
+            </div>
+          </div>
+        </div>
+
         <div id="${ids.panelAboutId}" class="stx-ui-panel stx-ui-advanced-subpanel" hidden>
           <div class="stx-ui-divider">
             <i class="fa-solid fa-circle-info"></i>

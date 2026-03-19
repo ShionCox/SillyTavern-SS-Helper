@@ -16,6 +16,7 @@ export type {
     DBSummarySource,
     DBTemplate,
     DBAudit,
+    DBMemoryMutationHistory,
     DBMeta,
     DBWorldInfoCache,
     DBTemplateBinding,

@@ -60,7 +60,6 @@ const RECALL_UI_REASON_LABELS: Record<string, string> = {
     vector_search: '来自向量搜索',
     vector_reranked: '经过向量重排',
     vector_source_metadata: '向量命中已按源记录 metadata 直连回源',
-    vector_source_weak: '向量命中来自弱来源块，仅作共享参考',
     relationship_projection: '关系记忆已按当前视角做投影',
     relationship_lane_focus: '关系候选已按角色焦点重新加权',
     relationship_shared_group: '共享关系变化进入共享池',
@@ -300,15 +299,15 @@ function countItemsByReason(items: ExplanationItem[], targetCodes: string[]): nu
  * @param version 原始版本值。
  * @returns 向量索引状态说明。
  */
-function formatVectorIndexVersionLabel(version: string | null | undefined): string {
+export function formatVectorIndexVersionLabel(version: string | null | undefined): string {
     const normalized = normalizeText(version ?? '');
     if (!normalized) {
-        return '旧版索引 / 未标记';
+        return '严格模式未重建';
     }
-    if (normalized === 'source_metadata_v2') {
-        return 'Metadata 直连回源';
+    if (normalized === 'source_metadata_v3') {
+        return '严格 Metadata 回源';
     }
-    return normalized;
+    return '旧链路已失效';
 }
 
 /**

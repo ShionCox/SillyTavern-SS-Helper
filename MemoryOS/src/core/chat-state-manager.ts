@@ -1,5 +1,5 @@
 import { readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db';
-import { db } from '../db/db';
+import { db, type DBFact, type DBSummary, type DBDerivationSource, type DBVectorChunkMetadata } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import {
@@ -30,6 +30,8 @@ import type {
     MemoryCandidate,
     MemoryCandidateKind,
     MemoryLifecycleState,
+    MemoryMutationHistoryAction,
+    MemoryMutationHistoryEntry,
     IngestHealthWindow,
     InjectedMemoryTone,
     LorebookGateDecision,
@@ -40,6 +42,7 @@ import type {
     MaintenanceExecutionResult,
     MaintenanceInsight,
     ManualOverrides,
+    MemoryMutationPlanSnapshot,
     PersonaMemoryProfile,
     MemoryOSChatState,
     MemoryQualityScorecard,
@@ -47,6 +50,7 @@ import type {
     RecallLogEntry,
     RelationshipDelta,
     RelationshipState,
+    MemoryMutationTargetKind,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
     PromptInjectionProfile,
@@ -78,6 +82,7 @@ import {
     DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
     DEFAULT_MEMORY_QUALITY,
+    DEFAULT_MEMORY_MUTATION_ACTION_COUNTS,
     DEFAULT_MEMORY_TUNING_PROFILE,
     DEFAULT_PERSONA_MEMORY_PROFILE,
     DEFAULT_PROMPT_INJECTION_PROFILE,
@@ -88,6 +93,7 @@ import {
     DEFAULT_USER_FACING_CHAT_PRESET,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
+import { MemoryMutationHistoryManager } from './memory-mutation-history';
 import {
     applyAdaptivePolicyOverrides,
     applyChatProfileOverrides,
@@ -100,7 +106,7 @@ import {
     inferVectorMode,
 } from './chat-strategy-engine';
 import { CompactionManager } from './compaction-manager';
-import { SummariesManager } from './summaries-manager';
+import { ProposalManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
 import {
     buildPerActorRetentionMap,
@@ -118,6 +124,79 @@ import {
     type MemoryCandidateInput,
     type OwnedMemoryInferenceInput,
 } from './memory-intelligence';
+
+/**
+ * 功能：把记录类型规整为严格向量链允许的类型。
+ * @param recordKind 记录类型。
+ * @returns 严格向量链允许的记录类型；如果不支持则返回 null。
+ */
+function normalizeStrictVectorRecordKind(recordKind: MemoryLifecycleState['recordKind']): 'fact' | 'summary' | null {
+    if (recordKind === 'fact' || recordKind === 'summary') {
+        return recordKind;
+    }
+    return null;
+}
+
+/**
+ * 功能：从事实或摘要记录里读取来源追踪信息。
+ * @param record 事实或摘要记录。
+ * @param recordKind 记录类型。
+ * @returns 来源追踪信息；若没有则返回 null。
+ */
+function readStrictVectorSourceTrace(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): DBDerivationSource | null {
+    if (recordKind === 'fact') {
+        return (record as DBFact).provenance?.source ?? null;
+    }
+    return (record as DBSummary).source?.provenance?.source ?? null;
+}
+
+/**
+ * 功能：构建严格向量索引所需的稳定文本。
+ * @param record 事实或摘要记录。
+ * @param recordKind 记录类型。
+ * @returns 用于向量化的规范文本。
+ */
+function buildStrictVectorText(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): string {
+    if (recordKind === 'fact') {
+        const fact = record as DBFact;
+        return normalizeMemoryText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
+    }
+    const summary = record as DBSummary;
+    return normalizeMemoryText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
+}
+
+/**
+ * 功能：为严格向量索引构建 metadata。
+ * @param record 事实或摘要记录。
+ * @param recordKind 记录类型。
+ * @param reason 触发原因。
+ * @returns 严格向量 metadata。
+ */
+function buildStrictVectorMetadata(record: DBFact | DBSummary, recordKind: 'fact' | 'summary', reason: string): DBVectorChunkMetadata {
+    const trace = readStrictVectorSourceTrace(record, recordKind);
+    const source: DBDerivationSource = {
+        kind: String(trace?.kind ?? `strict_${recordKind}_sync`),
+        reason: String(trace?.reason ?? reason),
+        viewHash: String(trace?.viewHash ?? ''),
+        snapshotHash: String(trace?.snapshotHash ?? ''),
+        messageIds: Array.isArray(trace?.messageIds) ? trace?.messageIds : [],
+        anchorMessageId: trace?.anchorMessageId,
+        mutationKinds: Array.isArray(trace?.mutationKinds) ? trace?.mutationKinds : [],
+        repairGeneration: Number(trace?.repairGeneration ?? 0),
+        ts: Number(trace?.ts ?? Date.now()),
+    };
+    return {
+        index: 0,
+        source,
+        sourceRecordKey: recordKind === 'fact' ? (record as DBFact).factKey : (record as DBSummary).summaryId,
+        sourceRecordKind: recordKind,
+        ownerActorKey: record.ownerActorKey ?? null,
+        sourceScope: normalizeMemoryText(record.sourceScope ?? 'system') || 'system',
+        memoryType: normalizeMemoryText(record.memoryType ?? 'other') || 'other',
+        memorySubtype: normalizeMemoryText(record.memorySubtype ?? 'other') || 'other',
+        participantActorKeys: [],
+    };
+}
 import {
     getPrimaryPersonaActorKey,
     migratePersonaState,
@@ -185,6 +264,80 @@ function averagePrecisionWindow(values: number[]): number {
 
 function normalizeSeedText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 功能：归一化最近一次 mutation planner 快照，确保聊天状态里只保留严格可用的字段。
+ * @param value 原始快照数据。
+ * @returns 归一化后的 mutation planner 快照；无效时返回 null。
+ */
+function normalizeMutationPlanSnapshot(value: unknown): MemoryMutationPlanSnapshot | null {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    const rawActionCounts = (record.actionCounts ?? {}) as Record<string, unknown>;
+    const items = Array.isArray(record.items)
+        ? record.items.reduce<MemoryMutationPlanSnapshot['items']>((result, item: unknown): MemoryMutationPlanSnapshot['items'] => {
+            if (!item || typeof item !== 'object') {
+                return result;
+            }
+            const itemRecord = item as Record<string, unknown>;
+            const targetKindRaw = normalizeSeedText(itemRecord.targetKind);
+            const targetKind: MemoryMutationPlanSnapshot['items'][number]['targetKind'] | null = targetKindRaw === 'fact' || targetKindRaw === 'summary' || targetKindRaw === 'state'
+                ? targetKindRaw
+                : null;
+            if (!targetKind) {
+                return result;
+            }
+            const actionRaw = normalizeSeedText(itemRecord.action).toUpperCase();
+            const action: MemoryMutationPlanSnapshot['items'][number]['action'] = actionRaw === 'ADD'
+                || actionRaw === 'MERGE'
+                || actionRaw === 'UPDATE'
+                || actionRaw === 'INVALIDATE'
+                || actionRaw === 'DELETE'
+                || actionRaw === 'NOOP'
+                ? actionRaw as MemoryMutationPlanSnapshot['items'][number]['action']
+                : 'NOOP';
+            const itemId = normalizeSeedText(itemRecord.itemId);
+            if (!itemId) {
+                return result;
+            }
+            result.push({
+                itemId,
+                targetKind,
+                action,
+                title: normalizeSeedText(itemRecord.title) || '未命名变更',
+                compareKey: normalizeSeedText(itemRecord.compareKey),
+                normalizedText: normalizeSeedText(itemRecord.normalizedText),
+                targetRecordKey: normalizeSeedText(itemRecord.targetRecordKey) || undefined,
+                existingRecordKeys: Array.isArray(itemRecord.existingRecordKeys)
+                    ? itemRecord.existingRecordKeys.map((entry: unknown): string => normalizeSeedText(entry)).filter(Boolean).slice(0, 8)
+                    : [],
+                reasonCodes: Array.isArray(itemRecord.reasonCodes)
+                    ? itemRecord.reasonCodes.map((entry: unknown): string => normalizeSeedText(entry)).filter(Boolean).slice(0, 8)
+                    : [],
+            });
+            return result;
+        }, []).slice(0, 16)
+        : [];
+    return {
+        source: normalizeSeedText(record.source) || 'proposal_apply',
+        consumerPluginId: normalizeSeedText(record.consumerPluginId) || 'unknown_plugin',
+        generatedAt: Math.max(0, Number(record.generatedAt ?? 0) || 0),
+        totalItems: Math.max(0, Number(record.totalItems ?? items.length) || 0),
+        appliedItems: Math.max(0, Number(record.appliedItems ?? 0) || 0),
+        actionCounts: {
+            ...DEFAULT_MEMORY_MUTATION_ACTION_COUNTS,
+            ADD: Math.max(0, Number(rawActionCounts.ADD ?? 0) || 0),
+            MERGE: Math.max(0, Number(rawActionCounts.MERGE ?? 0) || 0),
+            UPDATE: Math.max(0, Number(rawActionCounts.UPDATE ?? 0) || 0),
+            INVALIDATE: Math.max(0, Number(rawActionCounts.INVALIDATE ?? 0) || 0),
+            DELETE: Math.max(0, Number(rawActionCounts.DELETE ?? 0) || 0),
+            NOOP: Math.max(0, Number(rawActionCounts.NOOP ?? 0) || 0),
+        },
+        items,
+    };
 }
 
 function normalizeMemoryActorRetentionMap(value: unknown): MemoryActorRetentionMap {
@@ -429,9 +582,21 @@ export class ChatStateManager {
     private dirty = false;
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly flushIntervalMs = 1000;
+    private proposalManager: ProposalManager | null = null;
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
+    }
+
+    /**
+     * 功能：延迟创建用于结构化长期记忆写入的 proposal 管道。
+     * @returns proposal 管道实例。
+     */
+    private getProposalManager(): ProposalManager {
+        if (!this.proposalManager) {
+            this.proposalManager = new ProposalManager(this.chatKey, this);
+        }
+        return this.proposalManager;
     }
 
     /**
@@ -652,14 +817,14 @@ export class ChatStateManager {
         const actionLabelMap: Record<MaintenanceActionType, string> = {
             compress: '执行压缩',
             rebuild_summary: '重建摘要',
-            revectorize: '重建索引',
+            revectorize: '严格重建索引',
             schema_cleanup: '整理设定',
             group_maintenance: '群聊维护',
         };
         const shortLabelMap: Record<MaintenanceActionType, string> = {
             compress: '记忆过载',
             rebuild_summary: '摘要老化',
-            revectorize: '向量命中偏低',
+            revectorize: '严格向量链',
             schema_cleanup: '失效设定偏多',
             group_maintenance: '群聊状态分裂',
         };
@@ -936,9 +1101,6 @@ export class ChatStateManager {
             promptInjectionProfile: {
                 ...DEFAULT_PROMPT_INJECTION_PROFILE,
                 ...(state.promptInjectionProfile ?? {}),
-                fallbackOrder: Array.isArray(state.promptInjectionProfile?.fallbackOrder)
-                    ? state.promptInjectionProfile!.fallbackOrder
-                    : [...DEFAULT_PROMPT_INJECTION_PROFILE.fallbackOrder],
             },
             lastPreGenerationDecision: state.lastPreGenerationDecision ?? null,
             lastPostGenerationDecision: state.lastPostGenerationDecision ?? null,
@@ -1143,6 +1305,7 @@ export class ChatStateManager {
                 archivedStatePaths: Array.isArray(state.retentionArchives?.archivedStatePaths) ? state.retentionArchives.archivedStatePaths : [],
                 archivedVectorChunkIds: Array.isArray(state.retentionArchives?.archivedVectorChunkIds) ? state.retentionArchives.archivedVectorChunkIds : [],
             },
+            lastMutationPlan: normalizeMutationPlanSnapshot(state.lastMutationPlan ?? null),
             manualOverrides,
             lastStrategyDecision: state.lastStrategyDecision ?? null,
         };
@@ -1399,11 +1562,6 @@ export class ChatStateManager {
             ...(presetBundle.effectivePromptInjection ?? DEFAULT_PROMPT_INJECTION_PROFILE),
             ...(state.promptInjectionProfile ?? {}),
             ...(manualProfile ?? {}),
-            fallbackOrder: Array.isArray(manualProfile?.fallbackOrder) && manualProfile.fallbackOrder.length > 0
-                ? manualProfile.fallbackOrder
-                : Array.isArray(state.promptInjectionProfile?.fallbackOrder) && state.promptInjectionProfile.fallbackOrder.length > 0
-                    ? state.promptInjectionProfile.fallbackOrder
-                    : presetBundle.effectivePromptInjection.fallbackOrder,
         };
     }
 
@@ -1420,11 +1578,6 @@ export class ChatStateManager {
             ...DEFAULT_PROMPT_INJECTION_PROFILE,
             ...(state.promptInjectionProfile ?? {}),
             ...(profile ?? {}),
-            fallbackOrder: Array.isArray(profile?.fallbackOrder) && profile.fallbackOrder.length > 0
-                ? profile.fallbackOrder
-                : Array.isArray(state.promptInjectionProfile?.fallbackOrder) && state.promptInjectionProfile.fallbackOrder.length > 0
-                    ? state.promptInjectionProfile.fallbackOrder
-                    : [...DEFAULT_PROMPT_INJECTION_PROFILE.fallbackOrder],
         };
         this.markDirty();
     }
@@ -1656,7 +1809,6 @@ export class ChatStateManager {
                 touchedCounts.summariesCreated = Number(result.summariesCreated ?? 0);
                 touchedCounts.eventsArchived = Number(result.eventsArchived ?? 0);
             } else if (action === 'rebuild_summary') {
-                const summariesManager = new SummariesManager(this.chatKey);
                 const logicalView = state.logicalChatView;
                 const lines = Array.isArray(logicalView?.visibleMessages)
                     ? logicalView!.visibleMessages.slice(-16).map((item): string => normalizeSeedText(item.text)).filter(Boolean)
@@ -1676,115 +1828,58 @@ export class ChatStateManager {
                 if (sourceLines.length > 0) {
                     const summaryId = buildManagedSummaryStableId(this.chatKey, 'maintenance_rebuild_scene');
                     await this.deleteManagedMaintenanceSummaries(summaryId);
-                    await summariesManager.upsert({
-                        summaryId,
-                        level: 'scene',
-                        title: '维护重建摘要',
-                        content: sourceLines.slice(0, 16).join('\n'),
-                        range: {
-                            fromMessageId: Array.isArray(logicalView?.visibleMessages)
-                                ? normalizeSeedText(logicalView!.visibleMessages.slice(-16)[0]?.messageId) || undefined
-                                : undefined,
-                            toMessageId: Array.isArray(logicalView?.visibleMessages)
-                                ? normalizeSeedText(logicalView!.visibleMessages.slice(-1)[0]?.messageId) || undefined
-                                : undefined,
-                        },
+                    await this.getProposalManager().processWriteRequest({
                         source: {
-                            extractor: 'maintenance',
-                            provider: 'stx_memory_os',
-                            provenance: {
-                                extractor: 'maintenance',
-                                provider: 'stx_memory_os',
-                                source: {
-                                    kind: 'maintenance',
-                                    reason: 'rebuild_summary',
-                                    viewHash: normalizeSeedText(logicalView?.viewHash),
-                                    snapshotHash: normalizeSeedText(logicalView?.snapshotHash),
-                                    messageIds: Array.isArray(logicalView?.visibleMessages)
-                                        ? logicalView!.visibleMessages.slice(-16).map((item): string => normalizeSeedText(item.messageId)).filter(Boolean)
-                                        : [],
-                                    mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
-                                    repairGeneration: Number(state.mutationRepairGeneration ?? 0),
-                                    ts: Date.now(),
+                            pluginId: MEMORY_OS_PLUGIN_ID,
+                            version: '1.0.0',
+                        },
+                        chatKey: this.chatKey,
+                        reason: 'maintenance.rebuild_summary',
+                        proposal: {
+                            summaries: [{
+                                summaryId,
+                                targetRecordKey: summaryId,
+                                action: 'auto',
+                                level: 'scene',
+                                title: '维护重建摘要',
+                                content: sourceLines.slice(0, 16).join('\n'),
+                                keywords: ['maintenance', 'rebuild_summary'],
+                                range: {
+                                    fromMessageId: Array.isArray(logicalView?.visibleMessages)
+                                        ? normalizeSeedText(logicalView!.visibleMessages.slice(-16)[0]?.messageId) || undefined
+                                        : undefined,
+                                    toMessageId: Array.isArray(logicalView?.visibleMessages)
+                                        ? normalizeSeedText(logicalView!.visibleMessages.slice(-1)[0]?.messageId) || undefined
+                                        : undefined,
                                 },
-                            },
+                                source: {
+                                    extractor: 'maintenance',
+                                    provider: 'stx_memory_os',
+                                    provenance: {
+                                        extractor: 'maintenance',
+                                        provider: 'stx_memory_os',
+                                        source: {
+                                            kind: 'maintenance',
+                                            reason: 'rebuild_summary',
+                                            viewHash: normalizeSeedText(logicalView?.viewHash),
+                                            snapshotHash: normalizeSeedText(logicalView?.snapshotHash),
+                                            messageIds: Array.isArray(logicalView?.visibleMessages)
+                                                ? logicalView!.visibleMessages.slice(-16).map((item): string => normalizeSeedText(item.messageId)).filter(Boolean)
+                                                : [],
+                                            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
+                                            repairGeneration: Number(state.mutationRepairGeneration ?? 0),
+                                            ts: Date.now(),
+                                        },
+                                    },
+                                },
+                            }],
                         },
                     });
                     touchedCounts.summariesCreated = 1;
                 }
                 state.summaryFixQueue = [];
             } else if (action === 'revectorize') {
-                const vectorManager = new VectorManager(this.chatKey);
-                await vectorManager.clear();
-                const [facts, summaries] = await Promise.all([
-                    db.facts
-                        .where('[chatKey+updatedAt]')
-                        .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
-                        .reverse()
-                        .limit(180)
-                        .toArray(),
-                    db.summaries
-                        .where('[chatKey+level+createdAt]')
-                        .between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey])
-                        .reverse()
-                        .limit(80)
-                        .toArray(),
-                ]);
-                let rebuilt = 0;
-                for (const fact of facts) {
-                    const text = normalizeSeedText(`${fact.type} ${fact.path} ${JSON.stringify(fact.value ?? '')}`);
-                    if (!text) {
-                        continue;
-                    }
-                    const provenance = (fact.provenance ?? {}) as Record<string, unknown>;
-                    const chunkIds = await vectorManager.indexText(text, 'facts', {
-                        sourceRecordKey: normalizeSeedText(fact.factKey),
-                        sourceRecordKind: 'fact',
-                        ownerActorKey: normalizeMemoryText(fact.ownerActorKey ?? null) || null,
-                        sourceScope: normalizeMemoryText(fact.sourceScope ?? 'system') || 'system',
-                        memoryType: normalizeMemoryText(fact.memoryType ?? 'other') || 'other',
-                        memorySubtype: normalizeMemoryText(fact.memorySubtype ?? 'other') || 'other',
-                        participantActorKeys: [],
-                        source: {
-                            kind: 'maintenance',
-                            reason: 'revectorize_fact',
-                            viewHash: readProvenanceViewHash(provenance),
-                            messageIds: readProvenanceMessageIds(provenance),
-                            repairGeneration: Number(state.mutationRepairGeneration ?? 0),
-                            ts: Date.now(),
-                        },
-                    });
-                    rebuilt += chunkIds.length;
-                }
-                for (const summary of summaries) {
-                    const text = normalizeSeedText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
-                    if (!text) {
-                        continue;
-                    }
-                    const source = (summary.source ?? {}) as Record<string, unknown>;
-                    const provenance = (source.provenance ?? {}) as Record<string, unknown>;
-                    const chunkIds = await vectorManager.indexText(text, 'summaries', {
-                        sourceRecordKey: normalizeSeedText(summary.summaryId),
-                        sourceRecordKind: 'summary',
-                        ownerActorKey: normalizeMemoryText(summary.ownerActorKey ?? null) || null,
-                        sourceScope: normalizeMemoryText(summary.sourceScope ?? 'system') || 'system',
-                        memoryType: normalizeMemoryText(summary.memoryType ?? 'other') || 'other',
-                        memorySubtype: normalizeMemoryText(summary.memorySubtype ?? 'other') || 'other',
-                        participantActorKeys: [],
-                        source: {
-                            kind: 'maintenance',
-                            reason: 'revectorize_summary',
-                            viewHash: readProvenanceViewHash(provenance),
-                            messageIds: readProvenanceMessageIds(provenance),
-                            repairGeneration: Number(state.mutationRepairGeneration ?? 0),
-                            ts: Date.now(),
-                        },
-                    });
-                    rebuilt += chunkIds.length;
-                }
-                state.vectorIndexVersion = 'source_metadata_v2';
-                state.vectorMetadataRebuiltAt = Date.now();
-                touchedCounts.vectorChunksRebuilt = rebuilt;
+                touchedCounts.vectorChunksRebuilt = await this.rebuildStrictVectorIndex();
             } else if (action === 'schema_cleanup') {
                 const rowRedirects = state.rowRedirects ?? {};
                 const rowAliasIndex = state.rowAliasIndex ?? {};
@@ -1890,6 +1985,12 @@ export class ChatStateManager {
         quality: MemoryQualityScorecard,
     ): string {
         if (action !== 'schema_cleanup') {
+            if (action === 'revectorize') {
+                const rebuilt = Number(touchedCounts.vectorChunksRebuilt ?? 0);
+                return rebuilt > 0
+                    ? `已完成严格向量重建，重建了 ${rebuilt} 个向量块`
+                    : '已完成严格向量重建，但没有找到可重建的事实或摘要';
+            }
             return '维护动作已完成';
         }
         const cleanedStates = Number(touchedCounts.cleanedStates ?? 0);
@@ -2027,6 +2128,28 @@ export class ChatStateManager {
             : 0;
         await this.updateAdaptiveMetrics({ extractAcceptance: acceptanceBase });
         return state.extractHealth;
+    }
+
+    /**
+     * 功能：读取最近一次 mutation planner 执行快照。
+     * @returns 最近一次 mutation planner 快照；没有记录时返回 null。
+     */
+    async getLastMutationPlan(): Promise<MemoryMutationPlanSnapshot | null> {
+        const state = await this.load();
+        state.lastMutationPlan = normalizeMutationPlanSnapshot(state.lastMutationPlan ?? null);
+        return state.lastMutationPlan ?? null;
+    }
+
+    /**
+     * 功能：写入最近一次 mutation planner 执行快照，并持久化到聊天状态。
+     * @param snapshot 最新的 mutation planner 快照。
+     * @returns 写入后的归一化快照；传入空值时返回 null。
+     */
+    async setLastMutationPlan(snapshot: MemoryMutationPlanSnapshot | null): Promise<MemoryMutationPlanSnapshot | null> {
+        const state = await this.load();
+        state.lastMutationPlan = normalizeMutationPlanSnapshot(snapshot);
+        this.markDirty();
+        return state.lastMutationPlan ?? null;
     }
 
     /**
@@ -2208,6 +2331,7 @@ export class ChatStateManager {
             ...archives,
             archivedFactKeys: Array.from(new Set([...archives.archivedFactKeys, ...factKeys.filter(Boolean)])),
         };
+        await this.removeStrictVectorChunksByRecordKeys(factKeys);
         this.markDirty();
     }
 
@@ -2239,6 +2363,7 @@ export class ChatStateManager {
             ...archives,
             archivedSummaryIds: Array.from(new Set([...archives.archivedSummaryIds, ...summaryIds.filter(Boolean)])),
         };
+        await this.removeStrictVectorChunksByRecordKeys(summaryIds);
         this.markDirty();
     }
 
@@ -2287,6 +2412,117 @@ export class ChatStateManager {
             archivedVectorChunkIds: archives.archivedVectorChunkIds.filter((chunkId: string): boolean => !removed.has(chunkId)),
         };
         this.markDirty();
+    }
+
+    /**
+     * 功能：删除指定记录键对应的严格向量分块。
+     * @param recordKeys 记录键列表。
+     * @returns 被删除的分块数量。
+     */
+    private async removeStrictVectorChunksByRecordKeys(recordKeys: string[]): Promise<number> {
+        const normalizedKeys = Array.from(new Set((Array.isArray(recordKeys) ? recordKeys : []).map((item: string): string => normalizeMemoryText(item)).filter(Boolean)));
+        if (normalizedKeys.length <= 0) {
+            return 0;
+        }
+        const chunks = await db.vector_chunks.where('chatKey').equals(this.chatKey).toArray();
+        const chunkIds = chunks
+            .filter((chunk): boolean => {
+                const metadata = (chunk.metadata ?? {}) as Record<string, unknown>;
+                const sourceRecordKey = normalizeMemoryText(metadata.sourceRecordKey);
+                return sourceRecordKey.length > 0 && normalizedKeys.includes(sourceRecordKey);
+            })
+            .map((chunk): string => normalizeMemoryText(chunk.chunkId))
+            .filter(Boolean);
+        if (chunkIds.length <= 0) {
+            return 0;
+        }
+        await Promise.all([
+            db.vector_chunks.bulkDelete(chunkIds),
+            db.vector_embeddings.where('chunkId').anyOf(chunkIds).delete(),
+        ]);
+        await this.unarchiveVectorChunkIds(chunkIds);
+        return chunkIds.length;
+    }
+
+    /**
+     * 功能：把单条事实或摘要记录重新写入严格向量链。
+     * @param recordKey 记录键。
+     * @param recordKind 记录类型。
+     * @param reason 触发原因。
+     * @returns 新写入的 chunkId 列表。
+     */
+    private async syncStrictVectorRecord(recordKey: string, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
+        const normalizedRecordKey = normalizeMemoryText(recordKey);
+        const normalizedKind = normalizeStrictVectorRecordKind(recordKind);
+        if (!normalizedRecordKey || !normalizedKind) {
+            return [];
+        }
+        await this.removeStrictVectorChunksByRecordKeys([normalizedRecordKey]);
+        const record = normalizedKind === 'fact'
+            ? await db.facts.get(normalizedRecordKey)
+            : await db.summaries.get(normalizedRecordKey);
+        if (!record || String(record.chatKey ?? '').trim() !== this.chatKey) {
+            return [];
+        }
+        return this.indexStrictVectorRecord(record, normalizedKind, reason);
+    }
+
+    /**
+     * 功能：把一条现存事实或摘要记录写入严格向量链。
+     * @param record 事实或摘要记录。
+     * @param recordKind 记录类型。
+     * @param reason 触发原因。
+     * @returns 新写入的 chunkId 列表。
+     */
+    private async indexStrictVectorRecord(record: DBFact | DBSummary, recordKind: 'fact' | 'summary', reason: string): Promise<string[]> {
+        const text = buildStrictVectorText(record, recordKind);
+        if (!text) {
+            return [];
+        }
+        const metadata = buildStrictVectorMetadata(record, recordKind, reason);
+        const vectorManager = new VectorManager(this.chatKey);
+        const chunkIds = await vectorManager.indexText(text, recordKind === 'fact' ? 'facts' : 'summaries', metadata);
+        if (chunkIds.length > 0) {
+            const state = await this.load();
+            if (state.vectorIndexVersion !== 'source_metadata_v3') {
+                state.vectorIndexVersion = 'source_metadata_v3';
+                this.markDirty();
+            }
+        }
+        return chunkIds;
+    }
+
+    /**
+     * 功能：对当前聊天的事实与摘要执行严格向量全量重建。
+     * @returns 新写入的 chunk 总数。
+     */
+    public async rebuildStrictVectorIndex(): Promise<number> {
+        const vectorManager = new VectorManager(this.chatKey);
+        await vectorManager.clear();
+        const [facts, summaries] = await Promise.all([
+            db.facts.where('[chatKey+updatedAt]').between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey]).reverse().toArray(),
+            db.summaries.where('[chatKey+level+createdAt]').between([this.chatKey, Dexie.minKey, Dexie.minKey], [this.chatKey, Dexie.maxKey, Dexie.maxKey]).reverse().toArray(),
+        ]);
+        let rebuilt = 0;
+        for (const fact of facts) {
+            if (!fact || String(fact.chatKey ?? '').trim() !== this.chatKey) {
+                continue;
+            }
+            const chunkIds = await this.indexStrictVectorRecord(fact, 'fact', 'maintenance_revectorize');
+            rebuilt += chunkIds.length;
+        }
+        for (const summary of summaries) {
+            if (!summary || String(summary.chatKey ?? '').trim() !== this.chatKey) {
+                continue;
+            }
+            const chunkIds = await this.indexStrictVectorRecord(summary, 'summary', 'maintenance_revectorize');
+            rebuilt += chunkIds.length;
+        }
+        const state = await this.load();
+        state.vectorIndexVersion = 'source_metadata_v3';
+        state.vectorMetadataRebuiltAt = Date.now();
+        this.markDirty();
+        return rebuilt;
     }
 
     /**
@@ -2569,7 +2805,7 @@ export class ChatStateManager {
         const hasLegacyData = await this.hasLegacyDerivationData();
         if (hasLegacyData) {
             await this.runMaintenanceAction('rebuild_summary');
-            await this.targetedRevectorizeByView(view, task, true);
+            await this.rebuildStrictVectorIndex();
             state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
             if (state.groupMemory) {
                 state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
@@ -2580,7 +2816,7 @@ export class ChatStateManager {
 
         await this.archiveInvalidDerivedArtifacts(view, task);
         await this.rebuildLatestSummaryForRepair(view, task);
-        await this.targetedRevectorizeByView(view, task, false);
+        await this.rebuildStrictVectorIndex();
         state.turnLedger = this.rebuildTurnLedgerByActiveMessages(state.turnLedger ?? [], view.activeMessageIds ?? []);
         if (state.groupMemory) {
             state.groupMemory = this.deriveGroupMemoryFromView(view, state.groupMemory, state.semanticSeed ?? null);
@@ -2736,7 +2972,33 @@ export class ChatStateManager {
             .map((summary): string => normalizeSeedText(summary.summaryId))
             .filter(Boolean);
         if (duplicateIds.length > 0) {
-            await db.summaries.bulkDelete(Array.from(new Set(duplicateIds)));
+            for (const summaryId of Array.from(new Set(duplicateIds))) {
+                const summary = await db.summaries.get(summaryId);
+                if (!summary) {
+                    continue;
+                }
+                await this.getProposalManager().processWriteRequest({
+                    source: {
+                        pluginId: MEMORY_OS_PLUGIN_ID,
+                        version: '1.0.0',
+                    },
+                    chatKey: this.chatKey,
+                    reason: 'mutation_repair.cleanup',
+                    proposal: {
+                        summaries: [{
+                            summaryId,
+                            targetRecordKey: summaryId,
+                            action: 'delete',
+                            level: summary.level,
+                            title: summary.title,
+                            content: summary.content,
+                            keywords: summary.keywords,
+                            range: summary.range,
+                            source: summary.source,
+                        }],
+                    },
+                });
+            }
         }
     }
 
@@ -2762,12 +3024,37 @@ export class ChatStateManager {
             .map((summary): string => normalizeSeedText(summary.summaryId))
             .filter(Boolean);
         if (duplicateIds.length > 0) {
-            await db.summaries.bulkDelete(Array.from(new Set(duplicateIds)));
+            for (const summaryId of Array.from(new Set(duplicateIds))) {
+                const summary = await db.summaries.get(summaryId);
+                if (!summary) {
+                    continue;
+                }
+                await this.getProposalManager().processWriteRequest({
+                    source: {
+                        pluginId: MEMORY_OS_PLUGIN_ID,
+                        version: '1.0.0',
+                    },
+                    chatKey: this.chatKey,
+                    reason: 'maintenance.cleanup',
+                    proposal: {
+                        summaries: [{
+                            summaryId,
+                            targetRecordKey: summaryId,
+                            action: 'delete',
+                            level: summary.level,
+                            title: summary.title,
+                            content: summary.content,
+                            keywords: summary.keywords,
+                            range: summary.range,
+                            source: summary.source,
+                        }],
+                    },
+                });
+            }
         }
     }
 
     private async rebuildLatestSummaryForRepair(view: LogicalChatView, task: MutationRepairTask): Promise<void> {
-        const summariesManager = new SummariesManager(this.chatKey);
         const lines = view.visibleMessages
             .slice(Math.max(0, view.visibleMessages.length - 20))
             .map((item): string => normalizeSeedText(item.text))
@@ -2780,76 +3067,45 @@ export class ChatStateManager {
         const lastMessageId = normalizeSeedText(recentVisible[recentVisible.length - 1]?.messageId);
         const summaryId = buildManagedSummaryStableId(this.chatKey, 'mutation_repair_scene');
         await this.deleteManagedRepairSummaries(summaryId);
-        await summariesManager.upsert({
-            summaryId,
-            level: 'scene',
-            title: 'Mutation repair summary',
-            content: lines.join('\n'),
-            range: {
-                fromMessageId: firstMessageId || undefined,
-                toMessageId: lastMessageId || undefined,
-            },
+        await this.getProposalManager().processWriteRequest({
             source: {
-                extractor: 'mutation_repair',
-                provider: 'stx_memory_os',
-                provenance: {
-                    extractor: 'mutation_repair',
-                    provider: 'stx_memory_os',
-                    source: {
-                        kind: 'logical_repair',
-                        reason: task.mutationKinds.join('|'),
-                        viewHash: view.viewHash,
-                        snapshotHash: view.snapshotHash,
-                        messageIds: recentVisible.map((item) => normalizeSeedText(item.messageId)).filter(Boolean),
-                        anchorMessageId: task.repairAnchorMessageId || undefined,
-                        mutationKinds: task.mutationKinds,
-                        repairGeneration: task.repairGeneration,
-                        ts: Date.now(),
+                pluginId: MEMORY_OS_PLUGIN_ID,
+                version: '1.0.0',
+            },
+            chatKey: this.chatKey,
+            reason: 'mutation_repair.summary',
+            proposal: {
+                summaries: [{
+                    summaryId,
+                    targetRecordKey: summaryId,
+                    action: 'auto',
+                    level: 'scene',
+                    title: 'Mutation repair summary',
+                    content: lines.join('\n'),
+                    range: {
+                        fromMessageId: firstMessageId || undefined,
+                        toMessageId: lastMessageId || undefined,
                     },
-                },
-            },
-        });
-    }
-
-    private async targetedRevectorizeByView(
-        view: LogicalChatView,
-        task: MutationRepairTask,
-        conservativeFallback: boolean,
-    ): Promise<void> {
-        const vectorManager = new VectorManager(this.chatKey);
-        if (conservativeFallback) {
-            await vectorManager.clear();
-        }
-        const recentVisible = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - (conservativeFallback ? 40 : 24)));
-        if (recentVisible.length === 0) {
-            return;
-        }
-        const sourceMessageIds = recentVisible.map((item) => normalizeSeedText(item.messageId)).filter(Boolean);
-        const text = recentVisible
-            .map((item): string => normalizeSeedText(`${item.role}: ${item.text}`))
-            .filter(Boolean)
-            .join('\n');
-        if (!text) {
-            return;
-        }
-        await vectorManager.indexText(text, conservativeFallback ? 'repair_fallback' : 'repair', {
-            sourceRecordKey: normalizeSeedText(task.repairAnchorMessageId || view.viewHash || `repair_${task.repairGeneration}`),
-            sourceRecordKind: 'event',
-            ownerActorKey: null,
-            sourceScope: 'group',
-            memoryType: 'event',
-            memorySubtype: 'conversation_event',
-            participantActorKeys: [],
-            source: {
-                kind: conservativeFallback ? 'conservative_repair' : 'targeted_repair',
-                reason: task.mutationKinds.join('|'),
-                viewHash: view.viewHash,
-                snapshotHash: view.snapshotHash,
-                messageIds: sourceMessageIds,
-                anchorMessageId: task.repairAnchorMessageId || undefined,
-                mutationKinds: task.mutationKinds,
-                repairGeneration: task.repairGeneration,
-                ts: Date.now(),
+                    source: {
+                        extractor: 'mutation_repair',
+                        provider: 'stx_memory_os',
+                        provenance: {
+                            extractor: 'mutation_repair',
+                            provider: 'stx_memory_os',
+                            source: {
+                                kind: 'logical_repair',
+                                reason: task.mutationKinds.join('|'),
+                                viewHash: view.viewHash,
+                                snapshotHash: view.snapshotHash,
+                                messageIds: recentVisible.map((item) => normalizeSeedText(item.messageId)).filter(Boolean),
+                                anchorMessageId: task.repairAnchorMessageId || undefined,
+                                mutationKinds: task.mutationKinds,
+                                repairGeneration: task.repairGeneration,
+                                ts: Date.now(),
+                            },
+                        },
+                    },
+                }],
             },
         });
     }
@@ -4019,6 +4275,10 @@ export class ChatStateManager {
 
     private async persistOwnedMemoryToDb(lifecycle: MemoryLifecycleState): Promise<void> {
         await this.persistLifecycleToDb(lifecycle);
+        const normalizedKind = normalizeStrictVectorRecordKind(lifecycle.recordKind);
+        if (normalizedKind) {
+            await this.syncStrictVectorRecord(lifecycle.recordKey, normalizedKind, 'lifecycle_persist');
+        }
     }
 
     private async applyMajorEventTrigger(state: MemoryOSChatState, eventLifecycle: MemoryLifecycleState): Promise<number> {
@@ -4325,6 +4585,22 @@ export class ChatStateManager {
         const state = await this.load();
         const entries = await this.hydrateRecallLogFromDb(state);
         return entries.slice(0, Math.max(1, Math.floor(Number(limit || 40))));
+    }
+
+    /**
+     * 功能：读取长期记忆的 mutation history。
+     * @param opts 过滤条件。
+     * @returns Promise<MemoryMutationHistoryEntry[]>：历史列表。
+     */
+    async getMutationHistory(opts: {
+        limit?: number;
+        recordKey?: string;
+        targetKind?: MemoryMutationTargetKind;
+        action?: MemoryMutationHistoryAction;
+        sinceTs?: number;
+    } = {}): Promise<MemoryMutationHistoryEntry[]> {
+        const manager = new MemoryMutationHistoryManager(this.chatKey);
+        return manager.list(opts);
     }
 
     /**

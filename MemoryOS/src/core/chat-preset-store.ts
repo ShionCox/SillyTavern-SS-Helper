@@ -39,8 +39,6 @@ function normalizePromptProfile(profile: Partial<PromptInjectionProfile> | null 
     }
     return {
         ...profile,
-        fallbackOrder: Array.isArray(profile.fallbackOrder) ? profile.fallbackOrder.filter(Boolean) : undefined,
-        wrapTag: normalizeText(profile.wrapTag) || undefined,
         settingOnlyMinScore: Number.isFinite(Number(profile.settingOnlyMinScore))
             ? Number(profile.settingOnlyMinScore)
             : undefined,
@@ -104,12 +102,6 @@ function mergePromptProfile(...profiles: Array<Partial<PromptInjectionProfile> |
             continue;
         }
         Object.assign(merged, normalizePromptProfile(profile));
-        if (Array.isArray(profile.fallbackOrder) && profile.fallbackOrder.length > 0) {
-            merged.fallbackOrder = profile.fallbackOrder.filter(Boolean);
-        }
-    }
-    if (!Array.isArray(merged.fallbackOrder) || merged.fallbackOrder.length === 0) {
-        merged.fallbackOrder = [...DEFAULT_PROMPT_INJECTION_PROFILE.fallbackOrder];
     }
     return merged;
 }

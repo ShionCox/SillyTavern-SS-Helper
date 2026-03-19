@@ -30,6 +30,7 @@ import type {
     MemoryActorRetentionMap,
     MemoryActorRetentionState,
     MemoryLifecycleState,
+    MemoryMutationHistoryEntry,
     OwnedMemoryState,
     PersonaMemoryProfile,
     SourceRef,
@@ -37,7 +38,7 @@ import type {
 } from '../../../SDK/stx';
 import type { StructuredWorldStateEntry } from '../types';
 
-type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
+type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit' | 'memory_mutation_history';
 type ViewMode = 'world' | 'maintenance' | 'memory' | 'diagnostics' | 'raw';
 type VisibleRawTableName = Exclude<RawTableName, 'world_state'>;
 
@@ -137,6 +138,10 @@ const RECORD_EDITOR_RAW_TAB_META: Record<VisibleRawTableName, RecordEditorRawTab
     audit: {
         label: '审计日志',
         tip: '查看数据层的人工和系统修改痕迹，适合排查谁改了什么。',
+    },
+    memory_mutation_history: {
+        label: '变更历史',
+        tip: '查看已经执行完成的长期记忆变更，只读不可直接编辑。',
     },
 };
 
@@ -1058,6 +1063,9 @@ function getRawRecordId(tableName: RawTableName, record: RawRecord): string {
     if (tableName === 'world_state') {
         return String(record.stateKey ?? '');
     }
+    if (tableName === 'memory_mutation_history') {
+        return String(record.mutationId ?? '');
+    }
     return String(record.auditId ?? '');
 }
 
@@ -1076,7 +1084,19 @@ function getRawPayloadFieldName(tableName: RawTableName): 'payload' | 'value' | 
     if (tableName === 'audit') {
         return 'after';
     }
+    if (tableName === 'memory_mutation_history') {
+        return 'after';
+    }
     return 'value';
+}
+
+/**
+ * 功能：判断原始表是否只读。
+ * @param tableName 表名。
+ * @returns 是否只读。
+ */
+function isReadOnlyRawTable(tableName: RawTableName): boolean {
+    return tableName === 'audit' || tableName === 'memory_mutation_history';
 }
 
 /**
@@ -1214,6 +1234,14 @@ const RE_AUDIT_ACTION_I18N: Record<string, string> = {
     compact: '压缩',
     rebuild: '重建',
     snapshot: '快照',
+};
+
+const RE_MUTATION_HISTORY_ACTION_I18N: Record<string, string> = {
+    add: '新增',
+    merge: '合并',
+    update: '更新',
+    invalidate: '失效',
+    delete: '删除',
 };
 
 /**
@@ -1374,6 +1402,22 @@ function formatAuditActionLabel(value: string): string {
     }
     if (RE_AUDIT_ACTION_I18N[normalized]) {
         return RE_AUDIT_ACTION_I18N[normalized];
+    }
+    return formatRecordEditorKeyLabel(normalized);
+}
+
+/**
+ * 功能：把 mutation history 动作转换成更自然的中文动作名。
+ * @param value 原始动作。
+ * @returns 中文动作名称。
+ */
+function formatMutationHistoryActionLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '未命名变更';
+    }
+    if (RE_MUTATION_HISTORY_ACTION_I18N[normalized]) {
+        return RE_MUTATION_HISTORY_ACTION_I18N[normalized];
     }
     return formatRecordEditorKeyLabel(normalized);
 }
@@ -1815,6 +1859,75 @@ function formatPersonaDerivedSource(value: string): string {
 }
 
 /**
+ * 功能：把 mutation planner 快照格式化为便于摘要卡展示的动作统计文本。
+ * @param snapshot 最近一次 mutation planner 快照。
+ * @returns 动作统计文本。
+ */
+function formatMutationPlanSummary(snapshot: EditorExperienceSnapshot['lastMutationPlan']): string {
+    if (!snapshot) {
+        return '最近还没有 mutation planner 记录';
+    }
+    const parts = [
+        ['ADD', snapshot.actionCounts.ADD],
+        ['MERGE', snapshot.actionCounts.MERGE],
+        ['UPDATE', snapshot.actionCounts.UPDATE],
+        ['INVALIDATE', snapshot.actionCounts.INVALIDATE],
+        ['DELETE', snapshot.actionCounts.DELETE],
+        ['NOOP', snapshot.actionCounts.NOOP],
+    ].filter((entry): boolean => Number(entry[1] ?? 0) > 0)
+        .map((entry): string => `${entry[0]} ${entry[1]}`);
+    return parts.length > 0 ? parts.join(' / ') : '最近一轮没有产生有效动作';
+}
+
+/**
+ * 功能：把 mutation planner 快照格式化为摘要卡的来源行。
+ * @param snapshot 最近一次 mutation planner 快照。
+ * @returns 摘要卡来源行文本。
+ */
+function formatMutationPlanMeta(snapshot: EditorExperienceSnapshot['lastMutationPlan']): string {
+    if (!snapshot) {
+        return '等待新的提议进入长期记忆 CRUD';
+    }
+    const sourceLabel = String(snapshot.consumerPluginId || snapshot.source || 'unknown_plugin').trim();
+    return `${sourceLabel} · ${snapshot.generatedAt > 0 ? formatTimeLabel(snapshot.generatedAt) : '刚刚'}`;
+}
+
+/**
+ * 功能：把 mutation history 的最近条目整理成摘要文本。
+ * @param history 最近的变更历史。
+ * @returns 摘要文本。
+ */
+function formatMutationHistorySummary(history: EditorExperienceSnapshot['mutationHistory']): string {
+    if (!Array.isArray(history) || history.length === 0) {
+        return '最近还没有变更历史';
+    }
+    const counts = history.reduce<Record<string, number>>((result, entry): Record<string, number> => {
+        const action = String(entry.action ?? '').trim().toUpperCase() || 'OTHER';
+        result[action] = (result[action] ?? 0) + 1;
+        return result;
+    }, {});
+    const parts = ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE']
+        .filter((action: string): boolean => Number(counts[action] ?? 0) > 0)
+        .map((action: string): string => `${formatMutationHistoryActionLabel(action)} ${counts[action]}`);
+    return parts.length > 0 ? parts.join(' / ') : '最近没有可展示的变更';
+}
+
+/**
+ * 功能：把 mutation history 的来源行格式化为摘要卡可读文本。
+ * @param history 最近的变更历史。
+ * @returns 来源说明。
+ */
+function formatMutationHistoryMeta(history: EditorExperienceSnapshot['mutationHistory']): string {
+    if (!Array.isArray(history) || history.length === 0) {
+        return '等待新的变更写入历史';
+    }
+    const latest = history[0];
+    const sourceLabel = String(latest.consumerPluginId || latest.source || 'unknown_plugin').trim();
+    const targetLabel = `${formatMutationHistoryActionLabel(latest.action)} · ${latest.targetKind}`;
+    return `${sourceLabel} · ${targetLabel} · ${latest.ts > 0 ? formatTimeLabel(latest.ts) : '刚刚'}`;
+}
+
+/**
  * 功能：构建记录编辑器中可复用的 recall 视角摘要卡片。
  * @param experience 体验快照。
  * @returns HTML 字符串。
@@ -1844,10 +1957,22 @@ function buildRecallSummaryCardsMarkup(experience: EditorExperienceSnapshot): st
                 <div style="margin-top:6px;">热度角色：${escapeHtml(salienceText)}</div>
             </div>
             <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                <div style="font-weight:700; margin-bottom:6px;">向量直连回源</div>
+                <div style="font-weight:700; margin-bottom:6px;">严格 Metadata 回源</div>
                 <div>${escapeHtml(summary.vectorIndexLabel)}</div>
                 <div style="margin-top:6px;">最近重建：${escapeHtml(summary.vectorRebuiltLabel)}</div>
                 <div style="margin-top:6px;">命中 ${summary.selectedCount} 条 / 回退 ${summary.rejectedCount} 条</div>
+            </div>
+            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div style="font-weight:700; margin-bottom:6px;">长期记忆 CRUD</div>
+                <div>${escapeHtml(formatMutationPlanSummary(experience.lastMutationPlan))}</div>
+                <div style="margin-top:6px;">执行 ${escapeHtml(String(experience.lastMutationPlan?.appliedItems ?? 0))} / ${escapeHtml(String(experience.lastMutationPlan?.totalItems ?? 0))}</div>
+                <div style="margin-top:6px;">来源：${escapeHtml(formatMutationPlanMeta(experience.lastMutationPlan))}</div>
+            </div>
+            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div style="font-weight:700; margin-bottom:6px;">最近变更</div>
+                <div>${escapeHtml(formatMutationHistorySummary(experience.mutationHistory))}</div>
+                <div style="margin-top:6px;">记录 ${escapeHtml(String(experience.mutationHistory?.length ?? 0))} 条</div>
+                <div style="margin-top:6px;">来源：${escapeHtml(formatMutationHistoryMeta(experience.mutationHistory))}</div>
             </div>
         </div>
     `;
@@ -2646,6 +2771,7 @@ export async function openRecordEditor(): Promise<void> {
                     <div class="stx-re-tab" data-table="facts"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.facts.tip)}>${RECORD_EDITOR_RAW_TAB_META.facts.label}</div>
                     <div class="stx-re-tab" data-table="summaries"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.summaries.tip)}>${RECORD_EDITOR_RAW_TAB_META.summaries.label}</div>
                     <div class="stx-re-tab" data-table="audit"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.audit.tip)}>${RECORD_EDITOR_RAW_TAB_META.audit.label}</div>
+                    <div class="stx-re-tab" data-table="memory_mutation_history"${buildTipAttr(RECORD_EDITOR_RAW_TAB_META.memory_mutation_history.tip)}>${RECORD_EDITOR_RAW_TAB_META.memory_mutation_history.label}</div>
                 </div>
                 <div class="stx-re-content" id="stx-re-content-area"><div class="stx-re-empty">正在加载数据...</div></div>
                 <div class="stx-re-footer" id="stx-re-footer">
@@ -2998,9 +3124,9 @@ const selectedLogicRowIds = new Set<string>();
     async function getRawRecords(tableName: RawTableName): Promise<RawRecord[]> {
         const queryTable = (db as unknown as Record<RawTableName, any>)[tableName];
         const baseQuery = currentChatKey ? queryTable.where('chatKey').equals(currentChatKey) : queryTable.toCollection();
-        const needReverse = tableName === 'events' || tableName === 'audit';
+        const needReverse = tableName === 'events' || tableName === 'audit' || tableName === 'memory_mutation_history';
         const directionalQuery = needReverse ? baseQuery.reverse() : baseQuery;
-        const limitedQuery = (tableName === 'events' || tableName === 'audit')
+        const limitedQuery = (tableName === 'events' || tableName === 'audit' || tableName === 'memory_mutation_history')
             ? directionalQuery.limit(tableName === 'events' ? 1000 : 500)
             : directionalQuery;
         return limitedQuery.toArray() as Promise<RawRecord[]>;
@@ -3031,35 +3157,101 @@ const selectedLogicRowIds = new Set<string>();
         try {
             const deleteEntries = Array.from(pendingChanges.deletes);
             const updateEntries = Array.from(pendingChanges.updates.values());
+            const writeRequests: Array<{ tableName: RawTableName; id: string; payload: unknown; action: 'update' | 'delete'; item: RawRecord | null }> = [];
+            for (const pendingKey of deleteEntries) {
+                const parsedKey = parsePendingKey(pendingKey);
+                if (!parsedKey.tableName || !parsedKey.id) {
+                    continue;
+                }
+                const table = (db as unknown as Record<RawTableName, any>)[parsedKey.tableName];
+                const item = await table.get(parsedKey.id);
+                if (!item) {
+                    continue;
+                }
+                writeRequests.push({
+                    tableName: parsedKey.tableName,
+                    id: parsedKey.id,
+                    payload: null,
+                    action: 'delete',
+                    item: item as RawRecord,
+                });
+            }
 
-            await db.transaction('rw', [db.events, db.facts, db.summaries, db.world_state, db.audit], async (): Promise<void> => {
-                for (const pendingKey of deleteEntries) {
-                    const parsedKey = parsePendingKey(pendingKey);
-                    if (!parsedKey.tableName || !parsedKey.id) {
-                        continue;
+            for (const updateInfo of updateEntries) {
+                const table = (db as unknown as Record<RawTableName, any>)[updateInfo.tableName];
+                const item = await table.get(updateInfo.id);
+                if (!item) {
+                    continue;
+                }
+                writeRequests.push({
+                    tableName: updateInfo.tableName,
+                    id: updateInfo.id,
+                    payload: updateInfo.payload,
+                    action: 'update',
+                    item: item as RawRecord,
+                });
+            }
+
+            if (writeRequests.length > 0 && currentChatKey) {
+                const memory = (window as any).STX?.memory;
+                if (memory?.proposal?.requestWrite) {
+                    const facts: Array<Record<string, unknown>> = [];
+                    const summaries: Array<Record<string, unknown>> = [];
+                    const patches: Array<{ op: 'add' | 'replace' | 'remove'; path: string; value?: unknown }> = [];
+                    for (const request of writeRequests) {
+                        if (request.tableName === 'facts') {
+                            const factKey = String((request.item as any).factKey ?? '').trim();
+                            if (!factKey) {
+                                continue;
+                            }
+                            facts.push({
+                                factKey,
+                                targetRecordKey: factKey,
+                                action: request.action === 'delete' ? 'delete' : 'update',
+                                type: String((request.item as any).type ?? '').trim(),
+                                entity: (request.item as any).entity,
+                                path: String((request.item as any).path ?? '').trim(),
+                                value: request.action === 'delete' ? (request.item as any).value : request.payload,
+                                confidence: (request.item as any).confidence,
+                                provenance: (request.item as any).provenance,
+                            });
+                        } else if (request.tableName === 'summaries') {
+                            const summaryId = String((request.item as any).summaryId ?? '').trim();
+                            if (!summaryId) {
+                                continue;
+                            }
+                            summaries.push({
+                                summaryId,
+                                targetRecordKey: summaryId,
+                                action: request.action === 'delete' ? 'delete' : 'update',
+                                level: String((request.item as any).level ?? 'scene') as 'message' | 'scene' | 'arc',
+                                title: request.action === 'delete' ? (request.item as any).title : (request.item as any).title,
+                                content: request.action === 'delete' ? String((request.item as any).content ?? '') : String(request.payload ?? ''),
+                                keywords: Array.isArray((request.item as any).keywords) ? (request.item as any).keywords : [],
+                            });
+                        } else if (request.tableName === 'world_state') {
+                            const path = String((request.item as any).path ?? request.id).trim();
+                            if (!path) {
+                                continue;
+                            }
+                            patches.push(request.action === 'delete'
+                                ? { op: 'remove', path }
+                                : { op: 'replace', path, value: request.payload });
+                        }
                     }
-                    await (db as unknown as Record<RawTableName, any>)[parsedKey.tableName].delete(parsedKey.id);
+
+                    await memory.proposal.requestWrite({
+                        source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
+                        chatKey: currentChatKey,
+                        reason: 'raw_editor_save',
+                        proposal: {
+                            facts: facts.length > 0 ? facts as any[] : undefined,
+                            summaries: summaries.length > 0 ? summaries as any[] : undefined,
+                            patches: patches.length > 0 ? patches : undefined,
+                        },
+                    });
                 }
 
-                for (const updateInfo of updateEntries) {
-                    const table = (db as unknown as Record<RawTableName, any>)[updateInfo.tableName];
-                    const item = await table.get(updateInfo.id);
-                    if (!item) {
-                        continue;
-                    }
-                    const payloadField = getRawPayloadFieldName(updateInfo.tableName);
-                    const nextRecord = {
-                        ...item,
-                        [payloadField]: updateInfo.payload,
-                    } as RawRecord;
-                    if (updateInfo.tableName === 'facts' || updateInfo.tableName === 'world_state') {
-                        nextRecord.updatedAt = Date.now();
-                    }
-                    await table.put(nextRecord);
-                }
-            });
-
-            if (currentChatKey) {
                 const auditManager = new AuditManager(currentChatKey);
                 if (deleteEntries.length > 0) {
                     await auditManager.log({
@@ -4630,13 +4822,14 @@ const selectedLogicRowIds = new Set<string>();
                 return;
             }
             const displayData = tableName === 'events' ? dedupeDisplayEvents(data) : [...data];
+            const readOnlyTable = isReadOnlyRawTable(tableName);
             if (displayData.length === 0) {
                 contentArea.innerHTML = '<div class="stx-re-empty">暂无数据记录。</div>';
                 updateRawSelectionState();
                 return;
             }
 
-            const defaultSortCol = tableName === 'events' || tableName === 'audit'
+            const defaultSortCol = tableName === 'events' || readOnlyTable
                 ? 'ts'
                 : tableName === 'summaries'
                         ? 'level'
@@ -4671,6 +4864,113 @@ const selectedLogicRowIds = new Set<string>();
                     : '<i class="fa-solid fa-sort"></i>';
                 return `<th class="stx-re-th-sortable ${isActive ? 'active' : ''}" data-col="${column}">${label} ${icon}</th>`;
             };
+
+            if (readOnlyTable) {
+                const readOnlyRows = [...displayData];
+                const readOnlySortCol = currentSort.col || 'ts';
+                const readOnlyHeaderCell = (label: string, column: string): string => {
+                    const isActive = readOnlySortCol === column;
+                    const icon = isActive
+                        ? (currentSort.asc ? '<i class="fa-solid fa-sort-up"></i>' : '<i class="fa-solid fa-sort-down"></i>')
+                        : '<i class="fa-solid fa-sort"></i>';
+                    return `<th class="stx-re-th-sortable ${isActive ? 'active' : ''}" data-col="${column}">${label} ${icon}</th>`;
+                };
+                readOnlyRows.sort((left: RawRecord, right: RawRecord): number => {
+                    const leftValue = left[readOnlySortCol];
+                    const rightValue = right[readOnlySortCol];
+                    if (leftValue === rightValue) {
+                        return 0;
+                    }
+                    if (leftValue == null) {
+                        return 1;
+                    }
+                    if (rightValue == null) {
+                        return -1;
+                    }
+                    const normalizedLeftValue = typeof leftValue === 'number' ? leftValue : String(leftValue);
+                    const normalizedRightValue = typeof rightValue === 'number' ? rightValue : String(rightValue);
+                    if (normalizedLeftValue < normalizedRightValue) {
+                        return currentSort.asc ? -1 : 1;
+                    }
+                    if (normalizedLeftValue > normalizedRightValue) {
+                        return currentSort.asc ? 1 : -1;
+                    }
+                    return 0;
+                });
+
+                const readOnlyRowsHtml = readOnlyRows.map((record: RawRecord): string => {
+                    const recordId = getRawRecordId(tableName, record);
+                    const recordValue = getRawPayloadFieldName(tableName) === 'after' ? record.after : record.after;
+                    if (tableName === 'audit') {
+                        const actor = record.actor as Record<string, unknown> | undefined;
+                        const actorPluginId = String(actor?.pluginId ?? 'system').trim() || 'system';
+                        const actorMode = String(actor?.mode ?? '').trim();
+                        const actorTitle = actorPluginId === 'system' ? '系统维护' : actorPluginId === MEMORY_OS_PLUGIN_ID ? 'MemoryOS' : actorPluginId;
+                        const actorSubtitle = joinReadableMeta([
+                            actorMode ? `方式：${formatOperationModeLabel(actorMode)}` : '',
+                            actorPluginId === 'system' ? '来源：系统内核' : '',
+                        ]);
+                        return `
+                            <tr class="stx-re-row">
+                                <td>${renderRecordSummaryMarkup(formatAuditActionLabel(String(record.action ?? '')), String(record.reason ?? '记录发生了结构变更').trim() || '记录发生了结构变更', '审计编号', recordId)}</td>
+                                <td>${renderRecordSummaryMarkup(actorTitle, actorSubtitle || '未记录额外来源信息', '内部来源', actorPluginId)}</td>
+                                <td><div class="stx-re-value" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(recordValue, false)}</div></td>
+                                <td>${escapeHtml(formatTimeLabel(record.ts))}</td>
+                            </tr>
+                        `;
+                    }
+                    const targetKind = String(record.targetKind ?? '').trim() || '未知类型';
+                    const targetTitle = String(record.title ?? '').trim() || '未命名变更';
+                    const sourceLabel = joinReadableMeta([
+                        String(record.source ?? '').trim(),
+                        String(record.consumerPluginId ?? '').trim(),
+                    ]);
+                    const reasonText = Array.isArray(record.reasonCodes)
+                        ? (record.reasonCodes as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean).join(' / ')
+                        : '';
+                    return `
+                        <tr class="stx-re-row">
+                            <td>${renderRecordSummaryMarkup(formatMutationHistoryActionLabel(String(record.action ?? '')), `${targetKind} · ${targetTitle}`, '变更编号', recordId)}</td>
+                            <td>${renderRecordSummaryMarkup(formatLogicRowDisplayLabel(String(record.targetRecordKey ?? ''), targetTitle), joinReadableMeta([String(record.compareKey ?? '').trim(), reasonText ? `原因 ${reasonText}` : '']), '目标记录', String(record.targetRecordKey ?? ''))}</td>
+                            <td>${renderRecordSummaryMarkup(sourceLabel || '未记录来源', Array.isArray(record.visibleMessageIds) && record.visibleMessageIds.length > 0 ? `消息 ${record.visibleMessageIds.length}` : '未记录消息上下文', '执行来源', String(record.consumerPluginId ?? ''))}</td>
+                            <td><div class="stx-re-value" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(recordValue, false)}</div></td>
+                            <td>${escapeHtml(formatTimeLabel(record.ts))}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                let readOnlyTheadHtml = '';
+                if (tableName === 'audit') {
+                    readOnlyTheadHtml = `<tr>${readOnlyHeaderCell('审计动作', 'action')}${readOnlyHeaderCell('执行来源', 'actor')}${readOnlyHeaderCell('记录内容', 'after')}${readOnlyHeaderCell('发生时间', 'ts')}</tr>`;
+                } else {
+                    readOnlyTheadHtml = `<tr>${readOnlyHeaderCell('变更动作', 'action')}${readOnlyHeaderCell('目标记录', 'target')}${readOnlyHeaderCell('执行来源', 'source')}${readOnlyHeaderCell('记录内容', 'after')}${readOnlyHeaderCell('发生时间', 'ts')}</tr>`;
+                }
+
+                const tableEl = document.createElement('table');
+                tableEl.className = 'stx-re-table';
+                tableEl.innerHTML = `<thead>${readOnlyTheadHtml}</thead><tbody>${readOnlyRowsHtml}</tbody>`;
+                contentArea.innerHTML = '';
+                contentArea.appendChild(tableEl);
+
+                tableEl.querySelectorAll('.stx-re-th-sortable').forEach((header: Element): void => {
+                    (header as HTMLElement).dataset.tip = '点击这一列排序，再点一次切换升序/降序。';
+                    header.addEventListener('click', (): void => {
+                        const column = String((header as HTMLElement).dataset.col ?? '');
+                        if (!column) {
+                            return;
+                        }
+                        if (currentSort.col === column) {
+                            currentSort.asc = !currentSort.asc;
+                        } else {
+                            currentSort.col = column;
+                            currentSort.asc = false;
+                        }
+                        void renderRawTable(tableName);
+                    });
+                });
+                btnBatchDelete.classList.add('is-hidden');
+                return;
+            }
 
             let theadHtml = '';
             let rowsHtml = '';

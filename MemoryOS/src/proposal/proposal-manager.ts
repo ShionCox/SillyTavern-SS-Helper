@@ -9,10 +9,10 @@ import { AuditManager } from '../core/audit-manager';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from '../core/chat-state-manager';
-import { normalizeWorldStatePatchValue } from '../core/world-state-patch-normalizer';
+import { executeMemoryMutationPlan } from '../core/memory-mutation-executor';
+import { planMemoryMutations } from '../core/memory-mutation-planner';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
-import type { MemoryCandidate } from '../types';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
 import { Logger } from '../../../SDK/logger';
 
@@ -30,6 +30,11 @@ function hashText(value: string): string {
     return `h${(hash >>> 0).toString(16)}`;
 }
 
+/**
+ * 功能：为提议生成稳定的摘要记录 ID，避免重复写入时产生新的摘要键。
+ * @param input 提议摘要的稳定特征。
+ * @returns 可复用的稳定摘要 ID。
+ */
 export function buildStableProposalSummaryId(input: {
     chatKey: string;
     consumerPluginId: string;
@@ -62,8 +67,7 @@ export function buildStableProposalSummaryId(input: {
 }
 
 /**
- * 提议写入管理器 —— 接收 AI 或外部插件的提议，经闸门后落盘
- * v2: 支持 schemaChanges 三段闸门与变更预算
+ * 功能：接收 AI 或外部插件的写入提议，并统一交给 gate、planner 和 executor 处理。
  */
 export class ProposalManager {
     private chatKey: string;
@@ -77,7 +81,7 @@ export class ProposalManager {
     private schemaGate: SchemaGate | null;
     private chatStateManager: ChatStateManager | null;
 
-    /** 被授权可以写入 facts/state 的插件列表 */
+    /** 被授权可以写入 facts / state 的插件列表。 */
     private allowedPlugins: string[] = [MEMORY_OS_PLUGIN_ID];
 
     constructor(chatKey: string, chatStateManager?: ChatStateManager) {
@@ -94,7 +98,9 @@ export class ProposalManager {
     }
 
     /**
-     * 授权一个插件写入权限
+     * 功能：授予插件写入权限。
+     * @param pluginId 插件标识。
+     * @returns 无返回值。
      */
     grantPermission(pluginId: string): void {
         if (!this.allowedPlugins.includes(pluginId)) {
@@ -103,47 +109,46 @@ export class ProposalManager {
     }
 
     /**
-     * 撤销插件写入权限
+     * 功能：撤销插件写入权限。
+     * @param pluginId 插件标识。
+     * @returns 无返回值。
      */
     revokePermission(pluginId: string): void {
-        this.allowedPlugins = this.allowedPlugins.filter(id => id !== pluginId);
+        this.allowedPlugins = this.allowedPlugins.filter((id: string): boolean => id !== pluginId);
     }
 
     /**
-     * 处理 AI 提议（来自 memory.extract / world.update 等任务）
+     * 功能：处理 AI 提议，并在四道 gate 校验通过后执行长期记忆 CRUD。
+     * @param envelope 提议信封。
+     * @param consumerPluginId 调用方插件标识。
+     * @returns 提议处理结果。
      */
     async processProposal(
         envelope: ProposalEnvelope,
-        consumerPluginId: string
+        consumerPluginId: string,
     ): Promise<ProposalResult> {
-        // 获取当前活跃模板
         const activeTemplateId = await this.metaManager.getActiveTemplateId();
         let activeTemplate: WorldTemplate | null = null;
         if (activeTemplateId) {
             activeTemplate = await this.templateManager.getById(activeTemplateId);
         }
 
-        // 四道闸门校验（前三道）
         const gateResults = await this.gateValidator.validate(
             envelope,
             activeTemplate,
             consumerPluginId,
-            this.allowedPlugins
+            this.allowedPlugins,
         );
 
-        // 检查是否有闸门未通过
-        const failedGates = gateResults.filter(g => !g.passed);
+        const failedGates = gateResults.filter((gate) => !gate.passed);
         if (failedGates.length > 0) {
-            const reasons = failedGates.flatMap(g => g.errors);
-
-            // 闸门 4：审计记录（即使被拒绝也要记录）
+            const reasons = failedGates.flatMap((gate) => gate.errors);
             await this.auditManager.log({
                 action: 'proposal.rejected',
                 actor: { pluginId: consumerPluginId, mode: 'ai' },
                 before: {},
                 after: { envelope, reasons },
             });
-
             return {
                 accepted: false,
                 applied: { factKeys: [], statePaths: [], summaryIds: [] },
@@ -152,31 +157,34 @@ export class ProposalManager {
             };
         }
 
-        // 校验全部通过 → 落盘
         return this.applyProposal(envelope, consumerPluginId, gateResults);
     }
 
     /**
-     * 处理外部插件的写入请求（requestWrite）
+     * 功能：把外部插件的 requestWrite 适配为统一 proposal 入口。
+     * @param request 外部写入请求。
+     * @returns 提议处理结果。
      */
     async processWriteRequest(request: WriteRequest): Promise<ProposalResult> {
         const envelope: ProposalEnvelope = {
             ok: true,
             proposal: request.proposal,
-            confidence: 1.0, // 外部插件提交的视为确定性数据
+            confidence: 1.0,
         };
-
         return this.processProposal(envelope, request.source.pluginId);
     }
 
     /**
-     * 执行实际的落盘操作
-     * v2: 在同一事务中处理 facts + schemaChanges，支持变更预算
+     * 功能：执行经过 gate 校验后的提议写入，并统一走 mutation planner / executor 主链。
+     * @param envelope 提议信封。
+     * @param consumerPluginId 调用方插件标识。
+     * @param gateResults gate 校验结果。
+     * @returns 提议处理结果。
      */
     private async applyProposal(
         envelope: ProposalEnvelope,
         consumerPluginId: string,
-        gateResults: Array<{ passed: boolean; gate: string; errors: string[] }>
+        gateResults: Array<{ passed: boolean; gate: string; errors: string[] }>,
     ): Promise<ProposalResult> {
         const applied = {
             factKeys: [] as string[],
@@ -208,15 +216,13 @@ export class ProposalManager {
             snapshotHash: normalizeText(logicalView?.snapshotHash),
             messageIds: visibleMessageIds,
             anchorMessageId: normalizeText(logicalView?.repairAnchorMessageId) || undefined,
-            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
+            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView.mutationKinds : [],
             repairGeneration,
             ts: Date.now(),
         };
 
-        // 判断 facts 密度
         const factsHighDensity = (facts?.length ?? 0) > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates;
 
-        // schemaChanges 三段闸门（Schema Gate + Diff Gate）
         let acceptedSchemaChanges: SchemaChangeProposal[] = [];
         if (schemaChanges && schemaChanges.length > 0 && this.schemaGate) {
             const activeTemplateId = await this.metaManager.getActiveTemplateId();
@@ -238,7 +244,6 @@ export class ProposalManager {
             acceptedSchemaChanges = schemaGateResult.accepted;
             applied.schemaChangesDeferred = schemaGateResult.deferred.length;
 
-            // 延后的 changes 记入审计
             for (const deferred of schemaGateResult.deferred) {
                 deferredHints.push({
                     change: deferred,
@@ -248,200 +253,66 @@ export class ProposalManager {
             }
         }
 
-        // 写入 facts（受变更预算限制）
-        let factCellUpdates = 0;
-        const factEntityIds = new Set<string>();
-        const scoredCandidates: MemoryCandidate[] = [];
-        let shouldRefreshRelationshipState = false;
+        const plannedFacts = Array.isArray(facts)
+            ? facts.slice(0, DEFAULT_CHANGE_BUDGET.maxFactCellUpdates)
+            : [];
+        if (Array.isArray(facts) && facts.length > plannedFacts.length) {
+            logger.info('facts 单轮提议已达到预算上限，剩余条目将被跳过');
+        }
+        const plannedPatches = Array.isArray(patches) ? patches.slice() : [];
+        const plannedSummaries = Array.isArray(summaries) ? summaries.slice() : [];
 
-        if (facts) {
-            for (const f of facts) {
-                if (!f) continue;
+        const mutationPlan = await planMemoryMutations({
+            chatKey: this.chatKey,
+            consumerPluginId,
+            source: derivationSource.kind,
+            facts: plannedFacts,
+            patches: plannedPatches,
+            summaries: plannedSummaries,
+            chatStateManager: this.chatStateManager,
+        });
+        const execution = await executeMemoryMutationPlan({
+            chatKey: this.chatKey,
+            consumerPluginId,
+            envelopeConfidence: envelope.confidence,
+            derivationSource,
+            visibleMessageIds,
+            plan: mutationPlan,
+            factsManager: this.factsManager,
+            stateManager: this.stateManager,
+            summariesManager: this.summariesManager,
+            chatStateManager: this.chatStateManager,
+            buildSummaryId: ({ summary, ordinal, nextTitle, nextContent, nextKeywords }): string => buildStableProposalSummaryId({
+                chatKey: this.chatKey,
+                consumerPluginId,
+                level: summary.level,
+                title: nextTitle,
+                content: nextContent,
+                keywords: nextKeywords,
+                visibleMessageIds,
+                viewHash: derivationSource.viewHash,
+                ordinal,
+            }),
+        });
+        applied.factKeys.push(...execution.applied.factKeys);
+        applied.statePaths.push(...execution.applied.statePaths);
+        applied.summaryIds.push(...execution.applied.summaryIds);
 
-                // 变更预算检查
-                if (factCellUpdates >= DEFAULT_CHANGE_BUDGET.maxFactCellUpdates) {
-                    logger.info('facts 单元格更新达到预算上限，跳过剩余');
-                    break;
-                }
-                if (f.entity?.id) {
-                    factEntityIds.add(`${f.entity.kind}:${f.entity.id}`);
-                    if (factEntityIds.size > DEFAULT_CHANGE_BUDGET.maxFactEntityUpdates) {
-                        logger.info('facts 实体行更新达到预算上限，跳过剩余');
-                        break;
-                    }
-                }
-
-                let factCandidate: MemoryCandidate | null = null;
-                if (this.chatStateManager) {
-                    factCandidate = await this.chatStateManager.buildMemoryCandidate({
-                        candidateId: crypto.randomUUID(),
-                        kind: /relationship|relation|bond|trust|affection|conflict|关系|好感|信任|矛盾/.test(
-                            `${normalizeText(f.type)} ${normalizeText(f.path)} ${normalizeText(JSON.stringify(f.value ?? ''))}`,
-                        )
-                            ? 'relationship'
-                            : 'fact',
-                        source: consumerPluginId,
-                        summary: `${normalizeText(f.type)} ${normalizeText(f.path)} ${normalizeText(JSON.stringify(f.value ?? ''))}`.trim(),
-                        payload: {
-                            type: f.type,
-                            entity: f.entity,
-                            path: f.path,
-                            value: f.value,
-                            confidence: f.confidence,
-                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
-                        },
-                        extractedAt: Date.now(),
-                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
-                    });
-                    scoredCandidates.push(factCandidate);
-                    if (!factCandidate.encoding.accepted) {
-                        continue;
-                    }
-                }
-
-                const factKey = await this.factsManager.upsert({
-                    factKey: f.factKey,
-                    type: f.type,
-                    entity: f.entity,
-                    path: f.path,
-                    value: f.value,
-                    confidence: f.confidence,
-                    provenance: {
-                        extractor: 'ai',
-                        provider: consumerPluginId,
-                        pluginId: consumerPluginId,
-                        source: derivationSource,
-                    },
-                });
-                applied.factKeys.push(factKey);
-                factCellUpdates++;
-                if (factCandidate && this.chatStateManager) {
-                    factCandidate.resolvedRecordKey = factKey;
-                    await this.chatStateManager.applyEncodingToRecord(factKey, 'fact', factCandidate.encoding);
-                    shouldRefreshRelationshipState = shouldRefreshRelationshipState
-                        || factCandidate.kind === 'relationship'
-                        || Boolean(factCandidate.encoding.relationScope);
-                }
+        if (this.chatStateManager) {
+            await this.chatStateManager.setLastMutationPlan(execution.snapshot);
+            const ingestHealth = await this.chatStateManager.getIngestHealth();
+            await this.chatStateManager.recordIngestHealth({
+                totalAttempts: ingestHealth.totalAttempts + mutationPlan.items.length,
+                duplicateDrops: ingestHealth.duplicateDrops + mutationPlan.actionCounts.NOOP,
+                lastWriteAt: execution.appliedItems > 0 ? Date.now() : ingestHealth.lastWriteAt,
+            });
+            if (execution.shouldRefreshRelationshipState) {
+                await this.chatStateManager.recomputeRelationshipState();
             }
         }
 
-        // 写入 patches (world_state)
-        if (patches) {
-            for (const p of patches) {
-                if (!p) continue;
-                const normalizedPatchValue = p.op === 'remove'
-                    ? p.value
-                    : normalizeWorldStatePatchValue(p.path, p.value);
-                let stateCandidate: MemoryCandidate | null = null;
-                if (this.chatStateManager) {
-                    stateCandidate = await this.chatStateManager.buildMemoryCandidate({
-                        candidateId: crypto.randomUUID(),
-                        kind: 'state',
-                        source: consumerPluginId,
-                        summary: `${normalizeText(p.path)} ${normalizeText(JSON.stringify(normalizedPatchValue ?? ''))}`.trim(),
-                        payload: {
-                            op: p.op,
-                            path: p.path,
-                            value: normalizedPatchValue,
-                            confidence: envelope.confidence,
-                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
-                        },
-                        extractedAt: Date.now(),
-                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
-                    });
-                    scoredCandidates.push(stateCandidate);
-                    if (!stateCandidate.encoding.accepted) {
-                        continue;
-                    }
-                }
-                if (p.op === 'remove') {
-                    await this.stateManager.patch([{ op: 'remove', path: p.path }]);
-                } else {
-                    await this.stateManager.set(p.path, normalizedPatchValue);
-                }
-                applied.statePaths.push(p.path);
-                if (stateCandidate && this.chatStateManager) {
-                    stateCandidate.resolvedRecordKey = p.path;
-                    await this.chatStateManager.applyEncodingToRecord(p.path, 'state', stateCandidate.encoding);
-                }
-            }
-        }
-
-        // 写入 summaries
-        if (summaries) {
-            for (const [summaryIndex, s] of summaries.entries()) {
-                if (!s) continue;
-                let summaryCandidate: MemoryCandidate | null = null;
-                if (this.chatStateManager) {
-                    summaryCandidate = await this.chatStateManager.buildMemoryCandidate({
-                        candidateId: crypto.randomUUID(),
-                        kind: 'summary',
-                        source: consumerPluginId,
-                        summary: `${normalizeText(s.title)} ${normalizeText(s.content)}`.trim(),
-                        payload: {
-                            level: s.level,
-                            title: s.title,
-                            content: s.content,
-                            keywords: s.keywords,
-                            confidence: envelope.confidence,
-                            sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? '',
-                        },
-                        extractedAt: Date.now(),
-                        sourceEventId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
-                    });
-                    scoredCandidates.push(summaryCandidate);
-                    if (!summaryCandidate.encoding.accepted) {
-                        continue;
-                    }
-                }
-                const summaryId = buildStableProposalSummaryId({
-                    chatKey: this.chatKey,
-                    consumerPluginId,
-                    level: s.level,
-                    title: s.title,
-                    content: s.content,
-                    keywords: s.keywords,
-                    visibleMessageIds,
-                    viewHash: derivationSource.viewHash,
-                    ordinal: summaryIndex,
-                });
-                const persistedSummaryId = await this.summariesManager.upsert({
-                    summaryId,
-                    level: s.level,
-                    title: s.title,
-                    content: s.content,
-                    keywords: s.keywords,
-                    range: {
-                        fromMessageId: visibleMessageIds[0] ?? undefined,
-                        toMessageId: visibleMessageIds[visibleMessageIds.length - 1] ?? undefined,
-                    },
-                    source: {
-                        extractor: 'ai',
-                        provider: consumerPluginId,
-                        provenance: {
-                            extractor: 'ai',
-                            provider: consumerPluginId,
-                            pluginId: consumerPluginId,
-                            source: derivationSource,
-                        },
-                    },
-                });
-                applied.summaryIds.push(persistedSummaryId);
-                if (summaryCandidate && this.chatStateManager) {
-                    summaryCandidate.resolvedRecordKey = persistedSummaryId;
-                    await this.chatStateManager.applyEncodingToRecord(persistedSummaryId, 'summary', summaryCandidate.encoding);
-                }
-            }
-        }
-
-        if (this.chatStateManager && scoredCandidates.length > 0 && shouldRefreshRelationshipState) {
-            await this.chatStateManager.recomputeRelationshipState();
-        }
-
-        // Apply Gate: schemaChanges 落盘（仅记录审计，模板修订由外部管理）
         if (acceptedSchemaChanges.length > 0) {
             applied.schemaChangesApplied = acceptedSchemaChanges.length;
-
             await this.auditManager.log({
                 action: 'schema.changes_applied',
                 actor: { pluginId: consumerPluginId, mode: 'ai' },
@@ -450,10 +321,8 @@ export class ProposalManager {
             });
         }
 
-        // entityResolutions 记录（v1 只记录建议，不自动 merge）
         if (entityResolutions && entityResolutions.length > 0) {
             applied.entityResolutions = entityResolutions.length;
-
             await this.auditManager.log({
                 action: 'entity.resolution_suggested',
                 actor: { pluginId: consumerPluginId, mode: 'ai' },
@@ -462,15 +331,18 @@ export class ProposalManager {
             });
         }
 
-        // 闸门 4：审计记录（成功落盘）
         await this.auditManager.log({
             action: 'proposal.applied',
             actor: { pluginId: consumerPluginId, mode: 'ai' },
             before: {},
-            after: { applied, confidence: envelope.confidence, deferredSchemaHints: deferredHints.length },
+            after: {
+                applied,
+                confidence: envelope.confidence,
+                deferredSchemaHints: deferredHints.length,
+                mutationPlan: execution.snapshot,
+            },
         });
 
-        // 延后 schema 建议写入审计
         if (deferredHints.length > 0) {
             await this.auditManager.log({
                 action: 'schema.changes_deferred',
@@ -480,7 +352,6 @@ export class ProposalManager {
             });
         }
 
-        // 更新 shared.signals
         void this.updateSharedSignals();
 
         return {
@@ -489,11 +360,13 @@ export class ProposalManager {
             rejectedReasons: [],
             gateResults,
             deferredSchemaHints: deferredHints.length > 0 ? deferredHints : undefined,
+            mutationPlan: execution.snapshot,
         };
     }
 
     /**
-     * 统计当前 chatKey 下的事实/事件数量，写入 shared.signals
+     * 功能：统计当前 chatKey 下的事实和事件数量，并写回 shared.signals。
+     * @returns 无返回值。
      */
     private async updateSharedSignals(): Promise<void> {
         try {
@@ -514,7 +387,7 @@ export class ProposalManager {
                 },
             });
         } catch {
-            // signal 更新失败不应影响主流程
+            // shared.signals 写回失败不应影响主流程。
         }
     }
 }

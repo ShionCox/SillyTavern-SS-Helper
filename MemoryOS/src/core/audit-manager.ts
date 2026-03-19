@@ -58,7 +58,7 @@ export class AuditManager {
      * @returns 快照 ID。
      */
     async createSnapshot(note?: string): Promise<string> {
-        const [events, facts, states, summaries, templates, meta, binding, worldInfoCache, vectorChunks, vectorEmbeddings, vectorMeta] = await Promise.all([
+        const [events, facts, states, summaries, templates, meta, binding, worldInfoCache, vectorChunks, vectorEmbeddings, vectorMeta, mutationHistory] = await Promise.all([
             db.events.where('chatKey').equals(this.chatKey).toArray(),
             db.facts.where('chatKey').equals(this.chatKey).toArray(),
             db.world_state.where('[chatKey+path]').between([this.chatKey, ''], [this.chatKey, '\uffff']).toArray(),
@@ -70,6 +70,7 @@ export class AuditManager {
             db.vector_chunks.where('chatKey').equals(this.chatKey).toArray(),
             db.vector_embeddings.where('chatKey').equals(this.chatKey).toArray(),
             db.vector_meta.where('chatKey').equals(this.chatKey).toArray(),
+            db.memory_mutation_history.where('chatKey').equals(this.chatKey).toArray(),
         ]);
 
         return this.log({
@@ -77,7 +78,7 @@ export class AuditManager {
             actor: { pluginId: MEMORY_OS_PLUGIN_ID, mode: 'manual' },
             before: {},
             after: {
-                snapshotVersion: 3,
+                snapshotVersion: 4,
                 note,
                 chatKey: this.chatKey,
                 events,
@@ -91,6 +92,7 @@ export class AuditManager {
                 vectorChunks,
                 vectorEmbeddings,
                 vectorMeta,
+                mutationHistory,
             },
         });
     }
@@ -118,6 +120,7 @@ export class AuditManager {
         const vectorChunks = Array.isArray(data.vectorChunks) ? data.vectorChunks : [];
         const vectorEmbeddings = Array.isArray(data.vectorEmbeddings) ? data.vectorEmbeddings : [];
         const vectorMeta = Array.isArray(data.vectorMeta) ? data.vectorMeta : [];
+        const mutationHistory = Array.isArray(data.mutationHistory) ? data.mutationHistory : [];
 
         await clearMemoryChatData(this.chatKey, { includeAudit: false });
 
@@ -135,6 +138,7 @@ export class AuditManager {
                 db.vector_chunks,
                 db.vector_embeddings,
                 db.vector_meta,
+                db.memory_mutation_history,
             ],
             async () => {
                 if (events.length) {
@@ -186,6 +190,12 @@ export class AuditManager {
                         ...item,
                         chatKey: this.chatKey,
                         metaKey: `${this.chatKey}::${String(item.bookId ?? '')}`,
+                    })));
+                }
+                if (mutationHistory.length) {
+                    await db.memory_mutation_history.bulkPut(mutationHistory.map((item: any) => ({
+                        ...item,
+                        chatKey: this.chatKey,
                     })));
                 }
             }

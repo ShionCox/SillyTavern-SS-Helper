@@ -1,3 +1,5 @@
+import type { MemoryMutationPlanSnapshot } from '../types';
+
 /**
  * AI 提议制类型定义
  * 所有 AI 任务的返回必须以提议（Proposal）形式包裹,
@@ -7,11 +9,14 @@
 /** 事实提议 */
 export interface FactProposal {
     factKey?: string;
+    targetRecordKey?: string;
+    action?: 'auto' | 'update' | 'merge' | 'delete' | 'invalidate';
     type: string;
     entity?: { kind: string; id: string };
     path?: string;
     value: any;
     confidence?: number;
+    provenance?: any;
 }
 
 /** 状态补丁提议 (JSON Patch 格式) */
@@ -24,9 +29,19 @@ export interface PatchProposal {
 /** 摘要提议 */
 export interface SummaryProposal {
     level: 'message' | 'scene' | 'arc';
+    summaryId?: string;
+    targetRecordKey?: string;
+    action?: 'auto' | 'update' | 'merge' | 'delete' | 'invalidate';
     title?: string;
     content: string;
     keywords?: string[];
+    messageId?: string;
+    range?: { fromMessageId?: string; toMessageId?: string };
+    source?: {
+        extractor?: string;
+        provider?: string;
+        provenance?: Record<string, unknown>;
+    };
 }
 
 /** Schema 变更提议 */
@@ -89,6 +104,7 @@ export interface ProposalResult {
     rejectedReasons: string[];
     gateResults: GateResult[];
     deferredSchemaHints?: DeferredSchemaHint[];
+    mutationPlan?: MemoryMutationPlanSnapshot | null;
 }
 
 /** 外部插件写入请求 */

@@ -272,11 +272,7 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
             retentionPolicy: {
                 deletionStrategy: 'soft_delete',
             },
-            promptInjection: {
-                renderStyle: 'minimal_bullets',
-                softPersonaMode: 'hidden_context_summary',
-                defaultInsert: 'after_author_note',
-            },
+            promptInjection: {},
             profileRefreshInterval: 12,
             qualityRefreshInterval: 12,
             autoBootstrapSemanticSeed: true,
@@ -302,11 +298,7 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
             retentionPolicy: {
                 deletionStrategy: 'soft_delete',
             },
-            promptInjection: {
-                renderStyle: 'xml',
-                softPersonaMode: 'continuity_note',
-                defaultInsert: 'after_author_note',
-            },
+            promptInjection: {},
             profileRefreshInterval: 8,
             qualityRefreshInterval: 10,
             autoBootstrapSemanticSeed: true,
@@ -333,9 +325,6 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
                 deletionStrategy: 'soft_delete',
             },
             promptInjection: {
-                renderStyle: 'markdown',
-                softPersonaMode: 'hidden_context_summary',
-                defaultInsert: 'after_lorebook',
                 queryMode: 'setting_only',
             },
             profileRefreshInterval: 6,
@@ -364,11 +353,7 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
             retentionPolicy: {
                 deletionStrategy: 'soft_delete',
             },
-            promptInjection: {
-                renderStyle: 'xml',
-                softPersonaMode: 'continuity_note',
-                defaultInsert: 'after_author_note',
-            },
+            promptInjection: {},
             profileRefreshInterval: 8,
             qualityRefreshInterval: 8,
             autoBootstrapSemanticSeed: true,
@@ -394,11 +379,7 @@ function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChat
             retentionPolicy: {
                 deletionStrategy: 'immediate_purge',
             },
-            promptInjection: {
-                renderStyle: 'compact_kv',
-                softPersonaMode: 'hidden_context_summary',
-                defaultInsert: 'after_first_system',
-            },
+            promptInjection: {},
             profileRefreshInterval: 16,
             qualityRefreshInterval: 16,
             autoBootstrapSemanticSeed: false,
@@ -3399,11 +3380,11 @@ function translateDiagnosticKey(key: string): string {
         generatedAt: '决策生成时间',
         shouldInject: '是否注入',
         lorebookMode: '世界书策略',
-        anchorMode: '注入位置',
-        renderStyle: '注入呈现方式',
+        layoutMode: '注入布局',
+        insertionRole: '插入角色',
+        insertionPosition: '插入位置',
         queryMode: '查询模式',
-        softPersonaMode: '辅助提示方式',
-        fallbackOrder: '备用插入顺序',
+        blocksUsed: '已使用分层块',
         shouldTrimPrompt: '是否裁剪 Prompt',
         valueClass: '生成价值等级',
         shouldPersistLongTerm: '是否永久存储',
@@ -3457,7 +3438,7 @@ function buildDiagnosticKeyTip(key: string): string {
         worldStateSignal: '当前语境对世界观、环境设定等底层规则的敏感程度。',
         duplicateRate: '记忆库中语义重复的内容占比。过高会触发数据去重维护。',
         retrievalPrecision: '检索结果与当前对话语境的相关性得分，反映搜到的东西“准不准”。',
-        extractAcceptance: 'AI 提炼出的新事实有多少被通过并正式写入长期数据库。',
+        extractAcceptance: 'AI 提炼出的新事实有多少进入 mutation planner 后被实际执行。',
         summaryStaleness: '评估现有历史总结是否已经过时（对话已偏离原主题）。',
         tokenEfficiency: '单位 Token 承载的有效信息量。反映记忆压缩和表达是否精炼。',
         orphanFactsRatio: '库中那些虽然存在但与当前任何剧情主线都关联不上的琐碎碎片的比例。',
@@ -3472,8 +3453,11 @@ function buildDiagnosticKeyTip(key: string): string {
         sectionsUsed: '本轮决策挑选并使用了哪些记忆模块（如事实、摘要、群聊分流等）。',
         budgets: '给各记忆模块分配的最大字数限额。由系统根据当前的上下文剩余空间动态分配。',
         lorebookMode: '针对这次生成，系统决定如何结合世界书条目：强制注入、有条件注入或禁止。',
-        anchorMode: '确定记忆内容将被放置在 ST 命令流中的哪个具体位置（如 Author\'s Note 之后）。',
+        layoutMode: '当前注入采用的分层布局模式，第一阶段固定为 layered_memory_context。',
+        insertionRole: '记忆块被写入时使用的消息角色，第一阶段固定为 user。',
+        insertionPosition: '记忆块在 Prompt 中的插入位置，第一阶段固定为最后一条真实用户消息之前。',
         shouldTrimPrompt: '当上下文即将溢出时，系统是否决定主动对原始 Prompt 进行无损压缩。',
+        blocksUsed: '本轮 Memory Context 真正使用了哪些分层块，例如导演块或角色块。',
         valueClass: '评估 AI 这一句回复的“含金量”（如剧情推进、设定确认、琐事闲谈等）。',
         shouldPersistLongTerm: '判定本次对话产生的信息，是否有必要记入长期数据库（长远记忆）。',
         shouldExtractFacts: '判定是否需要从这段对话中提炼出结构化的固定事实记录。',
@@ -3564,24 +3548,24 @@ function formatDiagnosticDisplayValue(key: string, value: unknown): unknown {
         return formatLorebookModeLabel(String(value ?? ''));
     }
 
-    if (key === 'anchorMode') {
-        return formatAnchorModeLabel(String(value ?? ''));
-    }
-
-    if (key === 'renderStyle') {
-        return formatRenderStyleLabel(String(value ?? ''));
-    }
-
     if (key === 'queryMode') {
         return formatQueryModeLabel(String(value ?? ''));
     }
 
-    if (key === 'softPersonaMode') {
-        return formatSoftPersonaModeLabel(String(value ?? ''));
+    if (key === 'layoutMode') {
+        return formatLayoutModeLabel(String(value ?? ''));
     }
 
-    if (key === 'fallbackOrder') {
-        return formatAnchorModeLabel(String(value ?? ''));
+    if (key === 'insertionRole') {
+        return formatInsertionRoleLabel(String(value ?? ''));
+    }
+
+    if (key === 'insertionPosition') {
+        return formatInsertionPositionLabel(String(value ?? ''));
+    }
+
+    if (key === 'blocksUsed') {
+        return formatMemoryContextBlocksValue(value);
     }
 
     return value;
@@ -4093,41 +4077,42 @@ function formatLorebookModeLabel(value: string): string {
 }
 
 /**
- * 功能：格式化注入锚点标签。
- * @param value 原始锚点值。
+ * 功能：格式化注入布局标签。
+ * @param value 原始布局值。
  * @returns 中文标签。
  */
-function formatAnchorModeLabel(value: string): string {
+function formatLayoutModeLabel(value: string): string {
     const normalized = String(value || '').trim().toLowerCase();
     const dict: Record<string, string> = {
-        top: '插在最前面',
-        before_start: '放在开头之前',
-        custom_anchor: '插到自定义锚点',
-        after_first_system: '放在第一条系统提示后',
-        after_last_system: '放在最后一条系统提示后',
-        after_persona: '放在人设后面',
-        after_author_note: '放在作者注释后',
-        after_lorebook: '放在世界书后',
-        setting_query_only: '仅设定问答时插入',
+        layered_memory_context: '固定三层记忆布局',
     };
-    return dict[normalized] || value || '按默认位置插入';
+    return dict[normalized] || value || '固定分层布局';
 }
 
 /**
- * 功能：格式化注入渲染样式标签。
- * @param value 原始样式值。
+ * 功能：格式化注入角色标签。
+ * @param value 原始角色值。
  * @returns 中文标签。
  */
-function formatRenderStyleLabel(value: string): string {
+function formatInsertionRoleLabel(value: string): string {
     const normalized = String(value || '').trim().toLowerCase();
     const dict: Record<string, string> = {
-        xml: '结构化片段',
-        markdown: 'Markdown 列表',
-        comment: '注释说明',
-        compact_kv: '紧凑键值',
-        minimal_bullets: '精简条目',
+        user: 'user 消息',
     };
-    return dict[normalized] || value || '默认样式';
+    return dict[normalized] || value || '固定角色';
+}
+
+/**
+ * 功能：格式化注入位置标签。
+ * @param value 原始位置值。
+ * @returns 中文标签。
+ */
+function formatInsertionPositionLabel(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'before_last_user') {
+        return '最后一条真实用户消息之前';
+    }
+    return value || '固定位置';
 }
 
 /**
@@ -4147,19 +4132,23 @@ function formatQueryModeLabel(value: string): string {
 }
 
 /**
- * 功能：格式化辅助提示方式标签。
- * @param value 原始模式。
- * @returns 中文标签。
+ * 功能：把 Memory Context 分层块转换成便于展示的文本。
+ * @param value 分层块列表。
+ * @returns 文本。
  */
-function formatSoftPersonaModeLabel(value: string): string {
-    const normalized = String(value || '').trim().toLowerCase();
-    const dict: Record<string, string> = {
-        scene_note: '场景提醒',
-        continuity_note: '连续性提醒',
-        character_anchor: '角色锚点',
-        hidden_context_summary: '隐藏上下文摘要',
-    };
-    return dict[normalized] || value || '默认方式';
+function formatMemoryContextBlocksValue(value: unknown): string {
+    if (!Array.isArray(value) || value.length === 0) {
+        return '无分层块';
+    }
+    return value.map((item: any): string => {
+        const kind = String(item?.kind ?? '').trim();
+        const actorKey = String(item?.actorKey ?? '').trim();
+        const sectionHints = Array.isArray(item?.sectionHints) ? item.sectionHints.map((hint: unknown): string => String(hint ?? '').trim()).filter(Boolean) : [];
+        const prefix = kind === 'active_character_memory' ? '角色块' : '导演块';
+        return actorKey
+            ? `${prefix}(${actorKey})${sectionHints.length > 0 ? ` · ${sectionHints.join(',')}` : ''}`
+            : `${prefix}${sectionHints.length > 0 ? ` · ${sectionHints.join(',')}` : ''}`;
+    }).join(' / ');
 }
 
 /**
@@ -4170,6 +4159,21 @@ function formatSoftPersonaModeLabel(value: string): string {
 function formatDecisionReasonCodeLabel(code: string): string {
     const raw = String(code || '').trim();
     const normalized = raw.toLowerCase();
+    const layoutMatch = normalized.match(/^layout:(.+)$/i);
+    if (layoutMatch) {
+        return `注入布局：${formatLayoutModeLabel(layoutMatch[1])}`;
+    }
+    const insertionRoleMatch = normalized.match(/^insertion_role:(.+)$/i);
+    if (insertionRoleMatch) {
+        return `插入角色：${formatInsertionRoleLabel(insertionRoleMatch[1])}`;
+    }
+    const insertionPositionMatch = normalized.match(/^insertion_position:(.+)$/i);
+    if (insertionPositionMatch) {
+        return `插入位置：${formatInsertionPositionLabel(insertionPositionMatch[1])}`;
+    }
+    if (normalized.startsWith('block:')) {
+        return `分层块：${raw.slice('block:'.length)}`;
+    }
     const dict: Record<string, string> = {
         setting_only_mode: '当前只在设定问答场景下注入记忆',
         pre_gate_skip: '这一轮不适合注入额外记忆',
@@ -4463,7 +4467,7 @@ function formatMaintenanceActionLabel(action: MaintenanceActionType): string {
         return '摘要重建';
     }
     if (action === 'revectorize') {
-        return '向量重建';
+        return '严格向量重建';
     }
     if (action === 'schema_cleanup') {
         return '设定整理';

@@ -19,68 +19,6 @@ const REQUEST_LOG_MAX_RECORDS = 2000;
 const ARCHIVABLE_STATES = new Set<RequestState>(['completed', 'failed', 'cancelled', 'overlay_waiting']);
 const FALLBACK_SOURCE_PLUGIN_ID = 'stx_llmhub';
 
-function truncateString(value: string, max = 4000): { value: string; truncated: boolean; originalLength: number } {
-    if (value.length <= max) {
-        return { value, truncated: false, originalLength: value.length };
-    }
-    const suffix = ` ...(truncated ${value.length - max} chars)`;
-    return {
-        value: `${value.slice(0, Math.max(0, max - suffix.length))}${suffix}`,
-        truncated: true,
-        originalLength: value.length,
-    };
-}
-
-function sanitizeForLog(value: unknown, options?: { maxDepth?: number; maxArray?: number; maxKeys?: number; maxString?: number }): unknown {
-    const maxDepth = options?.maxDepth ?? 6;
-    const maxArray = options?.maxArray ?? 30;
-    const maxKeys = options?.maxKeys ?? 50;
-    const maxString = options?.maxString ?? 4000;
-    const seen = new WeakSet<object>();
-
-    const walk = (input: unknown, depth: number): unknown => {
-        if (input == null) return input;
-        if (typeof input === 'string') return truncateString(input, maxString).value;
-        if (typeof input === 'number' || typeof input === 'boolean') return input;
-        if (typeof input === 'bigint' || typeof input === 'symbol') return String(input);
-        if (typeof input === 'function') return `[Function ${(input as Function).name || 'anonymous'}]`;
-        if (depth >= maxDepth) return '[MaxDepth]';
-
-        if (Array.isArray(input)) {
-            const limited = input.slice(0, maxArray).map((item) => walk(item, depth + 1));
-            if (input.length > maxArray) {
-                limited.push(`[+${input.length - maxArray} more items]`);
-            }
-            return limited;
-        }
-
-        if (typeof input === 'object') {
-            const objectValue = input as Record<string, unknown>;
-            if (seen.has(objectValue)) return '[Circular]';
-            seen.add(objectValue);
-
-            const keys = Object.keys(objectValue);
-            const limitedKeys = keys.slice(0, maxKeys);
-            const out: Record<string, unknown> = {};
-            for (const key of limitedKeys) {
-                out[key] = walk(objectValue[key], depth + 1);
-            }
-            if (keys.length > maxKeys) {
-                out.__truncatedKeys = keys.length - maxKeys;
-            }
-            return out;
-        }
-
-        try {
-            return JSON.parse(JSON.stringify(input));
-        } catch {
-            return String(input);
-        }
-    };
-
-    return walk(value, 0);
-}
-
 function normalizeOptionalText(value: unknown): string | undefined {
     const normalized = String(value || '').trim();
     return normalized || undefined;
@@ -136,13 +74,12 @@ export class RequestLogService {
         const sourcePluginId = normalizeOptionalText(record.scope?.pluginId) || normalizeOptionalText(record.consumer) || FALLBACK_SOURCE_PLUGIN_ID;
         const chatKey = normalizeOptionalText(record.chatKey);
         const sessionId = normalizeOptionalText(record.scope?.sessionId);
-        const requestSnapshot = sanitizeForLog(
-            record.requestLogSnapshot || {
+        const requestSnapshot = {
+            ...(record.requestLogSnapshot || {
                 taskKind: record.taskKind,
                 taskDescription: record.taskDescription,
-            },
-            { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 },
-        ) as LLMRequestLogRequestSnapshot;
+            }),
+        } as LLMRequestLogRequestSnapshot;
         const responseSnapshot = this.buildLogResponseSnapshot(record);
         const latencyMs = record.finishedAt && record.startedAt ? Math.max(0, record.finishedAt - record.startedAt) : undefined;
         const logEntry: LLMRequestLogEntry = {
@@ -235,11 +172,10 @@ export class RequestLogService {
             finalError: record.debug?.finalError,
             reasonCode: record.debug?.reasonCode,
             validationErrors: Array.isArray(record.debug?.validationErrors) ? record.debug?.validationErrors.slice(0, 50) : undefined,
-            rawResponseText: typeof record.debug?.rawResponseText === 'string'
-                ? (sanitizeForLog(record.debug.rawResponseText, { maxString: 12000 }) as string)
-                : undefined,
-            parsedResponse: sanitizeForLog(record.debug?.parsedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
-            normalizedResponse: sanitizeForLog(record.debug?.normalizedResponse, { maxDepth: 8, maxArray: 40, maxKeys: 80, maxString: 8000 }),
+            rawResponseText: record.debug?.rawResponseText,
+            providerResponse: record.debug?.providerResponse,
+            parsedResponse: record.debug?.parsedResponse,
+            normalizedResponse: record.debug?.normalizedResponse,
         };
     }
 }

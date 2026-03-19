@@ -8,19 +8,6 @@ import { VectorManager } from './vector-manager';
 
 const logger = new Logger('HybridSearch');
 
-function summarizeIndexSource(metadata?: Record<string, unknown>): string {
-    const source = metadata?.source;
-    if (!source || typeof source !== 'object') {
-        return 'kind=unknown, reason=unknown';
-    }
-    const record = source as Record<string, unknown>;
-    const kind = String(record.kind ?? 'unknown').trim() || 'unknown';
-    const reason = String(record.reason ?? 'unknown').trim() || 'unknown';
-    const viewHash = String(record.viewHash ?? '').trim();
-    const messageIds = Array.isArray(record.messageIds) ? record.messageIds.length : 0;
-    return `kind=${kind}, reason=${reason}, viewHash=${viewHash || '-'}, messages=${messageIds}`;
-}
-
 export interface HybridSearchResult {
     content: string;
     score: number;
@@ -131,44 +118,6 @@ export class HybridSearchManager {
 
         logger.info(`混合检索完成：vector=${vectorResults.length}, keyword=${keywordResults.length}, event=${eventResults.length}, merged=${reranked.length}`);
         return reranked;
-    }
-
-    /**
-     * 功能：按聊天策略建立向量索引。
-     * @param text 待索引文本。
-     * @param bookId 来源 bookId。
-     * @returns 写入的分块键列表。
-     */
-    async indexText(text: string, bookId?: string, metadata?: Record<string, unknown>): Promise<string[]> {
-        const sourceSummary = summarizeIndexSource(metadata);
-        if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
-            logger.info(`跳过向量索引：聊天已归档，bookId=${bookId ?? '(无)'}, ${sourceSummary}`);
-            return [];
-        }
-        const adaptivePolicy = this.chatStateManager
-            ? await this.chatStateManager.getAdaptivePolicy()
-            : null;
-        const vectorMode = adaptivePolicy?.vectorMode ?? 'search_rerank';
-        if (adaptivePolicy?.vectorEnabled === false || vectorMode === 'off') {
-            logger.info(`跳过向量索引：向量能力已关闭，bookId=${bookId ?? '(无)'}, vectorMode=${vectorMode}, ${sourceSummary}`);
-            return [];
-        }
-        const threshold = Number(adaptivePolicy?.vectorChunkThreshold ?? 240);
-        if (String(text ?? '').trim().length < threshold) {
-            logger.info(`跳过向量索引：文本长度低于阈值，bookId=${bookId ?? '(无)'}, textLen=${String(text ?? '').trim().length}, threshold=${threshold}, ${sourceSummary}`);
-            return [];
-        }
-        logger.info(`向量索引策略放行，bookId=${bookId ?? '(无)'}, vectorMode=${vectorMode}, threshold=${threshold}, ${sourceSummary}`);
-        const chunkIds = await this.vectorManager.indexText(text, bookId, metadata);
-        if (this.chatStateManager && chunkIds.length > 0) {
-            const stats = await this.vectorManager.getIndexStats();
-            await this.chatStateManager.updateVectorLifecycle({
-                vectorChunkCount: Number(stats.chunkCount ?? 0),
-                lastIndexAt: Number(stats.lastIndexedAt ?? Date.now()),
-            });
-        }
-        logger.info(`向量索引策略执行结束，bookId=${bookId ?? '(无)'}, chunkIds=${chunkIds.length}, ${sourceSummary}`);
-        return chunkIds;
     }
 
     /**

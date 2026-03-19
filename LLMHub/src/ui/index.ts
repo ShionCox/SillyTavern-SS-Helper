@@ -173,72 +173,40 @@ function stringifyDebugValue(value: unknown): string {
     }
 }
 
-function formatRawLogText(value: unknown): string {
-    if (typeof value !== 'string') {
-        return stringifyDebugValue(value);
-    }
-
-    return value
-        .replace(/\r\n?/g, '\n')
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\n/g, '\n')
-        .replace(/\\t/g, '\t');
+function stringifyRawLogValue(value: unknown): string {
+    return stringifyDebugValue(value);
 }
 
 function buildRequestLogOutboundPreview(entry: LLMRequestLogEntry): string {
-    let outbound: unknown = null;
-
-    if (entry.taskKind === 'generation') {
-        const providerRequest = entry.request?.providerRequest;
-        const generationInput = entry.request?.generationInput;
-        const routeHint = entry.request?.routeHint;
-        const budget = entry.request?.budget;
-        const schemaSummary = entry.request?.schemaSummary;
-        const schema = entry.request?.schema;
-
-        if (providerRequest != null) {
-            outbound = providerRequest;
-        } else if (generationInput != null || routeHint != null || budget != null || schemaSummary != null || schema != null) {
-            outbound = {
-                note: '历史日志未记录 providerRequest，以下为上层输入回退快照',
-                generationInput,
-                routeHint,
-                budget,
-                schemaSummary,
-                schema,
-            };
-        }
-    } else if (entry.taskKind === 'embedding') {
-        outbound = {
-            resourceId: entry.response?.meta?.resourceId,
-            model: entry.response?.meta?.model,
-            texts: Array.isArray(entry.request?.embeddingTexts) ? entry.request.embeddingTexts : [],
-        };
-    } else if (entry.taskKind === 'rerank') {
-        outbound = {
-            resourceId: entry.response?.meta?.resourceId,
-            model: entry.response?.meta?.model,
-            query: entry.request?.rerankQuery,
-            docs: Array.isArray(entry.request?.rerankDocs) ? entry.request.rerankDocs : [],
-            topK: entry.request?.rerankTopK,
-        };
-    }
+    const outbound = entry.request?.providerRequest
+        ?? (entry.taskKind === 'embedding'
+            ? {
+                texts: Array.isArray(entry.request?.embeddingTexts) ? entry.request.embeddingTexts : [],
+                model: entry.response?.meta?.model,
+            }
+            : entry.taskKind === 'rerank'
+                ? {
+                    query: entry.request?.rerankQuery,
+                    docs: Array.isArray(entry.request?.rerankDocs) ? entry.request.rerankDocs : [],
+                    topK: entry.request?.rerankTopK,
+                    model: entry.response?.meta?.model,
+                }
+                : entry.request?.generationInput);
 
     if (outbound == null) {
         return '无原始发送内容';
     }
-    return typeof outbound === 'string' ? formatRawLogText(outbound) : stringifyDebugValue(outbound);
+    return stringifyRawLogValue(outbound);
 }
 
 function buildRequestLogInboundPreview(entry: LLMRequestLogEntry): string {
-    const inbound = entry.response?.rawResponseText
-        ?? entry.response?.parsedResponse
-        ?? entry.response?.finalError
-        ?? entry.response;
+    const inbound = entry.response?.providerResponse
+        ?? entry.response?.rawResponseText
+        ?? entry.response?.finalError;
     if (inbound == null || inbound === '') {
         return '无原始返回内容';
     }
-    return typeof inbound === 'string' ? formatRawLogText(inbound) : stringifyDebugValue(inbound);
+    return stringifyRawLogValue(inbound);
 }
 
 async function writeClipboardText(value: string): Promise<boolean> {

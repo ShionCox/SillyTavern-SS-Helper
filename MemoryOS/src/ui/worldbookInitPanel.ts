@@ -1248,15 +1248,13 @@ function buildDialogContentMarkup(manualDefault: string): string {
       <div class="stx-memory-worldbook-init-eyebrow">冷启动初始化</div>
       <div class="stx-memory-worldbook-init-title">
         <i class="fa-solid fa-books" aria-hidden="true"></i>
-        <span>选择要带入初始化分析的世界书</span>
+        <span>初始化记忆</span>
       </div>
-      <div class="stx-memory-worldbook-init-copy">现在支持两层粒度：你可以直接勾整本世界书，也可以先展开某一本，再只勾选关键条目。条目默认保持折叠，只有你点开时才显示正文细节。</div>
     </div>
     <div class="stx-memory-worldbook-init-body">
       <section class="stx-memory-worldbook-init-summary">
         <div class="stx-memory-worldbook-init-summary-main">
-          <strong id="${SUMMARY_TITLE_ID}">先选整本，或展开后只选关键条目</strong>
-          <span id="${SUMMARY_COPY_ID}">默认所有书卡和条目都保持紧凑折叠。</span>
+          <strong id="${SUMMARY_TITLE_ID}">选择需要加入初始化的内容</strong>
         </div>
         <div id="${SUMMARY_META_ID}" class="stx-memory-worldbook-init-summary-meta">确认后会真实读取所选条目</div>
       </section>

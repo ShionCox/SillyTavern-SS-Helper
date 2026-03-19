@@ -24,6 +24,7 @@ import type {
     DBVectorEmbedding,
     DBVectorMeta,
     DBRelationshipMemory,
+    DBMemoryMutationHistory,
     DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
@@ -49,6 +50,7 @@ export type {
     DBVectorEmbedding,
     DBVectorMeta,
     DBRelationshipMemory,
+    DBMemoryMutationHistory,
     DBMemoryRecallLog,
     DBWorldInfoCache,
     DBWorldState,
@@ -144,6 +146,7 @@ export async function clearMemoryChatData(
             db.vector_meta,
             db.relationship_memory,
             db.memory_recall_log,
+            db.memory_mutation_history,
         ]
         : [
             db.events,
@@ -159,6 +162,7 @@ export async function clearMemoryChatData(
             db.vector_meta,
             db.relationship_memory,
             db.memory_recall_log,
+            db.memory_mutation_history,
         ];
 
     await db.transaction('rw', writableTables, async (): Promise<void> => {
@@ -194,6 +198,10 @@ export async function clearMemoryChatData(
                 .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
                 .delete(),
             db.memory_recall_log
+                .where('[chatKey+ts]')
+                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
+                .delete(),
+            db.memory_mutation_history
                 .where('[chatKey+ts]')
                 .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
                 .delete(),
@@ -260,6 +268,7 @@ export async function clearAllMemoryData(): Promise<void> {
             db.vector_meta,
             db.relationship_memory,
             db.memory_recall_log,
+            db.memory_mutation_history,
             db.chat_plugin_state,
             db.chat_plugin_records,
         ],
@@ -279,6 +288,7 @@ export async function clearAllMemoryData(): Promise<void> {
                 db.vector_meta.clear(),
                 db.relationship_memory.clear(),
                 db.memory_recall_log.clear(),
+                db.memory_mutation_history.clear(),
                 db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
                 db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
             ]);

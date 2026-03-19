@@ -1,6 +1,6 @@
 import type {
   SdkTavernPromptMessageEvent,
-  SdkTavernPromptSystemInsertOptionsEvent,
+  SdkTavernPromptInsertOptionsEvent,
   SdkTavernPromptTargetEvent,
 } from "./types";
 import { stripRuntimePlaceholderArtifactsEvent } from "./artifacts";
@@ -128,7 +128,7 @@ function buildPromptContentLikeEvent(currentContent: unknown, nextText: string):
 }
 
 /**
- * 功能：根据参考消息推断新的 system 消息 `content` 结构。
+ * 功能：根据参考消息推断新的 prompt 消息 `content` 结构。
  * @param template 参考消息
  * @returns 适合新消息使用的空内容结构
  */
@@ -139,21 +139,28 @@ function buildEmptyPromptContentLikeEvent(
 }
 
 /**
- * 功能：按参考消息的字段形状创建新的 system 消息，避免无意义地同时携带多份重复文本字段。
+ * 功能：按目标角色创建新的 prompt 消息，避免无意义地同时携带多份重复文本字段。
  * @param template 参考消息
- * @returns 新的 system 消息对象
+ * @param role 目标角色。
+ * @returns 新的 prompt 消息对象
  */
-function buildPromptSystemMessageLikeEvent(
-  template: SdkTavernPromptMessageEvent | null | undefined
+function buildPromptMessageLikeEvent(
+  template: SdkTavernPromptMessageEvent | null | undefined,
+  role: "system" | "user" | "assistant"
 ): SdkTavernPromptMessageEvent {
   const templateRecord =
     template && typeof template === "object"
       ? (template as Record<string, unknown>)
       : null;
   const message: SdkTavernPromptMessageEvent = {
-    role: "system",
-    is_system: true,
+    role,
   };
+  if (role === "system") {
+    message.is_system = true;
+  }
+  if (role === "user") {
+    message.is_user = true;
+  }
 
   const hasContentField = Boolean(templateRecord) && Object.prototype.hasOwnProperty.call(templateRecord, "content");
   const hasMesField = Boolean(templateRecord) && Object.prototype.hasOwnProperty.call(templateRecord, "mes");
@@ -205,7 +212,7 @@ function applyTextToPromptRecordEvent(target: Record<string, unknown>, nextText:
  */
 function resolvePromptInsertIndexEvent(
   chatLength: number,
-  options?: SdkTavernPromptSystemInsertOptionsEvent
+  options?: SdkTavernPromptInsertOptionsEvent
 ): number {
   const insertMode = options?.insertMode ?? "before_index";
   if (insertMode === "append") {
@@ -428,15 +435,31 @@ export function extractTavernPromptMessagesEvent(
  * @param options 插入配置
  * @returns 新插入的 system 消息
  */
-export function insertTavernPromptSystemMessageEvent(
+export function insertTavernPromptMessageEvent(
   chat: SdkTavernPromptMessageEvent[],
-  options?: SdkTavernPromptSystemInsertOptionsEvent
+  options: SdkTavernPromptInsertOptionsEvent
 ): SdkTavernPromptMessageEvent {
-  const message = buildPromptSystemMessageLikeEvent(options?.template);
-  if (options?.text != null) {
+  const message = buildPromptMessageLikeEvent(options?.template, options.role);
+  if (options.text != null) {
     setTavernPromptMessageTextEvent(message, options.text);
   }
   const safeIndex = resolvePromptInsertIndexEvent(chat.length, options);
   chat.splice(safeIndex, 0, message);
   return message;
+}
+
+/**
+ * 功能：向 prompt 消息数组中插入一条 system 消息。
+ * @param chat 目标消息数组
+ * @param options 插入配置
+ * @returns 新插入的 system 消息
+ */
+export function insertTavernPromptSystemMessageEvent(
+  chat: SdkTavernPromptMessageEvent[],
+  options: SdkTavernPromptInsertOptionsEvent
+): SdkTavernPromptMessageEvent {
+  return insertTavernPromptMessageEvent(chat, {
+    ...options,
+    role: "system",
+  });
 }

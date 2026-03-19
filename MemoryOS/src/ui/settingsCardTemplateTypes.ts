@@ -42,6 +42,7 @@ export interface MemoryOSSettingsIds {
     panelAboutId: string;
     panelTemplateId: string;
     panelAuditId: string;
+    panelMutationHistoryId: string;
     roleOverviewMetaId: string;
     rolePersonaBadgesId: string;
     rolePrimaryFactsId: string;
@@ -129,6 +130,8 @@ export interface MemoryOSSettingsIds {
     auditListId: string;
     auditCreateSnapshotBtnId: string;
     auditRefreshBtnId: string;
+    mutationHistoryListId: string;
+    mutationHistoryRefreshBtnId: string;
     // 世界书写回
     wiPreviewId: string;
     wiPreviewBtnId: string;

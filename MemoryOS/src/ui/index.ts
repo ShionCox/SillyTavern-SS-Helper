@@ -28,6 +28,7 @@ import { escapeHtml } from './editorShared';
 import { showSnapshotSourceDetails } from './candidateSourceDialogs';
 import { createEditorActionExecutor } from './editorActions';
 import { bindSettingsAuditPanel } from './settingsAuditPanel';
+import { bindSettingsMutationHistoryPanel } from './settingsMutationHistoryPanel';
 import { bindSettingsTemplatePanel } from './settingsTemplatePanel';
 import { bindSettingsWorldInfoPanel } from './settingsWorldInfoPanel';
 
@@ -187,6 +188,9 @@ const IDS: MemoryOSSettingsIds = {
     auditListId: `${NAMESPACE}-audit-list`,
     auditCreateSnapshotBtnId: `${NAMESPACE}-audit-snapshot`,
     auditRefreshBtnId: `${NAMESPACE}-audit-refresh`,
+    panelMutationHistoryId: `${NAMESPACE}-panel-mutation-history`,
+    mutationHistoryListId: `${NAMESPACE}-mutation-history-list`,
+    mutationHistoryRefreshBtnId: `${NAMESPACE}-mutation-history-refresh`,
     // 世界书写回
     wiPreviewId: `${NAMESPACE}-wi-preview`,
     wiPreviewBtnId: `${NAMESPACE}-wi-preview-btn`,
@@ -480,6 +484,7 @@ function bindUiEvents() {
         mergePanelIntoGroup(IDS.panelAiId, IDS.panelTuningId);
         mergePanelIntoGroup(IDS.panelDbId, IDS.panelTemplateId);
         mergePanelIntoGroup(IDS.panelDbId, IDS.panelAuditId);
+        mergePanelIntoGroup(IDS.panelDbId, IDS.panelMutationHistoryId);
     };
 
     /**
@@ -2366,6 +2371,11 @@ function bindUiEvents() {
     }
 
     bindSettingsAuditPanel({
+        ids: IDS,
+        refreshExperiencePanels,
+        refreshTemplatePanelState,
+    });
+    bindSettingsMutationHistoryPanel({
         ids: IDS,
         refreshExperiencePanels,
         refreshTemplatePanelState,

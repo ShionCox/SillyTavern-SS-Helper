@@ -21,14 +21,12 @@ import type {
     GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
+    MemoryContextBlockUsage,
     LorebookGateDecision,
     LogicalChatView,
     PreGenerationGateDecision,
-    PromptAnchorMode,
     PromptInjectionProfile,
     PromptQueryMode,
-    PromptRenderStyle,
-    PromptSoftPersonaMode,
     RecallCandidate,
     RecallLogEntry,
     RecallPlan,
@@ -41,7 +39,7 @@ import { collectRecallCandidates } from '../recall/recall-assembler';
 import { planRecall } from '../recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
 import { buildPreparedRecallContext } from './recall-context-builder';
-import { buildSectionText, renderInjectedContext } from './prompt-memory-renderer';
+import { buildLayeredMemoryContext } from './prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries } from './recall-log-mapper';
 import { buildViewpointPolicyInput } from './viewpoint-policy';
 
@@ -64,7 +62,7 @@ type BuildContextDecision = {
     preDecision: PreGenerationGateDecision;
 };
 
-type AnchorPolicy = PromptInjectionProfile;
+type PromptInjectionPolicy = PromptInjectionProfile;
 
 /**
  * 功能：根据聊天画像和意图构建注入管理器。
@@ -84,7 +82,7 @@ export class InjectionManager {
     private stateManager: StateManager;
     private summariesManager: SummariesManager;
     private chatStateManager: ChatStateManager | null;
-    private anchorPolicy: AnchorPolicy = {
+    private promptInjectionProfile: PromptInjectionPolicy = {
         ...DEFAULT_PROMPT_INJECTION_PROFILE,
     };
 
@@ -137,41 +135,24 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：设置注入锚点策略。
+     * 功能：设置当前聊天的固定分层注入配置。
      * 参数：
-     *   opts：锚点策略补丁。
+     *   opts：注入配置补丁。
      * 返回：无返回值。
      */
-    async setAnchorPolicy(opts: {
-        allowSystem?: boolean;
-        allowUser?: boolean;
-        defaultInsert?: PromptAnchorMode;
-        fallbackOrder?: PromptAnchorMode[];
+    async setPromptInjectionProfile(opts: {
         queryMode?: PromptQueryMode;
-        renderStyle?: PromptRenderStyle;
-        softPersonaMode?: PromptSoftPersonaMode;
-        wrapTag?: string;
         settingOnlyMinScore?: number;
     }): Promise<void> {
         const normalizedPatch: Partial<PromptInjectionProfile> = {
-            allowSystem: opts.allowSystem,
-            allowUser: opts.allowUser,
-            defaultInsert: opts.defaultInsert,
-            fallbackOrder: Array.isArray(opts.fallbackOrder) ? opts.fallbackOrder.filter(Boolean) : undefined,
             queryMode: opts.queryMode,
-            renderStyle: opts.renderStyle,
-            softPersonaMode: opts.softPersonaMode,
-            wrapTag: typeof opts.wrapTag === 'string' && opts.wrapTag.trim().length > 0 ? opts.wrapTag.trim() : undefined,
             settingOnlyMinScore: Number.isFinite(Number(opts.settingOnlyMinScore))
                 ? Number(opts.settingOnlyMinScore)
                 : undefined,
         };
-        this.anchorPolicy = {
-            ...this.anchorPolicy,
-            ...(normalizedPatch ?? {}),
-            fallbackOrder: Array.isArray(normalizedPatch.fallbackOrder) && normalizedPatch.fallbackOrder.length > 0
-                ? normalizedPatch.fallbackOrder
-                : this.anchorPolicy.fallbackOrder,
+        this.promptInjectionProfile = {
+            ...this.promptInjectionProfile,
+            ...normalizedPatch,
         };
         if (this.chatStateManager) {
             await this.chatStateManager.setPromptInjectionProfile(normalizedPatch);
@@ -179,12 +160,12 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：读取当前锚点策略。
+     * 功能：读取当前固定分层注入配置。
      * 参数：无。
-     * 返回：当前锚点策略。
+     * 返回：当前注入配置。
      */
-    getAnchorPolicy(): AnchorPolicy {
-        return { ...this.anchorPolicy };
+    getPromptInjectionProfile(): PromptInjectionPolicy {
+        return { ...this.promptInjectionProfile };
     }
 
     /**
@@ -221,22 +202,6 @@ export class InjectionManager {
     }
 
     /**
-     * 功能：把旧锚点映射到新的锚点枚举。
-     * 参数：
-     *   value：旧值或新值。
-     * 返回：归一化后的锚点模式。
-     */
-    private mapLegacyAnchorMode(value: string): PromptAnchorMode {
-        if (value === 'setting_query_only') {
-            return 'setting_query_only';
-        }
-        if (value === 'after_lorebook' || value === 'after_author_note' || value === 'after_persona' || value === 'after_first_system' || value === 'after_last_system' || value === 'top' || value === 'before_start' || value === 'custom_anchor') {
-            return value;
-        }
-        return 'after_last_system';
-    }
-
-    /**
      * 功能：根据意图、画像和世界书裁决构建最终注入画像。
      * 参数：
      *   intent：当前注入意图。
@@ -254,28 +219,6 @@ export class InjectionManager {
     ): Promise<PromptInjectionProfile> {
         const dynamicProfile: PromptInjectionProfile = {
             ...DEFAULT_PROMPT_INJECTION_PROFILE,
-            renderStyle: profile?.stylePreference === 'qa' || profile?.chatType === 'tool'
-                ? 'compact_kv'
-                : profile?.chatType === 'worldbook'
-                    ? 'markdown'
-                    : profile?.stylePreference === 'story' || profile?.stylePreference === 'trpg'
-                        ? 'xml'
-                        : 'xml',
-            softPersonaMode: profile?.stylePreference === 'story' || profile?.stylePreference === 'trpg'
-                ? 'continuity_note'
-                : 'hidden_context_summary',
-            defaultInsert: intent === 'setting_qa'
-                ? 'after_lorebook'
-                : intent === 'roleplay'
-                    ? 'after_author_note'
-                    : intent === 'tool_qa'
-                        ? 'after_first_system'
-                        : 'after_last_system',
-            fallbackOrder: intent === 'setting_qa'
-                ? ['after_lorebook', 'after_last_system', 'top']
-                : intent === 'roleplay'
-                    ? ['after_author_note', 'after_persona', 'after_last_system', 'top']
-                    : ['after_last_system', 'top'],
             queryMode: lorebookDecision.mode === 'summary_only' && intent === 'setting_qa'
                 ? 'setting_only'
                 : 'always',
@@ -286,10 +229,6 @@ export class InjectionManager {
         return {
             ...dynamicProfile,
             ...(persistedProfile ?? DEFAULT_PROMPT_INJECTION_PROFILE),
-            defaultInsert: persistedProfile?.defaultInsert ?? dynamicProfile.defaultInsert,
-            fallbackOrder: Array.isArray(persistedProfile?.fallbackOrder) && persistedProfile.fallbackOrder.length > 0
-                ? persistedProfile.fallbackOrder.map((item: PromptAnchorMode): PromptAnchorMode => this.mapLegacyAnchorMode(item))
-                : dynamicProfile.fallbackOrder,
         };
     }
 
@@ -439,9 +378,10 @@ export class InjectionManager {
         lorebookDecision: LorebookGateDecision,
         policy: AdaptivePolicy,
         text: string,
+        blocksUsed: MemoryContextBlockUsage[],
     ): PreGenerationGateDecision {
         const baseReasonCodes: string[] = [];
-        const isSettingOnly = promptProfile.queryMode === 'setting_only' || promptProfile.defaultInsert === 'setting_query_only';
+        const isSettingOnly = promptProfile.queryMode === 'setting_only';
         const shouldInject = text.trim().length > 0 && (!isSettingOnly || intent === 'setting_qa');
         if (isSettingOnly) {
             baseReasonCodes.push('setting_only_mode');
@@ -458,12 +398,12 @@ export class InjectionManager {
             sectionsUsed: sections,
             budgets,
             lorebookMode: lorebookDecision.mode,
-            anchorMode: promptProfile.defaultInsert,
-            fallbackOrder: [...promptProfile.fallbackOrder],
+            layoutMode: promptProfile.layoutMode,
+            insertionRole: promptProfile.insertionRole,
+            insertionPosition: promptProfile.insertionPosition,
             queryMode: promptProfile.queryMode,
-            renderStyle: promptProfile.renderStyle,
-            softPersonaMode: promptProfile.softPersonaMode,
             shouldTrimPrompt: this.estimateTokens(text) > Math.max(64, Math.floor(policy.contextMaxTokensShare * 1000)),
+            blocksUsed,
             reasonCodes: baseReasonCodes,
             generatedAt: Date.now(),
         };
@@ -483,12 +423,12 @@ export class InjectionManager {
                 sectionsUsed: [],
                 budgets: {},
                 lorebookMode: 'block',
-                anchorMode: this.anchorPolicy.defaultInsert,
-                fallbackOrder: [...this.anchorPolicy.fallbackOrder],
-                queryMode: this.anchorPolicy.queryMode,
-                renderStyle: this.anchorPolicy.renderStyle,
-                softPersonaMode: this.anchorPolicy.softPersonaMode,
+                layoutMode: this.promptInjectionProfile.layoutMode,
+                insertionRole: this.promptInjectionProfile.insertionRole,
+                insertionPosition: this.promptInjectionProfile.insertionPosition,
+                queryMode: this.promptInjectionProfile.queryMode,
                 shouldTrimPrompt: false,
+                blocksUsed: [],
                 reasonCodes: ['chat_archived'],
                 generatedAt: Date.now(),
             };
@@ -554,7 +494,7 @@ export class InjectionManager {
         }
 
         const promptProfile = await this.resolvePromptInjectionProfile(intent, profile, lorebookDecision);
-        this.anchorPolicy = { ...promptProfile };
+        this.promptInjectionProfile = { ...promptProfile };
         const budgets = await this.resolveSectionBudgets(
             maxTokens,
             sections,
@@ -612,25 +552,11 @@ export class InjectionManager {
             String(opts?.query ?? ''),
             Date.now(),
         );
-        const sectionTexts: Partial<Record<InjectionSectionName, string>> = {};
-
-        for (const section of sections) {
-            sectionTexts[section] = buildSectionText(
-                section,
-                selectedCandidates.filter((candidate: RecallCandidate): boolean => candidate.sectionHint === section),
-                budgets[section] ?? 0,
-                promptProfile,
-            );
-        }
-
-        const text = this.trimToBudget(
-            sections
-                .map((section: InjectionSectionName): string => String(sectionTexts[section] ?? '').trim())
-                .filter((chunk: string): boolean => chunk.length > 0)
-                .join('\n\n')
-                .trim(),
-            maxTokens,
-        );
+        const memoryContext = buildLayeredMemoryContext({
+            candidates: selectedCandidates,
+            plan: recallPlan,
+        });
+        const text = this.trimToBudget(memoryContext.text, maxTokens);
         const preDecision = this.buildPreGenerationDecision(
             intent,
             sections,
@@ -639,6 +565,7 @@ export class InjectionManager {
             lorebookDecision,
             policy,
             text,
+            memoryContext.blocksUsed,
         );
         if (!preDecision.shouldInject || !text) {
             if (this.chatStateManager) {
@@ -666,10 +593,16 @@ export class InjectionManager {
                 : '';
         }
 
-        const renderedText = renderInjectedContext(text, promptProfile, intent);
+        const renderedText = text;
         const promptInjectionTokenRatio = maxTokens > 0 ? this.estimateTokens(renderedText) / maxTokens : 0;
         const reasonCodes = this.buildReasonCodes(intent, profile?.chatType, policy, sections, lorebookDecision);
-        const mergedReasonCodes = Array.from(new Set([...reasonCodes, ...lorebookDecision.reasonCodes.map((code: string): string => `lorebook:${code}`)]));
+        const mergedReasonCodes = Array.from(new Set([
+            ...reasonCodes,
+            `layout:${promptProfile.layoutMode}`,
+            `insertion_role:${promptProfile.insertionRole}`,
+            `insertion_position:${promptProfile.insertionPosition}`,
+            ...lorebookDecision.reasonCodes.map((code: string): string => `lorebook:${code}`),
+        ]));
         const decision = buildStrategyDecision(intent, sections, budgets, mergedReasonCodes);
         if (this.chatStateManager) {
             await this.chatStateManager.updateAdaptiveMetrics({
