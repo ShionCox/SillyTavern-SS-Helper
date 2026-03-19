@@ -21,6 +21,7 @@ export type {
   SdkTavernRoleIdentityEvent,
   SdkTavernRuntimeContextEvent,
   SdkTavernSemanticSnapshotEvent,
+  SdkTavernUserSnapshotEvent,
   SdkTavernCharacterWorldbookBindingEvent,
   SdkTavernResolvedWorldbookEntryEvent,
   SdkTavernSlashCommandArgumentFactoryEvent,
@@ -60,6 +61,14 @@ export {
   getTavernContextSnapshotEvent,
   getTavernSemanticSnapshotEvent,
 } from "./context";
+
+export {
+  getCurrentTavernUserNameEvent,
+  getCurrentTavernCounterpartNameEvent,
+  getCurrentTavernUserPersonaDescriptionEvent,
+  getCurrentTavernUserSnapshotEvent,
+  replaceTavernUserPlaceholdersEvent,
+} from "./user";
 
 export {
   getCurrentTavernCharacterEvent,

@@ -297,18 +297,17 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
     }
 
-    #${cardId} .stx-ui-param-row .stx-ui-input,
-    #${cardId} .stx-ui-param-row .stx-ui-select {
+    #${cardId} .stx-ui-param-row .stx-ui-input {
       width: 100%;
       min-width: 0;
       height: 100%;
-      min-height: 32px;
+      min-height: 30px;
     }
 
     #${cardId} .stx-ui-param-row .stx-ui-param-remove,
     #${cardId} .stx-ui-param-row .stx-ui-btn {
       align-self: stretch;
-      min-height: 32px;
+      min-height: 30px;
     }
 
     #${cardId} .stx-ui-param-empty {
@@ -346,7 +345,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
     }
 
-    #${cardId} .stx-ui-select,
     #${cardId} .stx-ui-input,
     #${cardId} .stx-ui-search {
       padding: 4px 8px;
@@ -417,6 +415,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-list {
       display: grid;
       grid-template-columns: 1fr 1fr;
+      align-items: start;
       gap: 8px;
       width: 100%;
       min-width: 0;
@@ -613,6 +612,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       gap: 8px;
       min-width: 0;
       width: 100%;
+      max-width: 100%;
+      overflow: hidden;
     }
 
     #${cardId} .stx-ui-consumer-map-head {
@@ -633,6 +634,19 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 8px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-consumer-map-form > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    #${cardId} .stx-ui-consumer-map-form .stx-shared-select,
+    #${cardId} .stx-ui-consumer-map-form .stx-shared-select-trigger,
+    #${cardId} .stx-ui-consumer-map-form .stx-ui-input {
       width: 100%;
       min-width: 0;
       max-width: 100%;
@@ -1580,6 +1594,10 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     @media (max-width: 900px) {
+      #${cardId} .stx-ui-list {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       #${cardId} .stx-ui-form-grid,
       #${cardId} .stx-ui-consumer-map-form {
         grid-template-columns: minmax(0, 1fr);

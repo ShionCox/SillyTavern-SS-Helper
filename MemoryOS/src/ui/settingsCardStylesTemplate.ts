@@ -2941,6 +2941,79 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       border-top: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.08)) 72%, transparent);
     }
 
+    .stx-re-world-section-tabs {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 2px;
+    }
+
+    .stx-re-world-section-tabs-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .stx-re-world-section-tabs-title {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 70%, transparent);
+    }
+
+    .stx-re-world-section-tabs-meta {
+      font-size: 11px;
+      font-weight: 700;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 58%, transparent);
+    }
+
+    .stx-re-world-section-tab-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .stx-re-world-section-tab {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      padding: 8px 11px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(18,18,24,0.8)) 100%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255,255,255,0.08)) 100%, transparent);
+      font-size: 12px;
+      text-align: left;
+    }
+
+    .stx-re-world-section-tab-label {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .stx-re-world-section-tab-badge {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 16%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 24%, transparent);
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 76%, transparent);
+      white-space: nowrap;
+    }
+
+    .stx-re-world-section-tab.is-active {
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 36%, transparent);
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 14%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ss-theme-accent, #c5a059) 14%, transparent);
+    }
+
     .stx-re-world-section-head {
       display: flex;
       align-items: flex-start;

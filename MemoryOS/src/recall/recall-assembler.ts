@@ -43,6 +43,8 @@ type RecallAssemblerInput = {
     summariesManager: SummariesManager;
     chatStateManager: ChatStateManager | null;
     lifecycleIndex: Map<string, MemoryLifecycleState>;
+    activeActorKey: string | null;
+    personaProfiles: Record<string, PersonaMemoryProfile>;
     personaProfile: PersonaMemoryProfile | null;
     tuningProfile: MemoryTuningProfile | null;
     relationships: RelationshipState[];
@@ -65,6 +67,8 @@ export async function collectRecallCandidates(input: RecallAssemblerInput): Prom
         summariesManager: input.summariesManager,
         chatStateManager: input.chatStateManager,
         lifecycleIndex: input.lifecycleIndex,
+        activeActorKey: input.activeActorKey,
+        personaProfiles: input.personaProfiles,
         personaProfile: input.personaProfile,
         tuningProfile: input.tuningProfile,
         relationships: input.relationships,

@@ -283,6 +283,13 @@ export interface DBSummarySource {
 export interface DBVectorChunkMetadata {
     index?: number;
     source?: DBDerivationSource;
+    sourceRecordKey?: string;
+    sourceRecordKind?: string;
+    ownerActorKey?: string | null;
+    sourceScope?: string;
+    memoryType?: string;
+    memorySubtype?: string;
+    participantActorKeys?: string[];
     [key: string]: unknown;
 }
 

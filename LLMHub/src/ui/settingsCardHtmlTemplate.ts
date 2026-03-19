@@ -25,6 +25,26 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         ],
     });
 
+        const globalMaxTokensModeSelect = buildSharedSelectField({
+          id: ids.globalMaxTokensModeId,
+          containerClassName: 'stx-shared-select-fluid',
+          selectClassName: 'stx-ui-select',
+          triggerClassName: 'stx-ui-input-full',
+          triggerAttributes: { 'data-tip': '控制 generation 请求的 max_tokens 取值策略' },
+          options: [
+            { value: 'inherit', label: '继承默认链路' },
+            { value: 'manual', label: '全局手动覆盖' },
+            { value: 'adaptive', label: '自适应估算' },
+          ],
+        });
+
+        const globalMaxTokensManualInput = buildSharedInputField({
+          id: ids.globalMaxTokensManualId,
+          type: 'number',
+          className: 'stx-ui-input stx-ui-input-full',
+          attributes: { min: '1', step: '1', placeholder: '例如 1600', 'data-tip': '当选择“全局手动覆盖”时，所有 generation 请求都以此值为准' },
+        });
+
     // ─── 资源 Panel ─────────────────────
     const resourceNewBtn = buildSharedButton({
         id: ids.resourceNewBtnId,
@@ -68,10 +88,25 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         triggerClassName: 'stx-ui-input-full',
         triggerAttributes: { 'data-tip': '选择资源来源' },
         options: [
-            { value: 'custom', label: '自定义服务（OpenAI 兼容）' },
+        { value: 'custom', label: '自定义服务' },
             { value: 'tavern', label: '酒馆代理（Tavern）' },
         ],
     });
+
+        const resourceApiTypeSelect = buildSharedSelectField({
+          id: ids.resourceApiTypeSelectId,
+          containerClassName: 'stx-shared-select-fluid',
+          selectClassName: 'stx-ui-select',
+          triggerClassName: 'stx-ui-input-full',
+          triggerAttributes: { 'data-tip': '选择自定义 API 的协议类型；默认使用 OpenAI 兼容模式' },
+          options: [
+            { value: 'openai', label: 'OpenAI（默认）' },
+            { value: 'deepseek', label: 'DeepSeek' },
+            { value: 'gemini', label: 'Gemini（原生）' },
+            { value: 'claude', label: 'Claude（原生）' },
+            { value: 'generic', label: 'Generic（通用 system 模式）' },
+          ],
+        });
 
     const resourceBaseUrlInput = buildSharedInputField({
         id: ids.resourceBaseUrlId,
@@ -323,6 +358,24 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
             </div>
           </div>
 
+          <div class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="max tokens token limit adaptive manual">
+            <div class="stx-ui-item-main">
+              <div class="stx-ui-item-title">全局 max_tokens 控制</div>
+              <div class="stx-ui-item-desc">优先级：全局手动覆盖 &gt; 任务手动覆盖 &gt; 自适应估算 &gt; 原有 budget / profile 默认链路。</div>
+            </div>
+            <div class="stx-ui-form-grid">
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.globalMaxTokensModeId}">控制模式</label>
+                ${globalMaxTokensModeSelect}
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.globalMaxTokensManualId}">手动值</label>
+                ${globalMaxTokensManualInput}
+              </div>
+            </div>
+            <span class="stx-ui-field-hint">自适应模式会根据输入内容、消息数和 schema 大小估算输出上限；手动模式会直接覆盖任务和上游传入值。</span>
+          </div>
+
           <div id="${ids.tavernInfoId}" class="stx-ui-item stx-ui-search-item stx-ui-item-stack" data-stx-ui-search="tavern api model source endpoint settings">
             <div class="stx-ui-item-main">
               <div class="stx-ui-item-title">当前酒馆连接信息</div>
@@ -367,6 +420,11 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.resourceSourceSelectId}">资源来源</label>
                 ${resourceSourceSelect}
+              </div>
+              <div class="stx-ui-field">
+                <label class="stx-ui-field-label" for="${ids.resourceApiTypeSelectId}">API 类型</label>
+                ${resourceApiTypeSelect}
+                <span class="stx-ui-field-hint">仅生成资源使用该选项：OpenAI 走兼容接口；Gemini / Claude 走原生接口；DeepSeek 走 JSON mode；Generic 使用 system 提示兜底。</span>
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.resourceBaseUrlId}">Base URL</label>

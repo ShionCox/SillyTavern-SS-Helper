@@ -24,6 +24,8 @@ export async function collectStateRecallCandidates(context: RecallSourceContext)
             rawText: `${path}: ${stringifyValue(value)}`,
             confidence: 0.58,
             updatedAt: Date.now(),
+            memoryType: 'world',
+            sourceScope: 'world',
         }))
         .filter((item: RecallCandidate | null): item is RecallCandidate => item != null);
 }

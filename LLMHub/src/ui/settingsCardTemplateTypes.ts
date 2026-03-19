@@ -29,6 +29,8 @@ export interface LLMHubSettingsIds {
     // ─── 基础 Panel ───
     enabledId: string;
     globalProfileId: string;
+    globalMaxTokensModeId: string;
+    globalMaxTokensManualId: string;
 
     // ─── 资源 Panel ───
     resourceListId: string;
@@ -40,6 +42,7 @@ export interface LLMHubSettingsIds {
     resourceLabelInputId: string;
     resourceTypeSelectId: string;
     resourceSourceSelectId: string;
+    resourceApiTypeSelectId: string;
     resourceEnabledId: string;
     resourceBaseUrlId: string;
     resourceApiKeyId: string;

@@ -3,6 +3,8 @@ import type {
     RerankRequest, RerankResponse,
     ProviderConnectionResult, ProviderModelListResult,
 } from './types';
+import type { ApiType } from '../schema/types';
+import { buildStructuredOutputSystemInstruction } from '../schema/structured-output';
 
 /**
  * OpenAI 兼容 Provider 实现
@@ -16,6 +18,7 @@ export class OpenAIProvider implements LLMProvider {
     private apiKey: string;
     private baseUrl: string;
     private model: string;
+    public readonly apiType: ApiType;
     private customParams: Record<string, unknown>;
 
     constructor(config: {
@@ -23,6 +26,7 @@ export class OpenAIProvider implements LLMProvider {
         apiKey: string;
         baseUrl?: string;
         model?: string;
+        apiType?: ApiType;
         enableRerank?: boolean;
         customParams?: Record<string, unknown>;
     }) {
@@ -30,6 +34,15 @@ export class OpenAIProvider implements LLMProvider {
         this.apiKey = config.apiKey;
         this.baseUrl = config.baseUrl || 'https://api.openai.com/v1';
         this.model = config.model || 'gpt-4o-mini';
+        this.apiType = config.apiType === 'deepseek'
+            ? 'deepseek'
+            : config.apiType === 'gemini'
+                ? 'gemini'
+                : config.apiType === 'claude'
+                    ? 'claude'
+                    : config.apiType === 'generic'
+                        ? 'generic'
+                        : 'openai';
         this.capabilities = {
             chat: true,
             json: true,
@@ -121,18 +134,91 @@ export class OpenAIProvider implements LLMProvider {
         };
     }
 
-    async request(req: LLMRequest): Promise<LLMResponse> {
-        const body: Record<string, any> = this.withCustomParams({
-            model: req.model || this.model,
-            messages: req.messages,
-            temperature: req.temperature ?? 0.7,
-            max_tokens: req.maxTokens ?? 2048,
-        });
+    private sanitizeSchemaName(name?: string): string {
+        const normalized = String(name || 'structured_output')
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return normalized || 'structured_output';
+    }
 
-        if (req.jsonMode) {
-            body.response_format = { type: 'json_object' };
+    private buildSystemStructuredOutputInstruction(req: LLMRequest): string {
+        return buildStructuredOutputSystemInstruction({
+            schema: req.schema,
+            schemaName: req.schemaName,
+        });
+    }
+
+    private ensureStructuredOutputMessages(
+        messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+        req: LLMRequest,
+        mode: 'json_hint' | 'system_schema',
+    ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+        const hasJsonHint = messages.some((message: { content: string }) => /json/i.test(String(message.content || '')));
+        const injectedSystem = mode === 'system_schema'
+            ? this.buildSystemStructuredOutputInstruction(req)
+            : '请始终输出合法 JSON（json）对象，不要输出额外说明。示例：{"ok":true}';
+
+        if (!hasJsonHint && messages.length > 0 && messages[0]?.role === 'system') {
+            return [{ ...messages[0], content: `${messages[0].content}\n\n${injectedSystem}` }, ...messages.slice(1)];
         }
 
+        if (!hasJsonHint || mode === 'system_schema') {
+            return [
+                {
+                    role: 'system',
+                    content: injectedSystem,
+                },
+                ...messages,
+            ];
+        }
+
+        if (hasJsonHint) {
+            return messages;
+        }
+
+        return messages;
+    }
+
+    private buildResponseFormat(req: LLMRequest): { payload?: Record<string, any>; formatType: 'none' | 'json_object' | 'json_schema' | 'system_json' } {
+        if (!req.jsonMode) {
+            return { formatType: 'none' };
+        }
+
+        if (this.apiType === 'deepseek') {
+            return {
+                payload: { type: 'json_object' },
+                formatType: 'json_object',
+            };
+        }
+
+        if (this.apiType === 'claude' || this.apiType === 'generic') {
+            return {
+                formatType: 'system_json',
+            };
+        }
+
+        if (req.schema && req.preferredResponseFormat === 'json_schema') {
+            return {
+                payload: {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: this.sanitizeSchemaName(req.schemaName),
+                        strict: true,
+                        schema: req.schema,
+                    },
+                },
+                formatType: 'json_schema',
+            };
+        }
+
+        return {
+            payload: { type: 'json_object' },
+            formatType: 'json_object',
+        };
+    }
+
+    private async sendChatCompletion(body: Record<string, any>): Promise<any> {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             headers: this.buildHeaders(),
@@ -144,7 +230,42 @@ export class OpenAIProvider implements LLMProvider {
             throw new Error(`OpenAI API 请求失败: ${response.status} ${errText}`);
         }
 
-        const data = await response.json();
+        return response.json();
+    }
+
+    async request(req: LLMRequest): Promise<LLMResponse> {
+        const messages = (this.apiType === 'deepseek' || this.apiType === 'generic' || this.apiType === 'claude') && req.jsonMode
+                ? this.ensureStructuredOutputMessages(req.messages, req, 'system_schema')
+                : req.messages;
+
+        const baseBody: Record<string, any> = {
+            model: req.model || this.model,
+            messages,
+            temperature: req.temperature ?? 0.7,
+            max_tokens: req.maxTokens ?? 2048,
+        };
+        const { payload: responseFormat, formatType } = this.buildResponseFormat(req);
+        const body: Record<string, any> = this.withCustomParams({
+            ...baseBody,
+            ...(responseFormat ? { response_format: responseFormat } : {}),
+        });
+
+        let data: any;
+        let finalBody: Record<string, any> = body;
+        try {
+            data = await this.sendChatCompletion(body);
+        } catch (error) {
+            if (formatType === 'json_schema' && req.jsonMode) {
+                const fallbackBody = this.withCustomParams({
+                    ...baseBody,
+                    response_format: { type: 'json_object' },
+                });
+                finalBody = fallbackBody;
+                data = await this.sendChatCompletion(fallbackBody);
+            } else {
+                throw error;
+            }
+        }
         const choice = data.choices?.[0];
 
         return {
@@ -155,6 +276,13 @@ export class OpenAIProvider implements LLMProvider {
                 totalTokens: data.usage.total_tokens,
             } : undefined,
             finishReason: choice?.finish_reason,
+            debugRequest: {
+                providerKind: this.kind,
+                apiType: this.apiType,
+                resourceId: this.id,
+                requestFormat: 'openai_chat_completions',
+                payload: finalBody,
+            },
         };
     }
 

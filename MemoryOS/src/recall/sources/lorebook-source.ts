@@ -32,6 +32,9 @@ export async function collectLorebookRecallCandidates(context: RecallSourceConte
         confidence: clamp01(context.lorebookDecision.score),
         updatedAt: Date.now(),
         continuityScore: context.lorebookDecision.matchedEntries.includes(`${entry.book}/${entry.entry}`) ? 1 : 0.4,
+        memoryType: 'world',
+        memorySubtype: 'global_rule',
+        sourceScope: 'world',
         extraReasonCodes: [`lorebook_mode:${context.lorebookDecision.mode}`],
     })).filter((item: RecallCandidate | null): item is RecallCandidate => item != null);
 }

@@ -50,7 +50,6 @@ import type {
     GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
-    LatestRecallExplanation,
     LorebookGateDecision,
     MaintenanceActionType,
     MaintenanceAdvice,
@@ -85,6 +84,7 @@ import type {
     LogicTableRow,
     LogicalChatView,
 } from '../types';
+import type { LatestRecallExplanation as SDKLatestRecallExplanation } from '../../../SDK/stx';
 
 const logger = new Logger('MemorySDK');
 const COLD_START_BOOTSTRAP_TASKS = new Map<string, Promise<void>>();
@@ -249,7 +249,7 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     /**
-     * 功能：收集并保存冷启动 seed（绑定阶段只做轻量采集，不落重写入）。
+        * 功能：收集并保存冷启动 seed，并立即落盘 starter facts/state，避免新聊天重复提示初始化。
      * @returns Promise<void>
      */
     private async bootstrapSemanticSeedIfNeeded(): Promise<void> {
@@ -324,6 +324,9 @@ export class MemorySDKImpl implements MemorySDK {
             await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
         }
         await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
+        await this.persistSemanticSeed(seed, bootstrap.fingerprint, 'bootstrap_init');
+        await this.chatStateManager.markColdStartStage('prompt_primed', bootstrap.fingerprint, { primedAt: Date.now() });
+        await this.chatStateManager.flush();
     }
 
     private async resolveColdStartLorebookSelection(defaultSelection: ColdStartLorebookSelection): Promise<ColdStartLorebookSelection | null> {
@@ -492,6 +495,13 @@ export class MemorySDKImpl implements MemorySDK {
                     },
                 });
                 await this.hybridSearch.indexText(summaryText, 'cold_start', {
+                    sourceRecordKey: fingerprint,
+                    sourceRecordKind: 'summary',
+                    ownerActorKey: null,
+                    sourceScope: 'world',
+                    memoryType: 'world',
+                    memorySubtype: 'global_rule',
+                    participantActorKeys: [],
                     source: {
                         kind: 'cold_start',
                         reason,
@@ -985,8 +995,8 @@ export class MemorySDKImpl implements MemorySDK {
         getRecallLog: (limit?: number): Promise<RecallLogEntry[]> => {
             return this.chatStateManager.getRecallLog(limit);
         },
-        getLatestRecallExplanation: (): Promise<LatestRecallExplanation | null> => {
-            return this.chatStateManager.getLatestRecallExplanation();
+        getLatestRecallExplanation: (): Promise<SDKLatestRecallExplanation | null> => {
+            return this.chatStateManager.getLatestRecallExplanation() as Promise<SDKLatestRecallExplanation | null>;
         },
         getMemoryLifecycleSummary: (limit?: number): Promise<MemoryLifecycleState[]> => {
             return this.chatStateManager.getMemoryLifecycleSummary(limit);

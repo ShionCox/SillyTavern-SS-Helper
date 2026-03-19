@@ -3,6 +3,8 @@
  * 将 Provider 抽象与具体实现解耦
  */
 
+import type { ApiType } from '../schema/types';
+
 export interface LLMProviderCapabilities {
     chat: boolean;
     json: boolean;
@@ -18,12 +20,15 @@ export interface LLMRequest {
     maxTokens?: number;
     jsonMode?: boolean;
     schema?: object;
+    schemaName?: string;
+    preferredResponseFormat?: 'json_object' | 'json_schema' | 'system_json';
 }
 
 export interface LLMResponse {
     content: string;
     usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
     finishReason?: string;
+    debugRequest?: Record<string, unknown>;
 }
 
 export interface EmbedRequest {

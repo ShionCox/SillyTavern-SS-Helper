@@ -220,6 +220,11 @@ export interface LLMRequestLogRequestSnapshot {
     schemaSummary?: string;
     schema?: unknown;
     jsonMode?: boolean;
+    resolvedMaxTokens?: {
+        value: number;
+        source: string;
+        detail?: unknown;
+    };
     providerRequest?: unknown;
     normalizeMode?: string;
     generationInput?: unknown;
@@ -366,6 +371,9 @@ export type ResourceType = 'generation' | 'embedding' | 'rerank';
 /** 资源来源 */
 export type ResourceSource = 'tavern' | 'custom';
 
+/** 自定义 API 协议类型 */
+export type ApiType = 'openai' | 'deepseek' | 'gemini' | 'claude' | 'generic';
+
 /** 资源级自定义请求参数 */
 export type ResourceCustomParams = Record<string, unknown>;
 
@@ -374,6 +382,7 @@ export interface ResourceConfig {
     id: string;
     type: ResourceType;
     source: ResourceSource;
+    apiType?: ApiType;
     label: string;
     baseUrl?: string;
     model?: string;
@@ -393,6 +402,25 @@ export interface ResourceConfig {
 /** 单条分配项 —— 只保存 resourceId */
 export interface AssignmentEntry {
     resourceId: string;
+}
+
+/** 全局 max_tokens 控制模式 */
+export type MaxTokensMode = 'inherit' | 'manual' | 'adaptive';
+
+/** 自适应 max_tokens 配置 */
+export interface AdaptiveMaxTokensConfig {
+    min?: number;
+    max?: number;
+    charDivisor?: number;
+    schemaCharDivisor?: number;
+    messageBonus?: number;
+}
+
+/** LLMHub 全局 max_tokens 控制 */
+export interface GlobalMaxTokensControl {
+    mode?: MaxTokensMode;
+    manualValue?: number;
+    adaptive?: AdaptiveMaxTokensConfig;
 }
 
 /** 全局分配 */
@@ -415,7 +443,8 @@ export interface TaskAssignment {
     pluginId: string;
     taskId: string;
     taskKind: CapabilityKind;
-    resourceId: string;
+    resourceId?: string;
+    maxTokens?: number;
     isStale: boolean;
     staleReason?: string;
 }
@@ -431,6 +460,8 @@ export interface SilentPermissionGrant {
 export interface LLMHubSettings {
     enabled?: boolean;
     globalProfile?: string;
+    /** 全局 max_tokens 控制 */
+    maxTokensControl?: GlobalMaxTokensControl;
     /** 用户创建的资源列表 */
     resources?: ResourceConfig[];
     /** 全局分配 */

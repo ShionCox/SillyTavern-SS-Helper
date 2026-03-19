@@ -30,6 +30,8 @@ export async function collectRecentRecallCandidates(context: RecallSourceContext
                     updatedAt: Number(node.updatedAt || node.createdAt || Date.now()),
                     continuityScore: 1,
                     recencyWindowDays: 7,
+                    memoryType: 'event',
+                    sourceScope: 'group',
                 });
                 if (candidate) {
                     candidates.push(candidate);
@@ -51,6 +53,8 @@ export async function collectRecentRecallCandidates(context: RecallSourceContext
                     updatedAt: Number(event.ts ?? Date.now()),
                     continuityScore: 0.9,
                     recencyWindowDays: 7,
+                    memoryType: 'event',
+                    sourceScope: 'group',
                 });
                 if (candidate) {
                     candidates.push(candidate);
@@ -80,6 +84,9 @@ export async function collectRecentRecallCandidates(context: RecallSourceContext
                     updatedAt: Number(summary.createdAt ?? Date.now()),
                     continuityScore: 1,
                     recencyWindowDays: 10,
+                    memoryType: summary.memoryType ?? 'world',
+                    memorySubtype: summary.memorySubtype,
+                    sourceScope: summary.sourceScope ?? 'group',
                 });
                 if (candidate) {
                     candidates.push(candidate);

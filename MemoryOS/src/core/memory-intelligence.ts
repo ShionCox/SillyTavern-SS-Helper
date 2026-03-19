@@ -51,6 +51,10 @@ export interface RecallScoreInput {
     continuityWeight: number;
     privacyPenalty: number;
     conflictPenalty: number;
+    actorVisibilityScore?: number;
+    actorForgetProbability?: number;
+    actorForgotten?: boolean;
+    actorRetentionBias?: number;
     tuning?: MemoryTuningProfile | null;
 }
 
@@ -983,7 +987,7 @@ export function resolveInjectedMemoryTone(
  *   RecallScoreResult：召回评分结果。
  */
 export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult {
-    if (input.lifecycle?.forgotten === true) {
+    if (input.lifecycle?.forgotten === true || input.actorForgotten === true) {
         return {
             score: 0.05,
             tone: 'possible_misremember',
@@ -1004,6 +1008,9 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
     const recencyBias: number = clamp01(Number(tuning?.recallRecencyBias ?? 1));
     const continuityBias: number = clamp01(Number(tuning?.recallContinuityBias ?? 1));
     const distortionProtectionBias: number = clamp01(Number(tuning?.distortionProtectionBias ?? 1));
+    const actorVisibilityScore: number = clamp01(Number(input.actorVisibilityScore ?? 0));
+    const actorRetentionBias: number = clampBias(Number(input.actorRetentionBias ?? 0), -0.2, 0.2);
+    const actorForgetProbability: number = clamp01(Number(input.actorForgetProbability ?? input.lifecycle?.forgetProbability ?? 0));
     const lifecyclePenalty: number = input.lifecycle?.stage === 'distorted'
         ? 0.24
         : input.lifecycle?.stage === 'blur'
@@ -1013,8 +1020,8 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
     const emotionBonus: number = input.emotionWeight * emotionBias * input.profile.emotionalBias * 0.16;
     const continuityBonus: number = input.continuityWeight * continuityBias * 0.14;
     const keywordBonus: number = Math.min(0.32, keywordHits * 0.08);
-    const forgetRiskPenaltyFactor: number = (input.lifecycle?.forgetProbability ?? 0) >= 0.75
-        ? (1 - clamp01(input.lifecycle?.forgetProbability ?? 0))
+    const forgetRiskPenaltyFactor: number = actorForgetProbability >= 0.75
+        ? (1 - actorForgetProbability)
         : 1;
     const score: number = clamp01(clamp01(
         input.confidence * 0.2
@@ -1023,6 +1030,8 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
         + relationBonus
         + emotionBonus
         + continuityBonus
+        + actorVisibilityScore * 0.12
+        + actorRetentionBias
         - lifecyclePenalty * distortionProtectionBias
         - input.privacyPenalty * input.profile.privacyGuard * 0.12
         - input.conflictPenalty * distortionProtectionBias * 0.18,
@@ -1040,18 +1049,26 @@ export function scoreRecallCandidate(input: RecallScoreInput): RecallScoreResult
     if (continuityBonus > 0.05) {
         reasonCodes.push('topic_continuity');
     }
+    if (actorVisibilityScore > 0.72) {
+        reasonCodes.push('actor_visibility_high');
+    }
+    if (actorRetentionBias > 0) {
+        reasonCodes.push('actor_retention_bias');
+    }
     if (lifecyclePenalty > 0) {
         reasonCodes.push(`lifecycle_${input.lifecycle?.stage ?? 'unknown'}`);
     }
     if (input.conflictPenalty > 0) {
         reasonCodes.push('conflict_penalty');
     }
-    if ((input.lifecycle?.forgetProbability ?? 0) >= 0.75) {
+    if (actorForgetProbability >= 0.75) {
         reasonCodes.push('forget_risk_penalty');
     }
     return {
         score,
-        tone: resolveInjectedMemoryTone(input.lifecycle, input.profile),
+        tone: actorForgetProbability >= 0.75
+            ? 'possible_misremember'
+            : resolveInjectedMemoryTone(input.lifecycle, input.profile),
         reasonCodes,
     };
 }

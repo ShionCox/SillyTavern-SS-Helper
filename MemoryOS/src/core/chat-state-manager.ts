@@ -296,6 +296,23 @@ function inferLaneGoal(text: string): string {
     return normalizeSeedText(match?.[2] ?? '');
 }
 
+function inferLaneEmotion(text: string): string {
+    const normalized = normalizeSeedText(text);
+    if (!normalized) {
+        return 'neutral';
+    }
+    if (/鎷呭績|瀹虫€晐鎭愭儳|绱у紶/.test(normalized)) {
+        return 'anxious';
+    }
+    if (/闅捐繃|鎮蹭激|澶辫惤/.test(normalized)) {
+        return 'sad';
+    }
+    if (/寮€蹇|鎰熸縺|鍠滄|鏀惧績/.test(normalized)) {
+        return 'happy';
+    }
+    return 'neutral';
+}
+
 function inferRelationshipDelta(text: string): string {
     const normalized = normalizeSeedText(text);
     const hints = ['盟友', '敌人', '同伴', '队友', '恋人', '仇人', '上级', '下属', '家人'];
@@ -1721,6 +1738,13 @@ export class ChatStateManager {
                     }
                     const provenance = (fact.provenance ?? {}) as Record<string, unknown>;
                     const chunkIds = await vectorManager.indexText(text, 'facts', {
+                        sourceRecordKey: normalizeSeedText(fact.factKey),
+                        sourceRecordKind: 'fact',
+                        ownerActorKey: normalizeMemoryText(fact.ownerActorKey ?? null) || null,
+                        sourceScope: normalizeMemoryText(fact.sourceScope ?? 'system') || 'system',
+                        memoryType: normalizeMemoryText(fact.memoryType ?? 'other') || 'other',
+                        memorySubtype: normalizeMemoryText(fact.memorySubtype ?? 'other') || 'other',
+                        participantActorKeys: [],
                         source: {
                             kind: 'maintenance',
                             reason: 'revectorize_fact',
@@ -1740,6 +1764,13 @@ export class ChatStateManager {
                     const source = (summary.source ?? {}) as Record<string, unknown>;
                     const provenance = (source.provenance ?? {}) as Record<string, unknown>;
                     const chunkIds = await vectorManager.indexText(text, 'summaries', {
+                        sourceRecordKey: normalizeSeedText(summary.summaryId),
+                        sourceRecordKind: 'summary',
+                        ownerActorKey: normalizeMemoryText(summary.ownerActorKey ?? null) || null,
+                        sourceScope: normalizeMemoryText(summary.sourceScope ?? 'system') || 'system',
+                        memoryType: normalizeMemoryText(summary.memoryType ?? 'other') || 'other',
+                        memorySubtype: normalizeMemoryText(summary.memorySubtype ?? 'other') || 'other',
+                        participantActorKeys: [],
                         source: {
                             kind: 'maintenance',
                             reason: 'revectorize_summary',
@@ -1751,6 +1782,8 @@ export class ChatStateManager {
                     });
                     rebuilt += chunkIds.length;
                 }
+                state.vectorIndexVersion = 'source_metadata_v2';
+                state.vectorMetadataRebuiltAt = Date.now();
                 touchedCounts.vectorChunksRebuilt = rebuilt;
             } else if (action === 'schema_cleanup') {
                 const rowRedirects = state.rowRedirects ?? {};
@@ -2800,6 +2833,13 @@ export class ChatStateManager {
             return;
         }
         await vectorManager.indexText(text, conservativeFallback ? 'repair_fallback' : 'repair', {
+            sourceRecordKey: normalizeSeedText(task.repairAnchorMessageId || view.viewHash || `repair_${task.repairGeneration}`),
+            sourceRecordKind: 'event',
+            ownerActorKey: null,
+            sourceScope: 'group',
+            memoryType: 'event',
+            memorySubtype: 'conversation_event',
+            participantActorKeys: [],
             source: {
                 kind: conservativeFallback ? 'conservative_repair' : 'targeted_repair',
                 reason: task.mutationKinds.join('|'),

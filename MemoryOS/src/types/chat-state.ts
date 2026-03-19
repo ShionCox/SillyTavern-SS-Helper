@@ -684,6 +684,38 @@ export type RecallCandidateRecordKind = MemoryRecordKind | 'event' | 'lorebook';
 
 export type RecallCandidateSource = 'facts' | 'summaries' | 'state' | 'relationships' | 'events' | 'vector' | 'lorebook';
 
+export type RecallVisibilityPool = 'global' | 'actor' | 'blocked';
+
+export type RecallViewpointMode = 'omniscient_director' | 'actor_bounded';
+
+export type RecallActorFocusTier = 'shared' | 'primary' | 'secondary' | 'blocked';
+
+export interface RecallActorFocusBudgetShare {
+    global: number;
+    primaryActor: number;
+    secondaryActors: number;
+}
+
+export interface RecallActorFocus {
+    primaryActorKey: string | null;
+    secondaryActorKeys: string[];
+    budgetShare: RecallActorFocusBudgetShare;
+    reasonCodes: string[];
+}
+
+export interface RecallViewpoint {
+    mode: RecallViewpointMode;
+    activeActorKey?: string | null;
+    allowSharedScene: boolean;
+    allowWorldState: boolean;
+    allowForeignPrivateMemory: boolean;
+    focus: RecallActorFocus;
+}
+
+export type MemoryPrivacyClass = 'shared' | 'private' | 'contextual';
+
+export type RecallViewpointReason = 'shared' | 'owned_by_actor' | 'retained_for_actor' | 'foreign_private_suppressed';
+
 export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
 
 export type MemorySubtype =
@@ -808,6 +840,14 @@ export interface RecallCandidate {
     emotionScore: number;
     conflictPenalty: number;
     privacyPenalty: number;
+    visibilityPool: RecallVisibilityPool;
+    privacyClass: MemoryPrivacyClass;
+    viewpointReason: RecallViewpointReason;
+    actorFocusTier: RecallActorFocusTier;
+    actorVisibilityScore: number;
+    actorForgetProbability?: number;
+    actorForgotten?: boolean;
+    actorRetentionBias?: number;
     finalScore: number;
     tone: InjectedMemoryTone;
     selected: boolean;
@@ -825,6 +865,7 @@ export interface RecallPlan {
     sectionWeights: Partial<Record<InjectionSectionName, number>>;
     coarseTopK: number;
     fineTopK: number;
+    viewpoint: RecallViewpoint;
     reasonCodes: string[];
 }
 
@@ -1453,6 +1494,8 @@ export interface MemoryOSChatState {
     adaptiveMetrics?: AdaptiveMetrics;
     adaptivePolicy?: AdaptivePolicy;
     vectorLifecycle?: VectorLifecycleState;
+    vectorIndexVersion?: string;
+    vectorMetadataRebuiltAt?: number;
     memoryQuality?: MemoryQualityScorecard;
     maintenanceAdvice?: MaintenanceAdvice[];
     maintenanceInsights?: MaintenanceInsight[];

@@ -139,7 +139,9 @@ export interface SdkTavernContextEvent {
   this_chid?: number | string;
   groupId?: string;
   mainApi?: string;
+  onlineStatus?: string;
   chatCompletionSettings?: Record<string, unknown>;
+  powerUserSettings?: Record<string, unknown>;
   chatId?: string;
   chat_id?: string;
   characters?: SdkTavernCharacterEvent[];
@@ -179,6 +181,16 @@ export interface SdkTavernContextEvent {
   group_members?: Array<string | SdkTavernGroupMemberEvent>;
   getRequestHeaders?: () => Record<string, string>;
   accountStorage?: SdkAccountStorageEvent;
+}
+
+export interface SdkTavernUserSnapshotEvent {
+  userName: string;
+  counterpartName: string;
+  personaDescription: string;
+  metadataPersona: string;
+  avatarName: string;
+  avatarUrl: string;
+  hasPersonaDescription: boolean;
 }
 
 export interface SdkTavernEventSourceEvent {

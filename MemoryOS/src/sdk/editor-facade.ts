@@ -523,6 +523,7 @@ function buildDataLayerSnapshot(template: WorldTemplate | null, semanticSeed: Ch
         worldStateCount: states.length,
         summaryCount: summaries.length,
         eventCount: events.length,
+        aliasCount: sumRecordMapEntries(rowAliasIndex),
         activeTemplateId: normalizeText(template?.templateId) || null,
         hasSemanticSeed: Boolean(semanticSeed),
         hasLogicalChatView: Boolean(logicalView),
@@ -580,6 +581,8 @@ export class MemoryEditorFacade {
             recallLog,
             latestRecallExplanation,
             tuningProfile,
+            activeActorKey,
+            chatState,
         ] = await Promise.all([
             this.chatStateManager.getChatProfile(),
             this.chatStateManager.getMemoryQuality(),
@@ -592,6 +595,8 @@ export class MemoryEditorFacade {
             this.chatStateManager.getRecallLog(),
             this.chatStateManager.getLatestRecallExplanation(),
             this.chatStateManager.getMemoryTuningProfile(),
+            this.chatStateManager.getActiveActorKey(),
+            this.chatStateManager.load(),
         ]);
 
         return {
@@ -600,6 +605,7 @@ export class MemoryEditorFacade {
             profile,
             quality,
             lifecycle: context.lifecycleState,
+            activeActorKey,
             retention,
             semanticSeed: context.semanticSeed,
             simplePersona,
@@ -621,6 +627,8 @@ export class MemoryEditorFacade {
                 .slice()
                 .sort((left: DBWorldState, right: DBWorldState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
                 .slice(0, 18),
+            vectorIndexVersion: String(chatState.vectorIndexVersion ?? '').trim() || null,
+            vectorMetadataRebuiltAt: Number(chatState.vectorMetadataRebuiltAt ?? 0) || null,
         };
     }
 

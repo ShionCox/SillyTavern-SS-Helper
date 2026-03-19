@@ -1,4 +1,5 @@
 import { db } from '../db/db';
+import type { DBVectorChunkMetadata } from '../db/db';
 import { Logger } from '../../../SDK/logger';
 import { runEmbed } from '../llm/memoryLlmBridge';
 
@@ -22,10 +23,12 @@ function pickIndexSource(metadata?: Record<string, unknown>): Record<string, unk
     return source as Record<string, unknown>;
 }
 
-function buildIndexTraceSummary(metadata?: Record<string, unknown>): string {
+function buildIndexTraceSummary(metadata?: DBVectorChunkMetadata | undefined): string {
     const source = pickIndexSource(metadata);
     const kind = String(source.kind ?? metadata?.kind ?? 'unknown').trim() || 'unknown';
     const reason = String(source.reason ?? metadata?.reason ?? 'unknown').trim() || 'unknown';
+    const sourceRecordKey = String(metadata?.sourceRecordKey ?? '').trim();
+    const sourceRecordKind = String(metadata?.sourceRecordKind ?? '').trim();
     const viewHash = String(source.viewHash ?? '').trim();
     const snapshotHash = String(source.snapshotHash ?? '').trim();
     const anchorMessageId = String(source.anchorMessageId ?? '').trim();
@@ -36,6 +39,8 @@ function buildIndexTraceSummary(metadata?: Record<string, unknown>): string {
     return [
         `kind=${kind}`,
         `reason=${reason}`,
+        `sourceRecordKind=${sourceRecordKind || '-'}`,
+        `sourceRecordKey=${sourceRecordKey || '-'}`,
         `viewHash=${viewHash || '-'}`,
         `snapshotHash=${snapshotHash || '-'}`,
         `anchor=${anchorMessageId || '-'}`,
@@ -143,7 +148,7 @@ export class VectorManager {
      * @param bookId 可选的来源 bookId（用于后续按书检索）
      * @returns 写入的 chunkId 列表
      */
-    public async indexText(text: string, bookId?: string, metadata?: Record<string, unknown>): Promise<string[]> {
+    public async indexText(text: string, bookId?: string, metadata?: DBVectorChunkMetadata): Promise<string[]> {
         const chunks = this.splitIntoChunks(text, this.chunkSize);
         if (chunks.length === 0) return [];
 
@@ -251,7 +256,14 @@ export class VectorManager {
      * @param topK 最多返回条数（默认 5）
      * @returns 按相似度排序的文本块列表
      */
-    public async search(query: string, topK = this.defaultTopK): Promise<Array<{ chunkId: string; content: string; score: number }>> {
+    public async search(query: string, topK = this.defaultTopK): Promise<Array<{
+        chunkId: string;
+        content: string;
+        score: number;
+        bookId?: string;
+        metadata?: DBVectorChunkMetadata;
+        createdAt?: number;
+    }>> {
         try {
             const embedResult = await runEmbed([query], { maxLatencyMs: 8000 }) as any;
 
@@ -279,11 +291,25 @@ export class VectorManager {
             const topHits = scored.slice(0, topK);
 
             // 批量查 chunk 原文
-            const results: Array<{ chunkId: string; content: string; score: number }> = [];
+            const results: Array<{
+                chunkId: string;
+                content: string;
+                score: number;
+                bookId?: string;
+                metadata?: DBVectorChunkMetadata;
+                createdAt?: number;
+            }> = [];
             for (const hit of topHits) {
                 const chunk = await db.vector_chunks.get(hit.chunkId);
                 if (chunk) {
-                    results.push({ chunkId: hit.chunkId, content: chunk.content, score: hit.score });
+                    results.push({
+                        chunkId: hit.chunkId,
+                        content: chunk.content,
+                        score: hit.score,
+                        bookId: chunk.bookId,
+                        metadata: chunk.metadata,
+                        createdAt: Number(chunk.createdAt ?? 0) || undefined,
+                    });
                 }
             }
 

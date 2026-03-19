@@ -43,6 +43,10 @@ export async function collectFactRecallCandidates(context: RecallSourceContext):
                     rawText,
                     confidence: Number(fact.confidence ?? fact.encodeScore ?? 0.55),
                     updatedAt: Number(fact.updatedAt ?? 0),
+                    memoryType: fact.memoryType,
+                    memorySubtype: fact.memorySubtype,
+                    sourceScope: fact.sourceScope,
+                    ownerActorKey: fact.ownerActorKey ?? null,
                 });
                 if (candidate) {
                     candidates.push(candidate);
@@ -67,6 +71,10 @@ export async function collectFactRecallCandidates(context: RecallSourceContext):
                     rawText,
                     confidence: Number(fact.confidence ?? fact.encodeScore ?? 0.56),
                     updatedAt: Number(fact.updatedAt ?? 0),
+                    memoryType: fact.memoryType,
+                    memorySubtype: fact.memorySubtype,
+                    sourceScope: fact.sourceScope,
+                    ownerActorKey: fact.ownerActorKey ?? null,
                 });
                 if (candidate) {
                     candidates.push(candidate);

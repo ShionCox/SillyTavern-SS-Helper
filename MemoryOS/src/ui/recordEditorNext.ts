@@ -3,6 +3,7 @@ import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
+import { renderSharedWorldStateSectionTable as renderWorldStateSectionTable, type SharedWorldStateSectionColumn as WorldStateSectionColumn, type SharedWorldStateSectionTypeTab as WorldStateSectionTypeTab } from '../../../_Components/sharedWorldStateSectionTable';
 import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import WORLD_INFO_HERO_ICON_URL from '../../../assets/images/icon/woridifo.png';
 import { AuditManager } from '../core/audit-manager';
@@ -12,6 +13,13 @@ import { readPluginSignal } from '../../../SDK/db';
 import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { escapeHtml, formatSourceKindLabel, formatSourceRefMeta, formatTimeLabel, normalizeLookup, parseLooseValue } from './editorShared';
 import { buildChatItemMeta, buildChatSummaryLabel, ChatItemMeta, formatArchiveReasonLabel, getCurrentMemoryChatKey, hasMeaningfulChatContent, resolveChatItemCanonicalKey } from './recordEditorChatList';
+import {
+    buildWorldStateSectionTypeState,
+    filterWorldStateEntriesByType,
+    shouldShowWorldStateSectionTypeTabs,
+    type WorldStateSectionTypeBucket,
+} from './worldStateSectionClassifier';
+import { buildRecallUiSummary, extractForeignPrivateSuppressedItems } from './recallUiSummary';
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
@@ -27,7 +35,7 @@ import type {
     SourceRef,
     SnapshotValue,
 } from '../../../SDK/stx';
-import type { StructuredWorldStateEntry, WorldStateGroupingResult } from '../types';
+import type { StructuredWorldStateEntry } from '../types';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit';
 type ViewMode = 'world' | 'maintenance' | 'memory' | 'diagnostics' | 'raw';
@@ -57,6 +65,22 @@ interface CurrentSort {
     asc: boolean;
 }
 
+interface WorldStateSectionCategoryShortcutItem {
+    sectionKey: string;
+    sectionTitle: string;
+    typeKey: string;
+    typeLabel: string;
+    count: number;
+}
+
+interface WorldStateSectionCategoryViewModel {
+    activeTypeKey: string;
+    currentTypeLabel: string;
+    totalTypeCount: number;
+    visibleTypeCount: number;
+    typeTabs: WorldStateSectionTypeTab[];
+}
+
 type RawRecord = Record<string, unknown>;
 
 const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
@@ -64,8 +88,8 @@ const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
         label: '世界状态',
         icon: 'fa-solid fa-scroll-old',
         title: '世界状态总览',
-        subtitle: '按城市、地点、规则与局势拆分显示，只呈现已经识别并生效的内容。',
-        tip: '按结构化分类查看当前聊天的世界状态，包括城市、地点、规则与局势变化。',
+        subtitle: '按子表拆分显示，并在每个子表内继续按分类标签切换，只呈现已经识别并生效的内容。',
+        tip: '按结构化分类查看当前聊天的世界状态，包括城市、地点、规则、局势与子表内分类切换。',
     },
     maintenance: {
         label: '逻辑维护',
@@ -130,14 +154,6 @@ function formatWorldStateAnchorSummary(entry: StructuredWorldStateEntry): string
         entry.node.itemId ? `物品：${entry.node.itemId}` : '',
     ].filter(Boolean);
     return parts.join(' · ') || '未绑定额外锚点';
-}
-
-interface WorldStateSectionColumn<T> {
-    label: string;
-    tip: string;
-    width?: string;
-    cellClassName?: string;
-    render: (item: T) => string;
 }
 
 interface WorldQuestBoardRow {
@@ -384,7 +400,6 @@ function renderWorldStateEntryPrimaryCell(
         <div class="stx-re-record-main">
             <div class="stx-re-record-title-row">
                 <div class="stx-re-record-title">${escapeHtml(formatWorldStateDisplayTitle(entry))}</div>
-                <span class="stx-re-record-flag">${escapeHtml(formatWorldStateTypeLabel(entry.node.stateType))}</span>
             </div>
             <div class="stx-re-record-sub">${escapeHtml(subtitle || entry.node.summary || '暂无说明')}</div>
             <div class="stx-re-world-meta-stack">${metaLines.join('')}</div>
@@ -405,59 +420,6 @@ function renderWorldStateUpdateCell(entry: StructuredWorldStateEntry): string {
     return `
         <div class="stx-re-record-sub">${escapeHtml(entry.updatedAt ? formatTimeLabel(entry.updatedAt) : '暂无')}</div>
         <div class="stx-re-record-code">置信度：${escapeHtml(entry.node.confidence != null ? formatPercent(entry.node.confidence) : '暂无')}</div>
-    `;
-}
-
-function renderWorldStateSectionTable<T>(options: {
-    sectionKey: string;
-    title: string;
-    description: string;
-    iconClass: string;
-    badgeText: string;
-    badgeTip: string;
-    rows: T[];
-    rowKey: (item: T, index: number) => string;
-    columns: WorldStateSectionColumn<T>[];
-}): string {
-    if (options.rows.length <= 0) {
-        return '';
-    }
-    const headerHtml = options.columns.map((column: WorldStateSectionColumn<T>, index: number): string => {
-        const widthAttr = column.width ? ` style="width:${escapeHtml(column.width)};"` : '';
-        const firstColumnPrefix = index === 0
-            ? `<span class="stx-re-world-section-colhead-badge" aria-hidden="true"><em>${escapeHtml(options.badgeText)}</em></span>`
-            : '';
-        const sectionTitleAttr = index === 0 ? ` class="stx-re-world-section-colhead" data-world-section-title="${escapeHtml(options.title)}"` : '';
-        return `<th${sectionTitleAttr}${widthAttr}${buildTipAttr(column.tip)}><span class="stx-re-world-section-colhead-content">${firstColumnPrefix}<span>${escapeHtml(column.label)}</span></span></th>`;
-    }).join('');
-    const bodyHtml = options.rows.map((item: T, index: number): string => {
-        const cellsHtml = options.columns.map((column: WorldStateSectionColumn<T>): string => `<td class="${escapeHtml(column.cellClassName || '')}">${column.render(item)}</td>`).join('');
-        return `<tr class="stx-re-row" data-world-row-key="${escapeHtml(options.rowKey(item, index))}">${cellsHtml}</tr>`;
-    }).join('');
-
-    return `
-        <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="${escapeHtml(options.sectionKey)}" id="stx-re-world-section-${escapeHtml(options.sectionKey)}">
-            <summary class="stx-re-world-section-summary"${buildTipAttr(`点击展开或收起 ${options.title} 分区。`)}>
-                <div class="stx-re-world-section-head">
-                    <div>
-                        <div class="stx-re-world-section-title"><span>${escapeHtml(options.title)}</span></div>
-                        <div class="stx-re-world-section-sub">${escapeHtml(options.description)}</div>
-                    </div>
-                    <div class="stx-re-world-section-head-side">
-                        <div class="stx-re-rpg-badge"${buildTipAttr(options.badgeTip)}>${escapeHtml(options.badgeText)}</div>
-                        <div class="stx-re-world-section-toggle"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i><span>展开 / 收起</span></div>
-                    </div>
-                </div>
-            </summary>
-            <div class="stx-re-world-section-body">
-                <div class="stx-re-world-table-wrap" data-world-table-limit="10">
-                    <table class="stx-re-table stx-re-world-table stx-re-world-table-compact">
-                        <thead><tr>${headerHtml}</tr></thead>
-                        <tbody>${bodyHtml}</tbody>
-                    </table>
-                </div>
-            </div>
-        </details>
     `;
 }
 
@@ -1514,6 +1476,36 @@ function formatWorldStateTypeLabel(value: string): string {
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'status');
 }
 
+/**
+ * 功能：把某个世界状态子表的类型桶整理成适合渲染的视图模型。
+ * @param sectionKey 子表键。
+ * @param sectionEntries 子表条目。
+ * @param preferredTypeKey 优先选中的类型键。
+ * @returns 子表分类视图模型。
+ */
+function buildWorldStateSectionCategoryViewModel(
+    sectionKey: string,
+    sectionEntries: StructuredWorldStateEntry[],
+    preferredTypeKey: string = '',
+): WorldStateSectionCategoryViewModel {
+    const typeState = buildWorldStateSectionTypeState(sectionEntries, preferredTypeKey);
+    const activeBucket = typeState.buckets.find((bucket: WorldStateSectionTypeBucket): boolean => bucket.typeKey === typeState.activeTypeKey) ?? null;
+    const typeTabs: WorldStateSectionTypeTab[] = typeState.buckets.map((bucket: WorldStateSectionTypeBucket): WorldStateSectionTypeTab => ({
+        key: bucket.typeKey,
+        label: formatWorldStateTypeLabel(bucket.typeKey),
+        count: bucket.count,
+        active: bucket.typeKey === typeState.activeTypeKey,
+    }));
+
+    return {
+        activeTypeKey: typeState.activeTypeKey,
+        currentTypeLabel: formatWorldStateTypeLabel(typeState.activeTypeKey || activeBucket?.typeKey || sectionKey),
+        totalTypeCount: sectionEntries.length,
+        visibleTypeCount: activeBucket?.count ?? sectionEntries.length,
+        typeTabs,
+    };
+}
+
 function hasWorldStateStructuralAnomaly(entry: StructuredWorldStateEntry): boolean {
     const raw = getWorldStateRawObject(entry);
     const anomalyFlags = Array.isArray(entry.node.anomalyFlags) ? entry.node.anomalyFlags : [];
@@ -1820,6 +1812,66 @@ function formatPersonaDerivedSource(value: string): string {
         return `风格：${formatRecordEditorKeyLabel(normalized.slice('style:'.length) || 'style')}`;
     }
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'persona');
+}
+
+/**
+ * 功能：构建记录编辑器中可复用的 recall 视角摘要卡片。
+ * @param experience 体验快照。
+ * @returns HTML 字符串。
+ */
+function buildRecallSummaryCardsMarkup(experience: EditorExperienceSnapshot): string {
+    const summary = buildRecallUiSummary(experience);
+    const secondaryText = summary.secondaryActorLabels.length > 0
+        ? summary.secondaryActorLabels.join(' / ')
+        : '当前以共享池为主';
+    const salienceText = summary.salienceLabels.length > 0
+        ? summary.salienceLabels.join(' / ')
+        : '当前没有显著活跃角色';
+    return `
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div style="font-weight:700; margin-bottom:6px;">召回视角</div>
+                <div>${escapeHtml(summary.viewpointModeLabel)}</div>
+                <div style="margin-top:6px;">主视角：${escapeHtml(summary.primaryActorLabel)}</div>
+                <div style="margin-top:6px;">来源：${escapeHtml(summary.focusSourceLabel)}</div>
+                <div style="margin-top:6px;">次角色：${escapeHtml(secondaryText)}</div>
+            </div>
+            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div style="font-weight:700; margin-bottom:6px;">共享池 / 角色池</div>
+                <div>命中 ${summary.globalPoolSelectedCount} / ${summary.actorPoolSelectedCount}</div>
+                <div style="margin-top:6px;">边界压制 ${summary.foreignPrivateSuppressedCount} 条</div>
+                <div style="margin-top:6px;">遗忘阻断 ${summary.forgottenBlockedCount} 条</div>
+                <div style="margin-top:6px;">热度角色：${escapeHtml(salienceText)}</div>
+            </div>
+            <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
+                <div style="font-weight:700; margin-bottom:6px;">向量直连回源</div>
+                <div>${escapeHtml(summary.vectorIndexLabel)}</div>
+                <div style="margin-top:6px;">最近重建：${escapeHtml(summary.vectorRebuiltLabel)}</div>
+                <div style="margin-top:6px;">命中 ${summary.selectedCount} 条 / 回退 ${summary.rejectedCount} 条</div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建最近被角色边界压制的 recall 条目列表。
+ * @param experience 体验快照。
+ * @returns HTML 字符串。
+ */
+function buildSuppressedRecallListMarkup(experience: EditorExperienceSnapshot): string {
+    const suppressedItems = extractForeignPrivateSuppressedItems(experience.latestRecallExplanation, 6);
+    if (suppressedItems.length <= 0) {
+        return '<div class="stx-re-empty">最近这一轮没有被角色边界压制的私人记忆。</div>';
+    }
+    return suppressedItems.map((item): string => `
+        <div class="stx-re-panel-card stx-re-panel-chip">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <strong>${escapeHtml(item.title)}</strong>
+                <span>${escapeHtml(formatPercent(item.score))}</span>
+            </div>
+            <div style="margin-top:6px; opacity:0.84;">${escapeHtml(item.reasonLabels.join(' / ') || '因角色边界规则被压制')}</div>
+        </div>
+    `).join('');
 }
 
 function renderPersonaProfileCardMarkup(
@@ -2627,15 +2679,18 @@ export async function openRecordEditor(): Promise<void> {
     let currentRawTable: RawTableName = 'events';
     let currentChatKey = getCurrentMemoryChatKey();
     let currentSort: CurrentSort = { col: '', asc: false };
-    let currentLogicTableKey = '';
-    let currentMemoryActorKey = '__all__';
-    let currentWorldStateScopeFilter = '__all__';
-    let currentWorldStateTypeFilter = '__all__';
-    let currentWorldStateKeywordFilter = '';
-    let logicCreateExpanded = false;
-    let recordMemory: MemorySDKImpl | null = null;
-    let recordMemoryChatKey = '';
-    const selectedLogicRowIds = new Set<string>();
+let currentLogicTableKey = '';
+let currentMemoryActorKey = '__all__';
+let currentWorldStateScopeFilter = '__all__';
+let currentWorldStateKeywordFilter = '';
+let logicCreateExpanded = false;
+let recordMemory: MemorySDKImpl | null = null;
+let recordMemoryChatKey = '';
+const currentWorldStateSectionTypeFilters = new Map<string, string>();
+let currentWorldStateRenderSeq = 0;
+let pendingWorldStateFocusSectionKey: string | null = null;
+let pendingWorldStateOpenSectionKeys: Set<string> | null = null;
+const selectedLogicRowIds = new Set<string>();
     const pendingChanges = {
         deletes: new Set<string>(),
         updates: new Map<string, PendingRawUpdate>(),
@@ -3042,25 +3097,49 @@ export async function openRecordEditor(): Promise<void> {
         }
     }
 
-    async function renderWorldStateStructuredView(): Promise<void> {
-        contentArea.innerHTML = '<div class="stx-re-empty">正在加载世界状态...</div>';
+    async function renderWorldStateStructuredView(options: { preserveContent?: boolean } = {}): Promise<void> {
+        const renderSeq = ++currentWorldStateRenderSeq;
+        const preservedOpenSectionKeys = new Set<string>(Array.from(contentArea.querySelectorAll('.stx-re-world-section-collapsible[open]')).map((node: Element): string => String((node as HTMLElement).dataset.worldSectionKey ?? '').trim()).filter(Boolean));
+        const nextOpenSectionKeys = new Set<string>(preservedOpenSectionKeys);
+        const preserveContent = Boolean(options.preserveContent && contentArea.querySelector('.stx-re-world-overview-top'));
+        if (pendingWorldStateOpenSectionKeys) {
+            pendingWorldStateOpenSectionKeys.forEach((sectionKey: string): void => {
+                const normalized = String(sectionKey ?? '').trim();
+                if (normalized) {
+                    nextOpenSectionKeys.add(normalized);
+                }
+            });
+            pendingWorldStateOpenSectionKeys = null;
+        }
+        const nextFocusSectionKey = pendingWorldStateFocusSectionKey;
+        pendingWorldStateFocusSectionKey = null;
+        const nextScrollTop = nextFocusSectionKey ? null : contentArea.scrollTop;
+        if (!preserveContent) {
+            contentArea.innerHTML = '<div class="stx-re-empty">正在加载世界状态...</div>';
+        }
         if (!currentChatKey) {
-            contentArea.innerHTML = '<div class="stx-re-empty">世界状态需要先选择一个具体聊天。</div>';
+            if (!preserveContent) {
+                contentArea.innerHTML = '<div class="stx-re-empty">世界状态需要先选择一个具体聊天。</div>';
+            }
             return;
         }
 
         const memory = await ensureRecordMemory();
         if (!memory) {
-            contentArea.innerHTML = '<div class="stx-re-empty">无法为当前聊天建立 MemorySDK。</div>';
+            if (!preserveContent) {
+                contentArea.innerHTML = '<div class="stx-re-empty">无法为当前聊天建立 MemorySDK。</div>';
+            }
             return;
         }
 
-        const [entries, groupedEntries, experience, ownedStates] = await Promise.all([
+        const [entries, experience, ownedStates] = await Promise.all([
             memory.state.queryStructured(''),
-            memory.state.queryGrouped('') as Promise<WorldStateGroupingResult>,
             memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
             memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
         ]);
+        if (renderSeq !== currentWorldStateRenderSeq) {
+            return;
+        }
         const actorLabelMap = new Map<string, string>();
         experience.canon.characters.forEach((character): void => {
             const actorKey = String(character.actorKey ?? '').trim();
@@ -3080,29 +3159,13 @@ export async function openRecordEditor(): Promise<void> {
             map.set(key, (map.get(key) ?? 0) + 1);
             return map;
         }, new Map<string, number>());
-        const groupedSummary = Object.entries(groupedEntries ?? {})
-            .flatMap(([scopeKey, typeMap]: [string, Record<string, StructuredWorldStateEntry[]>]): Array<{ scopeKey: string; typeKey: string; count: number }> => {
-                return Object.entries(typeMap ?? {}).map(([typeKey, items]: [string, StructuredWorldStateEntry[]]) => ({
-                    scopeKey,
-                    typeKey,
-                    count: items.length,
-                }));
-            })
-            .sort((left, right): number => right.count - left.count)
-            .slice(0, 10);
-
         const filteredByScope = entries.filter((entry: StructuredWorldStateEntry): boolean => {
             return currentWorldStateScopeFilter === '__all__' || entry.node.scopeType === currentWorldStateScopeFilter;
         });
-        const typeStats = filteredByScope.reduce<Map<string, number>>((map, entry: StructuredWorldStateEntry): Map<string, number> => {
-            const key = String(entry.node.stateType ?? 'status');
-            map.set(key, (map.get(key) ?? 0) + 1);
-            return map;
-        }, new Map<string, number>());
-        const filteredEntries = filteredByScope.filter((entry: StructuredWorldStateEntry): boolean => {
-            const typeMatch = currentWorldStateTypeFilter === '__all__' || entry.node.stateType === currentWorldStateTypeFilter;
-            return typeMatch && matchWorldStateKeyword(entry, currentWorldStateKeywordFilter);
-        }).sort((left: StructuredWorldStateEntry, right: StructuredWorldStateEntry): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
+        const filteredEntries = filteredByScope
+            .filter((entry: StructuredWorldStateEntry): boolean => matchWorldStateKeyword(entry, currentWorldStateKeywordFilter))
+            .sort((left: StructuredWorldStateEntry, right: StructuredWorldStateEntry): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
+        const sectionCategoryShortcutItems: WorldStateSectionCategoryShortcutItem[] = [];
         const majorPlotEvents = ownedStates
             .filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event' && item.forgotten !== true)
             .sort((left: OwnedMemoryState, right: OwnedMemoryState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
@@ -3164,7 +3227,7 @@ export async function openRecordEditor(): Promise<void> {
             : null;
         const recentThreshold = Date.now() - (24 * 60 * 60 * 1000);
         const recentlyUpdatedCount = entries.filter((entry: StructuredWorldStateEntry): boolean => Number(entry.updatedAt ?? 0) >= recentThreshold).length;
-        const recognizedGroupCount = groupedSummary.length;
+        let recognizedGroupCount = 0;
         const readinessChecks = [
             Boolean(worldOverviewRaw),
             Boolean(currentLocationValue),
@@ -3196,16 +3259,6 @@ export async function openRecordEditor(): Promise<void> {
         if (currentWorldStateScopeFilter !== '__all__' && !scopeButtons.some((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)) {
             currentWorldStateScopeFilter = '__all__';
         }
-        const typeButtons = [
-            { key: '__all__', label: `全部类型 (${filteredByScope.length})` },
-            ...Array.from(typeStats.entries()).sort((left, right): number => right[1] - left[1]).map(([key, count]: [string, number]) => ({
-                key,
-                label: `${formatWorldStateTypeLabel(key)} (${count})`,
-            })),
-        ];
-        if (currentWorldStateTypeFilter !== '__all__' && !typeButtons.some((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)) {
-            currentWorldStateTypeFilter = '__all__';
-        }
 
         const assignedSectionKeys = new Set<string>();
         const renderedSectionNavItems: Array<{ key: string; title: string; iconClass: string; badgeText: string }> = [];
@@ -3216,6 +3269,7 @@ export async function openRecordEditor(): Promise<void> {
             iconClass: string;
             predicate: (entry: StructuredWorldStateEntry) => boolean;
             columns: WorldStateSectionColumn<StructuredWorldStateEntry>[];
+            allowTypeTabs?: boolean;
         }): string => {
             const sectionEntries = filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => {
                 if (assignedSectionKeys.has(entry.stateKey)) {
@@ -3226,6 +3280,31 @@ export async function openRecordEditor(): Promise<void> {
             sectionEntries.forEach((entry: StructuredWorldStateEntry): void => {
                 assignedSectionKeys.add(entry.stateKey);
             });
+            const hasTypeTabs = options.allowTypeTabs !== false && shouldShowWorldStateSectionTypeTabs(options.sectionKey);
+            const typeView = hasTypeTabs && sectionEntries.length > 0
+                ? buildWorldStateSectionCategoryViewModel(
+                    options.sectionKey,
+                    sectionEntries,
+                    currentWorldStateSectionTypeFilters.get(options.sectionKey) ?? '',
+                )
+                : null;
+            if (typeView && typeView.typeTabs.length > 1) {
+                currentWorldStateSectionTypeFilters.set(options.sectionKey, typeView.activeTypeKey);
+                typeView.typeTabs.forEach((tab: WorldStateSectionTypeTab): void => {
+                    sectionCategoryShortcutItems.push({
+                        sectionKey: options.sectionKey,
+                        sectionTitle: options.title,
+                        typeKey: tab.key,
+                        typeLabel: tab.label,
+                        count: tab.count,
+                    });
+                });
+            } else if (hasTypeTabs) {
+                currentWorldStateSectionTypeFilters.delete(options.sectionKey);
+            }
+            const visibleSectionEntries = typeView && typeView.typeTabs.length > 1
+                ? filterWorldStateEntriesByType(sectionEntries, typeView.activeTypeKey)
+                : sectionEntries;
             if (sectionEntries.length > 0) {
                 renderedSectionNavItems.push({
                     key: options.sectionKey,
@@ -3239,12 +3318,18 @@ export async function openRecordEditor(): Promise<void> {
                 title: options.title,
                 description: options.description,
                 iconClass: options.iconClass,
-                badgeText: `${sectionEntries.length} 条`,
-                badgeTip: `${options.title} 当前共有 ${sectionEntries.length} 条生效记录。`,
-                rows: sectionEntries,
+                badgeText: typeView && typeView.typeTabs.length > 1
+                    ? `${visibleSectionEntries.length}/${sectionEntries.length} 条`
+                    : `${sectionEntries.length} 条`,
+                badgeTip: typeView && typeView.typeTabs.length > 1
+                    ? `${options.title} 当前显示 ${visibleSectionEntries.length} 条，共 ${sectionEntries.length} 条可切换记录。`
+                    : `${options.title} 当前共有 ${sectionEntries.length} 条生效记录。`,
+                rows: visibleSectionEntries,
                 rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
                 columns: options.columns,
-            });
+                typeTabs: typeView?.typeTabs,
+                open: nextOpenSectionKeys.has(options.sectionKey),
+            }, { buildTipAttr });
         };
 
         const cityColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
@@ -3959,7 +4044,7 @@ export async function openRecordEditor(): Promise<void> {
                         render: (row: WorldQuestBoardRow): string => `<div class="stx-re-record-sub">${escapeHtml(row.updatedAt ? formatTimeLabel(row.updatedAt) : '暂无')}</div>`,
                     },
                 ],
-            }) : '',
+            }, { buildTipAttr }) : '',
             pickStateSection({
                 sectionKey: 'rules',
                 title: '规则法典',
@@ -4010,7 +4095,7 @@ export async function openRecordEditor(): Promise<void> {
                 rows: filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey) && entry.node.stateType === 'danger'),
                 rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
                 columns: dangerColumns,
-            }),
+            }, { buildTipAttr }),
             pickStateSection({
                 sectionKey: 'history',
                 title: '历史事件',
@@ -4029,11 +4114,11 @@ export async function openRecordEditor(): Promise<void> {
                 rows: filteredEntries.filter((entry: StructuredWorldStateEntry): boolean => !assignedSectionKeys.has(entry.stateKey)),
                 rowKey: (entry: StructuredWorldStateEntry): string => entry.stateKey,
                 columns: anomalyColumns,
-            }),
+            }, { buildTipAttr }),
         ].filter(Boolean).join('');
 
         const majorEventPanelHtml = majorPlotEvents.length > 0 ? `
-            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events">
+            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events"${nextOpenSectionKeys.has('major-events') ? ' open' : ''}>
                 <summary class="stx-re-world-section-summary"${buildTipAttr('点击展开或收起重大事件分区。')}>
                     <div class="stx-re-world-section-head">
                         <div>
@@ -4089,6 +4174,21 @@ export async function openRecordEditor(): Promise<void> {
             });
         }
 
+        const totalSectionCategoryShortcutCount = sectionCategoryShortcutItems.length;
+        const sortedSectionCategoryShortcutItems = [...sectionCategoryShortcutItems]
+            .sort((left: WorldStateSectionCategoryShortcutItem, right: WorldStateSectionCategoryShortcutItem): number => {
+                if (right.count !== left.count) {
+                    return right.count - left.count;
+                }
+                const sectionTitleCompare = left.sectionTitle.localeCompare(right.sectionTitle);
+                if (sectionTitleCompare !== 0) {
+                    return sectionTitleCompare;
+                }
+                return left.typeLabel.localeCompare(right.typeLabel);
+            })
+            .slice(0, 16);
+        recognizedGroupCount = totalSectionCategoryShortcutCount;
+
         const locationSummary = currentLocationValue || '尚未稳定抽取';
         const worldOverview = worldOverviewRaw || '当前聊天暂未形成稳定世界总览。';
         const overviewLeadCardHtml = renderWorldMacroCard({
@@ -4099,8 +4199,6 @@ export async function openRecordEditor(): Promise<void> {
                 bodyHtml: `
                     <div class="stx-re-record-sub">${escapeHtml(worldOverview)}</div>
                     <div class="stx-re-world-meta-stack">
-                        ${renderWorldStateMiniMeta('当前位置', locationSummary, '尚未稳定抽取')}
-                        ${renderWorldStateMiniMeta('当前场景', currentSceneValue || '尚未稳定抽取', '尚未稳定抽取')}
                         ${renderWorldStateMiniMeta('冷启动成熟度', `${readinessScore}%`, '0%')}
                     </div>
                     <div class="stx-re-world-pill-list">
@@ -4154,12 +4252,9 @@ export async function openRecordEditor(): Promise<void> {
                 tip: '集中显示规则、硬约束与启用中的设定书，方便做世界观校准。',
                 className: 'stx-re-world-kpi-card',
                 bodyHtml: `
-                    <div class="stx-re-world-meta-stack">
-                        ${renderWorldStateMiniMeta('世界规则', ruleSummaryItems.slice(0, 2).join(' / ') || '暂无', '暂无')}
-                        ${renderWorldStateMiniMeta('硬约束', hardConstraintItems.slice(0, 2).join(' / ') || '暂无', '暂无')}
-                        ${renderWorldStateMiniMeta('启用设定书', lorebookLabels.slice(0, 3).join(' / ') || '暂无', '暂无')}
-                    </div>
-                    <div class="stx-re-record-code">规则条目：${escapeHtml(String(ruleEntryCount))} 条</div>
+                    <div class="stx-re-world-kpi-value">${escapeHtml(String(ruleEntryCount))}</div>
+                    <div class="stx-re-record-sub">规则 / 硬约束 / 设定书</div>
+                    <div class="stx-re-record-code">规则 ${escapeHtml(String(ruleSummaryItems.length))} · 硬约束 ${escapeHtml(String(hardConstraintItems.length))} · 设定书 ${escapeHtml(String(lorebookLabels.length))}</div>
                 `,
             }),
             renderWorldMacroCard({
@@ -4197,7 +4292,7 @@ export async function openRecordEditor(): Promise<void> {
                 bodyHtml: `
                     <div class="stx-re-world-kpi-value">${escapeHtml(averageConfidence != null ? formatPercent(averageConfidence) : '--')}</div>
                     <div class="stx-re-record-sub">平均置信度</div>
-                    <div class="stx-re-record-code">近 24h 更新 ${escapeHtml(String(recentlyUpdatedCount))} 条 · 分组 ${escapeHtml(String(recognizedGroupCount))} 个</div>
+                    <div class="stx-re-record-code">近 24h 更新 ${escapeHtml(String(recentlyUpdatedCount))} 条 · 分类 ${escapeHtml(String(recognizedGroupCount))} 个</div>
                 `,
             }),
             renderWorldMacroCard({
@@ -4220,18 +4315,18 @@ export async function openRecordEditor(): Promise<void> {
                 className: 'stx-re-world-kpi-card',
                 bodyHtml: `
                     <div class="stx-re-record-sub">作用域：${escapeHtml(scopeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateScopeFilter)?.label || '全部')}</div>
-                    <div class="stx-re-record-code">类型：${escapeHtml(typeButtons.find((item: { key: string; label: string }): boolean => item.key === currentWorldStateTypeFilter)?.label || '全部类型')}</div>
+                    <div class="stx-re-record-code">子表分类：${escapeHtml(String(currentWorldStateSectionTypeFilters.size))} 个子表记住了切换状态</div>
                     <div class="stx-re-record-code">关键词：${escapeHtml(currentWorldStateKeywordFilter || '未设置')}</div>
                 `,
             }),
             renderWorldMacroCard({
                 title: '热门分类',
                 iconClass: 'fa-solid fa-compass',
-                tip: '这里显示目前最常见的世界状态分组。',
+                tip: '这里显示目前最常见的可切换子表分类。',
                 className: 'stx-re-world-kpi-card',
                 bodyHtml: `
-                    <div class="stx-re-record-sub">${escapeHtml(groupedSummary.length > 0 ? `${formatWorldStateScopeLabel(groupedSummary[0]!.scopeKey)} / ${formatWorldStateTypeLabel(groupedSummary[0]!.typeKey)}` : '暂无')}</div>
-                    <div class="stx-re-record-code">已识别 ${escapeHtml(String(Object.keys(groupedEntries ?? {}).length))} 个作用域 / ${escapeHtml(String(recognizedGroupCount))} 个热门分组</div>
+                    <div class="stx-re-record-sub">${escapeHtml(sortedSectionCategoryShortcutItems.length > 0 ? `${sortedSectionCategoryShortcutItems[0]!.sectionTitle} / ${sortedSectionCategoryShortcutItems[0]!.typeLabel}` : '暂无')}</div>
+                    <div class="stx-re-record-code">已识别 ${escapeHtml(String(scopeStats.size))} 个作用域 / ${escapeHtml(String(recognizedGroupCount))} 个可切换分类</div>
                 `,
             }),
             renderWorldMacroCard({
@@ -4282,9 +4377,9 @@ export async function openRecordEditor(): Promise<void> {
                             </div>
                         </div>
                         <div class="stx-re-panel-card">
-                            <div class="stx-re-world-section-title"><span>类型筛选</span></div>
+                            <div class="stx-re-world-section-title"><span>分类捷径</span></div>
                             <div class="stx-re-world-filter-list">
-                                ${typeButtons.map((item: { key: string; label: string }): string => `<button class="stx-re-btn ${item.key === currentWorldStateTypeFilter ? 'save' : ''}" data-world-type="${escapeHtml(item.key)}"${buildTipAttr(`只显示类型为 ${item.label} 的世界状态。`)} style="justify-content:flex-start;">${escapeHtml(item.label)}</button>`).join('')}
+                                ${sortedSectionCategoryShortcutItems.length > 0 ? sortedSectionCategoryShortcutItems.map((item: WorldStateSectionCategoryShortcutItem): string => `<button class="stx-re-btn" data-world-section-type-shortcut data-world-section-key="${escapeHtml(item.sectionKey)}" data-world-section-type="${escapeHtml(item.typeKey)}"${buildTipAttr(`快速切换到 ${item.sectionTitle} 的 ${item.typeLabel} 分类，并跳转到对应子表。`)} style="justify-content:flex-start;">${escapeHtml(item.sectionTitle)} / ${escapeHtml(item.typeLabel)} · ${escapeHtml(String(item.count))} 条</button>`).join('') : '<div class="stx-re-record-sub">暂无可用分类</div>'}
                             </div>
                         </div>
                         <div class="stx-re-panel-card">
@@ -4295,12 +4390,6 @@ export async function openRecordEditor(): Promise<void> {
                                 <button class="stx-re-btn" data-world-keyword-clear${buildTipAttr('清空关键词过滤，重新显示全部命中条目。')}><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> 清空</button>
                             </div>
                         </div>
-                        <div class="stx-re-panel-card">
-                            <div class="stx-re-world-section-title"><span>分类捷径</span></div>
-                            <div class="stx-re-world-filter-list">
-                                ${groupedSummary.length > 0 ? groupedSummary.map((item: { scopeKey: string; typeKey: string; count: number }): string => `<button class="stx-re-btn" data-world-group-scope="${escapeHtml(item.scopeKey)}" data-world-group-type="${escapeHtml(item.typeKey)}"${buildTipAttr(`快速切换到 ${formatWorldStateScopeLabel(item.scopeKey)} / ${formatWorldStateTypeLabel(item.typeKey)} 分类。`)} style="justify-content:flex-start;">${escapeHtml(formatWorldStateScopeLabel(item.scopeKey))} / ${escapeHtml(formatWorldStateTypeLabel(item.typeKey))} · ${escapeHtml(String(item.count))} 条</button>`).join('') : '<div class="stx-re-record-sub">暂无可用分类</div>'}
-                            </div>
-                        </div>
                     </div>
                     <div class="stx-re-world-sections">
                         ${majorEventPanelHtml}
@@ -4309,39 +4398,53 @@ export async function openRecordEditor(): Promise<void> {
                 </div>
             </div>
         `;
+        if (renderSeq !== currentWorldStateRenderSeq) {
+            return;
+        }
 
         contentArea.querySelectorAll('[data-world-scope]').forEach((button: Element): void => {
             button.addEventListener('click', (): void => {
                 currentWorldStateScopeFilter = String((button as HTMLElement).dataset.worldScope ?? '__all__');
-                currentWorldStateTypeFilter = '__all__';
-                void renderWorldStateStructuredView();
+                void renderWorldStateStructuredView({ preserveContent: true });
             });
         });
 
-        contentArea.querySelectorAll('[data-world-type]').forEach((button: Element): void => {
+        contentArea.querySelectorAll('[data-world-section-type-tab]').forEach((button: Element): void => {
             button.addEventListener('click', (): void => {
-                currentWorldStateTypeFilter = String((button as HTMLElement).dataset.worldType ?? '__all__');
-                void renderWorldStateStructuredView();
+                const element = button as HTMLElement;
+                const sectionKey = String(element.dataset.worldSectionKey ?? '').trim();
+                const typeKey = String(element.dataset.worldSectionType ?? '').trim();
+                if (!sectionKey || !typeKey) {
+                    return;
+                }
+                currentWorldStateSectionTypeFilters.set(sectionKey, typeKey);
+                void renderWorldStateStructuredView({ preserveContent: true });
             });
         });
 
         contentArea.querySelector('[data-world-keyword-apply]')?.addEventListener('click', (): void => {
             const input = contentArea.querySelector('[data-world-keyword-input]') as HTMLInputElement | null;
             currentWorldStateKeywordFilter = String(input?.value ?? '').trim();
-            void renderWorldStateStructuredView();
+            void renderWorldStateStructuredView({ preserveContent: true });
         });
 
         contentArea.querySelector('[data-world-keyword-clear]')?.addEventListener('click', (): void => {
             currentWorldStateKeywordFilter = '';
-            void renderWorldStateStructuredView();
+            void renderWorldStateStructuredView({ preserveContent: true });
         });
 
-        contentArea.querySelectorAll('[data-world-group-scope]').forEach((button: Element): void => {
+        contentArea.querySelectorAll('[data-world-section-type-shortcut]').forEach((button: Element): void => {
             button.addEventListener('click', (): void => {
                 const element = button as HTMLElement;
-                currentWorldStateScopeFilter = String(element.dataset.worldGroupScope ?? '__all__');
-                currentWorldStateTypeFilter = String(element.dataset.worldGroupType ?? '__all__');
-                void renderWorldStateStructuredView();
+                const sectionKey = String(element.dataset.worldSectionKey ?? '').trim();
+                const typeKey = String(element.dataset.worldSectionType ?? '').trim();
+                if (!sectionKey || !typeKey) {
+                    return;
+                }
+                currentWorldStateSectionTypeFilters.set(sectionKey, typeKey);
+                pendingWorldStateFocusSectionKey = sectionKey;
+                pendingWorldStateOpenSectionKeys = new Set<string>([sectionKey]);
+                void renderWorldStateStructuredView({ preserveContent: true });
             });
         });
 
@@ -4488,6 +4591,19 @@ export async function openRecordEditor(): Promise<void> {
 
         requestAnimationFrame((): void => {
             applyWorldTableViewportLimits(contentArea);
+            if (nextFocusSectionKey) {
+                const target = contentArea.querySelector(`#stx-re-world-section-${nextFocusSectionKey}`) as HTMLElement | null;
+                if (target) {
+                    const targetRect = target.getBoundingClientRect();
+                    const contentRect = contentArea.getBoundingClientRect();
+                    const nextTop = contentArea.scrollTop + (targetRect.top - contentRect.top) - 12;
+                    contentArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+                } else if (nextScrollTop != null) {
+                    contentArea.scrollTo({ top: Math.max(0, nextScrollTop), behavior: 'auto' });
+                }
+            } else if (nextScrollTop != null) {
+                contentArea.scrollTo({ top: Math.max(0, nextScrollTop), behavior: 'auto' });
+            }
             scheduleWorldUiRefresh();
             window.setTimeout((): void => applyWorldTableViewportLimits(contentArea), 120);
             window.setTimeout((): void => scheduleWorldUiRefresh(), 120);
@@ -5439,6 +5555,11 @@ export async function openRecordEditor(): Promise<void> {
                         <div style="margin-top:6px;">当前主视角：${escapeHtml(activeActorLabel)}</div>
                     </div>
                 </div>
+                ${buildRecallSummaryCardsMarkup(experience)}
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">最近被角色边界压制的候选</div>
+                    ${buildSuppressedRecallListMarkup(experience)}
+                </div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
                     <button class="stx-re-btn" data-diag-action="rebuild-chat-view"${buildTipAttr('重新构建当前聊天的编辑器结构视图，适合结构不同步时使用。')}>重建结构视图</button>
                     <button class="stx-re-btn" data-diag-action="refresh-seed"${buildTipAttr('重新拉取或刷新当前聊天的初始设定种子。')}>刷新初始设定</button>
@@ -5808,6 +5929,11 @@ export async function openRecordEditor(): Promise<void> {
                         <div>重大事件 ${majorEventCount} 条</div>
                         <div style="margin-top:6px;">已影响 ${recentAffectedCount} 条 / 强化 ${reinforcedCount} 条 / 覆盖或冲淡 ${invalidatedCount} 条</div>
                     </div>
+                </div>
+                ${buildRecallSummaryCardsMarkup(experience)}
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">最近被角色边界压制的候选</div>
+                    ${buildSuppressedRecallListMarkup(experience)}
                 </div>
                 <div style="display:grid; grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr); gap:12px; align-items:start;">
                     <div style="display:flex; flex-direction:column; gap:10px;">

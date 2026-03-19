@@ -84,6 +84,10 @@ export class TaskRouter {
         for (const a of assignments) this.taskAssignments.set(`${a.pluginId}::${a.taskId}`, a);
     }
 
+    getTaskAssignment(pluginId: string, taskId: string): TaskAssignment | undefined {
+        return this.taskAssignments.get(`${pluginId}::${taskId}`);
+    }
+
     // ─── 统一路由解析 ───
 
     resolveRoute(args: RouteResolveArgs): RouteResolveResult {

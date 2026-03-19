@@ -647,6 +647,34 @@ export interface StyleSeed {
     sourceTrace: SeedSourceTrace[];
 }
 
+export interface SemanticAiSummary {
+    roleSummary: string;
+    worldSummary: string;
+    identityFacts: string[];
+    worldRules: string[];
+    hardConstraints: string[];
+    cities: string[];
+    locations: string[];
+    entities: string[];
+    nations: string[];
+    regions: string[];
+    factions: string[];
+    calendarSystems: string[];
+    currencySystems: string[];
+    socialSystems: string[];
+    culturalPractices: string[];
+    historicalEvents: string[];
+    dangers: string[];
+    otherWorldDetails: string[];
+    characterGoals: string[];
+    relationshipFacts: string[];
+    catchphrases: string[];
+    relationshipAnchors: string[];
+    styleCues: string[];
+    generatedAt: number;
+    source: 'ai';
+}
+
 export interface ChatSemanticSeed {
     collectedAt: number;
     characterCore: Record<string, unknown>;
@@ -673,6 +701,7 @@ export interface ChatSemanticSeed {
     identitySeeds?: Record<string, IdentitySeed>;
     worldSeed: WorldSeed;
     styleSeed: StyleSeed;
+    aiSummary?: SemanticAiSummary;
     sourceTrace: SeedSourceTrace[];
 }
 
@@ -736,6 +765,12 @@ export type MemoryLayer = 'working' | 'episodic' | 'semantic' | 'core_identity';
 export type MemoryCandidateKind = 'fact' | 'summary' | 'state' | 'relationship';
 
 export type MemoryRecordKind = 'fact' | 'summary' | 'state' | 'relationship';
+
+export type RecallCandidateRecordKind = MemoryRecordKind | 'event' | 'lorebook';
+
+export type MemoryPrivacyClass = 'shared' | 'private' | 'contextual';
+
+export type RecallViewpointReason = 'shared' | 'owned_by_actor' | 'retained_for_actor' | 'foreign_private_suppressed';
 
 export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
 
@@ -945,7 +980,7 @@ export interface RecallExplanationBucket {
         itemId: string;
         sourceKind: 'recall_log' | 'candidate';
         recordKey: string;
-        recordKind: MemoryRecordKind | MemoryCandidateKind;
+        recordKind: MemoryRecordKind | MemoryCandidateKind | RecallCandidateRecordKind;
         title: string;
         score: number;
         layer: MemoryLayer | null;
@@ -1058,6 +1093,8 @@ export interface MemoryOSChatState {
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
     mutationRepairGeneration?: number;
+    vectorIndexVersion?: string;
+    vectorMetadataRebuiltAt?: number;
 }
 
 export interface RowRefResolution {
@@ -1301,6 +1338,7 @@ export interface EditorExperienceSnapshot {
     profile: ChatProfile;
     quality: MemoryQualityScorecard;
     lifecycle: ChatLifecycleState;
+    activeActorKey: string | null;
     retention: RetentionPolicy;
     semanticSeed: ChatSemanticSeed | null;
     simplePersona: SimpleMemoryPersona | null;
@@ -1319,6 +1357,8 @@ export interface EditorExperienceSnapshot {
     summaries: DBSummary[];
     events: DBEvent[];
     states: DBWorldState[];
+    vectorIndexVersion: string | null;
+    vectorMetadataRebuiltAt: number | null;
 }
 
 // -- MemorySDK 接口 --
@@ -1706,6 +1746,7 @@ export interface RequestScope {
     chatId?: string;
     sessionId?: string;
     pluginId?: string;
+    chatKey?: string;
 }
 
 export interface RequestEnqueueOptions {

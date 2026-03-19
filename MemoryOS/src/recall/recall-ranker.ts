@@ -9,6 +9,7 @@ import type {
 } from '../types';
 
 type CandidatePriority = 'constraint' | 'continuity' | 'flavor';
+type CandidatePool = 'global' | 'primary_actor' | 'secondary_actor';
 
 type RankRecallCandidatesInput = {
     candidates: RecallCandidate[];
@@ -130,6 +131,180 @@ function priorityWeight(priority: CandidatePriority): number {
     return 0.03;
 }
 
+/**
+ * 功能：将候选映射到内部召回池。
+ * 参数：
+ *   candidate：召回候选。
+ * 返回：
+ *   'global' | 'actor'：召回池标记。
+ */
+function resolveCandidatePool(candidate: RecallCandidate): CandidatePool | 'blocked' {
+    if (candidate.visibilityPool === 'blocked') {
+        return 'blocked';
+    }
+    if (candidate.actorFocusTier === 'primary') {
+        return 'primary_actor';
+    }
+    if (candidate.actorFocusTier === 'secondary') {
+        return 'secondary_actor';
+    }
+    return 'global';
+}
+
+/**
+ * 功能：对单个召回池执行粗排、精排与安全裁剪。
+ * 参数：
+ *   candidates：候选列表。
+ *   input：召回排序输入。
+ * 返回：
+ *   RecallCandidate[]：排序后的候选。
+ */
+function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCandidatesInput): RecallCandidate[] {
+    const visibleMessages = Array.isArray(input.recentVisibleMessages) ? input.recentVisibleMessages : [];
+    const worldStateText = String(input.worldStateText ?? '');
+    const coarseRanked = candidates
+        .map((candidate: RecallCandidate): RecallCandidate => {
+            const sourceWeight = input.plan.sourceWeights[candidate.source] ?? 0.4;
+            const sectionWeight = candidate.sectionHint ? (input.plan.sectionWeights[candidate.sectionHint] ?? 0.4) : 0.2;
+            const priority = readPriority(candidate);
+            const focusWeight = candidate.actorFocusTier === 'primary'
+                ? 0.08
+                : candidate.actorFocusTier === 'secondary'
+                    ? 0.05
+                    : candidate.actorFocusTier === 'shared'
+                        ? 0.03
+                        : 0;
+            const roughScore = clamp01(
+                candidate.keywordScore * 0.22
+                + candidate.vectorScore * 0.2
+                + candidate.recencyScore * 0.14
+                + candidate.relationshipScore * 0.12
+                + candidate.emotionScore * 0.08
+                + candidate.continuityScore * 0.1
+                + candidate.actorVisibilityScore * 0.12
+                + focusWeight
+                - (candidate.actorForgotten ? 0.14 : 0)
+                - clamp01(Number(candidate.actorForgetProbability ?? 0)) * 0.05
+                + sourceWeight * 0.04
+                + sectionWeight * 0.02,
+            );
+            return {
+                ...candidate,
+                finalScore: clamp01(candidate.finalScore * 0.54 + roughScore * 0.32 + priorityWeight(priority)),
+                reasonCodes: [...candidate.reasonCodes, `priority:${priority}`],
+                selected: false,
+                suppressedBy: Array.isArray(candidate.suppressedBy) ? [...candidate.suppressedBy] : undefined,
+            };
+        })
+        .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+
+    const coarseTop = coarseRanked.slice(0, input.plan.coarseTopK);
+    const coarsePruned = coarseRanked.slice(input.plan.coarseTopK).map((candidate: RecallCandidate): RecallCandidate => ({
+        ...candidate,
+        reasonCodes: appendReason(candidate.reasonCodes, 'coarse_pruned'),
+        finalScore: Math.max(0, candidate.finalScore - 0.08),
+    }));
+
+    const safeCandidates = applySafetyGate(coarseTop);
+    const deduped = dedupeCandidates(safeCandidates);
+    const selectedSoFar: RecallCandidate[] = [];
+    const contradicted = detectContradictions(deduped, selectedSoFar, visibleMessages, worldStateText, input.lorebookConflictDetected === true)
+        .map((candidate: RecallCandidate): RecallCandidate => {
+            const tokenCostPenalty = clamp01((candidate.rawText.length / 420)) * 0.08;
+            const speakerRelevance = visibleMessages.length > 0 && matchesVisibleContext(candidate, visibleMessages.slice(-4)) ? 0.06 : 0;
+            const sceneContinuity = candidate.sectionHint === 'LAST_SCENE' || candidate.sectionHint === 'EVENTS' ? 0.06 : 0;
+            const contradictionPenalty = candidate.reasonCodes.includes('conflict_suppressed') ? 0.22 : 0;
+            const duplicatePenalty = candidate.reasonCodes.includes('duplicate_suppressed') || candidate.reasonCodes.includes('visible_duplicate_suppressed') ? 0.18 : 0;
+            const fineScore = clamp01(candidate.finalScore + speakerRelevance + sceneContinuity - tokenCostPenalty - contradictionPenalty - duplicatePenalty);
+            const nextCandidate = {
+                ...candidate,
+                finalScore: fineScore,
+            };
+            if (!nextCandidate.reasonCodes.includes('conflict_suppressed') && !nextCandidate.reasonCodes.includes('duplicate_suppressed') && !nextCandidate.reasonCodes.includes('visible_duplicate_suppressed')) {
+                selectedSoFar.push(nextCandidate);
+            }
+            return nextCandidate;
+        })
+        .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+
+    const fineTop = contradicted.slice(0, input.plan.fineTopK);
+    const finePruned = contradicted.slice(input.plan.fineTopK).map((candidate: RecallCandidate): RecallCandidate => ({
+        ...candidate,
+        reasonCodes: appendReason(candidate.reasonCodes, 'fine_pruned'),
+        finalScore: Math.max(0, candidate.finalScore - 0.05),
+    }));
+
+    return [...fineTop, ...finePruned, ...coarsePruned].sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+}
+
+/**
+ * 功能：按目标比例合并全局池与角色池。
+ * 参数：
+ *   globalCandidates：全局池候选。
+ *   actorCandidates：角色池候选。
+ *   actorShare：角色池目标占比。
+ * 返回：
+ *   RecallCandidate[]：合并后的候选。
+ */
+function mergeRankedPools(
+    globalCandidates: RecallCandidate[],
+    primaryCandidates: RecallCandidate[],
+    secondaryCandidates: RecallCandidate[],
+    shares: { global: number; primaryActor: number; secondaryActors: number },
+): RecallCandidate[] {
+    const pools = [
+        { key: 'global' as const, candidates: globalCandidates, weight: Math.max(0, Number(shares.global ?? 0)), carried: 0 },
+        { key: 'primary_actor' as const, candidates: primaryCandidates, weight: Math.max(0, Number(shares.primaryActor ?? 0)), carried: 0 },
+        { key: 'secondary_actor' as const, candidates: secondaryCandidates, weight: Math.max(0, Number(shares.secondaryActors ?? 0)), carried: 0 },
+    ].map((item) => ({
+        ...item,
+        weight: item.weight,
+    }));
+    const activePools = pools.filter((pool) => pool.candidates.length > 0 && pool.weight > 0);
+    if (activePools.length === 0) {
+        return [];
+    }
+    const weightSum = activePools.reduce((sum: number, pool): number => sum + pool.weight, 0) || 1;
+    const merged: RecallCandidate[] = [];
+    while (activePools.some((pool) => pool.candidates.length > 0)) {
+        activePools.forEach((pool): void => {
+            if (pool.candidates.length > 0) {
+                pool.carried += pool.weight;
+            }
+        });
+        let bestIndex = -1;
+        let bestScore = Number.NEGATIVE_INFINITY;
+        activePools.forEach((pool, index): void => {
+            if (pool.candidates.length <= 0) {
+                return;
+            }
+            if (pool.carried > bestScore) {
+                bestScore = pool.carried;
+                bestIndex = index;
+            }
+        });
+        if (bestIndex < 0) {
+            break;
+        }
+        const selectedPool = activePools[bestIndex];
+        merged.push(selectedPool.candidates.shift() as RecallCandidate);
+        selectedPool.carried -= weightSum;
+    }
+    return merged;
+}
+
+function appendBlockedCandidates(candidates: RecallCandidate[]): RecallCandidate[] {
+    const blocked = candidates
+        .filter((candidate: RecallCandidate): boolean => candidate.visibilityPool === 'blocked')
+        .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore)
+        .map((candidate: RecallCandidate): RecallCandidate => ({
+            ...candidate,
+            selected: false,
+            reasonCodes: appendReason(candidate.reasonCodes, 'foreign_private_memory_suppressed'),
+        }));
+    return blocked;
+}
+
 function hasNegationConflict(candidateText: string, compareText: string): boolean {
     const candidate = normalizeCandidateText(candidateText);
     const compare = normalizeCandidateText(compareText);
@@ -223,81 +398,43 @@ export function applySafetyGate(candidates: RecallCandidate[]): RecallCandidate[
 }
 
 export function rankRecallCandidates(input: RankRecallCandidatesInput): RecallCandidate[] {
-    const visibleMessages = Array.isArray(input.recentVisibleMessages) ? input.recentVisibleMessages : [];
-    const worldStateText = String(input.worldStateText ?? '');
-    const coarseRanked = input.candidates
-        .map((candidate: RecallCandidate): RecallCandidate => {
-            const sourceWeight = input.plan.sourceWeights[candidate.source] ?? 0.4;
-            const sectionWeight = candidate.sectionHint ? (input.plan.sectionWeights[candidate.sectionHint] ?? 0.4) : 0.2;
-            const priority = readPriority(candidate);
-            const roughScore = clamp01(
-                candidate.keywordScore * 0.24
-                + candidate.vectorScore * 0.22
-                + candidate.recencyScore * 0.16
-                + candidate.relationshipScore * 0.12
-                + candidate.emotionScore * 0.08
-                + candidate.continuityScore * 0.12
-                + sourceWeight * 0.04
-                + sectionWeight * 0.02,
-            );
-            return {
-                ...candidate,
-                finalScore: clamp01(candidate.finalScore * 0.54 + roughScore * 0.32 + priorityWeight(priority)),
-                reasonCodes: [...candidate.reasonCodes, `priority:${priority}`],
-                selected: false,
-                suppressedBy: Array.isArray(candidate.suppressedBy) ? [...candidate.suppressedBy] : undefined,
-            };
-        })
-        .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
-
-    const coarseTop = coarseRanked.slice(0, input.plan.coarseTopK);
-    const coarsePruned = coarseRanked.slice(input.plan.coarseTopK).map((candidate: RecallCandidate): RecallCandidate => ({
-        ...candidate,
-        reasonCodes: appendReason(candidate.reasonCodes, 'coarse_pruned'),
-        finalScore: Math.max(0, candidate.finalScore - 0.08),
-    }));
-
-    const safeCandidates = applySafetyGate(coarseTop);
-    const deduped = dedupeCandidates(safeCandidates);
-    const selectedSoFar: RecallCandidate[] = [];
-    const contradicted = detectContradictions(deduped, selectedSoFar, visibleMessages, worldStateText, input.lorebookConflictDetected === true)
-        .map((candidate: RecallCandidate): RecallCandidate => {
-            const tokenCostPenalty = clamp01((candidate.rawText.length / 420)) * 0.08;
-            const speakerRelevance = visibleMessages.length > 0 && matchesVisibleContext(candidate, visibleMessages.slice(-4)) ? 0.06 : 0;
-            const sceneContinuity = candidate.sectionHint === 'LAST_SCENE' || candidate.sectionHint === 'EVENTS' ? 0.06 : 0;
-            const contradictionPenalty = candidate.reasonCodes.includes('conflict_suppressed') ? 0.22 : 0;
-            const duplicatePenalty = candidate.reasonCodes.includes('duplicate_suppressed') || candidate.reasonCodes.includes('visible_duplicate_suppressed') ? 0.18 : 0;
-            const fineScore = clamp01(candidate.finalScore + speakerRelevance + sceneContinuity - tokenCostPenalty - contradictionPenalty - duplicatePenalty);
-            const nextCandidate = {
-                ...candidate,
-                finalScore: fineScore,
-            };
-            if (!nextCandidate.reasonCodes.includes('conflict_suppressed') && !nextCandidate.reasonCodes.includes('duplicate_suppressed') && !nextCandidate.reasonCodes.includes('visible_duplicate_suppressed')) {
-                selectedSoFar.push(nextCandidate);
-            }
-            return nextCandidate;
-        })
-        .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
-
-    const fineTop = contradicted.slice(0, input.plan.fineTopK);
-    const finePruned = contradicted.slice(input.plan.fineTopK).map((candidate: RecallCandidate): RecallCandidate => ({
-        ...candidate,
-        reasonCodes: appendReason(candidate.reasonCodes, 'fine_pruned'),
-        finalScore: Math.max(0, candidate.finalScore - 0.05),
-    }));
-
-    return [...fineTop, ...finePruned, ...coarsePruned].sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+    const blockedCandidates = appendBlockedCandidates(input.candidates);
+    const pooledCandidates = input.candidates.filter((candidate: RecallCandidate): boolean => candidate.visibilityPool !== 'blocked');
+    const directorMode = input.plan.viewpoint.mode === 'omniscient_director';
+    if (directorMode) {
+        return [
+            ...rankCandidateBatch(
+                pooledCandidates.filter((candidate: RecallCandidate): boolean => resolveCandidatePool(candidate) === 'global'),
+                input,
+            ),
+            ...blockedCandidates,
+        ];
+    }
+    const globalCandidates = pooledCandidates.filter((candidate: RecallCandidate): boolean => resolveCandidatePool(candidate) === 'global');
+    const primaryCandidates = pooledCandidates.filter((candidate: RecallCandidate): boolean => resolveCandidatePool(candidate) === 'primary_actor');
+    const secondaryCandidates = pooledCandidates.filter((candidate: RecallCandidate): boolean => resolveCandidatePool(candidate) === 'secondary_actor');
+    const rankedGlobal = rankCandidateBatch(globalCandidates, input);
+    const rankedPrimary = rankCandidateBatch(primaryCandidates, input);
+    const rankedSecondary = rankCandidateBatch(secondaryCandidates, input);
+    const merged = mergeRankedPools(rankedGlobal, rankedPrimary, rankedSecondary, input.plan.viewpoint.focus.budgetShare);
+    return [...dedupeCandidates(merged), ...blockedCandidates];
 }
 
 export function cutRecallCandidatesByBudget(input: CutRecallCandidatesInput): RecallCandidate[] {
     const usedSectionTokens = new Map<InjectionSectionName, number>();
     const openedSections = new Set<InjectionSectionName>();
     let totalTokens = 0;
+    const blockedCandidates = input.candidates.filter((candidate: RecallCandidate): boolean => candidate.visibilityPool === 'blocked');
 
     const grouped = ['constraint', 'continuity', 'flavor'].flatMap((priority: string): RecallCandidate[] => {
         return input.candidates
+            .filter((candidate: RecallCandidate): boolean => candidate.visibilityPool !== 'blocked')
             .filter((candidate: RecallCandidate): boolean => candidate.reasonCodes.includes(`priority:${priority}`))
-            .sort((left: RecallCandidate, right: RecallCandidate): number => right.finalScore - left.finalScore);
+            .sort((left: RecallCandidate, right: RecallCandidate): number => {
+                const leftTier = left.actorFocusTier === 'primary' ? 3 : left.actorFocusTier === 'secondary' ? 2 : left.actorFocusTier === 'shared' ? 1 : 0;
+                const rightTier = right.actorFocusTier === 'primary' ? 3 : right.actorFocusTier === 'secondary' ? 2 : right.actorFocusTier === 'shared' ? 1 : 0;
+                return rightTier - leftTier || right.finalScore - left.finalScore;
+            });
     });
 
     const selectedIds = new Set<string>();
@@ -332,11 +469,18 @@ export function cutRecallCandidatesByBudget(input: CutRecallCandidatesInput): Re
         selectedIds.add(candidate.candidateId);
     });
 
-    return input.candidates.map((candidate: RecallCandidate): RecallCandidate => {
+    const selected = input.candidates.map((candidate: RecallCandidate): RecallCandidate => {
         if (selectedIds.has(candidate.candidateId)) {
             return {
                 ...candidate,
                 selected: true,
+            };
+        }
+        if (candidate.visibilityPool === 'blocked') {
+            return {
+                ...candidate,
+                selected: false,
+                reasonCodes: appendReason(candidate.reasonCodes, 'foreign_private_memory_suppressed'),
             };
         }
         if (
@@ -357,4 +501,11 @@ export function cutRecallCandidatesByBudget(input: CutRecallCandidatesInput): Re
             reasonCodes: appendReason(candidate.reasonCodes, 'budget_dropped'),
         };
     });
+    const blockedTail = blockedCandidates
+        .map((candidate: RecallCandidate): RecallCandidate => ({
+            ...candidate,
+            selected: false,
+            reasonCodes: appendReason(candidate.reasonCodes, 'foreign_private_memory_suppressed'),
+        }));
+    return [...selected.filter((candidate: RecallCandidate): boolean => candidate.visibilityPool !== 'blocked'), ...blockedTail];
 }

@@ -19,6 +19,8 @@ export type {
     ProviderModelInfo,
 } from './providers/types';
 export { OpenAIProvider } from './providers/openai-provider';
+export { ClaudeProvider } from './providers/claude-provider';
+export { GeminiProvider } from './providers/gemini-provider';
 export { TavernProvider } from './providers/tavern-provider';
 export { CustomRerankProvider } from './providers/custom-rerank-provider';
 
@@ -55,6 +57,7 @@ export type { LLMError } from './schema/error-codes';
 export type {
     LLMCapability,
     CapabilityKind,
+    ApiType,
     ResourceType,
     ResourceSource,
     ResourceConfig,
@@ -81,6 +84,9 @@ export type {
     RouteResolveArgs,
     RouteResolveResult,
     AssignmentEntry,
+    MaxTokensMode,
+    AdaptiveMaxTokensConfig,
+    GlobalMaxTokensControl,
     GlobalAssignments,
     PluginAssignment,
     TaskAssignment,
@@ -117,6 +123,8 @@ import { TaskRouter, BUILTIN_TAVERN_RESOURCE_ID } from './router/router';
 import { BudgetManager, type BudgetConfig } from './budget/budget-manager';
 import { LLMSDKImpl } from './sdk/llm-sdk';
 import { OpenAIProvider } from './providers/openai-provider';
+import { ClaudeProvider } from './providers/claude-provider';
+import { GeminiProvider } from './providers/gemini-provider';
 import { TavernProvider } from './providers/tavern-provider';
 import { CustomRerankProvider } from './providers/custom-rerank-provider';
 import { VaultManager } from './vault/vault-manager';
@@ -129,6 +137,7 @@ import type {
     LLMHubSettings,
     LLMHubStatusSnapshot,
     LLMInspectApi,
+    ApiType,
     ResourceConfig,
     ResourceStatusSnapshot,
     ResourceType,
@@ -230,6 +239,7 @@ class LLMHub {
             this.displayController,
             this.registry,
         );
+        this.sdk.setSettingsResolver(() => this.readSettings());
         this.sdk.inspect = this.buildInspectApi();
         this.orchestrator.setArchiveCallback((record) => {
             logger.info('[RequestLog][ArchiveTrigger]', {
@@ -804,6 +814,17 @@ class LLMHub {
     private async upsertResource(cfg: ResourceConfig): Promise<void> {
         const capabilities = normalizeResourceCapabilities(cfg);
         const defaultModel = cfg.model || undefined;
+        const apiType: ApiType = cfg.type === 'generation'
+            ? cfg.apiType === 'deepseek'
+                ? 'deepseek'
+                : cfg.apiType === 'gemini'
+                    ? 'gemini'
+                    : cfg.apiType === 'claude'
+                        ? 'claude'
+                        : cfg.apiType === 'generic'
+                            ? 'generic'
+                            : 'openai'
+            : 'openai';
 
         if (cfg.source === 'tavern') {
             const provider = new TavernProvider({ id: cfg.id });
@@ -828,17 +849,44 @@ class LLMHub {
             return;
         }
 
-        // generation 或 embedding 走 OpenAI 兼容
+        if (cfg.type === 'generation' && apiType === 'claude') {
+            const provider = new ClaudeProvider({
+                id: cfg.id,
+                apiKey,
+                baseUrl: cfg.baseUrl || 'https://api.anthropic.com/v1',
+                model: cfg.model,
+                customParams: cfg.customParams,
+            });
+            this.router.registerProvider(provider, 'generation', capabilities, defaultModel);
+            logger.info(`资源已刷新 (claude): ${cfg.id}, model=${cfg.model}`);
+            return;
+        }
+
+        if (cfg.type === 'generation' && apiType === 'gemini') {
+            const provider = new GeminiProvider({
+                id: cfg.id,
+                apiKey,
+                baseUrl: cfg.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+                model: cfg.model,
+                customParams: cfg.customParams,
+            });
+            this.router.registerProvider(provider, cfg.type, capabilities, defaultModel);
+            logger.info(`资源已刷新 (gemini): ${cfg.id}, type=${cfg.type}, model=${cfg.model}`);
+            return;
+        }
+
+        // 其余 generation / embedding 走 OpenAI 兼容层
         const provider = new OpenAIProvider({
             id: cfg.id,
             apiKey,
             baseUrl: cfg.baseUrl || 'https://api.openai.com/v1',
             model: cfg.model,
+            apiType,
             enableRerank: capabilities.includes('rerank'),
             customParams: cfg.customParams,
         });
         this.router.registerProvider(provider, cfg.type, capabilities, defaultModel);
-        logger.info(`资源已刷新: ${cfg.id}, type=${cfg.type}, model=${cfg.model}`);
+        logger.info(`资源已刷新: ${cfg.id}, type=${cfg.type}, apiType=${cfg.type === 'generation' ? apiType : 'n/a'}, model=${cfg.model}`);
     }
 
     private notifyMemoryOsBridgeReady(): void {

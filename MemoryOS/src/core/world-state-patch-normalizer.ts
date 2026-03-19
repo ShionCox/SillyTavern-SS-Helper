@@ -11,13 +11,20 @@ export function normalizeWorldStatePatchValue(path: string, value: unknown): unk
         return value;
     }
 
-    const rawRecord = typeof value === 'object'
+    const rawRecord: Record<string, unknown> = typeof value === 'object'
         ? { ...(value as Record<string, unknown>) }
         : { summary: normalizeWorldStateText(value) };
     const summary = normalizeWorldStateText(rawRecord.summary ?? rawRecord.value ?? value);
-    const pathTail = normalizedPath.split('/').map((item: string): string => normalizeWorldStateText(item)).filter(Boolean).slice(-1)[0] || 'state';
-    rawRecord.title = normalizeWorldStateText(rawRecord.title) || (summary.length > 28 ? `${summary.slice(0, 28)}…` : summary) || pathTail;
-    const normalizedNode = buildWorldStateNodeFromRaw(normalizedPath, rawRecord, typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : Date.now());
+    const pathTail = normalizedPath
+        .split('/')
+        .map((item: string): string => normalizeWorldStateText(item))
+        .filter(Boolean)
+        .slice(-1)[0] || 'state';
+    const title = normalizeWorldStateText(rawRecord.title) || (summary.length > 28 ? `${summary.slice(0, 28)}...` : summary) || pathTail;
+    rawRecord.title = title;
+
+    const updatedAt = typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : Date.now();
+    const normalizedNode = buildWorldStateNodeFromRaw(normalizedPath, rawRecord, updatedAt);
     const tags = Array.from(new Set([...(normalizedNode.tags ?? []), normalizedNode.scopeType, normalizedNode.stateType, 'proposal_patch'])).slice(0, 12);
     const sourceRefs = Array.from(new Set([...(normalizedNode.sourceRefs ?? []), 'proposal_patch'])).slice(0, 8);
     const normalizedValue: WorldStateNodeValue = {
@@ -31,7 +38,7 @@ export function normalizeWorldStatePatchValue(path: string, value: unknown): unk
         normalizedValue.summary = normalizedValue.title || 'state';
     }
     if (!normalizedValue.title) {
-        normalizedValue.title = normalizedValue.summary.length > 28 ? `${normalizedValue.summary.slice(0, 28)}…` : normalizedValue.summary;
+        normalizedValue.title = normalizedValue.summary.length > 28 ? `${normalizedValue.summary.slice(0, 28)}...` : normalizedValue.summary;
     }
 
     return normalizedValue;

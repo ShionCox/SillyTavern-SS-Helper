@@ -28,6 +28,7 @@ import type {
     SpeakerMemoryLane,
 } from '../../../SDK/stx';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
+import { buildRecallUiSummary, formatRecallUiReasonCode } from './recallUiSummary';
 
 type ExperienceTone = 'accent' | 'soft' | 'warning' | 'success';
 type CharacterRoleMark = 'primary' | 'secondary' | 'pending';
@@ -541,6 +542,65 @@ function buildInjectionOverviewMarkupNext(snapshot: ExperienceSnapshot): string 
  * 返回：
  *   string：强度标签。
  */
+/**
+ * 功能：构建包含角色边界与向量索引状态的注入总览卡片。
+ * @param snapshot 体验快照。
+ * @returns HTML 字符串。
+ */
+function buildRecallInjectionOverviewMarkup(snapshot: ExperienceSnapshot): string {
+        const recallSummary = buildRecallUiSummary(snapshot);
+        const latestExplanation = snapshot.latestRecallExplanation;
+        const generatedAt = Number(latestExplanation?.generatedAt ?? snapshot.preDecision?.generatedAt ?? 0);
+        const subtitleText = snapshot.preDecision
+                ? [
+                        `意图：${formatInjectionIntentLabel(snapshot.preDecision.intent)}`,
+                        `锚点：${formatAnchorModeLabel(snapshot.preDecision.anchorMode)}`,
+                        `渲染：${formatRenderStyleLabel(snapshot.preDecision.renderStyle)}`,
+                        `世界书：${formatLorebookModeLabel(snapshot.preDecision.lorebookMode)}`,
+                ].join(' / ')
+                : '最近还没有新的注入决策，这里仍会持续显示角色边界与向量回源状态。';
+        const secondaryActorsText = recallSummary.secondaryActorLabels.length > 0
+                ? recallSummary.secondaryActorLabels.join(' / ')
+                : '当前以共享池为主';
+        const vectorDetailText = `${recallSummary.vectorIndexLabel} / ${recallSummary.vectorRebuiltLabel}`;
+        const resultText = latestExplanation
+                ? `${latestExplanation.selected.items.length} 条命中 / ${latestExplanation.rejectedCandidates.items.length} 条回退`
+                : '暂无注入解释快照';
+        const reasonText = recallSummary.reasonLabels.length > 0
+                ? recallSummary.reasonLabels.join(' / ')
+                : formatInjectionReasonSummary(snapshot.preDecision?.reasonCodes ?? []);
+        return buildSummaryCalloutMarkup({
+                eyebrow: '本轮注入视角',
+                title: snapshot.preDecision?.shouldInject ? '已生成注入上下文' : '本轮跳过注入',
+                copy: subtitleText,
+                copyHtml: `
+                    <div class="stx-ui-summary-caption">${escapeHtml(subtitleText)}</div>
+                    <div class="stx-ui-summary-tile-grid">
+                        ${[
+                                buildSummaryInfoTile('fa-solid fa-eye', '视角模式', recallSummary.viewpointModeLabel),
+                                buildSummaryInfoTile('fa-solid fa-user-check', '主视角角色', recallSummary.primaryActorLabel),
+                                buildSummaryInfoTile('fa-solid fa-users-viewfinder', '次角色', secondaryActorsText),
+                                buildSummaryInfoTile('fa-solid fa-layer-group', '共享 / 角色池', `${recallSummary.globalPoolSelectedCount} / ${recallSummary.actorPoolSelectedCount}`),
+                                buildSummaryInfoTile('fa-solid fa-shield', '边界压制', `${recallSummary.blockedCount} 条`),
+                                buildSummaryInfoTile('fa-solid fa-link', '向量回源', recallSummary.vectorIndexLabel),
+                        ].join('')}
+                    </div>
+                `,
+                foot: reasonText,
+                footHtml: [
+                        buildSummaryInfoLine('fa-solid fa-crosshairs', '主视角来源', recallSummary.focusSourceLabel),
+                        buildSummaryInfoLine('fa-solid fa-circle-nodes', '热度角色', recallSummary.salienceLabels.length > 0 ? recallSummary.salienceLabels.join(' / ') : '当前没有明显的热度角色'),
+                        buildSummaryInfoLine('fa-solid fa-filter-circle-xmark', '角色边界', recallSummary.foreignPrivateSuppressedCount > 0 ? `${recallSummary.foreignPrivateSuppressedCount} 条私人记忆被压制` : '当前没有因角色边界被压制的条目'),
+                        buildSummaryInfoLine('fa-solid fa-brain', '遗忘阻断', recallSummary.forgottenBlockedCount > 0 ? `${recallSummary.forgottenBlockedCount} 条因遗忘而不可见` : '当前没有因遗忘而阻断的条目'),
+                        buildSummaryInfoLine('fa-solid fa-database', '向量索引', vectorDetailText),
+                        buildSummaryInfoLine('fa-solid fa-list-check', '本轮结果', resultText),
+                ].join(''),
+                meta: generatedAt > 0 ? formatRelativeTime(generatedAt) : '暂无记录',
+                empty: !snapshot.preDecision && !latestExplanation,
+                iconClassName: 'fa-solid fa-brain',
+        });
+}
+
 function formatMemoryStrength(profile: ChatProfile): string {
     if (profile.memoryStrength === 'high') {
         return '强';
@@ -835,7 +895,24 @@ function formatInjectionReasonCode(code: string): string {
     if (!raw) {
         return '';
     }
+    const recallReasonLabel = formatRecallUiReasonCode(raw);
+    if (recallReasonLabel && recallReasonLabel !== raw) {
+        return recallReasonLabel;
+    }
     const normalized = raw.toLowerCase();
+    const viewpointLabelMap: Record<string, string> = {
+        viewpoint_shared: '褰撳墠瑙嗚鍙鐨勫叡浜蹇?',
+        viewpoint_owned_by_actor: '灞炰簬褰撳墠瑙掕壊鐨勭鏈夎蹇?',
+        viewpoint_retained_for_actor: '宸茶涓烘湰瑙掕壊鐣欏瓨鐨勮蹇?',
+        viewpoint_foreign_private_suppressed: '灞炰簬鍏朵粬瑙掕壊鐨勭鏈夎蹇嗭紝宸查伒鐓ц鑹茶竟鐣屽帇鍒?',
+        foreign_private_memory_suppressed: '鍥犺鑹茶竟鐣岃鍒欐湭杩涘叆鏈疆娉ㄥ叆',
+        blocked_foreign_private: '灞炰簬鍏朵粬瑙掕壊鐨勭鏈夎蹇嗚鍙洖瑙勫垯鎷︽埅',
+        blocked_actor_forgotten: '褰撳墠瑙掕壊宸茬粡蹇樿杩欐潯璁板繂',
+    };
+    const viewpointKey = normalized.replace(/:/g, '_');
+    if (viewpointLabelMap[viewpointKey]) {
+        return viewpointLabelMap[viewpointKey];
+    }
     if (INJECTION_REASON_LABELS[normalized]) {
         return INJECTION_REASON_LABELS[normalized];
     }
@@ -1971,10 +2048,6 @@ function buildOverviewMarkup(canon: CanonSnapshot): string {
         meta: canon.health.maintenanceLabels[0] || '当前状态稳定',
         iconClassName: 'fa-solid fa-compass',
         className: 'is-overview-hero',
-    }) + buildListMarkup(detailItems, '当前还没有稳定的世界概览条目。', {
-        listClassName: 'is-overview-grid',
-        entryClassName: 'is-overview-tile',
-        compactSourceButton: true,
     });
 }
 
@@ -2256,10 +2329,11 @@ function renderRelationPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): vo
     );
 }
 
-function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): void {
+function renderInjectionPanel(ids: MemoryOSSettingsIds, snapshot: EditorExperienceSnapshot): void {
+    const canon: CanonSnapshot = snapshot.canon;
     setContainerHtml(
         ids.injectionOverviewId,
-        buildListMarkup([
+        `${buildRecallInjectionOverviewMarkup(snapshot)}${buildListMarkup([
             {
                 title: '事实层',
                 detail: `${canon.health.dataLayers.factsCount} 条`,
@@ -2295,7 +2369,7 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
                 tone: (canon.health.dataLayers.redirectCount + canon.health.dataLayers.tombstoneCount) > 0 ? 'warning' : 'soft',
                 iconClassName: 'fa-solid fa-route',
             },
-        ], '当前还没有可展示的数据分层诊断。'),
+        ], '当前还没有可展示的数据分层诊断。')}`
     );
     setContainerHtml(ids.injectionSectionsId, buildListMarkup(canon.health.issues.map((issue) => ({
         title: issue.label,
@@ -2327,21 +2401,7 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, canon: CanonSnapshot): v
     );
     setContainerHtml(
         ids.injectionReasonId,
-        buildSummaryCalloutMarkup({
-            eyebrow: '诊断说明',
-            title: canon.health.maintenanceLabels[0] || '当前没有明显阻塞',
-            copy: canon.health.issues[0]?.detail || '如果主页面看起来很空，优先检查初始设定、聊天结构视图和世界状态是否都齐全。',
-            copyHtml: [
-                buildSummaryInfoLine('fa-solid fa-heart-pulse', '当前判断', canon.health.issues[0]?.detail || '当前没有明显阻塞，整体状态较稳定。'),
-                buildSummaryInfoLine('fa-solid fa-database', '数据检查', '优先确认初始设定、聊天结构视图和世界状态是否都已准备好。'),
-            ].join(''),
-            footHtml: [
-                buildSummaryInfoLine('fa-solid fa-screwdriver-wrench', '建议动作', canon.health.suggestedActions.length > 0 ? canon.health.suggestedActions.map(formatSuggestedActionLabel).join(' / ') : '当前没有额外建议动作。'),
-                buildSummaryInfoLine('fa-solid fa-clock-rotate-left', '生成时间', formatRelativeTime(canon.generatedAt)),
-            ].join(''),
-            meta: `生成于 ${formatRelativeTime(canon.generatedAt)}`,
-            iconClassName: 'fa-solid fa-stethoscope',
-        }),
+        buildInjectionReasonMarkup(snapshot.latestRecallExplanation),
     );
 }
 
@@ -2412,7 +2472,7 @@ export async function renderSettingsExperience(ids: MemoryOSSettingsIds): Promis
         renderRolePanel(ids, canonSnapshot);
         renderRecentPanel(ids, canonSnapshot);
         renderRelationPanel(ids, canonSnapshot);
-        renderInjectionPanel(ids, canonSnapshot);
+        renderInjectionPanel(ids, experienceSnapshot);
         renderTuningPanel(ids, experienceSnapshot);
     } catch (error) {
         const message: string = normalizeText(error instanceof Error ? error.message : error, '未知错误');

@@ -1,7 +1,7 @@
-import { db } from '../../db/db';
 import { runRerank } from '../../llm/memoryLlmBridge';
 import { VectorManager } from '../../vector/vector-manager';
 import type { RecallCandidate } from '../../types';
+import type { MemorySourceScope, MemorySubtype, MemoryType } from '../../types';
 import {
     buildScoredCandidate,
     clamp01,
@@ -19,19 +19,14 @@ type VectorHit = {
     chunkId: string;
     content: string;
     score: number;
+    bookId?: string;
+    metadata?: Record<string, unknown>;
+    createdAt?: number;
 };
 
-function buildFactIndexText(fact: FactRecord): string {
-    return normalizeText(`${fact.type ?? ''} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
-}
-
-function buildSummaryIndexText(summary: SummaryRecord): string {
-    return normalizeText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
-}
-
-function mapFactsByIndexText(facts: FactRecord[]): Map<string, FactRecord> {
+function buildFactRecordKeyMap(facts: FactRecord[]): Map<string, FactRecord> {
     return facts.reduce<Map<string, FactRecord>>((result: Map<string, FactRecord>, fact: FactRecord): Map<string, FactRecord> => {
-        const key = buildFactIndexText(fact);
+        const key = normalizeText(fact.factKey);
         if (key && !result.has(key)) {
             result.set(key, fact);
         }
@@ -39,14 +34,65 @@ function mapFactsByIndexText(facts: FactRecord[]): Map<string, FactRecord> {
     }, new Map<string, FactRecord>());
 }
 
-function mapSummariesByIndexText(summaries: SummaryRecord[]): Map<string, SummaryRecord> {
+function buildSummaryRecordKeyMap(summaries: SummaryRecord[]): Map<string, SummaryRecord> {
     return summaries.reduce<Map<string, SummaryRecord>>((result: Map<string, SummaryRecord>, summary: SummaryRecord): Map<string, SummaryRecord> => {
-        const key = buildSummaryIndexText(summary);
+        const key = normalizeText(summary.summaryId);
         if (key && !result.has(key)) {
             result.set(key, summary);
         }
         return result;
     }, new Map<string, SummaryRecord>());
+}
+
+function readVectorSourceMetadata(hit: VectorHit): {
+    sourceRecordKey: string;
+    sourceRecordKind: string;
+    ownerActorKey: string | null;
+    sourceScope?: MemorySourceScope;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    participantActorKeys: string[];
+} {
+    const metadata = (hit.metadata ?? {}) as Record<string, unknown>;
+    const sourceScope = normalizeText(metadata.sourceScope).toLowerCase();
+    const memoryType = normalizeText(metadata.memoryType).toLowerCase();
+    const memorySubtype = normalizeText(metadata.memorySubtype).toLowerCase();
+    return {
+        sourceRecordKey: normalizeText(metadata.sourceRecordKey),
+        sourceRecordKind: normalizeText(metadata.sourceRecordKind).toLowerCase(),
+        ownerActorKey: normalizeText(metadata.ownerActorKey) || null,
+        sourceScope: ['self', 'target', 'group', 'world', 'system'].includes(sourceScope) ? (sourceScope as MemorySourceScope) : undefined,
+        memoryType: ['identity', 'event', 'relationship', 'world', 'status', 'other'].includes(memoryType) ? (memoryType as MemoryType) : undefined,
+        memorySubtype: [
+            'identity',
+            'trait',
+            'preference',
+            'bond',
+            'emotion_imprint',
+            'goal',
+            'promise',
+            'secret',
+            'rumor',
+            'major_plot_event',
+            'minor_event',
+            'combat_event',
+            'travel_event',
+            'conversation_event',
+            'global_rule',
+            'city_rule',
+            'location_fact',
+            'item_rule',
+            'faction_rule',
+            'world_history',
+            'current_scene',
+            'current_conflict',
+            'temporary_status',
+            'other',
+        ].includes(memorySubtype) ? (memorySubtype as MemorySubtype) : undefined,
+        participantActorKeys: Array.isArray(metadata.participantActorKeys)
+            ? metadata.participantActorKeys.map((item: unknown): string => normalizeText(item)).filter(Boolean)
+            : [],
+    };
 }
 
 async function rerankVectorHits(query: string, hits: VectorHit[], enabled: boolean, threshold: number): Promise<VectorHit[]> {
@@ -101,18 +147,17 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
         context.policy.vectorMode === 'search_rerank' && context.policy.rerankEnabled !== false,
         Math.max(2, Number(context.policy.rerankThreshold ?? 6)),
     );
-    const factMap = mapFactsByIndexText(facts);
-    const summaryMap = mapSummariesByIndexText(summaries);
+    const factMap = buildFactRecordKeyMap(facts);
+    const summaryMap = buildSummaryRecordKeyMap(summaries);
     const candidates: RecallCandidate[] = [];
 
     for (const hit of hits.slice(0, sourceLimit)) {
-        const chunk = await db.vector_chunks.get(hit.chunkId);
-        if (!chunk) {
-            continue;
-        }
-        const normalizedContent = normalizeText(hit.content);
-        if (chunk.bookId === 'facts') {
-            const fact = factMap.get(normalizedContent);
+        const sourceMeta = readVectorSourceMetadata(hit);
+        if (hit.bookId === 'facts') {
+            if (!sourceMeta.sourceRecordKey || sourceMeta.sourceRecordKind !== 'fact') {
+                continue;
+            }
+            const fact = factMap.get(sourceMeta.sourceRecordKey);
             if (!fact) {
                 continue;
             }
@@ -130,15 +175,23 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
                 updatedAt: Number(fact.updatedAt ?? Date.now()),
                 vectorScore: clamp01(hit.score),
                 continuityScore: 0.82,
-                extraReasonCodes: ['vector_hit', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
+                memoryType: fact.memoryType,
+                memorySubtype: fact.memorySubtype,
+                sourceScope: fact.sourceScope,
+                ownerActorKey: fact.ownerActorKey ?? null,
+                participantActorKeys: sourceMeta.participantActorKeys,
+                extraReasonCodes: ['vector_hit', 'vector_source_metadata', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
             });
             if (candidate) {
                 candidates.push(candidate);
             }
             continue;
         }
-        if (chunk.bookId === 'summaries') {
-            const summary = summaryMap.get(normalizedContent);
+        if (hit.bookId === 'summaries') {
+            if (!sourceMeta.sourceRecordKey || sourceMeta.sourceRecordKind !== 'summary') {
+                continue;
+            }
+            const summary = summaryMap.get(sourceMeta.sourceRecordKey);
             if (!summary) {
                 continue;
             }
@@ -161,11 +214,20 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
                 updatedAt: Number(summary.createdAt ?? Date.now()),
                 vectorScore: clamp01(hit.score),
                 continuityScore: 0.86,
-                extraReasonCodes: ['vector_hit', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
+                memoryType: summary.memoryType,
+                memorySubtype: summary.memorySubtype,
+                sourceScope: summary.sourceScope,
+                ownerActorKey: summary.ownerActorKey ?? null,
+                participantActorKeys: sourceMeta.participantActorKeys,
+                extraReasonCodes: ['vector_hit', 'vector_source_metadata', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
             });
             if (candidate) {
                 candidates.push(candidate);
             }
+            continue;
+        }
+        const rawText = normalizeText(hit.content);
+        if (!rawText) {
             continue;
         }
         const candidate = buildScoredCandidate(context, {
@@ -174,13 +236,20 @@ export async function collectVectorRecallCandidates(context: RecallSourceContext
             recordKind: 'event',
             source: 'vector',
             sectionHint: context.plan.sections.includes('EVENTS') ? 'EVENTS' : context.plan.sections[0] ?? null,
-            title: chunk.bookId || 'vector_chunk',
-            rawText: hit.content,
+            title: hit.bookId || 'vector_chunk',
+            rawText,
             confidence: 0.58,
-            updatedAt: Number(chunk.createdAt ?? Date.now()),
+            updatedAt: Number(hit.createdAt ?? Date.now()),
             vectorScore: clamp01(hit.score),
             continuityScore: 0.75,
-            extraReasonCodes: ['vector_fallback_chunk', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
+            sourceScope: sourceMeta.sourceScope === 'self' || sourceMeta.sourceScope === 'target' || sourceMeta.sourceScope === 'group' || sourceMeta.sourceScope === 'world' || sourceMeta.sourceScope === 'system'
+                ? sourceMeta.sourceScope as 'self' | 'target' | 'group' | 'world' | 'system'
+                : 'group',
+            ownerActorKey: sourceMeta.ownerActorKey,
+            memoryType: sourceMeta.memoryType,
+            memorySubtype: sourceMeta.memorySubtype,
+            participantActorKeys: sourceMeta.participantActorKeys,
+            extraReasonCodes: ['vector_fallback_chunk', sourceMeta.sourceRecordKey ? 'vector_source_metadata' : 'vector_source_weak', context.policy.vectorMode === 'search_rerank' ? 'vector_reranked' : 'vector_search'],
         });
         if (candidate) {
             candidates.push(candidate);

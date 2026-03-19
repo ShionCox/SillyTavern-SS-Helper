@@ -1,8 +1,10 @@
 import {
     getCurrentTavernCharacterSnapshotEvent,
+    getCurrentTavernUserNameEvent,
     getSillyTavernContextEvent,
     listTavernActiveWorldbooksEvent,
     loadTavernWorldbookEntriesEvent,
+    replaceTavernUserPlaceholdersEvent,
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
@@ -44,11 +46,11 @@ function normalizeLorebookNames(value: unknown): string[] {
 }
 
 function normalizeText(value: unknown): string {
-    return String(value ?? '').replace(/\s+/g, ' ').trim();
+    return replaceTavernUserPlaceholdersEvent(String(value ?? '')).replace(/\s+/g, ' ').trim();
 }
 
 function normalizeLorebookContent(value: unknown): string {
-    return String(value ?? '').replace(/\r\n?/g, '\n').trim();
+    return replaceTavernUserPlaceholdersEvent(String(value ?? '')).replace(/\r\n?/g, '\n').trim();
 }
 
 function truncateText(value: string, limit: number): string {
@@ -382,6 +384,7 @@ export async function collectChatSemanticSeed(
 
     const contextRecord = context as unknown as Record<string, unknown>;
     const role = resolveTavernRoleIdentityEvent(context);
+    const currentUserName = getCurrentTavernUserNameEvent(context);
     const currentCharacter = getCurrentTavernCharacterSnapshotEvent(context);
     const group = resolveCurrentGroupEvent(context);
     const groupRecord = (group ?? null) as Record<string, unknown> | null;
@@ -400,6 +403,7 @@ export async function collectChatSemanticSeed(
         description: normalizeText(contextRecord.description ?? contextRecord.desc ?? contextRecord.personality),
         scenario: normalizeText(contextRecord.scenario),
         tags: Array.isArray(contextRecord.tags) ? contextRecord.tags : [],
+        userName: currentUserName,
     };
 
     const systemPrompt = normalizeText(

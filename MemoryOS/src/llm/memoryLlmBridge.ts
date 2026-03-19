@@ -611,7 +611,7 @@ export async function runGeneration<T>(
     );
 
     const guardResult = checkAiModeGuard(tid);
-    if (guardResult) {
+    if (guardResult && !guardResult.ok) {
         logger.warn('[ColdStart][RunGenerationBlocked]', {
             taskId,
             reasonCode: guardResult.reasonCode,

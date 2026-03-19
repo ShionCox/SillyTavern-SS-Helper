@@ -9,8 +9,10 @@ import {
     normalizeProposalEnvelopeInput,
     normalizeWorldTemplateInput,
 } from '../schema/validator';
+import { normalizeStructuredCategoryBuckets } from '../schema/structured-output-classifier';
 import { ProfileManager } from '../profile/profile-manager';
 import { inferReasonCode } from '../schema/error-codes';
+import { resolveMaxTokens } from './max-tokens';
 import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
 import { ConsumerRegistry } from '../registry/consumer-registry';
@@ -30,8 +32,10 @@ import type {
     RequestEnqueueOptions,
     LLMRequestLogRequestSnapshot,
     LLMTaskLifecycleEvent,
+    LLMHubSettings,
 } from '../schema/types';
 import type { ZodType } from 'zod';
+import type { ApiType } from '../schema/types';
 
 const logger = new Logger('LLMHub-LLMSDK');
 
@@ -50,6 +54,7 @@ export class LLMSDKImpl {
     private displayController: DisplayController;
     private registry: ConsumerRegistry;
     private globalProfileId: string;
+    private settingsResolver: (() => LLMHubSettings) | null = null;
     public inspect?: LLMInspectApi;
 
     constructor(
@@ -116,6 +121,18 @@ export class LLMSDKImpl {
         return this.globalProfileId;
     }
 
+    setSettingsResolver(resolver: () => LLMHubSettings): void {
+        this.settingsResolver = resolver;
+    }
+
+    private readSettings(): LLMHubSettings {
+        try {
+            return this.settingsResolver?.() || {};
+        } catch {
+            return {};
+        }
+    }
+
     private emitLifecycle(
         args: RunTaskArgs | EmbedArgs | RerankArgs,
         record: Pick<RequestRecord, 'requestId' | 'consumer' | 'taskId' | 'taskKind'>,
@@ -165,6 +182,26 @@ export class LLMSDKImpl {
 
     private isZodSchema(schema: unknown): schema is ZodType<any> {
         return Boolean(schema) && typeof (schema as { safeParse?: unknown }).safeParse === 'function';
+    }
+
+    private sanitizeSchemaName(name?: string): string {
+        const normalized = String(name || 'structured_output')
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return normalized || 'structured_output';
+    }
+
+    private normalizeApiType(value: unknown): ApiType {
+        switch (value) {
+            case 'deepseek':
+            case 'gemini':
+            case 'claude':
+            case 'generic':
+                return value;
+            default:
+                return 'openai';
+        }
     }
 
     private buildRequestLogSnapshot(
@@ -400,6 +437,185 @@ export class LLMSDKImpl {
             && value.docs.every((doc) => typeof doc === 'string');
     }
 
+    private serializeSchemaForLog(schema: unknown): unknown {
+        if (!schema) return undefined;
+        if (!this.isZodSchema(schema)) {
+            return schema;
+        }
+
+        const visit = (node: any, depth: number): unknown => {
+            if (!node) return undefined;
+            if (depth >= 6) return '[MaxDepthSchema]';
+
+            const def = node._def || {};
+            const typeName = String(def.typeName || def.type || node.type || 'unknown');
+            const description = typeof node.description === 'string' && node.description.trim()
+                ? node.description.trim()
+                : typeof def.description === 'string' && def.description.trim()
+                    ? def.description.trim()
+                    : undefined;
+
+            if (def.innerType) {
+                const inner = visit(def.innerType, depth + 1);
+                if (typeName.includes('Optional')) {
+                    return { type: 'optional', inner, ...(description ? { description } : {}) };
+                }
+                if (typeName.includes('Nullable')) {
+                    return { type: 'nullable', inner, ...(description ? { description } : {}) };
+                }
+                if (typeName.includes('Default')) {
+                    return { type: 'default', inner, ...(description ? { description } : {}) };
+                }
+                return inner;
+            }
+
+            if (def.schema) {
+                return visit(def.schema, depth + 1);
+            }
+
+            if (typeName.includes('Object')) {
+                const rawShape = typeof def.shape === 'function' ? def.shape() : (def.shape || node.shape || {});
+                const properties = Object.fromEntries(
+                    Object.entries(rawShape).map(([key, value]) => [key, visit(value, depth + 1)]),
+                );
+                return {
+                    type: 'object',
+                    properties,
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            if (typeName.includes('Array')) {
+                return {
+                    type: 'array',
+                    items: visit(def.type || def.element || def.itemType, depth + 1),
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            if (typeName.includes('Enum')) {
+                const values = Array.isArray(def.values) ? def.values : Object.values(def.values || {});
+                return {
+                    type: 'enum',
+                    values,
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            if (typeName.includes('Record')) {
+                return {
+                    type: 'record',
+                    valueType: visit(def.valueType, depth + 1),
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            if (typeName.includes('Literal')) {
+                return {
+                    type: 'literal',
+                    value: def.value,
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            if (typeName.includes('Union')) {
+                return {
+                    type: 'union',
+                    options: Array.isArray(def.options)
+                        ? def.options.map((option: unknown) => visit(option, depth + 1))
+                        : [],
+                    ...(description ? { description } : {}),
+                };
+            }
+
+            const primitiveType = typeName.replace(/^Zod/i, '').toLowerCase() || 'unknown';
+            return {
+                type: primitiveType,
+                ...(description ? { description } : {}),
+            };
+        };
+
+        return visit(schema, 0);
+    }
+
+    private buildGenerationProviderRequestSnapshot(
+        resourceId: string,
+        llmReq: LLMRequest,
+        runtimeSchema: unknown,
+        normalizeMode: 'proposal' | 'world_template' | 'none',
+        args: RunTaskArgs,
+        schemaSummary?: string,
+        maxTokensSource?: string,
+    ): Record<string, unknown> {
+        const provider = this.router.getProvider(resourceId) as ({ kind?: string; apiType?: ApiType } | undefined);
+        const providerKind = provider?.kind || 'unknown';
+        const providerApiType: ApiType | undefined = provider ? this.normalizeApiType(provider.apiType ?? (providerKind === 'openai' ? 'openai' : undefined)) : undefined;
+        const requestedOutputSchema = this.serializeSchemaForLog(runtimeSchema);
+        const requestParams = {
+            model: llmReq.model,
+            temperature: llmReq.temperature,
+            maxTokens: llmReq.maxTokens,
+            maxTokensSource,
+            jsonMode: Boolean(llmReq.jsonMode),
+            apiType: providerApiType,
+            preferredResponseFormat: llmReq.preferredResponseFormat,
+            normalizeMode,
+            schemaSummary,
+            routeHint: args.routeHint,
+            budget: args.budget,
+        };
+        const genericPayload: Record<string, unknown> = {
+            messages: llmReq.messages,
+            model: llmReq.model,
+            temperature: llmReq.temperature,
+            maxTokens: llmReq.maxTokens,
+            jsonMode: llmReq.jsonMode,
+            apiType: providerApiType,
+            jsonSchema: llmReq.schema,
+            requestedOutputSchema,
+            normalizeMode,
+        };
+
+        const openAiLikePayload: Record<string, unknown> = {
+            model: llmReq.model,
+            messages: llmReq.messages,
+            temperature: llmReq.temperature ?? 0.7,
+            max_tokens: llmReq.maxTokens ?? 2048,
+            requested_output_schema: requestedOutputSchema,
+            normalize_mode: normalizeMode,
+            api_type: providerApiType,
+        };
+        if (llmReq.jsonMode) {
+            if ((providerApiType === 'openai' || providerApiType === 'gemini') && llmReq.schema && llmReq.preferredResponseFormat === 'json_schema') {
+                openAiLikePayload.response_format = {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: llmReq.schemaName || 'structured_output',
+                        strict: true,
+                        schema: llmReq.schema,
+                    },
+                };
+            } else if (llmReq.preferredResponseFormat === 'system_json') {
+                openAiLikePayload.response_format = '[system_prompt_enforced_json_only]';
+            } else {
+                openAiLikePayload.response_format = { type: 'json_object' };
+            }
+        }
+
+        return {
+            providerKind,
+            resourceId,
+            requestFormat: providerKind === 'openai'
+                ? 'openai_chat_completions'
+                : providerKind === 'tavern'
+                    ? 'tavern_raw_messages'
+                    : 'generic_generation',
+            requestParams,
+            payload: providerKind === 'openai' ? openAiLikePayload : genericPayload,
+            messageCount: llmReq.messages.length,
+        };
+    }
+
     private async executeGeneration(args: RunTaskArgs, record: RequestRecord): Promise<LLMRunResult<any>> {
         // 预算检查
         const budgetCheck = this.budgetManager.canRequest(args.consumer);
@@ -456,6 +672,10 @@ export class LLMSDKImpl {
         const profileId = resolved.profileId || this.globalProfileId;
         const profile = this.profileManager.get(profileId);
         const consumerBudget = this.budgetManager.getConfig(args.consumer);
+        const settings = this.readSettings();
+        const taskAssignment = this.router.getTaskAssignment(args.consumer, args.taskId);
+        const resolvedProvider = this.router.getProvider(resolved.resourceId) as ({ apiType?: ApiType } | undefined);
+        const resolvedApiType: ApiType = this.normalizeApiType(resolvedProvider?.apiType);
 
         const hasCustomSchema = Boolean(args.schema);
         const runtimeSchema = hasCustomSchema
@@ -468,6 +688,7 @@ export class LLMSDKImpl {
         const providerSchema = hasCustomSchema && !this.isZodSchema(args.schema)
             ? args.schema
             : undefined;
+        const promptSchema = (providerSchema ?? this.serializeSchemaForLog(args.schema ?? runtimeSchema)) as object | undefined;
         const normalizeMode = hasCustomSchema
             ? 'none'
             : args.taskId === 'world.template.build'
@@ -475,6 +696,13 @@ export class LLMSDKImpl {
                 : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
                     ? 'proposal'
                     : 'none';
+
+        const resolvedMaxTokens = resolveMaxTokens(args, {
+            globalControl: settings.maxTokensControl,
+            taskAssignment: taskAssignment?.isStale ? undefined : taskAssignment,
+            consumerBudgetMaxTokens: consumerBudget?.maxTokens,
+            profileMaxTokens: profile?.maxTokens,
+        });
 
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
@@ -490,31 +718,40 @@ export class LLMSDKImpl {
                     },
                 ],
             model: resolved.model,
-            maxTokens: args.budget?.maxTokens ?? consumerBudget?.maxTokens ?? profile?.maxTokens ?? 2048,
+            maxTokens: resolvedMaxTokens.value,
             jsonMode: !!runtimeSchema || profile?.jsonMode === true,
-            schema: providerSchema,
+            schema: promptSchema,
+            schemaName: this.sanitizeSchemaName(this.summarizeSchema(args.schema ?? runtimeSchema)),
+            preferredResponseFormat: resolvedApiType === 'openai' || resolvedApiType === 'gemini'
+                ? (providerSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
+                : (runtimeSchema ? 'system_json' : undefined),
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
         };
 
+        const schemaSummary = this.summarizeSchema(args.schema ?? runtimeSchema);
         record.requestLogSnapshot = {
             ...(record.requestLogSnapshot || {
                 taskKind: record.taskKind,
                 taskDescription: record.taskDescription,
             }),
-            schemaSummary: this.summarizeSchema(args.schema ?? runtimeSchema),
-            schema: providerSchema ?? args.schema,
+            schemaSummary,
+            schema: this.serializeSchemaForLog(providerSchema ?? args.schema ?? runtimeSchema),
             jsonMode: llmReq.jsonMode,
-            normalizeMode,
-            providerRequest: {
-                model: llmReq.model,
-                temperature: llmReq.temperature,
-                maxTokens: llmReq.maxTokens,
-                jsonMode: llmReq.jsonMode,
-                jsonSchema: llmReq.schema,
-                messageCount: llmReq.messages.length,
-                providerKind: this.router.getProvider(resolved.resourceId)?.kind,
-                resourceId: resolved.resourceId,
+            resolvedMaxTokens: {
+                value: resolvedMaxTokens.value,
+                source: resolvedMaxTokens.source,
+                detail: resolvedMaxTokens.detail,
             },
+            normalizeMode,
+            providerRequest: this.buildGenerationProviderRequestSnapshot(
+                resolved.resourceId,
+                llmReq,
+                runtimeSchema,
+                normalizeMode,
+                args,
+                schemaSummary,
+                resolvedMaxTokens.source,
+            ),
         };
 
         const maxLatencyMs = args.budget?.maxLatencyMs ?? consumerBudget?.maxLatencyMs;
@@ -537,6 +774,7 @@ export class LLMSDKImpl {
             maxLatencyMs,
         );
 
+        this.attachProviderRequestSnapshot(record, primaryResult.providerRequest);
         this.attachRecordDebug(record, primaryResult);
 
         if (primaryResult.ok) {
@@ -587,6 +825,7 @@ export class LLMSDKImpl {
                 args.taskId,
                 maxLatencyMs,
             );
+            this.attachProviderRequestSnapshot(record, fallbackResult.providerRequest);
             this.attachRecordDebug(record, fallbackResult);
             if (fallbackResult.ok) {
                 const meta: LLMRunMeta = {
@@ -663,6 +902,52 @@ export class LLMSDKImpl {
             validationErrors: result.validationErrors,
             finalError: result.error,
             reasonCode: result.reasonCode,
+        };
+    }
+
+    private attachProviderRequestSnapshot(record: RequestRecord, providerRequest?: unknown): void {
+        if (!providerRequest || typeof providerRequest !== 'object') {
+            return;
+        }
+
+        const cloneForLog = (input: unknown, depth = 0, seen = new WeakSet<object>()): unknown => {
+            if (input == null || typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
+                return input;
+            }
+            if (typeof input === 'bigint' || typeof input === 'symbol') {
+                return String(input);
+            }
+            if (typeof input === 'function') {
+                return `[Function ${(input as Function).name || 'anonymous'}]`;
+            }
+            if (depth >= 10) {
+                return '[MaxDepth]';
+            }
+            if (Array.isArray(input)) {
+                return input.map((item) => cloneForLog(item, depth + 1, seen));
+            }
+            if (typeof input === 'object') {
+                const objectValue = input as Record<string, unknown>;
+                if (seen.has(objectValue)) {
+                    return '[Circular]';
+                }
+                seen.add(objectValue);
+                const out: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(objectValue)) {
+                    out[key] = cloneForLog(value, depth + 1, seen);
+                }
+                seen.delete(objectValue);
+                return out;
+            }
+            return String(input);
+        };
+
+        record.requestLogSnapshot = {
+            ...(record.requestLogSnapshot || {
+                taskKind: record.taskKind,
+                taskDescription: record.taskDescription,
+            }),
+            providerRequest: cloneForLog(providerRequest) as Record<string, unknown>,
         };
     }
 
@@ -857,6 +1142,7 @@ export class LLMSDKImpl {
         parsedResponse?: unknown;
         normalizedResponse?: unknown;
         validationErrors?: string[];
+        providerRequest?: Record<string, unknown>;
     }> {
         try {
             const provider = this.router.getProvider(resourceId);
@@ -884,6 +1170,7 @@ export class LLMSDKImpl {
                         retryable: true,
                         reasonCode: 'invalid_json',
                         rawResponseText: response.content,
+                        providerRequest: response.debugRequest,
                     };
                 }
 
@@ -892,9 +1179,10 @@ export class LLMSDKImpl {
                     : normalizeMode === 'world_template'
                         ? normalizeWorldTemplateInput(parsed.data)
                         : parsed.data;
+                const postProcessedInput = normalizeStructuredCategoryBuckets(normalizedInput);
 
                 if (this.isZodSchema(runtimeSchema)) {
-                    const validation = validateZodSchema(normalizedInput, runtimeSchema);
+                    const validation = validateZodSchema(postProcessedInput, runtimeSchema);
                     if (!validation.valid) {
                         this.budgetManager.recordFailure(consumer);
                         return {
@@ -904,8 +1192,9 @@ export class LLMSDKImpl {
                             reasonCode: 'schema_validation_failed',
                             rawResponseText: response.content,
                             parsedResponse: parsed.data,
-                            normalizedResponse: normalizedInput,
+                            normalizedResponse: postProcessedInput,
                             validationErrors: validation.errors,
+                            providerRequest: response.debugRequest,
                         };
                     }
 
@@ -915,22 +1204,29 @@ export class LLMSDKImpl {
                         data: validation.data,
                         rawResponseText: response.content,
                         parsedResponse: parsed.data,
-                        normalizedResponse: normalizedInput,
+                        normalizedResponse: postProcessedInput,
+                        providerRequest: response.debugRequest,
                     };
                 }
 
                 this.budgetManager.recordSuccess(consumer);
                 return {
                     ok: true,
-                    data: normalizedInput,
+                    data: postProcessedInput,
                     rawResponseText: response.content,
                     parsedResponse: parsed.data,
-                    normalizedResponse: normalizedInput,
+                    normalizedResponse: postProcessedInput,
+                    providerRequest: response.debugRequest,
                 };
             }
 
             this.budgetManager.recordSuccess(consumer);
-            return { ok: true, data: response.content, rawResponseText: response.content };
+            return {
+                ok: true,
+                data: response.content,
+                rawResponseText: response.content,
+                providerRequest: response.debugRequest,
+            };
         } catch (error) {
             this.budgetManager.recordFailure(consumer);
             const message = (error as Error).message;

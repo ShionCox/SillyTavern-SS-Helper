@@ -1,6 +1,9 @@
 /* 共享选择框组件样式，调用方会用作用域选择器替�?_SCOPE_ */
 
 _SCOPE_ .stx-shared-select {
+  --stx-shared-select-control-height: 30px;
+  --stx-shared-select-item-height: 30px;
+  --stx-shared-select-media-size: var(--stx-shared-select-item-height);
   position: relative;
   display: inline-block;
   width: min(100%, 240px);
@@ -47,7 +50,7 @@ _SCOPE_ .stx-shared-select-native {
   position: absolute;
   inset: 0;
   width: 100%;
-  height: 100%;
+  height: var(--stx-shared-select-control-height);
   margin: 0;
   opacity: 0;
   pointer-events: none;
@@ -59,14 +62,17 @@ _SCOPE_ .stx-shared-select-trigger {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 30px;
-  padding: 4px 10px;
+  height: var(--stx-shared-select-control-height);
+  min-height: var(--stx-shared-select-control-height);
+  max-height: var(--stx-shared-select-control-height);
+  padding: 0 10px;
   border: 1px solid var(--ss-theme-border, rgba(197, 160, 89, 0.36));
   border-radius: 8px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
     var(--ss-theme-surface-2, rgba(0, 0, 0, 0.28));
   color: var(--ss-theme-text, inherit);
+  line-height: 1;
   box-sizing: border-box;
   cursor: pointer;
   transition:
@@ -82,7 +88,9 @@ _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input {
   justify-content: space-between;
   width: 100%;
   min-width: 0;
-  min-height: 34px;
+  height: var(--stx-shared-select-control-height);
+  min-height: var(--stx-shared-select-control-height);
+  max-height: var(--stx-shared-select-control-height);
   padding-top: 0;
   padding-bottom: 0;
   line-height: 1;
@@ -105,14 +113,17 @@ _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-input .stx-shared-s
 }
 
 _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact {
-  min-height: 32px;
+  height: var(--stx-shared-select-control-height);
+  min-height: var(--stx-shared-select-control-height);
+  max-height: var(--stx-shared-select-control-height);
   padding: 4px 8px;
   gap: 6px;
 }
 
 _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-36 {
-  min-height: 36px;
-  height: 36px;
+  --stx-shared-select-control-height: 36px;
+  min-height: var(--stx-shared-select-control-height);
+  height: var(--stx-shared-select-control-height);
   padding-top: 0;
   padding-bottom: 0;
 }
@@ -142,7 +153,8 @@ _SCOPE_ .stx-shared-select-trigger-copy {
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 30px;
+  height: 100%;
+  min-height: var(--stx-shared-select-control-height);
 }
 
 _SCOPE_ .stx-shared-select-main {
@@ -153,7 +165,8 @@ _SCOPE_ .stx-shared-select-main {
   gap: 8px;
   width: 100%;
   min-width: 0;
-  min-height: 30px;
+  height: 100%;
+  min-height: var(--stx-shared-select-control-height);
   flex-wrap: nowrap;
 }
 
@@ -165,7 +178,7 @@ _SCOPE_ .stx-shared-select-main {
   gap: 8px;
   width: 100%;
   min-width: 0;
-  min-height: 30px;
+  min-height: var(--stx-shared-select-item-height);
   flex-wrap: nowrap;
 }
 
@@ -174,8 +187,8 @@ _SCOPE_ .stx-shared-select-media {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: var(--stx-shared-select-media-size);
+  height: var(--stx-shared-select-media-size);
   border-radius: 999px;
   overflow: hidden;
   background: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.08)) 100%, transparent);
@@ -185,17 +198,17 @@ _SCOPE_ .stx-shared-select-media {
 
 _SCOPE_ .stx-shared-select-option .stx-shared-select-media,
 _SCOPE_ .stx-shared-select-trigger .stx-shared-select-media {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
+  width: var(--stx-shared-select-media-size);
+  height: var(--stx-shared-select-media-size);
+  min-width: var(--stx-shared-select-media-size);
+  min-height: var(--stx-shared-select-media-size);
 }
 
 .stx-shared-select-list .stx-shared-select-media {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
+  width: var(--stx-shared-select-media-size);
+  height: var(--stx-shared-select-media-size);
+  min-width: var(--stx-shared-select-media-size);
+  min-height: var(--stx-shared-select-media-size);
   border-radius: 999px;
   overflow: hidden;
   flex: 0 0 auto;
@@ -221,12 +234,12 @@ _SCOPE_ .stx-shared-select-media-image {
 }
 
 .stx-shared-select-list .stx-shared-select-media-image {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
-  max-width: 30px;
-  max-height: 30px;
+  width: var(--stx-shared-select-media-size);
+  height: var(--stx-shared-select-media-size);
+  min-width: var(--stx-shared-select-media-size);
+  min-height: var(--stx-shared-select-media-size);
+  max-width: var(--stx-shared-select-media-size);
+  max-height: var(--stx-shared-select-media-size);
   object-fit: cover;
   display: block;
   border-radius: 999px;
@@ -299,7 +312,7 @@ _SCOPE_ .stx-shared-select-option,
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
+  min-height: var(--stx-shared-select-item-height);
   padding: 5px 9px;
   border: 1px solid transparent;
   border-radius: 8px;

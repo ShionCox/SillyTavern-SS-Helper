@@ -27,6 +27,10 @@ export async function collectSummaryRecallCandidates(context: RecallSourceContex
                 confidence: Number(summary.encodeScore ?? (summary.level === 'arc' ? 0.7 : summary.level === 'scene' ? 0.62 : 0.56)),
                 updatedAt: Number(summary.createdAt ?? 0),
                 recencyWindowDays: 21,
+                memoryType: summary.memoryType,
+                memorySubtype: summary.memorySubtype,
+                sourceScope: summary.sourceScope,
+                ownerActorKey: summary.ownerActorKey ?? null,
             });
             if (candidate) {
                 candidates.push(candidate);
@@ -43,15 +47,19 @@ export async function collectSummaryRecallCandidates(context: RecallSourceContex
                     candidateId: `short-summary:${normalizeText(summary.summaryId || `${summary.title}:${summary.createdAt}`)}`,
                     recordKey: normalizeText(summary.summaryId || `${summary.title}:${summary.createdAt}`),
                     recordKind: 'summary',
-                    source: 'summaries',
-                    sectionHint: 'SHORT_SUMMARY',
-                    title: normalizeText(summary.title || 'short_summary'),
-                    rawText: `${summary.title ? `${summary.title}: ` : ''}${summary.content ?? ''}`,
-                    confidence: Number(summary.encodeScore ?? 0.6),
-                    updatedAt: Number(summary.createdAt ?? Date.now()),
-                    continuityScore: 0.88,
-                    recencyWindowDays: 10,
-                });
+                source: 'summaries',
+                sectionHint: 'SHORT_SUMMARY',
+                title: normalizeText(summary.title || 'short_summary'),
+                rawText: `${summary.title ? `${summary.title}: ` : ''}${summary.content ?? ''}`,
+                confidence: Number(summary.encodeScore ?? 0.6),
+                updatedAt: Number(summary.createdAt ?? Date.now()),
+                continuityScore: 0.88,
+                recencyWindowDays: 10,
+                memoryType: summary.memoryType,
+                memorySubtype: summary.memorySubtype,
+                sourceScope: summary.sourceScope,
+                ownerActorKey: summary.ownerActorKey ?? null,
+            });
                 if (candidate) {
                     candidates.push(candidate);
                 }

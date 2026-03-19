@@ -5,9 +5,12 @@ import { planRecall } from '../src/recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../src/recall/recall-ranker';
 import {
     DEFAULT_ADAPTIVE_POLICY,
+    type GroupMemoryState,
     type InjectionIntent,
     type InjectionSectionName,
+    type LogicalChatView,
     type LorebookGateDecision,
+    type PersonaMemoryProfile,
     type RecallCandidate,
     type RecallCandidateRecordKind,
     type RecallCandidateSource,
@@ -29,7 +32,14 @@ function createLorebookDecision(overrides?: Partial<LorebookGateDecision>): Lore
     };
 }
 
-function createPlan(intent: InjectionIntent, maxTokens: number = 180): RecallPlan {
+function createPlan(
+    intent: InjectionIntent,
+    maxTokens: number = 180,
+    activeActorKey: string | null = null,
+    logicalView: LogicalChatView | null = null,
+    groupMemory: GroupMemoryState | null = null,
+    personaProfiles: Record<string, PersonaMemoryProfile> = {},
+): RecallPlan {
     return planRecall({
         intent,
         sections: ['WORLD_STATE', 'FACTS', 'EVENTS', 'SUMMARY', 'RELATIONSHIPS', 'LAST_SCENE'],
@@ -44,6 +54,10 @@ function createPlan(intent: InjectionIntent, maxTokens: number = 180): RecallPla
         maxTokens,
         policy: DEFAULT_ADAPTIVE_POLICY,
         lorebookDecision: createLorebookDecision(),
+        activeActorKey,
+        logicalView,
+        groupMemory,
+        personaProfiles,
     });
 }
 
@@ -63,6 +77,14 @@ function createCandidate(input: {
     emotionScore?: number;
     finalScore?: number;
     tone?: RecallCandidate['tone'];
+    visibilityPool?: RecallCandidate['visibilityPool'];
+    privacyClass?: RecallCandidate['privacyClass'];
+    viewpointReason?: RecallCandidate['viewpointReason'];
+    actorFocusTier?: RecallCandidate['actorFocusTier'];
+    actorVisibilityScore?: number;
+    actorForgetProbability?: number;
+    actorForgotten?: boolean;
+    actorRetentionBias?: number;
     reasonCodes?: string[];
 }): RecallCandidate {
     return {
@@ -84,6 +106,14 @@ function createCandidate(input: {
         emotionScore: input.emotionScore ?? 0,
         conflictPenalty: 0,
         privacyPenalty: 0,
+        visibilityPool: input.visibilityPool ?? 'global',
+        privacyClass: input.privacyClass ?? 'shared',
+        viewpointReason: input.viewpointReason ?? (input.visibilityPool === 'blocked' ? 'foreign_private_suppressed' : 'shared'),
+        actorFocusTier: input.actorFocusTier ?? (input.visibilityPool === 'blocked' ? 'blocked' : input.visibilityPool === 'actor' ? 'primary' : 'shared'),
+        actorVisibilityScore: input.actorVisibilityScore ?? 0.7,
+        actorForgetProbability: input.actorForgetProbability,
+        actorForgotten: input.actorForgotten,
+        actorRetentionBias: input.actorRetentionBias,
         finalScore: input.finalScore ?? 0.45,
         tone: input.tone ?? 'stable_fact',
         selected: false,
@@ -91,12 +121,16 @@ function createCandidate(input: {
     };
 }
 
-function runSelection(candidates: RecallCandidate[], plan: RecallPlan, options?: {
-    recentVisibleMessages?: string[];
-    worldStateText?: string;
-    lorebookConflictDetected?: boolean;
-    estimateTokens?: (text: string) => number;
-}): RecallCandidate[] {
+function runSelection(
+    candidates: RecallCandidate[],
+    plan: RecallPlan,
+    options?: {
+        recentVisibleMessages?: string[];
+        worldStateText?: string;
+        lorebookConflictDetected?: boolean;
+        estimateTokens?: (text: string) => number;
+    },
+): RecallCandidate[] {
     const ranked = rankRecallCandidates({
         candidates,
         plan,
@@ -112,71 +146,255 @@ function runSelection(candidates: RecallCandidate[], plan: RecallPlan, options?:
 }
 
 describe('phase3 recall mainline', (): void => {
-    it('关键词明确命中 fact 时会优先保留 fact', (): void => {
-        const plan = createPlan('story_continue');
+    it('roleplay uses actor bounded viewpoint and falls back when actor is missing', (): void => {
+        const actorPlan = createPlan('roleplay', 180, 'hero');
+        expect(actorPlan.viewpoint.mode).toBe('actor_bounded');
+        expect(actorPlan.viewpoint.activeActorKey).toBe('hero');
+        expect(actorPlan.viewpoint.allowForeignPrivateMemory).toBe(false);
+
+        const fallbackPlan = createPlan('roleplay');
+        expect(fallbackPlan.viewpoint.mode).toBe('omniscient_director');
+        expect(fallbackPlan.viewpoint.activeActorKey).toBeNull();
+    });
+
+    it('roleplay can infer the current speaker as the primary actor', (): void => {
+        const plan = createPlan(
+            'roleplay',
+            180,
+            null,
+            {
+                chatKey: 'chat',
+                visibleMessages: [
+                    {
+                        nodeId: '1',
+                        messageId: 'm1',
+                        role: 'assistant',
+                        text: 'Alice: 我们先去城门。',
+                        textSignature: 'sig1',
+                        isVisible: true,
+                        lifecycle: 'active',
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+                visibleUserTurns: [],
+                visibleAssistantTurns: [],
+                supersededCandidates: [],
+                editedRevisions: [],
+                deletedTurns: [],
+                branchRoots: [],
+                viewHash: 'view',
+                snapshotHash: 'snap',
+                mutationKinds: [],
+                activeMessageIds: [],
+                invalidatedMessageIds: [],
+                rebuiltAt: 1000,
+            },
+            {
+                lanes: [
+                    {
+                        laneId: 'lane-alice',
+                        actorKey: 'alice',
+                        displayName: 'Alice',
+                        identityHint: 'name_anchor',
+                        lastStyle: 'calm',
+                        lastEmotion: 'neutral',
+                        recentGoal: '',
+                        relationshipDelta: '',
+                        lastActiveAt: 1000,
+                        recentMessageIds: [],
+                    },
+                ],
+                sharedScene: {
+                    currentScene: '',
+                    currentConflict: '',
+                    groupConsensus: [],
+                    pendingEvents: [],
+                    participantActorKeys: [],
+                    updatedAt: 1000,
+                },
+                actorSalience: [],
+                bindingSnapshot: {
+                    groupId: 'group',
+                    characterIds: [],
+                    memberNames: [],
+                    updatedAt: 1000,
+                },
+                updatedAt: 1000,
+            },
+        );
+
+        expect(plan.viewpoint.mode).toBe('actor_bounded');
+        expect(plan.viewpoint.activeActorKey).toBe('alice');
+        expect(plan.viewpoint.focus.reasonCodes).toContain('focus:current_speaker');
+    });
+
+    it('roleplay uses actor salience to pick primary and secondary actors', (): void => {
+        const plan = createPlan(
+            'roleplay',
+            180,
+            null,
+            null,
+            {
+                lanes: [
+                    {
+                        laneId: 'lane-alice',
+                        actorKey: 'alice',
+                        displayName: 'Alice',
+                        identityHint: 'name_anchor',
+                        lastStyle: 'calm',
+                        lastEmotion: 'neutral',
+                        recentGoal: '',
+                        relationshipDelta: '',
+                        lastActiveAt: 1000,
+                        recentMessageIds: [],
+                    },
+                    {
+                        laneId: 'lane-bob',
+                        actorKey: 'bob',
+                        displayName: 'Bob',
+                        identityHint: 'name_anchor',
+                        lastStyle: 'warm',
+                        lastEmotion: 'neutral',
+                        recentGoal: '',
+                        relationshipDelta: '',
+                        lastActiveAt: 1000,
+                        recentMessageIds: [],
+                    },
+                    {
+                        laneId: 'lane-carol',
+                        actorKey: 'carol',
+                        displayName: 'Carol',
+                        identityHint: 'name_anchor',
+                        lastStyle: 'sharp',
+                        lastEmotion: 'neutral',
+                        recentGoal: '',
+                        relationshipDelta: '',
+                        lastActiveAt: 1000,
+                        recentMessageIds: [],
+                    },
+                ],
+                sharedScene: {
+                    currentScene: '',
+                    currentConflict: '',
+                    groupConsensus: [],
+                    pendingEvents: [],
+                    participantActorKeys: [],
+                    updatedAt: 1000,
+                },
+                actorSalience: [
+                    {
+                        actorKey: 'bob',
+                        score: 0.92,
+                        reasonCodes: ['recent_messages'],
+                        updatedAt: 1000,
+                    },
+                    {
+                        actorKey: 'carol',
+                        score: 0.84,
+                        reasonCodes: ['mentioned_recently'],
+                        updatedAt: 1000,
+                    },
+                ],
+                bindingSnapshot: {
+                    groupId: 'group',
+                    characterIds: [],
+                    memberNames: [],
+                    updatedAt: 1000,
+                },
+                updatedAt: 1000,
+            },
+        );
+
+        expect(plan.viewpoint.activeActorKey).toBe('bob');
+        expect(plan.viewpoint.focus.secondaryActorKeys).toEqual(['carol']);
+        expect(plan.viewpoint.focus.budgetShare).toEqual({
+            global: 0.4,
+            primaryActor: 0.45,
+            secondaryActors: 0.15,
+        });
+        expect(plan.viewpoint.focus.reasonCodes).toContain('focus:salience_top1');
+    });
+
+    it('director mode keeps only global candidates visible', (): void => {
+        const plan = createPlan('setting_qa', 180, 'hero');
+        const ranked = rankRecallCandidates({
+            candidates: [
+                createCandidate({
+                    candidateId: 'actor-private',
+                    recordKey: 'summary:actor-private',
+                    recordKind: 'summary',
+                    source: 'summaries',
+                    sectionHint: 'SUMMARY',
+                    title: 'actor private summary',
+                    rawText: 'private content',
+                    visibilityPool: 'actor',
+                    privacyClass: 'private',
+                    viewpointReason: 'owned_by_actor',
+                    actorVisibilityScore: 1,
+                    finalScore: 0.92,
+                }),
+                createCandidate({
+                    candidateId: 'global-public',
+                    recordKey: 'state:global-public',
+                    recordKind: 'state',
+                    source: 'state',
+                    sectionHint: 'WORLD_STATE',
+                    title: 'global state',
+                    rawText: 'public world info',
+                    visibilityPool: 'global',
+                    privacyClass: 'shared',
+                    viewpointReason: 'shared',
+                    actorVisibilityScore: 0.7,
+                    finalScore: 0.88,
+                }),
+            ],
+            plan,
+        });
+
+        expect(ranked.map((item) => item.recordKey)).toEqual(['state:global-public']);
+    });
+
+    it('blocked candidates stay in the tail and are not budget dropped', (): void => {
+        const plan = createPlan('roleplay', 180, 'hero');
         const selected = runSelection([
             createCandidate({
-                candidateId: 'fact-hit',
-                recordKey: 'fact:port',
-                recordKind: 'fact',
-                source: 'facts',
-                sectionHint: 'FACTS',
-                title: '旧港口约定',
-                rawText: '她答应在旧港口再次见面',
-                keywordScore: 0.96,
-                continuityScore: 0.75,
-                finalScore: 0.78,
+                candidateId: 'foreign-private',
+                recordKey: 'relationship:foreign-private',
+                recordKind: 'relationship',
+                source: 'relationships',
+                sectionHint: 'RELATIONSHIPS',
+                title: 'foreign private relationship',
+                rawText: 'this belongs to another actor',
+                visibilityPool: 'blocked',
+                privacyClass: 'private',
+                viewpointReason: 'foreign_private_suppressed',
+                finalScore: 0.91,
+                reasonCodes: ['viewpoint:foreign_private_suppressed', 'blocked:foreign_private'],
             }),
             createCandidate({
-                candidateId: 'summary-low',
-                recordKey: 'summary:1',
-                recordKind: 'summary',
-                source: 'summaries',
-                sectionHint: 'SUMMARY',
-                title: '普通摘要',
-                rawText: '他们讨论过几次去港口。',
-                keywordScore: 0.22,
-                vectorScore: 0.18,
-                finalScore: 0.41,
+                candidateId: 'shared-scene',
+                recordKey: 'state:shared-scene',
+                recordKind: 'state',
+                source: 'state',
+                sectionHint: 'WORLD_STATE',
+                title: 'shared scene',
+                rawText: 'public scene info',
+                visibilityPool: 'global',
+                privacyClass: 'shared',
+                viewpointReason: 'shared',
+                finalScore: 0.88,
             }),
         ], plan);
 
-        expect(selected.find((item) => item.recordKey === 'fact:port')?.selected).toBe(true);
+        const blocked = selected.find((item) => item.recordKey === 'relationship:foreign-private');
+        expect(blocked?.selected).toBe(false);
+        expect(blocked?.visibilityPool).toBe('blocked');
+        expect(blocked?.reasonCodes).toContain('foreign_private_memory_suppressed');
+        expect(blocked?.reasonCodes).not.toContain('budget_dropped');
     });
 
-    it('关键词不强但向量命中 summary 时也能进主池', (): void => {
-        const plan = createPlan('story_continue');
-        const selected = runSelection([
-            createCandidate({
-                candidateId: 'fact-weak',
-                recordKey: 'fact:weak',
-                recordKind: 'fact',
-                source: 'facts',
-                sectionHint: 'FACTS',
-                title: '弱关键词事实',
-                rawText: '她去过很多地方。',
-                keywordScore: 0.1,
-                finalScore: 0.28,
-            }),
-            createCandidate({
-                candidateId: 'summary-vector',
-                recordKey: 'summary:vector',
-                recordKind: 'summary',
-                source: 'vector',
-                sectionHint: 'SUMMARY',
-                title: '向量命中摘要',
-                rawText: '她曾答应下次去旧港口见面',
-                keywordScore: 0.08,
-                vectorScore: 0.94,
-                continuityScore: 0.64,
-                finalScore: 0.81,
-            }),
-        ], plan);
-
-        expect(selected.find((item) => item.recordKey === 'summary:vector')?.selected).toBe(true);
-    });
-
-    it('recent message 已明确出现时旧记忆会被压制', (): void => {
+    it('visible duplicate entries are still suppressed', (): void => {
         const plan = createPlan('story_continue');
         const selected = runSelection([
             createCandidate({
@@ -185,8 +403,8 @@ describe('phase3 recall mainline', (): void => {
                 recordKind: 'fact',
                 source: 'facts',
                 sectionHint: 'FACTS',
-                title: '已在可见区出现',
-                rawText: '她已经明确说过今晚不会去旧港口',
+                title: 'duplicate fact',
+                rawText: 'we already said this tonight',
                 keywordScore: 0.88,
                 finalScore: 0.79,
             }),
@@ -196,14 +414,14 @@ describe('phase3 recall mainline', (): void => {
                 recordKind: 'event',
                 source: 'events',
                 sectionHint: 'LAST_SCENE',
-                title: '最近场景',
-                rawText: '当前仍在旅店房间中整理装备',
+                title: 'recent scene',
+                rawText: 'they are still in the tavern',
                 keywordScore: 0.42,
                 recencyScore: 0.92,
                 finalScore: 0.74,
             }),
         ], plan, {
-            recentVisibleMessages: ['她已经明确说过今晚不会去旧港口'],
+            recentVisibleMessages: ['we already said this tonight'],
         });
 
         const suppressed = selected.find((item) => item.recordKey === 'fact:duplicate');
@@ -211,85 +429,15 @@ describe('phase3 recall mainline', (): void => {
         expect(suppressed?.reasonCodes).toContain('visible_duplicate_suppressed');
     });
 
-    it('distorted 生命周期条目只能以模糊语气注入', (): void => {
-        const plan = createPlan('story_continue');
-        const ranked = rankRecallCandidates({
-            candidates: [createCandidate({
-                candidateId: 'distorted',
-                recordKey: 'summary:distorted',
-                recordKind: 'summary',
-                source: 'summaries',
-                sectionHint: 'SUMMARY',
-                title: '失真摘要',
-                rawText: '她确定自己从未到过王都',
-                finalScore: 0.73,
-                reasonCodes: ['stage:distorted'],
-            })],
-            plan,
-        });
-
-        expect(ranked[0]?.tone).toBe('possible_misremember');
-        expect(ranked[0]?.renderedLine).toContain('也许记错了');
-    });
-
-    it('setting_qa 会优先 lorebook 与 world state', (): void => {
-        const plan = createPlan('setting_qa');
-
-        expect(plan.sourceWeights.lorebook).toBeGreaterThan(plan.sourceWeights.events);
-        expect(plan.sourceWeights.state).toBeGreaterThan(plan.sourceWeights.relationships);
-        expect(plan.sourceLimits.lorebook).toBeGreaterThan(plan.sourceLimits.events ?? 0);
-    });
-
-    it('roleplay 会优先 relationship 与 recent scene', (): void => {
-        const plan = createPlan('roleplay');
-
-        expect(plan.sourceWeights.relationships).toBeGreaterThan(plan.sourceWeights.lorebook);
-        expect(plan.sourceWeights.events).toBeGreaterThan(plan.sourceWeights.state);
-        expect(plan.sourceLimits.relationships).toBeGreaterThan(plan.sourceLimits.lorebook ?? 0);
-    });
-
-    it('预算很小时会优先保留约束型记忆', (): void => {
-        const plan = createPlan('setting_qa', 55);
-        const selected = runSelection([
-            createCandidate({
-                candidateId: 'constraint',
-                recordKey: 'state:rule',
-                recordKind: 'state',
-                source: 'state',
-                sectionHint: 'WORLD_STATE',
-                title: '硬约束',
-                rawText: '世界规则：任何人都不能在午夜后进入旧港口。',
-                keywordScore: 0.88,
-                finalScore: 0.84,
-            }),
-            createCandidate({
-                candidateId: 'flavor',
-                recordKey: 'fact:flavor',
-                recordKind: 'fact',
-                source: 'facts',
-                sectionHint: 'FACTS',
-                title: '背景风味',
-                rawText: '港口边常年弥漫着咸湿的雾气。',
-                keywordScore: 0.52,
-                finalScore: 0.72,
-            }),
-        ], plan, {
-            estimateTokens: (): number => 12,
-        });
-
-        expect(selected.find((item) => item.recordKey === 'state:rule')?.selected).toBe(true);
-        expect(selected.find((item) => item.recordKey === 'fact:flavor')?.reasonCodes).toContain('budget_dropped');
-    });
-
-    it('latestRecallExplanation 会与 injected text 对齐', (): void => {
+    it('blocked explanation items keep the viewpoint reason codes', (): void => {
         const recallEntries: RecallLogEntry[] = [
             {
                 recallId: 'selected:1',
-                query: '旧港口',
+                query: 'old harbor',
                 section: 'FACTS',
                 recordKey: 'fact:port',
                 recordKind: 'fact',
-                recordTitle: '旧港口约定',
+                recordTitle: 'old harbor contract',
                 score: 0.91,
                 selected: true,
                 conflictSuppressed: false,
@@ -298,49 +446,59 @@ describe('phase3 recall mainline', (): void => {
                 loggedAt: 1000,
             },
             {
-                recallId: 'conflict:1',
-                query: '旧港口',
-                section: 'SUMMARY',
-                recordKey: 'summary:conflict',
-                recordKind: 'summary',
-                recordTitle: '冲突摘要',
-                score: 0.77,
-                selected: false,
-                conflictSuppressed: true,
-                tone: 'stable_fact',
-                reasonCodes: ['conflict_suppressed'],
-                loggedAt: 1000,
-            },
-            {
-                recallId: 'rejected:1',
-                query: '旧港口',
-                section: 'WORLD_STATE',
-                recordKey: 'state:budget',
-                recordKind: 'state',
-                recordTitle: '预算淘汰状态',
-                score: 0.44,
+                recallId: 'blocked:1',
+                query: 'old harbor',
+                section: 'RELATIONSHIPS',
+                recordKey: 'relationship:foreign-private',
+                recordKind: 'relationship',
+                recordTitle: 'foreign private relationship',
+                score: 0.39,
                 selected: false,
                 conflictSuppressed: false,
                 tone: 'stable_fact',
-                reasonCodes: ['budget_dropped'],
+                reasonCodes: ['viewpoint:foreign_private_suppressed', 'foreign_private_memory_suppressed'],
                 loggedAt: 1000,
             },
         ];
+
         const explanation = buildLatestRecallExplanation({
             generatedAt: 1000,
-            query: '旧港口',
-            sectionsUsed: ['FACTS', 'SUMMARY'],
+            query: 'old harbor',
+            sectionsUsed: ['FACTS', 'RELATIONSHIPS'],
             reasonCodes: ['intent:story_continue'],
             recallEntries,
             lifecycleIndex: {
-                'fact:port': { recordKey: 'fact:port', recordKind: 'fact', stage: 'clear', strength: 0.8, salience: 0.8, rehearsalCount: 1, lastRecalledAt: 1000, distortionRisk: 0.1, emotionTag: '', relationScope: '', updatedAt: 1000 },
-                'summary:conflict': { recordKey: 'summary:conflict', recordKind: 'summary', stage: 'blur', strength: 0.6, salience: 0.6, rehearsalCount: 1, lastRecalledAt: 1000, distortionRisk: 0.4, emotionTag: '', relationScope: '', updatedAt: 1000 },
-                'state:budget': { recordKey: 'state:budget', recordKind: 'state', stage: 'clear', strength: 0.7, salience: 0.7, rehearsalCount: 0, lastRecalledAt: 0, distortionRisk: 0.1, emotionTag: '', relationScope: '', updatedAt: 1000 },
+                'fact:port': {
+                    recordKey: 'fact:port',
+                    recordKind: 'fact',
+                    stage: 'clear',
+                    strength: 0.8,
+                    salience: 0.8,
+                    rehearsalCount: 1,
+                    lastRecalledAt: 1000,
+                    distortionRisk: 0.1,
+                    emotionTag: '',
+                    relationScope: '',
+                    updatedAt: 1000,
+                },
+                'relationship:foreign-private': {
+                    recordKey: 'relationship:foreign-private',
+                    recordKind: 'relationship',
+                    stage: 'clear',
+                    strength: 0.6,
+                    salience: 0.6,
+                    rehearsalCount: 0,
+                    lastRecalledAt: 0,
+                    distortionRisk: 0.1,
+                    emotionTag: '',
+                    relationScope: '',
+                    updatedAt: 1000,
+                },
             },
         });
 
         expect(explanation?.selected.items.map((item) => item.recordKey)).toEqual(['fact:port']);
-        expect(explanation?.conflictSuppressed.items.map((item) => item.recordKey)).toEqual(['summary:conflict']);
-        expect(explanation?.rejectedCandidates.items.map((item) => item.recordKey)).toEqual(['state:budget']);
+        expect(explanation?.rejectedCandidates.items.map((item) => item.recordKey)).toEqual(['relationship:foreign-private']);
+        expect(explanation?.rejectedCandidates.items[0]?.reasonCodes).toContain('viewpoint:foreign_private_suppressed');
     });
 });

@@ -16,14 +16,22 @@ import type {
     InjectedMemoryTone,
     LogicalChatView,
     LorebookGateDecision,
+    MemoryPrivacyClass,
+    MemoryActorRetentionState,
     MemoryLifecycleState,
+    MemorySourceScope,
+    MemorySubtype,
+    MemoryType,
     MemoryTuningProfile,
     PersonaMemoryProfile,
     RecallCandidate,
     RecallCandidateRecordKind,
     RecallCandidateSource,
+    RecallActorFocusTier,
+    RecallViewpointReason,
     RecallPlan,
     RelationshipState,
+    RecallVisibilityPool,
 } from '../../types';
 
 export { clamp01 };
@@ -40,6 +48,10 @@ export type FactRecord = {
     confidence?: number;
     encodeScore?: number;
     updatedAt?: number;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    sourceScope?: MemorySourceScope;
+    ownerActorKey?: string | null;
 };
 
 export type SummaryRecord = {
@@ -49,6 +61,10 @@ export type SummaryRecord = {
     content?: string;
     encodeScore?: number;
     createdAt?: number;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    sourceScope?: MemorySourceScope;
+    ownerActorKey?: string | null;
 };
 
 export type RecallSourceContext = {
@@ -66,11 +82,41 @@ export type RecallSourceContext = {
     summariesManager: SummariesManager;
     chatStateManager: ChatStateManager | null;
     lifecycleIndex: Map<string, MemoryLifecycleState>;
+    activeActorKey: string | null;
+    personaProfiles: Record<string, PersonaMemoryProfile>;
     personaProfile: PersonaMemoryProfile | null;
     tuningProfile: MemoryTuningProfile | null;
     relationships: RelationshipState[];
     fallbackRelationshipWeight: number;
 };
+
+type CandidateVisibilityInput = {
+    recordKey: string;
+    recordKind: RecallCandidateRecordKind;
+    source: RecallCandidateSource;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    sourceScope?: MemorySourceScope;
+    ownerActorKey?: string | null;
+    participantActorKeys?: string[];
+};
+
+export type CandidateVisibilityClassification = {
+    privacyClass: MemoryPrivacyClass;
+    viewpointReason: RecallViewpointReason;
+    visibilityPool: RecallVisibilityPool;
+    actorFocusTier: RecallActorFocusTier;
+    actorVisibilityScore: number;
+    actorForgetProbability?: number;
+    actorForgotten?: boolean;
+    actorRetentionBias?: number;
+    reasonCodes: string[];
+};
+
+const DIRECT_SHARED_SUBTYPES: Set<string> = new Set<string>(['current_scene', 'current_conflict', 'global_rule', 'world_history']);
+const DIRECT_PRIVATE_SUBTYPES: Set<string> = new Set<string>(['secret', 'promise', 'emotion_imprint', 'bond', 'identity']);
+const PRIVATE_PREF_SCOPE: Set<string> = new Set<string>(['self', 'target']);
+const SHARED_SCOPE: Set<string> = new Set<string>(['group', 'world', 'system']);
 
 export function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -156,6 +202,395 @@ export function readLifecycle(context: RecallSourceContext, recordKey: string): 
     return context.lifecycleIndex.get(recordKey) ?? null;
 }
 
+/**
+ * 功能：读取指定角色对某条记录的保留状态。
+ * 参数：
+ *   context：召回上下文。
+ *   recordKey：记录键。
+ *   actorKey：角色键。
+ * 返回：
+ *   MemoryActorRetentionState | null：角色保留状态。
+ */
+export function readActorRetention(context: RecallSourceContext, recordKey: string, actorKey: string): MemoryActorRetentionState | null {
+    const normalizedActorKey = normalizeText(actorKey);
+    if (!normalizedActorKey) {
+        return null;
+    }
+    const lifecycle = readLifecycle(context, recordKey);
+    if (!lifecycle) {
+        return null;
+    }
+    const mappedRetention = lifecycle.perActorMetrics?.[normalizedActorKey] ?? null;
+    if (mappedRetention) {
+        return mappedRetention;
+    }
+    if (normalizeText(lifecycle.ownerActorKey) !== normalizedActorKey) {
+        return null;
+    }
+    return {
+        actorKey: normalizedActorKey,
+        stage: lifecycle.stage,
+        forgetProbability: clamp01(Number(lifecycle.forgetProbability ?? 0)),
+        forgotten: lifecycle.forgotten === true,
+        forgottenAt: lifecycle.forgottenAt,
+        forgottenReasonCodes: Array.isArray(lifecycle.forgottenReasonCodes) ? [...lifecycle.forgottenReasonCodes] : [],
+        rehearsalCount: Math.max(0, Number(lifecycle.rehearsalCount ?? 0) || 0),
+        lastRecalledAt: Math.max(0, Number(lifecycle.lastRecalledAt ?? 0) || 0),
+        retentionBias: 0,
+        confidence: clamp01(1 - Number(lifecycle.forgetProbability ?? 0)),
+        updatedAt: Math.max(0, Number(lifecycle.updatedAt ?? 0) || 0),
+    };
+}
+
+/**
+ * 功能：判断候选是否符合当前视角。
+ * 参数：
+ *   context：召回上下文。
+ *   params：候选基础参数。
+ *   lifecycle：候选生命周期。
+ * 返回：
+ *   CandidateVisibilityClassification：可见性分类结果。
+ */
+/**
+ * 功能：先按内容语义给记忆贴上共享 / 私人 / 上下文标签。
+ * 参数：
+ *   context：召回上下文。
+ *   params：候选基础参数。
+ *   lifecycle：候选生命周期。
+ * 返回：
+ *   CandidateVisibilityClassification：可见性分类结果。
+ */
+export function classifyMemoryPrivacy(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+): CandidateVisibilityClassification {
+    const memoryType = normalizeText(params.memoryType ?? lifecycle?.memoryType ?? '').toLowerCase();
+    const memorySubtype = normalizeText(params.memorySubtype ?? lifecycle?.memorySubtype ?? '').toLowerCase();
+    const sourceScope = normalizeText(params.sourceScope ?? lifecycle?.sourceScope ?? '').toLowerCase();
+    const ownerActorKey = normalizeText(params.ownerActorKey ?? lifecycle?.ownerActorKey ?? '');
+    const isRelationshipSignal = params.recordKind === 'relationship' || params.source === 'relationships';
+    const isEventSignal = params.recordKind === 'event' || params.source === 'events';
+    const sharedSourceHint = params.source === 'lorebook' || params.source === 'state' || params.source === 'summaries';
+
+    if (
+        memoryType === 'world'
+        || DIRECT_SHARED_SUBTYPES.has(memorySubtype)
+        || (isEventSignal && !ownerActorKey)
+        || (params.source === 'state' && !ownerActorKey)
+        || (params.source === 'lorebook' && !ownerActorKey)
+        || (params.source === 'summaries' && !ownerActorKey && !DIRECT_PRIVATE_SUBTYPES.has(memorySubtype))
+        || (sharedSourceHint && SHARED_SCOPE.has(sourceScope) && !ownerActorKey)
+    ) {
+        return {
+            privacyClass: 'shared',
+            viewpointReason: 'shared',
+            visibilityPool: 'global',
+            actorFocusTier: 'shared',
+            actorVisibilityScore: 0.7,
+            reasonCodes: ['privacy:shared_direct'],
+        };
+    }
+
+    if (
+        DIRECT_PRIVATE_SUBTYPES.has(memorySubtype)
+        || (memorySubtype === 'preference' && !SHARED_SCOPE.has(sourceScope))
+    ) {
+        return {
+            privacyClass: 'private',
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            reasonCodes: ['privacy:private_direct'],
+        };
+    }
+
+    if (SHARED_SCOPE.has(sourceScope) && !ownerActorKey) {
+        return {
+            privacyClass: 'shared',
+            viewpointReason: 'shared',
+            visibilityPool: 'global',
+            actorFocusTier: 'shared',
+            actorVisibilityScore: 0.7,
+            reasonCodes: ['privacy:shared_scope'],
+        };
+    }
+
+    if (PRIVATE_PREF_SCOPE.has(sourceScope)) {
+        return {
+            privacyClass: 'private',
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            reasonCodes: ['privacy:private_scope'],
+        };
+    }
+
+    if (ownerActorKey) {
+        return {
+            privacyClass: 'contextual',
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            reasonCodes: ['privacy:owner_context'],
+        };
+    }
+
+    if (isRelationshipSignal) {
+        return {
+            privacyClass: 'contextual',
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            reasonCodes: ['privacy:relationship_context'],
+        };
+    }
+
+    return {
+        privacyClass: 'contextual',
+        viewpointReason: 'foreign_private_suppressed',
+        visibilityPool: 'blocked',
+        actorFocusTier: 'blocked',
+        actorVisibilityScore: 0,
+        reasonCodes: ['privacy:contextual'],
+    };
+}
+
+function resolveFocusActorTier(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+    privacy: CandidateVisibilityClassification,
+): RecallActorFocusTier {
+    if (privacy.privacyClass === 'private') {
+        return 'blocked';
+    }
+    if (context.plan.viewpoint.mode === 'omniscient_director') {
+        return privacy.visibilityPool === 'global' ? 'shared' : 'blocked';
+    }
+    if (privacy.visibilityPool === 'global') {
+        return 'shared';
+    }
+    const focus = context.plan.viewpoint.focus;
+    const primaryActorKey = normalizeText(focus.primaryActorKey ?? '');
+    const secondaryActorKeys = new Set((focus.secondaryActorKeys ?? []).map((actorKey: string): string => normalizeText(actorKey)));
+    const ownerActorKey = normalizeText(params.ownerActorKey ?? lifecycle?.ownerActorKey ?? '');
+    const participantActorKeys = new Set((params.participantActorKeys ?? []).map((actorKey: string): string => normalizeText(actorKey)).filter(Boolean));
+    const isRelationshipSignal = params.recordKind === 'relationship' || params.source === 'relationships';
+    if (primaryActorKey) {
+        if (ownerActorKey && ownerActorKey === primaryActorKey) {
+            return 'primary';
+        }
+        if (isRelationshipSignal && participantActorKeys.has(primaryActorKey)) {
+            return 'primary';
+        }
+    }
+    if (ownerActorKey && secondaryActorKeys.has(ownerActorKey)) {
+        return 'secondary';
+    }
+    if (isRelationshipSignal) {
+        for (const actorKey of participantActorKeys) {
+            if (secondaryActorKeys.has(actorKey)) {
+                return 'secondary';
+            }
+        }
+    }
+    if (primaryActorKey && ownerActorKey && ownerActorKey === primaryActorKey) {
+        return 'primary';
+    }
+    return 'blocked';
+}
+
+/**
+ * 功能：在内容语义基础上结合当前视角，决定可见池与角色边界。
+ * 参数：
+ *   context：召回上下文。
+ *   params：候选基础参数。
+ *   lifecycle：候选生命周期。
+ *   privacy：内容语义分类结果。
+ * 返回：
+ *   CandidateVisibilityClassification：最终可见性分类。
+ */
+export function resolveViewpointVisibility(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+    privacy: CandidateVisibilityClassification,
+): CandidateVisibilityClassification {
+    const activeActorKey = normalizeText(context.activeActorKey ?? context.plan.viewpoint.activeActorKey ?? '');
+    const hasActiveActorKey = Boolean(activeActorKey);
+    const ownerActorKey = normalizeText(params.ownerActorKey ?? lifecycle?.ownerActorKey ?? '');
+    const actorRetention = hasActiveActorKey ? readActorRetention(context, params.recordKey, activeActorKey) : null;
+    const actorForgetProbability = clamp01(Number(actorRetention?.forgetProbability ?? lifecycle?.forgetProbability ?? 0));
+    const actorForgotten = actorRetention?.forgotten === true || lifecycle?.forgotten === true;
+    const actorRetentionBias = Number(actorRetention?.retentionBias ?? 0) || 0;
+    const ownsMemory = hasActiveActorKey && ownerActorKey && ownerActorKey === activeActorKey;
+    const retainedForActor = Boolean(actorRetention && !actorRetention.forgotten);
+    const actorFocusTier = resolveFocusActorTier(context, params, lifecycle, privacy);
+
+    if (actorForgotten) {
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            actorForgetProbability,
+            actorForgotten: true,
+            actorRetentionBias,
+            reasonCodes: [...privacy.reasonCodes, 'viewpoint:foreign_private_suppressed', 'blocked:actor_forgotten', 'foreign_private_memory_suppressed'],
+        };
+    }
+
+    if (context.plan.viewpoint.mode === 'omniscient_director') {
+        if (privacy.privacyClass === 'shared') {
+            return {
+                privacyClass: privacy.privacyClass,
+                viewpointReason: 'shared',
+                visibilityPool: 'global',
+                actorFocusTier: 'shared',
+                actorVisibilityScore: 0.7,
+                actorForgetProbability,
+                actorForgotten: false,
+                actorRetentionBias,
+                reasonCodes: [...privacy.reasonCodes, 'viewpoint:shared', 'pool:global'],
+            };
+        }
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: 'foreign_private_suppressed',
+            visibilityPool: 'blocked',
+            actorFocusTier: 'blocked',
+            actorVisibilityScore: 0,
+            actorForgetProbability,
+            actorForgotten: false,
+            actorRetentionBias,
+            reasonCodes: [...privacy.reasonCodes, 'viewpoint:foreign_private_suppressed', 'blocked:foreign_private', 'foreign_private_memory_suppressed'],
+        };
+    }
+
+    if (privacy.privacyClass === 'shared') {
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: 'shared',
+            visibilityPool: 'global',
+            actorFocusTier: 'shared',
+            actorVisibilityScore: 0.7,
+            actorForgetProbability,
+            actorForgotten: false,
+            actorRetentionBias,
+            reasonCodes: [...privacy.reasonCodes, 'viewpoint:shared', 'pool:global', 'focus:shared'],
+        };
+    }
+    if (actorFocusTier === 'primary' && hasActiveActorKey) {
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: ownsMemory ? 'owned_by_actor' : 'retained_for_actor',
+            visibilityPool: 'actor',
+            actorFocusTier: 'primary',
+            actorVisibilityScore: 1,
+            actorForgetProbability,
+            actorForgotten: false,
+            actorRetentionBias,
+            reasonCodes: [
+                ...privacy.reasonCodes,
+                ownsMemory ? 'viewpoint:owned_by_actor' : 'viewpoint:retained_for_actor',
+                'pool:actor',
+                'focus:primary_actor',
+                ...(ownsMemory ? ['visibility:self_owner'] : ['visibility:actor_retained']),
+            ],
+        };
+    }
+    if (actorFocusTier === 'secondary') {
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: 'retained_for_actor',
+            visibilityPool: 'actor',
+            actorFocusTier: 'secondary',
+            actorVisibilityScore: 0.86,
+            actorForgetProbability,
+            actorForgotten: false,
+            actorRetentionBias,
+            reasonCodes: [...privacy.reasonCodes, 'viewpoint:retained_for_actor', 'pool:actor', 'focus:secondary_actor', 'visibility:actor_retained'],
+        };
+    }
+    if (retainedForActor) {
+        return {
+            privacyClass: privacy.privacyClass,
+            viewpointReason: 'retained_for_actor',
+            visibilityPool: 'actor',
+            actorFocusTier: 'primary',
+            actorVisibilityScore: 0.86,
+            actorForgetProbability,
+            actorForgotten: false,
+            actorRetentionBias,
+            reasonCodes: [...privacy.reasonCodes, 'viewpoint:retained_for_actor', 'pool:actor', 'focus:primary_actor', 'visibility:actor_retained'],
+        };
+    }
+    return {
+        privacyClass: privacy.privacyClass,
+        viewpointReason: 'foreign_private_suppressed',
+        visibilityPool: 'blocked',
+        actorFocusTier: 'blocked',
+        actorVisibilityScore: 0,
+        actorForgetProbability,
+        actorForgotten: false,
+        actorRetentionBias,
+        reasonCodes: [...privacy.reasonCodes, 'viewpoint:foreign_private_suppressed', 'blocked:foreign_private', 'foreign_private_memory_suppressed'],
+    };
+}
+
+export function classifyCandidateVisibility(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+): CandidateVisibilityClassification {
+    return resolveViewpointVisibility(
+        context,
+        params,
+        lifecycle,
+        classifyMemoryPrivacy(context, params, lifecycle),
+    );
+}
+
+/**
+ * 功能：计算候选的角色可见性分。
+ * 参数：
+ *   context：召回上下文。
+ *   params：候选基础参数。
+ *   lifecycle：候选生命周期。
+ * 返回：
+ *   number：可见性分。
+ */
+export function computeActorVisibilityScore(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+): number {
+    return classifyCandidateVisibility(context, params, lifecycle).actorVisibilityScore;
+}
+
+/**
+ * 功能：判断候选是否允许进入当前视角。
+ * 参数：
+ *   context：召回上下文。
+ *   params：候选基础参数。
+ *   lifecycle：候选生命周期。
+ * 返回：
+ *   boolean：是否允许进入召回流程。
+ */
+export function shouldIncludeCandidateForViewpoint(
+    context: RecallSourceContext,
+    params: CandidateVisibilityInput,
+    lifecycle: MemoryLifecycleState | null,
+): boolean {
+    return classifyCandidateVisibility(context, params, lifecycle).visibilityPool !== 'blocked';
+}
+
 export function isCharacterFact(fact: FactRecord): boolean {
     const entityKind = normalizeText(fact.entity?.kind).toLowerCase();
     const path = normalizeText(fact.path).toLowerCase();
@@ -233,6 +668,11 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
     rawText: string;
     confidence: number;
     updatedAt: number;
+    memoryType?: MemoryType;
+    memorySubtype?: MemorySubtype;
+    sourceScope?: MemorySourceScope;
+    ownerActorKey?: string | null;
+    participantActorKeys?: string[];
     continuityScore?: number;
     relationshipScore?: number;
     emotionScore?: number;
@@ -249,6 +689,16 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
     const keywords = extractKeywords(context.query);
     const normalizedText = rawText.toLowerCase();
     const lifecycle = readLifecycle(context, params.recordKey);
+    const visibility = classifyCandidateVisibility(context, {
+        recordKey: params.recordKey,
+        recordKind: params.recordKind,
+        source: params.source,
+        memoryType: params.memoryType ?? lifecycle?.memoryType,
+        memorySubtype: params.memorySubtype ?? lifecycle?.memorySubtype,
+        sourceScope: params.sourceScope ?? lifecycle?.sourceScope,
+        ownerActorKey: params.ownerActorKey ?? lifecycle?.ownerActorKey ?? null,
+        participantActorKeys: params.participantActorKeys ?? [],
+    }, lifecycle);
     const relationshipScore = Number(params.relationshipScore ?? (lifecycle?.relationScope ? resolveRelationshipWeight(rawText, context.relationships, context.fallbackRelationshipWeight) : 0)) || 0;
     const emotionScore = Number(params.emotionScore ?? (lifecycle?.emotionTag || detectEmotionTag(rawText) ? 1 : 0)) || 0;
     const recencyWindowMs = Math.max(1, Number(params.recencyWindowDays ?? 30)) * 24 * 60 * 60 * 1000;
@@ -259,12 +709,17 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
     const privacyPenalty = Number(params.privacyPenalty ?? (/秘密|隐私|private|secret/.test(rawText) ? 1 : 0)) || 0;
     const conflictPenalty = Number(params.conflictPenalty ?? (lifecycle?.stage === 'distorted' ? 0.5 : 0)) || 0;
     const vectorScore = Number(params.vectorScore ?? 0) || 0;
+    const actorForgetProbability = visibility.actorForgetProbability ?? lifecycle?.forgetProbability ?? 0;
     const result = scoreRecallCandidate({
         text: rawText,
         keywords,
         confidence: clamp01(Number(params.confidence ?? 0.55)),
         recencyScore,
         lifecycle,
+        actorVisibilityScore: visibility.actorVisibilityScore,
+        actorForgetProbability,
+        actorForgotten: visibility.actorForgotten === true,
+        actorRetentionBias: visibility.actorRetentionBias,
         profile: context.personaProfile ?? {
             profileVersion: 'persona.v1',
             totalCapacity: 0.6,
@@ -288,6 +743,15 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         tuning: context.tuningProfile,
     });
     const stageReason = lifecycle?.stage ? [`stage:${lifecycle.stage}`] : [];
+    const visibilityReasonCodes = Array.from(new Set([
+        `viewpoint:${visibility.viewpointReason}`,
+        ...visibility.reasonCodes,
+        ...(visibility.visibilityPool === 'actor' ? [`visibility_score:${visibility.actorVisibilityScore.toFixed(2)}`] : []),
+        ...(actorForgetProbability >= 0.75 ? ['actor_forget_risk'] : []),
+    ]));
+    const tone = visibility.actorForgotten || actorForgetProbability >= 0.75
+        ? 'possible_misremember'
+        : result.tone;
     return {
         candidateId: params.candidateId,
         recordKey: params.recordKey,
@@ -296,7 +760,7 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         sectionHint: params.sectionHint,
         title: normalizeText(params.title) || normalizeText(params.recordKey),
         rawText,
-        renderedLine: formatLineByTone(rawText, result.tone),
+        renderedLine: formatLineByTone(rawText, tone),
         confidence: clamp01(Number(params.confidence ?? 0.55)),
         updatedAt,
         keywordScore,
@@ -307,10 +771,18 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         emotionScore,
         conflictPenalty,
         privacyPenalty,
-        finalScore: result.score,
-        tone: result.tone,
+        visibilityPool: visibility.visibilityPool,
+        privacyClass: visibility.privacyClass,
+        viewpointReason: visibility.viewpointReason,
+        actorFocusTier: visibility.actorFocusTier,
+        actorVisibilityScore: visibility.actorVisibilityScore,
+        actorForgetProbability,
+        actorForgotten: visibility.actorForgotten === true,
+        actorRetentionBias: visibility.actorRetentionBias,
+        finalScore: visibility.visibilityPool === 'blocked' ? Math.max(0, result.score * 0.12) : result.score,
+        tone,
         selected: false,
-        reasonCodes: Array.from(new Set([...(params.extraReasonCodes ?? []), ...stageReason, ...result.reasonCodes, `source:${params.source}`])),
+        reasonCodes: Array.from(new Set([...(params.extraReasonCodes ?? []), ...stageReason, ...visibilityReasonCodes, ...result.reasonCodes, `source:${params.source}`])),
     };
 }
 

@@ -20,8 +20,11 @@ import type {
     ResourceCustomParams,
     ResourceType,
     ResourceSource,
+    ApiType,
     CapabilityKind,
+    GlobalMaxTokensControl,
     GlobalAssignments,
+    MaxTokensMode,
     PluginAssignment,
     TaskAssignment,
     ConsumerSnapshot,
@@ -186,7 +189,25 @@ function buildRequestLogOutboundPreview(entry: LLMRequestLogEntry): string {
     let outbound: unknown = null;
 
     if (entry.taskKind === 'generation') {
-        outbound = entry.request?.providerRequest ?? null;
+        const providerRequest = entry.request?.providerRequest;
+        const generationInput = entry.request?.generationInput;
+        const routeHint = entry.request?.routeHint;
+        const budget = entry.request?.budget;
+        const schemaSummary = entry.request?.schemaSummary;
+        const schema = entry.request?.schema;
+
+        if (providerRequest != null) {
+            outbound = providerRequest;
+        } else if (generationInput != null || routeHint != null || budget != null || schemaSummary != null || schema != null) {
+            outbound = {
+                note: '历史日志未记录 providerRequest，以下为上层输入回退快照',
+                generationInput,
+                routeHint,
+                budget,
+                schemaSummary,
+                schema,
+            };
+        }
     } else if (entry.taskKind === 'embedding') {
         outbound = {
             resourceId: entry.response?.meta?.resourceId,
@@ -347,10 +368,23 @@ function formatResourceOptionLabel(resourceId: string, label?: string): string {
 }
 
 function normalizeResourceConfigForUi(config: ResourceConfig): ResourceConfig {
+    const normalizedApiType: ApiType | undefined = config.source === 'custom' && config.type === 'generation'
+        ? config.apiType === 'deepseek'
+            ? 'deepseek'
+            : config.apiType === 'gemini'
+                ? 'gemini'
+                : config.apiType === 'claude'
+                    ? 'claude'
+                    : config.apiType === 'generic'
+                        ? 'generic'
+                        : 'openai'
+        : undefined;
+
     const normalizedBase: ResourceConfig = {
         id: String(config.id || '').trim(),
         type: (config.type || 'generation') as ResourceType,
         source: config.source === 'tavern' ? 'tavern' : 'custom',
+        apiType: normalizedApiType,
         label: String(config.label || config.id || '').trim() || String(config.id || ''),
         baseUrl: config.source === 'custom' ? String(config.baseUrl || '').trim() || undefined : undefined,
         model: String(config.model || '').trim() || undefined,
@@ -395,6 +429,16 @@ function buildResourceListToggleHtml(resource: ResourceConfig): string {
     });
 }
 
+function getApiTypeLabel(apiType?: ApiType): string {
+    switch (apiType) {
+        case 'deepseek': return 'deepseek';
+        case 'gemini': return 'gemini';
+        case 'claude': return 'claude';
+        case 'generic': return 'generic';
+        default: return 'openai';
+    }
+}
+
 function formatTimestamp(ts: number): string {
     if (!ts) return '-';
     const d = new Date(ts);
@@ -409,6 +453,41 @@ function formatDateTime(ts?: number): string {
         `${d.getMonth() + 1}`.padStart(2, '0'),
         `${d.getDate()}`.padStart(2, '0'),
     ].join('-') + ` ${formatTimestamp(ts)}`;
+}
+
+function formatLatency(latencyMs?: number): string {
+    if (!Number.isFinite(latencyMs) || latencyMs == null || latencyMs < 0) {
+        return '-';
+    }
+    if (latencyMs < 1000) {
+        return `${Math.round(latencyMs)}ms`;
+    }
+    return `${(latencyMs / 1000).toFixed(latencyMs >= 10_000 ? 1 : 2)}s`;
+}
+
+function sanitizePositiveInteger(value: unknown): number | undefined {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+    return Math.max(1, Math.round(numeric));
+}
+
+function normalizeGlobalMaxTokensControl(value: unknown): GlobalMaxTokensControl {
+    const raw = (value && typeof value === 'object') ? (value as GlobalMaxTokensControl) : {};
+    const mode = raw.mode === 'manual' || raw.mode === 'adaptive' ? raw.mode : 'inherit';
+    const manualValue = sanitizePositiveInteger(raw.manualValue);
+    return {
+        mode,
+        manualValue,
+        adaptive: raw.adaptive && typeof raw.adaptive === 'object'
+            ? {
+                min: sanitizePositiveInteger(raw.adaptive.min),
+                max: sanitizePositiveInteger(raw.adaptive.max),
+                charDivisor: sanitizePositiveInteger(raw.adaptive.charDivisor),
+                schemaCharDivisor: sanitizePositiveInteger(raw.adaptive.schemaCharDivisor),
+                messageBonus: sanitizePositiveInteger(raw.adaptive.messageBonus),
+            }
+            : undefined,
+    };
 }
 
 function buildRequestLogSearchText(entry: LLMRequestLogEntry): string {
@@ -528,6 +607,8 @@ const IDS: LLMHubSettingsIds = {
 
     enabledId: `${NAMESPACE}-enabled`,
     globalProfileId: `${NAMESPACE}-global-profile`,
+    globalMaxTokensModeId: `${NAMESPACE}-global-max-tokens-mode`,
+    globalMaxTokensManualId: `${NAMESPACE}-global-max-tokens-manual`,
 
     resourceListId: `${NAMESPACE}-resource-list`,
     resourceNewBtnId: `${NAMESPACE}-resource-new-btn`,
@@ -536,6 +617,7 @@ const IDS: LLMHubSettingsIds = {
     resourceLabelInputId: `${NAMESPACE}-resource-label`,
     resourceTypeSelectId: `${NAMESPACE}-resource-type`,
     resourceSourceSelectId: `${NAMESPACE}-resource-source`,
+    resourceApiTypeSelectId: `${NAMESPACE}-resource-api-type`,
     resourceEnabledId: `${NAMESPACE}-resource-enabled`,
     resourceBaseUrlId: `${NAMESPACE}-resource-base-url`,
     resourceApiKeyId: `${NAMESPACE}-resource-api-key`,
@@ -817,9 +899,45 @@ function bindUiEvents(): void {
         });
     }
 
+    const globalMaxTokensModeEl = document.getElementById(IDS.globalMaxTokensModeId) as HTMLSelectElement | null;
+    const globalMaxTokensManualEl = document.getElementById(IDS.globalMaxTokensManualId) as HTMLInputElement | null;
+
+    const syncGlobalMaxTokensUi = (): void => {
+        const control = normalizeGlobalMaxTokensControl(ensureSettings().maxTokensControl);
+        if (globalMaxTokensModeEl) globalMaxTokensModeEl.value = control.mode || 'inherit';
+        if (globalMaxTokensManualEl) {
+            globalMaxTokensManualEl.value = control.manualValue ? String(control.manualValue) : '';
+            globalMaxTokensManualEl.disabled = control.mode !== 'manual';
+            globalMaxTokensManualEl.placeholder = control.mode === 'manual'
+                ? '例如 1600'
+                : '仅手动模式可编辑';
+        }
+        syncSharedSelects(cardRoot || document.body);
+    };
+
+    const persistGlobalMaxTokensControl = (): void => {
+        const settings = ensureSettings();
+        const mode = (globalMaxTokensModeEl?.value || 'inherit') as MaxTokensMode;
+        const manualValue = sanitizePositiveInteger(globalMaxTokensManualEl?.value);
+        settings.maxTokensControl = {
+            ...normalizeGlobalMaxTokensControl(settings.maxTokensControl),
+            mode,
+            manualValue,
+        };
+        saveSettings();
+        void runtime?.applySettingsFromContext?.();
+        syncGlobalMaxTokensUi();
+    };
+
+    syncGlobalMaxTokensUi();
+    globalMaxTokensModeEl?.addEventListener('change', persistGlobalMaxTokensControl);
+    globalMaxTokensManualEl?.addEventListener('change', persistGlobalMaxTokensControl);
+    globalMaxTokensManualEl?.addEventListener('blur', persistGlobalMaxTokensControl);
+
     const resourceEditorEl = document.getElementById(IDS.resourceEditorId) as HTMLElement | null;
     const resourceTypeSelectEl = document.getElementById(IDS.resourceTypeSelectId) as HTMLSelectElement | null;
     const resourceSourceSelectEl = document.getElementById(IDS.resourceSourceSelectId) as HTMLSelectElement | null;
+    const resourceApiTypeSelectEl = document.getElementById(IDS.resourceApiTypeSelectId) as HTMLSelectElement | null;
     const resourceBaseUrlEl = document.getElementById(IDS.resourceBaseUrlId) as HTMLInputElement | null;
     const resourceApiKeyEl = document.getElementById(IDS.resourceApiKeyId) as HTMLInputElement | null;
     const resourceApiKeySaveBtn = document.getElementById(IDS.resourceApiKeySaveBtnId) as HTMLButtonElement | null;
@@ -861,6 +979,7 @@ function bindUiEvents(): void {
     });
 
     const resourceBaseUrlField = resourceBaseUrlEl?.closest('.stx-ui-field') as HTMLElement | null;
+    const resourceApiTypeField = resourceApiTypeSelectEl?.closest('.stx-ui-field') as HTMLElement | null;
     const resourceRerankPathField = resourceRerankPathEl?.closest('.stx-ui-field') as HTMLElement | null;
     const resourceCapRerankEl = document.getElementById(IDS.resourceCapRerankId) as HTMLInputElement | null;
 
@@ -1109,12 +1228,36 @@ function bindUiEvents(): void {
     const syncResourceEditorState = (): void => {
         const source = (resourceSourceSelectEl?.value || 'custom') as ResourceSource;
         const type = (resourceTypeSelectEl?.value || 'generation') as ResourceType;
+        const apiType = (resourceApiTypeSelectEl?.value || 'openai') as ApiType;
         const capabilities = resourceTypeToCapabilities(type);
         const canToggleRerank = type === 'generation' && source === 'custom';
+        const showApiType = source === 'custom' && type === 'generation';
+
+        if (resourceApiTypeSelectEl) {
+            resourceApiTypeSelectEl.disabled = !showApiType;
+            if (!showApiType) {
+                resourceApiTypeSelectEl.value = 'openai';
+            }
+        }
+        if (resourceApiTypeField) {
+            resourceApiTypeField.style.display = showApiType ? '' : 'none';
+        }
 
         if (resourceBaseUrlEl) {
             resourceBaseUrlEl.disabled = source === 'tavern';
-            resourceBaseUrlEl.placeholder = source === 'tavern' ? '酒馆直连无需填写' : 'https://api.openai.com/v1';
+            resourceBaseUrlEl.placeholder = source === 'tavern'
+                ? '酒馆直连无需填写'
+                : type !== 'generation'
+                    ? 'https://api.openai.com/v1'
+                : apiType === 'gemini'
+                    ? 'https://generativelanguage.googleapis.com/v1beta'
+                    : apiType === 'claude'
+                        ? 'https://api.anthropic.com/v1'
+                        : apiType === 'deepseek'
+                            ? 'https://api.deepseek.com/v1'
+                            : apiType === 'generic'
+                                ? '请填写你的通用 OpenAI / 代理兼容地址'
+                        : 'https://api.openai.com/v1';
             if (source === 'tavern') resourceBaseUrlEl.value = '';
         }
 
@@ -1157,6 +1300,7 @@ function bindUiEvents(): void {
         if (resourceLabelInputEl) resourceLabelInputEl.value = resource?.label || '';
         if (resourceTypeSelectEl) resourceTypeSelectEl.value = resource?.type || 'generation';
         if (resourceSourceSelectEl) resourceSourceSelectEl.value = resource?.source || 'custom';
+        if (resourceApiTypeSelectEl) resourceApiTypeSelectEl.value = getApiTypeLabel(resource?.apiType);
         if (resourceBaseUrlEl) resourceBaseUrlEl.value = resource?.source === 'custom' ? (resource.baseUrl || '') : '';
         if (resourceDefaultModelEl) resourceDefaultModelEl.value = resource?.model || '';
         if (resourceRerankPathEl) resourceRerankPathEl.value = resource?.rerankPath || '';
@@ -1204,7 +1348,7 @@ function bindUiEvents(): void {
                                             ${escapeHtml(resource.label || resource.id)}
                                             <span class="stx-ui-list-tag ${resource.type}">${escapeHtml(getKindLabel(resource.type))}</span>
                                         </div>
-                                        <div class="stx-ui-list-meta">ID=${escapeHtml(resource.id)} · 来源=${escapeHtml(resource.source)} · ${resource.enabled === false ? '停用' : '启用'}</div>
+                                        <div class="stx-ui-list-meta">ID=${escapeHtml(resource.id)} · 来源=${escapeHtml(resource.source)}${resource.source === 'custom' && resource.type === 'generation' ? `/${escapeHtml(getApiTypeLabel(resource.apiType))}` : ''} · ${resource.enabled === false ? '停用' : '启用'}</div>
                                     </div>
                                 </button>
                                 <div class="stx-ui-list-side">
@@ -1223,6 +1367,7 @@ function bindUiEvents(): void {
         const label = String(resourceLabelInputEl?.value || '').trim();
         const type = (resourceTypeSelectEl?.value || 'generation') as ResourceType;
         const source = (resourceSourceSelectEl?.value || 'custom') as ResourceSource;
+        const apiType = (resourceApiTypeSelectEl?.value || 'openai') as ApiType;
         const baseUrl = String(resourceBaseUrlEl?.value || '').trim();
         const model = String(resourceDefaultModelEl?.value || '').trim();
         const rerankPath = String(resourceRerankPathEl?.value || '').trim();
@@ -1266,6 +1411,7 @@ function bindUiEvents(): void {
             label,
             type,
             source,
+            apiType: source === 'custom' && type === 'generation' ? apiType : undefined,
             baseUrl: source === 'custom' ? baseUrl : undefined,
             model: model || undefined,
             enabled: resourceEnabledEl?.checked !== false,
@@ -1399,6 +1545,7 @@ function bindUiEvents(): void {
 
     resourceTypeSelectEl?.addEventListener('change', syncResourceEditorState);
     resourceSourceSelectEl?.addEventListener('change', syncResourceEditorState);
+    resourceApiTypeSelectEl?.addEventListener('change', syncResourceEditorState);
     resourceCapRerankEl?.addEventListener('change', refreshRerankTestButtonState);
 
     resourceCustomParamsAddBtn?.addEventListener('click', () => {
@@ -1921,6 +2068,7 @@ function bindUiEvents(): void {
                           <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
                           ${escapeHtml(displayName)} / ${escapeHtml(task.taskId)}
                         </div>
+                                                ${task.description ? `<div class="stx-ui-list-meta">${escapeHtml(task.description)}</div>` : ''}
                         <div class="stx-ui-list-meta">
                           类型=${getKindLabel(task.taskKind)}
                           ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
@@ -1934,6 +2082,18 @@ function bindUiEvents(): void {
                         <label class="stx-ui-field-label">资源</label>
                         ${selectHtml}
                       </div>
+                                            <div class="stx-ui-field">
+                                                <label class="stx-ui-field-label">任务 max_tokens 覆盖</label>
+                                                <input
+                                                    class="stx-ui-input stx-ui-input-full"
+                                                    type="number"
+                                                    min="1"
+                                                    step="1"
+                                                    placeholder="留空则不覆盖"
+                                                    value="${escapeHtml(String(existing?.maxTokens || ''))}"
+                                                    data-task-assign-max-tokens="${escapeHtml(key)}"
+                                                />
+                                            </div>
                     </div>
                     <div class="stx-ui-consumer-map-actions">
                       <button class="stx-ui-btn" type="button" data-task-assign-save="${escapeHtml(key)}" data-task-kind="${task.taskKind}">保存</button>
@@ -1963,6 +2123,8 @@ function bindUiEvents(): void {
         if (saveBtn) {
             const resourceEl = document.querySelector<HTMLSelectElement>(`select[data-task-assign-resource="${key}"]`);
             const resourceId = resourceEl?.value.trim() || '';
+            const maxTokensEl = document.querySelector<HTMLInputElement>(`input[data-task-assign-max-tokens="${key}"]`);
+            const maxTokens = sanitizePositiveInteger(maxTokensEl?.value);
             const taskKind = (saveBtn.dataset.taskKind || 'generation') as CapabilityKind;
 
             if (resourceId) {
@@ -1982,12 +2144,15 @@ function bindUiEvents(): void {
                         return;
                     }
                 }
+            }
 
+            if (resourceId || maxTokens) {
                 assignments.push({
                     pluginId,
                     taskId,
                     taskKind,
-                    resourceId,
+                    resourceId: resourceId || undefined,
+                    maxTokens,
                     isStale: false,
                 });
             }
@@ -2178,6 +2343,29 @@ function bindUiEvents(): void {
         </section>
     `;
 
+    const buildRequestLogSummarySectionHtml = (entry: LLMRequestLogEntry): string => {
+        const model = String(entry.response?.meta?.model || '-').trim() || '-';
+        const resourceId = String(entry.response?.meta?.resourceId || '-').trim() || '-';
+        return `
+        <section class="stx-ui-log-section">
+          <div class="stx-ui-log-section-head">
+            <div class="stx-ui-log-section-title">请求概览</div>
+          </div>
+          <pre class="stx-ui-log-pre">${escapeHtml([
+                `请求ID：${entry.requestId}`,
+                `来源插件：${entry.sourcePluginId}`,
+                `任务：${entry.taskId}`,
+                `状态：${STATE_LABELS[entry.state] || entry.state}`,
+                `资源：${resourceId}`,
+                `模型：${model}`,
+                `发出时间：${formatDateTime(entry.queuedAt)}`,
+                `返回时间：${formatDateTime(entry.finishedAt)}`,
+                `请求耗时：${formatLatency(entry.latencyMs)}`,
+            ].join('\n'))}</pre>
+        </section>
+    `;
+    };
+
     const renderRequestLogDetail = (entry: LLMRequestLogEntry | null): void => {
         if (!requestLogDetailEl) return;
         if (!entry) {
@@ -2186,6 +2374,7 @@ function bindUiEvents(): void {
         }
 
         requestLogDetailEl.innerHTML = [
+            buildRequestLogSummarySectionHtml(entry),
             buildRequestLogPreviewSectionHtml('原始发送内容', buildRequestLogOutboundPreview(entry), 'outbound'),
             buildRequestLogPreviewSectionHtml('原始返回内容', buildRequestLogInboundPreview(entry), 'inbound'),
         ].join('');
@@ -2207,7 +2396,7 @@ function bindUiEvents(): void {
             </div>
                         ${entry.taskDescription ? `<div class="stx-ui-log-list-subtitle">${escapeHtml(entry.taskDescription)}</div>` : ''}
             <div class="stx-ui-log-list-timeline">
-                            <span>${entry.finishedAt ? `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 返回 ${escapeHtml(formatTimestamp(entry.finishedAt))}` : `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 等待返回`}</span>
+                                                        <span>${entry.finishedAt ? `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 返回 ${escapeHtml(formatTimestamp(entry.finishedAt))} · 耗时 ${escapeHtml(formatLatency(entry.latencyMs))}` : `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 等待返回`}</span>
             </div>
           </button>
         `).join('');
