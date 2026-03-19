@@ -12,10 +12,10 @@ import type {
     MemoryQualityScorecard,
     RetentionPolicy,
     StrategyDecision,
-    SummaryPolicyOverride,
     VectorLifecycleState,
     VectorMode,
 } from '../types';
+import type { SummaryRuntimeSettings } from './summary-settings-store';
 import {
     DEFAULT_ADAPTIVE_METRICS,
     DEFAULT_ADAPTIVE_POLICY,
@@ -630,26 +630,23 @@ export function applyAdaptivePolicyOverrides(policy: AdaptivePolicy, overrides?:
         ...policy,
         ...(overrides?.adaptivePolicy ?? {}),
     };
-    const summaryPolicy: SummaryPolicyOverride | undefined = overrides?.summaryPolicy;
-    if (!summaryPolicy) {
-        return nextPolicy;
-    }
-
-    if (typeof summaryPolicy.enabled === 'boolean') {
-        nextPolicy.summaryEnabled = summaryPolicy.enabled;
-    }
-
-    const interval = Number(summaryPolicy.interval);
-    if (Number.isFinite(interval)) {
-        nextPolicy.extractInterval = Math.max(1, Math.round(interval));
-    }
-
-    const windowSize = Number(summaryPolicy.windowSize);
-    if (Number.isFinite(windowSize)) {
-        nextPolicy.extractWindowSize = Math.max(1, Math.round(windowSize));
-    }
-
     return nextPolicy;
+}
+
+/**
+ * 鍔熻兘锛氬皢鎽樿杩愯璁剧疆鏄犲皠鍒拌嚜閫傚簲绛栫暐銆?
+ * @param policy 鍘熷鑷€傚簲绛栫暐銆?
+ * @param runtime 鎽樿杩愯鏃惰涓哄弬鏁般€?
+ * @returns 鏄犲皠鍚庣殑鑷€傚簲绛栫暐銆?
+ */
+export function applySummaryRuntimeSettings(policy: AdaptivePolicy, runtime: SummaryRuntimeSettings): AdaptivePolicy {
+    return {
+        ...policy,
+        summaryEnabled: Boolean(runtime.summaryEnabled),
+        extractInterval: Math.max(1, Math.round(runtime.processingIntervalTurns)),
+        extractWindowSize: Math.max(1, Math.round(runtime.lookbackWindowTurns)),
+        summaryMode: runtime.summaryMode,
+    };
 }
 
 /**

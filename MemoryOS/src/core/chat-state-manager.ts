@@ -3,11 +3,19 @@ import { db, type DBFact, type DBSummary, type DBDerivationSource, type DBVector
 import { Logger } from '../../../SDK/logger';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import {
-    buildEffectivePresetBundle,
-    clearRolePreset,
-    saveGlobalPreset,
-    saveRolePreset,
-} from './chat-preset-store';
+    advanceMemoryTraceContext,
+    buildMemoryMainlineTraceEntry,
+    normalizeMemoryMainlineTraceSnapshot,
+    summarizeMemoryMainlineTrace,
+    touchMemoryMainlineTraceSnapshot,
+} from './memory-trace';
+import {
+    readGlobalSummarySettings,
+    resolveEffectiveSummarySettings,
+    resolveSummaryRuntimeSettings,
+    normalizeSummarySettingsOverride,
+    writeGlobalSummarySettings,
+} from './summary-settings-store';
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
@@ -18,13 +26,13 @@ import type {
     ColdStartLorebookEntrySelection,
     ColdStartLorebookSelection,
     ColdStartStage,
-    EffectivePresetBundle,
     ChatSemanticSeed,
     ChatMutationKind,
     ChatProfile,
     ExtractHealthWindow,
     GroupMemoryState,
     LatestRecallExplanation,
+    LongSummaryCooldownState,
     MemoryActorRetentionMap,
     MemoryActorRetentionState,
     MemoryCandidate,
@@ -51,8 +59,12 @@ import type {
     RelationshipDelta,
     RelationshipState,
     MemoryMutationTargetKind,
+    MemoryTraceContext,
+    MemoryMainlineTraceSnapshot,
+    MemoryProcessingDecision,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
+    PrecompressedWindowStats,
     PromptInjectionProfile,
     RetentionArchives,
     RetentionPolicy,
@@ -67,9 +79,11 @@ import type {
     StrategyDecision,
     SummaryFixTask,
     MutationRepairTask,
-    SummaryPolicyOverride,
-    UserFacingChatPreset,
+    SummarySettings,
+    SummarySettingsOverride,
+    SummaryExecutionTier,
     VectorLifecycleState,
+    EffectiveSummarySettings,
 } from '../types';
 import {
     DEFAULT_ADAPTIVE_METRICS,
@@ -77,20 +91,19 @@ import {
     DEFAULT_AUTO_SCHEMA_POLICY,
     DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_CHAT_PROFILE,
-    DEFAULT_EFFECTIVE_PRESET_BUNDLE,
     DEFAULT_EXTRACT_HEALTH,
     DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
     DEFAULT_MEMORY_QUALITY,
     DEFAULT_MEMORY_MUTATION_ACTION_COUNTS,
     DEFAULT_MEMORY_TUNING_PROFILE,
+    DEFAULT_LONG_SUMMARY_COOLDOWN,
     DEFAULT_PERSONA_MEMORY_PROFILE,
     DEFAULT_PROMPT_INJECTION_PROFILE,
     DEFAULT_RETENTION_ARCHIVES,
     DEFAULT_RETRIEVAL_HEALTH,
     DEFAULT_SCHEMA_DRAFT_SESSION,
     DEFAULT_SIMPLE_MEMORY_PERSONA,
-    DEFAULT_USER_FACING_CHAT_PRESET,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
 import { MemoryMutationHistoryManager } from './memory-mutation-history';
@@ -98,6 +111,7 @@ import {
     applyAdaptivePolicyOverrides,
     applyChatProfileOverrides,
     applyRetentionPolicyOverrides,
+    applySummaryRuntimeSettings,
     buildAdaptivePolicy,
     buildMaintenanceAdvice,
     buildRetentionPolicy,
@@ -209,7 +223,6 @@ import { buildGroupRelationshipSeeds } from './relationship-graph';
 
 const logger = new Logger('ChatStateManager');
 const REPAIR_TRIGGER_KINDS: ChatMutationKind[] = ['message_edited', 'message_swiped', 'message_deleted', 'chat_branched'];
-
 function shouldEnqueueMutationRepair(mutationKinds: ChatMutationKind[]): boolean {
     const set = new Set(Array.isArray(mutationKinds) ? mutationKinds : []);
     return REPAIR_TRIGGER_KINDS.some((kind: ChatMutationKind): boolean => set.has(kind));
@@ -958,10 +971,8 @@ export class ChatStateManager {
                     ...state.manualOverrides.chatProfile.vectorStrategy,
                 },
             } : undefined,
-            summaryPolicy: state.manualOverrides?.summaryPolicy ? {
-                ...state.manualOverrides.summaryPolicy,
-            } : undefined,
         };
+        const summarySettingsOverride = normalizeSummarySettingsOverride(state.summarySettingsOverride ?? null);
         const inferredProfile = inferChatProfile({
             profile: {
                 ...DEFAULT_CHAT_PROFILE,
@@ -989,7 +1000,17 @@ export class ChatStateManager {
                 ...(state.memoryQuality?.dimensions ?? {}),
             },
         };
-        const adaptivePolicy = {
+        const effectiveSummarySettings = resolveEffectiveSummarySettings({
+            chatProfile: inferredProfile,
+            globalSettings: readGlobalSummarySettings(),
+            chatOverride: summarySettingsOverride,
+        });
+        const summaryRuntime = resolveSummaryRuntimeSettings(
+            effectiveSummarySettings,
+            state.adaptiveMetrics ?? DEFAULT_ADAPTIVE_METRICS,
+            state.longSummaryCooldown ?? null,
+        );
+        const adaptivePolicy = applySummaryRuntimeSettings({
             ...buildAdaptivePolicy(
                 inferredProfile,
                 {
@@ -1000,7 +1021,7 @@ export class ChatStateManager {
                 memoryQuality,
             ),
             ...(state.adaptivePolicy ?? {}),
-        };
+        }, summaryRuntime);
         const inferredVector = inferVectorMode(
             inferredProfile,
             {
@@ -1098,33 +1119,13 @@ export class ChatStateManager {
             })(),
             coldStartPrimedAt: Number(state.coldStartPrimedAt ?? 0) || undefined,
             lastLorebookDecision: state.lastLorebookDecision ?? undefined,
+            mainlineTraceSnapshot: normalizeMemoryMainlineTraceSnapshot(state.mainlineTraceSnapshot ?? null),
             promptInjectionProfile: {
                 ...DEFAULT_PROMPT_INJECTION_PROFILE,
                 ...(state.promptInjectionProfile ?? {}),
             },
             lastPreGenerationDecision: state.lastPreGenerationDecision ?? null,
             lastPostGenerationDecision: state.lastPostGenerationDecision ?? null,
-            userFacingPreset: state.userFacingPreset
-                ? {
-                    ...DEFAULT_USER_FACING_CHAT_PRESET,
-                    ...state.userFacingPreset,
-                    chatProfile: {
-                        ...(state.userFacingPreset.chatProfile ?? {}),
-                        vectorStrategy: {
-                            ...(state.userFacingPreset.chatProfile?.vectorStrategy ?? {}),
-                        },
-                    },
-                    adaptivePolicy: {
-                        ...(state.userFacingPreset.adaptivePolicy ?? {}),
-                    },
-                    retentionPolicy: {
-                        ...(state.userFacingPreset.retentionPolicy ?? {}),
-                    },
-                    promptInjection: {
-                        ...(state.userFacingPreset.promptInjection ?? {}),
-                    },
-                }
-                : null,
             groupMemory: {
                 ...DEFAULT_GROUP_MEMORY,
                 ...(state.groupMemory ?? {}),
@@ -1297,6 +1298,7 @@ export class ChatStateManager {
                 recentTasks: Array.isArray(state.extractHealth?.recentTasks) ? state.extractHealth.recentTasks : [],
             },
             retentionPolicy,
+            summarySettingsOverride,
             retentionArchives: {
                 ...DEFAULT_RETENTION_ARCHIVES,
                 ...(state.retentionArchives ?? {}),
@@ -1306,6 +1308,14 @@ export class ChatStateManager {
                 archivedVectorChunkIds: Array.isArray(state.retentionArchives?.archivedVectorChunkIds) ? state.retentionArchives.archivedVectorChunkIds : [],
             },
             lastMutationPlan: normalizeMutationPlanSnapshot(state.lastMutationPlan ?? null),
+            lastProcessingDecision: this.normalizeMemoryProcessingDecision(state.lastProcessingDecision ?? null),
+            recentProcessingDecisions: Array.isArray(state.recentProcessingDecisions)
+                ? state.recentProcessingDecisions
+                    .map((item) => this.normalizeMemoryProcessingDecision(item))
+                    .filter((item): item is MemoryProcessingDecision => item != null)
+                    .slice(-12)
+                : [],
+            longSummaryCooldown: this.normalizeLongSummaryCooldownState(state.longSummaryCooldown ?? null),
             manualOverrides,
             lastStrategyDecision: state.lastStrategyDecision ?? null,
         };
@@ -1387,11 +1397,7 @@ export class ChatStateManager {
         if (!state.chatProfile) {
             state.chatProfile = this.inferAutoChatProfileFromState(state);
         }
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
-        const presetAware = applyChatProfileOverrides(state.chatProfile, {
-            chatProfile: presetBundle.effectiveChatProfile,
-        });
-        return applyChatProfileOverrides(presetAware, state.manualOverrides);
+        return applyChatProfileOverrides(state.chatProfile, state.manualOverrides);
     }
 
     /**
@@ -1405,11 +1411,7 @@ export class ChatStateManager {
         if (options?.markDirty !== false) {
             this.markDirty();
         }
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
-        const presetAware = applyChatProfileOverrides(state.chatProfile, {
-            chatProfile: presetBundle.effectiveChatProfile,
-        });
-        return applyChatProfileOverrides(presetAware, state.manualOverrides);
+        return applyChatProfileOverrides(state.chatProfile, state.manualOverrides);
     }
 
     /**
@@ -1482,20 +1484,32 @@ export class ChatStateManager {
             await this.recomputeAdaptivePolicy();
         }
         const lifecycle = await this.refreshLifecycleState(state, 'get_policy');
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
+        const chatProfile = await this.getChatProfile();
+        const summarySettings = resolveEffectiveSummarySettings({
+            chatProfile,
+            globalSettings: readGlobalSummarySettings(),
+            chatOverride: normalizeSummarySettingsOverride(state.summarySettingsOverride ?? null),
+        });
+        const summaryRuntime = resolveSummaryRuntimeSettings(
+            summarySettings,
+            await this.getAdaptiveMetrics(),
+            state.longSummaryCooldown ?? null,
+        );
         return applyAdaptivePolicyOverrides(
-            {
-                ...(state.adaptivePolicy ?? this.applyLifecycleBias(
-                    buildAdaptivePolicy(
-                        await this.getChatProfile(),
-                        await this.getAdaptiveMetrics(),
-                        await this.getVectorLifecycle(),
-                        await this.getMemoryQuality(),
-                    ),
-                    lifecycle.stage,
-                )),
-                ...(presetBundle.effectiveAdaptivePolicy ?? {}),
-            },
+            applySummaryRuntimeSettings(
+                {
+                    ...(state.adaptivePolicy ?? this.applyLifecycleBias(
+                        buildAdaptivePolicy(
+                            chatProfile,
+                            await this.getAdaptiveMetrics(),
+                            await this.getVectorLifecycle(),
+                            await this.getMemoryQuality(),
+                        ),
+                        lifecycle.stage,
+                    )),
+                },
+                summaryRuntime,
+            ),
             state.manualOverrides,
         );
     }
@@ -1511,14 +1525,18 @@ export class ChatStateManager {
         const metrics = await this.getAdaptiveMetrics();
         const vectorLifecycle = await this.getVectorLifecycle();
         const memoryQuality = await this.getMemoryQuality();
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
-        state.adaptivePolicy = {
+        const summarySettings = resolveEffectiveSummarySettings({
+            chatProfile: profile,
+            globalSettings: readGlobalSummarySettings(),
+            chatOverride: normalizeSummarySettingsOverride(state.summarySettingsOverride ?? null),
+        });
+        const summaryRuntime = resolveSummaryRuntimeSettings(summarySettings, metrics, state.longSummaryCooldown ?? null);
+        state.adaptivePolicy = applySummaryRuntimeSettings({
             ...this.applyLifecycleBias(
                 buildAdaptivePolicy(profile, metrics, vectorLifecycle, memoryQuality),
                 lifecycle.stage,
             ),
-            ...(presetBundle.effectiveAdaptivePolicy ?? {}),
-        };
+        }, summaryRuntime);
         state.vectorLifecycle = {
             ...vectorLifecycle,
             vectorMode: state.adaptivePolicy.vectorMode,
@@ -1534,12 +1552,10 @@ export class ChatStateManager {
     async getRetentionPolicy(): Promise<RetentionPolicy> {
         const state = await this.load();
         const profile = await this.getChatProfile();
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
         const base = buildRetentionPolicy(profile);
         state.retentionPolicy = applyRetentionPolicyOverrides(
             {
                 ...base,
-                ...(presetBundle.effectiveRetentionPolicy ?? {}),
                 ...(state.retentionPolicy ?? {}),
             },
             { retentionPolicy: {} },
@@ -1555,11 +1571,9 @@ export class ChatStateManager {
      */
     async getPromptInjectionProfile(): Promise<PromptInjectionProfile> {
         const state = await this.load();
-        const presetBundle = this.getEffectivePresetBundleFromState(state);
         const manualProfile = state.manualOverrides?.promptInjectionProfile ?? {};
         return {
             ...DEFAULT_PROMPT_INJECTION_PROFILE,
-            ...(presetBundle.effectivePromptInjection ?? DEFAULT_PROMPT_INJECTION_PROFILE),
             ...(state.promptInjectionProfile ?? {}),
             ...(manualProfile ?? {}),
         };
@@ -1580,91 +1594,6 @@ export class ChatStateManager {
             ...(profile ?? {}),
         };
         this.markDirty();
-    }
-
-    /**
-     * 功能：读取当前聊天的三层 preset 合并结果。
-     * 参数：无。
-     * 返回：
-     *   Promise<EffectivePresetBundle>：三层 preset 生效结果。
-     */
-    async getEffectivePresetBundle(): Promise<EffectivePresetBundle> {
-        const state = await this.load();
-        return this.getEffectivePresetBundleFromState(state);
-    }
-
-    /**
-     * 功能：保存全局预设。
-     * 参数：
-     *   preset (UserFacingChatPreset)：要保存的预设。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    async saveGlobalPreset(preset: UserFacingChatPreset): Promise<void> {
-        saveGlobalPreset(preset);
-    }
-
-    /**
-     * 功能：保存角色级或群聊级预设。
-     * 参数：
-     *   preset (UserFacingChatPreset)：要保存的预设。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    async saveRolePreset(preset: UserFacingChatPreset): Promise<void> {
-        const state = await this.load();
-        saveRolePreset(state, preset);
-    }
-
-    /**
-     * 功能：清除当前角色或群聊绑定的预设。
-     * 参数：无。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    async clearRolePreset(): Promise<void> {
-        const state = await this.load();
-        clearRolePreset(state);
-    }
-
-    /**
-     * 功能：读取聊天级用户预设。
-     * 参数：无。
-     * 返回：
-     *   Promise<UserFacingChatPreset | null>：聊天级预设。
-     */
-    async getUserFacingPreset(): Promise<UserFacingChatPreset | null> {
-        const state = await this.load();
-        return state.userFacingPreset ?? null;
-    }
-
-    /**
-     * 功能：写入聊天级用户预设。
-     * 参数：
-     *   preset (UserFacingChatPreset | null)：聊天级预设。
-     * 返回：
-     *   Promise<void>：异步完成。
-     */
-    async setUserFacingPreset(preset: UserFacingChatPreset | null): Promise<void> {
-        const state = await this.load();
-        state.userFacingPreset = preset ? {
-            ...DEFAULT_USER_FACING_CHAT_PRESET,
-            ...preset,
-        } : null;
-        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
-        state.retentionPolicy = await this.getRetentionPolicy();
-        this.markDirty();
-    }
-
-    /**
-     * 功能：从当前状态构建三层 preset 生效结果。
-     * 参数：
-     *   state (MemoryOSChatState)：当前聊天状态。
-     * 返回：
-     *   EffectivePresetBundle：三层 preset 的合并结果。
-     */
-    private getEffectivePresetBundleFromState(state: MemoryOSChatState): EffectivePresetBundle {
-        return buildEffectivePresetBundle(state ?? {}) ?? DEFAULT_EFFECTIVE_PRESET_BUNDLE;
     }
 
     /**
@@ -2216,7 +2145,6 @@ export class ChatStateManager {
                 buildAdaptivePolicy(await this.getChatProfile(), nextMetrics, vectorLifecycle, quality),
                 state.chatLifecycle?.stage ?? 'new',
             ),
-            ...(this.getEffectivePresetBundleFromState(state).effectiveAdaptivePolicy ?? {}),
         };
         this.markDirty();
         return quality;
@@ -2304,6 +2232,111 @@ export class ChatStateManager {
     async getLastPostGenerationDecision(): Promise<PostGenerationGateDecision | null> {
         const state = await this.load();
         return state.lastPostGenerationDecision ?? null;
+    }
+
+    /**
+     * 鍔熻兘锛氳鍙栨渶杩戜竴娆″鐞嗙瓑绾у喅绛栥€?
+     * @returns 褰撳墠鏈€杩戜竴娆″鐞嗙瓑绾у喅绛栵紝娌℃湁鏃惰繑鍥?null銆?
+     */
+    async getLastProcessingDecision(): Promise<MemoryProcessingDecision | null> {
+        const state = await this.load();
+        state.lastProcessingDecision = this.normalizeMemoryProcessingDecision(state.lastProcessingDecision ?? null);
+        return state.lastProcessingDecision ?? null;
+    }
+
+    /**
+     * 鍔熻兘锛氬啓鍏ユ渶杩戜竴娆″鐞嗙瓑绾у喅绛栥€?
+     * @param decision 鏈€鏂扮殑澶勭悊绛夌骇鍐崇瓥銆?
+     * @returns 鏇存柊鍚庣殑鍐崇瓥銆?
+     */
+    async setLastProcessingDecision(decision: MemoryProcessingDecision | null): Promise<MemoryProcessingDecision | null> {
+        const state = await this.load();
+        const normalized = this.normalizeMemoryProcessingDecision(decision);
+        state.lastProcessingDecision = normalized;
+        if (normalized) {
+            const current = Array.isArray(state.recentProcessingDecisions) ? state.recentProcessingDecisions : [];
+            state.recentProcessingDecisions = [
+                normalized,
+                ...current.filter((item) => item.windowHash !== normalized.windowHash || item.generatedAt !== normalized.generatedAt),
+            ].slice(0, 12);
+        }
+        this.markDirty();
+        return state.lastProcessingDecision ?? null;
+    }
+
+    /**
+     * 鍔熻兘锛氳鍙栭暱鎬荤粨鍐峰嵈鐘舵€併€?
+     * @returns 鍐峰嵈鐘舵€併€?
+     */
+    async getLongSummaryCooldown(): Promise<LongSummaryCooldownState> {
+        const state = await this.load();
+        state.longSummaryCooldown = this.normalizeLongSummaryCooldownState(state.longSummaryCooldown ?? null);
+        return state.longSummaryCooldown;
+    }
+
+    /**
+     * 鍔熻兘锛氭洿鏂伴暱鎬荤粨鍐峰嵈鐘舵€併€?
+     * @param patch 鐘舵€佽ˉ涓併€?
+     * @returns 鏇存柊鍚庣殑鍐峰嵈鐘舵€併€?
+     */
+    async setLongSummaryCooldown(patch: Partial<LongSummaryCooldownState>): Promise<LongSummaryCooldownState> {
+        const state = await this.load();
+        state.longSummaryCooldown = this.normalizeLongSummaryCooldownState({
+            ...this.normalizeLongSummaryCooldownState(state.longSummaryCooldown ?? null),
+            ...(patch ?? {}),
+        });
+        this.markDirty();
+        return state.longSummaryCooldown;
+    }
+
+    /**
+     * 功能：归一化处理等级决策。
+     * @param decision 原始决策。
+     * @returns 归一化后的决策或 null。
+     */
+    private normalizeMemoryProcessingDecision(decision: MemoryProcessingDecision | null | undefined): MemoryProcessingDecision | null {
+        if (!decision) {
+            return null;
+        }
+        return {
+            ...decision,
+            level: (decision.level ?? 'none') as MemoryProcessingDecision['level'],
+            summaryTier: (decision.summaryTier ?? 'none') as MemoryProcessingDecision['summaryTier'],
+            extractScope: (decision.extractScope ?? 'none') as MemoryProcessingDecision['extractScope'],
+            reasonCodes: Array.isArray(decision.reasonCodes) ? decision.reasonCodes.filter(Boolean) : [],
+            heavyTriggerKind: decision.heavyTriggerKind ?? null,
+            cooldownBlocked: Boolean(decision.cooldownBlocked),
+            windowHash: String(decision.windowHash ?? ''),
+            windowEventCount: Math.max(0, Math.round(Number(decision.windowEventCount ?? 0))),
+            windowUserMessageCount: Math.max(0, Math.round(Number(decision.windowUserMessageCount ?? 0))),
+            generatedAt: Math.max(0, Math.round(Number(decision.generatedAt ?? 0))),
+            precompressedStats: {
+                originalLength: Math.max(0, Math.round(Number(decision.precompressedStats?.originalLength ?? 0))),
+                compressedLength: Math.max(0, Math.round(Number(decision.precompressedStats?.compressedLength ?? 0))),
+                removedGreetingCount: Math.max(0, Math.round(Number(decision.precompressedStats?.removedGreetingCount ?? 0))),
+                removedDuplicateCount: Math.max(0, Math.round(Number(decision.precompressedStats?.removedDuplicateCount ?? 0))),
+                mergedRunCount: Math.max(0, Math.round(Number(decision.precompressedStats?.mergedRunCount ?? 0))),
+                truncatedToolOutputCount: Math.max(0, Math.round(Number(decision.precompressedStats?.truncatedToolOutputCount ?? 0))),
+            },
+        };
+    }
+
+    /**
+     * 功能：归一化长总结冷却状态。
+     * @param cooldown 原始冷却状态。
+     * @returns 归一化后的冷却状态。
+     */
+    private normalizeLongSummaryCooldownState(cooldown: LongSummaryCooldownState | null | undefined): LongSummaryCooldownState {
+        return {
+            ...DEFAULT_LONG_SUMMARY_COOLDOWN,
+            ...(cooldown ?? {}),
+            lastLongSummaryAt: Math.max(0, Number(cooldown?.lastLongSummaryAt ?? 0)),
+            lastLongSummaryWindowHash: String(cooldown?.lastLongSummaryWindowHash ?? ''),
+            lastLongSummaryReason: String(cooldown?.lastLongSummaryReason ?? ''),
+            lastLongSummaryStage: (cooldown?.lastLongSummaryStage ?? DEFAULT_LONG_SUMMARY_COOLDOWN.lastLongSummaryStage) as LongSummaryCooldownState['lastLongSummaryStage'],
+            lastHeavyProcessAt: Math.max(0, Number(cooldown?.lastHeavyProcessAt ?? 0)),
+            lastLongSummaryAssistantTurnCount: Math.max(0, Number(cooldown?.lastLongSummaryAssistantTurnCount ?? 0)),
+        };
     }
 
     /**
@@ -2526,6 +2559,56 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：对单条严格向量记录执行重建。
+     * @param recordKey 记录键。
+     * @param recordKind 记录类型。
+     * @returns 新写入的 chunkId 列表。
+     */
+    public async rebuildVectorRecord(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> {
+        return this.syncStrictVectorRecord(recordKey, recordKind, 'viewer_rebuild');
+    }
+
+    /**
+     * 功能：删除单条向量片段及其 embedding。
+     * @param chunkId 分块键。
+     * @returns 是否实际删除成功。
+     */
+    public async deleteVectorChunk(chunkId: string): Promise<boolean> {
+        const normalizedChunkId = normalizeMemoryText(chunkId);
+        if (!normalizedChunkId) {
+            return false;
+        }
+        const existing = await db.vector_chunks.get(normalizedChunkId);
+        if (!existing || String(existing.chatKey ?? '').trim() !== this.chatKey) {
+            return false;
+        }
+        await Promise.all([
+            db.vector_chunks.delete(normalizedChunkId),
+            db.vector_embeddings.where('chunkId').equals(normalizedChunkId).delete(),
+        ]);
+        await this.unarchiveVectorChunkIds([normalizedChunkId]);
+        return true;
+    }
+
+    /**
+     * 功能：切换单条向量片段的忽略状态。
+     * @param chunkId 分块键。
+     * @param archived 是否标记为忽略。
+     * @returns 无返回值。
+     */
+    public async setVectorChunkArchived(chunkId: string, archived: boolean): Promise<void> {
+        const normalizedChunkId = normalizeMemoryText(chunkId);
+        if (!normalizedChunkId) {
+            return;
+        }
+        if (archived) {
+            await this.archiveVectorChunkIds([normalizedChunkId]);
+            return;
+        }
+        await this.unarchiveVectorChunkIds([normalizedChunkId]);
+    }
+
+    /**
      * 功能：判断指定事实是否已软删除。
      * @param factKey 事实键。
      * @returns 是否已软删除。
@@ -2559,51 +2642,67 @@ export class ChatStateManager {
      * 功能：读取兼容旧接口的摘要策略。
      * @returns 兼容旧接口的摘要策略。
      */
-    async getSummaryPolicyOverride(): Promise<SummaryPolicyOverride> {
-        const state = await this.load();
-        const adaptivePolicy = await this.getAdaptivePolicy();
-        return {
-            enabled: typeof state.manualOverrides?.summaryPolicy?.enabled === 'boolean'
-                ? state.manualOverrides.summaryPolicy.enabled
-                : adaptivePolicy.summaryEnabled,
-            interval: Number.isFinite(Number(state.manualOverrides?.summaryPolicy?.interval))
-                ? Number(state.manualOverrides?.summaryPolicy?.interval)
-                : adaptivePolicy.extractInterval,
-            windowSize: Number.isFinite(Number(state.manualOverrides?.summaryPolicy?.windowSize))
-                ? Number(state.manualOverrides?.summaryPolicy?.windowSize)
-                : adaptivePolicy.extractWindowSize,
-        };
+    /**
+     * 功能：读取全局摘要设置。
+     * @returns 全局摘要设置。
+     */
+    async getGlobalSummarySettings(): Promise<SummarySettings> {
+        return readGlobalSummarySettings();
     }
 
     /**
-     * 功能：写入兼容旧接口的摘要策略覆盖。
-     * @param override 摘要策略覆盖项。
+     * 功能：保存全局摘要设置。
+     * @param settings 摘要设置。
+     * @returns 规范化后的摘要设置。
+     */
+    async setGlobalSummarySettings(settings: SummarySettings): Promise<SummarySettings> {
+        return writeGlobalSummarySettings(settings);
+    }
+
+    /**
+     * 功能：读取当前聊天的摘要设置覆盖项。
+     * @returns 摘要设置覆盖项。
+     */
+    async getChatSummarySettingsOverride(): Promise<SummarySettingsOverride> {
+        const state = await this.load();
+        return normalizeSummarySettingsOverride(state.summarySettingsOverride ?? null);
+    }
+
+    /**
+     * 功能：写入当前聊天的摘要设置覆盖项。
+     * @param override 摘要设置覆盖项。
      * @returns 无返回值。
      */
-    async setSummaryPolicyOverride(override: SummaryPolicyOverride): Promise<void> {
+    async setChatSummarySettingsOverride(override: SummarySettingsOverride): Promise<void> {
         const state = await this.load();
-        const current = await this.getSummaryPolicyOverride();
-        const next: SummaryPolicyOverride = {
-            enabled: typeof override.enabled === 'boolean' ? override.enabled : current.enabled,
-            interval: Number.isFinite(Number(override.interval))
-                ? Math.max(1, Math.round(Number(override.interval)))
-                : current.interval,
-            windowSize: Number.isFinite(Number(override.windowSize))
-                ? Math.max(1, Math.round(Number(override.windowSize)))
-                : current.windowSize,
-        };
-        state.manualOverrides = {
-            ...(state.manualOverrides ?? {}),
-            summaryPolicy: next,
-            adaptivePolicy: {
-                ...(state.manualOverrides?.adaptivePolicy ?? {}),
-                ...(typeof next.enabled === 'boolean' ? { summaryEnabled: next.enabled } : {}),
-                ...(Number.isFinite(Number(next.interval)) ? { extractInterval: Number(next.interval) } : {}),
-                ...(Number.isFinite(Number(next.windowSize)) ? { extractWindowSize: Number(next.windowSize) } : {}),
-            },
-        };
+        const normalized = normalizeSummarySettingsOverride(override);
+        state.summarySettingsOverride = Object.keys(normalized).length > 0 ? normalized : null;
         state.adaptivePolicy = await this.recomputeAdaptivePolicy();
         this.markDirty();
+    }
+
+    /**
+     * 功能：清除当前聊天的摘要设置覆盖项。
+     * @returns 无返回值。
+     */
+    async clearChatSummarySettingsOverride(): Promise<void> {
+        const state = await this.load();
+        state.summarySettingsOverride = null;
+        state.adaptivePolicy = await this.recomputeAdaptivePolicy();
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取当前生效的摘要设置。
+     * @returns 生效中的摘要设置。
+     */
+    async getEffectiveSummarySettings(): Promise<EffectiveSummarySettings> {
+        const state = await this.load();
+        return resolveEffectiveSummarySettings({
+            chatProfile: await this.getChatProfile(),
+            globalSettings: readGlobalSummarySettings(),
+            chatOverride: normalizeSummarySettingsOverride(state.summarySettingsOverride ?? null),
+        });
     }
 
     /**
@@ -4622,6 +4721,43 @@ export class ChatStateManager {
         const state = await this.load();
         state.latestRecallExplanation = normalizeLatestRecallExplanation(state.latestRecallExplanation ?? null);
         return state.latestRecallExplanation ?? null;
+    }
+
+    /**
+     * 功能：读取主链 trace 快照。
+     * @returns Promise<MemoryMainlineTraceSnapshot>：主链 trace 快照。
+     */
+    async getMainlineTraceSnapshot(): Promise<MemoryMainlineTraceSnapshot> {
+        const state = await this.load();
+        state.mainlineTraceSnapshot = normalizeMemoryMainlineTraceSnapshot(state.mainlineTraceSnapshot ?? null);
+        return state.mainlineTraceSnapshot;
+    }
+
+    /**
+     * 功能：把一条主链 trace 记录写入状态快照。
+     * @param trace trace 上下文。
+     * @param label 记录标签。
+     * @param ok 是否成功。
+     * @param detail 额外说明。
+     * @returns 更新后的 trace 快照。
+     */
+    async recordMainlineTrace(
+        trace: MemoryTraceContext,
+        label: string,
+        ok: boolean,
+        detail?: Record<string, unknown>,
+    ): Promise<MemoryMainlineTraceSnapshot> {
+        const state = await this.load();
+        const entry = buildMemoryMainlineTraceEntry({
+            trace: advanceMemoryTraceContext(trace, trace.stage),
+            label,
+            ok,
+            detail,
+        });
+        state.mainlineTraceSnapshot = touchMemoryMainlineTraceSnapshot(state.mainlineTraceSnapshot ?? null, entry);
+        logger.info(`[主链 Trace] ${summarizeMemoryMainlineTrace(entry)}`, detail ?? {});
+        this.markDirty();
+        return state.mainlineTraceSnapshot;
     }
 
     /**

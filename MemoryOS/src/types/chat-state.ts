@@ -17,6 +17,81 @@ export type ExtractStrategy = 'facts_only' | 'facts_relations' | 'facts_relation
 
 export type SummaryStrategy = 'short' | 'layered' | 'timeline';
 
+export type SummaryMemoryMode = 'streamlined' | 'balanced' | 'deep';
+
+export type SummaryScenario = 'auto' | 'companion_chat' | 'long_rp' | 'worldbook_qa' | 'group_trpg' | 'tool_qa' | 'custom';
+
+export type SummaryResourcePriority = 'quality' | 'balanced' | 'saving';
+
+export type SummaryTiming = 'key_only' | 'stage_end' | 'frequent';
+
+export type SummaryLength = 'short' | 'standard' | 'detailed' | 'ultra';
+
+export type SummaryCooldownPreset = 'short' | 'standard' | 'long';
+
+export type SummaryRecordFocus = 'facts' | 'relationship' | 'world' | 'plot' | 'emotion' | 'tool_result';
+
+export type SummaryLowValueHandling = 'ignore' | 'keep_some' | 'keep_more';
+
+export type SummaryLookbackScope = 'small' | 'medium' | 'large';
+
+export type SummaryNoiseFilter = 'low' | 'medium' | 'high';
+
+export type SummaryLongTrigger = 'scene_end' | 'combat_end' | 'plot_advance' | 'relationship_shift' | 'world_change' | 'structure_repair' | 'archive_finalize';
+
+export type SummarySettingsSource = 'system_default' | 'memory_mode_preset' | 'scenario_preset' | 'global_setting' | 'chat_override';
+
+export type SummaryProcessInterval = 'small' | 'medium' | 'large';
+
+export interface SummarySettingsWorkMode {
+    memoryMode: SummaryMemoryMode;
+    scenario: SummaryScenario;
+    resourcePriority: SummaryResourcePriority;
+}
+
+export interface SummarySettingsSummaryBehavior {
+    summaryTiming: SummaryTiming;
+    summaryLength: SummaryLength;
+    longSummaryCooldown: SummaryCooldownPreset;
+    longSummaryTrigger: SummaryLongTrigger[];
+}
+
+export interface SummarySettingsContentPreference {
+    recordFocus: SummaryRecordFocus[];
+    lowValueHandling: SummaryLowValueHandling;
+    noiseFilter: SummaryNoiseFilter;
+}
+
+export interface SummarySettingsAdvanced {
+    processInterval: SummaryProcessInterval;
+    lookbackScope: SummaryLookbackScope;
+    allowLightRelationExtraction: boolean;
+    allowMediumWorldStateUpdate: boolean;
+    allowHeavyRewriteSummaries: boolean;
+    allowHeavyConsistencyRepair: boolean;
+    allowHeavyExpandedLookback: boolean;
+}
+
+export interface SummarySettings {
+    workMode: SummarySettingsWorkMode;
+    summaryBehavior: SummarySettingsSummaryBehavior;
+    contentPreference: SummarySettingsContentPreference;
+    advanced: SummarySettingsAdvanced;
+}
+
+export interface SummarySettingsOverride {
+    workMode?: Partial<SummarySettingsWorkMode>;
+    summaryBehavior?: Partial<SummarySettingsSummaryBehavior>;
+    contentPreference?: Partial<SummarySettingsContentPreference>;
+    advanced?: Partial<SummarySettingsAdvanced>;
+}
+
+export interface EffectiveSummarySettings extends SummarySettings {
+    source: SummarySettingsSource;
+    resolvedScenario: Exclude<SummaryScenario, 'auto'> | 'custom';
+    resolvedChatType: ChatType;
+}
+
 export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
@@ -35,16 +110,6 @@ export type GenerationValueClass =
     | 'relationship_shift'
     | 'small_talk_noise'
     | 'tool_result';
-
-export type UserFacingPresetId =
-    | 'companion_chat'
-    | 'long_rp'
-    | 'worldbook_qa'
-    | 'group_trpg'
-    | 'tool_qa'
-    | 'custom';
-
-export type PresetScope = 'global' | 'character' | 'group' | 'chat';
 
 export type InjectionSectionName =
     | 'WORLD_STATE'
@@ -65,6 +130,92 @@ export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' |
 export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
 
 export type ColdStartStage = 'seeded' | 'prompt_primed' | 'extract_primed';
+
+export type MemoryTraceSource =
+    | 'host_message'
+    | 'trusted_write'
+    | 'recall'
+    | 'prompt_injection'
+    | 'external_callback'
+    | 'maintenance';
+
+export type MemoryTraceStage =
+    | 'memory_ingest_started'
+    | 'memory_event_appended'
+    | 'memory_trusted_write_started'
+    | 'memory_trusted_write_finished'
+    | 'memory_recall_started'
+    | 'memory_context_built'
+    | 'memory_prompt_inserted'
+    | 'memory_prompt_insert_success'
+    | 'memory_external_callback_removed'
+    | 'memory_external_callback_unused'
+    | 'memory_maintenance_started'
+    | 'memory_maintenance_finished'
+    | 'memory_skipped'
+    | 'memory_failed';
+
+/**
+ * 鍔熻兘锛氭弿杩颁竴娆′富閾炬渶鍘熷鐨勮窡韪乏鍙愪俊鎭€?
+ * @param traceId 鎵撹穿鍏ㄩ摼鐨勮窡韪爣璇嗐€?
+ * @param chatKey 褰撳墠鑱婂ぉ閿€?
+ * @param sourceMessageId 鎵撳叆鎯呭喌涓殑鍘熷娑堟伅 ID銆?
+ * @param eventId 浜嬩欢閿€?
+ * @param requestId 鎴栬姹俉ID銆?
+ * @param source 璺ㄩ摼鏉ユ簮銆?
+ * @param stage 鐜幆闃舵銆?
+ * @param ts 鏃堕棿鎴点€?
+ * @returns 踪韪璞°€?
+ */
+export interface MemoryTraceContext {
+    traceId: string;
+    chatKey: string;
+    sourceMessageId?: string;
+    eventId?: string;
+    requestId?: string;
+    source: MemoryTraceSource;
+    stage: MemoryTraceStage;
+    ts: number;
+}
+
+/**
+ * 鍔熻兘锛氭弿杩颁笌 trace 鍏宠仈鐨勬渶鍘熷鎵ц璁板綍銆?
+ * @param trace 鍦ㄥ摢涓洖璺埌杈撳嚭銆?
+ * @param ok 鏄惁鎴愬姛銆?
+ * @param label 鍏ㄩ摼璁板綍鏍囩銆?
+ * @param detail 璁板綍瑙﹀彂鏃跺璞＄殑鏃ュ織鏁版嵁銆?
+ * @returns trace 璁板綍銆?
+ */
+export interface MemoryMainlineTraceEntry extends MemoryTraceContext {
+    ok: boolean;
+    label: string;
+    detail?: Record<string, unknown>;
+}
+
+/**
+ * 鍔熻兘锛氭弿杩颁富閾炬渶杩戣窡韪揩鐓с€?
+ * @param lastTrace 鏈€杩戜竴娆¤褰曘€?
+ * @param lastSuccessTrace 鏈€杩戜竴娆℃垚鍔熻褰曘€?
+ * @param recentTraces 鏈€杩戣褰曞垪琛ㄣ€?
+ * @param lastIngestTrace 鏈€杩戜竴娆″叆鍙ｅ璞°€?
+ * @param lastAppendTrace 鏈€杩戜竴娆′簨浠跺叆搴撳璞°€?
+ * @param lastTrustedWriteTrace 鏈€杩戜竴娆＄粡鎵胯鍐欏叆瀵硅薄銆?
+ * @param lastRecallTrace 鏈€杩戜竴娆″洖鏀惧璞°€?
+ * @param lastPromptInjectionTrace 鏈€杩戜竴娆℃敞鍏ュ璞°€?
+ * @param lastUpdatedAt 鏈€杩戞洿鏂版椂闂淬€?
+ * @returns trace 鍥炬櫙銆?
+ */
+export interface MemoryMainlineTraceSnapshot {
+    lastTrace: MemoryMainlineTraceEntry | null;
+    lastSuccessTrace: MemoryMainlineTraceEntry | null;
+    recentTraces: MemoryMainlineTraceEntry[];
+    lastIngestTrace: MemoryMainlineTraceEntry | null;
+    lastAppendTrace: MemoryMainlineTraceEntry | null;
+    lastTrustedWriteTrace: MemoryMainlineTraceEntry | null;
+    lastRecallTrace: MemoryMainlineTraceEntry | null;
+    lastPromptInjectionTrace: MemoryMainlineTraceEntry | null;
+    lastUpdatedAt: number;
+}
 
 /**
  * 功能：描述聊天画像中的向量策略。
@@ -263,6 +414,10 @@ export interface ExtractHealthWindow {
         appliedFacts: number;
         appliedPatches: number;
         appliedSummaries: number;
+        processingLevel?: MemoryProcessingLevel;
+        summaryTier?: SummaryExecutionTier;
+        windowHash?: string;
+        reasonCodes?: string[];
         ts: number;
     }>;
     lastAcceptedAt: number;
@@ -398,12 +553,6 @@ export interface AdaptivePolicy {
     groupLaneEnabled: boolean;
 }
 
-export interface SummaryPolicyOverride {
-    enabled?: boolean;
-    interval?: number;
-    windowSize?: number;
-}
-
 export interface PromptInjectionProfile {
     layoutMode: PromptLayoutMode;
     insertionRole: PromptInsertionRole;
@@ -475,6 +624,44 @@ export interface PostGenerationGateDecision {
     generatedAt: number;
 }
 
+export type MemoryProcessingLevel = 'none' | 'light' | 'medium' | 'heavy';
+
+export type SummaryExecutionTier = 'none' | 'short' | 'long';
+
+export type HeavyProcessingTriggerKind = 'stage_completion' | 'structure_repair' | 'long_running' | 'archive_finalize' | 'special_event' | 'value_rich';
+
+export interface PrecompressedWindowStats {
+    originalLength: number;
+    compressedLength: number;
+    removedGreetingCount: number;
+    removedDuplicateCount: number;
+    mergedRunCount: number;
+    truncatedToolOutputCount: number;
+}
+
+export interface MemoryProcessingDecision {
+    level: MemoryProcessingLevel;
+    summaryTier: SummaryExecutionTier;
+    extractScope: MemoryProcessingLevel;
+    reasonCodes: string[];
+    heavyTriggerKind: HeavyProcessingTriggerKind | null;
+    cooldownBlocked: boolean;
+    windowHash: string;
+    windowEventCount: number;
+    windowUserMessageCount: number;
+    generatedAt: number;
+    precompressedStats: PrecompressedWindowStats;
+}
+
+export interface LongSummaryCooldownState {
+    lastLongSummaryAt: number;
+    lastLongSummaryWindowHash: string;
+    lastLongSummaryReason: string;
+    lastLongSummaryStage: ChatLifecycleStage;
+    lastHeavyProcessAt: number;
+    lastLongSummaryAssistantTurnCount: number;
+}
+
 /**
  * 功能：描述保留与删除相关策略。
  * @param deletionStrategy 删除策略。
@@ -515,7 +702,6 @@ export interface RetentionArchives {
 export interface ManualOverrides {
     chatProfile?: ChatProfileOverride;
     adaptivePolicy?: Partial<AdaptivePolicy>;
-    summaryPolicy?: SummaryPolicyOverride;
     retentionPolicy?: Partial<RetentionPolicy>;
     promptInjectionProfile?: Partial<PromptInjectionProfile>;
 }
@@ -1156,36 +1342,6 @@ export interface MemoryTaskPresentationSettings {
     updatedAt: number;
 }
 
-export interface UserFacingChatPreset {
-    presetId: UserFacingPresetId;
-    label: string;
-    chatProfile?: ChatProfileOverride;
-    adaptivePolicy?: Partial<AdaptivePolicy>;
-    retentionPolicy?: Partial<RetentionPolicy>;
-    promptInjection?: Partial<PromptInjectionProfile>;
-    profileRefreshInterval?: number;
-    qualityRefreshInterval?: number;
-    autoBootstrapSemanticSeed?: boolean;
-    groupLaneEnabled?: boolean;
-    updatedAt: number;
-}
-
-export interface EffectivePresetBundle {
-    globalPreset: UserFacingChatPreset | null;
-    rolePreset: UserFacingChatPreset | null;
-    chatPreset: UserFacingChatPreset | null;
-    effectiveChatProfile: ChatProfileOverride;
-    effectiveAdaptivePolicy: Partial<AdaptivePolicy>;
-    effectiveRetentionPolicy: Partial<RetentionPolicy>;
-    effectivePromptInjection: PromptInjectionProfile;
-    profileRefreshInterval: number;
-    qualityRefreshInterval: number;
-    autoBootstrapSemanticSeed: boolean;
-    groupLaneEnabled: boolean;
-    roleScope: PresetScope | 'none';
-    roleScopeKey: string;
-}
-
 export interface SummaryFixTask {
     reason: string;
     lorebookMode: LorebookGateMode;
@@ -1309,35 +1465,35 @@ export const DEFAULT_PROMPT_INJECTION_PROFILE: PromptInjectionProfile = {
     settingOnlyMinScore: 0.35,
 };
 
-export const DEFAULT_USER_FACING_CHAT_PRESET: UserFacingChatPreset = {
-    presetId: 'custom',
-    label: '自定义',
-    chatProfile: {},
-    adaptivePolicy: {},
-    retentionPolicy: {},
-    promptInjection: {},
-    profileRefreshInterval: DEFAULT_ADAPTIVE_POLICY.profileRefreshInterval,
-    qualityRefreshInterval: DEFAULT_ADAPTIVE_POLICY.qualityRefreshInterval,
-    autoBootstrapSemanticSeed: true,
-    groupLaneEnabled: true,
-    updatedAt: 0,
+export const DEFAULT_SUMMARY_SETTINGS: SummarySettings = {
+    workMode: {
+        memoryMode: 'balanced',
+        scenario: 'auto',
+        resourcePriority: 'balanced',
+    },
+    summaryBehavior: {
+        summaryTiming: 'stage_end',
+        summaryLength: 'standard',
+        longSummaryCooldown: 'standard',
+        longSummaryTrigger: ['scene_end', 'combat_end', 'plot_advance', 'relationship_shift', 'world_change', 'structure_repair', 'archive_finalize'],
+    },
+    contentPreference: {
+        recordFocus: ['facts', 'relationship', 'world', 'plot'],
+        lowValueHandling: 'ignore',
+        noiseFilter: 'medium',
+    },
+    advanced: {
+        processInterval: 'medium',
+        lookbackScope: 'medium',
+        allowLightRelationExtraction: true,
+        allowMediumWorldStateUpdate: true,
+        allowHeavyRewriteSummaries: true,
+        allowHeavyConsistencyRepair: true,
+        allowHeavyExpandedLookback: true,
+    },
 };
 
-export const DEFAULT_EFFECTIVE_PRESET_BUNDLE: EffectivePresetBundle = {
-    globalPreset: null,
-    rolePreset: null,
-    chatPreset: null,
-    effectiveChatProfile: {},
-    effectiveAdaptivePolicy: {},
-    effectiveRetentionPolicy: {},
-    effectivePromptInjection: DEFAULT_PROMPT_INJECTION_PROFILE,
-    profileRefreshInterval: DEFAULT_ADAPTIVE_POLICY.profileRefreshInterval,
-    qualityRefreshInterval: DEFAULT_ADAPTIVE_POLICY.qualityRefreshInterval,
-    autoBootstrapSemanticSeed: true,
-    groupLaneEnabled: true,
-    roleScope: 'none',
-    roleScopeKey: '',
-};
+export const DEFAULT_SUMMARY_SETTINGS_OVERRIDE: SummarySettingsOverride = {};
 
 export const DEFAULT_VECTOR_LIFECYCLE: VectorLifecycleState = {
     vectorMode: 'off',
@@ -1390,6 +1546,15 @@ export const DEFAULT_RETRIEVAL_HEALTH: RetrievalHealthWindow = {
 export const DEFAULT_EXTRACT_HEALTH: ExtractHealthWindow = {
     recentTasks: [],
     lastAcceptedAt: 0,
+};
+
+export const DEFAULT_LONG_SUMMARY_COOLDOWN: LongSummaryCooldownState = {
+    lastLongSummaryAt: 0,
+    lastLongSummaryWindowHash: '',
+    lastLongSummaryReason: '',
+    lastLongSummaryStage: 'new',
+    lastHeavyProcessAt: 0,
+    lastLongSummaryAssistantTurnCount: 0,
 };
 
 export const DEFAULT_MEMORY_MUTATION_ACTION_COUNTS: MemoryMutationActionCounts = {
@@ -1571,10 +1736,10 @@ export interface MemoryOSChatState {
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
     lastLorebookDecision?: LorebookGateDecision;
+    mainlineTraceSnapshot?: MemoryMainlineTraceSnapshot | null;
     promptInjectionProfile?: PromptInjectionProfile;
     lastPreGenerationDecision?: PreGenerationGateDecision | null;
     lastPostGenerationDecision?: PostGenerationGateDecision | null;
-    userFacingPreset?: UserFacingChatPreset | null;
     groupMemory?: GroupMemoryState;
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
@@ -1592,6 +1757,7 @@ export interface MemoryOSChatState {
     chatProfile?: ChatProfile;
     adaptiveMetrics?: AdaptiveMetrics;
     adaptivePolicy?: AdaptivePolicy;
+    summarySettingsOverride?: SummarySettingsOverride | null;
     vectorLifecycle?: VectorLifecycleState;
     vectorIndexVersion?: string;
     vectorMetadataRebuiltAt?: number;
@@ -1603,6 +1769,9 @@ export interface MemoryOSChatState {
     retrievalHealth?: RetrievalHealthWindow;
     extractHealth?: ExtractHealthWindow;
     lastMutationPlan?: MemoryMutationPlanSnapshot | null;
+    lastProcessingDecision?: MemoryProcessingDecision | null;
+    recentProcessingDecisions?: MemoryProcessingDecision[];
+    longSummaryCooldown?: LongSummaryCooldownState;
     retentionPolicy?: RetentionPolicy;
     retentionArchives?: RetentionArchives;
     manualOverrides?: ManualOverrides;

@@ -1,0 +1,726 @@
+import { db, type DBFact, type DBMemoryRecallLog, type DBSummary, type DBVectorChunk, type DBVectorChunkMetadata, type DBVectorEmbedding } from '../db/db';
+import type {
+    VectorMemoryRecordSummary,
+    VectorMemorySearchTestHit,
+    VectorMemorySearchTestResult,
+    VectorMemoryUsageSnapshot,
+    VectorMemoryViewerSnapshot,
+} from '../../../SDK/stx';
+import type {
+    AdaptivePolicy,
+    InjectionIntent,
+    InjectionSectionName,
+    RecallCandidate,
+    RecallPlan,
+} from '../types';
+import { ChatStateManager } from '../core/chat-state-manager';
+import { EventsManager } from '../core/events-manager';
+import { FactsManager } from '../core/facts-manager';
+import { StateManager } from '../core/state-manager';
+import { SummariesManager } from '../core/summaries-manager';
+import { VectorManager } from '../vector/vector-manager';
+import { readVectorSourceMetadata, type StrictVectorSourceMetadata } from '../recall/sources/vector-source';
+import { buildIntentBudgets, collectAdaptiveMetricsFromEvents, decideInjectionIntent, resolveIntentSections } from '../core/chat-strategy-engine';
+import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from '../core/lorebook-relevance-gate';
+import { buildPreparedRecallContext } from '../injection/recall-context-builder';
+import { buildViewpointPolicyInput } from '../injection/viewpoint-policy';
+import { collectRecallCandidates } from '../recall/recall-assembler';
+import { planRecall } from '../recall/recall-planner';
+import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
+import { runRerank } from '../llm/memoryLlmBridge';
+
+type VectorHit = {
+    chunkId: string;
+    content: string;
+    score: number;
+    bookId?: string;
+    metadata?: DBVectorChunkMetadata;
+    createdAt?: number;
+};
+
+/**
+ * 功能：把任意值规整为紧凑文本。
+ * @param value 原始值。
+ * @returns 规整后的文本。
+ */
+function normalizeText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 功能：把任意值规整成查找键。
+ * @param value 原始值。
+ * @returns 小写查找键。
+ */
+function normalizeLookup(value: unknown): string {
+    return normalizeText(value).toLowerCase();
+}
+
+/**
+ * 功能：将任意值转为字符串。
+ * @param value 原始值。
+ * @returns 字符串。
+ */
+function stringifyValue(value: unknown): string {
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (value == null) {
+        return '';
+    }
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
+
+/**
+ * 功能：构建稳定的文本哈希。
+ * @param value 原始文本。
+ * @returns 哈希文本。
+ */
+function hashText(value: string): string {
+    let hash = 5381;
+    for (let index = 0; index < value.length; index += 1) {
+        hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * 功能：估算文本 token 数量。
+ * @param text 文本内容。
+ * @returns 估算 token 数。
+ */
+function estimateTokens(text: string): number {
+    if (!text) {
+        return 0;
+    }
+    const cjkCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const latinWordCount = (text.match(/[A-Za-z0-9_]+/g) || []).length;
+    const punctuationCount = (text.match(/[^\u4e00-\u9fffA-Za-z0-9_\s]/g) || []).length;
+    return Math.max(1, Math.ceil(cjkCount * 1.15 + latinWordCount * 1.35 + punctuationCount * 0.25));
+}
+
+/**
+ * 功能：格式化角色展示名。
+ * @param actorKey 角色键。
+ * @returns 展示名。
+ */
+function formatActorLabel(actorKey: string): string {
+    const normalized = normalizeText(actorKey);
+    if (!normalized) {
+        return '未归属';
+    }
+    const segments = normalized.split(':').filter(Boolean);
+    return segments[segments.length - 1] || normalized;
+}
+
+/**
+ * 功能：构建严格向量文本。
+ * @param record 记录。
+ * @param recordKind 记录类型。
+ * @returns 标准化后的索引文本。
+ */
+function buildStrictVectorText(record: DBFact | DBSummary, recordKind: 'fact' | 'summary'): string {
+    if (recordKind === 'fact') {
+        const fact = record as DBFact;
+        return normalizeText(`${fact.type} ${fact.path ?? ''} ${JSON.stringify(fact.value ?? '')}`);
+    }
+    const summary = record as DBSummary;
+    return normalizeText(`${summary.title ?? ''}\n${summary.content ?? ''}`);
+}
+
+/**
+ * 功能：构建列表预览文本。
+ * @param text 完整文本。
+ * @param maxLength 最大长度。
+ * @returns 预览文本。
+ */
+function buildPreview(text: string, maxLength: number = 120): string {
+    const normalized = normalizeText(text);
+    return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(16, maxLength - 1))}…`;
+}
+
+/**
+ * 功能：格式化来源类型标签。
+ * @param kind 来源类型。
+ * @returns 中文标签。
+ */
+function formatSourceKindLabel(kind: VectorMemoryRecordSummary['sourceRecordKind']): string {
+    if (kind === 'fact') {
+        return '事实';
+    }
+    if (kind === 'summary') {
+        return '摘要';
+    }
+    return '未知来源';
+}
+
+/**
+ * 功能：格式化来源范围。
+ * @param scope 来源范围。
+ * @returns 中文标签。
+ */
+function formatScopeLabel(scope: string | null | undefined): string {
+    const normalized = normalizeLookup(scope);
+    if (normalized === 'self') return '当前角色';
+    if (normalized === 'target') return '目标角色';
+    if (normalized === 'group') return '群组共享';
+    if (normalized === 'world') return '世界共享';
+    if (normalized === 'system') return '系统生成';
+    return normalized || '未标记';
+}
+
+/**
+ * 功能：格式化记忆类型。
+ * @param value 类型值。
+ * @returns 中文标签。
+ */
+function formatMemoryTypeLabel(value: string | null | undefined): string {
+    const normalized = normalizeLookup(value);
+    if (normalized === 'identity') return '身份';
+    if (normalized === 'event') return '事件';
+    if (normalized === 'relationship') return '关系';
+    if (normalized === 'world') return '世界';
+    if (normalized === 'status') return '状态';
+    return normalized || '其他';
+}
+
+/**
+ * 功能：格式化记忆细分类。
+ * @param value 细分类值。
+ * @returns 中文标签。
+ */
+function formatMemorySubtypeLabel(value: string | null | undefined): string {
+    const normalized = normalizeLookup(value);
+    const map: Record<string, string> = {
+        identity: '身份',
+        trait: '特征',
+        preference: '偏好',
+        bond: '关系纽带',
+        emotion_imprint: '情绪印记',
+        goal: '目标',
+        promise: '承诺',
+        secret: '秘密',
+        rumor: '传闻',
+        major_plot_event: '重大事件',
+        minor_event: '小事件',
+        combat_event: '战斗事件',
+        travel_event: '旅途事件',
+        conversation_event: '对话事件',
+        global_rule: '全局规则',
+        city_rule: '城市规则',
+        location_fact: '地点事实',
+        item_rule: '物品规则',
+        faction_rule: '势力规则',
+        world_history: '世界历史',
+        current_scene: '当前场景',
+        current_conflict: '当前冲突',
+        temporary_status: '临时状态',
+        other: '其他',
+    };
+    return map[normalized] ?? (normalized || '其他');
+}
+
+/**
+ * 功能：从 metadata 中读取锚点消息编号。
+ * @param metadata 向量 metadata。
+ * @returns 锚点消息编号。
+ */
+function readAnchorMessageId(metadata?: DBVectorChunkMetadata): string | null {
+    const source = metadata?.source;
+    if (!source || typeof source !== 'object') {
+        return null;
+    }
+    return normalizeText((source as Record<string, unknown>).anchorMessageId) || null;
+}
+
+/**
+ * 功能：从 metadata 中读取命中消息编号列表。
+ * @param metadata 向量 metadata。
+ * @returns 关联消息编号列表。
+ */
+function readSourceMessageIds(metadata?: DBVectorChunkMetadata): string[] {
+    const source = metadata?.source;
+    if (!source || typeof source !== 'object') {
+        return [];
+    }
+    const raw = (source as Record<string, unknown>).messageIds;
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    return raw.map((item: unknown): string => normalizeText(item)).filter(Boolean);
+}
+
+/**
+ * 功能：聚合召回日志，得到使用情况快照。
+ * @param rows 召回日志列表。
+ * @returns 使用情况快照。
+ */
+function buildUsageSnapshot(rows: DBMemoryRecallLog[]): VectorMemoryUsageSnapshot {
+    const now = Date.now();
+    const day7 = now - 7 * 24 * 60 * 60 * 1000;
+    const day30 = now - 30 * 24 * 60 * 60 * 1000;
+    const sorted = [...rows].sort((left: DBMemoryRecallLog, right: DBMemoryRecallLog): number => Number(right.ts ?? 0) - Number(left.ts ?? 0));
+    let totalHits = 0;
+    let selectedHits = 0;
+    let hitsIn7d = 0;
+    let hitsIn30d = 0;
+    let lastHitAt: number | null = null;
+    let lastSelectedAt: number | null = null;
+    let lastQuery: string | null = null;
+    let lastScore: number | null = null;
+    for (const row of sorted) {
+        const ts = Number(row.ts ?? 0) || 0;
+        totalHits += 1;
+        if (row.selected) {
+            selectedHits += 1;
+        }
+        if (ts >= day7) {
+            hitsIn7d += 1;
+        }
+        if (ts >= day30) {
+            hitsIn30d += 1;
+        }
+        if (lastHitAt == null) {
+            lastHitAt = ts || null;
+            lastQuery = normalizeText(row.query) || null;
+            lastScore = Number.isFinite(Number(row.score)) ? Number(row.score) : null;
+        }
+        if (row.selected && lastSelectedAt == null) {
+            lastSelectedAt = ts || null;
+        }
+    }
+    return {
+        totalHits,
+        selectedHits,
+        hitsIn7d,
+        hitsIn30d,
+        lastHitAt,
+        lastSelectedAt,
+        lastQuery,
+        lastScore,
+    };
+}
+
+/**
+ * 功能：整理角色展示名映射。
+ * @param state 当前聊天状态。
+ * @returns 角色名映射。
+ */
+function buildActorLabelMap(state: Awaited<ReturnType<ChatStateManager['load']>>): Map<string, string> {
+    const map = new Map<string, string>();
+    const identitySeed = state.semanticSeed?.identitySeed;
+    if (identitySeed?.roleKey) {
+        map.set(normalizeText(identitySeed.roleKey), normalizeText(identitySeed.displayName) || formatActorLabel(identitySeed.roleKey));
+    }
+    Object.entries(state.semanticSeed?.identitySeeds ?? {}).forEach(([actorKey, item]): void => {
+        const normalizedKey = normalizeText(actorKey);
+        if (normalizedKey) {
+            map.set(normalizedKey, normalizeText(item?.displayName) || formatActorLabel(normalizedKey));
+        }
+    });
+    (state.groupMemory?.lanes ?? []).forEach((lane): void => {
+        const normalizedKey = normalizeText(lane.actorKey);
+        if (normalizedKey) {
+            map.set(normalizedKey, normalizeText(lane.displayName) || map.get(normalizedKey) || formatActorLabel(normalizedKey));
+        }
+    });
+    return map;
+}
+
+/**
+ * 功能：检查当前片段是否需要重建。
+ * @param chunk 向量片段。
+ * @param sourceMeta 严格来源 metadata。
+ * @param sourceRecord 来源记录。
+ * @returns 重建检查结果。
+ */
+function inspectRebuildNeed(
+    chunk: DBVectorChunk,
+    sourceMeta: StrictVectorSourceMetadata | null,
+    sourceRecord: DBFact | DBSummary | null,
+): { needsRebuild: boolean; reasons: string[] } {
+    const reasons: string[] = [];
+    const content = normalizeText(chunk.content);
+    if (!content || content.length < 8) {
+        reasons.push('片段正文过短或为空');
+    }
+    if (!sourceMeta) {
+        reasons.push('缺少严格来源标记');
+        return { needsRebuild: reasons.length > 0, reasons };
+    }
+    if (!sourceRecord) {
+        return { needsRebuild: false, reasons };
+    }
+    if (buildStrictVectorText(sourceRecord, sourceMeta.sourceRecordKind) !== content) {
+        reasons.push('来源记录已更新，但片段尚未同步');
+    }
+    const metadata = chunk.metadata ?? {};
+    if (normalizeText(metadata.ownerActorKey) !== normalizeText(sourceRecord.ownerActorKey)) {
+        reasons.push('角色归属与来源记录不一致');
+    }
+    if (normalizeText(metadata.sourceScope) !== normalizeText(sourceRecord.sourceScope ?? 'system')) {
+        reasons.push('来源范围与来源记录不一致');
+    }
+    if (normalizeText(metadata.memoryType) !== normalizeText(sourceRecord.memoryType ?? 'other')) {
+        reasons.push('记忆类型与来源记录不一致');
+    }
+    if (normalizeText(metadata.memorySubtype) !== normalizeText(sourceRecord.memorySubtype ?? 'other')) {
+        reasons.push('记忆细分类与来源记录不一致');
+    }
+    return { needsRebuild: reasons.length > 0, reasons };
+}
+
+/**
+ * 功能：对一次检索命中执行和主链一致的 rerank。
+ * @param query 查询文本。
+ * @param hits 原始命中。
+ * @param enabled 是否启用 rerank。
+ * @param threshold 启动阈值。
+ * @returns 重排后的命中。
+ */
+async function rerankVectorHits(query: string, hits: VectorHit[], enabled: boolean, threshold: number): Promise<VectorHit[]> {
+    if (!enabled || hits.length < threshold) {
+        return hits;
+    }
+    const rerank = await runRerank(query, hits.map((item: VectorHit): string => item.content), hits.length);
+    if (!rerank.ok || !Array.isArray(rerank.results) || rerank.results.length <= 0) {
+        return hits;
+    }
+    return rerank.results
+        .map((item: { index: number; score: number }): VectorHit | null => {
+            const hit = hits[item.index] ?? null;
+            return hit ? { ...hit, score: Number(item.score ?? hit.score) } : null;
+        })
+        .filter((item: VectorHit | null): item is VectorHit => item != null)
+        .sort((left: VectorHit, right: VectorHit): number => Number(right.score ?? 0) - Number(left.score ?? 0));
+}
+
+/**
+ * 功能：构建向量查看器所需的数据层。
+ */
+export class VectorMemoryViewerFacade {
+    private chatKey: string;
+    private chatStateManager: ChatStateManager;
+
+    constructor(chatKey: string, chatStateManager: ChatStateManager) {
+        this.chatKey = chatKey;
+        this.chatStateManager = chatStateManager;
+    }
+
+    /**
+     * 功能：获取当前聊天全部向量片段的查看器快照。
+     * @returns 查看器快照。
+     */
+    async getSnapshot(): Promise<VectorMemoryViewerSnapshot> {
+        const [state, archives, chunks, embeddings, facts, summaries, recallRows] = await Promise.all([
+            this.chatStateManager.load(),
+            this.chatStateManager.getRetentionArchives(),
+            db.vector_chunks.where('chatKey').equals(this.chatKey).toArray(),
+            db.vector_embeddings.where('chatKey').equals(this.chatKey).toArray(),
+            db.facts.where('[chatKey+updatedAt]').between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER]).reverse().toArray(),
+            db.summaries.where('[chatKey+level+createdAt]').between([this.chatKey, '', 0], [this.chatKey, '\uffff', Number.MAX_SAFE_INTEGER]).reverse().toArray(),
+            db.memory_recall_log.where('chatKey').equals(this.chatKey).toArray(),
+        ]);
+        const factMap = new Map<string, DBFact>(facts.map((item: DBFact): [string, DBFact] => [normalizeText(item.factKey), item]));
+        const summaryMap = new Map<string, DBSummary>(summaries.map((item: DBSummary): [string, DBSummary] => [normalizeText(item.summaryId), item]));
+        const actorLabelMap = buildActorLabelMap(state);
+        const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
+        const archivedFactSet = new Set((archives.archivedFactKeys ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
+        const archivedSummarySet = new Set((archives.archivedSummaryIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
+        const recallMap = recallRows.reduce<Map<string, DBMemoryRecallLog[]>>((map: Map<string, DBMemoryRecallLog[]>, row: DBMemoryRecallLog): Map<string, DBMemoryRecallLog[]> => {
+            const key = normalizeText(row.recordKey);
+            if (!key) {
+                return map;
+            }
+            const bucket = map.get(key) ?? [];
+            bucket.push(row);
+            map.set(key, bucket);
+            return map;
+        }, new Map<string, DBMemoryRecallLog[]>());
+        const duplicateMap = chunks.reduce<Map<string, number>>((map: Map<string, number>, item: DBVectorChunk): Map<string, number> => {
+            const contentHash = hashText(normalizeText(item.content));
+            map.set(contentHash, Number(map.get(contentHash) ?? 0) + 1);
+            return map;
+        }, new Map<string, number>());
+        const embeddingMap = new Map<string, DBVectorEmbedding>(embeddings.map((item: DBVectorEmbedding): [string, DBVectorEmbedding] => [normalizeText(item.chunkId), item]));
+
+        const items: VectorMemoryRecordSummary[] = chunks
+            .slice()
+            .sort((left: DBVectorChunk, right: DBVectorChunk): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
+            .map((chunk: DBVectorChunk): VectorMemoryRecordSummary => {
+                const chunkId = normalizeText(chunk.chunkId);
+                const sourceMeta = readVectorSourceMetadata({
+                    chunkId,
+                    content: String(chunk.content ?? ''),
+                    score: 0,
+                    bookId: chunk.bookId,
+                    metadata: chunk.metadata,
+                    createdAt: Number(chunk.createdAt ?? 0) || undefined,
+                });
+                const sourceRecordKind = sourceMeta?.sourceRecordKind ?? 'unknown';
+                const sourceRecordKey = sourceMeta?.sourceRecordKey ?? null;
+                const sourceRecord = sourceRecordKind === 'fact'
+                    ? (sourceRecordKey ? factMap.get(sourceRecordKey) ?? null : null)
+                    : sourceRecordKind === 'summary'
+                        ? (sourceRecordKey ? summaryMap.get(sourceRecordKey) ?? null : null)
+                        : null;
+                const usage = buildUsageSnapshot(sourceRecordKey ? (recallMap.get(sourceRecordKey) ?? []) : []);
+                const duplicateCount = Number(duplicateMap.get(hashText(normalizeText(chunk.content))) ?? 0);
+                const rebuild = inspectRebuildNeed(chunk, sourceMeta, sourceRecord);
+                const sourceArchived = sourceRecordKind === 'fact'
+                    ? Boolean(sourceRecordKey && archivedFactSet.has(sourceRecordKey))
+                    : Boolean(sourceRecordKey && archivedSummarySet.has(sourceRecordKey));
+                const lastHitAt = Number(usage.lastHitAt ?? 0) || 0;
+                const sourceMissing = Boolean(sourceMeta && sourceRecordKey && !sourceRecord);
+                const isArchived = archivedChunkSet.has(chunkId) || sourceArchived;
+                const now = Date.now();
+                const longUnused = ((lastHitAt <= 0 && now - Number(chunk.createdAt ?? 0) > 14 * 24 * 60 * 60 * 1000) || (lastHitAt > 0 && now - lastHitAt > 30 * 24 * 60 * 60 * 1000));
+                const recentHit = lastHitAt > 0 && now - lastHitAt <= 7 * 24 * 60 * 60 * 1000;
+                const statusKind = sourceMissing
+                    ? 'source_missing'
+                    : isArchived
+                        ? 'archived_residual'
+                        : rebuild.needsRebuild
+                            ? 'needs_rebuild'
+                            : recentHit
+                                ? 'recent_hit'
+                                : longUnused
+                                    ? 'long_unused'
+                                    : 'normal';
+                const statusLabel = statusKind === 'source_missing'
+                    ? '来源丢失'
+                    : statusKind === 'archived_residual'
+                        ? '已归档残留'
+                        : statusKind === 'needs_rebuild'
+                            ? '建议重建'
+                            : statusKind === 'recent_hit'
+                                ? '最近命中'
+                                : statusKind === 'long_unused'
+                                    ? '长期未用'
+                                    : '正常使用';
+                const statusTone = statusKind === 'source_missing'
+                    ? 'danger'
+                    : statusKind === 'archived_residual'
+                        ? 'muted'
+                        : statusKind === 'needs_rebuild' || statusKind === 'long_unused'
+                            ? 'warning'
+                            : 'success';
+                const ownerActorKey = normalizeText(sourceMeta?.ownerActorKey ?? chunk.metadata?.ownerActorKey) || null;
+                const participantActorKeys = Array.isArray(sourceMeta?.participantActorKeys)
+                    ? sourceMeta!.participantActorKeys.map((item: string): string => normalizeText(item)).filter(Boolean)
+                    : [];
+                const chunkSource = chunk.metadata?.source && typeof chunk.metadata.source === 'object'
+                    ? chunk.metadata.source as Record<string, unknown>
+                    : {};
+                const embedding = embeddingMap.get(chunkId) ?? null;
+                const summaryKeywords = Array.isArray((sourceRecord as DBSummary | null)?.keywords)
+                    ? (((sourceRecord as DBSummary).keywords ?? []) as unknown[])
+                    : [];
+                return {
+                    chunkId,
+                    chatKey: this.chatKey,
+                    content: String(chunk.content ?? ''),
+                    preview: buildPreview(String(chunk.content ?? '')),
+                    contentHash: hashText(normalizeText(chunk.content)),
+                    contentLength: normalizeText(chunk.content).length,
+                    createdAt: Number(chunk.createdAt ?? 0) || 0,
+                    sourceRecordKey,
+                    sourceRecordKind,
+                    sourceLabel: sourceRecordKind === 'fact'
+                        ? (sourceRecord ? `${normalizeText((sourceRecord as DBFact).type) || '未命名事实'}${normalizeText((sourceRecord as DBFact).path) ? ` · ${normalizeText((sourceRecord as DBFact).path)}` : ''}` : '事实来源缺失')
+                        : sourceRecordKind === 'summary'
+                            ? (sourceRecord ? (normalizeText((sourceRecord as DBSummary).title) || `${normalizeText((sourceRecord as DBSummary).level) || 'scene'} 摘要`) : '摘要来源缺失')
+                            : '缺少严格来源',
+                    sourceDetail: sourceRecordKind === 'fact'
+                        ? (sourceRecord ? [formatMemoryTypeLabel((sourceRecord as DBFact).memoryType), formatMemorySubtypeLabel((sourceRecord as DBFact).memorySubtype)].filter(Boolean).join(' · ') || '结构化事实来源' : '原始事实记录已不存在')
+                        : sourceRecordKind === 'summary'
+                            ? (sourceRecord ? [normalizeText((sourceRecord as DBSummary).level) || 'scene', summaryKeywords.length > 0 ? `关键词：${summaryKeywords.slice(0, 4).map((item: unknown): string => normalizeText(item)).filter(Boolean).join(' / ')}` : ''].filter(Boolean).join(' · ') || '分层摘要来源' : '原始摘要记录已不存在')
+                            : '当前片段没有可回溯的严格 metadata',
+                    ownerActorKey,
+                    ownerActorLabel: ownerActorKey ? (actorLabelMap.get(ownerActorKey) || formatActorLabel(ownerActorKey)) : null,
+                    sourceScope: normalizeText(sourceMeta?.sourceScope ?? chunk.metadata?.sourceScope) || null,
+                    memoryType: normalizeText(sourceMeta?.memoryType ?? chunk.metadata?.memoryType) || null,
+                    memorySubtype: normalizeText(sourceMeta?.memorySubtype ?? chunk.metadata?.memorySubtype) || null,
+                    participantActorKeys,
+                    participantActorLabels: participantActorKeys.map((item: string): string => actorLabelMap.get(item) || formatActorLabel(item)),
+                    anchorMessageId: readAnchorMessageId(chunk.metadata),
+                    sourceMessageIds: readSourceMessageIds(chunk.metadata),
+                    sourceTraceKind: normalizeText(chunkSource.kind) || null,
+                    sourceReason: normalizeText(chunkSource.reason) || null,
+                    sourceViewHash: normalizeText(chunkSource.viewHash) || null,
+                    sourceSnapshotHash: normalizeText(chunkSource.snapshotHash) || null,
+                    sourceRepairGeneration: Number.isFinite(Number(chunkSource.repairGeneration))
+                        ? Number(chunkSource.repairGeneration)
+                        : null,
+                    embeddingModel: normalizeText(embedding?.model) || null,
+                    embeddingDimensions: Array.isArray(embedding?.vector) ? embedding!.vector.length : null,
+                    statusKind,
+                    statusLabel,
+                    statusTone,
+                    statusReasons: duplicateCount > 1 ? [...rebuild.reasons, `检测到 ${duplicateCount} 条重复内容`] : rebuild.reasons,
+                    isArchived,
+                    sourceMissing,
+                    needsRebuild: rebuild.needsRebuild,
+                    duplicateCount,
+                    usage,
+                };
+            });
+
+        return {
+            chatKey: this.chatKey,
+            generatedAt: Date.now(),
+            totalCount: items.length,
+            archivedCount: items.filter((item: VectorMemoryRecordSummary): boolean => item.isArchived).length,
+            sourceMissingCount: items.filter((item: VectorMemoryRecordSummary): boolean => item.sourceMissing).length,
+            needsRebuildCount: items.filter((item: VectorMemoryRecordSummary): boolean => item.needsRebuild).length,
+            recentHitCount: items.filter((item: VectorMemoryRecordSummary): boolean => item.statusKind === 'recent_hit').length,
+            longUnusedCount: items.filter((item: VectorMemoryRecordSummary): boolean => item.statusKind === 'long_unused').length,
+            items,
+        };
+    }
+
+    /**
+     * 功能：模拟一次向量检索，并返回原始顺序、重排顺序与是否进入最终上下文。
+     * @param query 测试语句。
+     * @param opts 额外配置。
+     * @returns 检索测试结果。
+     */
+    async runVectorMemorySearchTest(query: string, opts: { maxTokens?: number } = {}): Promise<VectorMemorySearchTestResult> {
+        const normalizedQuery = normalizeText(query);
+        if (!normalizedQuery) {
+            return {
+                query: '',
+                testedAt: Date.now(),
+                rerankApplied: false,
+                hitCount: 0,
+                selectedCount: 0,
+                hits: [],
+            };
+        }
+        const [snapshot, policy, profile, recentEvents, logicalView, groupMemory, worldStateSnapshot, lorebookEntries, recallContext] = await Promise.all([
+            this.getSnapshot(),
+            this.chatStateManager.getAdaptivePolicy(),
+            this.chatStateManager.getChatProfile(),
+            new EventsManager(this.chatKey).query({ limit: 24 }),
+            this.chatStateManager.getLogicalChatView(),
+            this.chatStateManager.getGroupMemory(),
+            new StateManager(this.chatKey).query(''),
+            loadActiveWorldInfoEntriesFromHost(),
+            buildPreparedRecallContext(this.chatStateManager, normalizedQuery),
+        ]);
+        const itemMap = new Map<string, VectorMemoryRecordSummary>(snapshot.items.map((item: VectorMemoryRecordSummary): [string, VectorMemoryRecordSummary] => [item.chunkId, item]));
+        const mergedMetrics = collectAdaptiveMetricsFromEvents(recentEvents, await this.chatStateManager.getAdaptiveMetrics());
+        const intent: InjectionIntent = decideInjectionIntent({
+            query: normalizedQuery,
+            events: recentEvents,
+            metrics: mergedMetrics,
+            profile,
+            logicalView,
+        });
+        const sections: InjectionSectionName[] = resolveIntentSections(intent);
+        const worldStateText = stringifyValue(worldStateSnapshot);
+        const lorebookDecision = evaluateLorebookRelevance({
+            query: normalizedQuery,
+            profileChatType: profile.chatType,
+            visibleMessages: logicalView?.visibleMessages,
+            recentEvents,
+            worldStateText,
+            entries: lorebookEntries,
+        });
+        const budgets = buildIntentBudgets(intent, sections, Math.max(200, Number(opts.maxTokens ?? 1200)), policy as AdaptivePolicy);
+        const recallPlan: RecallPlan = planRecall({
+            intent,
+            sections,
+            sectionBudgets: budgets,
+            maxTokens: Math.max(200, Number(opts.maxTokens ?? 1200)),
+            policy: policy as AdaptivePolicy,
+            lorebookDecision,
+            ...buildViewpointPolicyInput(recallContext, logicalView, groupMemory),
+        });
+        const vectorManager = new VectorManager(this.chatKey);
+        const rawHits = await vectorManager.search(normalizedQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? 5) * 2, Number(recallPlan.fineTopK ?? 8)));
+        const archives = await this.chatStateManager.getRetentionArchives();
+        const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
+        const activeHits = rawHits.filter((item: VectorHit): boolean => !archivedChunkSet.has(normalizeText(item.chunkId)));
+        const rerankEnabled = policy.vectorMode === 'search_rerank' && policy.rerankEnabled !== false;
+        const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(policy.rerankThreshold ?? 6)));
+        const beforeRankMap = new Map<string, number>(activeHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
+        const afterRankMap = new Map<string, number>(rerankedHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
+        const candidates = await collectRecallCandidates({
+            chatKey: this.chatKey,
+            plan: recallPlan,
+            query: normalizedQuery,
+            recentEvents,
+            logicalView,
+            groupMemory,
+            policy,
+            lorebookDecision,
+            lorebookEntries,
+            factsManager: new FactsManager(this.chatKey),
+            stateManager: new StateManager(this.chatKey),
+            summariesManager: new SummariesManager(this.chatKey),
+            chatStateManager: this.chatStateManager,
+            lifecycleIndex: recallContext.lifecycleMap,
+            activeActorKey: recallContext.activeActorKey,
+            personaProfiles: recallContext.personaProfiles,
+            personaProfile: recallContext.personaProfile,
+            tuningProfile: recallContext.tuningProfile,
+            relationships: recallContext.relationships,
+            fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+        });
+        const ranked = rankRecallCandidates({
+            candidates,
+            plan: recallPlan,
+            recentVisibleMessages: logicalView?.visibleMessages.map((item) => item.text) ?? [],
+            worldStateText,
+            lorebookConflictDetected: lorebookDecision.conflictDetected,
+        });
+        const finalized = cutRecallCandidatesByBudget({
+            candidates: ranked,
+            plan: recallPlan,
+            estimateTokens,
+        });
+        const vectorCandidateMap = new Map<string, RecallCandidate>();
+        ranked.filter((item: RecallCandidate): boolean => item.source === 'vector').forEach((item: RecallCandidate): void => {
+            const chunkId = normalizeText(String(item.candidateId ?? '').replace(/^vector:/, ''));
+            if (chunkId) {
+                vectorCandidateMap.set(chunkId, item);
+            }
+        });
+        const selectedVectorCandidates = finalized
+            .filter((item: RecallCandidate): boolean => item.source === 'vector' && item.selected)
+            .sort((left: RecallCandidate, right: RecallCandidate): number => Number(right.finalScore ?? 0) - Number(left.finalScore ?? 0));
+        const finalRankMap = new Map<string, number>(selectedVectorCandidates.map((item: RecallCandidate, index: number): [string, number] => [normalizeText(String(item.candidateId ?? '').replace(/^vector:/, '')), index + 1]));
+        const hits: VectorMemorySearchTestHit[] = rerankedHits.map((hit: VectorHit): VectorMemorySearchTestHit => {
+            const chunkId = normalizeText(hit.chunkId);
+            const item = itemMap.get(chunkId);
+            const candidate = vectorCandidateMap.get(chunkId);
+            return {
+                chunkId,
+                sourceRecordKey: item?.sourceRecordKey ?? null,
+                sourceRecordKind: item?.sourceRecordKind ?? 'unknown',
+                sourceLabel: item?.sourceLabel ?? formatSourceKindLabel(item?.sourceRecordKind ?? 'unknown'),
+                preview: item?.preview ?? buildPreview(hit.content),
+                vectorScore: Number(hit.score ?? 0),
+                initialRank: beforeRankMap.get(chunkId) ?? null,
+                rerankedRank: afterRankMap.get(chunkId) ?? null,
+                finalRank: finalRankMap.get(chunkId) ?? null,
+                matchedInRecall: Boolean(candidate),
+                enteredContext: finalRankMap.has(chunkId),
+                reasonCodes: candidate?.reasonCodes ?? [],
+            };
+        });
+        return {
+            query: normalizedQuery,
+            testedAt: Date.now(),
+            rerankApplied: rerankEnabled && activeHits.length >= Math.max(2, Number(policy.rerankThreshold ?? 6)),
+            hitCount: hits.length,
+            selectedCount: selectedVectorCandidates.length,
+            hits,
+        };
+    }
+}

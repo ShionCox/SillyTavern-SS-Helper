@@ -3,6 +3,7 @@ import { SummariesManager } from './summaries-manager';
 import { StateManager } from './state-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { advanceMemoryTraceContext, createMemoryTraceContext } from './memory-trace';
 
 /**
  * Compaction 管理器 —— 解决事件流越用越大的问题
@@ -75,6 +76,12 @@ export class CompactionManager {
     }): Promise<{ summariesCreated: number; eventsArchived: number }> {
         const windowSize = opts?.windowSize ?? 1000;
         const archiveProcessed = opts?.archiveProcessed ?? true;
+        const trace = createMemoryTraceContext({
+            chatKey: this.chatKey,
+            source: 'maintenance',
+            stage: 'memory_maintenance_started',
+            requestId: 'compaction.rule_summary',
+        });
 
         // 取最旧的 N 条非归档事件（排除已归档事件）
         const events = await db.events
@@ -107,6 +114,7 @@ export class CompactionManager {
                 },
                 chatKey: this.chatKey,
                 reason: 'compaction.rule_summary',
+                trace: advanceMemoryTraceContext(trace, 'memory_maintenance_started', 'maintenance'),
                 proposal: {
                     summaries: [{
                         summaryId,
@@ -162,6 +170,12 @@ export class CompactionManager {
         // 从空状态开始重建，避免在现有 world_state 上叠加
         const currentState: Record<string, any> = {};
         let statesUpdated = 0;
+        const trace = createMemoryTraceContext({
+            chatKey: this.chatKey,
+            source: 'maintenance',
+            stage: 'memory_maintenance_started',
+            requestId: 'compaction.replay_to_state',
+        });
 
         // 内置的默认规则集
         const defaultRules = new Map<string, (state: Record<string, any>, event: DBEvent) => void>();
@@ -224,6 +238,7 @@ export class CompactionManager {
                 },
                 chatKey: this.chatKey,
                 reason: 'compaction.replay_to_state',
+                trace: advanceMemoryTraceContext(trace, 'memory_maintenance_started', 'maintenance'),
                 proposal: { patches },
             });
             statesUpdated = patches.length;

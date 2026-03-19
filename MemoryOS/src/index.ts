@@ -109,15 +109,13 @@ import type { PluginManifest, RegistryChangeEvent } from '../../SDK/stx';
 import { EventBus } from '../../SDK/bus/bus';
 import { MemorySDKImpl } from './sdk/memory-sdk';
 import { ChatLifecycleManager } from './core/chat-lifecycle-manager';
+import { createMemoryTraceContext } from './core/memory-trace';
 import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
-    findLastTavernPromptUserIndexEvent,
     getCurrentTavernCharacterSnapshotEvent,
     getTavernMessageTextEvent,
     getTavernPromptMessageTextEvent,
-    insertTavernPromptMessageEvent,
-    isTavernPromptSystemMessageEvent,
 } from '../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../SDK/tavern';
 import { db } from './db/db';
@@ -126,7 +124,6 @@ import { filterRecordText } from './core/record-filter';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
-import type { PreGenerationGateDecision } from './types';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -139,13 +136,12 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
     name: 'MemoryOS',
     displayName: manifestJson.display_name || 'SS-Helper [记忆引擎]',
     version: manifestJson.version || '1.0.0',
-    capabilities: {
-        events: [
-            'plugin:request:ping',
-            'plugin:request:memory_chat_keys',
-            'plugin:request:memory_append_outcome',
-            'plugin:broadcast:registry_changed',
-        ],
+        capabilities: {
+            events: [
+                'plugin:request:ping',
+                'plugin:request:memory_chat_keys',
+                'plugin:broadcast:registry_changed',
+            ],
         memory: ['events', 'facts', 'state', 'summaries', 'memory_mutation_history', 'template', 'audit'],
         llm: [],
     },
@@ -153,40 +149,6 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
     requiresSDK: '^1.0.0',
     source: 'manifest_json',
 };
-
-type MemoryOutcomeWriteRequest = {
-    text?: unknown;
-    outcome?: unknown;
-    result?: unknown;
-    kind?: unknown;
-    eventType?: unknown;
-    sourcePlugin?: unknown;
-    sourceMessageId?: unknown;
-};
-
-type MemoryOutcomeWriteResponse = {
-    ok: boolean;
-    ts: number;
-    reason?: string;
-    eventId?: string;
-    eventType?: string;
-    chatKey?: string;
-    storedTextLength?: number;
-};
-
-
-/**
- * 功能：计算 Memory Context 在 Prompt 中的插入位置。
- * @param chat Prompt 消息数组。
- * @returns 应插入到最后一条真实 user 消息之前的位置索引。
- */
-function resolveMemoryContextInsertIndex(chat: SdkTavernPromptMessageEvent[]): number {
-    if (!Array.isArray(chat) || chat.length === 0) {
-        return 0;
-    }
-    const lastUserIndex = findLastTavernPromptUserIndexEvent(chat);
-    return lastUserIndex >= 0 ? lastUserIndex : chat.length;
-}
 
 class MemoryOS {
     private stxBus: EventBus;
@@ -261,25 +223,6 @@ class MemoryOS {
             }
             return raw as Record<string, unknown>;
         };
-        const normalizeExternalText = (payload: MemoryOutcomeWriteRequest): string => {
-            const rawList: unknown[] = [payload?.text, payload?.outcome, payload?.result];
-            for (const raw of rawList) {
-                if (typeof raw !== 'string') continue;
-                const normalized = raw.trim();
-                if (normalized.length > 0) {
-                    return normalized;
-                }
-            }
-            return '';
-        };
-        const resolveExternalEventType = (payload: MemoryOutcomeWriteRequest): string => {
-            const rawType = String(payload?.eventType ?? payload?.kind ?? '').trim().toLowerCase();
-            if (rawType === 'result' || rawType === 'chat.result') {
-                return 'chat.result';
-            }
-            return 'chat.outcome';
-        };
-
         respond('plugin:request:ping', 'stx_memory_os', async () => {
             return {
                 alive: true,
@@ -333,92 +276,6 @@ class MemoryOS {
                 };
             }
         });
-
-        respond<MemoryOutcomeWriteRequest, MemoryOutcomeWriteResponse>(
-            'plugin:request:memory_append_outcome',
-            'stx_memory_os',
-            async (payload: MemoryOutcomeWriteRequest, env): Promise<MemoryOutcomeWriteResponse> => {
-                const requestFrom = String(env?.from || 'unknown').trim() || 'unknown';
-                logger.info(
-                    `[MemoryOS 外部写入请求] from=${requestFrom}, kind=${String(payload?.kind ?? payload?.eventType ?? 'outcome')}, hasSourceMessageId=${Boolean(payload?.sourceMessageId)}`
-                );
-                if (!getEnabledFlag()) {
-                    logger.info('[MemoryOS 外部写入拒绝] reason=memory_os_disabled');
-                    return {
-                        ok: false,
-                        reason: 'memory_os_disabled',
-                        ts: Date.now(),
-                    };
-                }
-                const memory = (window as any).STX?.memory;
-                if (!memory?.events?.append) {
-                    logger.info('[MemoryOS 外部写入拒绝] reason=memory_sdk_not_ready');
-                    return {
-                        ok: false,
-                        reason: 'memory_sdk_not_ready',
-                        ts: Date.now(),
-                    };
-                }
-
-                const originalText = normalizeExternalText(payload);
-                if (!originalText) {
-                    logger.info('[MemoryOS 外部写入拒绝] reason=empty_text');
-                    return {
-                        ok: false,
-                        reason: 'empty_text',
-                        ts: Date.now(),
-                    };
-                }
-
-                const filterResult = filterRecordText(originalText, readRecordFilterSettings());
-                const compactText = String(filterResult.filteredText || '').replace(/\s+/g, '');
-                if (filterResult.dropped || compactText.length === 0) {
-                    logger.info(`[MemoryOS 外部写入拒绝] reason=filtered:${filterResult.reasonCode}`);
-                    return {
-                        ok: false,
-                        reason: `filtered:${filterResult.reasonCode}`,
-                        ts: Date.now(),
-                    };
-                }
-
-                const sourcePlugin = typeof payload?.sourcePlugin === 'string' && payload.sourcePlugin.trim().length > 0
-                    ? payload.sourcePlugin.trim()
-                    : String(env?.from || 'external_plugin').trim() || 'external_plugin';
-                const sourceMessageId = typeof payload?.sourceMessageId === 'string' && payload.sourceMessageId.trim().length > 0
-                    ? payload.sourceMessageId.trim()
-                    : undefined;
-                const eventType = resolveExternalEventType(payload);
-
-                try {
-                    const eventId: string = await memory.events.append(
-                        eventType,
-                        { text: filterResult.filteredText },
-                        {
-                            sourcePlugin,
-                            sourceMessageId,
-                        }
-                    );
-                    logger.info(
-                        `[MemoryOS 外部写入成功] from=${sourcePlugin}, eventType=${eventType}, eventId=${eventId}, textLength=${filterResult.filteredText.length}`
-                    );
-                    return {
-                        ok: true,
-                        ts: Date.now(),
-                        eventId,
-                        eventType,
-                        chatKey: typeof memory?.getChatKey === 'function' ? String(memory.getChatKey()) : '',
-                        storedTextLength: filterResult.filteredText.length,
-                    };
-                } catch (error) {
-                    logger.error('[MemoryOS 外部写入失败] reason=append_failed', error);
-                    return {
-                        ok: false,
-                        reason: 'append_failed',
-                        ts: Date.now(),
-                    };
-                }
-            }
-        );
 
         setTimeout(() => {
             broadcast(
@@ -1561,47 +1418,37 @@ class MemoryOS {
                 });
 
             try {
-                logger.info('触发大模型注入栈，正在向 Prompt 内附加短期事件池与摘要...');
                 const latestUserMessage = [...promptMessages]
                     .reverse()
                     .find((item: SdkTavernPromptMessageEvent) => {
                         return String(item?.role ?? '').trim().toLowerCase() === 'user' || item?.is_user === true;
                     });
                 const query = getTavernPromptMessageTextEvent(latestUserMessage).trim();
+                const sourceMessageId = String((latestUserMessage as any)?.mes_id ?? (latestUserMessage as any)?.message_id ?? (latestUserMessage as any)?.id ?? '').trim() || undefined;
                 const settingsMaxTokens = Number(readSettings().contextMaxTokens) || 1200;
-                const injectedContextResult = await memory.injection.buildContext({
+                const promptTrace = createMemoryTraceContext({
+                    chatKey: String(memory?.getChatKey?.() ?? currentChatKey ?? '').trim() || 'unknown',
+                    source: 'prompt_injection',
+                    stage: 'memory_recall_started',
+                    sourceMessageId,
+                    requestId: query || undefined,
+                });
+                const injectionResult = await memory.injection.runMemoryPromptInjection({
+                    promptMessages,
                     maxTokens: settingsMaxTokens,
                     query,
                     preferSummary: true,
                     intentHint: 'auto',
-                    includeDecisionMeta: true,
+                    source: 'chat_completion_prompt_ready',
+                    sourceMessageId,
+                    trace: promptTrace,
                 });
-                const injectedContext = typeof injectedContextResult === 'string'
-                    ? injectedContextResult
-                    : injectedContextResult?.text || '';
-                const preDecision = typeof injectedContextResult === 'object' && injectedContextResult
-                    ? (injectedContextResult.preDecision as PreGenerationGateDecision | undefined)
-                    : undefined;
-                if (typeof injectedContextResult === 'object' && injectedContextResult) {
-                    logger.info(`buildContext 选用区段: ${injectedContextResult.sectionsUsed.join(', ')}`);
-                }
-
-                logger.info(`buildContext 返回内容长度: ${injectedContext?.length ?? 0}`);
-
-                if (!preDecision?.shouldInject || !injectedContext || injectedContext.trim().length === 0) {
-                    logger.warn('记忆上下文为空或生成前 gate 判定跳过，已取消注入。');
-                    return;
-                }
-
-                const insertIndex = resolveMemoryContextInsertIndex(promptMessages);
-                insertTavernPromptMessageEvent(promptMessages, {
-                    role: 'user',
-                    text: injectedContext,
-                    insertMode: 'before_index',
-                    insertBeforeIndex: insertIndex,
-                    template: promptMessages[Math.max(0, Math.min(insertIndex - 1, promptMessages.length - 1))] ?? promptMessages[0],
-                });
-                logger.success(`记忆注入完成，已将独立 Memory Context 插入到最后一条用户消息之前。`);
+                const traceSummary = injectionResult.trace
+                    ? `${injectionResult.trace.stage} · ${injectionResult.trace.label} · ${injectionResult.trace.traceId}`
+                    : 'no-trace';
+                logger.info(
+                    `prompt 注入主链结束：shouldInject=${injectionResult.shouldInject}, inserted=${injectionResult.inserted}, insertIndex=${injectionResult.insertIndex}, promptLength=${injectionResult.promptLength}, insertedLength=${injectionResult.insertedLength}, trace=${traceSummary}`
+                );
 
             } catch (error) {
                 logger.error('Prompt Context 构建或注入失败', error);

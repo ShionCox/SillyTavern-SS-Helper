@@ -12,15 +12,23 @@ import { mountThemeHost, initThemeKernel } from '../../../SDK/theme';
 import { db } from '../db/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { ChatStateManager } from '../core/chat-state-manager';
+import {
+    buildMainlineTraceEvidenceMarkup,
+    formatMainlineTraceStatus,
+    formatRelativeTime,
+} from './mainline-trace-view';
+import { openRecordEditor } from './recordEditorNext';
 import { buildAdaptivePolicy, buildRetentionPolicy } from '../core/chat-strategy-engine';
 import {
     DEFAULT_ADAPTIVE_METRICS,
     DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_CHAT_PROFILE,
-    DEFAULT_EFFECTIVE_PRESET_BUNDLE,
+    DEFAULT_EXTRACT_HEALTH,
     DEFAULT_MEMORY_QUALITY,
+    DEFAULT_LONG_SUMMARY_COOLDOWN,
     DEFAULT_PROMPT_INJECTION_PROFILE,
     DEFAULT_RETENTION_POLICY,
+    DEFAULT_SUMMARY_SETTINGS,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
 import type {
@@ -30,22 +38,38 @@ import type {
     ChatLifecycleState,
     ChatProfile,
     DeletionStrategy,
-    EffectivePresetBundle,
     GroupMemoryState,
     MaintenanceActionType,
     MaintenanceAdvice,
     MaintenanceExecutionResult,
     MaintenanceInsight,
     MemoryQualityScorecard,
+    MemoryMainlineTraceSnapshot,
+    MemoryProcessingDecision,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
     PromptInjectionProfile,
     RetentionPolicy,
     StrategyDecision,
-    SummaryPolicyOverride,
-    UserFacingChatPreset,
-    UserFacingPresetId,
+    EffectiveSummarySettings,
+    SummaryCooldownPreset,
+    SummaryLength,
+    SummaryLowValueHandling,
+    SummaryMemoryMode,
+    SummaryNoiseFilter,
+    SummaryProcessInterval,
+    SummaryRecordFocus,
+    SummaryResourcePriority,
+    SummaryScenario,
+    SummarySettings,
+    SummaryLookbackScope,
+    SummarySettingsOverride,
+    SummarySettingsSource,
+    SummaryTiming,
+    SummaryLongTrigger,
     VectorLifecycleState,
+    LongSummaryCooldownState,
+    ExtractHealthWindow,
 } from '../types';
 
 interface ChatOption {
@@ -72,10 +96,16 @@ interface ChatStrategySnapshot {
     decision: StrategyDecision | null;
     preDecision: PreGenerationGateDecision | null;
     postDecision: PostGenerationGateDecision | null;
+    processingDecision: MemoryProcessingDecision | null;
+    longSummaryCooldown: LongSummaryCooldownState;
+    summarySettings: SummarySettings;
+    summarySettingsOverride: SummarySettingsOverride;
+    effectiveSummarySettings: EffectiveSummarySettings;
+    summarySettingsSource: SummarySettingsSource;
+    extractHealth: ExtractHealthWindow;
     promptInjectionProfile: PromptInjectionProfile;
-    effectivePresetBundle: EffectivePresetBundle;
-    userFacingPreset: UserFacingChatPreset | null;
     groupMemory: GroupMemoryState | null;
+    mainlineTraceSnapshot: MemoryMainlineTraceSnapshot | null;
     overrides: Record<string, unknown>;
 }
 
@@ -99,12 +129,13 @@ interface ReadableStrategyDashboard {
 
 interface MemoryChatStateApi {
     setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
-    setSummaryPolicyOverride?(override: SummaryPolicyOverride): Promise<void>;
     setRetentionPolicyOverride(override: Partial<RetentionPolicy>): Promise<void>;
-    setUserFacingPreset?(preset: UserFacingChatPreset | null): Promise<void>;
-    saveGlobalPreset?(preset: UserFacingChatPreset): Promise<void>;
-    saveRolePreset?(preset: UserFacingChatPreset): Promise<void>;
-    clearRolePreset?(): Promise<void>;
+    getGlobalSummarySettings?(): Promise<SummarySettings>;
+    setGlobalSummarySettings?(settings: SummarySettings): Promise<SummarySettings>;
+    getChatSummarySettingsOverride?(): Promise<SummarySettingsOverride>;
+    setChatSummarySettingsOverride?(override: SummarySettingsOverride): Promise<void>;
+    clearChatSummarySettingsOverride?(): Promise<void>;
+    getEffectiveSummarySettings?(): Promise<EffectiveSummarySettings>;
     getMaintenanceInsights?(): Promise<MaintenanceInsight[]>;
     getLifecycleState?(): Promise<ChatLifecycleState>;
     runMaintenanceAction?(action: MaintenanceActionType): Promise<MaintenanceExecutionResult>;
@@ -160,14 +191,40 @@ const EDITOR_IDS = {
     overviewWorldId: 'stx-memoryos-chat-strategy-overview-world',
     overviewRelationId: 'stx-memoryos-chat-strategy-overview-relation',
     overviewReminderId: 'stx-memoryos-chat-strategy-overview-reminder',
-    presetId: 'stx-memoryos-chat-strategy-preset',
-    presetMountId: 'stx-memoryos-chat-strategy-preset-mount',
-    saveGlobalPresetBtnId: 'stx-memoryos-chat-strategy-save-global-preset',
-    saveRolePresetBtnId: 'stx-memoryos-chat-strategy-save-role-preset',
-    clearRolePresetBtnId: 'stx-memoryos-chat-strategy-clear-role-preset',
-    summaryIntervalDirectId: 'stx-memoryos-chat-strategy-direct-summary-interval',
-    summaryWindowDirectId: 'stx-memoryos-chat-strategy-direct-summary-window',
-    summaryEnabledDirectId: 'stx-memoryos-chat-strategy-direct-summary-enabled',
+    summarySettingsMountId: 'stx-memoryos-chat-strategy-summary-settings-mount',
+    summarySourceId: 'stx-memoryos-chat-strategy-summary-source',
+    summarySaveGlobalBtnId: 'stx-memoryos-chat-strategy-summary-save-global',
+    summarySaveChatBtnId: 'stx-memoryos-chat-strategy-summary-save-chat',
+    summaryClearChatBtnId: 'stx-memoryos-chat-strategy-summary-clear-chat',
+    summaryResetBtnId: 'stx-memoryos-chat-strategy-summary-reset',
+    summaryMemoryModeId: 'stx-memoryos-chat-strategy-summary-memory-mode',
+    summaryScenarioId: 'stx-memoryos-chat-strategy-summary-scenario',
+    summaryResourcePriorityId: 'stx-memoryos-chat-strategy-summary-resource-priority',
+    summaryTimingId: 'stx-memoryos-chat-strategy-summary-timing',
+    summaryLengthId: 'stx-memoryos-chat-strategy-summary-length',
+    summaryCooldownId: 'stx-memoryos-chat-strategy-summary-cooldown',
+    summaryLowValueHandlingId: 'stx-memoryos-chat-strategy-summary-low-value',
+    summaryNoiseFilterId: 'stx-memoryos-chat-strategy-summary-noise',
+    summaryProcessIntervalId: 'stx-memoryos-chat-strategy-summary-process-interval',
+    summaryLookbackScopeId: 'stx-memoryos-chat-strategy-summary-lookback',
+    summaryFocusFactsId: 'stx-memoryos-chat-strategy-summary-focus-facts',
+    summaryFocusRelationshipId: 'stx-memoryos-chat-strategy-summary-focus-relationship',
+    summaryFocusWorldId: 'stx-memoryos-chat-strategy-summary-focus-world',
+    summaryFocusPlotId: 'stx-memoryos-chat-strategy-summary-focus-plot',
+    summaryFocusEmotionId: 'stx-memoryos-chat-strategy-summary-focus-emotion',
+    summaryFocusToolResultId: 'stx-memoryos-chat-strategy-summary-focus-tool-result',
+    summaryTriggerSceneEndId: 'stx-memoryos-chat-strategy-summary-trigger-scene-end',
+    summaryTriggerCombatEndId: 'stx-memoryos-chat-strategy-summary-trigger-combat-end',
+    summaryTriggerPlotAdvanceId: 'stx-memoryos-chat-strategy-summary-trigger-plot-advance',
+    summaryTriggerRelationshipShiftId: 'stx-memoryos-chat-strategy-summary-trigger-relationship-shift',
+    summaryTriggerWorldChangeId: 'stx-memoryos-chat-strategy-summary-trigger-world-change',
+    summaryTriggerStructureRepairId: 'stx-memoryos-chat-strategy-summary-trigger-structure-repair',
+    summaryTriggerArchiveFinalizeId: 'stx-memoryos-chat-strategy-summary-trigger-archive-finalize',
+    summaryLightRelationId: 'stx-memoryos-chat-strategy-summary-light-relation',
+    summaryMediumWorldStateId: 'stx-memoryos-chat-strategy-summary-medium-world',
+    summaryHeavyRewriteId: 'stx-memoryos-chat-strategy-summary-heavy-rewrite',
+    summaryHeavyConsistencyId: 'stx-memoryos-chat-strategy-summary-heavy-consistency',
+    summaryHeavyLookbackId: 'stx-memoryos-chat-strategy-summary-heavy-lookback',
     profileRefreshDirectId: 'stx-memoryos-chat-strategy-direct-profile-refresh',
     qualityRefreshDirectId: 'stx-memoryos-chat-strategy-direct-quality-refresh',
     vectorFactsDirectId: 'stx-memoryos-chat-strategy-direct-vector-facts',
@@ -196,6 +253,7 @@ const EDITOR_IDS = {
     qualityVectorModeId: 'stx-memoryos-chat-strategy-quality-vector-mode',
     qualityVectorStatsId: 'stx-memoryos-chat-strategy-quality-vector-stats',
     qualityVectorTimesId: 'stx-memoryos-chat-strategy-quality-vector-times',
+    qualityTraceEvidenceId: 'stx-memoryos-chat-strategy-quality-trace-evidence',
     qualityAdviceId: 'stx-memoryos-chat-strategy-quality-advice',
     qualityReasonsId: 'stx-memoryos-chat-strategy-quality-reasons',
     maintenanceInsightsId: 'stx-memoryos-chat-strategy-maintenance-insights',
@@ -217,6 +275,8 @@ const EDITOR_IDS = {
     decisionBlockId: 'stx-memoryos-chat-strategy-decision',
     preDecisionBlockId: 'stx-memoryos-chat-strategy-pre-decision',
     postDecisionBlockId: 'stx-memoryos-chat-strategy-post-decision',
+    processingDecisionBlockId: 'stx-memoryos-chat-strategy-processing-decision',
+    longSummaryCooldownBlockId: 'stx-memoryos-chat-strategy-long-summary-cooldown',
     diagnosticBasicDetailsId: 'stx-memoryos-chat-strategy-diagnostic-basic',
     diagnosticAdvancedDetailsId: 'stx-memoryos-chat-strategy-diagnostic-advanced',
     diagnosticBasicGridId: 'stx-memoryos-chat-strategy-diagnostic-basic-grid',
@@ -234,176 +294,495 @@ const CHAT_STRATEGY_AUTO_LOAD_MAX_ATTEMPTS: number = 8;
 const CHAT_STRATEGY_AUTO_LOAD_INTERVAL_MS: number = 700;
 
 /**
- * 功能：返回聊天预设下拉选项。
- * @returns 预设选项列表。
- */
-function listUserFacingPresetOptions(): Array<{ value: UserFacingPresetId; label: string }> {
-    return [
-        { value: 'companion_chat', label: '轻陪伴聊天' },
-        { value: 'long_rp', label: '长剧情 RP' },
-        { value: 'worldbook_qa', label: '世界设定问答' },
-        { value: 'group_trpg', label: '跑团 / 多角色' },
-        { value: 'tool_qa', label: '工具 / 代码问答' },
-        { value: 'custom', label: '自定义' },
-    ];
-}
-
-/**
- * 功能：根据预设编号构建用户可读预设。
- * @param presetId 预设编号。
- * @returns 预设对象。
- */
-function buildUserFacingPresetById(presetId: UserFacingPresetId): UserFacingChatPreset {
-    if (presetId === 'companion_chat') {
-        return {
-            presetId,
-            label: '轻陪伴聊天',
-            chatProfile: {
-                chatType: 'solo',
-                stylePreference: 'story',
-                memoryStrength: 'medium',
-                extractStrategy: 'facts_relations',
-                summaryStrategy: 'short',
-            },
-            adaptivePolicy: {
-                extractInterval: 10,
-                extractWindowSize: 28,
-            },
-            retentionPolicy: {
-                deletionStrategy: 'soft_delete',
-            },
-            promptInjection: {},
-            profileRefreshInterval: 12,
-            qualityRefreshInterval: 12,
-            autoBootstrapSemanticSeed: true,
-            groupLaneEnabled: false,
-            updatedAt: Date.now(),
-        };
-    }
-    if (presetId === 'long_rp') {
-        return {
-            presetId,
-            label: '长剧情 RP',
-            chatProfile: {
-                chatType: 'solo',
-                stylePreference: 'trpg',
-                memoryStrength: 'high',
-                extractStrategy: 'facts_relations_world',
-                summaryStrategy: 'timeline',
-            },
-            adaptivePolicy: {
-                extractInterval: 8,
-                extractWindowSize: 40,
-            },
-            retentionPolicy: {
-                deletionStrategy: 'soft_delete',
-            },
-            promptInjection: {},
-            profileRefreshInterval: 8,
-            qualityRefreshInterval: 10,
-            autoBootstrapSemanticSeed: true,
-            groupLaneEnabled: false,
-            updatedAt: Date.now(),
-        };
-    }
-    if (presetId === 'worldbook_qa') {
-        return {
-            presetId,
-            label: '世界设定问答',
-            chatProfile: {
-                chatType: 'worldbook',
-                stylePreference: 'info',
-                memoryStrength: 'medium',
-                extractStrategy: 'facts_relations_world',
-                summaryStrategy: 'short',
-            },
-            adaptivePolicy: {
-                extractInterval: 6,
-                extractWindowSize: 24,
-            },
-            retentionPolicy: {
-                deletionStrategy: 'soft_delete',
-            },
-            promptInjection: {
-                queryMode: 'setting_only',
-            },
-            profileRefreshInterval: 6,
-            qualityRefreshInterval: 8,
-            autoBootstrapSemanticSeed: true,
-            groupLaneEnabled: false,
-            updatedAt: Date.now(),
-        };
-    }
-    if (presetId === 'group_trpg') {
-        return {
-            presetId,
-            label: '跑团 / 多角色',
-            chatProfile: {
-                chatType: 'group',
-                stylePreference: 'trpg',
-                memoryStrength: 'high',
-                extractStrategy: 'facts_relations_world',
-                summaryStrategy: 'timeline',
-            },
-            adaptivePolicy: {
-                extractInterval: 8,
-                extractWindowSize: 36,
-                groupLaneEnabled: true,
-            },
-            retentionPolicy: {
-                deletionStrategy: 'soft_delete',
-            },
-            promptInjection: {},
-            profileRefreshInterval: 8,
-            qualityRefreshInterval: 8,
-            autoBootstrapSemanticSeed: true,
-            groupLaneEnabled: true,
-            updatedAt: Date.now(),
-        };
-    }
-    if (presetId === 'tool_qa') {
-        return {
-            presetId,
-            label: '工具 / 代码问答',
-            chatProfile: {
-                chatType: 'tool',
-                stylePreference: 'qa',
-                memoryStrength: 'low',
-                extractStrategy: 'facts_only',
-                summaryStrategy: 'short',
-            },
-            adaptivePolicy: {
-                extractInterval: 12,
-                extractWindowSize: 20,
-            },
-            retentionPolicy: {
-                deletionStrategy: 'immediate_purge',
-            },
-            promptInjection: {},
-            profileRefreshInterval: 16,
-            qualityRefreshInterval: 16,
-            autoBootstrapSemanticSeed: false,
-            groupLaneEnabled: false,
-            updatedAt: Date.now(),
-        };
-    }
-    return {
-        presetId: 'custom',
-        label: '自定义',
-        chatProfile: {},
-        adaptivePolicy: {},
-        retentionPolicy: {},
-        promptInjection: {},
-        updatedAt: Date.now(),
-    };
-}
-
-/**
  * 功能：为聊天策略画像区域应用共享提示逻辑。
  * @returns 无返回值。
  */
 function applyChatStrategyTooltips(): void {
     ensureSharedTooltip();
+}
+
+function escapeSummaryChoiceLabel(value: string): string {
+    return escapeHtml(value);
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+    return left.every((item: string, index: number): boolean => item === right[index]);
+}
+
+function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
+    const focusValues: SummaryRecordFocus[] = [
+        'facts',
+        'relationship',
+        'world',
+        'plot',
+        'emotion',
+        'tool_result',
+    ].filter((item: string): item is SummaryRecordFocus => getCheckboxValue(overlay, `stx-memoryos-chat-strategy-summary-focus-${item.replace(/_/g, '-')}`));
+    const triggerValues: SummaryLongTrigger[] = [
+        'scene_end',
+        'combat_end',
+        'plot_advance',
+        'relationship_shift',
+        'world_change',
+        'structure_repair',
+        'archive_finalize',
+    ].filter((item: string): item is SummaryLongTrigger => getCheckboxValue(overlay, `stx-memoryos-chat-strategy-summary-trigger-${item.replace(/_/g, '-')}`));
+    return {
+        workMode: {
+            memoryMode: getSelectValue(overlay, EDITOR_IDS.summaryMemoryModeId) as SummaryMemoryMode || DEFAULT_SUMMARY_SETTINGS.workMode.memoryMode,
+            scenario: getSelectValue(overlay, EDITOR_IDS.summaryScenarioId) as SummaryScenario || DEFAULT_SUMMARY_SETTINGS.workMode.scenario,
+            resourcePriority: getSelectValue(overlay, EDITOR_IDS.summaryResourcePriorityId) as SummaryResourcePriority || DEFAULT_SUMMARY_SETTINGS.workMode.resourcePriority,
+        },
+        summaryBehavior: {
+            summaryTiming: getSelectValue(overlay, EDITOR_IDS.summaryTimingId) as SummaryTiming || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.summaryTiming,
+            summaryLength: getSelectValue(overlay, EDITOR_IDS.summaryLengthId) as SummaryLength || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.summaryLength,
+            longSummaryCooldown: getSelectValue(overlay, EDITOR_IDS.summaryCooldownId) as SummaryCooldownPreset || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryCooldown,
+            longSummaryTrigger: triggerValues.length > 0 ? triggerValues : [...DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryTrigger],
+        },
+        contentPreference: {
+            recordFocus: focusValues.length > 0 ? focusValues : [...DEFAULT_SUMMARY_SETTINGS.contentPreference.recordFocus],
+            lowValueHandling: getSelectValue(overlay, EDITOR_IDS.summaryLowValueHandlingId) as SummaryLowValueHandling || DEFAULT_SUMMARY_SETTINGS.contentPreference.lowValueHandling,
+            noiseFilter: getSelectValue(overlay, EDITOR_IDS.summaryNoiseFilterId) as SummaryNoiseFilter || DEFAULT_SUMMARY_SETTINGS.contentPreference.noiseFilter,
+        },
+        advanced: {
+            processInterval: getSelectValue(overlay, EDITOR_IDS.summaryProcessIntervalId) as SummaryProcessInterval || DEFAULT_SUMMARY_SETTINGS.advanced.processInterval,
+            lookbackScope: getSelectValue(overlay, EDITOR_IDS.summaryLookbackScopeId) as SummaryLookbackScope || DEFAULT_SUMMARY_SETTINGS.advanced.lookbackScope,
+            allowLightRelationExtraction: getCheckboxValue(overlay, EDITOR_IDS.summaryLightRelationId),
+            allowMediumWorldStateUpdate: getCheckboxValue(overlay, EDITOR_IDS.summaryMediumWorldStateId),
+            allowHeavyRewriteSummaries: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyRewriteId),
+            allowHeavyConsistencyRepair: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyConsistencyId),
+            allowHeavyExpandedLookback: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyLookbackId),
+        },
+    };
+}
+
+function buildSummarySettingsOverrideDiff(base: SummarySettings, next: SummarySettings): SummarySettingsOverride {
+    const override: SummarySettingsOverride = {};
+    if (
+        base.workMode.memoryMode !== next.workMode.memoryMode
+        || base.workMode.scenario !== next.workMode.scenario
+        || base.workMode.resourcePriority !== next.workMode.resourcePriority
+    ) {
+        override.workMode = {};
+        if (base.workMode.memoryMode !== next.workMode.memoryMode) {
+            override.workMode.memoryMode = next.workMode.memoryMode;
+        }
+        if (base.workMode.scenario !== next.workMode.scenario) {
+            override.workMode.scenario = next.workMode.scenario;
+        }
+        if (base.workMode.resourcePriority !== next.workMode.resourcePriority) {
+            override.workMode.resourcePriority = next.workMode.resourcePriority;
+        }
+    }
+    if (
+        base.summaryBehavior.summaryTiming !== next.summaryBehavior.summaryTiming
+        || base.summaryBehavior.summaryLength !== next.summaryBehavior.summaryLength
+        || base.summaryBehavior.longSummaryCooldown !== next.summaryBehavior.longSummaryCooldown
+        || !areStringArraysEqual(base.summaryBehavior.longSummaryTrigger, next.summaryBehavior.longSummaryTrigger)
+    ) {
+        override.summaryBehavior = {};
+        if (base.summaryBehavior.summaryTiming !== next.summaryBehavior.summaryTiming) {
+            override.summaryBehavior.summaryTiming = next.summaryBehavior.summaryTiming;
+        }
+        if (base.summaryBehavior.summaryLength !== next.summaryBehavior.summaryLength) {
+            override.summaryBehavior.summaryLength = next.summaryBehavior.summaryLength;
+        }
+        if (base.summaryBehavior.longSummaryCooldown !== next.summaryBehavior.longSummaryCooldown) {
+            override.summaryBehavior.longSummaryCooldown = next.summaryBehavior.longSummaryCooldown;
+        }
+        if (!areStringArraysEqual(base.summaryBehavior.longSummaryTrigger, next.summaryBehavior.longSummaryTrigger)) {
+            override.summaryBehavior.longSummaryTrigger = [...next.summaryBehavior.longSummaryTrigger];
+        }
+    }
+    if (
+        !areStringArraysEqual(base.contentPreference.recordFocus, next.contentPreference.recordFocus)
+        || base.contentPreference.lowValueHandling !== next.contentPreference.lowValueHandling
+        || base.contentPreference.noiseFilter !== next.contentPreference.noiseFilter
+    ) {
+        override.contentPreference = {};
+        if (!areStringArraysEqual(base.contentPreference.recordFocus, next.contentPreference.recordFocus)) {
+            override.contentPreference.recordFocus = [...next.contentPreference.recordFocus];
+        }
+        if (base.contentPreference.lowValueHandling !== next.contentPreference.lowValueHandling) {
+            override.contentPreference.lowValueHandling = next.contentPreference.lowValueHandling;
+        }
+        if (base.contentPreference.noiseFilter !== next.contentPreference.noiseFilter) {
+            override.contentPreference.noiseFilter = next.contentPreference.noiseFilter;
+        }
+    }
+    if (
+        base.advanced.processInterval !== next.advanced.processInterval
+        || base.advanced.lookbackScope !== next.advanced.lookbackScope
+        || base.advanced.allowLightRelationExtraction !== next.advanced.allowLightRelationExtraction
+        || base.advanced.allowMediumWorldStateUpdate !== next.advanced.allowMediumWorldStateUpdate
+        || base.advanced.allowHeavyRewriteSummaries !== next.advanced.allowHeavyRewriteSummaries
+        || base.advanced.allowHeavyConsistencyRepair !== next.advanced.allowHeavyConsistencyRepair
+        || base.advanced.allowHeavyExpandedLookback !== next.advanced.allowHeavyExpandedLookback
+    ) {
+        override.advanced = {};
+        if (base.advanced.processInterval !== next.advanced.processInterval) {
+            override.advanced.processInterval = next.advanced.processInterval;
+        }
+        if (base.advanced.lookbackScope !== next.advanced.lookbackScope) {
+            override.advanced.lookbackScope = next.advanced.lookbackScope;
+        }
+        if (base.advanced.allowLightRelationExtraction !== next.advanced.allowLightRelationExtraction) {
+            override.advanced.allowLightRelationExtraction = next.advanced.allowLightRelationExtraction;
+        }
+        if (base.advanced.allowMediumWorldStateUpdate !== next.advanced.allowMediumWorldStateUpdate) {
+            override.advanced.allowMediumWorldStateUpdate = next.advanced.allowMediumWorldStateUpdate;
+        }
+        if (base.advanced.allowHeavyRewriteSummaries !== next.advanced.allowHeavyRewriteSummaries) {
+            override.advanced.allowHeavyRewriteSummaries = next.advanced.allowHeavyRewriteSummaries;
+        }
+        if (base.advanced.allowHeavyConsistencyRepair !== next.advanced.allowHeavyConsistencyRepair) {
+            override.advanced.allowHeavyConsistencyRepair = next.advanced.allowHeavyConsistencyRepair;
+        }
+        if (base.advanced.allowHeavyExpandedLookback !== next.advanced.allowHeavyExpandedLookback) {
+            override.advanced.allowHeavyExpandedLookback = next.advanced.allowHeavyExpandedLookback;
+        }
+    }
+    return override;
+}
+
+function buildSummaryToggleMarkup(id: string, title: string, description: string, checked: boolean): string {
+    return buildSharedCheckboxCard({
+        id,
+        title,
+        description,
+        checkedLabel: '开启',
+        uncheckedLabel: '关闭',
+        containerClassName: 'stx-memory-chat-strategy-toggle',
+    }).replace('checked', checked ? 'checked' : '');
+}
+
+function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): string {
+    const effective = snapshot?.effectiveSummarySettings ?? null;
+    const sourceLabel = formatSummarySourceLabel(effective?.source ?? null);
+    const settings = effective ?? DEFAULT_SUMMARY_SETTINGS;
+    const workModeCards = `
+      <div class="stx-memory-chat-strategy-control-grid">
+        ${buildEditorSelectField(EDITOR_IDS.summaryMemoryModeId, '记忆模式', '控制这套设置更偏省流、均衡还是深度。', [
+            { value: 'streamlined', label: '精简' },
+            { value: 'balanced', label: '均衡' },
+            { value: 'deep', label: '深度' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryScenarioId, '使用场景', '自动推断时会按聊天类型选择默认偏置。', [
+            { value: 'auto', label: '自动' },
+            { value: 'companion_chat', label: '陪伴闲聊' },
+            { value: 'long_rp', label: '长剧情 RP' },
+            { value: 'worldbook_qa', label: '世界设定问答' },
+            { value: 'group_trpg', label: '群聊 / 跑团' },
+            { value: 'tool_qa', label: '工具 / 代码' },
+            { value: 'custom', label: '自定义' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryResourcePriorityId, '资源优先级', '决定系统更偏质量、均衡还是节流。', [
+            { value: 'quality', label: '质量优先' },
+            { value: 'balanced', label: '均衡' },
+            { value: 'saving', label: '节流优先' },
+        ])}
+      </div>
+    `;
+    const summaryBehaviorCards = `
+      <div class="stx-memory-chat-strategy-control-grid">
+        ${buildEditorSelectField(EDITOR_IDS.summaryTimingId, '总结时机', '控制是关键节点、阶段结束还是更频繁地总结。', [
+            { value: 'key_only', label: '关键节点' },
+            { value: 'stage_end', label: '阶段结束' },
+            { value: 'frequent', label: '更频繁' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryLengthId, '总结长度', '控制短总结与长总结的预算档位。', [
+            { value: 'short', label: '短' },
+            { value: 'standard', label: '标准' },
+            { value: 'detailed', label: '详细' },
+            { value: 'ultra', label: '超长' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryCooldownId, '长总结冷却', '防止同一窗口重复重整。', [
+            { value: 'short', label: '短' },
+            { value: 'standard', label: '标准' },
+            { value: 'long', label: '长' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryLowValueHandlingId, '低价值内容', '如何处理闲聊、寒暄和低信息量内容。', [
+            { value: 'ignore', label: '忽略' },
+            { value: 'keep_some', label: '保留部分' },
+            { value: 'keep_more', label: '尽量保留' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryNoiseFilterId, '无效内容过滤', '过滤噪声、重复确认和无信息片段的强度。', [
+            { value: 'low', label: '低' },
+            { value: 'medium', label: '中' },
+            { value: 'high', label: '高' },
+        ])}
+      </div>
+    `;
+    const recordFocusCards = [
+        { id: EDITOR_IDS.summaryFocusFactsId, title: '事实', description: '保留明确事实与角色设定。' },
+        { id: EDITOR_IDS.summaryFocusRelationshipId, title: '关系', description: '保留角色关系和互动变化。' },
+        { id: EDITOR_IDS.summaryFocusWorldId, title: '世界', description: '保留世界观、规则和背景。' },
+        { id: EDITOR_IDS.summaryFocusPlotId, title: '剧情', description: '保留剧情推进与阶段节点。' },
+        { id: EDITOR_IDS.summaryFocusEmotionId, title: '情绪', description: '保留情绪、氛围和态度变化。' },
+        { id: EDITOR_IDS.summaryFocusToolResultId, title: '工具结果', description: '保留工具 / 代码 / 查询最终结论。' },
+    ];
+    const triggerCards = [
+        { id: EDITOR_IDS.summaryTriggerSceneEndId, title: '场景结束', description: '场景收束时允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerCombatEndId, title: '战斗结束', description: '战斗收尾时允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerPlotAdvanceId, title: '剧情推进', description: '剧情明显前进时允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerRelationshipShiftId, title: '关系变化', description: '关系或阵营变化时允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerWorldChangeId, title: '世界变化', description: '设定或世界状态变化时允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerStructureRepairId, title: '结构修复', description: '编辑、删改或分支后允许长总结。' },
+        { id: EDITOR_IDS.summaryTriggerArchiveFinalizeId, title: '归档整理', description: '归档前最后整理窗口。' },
+    ];
+    const advancedCards = `
+      <div class="stx-memory-chat-strategy-control-grid">
+        ${buildEditorSelectField(EDITOR_IDS.summaryProcessIntervalId, '处理间隔', '控制候选巡检频率。', [
+            { value: 'small', label: '小' },
+            { value: 'medium', label: '中' },
+            { value: 'large', label: '大' },
+        ])}
+        ${buildEditorSelectField(EDITOR_IDS.summaryLookbackScopeId, '回看范围', '控制一次处理会回看多大的窗口。', [
+            { value: 'small', label: '小' },
+            { value: 'medium', label: '中' },
+            { value: 'large', label: '大' },
+        ])}
+      </div>
+      <div class="stx-memory-chat-strategy-toggle-wrap">
+        ${buildSharedCheckboxCard({
+            id: EDITOR_IDS.summaryLightRelationId,
+            title: '轻处理中提取关系',
+            description: '轻处理时也保留最关键的关系变化。',
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })}
+        ${buildSharedCheckboxCard({
+            id: EDITOR_IDS.summaryMediumWorldStateId,
+            title: '中处理中更新世界状态',
+            description: '中处理允许同步必要的世界状态变化。',
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })}
+        ${buildSharedCheckboxCard({
+            id: EDITOR_IDS.summaryHeavyRewriteId,
+            title: '重处理中重整摘要',
+            description: '重处理允许整理旧摘要并重写更稳定的阶段概述。',
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })}
+        ${buildSharedCheckboxCard({
+            id: EDITOR_IDS.summaryHeavyConsistencyId,
+            title: '重处理中优先修复一致性',
+            description: '重处理更重视消除冲突与修复结构不一致。',
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })}
+        ${buildSharedCheckboxCard({
+            id: EDITOR_IDS.summaryHeavyLookbackId,
+            title: '重处理中允许扩大回看',
+            description: '重处理时可回看更大的上下文窗口。',
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })}
+      </div>
+    `;
+    const recordFocusMarkup = `
+      <div class="stx-memory-chat-strategy-toggle-wrap">
+        ${recordFocusCards.map((item): string => buildSharedCheckboxCard({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            checkedLabel: '开启',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })).join('')}
+      </div>
+    `;
+    const triggerMarkup = `
+      <div class="stx-memory-chat-strategy-toggle-wrap">
+        ${triggerCards.map((item): string => buildSharedCheckboxCard({
+            id: item.id,
+            title: item.title,
+            description: item.description,
+            checkedLabel: '允许',
+            uncheckedLabel: '关闭',
+            containerClassName: 'stx-memory-chat-strategy-toggle',
+        })).join('')}
+      </div>
+    `;
+    return `
+      <div class="stx-memory-chat-strategy-summary-compact">
+        <div class="stx-memory-chat-strategy-summary-bar">
+          <div>
+            <div class="stx-memory-chat-strategy-summary-bar-title">AI 记忆总结</div>
+            <div class="stx-memory-chat-strategy-summary-bar-subtitle">四块设置，控制总结的方式、时机、重点和高级行为。</div>
+          </div>
+          <div class="stx-memory-chat-strategy-summary-bar-badges">
+            <span class="stx-memory-chat-strategy-pill">${escapeHtml(sourceLabel)}</span>
+            <span class="stx-memory-chat-strategy-pill">${escapeHtml(`${settings.workMode.memoryMode} / ${settings.summaryBehavior.summaryLength}`)}</span>
+            <span class="stx-memory-chat-strategy-pill">${escapeHtml(`${settings.summaryBehavior.summaryTiming} / ${settings.advanced.processInterval}`)}</span>
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-summary-actions">
+          ${buildSharedButton({ id: EDITOR_IDS.summarySaveGlobalBtnId, label: '保存为全局默认', iconClassName: 'fa-solid fa-globe', variant: 'secondary' })}
+          ${buildSharedButton({ id: EDITOR_IDS.summarySaveChatBtnId, label: '应用到当前聊天', iconClassName: 'fa-solid fa-message', variant: 'secondary' })}
+          ${buildSharedButton({ id: EDITOR_IDS.summaryClearChatBtnId, label: '清除当前聊天覆盖', iconClassName: 'fa-solid fa-eraser', variant: 'secondary' })}
+          ${buildSharedButton({ id: EDITOR_IDS.summaryResetBtnId, label: '恢复文档默认', iconClassName: 'fa-solid fa-arrow-rotate-left', variant: 'secondary' })}
+        </div>
+        <div class="stx-memory-chat-strategy-summary-section">
+          <div class="stx-memory-chat-strategy-summary-section-head">
+            <h4>工作方式</h4>
+            <p>控制系统更偏省流、均衡还是深度，以及是否按场景自动推断。</p>
+          </div>
+          ${workModeCards}
+        </div>
+        <div class="stx-memory-chat-strategy-summary-section">
+          <div class="stx-memory-chat-strategy-summary-section-head">
+            <h4>总结行为</h4>
+            <p>控制什么时候总结、总结多长，以及长总结何时允许触发。</p>
+          </div>
+          ${summaryBehaviorCards}
+          <div class="stx-memory-chat-strategy-summary-subsection">
+            <div class="stx-memory-chat-strategy-summary-subsection-head">长总结触发条件</div>
+            ${triggerMarkup}
+          </div>
+        </div>
+        <div class="stx-memory-chat-strategy-summary-section">
+          <div class="stx-memory-chat-strategy-summary-section-head">
+            <h4>记录重点</h4>
+            <p>决定保留事实、关系、世界、剧情还是情绪 / 工具结果。</p>
+          </div>
+          ${recordFocusMarkup}
+        </div>
+        <div class="stx-memory-chat-strategy-summary-section">
+          <div class="stx-memory-chat-strategy-summary-section-head">
+            <h4>高级设置</h4>
+            <p>处理间隔、回看范围和重处理行为都收在这里，默认折叠前的内容尽量保持紧凑。</p>
+          </div>
+          ${advancedCards}
+        </div>
+      </div>
+    `.trim();
+}
+
+/**
+ * 功能：把处理等级决策压缩成一行便于面板展示的文案。
+ * @param decision 处理等级决策。
+ * @returns 简短摘要。
+ */
+function fillSummarySettingsForm(
+    overlay: HTMLElement,
+    settings: SummarySettings | EffectiveSummarySettings,
+    sourceOverride?: SummarySettingsSource | null,
+): void {
+    const summary = settings;
+    setSelectValue(overlay, EDITOR_IDS.summaryMemoryModeId, summary.workMode.memoryMode);
+    setSelectValue(overlay, EDITOR_IDS.summaryScenarioId, summary.workMode.scenario);
+    setSelectValue(overlay, EDITOR_IDS.summaryResourcePriorityId, summary.workMode.resourcePriority);
+    setSelectValue(overlay, EDITOR_IDS.summaryTimingId, summary.summaryBehavior.summaryTiming);
+    setSelectValue(overlay, EDITOR_IDS.summaryLengthId, summary.summaryBehavior.summaryLength);
+    setSelectValue(overlay, EDITOR_IDS.summaryCooldownId, summary.summaryBehavior.longSummaryCooldown);
+    setSelectValue(overlay, EDITOR_IDS.summaryLowValueHandlingId, summary.contentPreference.lowValueHandling);
+    setSelectValue(overlay, EDITOR_IDS.summaryNoiseFilterId, summary.contentPreference.noiseFilter);
+    setSelectValue(overlay, EDITOR_IDS.summaryProcessIntervalId, summary.advanced.processInterval);
+    setSelectValue(overlay, EDITOR_IDS.summaryLookbackScopeId, summary.advanced.lookbackScope);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusFactsId, summary.contentPreference.recordFocus.includes('facts'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusRelationshipId, summary.contentPreference.recordFocus.includes('relationship'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusWorldId, summary.contentPreference.recordFocus.includes('world'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusPlotId, summary.contentPreference.recordFocus.includes('plot'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusEmotionId, summary.contentPreference.recordFocus.includes('emotion'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryFocusToolResultId, summary.contentPreference.recordFocus.includes('tool_result'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerSceneEndId, summary.summaryBehavior.longSummaryTrigger.includes('scene_end'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerCombatEndId, summary.summaryBehavior.longSummaryTrigger.includes('combat_end'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerPlotAdvanceId, summary.summaryBehavior.longSummaryTrigger.includes('plot_advance'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerRelationshipShiftId, summary.summaryBehavior.longSummaryTrigger.includes('relationship_shift'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerWorldChangeId, summary.summaryBehavior.longSummaryTrigger.includes('world_change'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerStructureRepairId, summary.summaryBehavior.longSummaryTrigger.includes('structure_repair'));
+    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerArchiveFinalizeId, summary.summaryBehavior.longSummaryTrigger.includes('archive_finalize'));
+    const sourceElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.summarySourceId}`) as HTMLElement | null;
+    if (sourceElement) {
+        sourceElement.textContent = formatSummarySourceLabel(
+            'source' in summary ? (summary.source ?? sourceOverride ?? null) : (sourceOverride ?? null),
+        );
+    }
+}
+
+/**
+ * 功能：把当前聊天的总结设置卡渲染到主面板里。
+ * @param overlay 编辑器遮罩层根节点。
+ * @param snapshot 聊天策略快照。
+ * @returns 无返回值。
+ */
+function renderSummarySettingsSection(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
+    const existingMount: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.summarySettingsMountId}`) as HTMLElement | null;
+    if (existingMount) {
+        existingMount.innerHTML = buildSummarySettingsMarkup(snapshot);
+        fillSummarySettingsForm(existingMount, snapshot.effectiveSummarySettings);
+        hideLegacySummaryControls(overlay);
+        return;
+    }
+
+    const summaryHost: HTMLElement | null = overlay.querySelector('.stx-memory-chat-strategy-summary-settings-host') as HTMLElement | null;
+    if (!summaryHost) {
+        return;
+    }
+    summaryHost.innerHTML = buildSummarySettingsMarkup(snapshot);
+    const summaryMount: HTMLElement | null = summaryHost.querySelector(`#${EDITOR_IDS.summarySettingsMountId}`) as HTMLElement | null;
+    if (summaryMount) {
+        fillSummarySettingsForm(summaryMount, snapshot.effectiveSummarySettings);
+    }
+    hideLegacySummaryControls(overlay);
+}
+
+/**
+ * 功能：移除旧的摘要直控字段，避免与新的总结设置面板并存。
+ * @param overlay 编辑器遮罩层根节点。
+ * @returns 无返回值。
+ */
+function hideLegacySummaryControls(overlay: HTMLElement): void {
+    void overlay;
+}
+
+function formatProcessingDecisionSummary(decision: MemoryProcessingDecision | null): string {
+    if (!decision) {
+        return '处理等级：--';
+    }
+    const parts: string[] = [
+        `处理等级 ${decision.level}`,
+        `摘要 ${decision.summaryTier}`,
+        `抽取 ${decision.extractScope}`,
+    ];
+    if (decision.cooldownBlocked) {
+        parts.push('长总结冷却命中');
+    }
+    return parts.join(' · ');
+}
+
+/**
+ * 功能：把长总结冷却状态压缩成一行便于面板展示的文案。
+ * @param cooldown 长总结冷却状态。
+ * @returns 简短摘要。
+ */
+function formatLongSummaryCooldownSummary(cooldown: LongSummaryCooldownState): string {
+    const lastSummaryAt = Number(cooldown?.lastLongSummaryAt ?? 0);
+    const lastHeavyAt = Number(cooldown?.lastHeavyProcessAt ?? 0);
+    if (!lastSummaryAt && !lastHeavyAt) {
+        return '长总结冷却：未记录';
+    }
+    const bits: string[] = [];
+    if (lastSummaryAt > 0) {
+        bits.push(`最近长总结 ${formatRelativeTime(lastSummaryAt)}`);
+    }
+    if (lastHeavyAt > 0) {
+        bits.push(`最近重处理 ${formatRelativeTime(lastHeavyAt)}`);
+    }
+    if (cooldown?.lastLongSummaryWindowHash) {
+        bits.push(`窗口 ${cooldown.lastLongSummaryWindowHash.slice(0, 8)}`);
+    }
+    return bits.join(' · ');
 }
 
 async function hasPersistedChatStrategyData(chatKey: string): Promise<boolean> {
@@ -487,10 +866,21 @@ function buildEphemeralChatStrategySnapshot(chatKey: string): ChatStrategySnapsh
         decision: null,
         preDecision: null,
         postDecision: null,
+        processingDecision: null,
+        longSummaryCooldown: { ...DEFAULT_LONG_SUMMARY_COOLDOWN },
+        summarySettings: { ...DEFAULT_SUMMARY_SETTINGS },
+        summarySettingsOverride: {},
+        effectiveSummarySettings: {
+            ...DEFAULT_SUMMARY_SETTINGS,
+            source: 'system_default',
+            resolvedScenario: 'custom',
+            resolvedChatType: effectiveProfile.chatType,
+        },
+        summarySettingsSource: 'system_default',
+        extractHealth: { ...DEFAULT_EXTRACT_HEALTH, recentTasks: [] },
         promptInjectionProfile: { ...DEFAULT_PROMPT_INJECTION_PROFILE },
-        effectivePresetBundle: { ...DEFAULT_EFFECTIVE_PRESET_BUNDLE },
-        userFacingPreset: null,
         groupMemory: null,
+        mainlineTraceSnapshot: null,
         overrides: {},
     };
 }
@@ -776,13 +1166,6 @@ function buildEditorMarkup(): string {
                     <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
                   </div>
                 </article>
-                <div id="${EDITOR_IDS.presetMountId}" class="stx-memory-chat-strategy-inline-card stx-memory-chat-strategy-inline-card-preset">
-                  <div class="stx-memory-chat-strategy-inline-card-head">
-                    <h4>场景预设</h4>
-                    <p>选择更贴近当前聊天用途的默认方案。</p>
-                  </div>
-                  <div class="stx-memory-chat-strategy-empty">正在加载场景预设...</div>
-                </div>
               </div>
             </section>
             <section class="stx-memory-chat-strategy-section">
@@ -899,6 +1282,15 @@ function buildEditorMarkup(): string {
                     <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
                     <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
                   </div>
+                  <button type="button" class="menu_button" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
+                    <i class="fa-solid fa-vector-square"></i> 查看向量明细
+                  </button>
+                </article>
+                <article class="stx-memory-chat-strategy-quality-card" data-tip="展示主链最近一次真实执行证据：入口、append、trusted write、recall 与 prompt 注入。">
+                  <span class="stx-memory-chat-strategy-quality-label">主链执行证据</span>
+                  <div id="${EDITOR_IDS.qualityTraceEvidenceId}" class="stx-memory-chat-strategy-quality-list">
+                    <span class="stx-memory-chat-strategy-empty">等待主链执行记录</span>
+                  </div>
                 </article>
                 <article class="stx-memory-chat-strategy-quality-card" data-tip="系统根据数据表现自动生成的保养建议。如果这里空空如也，说明一切正常。">
                   <span class="stx-memory-chat-strategy-quality-label">系统维护与保养建议</span>
@@ -924,7 +1316,9 @@ function buildEditorMarkup(): string {
                   ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '结合生效方案', '这里显示的是系统当下正在使用的最终规则。当你觉得某个功能（比如抽取或者向量激活）没有按你的设置生效时，可以先来这里确认一下最终混合出的参数对不对。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最新执行决策', '这代表了 AI 最近一次回答时，底层都捞取了什么记忆。你能在这里看到是不是漏找了关键设定，或者是否多塞了无关紧要的记忆进去。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', 'AI 生成前系统做的判断：比如它有没有打算去搜索向量库？分配了多少预算给额外上下文？这有助于你诊断系统在发问前是不是已经定错了搜索方向。')}
-                  ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', 'AI 回复后系统的准入判断：系统是否觉得这段新对话有价值被记入长久记忆里？如果明明觉得该记住却没记住，说明这道门槛可能卡得太严了。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.processingDecisionBlockId, '处理等级决策', '本轮最终采用的不处理 / 轻处理 / 中处理 / 重处理决定。这里会把短总结、长总结、抽取范围和冷却命中一起展示出来。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.longSummaryCooldownBlockId, '长总结冷却', '这里显示最近一次长总结和重处理的时间、命中的窗口哈希，以及为什么当前轮次会降级或跳过。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate 输入', '生成后 gate 只作为底层输入快照，不再代表最终执行结果。')}
                 </div>
               </details>
               <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
@@ -1162,32 +1556,10 @@ function buildEditorMarkupV2(): string {
               <div class="stx-memory-chat-strategy-quick-grid">
                 <article class="stx-memory-chat-strategy-quick-card">
                   <div class="stx-memory-chat-strategy-quick-card-head">
-                    <h4>常用预设</h4>
-                    <p>先选接近的聊天用途，再做局部微调。</p>
+                    <h4>AI 记忆总结</h4>
+                    <p>四块紧凑设置，直接决定总结方式、时机和重点。</p>
                   </div>
-                  <div class="stx-memory-chat-strategy-control-stack">
-                    ${buildEditorSelectField(EDITOR_IDS.presetId, '场景预设', '先选一套接近当前聊天用途的默认方案。', listUserFacingPresetOptions())}
-                    <div class="stx-memory-chat-strategy-preset-actions">
-                      ${buildSharedButton({
-                          id: EDITOR_IDS.saveGlobalPresetBtnId,
-                          label: '设为全局默认',
-                          variant: 'secondary',
-                          iconClassName: 'fa-solid fa-globe',
-                      })}
-                      ${buildSharedButton({
-                          id: EDITOR_IDS.saveRolePresetBtnId,
-                          label: '设为角色默认',
-                          variant: 'secondary',
-                          iconClassName: 'fa-solid fa-id-card',
-                      })}
-                      ${buildSharedButton({
-                          id: EDITOR_IDS.clearRolePresetBtnId,
-                          label: '清空角色默认',
-                          variant: 'secondary',
-                          iconClassName: 'fa-solid fa-eraser',
-                      })}
-                    </div>
-                  </div>
+                  <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-strategy-summary-settings-host"></div>
                 </article>
                 <article class="stx-memory-chat-strategy-quick-card">
                   <div class="stx-memory-chat-strategy-quick-card-head">
@@ -1229,14 +1601,6 @@ function buildEditorMarkupV2(): string {
                         { value: 'soft_delete', label: '保留归档' },
                         { value: 'immediate_purge', label: '彻底清空' },
                     ])}
-                    ${buildSharedCheckboxCard({
-                        id: EDITOR_IDS.summaryEnabledDirectId,
-                        title: '自动生成摘要',
-                        description: '关闭后会更依赖短期上下文，不主动维护历史摘要。',
-                        checkedLabel: '开启',
-                        uncheckedLabel: '关闭',
-                        containerClassName: 'stx-memory-chat-strategy-toggle',
-                    })}
                   </div>
                 </article>
                 <article class="stx-memory-chat-strategy-quick-card">
@@ -1301,8 +1665,6 @@ function buildEditorMarkupV2(): string {
                         { value: 'soft_delete', label: '保留归档' },
                         { value: 'immediate_purge', label: '彻底清空' },
                     ])}
-                    ${buildEditorInputField(EDITOR_IDS.summaryIntervalDirectId, '多少轮做一次摘要', '间隔越短，系统越积极地归纳最近聊天。', 'number', '1', '100', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.summaryWindowDirectId, '每次回看多少轮', '控制每次摘要会回看的聊天窗口。', 'number', '1', '200', '1')}
                     ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多久重判一次聊天状态', '重新判断聊天类型、风格和记忆强度的间隔。', 'number', '1', '100', '1')}
                     ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多久刷新一次健康度', '重新评估记忆质量和维护提醒的间隔。', 'number', '1', '100', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后开始联想', '达到这个数量后，会更积极调用长期记忆。', 'number', '1', '5000', '1')}
@@ -1348,6 +1710,9 @@ function buildEditorMarkupV2(): string {
                         <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
                         <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
                       </div>
+                      <button type="button" class="menu_button" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
+                        <i class="fa-solid fa-vector-square"></i> 查看向量明细
+                      </button>
                     </article>
                     <article class="stx-memory-chat-strategy-quality-card">
                       <span class="stx-memory-chat-strategy-quality-label">系统建议</span>
@@ -1426,7 +1791,9 @@ function buildEditorMarkupV2(): string {
                       ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '最终生效方案', '系统当前真正采用的综合策略。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最近一次注入决策', '最近一次生成时，系统实际选用了哪些记忆模块。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', '生成前对检索、预算和注入的判断结果。')}
-                      ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', '生成后对是否持久化、是否抽取的判断结果。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.processingDecisionBlockId, '处理等级决策', '本轮究竟落在不处理、轻处理、中处理还是重处理。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.longSummaryCooldownBlockId, '长总结冷却', '这里记录长总结是否被同窗口拦截、最近一次重处理是什么时候。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate 输入', '生成后 gate 只保留为输入快照，不再是最终结论。')}
                     </div>
                   </details>
                   <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
@@ -1450,95 +1817,22 @@ function buildEditorMarkupV2(): string {
 }
 
 function ensureEditorSections(overlay: HTMLElement): void {
-    if (!overlay.querySelector(`#${EDITOR_IDS.presetId}`)) {
-        const presetMount: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.presetMountId}`) as HTMLElement | null;
+    if (!overlay.querySelector(`#${EDITOR_IDS.summarySettingsMountId}`)) {
         const anchorWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
         const anchorSection: HTMLElement | null = anchorWrap?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
-        const presetMarkup = `
-          <div class="stx-memory-chat-strategy-form-grid">
-            ${buildEditorSelectField(EDITOR_IDS.presetId, '聊天场景预设', '为当前聊天选择更贴近 ST 使用习惯的场景预设。', listUserFacingPresetOptions())}
-          </div>
-          <div class="stx-memory-chat-strategy-card-actions stx-memory-chat-strategy-preset-actions" style="margin-top: 10px;">
-            ${buildSharedButton({
-                id: EDITOR_IDS.saveGlobalPresetBtnId,
-                label: '存为全局默认',
-                variant: 'secondary',
-                iconClassName: 'fa-solid fa-globe',
-            })}
-            ${buildSharedButton({
-                id: EDITOR_IDS.saveRolePresetBtnId,
-                label: '存为角色卡默认',
-                variant: 'secondary',
-                iconClassName: 'fa-solid fa-id-card',
-            })}
-            ${buildSharedButton({
-                id: EDITOR_IDS.clearRolePresetBtnId,
-                label: '清除角色卡默认',
-                variant: 'secondary',
-                iconClassName: 'fa-solid fa-eraser',
-            })}
-          </div>
-        `.trim();
-        if (presetMount) {
-            presetMount.innerHTML = `
-              <div class="stx-memory-chat-strategy-inline-card-head">
-                <h4>场景预设</h4>
-                <p>先用易懂预设起步，再决定要不要细调参数。</p>
-              </div>
-              ${presetMarkup}
-            `.trim();
-        }
         if (anchorSection) {
-            const directAdjustMarkup = `
-              <section class="stx-memory-chat-strategy-section">
-                <div class="stx-memory-chat-strategy-section-head">
-                  <div>
-                    <h3>简易调整</h3>
-                    <p>聊天习惯参数</p>
-                  </div>
+            const summaryHost = document.createElement('section');
+            summaryHost.className = 'stx-memory-chat-strategy-section';
+            summaryHost.innerHTML = `
+              <div class="stx-memory-chat-strategy-section-head">
+                <div>
+                  <h3>AI 记忆总结</h3>
+                  <p>四块紧凑设置，直接决定总结方式、时机和重点。</p>
                 </div>
-                <div class="stx-memory-chat-strategy-toggle-wrap">
-                  ${buildSharedCheckboxCard({
-                      id: EDITOR_IDS.summaryEnabledDirectId,
-                      title: '启用楼层总结',
-                      description: '关闭后仍会提取事实，但不再按楼层自动生成总结。',
-                      checkedLabel: '开启',
-                      uncheckedLabel: '关闭',
-                      containerClassName: 'stx-memory-chat-strategy-toggle',
-                  })}
-                </div>
-                <div class="stx-memory-chat-strategy-form-grid">
-                  ${buildEditorInputField(EDITOR_IDS.summaryIntervalDirectId, '多少楼总结一次', '控制摘要多久触发一次。', 'number', '1', '200', '1')}
-                  ${buildEditorInputField(EDITOR_IDS.summaryWindowDirectId, '总结覆盖最近多少楼', '控制单次摘要回看窗口大小。', 'number', '1', '200', '1')}
-                  ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多少楼刷新一次画像', '控制聊天画像重算频率。', 'number', '1', '200', '1')}
-                  ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多少楼重算一次质量分', '控制质量诊断刷新频率。', 'number', '1', '200', '1')}
-                  ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后启用向量', '控制向量检索的启用水位。', 'number', '1', '5000', '1')}
-                  ${buildEditorSelectField(EDITOR_IDS.deletionStrategyDirectId, '聊天删除时', '控制聊天删除时默认采用归档还是彻底清理。', [
-                      { value: 'soft_delete', label: '归档记忆' },
-                      { value: 'immediate_purge', label: '彻底删除' },
-                  ])}
-                </div>
-                <div class="stx-memory-chat-strategy-toggle-wrap">
-                  ${buildSharedCheckboxCard({
-                      id: EDITOR_IDS.autoBootstrapSeedId,
-                      title: '新聊天自动从角色卡初始化',
-                      description: '进入新聊天时自动执行角色卡冷启动建档。',
-                      checkedLabel: '开启',
-                      uncheckedLabel: '关闭',
-                      containerClassName: 'stx-memory-chat-strategy-toggle',
-                  })}
-                  ${buildSharedCheckboxCard({
-                      id: EDITOR_IDS.groupLaneEnabledId,
-                      title: '群聊启用说话人分轨',
-                      description: '为群聊独立维护角色车道、共享场景和显著度。',
-                      checkedLabel: '开启',
-                      uncheckedLabel: '关闭',
-                      containerClassName: 'stx-memory-chat-strategy-toggle',
-                    })}
-                </div>
-              </section>
+              </div>
+              <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-strategy-summary-settings-host"></div>
             `.trim();
-            anchorSection.insertAdjacentHTML('afterend', directAdjustMarkup);
+            anchorSection.insertAdjacentElement('afterend', summaryHost);
         }
     }
 
@@ -1619,7 +1913,19 @@ function ensureEditorSections(overlay: HTMLElement): void {
         if (!overlay.querySelector(`#${EDITOR_IDS.postDecisionBlockId}`)) {
             basicDiagnosticGrid.insertAdjacentHTML(
                 'beforeend',
-                buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate', '查看生成后的长期记忆准入决策。'),
+                buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate 输入', '查看生成后 gate 的底层输入快照。'),
+            );
+        }
+        if (!overlay.querySelector(`#${EDITOR_IDS.processingDecisionBlockId}`)) {
+            basicDiagnosticGrid.insertAdjacentHTML(
+                'beforeend',
+                buildJsonCardMarkup(EDITOR_IDS.processingDecisionBlockId, '处理等级决策', '查看本轮最终采用的处理等级。'),
+            );
+        }
+        if (!overlay.querySelector(`#${EDITOR_IDS.longSummaryCooldownBlockId}`)) {
+            basicDiagnosticGrid.insertAdjacentHTML(
+                'beforeend',
+                buildJsonCardMarkup(EDITOR_IDS.longSummaryCooldownBlockId, '长总结冷却', '查看长总结冷却是否命中。'),
             );
         }
     }
@@ -1855,21 +2161,10 @@ function bindEditorListeners(overlay: HTMLElement): void {
     const refreshBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.refreshBtnId}`) as HTMLButtonElement | null;
     const recomputeBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.recomputeBtnId}`) as HTMLButtonElement | null;
     const applyBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.applyBtnId}`) as HTMLButtonElement | null;
-    const saveGlobalPresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.saveGlobalPresetBtnId}`) as HTMLButtonElement | null;
-    const saveRolePresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.saveRolePresetBtnId}`) as HTMLButtonElement | null;
-    const clearRolePresetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.clearRolePresetBtnId}`) as HTMLButtonElement | null;
-    const presetSelect: HTMLSelectElement | null = overlay.querySelector(`#${EDITOR_IDS.presetId}`) as HTMLSelectElement | null;
-    const directFieldIds: string[] = [
-        EDITOR_IDS.summaryEnabledDirectId,
-        EDITOR_IDS.summaryIntervalDirectId,
-        EDITOR_IDS.summaryWindowDirectId,
-        EDITOR_IDS.profileRefreshDirectId,
-        EDITOR_IDS.qualityRefreshDirectId,
-        EDITOR_IDS.vectorFactsDirectId,
-        EDITOR_IDS.deletionStrategyDirectId,
-        EDITOR_IDS.autoBootstrapSeedId,
-        EDITOR_IDS.groupLaneEnabledId,
-    ];
+    const summarySaveGlobalBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.summarySaveGlobalBtnId}`) as HTMLButtonElement | null;
+    const summarySaveChatBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.summarySaveChatBtnId}`) as HTMLButtonElement | null;
+    const summaryClearChatBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.summaryClearChatBtnId}`) as HTMLButtonElement | null;
+    const summaryResetBtn: HTMLButtonElement | null = overlay.querySelector(`#${EDITOR_IDS.summaryResetBtnId}`) as HTMLButtonElement | null;
     const chatSearchInput: HTMLInputElement | null = overlay.querySelector(`#${EDITOR_IDS.chatSearchId}`) as HTMLInputElement | null;
     const chatList: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.chatListId}`) as HTMLElement | null;
 
@@ -1904,46 +2199,32 @@ function bindEditorListeners(overlay: HTMLElement): void {
             await renderCompactPanelStateV2(selectedChatKey);
         });
     });
-    presetSelect?.addEventListener('change', (): void => {
-        const nextPresetId = (String(presetSelect.value || 'custom').trim() || 'custom') as UserFacingPresetId;
-        applyPresetTemplateToForm(overlay, nextPresetId);
-    });
-    directFieldIds.forEach((fieldId: string): void => {
-        const field = overlay.querySelector(`#${fieldId}`) as HTMLElement | null;
-        if (!field) {
-            return;
-        }
-        const markPresetCustom = (): void => {
-            markPresetAsCustomIfNeeded(overlay);
-        };
-        field.addEventListener('change', markPresetCustom);
-        if (field instanceof HTMLInputElement && field.type !== 'checkbox') {
-            field.addEventListener('input', markPresetCustom);
-        }
-    });
-    saveGlobalPresetBtn?.addEventListener('click', (): void => {
+    summarySaveGlobalBtn?.addEventListener('click', (): void => {
         if (!selectedChatKey) {
             return;
         }
-        void savePresetForChat(overlay, selectedChatKey, 'global').then(async (): Promise<void> => {
+        void saveSummarySettingsForChat(overlay, selectedChatKey, 'global').then(async (): Promise<void> => {
             await renderEditorStateV2(overlay, selectedChatKey);
         });
     });
-    saveRolePresetBtn?.addEventListener('click', (): void => {
+    summarySaveChatBtn?.addEventListener('click', (): void => {
         if (!selectedChatKey) {
             return;
         }
-        void savePresetForChat(overlay, selectedChatKey, 'role').then(async (): Promise<void> => {
+        void saveSummarySettingsForChat(overlay, selectedChatKey, 'chat').then(async (): Promise<void> => {
             await renderEditorStateV2(overlay, selectedChatKey);
         });
     });
-    clearRolePresetBtn?.addEventListener('click', (): void => {
+    summaryClearChatBtn?.addEventListener('click', (): void => {
         if (!selectedChatKey) {
             return;
         }
-        void clearRolePresetForChat(selectedChatKey).then(async (): Promise<void> => {
+        void clearSummarySettingsOverrideForChat(selectedChatKey).then(async (): Promise<void> => {
             await renderEditorStateV2(overlay, selectedChatKey);
         });
+    });
+    summaryResetBtn?.addEventListener('click', (): void => {
+        fillSummarySettingsForm(overlay, DEFAULT_SUMMARY_SETTINGS, null);
     });
     chatSearchInput?.addEventListener('input', (): void => {
         applyChatListFilter(overlay, String(chatSearchInput.value || ''));
@@ -1965,6 +2246,11 @@ function bindEditorListeners(overlay: HTMLElement): void {
     overlay.addEventListener('click', (event: Event): void => {
         const target: EventTarget | null = event.target;
         if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const vectorViewerBtn = target.closest<HTMLElement>('[data-open-vector-viewer]');
+        if (vectorViewerBtn) {
+            void openRecordEditor({ initialView: 'vector' });
             return;
         }
         if (target.classList.contains('stx-memory-chat-strategy-sidebar-scrim')) {
@@ -2110,8 +2396,10 @@ function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): Readabl
         formatStyleLabel(snapshot.effectiveProfile.stylePreference),
         `记忆${formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength)}`,
         snapshot.effectiveProfile.vectorStrategy.enabled ? '会联想更早内容' : '偏轻量记忆',
+        formatMainlineTraceStatus(snapshot.mainlineTraceSnapshot),
+        formatProcessingDecisionSummary(snapshot.processingDecision),
     ].join(' · ');
-    const scope = `${formatPresetScopeLabel(snapshot.effectivePresetBundle)} · ${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
+    const scope = `${formatSummarySourceLabel(snapshot.summarySettingsSource)} · ${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)} · ${formatMainlineTraceStatus(snapshot.mainlineTraceSnapshot)}`;
     const roleBits: string[] = [];
     if (primaryLane?.lastEmotion) {
         roleBits.push(`情绪偏 ${formatLaneEmotionLabel(primaryLane.lastEmotion)}`);
@@ -2174,7 +2462,7 @@ function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): Readabl
         : {
             label: '系统提醒',
             title: formatLifecycleStageSummary(snapshot.lifecycleState.stage),
-            detail: formatLifecycleStageDescription(snapshot.lifecycleState),
+            detail: `${formatLifecycleStageDescription(snapshot.lifecycleState)} · ${formatLongSummaryCooldownSummary(snapshot.longSummaryCooldown)}`,
             foot: `当前阶段：${formatLifecycleStageLabel(snapshot.lifecycleState.stage)}`,
             tone: 'soft',
         };
@@ -2250,7 +2538,6 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
         adaptivePolicy: snapshot.effectivePolicy,
         retentionPolicy: snapshot.effectiveRetention,
         promptInjection: snapshot.promptInjectionProfile,
-        presetBundle: snapshot.effectivePresetBundle,
         groupMemory: snapshot.groupMemory,
     });
     writeJsonBlock(overlay, EDITOR_IDS.metricsBlockId, snapshot.metrics);
@@ -2261,7 +2548,13 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
         tip: '暂无生成前 gate 决策。',
     });
     writeJsonBlock(overlay, EDITOR_IDS.postDecisionBlockId, snapshot.postDecision ?? {
-        tip: '暂无生成后 gate 决策。',
+        tip: '暂无生成后 gate 输入快照。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.processingDecisionBlockId, snapshot.processingDecision ?? {
+        tip: '暂无处理等级决策，抽取后会在这里显示。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.longSummaryCooldownBlockId, snapshot.longSummaryCooldown ?? {
+        tip: '暂无长总结冷却状态。',
     });
     applyChatStrategyTooltips();
 }
@@ -2318,6 +2611,7 @@ async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promi
     const snapshot: ChatStrategySnapshot = await loadChatStrategySnapshot(chatKey);
     fillEditorForm(overlay, snapshot.effectiveProfile, snapshot.effectiveRetention);
     fillPresetAndDirectFields(overlay, snapshot);
+    renderSummarySettingsSection(overlay, snapshot);
     updateEditorHeaderV2(overlay, snapshot);
     updateQualityPanel(overlay, snapshot);
     updateMaintenancePanel(overlay, snapshot);
@@ -2333,7 +2627,6 @@ async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promi
         adaptivePolicy: snapshot.effectivePolicy,
         retentionPolicy: snapshot.effectiveRetention,
         promptInjection: snapshot.promptInjectionProfile,
-        presetBundle: snapshot.effectivePresetBundle,
         groupMemory: snapshot.groupMemory,
     });
     writeJsonBlock(overlay, EDITOR_IDS.metricsBlockId, snapshot.metrics);
@@ -2344,7 +2637,13 @@ async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promi
         tip: '暂无生成前 gate 决策。',
     });
     writeJsonBlock(overlay, EDITOR_IDS.postDecisionBlockId, snapshot.postDecision ?? {
-        tip: '暂无生成后 gate 决策。',
+        tip: '暂无生成后 gate 输入快照。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.processingDecisionBlockId, snapshot.processingDecision ?? {
+        tip: '暂无处理等级决策，抽取后会在这里显示。',
+    });
+    writeJsonBlock(overlay, EDITOR_IDS.longSummaryCooldownBlockId, snapshot.longSummaryCooldown ?? {
+        tip: '暂无长总结冷却状态。',
     });
     applyChatStrategyTooltips();
 }
@@ -2374,9 +2673,13 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
         const decision: StrategyDecision | null = await manager.getLastStrategyDecision();
         const preDecision: PreGenerationGateDecision | null = await manager.getLastPreGenerationDecision();
         const postDecision: PostGenerationGateDecision | null = await manager.getLastPostGenerationDecision();
+        const processingDecision: MemoryProcessingDecision | null = await manager.getLastProcessingDecision();
+        const longSummaryCooldown: LongSummaryCooldownState = await manager.getLongSummaryCooldown();
+        const summarySettings: SummarySettings = await manager.getGlobalSummarySettings();
+        const summarySettingsOverride: SummarySettingsOverride = await manager.getChatSummarySettingsOverride();
+        const effectiveSummarySettings: EffectiveSummarySettings = await manager.getEffectiveSummarySettings();
+        const extractHealth: ExtractHealthWindow = await manager.getExtractHealth();
         const promptInjectionProfile: PromptInjectionProfile = await manager.getPromptInjectionProfile();
-        const effectivePresetBundle: EffectivePresetBundle = await manager.getEffectivePresetBundle();
-        const userFacingPreset: UserFacingChatPreset | null = await manager.getUserFacingPreset();
         const groupMemory: GroupMemoryState | null = await manager.getGroupMemory();
         const autoProfile: ChatProfile = state.chatProfile ?? DEFAULT_CHAT_PROFILE;
         const autoPolicy: AdaptivePolicy = state.adaptivePolicy
@@ -2409,10 +2712,16 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
             decision,
             preDecision,
             postDecision,
+            processingDecision,
+            longSummaryCooldown,
+            summarySettings,
+            summarySettingsOverride,
+            effectiveSummarySettings,
+            summarySettingsSource: effectiveSummarySettings.source,
+            extractHealth,
             promptInjectionProfile,
-            effectivePresetBundle,
-            userFacingPreset,
             groupMemory,
+            mainlineTraceSnapshot: state.mainlineTraceSnapshot ?? null,
             overrides: (state.manualOverrides ?? {}) as Record<string, unknown>,
         };
     } finally {
@@ -2473,70 +2782,86 @@ async function runMaintenanceActionForChat(
 }
 
 /**
- * 功能：将当前表单中的预设保存到指定作用域。
- * @param overlay 编辑器遮罩层根节点。
- * @param chatKey 聊天键。
- * @param scope 保存作用域。
- * @returns 无返回值。
- */
-async function savePresetForChat(overlay: HTMLElement, chatKey: string, scope: 'global' | 'role'): Promise<void> {
-    const preset: UserFacingChatPreset = collectUserFacingPresetFromForm(overlay);
-    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
-    try {
-        if (scope === 'global' && typeof currentChatState?.saveGlobalPreset === 'function') {
-            await currentChatState.saveGlobalPreset(preset);
-            return;
-        }
-        if (scope === 'role' && typeof currentChatState?.saveRolePreset === 'function') {
-            await currentChatState.saveRolePreset(preset);
-            return;
-        }
-        const manager: ChatStateManager = new ChatStateManager(chatKey);
-        try {
-            await manager.load();
-            if (scope === 'global') {
-                await manager.saveGlobalPreset(preset);
-            } else {
-                await manager.saveRolePreset(preset);
-            }
-        } finally {
-            await manager.destroy();
-        }
-    } catch (error) {
-        console.warn('保存预设失败', error);
-    }
-}
-
-/**
- * 功能：清除指定聊天对应的角色或群聊默认预设。
- * @param chatKey 聊天键。
- * @returns 无返回值。
- */
-async function clearRolePresetForChat(chatKey: string): Promise<void> {
-    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
-    try {
-        if (typeof currentChatState?.clearRolePreset === 'function') {
-            await currentChatState.clearRolePreset();
-            return;
-        }
-        const manager: ChatStateManager = new ChatStateManager(chatKey);
-        try {
-            await manager.load();
-            await manager.clearRolePreset();
-        } finally {
-            await manager.destroy();
-        }
-    } catch (error) {
-        console.warn('清除角色预设失败', error);
-    }
-}
-
-/**
  * 功能：保存当前编辑器表单中的覆盖配置。
  * @param overlay 编辑器遮罩层根节点。
  * @param chatKey 聊天键。
  * @returns 无返回值。
  */
+async function saveSummarySettingsForChat(overlay: HTMLElement, chatKey: string, scope: 'global' | 'chat'): Promise<void> {
+    const nextSettings: SummarySettings = collectSummarySettingsFromForm(overlay);
+    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
+    try {
+        if (scope === 'global') {
+            if (typeof currentChatState?.setGlobalSummarySettings === 'function') {
+                await currentChatState.setGlobalSummarySettings(nextSettings);
+                return;
+            }
+            const manager: ChatStateManager = new ChatStateManager(chatKey);
+            try {
+                await manager.load();
+                await manager.setGlobalSummarySettings(nextSettings);
+                await manager.flush();
+                return;
+            } finally {
+                await manager.destroy();
+            }
+        }
+
+        const baseSettings: SummarySettings = currentChatState && typeof currentChatState.getGlobalSummarySettings === 'function'
+            ? await currentChatState.getGlobalSummarySettings()
+            : await (async (): Promise<SummarySettings> => {
+                const manager: ChatStateManager = new ChatStateManager(chatKey);
+                try {
+                    await manager.load();
+                    return await manager.getGlobalSummarySettings();
+                } finally {
+                    await manager.destroy();
+                }
+            })();
+        const overrideDiff: SummarySettingsOverride = buildSummarySettingsOverrideDiff(baseSettings, nextSettings);
+        if (Object.keys(overrideDiff).length === 0) {
+            await clearSummarySettingsOverrideForChat(chatKey);
+            return;
+        }
+        if (typeof currentChatState?.setChatSummarySettingsOverride === 'function') {
+            await currentChatState.setChatSummarySettingsOverride(overrideDiff);
+            await currentChatState.flush();
+            return;
+        }
+        const manager: ChatStateManager = new ChatStateManager(chatKey);
+        try {
+            await manager.load();
+            await manager.setChatSummarySettingsOverride(overrideDiff);
+            await manager.flush();
+        } finally {
+            await manager.destroy();
+        }
+    } catch (error) {
+        console.warn('保存总结设置失败', error);
+    }
+}
+
+async function clearSummarySettingsOverrideForChat(chatKey: string): Promise<void> {
+    const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
+    try {
+        if (typeof currentChatState?.clearChatSummarySettingsOverride === 'function') {
+            await currentChatState.clearChatSummarySettingsOverride();
+            await currentChatState.flush();
+            return;
+        }
+        const manager: ChatStateManager = new ChatStateManager(chatKey);
+        try {
+            await manager.load();
+            await manager.clearChatSummarySettingsOverride();
+            await manager.flush();
+        } finally {
+            await manager.destroy();
+        }
+    } catch (error) {
+        console.warn('清除总结设置覆盖失败', error);
+    }
+}
+
 async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string): Promise<void> {
     setInputValue(
         overlay,
@@ -2552,39 +2877,11 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
     );
     const profileOverride: Partial<ChatProfile> = collectProfileOverrideFromForm(overlay);
     const retentionOverride: Partial<RetentionPolicy> = collectRetentionOverrideFromForm(overlay);
-    const userFacingPreset: UserFacingChatPreset = collectUserFacingPresetFromForm(overlay);
     const currentChatState: MemoryChatStateApi | undefined = chatKey === getCurrentChatKey() ? getWindowMemoryChatState() : undefined;
-
-    if (currentChatState) {
-        if (typeof currentChatState.setUserFacingPreset === 'function') {
-            await currentChatState.setUserFacingPreset(userFacingPreset);
-        }
-        if (typeof currentChatState.setSummaryPolicyOverride === 'function') {
-            await currentChatState.setSummaryPolicyOverride({
-                enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
-                interval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
-                windowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
-            });
-        }
-        await currentChatState.setChatProfileOverride(profileOverride);
-        await currentChatState.setRetentionPolicyOverride(retentionOverride);
-        await currentChatState.recomputeAdaptivePolicy();
-        if (typeof currentChatState.recomputeMemoryQuality === 'function') {
-            await currentChatState.recomputeMemoryQuality();
-        }
-        await currentChatState.flush();
-        return;
-    }
 
     const manager: ChatStateManager = new ChatStateManager(chatKey);
     try {
         await manager.load();
-        await manager.setUserFacingPreset(userFacingPreset);
-        await manager.setSummaryPolicyOverride({
-            enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
-            interval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
-            windowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
-        });
         await manager.setChatProfileOverride(profileOverride);
         await manager.setRetentionPolicyOverride(retentionOverride);
         await manager.recomputeAdaptivePolicy();
@@ -2619,7 +2916,7 @@ function updateEditorHeader(overlay: HTMLElement, snapshot: ChatStrategySnapshot
         snapshot.effectiveProfile.vectorStrategy.enabled ? '向量开启' : '向量关闭',
     ].join(' · ');
     intentElement.textContent = formatIntentLabel(snapshot.decision?.intent || 'auto');
-    scopeElement.textContent = `预设来源：${formatPresetScopeLabel(snapshot.effectivePresetBundle)} · 分轨：${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
+    scopeElement.textContent = `当前来源：${formatSummarySourceLabel(snapshot.summarySettingsSource)} · 分轨：${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
     replaceSummaryChips(sectionsWrap, snapshot.decision?.sectionsUsed || []);
 }
 
@@ -2636,9 +2933,10 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     const vectorModeElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityVectorModeId}`) as HTMLElement | null;
     const vectorStatsElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityVectorStatsId}`) as HTMLElement | null;
     const vectorTimesElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityVectorTimesId}`) as HTMLElement | null;
+    const traceEvidenceElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityTraceEvidenceId}`) as HTMLElement | null;
     const adviceElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityAdviceId}`) as HTMLElement | null;
     const reasonsElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.qualityReasonsId}`) as HTMLElement | null;
-    if (!scoreElement || !levelElement || !dimensionsElement || !vectorModeElement || !vectorStatsElement || !vectorTimesElement || !adviceElement || !reasonsElement) {
+    if (!scoreElement || !levelElement || !dimensionsElement || !vectorModeElement || !vectorStatsElement || !vectorTimesElement || !traceEvidenceElement || !adviceElement || !reasonsElement) {
         return;
     }
 
@@ -2670,6 +2968,7 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     );
     vectorStatsElement.innerHTML = `<span class="stx-memory-vector-stat"><i class="fa-solid fa-brain"></i> 事实: ${Number(lifecycle.factCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-list-check"></i> 摘要: ${Number(lifecycle.summaryCount ?? 0)}</span> <span class="stx-memory-vector-stat"><i class="fa-solid fa-cubes"></i> 检索分块: ${Number(lifecycle.vectorChunkCount ?? 0)}</span>`;
     vectorTimesElement.innerHTML = `<strong>最近激活</strong>: 访问 ${formatTimestamp(lifecycle.lastAccessAt)} · 命中 ${formatTimestamp(lifecycle.lastHitAt)} · 索引 ${formatTimestamp(lifecycle.lastIndexAt)}`;
+    traceEvidenceElement.innerHTML = buildMainlineTraceEvidenceMarkup(snapshot.mainlineTraceSnapshot);
 
     if (!Array.isArray(snapshot.maintenanceAdvice) || snapshot.maintenanceAdvice.length === 0) {
         adviceElement.innerHTML = '<span class="stx-memory-chat-strategy-empty">暂无建议</span>';
@@ -2737,7 +3036,7 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
     lifecycleTimelineElement.innerHTML = buildLifecycleTimelineMarkup(snapshot.lifecycleState);
     lifecycleImpactElement.innerHTML = buildLifecycleImpactMarkup(snapshot.lifecycleState);
     lifecycleMetaElement.textContent = formatLifecycleMetaText(snapshot.lifecycleState);
-    presetScopeElement.textContent = formatPresetScopeLabel(snapshot.effectivePresetBundle);
+    presetScopeElement.textContent = formatSummarySourceLabel(snapshot.summarySettingsSource);
     groupLaneMetaElement.textContent = formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled);
     groupLaneActorsElement.innerHTML = buildGroupLaneCardsMarkup(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled);
 
@@ -3069,20 +3368,11 @@ function fillEditorForm(overlay: HTMLElement, profile: ChatProfile, retention: R
  * @returns 无返回值。
  */
 function fillPresetAndDirectFields(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
-    const presetId = snapshot.userFacingPreset?.presetId
-        ?? snapshot.effectivePresetBundle.chatPreset?.presetId
-        ?? snapshot.effectivePresetBundle.rolePreset?.presetId
-        ?? snapshot.effectivePresetBundle.globalPreset?.presetId
-        ?? 'custom';
-    setSelectValue(overlay, EDITOR_IDS.presetId, presetId);
-    setCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId, snapshot.effectivePolicy.summaryEnabled);
-    setInputValue(overlay, EDITOR_IDS.summaryIntervalDirectId, snapshot.effectivePolicy.extractInterval);
-    setInputValue(overlay, EDITOR_IDS.summaryWindowDirectId, snapshot.effectivePolicy.extractWindowSize);
     setInputValue(overlay, EDITOR_IDS.profileRefreshDirectId, snapshot.effectivePolicy.profileRefreshInterval);
     setInputValue(overlay, EDITOR_IDS.qualityRefreshDirectId, snapshot.effectivePolicy.qualityRefreshInterval);
     setInputValue(overlay, EDITOR_IDS.vectorFactsDirectId, snapshot.effectiveProfile.vectorStrategy.activationFacts);
     setSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId, snapshot.effectiveRetention.deletionStrategy);
-    setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, snapshot.effectivePresetBundle.autoBootstrapSemanticSeed);
+    setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, snapshot.effectivePolicy.groupLaneEnabled);
     setCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId, snapshot.effectivePolicy.groupLaneEnabled);
     refreshSharedSelectOptions(overlay);
 }
@@ -3092,120 +3382,15 @@ function fillPresetAndDirectFields(overlay: HTMLElement, snapshot: ChatStrategyS
  * @param overlay 编辑器遮罩层根节点。
  * @returns 无返回值。
  */
-function markPresetAsCustomIfNeeded(overlay: HTMLElement): void {
-    const currentPreset = getSelectValue(overlay, EDITOR_IDS.presetId);
-    if (currentPreset === 'custom') {
-        return;
-    }
-    setSelectValue(overlay, EDITOR_IDS.presetId, 'custom');
-    refreshSharedSelectOptions(overlay);
-}
-
 /**
  * 功能：将预设模板快速回填到编辑器表单。
  * @param overlay 编辑器遮罩层根节点。
- * @param presetId 预设编号。
  * @returns 无返回值。
  */
-function applyPresetTemplateToForm(overlay: HTMLElement, presetId: UserFacingPresetId): void {
-    const preset = buildUserFacingPresetById(presetId);
-    const profile = {
-        ...DEFAULT_CHAT_PROFILE,
-        ...(preset.chatProfile ?? {}),
-        vectorStrategy: {
-            ...DEFAULT_CHAT_PROFILE.vectorStrategy,
-            ...(preset.chatProfile?.vectorStrategy ?? {}),
-        },
-    };
-    const retention = {
-        ...DEFAULT_RETENTION_POLICY,
-        ...(preset.retentionPolicy ?? {}),
-    };
-    fillEditorForm(overlay, profile, retention);
-    setCheckboxValue(
-        overlay,
-        EDITOR_IDS.summaryEnabledDirectId,
-        preset.adaptivePolicy?.summaryEnabled !== false,
-    );
-    setInputValue(
-        overlay,
-        EDITOR_IDS.summaryIntervalDirectId,
-        Number(preset.adaptivePolicy?.extractInterval ?? 12),
-    );
-    setInputValue(
-        overlay,
-        EDITOR_IDS.summaryWindowDirectId,
-        Number(preset.adaptivePolicy?.extractWindowSize ?? 32),
-    );
-    setInputValue(
-        overlay,
-        EDITOR_IDS.profileRefreshDirectId,
-        Number(preset.profileRefreshInterval ?? 12),
-    );
-    setInputValue(
-        overlay,
-        EDITOR_IDS.qualityRefreshDirectId,
-        Number(preset.qualityRefreshInterval ?? 12),
-    );
-    setInputValue(
-        overlay,
-        EDITOR_IDS.vectorFactsDirectId,
-        Number(profile.vectorStrategy.activationFacts ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts),
-    );
-    setSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId, retention.deletionStrategy);
-    setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, preset.autoBootstrapSemanticSeed !== false);
-    setCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId, preset.groupLaneEnabled === true);
-    refreshSharedSelectOptions(overlay);
-}
-
 /**
- * 功能：从编辑器表单采集用户可读预设。
+ * 功能：从编辑器表单采集画像覆盖。
  * @param overlay 编辑器遮罩层根节点。
- * @returns 用户可读预设对象。
- */
-function collectUserFacingPresetFromForm(overlay: HTMLElement): UserFacingChatPreset {
-    const presetId = (getSelectValue(overlay, EDITOR_IDS.presetId) || 'custom') as UserFacingPresetId;
-    const basePreset = buildUserFacingPresetById(presetId);
-    return {
-        ...basePreset,
-        presetId,
-        label: listUserFacingPresetOptions().find((item) => item.value === presetId)?.label || '自定义',
-        chatProfile: {
-            ...(basePreset.chatProfile ?? {}),
-            vectorStrategy: {
-                ...(basePreset.chatProfile?.vectorStrategy ?? {}),
-                activationFacts: getNumberValue(
-                    overlay,
-                    EDITOR_IDS.vectorFactsDirectId,
-                    DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts,
-                ),
-            },
-        },
-        adaptivePolicy: {
-            ...(basePreset.adaptivePolicy ?? {}),
-            summaryEnabled: getCheckboxValue(overlay, EDITOR_IDS.summaryEnabledDirectId),
-            extractInterval: getNumberValue(overlay, EDITOR_IDS.summaryIntervalDirectId, 12),
-            extractWindowSize: getNumberValue(overlay, EDITOR_IDS.summaryWindowDirectId, 40),
-            profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 6),
-            qualityRefreshInterval: getNumberValue(overlay, EDITOR_IDS.qualityRefreshDirectId, 12),
-            groupLaneEnabled: getCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId),
-        },
-        profileRefreshInterval: getNumberValue(overlay, EDITOR_IDS.profileRefreshDirectId, 6),
-        qualityRefreshInterval: getNumberValue(overlay, EDITOR_IDS.qualityRefreshDirectId, 12),
-        retentionPolicy: {
-            ...(basePreset.retentionPolicy ?? {}),
-            deletionStrategy: getSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId) as DeletionStrategy,
-        },
-        autoBootstrapSemanticSeed: getCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId),
-        groupLaneEnabled: getCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId),
-        updatedAt: Date.now(),
-    };
-}
-
-/**
- * 功能：从编辑器表单采集画像覆盖值。
- * @param overlay 编辑器遮罩层根节点。
- * @returns 聊天画像覆盖对象。
+ * @returns 聊天画像覆盖。
  */
 function collectProfileOverrideFromForm(overlay: HTMLElement): Partial<ChatProfile> {
     return {
@@ -3353,8 +3538,6 @@ function translateDiagnosticKey(key: string): string {
         maintenanceInsights: '深度维护洞察',
         lifecycleState: '聊天活跃阶段',
         promptInjectionProfile: '注入配置概览',
-        effectivePresetBundle: '当前预设方案',
-        userFacingPreset: '当前可见预设',
         groupMemory: '群聊分轨状态',
         lanes: '角色车道',
         sharedScene: '共享场景',
@@ -3396,7 +3579,97 @@ function translateDiagnosticKey(key: string): string {
         qualityRefreshInterval: '质量评估间隔',
         vectorIdleDecayDays: '闲置衰减天数',
     };
-    return dict[key] || key;
+        return dict[key] || key;
+}
+
+function formatSummarySourceLabel(source: SummarySettingsSource | null | undefined): string {
+    if (source === 'chat_override') {
+        return '当前聊天覆盖';
+    }
+    if (source === 'global_setting') {
+        return '全局默认';
+    }
+    if (source === 'scenario_preset') {
+        return '场景预设';
+    }
+    if (source === 'memory_mode_preset') {
+        return '记忆模式预设';
+    }
+    return '系统默认';
+}
+
+function formatSummaryMemoryModeLabel(value: SummaryMemoryMode): string {
+    return value === 'streamlined' ? '精简' : value === 'deep' ? '深度' : '平衡';
+}
+
+function formatSummaryScenarioLabel(value: SummaryScenario): string {
+    const labels: Record<SummaryScenario, string> = {
+        auto: '自动',
+        companion_chat: '陪伴闲聊',
+        long_rp: '长剧情角色扮演',
+        worldbook_qa: '世界设定问答',
+        group_trpg: '群聊 / 跑团',
+        tool_qa: '工具 / 代码协作',
+        custom: '自定义',
+    };
+    return labels[value] ?? '自动';
+}
+
+function formatSummaryResourcePriorityLabel(value: SummaryResourcePriority): string {
+    return value === 'quality' ? '质量优先' : value === 'saving' ? '节省优先' : '平衡';
+}
+
+function formatSummaryTimingLabel(value: SummaryTiming): string {
+    return value === 'key_only' ? '关键节点' : value === 'frequent' ? '更频繁' : '阶段结束';
+}
+
+function formatSummaryLengthLabel(value: SummaryLength): string {
+    return value === 'short' ? '短' : value === 'detailed' ? '详细' : value === 'ultra' ? '超长' : '标准';
+}
+
+function formatSummaryCooldownLabel(value: SummaryCooldownPreset): string {
+    return value === 'short' ? '短' : value === 'long' ? '长' : '标准';
+}
+
+function formatSummaryRecordFocusLabel(value: SummaryRecordFocus): string {
+    const labels: Record<SummaryRecordFocus, string> = {
+        facts: '事实',
+        relationship: '关系',
+        world: '世界',
+        plot: '剧情',
+        emotion: '情绪',
+        tool_result: '工具结果',
+    };
+    return labels[value] ?? value;
+}
+
+function formatSummaryLowValueHandlingLabel(value: SummaryLowValueHandling): string {
+    return value === 'keep_more' ? '保留更多' : value === 'keep_some' ? '保留部分' : '忽略';
+}
+
+function formatSummaryNoiseFilterLabel(value: SummaryNoiseFilter): string {
+    return value === 'high' ? '高过滤' : value === 'low' ? '低过滤' : '中过滤';
+}
+
+function formatSummaryProcessIntervalLabel(value: SummaryProcessInterval): string {
+    return value === 'small' ? '小' : value === 'large' ? '大' : '中';
+}
+
+function formatSummaryLookbackScopeLabel(value: SummaryLookbackScope): string {
+    return value === 'small' ? '小' : value === 'large' ? '大' : '中';
+}
+
+function formatSummaryTriggerLabel(value: SummaryLongTrigger): string {
+    const labels: Record<SummaryLongTrigger, string> = {
+        scene_end: '场景结束',
+        combat_end: '战斗结束',
+        plot_advance: '剧情推进',
+        relationship_shift: '关系变化',
+        world_change: '世界变化',
+        structure_repair: '结构修复',
+        archive_finalize: '归档整理',
+    };
+    return labels[value] ?? value;
 }
 
 /**
@@ -3993,19 +4266,7 @@ function formatLifecycleStageLabel(stage: ChatLifecycleState['stage']): string {
  * @param bundle 生效预设包。
  * @returns 用户可读的预设来源说明。
  */
-function formatPresetScopeLabel(bundle: EffectivePresetBundle): string {
-    if (bundle.chatPreset?.label) {
-        return `聊天覆盖 · ${bundle.chatPreset.label}`;
-    }
-    if (bundle.rolePreset?.label) {
-        const scope = bundle.roleScope === 'group' ? '群聊默认' : '角色卡默认';
-        return `${scope} · ${bundle.rolePreset.label}`;
-    }
-    if (bundle.globalPreset?.label) {
-        return `全局默认 · ${bundle.globalPreset.label}`;
-    }
-    return '未命中显式预设';
-}
+
 
 /**
  * 功能：格式化群聊分轨摘要。

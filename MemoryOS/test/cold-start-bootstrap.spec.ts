@@ -123,7 +123,6 @@ describe('cold-start bootstrap persistence', (): void => {
         const fakeThis = {
             chatKey_: 'chat-001',
             chatStateManager: {
-                getEffectivePresetBundle: vi.fn(async () => ({ autoBootstrapSemanticSeed: true })),
                 getSemanticSeed: vi.fn(async () => persistedState.semanticSeed),
                 getColdStartFingerprint: vi.fn(async () => persistedState.coldStartFingerprint),
                 getColdStartLorebookSelection: vi.fn(async () => persistedState.selectedLorebooks),

@@ -9,6 +9,7 @@ import type {
     EditorHealthSnapshot,
     GroupMemoryState,
     LatestRecallExplanation,
+    EffectiveSummarySettings,
     MemoryLifecycleState,
     MemoryTuningProfile,
     LogicalChatView,
@@ -17,6 +18,8 @@ import type {
     MemoryMutationPlanSnapshot,
     MemoryQualityScorecard,
     MemorySDK,
+    MemoryProcessingDecision,
+    LongSummaryCooldownState,
     InjectionSectionName,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
@@ -27,6 +30,11 @@ import type {
     SimpleMemoryPersona,
     SnapshotValue,
     SpeakerMemoryLane,
+    SummarySettings,
+    SummaryLongTrigger,
+    SummaryRecordFocus,
+    SummarySettingsOverride,
+    SummarySettingsSource,
 } from '../../../SDK/stx';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import { buildRecallUiSummary, formatRecallUiReasonCode } from './recallUiSummary';
@@ -416,12 +424,27 @@ function formatTuningSummary(tuning: MemoryTuningProfile): string {
         ].join(' / ');
 }
 
+function formatSummarySourceLabel(source: SummarySettingsSource | null | undefined): string {
+        if (source === 'chat_override') {
+                return '当前聊天覆盖';
+        }
+        if (source === 'global_setting') {
+                return '全局默认';
+        }
+        if (source === 'scenario_preset') {
+                return '场景预设';
+        }
+        if (source === 'memory_mode_preset') {
+                return '记忆模式预设';
+        }
+        return '系统默认';
+}
+
 /**
  * 功能：构建新的角色概览说明。
  * @param snapshot 体验快照。
  * @returns string：HTML 片段。
- */
-function buildRoleOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
+ */function buildRoleOverviewMarkupNext(snapshot: ExperienceSnapshot): string {
         const primaryLane: SpeakerMemoryLane | null = pickPrimaryLane(snapshot.groupMemory);
         const roleName: string = normalizeText(
                 primaryLane?.displayName
@@ -1752,6 +1775,85 @@ function buildPostDecisionItems(postDecision: PostGenerationGateDecision | null)
 }
 
 /**
+ * 功能：构建处理等级决策摘要。
+ * 参数：
+ *   processingDecision：最近一次处理等级决策。
+ * 返回：
+ *   ExperienceListItem[]：摘要列表。
+ */
+function buildProcessingDecisionItems(processingDecision: MemoryProcessingDecision | null): ExperienceListItem[] {
+    if (!processingDecision) {
+        return [{
+            title: '处理等级决策',
+            detail: '最近还没有处理等级决策记录。',
+            meta: '等待下一次抽取触发',
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-shuffle',
+        }];
+    }
+    const precompressed = processingDecision.precompressedStats;
+    const compressionMeta = precompressed
+        ? `${precompressed.originalLength} → ${precompressed.compressedLength} 字`
+        : '暂无预压缩数据';
+    const compressionDetail = precompressed
+        ? `去重 ${precompressed.removedDuplicateCount} · 合并 ${precompressed.mergedRunCount} · 截断 ${precompressed.truncatedToolOutputCount}`
+        : '本轮没有可展示的预压缩统计。';
+    return [
+        {
+            title: '处理等级决策',
+            detail: `等级 ${processingDecision.level} · 摘要 ${processingDecision.summaryTier} · 抽取 ${processingDecision.extractScope}`,
+            meta: processingDecision.cooldownBlocked ? '长总结冷却命中' : '本轮正常执行',
+            tone: processingDecision.level === 'heavy' ? 'warning' : (processingDecision.level === 'none' ? 'soft' : 'accent'),
+            iconClassName: 'fa-solid fa-shuffle',
+        },
+        {
+            title: '长总结触发',
+            detail: processingDecision.heavyTriggerKind
+                ? `重处理来源：${processingDecision.heavyTriggerKind}`
+                : '本轮没有进入重处理候选。',
+            meta: processingDecision.reasonCodes.slice(0, 3).join(' / ') || '暂无原因码',
+            tone: processingDecision.level === 'heavy' ? 'warning' : 'soft',
+            iconClassName: 'fa-solid fa-pen-to-square',
+        },
+        {
+            title: '预压缩结果',
+            detail: compressionDetail,
+            meta: compressionMeta,
+            tone: precompressed && precompressed.compressedLength < precompressed.originalLength ? 'accent' : 'soft',
+            iconClassName: 'fa-solid fa-compress',
+        },
+    ];
+}
+
+/**
+ * 功能：构建长总结冷却摘要。
+ * 参数：
+ *   cooldown：最近一次长总结冷却状态。
+ * 返回：
+ *   ExperienceListItem[]：摘要列表。
+ */
+function buildLongSummaryCooldownItems(cooldown: LongSummaryCooldownState | null): ExperienceListItem[] {
+    if (!cooldown) {
+        return [];
+    }
+    const hasSummary = Number(cooldown.lastLongSummaryAt ?? 0) > 0;
+    const hasHeavy = Number(cooldown.lastHeavyProcessAt ?? 0) > 0;
+    return [{
+        title: '长总结冷却',
+        detail: hasSummary
+            ? `最近长总结：${formatRelativeTime(Number(cooldown.lastLongSummaryAt ?? 0))}`
+            : '最近还没有长总结记录。',
+        meta: [
+            cooldown.lastLongSummaryWindowHash ? `窗口 ${cooldown.lastLongSummaryWindowHash.slice(0, 8)}` : '无窗口哈希',
+            cooldown.lastLongSummaryReason ? `原因 ${cooldown.lastLongSummaryReason}` : '无原因码',
+            hasHeavy ? `重处理 ${formatRelativeTime(Number(cooldown.lastHeavyProcessAt ?? 0))}` : '暂无重处理',
+        ].join(' · '),
+        tone: hasSummary ? 'warning' : 'soft',
+        iconClassName: 'fa-solid fa-hourglass-half',
+    }];
+}
+
+/**
  * 功能：把最近一次 mutation planner 快照格式化成便于界面展示的动作统计。
  * @param snapshot 最近一次 mutation planner 快照。
  * @returns 用于界面展示的动作统计文案。
@@ -1837,12 +1939,147 @@ function buildMutationHistoryItems(history: EditorExperienceSnapshot['mutationHi
 }
 
 /**
+ * 功能：构建主链 trace 的体验面板条目。
+ * @param traceSnapshot 最近一次主链 trace 快照。
+ * @returns 可直接渲染到体验面板的列表条目。
+ */
+function buildMainlineTraceItems(traceSnapshot: EditorExperienceSnapshot['mainlineTraceSnapshot']): ExperienceListItem[] {
+    const normalized = traceSnapshot ?? null;
+    const recentTraces = Array.isArray(normalized?.recentTraces) ? normalized!.recentTraces : [];
+    const lastSuccess = normalized?.lastSuccessTrace
+        ?? normalized?.lastPromptInjectionTrace
+        ?? normalized?.lastRecallTrace
+        ?? normalized?.lastTrustedWriteTrace
+        ?? normalized?.lastAppendTrace
+        ?? normalized?.lastIngestTrace
+        ?? null;
+    if (recentTraces.length === 0 && !lastSuccess) {
+        return [{
+            title: '主链追踪',
+            detail: '最近还没有可见的主链 trace。',
+            meta: '等待 ingest / trusted write / recall / prompt 注入完成后展示',
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-route',
+        }];
+    }
+
+    const preview = recentTraces
+        .slice(-3)
+        .map((item): string => `${item.ok ? '成功' : '失败'} · ${item.label} · ${formatRelativeTime(item.ts)}`)
+        .join(' / ');
+
+    return [{
+        title: '主链追踪',
+        detail: lastSuccess
+            ? `最近成功：${lastSuccess.label} · ${formatRelativeTime(lastSuccess.ts)}`
+            : `${recentTraces.length} 条 trace 已记录`,
+        meta: normalized?.lastUpdatedAt ? `最近更新 ${formatRelativeTime(normalized.lastUpdatedAt)}` : '尚未生成追踪快照',
+        tone: lastSuccess ? 'accent' : 'soft',
+        iconClassName: 'fa-solid fa-route',
+        detailHtml: preview
+            ? `<div class="stx-ui-body-text">${escapeHtml(preview)}</div>`
+            : undefined,
+    }];
+}
+
+/**
+ * 功能：把总结设置快照压缩成一组只读概览条目。
+ * @param snapshot 体验快照。
+ * @returns 可直接渲染到体验面板的条目列表。
+ */
+function buildSummarySettingsItems(snapshot: EditorExperienceSnapshot): ExperienceListItem[] {
+    const effective: EffectiveSummarySettings | null = snapshot.effectiveSummarySettings ?? null;
+    const sourceLabel = snapshot.summarySettingsSource
+        ? formatSummarySourceLabel(snapshot.summarySettingsSource as SummarySettingsSource)
+        : '系统默认';
+    const override = snapshot.summarySettingsOverride ?? null;
+    if (!effective) {
+        return [{
+            title: '总结设置',
+            detail: '当前还没有总结设置快照。',
+            meta: sourceLabel,
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-list-check',
+        }];
+    }
+    const focusText = Array.isArray(effective.contentPreference.recordFocus) && effective.contentPreference.recordFocus.length > 0
+        ? effective.contentPreference.recordFocus.map((item: SummaryRecordFocus): string => ({
+            facts: '事实',
+            relationship: '关系',
+            world: '世界',
+            plot: '剧情',
+            emotion: '情绪',
+            tool_result: '工具结果',
+        }[item] ?? item)).join(' / ')
+        : '事实 / 关系 / 世界 / 剧情';
+    const triggerText = Array.isArray(effective.summaryBehavior.longSummaryTrigger) && effective.summaryBehavior.longSummaryTrigger.length > 0
+        ? effective.summaryBehavior.longSummaryTrigger.map((item: SummaryLongTrigger): string => ({
+            scene_end: '场景结束',
+            combat_end: '战斗结束',
+            plot_advance: '剧情推进',
+            relationship_shift: '关系变化',
+            world_change: '世界变化',
+            structure_repair: '结构修复',
+            archive_finalize: '归档整理',
+        }[item] ?? item)).join(' / ')
+        : '阶段结束';
+    const workModeText = '记忆模式 ' + (effective.workMode.memoryMode === 'streamlined' ? '精简' : effective.workMode.memoryMode === 'deep' ? '深度' : '平衡') + ' · 使用场景 ' + ({
+        auto: '自动',
+        companion_chat: '陪伴闲聊',
+        long_rp: '长剧情角色扮演',
+        worldbook_qa: '世界设定问答',
+        group_trpg: '群聊 / 跑团',
+        tool_qa: '工具 / 代码协作',
+        custom: '自定义',
+    }[effective.workMode.scenario] ?? '自动') + ' · 资源优先级 ' + (effective.workMode.resourcePriority === 'quality' ? '质量优先' : effective.workMode.resourcePriority === 'saving' ? '节省优先' : '平衡');
+    const behaviorText = '时机 ' + (effective.summaryBehavior.summaryTiming === 'key_only' ? '关键节点' : effective.summaryBehavior.summaryTiming === 'frequent' ? '更频繁' : '阶段结束') + ' · 长度 ' + (effective.summaryBehavior.summaryLength === 'short' ? '短' : effective.summaryBehavior.summaryLength === 'detailed' ? '详细' : effective.summaryBehavior.summaryLength === 'ultra' ? '超长' : '标准') + ' · 冷却 ' + (effective.summaryBehavior.longSummaryCooldown === 'short' ? '短' : effective.summaryBehavior.longSummaryCooldown === 'long' ? '长' : '标准');
+    const advancedText = '处理间隔 ' + (effective.advanced.processInterval === 'small' ? '小' : effective.advanced.processInterval === 'large' ? '大' : '中') + ' · 回看范围 ' + (effective.advanced.lookbackScope === 'small' ? '小' : effective.advanced.lookbackScope === 'large' ? '大' : '中');
+    const overrideText = override && Object.keys(override).length > 0 ? '当前聊天存在差异覆盖' : '当前聊天与全局默认一致';
+    return [
+        {
+            title: '总结设置来源',
+            detail: sourceLabel,
+            meta: '来源：' + sourceLabel,
+            tone: 'accent',
+            iconClassName: 'fa-solid fa-sitemap',
+        },
+        {
+            title: '工作方式',
+            detail: workModeText,
+            meta: '当前生效：' + sourceLabel,
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-sliders',
+        },
+        {
+            title: '总结行为',
+            detail: behaviorText,
+            meta: '长总结触发：' + triggerText,
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-pen-to-square',
+        },
+        {
+            title: '记录重点',
+            detail: focusText,
+            meta: '低价值处理：' + (effective.contentPreference.lowValueHandling === 'keep_more' ? '保留更多' : effective.contentPreference.lowValueHandling === 'keep_some' ? '保留部分' : '忽略') + ' · 过滤强度：' + (effective.contentPreference.noiseFilter === 'high' ? '高过滤' : effective.contentPreference.noiseFilter === 'low' ? '低过滤' : '中过滤'),
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-tags',
+        },
+        {
+            title: '高级设置',
+            detail: advancedText,
+            meta: overrideText,
+            tone: 'soft',
+            iconClassName: 'fa-solid fa-wand-magic-sparkles',
+        },
+    ];
+}
+
+/**
  * 功能：把调参值写回到输入框。
  * @param id 输入框 ID。
  * @param value 待写入的数值。
  * @returns 无返回值。
- */
-function setNumberInputValue(id: string, value: number): void {
+ */function setNumberInputValue(id: string, value: number): void {
     const element: HTMLInputElement | null = document.getElementById(id) as HTMLInputElement | null;
     if (!element) {
         return;
@@ -2435,6 +2672,10 @@ function renderInjectionPanel(ids: MemoryOSSettingsIds, snapshot: EditorExperien
     setContainerHtml(
         ids.injectionOverviewId,
         `${buildRecallInjectionOverviewMarkup(snapshot)}${buildListMarkup([
+            ...buildSummarySettingsItems(snapshot),
+            ...buildMainlineTraceItems(snapshot.mainlineTraceSnapshot),
+            ...buildProcessingDecisionItems(snapshot.processingDecision),
+            ...buildLongSummaryCooldownItems(snapshot.longSummaryCooldown),
             ...buildMutationPlanItems(snapshot.lastMutationPlan),
             ...buildMutationHistoryItems(snapshot.mutationHistory),
             {

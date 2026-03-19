@@ -20,6 +20,7 @@ import {
     type WorldStateSectionTypeBucket,
 } from './worldStateSectionClassifier';
 import { buildRecallUiSummary, extractForeignPrivateSuppressedItems } from './recallUiSummary';
+import { VectorMemoryViewerController, type VectorMemoryViewerSourceJumpTarget } from './vectorMemoryViewer';
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
@@ -39,7 +40,7 @@ import type {
 import type { StructuredWorldStateEntry } from '../types';
 
 type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'audit' | 'memory_mutation_history';
-type ViewMode = 'world' | 'maintenance' | 'memory' | 'diagnostics' | 'raw';
+type ViewMode = 'world' | 'maintenance' | 'memory' | 'vector' | 'diagnostics' | 'raw';
 type VisibleRawTableName = Exclude<RawTableName, 'world_state'>;
 
 interface RecordEditorViewMeta {
@@ -64,6 +65,18 @@ interface PendingRawUpdate {
 interface CurrentSort {
     col: string;
     asc: boolean;
+}
+
+interface PendingRawFocus {
+    tableName: 'events' | 'facts' | 'summaries';
+    recordId?: string;
+    messageId?: string;
+}
+
+interface RecordEditorOpenOptions {
+    initialView?: ViewMode;
+    rawTable?: RawTableName;
+    focusRaw?: PendingRawFocus | null;
 }
 
 interface WorldStateSectionCategoryShortcutItem {
@@ -105,6 +118,13 @@ const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
         title: '角色记忆面板',
         subtitle: '用 RPG 角色卡方式查看记忆、遗忘、重大事件影响和角色画像。',
         tip: '查看每个角色的记忆状态、遗忘阶段、主视角与重大事件影响。',
+    },
+    vector: {
+        label: '向量记忆',
+        icon: 'fa-solid fa-vector-square',
+        title: '向量记忆查看器',
+        subtitle: '集中查看当前聊天的向量记忆、来源回溯、检索测试和单条维护动作。',
+        tip: '查看向量记忆、检索测试结果、来源跳转与异常状态。',
     },
     diagnostics: {
         label: '系统诊断',
@@ -2706,13 +2726,14 @@ function readRawEditedValue(editableDiv: HTMLElement, dataType: string | null): 
 
 /**
  * 功能：打开 MemoryOS 记录编辑器。
+ * @param options 打开选项。
  * @returns 无返回值
  */
-export async function openRecordEditor(): Promise<void> {
+export async function openRecordEditor(options: RecordEditorOpenOptions = {}): Promise<void> {
     initThemeKernel();
     ensureSharedTooltip();
 
-    let currentViewMode: ViewMode = 'world';
+    let currentViewMode: ViewMode = options.initialView ?? 'world';
     let btnSaveRef: HTMLButtonElement | null = null;
     let worldUiInteractionController: AbortController | null = null;
 
@@ -2730,6 +2751,7 @@ export async function openRecordEditor(): Promise<void> {
             return true;
         },
         onAfterClose: (): void => {
+            vectorViewerController?.reset();
             void disposeRecordMemory();
         },
     });
@@ -2761,6 +2783,7 @@ export async function openRecordEditor(): Promise<void> {
                 <div class="stx-re-view-tabs" id="stx-re-view-tabs">
                     <div class="stx-re-tab is-active" data-view="world"${buildTipAttr(RECORD_EDITOR_VIEW_META.world.tip)}><span>${RECORD_EDITOR_VIEW_META.world.label}</span></div>
                     <div class="stx-re-tab" data-view="memory"${buildTipAttr(RECORD_EDITOR_VIEW_META.memory.tip)}><span>${RECORD_EDITOR_VIEW_META.memory.label}</span></div>
+                    <div class="stx-re-tab" data-view="vector"${buildTipAttr(RECORD_EDITOR_VIEW_META.vector.tip)}><span>${RECORD_EDITOR_VIEW_META.vector.label}</span></div>
                     <div class="stx-re-tab" data-view="maintenance"${buildTipAttr(RECORD_EDITOR_VIEW_META.maintenance.tip)}><span>${RECORD_EDITOR_VIEW_META.maintenance.label}</span></div>
                     <div class="stx-re-tab" data-view="diagnostics"${buildTipAttr(RECORD_EDITOR_VIEW_META.diagnostics.tip)}><span>${RECORD_EDITOR_VIEW_META.diagnostics.label}</span></div>
                     <div class="stx-re-tab" data-view="raw"${buildTipAttr(RECORD_EDITOR_VIEW_META.raw.tip)}><span>${RECORD_EDITOR_VIEW_META.raw.label}</span></div>
@@ -2802,7 +2825,7 @@ export async function openRecordEditor(): Promise<void> {
     const btnClearDb = panel.querySelector('#stx-re-btn-clear-db') as HTMLButtonElement;
     const footer = panel.querySelector('#stx-re-footer') as HTMLElement;
 
-    let currentRawTable: RawTableName = 'events';
+    let currentRawTable: RawTableName = options.rawTable ?? options.focusRaw?.tableName ?? 'events';
     let currentChatKey = getCurrentMemoryChatKey();
     let currentSort: CurrentSort = { col: '', asc: false };
 let currentLogicTableKey = '';
@@ -2816,7 +2839,12 @@ const currentWorldStateSectionTypeFilters = new Map<string, string>();
 let currentWorldStateRenderSeq = 0;
 let pendingWorldStateFocusSectionKey: string | null = null;
 let pendingWorldStateOpenSectionKeys: Set<string> | null = null;
+let pendingRawFocus: PendingRawFocus | null = options.focusRaw ?? null;
+let vectorViewerController: VectorMemoryViewerController | null = null;
 const selectedLogicRowIds = new Set<string>();
+    if ((options.rawTable || options.focusRaw) && !options.initialView) {
+        currentViewMode = 'raw';
+    }
     const pendingChanges = {
         deletes: new Set<string>(),
         updates: new Map<string, PendingRawUpdate>(),
@@ -2894,6 +2922,77 @@ const selectedLogicRowIds = new Set<string>();
         recordMemoryChatKey = currentChatKey;
         return recordMemory;
     }
+
+    /**
+     * 功能：切换到原始数据表并尝试聚焦指定记录。
+     * @param target 原始表聚焦目标。
+     * @returns 无返回值。
+     */
+    async function jumpToRawTarget(target: VectorMemoryViewerSourceJumpTarget): Promise<void> {
+        pendingRawFocus = {
+            tableName: target.tableName,
+            recordId: target.recordId,
+            messageId: target.messageId,
+        };
+        currentViewMode = 'raw';
+        currentRawTable = target.tableName;
+        currentSort = { col: '', asc: false };
+        updateChromeState();
+        await renderActiveView();
+    }
+
+    /**
+     * 功能：在原始表完成渲染后聚焦指定记录。
+     * @param tableName 当前原始表名。
+     * @returns 无返回值。
+     */
+    function applyPendingRawFocus(tableName: RawTableName): void {
+        if (!pendingRawFocus || pendingRawFocus.tableName !== tableName) {
+            return;
+        }
+        const escapeSelector = (window as Window & { CSS?: { escape?: (value: string) => string } }).CSS?.escape;
+        const buildSelector = (attribute: 'data-record-id' | 'data-message-id', value?: string): string => {
+            const normalized = String(value ?? '').trim();
+            if (!normalized) {
+                return '';
+            }
+            if (escapeSelector) {
+                return `tr[${attribute}="${escapeSelector(normalized)}"]`;
+            }
+            return `tr[${attribute}="${normalized.replace(/"/g, '\\"')}"]`;
+        };
+        const recordSelector = buildSelector('data-record-id', pendingRawFocus.recordId);
+        const messageSelector = buildSelector('data-message-id', pendingRawFocus.messageId);
+        const row = (recordSelector ? contentArea.querySelector(recordSelector) : null)
+            || (messageSelector ? contentArea.querySelector(messageSelector) : null);
+        pendingRawFocus = null;
+        if (!(row instanceof HTMLElement)) {
+            return;
+        }
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const previousOutline = row.style.outline;
+        const previousBackground = row.style.background;
+        row.style.outline = '2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #ef7d2d) 88%, white 12%)';
+        row.style.background = 'color-mix(in srgb, var(--SmartThemeQuoteColor, #ef7d2d) 18%, transparent)';
+        window.setTimeout((): void => {
+            row.style.outline = previousOutline;
+            row.style.background = previousBackground;
+        }, 2600);
+    }
+
+    vectorViewerController = new VectorMemoryViewerController({
+        container: contentArea,
+        getMemory: async (): Promise<MemorySDKImpl> => {
+            const memory = await ensureRecordMemory();
+            if (!memory) {
+                throw new Error('当前未选中聊天。');
+            }
+            return memory;
+        },
+        onJumpToRaw: async (target: VectorMemoryViewerSourceJumpTarget): Promise<void> => {
+            await jumpToRawTarget(target);
+        },
+    });
 
     /**
      * 功能：刷新底部保存区状态。
@@ -4817,6 +4916,9 @@ const selectedLogicRowIds = new Set<string>();
         try {
             const data = await getRawRecords(tableName);
             if (data.length === 0) {
+                if (pendingRawFocus?.tableName === tableName) {
+                    pendingRawFocus = null;
+                }
                 contentArea.innerHTML = '<div class="stx-re-empty">暂无数据记录。</div>';
                 updateRawSelectionState();
                 return;
@@ -4824,6 +4926,9 @@ const selectedLogicRowIds = new Set<string>();
             const displayData = tableName === 'events' ? dedupeDisplayEvents(data) : [...data];
             const readOnlyTable = isReadOnlyRawTable(tableName);
             if (displayData.length === 0) {
+                if (pendingRawFocus?.tableName === tableName) {
+                    pendingRawFocus = null;
+                }
                 contentArea.innerHTML = '<div class="stx-re-empty">暂无数据记录。</div>';
                 updateRawSelectionState();
                 return;
@@ -4911,7 +5016,7 @@ const selectedLogicRowIds = new Set<string>();
                             actorPluginId === 'system' ? '来源：系统内核' : '',
                         ]);
                         return `
-                            <tr class="stx-re-row">
+                            <tr class="stx-re-row" data-record-id="${escapeHtml(recordId)}">
                                 <td>${renderRecordSummaryMarkup(formatAuditActionLabel(String(record.action ?? '')), String(record.reason ?? '记录发生了结构变更').trim() || '记录发生了结构变更', '审计编号', recordId)}</td>
                                 <td>${renderRecordSummaryMarkup(actorTitle, actorSubtitle || '未记录额外来源信息', '内部来源', actorPluginId)}</td>
                                 <td><div class="stx-re-value" data-id="${escapeHtml(recordId)}" data-type="object">${renderRawValueHtml(recordValue, false)}</div></td>
@@ -4929,7 +5034,7 @@ const selectedLogicRowIds = new Set<string>();
                         ? (record.reasonCodes as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean).join(' / ')
                         : '';
                     return `
-                        <tr class="stx-re-row">
+                        <tr class="stx-re-row" data-record-id="${escapeHtml(recordId)}">
                             <td>${renderRecordSummaryMarkup(formatMutationHistoryActionLabel(String(record.action ?? '')), `${targetKind} · ${targetTitle}`, '变更编号', recordId)}</td>
                             <td>${renderRecordSummaryMarkup(formatLogicRowDisplayLabel(String(record.targetRecordKey ?? ''), targetTitle), joinReadableMeta([String(record.compareKey ?? '').trim(), reasonText ? `原因 ${reasonText}` : '']), '目标记录', String(record.targetRecordKey ?? ''))}</td>
                             <td>${renderRecordSummaryMarkup(sourceLabel || '未记录来源', Array.isArray(record.visibleMessageIds) && record.visibleMessageIds.length > 0 ? `消息 ${record.visibleMessageIds.length}` : '未记录消息上下文', '执行来源', String(record.consumerPluginId ?? ''))}</td>
@@ -4951,6 +5056,7 @@ const selectedLogicRowIds = new Set<string>();
                 tableEl.innerHTML = `<thead>${readOnlyTheadHtml}</thead><tbody>${readOnlyRowsHtml}</tbody>`;
                 contentArea.innerHTML = '';
                 contentArea.appendChild(tableEl);
+                applyPendingRawFocus(tableName);
 
                 tableEl.querySelectorAll('.stx-re-th-sortable').forEach((header: Element): void => {
                     (header as HTMLElement).dataset.tip = '点击这一列排序，再点一次切换升序/降序。';
@@ -5004,7 +5110,7 @@ const selectedLogicRowIds = new Set<string>();
                         senderName && senderName !== normalizeSenderLabel(senderType) ? senderName : '',
                     ]);
                     rowsHtml += `
-                        <tr class="${rowClass}">
+                        <tr class="${rowClass}" data-record-id="${escapeHtml(recordId)}" data-message-id="${escapeHtml(readEventMessageId(record))}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
                             <td>${renderRecordSummaryMarkup(eventTypeLabel, eventSummary, '事件编号', recordId)}</td>
                             <td>${escapeHtml(formatTimeLabel(record.ts))}</td>
@@ -5025,7 +5131,7 @@ const selectedLogicRowIds = new Set<string>();
                     const factSubtitle = joinReadableMeta([entityLabel, buildFactSummaryLabel(record)]);
                     const entitySummary = entity ? '这条记录已经绑定到具体对象' : '这条记录还没有绑定对象';
                     rowsHtml += `
-                        <tr class="${rowClass}">
+                        <tr class="${rowClass}" data-record-id="${escapeHtml(recordId)}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
                             <td>${renderRecordSummaryMarkup(factTitle, factSubtitle, '', '', isFactStructurallyIncomplete(record) ? '结构待整理' : '')}</td>
                             <td>${renderRecordSummaryMarkup(entityLabel, entitySummary, '', '')}</td>
@@ -5042,7 +5148,7 @@ const selectedLogicRowIds = new Set<string>();
                         ? (record.keywords as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
                         : [];
                     rowsHtml += `
-                        <tr class="${rowClass}">
+                        <tr class="${rowClass}" data-record-id="${escapeHtml(recordId)}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
                             <td>${renderRecordSummaryMarkup(buildSummaryHeadline(record), buildSummarySubtitle(record), '', '')}</td>
                             <td>${renderRecordSummaryMarkup(keywords.length > 0 ? keywords.join('、') : '暂无关键词', keywords.length > 0 ? '这些词会帮助系统回忆这段摘要' : '当前这条摘要还没有提取关键词', '', '')}</td>
@@ -5063,7 +5169,7 @@ const selectedLogicRowIds = new Set<string>();
                         actorPluginId === 'system' ? '来源：系统内核' : '',
                     ]);
                     rowsHtml += `
-                        <tr class="${rowClass}">
+                        <tr class="${rowClass}" data-record-id="${escapeHtml(recordId)}">
                             <td class="stx-re-checkbox-td"><input type="checkbox" class="stx-re-checkbox stx-re-select-row" data-id="${escapeHtml(recordId)}" ${checkboxDisabled}></td>
                             <td>${renderRecordSummaryMarkup(formatAuditActionLabel(String(record.action ?? '')), String(record.reason ?? '记录发生了结构变更').trim() || '记录发生了结构变更', '审计编号', recordId)}</td>
                             <td>${renderRecordSummaryMarkup(actorTitle, actorSubtitle || '未记录额外来源信息', '内部来源', actorPluginId)}</td>
@@ -5080,6 +5186,7 @@ const selectedLogicRowIds = new Set<string>();
             tableEl.innerHTML = `<thead>${theadHtml}</thead><tbody>${rowsHtml}</tbody>`;
             contentArea.innerHTML = '';
             contentArea.appendChild(tableEl);
+            applyPendingRawFocus(tableName);
 
             tableEl.querySelectorAll('.stx-re-th-sortable').forEach((header: Element): void => {
                 (header as HTMLElement).dataset.tip = '点击按这一列排序，再点一次切换升序/降序。';
@@ -6411,6 +6518,14 @@ const selectedLogicRowIds = new Set<string>();
             await renderMemoryView();
             return;
         }
+        if (currentViewMode === 'vector') {
+            if (!currentChatKey) {
+                contentArea.innerHTML = '<div class="stx-re-empty">请先在左侧选择一个聊天，再查看向量记忆。</div>';
+                return;
+            }
+            await vectorViewerController?.render();
+            return;
+        }
         if (currentViewMode === 'diagnostics') {
             await renderDiagnosticsView();
             return;
@@ -6428,6 +6543,8 @@ const selectedLogicRowIds = new Set<string>();
         currentLogicTableKey = '';
         currentMemoryActorKey = '__all__';
         logicCreateExpanded = false;
+        pendingRawFocus = null;
+        vectorViewerController?.reset();
         selectedLogicRowIds.clear();
         activateChatItem(chatKey);
         if (currentViewMode !== 'raw') {

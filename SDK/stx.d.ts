@@ -230,7 +230,179 @@ export type ExtractStrategy = 'facts_only' | 'facts_relations' | 'facts_relation
 
 export type SummaryStrategy = 'short' | 'layered' | 'timeline';
 
+export type SummaryMemoryMode = 'streamlined' | 'balanced' | 'deep';
+
+export type SummaryScenario = 'auto' | 'companion_chat' | 'long_rp' | 'worldbook_qa' | 'group_trpg' | 'tool_qa' | 'custom';
+
+export type SummaryResourcePriority = 'quality' | 'balanced' | 'saving';
+
+export type SummaryTiming = 'key_only' | 'stage_end' | 'frequent';
+
+export type SummaryLength = 'short' | 'standard' | 'detailed' | 'ultra';
+
+export type SummaryCooldownPreset = 'short' | 'standard' | 'long';
+
+export type SummaryRecordFocus = 'facts' | 'relationship' | 'world' | 'plot' | 'emotion' | 'tool_result';
+
+export type SummaryLowValueHandling = 'ignore' | 'keep_some' | 'keep_more';
+
+export type SummaryLookbackScope = 'small' | 'medium' | 'large';
+
+export type SummaryNoiseFilter = 'low' | 'medium' | 'high';
+
+export type SummaryLongTrigger = 'scene_end' | 'combat_end' | 'plot_advance' | 'relationship_shift' | 'world_change' | 'structure_repair' | 'archive_finalize';
+
+export type SummarySettingsSource = 'system_default' | 'memory_mode_preset' | 'scenario_preset' | 'global_setting' | 'chat_override';
+
+export type SummaryProcessInterval = 'small' | 'medium' | 'large';
+
+export interface SummarySettingsWorkMode {
+    memoryMode: SummaryMemoryMode;
+    scenario: SummaryScenario;
+    resourcePriority: SummaryResourcePriority;
+}
+
+export interface SummarySettingsSummaryBehavior {
+    summaryTiming: SummaryTiming;
+    summaryLength: SummaryLength;
+    longSummaryCooldown: SummaryCooldownPreset;
+    longSummaryTrigger: SummaryLongTrigger[];
+}
+
+export interface SummarySettingsContentPreference {
+    recordFocus: SummaryRecordFocus[];
+    lowValueHandling: SummaryLowValueHandling;
+    noiseFilter: SummaryNoiseFilter;
+}
+
+export interface SummarySettingsAdvanced {
+    processInterval: SummaryProcessInterval;
+    lookbackScope: SummaryLookbackScope;
+    allowLightRelationExtraction: boolean;
+    allowMediumWorldStateUpdate: boolean;
+    allowHeavyRewriteSummaries: boolean;
+    allowHeavyConsistencyRepair: boolean;
+    allowHeavyExpandedLookback: boolean;
+}
+
+export interface SummarySettings {
+    workMode: SummarySettingsWorkMode;
+    summaryBehavior: SummarySettingsSummaryBehavior;
+    contentPreference: SummarySettingsContentPreference;
+    advanced: SummarySettingsAdvanced;
+}
+
+export interface SummarySettingsOverride {
+    workMode?: Partial<SummarySettingsWorkMode>;
+    summaryBehavior?: Partial<SummarySettingsSummaryBehavior>;
+    contentPreference?: Partial<SummarySettingsContentPreference>;
+    advanced?: Partial<SummarySettingsAdvanced>;
+}
+
+export interface EffectiveSummarySettings extends SummarySettings {
+    source: SummarySettingsSource;
+    resolvedScenario: Exclude<SummaryScenario, 'auto'> | 'custom';
+    resolvedChatType: ChatType;
+}
+
 export type DeletionStrategy = 'soft_delete' | 'immediate_purge';
+
+export type MemoryProcessingLevel = 'none' | 'light' | 'medium' | 'heavy';
+
+export type SummaryExecutionTier = 'none' | 'short' | 'long';
+
+export type HeavyProcessingTriggerKind =
+    | 'stage_completion'
+    | 'structure_repair'
+    | 'long_running'
+    | 'archive_finalize'
+    | 'special_event'
+    | 'value_rich';
+
+export interface PrecompressedWindowStats {
+    originalLength: number;
+    compressedLength: number;
+    removedGreetingCount: number;
+    removedDuplicateCount: number;
+    mergedRunCount: number;
+    truncatedToolOutputCount: number;
+}
+
+export interface MemoryProcessingDecision {
+    level: MemoryProcessingLevel;
+    summaryTier: SummaryExecutionTier;
+    extractScope: MemoryProcessingLevel;
+    reasonCodes: string[];
+    heavyTriggerKind: HeavyProcessingTriggerKind | null;
+    cooldownBlocked: boolean;
+    windowHash: string;
+    windowEventCount: number;
+    windowUserMessageCount: number;
+    generatedAt: number;
+    precompressedStats: PrecompressedWindowStats;
+}
+
+export interface LongSummaryCooldownState {
+    lastLongSummaryAt: number;
+    lastLongSummaryWindowHash: string;
+    lastLongSummaryReason: string;
+    lastLongSummaryStage: string;
+    lastHeavyProcessAt: number;
+    lastLongSummaryAssistantTurnCount: number;
+}
+
+export type MemoryTraceSource =
+    | 'host_message'
+    | 'trusted_write'
+    | 'recall'
+    | 'prompt_injection'
+    | 'external_callback'
+    | 'maintenance';
+
+export type MemoryTraceStage =
+    | 'memory_ingest_started'
+    | 'memory_event_appended'
+    | 'memory_trusted_write_started'
+    | 'memory_trusted_write_finished'
+    | 'memory_recall_started'
+    | 'memory_context_built'
+    | 'memory_prompt_inserted'
+    | 'memory_prompt_insert_success'
+    | 'memory_external_callback_removed'
+    | 'memory_external_callback_unused'
+    | 'memory_maintenance_started'
+    | 'memory_maintenance_finished'
+    | 'memory_skipped'
+    | 'memory_failed';
+
+export interface MemoryTraceContext {
+    traceId: string;
+    chatKey: string;
+    sourceMessageId?: string;
+    eventId?: string;
+    requestId?: string;
+    source: MemoryTraceSource;
+    stage: MemoryTraceStage;
+    ts: number;
+}
+
+export interface MemoryMainlineTraceEntry extends MemoryTraceContext {
+    ok: boolean;
+    label: string;
+    detail?: Record<string, unknown>;
+}
+
+export interface MemoryMainlineTraceSnapshot {
+    lastTrace: MemoryMainlineTraceEntry | null;
+    lastSuccessTrace: MemoryMainlineTraceEntry | null;
+    recentTraces: MemoryMainlineTraceEntry[];
+    lastIngestTrace: MemoryMainlineTraceEntry | null;
+    lastAppendTrace: MemoryMainlineTraceEntry | null;
+    lastTrustedWriteTrace: MemoryMainlineTraceEntry | null;
+    lastRecallTrace: MemoryMainlineTraceEntry | null;
+    lastPromptInjectionTrace: MemoryMainlineTraceEntry | null;
+    lastUpdatedAt: number;
+}
 
 export type InjectionIntent = 'setting_qa' | 'story_continue' | 'roleplay' | 'tool_qa' | 'auto';
 
@@ -248,16 +420,6 @@ export type GenerationValueClass =
     | 'relationship_shift'
     | 'small_talk_noise'
     | 'tool_result';
-
-export type UserFacingPresetId =
-    | 'companion_chat'
-    | 'long_rp'
-    | 'worldbook_qa'
-    | 'group_trpg'
-    | 'tool_qa'
-    | 'custom';
-
-export type PresetScope = 'global' | 'character' | 'group' | 'chat';
 
 export type InjectionSectionName =
     | 'WORLD_STATE'
@@ -489,6 +651,102 @@ export interface MemoryMutationHistoryEntry {
     derivation?: DBDerivationSource;
 }
 
+export type VectorMemorySourceKind = 'fact' | 'summary' | 'unknown';
+
+export type VectorMemoryStatusKind =
+    | 'normal'
+    | 'recent_hit'
+    | 'long_unused'
+    | 'source_missing'
+    | 'archived_residual'
+    | 'needs_rebuild';
+
+export interface VectorMemoryUsageSnapshot {
+    totalHits: number;
+    selectedHits: number;
+    hitsIn7d: number;
+    hitsIn30d: number;
+    lastHitAt: number | null;
+    lastSelectedAt: number | null;
+    lastQuery: string | null;
+    lastScore: number | null;
+}
+
+export interface VectorMemoryRecordSummary {
+    chunkId: string;
+    chatKey: string;
+    content: string;
+    preview: string;
+    contentHash: string;
+    contentLength: number;
+    createdAt: number;
+    sourceRecordKey: string | null;
+    sourceRecordKind: VectorMemorySourceKind;
+    sourceLabel: string;
+    sourceDetail: string;
+    ownerActorKey: string | null;
+    ownerActorLabel: string | null;
+    sourceScope: string | null;
+    memoryType: string | null;
+    memorySubtype: string | null;
+    participantActorKeys: string[];
+    participantActorLabels: string[];
+    anchorMessageId: string | null;
+    sourceMessageIds: string[];
+    sourceTraceKind: string | null;
+    sourceReason: string | null;
+    sourceViewHash: string | null;
+    sourceSnapshotHash: string | null;
+    sourceRepairGeneration: number | null;
+    embeddingModel: string | null;
+    embeddingDimensions: number | null;
+    statusKind: VectorMemoryStatusKind;
+    statusLabel: string;
+    statusTone: 'success' | 'warning' | 'danger' | 'muted';
+    statusReasons: string[];
+    isArchived: boolean;
+    sourceMissing: boolean;
+    needsRebuild: boolean;
+    duplicateCount: number;
+    usage: VectorMemoryUsageSnapshot;
+}
+
+export interface VectorMemorySearchTestHit {
+    chunkId: string;
+    sourceRecordKey: string | null;
+    sourceRecordKind: VectorMemorySourceKind;
+    sourceLabel: string;
+    preview: string;
+    vectorScore: number;
+    initialRank: number | null;
+    rerankedRank: number | null;
+    finalRank: number | null;
+    matchedInRecall: boolean;
+    enteredContext: boolean;
+    reasonCodes: string[];
+}
+
+export interface VectorMemorySearchTestResult {
+    query: string;
+    testedAt: number;
+    rerankApplied: boolean;
+    hitCount: number;
+    selectedCount: number;
+    hits: VectorMemorySearchTestHit[];
+}
+
+export interface VectorMemoryViewerSnapshot {
+    chatKey: string;
+    generatedAt: number;
+    totalCount: number;
+    archivedCount: number;
+    sourceMissingCount: number;
+    needsRebuildCount: number;
+    recentHitCount: number;
+    longUnusedCount: number;
+    items: VectorMemoryRecordSummary[];
+}
+
 export interface AdaptivePolicy {
     extractInterval: number;
     extractWindowSize: number;
@@ -582,36 +840,6 @@ export interface BuildContextDecision {
     intent: InjectionIntent;
     reasonCodes: string[];
     preDecision: PreGenerationGateDecision;
-}
-
-export interface UserFacingChatPreset {
-    presetId: UserFacingPresetId;
-    label: string;
-    chatProfile?: ChatProfileOverride;
-    adaptivePolicy?: Partial<AdaptivePolicy>;
-    retentionPolicy?: Partial<RetentionPolicy>;
-    promptInjection?: Partial<PromptInjectionProfile>;
-    profileRefreshInterval?: number;
-    qualityRefreshInterval?: number;
-    autoBootstrapSemanticSeed?: boolean;
-    groupLaneEnabled?: boolean;
-    updatedAt: number;
-}
-
-export interface EffectivePresetBundle {
-    globalPreset: UserFacingChatPreset | null;
-    rolePreset: UserFacingChatPreset | null;
-    chatPreset: UserFacingChatPreset | null;
-    effectiveChatProfile: ChatProfileOverride;
-    effectiveAdaptivePolicy: Partial<AdaptivePolicy>;
-    effectiveRetentionPolicy: Partial<RetentionPolicy>;
-    effectivePromptInjection: PromptInjectionProfile;
-    profileRefreshInterval: number;
-    qualityRefreshInterval: number;
-    autoBootstrapSemanticSeed: boolean;
-    groupLaneEnabled: boolean;
-    roleScope: PresetScope | 'none';
-    roleScopeKey: string;
 }
 
 // -- v2: 行操作类型 --
@@ -1152,6 +1380,8 @@ export interface MemoryOSChatState {
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
     latestRecallExplanation?: LatestRecallExplanation | null;
+    mainlineTraceSnapshot?: MemoryMainlineTraceSnapshot | null;
+    summarySettingsOverride?: SummarySettingsOverride | null;
     memoryTuningProfile?: MemoryTuningProfile;
     mutationRepairQueue?: MutationRepairTask[];
     lastMutationRepairViewHash?: string;
@@ -1413,9 +1643,16 @@ export interface EditorExperienceSnapshot {
     lorebookDecision: LorebookGateDecision | null;
     preDecision: PreGenerationGateDecision | null;
     postDecision: PostGenerationGateDecision | null;
+    processingDecision: MemoryProcessingDecision | null;
+    longSummaryCooldown: LongSummaryCooldownState;
+    summarySettings: SummarySettings;
+    summarySettingsOverride: SummarySettingsOverride;
+    effectiveSummarySettings: EffectiveSummarySettings;
+    summarySettingsSource: SummarySettingsSource;
     lifecycleSummary: MemoryLifecycleState[];
     recallLog: RecallLogEntry[];
     latestRecallExplanation: LatestRecallExplanation | null;
+    mainlineTraceSnapshot: MemoryMainlineTraceSnapshot;
     tuningProfile: MemoryTuningProfile;
     maintenanceInsights: MaintenanceInsight[];
     mutationHistory: MemoryMutationHistoryEntry[];
@@ -1478,6 +1715,28 @@ export interface MemorySDK {
             intentHint?: InjectionIntent;
             includeDecisionMeta?: boolean;
         }): Promise<string | BuildContextDecision>;
+        runMemoryPromptInjection(opts?: {
+            maxTokens?: number;
+            sections?: InjectionSectionName[];
+            query?: string;
+            sectionBudgets?: Partial<Record<InjectionSectionName, number>>;
+            preferSummary?: boolean;
+            intentHint?: InjectionIntent;
+            includeDecisionMeta?: boolean;
+            promptMessages?: SdkTavernPromptMessageEvent[];
+            source?: string;
+            sourceMessageId?: string;
+            trace?: MemoryTraceContext;
+        }): Promise<{
+            shouldInject: boolean;
+            inserted: boolean;
+            insertIndex: number;
+            promptLength: number;
+            insertedLength: number;
+            trace: MemoryMainlineTraceEntry;
+            preDecision: PreGenerationGateDecision | null;
+            reasonCodes: string[];
+        }>;
         setPromptInjectionProfile(opts: {
             queryMode?: PromptQueryMode;
             settingOnlyMinScore?: number;
@@ -1563,6 +1822,8 @@ export interface MemorySDK {
         getCanonSnapshot(): Promise<CanonSnapshot>;
         getEditorHealth(): Promise<EditorHealthSnapshot>;
         getExperienceSnapshot(): Promise<EditorExperienceSnapshot>;
+        getVectorMemorySnapshot(): Promise<VectorMemoryViewerSnapshot>;
+        runVectorMemorySearchTest(query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult>;
         refreshCanonSnapshot(): Promise<CanonSnapshot>;
         rebuildChatView(): Promise<LogicalChatView>;
         refreshSemanticSeed(): Promise<CanonSnapshot>;
@@ -1572,6 +1833,12 @@ export interface MemorySDK {
     chatState: {
         getChatProfile(): Promise<ChatProfile>;
         setChatProfileOverride(override: Partial<ChatProfile>): Promise<void>;
+        getGlobalSummarySettings(): Promise<SummarySettings>;
+        setGlobalSummarySettings(settings: SummarySettings): Promise<SummarySettings>;
+        getChatSummarySettingsOverride(): Promise<SummarySettingsOverride>;
+        setChatSummarySettingsOverride(override: SummarySettingsOverride): Promise<void>;
+        clearChatSummarySettingsOverride(): Promise<void>;
+        getEffectiveSummarySettings(): Promise<EffectiveSummarySettings>;
         getAdaptiveMetrics(): Promise<AdaptiveMetrics>;
         getAdaptivePolicy(): Promise<AdaptivePolicy>;
         getVectorLifecycle(): Promise<VectorLifecycleState>;
@@ -1611,6 +1878,10 @@ export interface MemorySDK {
         getMemoryTuningProfile(): Promise<MemoryTuningProfile>;
         setMemoryTuningProfile(profile: Partial<MemoryTuningProfile>): Promise<MemoryTuningProfile>;
         getMutationHistory(opts?: { limit?: number; recordKey?: string; targetKind?: MemoryMutationTargetKind; action?: MemoryMutationHistoryAction }): Promise<MemoryMutationHistoryEntry[]>;
+        getMainlineTraceSnapshot(): Promise<MemoryMainlineTraceSnapshot>;
+        rebuildVectorRecord(recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]>;
+        deleteVectorChunk(chunkId: string): Promise<boolean>;
+        setVectorChunkArchived(chunkId: string, archived: boolean): Promise<void>;
         getColdStartStage(): Promise<ColdStartStage | null>;
         primeColdStartPrompt(reason?: string): Promise<boolean>;
         primeColdStartExtract(reason?: string): Promise<boolean>;
@@ -1618,12 +1889,6 @@ export interface MemorySDK {
         getGroupMemory(): Promise<GroupMemoryState | null>;
         getPromptInjectionProfile(): Promise<PromptInjectionProfile>;
         setPromptInjectionProfile(profile: Partial<PromptInjectionProfile>): Promise<void>;
-        getEffectivePresetBundle(): Promise<EffectivePresetBundle>;
-        saveGlobalPreset(preset: UserFacingChatPreset): Promise<void>;
-        saveRolePreset(preset: UserFacingChatPreset): Promise<void>;
-        clearRolePreset(): Promise<void>;
-        getUserFacingPreset(): Promise<UserFacingChatPreset | null>;
-        setUserFacingPreset(preset: UserFacingChatPreset | null): Promise<void>;
         getLastPreGenerationDecision(): Promise<PreGenerationGateDecision | null>;
         getLastPostGenerationDecision(): Promise<PostGenerationGateDecision | null>;
         getLogicalChatView(): Promise<LogicalChatView | null>;

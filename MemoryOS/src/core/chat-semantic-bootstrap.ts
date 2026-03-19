@@ -4,7 +4,7 @@ import {
     getSillyTavernContextEvent,
     listTavernActiveWorldbooksEvent,
     loadTavernWorldbookEntriesEvent,
-    replaceTavernUserPlaceholdersEvent,
+    substituteTavernMacrosIfPresentEvent,
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
@@ -46,11 +46,13 @@ function normalizeLorebookNames(value: unknown): string[] {
 }
 
 function normalizeText(value: unknown): string {
-    return replaceTavernUserPlaceholdersEvent(String(value ?? '')).replace(/\s+/g, ' ').trim();
+    const expanded = substituteTavernMacrosIfPresentEvent(value);
+    return expanded.replace(/\s+/g, ' ').trim();
 }
 
 function normalizeLorebookContent(value: unknown): string {
-    return replaceTavernUserPlaceholdersEvent(String(value ?? '')).replace(/\r\n?/g, '\n').trim();
+    const expanded = substituteTavernMacrosIfPresentEvent(value);
+    return expanded.replace(/\r\n?/g, '\n').trim();
 }
 
 function truncateText(value: string, limit: number): string {

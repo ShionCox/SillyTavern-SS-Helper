@@ -2,6 +2,7 @@ import type { EventEnvelope } from '../../../SDK/stx';
 import { ChatStateManager } from '../core/chat-state-manager';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
+import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
 import { StateManager } from '../core/state-manager';
 import { SummariesManager } from '../core/summaries-manager';
 import {
@@ -16,6 +17,7 @@ import {
     loadActiveWorldInfoEntriesFromHost,
     type LorebookEntryCandidate,
 } from '../core/lorebook-relevance-gate';
+import { insertTavernPromptMessageEvent } from '../../../SDK/tavern';
 import type {
     AdaptivePolicy,
     GroupMemoryState,
@@ -42,6 +44,8 @@ import { buildPreparedRecallContext } from './recall-context-builder';
 import { buildLayeredMemoryContext } from './prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries } from './recall-log-mapper';
 import { buildViewpointPolicyInput } from './viewpoint-policy';
+import { findLastTavernPromptUserIndexEvent } from '../../../SDK/tavern';
+import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 
 type BuildContextOptions = {
     maxTokens?: number;
@@ -63,6 +67,19 @@ type BuildContextDecision = {
 };
 
 type PromptInjectionPolicy = PromptInjectionProfile;
+
+/**
+ * 功能：计算应插入到最后一条真实 user 消息前的位置。
+ * @param chat Prompt 消息数组。
+ * @returns 插入索引。
+ */
+function resolveMemoryContextInsertIndex(chat: SdkTavernPromptMessageEvent[]): number {
+    if (!Array.isArray(chat) || chat.length === 0) {
+        return 0;
+    }
+    const lastUserIndex = findLastTavernPromptUserIndexEvent(chat);
+    return lastUserIndex >= 0 ? lastUserIndex : chat.length;
+}
 
 /**
  * 功能：根据聊天画像和意图构建注入管理器。
@@ -648,6 +665,131 @@ export class InjectionManager {
      *   maxTokens：总预算。
      * 返回：裁剪后的文本。
      */
+    /**
+     * 功能：统一执行 prompt 注入主链，并记录完整 trace。
+     * @param opts 构建与插入参数。
+     * @returns 注入执行结果。
+     */
+    async runMemoryPromptInjection(opts?: BuildContextOptions & {
+        promptMessages?: SdkTavernPromptMessageEvent[];
+        source?: string;
+        sourceMessageId?: string;
+        trace?: import('../types').MemoryTraceContext;
+    }): Promise<{
+        shouldInject: boolean;
+        inserted: boolean;
+        insertIndex: number;
+        promptLength: number;
+        insertedLength: number;
+        trace: import('../types').MemoryMainlineTraceEntry;
+        preDecision: PreGenerationGateDecision | null;
+        reasonCodes: string[];
+    }> {
+        const promptMessages = Array.isArray(opts?.promptMessages) ? opts!.promptMessages : [];
+        const latestUserMessage = [...promptMessages]
+            .reverse()
+            .find((item: SdkTavernPromptMessageEvent): boolean => {
+                return String(item?.role ?? '').trim().toLowerCase() === 'user' || item?.is_user === true;
+            });
+        const sourceMessageId = String(latestUserMessage?.mes_id ?? latestUserMessage?.message_id ?? latestUserMessage?.id ?? '').trim() || undefined;
+        const baseTrace = opts?.trace ?? createMemoryTraceContext({
+            chatKey: this.chatKey,
+            source: 'prompt_injection',
+            stage: 'memory_recall_started',
+            sourceMessageId: String(opts?.sourceMessageId ?? sourceMessageId ?? '').trim() || undefined,
+            requestId: String(opts?.query ?? '').trim() || undefined,
+        });
+
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(baseTrace, 'memory_recall_started', true, {
+                query: String(opts?.query ?? ''),
+                maxTokens: Number(opts?.maxTokens ?? 0) || undefined,
+                promptMessages: promptMessages.length,
+            });
+        }
+
+        const injectedContextResult = await this.buildContext({
+            ...opts,
+            includeDecisionMeta: true,
+        });
+        const injectedContext = typeof injectedContextResult === 'string'
+            ? injectedContextResult
+            : injectedContextResult?.text || '';
+        const preDecision = typeof injectedContextResult === 'object' && injectedContextResult
+            ? (injectedContextResult.preDecision as PreGenerationGateDecision | undefined)
+            : undefined;
+        const contextTrace = advanceMemoryTraceContext(baseTrace, 'memory_context_built', 'recall');
+
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(contextTrace, 'memory_context_built', Boolean(injectedContext && injectedContext.trim().length > 0), {
+                shouldInject: Boolean(preDecision?.shouldInject),
+                sectionsUsed: typeof injectedContextResult === 'object' && injectedContextResult
+                    ? injectedContextResult.sectionsUsed
+                    : [],
+                promptLength: injectedContext.length,
+                reasonCodes: preDecision?.reasonCodes ?? [],
+            });
+        }
+
+        if (!preDecision?.shouldInject || !injectedContext || injectedContext.trim().length === 0) {
+            const skippedTrace = advanceMemoryTraceContext(baseTrace, 'memory_skipped', 'prompt_injection');
+            if (this.chatStateManager) {
+                await this.chatStateManager.recordMainlineTrace(skippedTrace, 'memory_prompt_insert_skipped', true, {
+                    reasonCodes: preDecision?.reasonCodes ?? ['pre_gate_skip'],
+                });
+            }
+            return {
+                shouldInject: false,
+                inserted: false,
+                insertIndex: -1,
+                promptLength: injectedContext.length,
+                insertedLength: 0,
+                trace: skippedTrace as import('../types').MemoryMainlineTraceEntry,
+                preDecision: preDecision ?? null,
+                reasonCodes: preDecision?.reasonCodes ?? ['pre_gate_skip'],
+            };
+        }
+
+        const insertIndex = resolveMemoryContextInsertIndex(promptMessages);
+        insertTavernPromptMessageEvent(promptMessages, {
+            role: 'user',
+            text: injectedContext,
+            insertMode: 'before_index',
+            insertBeforeIndex: insertIndex,
+            template: promptMessages[Math.max(0, Math.min(insertIndex - 1, promptMessages.length - 1))] ?? promptMessages[0],
+        });
+
+        const insertedTrace = advanceMemoryTraceContext(baseTrace, 'memory_prompt_inserted', 'prompt_injection');
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(insertedTrace, 'memory_prompt_inserted', true, {
+                insertIndex,
+                promptBefore: promptMessages.length - 1,
+                promptAfter: promptMessages.length,
+                insertedLength: injectedContext.length,
+            });
+        }
+
+        const successTrace = advanceMemoryTraceContext(insertedTrace, 'memory_prompt_insert_success', 'prompt_injection');
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(successTrace, 'memory_prompt_insert_success', true, {
+                insertIndex,
+                promptLength: injectedContext.length,
+                reasonCodes: preDecision?.reasonCodes ?? [],
+            });
+        }
+
+        return {
+            shouldInject: true,
+            inserted: true,
+            insertIndex,
+            promptLength: injectedContext.length,
+            insertedLength: injectedContext.length,
+            trace: successTrace as import('../types').MemoryMainlineTraceEntry,
+            preDecision: preDecision ?? null,
+            reasonCodes: preDecision?.reasonCodes ?? [],
+        };
+    }
+
     private trimToBudget(text: string, maxTokens: number): string {
         if (!text.trim()) {
             return '';

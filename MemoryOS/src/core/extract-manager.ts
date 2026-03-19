@@ -5,11 +5,18 @@ import { MEMORY_TASKS, checkAiModeGuard, runGeneration } from '../llm/memoryLlmB
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
 import type { ProposalEnvelope } from '../proposal/types';
 import type {
+    ChatLifecycleState,
     ChatProfile,
     ChatMutationKind,
     GenerationValueClass,
     LogicalChatView,
+    LongSummaryCooldownState,
+    HeavyProcessingTriggerKind,
+    MemoryProcessingDecision,
+    MemoryProcessingLevel,
     PostGenerationGateDecision,
+    PrecompressedWindowStats,
+    SummaryExecutionTier,
 } from '../types';
 import type { ChatStateManager } from './chat-state-manager';
 import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';
@@ -283,112 +290,195 @@ export class ExtractManager {
         let currentExtractionPromise: Promise<void> | null = null;
         const extractionPromise = (async (): Promise<void> => {
             try {
-                if (postGate.shortTermOnly && !postGate.shouldPersistLongTerm) {
-                    logger.info(`生成后 gate 判定为短期噪音，跳过长期抽取：${postGate.valueClass}`);
-                    return;
-                }
-
-                const summarizePrompt = this.buildSummarizePrompt(lorebookDecision.mode, postGate);
-                const extractPrompt = this.buildExtractPrompt(lorebookDecision.mode, lorebookDecision.shouldExtractWorldFacts, postGate);
-
-                const summarizeResult = summaryEnabled && postGate.rebuildSummary
-                    ? await this.runProposalTask(
-                        'memory.summarize',
-                        '对话摘要生成',
-                        summarizePrompt,
-                        windowText,
-                        schemaContext,
-                        { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
-                    )
-                    : null;
-                const extractResult = await this.runProposalTask(
-                    'memory.extract',
-                    '结构化记忆提取',
-                    extractPrompt,
-                    windowText,
-                    schemaContext,
-                    { maxTokens: 1400, maxLatencyMs: 0, maxCost: 0.35 },
-                );
-
-                if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
-                    logger.info(`抽取成功后触发 cold-start extract，chatKey=${this.chatKey}, reason=extract_success, accepted=${Boolean(extractResult?.accepted)}`);
-                    await (memory as any).chatState.primeColdStartExtract('extract_success');
-                }
-
-                if (this.chatStateManager) {
-                    const windowBase = Math.max(1, extractionWindow.length);
-                    const factsApplied = Number(extractResult?.applied?.factKeys?.length ?? 0);
-                    const patchesApplied = Number(extractResult?.applied?.statePaths?.length ?? 0);
-                    const summariesApplied = Number(summarizeResult?.applied?.summaryIds?.length ?? 0)
-                        + Number(extractResult?.applied?.summaryIds?.length ?? 0);
-                    const extractHealth = await this.chatStateManager.getExtractHealth();
-                    const nextRecentTasks = [
-                        ...extractHealth.recentTasks,
-                        {
-                            task: 'memory.summarize' as const,
-                            accepted: Boolean(summarizeResult?.accepted),
-                            appliedFacts: 0,
-                            appliedPatches: 0,
-                            appliedSummaries: Number(summarizeResult?.applied?.summaryIds?.length ?? 0),
-                            ts: Date.now(),
-                        },
-                        {
-                            task: 'memory.extract' as const,
-                            accepted: Boolean(extractResult?.accepted),
-                            appliedFacts: factsApplied,
-                            appliedPatches: patchesApplied,
-                            appliedSummaries: Number(extractResult?.applied?.summaryIds?.length ?? 0),
-                            ts: Date.now(),
-                        },
-                    ].slice(-12);
-                    await this.chatStateManager.recordExtractHealth({
-                        recentTasks: nextRecentTasks,
-                        lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
-                            ? Date.now()
-                            : extractHealth.lastAcceptedAt,
-                    });
-                    await this.chatStateManager.updateAdaptiveMetrics({
-                        factsHitRate: Math.min(1, factsApplied / windowBase),
-                        factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
-                        summaryEffectiveness: summariesApplied > 0
-                            ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
-                            : 0,
-                        worldStateSignal: postGate.shouldUpdateWorldState
-                            ? Math.max(0, Math.min(1, lorebookDecision.score))
-                            : 0,
-                    });
-                    if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
-                        await this.chatStateManager.enqueueSummaryFixTask(
-                            `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
-                            lorebookDecision.mode,
-                        );
-                    }
-                    if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                        await this.chatStateManager.enqueueSummaryFixTask(
-                            `mutation_repair:${postGate.reasonCodes.join('|')}`,
-                            lorebookDecision.mode,
-                        );
-                    }
-                    if (postGate.rebuildSummary && summarizeResult?.accepted === false) {
-                        await this.chatStateManager.enqueueSummaryFixTask(
-                            `post_gate_summary_retry:${postGate.valueClass}`,
-                            lorebookDecision.mode,
-                        );
-                    }
+                {
                     const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
-                    const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
+                    const lifecycleState = this.chatStateManager
+                        ? await this.chatStateManager.getLifecycleState()
+                        : null;
+                    const longSummaryCooldown = this.chatStateManager
+                        ? await this.chatStateManager.getLongSummaryCooldown()
+                        : null;
+                    const compressedWindow = this.precompressWindowText(windowText);
+                    const processingDecision = this.buildProcessingDecision({
+                        postGate,
+                        summaryEnabled,
+                        lifecycle: lifecycleState,
+                        chatProfile,
                         currentAssistantTurnCount,
-                        Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
-                        Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
-                    );
-                    if (shouldRefreshQuality) {
-                        await this.chatStateManager.recomputeMemoryQuality();
-                        await this.metaManager.markRefreshCheckpoints({
-                            qualityAssistantTurnCount: currentAssistantTurnCount,
-                        });
-                    } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                        await this.chatStateManager.recomputeMemoryQuality();
+                        extractInterval: summaryInterval,
+                        windowHash,
+                        windowEventCount: eventCount,
+                        windowUserMessageCount: userMsgCount,
+                        specialEventHit: triggerBySpecialEvent,
+                        mutationRepairSignal: postGate.reasonCodes.includes('mutation_repair_required'),
+                        cooldown: longSummaryCooldown,
+                        precompressedStats: compressedWindow.stats,
+                    });
+
+                    if (this.chatStateManager) {
+                        await this.chatStateManager.setLastProcessingDecision(processingDecision);
                     }
+
+                    if (processingDecision.level === 'none') {
+                        if (this.chatStateManager) {
+                            const extractHealth = await this.chatStateManager.getExtractHealth();
+                            await this.chatStateManager.recordExtractHealth({
+                                recentTasks: [
+                                    ...extractHealth.recentTasks,
+                                    {
+                                        task: 'memory.extract' as const,
+                                        accepted: false,
+                                        appliedFacts: 0,
+                                        appliedPatches: 0,
+                                        appliedSummaries: 0,
+                                        processingLevel: processingDecision.level,
+                                        summaryTier: processingDecision.summaryTier,
+                                        windowHash,
+                                        reasonCodes: processingDecision.reasonCodes,
+                                        ts: Date.now(),
+                                    },
+                                ].slice(-12),
+                                lastAcceptedAt: extractHealth.lastAcceptedAt,
+                            });
+                        }
+                        return;
+                    }
+
+                    const summarizeResult = processingDecision.summaryTier === 'none'
+                        ? null
+                        : await this.runProposalTask(
+                            'memory.summarize',
+                            processingDecision.summaryTier === 'long' ? '长总结生成' : '短总结生成',
+                            processingDecision.summaryTier === 'long'
+                                ? this.buildLongSummarizePrompt(lorebookDecision.mode, postGate)
+                                : this.buildShortSummarizePrompt(lorebookDecision.mode, postGate),
+                            compressedWindow.text,
+                            schemaContext,
+                            processingDecision.summaryTier === 'long'
+                                ? { maxTokens: 8000, maxLatencyMs: 0, maxCost: 0.55 }
+                                : { maxTokens: 2400, maxLatencyMs: 0, maxCost: 0.25 },
+                        );
+                    const extractResult = await this.runProposalTask(
+                        'memory.extract',
+                        processingDecision.level === 'heavy' ? '重处理记忆抽取' : processingDecision.level === 'medium' ? '中处理记忆抽取' : '轻处理记忆抽取',
+                        this.buildExtractPromptByScope(
+                            lorebookDecision.mode,
+                            lorebookDecision.shouldExtractWorldFacts,
+                            postGate,
+                            processingDecision.extractScope,
+                        ),
+                        compressedWindow.text,
+                        schemaContext,
+                        processingDecision.extractScope === 'heavy'
+                            ? { maxTokens: 2600, maxLatencyMs: 0, maxCost: 0.45 }
+                            : processingDecision.extractScope === 'medium'
+                                ? { maxTokens: 1600, maxLatencyMs: 0, maxCost: 0.32 }
+                                : { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
+                    );
+
+                    if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
+                        logger.info(`抽取成功后触发 cold-start extract，chatKey=${this.chatKey}, reason=extract_success, accepted=${Boolean(extractResult?.accepted)}`);
+                        await (memory as any).chatState.primeColdStartExtract('extract_success');
+                    }
+
+                    if (this.chatStateManager) {
+                        const windowBase = Math.max(1, extractionWindow.length);
+                        const factsApplied = Number(extractResult?.applied?.factKeys?.length ?? 0);
+                        const patchesApplied = Number(extractResult?.applied?.statePaths?.length ?? 0);
+                        const summariesApplied = Number(summarizeResult?.applied?.summaryIds?.length ?? 0);
+                        const extractHealth = await this.chatStateManager.getExtractHealth();
+                        const nextRecentTasks = [
+                            ...extractHealth.recentTasks,
+                            ...(processingDecision.summaryTier === 'none'
+                                ? []
+                                : [{
+                                    task: 'memory.summarize' as const,
+                                    accepted: Boolean(summarizeResult?.accepted),
+                                    appliedFacts: 0,
+                                    appliedPatches: 0,
+                                    appliedSummaries: Number(summarizeResult?.applied?.summaryIds?.length ?? 0),
+                                    processingLevel: processingDecision.level,
+                                    summaryTier: processingDecision.summaryTier,
+                                    windowHash,
+                                    reasonCodes: processingDecision.reasonCodes,
+                                    ts: Date.now(),
+                                }]),
+                            {
+                                task: 'memory.extract' as const,
+                                accepted: Boolean(extractResult?.accepted),
+                                appliedFacts: factsApplied,
+                                appliedPatches: patchesApplied,
+                                appliedSummaries: 0,
+                                processingLevel: processingDecision.level,
+                                summaryTier: processingDecision.summaryTier,
+                                windowHash,
+                                reasonCodes: processingDecision.reasonCodes,
+                                ts: Date.now(),
+                            },
+                        ].slice(-12);
+                        await this.chatStateManager.recordExtractHealth({
+                            recentTasks: nextRecentTasks,
+                            lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
+                                ? Date.now()
+                                : extractHealth.lastAcceptedAt,
+                        });
+                        await this.chatStateManager.updateAdaptiveMetrics({
+                            factsHitRate: Math.min(1, factsApplied / windowBase),
+                            factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
+                            summaryEffectiveness: summariesApplied > 0
+                                ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
+                                : 0,
+                            worldStateSignal: postGate.shouldUpdateWorldState
+                                ? Math.max(0, Math.min(1, lorebookDecision.score))
+                                : 0,
+                        });
+                        if (processingDecision.summaryTier === 'long' && summarizeResult?.accepted) {
+                            await this.chatStateManager.setLongSummaryCooldown({
+                                lastLongSummaryAt: Date.now(),
+                                lastLongSummaryWindowHash: windowHash,
+                                lastLongSummaryReason: processingDecision.reasonCodes.join('|'),
+                                lastLongSummaryStage: lifecycleState?.stage ?? 'new',
+                                lastHeavyProcessAt: Date.now(),
+                                lastLongSummaryAssistantTurnCount: currentAssistantTurnCount,
+                            });
+                        } else if (extractResult?.accepted) {
+                            await this.chatStateManager.setLongSummaryCooldown({
+                                lastHeavyProcessAt: Date.now(),
+                            });
+                        }
+                        if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
+                            await this.chatStateManager.enqueueSummaryFixTask(
+                                `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
+                                lorebookDecision.mode,
+                            );
+                        }
+                        if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                            await this.chatStateManager.enqueueSummaryFixTask(
+                                `mutation_repair:${postGate.reasonCodes.join('|')}`,
+                                lorebookDecision.mode,
+                            );
+                        }
+                        if (processingDecision.summaryTier !== 'none' && summarizeResult?.accepted === false) {
+                            await this.chatStateManager.enqueueSummaryFixTask(
+                                `summary_retry:${processingDecision.summaryTier}:${postGate.valueClass}`,
+                                lorebookDecision.mode,
+                            );
+                        }
+                        const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
+                            currentAssistantTurnCount,
+                            Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
+                            Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
+                        );
+                        if (shouldRefreshQuality) {
+                            await this.chatStateManager.recomputeMemoryQuality();
+                            await this.metaManager.markRefreshCheckpoints({
+                                qualityAssistantTurnCount: currentAssistantTurnCount,
+                            });
+                        } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                            await this.chatStateManager.recomputeMemoryQuality();
+                        }
+                    }
+                    return;
                 }
             } catch (error) {
                 logger.error('抽取流程执行失败', error);
@@ -469,6 +559,115 @@ export class ExtractManager {
      * @param postGate 生成后 gate 结果。
      * @returns 摘要任务提示词。
      */
+    /**
+     * 功能：构建短总结提示词。
+     * @param lorebookMode 当前世界书裁决模式。
+     * @param postGate 生成后 gate 结果。
+     * @returns 短总结任务提示词。
+     */
+    private buildShortSummarizePrompt(
+        lorebookMode: string,
+        postGate: PostGenerationGateDecision,
+    ): string {
+        const lorebookHint = lorebookMode === 'block'
+            ? '不要把世界书原文写进摘要，只保留聊天里显式出现的事实。'
+            : lorebookMode === 'summary_only'
+                ? '只保留概念级设定，不要复制世界书条目原文。'
+                : '可以吸收世界书信息，但优先保留聊天里明确确认过的内容。';
+        return [
+            '你是短总结助手，只总结当前小阶段，不重写历史。',
+            '输出必须是纯 JSON，格式如下：',
+            'summary 数组里的每一项都必须是对象，至少包含 level(只能是 message/scene) 与 content(字符串)。',
+            '可选字段只有 title(字符串) 和 keywords(字符串数组)。',
+            `Lorebook gate mode: ${lorebookMode}.`,
+            `Post gate class: ${postGate.valueClass}.`,
+            `Should rebuild summary: ${postGate.rebuildSummary}.`,
+            lorebookHint,
+            '短总结只描述当前窗口里真正推动后续生成的内容，不要复写长历史。',
+            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+        ].join('\n');
+    }
+
+    /**
+     * 功能：构建长总结提示词。
+     * @param lorebookMode 当前世界书裁决模式。
+     * @param postGate 生成后 gate 结果。
+     * @returns 长总结任务提示词。
+     */
+    private buildLongSummarizePrompt(
+        lorebookMode: string,
+        postGate: PostGenerationGateDecision,
+    ): string {
+        const lorebookHint = lorebookMode === 'block'
+            ? '不要把世界书原文写进长总结，只保留已经被聊天确认过的稳定事实。'
+            : lorebookMode === 'summary_only'
+                ? '允许整理为稳定设定摘要，但不要复制世界书原文。'
+                : '可以综合世界书，但优先输出可稳定复用的阶段摘要。';
+        return [
+            '你是长总结助手，只在关键节点整理整段时间线。',
+            '输出必须是纯 JSON，格式如下：',
+            'summary 数组里的每一项都必须是对象，至少包含 level(只能是 message/scene/arc) 与 content(字符串)。',
+            '可选字段只有 title(字符串) 和 keywords(字符串数组)。',
+            `Lorebook gate mode: ${lorebookMode}.`,
+            `Post gate class: ${postGate.valueClass}.`,
+            `Should rebuild summary: ${postGate.rebuildSummary}.`,
+            lorebookHint,
+            '长总结可以归并重复信息，整合阶段变化，并保留时间线上的稳定锚点。',
+            '不要输出 markdown，不要输出解释性正文，只返回单个 JSON 对象。',
+            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
+        ].join('\n');
+    }
+
+    /**
+     * 功能：构建分档抽取提示词。
+     * @param lorebookMode 当前世界书裁决模式。
+     * @param allowWorldFacts 是否允许抽取世界事实。
+     * @param postGate 生成后 gate 结果。
+     * @param scope 抽取范围档位。
+     * @returns 抽取任务提示词。
+     */
+    private buildExtractPromptByScope(
+        lorebookMode: string,
+        allowWorldFacts: boolean,
+        postGate: PostGenerationGateDecision,
+        scope: MemoryProcessingLevel,
+    ): string {
+        const worldHint = postGate.shouldExtractWorldState && allowWorldFacts
+            ? '允许抽取世界设定类事实，但必须区分“聊天确认”与“仅世界书支撑”。'
+            : '不要扩张世界设定类抽取，优先保留聊天里显式确认的信息。';
+        const relationHint = postGate.shouldExtractRelations
+            ? '允许抽取关系变化、情绪变化和目标变化。'
+            : '不要主动创建新的关系变化事实，除非文本明确出现。';
+        const scopeHint = scope === 'light'
+            ? '轻处理只保留稳定 facts、必要 world_state、极明确 relation 变化，窗口只看最近一小段。'
+            : scope === 'medium'
+                ? '中处理允许 facts / relations / world_state，并可补充少量短摘要线索。'
+                : scope === 'heavy'
+                    ? '重处理允许完整 facts / relations / world_state，并优先修复结构不一致。'
+                    : '本轮不执行抽取。';
+        return [
+            '你是结构化记忆提取助手，只能返回 facts 与 patches。',
+            '输出必须是纯 JSON，格式如下：',
+            'facts 数组里的每一项都必须是对象，至少包含 type(字符串) 与 value(任意 JSON 值)。',
+            'patches 数组里的每一项都必须是对象，至少包含 op(add/replace/remove) 与 path(字符串)。',
+            '当 op 不是 remove 时，必须提供 value。',
+            '不要输出 summaries，不要输出解释性正文，不要输出 markdown。',
+            `Lorebook gate mode: ${lorebookMode}.`,
+            `Post gate class: ${postGate.valueClass}.`,
+            `Persist long term: ${postGate.shouldPersistLongTerm}.`,
+            `Extract facts: ${postGate.shouldExtractFacts}.`,
+            `Extract relations: ${postGate.shouldExtractRelations}.`,
+            `Extract world state: ${postGate.shouldExtractWorldState}.`,
+            `Processing scope: ${scope}.`,
+            scopeHint,
+            worldHint,
+            relationHint,
+            'facts 数组的每一项都必须是对象，且至少包含：type 与 value。可选字段包括 factKey、entity、path、confidence。',
+            'patches 数组只允许 add/replace/remove，且尽量只表达必要差异。',
+            '{ "ok": true, "proposal": { "facts": [...], "patches": [...] }, "confidence": 0.0~1.0 }',
+        ].join('\n');
+    }
+
     private buildSummarizePrompt(
         lorebookMode: string,
         postGate: PostGenerationGateDecision,
@@ -545,7 +744,7 @@ export class ExtractManager {
                 basePrompt,
                 '上一次输出因 JSON 解析失败而被丢弃；这通常意味着输出过长、未闭合或结构不够紧凑。',
                 '本次必须优先保证 JSON 完整闭合，宁可少写也不要写断。',
-                '严格限制：facts 最多 10 条，patches 最多 6 条，summaries 最多 1 条。',
+                '严格限制：facts 最多 10 条，patches 最多 6 条。',
                 '不要把同一角色的多个近义状态拆成很多条；优先合并为更高价值的事实。',
                 '不要把 facts 已经表达清楚的内容再次重复写进 patches。',
                 '不要输出额外解释、前后缀、Markdown、代码块，只返回单个完整 JSON 对象。',
@@ -785,6 +984,227 @@ export class ExtractManager {
      * @param stylePreference 当前聊天风格偏好。
      * @returns 生成价值分类。
      */
+    /**
+     * 功能：把当前窗口预压缩成更适合模型消费的文本。
+     * @param windowText 原始窗口文本。
+     * @returns 预压缩后的文本与统计信息。
+     */
+    private precompressWindowText(windowText: string): { text: string; stats: PrecompressedWindowStats } {
+        const originalText = String(windowText ?? '');
+        const lines = originalText.split(/\r?\n/);
+        const compacted: string[] = [];
+        let removedGreetingCount = 0;
+        let removedDuplicateCount = 0;
+        let mergedRunCount = 0;
+        let truncatedToolOutputCount = 0;
+        let lastNormalizedLine = '';
+
+        const isGreetingLine = (text: string): boolean => {
+            return /^(hi|hello|hey|你好|嗨|哈喽|您好|好的|收到|明白|ok|okay|行|嗯嗯|嗯|对的|可以)[!！。,.，、\s]*$/i.test(text);
+        };
+
+        for (const rawLine of lines) {
+            const line = String(rawLine ?? '').trim();
+            if (!line) {
+                continue;
+            }
+            const normalizedLine = line.toLowerCase().replace(/\s+/g, ' ');
+            if (normalizedLine.length <= 12 && isGreetingLine(normalizedLine)) {
+                removedGreetingCount += 1;
+                continue;
+            }
+            if (normalizedLine === lastNormalizedLine) {
+                removedDuplicateCount += 1;
+                continue;
+            }
+            const previousLine = compacted[compacted.length - 1] ?? '';
+            const previousNormalized = previousLine.toLowerCase().replace(/\s+/g, ' ');
+            if (previousNormalized && normalizedLine.length > 18 && previousNormalized.length > 18) {
+                if (normalizedLine.includes(previousNormalized) || previousNormalized.includes(normalizedLine)) {
+                    mergedRunCount += 1;
+                    continue;
+                }
+            }
+            let nextLine = line;
+            if (line.length > 420 && /```|stack|error|trace|debug|日志|报错|exception|warning|命令|curl|npm|pnpm|tsc/i.test(line)) {
+                nextLine = `${line.slice(0, 360)}…`;
+                truncatedToolOutputCount += 1;
+            }
+            compacted.push(nextLine);
+            lastNormalizedLine = normalizedLine;
+        }
+
+        const text = compacted.join('\n');
+        return {
+            text,
+            stats: {
+                originalLength: originalText.length,
+                compressedLength: text.length,
+                removedGreetingCount,
+                removedDuplicateCount,
+                mergedRunCount,
+                truncatedToolOutputCount,
+            },
+        };
+    }
+
+    /**
+     * 功能：把 postGate 与主链信号收敛为最终处理等级。
+     * @param input 决策输入。
+     * @returns 处理等级决策。
+     */
+    private buildProcessingDecision(input: {
+        postGate: PostGenerationGateDecision;
+        summaryEnabled: boolean;
+        lifecycle: ChatLifecycleState | null;
+        chatProfile: ChatProfile | null;
+        currentAssistantTurnCount: number;
+        extractInterval: number;
+        windowHash: string;
+        windowEventCount: number;
+        windowUserMessageCount: number;
+        specialEventHit: boolean;
+        mutationRepairSignal: boolean;
+        cooldown: LongSummaryCooldownState | null;
+        precompressedStats: PrecompressedWindowStats;
+    }): MemoryProcessingDecision {
+        const stage = input.lifecycle?.stage ?? 'new';
+        const profile = input.chatProfile ?? null;
+        const reasonCodes = new Set<string>([
+            ...(input.postGate.reasonCodes ?? []),
+            `stage_${stage}`,
+            `chat_type_${profile?.chatType ?? 'solo'}`,
+        ]);
+        const specialEventHit = Boolean(input.specialEventHit);
+        const mutationRepairSignal = Boolean(input.mutationRepairSignal);
+        const stageCompletionSignal = specialEventHit && input.postGate.shouldPersistLongTerm && (
+            input.postGate.rebuildSummary
+            || input.postGate.shouldUpdateWorldState
+            || input.postGate.shouldExtractWorldState
+        );
+        const longRunningSignal = stage === 'long_running';
+        const shouldSummarize = Boolean(input.summaryEnabled);
+        const cooldownWindow = Math.max(8, Math.round(Number(input.extractInterval ?? 0) || 0));
+        const lastSummaryTurns = Math.max(0, Number(input.cooldown?.lastLongSummaryAssistantTurnCount ?? 0));
+        const turnDelta = Math.max(0, Math.round(Number(input.currentAssistantTurnCount ?? 0)) - lastSummaryTurns);
+        const cooldownActive = Boolean(input.cooldown?.lastLongSummaryWindowHash)
+            && input.cooldown?.lastLongSummaryWindowHash === input.windowHash
+            && turnDelta < cooldownWindow;
+
+        let level: MemoryProcessingLevel = 'none';
+        let summaryTier: SummaryExecutionTier = 'none';
+        let extractScope: MemoryProcessingLevel = 'none';
+        let heavyTriggerKind: HeavyProcessingTriggerKind | null = null;
+        let cooldownBlocked = false;
+
+        if (!input.postGate.shouldPersistLongTerm && !specialEventHit && !mutationRepairSignal && !longRunningSignal) {
+            reasonCodes.add('skip_long_term_extract');
+        } else if (input.postGate.valueClass === 'small_talk_noise' && !specialEventHit && !mutationRepairSignal) {
+            reasonCodes.add('small_talk_noise');
+            level = 'none';
+        } else if (input.postGate.valueClass === 'tool_result') {
+            level = 'light';
+            extractScope = 'light';
+            reasonCodes.add('tool_result');
+        } else if (input.postGate.valueClass === 'relationship_shift') {
+            level = 'medium';
+            extractScope = 'medium';
+            reasonCodes.add('relationship_shift');
+        } else if (input.postGate.valueClass === 'setting_confirmed') {
+            level = input.postGate.shouldExtractWorldState || input.postGate.rebuildSummary ? 'medium' : 'light';
+            extractScope = level;
+            reasonCodes.add('setting_confirmed');
+        } else if (longRunningSignal) {
+            level = 'heavy';
+            extractScope = 'heavy';
+            heavyTriggerKind = 'long_running';
+            reasonCodes.add('long_running');
+        } else if (mutationRepairSignal) {
+            level = 'heavy';
+            extractScope = 'heavy';
+            heavyTriggerKind = 'structure_repair';
+            reasonCodes.add('mutation_repair');
+        } else if (stageCompletionSignal) {
+            level = 'heavy';
+            extractScope = 'heavy';
+            heavyTriggerKind = 'stage_completion';
+            reasonCodes.add('stage_completion');
+        } else if (specialEventHit && input.postGate.rebuildSummary) {
+            level = 'heavy';
+            extractScope = 'heavy';
+            heavyTriggerKind = 'special_event';
+            reasonCodes.add('special_event');
+        } else {
+            level = input.postGate.rebuildSummary ? 'medium' : 'light';
+            extractScope = level;
+            reasonCodes.add('plot_progress');
+        }
+
+        if (profile?.chatType === 'tool') {
+            if (level === 'heavy') {
+                level = 'light';
+                extractScope = 'light';
+                reasonCodes.add('chat_type_tool_light');
+            } else if (level === 'medium' && !mutationRepairSignal && !stageCompletionSignal) {
+                level = 'light';
+                extractScope = 'light';
+                reasonCodes.add('chat_type_tool_light');
+            }
+        } else if (profile?.chatType === 'worldbook') {
+            if (level === 'light' && input.postGate.shouldExtractWorldState) {
+                level = 'medium';
+                extractScope = 'medium';
+                reasonCodes.add('chat_type_worldbook_world_state');
+            }
+        } else if (profile?.chatType === 'group') {
+            if (level === 'light' && (input.postGate.shouldExtractRelations || input.postGate.shouldExtractWorldState)) {
+                level = 'medium';
+                extractScope = 'medium';
+                reasonCodes.add('chat_type_group_relation');
+            }
+        } else if (profile?.memoryStrength === 'low' && level === 'heavy' && !mutationRepairSignal && !stageCompletionSignal) {
+            level = 'medium';
+            extractScope = 'medium';
+            reasonCodes.add('low_memory_strength_soften');
+        }
+
+        if (level === 'heavy' && cooldownActive && !mutationRepairSignal && !stageCompletionSignal && !longRunningSignal) {
+            cooldownBlocked = true;
+            level = 'medium';
+            extractScope = 'medium';
+            summaryTier = shouldSummarize ? 'short' : 'none';
+            reasonCodes.add('long_summary_cooldown');
+        }
+
+        if (summaryTier === 'none') {
+            summaryTier = !shouldSummarize
+                ? 'none'
+                : level === 'heavy'
+                    ? 'long'
+                    : level === 'medium'
+                        ? 'short'
+                        : 'none';
+        }
+
+        if (summaryTier === 'long' && cooldownBlocked) {
+            summaryTier = 'short';
+        }
+
+        return {
+            level,
+            summaryTier,
+            extractScope,
+            reasonCodes: Array.from(reasonCodes),
+            heavyTriggerKind,
+            cooldownBlocked,
+            windowHash: input.windowHash,
+            windowEventCount: Math.max(0, Math.round(Number(input.windowEventCount ?? 0))),
+            windowUserMessageCount: Math.max(0, Math.round(Number(input.windowUserMessageCount ?? 0))),
+            generatedAt: Date.now(),
+            precompressedStats: input.precompressedStats,
+        };
+    }
+
     private classifyPostGenerationValue(
         userLine: string,
         assistantLine: string,

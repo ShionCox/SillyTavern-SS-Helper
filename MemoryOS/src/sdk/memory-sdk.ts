@@ -7,6 +7,8 @@ import type {
     LogicTableSummary,
     LogicTableViewModel,
     MemorySDK,
+    VectorMemorySearchTestResult,
+    VectorMemoryViewerSnapshot,
 } from '../../../SDK/stx';
 import { Logger } from '../../../SDK/logger';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
@@ -40,6 +42,7 @@ import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
 import { LogicTableFacade } from './logic-table-facade';
 import { openWorldbookInitPanel } from '../ui/index';
+import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
 import type { TemplateTableDef } from '../template/types';
 import type {
     AdaptiveMetrics,
@@ -48,7 +51,6 @@ import type {
     ChatSemanticSeed,
     ChatProfile,
     ColdStartLorebookSelection,
-    EffectivePresetBundle,
     GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
@@ -63,6 +65,7 @@ import type {
     MemoryTuningProfile,
     MemoryMutationHistoryAction,
     MemoryMutationTargetKind,
+    MemoryTraceContext,
     OwnedMemoryState,
     PersonaMemoryProfile,
     PostGenerationGateDecision,
@@ -73,9 +76,10 @@ import type {
     RetentionPolicy,
     StructuredWorldStateEntry,
     SimpleMemoryPersona,
-    SummaryPolicyOverride,
+    SummarySettings,
+    SummarySettingsOverride,
+    EffectiveSummarySettings,
     StrategyDecision,
-    UserFacingChatPreset,
     VectorLifecycleState,
     WorldStateGroupingResult,
     RowRefResolution,
@@ -229,12 +233,19 @@ export class MemorySDKImpl implements MemorySDK {
     private async requestTrustedWrite(
         proposal: WriteRequest['proposal'],
         reason: string,
+        trace?: MemoryTraceContext,
     ): Promise<ProposalResult> {
         return this.proposalManager.processWriteRequest({
             source: buildMemoryWriteSource(),
             chatKey: this.chatKey_,
             proposal,
             reason,
+            trace: trace ?? createMemoryTraceContext({
+                chatKey: this.chatKey_,
+                source: 'trusted_write',
+                stage: 'memory_trusted_write_started',
+                requestId: reason,
+            }),
         });
     }
 
@@ -323,10 +334,6 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     private async performBootstrapSemanticSeedIfNeeded(): Promise<void> {
-        const presetBundle = await this.chatStateManager.getEffectivePresetBundle();
-        if (presetBundle.autoBootstrapSemanticSeed === false) {
-            return;
-        }
         const [existingSeed, currentFingerprint] = await Promise.all([
             this.chatStateManager.getSemanticSeed(),
             this.chatStateManager.getColdStartFingerprint(),
@@ -412,6 +419,12 @@ export class MemorySDKImpl implements MemorySDK {
             return;
         }
         const roleEntity = { kind: 'character', id: roleKey };
+        const trace = createMemoryTraceContext({
+            chatKey: this.chatKey_,
+            source: 'trusted_write',
+            stage: 'memory_trusted_write_started',
+            requestId: `semantic_seed:${reason}`,
+        });
         const provenance = {
             extractor: 'semantic_seed_bootstrap',
             provider: 'stx_memory_os',
@@ -474,12 +487,12 @@ export class MemorySDKImpl implements MemorySDK {
                 { op: 'replace', path: '/semantic/meta/activeLorebooks', value: seed.activeLorebooks },
                 { op: 'replace', path: '/semantic/meta/groupMembers', value: seed.groupMembers },
             ],
-        }, `semantic_seed:${reason}`);
+        }, `semantic_seed:${reason}`, trace);
         const structuredSeedEntries = inferStructuredSeedWorldStateEntries(seed);
         for (const entry of structuredSeedEntries) {
             await this.requestTrustedWrite({
                 patches: [{ op: 'replace', path: entry.path, value: entry.value }],
-            }, `semantic_seed:structured:${reason}`);
+            }, `semantic_seed:structured:${reason}`, advanceMemoryTraceContext(trace, 'memory_trusted_write_started', 'trusted_write'));
         }
     }
 
@@ -549,6 +562,12 @@ export class MemorySDKImpl implements MemorySDK {
                     viewHash: '',
                     ordinal: 0,
                 });
+                const trace = createMemoryTraceContext({
+                    chatKey: this.chatKey_,
+                    source: 'trusted_write',
+                    stage: 'memory_trusted_write_started',
+                    requestId: `cold_start_extract:${reason}`,
+                });
                 const writeResult = await this.requestTrustedWrite({
                     summaries: [{
                         summaryId,
@@ -577,7 +596,7 @@ export class MemorySDKImpl implements MemorySDK {
                             },
                         },
                     }],
-                }, `cold_start_extract:${reason}`);
+                }, `cold_start_extract:${reason}`, trace);
                 if (this.chatStateManager) {
                     const candidate = await this.chatStateManager.buildMemoryCandidate({
                         candidateId: writeResult.applied.summaryIds[0] ?? summaryId,
@@ -811,6 +830,21 @@ export class MemorySDKImpl implements MemorySDK {
         }) => {
             return this.injectionManager.buildContext(opts);
         },
+        runMemoryPromptInjection: (opts?: {
+            maxTokens?: number;
+            sections?: InjectionSectionName[];
+            query?: string;
+            sectionBudgets?: Partial<Record<InjectionSectionName, number>>;
+            preferSummary?: boolean;
+            intentHint?: InjectionIntent;
+            includeDecisionMeta?: boolean;
+            promptMessages?: any[];
+            source?: string;
+            sourceMessageId?: string;
+            trace?: MemoryTraceContext;
+        }) => {
+            return this.injectionManager.runMemoryPromptInjection(opts as Parameters<typeof this.injectionManager.runMemoryPromptInjection>[0]);
+        },
         setPromptInjectionProfile: (opts: {
             queryMode?: 'always' | 'setting_only';
             settingOnlyMinScore?: number;
@@ -1029,6 +1063,12 @@ export class MemorySDKImpl implements MemorySDK {
         getExperienceSnapshot: (): Promise<EditorExperienceSnapshot> => {
             return this.editorFacade.getExperienceSnapshot();
         },
+        getVectorMemorySnapshot: (): Promise<VectorMemoryViewerSnapshot> => {
+            return this.editorFacade.getVectorMemorySnapshot();
+        },
+        runVectorMemorySearchTest: (query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult> => {
+            return this.editorFacade.runVectorMemorySearchTest(query, opts);
+        },
         refreshCanonSnapshot: (): Promise<CanonSnapshot> => {
             return this.editorFacade.getCanonSnapshot();
         },
@@ -1069,11 +1109,23 @@ export class MemorySDKImpl implements MemorySDK {
         setChatProfileOverride: (override: Partial<ChatProfile>): Promise<void> => {
             return this.chatStateManager.setChatProfileOverride(override);
         },
-        getSummaryPolicyOverride: () => {
-            return this.chatStateManager.getSummaryPolicyOverride();
+        getGlobalSummarySettings: (): Promise<SummarySettings> => {
+            return this.chatStateManager.getGlobalSummarySettings();
         },
-        setSummaryPolicyOverride: (override: SummaryPolicyOverride) => {
-            return this.chatStateManager.setSummaryPolicyOverride(override);
+        setGlobalSummarySettings: (settings: SummarySettings): Promise<SummarySettings> => {
+            return this.chatStateManager.setGlobalSummarySettings(settings);
+        },
+        getChatSummarySettingsOverride: (): Promise<SummarySettingsOverride> => {
+            return this.chatStateManager.getChatSummarySettingsOverride();
+        },
+        setChatSummarySettingsOverride: (override: SummarySettingsOverride): Promise<void> => {
+            return this.chatStateManager.setChatSummarySettingsOverride(override);
+        },
+        clearChatSummarySettingsOverride: (): Promise<void> => {
+            return this.chatStateManager.clearChatSummarySettingsOverride();
+        },
+        getEffectiveSummarySettings: (): Promise<EffectiveSummarySettings> => {
+            return this.chatStateManager.getEffectiveSummarySettings();
         },
         getAdaptiveMetrics: (): Promise<AdaptiveMetrics> => {
             return this.chatStateManager.getAdaptiveMetrics();
@@ -1195,6 +1247,18 @@ export class MemorySDKImpl implements MemorySDK {
         getMutationHistory: (opts?: { limit?: number; recordKey?: string; targetKind?: MemoryMutationTargetKind; action?: MemoryMutationHistoryAction }) => {
             return this.chatStateManager.getMutationHistory(opts);
         },
+        getMainlineTraceSnapshot: (): Promise<import('../types').MemoryMainlineTraceSnapshot> => {
+            return this.chatStateManager.getMainlineTraceSnapshot();
+        },
+        rebuildVectorRecord: (recordKey: string, recordKind: 'fact' | 'summary'): Promise<string[]> => {
+            return this.chatStateManager.rebuildVectorRecord(recordKey, recordKind);
+        },
+        deleteVectorChunk: (chunkId: string): Promise<boolean> => {
+            return this.chatStateManager.deleteVectorChunk(chunkId);
+        },
+        setVectorChunkArchived: (chunkId: string, archived: boolean): Promise<void> => {
+            return this.chatStateManager.setVectorChunkArchived(chunkId, archived);
+        },
         getColdStartStage: () => {
             return this.chatStateManager.getColdStartStage();
         },
@@ -1215,24 +1279,6 @@ export class MemorySDKImpl implements MemorySDK {
         },
         setPromptInjectionProfile: (profile: Partial<PromptInjectionProfile>): Promise<void> => {
             return this.chatStateManager.setPromptInjectionProfile(profile);
-        },
-        getEffectivePresetBundle: (): Promise<EffectivePresetBundle> => {
-            return this.chatStateManager.getEffectivePresetBundle();
-        },
-        saveGlobalPreset: (preset: UserFacingChatPreset): Promise<void> => {
-            return this.chatStateManager.saveGlobalPreset(preset);
-        },
-        saveRolePreset: (preset: UserFacingChatPreset): Promise<void> => {
-            return this.chatStateManager.saveRolePreset(preset);
-        },
-        clearRolePreset: (): Promise<void> => {
-            return this.chatStateManager.clearRolePreset();
-        },
-        getUserFacingPreset: (): Promise<UserFacingChatPreset | null> => {
-            return this.chatStateManager.getUserFacingPreset();
-        },
-        setUserFacingPreset: (preset: UserFacingChatPreset | null): Promise<void> => {
-            return this.chatStateManager.setUserFacingPreset(preset);
         },
         getLastPreGenerationDecision: (): Promise<PreGenerationGateDecision | null> => {
             return this.chatStateManager.getLastPreGenerationDecision();

@@ -1,5 +1,6 @@
 import { getSillyTavernContextEvent } from "./context";
 import { getCurrentTavernCharacterEvent, getCurrentTavernCharacterFilenameEvent, getTavernCharacterExtensionFieldEvent } from "./characters";
+import { substituteTavernWorldbookEntryMacrosEvent } from "./macros";
 import { getTavernRuntimeContextEvent } from "./runtime";
 import type {
   SdkTavernCharacterWorldbookBindingEvent,
@@ -16,6 +17,10 @@ type WorldbookGlobalRef = Record<string, unknown> & {
 
 function normalizeText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeMultilineText(value: unknown): string {
+  return String(value ?? "").replace(/\r\n?/g, "\n").trim();
 }
 
 function normalizeFilename(value: unknown): string {
@@ -150,8 +155,9 @@ function normalizeResolvedEntry(
   if (!rawEntry || typeof rawEntry !== "object") {
     return null;
   }
-  const source = rawEntry as SdkTavernWorldbookEntryEvent;
-  const content = normalizeText(source.content);
+  const originalSource = rawEntry as SdkTavernWorldbookEntryEvent;
+  const source = substituteTavernWorldbookEntryMacrosEvent(originalSource);
+  const content = normalizeMultilineText(source.content);
   if (!content) {
     return null;
   }
@@ -165,7 +171,7 @@ function normalizeResolvedEntry(
     entry: normalizeText(source.comment ?? keywords[0] ?? entryId ?? "untitled"),
     keywords,
     content,
-    rawEntry: source,
+    rawEntry: originalSource,
   };
 }
 

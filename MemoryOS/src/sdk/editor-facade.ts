@@ -18,10 +18,17 @@ import type {
     SceneSnapshot,
     SnapshotValue,
     SourceRef,
+    SummarySettings,
+    SummarySettingsOverride,
+    EffectiveSummarySettings,
+    SummarySettingsSource,
+    VectorMemorySearchTestResult,
+    VectorMemoryViewerSnapshot,
     WorldTemplate,
 } from '../../../SDK/stx';
 import { ChatStateManager } from '../core/chat-state-manager';
 import { TemplateManager } from '../template/template-manager';
+import { VectorMemoryViewerFacade } from './vector-memory-viewer';
 
 const EMPTY_STABLE_LABEL = '尚未稳定抽取';
 
@@ -554,11 +561,13 @@ export class MemoryEditorFacade {
     private chatKey: string;
     private templateManager: TemplateManager;
     private chatStateManager: ChatStateManager;
+    private vectorMemoryViewer: VectorMemoryViewerFacade;
 
     constructor(chatKey: string, templateManager: TemplateManager, chatStateManager: ChatStateManager) {
         this.chatKey = chatKey;
         this.templateManager = templateManager;
         this.chatStateManager = chatStateManager;
+        this.vectorMemoryViewer = new VectorMemoryViewerFacade(chatKey, chatStateManager);
     }
 
     async getCanonSnapshot(): Promise<CanonSnapshot> {
@@ -573,13 +582,19 @@ export class MemoryEditorFacade {
             profile,
             quality,
             retention,
+            summarySettings,
+            summarySettingsOverride,
+            effectiveSummarySettings,
             simplePersona,
             lorebookDecision,
             preDecision,
             postDecision,
+            processingDecision,
+            longSummaryCooldown,
             lifecycleSummary,
             recallLog,
             latestRecallExplanation,
+            mainlineTraceSnapshot,
             tuningProfile,
             activeActorKey,
             chatState,
@@ -588,13 +603,19 @@ export class MemoryEditorFacade {
             this.chatStateManager.getChatProfile(),
             this.chatStateManager.getMemoryQuality(),
             this.chatStateManager.getRetentionPolicy(),
+            this.chatStateManager.getGlobalSummarySettings(),
+            this.chatStateManager.getChatSummarySettingsOverride(),
+            this.chatStateManager.getEffectiveSummarySettings(),
             this.chatStateManager.getSimpleMemoryPersona(),
             this.chatStateManager.getLorebookDecision(),
             this.chatStateManager.getLastPreGenerationDecision(),
             this.chatStateManager.getLastPostGenerationDecision(),
+            this.chatStateManager.getLastProcessingDecision(),
+            this.chatStateManager.getLongSummaryCooldown(),
             this.chatStateManager.getMemoryLifecycleSummary(),
             this.chatStateManager.getRecallLog(),
             this.chatStateManager.getLatestRecallExplanation(),
+            this.chatStateManager.getMainlineTraceSnapshot(),
             this.chatStateManager.getMemoryTuningProfile(),
             this.chatStateManager.getActiveActorKey(),
             this.chatStateManager.load(),
@@ -617,9 +638,16 @@ export class MemoryEditorFacade {
             lorebookDecision,
             preDecision,
             postDecision,
+            processingDecision,
+            longSummaryCooldown,
+            summarySettings,
+            summarySettingsOverride,
+            effectiveSummarySettings,
+            summarySettingsSource: effectiveSummarySettings.source,
             lifecycleSummary,
             recallLog,
             latestRecallExplanation,
+            mainlineTraceSnapshot,
             tuningProfile,
             lastMutationPlan: chatState.lastMutationPlan ?? null,
             maintenanceInsights: context.maintenanceInsights,
@@ -634,6 +662,24 @@ export class MemoryEditorFacade {
             vectorIndexVersion: String(chatState.vectorIndexVersion ?? '').trim() || null,
             vectorMetadataRebuiltAt: Number(chatState.vectorMetadataRebuiltAt ?? 0) || null,
         };
+    }
+
+    /**
+     * 功能：读取当前聊天的向量记忆查看器快照。
+     * @returns 向量记忆查看器快照。
+     */
+    async getVectorMemorySnapshot(): Promise<VectorMemoryViewerSnapshot> {
+        return this.vectorMemoryViewer.getSnapshot();
+    }
+
+    /**
+     * 功能：模拟一次向量检索测试，返回命中顺序与最终入选情况。
+     * @param query 测试语句。
+     * @param opts 额外配置。
+     * @returns 检索测试结果。
+     */
+    async runVectorMemorySearchTest(query: string, opts?: { maxTokens?: number }): Promise<VectorMemorySearchTestResult> {
+        return this.vectorMemoryViewer.runVectorMemorySearchTest(query, opts);
     }
 
     private buildCanonSnapshotFromContext(context: EditorContextBundle): CanonSnapshot {

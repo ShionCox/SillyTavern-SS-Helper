@@ -14,6 +14,7 @@ import { planMemoryMutations } from '../core/memory-mutation-planner';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
+import { advanceMemoryTraceContext, buildMemoryMainlineTraceEntry, createMemoryTraceContext } from '../core/memory-trace';
 import { Logger } from '../../../SDK/logger';
 
 const logger = new Logger('ProposalManager');
@@ -166,12 +167,44 @@ export class ProposalManager {
      * @returns 提议处理结果。
      */
     async processWriteRequest(request: WriteRequest): Promise<ProposalResult> {
+        const trace = request.trace ?? createMemoryTraceContext({
+            chatKey: request.chatKey,
+            source: 'trusted_write',
+            stage: 'memory_trusted_write_started',
+            requestId: request.reason,
+        });
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(
+                trace,
+                'memory_trusted_write_started',
+                true,
+                {
+                    reason: request.reason,
+                    pluginId: request.source.pluginId,
+                },
+            );
+        }
         const envelope: ProposalEnvelope = {
             ok: true,
             proposal: request.proposal,
             confidence: 1.0,
         };
-        return this.processProposal(envelope, request.source.pluginId);
+        const result = await this.processProposal(envelope, request.source.pluginId);
+        if (this.chatStateManager) {
+            await this.chatStateManager.recordMainlineTrace(
+                advanceMemoryTraceContext(trace, 'memory_trusted_write_finished', 'trusted_write'),
+                'memory_trusted_write_finished',
+                result.accepted && result.rejectedReasons.length === 0,
+                {
+                    accepted: result.accepted,
+                    appliedFactKeys: result.applied.factKeys.length,
+                    appliedStatePaths: result.applied.statePaths.length,
+                    appliedSummaryIds: result.applied.summaryIds.length,
+                    rejectedReasons: result.rejectedReasons,
+                },
+            );
+        }
+        return result;
     }
 
     /**

@@ -1,4 +1,4 @@
-import type { MemoryMutationPlanSnapshot } from '../types';
+import type { MemoryMutationPlanSnapshot, MemoryTraceContext } from '../types';
 
 /**
  * AI 提议制类型定义
@@ -119,5 +119,6 @@ export interface WriteRequest {
         entityResolutions?: EntityResolutionProposal[];
     };
     reason: string;
+    trace?: MemoryTraceContext;
     deferredSchemaHints?: DeferredSchemaHint[];
 }

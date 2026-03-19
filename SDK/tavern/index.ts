@@ -89,6 +89,13 @@ export {
 } from "./groups";
 
 export {
+  hasTavernMacroEvent,
+  substituteTavernMacrosEvent,
+  substituteTavernMacrosIfPresentEvent,
+  substituteTavernWorldbookEntryMacrosEvent,
+} from "./macros";
+
+export {
   deleteTavernWorldbookBookEvent,
   deleteTavernWorldbookEntryEvent,
   getTavernWorldbookCapabilitiesEvent,
