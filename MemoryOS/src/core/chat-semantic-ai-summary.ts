@@ -1,6 +1,19 @@
-import type { ChatSemanticSeed, SemanticAiSummary } from '../types/chat-state';
+import type {
+    ChatSemanticSeed,
+    SemanticAiSummary,
+    SemanticCatalogEntrySummary,
+    SemanticKnowledgeLevel,
+    SemanticWorldFacetEntry,
+} from '../types/chat-state';
 import { Logger } from '../../../SDK/logger';
 import { runGeneration, MEMORY_TASKS, type TaskPresentationOverride } from '../llm/memoryLlmBridge';
+import { buildColdstartOperationSystemPrompt } from '../llm/skills';
+import {
+    buildStrictObjectSchema,
+    nullableEnumStringSchema,
+    nullableStringArraySchema,
+    nullableStringSchema,
+} from '../llm/strict-schema';
 
 const logger = new Logger('ColdStartAiSummary');
 
@@ -12,6 +25,8 @@ export interface EnhanceSemanticSeedWithAiOptions {
 }
 
 type SemanticSeedAiSummary = Omit<SemanticAiSummary, 'generatedAt' | 'source'>;
+
+const KNOWLEDGE_LEVEL_VALUES = ['confirmed', 'rumor', 'inferred'] as const;
 
 const NATION_PATTERN = /国家|政体|王国|帝国|联邦|共和国|王朝|nation|country|kingdom|empire|republic|federation|realm/i;
 const REGION_PATTERN = /区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领|region|area|province|territory|continent|frontier/i;
@@ -30,6 +45,34 @@ const GOAL_PATTERN = /目标|想要|必须|计划|打算|任务|goal|objective|i
 const RELATIONSHIP_PATTERN = /关系|信任|敌对|盟友|同伴|羁绊|恋人|导师|relationship|bond|trust|ally|enemy/i;
 const IDENTITY_PATTERN = /身份|血统|别名|称号|职业|来历|出身|identity|alias|title|background|lineage/i;
 const ENTITY_PATTERN = /机构|设施|装置|神器|遗物|系统核心|核心装置|entity|artifact|relic|device|institution/i;
+
+const CATALOG_ENTRY_SCHEMA = buildStrictObjectSchema({
+    name: { type: 'string' },
+    summary: { type: 'string' },
+    knowledgeLevel: { type: 'string', enum: [...KNOWLEDGE_LEVEL_VALUES] },
+    nationName: nullableStringSchema(),
+    nationKnowledgeLevel: nullableEnumStringSchema(KNOWLEDGE_LEVEL_VALUES),
+    regionName: nullableStringSchema(),
+    regionKnowledgeLevel: nullableEnumStringSchema(KNOWLEDGE_LEVEL_VALUES),
+    cityName: nullableStringSchema(),
+    cityKnowledgeLevel: nullableEnumStringSchema(KNOWLEDGE_LEVEL_VALUES),
+    aliases: nullableStringArraySchema(),
+    tags: nullableStringArraySchema(),
+});
+
+const WORLD_FACET_ENTRY_SCHEMA = buildStrictObjectSchema({
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    facet: { type: 'string', enum: ['rule', 'constraint', 'social', 'culture', 'history', 'danger', 'entity', 'other'] },
+    knowledgeLevel: { type: 'string', enum: [...KNOWLEDGE_LEVEL_VALUES] },
+    scopeType: { type: 'string', enum: ['global', 'nation', 'region', 'city', 'location', 'faction', 'item', 'character', 'scene', 'unclassified'] },
+    nationName: nullableStringSchema(),
+    regionName: nullableStringSchema(),
+    cityName: nullableStringSchema(),
+    locationName: nullableStringSchema(),
+    appliesTo: nullableStringSchema(),
+    tags: nullableStringArraySchema(),
+});
 
 const SEMANTIC_SEED_SUMMARY_SCHEMA = {
     type: 'object',
@@ -58,6 +101,18 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         'catchphrases',
         'relationshipAnchors',
         'styleCues',
+        'nationDetails',
+        'regionDetails',
+        'cityDetails',
+        'locationDetails',
+        'ruleDetails',
+        'constraintDetails',
+        'socialSystemDetails',
+        'culturalPracticeDetails',
+        'historicalEventDetails',
+        'dangerDetails',
+        'entityDetails',
+        'otherWorldDetailDetails',
     ],
     properties: {
         roleSummary: { type: 'string' },
@@ -83,6 +138,18 @@ const SEMANTIC_SEED_SUMMARY_SCHEMA = {
         catchphrases: { type: 'array', items: { type: 'string' } },
         relationshipAnchors: { type: 'array', items: { type: 'string' } },
         styleCues: { type: 'array', items: { type: 'string' } },
+        nationDetails: { type: 'array', items: CATALOG_ENTRY_SCHEMA },
+        regionDetails: { type: 'array', items: CATALOG_ENTRY_SCHEMA },
+        cityDetails: { type: 'array', items: CATALOG_ENTRY_SCHEMA },
+        locationDetails: { type: 'array', items: CATALOG_ENTRY_SCHEMA },
+        ruleDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        constraintDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        socialSystemDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        culturalPracticeDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        historicalEventDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        dangerDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        entityDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
+        otherWorldDetailDetails: { type: 'array', items: WORLD_FACET_ENTRY_SCHEMA },
     },
 };
 
@@ -164,6 +231,18 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
         || Array.isArray(direct.socialSystems)
         || Array.isArray(direct.culturalPractices)
         || Array.isArray(direct.otherWorldDetails)
+        || Array.isArray(direct.nationDetails)
+        || Array.isArray(direct.regionDetails)
+        || Array.isArray(direct.cityDetails)
+        || Array.isArray(direct.locationDetails)
+        || Array.isArray(direct.ruleDetails)
+        || Array.isArray(direct.constraintDetails)
+        || Array.isArray(direct.socialSystemDetails)
+        || Array.isArray(direct.culturalPracticeDetails)
+        || Array.isArray(direct.historicalEventDetails)
+        || Array.isArray(direct.dangerDetails)
+        || Array.isArray(direct.entityDetails)
+        || Array.isArray(direct.otherWorldDetailDetails)
     ) {
         return {
             roleSummary: directRoleSummary,
@@ -171,11 +250,11 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
             identityFacts: toStringArray(direct.identityFacts, 12),
             worldRules: toStringArray(direct.worldRules, 16),
             hardConstraints: toStringArray(direct.hardConstraints, 12),
-            cities: toStringArray(direct.cities, 12),
-            locations: toStringArray(direct.locations, 12),
+            cities: normalizeNamedSummaryTexts(toStringArray(direct.cities, 12)),
+            locations: normalizeNamedSummaryTexts(toStringArray(direct.locations, 12)),
             entities: toStringArray(direct.entities, 12),
-            nations: toStringArray(direct.nations, 12),
-            regions: toStringArray(direct.regions, 12),
+            nations: normalizeNationSummaryTexts(toStringArray(direct.nations, 12)),
+            regions: normalizeNamedSummaryTexts(toStringArray(direct.regions, 12)),
             factions: toStringArray(direct.factions, 12),
             calendarSystems: toStringArray(direct.calendarSystems, 12),
             currencySystems: toStringArray(direct.currencySystems, 12),
@@ -189,6 +268,18 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
             catchphrases: toStringArray(direct.catchphrases, 8),
             relationshipAnchors: toStringArray(direct.relationshipAnchors, 8),
             styleCues: toStringArray(direct.styleCues, 10),
+            nationDetails: normalizeCatalogEntrySummaryArray(direct.nationDetails),
+            regionDetails: normalizeCatalogEntrySummaryArray(direct.regionDetails),
+            cityDetails: normalizeCatalogEntrySummaryArray(direct.cityDetails),
+            locationDetails: normalizeCatalogEntrySummaryArray(direct.locationDetails),
+            ruleDetails: normalizeWorldFacetEntryArray(direct.ruleDetails, 'rule'),
+            constraintDetails: normalizeWorldFacetEntryArray(direct.constraintDetails, 'constraint'),
+            socialSystemDetails: normalizeWorldFacetEntryArray(direct.socialSystemDetails, 'social'),
+            culturalPracticeDetails: normalizeWorldFacetEntryArray(direct.culturalPracticeDetails, 'culture'),
+            historicalEventDetails: normalizeWorldFacetEntryArray(direct.historicalEventDetails, 'history'),
+            dangerDetails: normalizeWorldFacetEntryArray(direct.dangerDetails, 'danger'),
+            entityDetails: normalizeWorldFacetEntryArray(direct.entityDetails, 'entity'),
+            otherWorldDetailDetails: normalizeWorldFacetEntryArray(direct.otherWorldDetailDetails, 'other'),
         };
     }
 
@@ -390,6 +481,18 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
         catchphrases: [],
         relationshipAnchors,
         styleCues: uniqueTexts(10, [pickText(worldSummary?.tone_style, worldSummary?.toneStyle)]),
+        nationDetails: [],
+        regionDetails: [],
+        cityDetails: [],
+        locationDetails: [],
+        ruleDetails: [],
+        constraintDetails: [],
+        socialSystemDetails: [],
+        culturalPracticeDetails: [],
+        historicalEventDetails: [],
+        dangerDetails: [],
+        entityDetails: [],
+        otherWorldDetailDetails: [],
     };
 }
 
@@ -404,6 +507,196 @@ function uniqueTexts(limit: number, ...groups: unknown[][]): string[] {
             .map((item: unknown): string => normalizeText(item))
             .filter((item: string): boolean => item.length >= 2),
     )).slice(0, limit);
+}
+
+/**
+ * 功能：从国家/政体描述中提取明确的国家名字。
+ * @param value 原始国家描述。
+ * @returns 可用于国家字段的名字；无法确认时返回空字符串。
+ */
+function extractNationEntityLabel(value: string): string {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return '';
+    }
+    const candidates = Array.from(
+        normalized.matchAll(/([A-Za-z0-9\u4e00-\u9fa5·]{2,20}(?:王朝|帝国|王国|联邦|共和国|公国|汗国|联盟|国))/g),
+    ).map((item: RegExpMatchArray): string => normalizeText(item[1]));
+    const invalidPattern = /社会|结构|制度|政治|经济|军事|婚姻|女子|男子|为尊|为附|开国|盛世|架空|古代|现代|治理|权力|主导|继承|女娶男嫁/;
+    for (const candidate of candidates) {
+        if (!candidate || invalidPattern.test(candidate) || candidate.length > 16) {
+            continue;
+        }
+        return candidate;
+    }
+    return '';
+}
+
+/**
+ * 功能：规范化 AI 摘要中的国家列表，只保留明确国家名。
+ * @param values 原始国家数组。
+ * @returns 过滤后的国家名数组。
+ */
+function normalizeNationSummaryTexts(values: string[]): string[] {
+    return uniqueTexts(
+        12,
+        values
+            .map((item: string): string => extractNationEntityLabel(item))
+            .filter(Boolean),
+    );
+}
+
+/**
+ * 功能：规范化区域、城市、地点名称数组，只保留名字。
+ * @param values 原始名称数组。
+ * @returns 过滤后的名称数组。
+ */
+function normalizeNamedSummaryTexts(values: string[]): string[] {
+    return uniqueTexts(
+        12,
+        values
+            .map((item: string): string => extractNamedLeadSegment(item))
+            .filter(Boolean),
+    );
+}
+
+/**
+ * 功能：从描述中提取适合区域、城市、地点的简短名称。
+ * @param value 原始描述文本。
+ * @returns 提取出的名称；无法确认时返回空字符串。
+ */
+function extractNamedLeadSegment(value: string): string {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return '';
+    }
+    const lead = normalized
+        .split(/[：:，,；;。!！?？\n]/)[0]
+        .trim()
+        .split(/\s*[-—]\s*/)[0]
+        .trim();
+    const invalidPattern = /政治|经济|军事|制度|结构|领域|主导权|所有领域|休憩游玩之所|举行大典之所|最受宠的君后寝宫/;
+    if (!lead || lead.length > 16 || invalidPattern.test(lead)) {
+        return '';
+    }
+    return lead;
+}
+
+/**
+ * 功能：规范化目录实体详情数组。
+ * @param value 原始详情列表。
+ * @returns 结构化后的实体详情。
+ */
+function normalizeKnowledgeLevel(value: unknown, fallback: SemanticKnowledgeLevel = 'confirmed'): SemanticKnowledgeLevel {
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === 'rumor' || normalized === 'inferred' || normalized === 'confirmed') {
+        return normalized;
+    }
+    return fallback;
+}
+
+function normalizeCatalogEntrySummaryArray(value: unknown): SemanticCatalogEntrySummary[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: SemanticCatalogEntrySummary[] = [];
+    const seen = new Set<string>();
+    value.forEach((item: unknown): void => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return;
+        }
+        const record = item as Record<string, unknown>;
+        const rawName = normalizeText(record.name);
+        const summary = normalizeText(record.summary);
+        const name = rawName || extractNamedLeadSegment(summary);
+        if (!name) {
+            return;
+        }
+        const nationName = normalizeText(record.nationName) || undefined;
+        const regionName = normalizeText(record.regionName) || undefined;
+        const cityName = normalizeText(record.cityName) || undefined;
+        const signature = `${normalizeText(name).toLowerCase()}::${normalizeText(nationName).toLowerCase()}::${normalizeText(regionName).toLowerCase()}::${normalizeText(cityName).toLowerCase()}::${normalizeText(summary).toLowerCase()}`;
+        if (seen.has(signature)) {
+            return;
+        }
+        seen.add(signature);
+        result.push({
+            name,
+            summary: summary || name,
+            knowledgeLevel: normalizeKnowledgeLevel(record.knowledgeLevel, 'confirmed'),
+            nationName,
+            nationKnowledgeLevel: normalizeKnowledgeLevel(record.nationKnowledgeLevel, 'confirmed'),
+            regionName,
+            regionKnowledgeLevel: normalizeKnowledgeLevel(record.regionKnowledgeLevel, 'confirmed'),
+            cityName,
+            cityKnowledgeLevel: normalizeKnowledgeLevel(record.cityKnowledgeLevel, 'confirmed'),
+            aliases: uniqueTexts(8, toStringArray(record.aliases, 8)),
+            tags: uniqueTexts(10, toStringArray(record.tags, 10)),
+        });
+    });
+    return result.slice(0, 16);
+}
+
+function normalizeWorldFacetEntryArray(value: unknown, fallbackFacet: SemanticWorldFacetEntry['facet']): SemanticWorldFacetEntry[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: SemanticWorldFacetEntry[] = [];
+    const seen = new Set<string>();
+    value.forEach((item: unknown): void => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return;
+        }
+        const record = item as Record<string, unknown>;
+        const title = normalizeText(record.title) || extractNamedLeadSegment(normalizeText(record.summary));
+        const summary = normalizeText(record.summary);
+        if (!title && !summary) {
+            return;
+        }
+        const facetRaw = normalizeText(record.facet).toLowerCase();
+        const facet = (
+            facetRaw === 'rule'
+            || facetRaw === 'constraint'
+            || facetRaw === 'social'
+            || facetRaw === 'culture'
+            || facetRaw === 'history'
+            || facetRaw === 'danger'
+            || facetRaw === 'entity'
+            || facetRaw === 'other'
+        ) ? facetRaw : fallbackFacet;
+        const scopeTypeRaw = normalizeText(record.scopeType).toLowerCase();
+        const scopeType = (
+            scopeTypeRaw === 'global'
+            || scopeTypeRaw === 'nation'
+            || scopeTypeRaw === 'region'
+            || scopeTypeRaw === 'city'
+            || scopeTypeRaw === 'location'
+            || scopeTypeRaw === 'faction'
+            || scopeTypeRaw === 'item'
+            || scopeTypeRaw === 'character'
+            || scopeTypeRaw === 'scene'
+            || scopeTypeRaw === 'unclassified'
+        ) ? scopeTypeRaw : 'global';
+        const signature = `${normalizeText(title || summary).toLowerCase()}::${normalizeText(summary).toLowerCase()}::${facet}::${scopeType}::${normalizeText(record.nationName).toLowerCase()}::${normalizeText(record.regionName).toLowerCase()}::${normalizeText(record.cityName).toLowerCase()}::${normalizeText(record.locationName).toLowerCase()}`;
+        if (seen.has(signature)) {
+            return;
+        }
+        seen.add(signature);
+        result.push({
+            title: title || summary,
+            summary: summary || title,
+            facet,
+            knowledgeLevel: normalizeKnowledgeLevel(record.knowledgeLevel, 'confirmed'),
+            scopeType,
+            nationName: normalizeText(record.nationName) || undefined,
+            regionName: normalizeText(record.regionName) || undefined,
+            cityName: normalizeText(record.cityName) || undefined,
+            locationName: normalizeText(record.locationName) || undefined,
+            appliesTo: normalizeText(record.appliesTo) || undefined,
+            tags: uniqueTexts(10, toStringArray(record.tags, 10)),
+        });
+    });
+    return result.slice(0, 24);
 }
 
 function shouldUseAiSummary(seed: ChatSemanticSeed): boolean {
@@ -443,18 +736,17 @@ function buildPromptPayload(seed: ChatSemanticSeed): string {
 
 export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSummary): ChatSemanticSeed {
     const roleSummary = normalizeText(summary.roleSummary);
-    const worldSummary = normalizeText(summary.worldSummary);
     const aiSummary = {
         roleSummary,
-        worldSummary,
+        worldSummary: normalizeText(summary.worldSummary),
         identityFacts: uniqueTexts(12, summary.identityFacts),
         worldRules: uniqueTexts(16, summary.worldRules),
         hardConstraints: uniqueTexts(12, summary.hardConstraints),
-        cities: uniqueTexts(12, summary.cities),
-        locations: uniqueTexts(12, summary.locations),
+        cities: normalizeNamedSummaryTexts(summary.cities),
+        locations: normalizeNamedSummaryTexts(summary.locations),
         entities: uniqueTexts(12, summary.entities),
-        nations: uniqueTexts(12, summary.nations),
-        regions: uniqueTexts(12, summary.regions),
+        nations: normalizeNationSummaryTexts(summary.nations),
+        regions: normalizeNamedSummaryTexts(summary.regions),
         factions: uniqueTexts(12, summary.factions),
         calendarSystems: uniqueTexts(12, summary.calendarSystems),
         currencySystems: uniqueTexts(12, summary.currencySystems),
@@ -468,9 +760,26 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         catchphrases: uniqueTexts(8, summary.catchphrases),
         relationshipAnchors: uniqueTexts(8, summary.relationshipAnchors),
         styleCues: uniqueTexts(10, summary.styleCues),
+        nationDetails: normalizeCatalogEntrySummaryArray(summary.nationDetails),
+        regionDetails: normalizeCatalogEntrySummaryArray(summary.regionDetails),
+        cityDetails: normalizeCatalogEntrySummaryArray(summary.cityDetails),
+        locationDetails: normalizeCatalogEntrySummaryArray(summary.locationDetails),
+        ruleDetails: normalizeWorldFacetEntryArray(summary.ruleDetails, 'rule'),
+        constraintDetails: normalizeWorldFacetEntryArray(summary.constraintDetails, 'constraint'),
+        socialSystemDetails: normalizeWorldFacetEntryArray(summary.socialSystemDetails, 'social'),
+        culturalPracticeDetails: normalizeWorldFacetEntryArray(summary.culturalPracticeDetails, 'culture'),
+        historicalEventDetails: normalizeWorldFacetEntryArray(summary.historicalEventDetails, 'history'),
+        dangerDetails: normalizeWorldFacetEntryArray(summary.dangerDetails, 'danger'),
+        entityDetails: normalizeWorldFacetEntryArray(summary.entityDetails, 'entity'),
+        otherWorldDetailDetails: normalizeWorldFacetEntryArray(summary.otherWorldDetailDetails, 'other'),
         generatedAt: Date.now(),
         source: 'ai' as const,
     };
+
+    aiSummary.nations = uniqueTexts(12, aiSummary.nations, aiSummary.nationDetails.map((item): string => item.name));
+    aiSummary.regions = uniqueTexts(12, aiSummary.regions, aiSummary.regionDetails.map((item): string => item.name));
+    aiSummary.cities = uniqueTexts(12, aiSummary.cities, aiSummary.cityDetails.map((item): string => item.name));
+    aiSummary.locations = uniqueTexts(12, aiSummary.locations, aiSummary.locationDetails.map((item): string => item.name));
 
     return {
         ...seed,
@@ -484,7 +793,7 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         worldSeed: {
             ...seed.worldSeed,
             locations: uniqueTexts(12, aiSummary.locations, seed.worldSeed.locations),
-            rules: uniqueTexts(16, worldSummary ? [worldSummary] : [], aiSummary.worldRules, seed.worldSeed.rules),
+            rules: uniqueTexts(16, aiSummary.worldRules, seed.worldSeed.rules),
             hardConstraints: uniqueTexts(12, aiSummary.hardConstraints, seed.worldSeed.hardConstraints),
             entities: uniqueTexts(12, aiSummary.entities, seed.worldSeed.entities),
         },
@@ -514,26 +823,7 @@ export async function enhanceSemanticSeedWithAiWithOptions(
         return seed;
     }
 
-    const systemPrompt = [
-        '你是一个角色卡与世界观整理助手。',
-        '请根据输入的角色描述、开场白、作者注释、系统提示和世界观资料，提炼适合 MemoryOS 冷启动的角色总结与世界观总结。',
-        '只输出符合 schema 的 JSON，不要输出额外说明。',
-        '所有自然语言内容使用简体中文。',
-        '内容要简洁、可复用、避免编造；如果资料里没有，就返回空字符串或空数组。',
-        '严格使用以下 JSON 键名：roleSummary, worldSummary, identityFacts, worldRules, hardConstraints, nations, regions, cities, locations, factions, entities, calendarSystems, currencySystems, socialSystems, culturalPractices, historicalEvents, dangers, otherWorldDetails, characterGoals, relationshipFacts, catchphrases, relationshipAnchors, styleCues。',
-        'roleSummary 和 worldSummary 是字符串；其余键都必须是字符串数组。没有内容时返回空字符串或空数组。',
-        'nations 只放国家、王国、帝国、联邦、共和国、政体实体。',
-        'regions 只放大区、边境、行省、州郡、大陆分区。',
-        'cities 只放城市、都城、主城、镇、村、聚落、港口城等聚居地。',
-        'locations 只放神殿、遗迹、房间、据点、学院、基地、空间站、森林、峡谷等具体地点节点，不要放国家、区域、城市。',
-        'factions 只放组织、派系、公会、教团、军团、家族势力。entities 只放不属于前述分类、但可单独索引的对象或机构。',
-        'worldRules 放普遍规则与运行机制；hardConstraints 放绝对禁忌和硬限制。',
-        'calendarSystems 放历法、纪年、节气与月份体系；currencySystems 放货币、面额、税制、交易度量；socialSystems 放阶级、身份等级、社会制度；culturalPractices 放礼俗、传统、节庆、仪式习惯。',
-        'historicalEvents 放历史事件；dangers 放危险和威胁；characterGoals 放角色目标；relationshipFacts 与 relationshipAnchors 放稳定关系事实与检索锚点。',
-        'otherWorldDetails 只放明确属于世界设定、但不适合放入上述任一分类的合法条目；不要把无法理解、残缺或噪音文本放进去。',
-        '同一条内容只能进入一个最合适的字段。nation > region > city > location，系统类内容不要放入地点类字段。',
-        '不要返回 character_summary、world_summary、seed_key_entries 或任何其他替代键名。',
-    ].join('\n');
+    const systemPrompt = buildColdstartOperationSystemPrompt(); 
 
     const userPrompt = `${buildPromptPayload(seed)}\n\n请输出角色摘要、世界观摘要，以及适合做 seed 的关键条目。`;
     const result = await runGeneration<SemanticSeedAiSummary>(

@@ -51,6 +51,9 @@ const SDK_FLOATING_TOOLBAR_SHELL_ATTR = "data-stx-sdk-toolbar-shell";
 const SDK_FLOATING_TOOLBAR_ACTIONS_ATTR = "data-stx-sdk-toolbar-actions";
 const SDK_FLOATING_TOOLBAR_GROUP_ATTR = "data-stx-sdk-toolbar-group";
 const SDK_FLOATING_TOOLBAR_TOGGLE_ATTR = "data-stx-sdk-toolbar-toggle";
+const SDK_FLOATING_TOOLBAR_OBSERVER_ATTR = "data-stx-sdk-toolbar-observer-bound";
+
+const sdkFloatingToolbarObserverMap = new WeakMap<HTMLElement, MutationObserver>();
 
 function resolveDefaultToolbarHost(): HTMLElement | null {
   const compact = document.querySelector<HTMLElement>("#send_form.compact");
@@ -330,6 +333,65 @@ function mountToolbarToHost(toolbar: HTMLElement, host: HTMLElement): void {
   }
 }
 
+/**
+ * 功能：断开工具栏的宿主监听器，避免在工具栏销毁后继续观察页面。
+ * @param toolbar 当前工具栏节点。
+ * @returns 无返回值。
+ */
+function disconnectToolbarObserver(toolbar: HTMLElement): void {
+  const observer = sdkFloatingToolbarObserverMap.get(toolbar);
+  if (!observer) {
+    return;
+  }
+  observer.disconnect();
+  sdkFloatingToolbarObserverMap.delete(toolbar);
+  delete toolbar.dataset.stxSdkToolbarObserverBound;
+}
+
+/**
+ * 功能：确保工具栏在宿主节点重绘或替换后能够自动重新挂载。
+ * @param toolbar 当前工具栏节点。
+ * @param options 工具栏挂载选项。
+ * @returns 无返回值。
+ */
+function ensureToolbarObserver(toolbar: HTMLElement, options: SdkFloatingToolbarOptions): void {
+  if (toolbar.dataset.stxSdkToolbarObserverBound === "1") {
+    return;
+  }
+  const root = document.body;
+  if (!root) {
+    return;
+  }
+
+  const observer = new MutationObserver((): void => {
+    if (!toolbar.isConnected) {
+      const host = (options.hostResolver ?? resolveDefaultToolbarHost)();
+      if (!host) {
+        return;
+      }
+      mountToolbarToHost(toolbar, host);
+      options.onToolbarMounted?.(toolbar, host);
+      return;
+    }
+
+    const host = (options.hostResolver ?? resolveDefaultToolbarHost)();
+    if (!host) {
+      return;
+    }
+    if (toolbar.parentElement !== host) {
+      mountToolbarToHost(toolbar, host);
+      options.onToolbarMounted?.(toolbar, host);
+    }
+  });
+
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+  });
+  sdkFloatingToolbarObserverMap.set(toolbar, observer);
+  toolbar.dataset.stxSdkToolbarObserverBound = "1";
+}
+
 function scheduleEnsureRetry(options: SdkFloatingToolbarOptions, attempt: number): void {
   if (attempt > getToolbarOptionValue(options.retryMax, 60)) return;
   window.setTimeout(() => {
@@ -360,11 +422,13 @@ export function ensureSdkFloatingToolbar(
 
   const host = (options.hostResolver ?? resolveDefaultToolbarHost)();
   if (!host) {
+    ensureToolbarObserver(toolbar, options);
     scheduleEnsureRetry(options, attempt + 1);
     return toolbar;
   }
 
   mountToolbarToHost(toolbar, host);
+  ensureToolbarObserver(toolbar, options);
   options.onToolbarMounted?.(toolbar, host);
   return toolbar;
 }
@@ -378,6 +442,7 @@ export function removeSdkFloatingToolbarGroup(options: RemoveSdkFloatingToolbarG
   const safeGroupId = CSS.escape(options.groupId);
   actionsWrap.querySelector<HTMLElement>(`[${SDK_FLOATING_TOOLBAR_GROUP_ATTR}="${safeGroupId}"]`)?.remove();
   if (!actionsWrap.querySelector(`[${SDK_FLOATING_TOOLBAR_GROUP_ATTR}]`)) {
+    disconnectToolbarObserver(toolbar);
     toolbar.remove();
   }
 }

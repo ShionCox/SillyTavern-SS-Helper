@@ -93,6 +93,10 @@ export class ChatLifecycleManager {
             }
 
             const hostChats = await listTavernChatsForCurrentScopeEvent().catch((): unknown[] => []);
+            if (!Array.isArray(hostChats) || hostChats.length <= 0) {
+                logger.info(`Skip reconcile because host chats are not ready. reason=${reason}`);
+                return [];
+            }
             const hostChatKeySet = new Set(
                 (Array.isArray(hostChats) ? hostChats : [])
                     .map((item: any): string => buildTavernChatScopedKeyEvent(item.locator))

@@ -829,6 +829,24 @@ export interface StyleSeed {
     sourceTrace: SeedSourceTrace[];
 }
 
+export type SemanticKnowledgeLevel = 'confirmed' | 'rumor' | 'inferred';
+
+export type SemanticWorldFacet = 'rule' | 'constraint' | 'social' | 'culture' | 'history' | 'danger' | 'entity' | 'other';
+
+export interface SemanticWorldFacetEntry {
+    title: string;
+    summary: string;
+    facet: SemanticWorldFacet;
+    knowledgeLevel: SemanticKnowledgeLevel;
+    scopeType: WorldStateScopeType;
+    nationName?: string;
+    regionName?: string;
+    cityName?: string;
+    locationName?: string;
+    appliesTo?: string;
+    tags?: string[];
+}
+
 export interface SemanticAiSummary {
     roleSummary: string;
     worldSummary: string;
@@ -853,8 +871,34 @@ export interface SemanticAiSummary {
     catchphrases: string[];
     relationshipAnchors: string[];
     styleCues: string[];
+    nationDetails: SemanticCatalogEntrySummary[];
+    regionDetails: SemanticCatalogEntrySummary[];
+    cityDetails: SemanticCatalogEntrySummary[];
+    locationDetails: SemanticCatalogEntrySummary[];
+    ruleDetails: SemanticWorldFacetEntry[];
+    constraintDetails: SemanticWorldFacetEntry[];
+    socialSystemDetails: SemanticWorldFacetEntry[];
+    culturalPracticeDetails: SemanticWorldFacetEntry[];
+    historicalEventDetails: SemanticWorldFacetEntry[];
+    dangerDetails: SemanticWorldFacetEntry[];
+    entityDetails: SemanticWorldFacetEntry[];
+    otherWorldDetailDetails: SemanticWorldFacetEntry[];
     generatedAt: number;
     source: 'ai';
+}
+
+export interface SemanticCatalogEntrySummary {
+    name: string;
+    summary: string;
+    knowledgeLevel?: SemanticKnowledgeLevel;
+    nationName?: string;
+    nationKnowledgeLevel?: SemanticKnowledgeLevel;
+    regionName?: string;
+    regionKnowledgeLevel?: SemanticKnowledgeLevel;
+    cityName?: string;
+    cityKnowledgeLevel?: SemanticKnowledgeLevel;
+    aliases?: string[];
+    tags?: string[];
 }
 
 export interface ColdStartLorebookEntrySelection {
@@ -1206,12 +1250,17 @@ export interface WorldStateNodeValue {
     summary: string;
     scopeType: WorldStateScopeType;
     stateType: WorldStateType;
+    knowledgeLevel?: SemanticKnowledgeLevel;
     subjectId?: string;
     nationId?: string;
+    nationKnowledgeLevel?: SemanticKnowledgeLevel;
     regionId?: string;
+    regionKnowledgeLevel?: SemanticKnowledgeLevel;
     cityId?: string;
+    cityKnowledgeLevel?: SemanticKnowledgeLevel;
     locationId?: string;
     itemId?: string;
+    canonicalKey?: string;
     anomalyFlags?: string[];
     keywords: string[];
     tags: string[];

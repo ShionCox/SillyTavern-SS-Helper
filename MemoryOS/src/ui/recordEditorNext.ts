@@ -1,4 +1,4 @@
-import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from '../db/db';
+import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared, restoreArchivedMemoryChat } from '../db/db';
 import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
@@ -96,6 +96,13 @@ interface WorldStateSectionCategoryViewModel {
 }
 
 type RawRecord = Record<string, unknown>;
+
+const WORLD_STATE_INTERNAL_AGGREGATE_PATH_PREFIXES: string[] = [
+    '/semantic/world/locations',
+    '/semantic/world/entities',
+    '/semantic/meta/groupmembers',
+    '/semantic/world/overview',
+];
 
 const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
     world: {
@@ -289,7 +296,221 @@ function extractWorldStateListItems(entry: StructuredWorldStateEntry, preferredK
         .slice(0, 8);
 }
 
+/**
+ * 功能：从国家与政体描述中提取可展示的国家名称。
+ * @param value 原始文本。
+ * @returns 提取出的国家名；无法确认时返回空字符串。
+ */
+function extractWorldStateNationLabel(value: unknown): string {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+        return '';
+    }
+    const candidates = Array.from(
+        normalized.matchAll(/([A-Za-z0-9\u4e00-\u9fa5·]{2,20}(?:王朝|帝国|王国|联邦|共和国|公国|汗国|联盟|国))/g),
+    ).map((item: RegExpMatchArray): string => String(item[1] ?? '').trim());
+    const invalidPattern = /社会|结构|制度|政治|经济|军事|婚姻|女子|男子|为尊|为附|开国|盛世|架空|古代|现代|治理|权力|主导|继承|女娶男嫁/;
+    for (const candidate of candidates) {
+        if (!candidate || invalidPattern.test(candidate) || candidate.length > 16) {
+            continue;
+        }
+        return candidate;
+    }
+    return '';
+}
+
+/**
+ * 功能：从区域、城市、地点描述中提取简短名称。
+ * @param value 原始文本。
+ * @returns 提取出的名称；无法确认时返回空字符串。
+ */
+function extractWorldStateNamedLead(value: unknown): string {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+        return '';
+    }
+    const lead = normalized
+        .split(/[：:，,；;。!！?？\n]/)[0]
+        .trim()
+        .split(/\s*[-—]\s*/)[0]
+        .trim();
+    const invalidPattern = /政治|经济|军事|制度|结构|领域|主导权|所有领域/;
+    if (!lead || lead.length > 16 || invalidPattern.test(lead)) {
+        return '';
+    }
+    return lead;
+}
+
+/**
+ * 功能：解析世界状态条目的国家显示名。
+ * @param entry 世界状态条目。
+ * @returns 可展示的国家名称；无法确认时返回空字符串。
+ */
+/**
+ * 功能：解析世界状态的知识级别字段。
+ * @param value 原始值。
+ * @returns 规范化知识级别，无法识别时返回空串。
+ */
+function parseWorldStateKnowledgeLevel(value: unknown): 'confirmed' | 'rumor' | 'inferred' | '' {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'confirmed' || normalized === 'rumor' || normalized === 'inferred') {
+        return normalized;
+    }
+    return '';
+}
+
+/**
+ * 功能：根据知识级别格式化父级标签显示。
+ * @param label 基础标签。
+ * @param knowledgeLevel 知识级别。
+ * @returns 带“传闻/推测”前缀的显示标签。
+ */
+function resolveWorldStateKnowledgeAwareLabel(label: string, knowledgeLevel: unknown): string {
+    const normalizedLabel = String(label ?? '').trim();
+    if (!normalizedLabel) {
+        return '';
+    }
+    const level = parseWorldStateKnowledgeLevel(knowledgeLevel);
+    if (level === 'rumor') {
+        return `传闻：${normalizedLabel}`;
+    }
+    if (level === 'inferred') {
+        return `推测：${normalizedLabel}`;
+    }
+    return normalizedLabel;
+}
+
+/**
+ * 功能：格式化知识级别文案。
+ * @param knowledgeLevel 知识级别原始值。
+ * @returns 面向 UI 的知识级别文案。
+ */
+function formatWorldStateKnowledgeLevelLabel(knowledgeLevel: unknown): string {
+    const level = parseWorldStateKnowledgeLevel(knowledgeLevel);
+    if (level === 'confirmed') {
+        return '明确';
+    }
+    if (level === 'rumor') {
+        return '传闻';
+    }
+    if (level === 'inferred') {
+        return '推测';
+    }
+    return '未标注';
+}
+
+function resolveWorldStateNationLabel(entry: StructuredWorldStateEntry, options?: { strictParent?: boolean }): string {
+    const raw = getWorldStateRawObject(entry);
+    const strictParent = options?.strictParent === true;
+    const baseLabel = (
+        extractWorldStateNationLabel(raw.nationName)
+        || extractWorldStateNationLabel(raw.nation)
+        || extractWorldStateNationLabel(raw.country)
+        || extractWorldStateNationLabel(raw.kingdom)
+        || extractWorldStateNationLabel(raw.empire)
+        || extractWorldStateNationLabel(raw.polity)
+        || extractWorldStateNationLabel(entry.node.nationId)
+    );
+    if (strictParent) {
+        return resolveWorldStateKnowledgeAwareLabel(
+            baseLabel,
+            raw.nationKnowledgeLevel ?? raw.knowledgeLevel ?? entry.node.nationKnowledgeLevel ?? entry.node.knowledgeLevel,
+        );
+    }
+    return (
+        baseLabel
+        || extractWorldStateNationLabel(entry.node.title)
+        || extractWorldStateNationLabel(entry.node.summary)
+    );
+}
+
+/**
+ * 功能：解析世界状态条目的区域显示名。
+ * @param entry 世界状态条目。
+ * @returns 可展示的区域名称；无法确认时返回空字符串。
+ */
+function resolveWorldStateRegionLabel(entry: StructuredWorldStateEntry, options?: { strictParent?: boolean }): string {
+    const raw = getWorldStateRawObject(entry);
+    const strictParent = options?.strictParent === true;
+    const baseLabel = (
+        extractWorldStateNamedLead(raw.regionName)
+        || extractWorldStateNamedLead(raw.region)
+        || extractWorldStateNamedLead(raw.area)
+        || extractWorldStateNamedLead(entry.node.regionId)
+    );
+    if (strictParent) {
+        return resolveWorldStateKnowledgeAwareLabel(
+            baseLabel,
+            raw.regionKnowledgeLevel ?? raw.knowledgeLevel ?? entry.node.regionKnowledgeLevel ?? entry.node.knowledgeLevel,
+        );
+    }
+    return (
+        baseLabel
+        || extractWorldStateNamedLead(entry.node.title)
+        || extractWorldStateNamedLead(entry.node.summary)
+    );
+}
+
+/**
+ * 功能：解析世界状态条目的城市显示名。
+ * @param entry 世界状态条目。
+ * @returns 可展示的城市名称；无法确认时返回空字符串。
+ */
+function resolveWorldStateCityLabel(entry: StructuredWorldStateEntry, options?: { strictParent?: boolean }): string {
+    const raw = getWorldStateRawObject(entry);
+    const strictParent = options?.strictParent === true;
+    const baseLabel = (
+        extractWorldStateNamedLead(raw.cityName)
+        || extractWorldStateNamedLead(raw.city)
+        || extractWorldStateNamedLead(entry.node.cityId)
+    );
+    if (strictParent) {
+        return resolveWorldStateKnowledgeAwareLabel(
+            baseLabel,
+            raw.cityKnowledgeLevel ?? raw.knowledgeLevel ?? entry.node.cityKnowledgeLevel ?? entry.node.knowledgeLevel,
+        );
+    }
+    return (
+        baseLabel
+        || extractWorldStateNamedLead(entry.node.title)
+        || extractWorldStateNamedLead(entry.node.summary)
+    );
+}
+
+/**
+ * 功能：解析世界状态条目的地点显示名。
+ * @param entry 世界状态条目。
+ * @returns 可展示的地点名称；无法确认时返回空字符串。
+ */
+function resolveWorldStateLocationLabel(entry: StructuredWorldStateEntry): string {
+    const raw = getWorldStateRawObject(entry);
+    return (
+        extractWorldStateNamedLead(raw.locationName)
+        || extractWorldStateNamedLead(raw.location)
+        || extractWorldStateNamedLead(raw.scene)
+        || extractWorldStateNamedLead(entry.node.title)
+        || extractWorldStateNamedLead(entry.node.summary)
+        || extractWorldStateNamedLead(entry.node.locationId)
+    );
+}
+
 function formatWorldStateDisplayTitle(entry: StructuredWorldStateEntry): string {
+    if (entry.node.scopeType === 'nation') {
+        const nationLabel = resolveWorldStateNationLabel(entry);
+        if (nationLabel) {
+            return nationLabel;
+        }
+        return '未知国家';
+    }
+    if (entry.node.scopeType === 'region') {
+        return resolveWorldStateRegionLabel(entry) || '未知区域';
+    }
+    if (entry.node.scopeType === 'city') {
+        return resolveWorldStateCityLabel(entry) || '未知城市';
+    }
+    if (entry.node.scopeType === 'location') {
+        return resolveWorldStateLocationLabel(entry) || '未知地点';
+    }
     const rawTitle = String(entry.node.title || '').trim();
     if (!rawTitle) {
         return buildWorldStateHeadline(entry.path);
@@ -1571,6 +1792,9 @@ function buildWorldStateSectionCategoryViewModel(
 }
 
 function hasWorldStateStructuralAnomaly(entry: StructuredWorldStateEntry): boolean {
+    if (isInternalWorldStateAggregateEntry(entry)) {
+        return false;
+    }
     const raw = getWorldStateRawObject(entry);
     const anomalyFlags = Array.isArray(entry.node.anomalyFlags) ? entry.node.anomalyFlags : [];
     if (anomalyFlags.length > 0) {
@@ -1592,6 +1816,19 @@ function hasWorldStateStructuralAnomaly(entry: StructuredWorldStateEntry): boole
         return true;
     }
     return entry.node.stateType === 'anomaly';
+}
+
+/**
+ * 功能：判断条目是否属于内部聚合路径。
+ * @param entry 世界状态条目。
+ * @returns 是否为内部聚合条目。
+ */
+function isInternalWorldStateAggregateEntry(entry: StructuredWorldStateEntry): boolean {
+    const normalizedPath = String(entry.path ?? '').trim().toLowerCase();
+    if (!normalizedPath) {
+        return false;
+    }
+    return WORLD_STATE_INTERNAL_AGGREGATE_PATH_PREFIXES.some((prefix: string): boolean => normalizedPath.startsWith(prefix));
 }
 
 function matchWorldStateKeyword(entry: StructuredWorldStateEntry, keyword: string): boolean {
@@ -3084,6 +3321,24 @@ const selectedLogicRowIds = new Set<string>();
     }
 
     /**
+     * 功能：判断聊天是否属于“宿主仍存在，但曾被误标删除”的可恢复状态。
+     * @param archived 当前插件状态是否已归档。
+     * @param archiveReason 当前归档原因。
+     * @param hostPresent 宿主聊天是否仍然存在。
+     * @returns 是否应该恢复为正常状态。
+     */
+    function shouldRecoverChatArchiveState(archived: boolean, archiveReason: string, hostPresent: boolean): boolean {
+        if (!archived || !hostPresent) {
+            return false;
+        }
+        const normalizedReason = String(archiveReason ?? '').trim().toLowerCase();
+        if (!normalizedReason) {
+            return false;
+        }
+        return normalizedReason.includes('orphaned') || normalizedReason.includes('host_deleted') || normalizedReason.includes('host_chat_deleted');
+    }
+
+    /**
      * 功能：加载聊天列表并附带 MemoryOS 摘要。
      * @returns 无返回值
      */
@@ -3140,6 +3395,24 @@ const selectedLogicRowIds = new Set<string>();
                     hasMeaningfulData,
                 };
             }));
+            const recoverableChatKeys = items
+                .filter((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): boolean => {
+                    return shouldRecoverChatArchiveState(item.archived, item.archiveReason, item.hostPresent);
+                })
+                .map((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): string => item.chatKey);
+
+            if (recoverableChatKeys.length > 0) {
+                await Promise.all(
+                    recoverableChatKeys.map((chatKey: string): Promise<void> => restoreArchivedMemoryChat(chatKey)),
+                );
+                for (const item of items) {
+                    if (!recoverableChatKeys.includes(item.chatKey)) {
+                        continue;
+                    }
+                    item.archived = false;
+                    item.archiveReason = '';
+                }
+            }
             const activeCanonicalKey = resolveChatItemCanonicalKey(currentChatKey);
             const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }>, item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }) => {
                 const dedupeKey = item.canonicalKey || item.chatKey;
@@ -3157,13 +3430,16 @@ const selectedLogicRowIds = new Set<string>();
                     ? item
                     : (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal) ? item : existing);
                 const mergedHostPresent = existing.hostPresent || item.hostPresent;
+                const mergedArchiveReason = preferredItem.archiveReason || existing.archiveReason || item.archiveReason;
+                const mergedArchived = (existing.archived || item.archived)
+                    && !shouldRecoverChatArchiveState(existing.archived || item.archived, mergedArchiveReason, mergedHostPresent);
                 const mergedItem = {
                     ...preferredItem,
-                    archived: existing.archived || item.archived,
+                    archived: mergedArchived,
                     hostMissing: !mergedHostPresent && (existing.hostMissing || item.hostMissing),
                     hostPresent: mergedHostPresent,
                     hasMeaningfulData: existing.hasMeaningfulData || item.hasMeaningfulData,
-                    archiveReason: preferredItem.archiveReason || existing.archiveReason || item.archiveReason,
+                    archiveReason: mergedArchived ? mergedArchiveReason : '',
                     signal: preferredItem.signal || existing.signal || item.signal,
                 } as ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean };
                 map.set(dedupeKey, mergedItem);
@@ -3424,7 +3700,7 @@ const selectedLogicRowIds = new Set<string>();
             return;
         }
 
-        const [entries, experience, ownedStates] = await Promise.all([
+        const [rawEntries, experience, ownedStates] = await Promise.all([
             memory.state.queryStructured(''),
             memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
             memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
@@ -3432,6 +3708,22 @@ const selectedLogicRowIds = new Set<string>();
         if (renderSeq !== currentWorldStateRenderSeq) {
             return;
         }
+        const visibleEntries = rawEntries.filter((entry: StructuredWorldStateEntry): boolean => !isInternalWorldStateAggregateEntry(entry));
+        const dedupedEntryMap = new Map<string, StructuredWorldStateEntry>();
+        visibleEntries.forEach((entry: StructuredWorldStateEntry): void => {
+            const raw = getWorldStateRawObject(entry);
+            const canonical = String(raw.canonicalKey || entry.node.canonicalKey || '').trim();
+            const dedupeKey = canonical || entry.stateKey || entry.path;
+            const existing = dedupedEntryMap.get(dedupeKey);
+            if (!existing) {
+                dedupedEntryMap.set(dedupeKey, entry);
+                return;
+            }
+            const existingScore = Number(existing.updatedAt ?? 0) + Number(existing.node.confidence ?? 0);
+            const nextScore = Number(entry.updatedAt ?? 0) + Number(entry.node.confidence ?? 0);
+            dedupedEntryMap.set(dedupeKey, nextScore >= existingScore ? entry : existing);
+        });
+        const entries = Array.from(dedupedEntryMap.values());
         const actorLabelMap = new Map<string, string>();
         experience.canon.characters.forEach((character): void => {
             const actorKey = String(character.actorKey ?? '').trim();
@@ -3486,20 +3778,16 @@ const selectedLogicRowIds = new Set<string>();
             .map((item: SnapshotValue): string => String(item.value ?? '').trim())
             .filter(Boolean);
         const uniqueCities = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
-            const raw = getWorldStateRawObject(entry);
-            return String(entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city']) || '').trim();
+            return resolveWorldStateCityLabel(entry);
         }).filter(Boolean));
         const uniqueLocations = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
-            const raw = getWorldStateRawObject(entry);
-            return String(entry.node.locationId || pickWorldStateText(raw, ['locationName', 'location', 'scene']) || '').trim();
+            return resolveWorldStateLocationLabel(entry);
         }).filter(Boolean));
         const uniqueRegions = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
-            const raw = getWorldStateRawObject(entry);
-            return String(entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region', 'area']) || '').trim();
+            return resolveWorldStateRegionLabel(entry);
         }).filter(Boolean));
         const uniqueNations = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
-            const raw = getWorldStateRawObject(entry);
-            return String(entry.node.nationId || pickWorldStateText(raw, ['nationName', 'nation', 'country', 'kingdom', 'empire', 'polity']) || '').trim();
+            return resolveWorldStateNationLabel(entry);
         }).filter(Boolean));
         const boundSubjects = new Set(entries.map((entry: StructuredWorldStateEntry): string => {
             const raw = getWorldStateRawObject(entry);
@@ -3632,8 +3920,8 @@ const selectedLogicRowIds = new Set<string>();
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前城市的主状态说明。', [
-                        renderWorldStateMiniMeta('城市', entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city', 'name']) || '未标记'),
-                        renderWorldStateMiniMeta('区域', entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region']) || '未标记'),
+                        renderWorldStateMiniMeta('城市', resolveWorldStateCityLabel(entry) || '未知'),
+                        renderWorldStateMiniMeta('区域', resolveWorldStateRegionLabel(entry, { strictParent: true }) || '未知'),
                     ]);
                 },
             },
@@ -3686,7 +3974,7 @@ const selectedLogicRowIds = new Set<string>();
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前国家/政体说明。', [
-                        renderWorldStateMiniMeta('国家', entry.node.nationId || pickWorldStateText(raw, ['nationName', 'nation', 'country', 'kingdom', 'empire']) || '未标记'),
+                        renderWorldStateMiniMeta('国家', resolveWorldStateNationLabel(entry, { strictParent: true }) || '未知'),
                         renderWorldStateMiniMeta('政体', pickWorldStateText(raw, ['government', 'regime', 'polity', '政体']) || formatWorldStateTypeLabel(entry.node.stateType)),
                     ]);
                 },
@@ -3739,8 +4027,8 @@ const selectedLogicRowIds = new Set<string>();
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前区域/地理说明。', [
-                        renderWorldStateMiniMeta('区域', entry.node.regionId || pickWorldStateText(raw, ['regionName', 'region', 'area']) || '未标记'),
-                        renderWorldStateMiniMeta('国家', entry.node.nationId || pickWorldStateText(raw, ['nation', 'country']) || '未标记'),
+                        renderWorldStateMiniMeta('区域', resolveWorldStateRegionLabel(entry, { strictParent: true }) || '未知'),
+                        renderWorldStateMiniMeta('国家', resolveWorldStateNationLabel(entry, { strictParent: true }) || '未知'),
                     ]);
                 },
             },
@@ -3791,8 +4079,8 @@ const selectedLogicRowIds = new Set<string>();
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前地点的状态说明。', [
-                        renderWorldStateMiniMeta('地点', entry.node.locationId || pickWorldStateText(raw, ['locationName', 'location', 'scene']) || '未标记'),
-                        renderWorldStateMiniMeta('城市', entry.node.cityId || pickWorldStateText(raw, ['cityName', 'city']) || '未标记'),
+                        renderWorldStateMiniMeta('地点', resolveWorldStateLocationLabel(entry) || '未知'),
+                        renderWorldStateMiniMeta('城市', resolveWorldStateCityLabel(entry, { strictParent: true }) || '未知'),
                     ]);
                 },
             },
@@ -3847,6 +4135,7 @@ const selectedLogicRowIds = new Set<string>();
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, buildWorldStateLeadSummary(entry, '当前规则的核心说明。'), [
                         renderWorldStateMiniMeta('规则类型', formatWorldStateTypeLabel(entry.node.stateType)),
+                        renderWorldStateMiniMeta('知识级别', formatWorldStateKnowledgeLevelLabel(raw.knowledgeLevel ?? entry.node.knowledgeLevel)),
                         renderWorldStateMiniMeta('适用对象', entry.node.subjectId || pickWorldStateText(raw, ['subject', 'target', 'appliesTo']) || '未指定'),
                     ]);
                 },

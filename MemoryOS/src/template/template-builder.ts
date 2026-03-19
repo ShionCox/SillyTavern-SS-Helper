@@ -4,6 +4,7 @@ import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
 import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
+import { buildStrictObjectSchema, nullableStringSchema } from '../llm/strict-schema';
 import { buildDisplayTables } from './table-derivation';
 
 /**
@@ -174,25 +175,21 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
  * 返回：
  *   JSON Schema 对象。
  */
-const TEMPLATE_SCHEMA = {
-    type: 'object',
-    required: ['worldType', 'name', 'tables', 'factTypes'],
-    properties: {
-        templateId: { type: 'string' },
-        worldType: { type: 'string' },
-        name: { type: 'string' },
-        tables: { type: 'array' },
-        factTypes: { type: 'array' },
-        extractPolicies: { type: 'object' },
-        injectionLayout: { type: 'object' },
-        fieldSynonyms: { type: 'object' },
-        tableSynonyms: { type: 'object' },
-        templateFamilyId: { type: 'string' },
-        revisionNo: { type: 'number' },
-        revisionState: { type: 'string' },
-        parentTemplateId: { type: ['string', 'null'] },
-        schemaFingerprint: { type: 'string' },
-        lastTouchedAt: { type: 'number' },
-        finalizedAt: { type: ['number', 'null'] },
-    },
-};
+const TEMPLATE_SCHEMA = buildStrictObjectSchema({
+    templateId: nullableStringSchema(),
+    worldType: { type: 'string' },
+    name: { type: 'string' },
+    tables: { type: 'array' },
+    factTypes: { type: 'array' },
+    extractPolicies: { type: ['object', 'null'] },
+    injectionLayout: { type: ['object', 'null'] },
+    fieldSynonyms: { type: ['object', 'null'] },
+    tableSynonyms: { type: ['object', 'null'] },
+    templateFamilyId: nullableStringSchema(),
+    revisionNo: { type: ['number', 'null'] },
+    revisionState: nullableStringSchema(),
+    parentTemplateId: nullableStringSchema(),
+    schemaFingerprint: nullableStringSchema(),
+    lastTouchedAt: { type: ['number', 'null'] },
+    finalizedAt: { type: ['number', 'null'] },
+});

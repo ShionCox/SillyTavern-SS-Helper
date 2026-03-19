@@ -1,8 +1,79 @@
 import { describe, expect, it } from 'vitest';
 import { deriveVectorMemoryViewerItems } from '../src/ui/vectorMemoryViewer';
-import type { VectorMemoryViewerSnapshot } from '../../SDK/stx';
+import type { MemoryCardSummary, MemoryCardViewerSnapshot, MemoryRecallPreviewResult } from '../../SDK/stx';
 
-function buildSnapshot(): VectorMemoryViewerSnapshot {
+/**
+ * 功能：创建基础记忆卡摘要，减少测试样板代码。
+ * @param cardId 卡片编号。
+ * @param overrides 覆盖字段。
+ * @returns 完整记忆卡摘要对象。
+ */
+function createCardSummary(cardId: string, overrides: Partial<MemoryCardSummary> = {}): MemoryCardSummary {
+    return {
+        chunkId: cardId,
+        cardId,
+        cardIds: [cardId],
+        chatKey: 'chat:test',
+        content: '示例记忆',
+        preview: '示例记忆',
+        contentHash: `hash-${cardId}`,
+        contentLength: 4,
+        createdAt: 100,
+        sourceRecordKey: `fact:${cardId}`,
+        sourceRecordKind: 'fact',
+        sourceLabel: '事实',
+        sourceDetail: '来源说明',
+        ownerActorKey: 'actor:a',
+        ownerActorLabel: '角色A',
+        sourceScope: 'self',
+        memoryType: 'identity',
+        memorySubtype: 'trait',
+        participantActorKeys: [],
+        participantActorLabels: [],
+        anchorMessageId: null,
+        sourceMessageIds: [],
+        sourceTraceKind: 'extract',
+        sourceReason: 'manual',
+        sourceViewHash: null,
+        sourceSnapshotHash: null,
+        sourceRepairGeneration: null,
+        embeddingModel: 'model',
+        embeddingDimensions: 1024,
+        statusKind: 'normal',
+        statusLabel: '正常',
+        statusTone: 'muted',
+        statusReasons: [],
+        isArchived: false,
+        sourceMissing: false,
+        needsRebuild: false,
+        duplicateCount: 1,
+        usage: {
+            totalHits: 0,
+            selectedHits: 0,
+            hitsIn7d: 0,
+            hitsIn30d: 0,
+            lastHitAt: null,
+            lastSelectedAt: null,
+            lastQuery: null,
+            lastScore: null,
+        },
+        lane: 'identity',
+        subject: '主角',
+        title: `标题-${cardId}`,
+        memoryText: '示例记忆正文',
+        evidenceText: null,
+        ttl: 'long',
+        replaceKey: null,
+        status: 'active',
+        ...overrides,
+    };
+}
+
+/**
+ * 功能：创建测试快照。
+ * @returns 记忆卡查看器快照。
+ */
+function createSnapshot(): MemoryCardViewerSnapshot {
     return {
         chatKey: 'chat:test',
         generatedAt: 1000,
@@ -13,42 +84,14 @@ function buildSnapshot(): VectorMemoryViewerSnapshot {
         recentHitCount: 1,
         longUnusedCount: 1,
         items: [
-            {
-                chunkId: 'chunk-a',
-                chatKey: 'chat:test',
-                content: '阿尔法记忆内容较完整',
-                preview: '阿尔法记忆内容较完整',
-                contentHash: 'ha',
-                contentLength: 10,
-                createdAt: 100,
-                sourceRecordKey: 'fact:a',
+            createCardSummary('card-a', {
+                content: '角色A身份记忆',
+                preview: '角色A身份记忆',
+                contentLength: 16,
                 sourceRecordKind: 'fact',
-                sourceLabel: '事实 A',
-                sourceDetail: '来源 A',
-                ownerActorKey: 'actor:a',
-                ownerActorLabel: '角色 A',
-                sourceScope: 'self',
-                memoryType: 'identity',
-                memorySubtype: 'trait',
-                participantActorKeys: [],
-                participantActorLabels: [],
-                anchorMessageId: 'msg-a',
-                sourceMessageIds: ['msg-a'],
-                sourceTraceKind: 'extract',
-                sourceReason: 'manual',
-                sourceViewHash: 'view-a',
-                sourceSnapshotHash: 'snap-a',
-                sourceRepairGeneration: 0,
-                embeddingModel: 'model-a',
-                embeddingDimensions: 1024,
                 statusKind: 'recent_hit',
                 statusLabel: '最近命中',
                 statusTone: 'success',
-                statusReasons: [],
-                isArchived: false,
-                sourceMissing: false,
-                needsRebuild: false,
-                duplicateCount: 1,
                 usage: {
                     totalHits: 5,
                     selectedHits: 2,
@@ -56,92 +99,41 @@ function buildSnapshot(): VectorMemoryViewerSnapshot {
                     hitsIn30d: 5,
                     lastHitAt: Date.now(),
                     lastSelectedAt: Date.now(),
-                    lastQuery: '谁最重要',
+                    lastQuery: '她是谁',
                     lastScore: 0.91,
                 },
-            },
-            {
-                chunkId: 'chunk-b',
-                chatKey: 'chat:test',
-                content: '贝塔记忆',
-                preview: '贝塔记忆',
-                contentHash: 'hb',
-                contentLength: 4,
-                createdAt: 200,
-                sourceRecordKey: 'summary:b',
+            }),
+            createCardSummary('card-b', {
+                content: '关系变化记忆',
+                preview: '关系变化记忆',
                 sourceRecordKind: 'summary',
-                sourceLabel: '摘要 B',
-                sourceDetail: '来源 B',
-                ownerActorKey: 'actor:b',
-                ownerActorLabel: '角色 B',
-                sourceScope: 'group',
-                memoryType: 'event',
-                memorySubtype: 'major_plot_event',
-                participantActorKeys: ['actor:a'],
-                participantActorLabels: ['角色 A'],
-                anchorMessageId: null,
-                sourceMessageIds: [],
-                sourceTraceKind: 'extract',
-                sourceReason: 'repair',
-                sourceViewHash: 'view-b',
-                sourceSnapshotHash: 'snap-b',
-                sourceRepairGeneration: 2,
-                embeddingModel: 'model-b',
-                embeddingDimensions: 1024,
+                lane: 'event',
+                title: '关系变化',
                 statusKind: 'needs_rebuild',
                 statusLabel: '建议重建',
                 statusTone: 'warning',
                 statusReasons: ['来源记录已更新'],
-                isArchived: false,
-                sourceMissing: false,
                 needsRebuild: true,
-                duplicateCount: 1,
-                usage: {
-                    totalHits: 0,
-                    selectedHits: 0,
-                    hitsIn7d: 0,
-                    hitsIn30d: 0,
-                    lastHitAt: null,
-                    lastSelectedAt: null,
-                    lastQuery: null,
-                    lastScore: null,
-                },
-            },
-            {
-                chunkId: 'chunk-c',
-                chatKey: 'chat:test',
-                content: '伽马记忆',
-                preview: '伽马记忆',
-                contentHash: 'hc',
-                contentLength: 4,
-                createdAt: 300,
-                sourceRecordKey: null,
+                participantActorKeys: ['actor:a'],
+                participantActorLabels: ['角色A'],
+            }),
+            createCardSummary('card-c', {
+                content: '旧记录',
+                preview: '旧记录',
                 sourceRecordKind: 'unknown',
+                sourceRecordKey: null,
                 sourceLabel: '未知来源',
                 sourceDetail: '来源缺失',
                 ownerActorKey: null,
                 ownerActorLabel: null,
-                sourceScope: null,
-                memoryType: null,
-                memorySubtype: null,
                 participantActorKeys: [],
                 participantActorLabels: [],
-                anchorMessageId: null,
-                sourceMessageIds: [],
-                sourceTraceKind: null,
-                sourceReason: null,
-                sourceViewHash: null,
-                sourceSnapshotHash: null,
-                sourceRepairGeneration: null,
-                embeddingModel: 'model-c',
-                embeddingDimensions: 1024,
+                lane: 'state',
                 statusKind: 'source_missing',
                 statusLabel: '来源丢失',
                 statusTone: 'danger',
-                statusReasons: ['缺少来源'],
                 isArchived: true,
                 sourceMissing: true,
-                needsRebuild: false,
                 duplicateCount: 2,
                 usage: {
                     totalHits: 1,
@@ -153,14 +145,73 @@ function buildSnapshot(): VectorMemoryViewerSnapshot {
                     lastQuery: '旧问题',
                     lastScore: 0.1,
                 },
-            },
+            }),
         ],
     };
 }
 
-describe('vectorMemoryViewer', () => {
-    it('按异常快捷筛选与当前角色筛选返回正确结果', () => {
-        const snapshot = buildSnapshot();
+/**
+ * 功能：创建测试召回结果。
+ * @returns 召回预演结果。
+ */
+function createTestResult(): MemoryRecallPreviewResult {
+    return {
+        query: '测试',
+        testedAt: Date.now(),
+        rerankApplied: true,
+        hitCount: 2,
+        selectedCount: 1,
+        hits: [
+            {
+                chunkId: 'card-b',
+                cardId: 'card-b',
+                lane: 'event',
+                subject: '主角',
+                title: '关系变化',
+                ttl: 'medium',
+                status: 'active',
+                sourceRecordKey: 'summary:card-b',
+                sourceRecordKind: 'summary',
+                sourceLabel: '摘要B',
+                preview: '关系变化记忆',
+                vectorScore: 0.8,
+                initialRank: 2,
+                rerankedRank: 1,
+                finalRank: 1,
+                matchedInRecall: true,
+                enteredContext: true,
+                reasonCodes: ['vector'],
+            },
+            {
+                chunkId: 'card-a',
+                cardId: 'card-a',
+                lane: 'identity',
+                subject: '主角',
+                title: '角色身份',
+                ttl: 'long',
+                status: 'active',
+                sourceRecordKey: 'fact:card-a',
+                sourceRecordKind: 'fact',
+                sourceLabel: '事实A',
+                preview: '角色A身份记忆',
+                vectorScore: 0.7,
+                initialRank: 1,
+                rerankedRank: 2,
+                finalRank: null,
+                matchedInRecall: true,
+                enteredContext: false,
+                reasonCodes: ['vector'],
+            },
+        ],
+        vectorGate: undefined,
+        cache: undefined,
+        cheapRecall: null,
+    };
+}
+
+describe('vectorMemoryViewer', (): void => {
+    it('按异常快捷筛选与当前角色筛选返回正确结果', (): void => {
+        const snapshot = createSnapshot();
         const items = deriveVectorMemoryViewerItems(snapshot, {
             keyword: '',
             sourceKind: 'all',
@@ -175,11 +226,12 @@ describe('vectorMemoryViewer', () => {
             activeActorKey: 'actor:a',
             testResult: null,
         });
-        expect(items.map((item) => item.item.chunkId)).toEqual(['chunk-b']);
+
+        expect(items.map((item) => item.item.cardId)).toEqual(['card-b']);
     });
 
-    it('在测试结果模式下按命中顺序返回并保留测试信息', () => {
-        const snapshot = buildSnapshot();
+    it('在测试结果模式下按命中顺序返回并保留测试信息', (): void => {
+        const snapshot = createSnapshot();
         const items = deriveVectorMemoryViewerItems(snapshot, {
             keyword: '',
             sourceKind: 'all',
@@ -192,45 +244,10 @@ describe('vectorMemoryViewer', () => {
             quickAbnormal: false,
             quickCurrentActor: false,
             activeActorKey: null,
-            testResult: {
-                query: '测试',
-                testedAt: Date.now(),
-                rerankApplied: true,
-                hitCount: 2,
-                selectedCount: 1,
-                hits: [
-                    {
-                        chunkId: 'chunk-b',
-                        sourceRecordKey: 'summary:b',
-                        sourceRecordKind: 'summary',
-                        sourceLabel: '摘要 B',
-                        preview: '贝塔记忆',
-                        vectorScore: 0.8,
-                        initialRank: 2,
-                        rerankedRank: 1,
-                        finalRank: 1,
-                        matchedInRecall: true,
-                        enteredContext: true,
-                        reasonCodes: ['vector'],
-                    },
-                    {
-                        chunkId: 'chunk-a',
-                        sourceRecordKey: 'fact:a',
-                        sourceRecordKind: 'fact',
-                        sourceLabel: '事实 A',
-                        preview: '阿尔法记忆',
-                        vectorScore: 0.7,
-                        initialRank: 1,
-                        rerankedRank: 2,
-                        finalRank: null,
-                        matchedInRecall: true,
-                        enteredContext: false,
-                        reasonCodes: ['vector'],
-                    },
-                ],
-            },
+            testResult: createTestResult(),
         });
-        expect(items.map((item) => item.item.chunkId)).toEqual(['chunk-b', 'chunk-a']);
+
+        expect(items.map((item) => item.item.cardId)).toEqual(['card-b', 'card-a']);
         expect(items[0]?.testHit?.finalRank).toBe(1);
         expect(items[1]?.testHit?.rerankedRank).toBe(2);
     });

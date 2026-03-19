@@ -3,6 +3,12 @@ import type { EventEnvelope, MemorySDK, ProposalResult } from '../../../SDK/stx'
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MEMORY_TASKS, checkAiModeGuard, runGeneration } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
+import {
+    buildExtractPromptByScopeTaskPrompt,
+    buildLongSummarizeTaskPrompt,
+    buildMemorySummarySaveSystemPrompt,
+    buildShortSummarizeTaskPrompt,
+} from '../llm/skills';
 import type { ProposalEnvelope } from '../proposal/types';
 import type {
     ChatLifecycleState,
@@ -554,12 +560,6 @@ export class ExtractManager {
     }
 
     /**
-     * 功能：构建摘要任务提示词。
-     * @param lorebookMode 当前世界书裁决模式。
-     * @param postGate 生成后 gate 结果。
-     * @returns 摘要任务提示词。
-     */
-    /**
      * 功能：构建短总结提示词。
      * @param lorebookMode 当前世界书裁决模式。
      * @param postGate 生成后 gate 结果。
@@ -569,24 +569,11 @@ export class ExtractManager {
         lorebookMode: string,
         postGate: PostGenerationGateDecision,
     ): string {
-        const lorebookHint = lorebookMode === 'block'
-            ? '不要把世界书原文写进摘要，只保留聊天里显式出现的事实。'
-            : lorebookMode === 'summary_only'
-                ? '只保留概念级设定，不要复制世界书条目原文。'
-                : '可以吸收世界书信息，但优先保留聊天里明确确认过的内容。';
-        return [
-            '你是短总结助手，只总结当前小阶段，不重写历史。',
-            '输出必须是纯 JSON，格式如下：',
-            'summary 数组里的每一项都必须是对象，至少包含 level(只能是 message/scene) 与 content(字符串)。',
-            '可选字段只有 title(字符串) 和 keywords(字符串数组)。',
-            `Lorebook gate mode: ${lorebookMode}.`,
-            `Post gate class: ${postGate.valueClass}.`,
-            `Should rebuild summary: ${postGate.rebuildSummary}.`,
-            lorebookHint,
-            '短总结只描述当前窗口里真正推动后续生成的内容，不要复写长历史。',
-            'memoryCards 鏁扮粍鏄笌 summaries 鍚屾簮鐨勮蹇嗗崱鑽夌锛屾瘡椤瑰繀椤诲崟涓珯鐐瑰寲锛屼笉瑕佹媶鎴愬涓棤鍏宠蹇嗐€?',
-            '{ "ok": true, "proposal": { "summaries": [...], "memoryCards": [...] }, "confidence": 0.0~1.0 }',
-        ].join('\n');
+        return buildShortSummarizeTaskPrompt(
+            lorebookMode,
+            postGate,
+            buildMemorySummarySaveSystemPrompt(),
+        );
     }
 
     /**
@@ -599,25 +586,11 @@ export class ExtractManager {
         lorebookMode: string,
         postGate: PostGenerationGateDecision,
     ): string {
-        const lorebookHint = lorebookMode === 'block'
-            ? '不要把世界书原文写进长总结，只保留已经被聊天确认过的稳定事实。'
-            : lorebookMode === 'summary_only'
-                ? '允许整理为稳定设定摘要，但不要复制世界书原文。'
-                : '可以综合世界书，但优先输出可稳定复用的阶段摘要。';
-        return [
-            '你是长总结助手，只在关键节点整理整段时间线。',
-            '输出必须是纯 JSON，格式如下：',
-            'summary 数组里的每一项都必须是对象，至少包含 level(只能是 message/scene/arc) 与 content(字符串)。',
-            '可选字段只有 title(字符串) 和 keywords(字符串数组)。',
-            `Lorebook gate mode: ${lorebookMode}.`,
-            `Post gate class: ${postGate.valueClass}.`,
-            `Should rebuild summary: ${postGate.rebuildSummary}.`,
-            lorebookHint,
-            '长总结可以归并重复信息，整合阶段变化，并保留时间线上的稳定锚点。',
-            '不要输出 markdown，不要输出解释性正文，只返回单个 JSON 对象。',
-            'memoryCards 鏁扮粍鏄笌 summaries 鍚屾簮鐨勮蹇嗗崱鑽夌锛屽彲浠ュ皢鏁撮噺姒傚康鍜屽悓绫诲瀷浼犻€掑埌鍗曟潯鍗★紝涓嶈鎶婃暣涓憳瑕佹媶鎴愬お澶氬崱銆?',
-            '{ "ok": true, "proposal": { "summaries": [...], "memoryCards": [...] }, "confidence": 0.0~1.0 }',
-        ].join('\n');
+        return buildLongSummarizeTaskPrompt(
+            lorebookMode,
+            postGate,
+            buildMemorySummarySaveSystemPrompt(),
+        );
     }
 
     /**
@@ -634,104 +607,12 @@ export class ExtractManager {
         postGate: PostGenerationGateDecision,
         scope: MemoryProcessingLevel,
     ): string {
-        const worldHint = postGate.shouldExtractWorldState && allowWorldFacts
-            ? '允许抽取世界设定类事实，但必须区分“聊天确认”与“仅世界书支撑”。'
-            : '不要扩张世界设定类抽取，优先保留聊天里显式确认的信息。';
-        const relationHint = postGate.shouldExtractRelations
-            ? '允许抽取关系变化、情绪变化和目标变化。'
-            : '不要主动创建新的关系变化事实，除非文本明确出现。';
-        const scopeHint = scope === 'light'
-            ? '轻处理只保留稳定 facts、必要 world_state、极明确 relation 变化，窗口只看最近一小段。'
-            : scope === 'medium'
-                ? '中处理允许 facts / relations / world_state，并可补充少量短摘要线索。'
-                : scope === 'heavy'
-                    ? '重处理允许完整 facts / relations / world_state，并优先修复结构不一致。'
-                    : '本轮不执行抽取。';
-        return [
-            '你是结构化记忆提取助手，只能返回 facts 与 patches。',
-            '输出必须是纯 JSON，格式如下：',
-            'facts 数组里的每一项都必须是对象，至少包含 type(字符串) 与 value(任意 JSON 值)。',
-            'patches 数组里的每一项都必须是对象，至少包含 op(add/replace/remove) 与 path(字符串)。',
-            '当 op 不是 remove 时，必须提供 value。',
-            '不要输出 summaries，不要输出解释性正文，不要输出 markdown。',
-            `Lorebook gate mode: ${lorebookMode}.`,
-            `Post gate class: ${postGate.valueClass}.`,
-            `Persist long term: ${postGate.shouldPersistLongTerm}.`,
-            `Extract facts: ${postGate.shouldExtractFacts}.`,
-            `Extract relations: ${postGate.shouldExtractRelations}.`,
-            `Extract world state: ${postGate.shouldExtractWorldState}.`,
-            `Processing scope: ${scope}.`,
-            scopeHint,
-            worldHint,
-            relationHint,
-            'facts 数组的每一项都必须是对象，且至少包含：type 与 value。可选字段包括 factKey、entity、path、confidence。',
-            'patches 数组只允许 add/replace/remove，且尽量只表达必要差异。',
-            '{ "ok": true, "proposal": { "facts": [...], "patches": [...] }, "confidence": 0.0~1.0 }',
-        ].join('\n');
-    }
-
-    private buildSummarizePrompt(
-        lorebookMode: string,
-        postGate: PostGenerationGateDecision,
-    ): string {
-        const lorebookHint = lorebookMode === 'block'
-            ? '不要把世界书原文写入摘要，只保留聊天里明确出现的信息。'
-            : lorebookMode === 'summary_only'
-                ? '只保留概念级设定，不要复制世界书条目原文。'
-                : '可以吸收世界书信息，但优先保留聊天显式确认内容。';
-        return [
-            '你是对话摘要助手，请根据事件窗口生成可写入的摘要提议。',
-            '输出必须是纯 JSON，格式如下：',
-            '所有摘要中的 title、content、keywords 等自然语言内容都必须使用简体中文。',
-            `Lorebook gate mode: ${lorebookMode}.`,
-            `Post gate class: ${postGate.valueClass}.`,
-            `Should rebuild summary: ${postGate.rebuildSummary}.`,
-            lorebookHint,
-            'summaries 数组中的每一项都必须是对象，且至少包含：level(只能是 message/scene/arc) 与 content(字符串)。',
-            '可选字段只有：title(字符串)、keywords(字符串数组)。不要输出纯字符串数组，不要输出 markdown。',
-            '{ "ok": true, "proposal": { "summaries": [...] }, "confidence": 0.0~1.0 }',
-        ].join('\n');
-    }
-
-    /**
-     * 功能：构建事实抽取任务提示词。
-     * @param lorebookMode 当前世界书裁决模式。
-     * @param allowWorldFacts 是否允许世界事实提取。
-     * @param postGate 生成后 gate 结果。
-     * @returns 抽取任务提示词。
-     */
-    private buildExtractPrompt(
-        lorebookMode: string,
-        allowWorldFacts: boolean,
-        postGate: PostGenerationGateDecision,
-    ): string {
-        const worldHint = postGate.shouldExtractWorldState && allowWorldFacts
-            ? '允许抽取世界设定类事实，但必须区分“聊天确认”和“仅世界书支撑”。'
-            : '不要扩张世界设定类事实抽取，优先提取聊天显式信息。';
-        const relationHint = postGate.shouldExtractRelations
-            ? '允许提取关系变化、情绪变化和目标变化。'
-            : '不要创建新的关系变化事实，除非文本明确出现强关系变动。';
-        const retentionHint = postGate.shouldPersistLongTerm
-            ? '允许写入长期记忆。'
-            : '本轮只保留必要短期信息，不要扩张长期事实。';
-        return [
-            '你是结构化记忆提取助手，请提取 facts 与 patches。',
-            '输出必须是纯 JSON，格式如下：',
-            '所有 notes、summaries.content、summaries.title，以及 value 中的自然语言文本都必须使用简体中文。',
-            `Lorebook gate mode: ${lorebookMode}.`,
-            `Post gate class: ${postGate.valueClass}.`,
-            `Persist long term: ${postGate.shouldPersistLongTerm}.`,
-            `Extract facts: ${postGate.shouldExtractFacts}.`,
-            `Extract relations: ${postGate.shouldExtractRelations}.`,
-            `Extract world state: ${postGate.shouldExtractWorldState}.`,
-            worldHint,
-            relationHint,
-            retentionHint,
-            'facts 数组中的每一项都必须是对象，且至少包含：type(字符串) 与 value(任意 JSON 值)。可选字段：factKey、entity={kind,id}、path、confidence。',
-            'patches 数组中的每一项都必须是对象，且必须包含：op(只能是 add/replace/remove) 与 path(字符串)。当 op 不是 remove 时，必须提供 value。',
-            'summaries 如果返回，也必须是对象数组，每项字段同摘要任务要求。不要输出字符串数组，不要输出额外解释文本。',
-            '{ "ok": true, "proposal": { "facts": [...], "patches": [...], "summaries": [...] }, "confidence": 0.0~1.0 }',
-        ].join('\n');
+        return buildExtractPromptByScopeTaskPrompt(
+            lorebookMode,
+            allowWorldFacts,
+            postGate,
+            scope,
+        );
     }
 
     /**

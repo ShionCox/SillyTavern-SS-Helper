@@ -4,6 +4,19 @@ export function normalizeWorldStateText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * 功能：规范化世界状态知识级别。
+ * @param value 原始知识级别值。
+ * @returns 规范化后的知识级别，非法值返回 undefined。
+ */
+function normalizeWorldStateKnowledgeLevel(value: unknown): 'confirmed' | 'rumor' | 'inferred' | undefined {
+    const normalized = normalizeWorldStateText(value).toLowerCase();
+    if (normalized === 'confirmed' || normalized === 'rumor' || normalized === 'inferred') {
+        return normalized;
+    }
+    return undefined;
+}
+
 function parseWorldStatePathSegments(path: string): string[] {
     return normalizeWorldStateText(path)
         .split('/')
@@ -69,6 +82,8 @@ export function inferWorldStateScopeType(path: string, text: string): WorldState
     const normalizedPath = normalizeWorldStateText(path).toLowerCase();
     const normalizedText = normalizeWorldStateText(text).toLowerCase();
     if (/^global\//.test(normalizedPath) || /global|world\//.test(normalizedPath)) return 'global';
+    if (/^\/?semantic\/rules\//.test(normalizedPath) || /^\/?semantic\/constraints\//.test(normalizedPath)) return 'global';
+    if (/^\/?semantic\/world\/(systems|history|danger|other)\//.test(normalizedPath)) return 'global';
     if (/^nation\//.test(normalizedPath) || /^country\//.test(normalizedPath) || /\/nations?\//.test(normalizedPath)) return 'nation';
     if (/^region\//.test(normalizedPath) || /\/regions?\//.test(normalizedPath)) return 'region';
     if (/^city\//.test(normalizedPath) || /\/cities\//.test(normalizedPath)) return 'city';
@@ -76,6 +91,7 @@ export function inferWorldStateScopeType(path: string, text: string): WorldState
     if (/^faction\//.test(normalizedPath) || /\/factions?\//.test(normalizedPath)) return 'faction';
     if (/^item\//.test(normalizedPath) || /\/items?\//.test(normalizedPath)) return 'item';
     if (/^character\//.test(normalizedPath) || /\/characters\//.test(normalizedPath)) return 'character';
+    if (/政治|经济|军事|制度|法则|法律|婚姻制度|社会结构|阶级|礼制|习俗/.test(normalizedText)) return 'global';
     if (/nation|country|kingdom|empire|republic|federation|realm|政体|国家|王国|帝国|共和国|联邦|王朝/.test(normalizedPath + ' ' + normalizedText)) return 'nation';
     if (/region|区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领/.test(normalizedPath + ' ' + normalizedText)) return 'region';
     if (/city|城市|都城|城邦|主城|镇|村|聚落|港口|港城|城镇/.test(normalizedPath + ' ' + normalizedText)) return 'city';
@@ -142,12 +158,17 @@ export function buildWorldStateNodeFromRaw(path: string, value: unknown, updated
         summary,
         scopeType: normalizedScopeType,
         stateType: normalizedStateType,
+        knowledgeLevel: normalizeWorldStateKnowledgeLevel(rawObject?.knowledgeLevel),
         subjectId: normalizeWorldStateText(rawObject?.subjectId) || pickAnchorAfter(pathSegments, ['character', 'characters']) || undefined,
-        nationId: normalizeWorldStateText(rawObject?.nationId ?? rawObject?.countryId) || pickAnchorAfter(pathSegments, ['nation', 'nations', 'country', 'countries']) || undefined,
-        regionId: normalizeWorldStateText(rawObject?.regionId) || pickAnchorAfter(pathSegments, ['region', 'regions']) || undefined,
-        cityId: normalizeWorldStateText(rawObject?.cityId) || pickAnchorAfter(pathSegments, ['city', 'cities']) || undefined,
-        locationId: normalizeWorldStateText(rawObject?.locationId) || pickAnchorAfter(pathSegments, ['location', 'locations']) || undefined,
+        nationId: normalizeWorldStateText(rawObject?.nationName ?? rawObject?.nationId ?? rawObject?.countryId) || pickAnchorAfter(pathSegments, ['nation', 'nations', 'country', 'countries']) || undefined,
+        nationKnowledgeLevel: normalizeWorldStateKnowledgeLevel(rawObject?.nationKnowledgeLevel),
+        regionId: normalizeWorldStateText(rawObject?.regionName ?? rawObject?.regionId) || pickAnchorAfter(pathSegments, ['region', 'regions']) || undefined,
+        regionKnowledgeLevel: normalizeWorldStateKnowledgeLevel(rawObject?.regionKnowledgeLevel),
+        cityId: normalizeWorldStateText(rawObject?.cityName ?? rawObject?.cityId) || pickAnchorAfter(pathSegments, ['city', 'cities']) || undefined,
+        cityKnowledgeLevel: normalizeWorldStateKnowledgeLevel(rawObject?.cityKnowledgeLevel),
+        locationId: normalizeWorldStateText(rawObject?.locationName ?? rawObject?.locationId) || pickAnchorAfter(pathSegments, ['location', 'locations']) || undefined,
         itemId: normalizeWorldStateText(rawObject?.itemId) || pickAnchorAfter(pathSegments, ['item', 'items']) || undefined,
+        canonicalKey: normalizeWorldStateText(rawObject?.canonicalKey) || undefined,
         anomalyFlags: anomalyFlags.length > 0 ? anomalyFlags : undefined,
         keywords,
         tags,
