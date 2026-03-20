@@ -95,6 +95,10 @@ export type {
     SummaryLookbackScope,
     SummaryNoiseFilter,
     SummaryLongTrigger,
+    AutoSummaryMode,
+    AutoSummaryTriggerSettings,
+    AutoSummaryRuntimeState,
+    AutoSummaryDecisionSnapshot,
     SummaryProcessInterval,
     OwnedMemoryState,
     PersonaMemoryProfile,
@@ -192,6 +196,7 @@ export {
     DEFAULT_GROUP_MEMORY,
     DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_LONG_SUMMARY_COOLDOWN,
+    DEFAULT_AUTO_SUMMARY_RUNTIME_STATE,
     DEFAULT_PERSONA_MEMORY_PROFILE,
     DEFAULT_SIMPLE_MEMORY_PERSONA,
 } from './chat-state';

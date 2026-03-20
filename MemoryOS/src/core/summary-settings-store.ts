@@ -2,6 +2,7 @@ import { readSdkPluginSettings, writeSdkPluginSettings } from '../../../SDK/sett
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import type {
     AdaptiveMetrics,
+    AutoSummaryTriggerSettings,
     ChatProfile,
     EffectiveSummarySettings,
     LongSummaryCooldownState,
@@ -30,6 +31,10 @@ import {
     DEFAULT_SUMMARY_SETTINGS,
     DEFAULT_SUMMARY_SETTINGS_OVERRIDE,
 } from '../types';
+import {
+    getDefaultSummaryTriggerIds,
+    isSummaryTriggerId,
+} from './summary-trigger-registry';
 
 export interface SummaryRuntimeSettings {
     summaryEnabled: boolean;
@@ -121,21 +126,54 @@ function normalizeWorkMode(input: unknown, fallback: SummarySettingsWorkMode = D
 
 function normalizeSummaryBehavior(input: unknown, fallback: SummarySettingsSummaryBehavior = DEFAULT_SUMMARY_SETTINGS.summaryBehavior): SummarySettingsSummaryBehavior {
     const record = isObjectRecord(input) ? input : {};
+    const normalizedTriggers = normalizeStringArray(record.longSummaryTrigger, fallback.longSummaryTrigger)
+        .filter((item: string): item is SummaryLongTrigger => isSummaryTriggerId(item));
     return {
         summaryTiming: normalizeEnum<SummaryTiming>(record.summaryTiming, fallback.summaryTiming, ['key_only', 'stage_end', 'frequent']),
         summaryLength: normalizeEnum<SummaryLength>(record.summaryLength, fallback.summaryLength, ['short', 'standard', 'detailed', 'ultra']),
         longSummaryCooldown: normalizeEnum<SummaryCooldownPreset>(record.longSummaryCooldown, fallback.longSummaryCooldown, ['short', 'standard', 'long']),
-        longSummaryTrigger: normalizeStringArray(record.longSummaryTrigger, fallback.longSummaryTrigger).filter(
-            (item: string): item is SummaryLongTrigger => [
-                'scene_end',
-                'combat_end',
-                'plot_advance',
-                'relationship_shift',
-                'world_change',
-                'structure_repair',
-                'archive_finalize',
-            ].includes(item as SummaryLongTrigger),
-        ),
+        longSummaryTrigger: normalizedTriggers.length > 0 ? normalizedTriggers : getDefaultSummaryTriggerIds(),
+    };
+}
+
+/**
+ * 功能：归一化自动长总结触发设置。
+ * 参数：
+ *   input：待归一化输入。
+ *   fallback：回退设置。
+ * 返回：
+ *   AutoSummaryTriggerSettings：归一化后的自动长总结触发设置。
+ */
+function normalizeAutoSummary(input: unknown, fallback: AutoSummaryTriggerSettings = DEFAULT_SUMMARY_SETTINGS.autoSummary): AutoSummaryTriggerSettings {
+    const record = isObjectRecord(input) ? input : {};
+    const clampCount = (value: unknown, fallbackValue: number, min: number, max: number): number => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            return fallbackValue;
+        }
+        return Math.max(min, Math.min(max, Math.round(numeric)));
+    };
+    const clampRatio = (value: unknown, fallbackValue: number, min: number, max: number): number => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            return fallbackValue;
+        }
+        return Number(Math.max(min, Math.min(max, numeric)).toFixed(3));
+    };
+    return {
+        enabled: normalizeBoolean(record.enabled, fallback.enabled),
+        roleplayTurnThreshold: clampCount(record.roleplayTurnThreshold, fallback.roleplayTurnThreshold, 1, 120),
+        chatTurnThreshold: clampCount(record.chatTurnThreshold, fallback.chatTurnThreshold, 1, 120),
+        storyTurnThreshold: clampCount(record.storyTurnThreshold, fallback.storyTurnThreshold, 1, 120),
+        mixedTurnThreshold: clampCount(record.mixedTurnThreshold, fallback.mixedTurnThreshold, 1, 120),
+        minTurnsAfterLastSummary: clampCount(record.minTurnsAfterLastSummary, fallback.minTurnsAfterLastSummary, 0, 80),
+        coolDownTurns: clampCount(record.coolDownTurns, fallback.coolDownTurns, 0, 80),
+        enableTriggerRules: normalizeBoolean(record.enableTriggerRules, fallback.enableTriggerRules),
+        enableSemanticChangeTrigger: normalizeBoolean(record.enableSemanticChangeTrigger, fallback.enableSemanticChangeTrigger),
+        enablePromptPressureTrigger: normalizeBoolean(record.enablePromptPressureTrigger, fallback.enablePromptPressureTrigger),
+        triggerRuleMinScore: clampRatio(record.triggerRuleMinScore, fallback.triggerRuleMinScore, 0, 1.5),
+        semanticTriggerMinScore: clampRatio(record.semanticTriggerMinScore, fallback.semanticTriggerMinScore, 0, 1.5),
+        promptPressureTokenRatio: clampRatio(record.promptPressureTokenRatio, fallback.promptPressureTokenRatio, 0, 1.2),
     };
 }
 
@@ -185,6 +223,9 @@ function normalizeSummarySettingsPatch(input?: Partial<SummarySettings> | null):
     if (input.advanced) {
         patch.advanced = normalizeAdvanced(input.advanced, DEFAULT_SUMMARY_SETTINGS.advanced);
     }
+    if (input.autoSummary) {
+        patch.autoSummary = normalizeAutoSummary(input.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+    }
     return patch;
 }
 
@@ -194,6 +235,7 @@ export function normalizeSummarySettings(input?: Partial<SummarySettings> | null
         summaryBehavior: normalizeSummaryBehavior(input?.summaryBehavior),
         contentPreference: normalizeContentPreference(input?.contentPreference),
         advanced: normalizeAdvanced(input?.advanced),
+        autoSummary: normalizeAutoSummary(input?.autoSummary),
     };
 }
 
@@ -224,17 +266,10 @@ export function normalizeSummarySettingsOverride(input?: Partial<SummarySettings
             override.summaryBehavior.longSummaryCooldown = normalizeEnum<SummaryCooldownPreset>(record.summaryBehavior.longSummaryCooldown, DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryCooldown, ['short', 'standard', 'long']);
         }
         if (Object.prototype.hasOwnProperty.call(record.summaryBehavior, 'longSummaryTrigger')) {
-            override.summaryBehavior.longSummaryTrigger = normalizeStringArray(record.summaryBehavior.longSummaryTrigger, DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryTrigger).filter(
-                (item: string): item is SummaryLongTrigger => [
-                    'scene_end',
-                    'combat_end',
-                    'plot_advance',
-                    'relationship_shift',
-                    'world_change',
-                    'structure_repair',
-                    'archive_finalize',
-                ].includes(item as SummaryLongTrigger),
+            const normalizedTriggers = normalizeStringArray(record.summaryBehavior.longSummaryTrigger, DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryTrigger).filter(
+                (item: string): item is SummaryLongTrigger => isSummaryTriggerId(item),
             );
+            override.summaryBehavior.longSummaryTrigger = normalizedTriggers.length > 0 ? normalizedTriggers : getDefaultSummaryTriggerIds();
         }
     }
     if (isObjectRecord(record.contentPreference) && Object.keys(record.contentPreference).length > 0) {
@@ -279,6 +314,9 @@ export function normalizeSummarySettingsOverride(input?: Partial<SummarySettings
             override.advanced.allowHeavyExpandedLookback = normalizeBoolean(record.advanced.allowHeavyExpandedLookback, DEFAULT_SUMMARY_SETTINGS.advanced.allowHeavyExpandedLookback);
         }
     }
+    if (isObjectRecord(record.autoSummary) && Object.keys(record.autoSummary).length > 0) {
+        override.autoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+    }
     return override;
 }
 
@@ -301,6 +339,7 @@ function mergeSummarySettings(base: SummarySettings, patch?: Partial<SummarySett
                 : [...base.contentPreference.recordFocus],
         },
         advanced: normalizedPatch.advanced ? { ...base.advanced, ...normalizedPatch.advanced } : { ...base.advanced },
+        autoSummary: normalizedPatch.autoSummary ? { ...base.autoSummary, ...normalizedPatch.autoSummary } : { ...base.autoSummary },
     };
 }
 
@@ -327,6 +366,7 @@ function applySummarySettingsOverride(base: SummarySettings, override?: SummaryS
             }
             : base.contentPreference,
         advanced: normalized.advanced ? { ...base.advanced, ...normalized.advanced } : base.advanced,
+        autoSummary: normalized.autoSummary ? { ...base.autoSummary, ...normalized.autoSummary } : base.autoSummary,
     };
 }
 

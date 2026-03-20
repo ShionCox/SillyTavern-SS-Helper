@@ -239,7 +239,7 @@ function ensureThemeBinding(): void {
             mountThemeHost(contentRoot);
         }
         document
-            .querySelectorAll<HTMLElement>('.stx-record-editor-overlay, .stx-memory-chat-strategy-overlay')
+            .querySelectorAll<HTMLElement>('.stx-record-editor-overlay, .stx-memory-chat-ops-overlay')
             .forEach((overlay: HTMLElement) => {
                 mountThemeHost(overlay);
             });

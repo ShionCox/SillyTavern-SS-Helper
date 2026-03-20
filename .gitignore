@@ -30,6 +30,7 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+/MemoryOS/test/aitest/.env.memoryos.test
 .npmrc
 
 # OS generated files

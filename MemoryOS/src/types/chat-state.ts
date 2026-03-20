@@ -39,6 +39,8 @@ export type SummaryNoiseFilter = 'low' | 'medium' | 'high';
 
 export type SummaryLongTrigger = 'scene_end' | 'combat_end' | 'plot_advance' | 'relationship_shift' | 'world_change' | 'structure_repair' | 'archive_finalize';
 
+export type AutoSummaryMode = 'roleplay' | 'chat' | 'story' | 'mixed';
+
 export type SummarySettingsSource = 'system_default' | 'memory_mode_preset' | 'scenario_preset' | 'global_setting' | 'chat_override';
 
 export type SummaryProcessInterval = 'small' | 'medium' | 'large';
@@ -72,11 +74,53 @@ export interface SummarySettingsAdvanced {
     allowHeavyExpandedLookback: boolean;
 }
 
+export interface AutoSummaryTriggerSettings {
+    enabled: boolean;
+    roleplayTurnThreshold: number;
+    chatTurnThreshold: number;
+    storyTurnThreshold: number;
+    mixedTurnThreshold: number;
+    minTurnsAfterLastSummary: number;
+    coolDownTurns: number;
+    enableTriggerRules: boolean;
+    enableSemanticChangeTrigger: boolean;
+    enablePromptPressureTrigger: boolean;
+    triggerRuleMinScore: number;
+    semanticTriggerMinScore: number;
+    promptPressureTokenRatio: number;
+}
+
+export interface AutoSummaryRuntimeState {
+    lastSummaryTurnCount: number;
+    lastSummaryAt: number;
+    lastTriggerReasonCodes: string[];
+    lastMode: AutoSummaryMode;
+}
+
+export interface AutoSummaryDecisionSnapshot {
+    shouldRun: boolean;
+    mode: AutoSummaryMode;
+    threshold: number;
+    activeAssistantTurnCount: number;
+    turnsSinceLastSummary: number;
+    reasonCodes: string[];
+    matchedTriggerIds: SummaryLongTrigger[];
+    scores: {
+        triggerRule: number;
+        semantic: number;
+        pressure: number;
+    };
+    semanticFlags: string[];
+    promptPressureRatio: number;
+    generatedAt: number;
+}
+
 export interface SummarySettings {
     workMode: SummarySettingsWorkMode;
     summaryBehavior: SummarySettingsSummaryBehavior;
     contentPreference: SummarySettingsContentPreference;
     advanced: SummarySettingsAdvanced;
+    autoSummary: AutoSummaryTriggerSettings;
 }
 
 export interface SummarySettingsOverride {
@@ -84,6 +128,7 @@ export interface SummarySettingsOverride {
     summaryBehavior?: Partial<SummarySettingsSummaryBehavior>;
     contentPreference?: Partial<SummarySettingsContentPreference>;
     advanced?: Partial<SummarySettingsAdvanced>;
+    autoSummary?: Partial<AutoSummaryTriggerSettings>;
 }
 
 export interface EffectiveSummarySettings extends SummarySettings {
@@ -1597,6 +1642,21 @@ export const DEFAULT_SUMMARY_SETTINGS: SummarySettings = {
         allowHeavyConsistencyRepair: true,
         allowHeavyExpandedLookback: true,
     },
+    autoSummary: {
+        enabled: true,
+        roleplayTurnThreshold: 8,
+        chatTurnThreshold: 12,
+        storyTurnThreshold: 10,
+        mixedTurnThreshold: 10,
+        minTurnsAfterLastSummary: 4,
+        coolDownTurns: 3,
+        enableTriggerRules: true,
+        enableSemanticChangeTrigger: true,
+        enablePromptPressureTrigger: true,
+        triggerRuleMinScore: 0.66,
+        semanticTriggerMinScore: 0.62,
+        promptPressureTokenRatio: 0.72,
+    },
 };
 
 export const DEFAULT_SUMMARY_SETTINGS_OVERRIDE: SummarySettingsOverride = {};
@@ -1661,6 +1721,13 @@ export const DEFAULT_LONG_SUMMARY_COOLDOWN: LongSummaryCooldownState = {
     lastLongSummaryStage: 'new',
     lastHeavyProcessAt: 0,
     lastLongSummaryAssistantTurnCount: 0,
+};
+
+export const DEFAULT_AUTO_SUMMARY_RUNTIME_STATE: AutoSummaryRuntimeState = {
+    lastSummaryTurnCount: 0,
+    lastSummaryAt: 0,
+    lastTriggerReasonCodes: [],
+    lastMode: 'mixed',
 };
 
 export const DEFAULT_MEMORY_MUTATION_ACTION_COUNTS: MemoryMutationActionCounts = {
@@ -1880,6 +1947,8 @@ export interface MemoryOSChatState {
     lastProcessingDecision?: MemoryProcessingDecision | null;
     recentProcessingDecisions?: MemoryProcessingDecision[];
     longSummaryCooldown?: LongSummaryCooldownState;
+    autoSummaryRuntime?: AutoSummaryRuntimeState;
+    lastAutoSummaryDecision?: AutoSummaryDecisionSnapshot | null;
     retentionPolicy?: RetentionPolicy;
     retentionArchives?: RetentionArchives;
     manualOverrides?: ManualOverrides;

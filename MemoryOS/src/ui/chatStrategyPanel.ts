@@ -13,14 +13,30 @@ import { db } from '../db/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { ChatStateManager } from '../core/chat-state-manager';
 import {
+    type SummaryTriggerCategory,
+    type SummaryTriggerRule,
+} from '../core/summary-trigger-registry';
+import {
+    buildSummaryTriggerCardsForPanel,
+    buildSummaryTriggerControlId,
+    listSummaryTriggerRulesForPanel,
+} from './summary-trigger-ui-model';
+import {
     buildMainlineTraceEvidenceMarkup,
     formatMainlineTraceStatus,
     formatRelativeTime,
 } from './mainline-trace-view';
 import { openRecordEditor } from './recordEditorNext';
+import {
+    activateMemoryChatSidebarItem,
+    filterMemoryChatSidebarList,
+    loadMemoryChatSidebarItems,
+    renderMemoryChatSidebarList,
+} from './recordEditorChatList';
 import { buildAdaptivePolicy, buildRetentionPolicy } from '../core/chat-strategy-engine';
 import {
     DEFAULT_ADAPTIVE_METRICS,
+    DEFAULT_AUTO_SUMMARY_RUNTIME_STATE,
     DEFAULT_CHAT_LIFECYCLE_STATE,
     DEFAULT_CHAT_PROFILE,
     DEFAULT_EXTRACT_HEALTH,
@@ -34,6 +50,8 @@ import {
 import type {
     AdaptiveMetrics,
     AdaptivePolicy,
+    AutoSummaryDecisionSnapshot,
+    AutoSummaryRuntimeState,
     ChatMutationKind,
     ChatLifecycleState,
     ChatProfile,
@@ -98,6 +116,8 @@ interface ChatStrategySnapshot {
     postDecision: PostGenerationGateDecision | null;
     processingDecision: MemoryProcessingDecision | null;
     longSummaryCooldown: LongSummaryCooldownState;
+    autoSummaryRuntime: AutoSummaryRuntimeState;
+    lastAutoSummaryDecision: AutoSummaryDecisionSnapshot | null;
     summarySettings: SummarySettings;
     summarySettingsOverride: SummarySettingsOverride;
     effectiveSummarySettings: EffectiveSummarySettings;
@@ -125,6 +145,14 @@ interface ReadableStrategyDashboard {
     world: ReadableStrategyCard;
     relation: ReadableStrategyCard;
     reminder: ReadableStrategyCard;
+    decision: ReadableStrategyCard;
+}
+
+interface SummaryTriggerCardModel {
+    id: string;
+    triggerId: SummaryLongTrigger;
+    title: string;
+    description: string;
 }
 
 interface MemoryChatStateApi {
@@ -154,134 +182,143 @@ type WindowWithMemory = Window & {
 };
 
 const PANEL_IDS = {
-    rootId: 'stx-memoryos-chat-strategy-panel',
-    chatSelectId: 'stx-memoryos-chat-strategy-card-chat',
-    summaryNameId: 'stx-memoryos-chat-strategy-summary-name',
-    summaryMetaId: 'stx-memoryos-chat-strategy-summary-meta',
-    summaryIntentId: 'stx-memoryos-chat-strategy-summary-intent',
-    summarySectionsId: 'stx-memoryos-chat-strategy-summary-sections',
-    summaryProfileId: 'stx-memoryos-chat-strategy-summary-profile',
-    summaryLifecycleId: 'stx-memoryos-chat-strategy-summary-lifecycle',
-    summaryMaintenanceId: 'stx-memoryos-chat-strategy-summary-maintenance',
-    summaryMaintenanceTextId: 'stx-memoryos-chat-strategy-summary-maintenance-text',
-    summaryRoleId: 'stx-memoryos-chat-strategy-summary-role',
-    summaryWorldId: 'stx-memoryos-chat-strategy-summary-world',
-    summaryRelationId: 'stx-memoryos-chat-strategy-summary-relation',
-    summaryReminderId: 'stx-memoryos-chat-strategy-summary-reminder',
-    summaryMaintenanceActionId: 'stx-memoryos-chat-strategy-summary-maintenance-action',
-    openBtnId: 'stx-memoryos-chat-strategy-open',
-    refreshBtnId: 'stx-memoryos-chat-strategy-refresh-card',
+    rootId: 'stx-memoryos-chat-ops-panel',
+    chatSelectId: 'stx-memoryos-chat-ops-card-chat',
+    summaryNameId: 'stx-memoryos-chat-ops-summary-name',
+    summaryMetaId: 'stx-memoryos-chat-ops-summary-meta',
+    summaryIntentId: 'stx-memoryos-chat-ops-summary-intent',
+    summarySectionsId: 'stx-memoryos-chat-ops-summary-sections',
+    summaryProfileId: 'stx-memoryos-chat-ops-summary-profile',
+    summaryLifecycleId: 'stx-memoryos-chat-ops-summary-lifecycle',
+    summaryMaintenanceId: 'stx-memoryos-chat-ops-summary-maintenance',
+    summaryMaintenanceTextId: 'stx-memoryos-chat-ops-summary-maintenance-text',
+    summaryRoleId: 'stx-memoryos-chat-ops-summary-role',
+    summaryWorldId: 'stx-memoryos-chat-ops-summary-world',
+    summaryRelationId: 'stx-memoryos-chat-ops-summary-relation',
+    summaryReminderId: 'stx-memoryos-chat-ops-summary-reminder',
+    summaryMaintenanceActionId: 'stx-memoryos-chat-ops-summary-maintenance-action',
+    openBtnId: 'stx-memoryos-chat-ops-open',
+    refreshBtnId: 'stx-memoryos-chat-ops-refresh-card',
 } as const;
 
 const EDITOR_IDS = {
-    overlayId: 'stx-memoryos-chat-strategy-overlay',
-    closeBtnId: 'stx-memoryos-chat-strategy-close',
-    mobileToggleBtnId: 'stx-memoryos-chat-strategy-mobile-toggle',
-    refreshBtnId: 'stx-memoryos-chat-strategy-editor-refresh',
-    recomputeBtnId: 'stx-memoryos-chat-strategy-editor-recompute',
-    applyBtnId: 'stx-memoryos-chat-strategy-editor-apply',
-    chatSearchId: 'stx-memoryos-chat-strategy-chat-search',
-    chatListId: 'stx-memoryos-chat-strategy-chat-list',
-    currentChatNameId: 'stx-memoryos-chat-strategy-current-name',
-    currentChatMetaId: 'stx-memoryos-chat-strategy-current-meta',
-    currentIntentId: 'stx-memoryos-chat-strategy-current-intent',
-    currentScopeId: 'stx-memoryos-chat-strategy-current-scope',
-    sectionsWrapId: 'stx-memoryos-chat-strategy-current-sections',
-    overviewRoleId: 'stx-memoryos-chat-strategy-overview-role',
-    overviewWorldId: 'stx-memoryos-chat-strategy-overview-world',
-    overviewRelationId: 'stx-memoryos-chat-strategy-overview-relation',
-    overviewReminderId: 'stx-memoryos-chat-strategy-overview-reminder',
-    summarySettingsMountId: 'stx-memoryos-chat-strategy-summary-settings-mount',
-    summarySourceId: 'stx-memoryos-chat-strategy-summary-source',
-    summarySaveGlobalBtnId: 'stx-memoryos-chat-strategy-summary-save-global',
-    summarySaveChatBtnId: 'stx-memoryos-chat-strategy-summary-save-chat',
-    summaryClearChatBtnId: 'stx-memoryos-chat-strategy-summary-clear-chat',
-    summaryResetBtnId: 'stx-memoryos-chat-strategy-summary-reset',
-    summaryMemoryModeId: 'stx-memoryos-chat-strategy-summary-memory-mode',
-    summaryScenarioId: 'stx-memoryos-chat-strategy-summary-scenario',
-    summaryResourcePriorityId: 'stx-memoryos-chat-strategy-summary-resource-priority',
-    summaryTimingId: 'stx-memoryos-chat-strategy-summary-timing',
-    summaryLengthId: 'stx-memoryos-chat-strategy-summary-length',
-    summaryCooldownId: 'stx-memoryos-chat-strategy-summary-cooldown',
-    summaryLowValueHandlingId: 'stx-memoryos-chat-strategy-summary-low-value',
-    summaryNoiseFilterId: 'stx-memoryos-chat-strategy-summary-noise',
-    summaryProcessIntervalId: 'stx-memoryos-chat-strategy-summary-process-interval',
-    summaryLookbackScopeId: 'stx-memoryos-chat-strategy-summary-lookback',
-    summaryFocusFactsId: 'stx-memoryos-chat-strategy-summary-focus-facts',
-    summaryFocusRelationshipId: 'stx-memoryos-chat-strategy-summary-focus-relationship',
-    summaryFocusWorldId: 'stx-memoryos-chat-strategy-summary-focus-world',
-    summaryFocusPlotId: 'stx-memoryos-chat-strategy-summary-focus-plot',
-    summaryFocusEmotionId: 'stx-memoryos-chat-strategy-summary-focus-emotion',
-    summaryFocusToolResultId: 'stx-memoryos-chat-strategy-summary-focus-tool-result',
-    summaryTriggerSceneEndId: 'stx-memoryos-chat-strategy-summary-trigger-scene-end',
-    summaryTriggerCombatEndId: 'stx-memoryos-chat-strategy-summary-trigger-combat-end',
-    summaryTriggerPlotAdvanceId: 'stx-memoryos-chat-strategy-summary-trigger-plot-advance',
-    summaryTriggerRelationshipShiftId: 'stx-memoryos-chat-strategy-summary-trigger-relationship-shift',
-    summaryTriggerWorldChangeId: 'stx-memoryos-chat-strategy-summary-trigger-world-change',
-    summaryTriggerStructureRepairId: 'stx-memoryos-chat-strategy-summary-trigger-structure-repair',
-    summaryTriggerArchiveFinalizeId: 'stx-memoryos-chat-strategy-summary-trigger-archive-finalize',
-    summaryLightRelationId: 'stx-memoryos-chat-strategy-summary-light-relation',
-    summaryMediumWorldStateId: 'stx-memoryos-chat-strategy-summary-medium-world',
-    summaryHeavyRewriteId: 'stx-memoryos-chat-strategy-summary-heavy-rewrite',
-    summaryHeavyConsistencyId: 'stx-memoryos-chat-strategy-summary-heavy-consistency',
-    summaryHeavyLookbackId: 'stx-memoryos-chat-strategy-summary-heavy-lookback',
-    profileRefreshDirectId: 'stx-memoryos-chat-strategy-direct-profile-refresh',
-    qualityRefreshDirectId: 'stx-memoryos-chat-strategy-direct-quality-refresh',
-    vectorFactsDirectId: 'stx-memoryos-chat-strategy-direct-vector-facts',
-    deletionStrategyDirectId: 'stx-memoryos-chat-strategy-direct-delete',
-    autoBootstrapSeedId: 'stx-memoryos-chat-strategy-auto-bootstrap-seed',
-    groupLaneEnabledId: 'stx-memoryos-chat-strategy-group-lane-enabled',
-    chatTypeId: 'stx-memoryos-chat-strategy-chat-type',
-    stylePreferenceId: 'stx-memoryos-chat-strategy-style',
-    memoryStrengthId: 'stx-memoryos-chat-strategy-memory-strength',
-    extractStrategyId: 'stx-memoryos-chat-strategy-extract',
-    summaryStrategyId: 'stx-memoryos-chat-strategy-summary',
-    deletionStrategyId: 'stx-memoryos-chat-strategy-delete',
-    vectorEnabledId: 'stx-memoryos-chat-strategy-vector-enabled',
-    vectorChunkThresholdId: 'stx-memoryos-chat-strategy-vector-chunk',
-    rerankThresholdId: 'stx-memoryos-chat-strategy-rerank-threshold',
-    vectorActivationFactsId: 'stx-memoryos-chat-strategy-vector-activation-facts',
-    vectorActivationSummariesId: 'stx-memoryos-chat-strategy-vector-activation-summaries',
-    vectorIdleDecayDaysId: 'stx-memoryos-chat-strategy-vector-idle-decay-days',
-    vectorLowPrecisionStrideId: 'stx-memoryos-chat-strategy-vector-low-precision-stride',
-    keepSummaryCountId: 'stx-memoryos-chat-strategy-keep-summary',
-    keepEventCountId: 'stx-memoryos-chat-strategy-keep-event',
-    keepVectorDaysId: 'stx-memoryos-chat-strategy-keep-vector-days',
-    qualityScoreId: 'stx-memoryos-chat-strategy-quality-score',
-    qualityLevelId: 'stx-memoryos-chat-strategy-quality-level',
-    qualityDimensionsId: 'stx-memoryos-chat-strategy-quality-dimensions',
-    qualityVectorModeId: 'stx-memoryos-chat-strategy-quality-vector-mode',
-    qualityVectorStatsId: 'stx-memoryos-chat-strategy-quality-vector-stats',
-    qualityVectorTimesId: 'stx-memoryos-chat-strategy-quality-vector-times',
-    qualityTraceEvidenceId: 'stx-memoryos-chat-strategy-quality-trace-evidence',
-    qualityAdviceId: 'stx-memoryos-chat-strategy-quality-advice',
-    qualityReasonsId: 'stx-memoryos-chat-strategy-quality-reasons',
-    maintenanceInsightsId: 'stx-memoryos-chat-strategy-maintenance-insights',
-    lifecycleHeroId: 'stx-memoryos-chat-strategy-lifecycle-hero',
-    lifecycleStageId: 'stx-memoryos-chat-strategy-lifecycle-stage',
-    lifecycleMetaId: 'stx-memoryos-chat-strategy-lifecycle-meta',
-    lifecycleSummaryId: 'stx-memoryos-chat-strategy-lifecycle-summary',
-    lifecycleExplanationId: 'stx-memoryos-chat-strategy-lifecycle-explanation',
-    lifecycleReasonListId: 'stx-memoryos-chat-strategy-lifecycle-reasons',
-    lifecycleTimelineId: 'stx-memoryos-chat-strategy-lifecycle-timeline',
-    lifecycleImpactId: 'stx-memoryos-chat-strategy-lifecycle-impact',
-    presetScopeMetaId: 'stx-memoryos-chat-strategy-preset-scope-meta',
-    groupLaneMetaId: 'stx-memoryos-chat-strategy-group-lane-meta',
-    groupLaneActorsId: 'stx-memoryos-chat-strategy-group-lane-actors',
-    autoBlockId: 'stx-memoryos-chat-strategy-auto',
-    overrideBlockId: 'stx-memoryos-chat-strategy-override',
-    finalBlockId: 'stx-memoryos-chat-strategy-final',
-    metricsBlockId: 'stx-memoryos-chat-strategy-metrics',
-    decisionBlockId: 'stx-memoryos-chat-strategy-decision',
-    preDecisionBlockId: 'stx-memoryos-chat-strategy-pre-decision',
-    postDecisionBlockId: 'stx-memoryos-chat-strategy-post-decision',
-    processingDecisionBlockId: 'stx-memoryos-chat-strategy-processing-decision',
-    longSummaryCooldownBlockId: 'stx-memoryos-chat-strategy-long-summary-cooldown',
-    diagnosticBasicDetailsId: 'stx-memoryos-chat-strategy-diagnostic-basic',
-    diagnosticAdvancedDetailsId: 'stx-memoryos-chat-strategy-diagnostic-advanced',
-    diagnosticBasicGridId: 'stx-memoryos-chat-strategy-diagnostic-basic-grid',
-    diagnosticAdvancedGridId: 'stx-memoryos-chat-strategy-diagnostic-advanced-grid',
-    advancedSettingsId: 'stx-memoryos-chat-strategy-advanced-settings',
+    overlayId: 'stx-memoryos-chat-ops-overlay',
+    closeBtnId: 'stx-memoryos-chat-ops-close',
+    mobileToggleBtnId: 'stx-memoryos-chat-ops-mobile-toggle',
+    refreshBtnId: 'stx-memoryos-chat-ops-editor-refresh',
+    recomputeBtnId: 'stx-memoryos-chat-ops-editor-recompute',
+    applyBtnId: 'stx-memoryos-chat-ops-editor-apply',
+    chatSearchId: 'stx-memoryos-chat-ops-chat-search',
+    chatListId: 'stx-memoryos-chat-ops-chat-list',
+    currentChatNameId: 'stx-memoryos-chat-ops-current-name',
+    currentChatMetaId: 'stx-memoryos-chat-ops-current-meta',
+    currentIntentId: 'stx-memoryos-chat-ops-current-intent',
+    currentScopeId: 'stx-memoryos-chat-ops-current-scope',
+    sectionsWrapId: 'stx-memoryos-chat-ops-current-sections',
+    overviewRoleId: 'stx-memoryos-chat-ops-overview-role',
+    overviewWorldId: 'stx-memoryos-chat-ops-overview-world',
+    overviewRelationId: 'stx-memoryos-chat-ops-overview-relation',
+    overviewReminderId: 'stx-memoryos-chat-ops-overview-reminder',
+    overviewDecisionId: 'stx-memoryos-chat-ops-overview-decision',
+    summarySettingsMountId: 'stx-memoryos-chat-ops-summary-settings-mount',
+    summarySourceId: 'stx-memoryos-chat-ops-summary-source',
+    summarySaveGlobalBtnId: 'stx-memoryos-chat-ops-summary-save-global',
+    summarySaveChatBtnId: 'stx-memoryos-chat-ops-summary-save-chat',
+    summaryClearChatBtnId: 'stx-memoryos-chat-ops-summary-clear-chat',
+    summaryResetBtnId: 'stx-memoryos-chat-ops-summary-reset',
+    summaryMemoryModeId: 'stx-memoryos-chat-ops-summary-memory-mode',
+    summaryScenarioId: 'stx-memoryos-chat-ops-summary-scenario',
+    summaryResourcePriorityId: 'stx-memoryos-chat-ops-summary-resource-priority',
+    summaryTimingId: 'stx-memoryos-chat-ops-summary-timing',
+    summaryLengthId: 'stx-memoryos-chat-ops-summary-length',
+    summaryCooldownId: 'stx-memoryos-chat-ops-summary-cooldown',
+    summaryLowValueHandlingId: 'stx-memoryos-chat-ops-summary-low-value',
+    summaryNoiseFilterId: 'stx-memoryos-chat-ops-summary-noise',
+    summaryProcessIntervalId: 'stx-memoryos-chat-ops-summary-process-interval',
+    summaryLookbackScopeId: 'stx-memoryos-chat-ops-summary-lookback',
+    summaryFocusFactsId: 'stx-memoryos-chat-ops-summary-focus-facts',
+    summaryFocusRelationshipId: 'stx-memoryos-chat-ops-summary-focus-relationship',
+    summaryFocusWorldId: 'stx-memoryos-chat-ops-summary-focus-world',
+    summaryFocusPlotId: 'stx-memoryos-chat-ops-summary-focus-plot',
+    summaryFocusEmotionId: 'stx-memoryos-chat-ops-summary-focus-emotion',
+    summaryFocusToolResultId: 'stx-memoryos-chat-ops-summary-focus-tool-result',
+    summaryAutoEnabledId: 'stx-memoryos-chat-ops-summary-auto-enabled',
+    summaryAutoRoleplayThresholdId: 'stx-memoryos-chat-ops-summary-auto-roleplay-threshold',
+    summaryAutoChatThresholdId: 'stx-memoryos-chat-ops-summary-auto-chat-threshold',
+    summaryAutoStoryThresholdId: 'stx-memoryos-chat-ops-summary-auto-story-threshold',
+    summaryAutoMixedThresholdId: 'stx-memoryos-chat-ops-summary-auto-mixed-threshold',
+    summaryAutoMinGapId: 'stx-memoryos-chat-ops-summary-auto-min-gap',
+    summaryAutoCooldownTurnsId: 'stx-memoryos-chat-ops-summary-auto-cooldown-turns',
+    summaryAutoEnableTriggerRulesId: 'stx-memoryos-chat-ops-summary-auto-enable-trigger-rules',
+    summaryAutoEnableSemanticId: 'stx-memoryos-chat-ops-summary-auto-enable-semantic',
+    summaryAutoEnablePressureId: 'stx-memoryos-chat-ops-summary-auto-enable-pressure',
+    summaryAutoTriggerScoreId: 'stx-memoryos-chat-ops-summary-auto-trigger-score',
+    summaryAutoSemanticScoreId: 'stx-memoryos-chat-ops-summary-auto-semantic-score',
+    summaryAutoPressureRatioId: 'stx-memoryos-chat-ops-summary-auto-pressure-ratio',
+    summaryLightRelationId: 'stx-memoryos-chat-ops-summary-light-relation',
+    summaryMediumWorldStateId: 'stx-memoryos-chat-ops-summary-medium-world',
+    summaryHeavyRewriteId: 'stx-memoryos-chat-ops-summary-heavy-rewrite',
+    summaryHeavyConsistencyId: 'stx-memoryos-chat-ops-summary-heavy-consistency',
+    summaryHeavyLookbackId: 'stx-memoryos-chat-ops-summary-heavy-lookback',
+    profileRefreshDirectId: 'stx-memoryos-chat-ops-direct-profile-refresh',
+    qualityRefreshDirectId: 'stx-memoryos-chat-ops-direct-quality-refresh',
+    vectorFactsDirectId: 'stx-memoryos-chat-ops-direct-vector-facts',
+    deletionStrategyDirectId: 'stx-memoryos-chat-ops-direct-delete',
+    autoBootstrapSeedId: 'stx-memoryos-chat-ops-auto-bootstrap-seed',
+    groupLaneEnabledId: 'stx-memoryos-chat-ops-group-lane-enabled',
+    chatTypeId: 'stx-memoryos-chat-ops-chat-type',
+    stylePreferenceId: 'stx-memoryos-chat-ops-style',
+    memoryStrengthId: 'stx-memoryos-chat-ops-memory-strength',
+    extractStrategyId: 'stx-memoryos-chat-ops-extract',
+    summaryStrategyId: 'stx-memoryos-chat-ops-summary',
+    deletionStrategyId: 'stx-memoryos-chat-ops-delete',
+    vectorEnabledId: 'stx-memoryos-chat-ops-vector-enabled',
+    vectorChunkThresholdId: 'stx-memoryos-chat-ops-vector-chunk',
+    rerankThresholdId: 'stx-memoryos-chat-ops-rerank-threshold',
+    vectorActivationFactsId: 'stx-memoryos-chat-ops-vector-activation-facts',
+    vectorActivationSummariesId: 'stx-memoryos-chat-ops-vector-activation-summaries',
+    vectorIdleDecayDaysId: 'stx-memoryos-chat-ops-vector-idle-decay-days',
+    vectorLowPrecisionStrideId: 'stx-memoryos-chat-ops-vector-low-precision-stride',
+    keepSummaryCountId: 'stx-memoryos-chat-ops-keep-summary',
+    keepEventCountId: 'stx-memoryos-chat-ops-keep-event',
+    keepVectorDaysId: 'stx-memoryos-chat-ops-keep-vector-days',
+    qualityScoreId: 'stx-memoryos-chat-ops-quality-score',
+    qualityLevelId: 'stx-memoryos-chat-ops-quality-level',
+    qualityDimensionsId: 'stx-memoryos-chat-ops-quality-dimensions',
+    qualityVectorModeId: 'stx-memoryos-chat-ops-quality-vector-mode',
+    qualityVectorStatsId: 'stx-memoryos-chat-ops-quality-vector-stats',
+    qualityVectorTimesId: 'stx-memoryos-chat-ops-quality-vector-times',
+    qualityTraceEvidenceId: 'stx-memoryos-chat-ops-quality-trace-evidence',
+    qualityAdviceId: 'stx-memoryos-chat-ops-quality-advice',
+    qualityReasonsId: 'stx-memoryos-chat-ops-quality-reasons',
+    maintenanceInsightsId: 'stx-memoryos-chat-ops-maintenance-insights',
+    lifecycleHeroId: 'stx-memoryos-chat-ops-lifecycle-hero',
+    lifecycleStageId: 'stx-memoryos-chat-ops-lifecycle-stage',
+    lifecycleMetaId: 'stx-memoryos-chat-ops-lifecycle-meta',
+    lifecycleSummaryId: 'stx-memoryos-chat-ops-lifecycle-summary',
+    lifecycleExplanationId: 'stx-memoryos-chat-ops-lifecycle-explanation',
+    lifecycleReasonListId: 'stx-memoryos-chat-ops-lifecycle-reasons',
+    lifecycleTimelineId: 'stx-memoryos-chat-ops-lifecycle-timeline',
+    lifecycleImpactId: 'stx-memoryos-chat-ops-lifecycle-impact',
+    presetScopeMetaId: 'stx-memoryos-chat-ops-preset-scope-meta',
+    groupLaneMetaId: 'stx-memoryos-chat-ops-group-lane-meta',
+    groupLaneActorsId: 'stx-memoryos-chat-ops-group-lane-actors',
+    autoBlockId: 'stx-memoryos-chat-ops-auto',
+    overrideBlockId: 'stx-memoryos-chat-ops-override',
+    finalBlockId: 'stx-memoryos-chat-ops-final',
+    metricsBlockId: 'stx-memoryos-chat-ops-metrics',
+    decisionBlockId: 'stx-memoryos-chat-ops-decision',
+    preDecisionBlockId: 'stx-memoryos-chat-ops-pre-decision',
+    postDecisionBlockId: 'stx-memoryos-chat-ops-post-decision',
+    processingDecisionBlockId: 'stx-memoryos-chat-ops-processing-decision',
+    longSummaryCooldownBlockId: 'stx-memoryos-chat-ops-long-summary-cooldown',
+    autoSummaryDecisionBlockId: 'stx-memoryos-chat-ops-auto-summary-decision',
+    autoSummaryRuntimeBlockId: 'stx-memoryos-chat-ops-auto-summary-runtime',
+    diagnosticBasicDetailsId: 'stx-memoryos-chat-ops-diagnostic-basic',
+    diagnosticAdvancedDetailsId: 'stx-memoryos-chat-ops-diagnostic-advanced',
+    diagnosticBasicGridId: 'stx-memoryos-chat-ops-diagnostic-basic-grid',
+    diagnosticAdvancedGridId: 'stx-memoryos-chat-ops-diagnostic-advanced-grid',
+    advancedSettingsId: 'stx-memoryos-chat-ops-advanced-settings',
 } as const;
 
 let selectedChatKey: string = '';
@@ -312,6 +349,73 @@ function areStringArraysEqual(left: string[], right: string[]): boolean {
     return left.every((item: string, index: number): boolean => item === right[index]);
 }
 
+/**
+ * 功能：返回聊天策略面板当前使用的总结触发规则列表。
+ * 参数：无。
+ * 返回：按注册表排序后的触发规则。
+ */
+
+/**
+ * 功能：构建总结触发器 UI 卡片模型，统一供渲染与测试复用。
+ * 参数：无。
+ * 返回：触发器卡片模型列表。
+ */
+
+/**
+ * 功能：构建总结触发器复选框 ID，避免为每个 trigger 维护手写常量。
+ * 参数：
+ *   triggerId：触发器 ID。
+ * 返回：触发器复选框 ID。
+ */
+
+/**
+ * 功能：将触发器分类转换为面板展示标签。
+ * 参数：
+ *   category：触发器分类。
+ * 返回：分类中文标签。
+ */
+function formatSummaryTriggerCategoryLabel(category: SummaryTriggerCategory): string {
+    if (category === 'scene') return '场景';
+    if (category === 'combat') return '战斗';
+    if (category === 'plot') return '剧情';
+    if (category === 'relationship') return '关系';
+    if (category === 'world') return '世界';
+    if (category === 'repair') return '修复';
+    if (category === 'archive') return '归档';
+    if (category === 'intent') return '意图';
+    if (category === 'identity') return '身份';
+    if (category === 'status') return '状态';
+    return category;
+}
+
+/**
+ * 功能：构建触发器卡片说明文案，强化“触发来源 + 提前触发”的可扫读性。
+ * 参数：
+ *   rule：触发规则。
+ * 返回：用于复选卡片描述的文案。
+ */
+function buildSummaryTriggerCardDescription(rule: SummaryTriggerRule): string {
+    const category = formatSummaryTriggerCategoryLabel(rule.category);
+    const early = rule.allowEarlyTrigger ? '支持提前触发' : '仅阈值后触发';
+    return `${rule.description} [${category}] [${early}]`;
+}
+
+/**
+ * 功能：从表单读取当前启用的长总结触发器列表。
+ * 参数：
+ *   overlay：编辑器根节点。
+ * 返回：启用的触发器 ID 列表。
+ */
+function collectSummaryTriggerIdsFromForm(overlay: HTMLElement): SummaryLongTrigger[] {
+    const selected = listSummaryTriggerRulesForPanel()
+        .filter((rule: SummaryTriggerRule): boolean => getCheckboxValue(overlay, buildSummaryTriggerControlId(rule.id)))
+        .map((rule: SummaryTriggerRule): SummaryLongTrigger => rule.id);
+    if (selected.length > 0) {
+        return selected;
+    }
+    return listSummaryTriggerRulesForPanel().map((rule: SummaryTriggerRule): SummaryLongTrigger => rule.id);
+}
+
 function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
     const focusValues: SummaryRecordFocus[] = [
         'facts',
@@ -320,16 +424,8 @@ function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
         'plot',
         'emotion',
         'tool_result',
-    ].filter((item: string): item is SummaryRecordFocus => getCheckboxValue(overlay, `stx-memoryos-chat-strategy-summary-focus-${item.replace(/_/g, '-')}`));
-    const triggerValues: SummaryLongTrigger[] = [
-        'scene_end',
-        'combat_end',
-        'plot_advance',
-        'relationship_shift',
-        'world_change',
-        'structure_repair',
-        'archive_finalize',
-    ].filter((item: string): item is SummaryLongTrigger => getCheckboxValue(overlay, `stx-memoryos-chat-strategy-summary-trigger-${item.replace(/_/g, '-')}`));
+    ].filter((item: string): item is SummaryRecordFocus => getCheckboxValue(overlay, `stx-memoryos-chat-ops-summary-focus-${item.replace(/_/g, '-')}`));
+    const triggerValues: SummaryLongTrigger[] = collectSummaryTriggerIdsFromForm(overlay);
     return {
         workMode: {
             memoryMode: getSelectValue(overlay, EDITOR_IDS.summaryMemoryModeId) as SummaryMemoryMode || DEFAULT_SUMMARY_SETTINGS.workMode.memoryMode,
@@ -340,7 +436,7 @@ function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
             summaryTiming: getSelectValue(overlay, EDITOR_IDS.summaryTimingId) as SummaryTiming || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.summaryTiming,
             summaryLength: getSelectValue(overlay, EDITOR_IDS.summaryLengthId) as SummaryLength || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.summaryLength,
             longSummaryCooldown: getSelectValue(overlay, EDITOR_IDS.summaryCooldownId) as SummaryCooldownPreset || DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryCooldown,
-            longSummaryTrigger: triggerValues.length > 0 ? triggerValues : [...DEFAULT_SUMMARY_SETTINGS.summaryBehavior.longSummaryTrigger],
+            longSummaryTrigger: triggerValues,
         },
         contentPreference: {
             recordFocus: focusValues.length > 0 ? focusValues : [...DEFAULT_SUMMARY_SETTINGS.contentPreference.recordFocus],
@@ -355,6 +451,21 @@ function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
             allowHeavyRewriteSummaries: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyRewriteId),
             allowHeavyConsistencyRepair: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyConsistencyId),
             allowHeavyExpandedLookback: getCheckboxValue(overlay, EDITOR_IDS.summaryHeavyLookbackId),
+        },
+        autoSummary: {
+            enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnabledId),
+            roleplayTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoRoleplayThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.roleplayTurnThreshold),
+            chatTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoChatThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.chatTurnThreshold),
+            storyTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoStoryThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.storyTurnThreshold),
+            mixedTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoMixedThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.mixedTurnThreshold),
+            minTurnsAfterLastSummary: getNumberValue(overlay, EDITOR_IDS.summaryAutoMinGapId, DEFAULT_SUMMARY_SETTINGS.autoSummary.minTurnsAfterLastSummary),
+            coolDownTurns: getNumberValue(overlay, EDITOR_IDS.summaryAutoCooldownTurnsId, DEFAULT_SUMMARY_SETTINGS.autoSummary.coolDownTurns),
+            enableTriggerRules: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnableTriggerRulesId),
+            enableSemanticChangeTrigger: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnableSemanticId),
+            enablePromptPressureTrigger: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnablePressureId),
+            triggerRuleMinScore: getNumberValue(overlay, EDITOR_IDS.summaryAutoTriggerScoreId, DEFAULT_SUMMARY_SETTINGS.autoSummary.triggerRuleMinScore),
+            semanticTriggerMinScore: getNumberValue(overlay, EDITOR_IDS.summaryAutoSemanticScoreId, DEFAULT_SUMMARY_SETTINGS.autoSummary.semanticTriggerMinScore),
+            promptPressureTokenRatio: getNumberValue(overlay, EDITOR_IDS.summaryAutoPressureRatioId, DEFAULT_SUMMARY_SETTINGS.autoSummary.promptPressureTokenRatio),
         },
     };
 }
@@ -445,6 +556,62 @@ function buildSummarySettingsOverrideDiff(base: SummarySettings, next: SummarySe
             override.advanced.allowHeavyExpandedLookback = next.advanced.allowHeavyExpandedLookback;
         }
     }
+    if (
+        base.autoSummary.enabled !== next.autoSummary.enabled
+        || base.autoSummary.roleplayTurnThreshold !== next.autoSummary.roleplayTurnThreshold
+        || base.autoSummary.chatTurnThreshold !== next.autoSummary.chatTurnThreshold
+        || base.autoSummary.storyTurnThreshold !== next.autoSummary.storyTurnThreshold
+        || base.autoSummary.mixedTurnThreshold !== next.autoSummary.mixedTurnThreshold
+        || base.autoSummary.minTurnsAfterLastSummary !== next.autoSummary.minTurnsAfterLastSummary
+        || base.autoSummary.coolDownTurns !== next.autoSummary.coolDownTurns
+        || base.autoSummary.enableTriggerRules !== next.autoSummary.enableTriggerRules
+        || base.autoSummary.enableSemanticChangeTrigger !== next.autoSummary.enableSemanticChangeTrigger
+        || base.autoSummary.enablePromptPressureTrigger !== next.autoSummary.enablePromptPressureTrigger
+        || base.autoSummary.triggerRuleMinScore !== next.autoSummary.triggerRuleMinScore
+        || base.autoSummary.semanticTriggerMinScore !== next.autoSummary.semanticTriggerMinScore
+        || base.autoSummary.promptPressureTokenRatio !== next.autoSummary.promptPressureTokenRatio
+    ) {
+        override.autoSummary = {};
+        if (base.autoSummary.enabled !== next.autoSummary.enabled) {
+            override.autoSummary.enabled = next.autoSummary.enabled;
+        }
+        if (base.autoSummary.roleplayTurnThreshold !== next.autoSummary.roleplayTurnThreshold) {
+            override.autoSummary.roleplayTurnThreshold = next.autoSummary.roleplayTurnThreshold;
+        }
+        if (base.autoSummary.chatTurnThreshold !== next.autoSummary.chatTurnThreshold) {
+            override.autoSummary.chatTurnThreshold = next.autoSummary.chatTurnThreshold;
+        }
+        if (base.autoSummary.storyTurnThreshold !== next.autoSummary.storyTurnThreshold) {
+            override.autoSummary.storyTurnThreshold = next.autoSummary.storyTurnThreshold;
+        }
+        if (base.autoSummary.mixedTurnThreshold !== next.autoSummary.mixedTurnThreshold) {
+            override.autoSummary.mixedTurnThreshold = next.autoSummary.mixedTurnThreshold;
+        }
+        if (base.autoSummary.minTurnsAfterLastSummary !== next.autoSummary.minTurnsAfterLastSummary) {
+            override.autoSummary.minTurnsAfterLastSummary = next.autoSummary.minTurnsAfterLastSummary;
+        }
+        if (base.autoSummary.coolDownTurns !== next.autoSummary.coolDownTurns) {
+            override.autoSummary.coolDownTurns = next.autoSummary.coolDownTurns;
+        }
+        if (base.autoSummary.enableTriggerRules !== next.autoSummary.enableTriggerRules) {
+            override.autoSummary.enableTriggerRules = next.autoSummary.enableTriggerRules;
+        }
+        if (base.autoSummary.enableSemanticChangeTrigger !== next.autoSummary.enableSemanticChangeTrigger) {
+            override.autoSummary.enableSemanticChangeTrigger = next.autoSummary.enableSemanticChangeTrigger;
+        }
+        if (base.autoSummary.enablePromptPressureTrigger !== next.autoSummary.enablePromptPressureTrigger) {
+            override.autoSummary.enablePromptPressureTrigger = next.autoSummary.enablePromptPressureTrigger;
+        }
+        if (base.autoSummary.triggerRuleMinScore !== next.autoSummary.triggerRuleMinScore) {
+            override.autoSummary.triggerRuleMinScore = next.autoSummary.triggerRuleMinScore;
+        }
+        if (base.autoSummary.semanticTriggerMinScore !== next.autoSummary.semanticTriggerMinScore) {
+            override.autoSummary.semanticTriggerMinScore = next.autoSummary.semanticTriggerMinScore;
+        }
+        if (base.autoSummary.promptPressureTokenRatio !== next.autoSummary.promptPressureTokenRatio) {
+            override.autoSummary.promptPressureTokenRatio = next.autoSummary.promptPressureTokenRatio;
+        }
+    }
     return override;
 }
 
@@ -455,8 +622,9 @@ function buildSummaryToggleMarkup(id: string, title: string, description: string
         description,
         checkedLabel: '开启',
         uncheckedLabel: '关闭',
-        containerClassName: 'stx-memory-chat-strategy-toggle',
-    }).replace('checked', checked ? 'checked' : '');
+        containerClassName: 'stx-memory-chat-ops-toggle',
+        inputAttributes: checked ? { checked: true } : undefined,
+    });
 }
 
 function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): string {
@@ -464,7 +632,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
     const sourceLabel = formatSummarySourceLabel(effective?.source ?? null);
     const settings = effective ?? DEFAULT_SUMMARY_SETTINGS;
     const workModeCards = `
-      <div class="stx-memory-chat-strategy-control-grid">
+      <div class="stx-memory-chat-ops-control-grid">
         ${buildEditorSelectField(EDITOR_IDS.summaryMemoryModeId, '记忆模式', '控制这套设置更偏省流、均衡还是深度。', [
             { value: 'streamlined', label: '精简' },
             { value: 'balanced', label: '均衡' },
@@ -487,7 +655,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
       </div>
     `;
     const summaryBehaviorCards = `
-      <div class="stx-memory-chat-strategy-control-grid">
+      <div class="stx-memory-chat-ops-control-grid">
         ${buildEditorSelectField(EDITOR_IDS.summaryTimingId, '总结时机', '控制是关键节点、阶段结束还是更频繁地总结。', [
             { value: 'key_only', label: '关键节点' },
             { value: 'stage_end', label: '阶段结束' },
@@ -524,17 +692,9 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
         { id: EDITOR_IDS.summaryFocusEmotionId, title: '情绪', description: '保留情绪、氛围和态度变化。' },
         { id: EDITOR_IDS.summaryFocusToolResultId, title: '工具结果', description: '保留工具 / 代码 / 查询最终结论。' },
     ];
-    const triggerCards = [
-        { id: EDITOR_IDS.summaryTriggerSceneEndId, title: '场景结束', description: '场景收束时允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerCombatEndId, title: '战斗结束', description: '战斗收尾时允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerPlotAdvanceId, title: '剧情推进', description: '剧情明显前进时允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerRelationshipShiftId, title: '关系变化', description: '关系或阵营变化时允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerWorldChangeId, title: '世界变化', description: '设定或世界状态变化时允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerStructureRepairId, title: '结构修复', description: '编辑、删改或分支后允许长总结。' },
-        { id: EDITOR_IDS.summaryTriggerArchiveFinalizeId, title: '归档整理', description: '归档前最后整理窗口。' },
-    ];
+    const triggerCards = buildSummaryTriggerCardsForPanel();
     const advancedCards = `
-      <div class="stx-memory-chat-strategy-control-grid">
+      <div class="stx-memory-chat-ops-control-grid">
         ${buildEditorSelectField(EDITOR_IDS.summaryProcessIntervalId, '处理间隔', '控制候选巡检频率。', [
             { value: 'small', label: '小' },
             { value: 'medium', label: '中' },
@@ -546,14 +706,14 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             { value: 'large', label: '大' },
         ])}
       </div>
-      <div class="stx-memory-chat-strategy-toggle-wrap">
+      <div class="stx-memory-chat-ops-toggle-wrap">
         ${buildSharedCheckboxCard({
             id: EDITOR_IDS.summaryLightRelationId,
             title: '轻处理中提取关系',
             description: '轻处理时也保留最关键的关系变化。',
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })}
         ${buildSharedCheckboxCard({
             id: EDITOR_IDS.summaryMediumWorldStateId,
@@ -561,7 +721,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             description: '中处理允许同步必要的世界状态变化。',
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })}
         ${buildSharedCheckboxCard({
             id: EDITOR_IDS.summaryHeavyRewriteId,
@@ -569,7 +729,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             description: '重处理允许整理旧摘要并重写更稳定的阶段概述。',
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })}
         ${buildSharedCheckboxCard({
             id: EDITOR_IDS.summaryHeavyConsistencyId,
@@ -577,7 +737,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             description: '重处理更重视消除冲突与修复结构不一致。',
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })}
         ${buildSharedCheckboxCard({
             id: EDITOR_IDS.summaryHeavyLookbackId,
@@ -585,80 +745,133 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             description: '重处理时可回看更大的上下文窗口。',
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })}
       </div>
     `;
     const recordFocusMarkup = `
-      <div class="stx-memory-chat-strategy-toggle-wrap">
+      <div class="stx-memory-chat-ops-toggle-wrap">
         ${recordFocusCards.map((item): string => buildSharedCheckboxCard({
             id: item.id,
             title: item.title,
             description: item.description,
             checkedLabel: '开启',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
         })).join('')}
       </div>
     `;
     const triggerMarkup = `
-      <div class="stx-memory-chat-strategy-toggle-wrap">
+      <div class="stx-memory-chat-ops-toggle-wrap">
         ${triggerCards.map((item): string => buildSharedCheckboxCard({
             id: item.id,
             title: item.title,
             description: item.description,
             checkedLabel: '允许',
             uncheckedLabel: '关闭',
-            containerClassName: 'stx-memory-chat-strategy-toggle',
+            containerClassName: 'stx-memory-chat-ops-toggle',
+            inputAttributes: {
+                'data-summary-trigger-id': item.triggerId,
+            },
         })).join('')}
       </div>
     `;
+    const autoSummaryCards = `
+      <div class="stx-memory-chat-ops-toggle-wrap">
+        ${buildSummaryToggleMarkup(
+            EDITOR_IDS.summaryAutoEnabledId,
+            '启用自动长总结触发',
+            '只接管“是否允许进入长总结”，不改变抽取和短总结主线。',
+            settings.autoSummary.enabled,
+        )}
+      </div>
+      <div class="stx-memory-chat-ops-control-grid">
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoRoleplayThresholdId, '角色扮演阈值', '角色扮演聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoChatThresholdId, '日常聊天阈值', '日常聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoStoryThresholdId, '剧情聊天阈值', '剧情聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoMixedThresholdId, '混合聊天阈值', '混合聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+      </div>
+      <div class="stx-memory-chat-ops-control-grid">
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoMinGapId, '最小间隔', '距离上次长总结不足该楼层时，直接阻止本轮长总结。', 'number', '0', '80', '1')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoCooldownTurnsId, '冷却楼层', '冷却期内仅记录信号，不重复触发长总结。', 'number', '0', '80', '1')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoTriggerScoreId, '触发词分数阈值', '触发词累计分达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoSemanticScoreId, '关键变化分数阈值', '关键变化分数达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
+        ${buildEditorInputField(EDITOR_IDS.summaryAutoPressureRatioId, '上下文压力阈值', '预压缩窗口长度 / 长总结预算达到该值后，视为命中。', 'number', '0', '1.2', '0.01')}
+      </div>
+      <div class="stx-memory-chat-ops-toggle-wrap">
+        ${buildSummaryToggleMarkup(
+            EDITOR_IDS.summaryAutoEnableTriggerRulesId,
+            '启用触发词规则',
+            '使用触发词规则（关键词/正则/权重）参与判定。',
+            settings.autoSummary.enableTriggerRules,
+        )}
+        ${buildSummaryToggleMarkup(
+            EDITOR_IDS.summaryAutoEnableSemanticId,
+            '启用关键变化',
+            '根据地点、时间、关系、世界状态、用户更正等变化参与判定。',
+            settings.autoSummary.enableSemanticChangeTrigger,
+        )}
+        ${buildSummaryToggleMarkup(
+            EDITOR_IDS.summaryAutoEnablePressureId,
+            '启用上下文压力',
+            '当窗口长度接近预算上限时，允许上下文压力信号参与判定。',
+            settings.autoSummary.enablePromptPressureTrigger,
+        )}
+      </div>
+    `;
     return `
-      <div class="stx-memory-chat-strategy-summary-compact">
-        <div class="stx-memory-chat-strategy-summary-bar">
+      <div class="stx-memory-chat-ops-summary-compact">
+        <div class="stx-memory-chat-ops-summary-bar">
           <div>
-            <div class="stx-memory-chat-strategy-summary-bar-title">AI 记忆总结</div>
-            <div class="stx-memory-chat-strategy-summary-bar-subtitle">四块设置，控制总结的方式、时机、重点和高级行为。</div>
+            <div class="stx-memory-chat-ops-summary-bar-title">AI 记忆总结</div>
+            <div class="stx-memory-chat-ops-summary-bar-subtitle">四块设置，控制总结的方式、时机、重点和高级行为。</div>
           </div>
-          <div class="stx-memory-chat-strategy-summary-bar-badges">
-            <span class="stx-memory-chat-strategy-pill">${escapeHtml(sourceLabel)}</span>
-            <span class="stx-memory-chat-strategy-pill">${escapeHtml(`${settings.workMode.memoryMode} / ${settings.summaryBehavior.summaryLength}`)}</span>
-            <span class="stx-memory-chat-strategy-pill">${escapeHtml(`${settings.summaryBehavior.summaryTiming} / ${settings.advanced.processInterval}`)}</span>
+          <div class="stx-memory-chat-ops-summary-bar-badges">
+            <span class="stx-memory-chat-ops-pill">${escapeHtml(sourceLabel)}</span>
+            <span class="stx-memory-chat-ops-pill">${escapeHtml(`${settings.workMode.memoryMode} / ${settings.summaryBehavior.summaryLength}`)}</span>
+            <span class="stx-memory-chat-ops-pill">${escapeHtml(`${settings.summaryBehavior.summaryTiming} / ${settings.advanced.processInterval}`)}</span>
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-summary-actions">
+        <div class="stx-memory-chat-ops-summary-actions">
           ${buildSharedButton({ id: EDITOR_IDS.summarySaveGlobalBtnId, label: '保存为全局默认', iconClassName: 'fa-solid fa-globe', variant: 'secondary' })}
           ${buildSharedButton({ id: EDITOR_IDS.summarySaveChatBtnId, label: '应用到当前聊天', iconClassName: 'fa-solid fa-message', variant: 'secondary' })}
           ${buildSharedButton({ id: EDITOR_IDS.summaryClearChatBtnId, label: '清除当前聊天覆盖', iconClassName: 'fa-solid fa-eraser', variant: 'secondary' })}
           ${buildSharedButton({ id: EDITOR_IDS.summaryResetBtnId, label: '恢复文档默认', iconClassName: 'fa-solid fa-arrow-rotate-left', variant: 'secondary' })}
         </div>
-        <div class="stx-memory-chat-strategy-summary-section">
-          <div class="stx-memory-chat-strategy-summary-section-head">
+        <div class="stx-memory-chat-ops-summary-section">
+          <div class="stx-memory-chat-ops-summary-section-head">
             <h4>工作方式</h4>
             <p>控制系统更偏省流、均衡还是深度，以及是否按场景自动推断。</p>
           </div>
           ${workModeCards}
         </div>
-        <div class="stx-memory-chat-strategy-summary-section">
-          <div class="stx-memory-chat-strategy-summary-section-head">
+        <div class="stx-memory-chat-ops-summary-section">
+          <div class="stx-memory-chat-ops-summary-section-head">
             <h4>总结行为</h4>
-            <p>控制什么时候总结、总结多长，以及长总结何时允许触发。</p>
+            <p>控制什么时候总结、总结多长，以及长总结由哪些规则参与触发。</p>
           </div>
           ${summaryBehaviorCards}
-          <div class="stx-memory-chat-strategy-summary-subsection">
-            <div class="stx-memory-chat-strategy-summary-subsection-head">长总结触发条件</div>
+          <div class="stx-memory-chat-ops-summary-subsection">
+            <div class="stx-memory-chat-ops-summary-subsection-head">触发规则来源（注册表）</div>
             ${triggerMarkup}
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-summary-section">
-          <div class="stx-memory-chat-strategy-summary-section-head">
+        <div class="stx-memory-chat-ops-summary-section">
+          <div class="stx-memory-chat-ops-summary-section-head">
+            <h4>自动总结触发器</h4>
+            <p>把“楼层阈值触发”和“提前触发”分开配置，优先保证节奏稳定，再让关键变化提前触发长总结。</p>
+          </div>
+          ${autoSummaryCards}
+        </div>
+        <div class="stx-memory-chat-ops-summary-section">
+          <div class="stx-memory-chat-ops-summary-section-head">
             <h4>记录重点</h4>
             <p>决定保留事实、关系、世界、剧情还是情绪 / 工具结果。</p>
           </div>
           ${recordFocusMarkup}
         </div>
-        <div class="stx-memory-chat-strategy-summary-section">
-          <div class="stx-memory-chat-strategy-summary-section-head">
+        <div class="stx-memory-chat-ops-summary-section">
+          <div class="stx-memory-chat-ops-summary-section-head">
             <h4>高级设置</h4>
             <p>处理间隔、回看范围和重处理行为都收在这里，默认折叠前的内容尽量保持紧凑。</p>
           </div>
@@ -695,13 +908,23 @@ function fillSummarySettingsForm(
     setCheckboxValue(overlay, EDITOR_IDS.summaryFocusPlotId, summary.contentPreference.recordFocus.includes('plot'));
     setCheckboxValue(overlay, EDITOR_IDS.summaryFocusEmotionId, summary.contentPreference.recordFocus.includes('emotion'));
     setCheckboxValue(overlay, EDITOR_IDS.summaryFocusToolResultId, summary.contentPreference.recordFocus.includes('tool_result'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerSceneEndId, summary.summaryBehavior.longSummaryTrigger.includes('scene_end'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerCombatEndId, summary.summaryBehavior.longSummaryTrigger.includes('combat_end'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerPlotAdvanceId, summary.summaryBehavior.longSummaryTrigger.includes('plot_advance'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerRelationshipShiftId, summary.summaryBehavior.longSummaryTrigger.includes('relationship_shift'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerWorldChangeId, summary.summaryBehavior.longSummaryTrigger.includes('world_change'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerStructureRepairId, summary.summaryBehavior.longSummaryTrigger.includes('structure_repair'));
-    setCheckboxValue(overlay, EDITOR_IDS.summaryTriggerArchiveFinalizeId, summary.summaryBehavior.longSummaryTrigger.includes('archive_finalize'));
+    const selectedTriggers = new Set(summary.summaryBehavior.longSummaryTrigger);
+    listSummaryTriggerRulesForPanel().forEach((rule: SummaryTriggerRule): void => {
+        setCheckboxValue(overlay, buildSummaryTriggerControlId(rule.id), selectedTriggers.has(rule.id));
+    });
+    setCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnabledId, summary.autoSummary.enabled);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoRoleplayThresholdId, summary.autoSummary.roleplayTurnThreshold);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoChatThresholdId, summary.autoSummary.chatTurnThreshold);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoStoryThresholdId, summary.autoSummary.storyTurnThreshold);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoMixedThresholdId, summary.autoSummary.mixedTurnThreshold);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoMinGapId, summary.autoSummary.minTurnsAfterLastSummary);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoCooldownTurnsId, summary.autoSummary.coolDownTurns);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnableTriggerRulesId, summary.autoSummary.enableTriggerRules);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnableSemanticId, summary.autoSummary.enableSemanticChangeTrigger);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnablePressureId, summary.autoSummary.enablePromptPressureTrigger);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoTriggerScoreId, summary.autoSummary.triggerRuleMinScore);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoSemanticScoreId, summary.autoSummary.semanticTriggerMinScore);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoPressureRatioId, summary.autoSummary.promptPressureTokenRatio);
     const sourceElement: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.summarySourceId}`) as HTMLElement | null;
     if (sourceElement) {
         sourceElement.textContent = formatSummarySourceLabel(
@@ -725,7 +948,7 @@ function renderSummarySettingsSection(overlay: HTMLElement, snapshot: ChatStrate
         return;
     }
 
-    const summaryHost: HTMLElement | null = overlay.querySelector('.stx-memory-chat-strategy-summary-settings-host') as HTMLElement | null;
+    const summaryHost: HTMLElement | null = overlay.querySelector('.stx-memory-chat-ops-summary-settings-host') as HTMLElement | null;
     if (!summaryHost) {
         return;
     }
@@ -783,6 +1006,72 @@ function formatLongSummaryCooldownSummary(cooldown: LongSummaryCooldownState): s
         bits.push(`窗口 ${cooldown.lastLongSummaryWindowHash.slice(0, 8)}`);
     }
     return bits.join(' · ');
+}
+
+/**
+ * 功能：按自动总结模式读取对应阈值，供调试面板展示。
+ * 参数：
+ *   snapshot：聊天策略快照。
+ *   mode：自动总结模式。
+ * 返回：该模式对应的楼层阈值。
+ */
+function resolveAutoSummaryThreshold(snapshot: ChatStrategySnapshot, mode: AutoSummaryDecisionSnapshot['mode']): number {
+    const settings = snapshot.effectiveSummarySettings.autoSummary;
+    if (mode === 'roleplay') {
+        return settings.roleplayTurnThreshold;
+    }
+    if (mode === 'chat') {
+        return settings.chatTurnThreshold;
+    }
+    if (mode === 'story') {
+        return settings.storyTurnThreshold;
+    }
+    return settings.mixedTurnThreshold;
+}
+
+/**
+ * 功能：构建自动总结判定调试对象，优先展示模式、楼层、阈值、命中项与最终结论。
+ * 参数：
+ *   snapshot：聊天策略快照。
+ * 返回：可直接写入调试 JSON 卡片的对象。
+ */
+function buildAutoSummaryDecisionDiagnostic(snapshot: ChatStrategySnapshot): Record<string, unknown> {
+    const decision = snapshot.lastAutoSummaryDecision;
+    const runtime = snapshot.autoSummaryRuntime;
+    const mode = decision?.mode ?? runtime.lastMode;
+    const threshold = decision?.threshold ?? resolveAutoSummaryThreshold(snapshot, mode);
+    return {
+        conclusion: decision
+            ? (decision.shouldRun ? 'allow_long' : 'block_long')
+            : 'no_decision_snapshot',
+        mode,
+        activeAssistantTurnCount: decision?.activeAssistantTurnCount ?? null,
+        turnsSinceLastSummary: decision?.turnsSinceLastSummary ?? null,
+        threshold,
+        matchedTriggerIds: decision?.matchedTriggerIds ?? [],
+        reasonCodes: decision?.reasonCodes ?? [],
+        semanticFlags: decision?.semanticFlags ?? [],
+        scores: decision?.scores ?? null,
+        promptPressureRatio: decision?.promptPressureRatio ?? null,
+        generatedAt: decision?.generatedAt ?? 0,
+    };
+}
+
+/**
+ * 功能：构建自动总结运行态调试对象，展示上次成功长总结后的持久化信息。
+ * 参数：
+ *   snapshot：聊天策略快照。
+ * 返回：可直接写入调试 JSON 卡片的对象。
+ */
+function buildAutoSummaryRuntimeDiagnostic(snapshot: ChatStrategySnapshot): Record<string, unknown> {
+    const runtime = snapshot.autoSummaryRuntime;
+    return {
+        lastSummaryTurnCount: runtime.lastSummaryTurnCount,
+        lastSummaryAt: runtime.lastSummaryAt,
+        lastSummaryAtLabel: runtime.lastSummaryAt > 0 ? formatRelativeTime(runtime.lastSummaryAt) : '未记录',
+        lastMode: runtime.lastMode,
+        lastTriggerReasonCodes: runtime.lastTriggerReasonCodes,
+    };
 }
 
 async function hasPersistedChatStrategyData(chatKey: string): Promise<boolean> {
@@ -868,6 +1157,8 @@ function buildEphemeralChatStrategySnapshot(chatKey: string): ChatStrategySnapsh
         postDecision: null,
         processingDecision: null,
         longSummaryCooldown: { ...DEFAULT_LONG_SUMMARY_COOLDOWN },
+        autoSummaryRuntime: { ...DEFAULT_AUTO_SUMMARY_RUNTIME_STATE },
+        lastAutoSummaryDecision: null,
         summarySettings: { ...DEFAULT_SUMMARY_SETTINGS },
         summarySettingsOverride: {},
         effectiveSummarySettings: {
@@ -951,7 +1242,7 @@ export async function openChatStrategyEditor(): Promise<void> {
     const dialog = openSharedDialog({
         id: EDITOR_IDS.overlayId,
         layout: 'stretch',
-        rootClassName: 'stx-memory-chat-strategy-overlay ui-widget',
+        rootClassName: 'stx-memory-chat-ops-overlay stx-memory-chat-ops-widget',
         chrome: false,
         closeOnBackdrop: true,
         closeOnEscape: true,
@@ -980,8 +1271,8 @@ function buildCompactPanelMarkup(): string {
     const selectMarkup: string = buildSharedSelectField({
         id: PANEL_IDS.chatSelectId,
         containerClassName: 'stx-shared-select-fluid stx-shared-select-inline',
-        selectClassName: 'stx-ui-input',
-        triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-input',
+        selectClassName: 'stx-memory-chat-ops-input',
+        triggerClassName: 'stx-memory-chat-ops-input-full stx-shared-select-trigger-input',
         triggerAttributes: {
             'data-tip': '切换要查看的聊天策略摘要。',
         },
@@ -998,7 +1289,7 @@ function buildCompactPanelMarkup(): string {
         id: PANEL_IDS.openBtnId,
         label: '打开全屏编辑器',
         iconClassName: 'fa-solid fa-expand',
-        className: 'stx-memory-chat-strategy-open',
+        className: 'stx-memory-chat-ops-open',
         attributes: {
             'data-tip': '打开全屏聊天策略编辑器。',
         },
@@ -1013,56 +1304,56 @@ function buildCompactPanelMarkup(): string {
         },
     });
     return `
-      <div id="${PANEL_IDS.rootId}" class="stx-ui-item stx-ui-item-stack stx-memory-chat-strategy-card">
-        <div class="stx-ui-divider">
+      <div id="${PANEL_IDS.rootId}" class="stx-memory-chat-ops-card stx-memory-chat-ops-card-shell">
+        <div class="stx-memory-chat-ops-card-divider">
           <i class="fa-solid fa-sliders"></i>
           <span>聊天策略画像</span>
-          <div class="stx-ui-divider-line"></div>
+          <div class="stx-memory-chat-ops-card-divider-line"></div>
         </div>
-        <div class="stx-memory-chat-strategy-card-head">
-          <div class="stx-ui-item-main">
-            <div class="stx-ui-item-title">按聊天查看与编辑记忆策略</div>
-            <div class="stx-ui-item-desc">设置页只保留紧凑摘要，详细编辑、诊断和多聊天切换都在全屏编辑器中完成。</div>
+        <div class="stx-memory-chat-ops-card-head">
+          <div class="stx-memory-chat-ops-card-main">
+            <div class="stx-memory-chat-ops-card-title">按聊天查看与编辑记忆策略</div>
+            <div class="stx-memory-chat-ops-card-desc">设置页只保留紧凑摘要，详细编辑、诊断和多聊天切换都在全屏编辑器中完成。</div>
           </div>
-          <div class="stx-memory-chat-strategy-card-actions">
+          <div class="stx-memory-chat-ops-card-actions">
             ${refreshButtonMarkup}
             ${openButtonMarkup}
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-card-toolbar">
-          <label class="stx-memory-chat-strategy-card-field">
-            <span class="stx-memory-chat-strategy-card-label">聊天</span>
+        <div class="stx-memory-chat-ops-card-toolbar">
+          <label class="stx-memory-chat-ops-card-field">
+            <span class="stx-memory-chat-ops-card-label">聊天</span>
             ${selectMarkup}
           </label>
         </div>
-        <div class="stx-memory-chat-strategy-summary-grid">
-          <div class="stx-memory-chat-strategy-summary-card">
-            <span class="stx-memory-chat-strategy-summary-label">当前聊天</span>
-            <strong id="${PANEL_IDS.summaryNameId}" class="stx-memory-chat-strategy-summary-value">未选择</strong>
+        <div class="stx-memory-chat-ops-summary-grid">
+          <div class="stx-memory-chat-ops-summary-card">
+            <span class="stx-memory-chat-ops-summary-label">当前聊天</span>
+            <strong id="${PANEL_IDS.summaryNameId}" class="stx-memory-chat-ops-summary-value">未选择</strong>
           </div>
-          <div class="stx-memory-chat-strategy-summary-card">
-            <span class="stx-memory-chat-strategy-summary-label">当前意图</span>
-            <strong id="${PANEL_IDS.summaryIntentId}" class="stx-memory-chat-strategy-summary-value">暂无</strong>
+          <div class="stx-memory-chat-ops-summary-card">
+            <span class="stx-memory-chat-ops-summary-label">当前意图</span>
+            <strong id="${PANEL_IDS.summaryIntentId}" class="stx-memory-chat-ops-summary-value">暂无</strong>
           </div>
-          <div class="stx-memory-chat-strategy-summary-card">
-            <span class="stx-memory-chat-strategy-summary-label">画像概览</span>
-            <strong id="${PANEL_IDS.summaryProfileId}" class="stx-memory-chat-strategy-summary-value">等待加载</strong>
+          <div class="stx-memory-chat-ops-summary-card">
+            <span class="stx-memory-chat-ops-summary-label">画像概览</span>
+            <strong id="${PANEL_IDS.summaryProfileId}" class="stx-memory-chat-ops-summary-value">等待加载</strong>
           </div>
-          <div class="stx-memory-chat-strategy-summary-card">
-            <span class="stx-memory-chat-strategy-summary-label">生命周期</span>
-            <strong id="${PANEL_IDS.summaryLifecycleId}" class="stx-memory-chat-strategy-summary-value">new</strong>
+          <div class="stx-memory-chat-ops-summary-card">
+            <span class="stx-memory-chat-ops-summary-label">生命周期</span>
+            <strong id="${PANEL_IDS.summaryLifecycleId}" class="stx-memory-chat-ops-summary-value">new</strong>
           </div>
         </div>
-        <div id="${PANEL_IDS.summaryMaintenanceId}" class="stx-memory-chat-strategy-summary-maintenance" style="display: none;">
-          <span id="${PANEL_IDS.summaryMaintenanceTextId}" class="stx-memory-chat-strategy-summary-maintenance-text">暂无维护异常</span>
-          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-strategy-summary-maintenance-action">
+        <div id="${PANEL_IDS.summaryMaintenanceId}" class="stx-memory-chat-ops-summary-maintenance" style="display: none;">
+          <span id="${PANEL_IDS.summaryMaintenanceTextId}" class="stx-memory-chat-ops-summary-maintenance-text">暂无维护异常</span>
+          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-ops-summary-maintenance-action">
             去维护
           </button>
         </div>
-        <div class="stx-memory-chat-strategy-sections">
-          <span class="stx-memory-chat-strategy-card-label">最近注入区段</span>
-          <div id="${PANEL_IDS.summarySectionsId}" class="stx-memory-chat-strategy-pill-wrap">
-            <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+        <div class="stx-memory-chat-ops-sections">
+          <span class="stx-memory-chat-ops-card-label">最近注入区段</span>
+          <div id="${PANEL_IDS.summarySectionsId}" class="stx-memory-chat-ops-pill-wrap">
+            <span class="stx-memory-chat-ops-empty">暂无注入记录</span>
           </div>
         </div>
       </div>
@@ -1077,7 +1368,7 @@ function buildEditorMarkup(): string {
     const searchInputMarkup: string = buildSharedInputField({
         id: EDITOR_IDS.chatSearchId,
         type: 'search',
-        className: 'stx-memory-chat-strategy-search',
+        className: 'stx-memory-chat-ops-search',
         attributes: {
             placeholder: '搜索聊天名或 chatKey',
             'data-tip': '按聊天名或 chatKey 过滤左侧聊天列表。',
@@ -1107,75 +1398,75 @@ function buildEditorMarkup(): string {
         iconClassName: 'fa-solid fa-floppy-disk',
     });
     return `
-      <div class="stx-memory-chat-strategy-editor">
-        <div class="stx-memory-chat-strategy-header">
-          <div class="stx-memory-chat-strategy-title-wrap">
-            <div class="stx-memory-chat-strategy-title">
+      <div class="stx-memory-chat-ops-editor">
+        <div class="stx-memory-chat-ops-header">
+          <div class="stx-memory-chat-ops-title-wrap">
+            <div class="stx-memory-chat-ops-title">
               <i class="fa-solid fa-sliders"></i>
               <span>聊天策略画像编辑器</span>
             </div>
-            <div class="stx-memory-chat-strategy-subtitle">按聊天编辑记忆画像、自适应阈值入口与诊断信息，适配桌面和手机端。</div>
+            <div class="stx-memory-chat-ops-subtitle">按聊天编辑记忆画像、自适应阈值入口与诊断信息，适配桌面和手机端。</div>
           </div>
-          <div class="stx-memory-chat-strategy-header-actions">
+          <div class="stx-memory-chat-ops-header-actions">
             ${mobileToggleMarkup}
             ${refreshButtonMarkup}
             ${recomputeButtonMarkup}
             ${applyButtonMarkup}
-            <button id="${EDITOR_IDS.closeBtnId}" type="button" class="stx-memory-chat-strategy-close" aria-label="关闭聊天策略编辑器">
+            <button id="${EDITOR_IDS.closeBtnId}" type="button" class="stx-memory-chat-ops-close" aria-label="关闭聊天策略编辑器">
               <i class="fa-solid fa-xmark"></i>
             </button>
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-body">
-          <aside class="stx-memory-chat-strategy-sidebar">
-            <div class="stx-memory-chat-strategy-sidebar-head">
-              <span class="stx-memory-chat-strategy-sidebar-title">聊天列表</span>
+        <div class="stx-memory-chat-ops-body">
+          <aside class="stx-memory-chat-ops-sidebar">
+            <div class="stx-memory-chat-ops-sidebar-head">
+              <span class="stx-memory-chat-ops-sidebar-title">聊天列表</span>
               ${searchInputMarkup}
             </div>
-            <div id="${EDITOR_IDS.chatListId}" class="stx-memory-chat-strategy-chat-list">
-              <div class="stx-memory-chat-strategy-empty">正在加载聊天列表...</div>
+            <div id="${EDITOR_IDS.chatListId}" class="stx-memory-chat-ops-chat-list stx-memory-chat-ops-chat-list-shell">
+              <div class="stx-memory-chat-ops-empty">正在加载聊天列表...</div>
             </div>
           </aside>
-          <div class="stx-memory-chat-strategy-sidebar-scrim" aria-hidden="true"></div>
-          <main class="stx-memory-chat-strategy-main">
-            <section class="stx-memory-chat-strategy-hero">
-              <div class="stx-memory-chat-strategy-hero-main">
-                <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-strategy-hero-title">未选择聊天</div>
-                <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-strategy-hero-meta">等待加载聊天画像</div>
-                                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-strategy-hero-meta">预设来源等待加载</div>
+          <div class="stx-memory-chat-ops-sidebar-scrim" aria-hidden="true"></div>
+          <main class="stx-memory-chat-ops-main">
+            <section class="stx-memory-chat-ops-hero">
+              <div class="stx-memory-chat-ops-hero-main">
+                <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-ops-hero-title">未选择聊天</div>
+                <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-ops-hero-meta">等待加载聊天画像</div>
+                                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-ops-hero-meta">预设来源等待加载</div>
               </div>
-              <div class="stx-memory-chat-strategy-hero-side">
-                <span class="stx-memory-chat-strategy-hero-label">当前意图</span>
-                <strong id="${EDITOR_IDS.currentIntentId}" class="stx-memory-chat-strategy-hero-intent">暂无</strong>
+              <div class="stx-memory-chat-ops-hero-side">
+                <span class="stx-memory-chat-ops-hero-label">当前意图</span>
+                <strong id="${EDITOR_IDS.currentIntentId}" class="stx-memory-chat-ops-hero-intent">暂无</strong>
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
                   <h3>最近注入区段与场景预设</h3>
                   <p>左边看最近一次注入重点，右边直接切换当前聊天的场景预设。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-top-inline-grid">
-                <article class="stx-memory-chat-strategy-inline-card">
-                  <div class="stx-memory-chat-strategy-inline-card-head">
+              <div class="stx-memory-chat-ops-top-inline-grid">
+                <article class="stx-memory-chat-ops-inline-card">
+                  <div class="stx-memory-chat-ops-inline-card-head">
                     <h4>最近注入区段</h4>
                     <p>快速确认最近一次上下文注入偏向哪些内容。</p>
                   </div>
-                  <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-strategy-pill-wrap">
-                    <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+                  <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-ops-pill-wrap">
+                    <span class="stx-memory-chat-ops-empty">暂无注入记录</span>
                   </div>
                 </article>
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
                   <h3>基础画像</h3>
                   <p>这里决定该聊天的基础记忆风格和整体强度。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-form-grid">
+              <div class="stx-memory-chat-ops-form-grid">
                 ${buildEditorSelectField(EDITOR_IDS.chatTypeId, '聊天类型', '切换该聊天的类型画像。', [
                     { value: 'solo', label: '单人' },
                     { value: 'group', label: '群聊' },
@@ -1195,14 +1486,14 @@ function buildEditorMarkup(): string {
                 ])}
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
                   <h3>抽取与摘要</h3>
                   <p>控制事实提取、关系抽取和摘要形态。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-form-grid">
+              <div class="stx-memory-chat-ops-form-grid">
                 ${buildEditorSelectField(EDITOR_IDS.extractStrategyId, '抽取策略', '控制事实、关系与世界状态的抽取范围。', [
                     { value: 'facts_only', label: '只提事实' },
                     { value: 'facts_relations', label: '事实 + 关系' },
@@ -1219,27 +1510,27 @@ function buildEditorMarkup(): string {
                 ])}
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
                   <h3>向量与保留</h3>
                   <p>为高信息密度聊天调优向量阈值与数据保留策略。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-toggle-wrap">
+              <div class="stx-memory-chat-ops-toggle-wrap">
                 ${buildSharedCheckboxCard({
                     id: EDITOR_IDS.vectorEnabledId,
                     title: '启用向量检索',
                     description: '关闭后，该聊天将尽量走轻量记忆路径。',
                     checkedLabel: '开启',
                     uncheckedLabel: '关闭',
-                    containerClassName: 'stx-memory-chat-strategy-toggle',
+                    containerClassName: 'stx-memory-chat-ops-toggle',
                     inputAttributes: {
                         'data-tip': '控制当前聊天是否启用向量索引与检索。',
                     },
                 })}
               </div>
-              <div class="stx-memory-chat-strategy-form-grid">
+              <div class="stx-memory-chat-ops-form-grid">
                 ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '记忆提炼阈值', '达到该长度后才更积极地进入记忆卡提炼。', 'number', '50', '4000', '10')}
                 ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '重排阈值', '候选数量达到该值后再触发 rerank。', 'number', '1', '50', '1')}
                 ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, 'Facts 启用阈值', 'facts 数量达到该值后优先进入向量检索阶段。', 'number', '1', '5000', '1')}
@@ -1251,82 +1542,84 @@ function buildEditorMarkup(): string {
                 ${buildEditorInputField(EDITOR_IDS.keepEventCountId, '保留事件数', '控制事件记录的保留数量上限。', 'number', '50', '5000', '50')}
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head" data-tip="直观展示当前聊天的整体健康度，包含各项指标明细、向量引擎当前的运行模式，以及系统的维护建议。">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head" data-tip="直观展示当前聊天的整体健康度，包含各项指标明细、向量引擎当前的运行模式，以及系统的维护建议。">
                 <div>
                   <h3>记忆质量与引擎状态</h3>
                   <p>查看当前聊天的质量评分、各项核心能力表现以及系统维护指引。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-quality-grid">
-                <article class="stx-memory-chat-strategy-quality-card is-score" data-tip="结合聊天活跃度与记忆鲜活度得出的综合体检分数，随时了解该聊天是否“健康”。">
-                  <span class="stx-memory-chat-strategy-quality-label">记忆综合评分</span>
-                  <div class="stx-memory-chat-strategy-quality-score-wrap">
-                    <strong id="${EDITOR_IDS.qualityScoreId}" class="stx-memory-chat-strategy-quality-score">--</strong>
-                    <span id="${EDITOR_IDS.qualityLevelId}" class="stx-memory-chat-strategy-quality-level">--</span>
+              <div class="stx-memory-chat-ops-quality-grid">
+                <article class="stx-memory-chat-ops-quality-card is-score" data-tip="结合聊天活跃度与记忆鲜活度得出的综合体检分数，随时了解该聊天是否“健康”。">
+                  <span class="stx-memory-chat-ops-quality-label">记忆综合评分</span>
+                  <div class="stx-memory-chat-ops-quality-score-wrap">
+                    <strong id="${EDITOR_IDS.qualityScoreId}" class="stx-memory-chat-ops-quality-score">--</strong>
+                    <span id="${EDITOR_IDS.qualityLevelId}" class="stx-memory-chat-ops-quality-level">--</span>
                   </div>
-                  <div id="${EDITOR_IDS.qualityReasonsId}" class="stx-memory-chat-strategy-pill-wrap" style="margin-top: 8px;">
-                    <span class="stx-memory-chat-strategy-empty">暂无状态说明</span>
-                  </div>
-                </article>
-                <article class="stx-memory-chat-strategy-quality-card" data-tip="展示各维度的得分情况。满管表示该维度表现优异，缩水则代表存在数据稀疏或老化。">
-                  <span class="stx-memory-chat-strategy-quality-label">各维度表现明细</span>
-                  <div id="${EDITOR_IDS.qualityDimensionsId}" class="stx-memory-chat-strategy-quality-dimensions">
-                    <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                  <div id="${EDITOR_IDS.qualityReasonsId}" class="stx-memory-chat-ops-pill-wrap" style="margin-top: 8px;">
+                    <span class="stx-memory-chat-ops-empty">暂无状态说明</span>
                   </div>
                 </article>
-                <article class="stx-memory-chat-strategy-quality-card" data-tip="展示向量库在该聊天下的激活深度与数据量。">
-                  <span class="stx-memory-chat-strategy-quality-label">向量引擎运转状态</span>
-                  <strong id="${EDITOR_IDS.qualityVectorModeId}" class="stx-memory-chat-strategy-quality-meta" style="color: var(--stx-memory-info);">--</strong>
-                  <div class="stx-memory-chat-strategy-quality-stats">
-                    <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
-                    <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                <article class="stx-memory-chat-ops-quality-card" data-tip="展示各维度的得分情况。满管表示该维度表现优异，缩水则代表存在数据稀疏或老化。">
+                  <span class="stx-memory-chat-ops-quality-label">各维度表现明细</span>
+                  <div id="${EDITOR_IDS.qualityDimensionsId}" class="stx-memory-chat-ops-quality-dimensions">
+                    <span class="stx-memory-chat-ops-empty">等待加载...</span>
                   </div>
-                  <button type="button" class="menu_button" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
+                </article>
+                <article class="stx-memory-chat-ops-quality-card" data-tip="展示向量库在该聊天下的激活深度与数据量。">
+                  <span class="stx-memory-chat-ops-quality-label">向量引擎运转状态</span>
+                  <strong id="${EDITOR_IDS.qualityVectorModeId}" class="stx-memory-chat-ops-quality-meta" style="color: var(--stx-memory-info);">--</strong>
+                  <div class="stx-memory-chat-ops-quality-stats">
+                    <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-ops-quality-subtext">--</div>
+                    <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-ops-quality-subtext">--</div>
+                  </div>
+                  <button type="button" class="stx-memory-chat-ops-vector-btn" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
                     <i class="fa-solid fa-vector-square"></i> 查看向量明细
                   </button>
                 </article>
-                <article class="stx-memory-chat-strategy-quality-card" data-tip="展示主链最近一次真实执行证据：入口、append、trusted write、recall 与 prompt 注入。">
-                  <span class="stx-memory-chat-strategy-quality-label">主链执行证据</span>
-                  <div id="${EDITOR_IDS.qualityTraceEvidenceId}" class="stx-memory-chat-strategy-quality-list">
-                    <span class="stx-memory-chat-strategy-empty">等待主链执行记录</span>
+                <article class="stx-memory-chat-ops-quality-card" data-tip="展示主链最近一次真实执行证据：入口、append、trusted write、recall 与 prompt 注入。">
+                  <span class="stx-memory-chat-ops-quality-label">主链执行证据</span>
+                  <div id="${EDITOR_IDS.qualityTraceEvidenceId}" class="stx-memory-chat-ops-quality-list">
+                    <span class="stx-memory-chat-ops-empty">等待主链执行记录</span>
                   </div>
                 </article>
-                <article class="stx-memory-chat-strategy-quality-card" data-tip="系统根据数据表现自动生成的保养建议。如果这里空空如也，说明一切正常。">
-                  <span class="stx-memory-chat-strategy-quality-label">系统维护与保养建议</span>
-                  <div id="${EDITOR_IDS.qualityAdviceId}" class="stx-memory-chat-strategy-quality-list">
-                    <span class="stx-memory-chat-strategy-empty">暂无建议，继续保持</span>
+                <article class="stx-memory-chat-ops-quality-card" data-tip="系统根据数据表现自动生成的保养建议。如果这里空空如也，说明一切正常。">
+                  <span class="stx-memory-chat-ops-quality-label">系统维护与保养建议</span>
+                  <div id="${EDITOR_IDS.qualityAdviceId}" class="stx-memory-chat-ops-quality-list">
+                    <span class="stx-memory-chat-ops-empty">暂无建议，继续保持</span>
                   </div>
                 </article>
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head" data-tip="面板展示了当前聊天在实际运行中的具体策略参数。这里的数据是系统融合了默认预设、全局覆盖和当前聊天自定义设置后最终生效的结果，主要用来帮你诊断配置有没有如你希望的那样工作。">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head" data-tip="面板展示了当前聊天在实际运行中的具体策略参数。这里的数据是系统融合了默认预设、全局覆盖和当前聊天自定义设置后最终生效的结果，主要用来帮你诊断配置有没有如你希望的那样工作。">
                 <div>
                   <h3>底层运行诊断面板</h3>
                   <p>监控系统如何处理自动策略与人工覆盖的合并效果，以及近期调参指标。</p>
                 </div>
               </div>
-              <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-strategy-diagnostic-group" open>
+              <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-ops-diagnostic-group" open>
                 <summary>
                   <span>基础诊断</span>
                   <small>先看这组：本轮怎么注入、最终怎么生效、生成前后 gate 如何决策。</small>
                 </summary>
-                <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-basic">
+                <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-ops-diagnostic-grid stx-memory-chat-ops-diagnostic-grid-basic">
                   ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '结合生效方案', '这里显示的是系统当下正在使用的最终规则。当你觉得某个功能（比如抽取或者向量激活）没有按你的设置生效时，可以先来这里确认一下最终混合出的参数对不对。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最新执行决策', '这代表了 AI 最近一次回答时，底层都捞取了什么记忆。你能在这里看到是不是漏找了关键设定，或者是否多塞了无关紧要的记忆进去。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', 'AI 生成前系统做的判断：比如它有没有打算去搜索向量库？分配了多少预算给额外上下文？这有助于你诊断系统在发问前是不是已经定错了搜索方向。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.processingDecisionBlockId, '处理等级决策', '本轮最终采用的不处理 / 轻处理 / 中处理 / 重处理决定。这里会把短总结、长总结、抽取范围和冷却命中一起展示出来。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.longSummaryCooldownBlockId, '长总结冷却', '这里显示最近一次长总结和重处理的时间、命中的窗口哈希，以及为什么当前轮次会降级或跳过。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.autoSummaryDecisionBlockId, '自动总结判定', '展示本轮自动长总结判定：当前模式、楼层阈值、命中 trigger、分数与最终结论。')}
+                  ${buildJsonCardMarkup(EDITOR_IDS.autoSummaryRuntimeBlockId, '自动总结运行态', '展示自动总结运行态：上次长总结楼层、时间、模式与触发原因码。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate 输入', '生成后 gate 只作为底层输入快照，不再代表最终执行结果。')}
                 </div>
               </details>
-              <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
+              <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-ops-diagnostic-group">
                 <summary>
                   <span>高级诊断</span>
                   <small>深入定位时再展开：自动推断、人工覆盖与上下文动态指标。</small>
                 </summary>
-                <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-advanced">
+                <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-ops-diagnostic-grid stx-memory-chat-ops-diagnostic-grid-advanced">
                   ${buildJsonCardMarkup(EDITOR_IDS.autoBlockId, '系统自动推测', '这里指的是系统在没有任何干预下，默认认为当前聊天应该用什么策略。你可以对比一下它和“结合生效方案”的差异。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.overrideBlockId, '人工锁定设置', '显示你为了这个聊天单独做了哪些参数覆盖。只有在这里看到的值，才代表了你真正成功锁定的个性化配置。')}
                   ${buildJsonCardMarkup(EDITOR_IDS.metricsBlockId, '上下文动态指标', '这部分记录了聊天过程中各项活动的频次，比如总结了多少次、抽取了多少事实等。数字变化太快或太慢都能帮你决定要不要去调上面的阈值。')}
@@ -1348,8 +1641,8 @@ function buildCompactPanelMarkupV2(): string {
     const selectMarkup: string = buildSharedSelectField({
         id: PANEL_IDS.chatSelectId,
         containerClassName: 'stx-shared-select-fluid stx-shared-select-inline',
-        selectClassName: 'stx-ui-input',
-        triggerClassName: 'stx-ui-input-full stx-shared-select-trigger-input',
+        selectClassName: 'stx-memory-chat-ops-input',
+        triggerClassName: 'stx-memory-chat-ops-input-full stx-shared-select-trigger-input',
         triggerAttributes: {
             'data-tip': '切换要查看的聊天策略总览。',
         },
@@ -1366,7 +1659,7 @@ function buildCompactPanelMarkupV2(): string {
         id: PANEL_IDS.openBtnId,
         label: '打开编辑器',
         iconClassName: 'fa-solid fa-expand',
-        className: 'stx-memory-chat-strategy-open',
+        className: 'stx-memory-chat-ops-open',
         attributes: {
             'data-tip': '打开全屏聊天策略画像编辑器。',
         },
@@ -1381,60 +1674,60 @@ function buildCompactPanelMarkupV2(): string {
         },
     });
     return `
-      <div id="${PANEL_IDS.rootId}" class="stx-ui-item stx-ui-item-stack stx-memory-chat-strategy-card">
-        <div class="stx-ui-divider">
+      <div id="${PANEL_IDS.rootId}" class="stx-memory-chat-ops-card stx-memory-chat-ops-card-shell">
+        <div class="stx-memory-chat-ops-card-divider">
           <i class="fa-solid fa-sliders"></i>
           <span>聊天策略画像</span>
-          <div class="stx-ui-divider-line"></div>
+          <div class="stx-memory-chat-ops-card-divider-line"></div>
         </div>
-        <div class="stx-memory-chat-strategy-card-head">
-          <div class="stx-ui-item-main">
-            <div class="stx-ui-item-title">当前聊天总览</div>
-            <div class="stx-ui-item-desc">直接看角色、世界、关系和提醒，不用先理解专业参数。</div>
+        <div class="stx-memory-chat-ops-card-head">
+          <div class="stx-memory-chat-ops-card-main">
+            <div class="stx-memory-chat-ops-card-title">当前聊天总览</div>
+            <div class="stx-memory-chat-ops-card-desc">直接看角色、世界、关系和提醒，不用先理解专业参数。</div>
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-card-toolbar">
-          <label class="stx-memory-chat-strategy-card-field">
-            <span class="stx-memory-chat-strategy-card-label">聊天</span>
+        <div class="stx-memory-chat-ops-card-toolbar">
+          <label class="stx-memory-chat-ops-card-field">
+            <span class="stx-memory-chat-ops-card-label">聊天</span>
             ${selectMarkup}
           </label>
-          <div class="stx-memory-chat-strategy-card-actions">
+          <div class="stx-memory-chat-ops-card-actions">
             ${refreshButtonMarkup}
             ${openButtonMarkup}
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-dashboard-hero">
-          <div class="stx-memory-chat-strategy-dashboard-copy">
-            <strong id="${PANEL_IDS.summaryNameId}" class="stx-memory-chat-strategy-dashboard-title">未选择聊天</strong>
-            <div id="${PANEL_IDS.summaryMetaId}" class="stx-memory-chat-strategy-dashboard-meta">等待加载当前聊天状态</div>
+        <div class="stx-memory-chat-ops-dashboard-hero">
+          <div class="stx-memory-chat-ops-dashboard-copy">
+            <strong id="${PANEL_IDS.summaryNameId}" class="stx-memory-chat-ops-dashboard-title">未选择聊天</strong>
+            <div id="${PANEL_IDS.summaryMetaId}" class="stx-memory-chat-ops-dashboard-meta">等待加载当前聊天状态</div>
           </div>
-          <div class="stx-memory-chat-strategy-dashboard-intent">
-            <span class="stx-memory-chat-strategy-summary-label">当前氛围</span>
-            <strong id="${PANEL_IDS.summaryIntentId}" class="stx-memory-chat-strategy-dashboard-intent-value">暂无</strong>
+          <div class="stx-memory-chat-ops-dashboard-intent">
+            <span class="stx-memory-chat-ops-summary-label">当前氛围</span>
+            <strong id="${PANEL_IDS.summaryIntentId}" class="stx-memory-chat-ops-dashboard-intent-value">暂无</strong>
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-dashboard-grid">
-          <article id="${PANEL_IDS.summaryRoleId}" class="stx-memory-chat-strategy-dashboard-card">
-            <span class="stx-memory-chat-strategy-empty">等待加载角色状态</span>
+        <div class="stx-memory-chat-ops-dashboard-grid">
+          <article id="${PANEL_IDS.summaryRoleId}" class="stx-memory-chat-ops-dashboard-card" data-tone="accent">
+            <span class="stx-memory-chat-ops-empty">等待加载角色状态</span>
           </article>
-          <article id="${PANEL_IDS.summaryWorldId}" class="stx-memory-chat-strategy-dashboard-card">
-            <span class="stx-memory-chat-strategy-empty">等待加载世界情况</span>
+          <article id="${PANEL_IDS.summaryWorldId}" class="stx-memory-chat-ops-dashboard-card">
+            <span class="stx-memory-chat-ops-empty">等待加载世界情况</span>
           </article>
-          <article id="${PANEL_IDS.summaryRelationId}" class="stx-memory-chat-strategy-dashboard-card">
-            <span class="stx-memory-chat-strategy-empty">等待加载关系变化</span>
+          <article id="${PANEL_IDS.summaryRelationId}" class="stx-memory-chat-ops-dashboard-card" data-tone="soft">
+            <span class="stx-memory-chat-ops-empty">等待加载关系变化</span>
           </article>
-          <article id="${PANEL_IDS.summaryReminderId}" class="stx-memory-chat-strategy-dashboard-card" data-tone="soft">
-            <span class="stx-memory-chat-strategy-empty">等待加载系统提醒</span>
+          <article id="${PANEL_IDS.summaryReminderId}" class="stx-memory-chat-ops-dashboard-card" data-tone="soft">
+            <span class="stx-memory-chat-ops-empty">等待加载系统提醒</span>
           </article>
         </div>
-        <div class="stx-memory-chat-strategy-dashboard-foot">
-          <div class="stx-memory-chat-strategy-dashboard-foot-copy">
-            <span class="stx-memory-chat-strategy-card-label">系统最近在关注</span>
-            <div id="${PANEL_IDS.summarySectionsId}" class="stx-memory-chat-strategy-pill-wrap">
-              <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
+        <div class="stx-memory-chat-ops-dashboard-foot">
+          <div class="stx-memory-chat-ops-dashboard-foot-copy">
+            <span class="stx-memory-chat-ops-card-label">系统最近在关注</span>
+            <div id="${PANEL_IDS.summarySectionsId}" class="stx-memory-chat-ops-pill-wrap">
+              <span class="stx-memory-chat-ops-empty">暂无注入记录</span>
             </div>
           </div>
-          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-strategy-summary-maintenance-action">
+          <button id="${PANEL_IDS.summaryMaintenanceActionId}" type="button" class="stx-memory-chat-ops-summary-maintenance-action">
             打开详细调整
           </button>
         </div>
@@ -1446,7 +1739,7 @@ function buildEditorMarkupV2(): string {
     const searchInputMarkup: string = buildSharedInputField({
         id: EDITOR_IDS.chatSearchId,
         type: 'search',
-        className: 'stx-memory-chat-strategy-search',
+        className: 'stx-memory-chat-ops-search',
         attributes: {
             placeholder: '搜索聊天名',
             'data-tip': '按聊天名搜索左侧聊天列表。',
@@ -1476,97 +1769,97 @@ function buildEditorMarkupV2(): string {
         iconClassName: 'fa-solid fa-floppy-disk',
     });
     return `
-      <div class="stx-memory-chat-strategy-editor">
-        <div class="stx-memory-chat-strategy-header">
-          <div class="stx-memory-chat-strategy-title-wrap">
-            <div class="stx-memory-chat-strategy-title">
+      <div class="stx-memory-chat-ops-editor">
+        <div class="stx-memory-chat-ops-header">
+          <div class="stx-memory-chat-ops-title-wrap">
+            <div class="stx-memory-chat-ops-title">
               <i class="fa-solid fa-sliders"></i>
-              <span>聊天策略画像编辑器</span>
+              <span>聊天作战台</span>
             </div>
-            <div class="stx-memory-chat-strategy-subtitle">以用户体验为主，默认先看聊天状态，再做少量高频调节；技术细节统一收进高级里。</div>
+            <div class="stx-memory-chat-ops-subtitle">先看当前战况，再调常用设置；详细记录收进下方折叠区。</div>
           </div>
-          <div class="stx-memory-chat-strategy-header-actions">
+          <div class="stx-memory-chat-ops-header-actions">
             ${mobileToggleMarkup}
             ${refreshButtonMarkup}
             ${recomputeButtonMarkup}
             ${applyButtonMarkup}
-            <button id="${EDITOR_IDS.closeBtnId}" type="button" class="stx-memory-chat-strategy-close" aria-label="关闭聊天策略画像编辑器">
+            <button id="${EDITOR_IDS.closeBtnId}" type="button" class="stx-memory-chat-ops-close" aria-label="关闭聊天作战台">
               <i class="fa-solid fa-xmark"></i>
             </button>
           </div>
         </div>
-        <div class="stx-memory-chat-strategy-body">
-          <aside class="stx-memory-chat-strategy-sidebar">
-            <div class="stx-memory-chat-strategy-sidebar-head">
-              <span class="stx-memory-chat-strategy-sidebar-title">聊天列表</span>
+        <div class="stx-memory-chat-ops-body">
+          <aside class="stx-memory-chat-ops-sidebar">
+            <div class="stx-memory-chat-ops-sidebar-head">
+              <span class="stx-memory-chat-ops-sidebar-title">聊天列表</span>
               ${searchInputMarkup}
             </div>
-            <div id="${EDITOR_IDS.chatListId}" class="stx-memory-chat-strategy-chat-list">
-              <div class="stx-memory-chat-strategy-empty">正在加载聊天列表...</div>
+            <div id="${EDITOR_IDS.chatListId}" class="stx-memory-chat-ops-chat-list stx-memory-chat-ops-chat-list-shell">
+              <div class="stx-memory-chat-ops-empty">正在加载聊天列表...</div>
             </div>
           </aside>
-          <div class="stx-memory-chat-strategy-sidebar-scrim" aria-hidden="true"></div>
-          <main class="stx-memory-chat-strategy-main">
-            <section class="stx-memory-chat-strategy-hero">
-              <div class="stx-memory-chat-strategy-hero-main">
-                <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-strategy-hero-title">未选择聊天</div>
-                <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-strategy-hero-meta">等待加载当前聊天状态</div>
-                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-strategy-hero-meta">等待加载系统工作方式</div>
+          <div class="stx-memory-chat-ops-sidebar-scrim" aria-hidden="true"></div>
+          <main class="stx-memory-chat-ops-main">
+            <section class="stx-memory-chat-ops-hero">
+              <div class="stx-memory-chat-ops-hero-main">
+                <div id="${EDITOR_IDS.currentChatNameId}" class="stx-memory-chat-ops-hero-title">未选择聊天</div>
+                <div id="${EDITOR_IDS.currentChatMetaId}" class="stx-memory-chat-ops-hero-meta">等待加载当前聊天状态</div>
+                <div id="${EDITOR_IDS.currentScopeId}" class="stx-memory-chat-ops-hero-meta">等待加载当前配置来源</div>
               </div>
-              <div class="stx-memory-chat-strategy-hero-side">
-                <span class="stx-memory-chat-strategy-hero-label">当前氛围</span>
-                <strong id="${EDITOR_IDS.currentIntentId}" class="stx-memory-chat-strategy-hero-intent">暂无</strong>
-              </div>
-            </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
-                <div>
-                  <h3>现在这段聊天是什么状态</h3>
-                  <p>直接看角色、世界、关系和提醒，先弄清楚系统目前看到了什么。</p>
-                </div>
-              </div>
-              <div class="stx-memory-chat-strategy-hero-pills">
-                <span class="stx-memory-chat-strategy-card-label">系统最近在关注</span>
-                <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-strategy-pill-wrap">
-                  <span class="stx-memory-chat-strategy-empty">暂无注入记录</span>
-                </div>
-              </div>
-              <div class="stx-memory-chat-strategy-dashboard-grid stx-memory-chat-strategy-dashboard-grid-editor">
-                <article id="${EDITOR_IDS.overviewRoleId}" class="stx-memory-chat-strategy-dashboard-card">
-                  <span class="stx-memory-chat-strategy-empty">等待加载角色状态</span>
-                </article>
-                <article id="${EDITOR_IDS.overviewWorldId}" class="stx-memory-chat-strategy-dashboard-card">
-                  <span class="stx-memory-chat-strategy-empty">等待加载世界情况</span>
-                </article>
-                <article id="${EDITOR_IDS.overviewRelationId}" class="stx-memory-chat-strategy-dashboard-card">
-                  <span class="stx-memory-chat-strategy-empty">等待加载关系变化</span>
-                </article>
-                <article id="${EDITOR_IDS.overviewReminderId}" class="stx-memory-chat-strategy-dashboard-card" data-tone="soft">
-                  <span class="stx-memory-chat-strategy-empty">等待加载系统提醒</span>
-                </article>
+              <div class="stx-memory-chat-ops-hero-side">
+                <span class="stx-memory-chat-ops-hero-label">当前战况</span>
+                <strong id="${EDITOR_IDS.currentIntentId}" class="stx-memory-chat-ops-hero-intent">暂无</strong>
               </div>
             </section>
-            <section class="stx-memory-chat-strategy-section">
-              <div class="stx-memory-chat-strategy-section-head">
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
-                  <h3>我想让它更偏向什么</h3>
-                  <p>这里只保留最常用的调整项，尽量避免让你一开始就掉进技术细节里。</p>
+                  <h3>当前状态总览</h3>
+                  <p>先看人物动向、场景进度和系统提醒，再决定要不要调设置。</p>
                 </div>
               </div>
-              <div class="stx-memory-chat-strategy-quick-grid">
-                <article class="stx-memory-chat-strategy-quick-card">
-                  <div class="stx-memory-chat-strategy-quick-card-head">
+              <div class="stx-memory-chat-ops-hero-pills">
+                <span class="stx-memory-chat-ops-card-label">系统最近在关注</span>
+                <div id="${EDITOR_IDS.sectionsWrapId}" class="stx-memory-chat-ops-pill-wrap">
+                  <span class="stx-memory-chat-ops-empty">暂无注入记录</span>
+                </div>
+              </div>
+              <div class="stx-memory-chat-ops-dashboard-grid stx-memory-chat-ops-dashboard-grid-editor">
+                <article id="${EDITOR_IDS.overviewRoleId}" class="stx-memory-chat-ops-dashboard-card" data-tone="accent">
+                  <span class="stx-memory-chat-ops-empty">等待加载角色状态</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewWorldId}" class="stx-memory-chat-ops-dashboard-card">
+                  <span class="stx-memory-chat-ops-empty">等待加载世界情况</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewReminderId}" class="stx-memory-chat-ops-dashboard-card" data-tone="soft">
+                  <span class="stx-memory-chat-ops-empty">等待加载系统提醒</span>
+                </article>
+                <article id="${EDITOR_IDS.overviewDecisionId}" class="stx-memory-chat-ops-dashboard-card" data-tone="soft">
+                  <span class="stx-memory-chat-ops-empty">等待加载本轮系统判断</span>
+                </article>
+              </div>
+            </section>
+            <section class="stx-memory-chat-ops-section">
+              <div class="stx-memory-chat-ops-section-head">
+                <div>
+                  <h3>快捷调整</h3>
+                  <p>这里只放高频设置，够用就好；细节项都在下方折叠区。</p>
+                </div>
+              </div>
+              <div class="stx-memory-chat-ops-quick-grid">
+                <article class="stx-memory-chat-ops-quick-card">
+                  <div class="stx-memory-chat-ops-quick-card-head">
                     <h4>AI 记忆总结</h4>
                     <p>四块紧凑设置，直接决定总结方式、时机和重点。</p>
                   </div>
-                  <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-strategy-summary-settings-host"></div>
+                  <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-ops-summary-settings-host"></div>
                 </article>
-                <article class="stx-memory-chat-strategy-quick-card">
-                  <div class="stx-memory-chat-strategy-quick-card-head">
-                    <h4>聊天整体感觉</h4>
-                    <p>决定它更像单聊、群聊，偏剧情还是偏说明。</p>
+                <article class="stx-memory-chat-ops-quick-card">
+                  <div class="stx-memory-chat-ops-quick-card-head">
+                    <h4>聊天风格</h4>
+                    <p>决定它更像单聊、群聊，偏剧情还是偏问答。</p>
                   </div>
-                  <div class="stx-memory-chat-strategy-control-grid">
+                  <div class="stx-memory-chat-ops-control-grid">
                     ${buildEditorSelectField(EDITOR_IDS.chatTypeId, '聊天类型', '切换当前聊天的整体类型。', [
                         { value: 'solo', label: '单人' },
                         { value: 'group', label: '群聊' },
@@ -1586,12 +1879,12 @@ function buildEditorMarkupV2(): string {
                     ])}
                   </div>
                 </article>
-                <article class="stx-memory-chat-strategy-quick-card">
-                  <div class="stx-memory-chat-strategy-quick-card-head">
-                    <h4>摘要和清理方式</h4>
-                    <p>决定它怎么总结这段聊天，以及聊天删除后怎么处理数据。</p>
+                <article class="stx-memory-chat-ops-quick-card">
+                  <div class="stx-memory-chat-ops-quick-card-head">
+                    <h4>清理与保留</h4>
+                    <p>决定它怎么整理摘要，以及聊天删除后怎么处理数据。</p>
                   </div>
-                  <div class="stx-memory-chat-strategy-control-grid">
+                  <div class="stx-memory-chat-ops-control-grid">
                     ${buildEditorSelectField(EDITOR_IDS.summaryStrategyId, '摘要倾向', '控制当前聊天的摘要组织方式。', [
                         { value: 'short', label: '短摘要' },
                         { value: 'layered', label: '分层摘要' },
@@ -1603,28 +1896,28 @@ function buildEditorMarkupV2(): string {
                     ])}
                   </div>
                 </article>
-                <article class="stx-memory-chat-strategy-quick-card">
-                  <div class="stx-memory-chat-strategy-quick-card-head">
-                    <h4>角色与世界记忆</h4>
-                    <p>控制是否联想更早的内容，以及是否跟踪多角色状态。</p>
+                <article class="stx-memory-chat-ops-quick-card">
+                  <div class="stx-memory-chat-ops-quick-card-head">
+                    <h4>联想与角色跟踪</h4>
+                    <p>控制是否联想更早内容，以及是否跟踪多个角色状态。</p>
                   </div>
-                  <div class="stx-memory-chat-strategy-control-stack">
+                  <div class="stx-memory-chat-ops-control-stack">
                     ${buildSharedCheckboxCard({
                         id: EDITOR_IDS.vectorEnabledId,
                         title: '联想更早的聊天内容',
                         description: '适合长线聊天；关闭后会更轻、更快。',
                         checkedLabel: '开启',
                         uncheckedLabel: '关闭',
-                        containerClassName: 'stx-memory-chat-strategy-toggle',
+                        containerClassName: 'stx-memory-chat-ops-toggle',
                     })}
-                    <div class="stx-memory-chat-strategy-control-grid">
+                    <div class="stx-memory-chat-ops-control-grid">
                       ${buildSharedCheckboxCard({
                           id: EDITOR_IDS.groupLaneEnabledId,
                           title: '跟踪多个角色状态',
                           description: '群聊时更容易记住每个角色的情绪和目标。',
                           checkedLabel: '开启',
                           uncheckedLabel: '关闭',
-                          containerClassName: 'stx-memory-chat-strategy-toggle',
+                          containerClassName: 'stx-memory-chat-ops-toggle',
                       })}
                       ${buildSharedCheckboxCard({
                           id: EDITOR_IDS.autoBootstrapSeedId,
@@ -1632,30 +1925,30 @@ function buildEditorMarkupV2(): string {
                           description: '新会话会优先补角色和世界的基础锚点。',
                           checkedLabel: '开启',
                           uncheckedLabel: '关闭',
-                          containerClassName: 'stx-memory-chat-strategy-toggle',
+                          containerClassName: 'stx-memory-chat-ops-toggle',
                       })}
                     </div>
                   </div>
                 </article>
               </div>
             </section>
-            <details id="${EDITOR_IDS.advancedSettingsId}" class="stx-memory-chat-strategy-advanced">
-              <summary class="stx-memory-chat-strategy-advanced-summary">
+            <details id="${EDITOR_IDS.advancedSettingsId}" class="stx-memory-chat-ops-advanced">
+              <summary class="stx-memory-chat-ops-advanced-summary">
                 <div>
-                  <h3>高级与诊断</h3>
-                  <p>详细阈值、维护动作和底层诊断都在这里，默认不打扰主流程。</p>
+                  <h3>深入设置与系统记录</h3>
+                  <p>详细阈值、维护动作和底层记录都在这里，默认收起。</p>
                 </div>
-                <span class="stx-memory-chat-strategy-pill">高级</span>
+                <span class="stx-memory-chat-ops-pill">展开</span>
               </summary>
-              <div class="stx-memory-chat-strategy-advanced-body">
-                <section class="stx-memory-chat-strategy-section">
-                  <div class="stx-memory-chat-strategy-section-head">
+              <div class="stx-memory-chat-ops-advanced-body">
+                <section class="stx-memory-chat-ops-section">
+                  <div class="stx-memory-chat-ops-section-head">
                     <div>
-                      <h3>系统怎么帮我记</h3>
-                      <p>调节摘要节奏、抽取范围、向量阈值和保留数量。</p>
+                      <h3>详细设置</h3>
+                      <p>这里可以细调抽取范围、联想阈值和保留数量。</p>
                     </div>
                   </div>
-                  <div class="stx-memory-chat-strategy-form-grid">
+                  <div class="stx-memory-chat-ops-form-grid">
                     ${buildEditorSelectField(EDITOR_IDS.extractStrategyId, '抽取范围', '控制事实、关系和世界状态的抽取范围。', [
                         { value: 'facts_only', label: '只提事实' },
                         { value: 'facts_relations', label: '事实 + 关系' },
@@ -1670,8 +1963,8 @@ function buildEditorMarkupV2(): string {
                     ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后开始联想', '达到这个数量后，会更积极调用长期记忆。', 'number', '1', '5000', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '记忆提炼阈值', '内容达到这个长度后更容易进入记忆卡提炼。', 'number', '50', '4000', '10')}
                     ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '候选多少条后精排', '结果越多时越需要二次筛选。', 'number', '1', '50', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, 'Facts 启动阈值', '事实数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, 'Summaries 启动阈值', '摘要数达到这个值后再优先走向量检索。', 'number', '1', '5000', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, '事实启动阈值', '事实数达到这个值后，才优先走长期记忆检索。', 'number', '1', '5000', '1')}
+                    ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, '摘要启动阈值', '摘要数达到这个值后，才优先走长期记忆检索。', 'number', '1', '5000', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorIdleDecayDaysId, '多久不命中就降温', '长期没命中的向量内容会逐渐降权。', 'number', '1', '365', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorLowPrecisionStrideId, '低精度时的降频步长', '控制向量搜索在低命中期的节奏。', 'number', '1', '30', '1')}
                     ${buildEditorInputField(EDITOR_IDS.keepSummaryCountId, '保留多少条摘要', '超过上限后会优先清理较旧摘要。', 'number', '10', '1000', '10')}
@@ -1679,129 +1972,137 @@ function buildEditorMarkupV2(): string {
                     ${buildEditorInputField(EDITOR_IDS.keepVectorDaysId, '向量保留天数', '长期记忆内容最多保留多久。', 'number', '1', '365', '1')}
                   </div>
                 </section>
-                <section class="stx-memory-chat-strategy-section">
-                  <div class="stx-memory-chat-strategy-section-head">
+                <section class="stx-memory-chat-ops-section">
+                  <div class="stx-memory-chat-ops-section-head">
                     <div>
-                      <h3>系统正在怎么帮我记</h3>
-                      <p>主要看健康度、向量状态和需要注意的系统建议。</p>
+                      <h3>系统状态</h3>
+                      <p>看记忆状态、长期记忆状态和系统建议。</p>
                     </div>
                   </div>
-                  <div class="stx-memory-chat-strategy-quality-grid">
-                    <article class="stx-memory-chat-strategy-quality-card is-score">
-                      <span class="stx-memory-chat-strategy-quality-label">当前记忆健康度</span>
-                      <div class="stx-memory-chat-strategy-quality-score-wrap">
-                        <strong id="${EDITOR_IDS.qualityScoreId}" class="stx-memory-chat-strategy-quality-score">--</strong>
-                        <span id="${EDITOR_IDS.qualityLevelId}" class="stx-memory-chat-strategy-quality-level">--</span>
+                  <div class="stx-memory-chat-ops-quality-grid">
+                    <article class="stx-memory-chat-ops-quality-card is-score">
+                      <span class="stx-memory-chat-ops-quality-label">当前记忆状态</span>
+                      <div class="stx-memory-chat-ops-quality-score-wrap">
+                        <strong id="${EDITOR_IDS.qualityScoreId}" class="stx-memory-chat-ops-quality-score">--</strong>
+                        <span id="${EDITOR_IDS.qualityLevelId}" class="stx-memory-chat-ops-quality-level">--</span>
                       </div>
-                      <div id="${EDITOR_IDS.qualityReasonsId}" class="stx-memory-chat-strategy-pill-wrap" style="margin-top: 8px;">
-                        <span class="stx-memory-chat-strategy-empty">暂无状态说明</span>
-                      </div>
-                    </article>
-                    <article class="stx-memory-chat-strategy-quality-card">
-                      <span class="stx-memory-chat-strategy-quality-label">各项表现</span>
-                      <div id="${EDITOR_IDS.qualityDimensionsId}" class="stx-memory-chat-strategy-quality-dimensions">
-                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      <div id="${EDITOR_IDS.qualityReasonsId}" class="stx-memory-chat-ops-pill-wrap" style="margin-top: 8px;">
+                        <span class="stx-memory-chat-ops-empty">暂无状态说明</span>
                       </div>
                     </article>
-                    <article class="stx-memory-chat-strategy-quality-card">
-                      <span class="stx-memory-chat-strategy-quality-label">长期记忆状态</span>
-                      <strong id="${EDITOR_IDS.qualityVectorModeId}" class="stx-memory-chat-strategy-quality-meta" style="color: var(--stx-memory-info);">--</strong>
-                      <div class="stx-memory-chat-strategy-quality-stats">
-                        <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
-                        <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                    <article class="stx-memory-chat-ops-quality-card">
+                      <span class="stx-memory-chat-ops-quality-label">各项表现</span>
+                      <div id="${EDITOR_IDS.qualityDimensionsId}" class="stx-memory-chat-ops-quality-dimensions">
+                        <span class="stx-memory-chat-ops-empty">等待加载...</span>
                       </div>
-                      <button type="button" class="menu_button" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
-                        <i class="fa-solid fa-vector-square"></i> 查看向量明细
+                    </article>
+                    <article class="stx-memory-chat-ops-quality-card">
+                      <span class="stx-memory-chat-ops-quality-label">长期记忆状态</span>
+                      <strong id="${EDITOR_IDS.qualityVectorModeId}" class="stx-memory-chat-ops-quality-meta" style="color: var(--stx-memory-info);">--</strong>
+                      <div class="stx-memory-chat-ops-quality-stats">
+                        <div id="${EDITOR_IDS.qualityVectorStatsId}" class="stx-memory-chat-ops-quality-subtext">--</div>
+                        <div id="${EDITOR_IDS.qualityVectorTimesId}" class="stx-memory-chat-ops-quality-subtext">--</div>
+                      </div>
+                      <button type="button" class="stx-memory-chat-ops-vector-btn" data-open-vector-viewer="1" style="margin-top: 10px; align-self: flex-start;">
+                        <i class="fa-solid fa-vector-square"></i> 查看长期记忆明细
                       </button>
                     </article>
-                    <article class="stx-memory-chat-strategy-quality-card">
-                      <span class="stx-memory-chat-strategy-quality-label">系统建议</span>
-                      <div id="${EDITOR_IDS.qualityAdviceId}" class="stx-memory-chat-strategy-quality-list">
-                        <span class="stx-memory-chat-strategy-empty">暂无建议，继续保持</span>
+                    <article class="stx-memory-chat-ops-quality-card">
+                      <span class="stx-memory-chat-ops-quality-label">系统建议</span>
+                      <div id="${EDITOR_IDS.qualityAdviceId}" class="stx-memory-chat-ops-quality-list">
+                        <span class="stx-memory-chat-ops-empty">暂无建议，继续保持</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-quality-card-full-row">
+                      <span class="stx-memory-chat-ops-quality-label">本轮执行记录</span>
+                      <div id="${EDITOR_IDS.qualityTraceEvidenceId}" class="stx-memory-chat-ops-quality-list">
+                        <span class="stx-memory-chat-ops-empty">等待主链执行记录</span>
                       </div>
                     </article>
                   </div>
                 </section>
-                <section class="stx-memory-chat-strategy-section">
-                  <div class="stx-memory-chat-strategy-section-head">
+                <section class="stx-memory-chat-ops-section">
+                  <div class="stx-memory-chat-ops-section-head">
                     <div>
-                      <h3>维护和阶段</h3>
-                      <p>查看这段聊天现在处在哪个阶段，以及系统建议你做什么。</p>
+                      <h3>聊天阶段与维护</h3>
+                      <p>查看当前处于哪个阶段，以及系统建议你做什么。</p>
                     </div>
                   </div>
-                  <div class="stx-memory-chat-strategy-lifecycle-grid">
-                    <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-hero" data-stage="new">
-                      <div class="stx-memory-chat-strategy-lifecycle-hero-head">
-                        <span id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-lifecycle-stage-badge">new</span>
-                        <span id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-strategy-quality-subtext">--</span>
+                  <div class="stx-memory-chat-ops-lifecycle-grid">
+                    <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-lifecycle-hero" data-stage="new">
+                      <div class="stx-memory-chat-ops-lifecycle-hero-head">
+                        <span id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-ops-lifecycle-stage-badge">new</span>
+                        <span id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-ops-quality-subtext">--</span>
                       </div>
-                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-strategy-lifecycle-summary">--</div>
-                      <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-strategy-lifecycle-explanation">--</div>
-                      <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-lifecycle-reasons">
-                        <span class="stx-memory-chat-strategy-empty">暂无阶段原因</span>
-                      </div>
-                    </article>
-                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
-                      <span class="stx-memory-chat-strategy-quality-label">最近变化时间线</span>
-                      <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-strategy-lifecycle-timeline">
-                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-ops-lifecycle-summary">--</div>
+                      <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-ops-lifecycle-explanation">--</div>
+                      <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-ops-pill-wrap stx-memory-chat-ops-lifecycle-reasons">
+                        <span class="stx-memory-chat-ops-empty">暂无阶段原因</span>
                       </div>
                     </article>
-                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
-                      <span class="stx-memory-chat-strategy-quality-label">当前影响</span>
-                      <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-strategy-lifecycle-impact">
-                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                    <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-lifecycle-card">
+                      <span class="stx-memory-chat-ops-quality-label">最近变化</span>
+                      <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-ops-lifecycle-timeline">
+                        <span class="stx-memory-chat-ops-empty">等待加载...</span>
                       </div>
                     </article>
-                    <article class="stx-memory-chat-strategy-quality-card">
-                      <span class="stx-memory-chat-strategy-quality-label">预设来源</span>
-                      <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
-                    </article>
-                    <article class="stx-memory-chat-strategy-quality-card">
-                      <span class="stx-memory-chat-strategy-quality-label">角色状态跟踪</span>
-                      <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
-                    </article>
-                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
-                      <span class="stx-memory-chat-strategy-quality-label">角色和世界状态明细</span>
-                      <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-strategy-group-memory">
-                        <span class="stx-memory-chat-strategy-empty">等待加载...</span>
+                    <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-lifecycle-card">
+                      <span class="stx-memory-chat-ops-quality-label">当前影响</span>
+                      <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-ops-lifecycle-impact">
+                        <span class="stx-memory-chat-ops-empty">等待加载...</span>
                       </div>
                     </article>
-                    <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
-                      <span class="stx-memory-chat-strategy-quality-label">维护提醒</span>
-                      <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-strategy-quality-list">
-                        <span class="stx-memory-chat-strategy-empty">暂无维护提示</span>
+                    <article class="stx-memory-chat-ops-quality-card">
+                      <span class="stx-memory-chat-ops-quality-label">配置来源</span>
+                      <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-ops-quality-meta">--</strong>
+                    </article>
+                    <article class="stx-memory-chat-ops-quality-card">
+                      <span class="stx-memory-chat-ops-quality-label">角色跟踪状态</span>
+                      <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-ops-quality-meta">--</strong>
+                    </article>
+                    <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-quality-card-full-row">
+                      <span class="stx-memory-chat-ops-quality-label">角色与世界明细</span>
+                      <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-ops-group-memory">
+                        <span class="stx-memory-chat-ops-empty">等待加载...</span>
+                      </div>
+                    </article>
+                    <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-quality-card-full-row">
+                      <span class="stx-memory-chat-ops-quality-label">维护提醒</span>
+                      <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-ops-quality-list">
+                        <span class="stx-memory-chat-ops-empty">暂无维护提示</span>
                       </div>
                     </article>
                   </div>
                 </section>
-                <section class="stx-memory-chat-strategy-section">
-                  <div class="stx-memory-chat-strategy-section-head">
+                <section class="stx-memory-chat-ops-section">
+                  <div class="stx-memory-chat-ops-section-head">
                     <div>
-                      <h3>完整诊断</h3>
-                      <p>需要排查底层行为时再展开，看系统自动决策和最终结果。</p>
+                      <h3>系统记录</h3>
+                      <p>排查问题时再展开，查看系统判断和最终结果。</p>
                     </div>
                   </div>
-                  <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-strategy-diagnostic-group" open>
+                  <details id="${EDITOR_IDS.diagnosticBasicDetailsId}" class="stx-memory-chat-ops-diagnostic-group" open>
                     <summary>
-                      <span>基础诊断</span>
-                      <small>先看最终生效方案、最近决策和前后 gate 的结果。</small>
+                      <span>基础记录</span>
+                      <small>先看最终生效方案、最近决策和前后阶段的结果。</small>
                     </summary>
-                    <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-basic">
+                    <div id="${EDITOR_IDS.diagnosticBasicGridId}" class="stx-memory-chat-ops-diagnostic-grid stx-memory-chat-ops-diagnostic-grid-basic">
                       ${buildJsonCardMarkup(EDITOR_IDS.finalBlockId, '最终生效方案', '系统当前真正采用的综合策略。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.decisionBlockId, '最近一次注入决策', '最近一次生成时，系统实际选用了哪些记忆模块。')}
-                      ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前 gate', '生成前对检索、预算和注入的判断结果。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.preDecisionBlockId, '生成前判断', '生成前对检索、预算和注入的判断结果。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.processingDecisionBlockId, '处理等级决策', '本轮究竟落在不处理、轻处理、中处理还是重处理。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.longSummaryCooldownBlockId, '长总结冷却', '这里记录长总结是否被同窗口拦截、最近一次重处理是什么时候。')}
-                      ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后 gate 输入', '生成后 gate 只保留为输入快照，不再是最终结论。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.autoSummaryDecisionBlockId, '自动总结判定', '展示本轮自动长总结判定：模式、阈值、命中项与最终结论。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.autoSummaryRuntimeBlockId, '自动总结运行态', '展示上次长总结楼层、时间、模式和触发原因。')}
+                      ${buildJsonCardMarkup(EDITOR_IDS.postDecisionBlockId, '生成后输入快照', '生成后只保留输入快照，不代表最终结论。')}
                     </div>
                   </details>
-                  <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-strategy-diagnostic-group">
+                  <details id="${EDITOR_IDS.diagnosticAdvancedDetailsId}" class="stx-memory-chat-ops-diagnostic-group">
                     <summary>
-                      <span>高级诊断</span>
-                      <small>深入定位时再展开：自动推断、手动覆盖和上下文指标。</small>
+                      <span>原始记录</span>
+                      <small>深入定位时再展开：自动推断、手动覆盖和动态指标。</small>
                     </summary>
-                    <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-strategy-diagnostic-grid stx-memory-chat-strategy-diagnostic-grid-advanced">
+                    <div id="${EDITOR_IDS.diagnosticAdvancedGridId}" class="stx-memory-chat-ops-diagnostic-grid stx-memory-chat-ops-diagnostic-grid-advanced">
                       ${buildJsonCardMarkup(EDITOR_IDS.autoBlockId, '系统自动推断', '系统在没有人工干预时默认认为当前聊天该怎么记。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.overrideBlockId, '手动覆盖设置', '你对当前聊天显式保存过的覆盖项。')}
                       ${buildJsonCardMarkup(EDITOR_IDS.metricsBlockId, '动态指标', '最近这段聊天的活跃度、密度和命中情况。')}
@@ -1819,77 +2120,77 @@ function buildEditorMarkupV2(): string {
 function ensureEditorSections(overlay: HTMLElement): void {
     if (!overlay.querySelector(`#${EDITOR_IDS.summarySettingsMountId}`)) {
         const anchorWrap: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.sectionsWrapId}`) as HTMLElement | null;
-        const anchorSection: HTMLElement | null = anchorWrap?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+        const anchorSection: HTMLElement | null = anchorWrap?.closest('.stx-memory-chat-ops-section') as HTMLElement | null;
         if (anchorSection) {
             const summaryHost = document.createElement('section');
-            summaryHost.className = 'stx-memory-chat-strategy-section';
+            summaryHost.className = 'stx-memory-chat-ops-section';
             summaryHost.innerHTML = `
-              <div class="stx-memory-chat-strategy-section-head">
+              <div class="stx-memory-chat-ops-section-head">
                 <div>
                   <h3>AI 记忆总结</h3>
                   <p>四块紧凑设置，直接决定总结方式、时机和重点。</p>
                 </div>
               </div>
-              <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-strategy-summary-settings-host"></div>
+              <div id="${EDITOR_IDS.summarySettingsMountId}" class="stx-memory-chat-ops-summary-settings-host"></div>
             `.trim();
             anchorSection.insertAdjacentElement('afterend', summaryHost);
         }
     }
 
     if (!overlay.querySelector(`#${EDITOR_IDS.maintenanceInsightsId}`)) {
-        const qualitySection = overlay.querySelector(`#${EDITOR_IDS.qualityScoreId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+        const qualitySection = overlay.querySelector(`#${EDITOR_IDS.qualityScoreId}`)?.closest('.stx-memory-chat-ops-section') as HTMLElement | null;
         if (qualitySection) {
             const maintenanceMarkup = `
-              <section class="stx-memory-chat-strategy-section">
-                <div class="stx-memory-chat-strategy-section-head">
+              <section class="stx-memory-chat-ops-section">
+                <div class="stx-memory-chat-ops-section-head">
                   <div>
                     <h3>维护感知</h3>
                     <p>面向当前聊天的可执行维护提示。只在执行动作后显示 Toast。</p>
                   </div>
                 </div>
-                <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-strategy-quality-list">
-                  <span class="stx-memory-chat-strategy-empty">暂无维护提示</span>
+                <div id="${EDITOR_IDS.maintenanceInsightsId}" class="stx-memory-chat-ops-quality-list">
+                  <span class="stx-memory-chat-ops-empty">暂无维护提示</span>
                 </div>
               </section>
-              <section class="stx-memory-chat-strategy-section">
-                <div class="stx-memory-chat-strategy-section-head">
+              <section class="stx-memory-chat-ops-section">
+                <div class="stx-memory-chat-ops-section-head">
                   <div>
                     <h3>聊天生命周期</h3>
                     <p>快速看懂当前阶段、判断原因和默认偏向。</p>
                   </div>
                 </div>
-                <div class="stx-memory-chat-strategy-quality-grid stx-memory-chat-strategy-lifecycle-grid">
-                  <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row stx-memory-chat-strategy-lifecycle-hero" data-stage="new">
-                    <span class="stx-memory-chat-strategy-quality-label">当前状态</span>
-                    <div class="stx-memory-chat-strategy-lifecycle-hero-head">
-                      <strong id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-strategy-quality-meta stx-memory-chat-strategy-lifecycle-stage-badge">--</strong>
-                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-strategy-lifecycle-summary">--</div>
+                <div class="stx-memory-chat-ops-quality-grid stx-memory-chat-ops-lifecycle-grid">
+                  <article id="${EDITOR_IDS.lifecycleHeroId}" class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-quality-card-full-row stx-memory-chat-ops-lifecycle-hero" data-stage="new">
+                    <span class="stx-memory-chat-ops-quality-label">当前状态</span>
+                    <div class="stx-memory-chat-ops-lifecycle-hero-head">
+                      <strong id="${EDITOR_IDS.lifecycleStageId}" class="stx-memory-chat-ops-quality-meta stx-memory-chat-ops-lifecycle-stage-badge">--</strong>
+                      <div id="${EDITOR_IDS.lifecycleSummaryId}" class="stx-memory-chat-ops-lifecycle-summary">--</div>
                     </div>
-                    <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-strategy-lifecycle-explanation">--</div>
-                    <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-lifecycle-reasons">
-                      <span class="stx-memory-chat-strategy-empty">正在整理判断依据...</span>
-                    </div>
-                  </article>
-                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
-                    <span class="stx-memory-chat-strategy-quality-label">关键时间点</span>
-                    <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-strategy-lifecycle-timeline">
-                      <span class="stx-memory-chat-strategy-empty">正在整理时间线...</span>
+                    <div id="${EDITOR_IDS.lifecycleExplanationId}" class="stx-memory-chat-ops-lifecycle-explanation">--</div>
+                    <div id="${EDITOR_IDS.lifecycleReasonListId}" class="stx-memory-chat-ops-pill-wrap stx-memory-chat-ops-lifecycle-reasons">
+                      <span class="stx-memory-chat-ops-empty">正在整理判断依据...</span>
                     </div>
                   </article>
-                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-lifecycle-card">
-                    <span class="stx-memory-chat-strategy-quality-label">这代表什么</span>
-                    <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-strategy-lifecycle-impact">--</div>
-                    <div id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-strategy-quality-subtext">--</div>
+                  <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-lifecycle-card">
+                    <span class="stx-memory-chat-ops-quality-label">关键时间点</span>
+                    <div id="${EDITOR_IDS.lifecycleTimelineId}" class="stx-memory-chat-ops-lifecycle-timeline">
+                      <span class="stx-memory-chat-ops-empty">正在整理时间线...</span>
+                    </div>
                   </article>
-                  <article class="stx-memory-chat-strategy-quality-card">
-                    <span class="stx-memory-chat-strategy-quality-label">当前策略主要来自</span>
-                    <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
-                    <div class="stx-memory-chat-strategy-quality-subtext">显示当前真正生效的主来源。</div>
+                  <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-lifecycle-card">
+                    <span class="stx-memory-chat-ops-quality-label">这代表什么</span>
+                    <div id="${EDITOR_IDS.lifecycleImpactId}" class="stx-memory-chat-ops-lifecycle-impact">--</div>
+                    <div id="${EDITOR_IDS.lifecycleMetaId}" class="stx-memory-chat-ops-quality-subtext">--</div>
                   </article>
-                  <article class="stx-memory-chat-strategy-quality-card stx-memory-chat-strategy-quality-card-full-row">
-                    <span class="stx-memory-chat-strategy-quality-label">群聊分轨状态</span>
-                    <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-strategy-quality-meta">--</strong>
-                    <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-strategy-quality-subtext">正在加载分轨卡片...</div>
+                  <article class="stx-memory-chat-ops-quality-card">
+                    <span class="stx-memory-chat-ops-quality-label">当前策略主要来自</span>
+                    <strong id="${EDITOR_IDS.presetScopeMetaId}" class="stx-memory-chat-ops-quality-meta">--</strong>
+                    <div class="stx-memory-chat-ops-quality-subtext">显示当前真正生效的主来源。</div>
+                  </article>
+                  <article class="stx-memory-chat-ops-quality-card stx-memory-chat-ops-quality-card-full-row">
+                    <span class="stx-memory-chat-ops-quality-label">群聊分轨状态</span>
+                    <strong id="${EDITOR_IDS.groupLaneMetaId}" class="stx-memory-chat-ops-quality-meta">--</strong>
+                    <div id="${EDITOR_IDS.groupLaneActorsId}" class="stx-memory-chat-ops-quality-subtext">正在加载分轨卡片...</div>
                   </article>
                 </div>
               </section>
@@ -1902,7 +2203,7 @@ function ensureEditorSections(overlay: HTMLElement): void {
 
     const basicDiagnosticGrid: HTMLElement | null =
         (overlay.querySelector(`#${EDITOR_IDS.diagnosticBasicGridId}`) as HTMLElement | null)
-        ?? (overlay.querySelector('.stx-memory-chat-strategy-diagnostic-grid') as HTMLElement | null);
+        ?? (overlay.querySelector('.stx-memory-chat-ops-diagnostic-grid') as HTMLElement | null);
     if (basicDiagnosticGrid) {
         if (!overlay.querySelector(`#${EDITOR_IDS.preDecisionBlockId}`)) {
             basicDiagnosticGrid.insertAdjacentHTML(
@@ -1940,9 +2241,9 @@ function ensureAdvancedSettingsFold(overlay: HTMLElement): void {
     if (overlay.querySelector(`#${EDITOR_IDS.advancedSettingsId}`)) {
         return;
     }
-    const profileSection = overlay.querySelector(`#${EDITOR_IDS.chatTypeId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
-    const extractSection = overlay.querySelector(`#${EDITOR_IDS.extractStrategyId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
-    const vectorSection = overlay.querySelector(`#${EDITOR_IDS.vectorChunkThresholdId}`)?.closest('.stx-memory-chat-strategy-section') as HTMLElement | null;
+    const profileSection = overlay.querySelector(`#${EDITOR_IDS.chatTypeId}`)?.closest('.stx-memory-chat-ops-section') as HTMLElement | null;
+    const extractSection = overlay.querySelector(`#${EDITOR_IDS.extractStrategyId}`)?.closest('.stx-memory-chat-ops-section') as HTMLElement | null;
+    const vectorSection = overlay.querySelector(`#${EDITOR_IDS.vectorChunkThresholdId}`)?.closest('.stx-memory-chat-ops-section') as HTMLElement | null;
     if (!profileSection || !extractSection || !vectorSection) {
         return;
     }
@@ -1952,9 +2253,9 @@ function ensureAdvancedSettingsFold(overlay: HTMLElement): void {
     }
     const details = document.createElement('details');
     details.id = EDITOR_IDS.advancedSettingsId;
-    details.className = 'stx-memory-chat-strategy-section stx-memory-chat-strategy-advanced';
+    details.className = 'stx-memory-chat-ops-section stx-memory-chat-ops-advanced';
     const summary = document.createElement('summary');
-    summary.className = 'stx-memory-chat-strategy-advanced-summary';
+    summary.className = 'stx-memory-chat-ops-advanced-summary';
     summary.innerHTML = `
       <div>
         <h3>高级设置</h3>
@@ -1962,7 +2263,7 @@ function ensureAdvancedSettingsFold(overlay: HTMLElement): void {
       </div>
     `.trim();
     const body = document.createElement('div');
-    body.className = 'stx-memory-chat-strategy-advanced-body';
+    body.className = 'stx-memory-chat-ops-advanced-body';
     details.appendChild(summary);
     details.appendChild(body);
     profileSection.insertAdjacentElement('beforebegin', details);
@@ -1987,17 +2288,17 @@ function buildEditorSelectField(
 ): string {
     const selectMarkup: string = buildSharedSelectField({
         id,
-        containerClassName: 'stx-memory-chat-strategy-select',
-        selectClassName: 'stx-memory-chat-strategy-input',
-        triggerClassName: 'stx-memory-chat-strategy-input',
+        containerClassName: 'stx-memory-chat-ops-select',
+        selectClassName: 'stx-memory-chat-ops-input',
+        triggerClassName: 'stx-memory-chat-ops-input',
         triggerAttributes: {
             'data-tip': tip,
         },
         options,
     });
     return `
-      <label class="stx-memory-chat-strategy-field">
-        <span class="stx-memory-chat-strategy-field-label">${label}</span>
+      <label class="stx-memory-chat-ops-field">
+        <span class="stx-memory-chat-ops-field-label">${label}</span>
         ${selectMarkup}
       </label>
     `.trim();
@@ -2026,7 +2327,7 @@ function buildEditorInputField(
     const inputMarkup: string = buildSharedInputField({
         id,
         type,
-        className: 'stx-memory-chat-strategy-input',
+        className: 'stx-memory-chat-ops-input',
         attributes: {
             min,
             max,
@@ -2035,8 +2336,8 @@ function buildEditorInputField(
         },
     });
     return `
-      <label class="stx-memory-chat-strategy-field">
-        <span class="stx-memory-chat-strategy-field-label">${label}</span>
+      <label class="stx-memory-chat-ops-field">
+        <span class="stx-memory-chat-ops-field-label">${label}</span>
         ${inputMarkup}
       </label>
     `.trim();
@@ -2051,12 +2352,12 @@ function buildEditorInputField(
  */
 function buildJsonCardMarkup(bodyId: string, title: string, description: string): string {
     return `
-      <details class="stx-memory-chat-strategy-json-card" open>
+      <details class="stx-memory-chat-ops-json-card" open>
         <summary data-tip="${description}">
           <span>${title}</span>
           <small>${description}</small>
         </summary>
-        <div id="${bodyId}" class="stx-memory-chat-strategy-pretty-body">等待加载...</div>
+        <div id="${bodyId}" class="stx-memory-chat-ops-pretty-body">等待加载...</div>
       </details>
     `.trim();
 }
@@ -2253,7 +2554,7 @@ function bindEditorListeners(overlay: HTMLElement): void {
             void openRecordEditor({ initialView: 'vector' });
             return;
         }
-        if (target.classList.contains('stx-memory-chat-strategy-sidebar-scrim')) {
+        if (target.classList.contains('stx-memory-chat-ops-sidebar-scrim')) {
             overlay.classList.remove('is-sidebar-open');
         }
     });
@@ -2268,13 +2569,6 @@ function closeEditor(_overlay?: HTMLElement): void {
     void closeSharedDialog(EDITOR_IDS.overlayId, 'button');
 }
 
-function buildChatListMetaLabel(item: ChatOption): string {
-    const scopeLabel = item.iconClassName === 'fa-solid fa-users' ? '群聊会话' : '角色会话';
-    const suffixMatch = item.label.match(/\(([^)]+)\)\s*$/);
-    const shortRef = suffixMatch?.[1] ? String(suffixMatch[1]).trim() : '';
-    return shortRef ? `${scopeLabel} · ${shortRef}` : scopeLabel;
-}
-
 /**
  * 功能：同步编辑器中的聊天列表与当前选中项。
  * @param overlay 编辑器遮罩层根节点。
@@ -2283,32 +2577,25 @@ function buildChatListMetaLabel(item: ChatOption): string {
  */
 async function syncEditorChatOptions(overlay: HTMLElement, currentChatKey: string): Promise<void> {
     cachedChatOptions = await loadChatOptions();
+    const sidebarItems = await loadMemoryChatSidebarItems({
+        activeChatKey: currentChatKey,
+        recoverArchivedIfHostExists: true,
+    });
     const chatList: HTMLElement | null = overlay.querySelector(`#${EDITOR_IDS.chatListId}`) as HTMLElement | null;
     if (!chatList) {
         return;
     }
-    if (cachedChatOptions.length === 0) {
-        chatList.innerHTML = '<div class="stx-memory-chat-strategy-empty">当前 Tavern 下没有可用聊天。</div>';
+    if (sidebarItems.length === 0) {
+        chatList.innerHTML = '<div class="stx-memory-chat-ops-empty">当前 Tavern 下没有可用聊天。</div>';
         applyChatStrategyTooltips();
         return;
     }
-    chatList.innerHTML = cachedChatOptions
-        .map((item: ChatOption): string => {
-            const isActive: boolean = item.value === currentChatKey;
-            const mediaMarkup: string = item.avatarUrl
-                ? `<span class="stx-memory-chat-strategy-chat-avatar"><img src="${escapeHtml(item.avatarUrl)}" alt="${escapeHtml(item.label)}" /></span>`
-                : `<span class="stx-memory-chat-strategy-chat-avatar is-icon"><i class="${escapeHtml(item.iconClassName || 'fa-solid fa-user')}"></i></span>`;
-            return `
-              <button type="button" class="stx-memory-chat-strategy-chat-item${isActive ? ' is-active' : ''}" data-chat-key="${escapeHtml(item.value)}" title="${escapeHtml(item.value)}">
-                ${mediaMarkup}
-                <span class="stx-memory-chat-strategy-chat-copy">
-                  <span class="stx-memory-chat-strategy-chat-name">${escapeHtml(item.label)}</span>
-                  <span class="stx-memory-chat-strategy-chat-key">${escapeHtml(buildChatListMetaLabel(item))}</span>
-                </span>
-              </button>
-            `.trim();
-        })
-        .join('');
+    renderMemoryChatSidebarList(chatList, sidebarItems, {
+        activeChatKey: currentChatKey,
+        itemClassName: 'stx-memory-chat-ops-chat-item',
+        includeLegacyItemClassName: false,
+        emptyText: '当前 Tavern 下没有可用聊天。',
+    });
     applyChatListFilter(overlay, String((overlay.querySelector(`#${EDITOR_IDS.chatSearchId}`) as HTMLInputElement | null)?.value || ''));
     applyChatStrategyTooltips();
 }
@@ -2320,11 +2607,7 @@ async function syncEditorChatOptions(overlay: HTMLElement, currentChatKey: strin
  * @returns 无返回值。
  */
 function applyChatListFilter(overlay: HTMLElement, keyword: string): void {
-    const normalizedKeyword: string = keyword.trim().toLowerCase();
-    overlay.querySelectorAll<HTMLElement>('.stx-memory-chat-strategy-chat-item').forEach((item: HTMLElement): void => {
-        const text: string = item.textContent?.toLowerCase() || '';
-        item.hidden = Boolean(normalizedKeyword) && !text.includes(normalizedKeyword);
-    });
+    filterMemoryChatSidebarList(overlay, keyword, '.stx-memory-chat-ops-chat-item');
 }
 
 function pickPrimaryLane(snapshot: ChatStrategySnapshot): GroupMemoryState['lanes'][number] | null {
@@ -2349,13 +2632,13 @@ function pickPrimaryLane(snapshot: ChatStrategySnapshot): GroupMemoryState['lane
 function buildDashboardCardMarkup(card: ReadableStrategyCard): string {
     const toneAttr = card.tone ? ` data-tone="${escapeHtml(card.tone)}"` : '';
     const footMarkup = card.foot
-        ? `<div class="stx-memory-chat-strategy-dashboard-card-foot">${escapeHtml(card.foot)}</div>`
+        ? `<div class="stx-memory-chat-ops-dashboard-card-foot">${escapeHtml(card.foot)}</div>`
         : '';
     return `
-      <div class="stx-memory-chat-strategy-dashboard-card-inner"${toneAttr}>
-        <span class="stx-memory-chat-strategy-dashboard-card-label">${escapeHtml(card.label)}</span>
-        <strong class="stx-memory-chat-strategy-dashboard-card-title">${escapeHtml(card.title)}</strong>
-        <div class="stx-memory-chat-strategy-dashboard-card-detail">${escapeHtml(card.detail)}</div>
+      <div class="stx-memory-chat-ops-dashboard-card-inner"${toneAttr}>
+        <span class="stx-memory-chat-ops-dashboard-card-label">${escapeHtml(card.label)}</span>
+        <strong class="stx-memory-chat-ops-dashboard-card-title">${escapeHtml(card.title)}</strong>
+        <div class="stx-memory-chat-ops-dashboard-card-detail">${escapeHtml(card.detail)}</div>
         ${footMarkup}
       </div>
     `.trim();
@@ -2409,6 +2692,11 @@ function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): Readabl
     }
     if (roleBits.length === 0) {
         roleBits.push(`当前更偏${formatStyleLabel(snapshot.effectiveProfile.stylePreference)}，系统会按${formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength)}强度持续记住关键线索。`);
+    }
+    if (primaryLane?.relationshipDelta) {
+        roleBits.push(`关系变化：${primaryLane.relationshipDelta}`);
+    } else if (conflict) {
+        roleBits.push(`当前冲突：${conflict}`);
     }
     const roleCard: ReadableStrategyCard = {
         label: '角色状态',
@@ -2466,6 +2754,19 @@ function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): Readabl
             foot: `当前阶段：${formatLifecycleStageLabel(snapshot.lifecycleState.stage)}`,
             tone: 'soft',
         };
+    const decisionCard: ReadableStrategyCard = {
+        label: '本轮系统判断',
+        title: snapshot.processingDecision
+            ? `本轮：${snapshot.processingDecision.level}`
+            : '本轮：等待下一次生成',
+        detail: snapshot.processingDecision
+            ? `摘要 ${snapshot.processingDecision.summaryTier} · 抽取 ${snapshot.processingDecision.extractScope}`
+            : '还没有本轮处理结果，下一次生成后会自动更新。',
+        foot: snapshot.processingDecision?.cooldownBlocked
+            ? '长总结在冷却中'
+            : formatMainlineTraceStatus(snapshot.mainlineTraceSnapshot),
+        tone: 'soft',
+    };
     return {
         meta,
         intent: formatIntentLabel(snapshot.decision?.intent || 'auto'),
@@ -2474,6 +2775,7 @@ function buildReadableStrategyDashboard(snapshot: ChatStrategySnapshot): Readabl
         world: worldCard,
         relation: relationCard,
         reminder: reminderCard,
+        decision: decisionCard,
     };
 }
 
@@ -2556,6 +2858,8 @@ async function renderEditorState(overlay: HTMLElement, chatKey: string): Promise
     writeJsonBlock(overlay, EDITOR_IDS.longSummaryCooldownBlockId, snapshot.longSummaryCooldown ?? {
         tip: '暂无长总结冷却状态。',
     });
+    writeJsonBlock(overlay, EDITOR_IDS.autoSummaryDecisionBlockId, buildAutoSummaryDecisionDiagnostic(snapshot));
+    writeJsonBlock(overlay, EDITOR_IDS.autoSummaryRuntimeBlockId, buildAutoSummaryRuntimeDiagnostic(snapshot));
     applyChatStrategyTooltips();
 }
 
@@ -2603,8 +2907,8 @@ function updateEditorHeaderV2(overlay: HTMLElement, snapshot: ChatStrategySnapsh
     replaceSummaryChips(sectionsWrap, snapshot.decision?.sectionsUsed || []);
     writeDashboardCard(overlay, EDITOR_IDS.overviewRoleId, dashboard.role);
     writeDashboardCard(overlay, EDITOR_IDS.overviewWorldId, dashboard.world);
-    writeDashboardCard(overlay, EDITOR_IDS.overviewRelationId, dashboard.relation);
     writeDashboardCard(overlay, EDITOR_IDS.overviewReminderId, dashboard.reminder);
+    writeDashboardCard(overlay, EDITOR_IDS.overviewDecisionId, dashboard.decision);
 }
 
 async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promise<void> {
@@ -2645,6 +2949,8 @@ async function renderEditorStateV2(overlay: HTMLElement, chatKey: string): Promi
     writeJsonBlock(overlay, EDITOR_IDS.longSummaryCooldownBlockId, snapshot.longSummaryCooldown ?? {
         tip: '暂无长总结冷却状态。',
     });
+    writeJsonBlock(overlay, EDITOR_IDS.autoSummaryDecisionBlockId, buildAutoSummaryDecisionDiagnostic(snapshot));
+    writeJsonBlock(overlay, EDITOR_IDS.autoSummaryRuntimeBlockId, buildAutoSummaryRuntimeDiagnostic(snapshot));
     applyChatStrategyTooltips();
 }
 
@@ -2675,6 +2981,8 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
         const postDecision: PostGenerationGateDecision | null = await manager.getLastPostGenerationDecision();
         const processingDecision: MemoryProcessingDecision | null = await manager.getLastProcessingDecision();
         const longSummaryCooldown: LongSummaryCooldownState = await manager.getLongSummaryCooldown();
+        const autoSummaryRuntime: AutoSummaryRuntimeState = await manager.getAutoSummaryRuntime();
+        const lastAutoSummaryDecision: AutoSummaryDecisionSnapshot | null = await manager.getLastAutoSummaryDecision();
         const summarySettings: SummarySettings = await manager.getGlobalSummarySettings();
         const summarySettingsOverride: SummarySettingsOverride = await manager.getChatSummarySettingsOverride();
         const effectiveSummarySettings: EffectiveSummarySettings = await manager.getEffectiveSummarySettings();
@@ -2714,6 +3022,8 @@ async function loadChatStrategySnapshot(chatKey: string): Promise<ChatStrategySn
             postDecision,
             processingDecision,
             longSummaryCooldown,
+            autoSummaryRuntime,
+            lastAutoSummaryDecision,
             summarySettings,
             summarySettingsOverride,
             effectiveSummarySettings,
@@ -2912,11 +3222,11 @@ function updateEditorHeader(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     metaElement.textContent = [
         formatChatTypeLabel(snapshot.effectiveProfile.chatType),
         formatStyleLabel(snapshot.effectiveProfile.stylePreference),
-        formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength),
-        snapshot.effectiveProfile.vectorStrategy.enabled ? '向量开启' : '向量关闭',
+        formatMemoryStrengthLabel(snapshot.effectiveProfile.memoryStrength).replace('强度', ''),
+        snapshot.effectiveProfile.vectorStrategy.enabled ? '会联想旧内容' : '不联想旧内容',
     ].join(' · ');
-    intentElement.textContent = formatIntentLabel(snapshot.decision?.intent || 'auto');
-    scopeElement.textContent = `当前来源：${formatSummarySourceLabel(snapshot.summarySettingsSource)} · 分轨：${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
+    intentElement.textContent = `${formatIntentLabel(snapshot.decision?.intent || 'auto')} · ${formatLifecycleStageLabel(snapshot.lifecycleState.stage)}`;
+    scopeElement.textContent = `配置来源：${formatSummarySourceLabel(snapshot.summarySettingsSource)} · 角色跟踪：${formatGroupLaneSummary(snapshot.groupMemory, snapshot.effectivePolicy.groupLaneEnabled)}`;
     replaceSummaryChips(sectionsWrap, snapshot.decision?.sectionsUsed || []);
 }
 
@@ -2951,12 +3261,12 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
             const ratio = Math.max(0, Math.min(1, Number(value ?? 0)));
             const percent = Math.round(ratio * 100);
             return `
-              <div class="stx-memory-chat-strategy-dimension-item">
-                <span class="stx-memory-chat-strategy-dimension-label">${escapeHtml(formatQualityDimensionLabel(key))}</span>
-                <div class="stx-memory-chat-strategy-progress">
-                    <div class="stx-memory-chat-strategy-progress-bar" style="width: ${percent}%;"></div>
+              <div class="stx-memory-chat-ops-dimension-item">
+                <span class="stx-memory-chat-ops-dimension-label">${escapeHtml(formatQualityDimensionLabel(key))}</span>
+                <div class="stx-memory-chat-ops-progress">
+                    <div class="stx-memory-chat-ops-progress-bar" style="width: ${percent}%;"></div>
                 </div>
-                <span class="stx-memory-chat-strategy-dimension-value">${percent}%</span>
+                <span class="stx-memory-chat-ops-dimension-value">${percent}%</span>
               </div>
             `.trim();
         })
@@ -2971,11 +3281,11 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
     traceEvidenceElement.innerHTML = buildMainlineTraceEvidenceMarkup(snapshot.mainlineTraceSnapshot);
 
     if (!Array.isArray(snapshot.maintenanceAdvice) || snapshot.maintenanceAdvice.length === 0) {
-        adviceElement.innerHTML = '<span class="stx-memory-chat-strategy-empty">暂无建议</span>';
+        adviceElement.innerHTML = '<span class="stx-memory-chat-ops-empty">暂无建议</span>';
     } else {
         adviceElement.innerHTML = snapshot.maintenanceAdvice
             .map((item): string => `
-              <div class="stx-memory-chat-strategy-quality-advice-item">
+              <div class="stx-memory-chat-ops-quality-advice-item">
                 <strong>${escapeHtml(item.title)}</strong>
                 <span>${escapeHtml(item.detail)}</span>
               </div>
@@ -2987,7 +3297,7 @@ function updateQualityPanel(overlay: HTMLElement, snapshot: ChatStrategySnapshot
         const scoreWrap = overlay.querySelector(`#${EDITOR_IDS.qualityReasonsId}`);
         if (scoreWrap) {
             scoreWrap.innerHTML = quality.reasonCodes
-                .map((code: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(formatQualityReasonCodeLabel(code))}</span>`)
+                .map((code: string): string => `<span class="stx-memory-chat-ops-pill">${escapeHtml(formatQualityReasonCodeLabel(code))}</span>`)
                 .join('');
         }
     }
@@ -3042,7 +3352,7 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
 
     const insights = Array.isArray(snapshot.maintenanceInsights) ? snapshot.maintenanceInsights : [];
     if (insights.length === 0) {
-        insightsElement.innerHTML = '<span class="stx-memory-chat-strategy-empty">暂无维护提示</span>';
+        insightsElement.innerHTML = '<span class="stx-memory-chat-ops-empty">暂无维护提示</span>';
         return;
     }
 
@@ -3061,12 +3371,12 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
 
     insightsElement.innerHTML = sortedInsights
         .map((item: MaintenanceInsight): string => `
-          <div class="stx-memory-chat-strategy-quality-advice-item">
+          <div class="stx-memory-chat-ops-quality-advice-item">
             <strong>[${escapeHtml(formatMaintenanceSeverityLabel(item.severity))}] ${escapeHtml(item.title)}</strong>
             <span>${escapeHtml(item.detail)}</span>
             <button
               type="button"
-              class="stx-memory-chat-strategy-maintenance-action"
+              class="stx-memory-chat-ops-maintenance-action"
               data-action="${escapeHtml(item.action)}"
             >
               ${escapeHtml(item.actionLabel || '立即维护')}
@@ -3075,7 +3385,7 @@ function updateMaintenancePanel(overlay: HTMLElement, snapshot: ChatStrategySnap
         `.trim())
         .join('');
 
-    insightsElement.querySelectorAll<HTMLButtonElement>('.stx-memory-chat-strategy-maintenance-action')
+    insightsElement.querySelectorAll<HTMLButtonElement>('.stx-memory-chat-ops-maintenance-action')
         .forEach((button: HTMLButtonElement): void => {
             button.onclick = (): void => {
                 const action = String(button.dataset.action || '').trim() as MaintenanceActionType;
@@ -3153,8 +3463,8 @@ function buildLifecycleImpactMarkup(lifecycle: ChatLifecycleState): string {
     const title = formatLifecycleImpactTitle(lifecycle.stage);
     const detail = formatLifecycleImpactDetail(lifecycle.stage);
     return `
-        <strong class="stx-memory-chat-strategy-lifecycle-impact-title">${escapeHtml(title)}</strong>
-        <span class="stx-memory-chat-strategy-lifecycle-impact-detail">${escapeHtml(detail)}</span>
+        <strong class="stx-memory-chat-ops-lifecycle-impact-title">${escapeHtml(title)}</strong>
+        <span class="stx-memory-chat-ops-lifecycle-impact-detail">${escapeHtml(detail)}</span>
     `.trim();
 }
 
@@ -3219,10 +3529,10 @@ function formatLifecycleImpactDetail(stage: ChatLifecycleState['stage']): string
  */
 function buildLifecycleReasonPillsMarkup(reasonCodes: string[]): string {
     if (!Array.isArray(reasonCodes) || reasonCodes.length === 0) {
-        return '<span class="stx-memory-chat-strategy-empty">当前没有额外判定依据</span>';
+        return '<span class="stx-memory-chat-ops-empty">当前没有额外判定依据</span>';
     }
     return reasonCodes
-        .map((code: string): string => `<span class="stx-memory-chat-strategy-pill stx-memory-chat-strategy-lifecycle-pill">${escapeHtml(formatLifecycleReasonCodeLabel(code))}</span>`)
+        .map((code: string): string => `<span class="stx-memory-chat-ops-pill stx-memory-chat-ops-lifecycle-pill">${escapeHtml(formatLifecycleReasonCodeLabel(code))}</span>`)
         .join('');
 }
 
@@ -3240,23 +3550,23 @@ function buildLifecycleTimelineMarkup(lifecycle: ChatLifecycleState): string {
         ? `${formatTimestamp(lifecycle.lastMaintenanceAt)} · ${lifecycle.lastMaintenanceAction ? formatMaintenanceActionLabel(lifecycle.lastMaintenanceAction) : '已执行维护'}`
         : '还没有执行过维护动作';
     return `
-        <div class="stx-memory-chat-strategy-lifecycle-point">
-          <span class="stx-memory-chat-strategy-lifecycle-point-label">第一次被系统识别</span>
+        <div class="stx-memory-chat-ops-lifecycle-point">
+          <span class="stx-memory-chat-ops-lifecycle-point-label">第一次被系统识别</span>
           <strong>${escapeHtml(formatTimestamp(lifecycle.firstSeenAt))}</strong>
           <small>系统开始跟踪这段聊天。</small>
         </div>
-        <div class="stx-memory-chat-strategy-lifecycle-point">
-          <span class="stx-memory-chat-strategy-lifecycle-point-label">进入当前阶段</span>
+        <div class="stx-memory-chat-ops-lifecycle-point">
+          <span class="stx-memory-chat-ops-lifecycle-point-label">进入当前阶段</span>
           <strong>${escapeHtml(formatTimestamp(lifecycle.stageEnteredAt))}</strong>
           <small>默认策略从这里开始切换偏向。</small>
         </div>
-        <div class="stx-memory-chat-strategy-lifecycle-point">
-          <span class="stx-memory-chat-strategy-lifecycle-point-label">最近一次聊天变化</span>
+        <div class="stx-memory-chat-ops-lifecycle-point">
+          <span class="stx-memory-chat-ops-lifecycle-point-label">最近一次聊天变化</span>
           <strong>${escapeHtml(formatTimestamp(lifecycle.lastMutationAt))}</strong>
           <small>${escapeHtml(`${mutationSummary} · 来源 ${formatLifecycleMutationSourceLabel(lifecycle.lastMutationSource)}`)}</small>
         </div>
-        <div class="stx-memory-chat-strategy-lifecycle-point">
-          <span class="stx-memory-chat-strategy-lifecycle-point-label">最近一次维护</span>
+        <div class="stx-memory-chat-ops-lifecycle-point">
+          <span class="stx-memory-chat-ops-lifecycle-point-label">最近一次维护</span>
           <strong>${escapeHtml(maintenanceSummary)}</strong>
           <small>影响摘要、压缩或向量状态。</small>
         </div>
@@ -3433,9 +3743,11 @@ function collectRetentionOverrideFromForm(overlay: HTMLElement): Partial<Retenti
  * @returns 无返回值。
  */
 function updateChatListActiveState(overlay: HTMLElement, chatKey: string): void {
-    overlay.querySelectorAll<HTMLElement>('.stx-memory-chat-strategy-chat-item').forEach((item: HTMLElement): void => {
-        item.classList.toggle('is-active', String(item.dataset.chatKey || '') === chatKey);
-    });
+    const chatList = overlay.querySelector(`#${EDITOR_IDS.chatListId}`);
+    if (!chatList) {
+        return;
+    }
+    activateMemoryChatSidebarItem(chatList, chatKey, '.stx-memory-chat-ops-chat-item');
 }
 
 /**
@@ -3660,16 +3972,7 @@ function formatSummaryLookbackScopeLabel(value: SummaryLookbackScope): string {
 }
 
 function formatSummaryTriggerLabel(value: SummaryLongTrigger): string {
-    const labels: Record<SummaryLongTrigger, string> = {
-        scene_end: '场景结束',
-        combat_end: '战斗结束',
-        plot_advance: '剧情推进',
-        relationship_shift: '关系变化',
-        world_change: '世界变化',
-        structure_repair: '结构修复',
-        archive_finalize: '归档整理',
-    };
-    return labels[value] ?? value;
+    return listSummaryTriggerRulesForPanel().find((rule: SummaryTriggerRule): boolean => rule.id === value)?.label ?? value;
 }
 
 /**
@@ -3997,11 +4300,11 @@ function formatTimestamp(value: number): string {
  */
 function replaceSummaryChips(container: HTMLElement, sections: string[]): void {
     if (!sections.length) {
-        container.innerHTML = '<span class="stx-memory-chat-strategy-empty">暂无注入记录</span>';
+        container.innerHTML = '<span class="stx-memory-chat-ops-empty">暂无注入记录</span>';
         return;
     }
     container.innerHTML = sections
-        .map((section: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(formatSectionLabel(section))}</span>`)
+        .map((section: string): string => `<span class="stx-memory-chat-ops-pill">${escapeHtml(formatSectionLabel(section))}</span>`)
         .join('');
 }
 
@@ -4611,7 +4914,7 @@ function formatLifecycleReasonCodeLabel(code: string): string {
  */
 function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled: boolean): string {
         if (!enabled) {
-                return '<span class="stx-memory-chat-strategy-empty">当前聊天未开启群聊分轨。</span>';
+                return '<span class="stx-memory-chat-ops-empty">当前聊天未开启群聊分轨。</span>';
         }
 
         const lanes = Array.isArray(groupMemory?.lanes) ? groupMemory!.lanes : [];
@@ -4635,30 +4938,30 @@ function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled
         const pendingEvents = Array.isArray(sharedScene?.pendingEvents) ? sharedScene!.pendingEvents.filter(Boolean) : [];
 
         const sceneCardMarkup = `
-            <article class="stx-memory-chat-strategy-group-scene-card">
-                <div class="stx-memory-chat-strategy-group-scene-head">
+            <article class="stx-memory-chat-ops-group-scene-card">
+                <div class="stx-memory-chat-ops-group-scene-head">
                     <div>
-                        <div class="stx-memory-chat-strategy-group-section-title">共享场景</div>
-                        <div class="stx-memory-chat-strategy-group-scene-summary">${sharedSceneParts.length > 0 ? escapeHtml(sharedSceneParts.join(' / ')) : '暂无共享场景摘要'}</div>
+                        <div class="stx-memory-chat-ops-group-section-title">共享场景</div>
+                        <div class="stx-memory-chat-ops-group-scene-summary">${sharedSceneParts.length > 0 ? escapeHtml(sharedSceneParts.join(' / ')) : '暂无共享场景摘要'}</div>
                     </div>
-                    <span class="stx-memory-chat-strategy-group-count">${lanes.length} 条车道</span>
+                    <span class="stx-memory-chat-ops-group-count">${lanes.length} 条车道</span>
                 </div>
-                <div class="stx-memory-chat-strategy-group-scene-body">
-                    <div class="stx-memory-chat-strategy-group-subsection">
-                        <span class="stx-memory-chat-strategy-group-subtitle">当前共识</span>
-                        <div class="stx-memory-chat-strategy-pill-wrap">
-                            ${groupConsensus.length > 0 ? groupConsensus.slice(0, 4).map((item: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-strategy-empty">暂无群体共识</span>'}
+                <div class="stx-memory-chat-ops-group-scene-body">
+                    <div class="stx-memory-chat-ops-group-subsection">
+                        <span class="stx-memory-chat-ops-group-subtitle">当前共识</span>
+                        <div class="stx-memory-chat-ops-pill-wrap">
+                            ${groupConsensus.length > 0 ? groupConsensus.slice(0, 4).map((item: string): string => `<span class="stx-memory-chat-ops-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-ops-empty">暂无群体共识</span>'}
                         </div>
                     </div>
-                    <div class="stx-memory-chat-strategy-group-subsection">
-                        <span class="stx-memory-chat-strategy-group-subtitle">待处理事件</span>
-                        <div class="stx-memory-chat-strategy-group-event-list">
+                    <div class="stx-memory-chat-ops-group-subsection">
+                        <span class="stx-memory-chat-ops-group-subtitle">待处理事件</span>
+                        <div class="stx-memory-chat-ops-group-event-list">
                             ${pendingEvents.length > 0 ? pendingEvents.slice(0, 2).map((item: string, index: number): string => `
-                                <div class="stx-memory-chat-strategy-group-event-item">
-                                    <span class="stx-memory-chat-strategy-group-event-index">${index + 1}</span>
-                                    <span class="stx-memory-chat-strategy-group-event-text">${escapeHtml(item)}</span>
+                                <div class="stx-memory-chat-ops-group-event-item">
+                                    <span class="stx-memory-chat-ops-group-event-index">${index + 1}</span>
+                                    <span class="stx-memory-chat-ops-group-event-text">${escapeHtml(item)}</span>
                                 </div>
-                            `.trim()).join('') : '<span class="stx-memory-chat-strategy-empty">暂无待处理事件</span>'}
+                            `.trim()).join('') : '<span class="stx-memory-chat-ops-empty">暂无待处理事件</span>'}
                         </div>
                     </div>
                 </div>
@@ -4666,7 +4969,7 @@ function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled
         `.trim();
 
         if (topLanes.length === 0) {
-                return `${sceneCardMarkup}<span class="stx-memory-chat-strategy-empty">分轨已开启，但当前还没有形成稳定角色车道。</span>`;
+                return `${sceneCardMarkup}<span class="stx-memory-chat-ops-empty">分轨已开启，但当前还没有形成稳定角色车道。</span>`;
         }
 
         const laneCardsMarkup = topLanes.map((lane, index): string => {
@@ -4681,18 +4984,18 @@ function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled
                         Number.isFinite(Number(lane.recentMessageIds?.length ?? 0)) ? `近期消息 ${Number(lane.recentMessageIds?.length ?? 0)} 条` : '',
                 ].filter((item: string): boolean => Boolean(item));
                 return `
-                    <article class="stx-memory-chat-strategy-group-lane-card">
-                        <div class="stx-memory-chat-strategy-group-lane-head">
-                            <div class="stx-memory-chat-strategy-group-lane-copy">
-                                <strong class="stx-memory-chat-strategy-group-lane-name">#${index + 1} ${escapeHtml(lane.displayName || lane.actorKey || '未命名角色')}</strong>
-                                <span class="stx-memory-chat-strategy-group-lane-time">最近活跃：${escapeHtml(formatTimestamp(Number(lane.lastActiveAt ?? 0)))}</span>
+                    <article class="stx-memory-chat-ops-group-lane-card">
+                        <div class="stx-memory-chat-ops-group-lane-head">
+                            <div class="stx-memory-chat-ops-group-lane-copy">
+                                <strong class="stx-memory-chat-ops-group-lane-name">#${index + 1} ${escapeHtml(lane.displayName || lane.actorKey || '未命名角色')}</strong>
+                                <span class="stx-memory-chat-ops-group-lane-time">最近活跃：${escapeHtml(formatTimestamp(Number(lane.lastActiveAt ?? 0)))}</span>
                             </div>
-                            <span class="stx-memory-chat-strategy-pill stx-memory-chat-strategy-group-salience">显著度 ${(salience * 100).toFixed(0)}%</span>
+                            <span class="stx-memory-chat-ops-pill stx-memory-chat-ops-group-salience">显著度 ${(salience * 100).toFixed(0)}%</span>
                         </div>
-                        <div class="stx-memory-chat-strategy-pill-wrap stx-memory-chat-strategy-group-lane-tags">
-                            ${metaPills.length > 0 ? metaPills.map((item: string): string => `<span class="stx-memory-chat-strategy-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-strategy-empty">暂无风格 / 情绪 / 目标线索</span>'}
+                        <div class="stx-memory-chat-ops-pill-wrap stx-memory-chat-ops-group-lane-tags">
+                            ${metaPills.length > 0 ? metaPills.map((item: string): string => `<span class="stx-memory-chat-ops-pill">${escapeHtml(item)}</span>`).join('') : '<span class="stx-memory-chat-ops-empty">暂无风格 / 情绪 / 目标线索</span>'}
                         </div>
-                        <div class="stx-memory-chat-strategy-group-lane-footer">
+                        <div class="stx-memory-chat-ops-group-lane-footer">
                             ${footerBits.length > 0 ? escapeHtml(footerBits.join(' · ')) : '暂无关系变化记录'}
                         </div>
                     </article>
@@ -4701,13 +5004,13 @@ function buildGroupLaneCardsMarkup(groupMemory: GroupMemoryState | null, enabled
 
         const hiddenLaneCount = Math.max(0, sortedLanes.length - topLanes.length);
         const hiddenLaneHint = hiddenLaneCount > 0
-                ? `<div class="stx-memory-chat-strategy-group-footnote">还有 ${hiddenLaneCount} 条车道未展开，已优先展示最活跃的角色。</div>`
+                ? `<div class="stx-memory-chat-ops-group-footnote">还有 ${hiddenLaneCount} 条车道未展开，已优先展示最活跃的角色。</div>`
                 : '';
 
         return `
-            <div class="stx-memory-chat-strategy-group-memory">
+            <div class="stx-memory-chat-ops-group-memory">
                 ${sceneCardMarkup}
-                <div class="stx-memory-chat-strategy-group-lane-grid">
+                <div class="stx-memory-chat-ops-group-lane-grid">
                     ${laneCardsMarkup}
                 </div>
                 ${hiddenLaneHint}

@@ -11,6 +11,7 @@ import {
 } from '../llm/skills';
 import type { ProposalEnvelope } from '../proposal/types';
 import type {
+    AutoSummaryDecisionSnapshot,
     ChatLifecycleState,
     ChatProfile,
     ChatMutationKind,
@@ -26,6 +27,13 @@ import type {
 } from '../types';
 import type { ChatStateManager } from './chat-state-manager';
 import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';
+import {
+    buildSemanticChangeSummary,
+    resolveAutoSummaryMode,
+    shouldRunAutoSummary,
+} from './auto-summary-trigger';
+import type { AutoSummaryDecisionResult, SemanticChangeSummary } from './auto-summary-trigger';
+import { resolveSummaryRuntimeSettings } from './summary-settings-store';
 import type { EventsManager } from './events-manager';
 import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from './lorebook-relevance-gate';
 import { MetaManager } from './meta-manager';
@@ -305,7 +313,7 @@ export class ExtractManager {
                         ? await this.chatStateManager.getLongSummaryCooldown()
                         : null;
                     const compressedWindow = this.precompressWindowText(windowText);
-                    const processingDecision = this.buildProcessingDecision({
+                    let processingDecision = this.buildProcessingDecision({
                         postGate,
                         summaryEnabled,
                         lifecycle: lifecycleState,
@@ -320,6 +328,52 @@ export class ExtractManager {
                         cooldown: longSummaryCooldown,
                         precompressedStats: compressedWindow.stats,
                     });
+                    let autoSummaryDecisionSnapshot: AutoSummaryDecisionSnapshot | null = null;
+
+                    if (this.chatStateManager) {
+                        const effectiveSummarySettings = await this.chatStateManager.getEffectiveSummarySettings();
+                        const autoSummaryRuntime = await this.chatStateManager.getAutoSummaryRuntime();
+                        const runtimeSettings = resolveSummaryRuntimeSettings(
+                            effectiveSummarySettings,
+                            null,
+                            longSummaryCooldown,
+                        );
+                        const autoSummaryMode = resolveAutoSummaryMode({
+                            presetStyle: chatProfile?.stylePreference ?? null,
+                            chatProfile,
+                            logicalView,
+                        });
+                        const semanticChange = buildSemanticChangeSummary({
+                            textWindow: compressedWindow.text,
+                            logicalView,
+                            postGate,
+                        });
+                        const promptPressureRatio = Number(
+                            (compressedWindow.stats.compressedLength / Math.max(1, runtimeSettings.longSummaryBudget)).toFixed(3),
+                        );
+                        const autoSummaryDecision = shouldRunAutoSummary({
+                            settings: effectiveSummarySettings.autoSummary,
+                            runtime: autoSummaryRuntime,
+                            activeAssistantTurnCount: currentAssistantTurnCount,
+                            currentMode: autoSummaryMode,
+                            textWindow: compressedWindow.text,
+                            enabledTriggerIds: effectiveSummarySettings.summaryBehavior.longSummaryTrigger,
+                            semanticChange,
+                            promptPressureRatio,
+                        });
+                        autoSummaryDecisionSnapshot = this.buildAutoSummaryDecisionSnapshot({
+                            decision: autoSummaryDecision,
+                            semanticChange,
+                            activeAssistantTurnCount: currentAssistantTurnCount,
+                            promptPressureRatio,
+                        });
+                        processingDecision = this.applyAutoSummaryDecision({
+                            baseDecision: processingDecision,
+                            autoDecision: autoSummaryDecision,
+                            summaryEnabled,
+                        });
+                        await this.chatStateManager.setLastAutoSummaryDecision(autoSummaryDecisionSnapshot);
+                    }
 
                     if (this.chatStateManager) {
                         await this.chatStateManager.setLastProcessingDecision(processingDecision);
@@ -439,13 +493,20 @@ export class ExtractManager {
                                 : 0,
                         });
                         if (processingDecision.summaryTier === 'long' && summarizeResult?.accepted) {
+                            const now = Date.now();
                             await this.chatStateManager.setLongSummaryCooldown({
-                                lastLongSummaryAt: Date.now(),
+                                lastLongSummaryAt: now,
                                 lastLongSummaryWindowHash: windowHash,
                                 lastLongSummaryReason: processingDecision.reasonCodes.join('|'),
                                 lastLongSummaryStage: lifecycleState?.stage ?? 'new',
-                                lastHeavyProcessAt: Date.now(),
+                                lastHeavyProcessAt: now,
                                 lastLongSummaryAssistantTurnCount: currentAssistantTurnCount,
+                            });
+                            await this.chatStateManager.setAutoSummaryRuntime({
+                                lastSummaryTurnCount: currentAssistantTurnCount,
+                                lastSummaryAt: now,
+                                lastTriggerReasonCodes: autoSummaryDecisionSnapshot?.reasonCodes ?? processingDecision.reasonCodes,
+                                lastMode: autoSummaryDecisionSnapshot?.mode ?? 'mixed',
                             });
                         } else if (extractResult?.accepted) {
                             await this.chatStateManager.setLongSummaryCooldown({
@@ -660,6 +721,129 @@ export class ExtractManager {
             factTypes: currentTemplate.factTypes,
             extractPolicies: currentTemplate.extractPolicies,
         };
+    }
+
+    /**
+     * 功能：将自动长总结判定收口到处理决策上，只控制是否允许进入 long summary。
+     * 参数：
+     *   input.baseDecision：基础处理决策（由既有主线计算）。
+     *   input.autoDecision：自动长总结判定结果。
+     *   input.summaryEnabled：当前轮次是否允许执行总结。
+     * 返回：
+     *   MemoryProcessingDecision：应用自动长总结判定后的决策。
+     */
+    private applyAutoSummaryDecision(input: {
+        baseDecision: MemoryProcessingDecision;
+        autoDecision: AutoSummaryDecisionResult;
+        summaryEnabled: boolean;
+    }): MemoryProcessingDecision {
+        const reasonCodes = new Set<string>([
+            ...(Array.isArray(input.baseDecision.reasonCodes) ? input.baseDecision.reasonCodes : []),
+            ...(Array.isArray(input.autoDecision.reasonCodes) ? input.autoDecision.reasonCodes : []),
+            `auto_summary_mode:${input.autoDecision.mode}`,
+        ]);
+        let summaryTier: SummaryExecutionTier = input.baseDecision.summaryTier;
+        const isEarlyTrigger = input.autoDecision.reasonCodes.includes('auto_summary:early_trigger');
+
+        if (summaryTier === 'long' && !input.autoDecision.shouldRun) {
+            summaryTier = input.summaryEnabled ? 'short' : 'none';
+            reasonCodes.add('auto_summary_gate:long_blocked');
+        } else if (summaryTier === 'long' && input.autoDecision.shouldRun) {
+            reasonCodes.add('auto_summary_gate:long_allowed');
+        }
+
+        if (
+            summaryTier !== 'long'
+            && input.autoDecision.shouldRun
+            && isEarlyTrigger
+            && !input.baseDecision.cooldownBlocked
+            && (input.baseDecision.level === 'medium' || input.baseDecision.level === 'heavy')
+            && input.summaryEnabled
+        ) {
+            summaryTier = 'long';
+            reasonCodes.add('auto_summary_gate:early_promoted');
+        } else if (
+            input.autoDecision.shouldRun
+            && isEarlyTrigger
+            && input.baseDecision.level === 'light'
+        ) {
+            reasonCodes.add('auto_summary_gate:light_not_promoted');
+        }
+
+        if (input.baseDecision.cooldownBlocked && input.autoDecision.shouldRun) {
+            reasonCodes.add('auto_summary_gate:cooldown_kept');
+        }
+
+        return {
+            ...input.baseDecision,
+            summaryTier,
+            reasonCodes: Array.from(reasonCodes),
+        };
+    }
+
+    /**
+     * 功能：构建自动长总结判定快照，供调试面板展示最近一次判定细节。
+     * 参数：
+     *   input.decision：自动长总结判定结果。
+     *   input.semanticChange：语义变化摘要。
+     *   input.activeAssistantTurnCount：当前 assistant turn 计数。
+     *   input.promptPressureRatio：近似 prompt 压力比。
+     * 返回：
+     *   AutoSummaryDecisionSnapshot：可持久化的判定快照。
+     */
+    private buildAutoSummaryDecisionSnapshot(input: {
+        decision: AutoSummaryDecisionResult;
+        semanticChange: SemanticChangeSummary;
+        activeAssistantTurnCount: number;
+        promptPressureRatio: number;
+    }): AutoSummaryDecisionSnapshot {
+        return {
+            shouldRun: input.decision.shouldRun,
+            mode: input.decision.mode,
+            threshold: input.decision.threshold,
+            activeAssistantTurnCount: Math.max(0, Math.round(Number(input.activeAssistantTurnCount ?? 0))),
+            turnsSinceLastSummary: input.decision.turnsSinceLastSummary,
+            reasonCodes: [...input.decision.reasonCodes],
+            matchedTriggerIds: [...input.decision.matchedTriggerIds],
+            scores: {
+                triggerRule: input.decision.scores.triggerRule,
+                semantic: input.decision.scores.semantic,
+                pressure: input.decision.scores.pressure,
+            },
+            semanticFlags: this.buildSemanticFlagList(input.semanticChange),
+            promptPressureRatio: Number(Math.max(0, Number(input.promptPressureRatio ?? 0)).toFixed(3)),
+            generatedAt: Date.now(),
+        };
+    }
+
+    /**
+     * 功能：把语义变化布尔信号转换为可读 flag 列表，便于调试面板直接展示。
+     * 参数：
+     *   semantic：语义变化摘要。
+     * 返回：
+     *   string[]：语义 flag 列表。
+     */
+    private buildSemanticFlagList(semantic: SemanticChangeSummary): string[] {
+        const flags: string[] = [];
+        if (semantic.hasLocationShift) {
+            flags.push('location_shift');
+        }
+        if (semantic.hasTimeShift) {
+            flags.push('time_shift');
+        }
+        if (semantic.hasRelationshipShift) {
+            flags.push('relationship_shift');
+        }
+        if (semantic.hasWorldStateShift) {
+            flags.push('world_state_shift');
+        }
+        if (semantic.hasUserCorrection) {
+            flags.push('user_correction');
+        }
+        if (semantic.hasImportantEvent) {
+            flags.push('important_event');
+        }
+        return flags;
     }
 
     /**

@@ -1,4 +1,4 @@
-import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared, restoreArchivedMemoryChat } from '../db/db';
+import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from '../db/db';
 import type { DBMeta } from '../db/db';
 import { logger, toast } from '../index';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
@@ -9,10 +9,13 @@ import WORLD_INFO_HERO_ICON_URL from '../../../assets/images/icon/woridifo.png';
 import { AuditManager } from '../core/audit-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
-import { readPluginSignal } from '../../../SDK/db';
-import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { escapeHtml, formatSourceKindLabel, formatSourceRefMeta, formatTimeLabel, normalizeLookup, parseLooseValue } from './editorShared';
-import { buildChatItemMeta, buildChatSummaryLabel, ChatItemMeta, formatArchiveReasonLabel, getCurrentMemoryChatKey, hasMeaningfulChatContent, resolveChatItemCanonicalKey } from './recordEditorChatList';
+import {
+    activateMemoryChatSidebarItem,
+    getCurrentMemoryChatKey,
+    loadMemoryChatSidebarItems,
+    renderMemoryChatSidebarList,
+} from './recordEditorChatList';
 import {
     buildWorldStateSectionTypeState,
     filterWorldStateEntriesByType,
@@ -3295,18 +3298,7 @@ const selectedLogicRowIds = new Set<string>();
      * @returns 无返回值
      */
     function activateChatItem(chatKey: string): void {
-        const normalizedChatKey = String(chatKey ?? '').trim();
-        const activeCanonicalKey = normalizedChatKey ? resolveChatItemCanonicalKey(normalizedChatKey) : '';
-        chatListContainer.querySelectorAll('.stx-re-chat-item').forEach((item: Element): void => {
-            const element = item as HTMLElement;
-            const itemChatKey = String(element.dataset.chatKey ?? '').trim();
-            const itemCanonicalKey = String(element.dataset.chatCanonicalKey ?? '').trim();
-            const isActive = !normalizedChatKey
-                ? itemChatKey === ''
-                : itemChatKey === normalizedChatKey
-                    || Boolean(activeCanonicalKey && itemCanonicalKey === activeCanonicalKey);
-            element.classList.toggle('is-active', isActive);
-        });
+        activateMemoryChatSidebarItem(chatListContainer, chatKey, '.stx-re-chat-item');
     }
 
     /**
@@ -3321,170 +3313,22 @@ const selectedLogicRowIds = new Set<string>();
     }
 
     /**
-     * 功能：判断聊天是否属于“宿主仍存在，但曾被误标删除”的可恢复状态。
-     * @param archived 当前插件状态是否已归档。
-     * @param archiveReason 当前归档原因。
-     * @param hostPresent 宿主聊天是否仍然存在。
-     * @returns 是否应该恢复为正常状态。
-     */
-    function shouldRecoverChatArchiveState(archived: boolean, archiveReason: string, hostPresent: boolean): boolean {
-        if (!archived || !hostPresent) {
-            return false;
-        }
-        const normalizedReason = String(archiveReason ?? '').trim().toLowerCase();
-        if (!normalizedReason) {
-            return false;
-        }
-        return normalizedReason.includes('orphaned') || normalizedReason.includes('host_deleted') || normalizedReason.includes('host_chat_deleted');
-    }
-
-    /**
      * 功能：加载聊天列表并附带 MemoryOS 摘要。
      * @returns 无返回值
      */
     async function loadChatKeys(): Promise<void> {
         try {
-            const [metaKeys, eventKeys, hostChats] = await Promise.all([
-                db.meta.toCollection().primaryKeys(),
-                db.events.orderBy('chatKey').uniqueKeys(),
-                listTavernChatsForCurrentTavernEvent().catch((): unknown[] => []),
-            ]);
-            const allKeys = Array.from(
-                new Set(
-                    [...metaKeys, ...eventKeys]
-                        .map((item: unknown): string => String(item ?? '').trim())
-                        .filter(Boolean),
-                ),
-            ) as string[];
-
-            const hostCanonicalKeySet = new Set(
-                (Array.isArray(hostChats) ? hostChats : [])
-                    .map((item: unknown): string => {
-                        const locator = (item as { locator?: Record<string, unknown> })?.locator;
-                        if (!locator || typeof locator !== 'object') {
-                            return '';
-                        }
-                        const parsed = parseAnyTavernChatRefEvent(locator as any);
-                        return buildTavernChatEntityKeyEvent(parsed);
-                    })
-                    .filter(Boolean),
-            );
-
-            const hostChatKeySet = new Set(
-                (Array.isArray(hostChats) ? hostChats : [])
-                    .map((item: unknown): string => {
-                        const locator = (item as { locator?: Record<string, unknown> })?.locator;
-                        if (!locator || typeof locator !== 'object') {
-                            return '';
-                        }
-                        return String(buildTavernChatScopedKeyEvent(locator as any) || '').trim();
-                    })
-                    .filter(Boolean),
-            );
-
-            const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }> => {
-                const signal = await readPluginSignal(chatKey, MEMORY_OS_PLUGIN_ID);
-                const [item, hasMeaningfulData] = await Promise.all([
-                    buildChatItemMeta(chatKey, signal, hostCanonicalKeySet, hostChatKeySet),
-                    hasMeaningfulChatContent(chatKey),
-                ]);
-                const hostPresent = hostChatKeySet.has(chatKey) || Boolean(item.canonicalKey && hostCanonicalKeySet.has(item.canonicalKey));
-                return {
-                    ...item,
-                    hostPresent,
-                    hasMeaningfulData,
-                };
-            }));
-            const recoverableChatKeys = items
-                .filter((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): boolean => {
-                    return shouldRecoverChatArchiveState(item.archived, item.archiveReason, item.hostPresent);
-                })
-                .map((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): string => item.chatKey);
-
-            if (recoverableChatKeys.length > 0) {
-                await Promise.all(
-                    recoverableChatKeys.map((chatKey: string): Promise<void> => restoreArchivedMemoryChat(chatKey)),
-                );
-                for (const item of items) {
-                    if (!recoverableChatKeys.includes(item.chatKey)) {
-                        continue;
-                    }
-                    item.archived = false;
-                    item.archiveReason = '';
-                }
-            }
-            const activeCanonicalKey = resolveChatItemCanonicalKey(currentChatKey);
-            const dedupedItems = Array.from(items.reduce((map: Map<string, ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }>, item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }) => {
-                const dedupeKey = item.canonicalKey || item.chatKey;
-                const existing = map.get(dedupeKey);
-                if (!existing) {
-                    map.set(dedupeKey, item);
-                    return map;
-                }
-
-                const existingIsActive = Boolean(activeCanonicalKey) && existing.canonicalKey === activeCanonicalKey;
-                const nextIsActive = Boolean(activeCanonicalKey) && item.canonicalKey === activeCanonicalKey;
-                const nextCreatedAt = Number(item.createdAt ?? 0);
-                const existingCreatedAt = Number(existing.createdAt ?? 0);
-                const preferredItem = nextIsActive && !existingIsActive
-                    ? item
-                    : (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal) ? item : existing);
-                const mergedHostPresent = existing.hostPresent || item.hostPresent;
-                const mergedArchiveReason = preferredItem.archiveReason || existing.archiveReason || item.archiveReason;
-                const mergedArchived = (existing.archived || item.archived)
-                    && !shouldRecoverChatArchiveState(existing.archived || item.archived, mergedArchiveReason, mergedHostPresent);
-                const mergedItem = {
-                    ...preferredItem,
-                    archived: mergedArchived,
-                    hostMissing: !mergedHostPresent && (existing.hostMissing || item.hostMissing),
-                    hostPresent: mergedHostPresent,
-                    hasMeaningfulData: existing.hasMeaningfulData || item.hasMeaningfulData,
-                    archiveReason: mergedArchived ? mergedArchiveReason : '',
-                    signal: preferredItem.signal || existing.signal || item.signal,
-                } as ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean };
-                map.set(dedupeKey, mergedItem);
-                return map;
-            }, new Map<string, ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }>()).values()).filter((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): boolean => {
-                return item.hostPresent || item.hasMeaningfulData || item.archived;
+            const items = await loadMemoryChatSidebarItems({
+                activeChatKey: currentChatKey,
+                recoverArchivedIfHostExists: true,
             });
-
-            const allItemHtml = `
-                <div class="stx-re-chat-item${currentChatKey ? '' : ' is-active'}" data-chat-key="">
-                    <div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-globe"></i></div>
-                    <div class="stx-re-chat-info">
-                        <div class="stx-re-chat-name-wrap">
-                            <div class="stx-re-chat-name">全局记录</div>
-                        </div>
-                        <div class="stx-re-chat-sys">Database Root</div>
-                        <div class="stx-re-chat-sys">仅原始库表可查看</div>
-                    </div>
-                </div>
-            `;
-
-            const listHtml = dedupedItems
-                .sort((left: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }, right: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
-                .map((item: ChatItemMeta & { hostPresent: boolean; hasMeaningfulData: boolean }): string => {
-                    const deleted = item.archived || item.hostMissing;
-                    const deletedReason = item.archiveReason || (item.hostMissing ? 'host_chat_deleted' : '');
-                    return `
-                    <div class="stx-re-chat-item${item.chatKey === currentChatKey || (activeCanonicalKey && item.canonicalKey === activeCanonicalKey) ? ' is-active' : ''}${deleted ? ' is-archived' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" data-chat-canonical-key="${escapeHtml(item.canonicalKey)}" data-archived="${deleted ? 'true' : 'false'}" title="${escapeHtml(deleted ? `${item.systemName}\n${formatArchiveReasonLabel(deletedReason)}` : item.systemName)}">
-                        ${item.avatarHtml}
-                        <div class="stx-re-chat-info">
-                            <div class="stx-re-chat-name-wrap">
-                                <div class="stx-re-chat-name" title="${escapeHtml(item.displayName)}">${escapeHtml(item.displayName)}</div>
-                                ${deleted ? `<span class="stx-re-chat-status-badge">已删除</span>` : ''}
-                            </div>
-                            <div class="stx-re-chat-sys" title="${escapeHtml(item.systemName)}">${escapeHtml(item.systemName)}</div>
-                            <div class="stx-re-chat-sys">${escapeHtml(buildChatSummaryLabel(item.signal))}</div>
-                            ${deleted ? `<div class="stx-re-chat-sys stx-re-chat-sys-status">${escapeHtml(formatArchiveReasonLabel(deletedReason))}</div>` : ''}
-                            ${item.createdAt ? `<div class="stx-re-chat-time">${escapeHtml(formatTimeLabel(item.createdAt))}</div>` : ''}
-                        </div>
-                    </div>
-                `;
-                })
-                .join('');
-
-            chatListContainer.innerHTML = `${allItemHtml}${listHtml}`;
+            renderMemoryChatSidebarList(chatListContainer, items, {
+                activeChatKey: currentChatKey,
+                includeGlobalEntry: true,
+                globalEntryTitle: '全局记录',
+                globalEntryMetaLine1: 'Database Root',
+                globalEntryMetaLine2: '仅原始库表可查看',
+            });
             activateChatItem(currentChatKey);
         } catch (error) {
             logger.error('加载聊天列表失败', error);

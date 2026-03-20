@@ -66,7 +66,7 @@ export function formatMainlineTraceStatus(traceSnapshot: MemoryMainlineTraceSnap
 export function buildMainlineTraceEvidenceMarkup(traceSnapshot: MemoryMainlineTraceSnapshot | null | undefined): string {
     const normalized = traceSnapshot ?? null;
     if (!normalized) {
-        return '<span class="stx-memory-chat-strategy-empty">暂无主链执行证据</span>';
+        return '<span class="stx-memory-chat-ops-empty">暂无主链执行证据</span>';
     }
 
     const rows: Array<{ label: string; trace: MemoryMainlineTraceEntry | null }> = [
@@ -102,7 +102,7 @@ export function buildMainlineTraceEvidenceMarkup(traceSnapshot: MemoryMainlineTr
     ].filter(Boolean);
 
     return `
-      <div class="stx-memory-chat-strategy-quality-list">
+      <div class="stx-memory-chat-ops-quality-list">
         ${rows.map((row): string => {
             const trace = row.trace;
             const detail = trace?.detail && typeof trace.detail === 'object' ? trace.detail as Record<string, unknown> : null;
@@ -112,14 +112,14 @@ export function buildMainlineTraceEvidenceMarkup(traceSnapshot: MemoryMainlineTr
                 detail?.reasonCodes && Array.isArray(detail.reasonCodes) ? `${(detail.reasonCodes as unknown[]).length} 条原因` : '',
             ].filter(Boolean);
             return `
-              <div class="stx-memory-chat-strategy-quality-advice-item">
+              <div class="stx-memory-chat-ops-quality-advice-item">
                 <strong>${escapeHtml(row.label)}</strong>
                 <span>${trace ? `${escapeHtml(trace.label)} · ${escapeHtml(formatRelativeTime(trace.ts))}` : '暂无记录'}</span>
                 <small>${escapeHtml(extraBits.join(' · ') || '等待主链写入')}</small>
               </div>
             `.trim();
         }).join('')}
-        <div class="stx-memory-chat-strategy-quality-advice-item">
+        <div class="stx-memory-chat-ops-quality-advice-item">
           <strong>最近一轮注入</strong>
           <span>${escapeHtml(promptBits.join(' · ') || '暂无注入详情')}</span>
           <small>${escapeHtml(formatMainlineTraceStatus(normalized))}</small>

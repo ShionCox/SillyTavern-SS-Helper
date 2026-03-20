@@ -1,8 +1,9 @@
-import { db } from '../db/db';
+import { db, restoreArchivedMemoryChat } from '../db/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readSdkPluginChatState } from '../../../SDK/db';
-import { buildTavernChatEntityKeyEvent, getTavernContextSnapshotEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import { buildTavernChatEntityKeyEvent, buildTavernChatScopedKeyEvent, getTavernContextSnapshotEvent, listTavernChatsForCurrentTavernEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { escapeHtml, formatTimeLabel } from './editorShared';
+import type { SdkTavernChatLocatorEvent } from '../../../SDK/tavern/types';
 
 export interface ChatItemMeta {
     chatKey: string;
@@ -15,6 +16,29 @@ export interface ChatItemMeta {
     archived: boolean;
     hostMissing: boolean;
     archiveReason: string;
+}
+
+export interface MemoryChatSidebarItem extends ChatItemMeta {
+    hostPresent: boolean;
+    hasMeaningfulData: boolean;
+    deleted: boolean;
+    deletedReason: string;
+}
+
+export interface LoadMemoryChatSidebarItemsOptions {
+    activeChatKey?: string;
+    recoverArchivedIfHostExists?: boolean;
+}
+
+export interface RenderMemoryChatSidebarListOptions {
+    activeChatKey?: string;
+    includeGlobalEntry?: boolean;
+    itemClassName?: string;
+    includeLegacyItemClassName?: boolean;
+    emptyText?: string;
+    globalEntryTitle?: string;
+    globalEntryMetaLine1?: string;
+    globalEntryMetaLine2?: string;
 }
 
 /**
@@ -188,4 +212,271 @@ export async function buildChatItemMeta(
         hostMissing,
         archiveReason,
     };
+}
+
+/**
+ * 功能：根据宿主聊天列表构建 chatKey/canonicalKey 集合。
+ * @param hostChats 宿主聊天列表。
+ * @returns 宿主 chatKey 集合与 canonicalKey 集合。
+ */
+function buildHostChatLookupSets(hostChats: unknown[]): { hostCanonicalKeySet: Set<string>; hostChatKeySet: Set<string> } {
+    const hostCanonicalKeySet = new Set(
+        (Array.isArray(hostChats) ? hostChats : [])
+            .map((item: unknown): string => {
+                const locator = (item as { locator?: Record<string, unknown> })?.locator;
+                if (!locator || typeof locator !== 'object') {
+                    return '';
+                }
+                const parsed = parseAnyTavernChatRefEvent(locator as any);
+                return buildTavernChatEntityKeyEvent(parsed);
+            })
+            .filter(Boolean),
+    );
+    const hostChatKeySet = new Set(
+        (Array.isArray(hostChats) ? hostChats : [])
+            .map((item: unknown): string => {
+                const locator = (item as { locator?: SdkTavernChatLocatorEvent })?.locator;
+                if (!locator || typeof locator !== 'object') {
+                    return '';
+                }
+                return String(buildTavernChatScopedKeyEvent(locator as SdkTavernChatLocatorEvent) || '').trim();
+            })
+            .filter(Boolean),
+    );
+    return { hostCanonicalKeySet, hostChatKeySet };
+}
+
+/**
+ * 功能：判断聊天是否属于“宿主仍存在但被误判删除”的可恢复状态。
+ * @param archived 当前插件状态是否已归档。
+ * @param archiveReason 归档原因码。
+ * @param hostPresent 宿主是否仍存在。
+ * @returns 是否建议恢复归档状态。
+ */
+function shouldRecoverChatArchiveState(archived: boolean, archiveReason: string, hostPresent: boolean): boolean {
+    if (!archived || !hostPresent) {
+        return false;
+    }
+    const normalizedReason = String(archiveReason ?? '').trim().toLowerCase();
+    if (!normalizedReason) {
+        return false;
+    }
+    return normalizedReason.includes('orphaned') || normalizedReason.includes('host_deleted') || normalizedReason.includes('host_chat_deleted');
+}
+
+/**
+ * 功能：按 canonicalKey 去重聊天项，优先保留当前激活项与较新记录。
+ * @param items 原始聊天项列表。
+ * @param activeChatKey 当前激活聊天键。
+ * @returns 去重后的聊天项列表。
+ */
+function dedupeMemoryChatSidebarItems(items: MemoryChatSidebarItem[], activeChatKey: string): MemoryChatSidebarItem[] {
+    const activeCanonicalKey = resolveChatItemCanonicalKey(activeChatKey);
+    return Array.from(items.reduce((map: Map<string, MemoryChatSidebarItem>, item: MemoryChatSidebarItem) => {
+        const dedupeKey = item.canonicalKey || item.chatKey;
+        const existing = map.get(dedupeKey);
+        if (!existing) {
+            map.set(dedupeKey, item);
+            return map;
+        }
+
+        const existingIsActive = Boolean(activeCanonicalKey) && existing.canonicalKey === activeCanonicalKey;
+        const nextIsActive = Boolean(activeCanonicalKey) && item.canonicalKey === activeCanonicalKey;
+        const nextCreatedAt = Number(item.createdAt ?? 0);
+        const existingCreatedAt = Number(existing.createdAt ?? 0);
+        const preferredItem = nextIsActive && !existingIsActive
+            ? item
+            : (nextCreatedAt > existingCreatedAt || (!existing.signal && item.signal) ? item : existing);
+        const mergedHostPresent = existing.hostPresent || item.hostPresent;
+        const mergedArchiveReason = preferredItem.archiveReason || existing.archiveReason || item.archiveReason;
+        const mergedArchived = (existing.archived || item.archived)
+            && !shouldRecoverChatArchiveState(existing.archived || item.archived, mergedArchiveReason, mergedHostPresent);
+        const mergedItem: MemoryChatSidebarItem = {
+            ...preferredItem,
+            archived: mergedArchived,
+            hostMissing: !mergedHostPresent && (existing.hostMissing || item.hostMissing),
+            hostPresent: mergedHostPresent,
+            hasMeaningfulData: existing.hasMeaningfulData || item.hasMeaningfulData,
+            archiveReason: mergedArchived ? mergedArchiveReason : '',
+            signal: preferredItem.signal || existing.signal || item.signal,
+            deleted: mergedArchived || (!mergedHostPresent && (existing.hostMissing || item.hostMissing)),
+            deletedReason: mergedArchived
+                ? (mergedArchiveReason || 'host_chat_deleted')
+                : ((!mergedHostPresent && (existing.hostMissing || item.hostMissing)) ? 'host_chat_deleted' : ''),
+        };
+        map.set(dedupeKey, mergedItem);
+        return map;
+    }, new Map<string, MemoryChatSidebarItem>()).values()).filter((item: MemoryChatSidebarItem): boolean => {
+        return item.hostPresent || item.hasMeaningfulData || item.archived;
+    });
+}
+
+/**
+ * 功能：加载可复用的聊天侧栏列表数据（供记录编辑器与策略编辑器共用）。
+ * @param options 加载选项。
+ * @returns 聊天侧栏项列表。
+ */
+export async function loadMemoryChatSidebarItems(options: LoadMemoryChatSidebarItemsOptions = {}): Promise<MemoryChatSidebarItem[]> {
+    const activeChatKey = String(options.activeChatKey ?? '').trim();
+    const shouldRecoverArchived = options.recoverArchivedIfHostExists !== false;
+    const [metaKeys, eventKeys, hostChats] = await Promise.all([
+        db.meta.toCollection().primaryKeys(),
+        db.events.orderBy('chatKey').uniqueKeys(),
+        listTavernChatsForCurrentTavernEvent().catch((): unknown[] => []),
+    ]);
+    const allKeys = Array.from(
+        new Set(
+            [...metaKeys, ...eventKeys]
+                .map((item: unknown): string => String(item ?? '').trim())
+                .filter(Boolean),
+        ),
+    ) as string[];
+    const { hostCanonicalKeySet, hostChatKeySet } = buildHostChatLookupSets(hostChats);
+    const items = await Promise.all(allKeys.map(async (chatKey: string): Promise<MemoryChatSidebarItem> => {
+        const signal = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey).then((row) => {
+            const rawSignal = (row?.state as Record<string, unknown> | undefined)?.signals as Record<string, unknown> | undefined;
+            const scoped = rawSignal?.[MEMORY_OS_PLUGIN_ID];
+            return (scoped && typeof scoped === 'object') ? (scoped as Record<string, unknown>) : null;
+        }).catch((): Record<string, unknown> | null => null);
+        const [item, hasData] = await Promise.all([
+            buildChatItemMeta(chatKey, signal, hostCanonicalKeySet, hostChatKeySet),
+            hasMeaningfulChatContent(chatKey),
+        ]);
+        const hostPresent = hostChatKeySet.has(chatKey) || Boolean(item.canonicalKey && hostCanonicalKeySet.has(item.canonicalKey));
+        const deleted = item.archived || item.hostMissing;
+        const deletedReason = item.archiveReason || (item.hostMissing ? 'host_chat_deleted' : '');
+        return {
+            ...item,
+            hostPresent,
+            hasMeaningfulData: hasData,
+            deleted,
+            deletedReason,
+        };
+    }));
+
+    if (shouldRecoverArchived) {
+        const recoverableChatKeys = items
+            .filter((item: MemoryChatSidebarItem): boolean => shouldRecoverChatArchiveState(item.archived, item.archiveReason, item.hostPresent))
+            .map((item: MemoryChatSidebarItem): string => item.chatKey);
+        if (recoverableChatKeys.length > 0) {
+            await Promise.all(recoverableChatKeys.map((chatKey: string): Promise<void> => restoreArchivedMemoryChat(chatKey)));
+            for (const item of items) {
+                if (!recoverableChatKeys.includes(item.chatKey)) {
+                    continue;
+                }
+                item.archived = false;
+                item.archiveReason = '';
+                item.deleted = item.hostMissing;
+                item.deletedReason = item.hostMissing ? 'host_chat_deleted' : '';
+            }
+        }
+    }
+
+    return dedupeMemoryChatSidebarItems(items, activeChatKey)
+        .sort((left: MemoryChatSidebarItem, right: MemoryChatSidebarItem): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0));
+}
+
+/**
+ * 功能：把侧栏聊天项渲染为统一 HTML（支持记录编辑器与策略编辑器共用）。
+ * @param items 聊天侧栏项列表。
+ * @param options 渲染选项。
+ * @returns 侧栏 HTML 字符串。
+ */
+export function buildMemoryChatSidebarListMarkup(items: MemoryChatSidebarItem[], options: RenderMemoryChatSidebarListOptions = {}): string {
+    const activeChatKey = String(options.activeChatKey ?? '').trim();
+    const itemClassName = String(options.itemClassName ?? '').trim();
+    const includeLegacyItemClassName = options.includeLegacyItemClassName !== false;
+    const classNameParts = [
+        includeLegacyItemClassName ? 'stx-re-chat-item' : '',
+        itemClassName,
+    ].filter(Boolean);
+    const mergedClassName = classNameParts.join(' ').trim();
+    if (items.length === 0 && !options.includeGlobalEntry) {
+        return `<div class="stx-re-empty">${escapeHtml(options.emptyText || '当前没有可用聊天。')}</div>`;
+    }
+    const activeCanonicalKey = resolveChatItemCanonicalKey(activeChatKey);
+    const globalHtml = options.includeGlobalEntry
+        ? `
+            <div class="${mergedClassName}${activeChatKey ? '' : ' is-active'}" data-chat-key="">
+                <div class="stx-re-chat-avatar-icon"><i class="fa-solid fa-globe"></i></div>
+                <div class="stx-re-chat-info">
+                    <div class="stx-re-chat-name-wrap">
+                        <div class="stx-re-chat-name">${escapeHtml(options.globalEntryTitle || '全局记录')}</div>
+                    </div>
+                    <div class="stx-re-chat-sys">${escapeHtml(options.globalEntryMetaLine1 || 'Database Root')}</div>
+                    <div class="stx-re-chat-sys">${escapeHtml(options.globalEntryMetaLine2 || '仅原始库表可查看')}</div>
+                </div>
+            </div>
+        `.trim()
+        : '';
+    const itemHtml = items.map((item: MemoryChatSidebarItem): string => {
+        const isActive = item.chatKey === activeChatKey || (activeCanonicalKey && item.canonicalKey === activeCanonicalKey);
+        const title = item.deleted
+            ? `${item.systemName}\n${formatArchiveReasonLabel(item.deletedReason)}`
+            : item.systemName;
+        return `
+            <div class="${mergedClassName}${isActive ? ' is-active' : ''}${item.deleted ? ' is-archived' : ''}" data-chat-key="${escapeHtml(item.chatKey)}" data-chat-canonical-key="${escapeHtml(item.canonicalKey)}" data-archived="${item.deleted ? 'true' : 'false'}" title="${escapeHtml(title)}">
+                ${item.avatarHtml}
+                <div class="stx-re-chat-info">
+                    <div class="stx-re-chat-name-wrap">
+                        <div class="stx-re-chat-name" title="${escapeHtml(item.displayName)}">${escapeHtml(item.displayName)}</div>
+                        ${item.deleted ? '<span class="stx-re-chat-status-badge">已删除</span>' : ''}
+                    </div>
+                    <div class="stx-re-chat-sys" title="${escapeHtml(item.systemName)}">${escapeHtml(item.systemName)}</div>
+                    <div class="stx-re-chat-sys">${escapeHtml(buildChatSummaryLabel(item.signal))}</div>
+                    ${item.deleted ? `<div class="stx-re-chat-sys stx-re-chat-sys-status">${escapeHtml(formatArchiveReasonLabel(item.deletedReason))}</div>` : ''}
+                    ${item.createdAt ? `<div class="stx-re-chat-time">${escapeHtml(formatTimeLabel(item.createdAt))}</div>` : ''}
+                </div>
+            </div>
+        `.trim();
+    }).join('');
+    return `${globalHtml}${itemHtml}`;
+}
+
+/**
+ * 功能：将聊天侧栏列表写入容器。
+ * @param container 聊天侧栏容器。
+ * @param items 聊天侧栏项列表。
+ * @param options 渲染选项。
+ * @returns 无返回值。
+ */
+export function renderMemoryChatSidebarList(container: HTMLElement, items: MemoryChatSidebarItem[], options: RenderMemoryChatSidebarListOptions = {}): void {
+    container.innerHTML = buildMemoryChatSidebarListMarkup(items, options);
+}
+
+/**
+ * 功能：同步聊天侧栏激活态。
+ * @param container 聊天侧栏容器。
+ * @param chatKey 当前激活聊天键。
+ * @param selector 列表项选择器。
+ * @returns 无返回值。
+ */
+export function activateMemoryChatSidebarItem(container: ParentNode, chatKey: string, selector: string = '.stx-re-chat-item'): void {
+    const normalizedChatKey = String(chatKey ?? '').trim();
+    const activeCanonicalKey = normalizedChatKey ? resolveChatItemCanonicalKey(normalizedChatKey) : '';
+    container.querySelectorAll(selector).forEach((item: Element): void => {
+        const element = item as HTMLElement;
+        const itemChatKey = String(element.dataset.chatKey ?? '').trim();
+        const itemCanonicalKey = String(element.dataset.chatCanonicalKey ?? '').trim();
+        const isActive = !normalizedChatKey
+            ? itemChatKey === ''
+            : itemChatKey === normalizedChatKey || Boolean(activeCanonicalKey && itemCanonicalKey === activeCanonicalKey);
+        element.classList.toggle('is-active', isActive);
+    });
+}
+
+/**
+ * 功能：按关键字过滤聊天侧栏列表项。
+ * @param container 聊天侧栏容器。
+ * @param keyword 关键字。
+ * @param selector 列表项选择器。
+ * @returns 无返回值。
+ */
+export function filterMemoryChatSidebarList(container: ParentNode, keyword: string, selector: string = '.stx-re-chat-item'): void {
+    const normalizedKeyword = String(keyword ?? '').trim().toLowerCase();
+    container.querySelectorAll(selector).forEach((item: Element): void => {
+        const element = item as HTMLElement;
+        const text = element.textContent?.toLowerCase() || '';
+        element.hidden = Boolean(normalizedKeyword) && !text.includes(normalizedKeyword);
+    });
 }

@@ -20,6 +20,8 @@ import type {
     AdaptiveMetrics,
     AdaptivePolicy,
     AssistantTurnTracker,
+    AutoSummaryDecisionSnapshot,
+    AutoSummaryRuntimeState,
     AutoSchemaPolicy,
     ChatLifecycleStage,
     ChatLifecycleState,
@@ -88,6 +90,7 @@ import type {
 } from '../types';
 import {
     DEFAULT_ADAPTIVE_METRICS,
+    DEFAULT_AUTO_SUMMARY_RUNTIME_STATE,
     DEFAULT_ASSISTANT_TURN_TRACKER,
     DEFAULT_AUTO_SCHEMA_POLICY,
     DEFAULT_CHAT_LIFECYCLE_STATE,
@@ -1281,6 +1284,8 @@ export class ChatStateManager {
                     .slice(-12)
                 : [],
             longSummaryCooldown: this.normalizeLongSummaryCooldownState(state.longSummaryCooldown ?? null),
+            autoSummaryRuntime: this.normalizeAutoSummaryRuntimeState(state.autoSummaryRuntime ?? null),
+            lastAutoSummaryDecision: this.normalizeAutoSummaryDecision(state.lastAutoSummaryDecision ?? null),
             manualOverrides,
             lastStrategyDecision: state.lastStrategyDecision ?? null,
         };
@@ -2256,6 +2261,59 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取自动长总结运行态。
+     * 返回：
+     *   AutoSummaryRuntimeState：自动长总结运行态。
+     */
+    async getAutoSummaryRuntime(): Promise<AutoSummaryRuntimeState> {
+        const state = await this.load();
+        state.autoSummaryRuntime = this.normalizeAutoSummaryRuntimeState(state.autoSummaryRuntime ?? null);
+        return state.autoSummaryRuntime;
+    }
+
+    /**
+     * 功能：更新自动长总结运行态。
+     * 参数：
+     *   patch：运行态补丁。
+     * 返回：
+     *   AutoSummaryRuntimeState：更新后的运行态。
+     */
+    async setAutoSummaryRuntime(patch: Partial<AutoSummaryRuntimeState>): Promise<AutoSummaryRuntimeState> {
+        const state = await this.load();
+        state.autoSummaryRuntime = this.normalizeAutoSummaryRuntimeState({
+            ...this.normalizeAutoSummaryRuntimeState(state.autoSummaryRuntime ?? null),
+            ...(patch ?? {}),
+        });
+        this.markDirty();
+        return state.autoSummaryRuntime;
+    }
+
+    /**
+     * 功能：读取最近一次自动长总结判定快照。
+     * 返回：
+     *   AutoSummaryDecisionSnapshot | null：最近一次判定快照。
+     */
+    async getLastAutoSummaryDecision(): Promise<AutoSummaryDecisionSnapshot | null> {
+        const state = await this.load();
+        state.lastAutoSummaryDecision = this.normalizeAutoSummaryDecision(state.lastAutoSummaryDecision ?? null);
+        return state.lastAutoSummaryDecision ?? null;
+    }
+
+    /**
+     * 功能：写入最近一次自动长总结判定快照。
+     * 参数：
+     *   decision：判定快照。
+     * 返回：
+     *   AutoSummaryDecisionSnapshot | null：写入后的快照。
+     */
+    async setLastAutoSummaryDecision(decision: AutoSummaryDecisionSnapshot | null): Promise<AutoSummaryDecisionSnapshot | null> {
+        const state = await this.load();
+        state.lastAutoSummaryDecision = this.normalizeAutoSummaryDecision(decision);
+        this.markDirty();
+        return state.lastAutoSummaryDecision ?? null;
+    }
+
+    /**
      * 功能：归一化处理等级决策。
      * @param decision 原始决策。
      * @returns 归一化后的决策或 null。
@@ -2302,6 +2360,54 @@ export class ChatStateManager {
             lastLongSummaryStage: (cooldown?.lastLongSummaryStage ?? DEFAULT_LONG_SUMMARY_COOLDOWN.lastLongSummaryStage) as LongSummaryCooldownState['lastLongSummaryStage'],
             lastHeavyProcessAt: Math.max(0, Number(cooldown?.lastHeavyProcessAt ?? 0)),
             lastLongSummaryAssistantTurnCount: Math.max(0, Number(cooldown?.lastLongSummaryAssistantTurnCount ?? 0)),
+        };
+    }
+
+    /**
+     * 功能：归一化自动长总结运行态。
+     * 参数：
+     *   runtime：原始运行态。
+     * 返回：
+     *   AutoSummaryRuntimeState：归一化后的运行态。
+     */
+    private normalizeAutoSummaryRuntimeState(runtime: AutoSummaryRuntimeState | null | undefined): AutoSummaryRuntimeState {
+        return {
+            ...DEFAULT_AUTO_SUMMARY_RUNTIME_STATE,
+            ...(runtime ?? {}),
+            lastSummaryTurnCount: Math.max(0, Number(runtime?.lastSummaryTurnCount ?? 0)),
+            lastSummaryAt: Math.max(0, Number(runtime?.lastSummaryAt ?? 0)),
+            lastTriggerReasonCodes: Array.isArray(runtime?.lastTriggerReasonCodes) ? runtime.lastTriggerReasonCodes.filter(Boolean) : [],
+            lastMode: (runtime?.lastMode ?? DEFAULT_AUTO_SUMMARY_RUNTIME_STATE.lastMode) as AutoSummaryRuntimeState['lastMode'],
+        };
+    }
+
+    /**
+     * 功能：归一化自动长总结判定快照。
+     * 参数：
+     *   decision：原始判定快照。
+     * 返回：
+     *   AutoSummaryDecisionSnapshot | null：归一化后的判定快照。
+     */
+    private normalizeAutoSummaryDecision(decision: AutoSummaryDecisionSnapshot | null | undefined): AutoSummaryDecisionSnapshot | null {
+        if (!decision) {
+            return null;
+        }
+        return {
+            shouldRun: decision.shouldRun === true,
+            mode: (decision.mode ?? 'mixed') as AutoSummaryDecisionSnapshot['mode'],
+            threshold: Math.max(1, Number(decision.threshold ?? 1)),
+            activeAssistantTurnCount: Math.max(0, Number(decision.activeAssistantTurnCount ?? 0)),
+            turnsSinceLastSummary: Math.max(0, Number(decision.turnsSinceLastSummary ?? 0)),
+            reasonCodes: Array.isArray(decision.reasonCodes) ? decision.reasonCodes.filter(Boolean) : [],
+            matchedTriggerIds: Array.isArray(decision.matchedTriggerIds) ? decision.matchedTriggerIds.filter(Boolean) : [],
+            scores: {
+                triggerRule: Math.max(0, Math.min(1.5, Number(decision.scores?.triggerRule ?? 0))),
+                semantic: Math.max(0, Math.min(1.5, Number(decision.scores?.semantic ?? 0))),
+                pressure: Math.max(0, Math.min(1.5, Number(decision.scores?.pressure ?? 0))),
+            },
+            semanticFlags: Array.isArray(decision.semanticFlags) ? decision.semanticFlags.filter(Boolean) : [],
+            promptPressureRatio: Math.max(0, Number(decision.promptPressureRatio ?? 0)),
+            generatedAt: Math.max(0, Number(decision.generatedAt ?? 0)),
         };
     }
 
