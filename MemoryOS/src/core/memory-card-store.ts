@@ -1,8 +1,10 @@
 import { db, type DBFact, type DBMemoryCard, type DBSummary } from '../db/db';
 import type { MemoryCard, MemoryCardDraft, MemoryCardLane, MemorySummaryEnvelope } from '../../../SDK/stx';
 import { buildMemoryCardDraftsFromFact } from './memory-card-text';
+import { buildMemoryCardDraftsFromSemanticSeed } from './memory-card-semantic-seed';
 import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
 import { VectorManager } from '../vector/vector-manager';
+import type { ChatSemanticSeed } from '../types';
 
 /**
  * 功能：将任意值规整为紧凑文本。
@@ -227,6 +229,9 @@ interface PersistMemoryCardsResult {
     supersededCardIds: string[];
 }
 
+const SEMANTIC_SEED_SOURCE_RECORD_KEY = 'semantic_seed:active';
+const SEMANTIC_SEED_SOURCE_RECORD_KIND = 'semantic_seed';
+
 /**
  * 功能：执行记忆卡主线存储。
  * @param chatKey 聊天键。
@@ -335,6 +340,35 @@ async function persistMemoryCards(
 }
 
 /**
+ * 功能：清理当前会话中不再存在的语义种子记忆卡。
+ * @param chatKey 聊天键。
+ * @param activeCardIds 本轮应保留的卡片编号集合。
+ * @returns 实际删除的卡片编号列表。
+ */
+async function deleteStaleSemanticSeedCards(chatKey: string, activeCardIds: Set<string>): Promise<string[]> {
+    const cards = await db.memory_cards
+        .where('[chatKey+status]')
+        .equals([chatKey, 'active'])
+        .toArray();
+    const staleCardIds = cards
+        .filter((card: DBMemoryCard): boolean => {
+            return normalizeText(card.sourceRecordKind) === SEMANTIC_SEED_SOURCE_RECORD_KIND
+                && normalizeText(card.sourceRecordKey) === SEMANTIC_SEED_SOURCE_RECORD_KEY
+                && !activeCardIds.has(normalizeText(card.cardId));
+        })
+        .map((card: DBMemoryCard): string => normalizeText(card.cardId))
+        .filter(Boolean);
+    if (staleCardIds.length <= 0) {
+        return [];
+    }
+    await Promise.all([
+        db.memory_cards.bulkDelete(staleCardIds),
+        db.memory_card_embeddings.where('cardId').anyOf(staleCardIds).delete(),
+    ]);
+    return staleCardIds;
+}
+
+/**
  * 功能：保存摘要封装产生的记忆卡。
  * @param chatKey 聊天键。
  * @param summary 摘要记录。
@@ -419,6 +453,44 @@ export async function saveMemoryCardsFromFactRecord(chatKey: string, fact: DBFac
         await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
     }
     return [...result.reusedCards, ...result.activeCards].map(toSdkCard);
+}
+
+/**
+ * 功能：从语义种子生成并保存冷启动记忆卡。
+ * @param chatKey 聊天键。
+ * @param seed 语义种子。
+ * @param fingerprint 种子指纹。
+ * @param reason 触发原因。
+ * @returns 保存后的记忆卡列表。
+ */
+export async function saveMemoryCardsFromSemanticSeed(
+    chatKey: string,
+    seed: ChatSemanticSeed,
+    fingerprint: string,
+    reason: string,
+): Promise<MemoryCard[]> {
+    const drafts = buildMemoryCardDraftsFromSemanticSeed(seed, {
+        fingerprint,
+        reason,
+    });
+    const result = await persistMemoryCards(
+        chatKey,
+        drafts,
+        SEMANTIC_SEED_SOURCE_RECORD_KEY,
+        SEMANTIC_SEED_SOURCE_RECORD_KIND,
+    );
+    const keptCards = [...result.reusedCards, ...result.activeCards];
+    const keptCardIds = new Set<string>(keptCards.map((item: DBMemoryCard): string => normalizeText(item.cardId)).filter(Boolean));
+    const staleCardIds = await deleteStaleSemanticSeedCards(chatKey, keptCardIds);
+    const vectorManager = new VectorManager(chatKey);
+    const deletedEmbeddingIds = Array.from(new Set([...result.supersededCardIds, ...staleCardIds]));
+    if (deletedEmbeddingIds.length > 0) {
+        await vectorManager.deleteMemoryCardEmbeddings(deletedEmbeddingIds);
+    }
+    if (result.activeCards.length > 0) {
+        await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
+    }
+    return keptCards.map(toSdkCard);
 }
 
 /**

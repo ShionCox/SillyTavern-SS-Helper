@@ -42,7 +42,7 @@ import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
 import { buildMemorySummaryEnvelope } from '../core/memory-summary-envelope';
-import { saveMemoryCardsFromSummaryEnvelope } from '../core/memory-card-store';
+import { saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from '../core/memory-card-store';
 import { LogicTableFacade } from './logic-table-facade';
 import { openWorldbookInitPanel } from '../ui/index';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
@@ -390,6 +390,7 @@ export class MemorySDKImpl implements MemorySDK {
         }
         await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
         await this.persistSemanticSeed(seed, bootstrap.fingerprint, 'bootstrap_init');
+        await this.saveSemanticSeedMemoryCards(seed, bootstrap.fingerprint, 'bootstrap_init');
         await this.chatStateManager.markColdStartStage('prompt_primed', bootstrap.fingerprint, { primedAt: Date.now() });
         await this.chatStateManager.flush();
     }
@@ -499,6 +500,16 @@ export class MemorySDKImpl implements MemorySDK {
         }
     }
 
+    /**
+     * 功能：把语义种子同步写入冷启动向量记忆卡主线。
+     * @param seed 语义种子。
+     * @param fingerprint 种子指纹。
+     * @param reason 触发原因。
+     */
+    private async saveSemanticSeedMemoryCards(seed: ChatSemanticSeed, fingerprint: string, reason: string): Promise<void> {
+        await saveMemoryCardsFromSemanticSeed(this.chatKey_, seed, fingerprint, reason);
+    }
+
     private async primeColdStartPrompt(reason: string): Promise<boolean> {
         return this.runColdStartPrimeTask('prompt', async (): Promise<boolean> => {
             if (await this.chatStateManager.isChatArchived()) {
@@ -516,6 +527,7 @@ export class MemorySDKImpl implements MemorySDK {
                 return false;
             }
             await this.persistSemanticSeed(seed, fingerprint, reason || 'prompt_prime');
+            await this.saveSemanticSeedMemoryCards(seed, fingerprint, reason || 'prompt_prime');
             await this.chatStateManager.markColdStartStage('prompt_primed', fingerprint, { primedAt: Date.now() });
             return true;
         });
@@ -545,17 +557,7 @@ export class MemorySDKImpl implements MemorySDK {
                 await this.primeColdStartPrompt('auto_prompt_prime_before_extract');
             }
 
-            const summaryLines = [
-                String(seed.aiSummary?.roleSummary ?? '').trim(),
-                ...seed.identitySeed.identity.slice(0, 4),
-                String(seed.aiSummary?.worldSummary ?? '').trim(),
-                ...seed.worldSeed.rules.slice(0, 4),
-                ...seed.worldSeed.hardConstraints.slice(0, 3),
-            ].map((item: string): string => String(item ?? '').trim()).filter(Boolean);
-            if (summaryLines.length > 0) {
-                const summaryText = summaryLines.join('\n');
-                logger.info(`冷启动提取仅保留观察值，不再写入旧链路，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}, summaryLines=${summaryLines.length}, summaryLen=${summaryText.length}`);
-            }
+            await this.saveSemanticSeedMemoryCards(seed, fingerprint, reason || 'extract_prime');
             logger.info(`冷启动提取完成，reason=${reason}, chatKey=${this.chatKey_}, fingerprint=${fingerprint}`);
             await this.chatStateManager.markColdStartStage('extract_primed', fingerprint, { primedAt: Date.now() });
             return true;
@@ -1058,6 +1060,7 @@ export class MemorySDKImpl implements MemorySDK {
                 }
                 await this.chatStateManager.saveSemanticSeed(bootstrap.seed, bootstrap.fingerprint);
                 await this.persistSemanticSeed(bootstrap.seed, bootstrap.fingerprint, 'editor_refresh');
+                await this.saveSemanticSeedMemoryCards(bootstrap.seed, bootstrap.fingerprint, 'editor_refresh');
             }
             return this.editorFacade.getCanonSnapshot();
         },

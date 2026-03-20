@@ -46,8 +46,8 @@ function buildSummaryRecordKeyMap(summaries: SummaryRecord[]): Map<string, Summa
  * @returns 来源元数据；无效时返回 null。
  */
 function readMemoryCardSourceMetadata(hit: MemoryCardSearchHit): {
-    sourceRecordKey: string;
-    sourceRecordKind: 'fact' | 'summary';
+    sourceRecordKey: string | null;
+    sourceRecordKind: 'fact' | 'summary' | 'semantic_seed';
     ownerActorKey: string | null;
     sourceScope?: string;
     memoryType?: string;
@@ -57,12 +57,12 @@ function readMemoryCardSourceMetadata(hit: MemoryCardSearchHit): {
     const metadata = hit.metadata ?? {};
     const sourceRecordKey = normalizeText(metadata.sourceRecordKey);
     const sourceRecordKind = normalizeText(metadata.sourceRecordKind).toLowerCase();
-    if (!sourceRecordKey || (sourceRecordKind !== 'fact' && sourceRecordKind !== 'summary')) {
+    if (sourceRecordKind !== 'fact' && sourceRecordKind !== 'summary' && sourceRecordKind !== 'semantic_seed') {
         return null;
     }
     return {
-        sourceRecordKey,
-        sourceRecordKind,
+        sourceRecordKey: sourceRecordKey || null,
+        sourceRecordKind: sourceRecordKind as 'fact' | 'summary' | 'semantic_seed',
         ownerActorKey: normalizeText(metadata.ownerActorKey) || null,
         sourceScope: normalizeText(metadata.sourceScope) || undefined,
         memoryType: normalizeText(metadata.memoryType) || undefined,
@@ -119,6 +119,44 @@ export async function collectMemoryCardRecallCandidates(context: RecallSourceCon
         }
         const sourceMeta = readMemoryCardSourceMetadata(hit);
         if (!sourceMeta) {
+            continue;
+        }
+        if (sourceMeta.sourceRecordKind === 'semantic_seed') {
+            const lane = normalizeText(sourceMeta.memoryType).toLowerCase();
+            const normalizedRaw = normalizeText(hit.content);
+            if (!normalizedRaw) {
+                continue;
+            }
+            const candidate = buildScoredCandidate(context, {
+                candidateId: `memory-card:${hit.cardId}`,
+                recordKey: normalizeText(sourceMeta.sourceRecordKey || hit.cardId),
+                recordKind: lane === 'relationship'
+                    ? 'relationship'
+                    : (lane === 'state' || lane === 'rule')
+                        ? 'state'
+                        : 'fact',
+                source: 'memory_card',
+                sectionHint: (lane === 'rule' || lane === 'state') && context.plan.sections.includes('SUMMARY')
+                    ? 'SUMMARY'
+                    : context.plan.sections.includes('FACTS')
+                        ? 'FACTS'
+                        : context.plan.sections[0] ?? null,
+                title: normalizeText(sourceMeta.memoryType || 'semantic_seed_memory'),
+                rawText: normalizedRaw,
+                confidence: 0.82,
+                updatedAt: Number(hit.createdAt ?? Date.now()),
+                vectorScore: clamp01(hit.score),
+                continuityScore: 0.86,
+                memoryType: sourceMeta.memoryType as any,
+                memorySubtype: sourceMeta.memorySubtype as any,
+                sourceScope: sourceMeta.sourceScope as any,
+                ownerActorKey: sourceMeta.ownerActorKey,
+                participantActorKeys: sourceMeta.participantActorKeys,
+                extraReasonCodes: ['memory_card_hit', 'memory_card_seed_hit'],
+            });
+            if (candidate) {
+                candidates.push(candidate);
+            }
             continue;
         }
         if (sourceMeta.sourceRecordKind === 'fact') {

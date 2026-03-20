@@ -166,6 +166,9 @@ describe('cold-start bootstrap persistence', (): void => {
             persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
                 callOrder.push(`persist:${reason}`);
             }),
+            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+                callOrder.push(`seed-cards:${reason}`);
+            }),
         };
 
         const performBootstrap = (MemorySDKImpl.prototype as any).performBootstrapSemanticSeedIfNeeded as () => Promise<void>;
@@ -176,6 +179,8 @@ describe('cold-start bootstrap persistence', (): void => {
         expect(collectChatSemanticSeedWithAi).toHaveBeenCalledTimes(1);
         expect(fakeThis.persistSemanticSeed).toHaveBeenCalledTimes(1);
         expect(fakeThis.persistSemanticSeed).toHaveBeenCalledWith(seed, 'fp-001', 'bootstrap_init');
+        expect(fakeThis.saveSemanticSeedMemoryCards).toHaveBeenCalledTimes(1);
+        expect(fakeThis.saveSemanticSeedMemoryCards).toHaveBeenCalledWith(seed, 'fp-001', 'bootstrap_init');
         expect(fakeThis.chatStateManager.markColdStartStage).toHaveBeenCalledWith('prompt_primed', 'fp-001', expect.any(Object));
         expect(fakeThis.chatStateManager.flush).toHaveBeenCalledTimes(2);
         expect(persistedState.semanticSeed).toEqual(seed);
@@ -187,8 +192,44 @@ describe('cold-start bootstrap persistence', (): void => {
             'set-binding',
             'save-seed',
             'persist:bootstrap_init',
+            'seed-cards:bootstrap_init',
             'mark-stage:prompt_primed',
             'flush',
+        ]);
+    });
+    it('prompt prime 会同步写入语义种子记忆卡', async (): Promise<void> => {
+        const seed = buildSeed();
+        const callOrder: string[] = [];
+        const fakeThis = {
+            chatKey_: 'chat-001',
+            chatStateManager: {
+                isChatArchived: vi.fn(async () => false),
+                getSemanticSeed: vi.fn(async () => seed),
+                getColdStartFingerprint: vi.fn(async () => 'fp-001'),
+                getColdStartStage: vi.fn(async () => 'seeded'),
+                markColdStartStage: vi.fn(async () => {
+                    callOrder.push('mark-stage');
+                }),
+            },
+            persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+                callOrder.push(`persist:${reason}`);
+            }),
+            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+                callOrder.push(`seed-cards:${reason}`);
+            }),
+            runColdStartPrimeTask: vi.fn(async (_kind: 'prompt' | 'extract', task: () => Promise<boolean>) => task()),
+        };
+
+        const primePrompt = (MemorySDKImpl.prototype as any).primeColdStartPrompt as (reason: string) => Promise<boolean>;
+        const result = await primePrompt.call(fakeThis, 'manual_prompt_prime');
+
+        expect(result).toBe(true);
+        expect(fakeThis.persistSemanticSeed).toHaveBeenCalledWith(seed, 'fp-001', 'manual_prompt_prime');
+        expect(fakeThis.saveSemanticSeedMemoryCards).toHaveBeenCalledWith(seed, 'fp-001', 'manual_prompt_prime');
+        expect(callOrder).toEqual([
+            'persist:manual_prompt_prime',
+            'seed-cards:manual_prompt_prime',
+            'mark-stage',
         ]);
     });
 });

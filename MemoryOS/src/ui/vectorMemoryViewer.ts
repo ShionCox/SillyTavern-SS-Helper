@@ -291,6 +291,7 @@ function formatMemoryLaneLabel(lane: string | null | undefined): string {
 function formatSourceKindLabel(kind: MemoryCardSummary['sourceRecordKind']): string {
     if (kind === 'fact') return '事实';
     if (kind === 'summary') return '摘要';
+    if (kind === 'semantic_seed') return '语义种子';
     return '未知来源';
 }
 
@@ -887,6 +888,10 @@ export class VectorMemoryViewerController {
      * @returns 无返回值。
      */
     private async jumpToSource(item: MemoryCardSummary): Promise<void> {
+        if (item.sourceRecordKind === 'semantic_seed') {
+            toast.info('语义种子卡没有单条原始记录，请使用“刷新语义种子”来同步。');
+            return;
+        }
         if (item.sourceRecordKind === 'fact' && item.sourceRecordKey) {
             await this.onJumpToRaw({ tableName: 'facts', recordId: item.sourceRecordKey });
             return;
@@ -917,6 +922,10 @@ export class VectorMemoryViewerController {
      * @returns 无返回值。
      */
     private async rebuildSelectedItem(item: MemoryCardSummary): Promise<void> {
+        if (item.sourceRecordKind === 'semantic_seed') {
+            toast.info('语义种子卡请通过“刷新语义种子”或“严格重建记忆卡”重建。');
+            return;
+        }
         if (!item.sourceRecordKey || (item.sourceRecordKind !== 'fact' && item.sourceRecordKind !== 'summary')) {
             toast.info('当前这张记忆卡缺少严格来源，无法直接重建。');
             return;

@@ -651,7 +651,7 @@ export interface MemoryMutationHistoryEntry {
     derivation?: DBDerivationSource;
 }
 
-export type VectorMemorySourceKind = 'fact' | 'summary' | 'unknown';
+export type VectorMemorySourceKind = 'fact' | 'summary' | 'semantic_seed' | 'unknown';
 
 export type VectorMemoryStatusKind =
     | 'normal'

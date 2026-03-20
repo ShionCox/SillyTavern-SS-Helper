@@ -124,7 +124,7 @@ import { CompactionManager } from './compaction-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
 import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from './memory-card-text';
-import { deleteMemoryCardsBySource, rebuildMemoryCardsFromSource, saveMemoryCardsFromFactRecord, saveMemoryCardsFromSummaryEnvelope } from './memory-card-store';
+import { deleteMemoryCardsBySource, rebuildMemoryCardsFromSource, saveMemoryCardsFromFactRecord, saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from './memory-card-store';
 import {
     buildPerActorRetentionMap,
     buildLifecycleState,
@@ -2503,6 +2503,17 @@ export class ChatStateManager {
             rebuilt += cardIds.length;
         }
         const state = await this.load();
+        const semanticSeed = state.semanticSeed ?? null;
+        const semanticFingerprint = normalizeSeedText(state.coldStartFingerprint);
+        if (semanticSeed && semanticFingerprint) {
+            const seedCards = await saveMemoryCardsFromSemanticSeed(
+                this.chatKey,
+                semanticSeed,
+                semanticFingerprint,
+                'maintenance_memory_card_rebuild',
+            );
+            rebuilt += seedCards.length;
+        }
         state.vectorIndexVersion = 'memory_card_v1';
         state.vectorMetadataRebuiltAt = Date.now();
         this.markDirty();
@@ -3831,6 +3842,36 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：解析角色绑定指纹。
+     * @param fingerprint 原始指纹。
+     * @returns 归一化后的群组与角色编号。
+     */
+    private parseCharacterBindingFingerprint(fingerprint: string): { groupId: string; characterId: string } {
+        const [groupIdRaw, characterIdRaw] = String(fingerprint ?? '').split('|');
+        return {
+            groupId: normalizeSeedText(groupIdRaw === '-' ? '' : groupIdRaw),
+            characterId: normalizeSeedText(characterIdRaw === '-' ? '' : characterIdRaw),
+        };
+    }
+
+    /**
+     * 功能：判断绑定变化是否足以清空冷启动状态。
+     * @param previousFingerprint 旧指纹。
+     * @param nextFingerprint 新指纹。
+     * @returns 是否需要清空现有冷启动状态。
+     */
+    private shouldResetColdStartStateForBindingChange(previousFingerprint: string, nextFingerprint: string): boolean {
+        if (!previousFingerprint || !nextFingerprint || previousFingerprint === nextFingerprint) {
+            return false;
+        }
+        const previous = this.parseCharacterBindingFingerprint(previousFingerprint);
+        const next = this.parseCharacterBindingFingerprint(nextFingerprint);
+        const groupConflict = Boolean(previous.groupId && next.groupId && previous.groupId !== next.groupId);
+        const characterConflict = Boolean(previous.characterId && next.characterId && previous.characterId !== next.characterId);
+        return groupConflict || characterConflict;
+    }
+
+    /**
      * 功能：读取角色记忆画像。
      * 参数：
      *   无。
@@ -5086,9 +5127,7 @@ export class ChatStateManager {
         const previousFingerprint = normalizeSeedText(state.characterBindingFingerprint);
         const nextFingerprint = normalizeSeedText(fingerprint);
         state.characterBindingFingerprint = nextFingerprint || undefined;
-        const [groupIdRaw, characterIdRaw] = String(fingerprint ?? '').split('|');
-        const groupId = normalizeSeedText(groupIdRaw === '-' ? '' : groupIdRaw);
-        const characterId = normalizeSeedText(characterIdRaw === '-' ? '' : characterIdRaw);
+        const { groupId, characterId } = this.parseCharacterBindingFingerprint(fingerprint);
         state.groupMemory = {
             ...(state.groupMemory ?? DEFAULT_GROUP_MEMORY),
             bindingSnapshot: {
@@ -5099,7 +5138,7 @@ export class ChatStateManager {
             },
             updatedAt: Date.now(),
         };
-        if (previousFingerprint !== nextFingerprint) {
+        if (this.shouldResetColdStartStateForBindingChange(previousFingerprint, nextFingerprint)) {
             logger.warn('[ColdStart][BindingFingerprintChanged]', {
                 chatKey: this.chatKey,
                 previousFingerprint,

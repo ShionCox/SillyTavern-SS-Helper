@@ -268,6 +268,9 @@ function formatSourceKindLabel(kind: VectorMemoryRecordSummary['sourceRecordKind
     if (kind === 'summary') {
         return '摘要';
     }
+    if (kind === 'semantic_seed') {
+        return '语义种子';
+    }
     return '未知来源';
 }
 
@@ -467,7 +470,7 @@ function buildMemoryCardSnapshotItemsFromCards(
             const lastHitAt = Number(usage.lastHitAt ?? 0) || 0;
             const recentHit = lastHitAt > 0 && now - lastHitAt <= 7 * 24 * 60 * 60 * 1000;
             const longUnused = ((lastHitAt <= 0 && now - Number(card.createdAt ?? 0) > 14 * 24 * 60 * 60 * 1000) || (lastHitAt > 0 && now - lastHitAt > 30 * 24 * 60 * 60 * 1000));
-            const sourceMissing = Boolean(sourceRecordKey && !sourceRecord);
+            const sourceMissing = Boolean(sourceRecordKey && !sourceRecord && sourceRecordKind !== 'semantic_seed');
             const statusKind = sourceMissing
                 ? 'source_missing'
                 : isArchived
@@ -503,7 +506,9 @@ function buildMemoryCardSnapshotItemsFromCards(
                 ? (sourceRecord ? `${normalizeText((sourceRecord as DBFact).type) || '未命名事实'}${normalizeText((sourceRecord as DBFact).path) ? ` · ${normalizeText((sourceRecord as DBFact).path)}` : ''}` : '事实来源缺失')
                 : sourceRecordKind === 'summary'
                     ? (sourceRecord ? (normalizeText((sourceRecord as DBSummary).title) || `${normalizeText((sourceRecord as DBSummary).level) || 'scene'} 摘要`) : '摘要来源缺失')
-                    : normalizeText(card.title) || normalizeText(card.subject) || '记忆卡';
+                    : sourceRecordKind === 'semantic_seed'
+                        ? '语义种子'
+                        : normalizeText(card.title) || normalizeText(card.subject) || '记忆卡';
             const sourceDetail = [
                 `记忆层级 · ${normalizeText(card.lane) || 'other'}`,
                 `有效期 · ${normalizeText(card.ttl)}`,
@@ -828,9 +833,11 @@ export class VectorMemoryViewerFacade {
                 const rebuild = inspectRebuildNeed(chunk, sourceMeta, sourceRecord);
                 const sourceArchived = sourceRecordKind === 'fact'
                     ? Boolean(sourceRecordKey && archivedFactSet.has(sourceRecordKey))
-                    : Boolean(sourceRecordKey && archivedSummarySet.has(sourceRecordKey));
+                    : sourceRecordKind === 'summary'
+                        ? Boolean(sourceRecordKey && archivedSummarySet.has(sourceRecordKey))
+                        : false;
                 const lastHitAt = Number(usage.lastHitAt ?? 0) || 0;
-                const sourceMissing = Boolean(sourceMeta && sourceRecordKey && !sourceRecord);
+                const sourceMissing = Boolean(sourceMeta && sourceRecordKey && !sourceRecord && sourceRecordKind !== 'semantic_seed');
                 const isArchived = archivedChunkSet.has(chunkId) || sourceArchived;
                 const now = Date.now();
                 const longUnused = ((lastHitAt <= 0 && now - Number(chunk.createdAt ?? 0) > 14 * 24 * 60 * 60 * 1000) || (lastHitAt > 0 && now - lastHitAt > 30 * 24 * 60 * 60 * 1000));

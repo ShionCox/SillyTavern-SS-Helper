@@ -320,7 +320,7 @@ export interface DBMemoryCard {
     replaceKey?: string | null;
     sourceRefs: string[];
     sourceRecordKey: string | null;
-    sourceRecordKind: 'fact' | 'summary' | 'state' | 'event' | 'relationship' | 'unknown';
+    sourceRecordKind: 'fact' | 'summary' | 'state' | 'event' | 'relationship' | 'semantic_seed' | 'unknown';
     ownerActorKey?: string | null;
     participantActorKeys: string[];
     validFrom?: number;
