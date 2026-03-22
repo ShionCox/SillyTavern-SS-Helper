@@ -102,7 +102,7 @@ export function buildMainlineTraceEvidenceMarkup(traceSnapshot: MemoryMainlineTr
     ].filter(Boolean);
 
     return `
-      <div class="stx-memory-chat-ops-quality-list">
+      <div class="stx-memory-chat-ops-quality-list stx-memory-chat-ops-quality-list-evidence">
         ${rows.map((row): string => {
             const trace = row.trace;
             const detail = trace?.detail && typeof trace.detail === 'object' ? trace.detail as Record<string, unknown> : null;
@@ -112,14 +112,14 @@ export function buildMainlineTraceEvidenceMarkup(traceSnapshot: MemoryMainlineTr
                 detail?.reasonCodes && Array.isArray(detail.reasonCodes) ? `${(detail.reasonCodes as unknown[]).length} 条原因` : '',
             ].filter(Boolean);
             return `
-              <div class="stx-memory-chat-ops-quality-advice-item">
+              <div class="stx-memory-chat-ops-quality-advice-item stx-memory-chat-ops-quality-evidence-item">
                 <strong>${escapeHtml(row.label)}</strong>
                 <span>${trace ? `${escapeHtml(trace.label)} · ${escapeHtml(formatRelativeTime(trace.ts))}` : '暂无记录'}</span>
                 <small>${escapeHtml(extraBits.join(' · ') || '等待主链写入')}</small>
               </div>
             `.trim();
         }).join('')}
-        <div class="stx-memory-chat-ops-quality-advice-item">
+        <div class="stx-memory-chat-ops-quality-advice-item stx-memory-chat-ops-quality-evidence-item">
           <strong>最近一轮注入</strong>
           <span>${escapeHtml(promptBits.join(' · ') || '暂无注入详情')}</span>
           <small>${escapeHtml(formatMainlineTraceStatus(normalized))}</small>

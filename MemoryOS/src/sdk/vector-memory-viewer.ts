@@ -3,6 +3,7 @@ import type {
     MemoryCardLane,
     MemoryCardStatus,
     MemoryCardSummary,
+    MemoryRecallPreviewMode,
     MemoryCardTtl,
     MemoryRecallPreviewHit,
     MemoryRecallPreviewResult,
@@ -15,6 +16,7 @@ import type {
     AdaptivePolicy,
     InjectionIntent,
     InjectionSectionName,
+    RecallGateDecision,
     RecallCandidate,
     RecallPlan,
 } from '../types';
@@ -949,19 +951,14 @@ export class VectorMemoryViewerFacade {
     }
 
     /**
-     * 功能：模拟一次向量检索，并返回原始顺序、重排顺序与是否进入最终上下文。
-     * @param query 测试语句。
-     * @param opts 额外配置。
-     * @returns 检索测试结果。
-     */
-    /**
      * 功能：模拟一次向量检索，返回记忆卡预览结果。
      * @param query 测试语句。
-     * @param opts 附加配置。
+     * @param opts 附加配置，可指定是否强制执行向量预演。
      * @returns 预览结果。
      */
-    async runMemoryRecallPreview(query: string, opts: { maxTokens?: number } = {}): Promise<MemoryRecallPreviewResult> {
+    async runMemoryRecallPreview(query: string, opts: { maxTokens?: number; forceVector?: boolean } = {}): Promise<MemoryRecallPreviewResult> {
         const normalizedQuery = normalizeText(query);
+        const previewMode: MemoryRecallPreviewMode = opts.forceVector === true ? 'forced_vector' : 'effective_policy';
         if (!normalizedQuery) {
             return {
                 query: '',
@@ -970,6 +967,7 @@ export class VectorMemoryViewerFacade {
                 hitCount: 0,
                 selectedCount: 0,
                 hits: [],
+                previewMode,
             };
         }
         const [snapshot, policy, profile, recentEvents, logicalView, groupMemory, worldStateSnapshot, lorebookEntries, recallContext] = await Promise.all([
@@ -1009,13 +1007,22 @@ export class VectorMemoryViewerFacade {
             worldStateText,
             entries: lorebookEntries,
         });
-        const budgets = buildIntentBudgets(intent, sections, Math.max(200, Number(opts.maxTokens ?? 1200)), policy as AdaptivePolicy);
+        const executionPolicy: AdaptivePolicy = previewMode === 'forced_vector'
+            ? {
+                ...policy,
+                vectorEnabled: true,
+                vectorMode: policy.vectorMode === 'search' || policy.vectorMode === 'search_rerank'
+                    ? policy.vectorMode
+                    : 'search_rerank',
+            }
+            : policy;
+        const budgets = buildIntentBudgets(intent, sections, Math.max(200, Number(opts.maxTokens ?? 1200)), executionPolicy);
         const recallPlan: RecallPlan = planRecall({
             intent,
             sections,
             sectionBudgets: budgets,
             maxTokens: Math.max(200, Number(opts.maxTokens ?? 1200)),
-            policy: policy as AdaptivePolicy,
+            policy: executionPolicy,
             lorebookDecision,
             ...buildViewpointPolicyInput(recallContext, logicalView, groupMemory),
         });
@@ -1027,7 +1034,7 @@ export class VectorMemoryViewerFacade {
             recentEvents,
             logicalView,
             groupMemory,
-            policy: policy as AdaptivePolicy,
+            policy: executionPolicy,
             lorebookDecision,
             lorebookEntries,
             factsManager: new FactsManager(this.chatKey),
@@ -1061,10 +1068,10 @@ export class VectorMemoryViewerFacade {
             && cacheActiveCards.length > 0
             && cacheActiveCards.every((card): boolean => Boolean(card && card.status === 'active' && String(card.chatKey ?? '').trim() === this.chatKey)),
         );
-        const vectorGate = shouldRunVectorRecall({
+        const policyGate = shouldRunVectorRecall({
             query: normalizedQuery,
             intent,
-            policy: policy as AdaptivePolicy,
+            policy,
             structuredCount: cheapRecall.structuredCount,
             coveredLanes: cheapRecall.coveredLanes,
             recentEventCount: cheapRecall.recentEventCount,
@@ -1072,25 +1079,43 @@ export class VectorMemoryViewerFacade {
             recentEventsEnough: cheapRecall.recentEventCount > 0 && (cheapRecall.primaryNeed === 'historical_event' || cheapRecall.primaryNeed === 'causal_trace' || cheapRecall.primaryNeed === 'mixed'),
             cacheHit,
         });
-        const effectiveVectorGate = {
-            ...vectorGate,
-            lanes: resolveRecallGateLanes(cheapRecall, vectorGate),
+        const resolvedPolicyGate: RecallGateDecision = {
+            ...policyGate,
+            lanes: resolveRecallGateLanes(cheapRecall, policyGate),
         };
+        const executionVectorGate: RecallGateDecision = previewMode === 'forced_vector'
+            ? {
+                enabled: true,
+                lanes: resolveRecallGateLanes(cheapRecall, {
+                    enabled: true,
+                    lanes: [],
+                    reasonCodes: [],
+                    primaryNeed: policyGate.primaryNeed,
+                    vectorMode: executionPolicy.vectorMode,
+                }),
+                reasonCodes: Array.from(new Set([
+                    'forced_vector_preview',
+                    `recall_need:${policyGate.primaryNeed}`,
+                ])),
+                primaryNeed: policyGate.primaryNeed,
+                vectorMode: executionPolicy.vectorMode,
+            }
+            : resolvedPolicyGate;
         const vectorManager = new VectorManager(this.chatKey);
-        const rawHits = vectorGate.enabled
+        const rawHits = executionVectorGate.enabled
             ? await vectorManager.search(normalizedQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? 5) * 2, Number(recallPlan.fineTopK ?? 8)), {
-                lanes: effectiveVectorGate.lanes,
+                lanes: executionVectorGate.lanes,
                 activeOnly: true,
             })
             : [];
         const archives = await this.chatStateManager.getRetentionArchives();
         const archivedChunkSet = new Set((archives.archivedVectorChunkIds ?? []).map((item: string): string => normalizeText(item)).filter(Boolean));
         const activeHits = rawHits.filter((item: VectorHit): boolean => !archivedChunkSet.has(normalizeText(item.chunkId)));
-        const rerankEnabled = policy.vectorMode === 'search_rerank' && policy.rerankEnabled !== false;
-        const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(policy.rerankThreshold ?? 6)));
+        const rerankEnabled = executionPolicy.vectorMode === 'search_rerank' && executionPolicy.rerankEnabled !== false;
+        const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(executionPolicy.rerankThreshold ?? 6)));
         const beforeRankMap = new Map<string, number>(activeHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
         const afterRankMap = new Map<string, number>(rerankedHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
-        const candidates = vectorGate.enabled
+        const candidates = executionVectorGate.enabled
             ? await collectRecallCandidates({
                 chatKey: this.chatKey,
                 plan: recallPlan,
@@ -1098,7 +1123,7 @@ export class VectorMemoryViewerFacade {
                 recentEvents,
                 logicalView,
                 groupMemory,
-                policy,
+                policy: executionPolicy,
                 lorebookDecision,
                 lorebookEntries,
                 factsManager: new FactsManager(this.chatKey),
@@ -1112,7 +1137,7 @@ export class VectorMemoryViewerFacade {
                 tuningProfile: recallContext.tuningProfile,
                 relationships: recallContext.relationships,
                 fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
-                vectorGate: effectiveVectorGate,
+                vectorGate: executionVectorGate,
             })
             : [...cheapRecall.candidates];
         const ranked = rankRecallCandidates({
@@ -1166,11 +1191,17 @@ export class VectorMemoryViewerFacade {
         return {
             query: normalizedQuery,
             testedAt: Date.now(),
-            rerankApplied: vectorGate.enabled && rerankEnabled && activeHits.length >= Math.max(2, Number(policy.rerankThreshold ?? 6)),
+            previewMode,
+            rerankApplied: executionVectorGate.enabled && rerankEnabled && activeHits.length >= Math.max(2, Number(executionPolicy.rerankThreshold ?? 6)),
             hitCount: hits.length,
             selectedCount: selectedVectorCandidates.length,
             hits,
-            vectorGate: effectiveVectorGate,
+            policyGate: resolvedPolicyGate,
+            vectorGate: executionVectorGate,
+            effectivePolicy: {
+                vectorEnabled: Boolean(policy.vectorEnabled),
+                vectorMode: policy.vectorMode,
+            },
             cache: {
                 hit: cacheHit,
                 reasonCodes: cacheHit ? ['recall_cache_hit'] : [],

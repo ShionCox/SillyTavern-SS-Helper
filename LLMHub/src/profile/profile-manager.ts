@@ -1,3 +1,5 @@
+import { logger } from '../index';
+
 /**
  * Profile 配置层 —— 一套参数组合（温度、maxTokens、json 强制、重试等）
  * 用于 LLM Hub 的 consumer+task → provider+profile 路由
@@ -93,7 +95,7 @@ export class ProfileManager {
     /** 删除自定义 Profile */
     remove(profileId: string): boolean {
         if (BUILTIN_PROFILES[profileId]) {
-            console.warn(`[ProfileManager] 无法删除内置 Profile: ${profileId}`);
+            logger.warn(`[ProfileManager] 无法删除内置 Profile: ${profileId}`);
             return false;
         }
         return this.profiles.delete(profileId);

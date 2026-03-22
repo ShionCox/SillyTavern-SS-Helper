@@ -18,7 +18,7 @@ describe('chat strategy summary trigger ui', (): void => {
         expect(cards.length).toBe(rules.length);
         expect(cards.map((item) => item.triggerId)).toEqual(rules.map((item) => item.id));
         cards.forEach((card): void => {
-            expect(card.id).toContain('stx-memoryos-chat-strategy-summary-trigger-');
+            expect(card.id).toContain('stx-memoryos-chat-ops-summary-trigger-');
             expect(card.title.length).toBeGreaterThan(0);
             expect(card.description.length).toBeGreaterThan(0);
         });

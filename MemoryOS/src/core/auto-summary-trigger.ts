@@ -269,6 +269,9 @@ export function shouldRunAutoSummary(input: {
  *   number：对应模式阈值。
  */
 function getThresholdByMode(settings: AutoSummaryTriggerSettings, mode: AutoSummaryMode): number {
+    if (settings.manualTurnThresholdEnabled) {
+        return Math.max(1, settings.manualTurnThreshold);
+    }
     if (mode === 'roleplay') return Math.max(1, settings.roleplayTurnThreshold);
     if (mode === 'chat') return Math.max(1, settings.chatTurnThreshold);
     if (mode === 'story') return Math.max(1, settings.storyTurnThreshold);

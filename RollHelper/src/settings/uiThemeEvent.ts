@@ -6,6 +6,7 @@ import {
   normalizeThemeId,
   type ThemeId,
 } from "../../../SDK/theme";
+import { logger } from "../../index";
 import { sdkThemeToSettingsThemeEvent } from "./themeBridgeEvent";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
 
@@ -14,10 +15,10 @@ const THEME_REFRESH_FRAME_BY_TARGET_Event = new WeakMap<HTMLElement, number>();
 
 function traceRollHelperThemeUi(message: string, payload?: unknown): void {
   if (payload === undefined) {
-    console.info(`[SS-Helper][RollHelperThemeUI] ${message}`);
+    logger.info(`[SS-Helper][RollHelperThemeUI] ${message}`);
     return;
   }
-  console.info(`[SS-Helper][RollHelperThemeUI] ${message}`, payload);
+  logger.info(`[SS-Helper][RollHelperThemeUI] ${message}`, payload);
 }
 
 export function syncThemeControlClassesEvent(root: ParentNode | null, theme: string): void {

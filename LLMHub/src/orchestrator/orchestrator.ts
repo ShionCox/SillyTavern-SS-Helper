@@ -9,7 +9,7 @@
  * - scope 作为取消与作废判断的唯一上下文单位
  */
 
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     RequestRecord,
     RequestState,
@@ -21,7 +21,6 @@ import type {
     DisplayMode,
 } from '../schema/types';
 
-const logger = new Logger('LLMHub-Orchestrator');
 
 let globalRequestCounter = 0;
 function generateRequestId(): string {

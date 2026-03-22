@@ -4,7 +4,7 @@ import {
     queryLlmRequestLogs,
     trimLlmRequestLogs,
 } from '../../../SDK/db';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     LLMRequestLogEntry,
     LLMRequestLogQueryOptions,
@@ -14,7 +14,6 @@ import type {
     RequestState,
 } from '../schema/types';
 
-const logger = new Logger('LLMHubRequestLogService');
 const REQUEST_LOG_MAX_RECORDS = 2000;
 const ARCHIVABLE_STATES = new Set<RequestState>(['completed', 'failed', 'cancelled', 'overlay_waiting']);
 const FALLBACK_SOURCE_PLUGIN_ID = 'stx_llmhub';

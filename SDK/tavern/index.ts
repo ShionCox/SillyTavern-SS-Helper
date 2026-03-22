@@ -153,6 +153,8 @@ export {
 } from "./chats";
 
 export type {
+  TavernCompatAttempt,
+  TavernCompatStage,
   TavernChatResult,
   TavernConnectionInfoItem,
   TavernConnectionResult,

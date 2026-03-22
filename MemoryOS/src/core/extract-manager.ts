@@ -1,15 +1,13 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type { EventEnvelope, MemorySDK, ProposalResult } from '../../../SDK/stx';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { MEMORY_TASKS, checkAiModeGuard, runGeneration } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
 import {
-    buildExtractPromptByScopeTaskPrompt,
-    buildLongSummarizeTaskPrompt,
     buildMemorySummarySaveSystemPrompt,
-    buildShortSummarizeTaskPrompt,
+    buildUnifiedIngestTaskPrompt,
 } from '../llm/skills';
-import type { ProposalEnvelope } from '../proposal/types';
+import type { ProposalEnvelope, SummaryProposal } from '../proposal/types';
 import type {
     AutoSummaryDecisionSnapshot,
     ChatLifecycleState,
@@ -19,11 +17,13 @@ import type {
     LogicalChatView,
     LongSummaryCooldownState,
     HeavyProcessingTriggerKind,
+    MemoryIngestProgressState,
     MemoryProcessingDecision,
     MemoryProcessingLevel,
     PostGenerationGateDecision,
     PrecompressedWindowStats,
     SummaryExecutionTier,
+    TurnRecord,
 } from '../types';
 import type { ChatStateManager } from './chat-state-manager';
 import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';
@@ -40,10 +40,38 @@ import { MetaManager } from './meta-manager';
 import type { TemplateManager } from '../template/template-manager';
 import type { TurnTracker } from './turn-tracker';
 
-const logger = new Logger('ExtractManager');
 
-type ProposalTask = 'memory.summarize' | 'memory.extract';
+type ProposalTask = 'memory.ingest';
 type SchemaContextPayload = Record<string, unknown> | string;
+type ProposalTaskRunResult = {
+    result: ProposalResult | null;
+    reasonCode?: string;
+    error?: string;
+    compatFailure: boolean;
+};
+
+type IngestWindowSelection = {
+    windowHash: string;
+    windowMessages: LogicalChatView['visibleMessages'];
+    fromMessageId?: string;
+    toMessageId?: string;
+    lastAssistantTurnId?: string;
+    lastAssistantMessageId?: string;
+    lastAssistantTurnCount: number;
+    pendingAssistantTurns: number;
+    repairTriggered: boolean;
+};
+
+type IngestSkipDebugInfo = {
+    currentAssistantTurnCount: number;
+    pendingAssistantTurns: number;
+    normalizedInterval: number;
+    lastProcessedAssistantTurnCount: number;
+    repairTriggered: boolean;
+    triggerBySpecialEvent: boolean;
+    repairGeneration: number;
+    lastRepairGeneration: number;
+};
 
 /**
  * 功能：从事件窗口中提取最近一条用户文本。
@@ -70,6 +98,11 @@ function normalizeTextFromEventWindow(events: Array<EventEnvelope<unknown>>): st
 }
 
 /**
+ * 功能：把模型返回的摘要层级归一化为系统允许的 level。
+ * @param level 模型返回的原始摘要层级。
+ * @returns 合法的摘要层级。
+ */
+/**
  * 功能：调度 MemoryOS 的摘要与抽取任务。
  * @param chatKey 当前聊天键。
  * @param events 事件管理器。
@@ -88,6 +121,7 @@ export class ExtractManager {
     private readonly minUserMessageDelta: number = 3;
     private readonly minEventDelta: number = 20;
     private readonly duplicateWindowMs: number = 8000;
+    private readonly compatFailureCooldownTurns: number = 3;
     private readonly specialTriggerTypes: Set<string> = new Set([
         'memory.template.changed',
         'world.template.changed',
@@ -119,21 +153,29 @@ export class ExtractManager {
      * @returns 无返回值。
      */
     public async kickOffExtraction(): Promise<void> {
-        logger.info(`开始评估抽取触发条件，chatKey=${this.chatKey}`);
-        const summarizeGuard = checkAiModeGuard(MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId);
-        if (summarizeGuard) {
-            logger.info(`抽取跳过：AI 守卫未通过，chatKey=${this.chatKey}`);
+        return this.runUnifiedIngest();
+    }
+
+    /**
+     * 功能：按楼层消费游标执行统一记忆摄取。
+     * @returns 无返回值。
+     */
+    private async runUnifiedIngest(): Promise<void> {
+        logger.info(`开始评估统一记忆摄取触发条件，chatKey=${this.chatKey}`);
+        const ingestGuard = checkAiModeGuard(MEMORY_TASKS.INGEST as MemoryAiTaskId);
+        if (ingestGuard) {
+            logger.info(`统一记忆摄取跳过：AI 守卫未通过，chatKey=${this.chatKey}`);
             return;
         }
 
         const memory = this.getWindowMemory();
         if (!memory?.proposal?.processProposal) {
-            logger.warn('ProposalManager 未就绪，跳过抽取');
+            logger.warn('ProposalManager 未就绪，跳过统一记忆摄取');
             return;
         }
 
         if (this.chatStateManager && await this.chatStateManager.isChatArchived()) {
-            logger.info(`抽取跳过：聊天已归档，chatKey=${this.chatKey}`);
+            logger.info(`统一记忆摄取跳过：聊天已归档，chatKey=${this.chatKey}`);
             return;
         }
 
@@ -141,8 +183,8 @@ export class ExtractManager {
         const logicalView = this.chatStateManager
             ? await this.chatStateManager.getLogicalChatView()
             : null;
-        if (recentEvents.length === 0 && !logicalView) {
-            logger.info(`抽取跳过：最近事件与逻辑视图都为空，chatKey=${this.chatKey}`);
+        if (!logicalView || logicalView.visibleMessages.length === 0) {
+            logger.info(`统一记忆摄取跳过：当前没有可消费楼层，chatKey=${this.chatKey}`);
             return;
         }
 
@@ -188,67 +230,50 @@ export class ExtractManager {
             summaryEnabled = adaptivePolicy.summaryEnabled;
         }
 
-        const extractionWindow = recentEvents.slice(0, summaryWindowSize);
-        const windowHash = logicalView
-            ? this.computeLogicalViewHash(logicalView, summaryWindowSize)
-            : this.computeWindowHash(extractionWindow);
-        let shouldExtract = false;
-
-        if (this.turnTracker && summaryEnabled) {
-            const lastExtractTurnCount = meta?.lastExtractAssistantTurnCount ?? 0;
-            shouldExtract = await this.turnTracker.shouldTriggerExtraction({
-                lastExtractAssistantTurnCount: lastExtractTurnCount,
-                lastExtractWindowHash: meta?.lastExtractWindowHash,
-                currentWindowHash: windowHash,
-                interval: summaryInterval,
-                summaryEnabled,
-                lastCommittedTurnCursor: meta?.lastCommittedTurnCursor,
-                lastVisibleTurnSnapshotHash: meta?.lastVisibleTurnSnapshotHash,
-            });
-        }
-
-        if (!shouldExtract && !triggerBySpecialEvent) {
-            const eventCount = await this.eventsManager.count();
-            const userMsgCount = recentEvents.filter((event: EventEnvelope<unknown>): boolean => {
-                return this.isUserMessageEvent(event.type);
-            }).length;
-            const eventDelta = Math.max(0, eventCount - Number(meta?.lastExtractEventCount ?? 0));
-            const userDelta = Math.max(0, userMsgCount - Number(meta?.lastExtractUserMsgCount ?? 0));
-            if (eventDelta < this.minEventDelta && userDelta < this.minUserMessageDelta) {
-                logger.info(`抽取跳过：未达到触发阈值，chatKey=${this.chatKey}, eventDelta=${eventDelta}, userDelta=${userDelta}`);
-                return;
-            }
-            if (meta?.lastExtractWindowHash === windowHash) {
-                logger.info('抽取窗口未变化，跳过重复抽取');
-                return;
-            }
-        } else if (!shouldExtract && !triggerBySpecialEvent) {
+        const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
+        if (await this.shouldSkipForCompatFailureCooldown(currentAssistantTurnCount, triggerBySpecialEvent)) {
+            logger.info(`统一记忆摄取跳过：命中结构化兼容失败冷却窗口，chatKey=${this.chatKey}, assistantTurns=${currentAssistantTurnCount}`);
             return;
         }
 
-        if (!triggerBySpecialEvent && !shouldExtract && meta?.lastExtractWindowHash === windowHash) {
-            logger.info('抽取窗口未变化，跳过重复抽取');
+        const turnLedger = this.chatStateManager
+            ? await this.chatStateManager.getTurnLedger()
+            : [];
+        const ingestProgress = this.chatStateManager
+            ? await this.chatStateManager.getMemoryIngestProgress()
+            : {
+                lastProcessedAssistantTurnCount: 0,
+                lastProcessedSnapshotHash: '',
+                lastProcessedAt: 0,
+                lastProcessedOutcome: 'skipped' as const,
+                lastRepairGeneration: 0,
+            };
+        const normalizedInterval = Math.max(1, Math.round(Number(summaryInterval || 0)));
+        const lastProcessedAssistantTurnCount = Math.max(0, Number(ingestProgress.lastProcessedAssistantTurnCount ?? 0));
+        const pendingAssistantTurns = Math.max(0, Number(currentAssistantTurnCount ?? 0) - lastProcessedAssistantTurnCount);
+        const repairGeneration = this.chatStateManager
+            ? await this.chatStateManager.getMutationRepairGeneration()
+            : 0;
+        logger.info(
+            `统一记忆摄取门槛检查：chatKey=${this.chatKey}, 待处理 assistant 楼层=${pendingAssistantTurns}/${normalizedInterval}, 当前总 assistant 楼层=${currentAssistantTurnCount}, 上次已处理到=${lastProcessedAssistantTurnCount}, repairGeneration=${repairGeneration}, lastRepairGeneration=${Number(ingestProgress.lastRepairGeneration ?? 0)}, specialEvent=${triggerBySpecialEvent}`,
+        );
+        const selection = this.resolveIngestWindowSelection({
+            logicalView,
+            turnLedger,
+            currentAssistantTurnCount,
+            interval: summaryInterval,
+            initialWindowSize: summaryWindowSize,
+            triggerBySpecialEvent,
+            repairGeneration,
+            progress: ingestProgress,
+        });
+        if (!selection) {
+            logger.info(`统一记忆摄取跳过：未达到增量冲洗阈值，chatKey=${this.chatKey}, assistantTurns=${currentAssistantTurnCount}`);
             return;
         }
 
-        const schemaContext = await this.buildSchemaContext(memory);
-        const windowText = logicalView
-            ? this.buildLogicalWindowText(logicalView, summaryWindowSize)
-            : [...extractionWindow]
-                .reverse()
-                .map((event: EventEnvelope<unknown>): string => {
-                    return `[${new Date(event.ts).toLocaleTimeString()}] ${event.type}: ${this.getEventPayloadText(event)}`;
-                })
-                .join('\n');
-        const recentUserLine = logicalView
-            ? [...logicalView.visibleMessages].reverse().find((node) => node.role === 'user')?.text ?? ''
-            : normalizeTextFromEventWindow(extractionWindow);
-        const recentAssistantLine = logicalView
-            ? [...logicalView.visibleMessages].reverse().find((node) => node.role === 'assistant')?.text ?? ''
-            : [...extractionWindow]
-                .reverse()
-                .map((event: EventEnvelope<unknown>): string => this.getEventPayloadText(event))
-                .find((text: string): boolean => text.trim().length > 0) ?? '';
+        const recentUserLine = [...selection.windowMessages].reverse().find((node) => node.role === 'user')?.text ?? '';
+        const recentAssistantLine = [...selection.windowMessages].reverse().find((node) => node.role === 'assistant')?.text ?? '';
         const worldInfoEntries = await loadActiveWorldInfoEntriesFromHost();
         const previousLorebookDecision = this.chatStateManager
             ? await this.chatStateManager.getLorebookDecision()
@@ -259,311 +284,286 @@ export class ExtractManager {
         const lorebookDecision = evaluateLorebookRelevance({
             query: recentUserLine,
             profileChatType: chatProfile?.chatType,
-            visibleMessages: logicalView?.visibleMessages,
-            recentEvents: extractionWindow,
+            visibleMessages: logicalView.visibleMessages,
+            recentEvents,
             worldStateText: '',
             entries: worldInfoEntries,
         });
         if (this.chatStateManager) {
             await this.chatStateManager.setLorebookDecision(lorebookDecision, 'extract');
         }
-        const eventCount = await this.eventsManager.count();
-        const userMsgCount = logicalView
-            ? logicalView.visibleUserTurns.length
-            : recentEvents.filter((event: EventEnvelope<unknown>): boolean => this.isUserMessageEvent(event.type)).length;
+
         const postGate = this.buildPostGenerationDecision({
             recentUserLine,
             recentAssistantLine,
             lorebookDecision,
             summaryEnabled,
             logicalView,
-            mutationKinds: Array.isArray(logicalView?.mutationKinds) ? logicalView!.mutationKinds : [],
+            mutationKinds: Array.isArray(logicalView.mutationKinds) ? logicalView.mutationKinds : [],
             extractStrategy: chatProfile?.extractStrategy ?? 'facts_relations',
             stylePreference: chatProfile?.stylePreference ?? 'story',
         });
-
         if (this.chatStateManager) {
             await this.chatStateManager.setLastPostGenerationDecision(postGate);
         }
 
-        if (this.extractionFlight && this.extractionFlightWindowHash === windowHash) {
-            logger.info(`抽取跳过：相同窗口已在处理中，chatKey=${this.chatKey}, windowHash=${windowHash}`);
+        if (this.extractionFlight && this.extractionFlightWindowHash === selection.windowHash) {
+            logger.info(`统一记忆摄取跳过：相同增量窗口已在处理中，chatKey=${this.chatKey}, windowHash=${selection.windowHash}`);
             await this.extractionFlight;
             return;
         }
 
         if (
-            this.lastSettledWindowHash === windowHash
+            this.lastSettledWindowHash === selection.windowHash
             && Date.now() - this.lastSettledAt <= this.duplicateWindowMs
         ) {
-            logger.info(`抽取跳过：相同窗口刚处理完成，chatKey=${this.chatKey}, windowHash=${windowHash}`);
+            logger.info(`统一记忆摄取跳过：相同增量窗口刚处理完成，chatKey=${this.chatKey}, windowHash=${selection.windowHash}`);
             return;
         }
 
-        logger.info(`触发抽取：chatKey=${this.chatKey}, turnBased=${Boolean(this.turnTracker)}, special=${triggerBySpecialEvent}`);
+        logger.info(`触发统一记忆摄取，chatKey=${this.chatKey}, pendingAssistantTurns=${selection.pendingAssistantTurns}, repair=${selection.repairTriggered}`);
         let currentExtractionPromise: Promise<void> | null = null;
+        let shouldSettleWindow = false;
         const extractionPromise = (async (): Promise<void> => {
             try {
-                {
-                    const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
-                    const lifecycleState = this.chatStateManager
-                        ? await this.chatStateManager.getLifecycleState()
-                        : null;
-                    const longSummaryCooldown = this.chatStateManager
-                        ? await this.chatStateManager.getLongSummaryCooldown()
-                        : null;
-                    const compressedWindow = this.precompressWindowText(windowText);
-                    let processingDecision = this.buildProcessingDecision({
-                        postGate,
-                        summaryEnabled,
-                        lifecycle: lifecycleState,
-                        chatProfile,
-                        currentAssistantTurnCount,
-                        extractInterval: summaryInterval,
-                        windowHash,
-                        windowEventCount: eventCount,
-                        windowUserMessageCount: userMsgCount,
-                        specialEventHit: triggerBySpecialEvent,
-                        mutationRepairSignal: postGate.reasonCodes.includes('mutation_repair_required'),
-                        cooldown: longSummaryCooldown,
-                        precompressedStats: compressedWindow.stats,
-                    });
-                    let autoSummaryDecisionSnapshot: AutoSummaryDecisionSnapshot | null = null;
+                const lifecycleState = this.chatStateManager
+                    ? await this.chatStateManager.getLifecycleState()
+                    : null;
+                const longSummaryCooldown = this.chatStateManager
+                    ? await this.chatStateManager.getLongSummaryCooldown()
+                    : null;
+                const schemaContext = await this.buildSchemaContext(memory);
+                const windowText = this.buildLogicalWindowTextFromMessages(selection.windowMessages);
+                const compressedWindow = this.precompressWindowText(windowText);
+                let processingDecision = this.buildProcessingDecision({
+                    postGate,
+                    summaryEnabled,
+                    lifecycle: lifecycleState,
+                    chatProfile,
+                    currentAssistantTurnCount,
+                    extractInterval: summaryInterval,
+                    windowHash: selection.windowHash,
+                    windowEventCount: selection.windowMessages.length,
+                    windowUserMessageCount: selection.windowMessages.filter((node) => node.role === 'user').length,
+                    specialEventHit: triggerBySpecialEvent,
+                    mutationRepairSignal: selection.repairTriggered || postGate.reasonCodes.includes('mutation_repair_required'),
+                    cooldown: longSummaryCooldown,
+                    precompressedStats: compressedWindow.stats,
+                });
+                let autoSummaryDecisionSnapshot: AutoSummaryDecisionSnapshot | null = null;
 
-                    if (this.chatStateManager) {
-                        const effectiveSummarySettings = await this.chatStateManager.getEffectiveSummarySettings();
-                        const autoSummaryRuntime = await this.chatStateManager.getAutoSummaryRuntime();
-                        const runtimeSettings = resolveSummaryRuntimeSettings(
-                            effectiveSummarySettings,
-                            null,
-                            longSummaryCooldown,
-                        );
-                        const autoSummaryMode = resolveAutoSummaryMode({
-                            presetStyle: chatProfile?.stylePreference ?? null,
-                            chatProfile,
-                            logicalView,
-                        });
-                        const semanticChange = buildSemanticChangeSummary({
-                            textWindow: compressedWindow.text,
-                            logicalView,
-                            postGate,
-                        });
-                        const promptPressureRatio = Number(
-                            (compressedWindow.stats.compressedLength / Math.max(1, runtimeSettings.longSummaryBudget)).toFixed(3),
-                        );
-                        const autoSummaryDecision = shouldRunAutoSummary({
-                            settings: effectiveSummarySettings.autoSummary,
-                            runtime: autoSummaryRuntime,
-                            activeAssistantTurnCount: currentAssistantTurnCount,
-                            currentMode: autoSummaryMode,
-                            textWindow: compressedWindow.text,
-                            enabledTriggerIds: effectiveSummarySettings.summaryBehavior.longSummaryTrigger,
-                            semanticChange,
-                            promptPressureRatio,
-                        });
-                        autoSummaryDecisionSnapshot = this.buildAutoSummaryDecisionSnapshot({
-                            decision: autoSummaryDecision,
-                            semanticChange,
-                            activeAssistantTurnCount: currentAssistantTurnCount,
-                            promptPressureRatio,
-                        });
-                        processingDecision = this.applyAutoSummaryDecision({
-                            baseDecision: processingDecision,
-                            autoDecision: autoSummaryDecision,
-                            summaryEnabled,
-                        });
-                        await this.chatStateManager.setLastAutoSummaryDecision(autoSummaryDecisionSnapshot);
-                    }
-
-                    if (this.chatStateManager) {
-                        await this.chatStateManager.setLastProcessingDecision(processingDecision);
-                    }
-
-                    if (processingDecision.level === 'none') {
-                        if (this.chatStateManager) {
-                            const extractHealth = await this.chatStateManager.getExtractHealth();
-                            await this.chatStateManager.recordExtractHealth({
-                                recentTasks: [
-                                    ...extractHealth.recentTasks,
-                                    {
-                                        task: 'memory.extract' as const,
-                                        accepted: false,
-                                        appliedFacts: 0,
-                                        appliedPatches: 0,
-                                        appliedSummaries: 0,
-                                        processingLevel: processingDecision.level,
-                                        summaryTier: processingDecision.summaryTier,
-                                        windowHash,
-                                        reasonCodes: processingDecision.reasonCodes,
-                                        ts: Date.now(),
-                                    },
-                                ].slice(-12),
-                                lastAcceptedAt: extractHealth.lastAcceptedAt,
-                            });
-                        }
-                        return;
-                    }
-
-                    const summarizeResult = processingDecision.summaryTier === 'none'
-                        ? null
-                        : await this.runProposalTask(
-                            'memory.summarize',
-                            processingDecision.summaryTier === 'long' ? '长总结生成' : '短总结生成',
-                            processingDecision.summaryTier === 'long'
-                                ? this.buildLongSummarizePrompt(lorebookDecision.mode, postGate)
-                                : this.buildShortSummarizePrompt(lorebookDecision.mode, postGate),
-                            compressedWindow.text,
-                            schemaContext,
-                            processingDecision.summaryTier === 'long'
-                                ? { maxTokens: 8000, maxLatencyMs: 0, maxCost: 0.55 }
-                                : { maxTokens: 2400, maxLatencyMs: 0, maxCost: 0.25 },
-                        );
-                    const extractResult = await this.runProposalTask(
-                        'memory.extract',
-                        processingDecision.level === 'heavy' ? '重处理记忆抽取' : processingDecision.level === 'medium' ? '中处理记忆抽取' : '轻处理记忆抽取',
-                        this.buildExtractPromptByScope(
-                            lorebookDecision.mode,
-                            lorebookDecision.shouldExtractWorldFacts,
-                            postGate,
-                            processingDecision.extractScope,
-                        ),
-                        compressedWindow.text,
-                        schemaContext,
-                        processingDecision.extractScope === 'heavy'
-                            ? { maxTokens: 2600, maxLatencyMs: 0, maxCost: 0.45 }
-                            : processingDecision.extractScope === 'medium'
-                                ? { maxTokens: 1600, maxLatencyMs: 0, maxCost: 0.32 }
-                                : { maxTokens: 900, maxLatencyMs: 0, maxCost: 0.2 },
+                if (this.chatStateManager) {
+                    const effectiveSummarySettings = await this.chatStateManager.getEffectiveSummarySettings();
+                    const autoSummaryRuntime = await this.chatStateManager.getAutoSummaryRuntime();
+                    const runtimeSettings = resolveSummaryRuntimeSettings(
+                        effectiveSummarySettings,
+                        null,
+                        longSummaryCooldown,
                     );
+                    const autoSummaryMode = resolveAutoSummaryMode({
+                        presetStyle: chatProfile?.stylePreference ?? null,
+                        chatProfile,
+                        logicalView,
+                    });
+                    const semanticChange = buildSemanticChangeSummary({
+                        textWindow: compressedWindow.text,
+                        logicalView,
+                        postGate,
+                    });
+                    const promptPressureRatio = Number(
+                        (compressedWindow.stats.compressedLength / Math.max(1, runtimeSettings.longSummaryBudget)).toFixed(3),
+                    );
+                    const autoSummaryDecision = shouldRunAutoSummary({
+                        settings: effectiveSummarySettings.autoSummary,
+                        runtime: autoSummaryRuntime,
+                        activeAssistantTurnCount: currentAssistantTurnCount,
+                        currentMode: autoSummaryMode,
+                        textWindow: compressedWindow.text,
+                        enabledTriggerIds: effectiveSummarySettings.summaryBehavior.longSummaryTrigger,
+                        semanticChange,
+                        promptPressureRatio,
+                    });
+                    autoSummaryDecisionSnapshot = this.buildAutoSummaryDecisionSnapshot({
+                        decision: autoSummaryDecision,
+                        semanticChange,
+                        activeAssistantTurnCount: currentAssistantTurnCount,
+                        promptPressureRatio,
+                    });
+                    processingDecision = this.applyAutoSummaryDecision({
+                        baseDecision: processingDecision,
+                        autoDecision: autoSummaryDecision,
+                        summaryEnabled,
+                    });
+                    await this.chatStateManager.setLastAutoSummaryDecision(autoSummaryDecisionSnapshot);
+                    await this.chatStateManager.setLastProcessingDecision(processingDecision);
+                }
 
-                    if (extractResult?.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
-                        logger.info(`抽取成功后触发 cold-start extract，chatKey=${this.chatKey}, reason=extract_success, accepted=${Boolean(extractResult?.accepted)}`);
-                        await (memory as any).chatState.primeColdStartExtract('extract_success');
-                    }
-
-                    if (this.chatStateManager) {
-                        const windowBase = Math.max(1, extractionWindow.length);
-                        const factsApplied = Number(extractResult?.applied?.factKeys?.length ?? 0);
-                        const patchesApplied = Number(extractResult?.applied?.statePaths?.length ?? 0);
-                        const summariesApplied = Number(summarizeResult?.applied?.summaryIds?.length ?? 0);
-                        const extractHealth = await this.chatStateManager.getExtractHealth();
-                        const nextRecentTasks = [
-                            ...extractHealth.recentTasks,
-                            ...(processingDecision.summaryTier === 'none'
-                                ? []
-                                : [{
-                                    task: 'memory.summarize' as const,
-                                    accepted: Boolean(summarizeResult?.accepted),
-                                    appliedFacts: 0,
-                                    appliedPatches: 0,
-                                    appliedSummaries: Number(summarizeResult?.applied?.summaryIds?.length ?? 0),
-                                    processingLevel: processingDecision.level,
-                                    summaryTier: processingDecision.summaryTier,
-                                    windowHash,
-                                    reasonCodes: processingDecision.reasonCodes,
-                                    ts: Date.now(),
-                                }]),
-                            {
-                                task: 'memory.extract' as const,
-                                accepted: Boolean(extractResult?.accepted),
-                                appliedFacts: factsApplied,
-                                appliedPatches: patchesApplied,
-                                appliedSummaries: 0,
-                                processingLevel: processingDecision.level,
-                                summaryTier: processingDecision.summaryTier,
-                                windowHash,
-                                reasonCodes: processingDecision.reasonCodes,
-                                ts: Date.now(),
-                            },
-                        ].slice(-12);
-                        await this.chatStateManager.recordExtractHealth({
-                            recentTasks: nextRecentTasks,
-                            lastAcceptedAt: summarizeResult?.accepted || extractResult?.accepted
-                                ? Date.now()
-                                : extractHealth.lastAcceptedAt,
-                        });
-                        await this.chatStateManager.updateAdaptiveMetrics({
-                            factsHitRate: Math.min(1, factsApplied / windowBase),
-                            factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
-                            summaryEffectiveness: summariesApplied > 0
-                                ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
-                                : 0,
-                            worldStateSignal: postGate.shouldUpdateWorldState
-                                ? Math.max(0, Math.min(1, lorebookDecision.score))
-                                : 0,
-                        });
-                        if (processingDecision.summaryTier === 'long' && summarizeResult?.accepted) {
-                            const now = Date.now();
-                            await this.chatStateManager.setLongSummaryCooldown({
-                                lastLongSummaryAt: now,
-                                lastLongSummaryWindowHash: windowHash,
-                                lastLongSummaryReason: processingDecision.reasonCodes.join('|'),
-                                lastLongSummaryStage: lifecycleState?.stage ?? 'new',
-                                lastHeavyProcessAt: now,
-                                lastLongSummaryAssistantTurnCount: currentAssistantTurnCount,
-                            });
-                            await this.chatStateManager.setAutoSummaryRuntime({
-                                lastSummaryTurnCount: currentAssistantTurnCount,
-                                lastSummaryAt: now,
-                                lastTriggerReasonCodes: autoSummaryDecisionSnapshot?.reasonCodes ?? processingDecision.reasonCodes,
-                                lastMode: autoSummaryDecisionSnapshot?.mode ?? 'mixed',
-                            });
-                        } else if (extractResult?.accepted) {
-                            await this.chatStateManager.setLongSummaryCooldown({
-                                lastHeavyProcessAt: Date.now(),
-                            });
-                        }
-                        if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
-                            await this.chatStateManager.enqueueSummaryFixTask(
-                                `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
-                                lorebookDecision.mode,
-                            );
-                        }
-                        if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                            await this.chatStateManager.enqueueSummaryFixTask(
-                                `mutation_repair:${postGate.reasonCodes.join('|')}`,
-                                lorebookDecision.mode,
-                            );
-                        }
-                        if (processingDecision.summaryTier !== 'none' && summarizeResult?.accepted === false) {
-                            await this.chatStateManager.enqueueSummaryFixTask(
-                                `summary_retry:${processingDecision.summaryTier}:${postGate.valueClass}`,
-                                lorebookDecision.mode,
-                            );
-                        }
-                        const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
-                            currentAssistantTurnCount,
-                            Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
-                            Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
-                        );
-                        if (shouldRefreshQuality) {
-                            await this.chatStateManager.recomputeMemoryQuality();
-                            await this.metaManager.markRefreshCheckpoints({
-                                qualityAssistantTurnCount: currentAssistantTurnCount,
-                            });
-                        } else if (postGate.reasonCodes.includes('mutation_repair_required')) {
-                            await this.chatStateManager.recomputeMemoryQuality();
-                        }
-                    }
+                if (processingDecision.level === 'none') {
+                    await this.recordUnifiedExtractHealth({
+                        accepted: false,
+                        processingDecision,
+                        assistantTurnCount: currentAssistantTurnCount,
+                        windowHash: selection.windowHash,
+                        appliedFacts: 0,
+                        appliedPatches: 0,
+                        appliedSummaries: 0,
+                        extraReasonCodes: ['skipped_processing_none'],
+                    });
+                    await this.advanceMemoryIngestProgress({
+                        selection,
+                        logicalView,
+                        repairGeneration,
+                        outcome: 'skipped',
+                    });
+                    shouldSettleWindow = true;
                     return;
                 }
+
+                const ingestExecution = await this.runProposalTask(
+                    'memory.ingest',
+                    this.buildUnifiedIngestTaskDescription(processingDecision, selection),
+                    this.buildUnifiedIngestPrompt(
+                        lorebookDecision.mode,
+                        lorebookDecision.shouldExtractWorldFacts,
+                        postGate,
+                        processingDecision.summaryTier,
+                        processingDecision.extractScope,
+                    ),
+                    compressedWindow.text,
+                    schemaContext,
+                    this.resolveUnifiedIngestBudget(processingDecision),
+                    {
+                        fromMessageId: selection.fromMessageId,
+                        toMessageId: selection.toMessageId,
+                    },
+                );
+                const ingestResult = ingestExecution.result;
+                const factsApplied = Number(ingestResult?.applied?.factKeys?.length ?? 0);
+                const patchesApplied = Number(ingestResult?.applied?.statePaths?.length ?? 0);
+                const summariesApplied = Number(ingestResult?.applied?.summaryIds?.length ?? 0);
+                const failureReasonCodes = ingestExecution.compatFailure
+                    ? ['tavern_compat_failure', 'task_request_failed']
+                    : ingestExecution.error
+                        ? ['task_request_failed']
+                        : [];
+
+                await this.recordUnifiedExtractHealth({
+                    accepted: Boolean(ingestResult?.accepted),
+                    processingDecision,
+                    assistantTurnCount: currentAssistantTurnCount,
+                    windowHash: selection.windowHash,
+                    appliedFacts: factsApplied,
+                    appliedPatches: patchesApplied,
+                    appliedSummaries: summariesApplied,
+                    extraReasonCodes: failureReasonCodes,
+                });
+
+                if (!ingestResult) {
+                    return;
+                }
+
+                if (ingestResult.accepted && typeof (memory as any)?.chatState?.primeColdStartExtract === 'function') {
+                    logger.info(`统一记忆摄取成功后触发 cold-start extract，chatKey=${this.chatKey}`);
+                    await (memory as any).chatState.primeColdStartExtract('ingest_success');
+                }
+
+                if (this.chatStateManager) {
+                    const windowBase = Math.max(1, selection.windowMessages.length);
+                    await this.chatStateManager.updateAdaptiveMetrics({
+                        factsHitRate: Math.min(1, factsApplied / windowBase),
+                        factsUpdateRate: Math.min(1, (factsApplied + patchesApplied) / windowBase),
+                        summaryEffectiveness: summariesApplied > 0
+                            ? Math.min(1, summariesApplied / Math.max(1, Math.ceil(windowBase / 4)))
+                            : 0,
+                        worldStateSignal: postGate.shouldUpdateWorldState
+                            ? Math.max(0, Math.min(1, lorebookDecision.score))
+                            : 0,
+                    });
+
+                    if (processingDecision.summaryTier === 'long' && ingestResult.accepted) {
+                        const now = Date.now();
+                        await this.chatStateManager.setLongSummaryCooldown({
+                            lastLongSummaryAt: now,
+                            lastLongSummaryWindowHash: selection.windowHash,
+                            lastLongSummaryReason: processingDecision.reasonCodes.join('|'),
+                            lastLongSummaryStage: lifecycleState?.stage ?? 'new',
+                            lastHeavyProcessAt: now,
+                            lastLongSummaryAssistantTurnCount: currentAssistantTurnCount,
+                        });
+                        await this.chatStateManager.setAutoSummaryRuntime({
+                            lastSummaryTurnCount: currentAssistantTurnCount,
+                            lastSummaryAt: now,
+                            lastTriggerReasonCodes: autoSummaryDecisionSnapshot?.reasonCodes ?? processingDecision.reasonCodes,
+                            lastMode: autoSummaryDecisionSnapshot?.mode ?? 'mixed',
+                        });
+                    } else if (ingestResult.accepted) {
+                        await this.chatStateManager.setLongSummaryCooldown({
+                            lastHeavyProcessAt: Date.now(),
+                        });
+                    }
+
+                    if (previousLorebookDecision && previousLorebookDecision.mode !== lorebookDecision.mode) {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `lorebook_mode_changed:${previousLorebookDecision.mode}->${lorebookDecision.mode}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+                    if (postGate.reasonCodes.includes('mutation_repair_required')) {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `mutation_repair:${postGate.reasonCodes.join('|')}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+                    if (!ingestResult.accepted && processingDecision.summaryTier !== 'none') {
+                        await this.chatStateManager.enqueueSummaryFixTask(
+                            `ingest_retry:${processingDecision.summaryTier}:${postGate.valueClass}`,
+                            lorebookDecision.mode,
+                        );
+                    }
+
+                    const shouldRefreshQuality = this.shouldRefreshByAssistantTurns(
+                        currentAssistantTurnCount,
+                        Number(meta?.lastQualityRefreshAssistantTurnCount ?? 0),
+                        Number((await this.chatStateManager.getAdaptivePolicy()).qualityRefreshInterval ?? 0),
+                    );
+                    if (shouldRefreshQuality) {
+                        await this.chatStateManager.recomputeMemoryQuality();
+                        await this.metaManager.markRefreshCheckpoints({
+                            qualityAssistantTurnCount: currentAssistantTurnCount,
+                        });
+                    } else if (selection.repairTriggered) {
+                        await this.chatStateManager.recomputeMemoryQuality();
+                    }
+                }
+
+                await this.advanceMemoryIngestProgress({
+                    selection,
+                    logicalView,
+                    repairGeneration,
+                    outcome: ingestResult.accepted
+                        ? (factsApplied > 0 || patchesApplied > 0 || summariesApplied > 0 ? 'accepted' : 'noop')
+                        : 'rejected',
+                });
+                shouldSettleWindow = true;
             } catch (error) {
-                logger.error('抽取流程执行失败', error);
+                logger.error('统一记忆摄取流程执行失败', error);
             } finally {
                 const extractionSnapshot = this.turnTracker
                     ? await this.turnTracker.getExtractionSnapshot()
                     : null;
                 await this.metaManager.markLastExtract({
                     ts: Date.now(),
-                    eventCount,
-                    userMsgCount,
-                    windowHash,
-                    activeAssistantTurnCount: extractionSnapshot?.activeAssistantTurnCount,
+                    eventCount: recentEvents.length,
+                    userMsgCount: logicalView.visibleUserTurns.length,
+                    windowHash: selection.windowHash,
+                    activeAssistantTurnCount: extractionSnapshot?.activeAssistantTurnCount ?? currentAssistantTurnCount,
                     lastCommittedTurnCursor: extractionSnapshot?.lastCommittedTurnCursor,
-                    lastVisibleTurnSnapshotHash: extractionSnapshot?.lastVisibleTurnSnapshotHash,
+                    lastVisibleTurnSnapshotHash: extractionSnapshot?.lastVisibleTurnSnapshotHash ?? logicalView.snapshotHash,
                 });
-                this.lastSettledWindowHash = windowHash;
-                this.lastSettledAt = Date.now();
+                if (shouldSettleWindow) {
+                    this.lastSettledWindowHash = selection.windowHash;
+                    this.lastSettledAt = Date.now();
+                }
                 if (currentExtractionPromise && this.extractionFlight === currentExtractionPromise) {
                     this.extractionFlight = null;
                     this.extractionFlightWindowHash = '';
@@ -573,16 +573,275 @@ export class ExtractManager {
 
         currentExtractionPromise = extractionPromise;
         this.extractionFlight = extractionPromise;
-        this.extractionFlightWindowHash = windowHash;
+        this.extractionFlightWindowHash = selection.windowHash;
         await extractionPromise;
     }
 
     /**
-     * 功能：解析当前聊天可见的 assistant turn 计数。
-     * @param logicalView 逻辑消息视图。
-     * @param recentEvents 最近事件窗口。
-     * @returns assistant turn 计数。
+     * 功能：根据已消费游标选择本轮需要送入模型的增量楼层窗口。
+     * @param input 增量窗口计算输入。
+     * @returns 本轮增量窗口；未达到触发条件时返回 null。
      */
+    private resolveIngestWindowSelection(input: {
+        logicalView: LogicalChatView;
+        turnLedger: TurnRecord[];
+        currentAssistantTurnCount: number;
+        interval: number;
+        initialWindowSize: number;
+        triggerBySpecialEvent: boolean;
+        repairGeneration: number;
+        progress: MemoryIngestProgressState;
+    }): IngestWindowSelection | null {
+        const visibleMessages = Array.isArray(input.logicalView.visibleMessages)
+            ? input.logicalView.visibleMessages
+            : [];
+        if (visibleMessages.length === 0) {
+            return null;
+        }
+
+        const latestAssistant = [...visibleMessages].reverse().find((node) => node.role === 'assistant');
+        if (!latestAssistant) {
+            return null;
+        }
+
+        const latestAssistantIndex = String(latestAssistant.messageId ?? '').trim()
+            ? this.findVisibleMessageIndex(input.logicalView, latestAssistant.messageId)
+            : input.logicalView.visibleMessages.lastIndexOf(latestAssistant);
+        if (latestAssistantIndex < 0) {
+            return null;
+        }
+
+        const normalizedInterval = Math.max(1, Math.round(Number(input.interval || 0)));
+        const pendingAssistantTurns = Math.max(
+            0,
+            Number(input.currentAssistantTurnCount ?? 0) - Number(input.progress.lastProcessedAssistantTurnCount ?? 0),
+        );
+        const repairTriggered = input.repairGeneration > Number(input.progress.lastRepairGeneration ?? 0)
+            || (Array.isArray(input.logicalView.mutationKinds) && input.logicalView.mutationKinds.some((kind: ChatMutationKind): boolean => {
+                return kind === 'message_edited' || kind === 'message_swiped' || kind === 'message_deleted' || kind === 'chat_branched';
+            }));
+        if (!repairTriggered && !input.triggerBySpecialEvent && pendingAssistantTurns < normalizedInterval) {
+            return null;
+        }
+
+        let startIndex = 0;
+        const hasProgressCursor = Boolean(
+            input.progress.lastProcessedAssistantMessageId
+            || input.progress.lastProcessedRange?.toMessageId
+            || input.progress.lastProcessedAssistantTurnCount > 0,
+        );
+        if (repairTriggered) {
+            startIndex = this.findVisibleMessageIndex(input.logicalView, input.logicalView.repairAnchorMessageId);
+            if (startIndex < 0) {
+                startIndex = Math.max(0, latestAssistantIndex - Math.max(1, input.initialWindowSize) + 1);
+            }
+        } else if (hasProgressCursor) {
+            const cursorMessageId = input.progress.lastProcessedAssistantMessageId
+                || input.progress.lastProcessedRange?.toMessageId
+                || '';
+            const lastProcessedIndex = this.findVisibleMessageIndex(input.logicalView, cursorMessageId);
+            if (lastProcessedIndex >= 0) {
+                startIndex = Math.min(latestAssistantIndex, lastProcessedIndex + 1);
+            } else {
+                startIndex = Math.max(0, latestAssistantIndex - Math.max(1, input.initialWindowSize) + 1);
+            }
+        } else {
+            startIndex = Math.max(0, latestAssistantIndex - Math.max(1, input.initialWindowSize) + 1);
+        }
+
+        const windowMessages = visibleMessages.slice(startIndex, latestAssistantIndex + 1);
+        if (windowMessages.length === 0) {
+            return null;
+        }
+
+        const fromMessageId = windowMessages[0]?.messageId || undefined;
+        const toMessageId = windowMessages[windowMessages.length - 1]?.messageId || undefined;
+        const lastTurnRecord = [...(Array.isArray(input.turnLedger) ? input.turnLedger : [])]
+            .reverse()
+            .find((turn: TurnRecord): boolean => turn.kind === 'assistant' && turn.lifecycle === 'active' && turn.messageId === latestAssistant.messageId);
+
+        return {
+            windowHash: this.computeLogicalWindowHashFromMessages(windowMessages, input.logicalView, input.repairGeneration),
+            windowMessages,
+            fromMessageId,
+            toMessageId,
+            lastAssistantTurnId: lastTurnRecord?.turnId,
+            lastAssistantMessageId: latestAssistant.messageId,
+            lastAssistantTurnCount: input.currentAssistantTurnCount,
+            pendingAssistantTurns,
+            repairTriggered,
+        };
+    }
+
+    /**
+     * 功能：为统一记忆摄取生成任务说明。
+     * @param processingDecision 当前处理决策。
+     * @returns 任务说明文本。
+     */
+    private buildUnifiedIngestTaskDescription(
+        processingDecision: MemoryProcessingDecision,
+        selection: IngestWindowSelection,
+    ): string {
+        const rangeText = this.buildIngestRangeLabel(selection);
+        if (processingDecision.summaryTier === 'long' || processingDecision.extractScope === 'heavy') {
+            return `统一记忆处理（重处理）${rangeText}`;
+        }
+        if (processingDecision.summaryTier === 'short' || processingDecision.extractScope === 'medium') {
+            return `统一记忆处理（中处理）${rangeText}`;
+        }
+        return `统一记忆处理${rangeText}`;
+    }
+
+    /**
+     * 功能：构建统一摄取的楼层范围标签。
+     * @param selection 当前增量窗口。
+     * @returns 带范围的短标签。
+     */
+    private buildIngestRangeLabel(selection: IngestWindowSelection): string {
+        const fromMessageId = String(selection.fromMessageId ?? '').trim();
+        const toMessageId = String(selection.toMessageId ?? '').trim();
+        const pendingTurns = Math.max(0, Number(selection.pendingAssistantTurns ?? 0));
+        const fromShort = fromMessageId ? fromMessageId.slice(-8) : 'unknown';
+        const toShort = toMessageId ? toMessageId.slice(-8) : 'unknown';
+        return `｜范围 ${fromShort} → ${toShort}｜待处理 ${pendingTurns} 楼`;
+    }
+
+    /**
+     * 功能：根据处理决策计算统一记忆摄取预算。
+     * @param processingDecision 当前处理决策。
+     * @returns 模型预算配置。
+     */
+    private resolveUnifiedIngestBudget(processingDecision: MemoryProcessingDecision): {
+        maxTokens: number;
+        maxLatencyMs: number;
+        maxCost: number;
+    } {
+        if (processingDecision.summaryTier === 'long' || processingDecision.extractScope === 'heavy') {
+            return { maxTokens: 8200, maxLatencyMs: 0, maxCost: 0.65 };
+        }
+        if (processingDecision.summaryTier === 'short' || processingDecision.extractScope === 'medium') {
+            return { maxTokens: 3200, maxLatencyMs: 0, maxCost: 0.38 };
+        }
+        return { maxTokens: 1800, maxLatencyMs: 0, maxCost: 0.24 };
+    }
+
+    /**
+     * 功能：记录统一记忆摄取的健康窗口结果。
+     * @param input 健康记录输入。
+     * @returns 无返回值。
+     */
+    private async recordUnifiedExtractHealth(input: {
+        accepted: boolean;
+        processingDecision: MemoryProcessingDecision;
+        assistantTurnCount: number;
+        windowHash: string;
+        appliedFacts: number;
+        appliedPatches: number;
+        appliedSummaries: number;
+        extraReasonCodes?: string[];
+    }): Promise<void> {
+        if (!this.chatStateManager) {
+            return;
+        }
+        const extractHealth = await this.chatStateManager.getExtractHealth();
+        await this.chatStateManager.recordExtractHealth({
+            recentTasks: [
+                ...extractHealth.recentTasks,
+                {
+                    task: 'memory.ingest' as const,
+                    accepted: input.accepted,
+                    appliedFacts: input.appliedFacts,
+                    appliedPatches: input.appliedPatches,
+                    appliedSummaries: input.appliedSummaries,
+                    processingLevel: input.processingDecision.level,
+                    summaryTier: input.processingDecision.summaryTier,
+                    windowHash: input.windowHash,
+                    reasonCodes: this.buildRecentTaskReasonCodes(
+                        input.processingDecision.reasonCodes,
+                        input.extraReasonCodes ?? [],
+                    ),
+                    assistantTurnCount: input.assistantTurnCount,
+                    ts: Date.now(),
+                },
+            ].slice(-12),
+            lastAcceptedAt: input.accepted ? Date.now() : extractHealth.lastAcceptedAt,
+        });
+    }
+
+    /**
+     * 功能：推进统一记忆摄取的楼层消费游标。
+     * @param input 游标推进输入。
+     * @returns 无返回值。
+     */
+    private async advanceMemoryIngestProgress(input: {
+        selection: IngestWindowSelection;
+        logicalView: LogicalChatView;
+        repairGeneration: number;
+        outcome: MemoryIngestProgressState['lastProcessedOutcome'];
+    }): Promise<void> {
+        if (!this.chatStateManager) {
+            return;
+        }
+        await this.chatStateManager.setMemoryIngestProgress({
+            lastProcessedAssistantTurnId: input.selection.lastAssistantTurnId,
+            lastProcessedAssistantMessageId: input.selection.lastAssistantMessageId,
+            lastProcessedAssistantTurnCount: input.selection.lastAssistantTurnCount,
+            lastProcessedSnapshotHash: input.logicalView.snapshotHash,
+            lastProcessedRange: {
+                fromMessageId: input.selection.fromMessageId,
+                toMessageId: input.selection.toMessageId,
+            },
+            lastProcessedAt: Date.now(),
+            lastProcessedOutcome: input.outcome,
+            lastRepairGeneration: input.repairGeneration,
+        });
+    }
+
+    /**
+     * 功能：把可见楼层窗口转换成统一摄取文本。
+     * @param windowMessages 增量楼层列表。
+     * @returns 统一摄取用文本窗口。
+     */
+    private buildLogicalWindowTextFromMessages(windowMessages: LogicalChatView['visibleMessages']): string {
+        return windowMessages
+            .map((node) => {
+                return `[${new Date(node.updatedAt || node.createdAt || Date.now()).toLocaleTimeString()}] chat.message.${node.role}: ${node.text}`;
+            })
+            .join('\n');
+    }
+
+    /**
+     * 功能：按增量楼层窗口计算哈希，避免重复摄取。
+     * @param windowMessages 增量楼层列表。
+     * @param view 当前逻辑视图。
+     * @param repairGeneration 当前修复代数。
+     * @returns 增量窗口哈希。
+     */
+    private computeLogicalWindowHashFromMessages(
+        windowMessages: LogicalChatView['visibleMessages'],
+        view: LogicalChatView,
+        repairGeneration: number,
+    ): string {
+        const payload = windowMessages
+            .map((node) => `${node.messageId}|${node.role}|${node.textSignature}`)
+            .join('\n');
+        return this.hashString(`${payload}|${view.snapshotHash}|${(view.mutationKinds || []).join(',')}|${repairGeneration}`);
+    }
+
+    /**
+     * 功能：在可见楼层中查找指定消息索引。
+     * @param logicalView 逻辑视图。
+     * @param messageId 目标消息 ID。
+     * @returns 可见索引；找不到时返回 -1。
+     */
+    private findVisibleMessageIndex(logicalView: LogicalChatView, messageId?: string | null): number {
+        const normalizedMessageId = String(messageId ?? '').trim();
+        if (!normalizedMessageId) {
+            return -1;
+        }
+        return logicalView.visibleMessages.findIndex((node) => node.messageId === normalizedMessageId);
+    }
+
     private async resolveAssistantTurnCount(
         logicalView: LogicalChatView | null,
         recentEvents: Array<EventEnvelope<unknown>>,
@@ -621,58 +880,28 @@ export class ExtractManager {
     }
 
     /**
-     * 功能：构建短总结提示词。
-     * @param lorebookMode 当前世界书裁决模式。
-     * @param postGate 生成后 gate 结果。
-     * @returns 短总结任务提示词。
-     */
-    private buildShortSummarizePrompt(
-        lorebookMode: string,
-        postGate: PostGenerationGateDecision,
-    ): string {
-        return buildShortSummarizeTaskPrompt(
-            lorebookMode,
-            postGate,
-            buildMemorySummarySaveSystemPrompt(),
-        );
-    }
-
-    /**
-     * 功能：构建长总结提示词。
-     * @param lorebookMode 当前世界书裁决模式。
-     * @param postGate 生成后 gate 结果。
-     * @returns 长总结任务提示词。
-     */
-    private buildLongSummarizePrompt(
-        lorebookMode: string,
-        postGate: PostGenerationGateDecision,
-    ): string {
-        return buildLongSummarizeTaskPrompt(
-            lorebookMode,
-            postGate,
-            buildMemorySummarySaveSystemPrompt(),
-        );
-    }
-
-    /**
-     * 功能：构建分档抽取提示词。
-     * @param lorebookMode 当前世界书裁决模式。
+     * 功能：构建统一记忆摄取提示词。
+     * @param lorebookMode 当前世界书裁剪模式。
      * @param allowWorldFacts 是否允许抽取世界事实。
      * @param postGate 生成后 gate 结果。
-     * @param scope 抽取范围档位。
-     * @returns 抽取任务提示词。
+     * @param summaryTier 摘要档位。
+     * @param scope 抽取档位。
+     * @returns 统一摄取任务提示词。
      */
-    private buildExtractPromptByScope(
+    private buildUnifiedIngestPrompt(
         lorebookMode: string,
         allowWorldFacts: boolean,
         postGate: PostGenerationGateDecision,
+        summaryTier: SummaryExecutionTier,
         scope: MemoryProcessingLevel,
     ): string {
-        return buildExtractPromptByScopeTaskPrompt(
+        return buildUnifiedIngestTaskPrompt(
             lorebookMode,
             allowWorldFacts,
             postGate,
+            summaryTier,
             scope,
+            buildMemorySummarySaveSystemPrompt(),
         );
     }
 
@@ -683,7 +912,7 @@ export class ExtractManager {
      * @returns 更严格的重试提示词。
      */
     private buildCompactRetryPrompt(basePrompt: string, task: ProposalTask): string {
-        if (task === 'memory.extract') {
+        if (task === 'memory.ingest') {
             return [
                 basePrompt,
                 '上一次输出因 JSON 解析失败而被丢弃；这通常意味着输出过长、未闭合或结构不够紧凑。',
@@ -847,6 +1076,148 @@ export class ExtractManager {
     }
 
     /**
+     * 功能：归一化统一记忆摄取返回的提议信封，并把记忆卡草稿挂到摘要条目上。
+     * @param envelope 原始提议信封。
+     * @param rangeFallback 摘要缺失范围时使用的回填范围。
+     * @returns 归一化后的提议信封。
+     */
+    private normalizeUnifiedIngestEnvelope(
+        envelope: ProposalEnvelope,
+        rangeFallback?: { fromMessageId?: string; toMessageId?: string },
+    ): ProposalEnvelope {
+        const proposal = envelope?.proposal ?? {};
+        const summaries = Array.isArray(proposal.summaries)
+            ? proposal.summaries
+                .filter((summary: SummaryProposal | null | undefined): summary is SummaryProposal => {
+                    return Boolean(summary && typeof summary === 'object' && String(summary.content ?? '').trim());
+                })
+                .map((summary: SummaryProposal): SummaryProposal => {
+                    const normalizedRange = summary.range?.fromMessageId || summary.range?.toMessageId
+                        ? {
+                            fromMessageId: String(summary.range?.fromMessageId ?? '').trim() || rangeFallback?.fromMessageId,
+                            toMessageId: String(summary.range?.toMessageId ?? '').trim() || rangeFallback?.toMessageId,
+                        }
+                        : rangeFallback
+                            ? {
+                                fromMessageId: rangeFallback.fromMessageId,
+                                toMessageId: rangeFallback.toMessageId,
+                            }
+                            : undefined;
+                    return {
+                        ...summary,
+                        content: String(summary.content ?? '').trim(),
+                        range: normalizedRange,
+                    };
+                })
+            : [];
+        const memoryCards = Array.isArray(proposal.memoryCards)
+            ? proposal.memoryCards.filter((card): boolean => {
+                return Boolean(card && typeof card === 'object' && String(card.memoryText ?? '').trim());
+            })
+            : [];
+
+        if (summaries.length > 0 && memoryCards.length > 0) {
+            const firstSummary = summaries[0];
+            summaries[0] = {
+                ...firstSummary,
+                memoryCards: [
+                    ...(Array.isArray(firstSummary.memoryCards) ? firstSummary.memoryCards : []),
+                    ...memoryCards,
+                ],
+            };
+        }
+
+        return {
+            ...envelope,
+            proposal: {
+                ...proposal,
+                summaries,
+                memoryCards: undefined,
+            },
+        };
+    }
+
+    /**
+     * 功能：把可能为 JSON 字符串的提议信封输入解析成对象，避免字符串被误当作对象展开。
+     * @param value 原始提议信封输入。
+     * @returns 解析后的提议信封对象；无法解析时返回原值。
+     */
+    private coerceProposalEnvelopeInput(value: unknown): unknown {
+        if (typeof value !== 'string') {
+            return value;
+        }
+        const normalized = String(value).trim();
+        if (!normalized) {
+            return value;
+        }
+        try {
+            return JSON.parse(normalized) as unknown;
+        } catch {
+            const jsonBlockMatch = normalized.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
+            const candidate = jsonBlockMatch?.[1]?.trim() || normalized;
+            try {
+                return JSON.parse(candidate) as unknown;
+            } catch {
+                const firstBrace = candidate.indexOf('{');
+                const lastBrace = candidate.lastIndexOf('}');
+                if (firstBrace >= 0 && lastBrace > firstBrace) {
+                    try {
+                        return JSON.parse(candidate.slice(firstBrace, lastBrace + 1)) as unknown;
+                    } catch {
+                        return value;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+
+    /**
+     * 功能：判断任意值是否已经具备提议信封的基本结构。
+     * @param value 待判断的值。
+     * @returns 是否可视为提议信封对象。
+     */
+    private isProposalEnvelopeLike(value: unknown): value is ProposalEnvelope {
+        if (!value || typeof value !== 'object') {
+            return false;
+        }
+        const record = value as Record<string, unknown>;
+        return 'ok' in record && 'proposal' in record;
+    }
+
+    /**
+     * 功能：把统一记忆摄取提议信封压缩成简短日志摘要，便于判断是否真正进入落库链路。
+     * @param envelope 提议信封。
+     * @returns 适合日志打印的摘要对象。
+     */
+    private summarizeProposalEnvelopeForLog(envelope: ProposalEnvelope | null | undefined): {
+        ok: boolean;
+        facts: number;
+        patches: number;
+        summaries: number;
+        memoryCards: number;
+        confidence: number;
+        summaryRanges: string[];
+    } {
+        const proposal = envelope?.proposal ?? {};
+        const summaries = Array.isArray(proposal.summaries) ? proposal.summaries : [];
+        return {
+            ok: Boolean(envelope?.ok),
+            facts: Array.isArray(proposal.facts) ? proposal.facts.length : 0,
+            patches: Array.isArray(proposal.patches) ? proposal.patches.length : 0,
+            summaries: summaries.length,
+            memoryCards: Array.isArray(proposal.memoryCards) ? proposal.memoryCards.length : 0,
+            confidence: Number(envelope?.confidence ?? 0) || 0,
+            summaryRanges: summaries.slice(0, 4).map((summary: SummaryProposal): string => {
+                const level = String(summary.level ?? 'summary').trim() || 'summary';
+                const fromMessageId = String(summary.range?.fromMessageId ?? '').trim() || '?';
+                const toMessageId = String(summary.range?.toMessageId ?? '').trim() || '?';
+                return `${level}:${fromMessageId}->${toMessageId}`;
+            }),
+        };
+    }
+
+    /**
      * 功能：执行单个提议任务并提交落地。
      * @param task 任务名。
      * @param systemPrompt 系统提示词。
@@ -862,10 +1233,15 @@ export class ExtractManager {
         eventsText: string,
         schemaContext: SchemaContextPayload,
         budget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
-    ): Promise<ProposalResult | null> {
+        rangeFallback?: { fromMessageId?: string; toMessageId?: string },
+    ): Promise<ProposalTaskRunResult> {
         const memory = this.getWindowMemory();
         if (!memory?.proposal?.processProposal) {
-            return null;
+            logger.warn(`${task} 跳过落地：窗口中没有可用的提案写入接口`);
+            return {
+                result: null,
+                compatFailure: false,
+            };
         }
 
         const executeAttempt = async (
@@ -887,34 +1263,71 @@ export class ExtractManager {
             );
         };
 
-        let response = await executeAttempt(systemPrompt, budget);
+        let response: any = await executeAttempt(systemPrompt, budget);
         if (!response.ok && response.reasonCode === 'invalid_json') {
             const retryBudget = {
                 maxTokens: Math.min(3200, Math.max(Number(budget.maxTokens ?? 0) + 400, 2200)),
                 maxLatencyMs: budget.maxLatencyMs,
-                maxCost: Math.max(Number(budget.maxCost ?? 0), task === 'memory.extract' ? 0.5 : 0.25),
+                maxCost: Math.max(Number(budget.maxCost ?? 0), task === 'memory.ingest' ? 0.5 : 0.25),
             };
             logger.warn(`${task} 返回无效 JSON，启用紧凑模式重试一次`);
             response = await executeAttempt(this.buildCompactRetryPrompt(systemPrompt, task), retryBudget);
         }
         if (!response.ok) {
+            const failedResponse = response as { ok: false; error?: string; reasonCode?: string };
+            const failedResponseAny: any = failedResponse;
+            logger.warn(`${task} 请求失败：${failedResponse.error || '未知错误'} (${failedResponse.reasonCode || 'unknown'})`);
+            return {
+                result: null,
+                reasonCode: failedResponse.reasonCode,
+                error: failedResponse.error,
+                compatFailure: this.isStructuredCompatibilityFailure(failedResponse.error, failedResponse.reasonCode),
+            };
             logger.warn(`${task} 请求失败：${response.error} (${response.reasonCode || 'unknown'})`);
-            return null;
+            return {
+                result: null,
+                compatFailure: false,
+            };
         }
 
-        const envelope = response.data;
+        const normalizedResponseData = this.coerceProposalEnvelopeInput(response.data);
+        const envelope: ProposalEnvelope | null = this.isProposalEnvelopeLike(normalizedResponseData)
+            ? (task === 'memory.ingest'
+                ? this.normalizeUnifiedIngestEnvelope(normalizedResponseData, rangeFallback)
+                : normalizedResponseData)
+            : null;
+        logger.info(`${task} 返回提案摘要：${JSON.stringify(this.summarizeProposalEnvelopeForLog(envelope))}`);
         if (!envelope?.ok || !envelope?.proposal) {
+            logger.warn(`${task} 返回结构无效，跳过落地：${JSON.stringify({
+                hasEnvelope: Boolean(envelope),
+                ok: Boolean(envelope?.ok),
+                hasProposal: Boolean(envelope?.proposal),
+                keys: envelope && typeof envelope === 'object'
+                    ? Object.keys(envelope as unknown as Record<string, unknown>).slice(0, 12)
+                    : [],
+            })}`);
+            return {
+                result: null,
+                compatFailure: false,
+            };
             logger.warn(`${task} 返回结构无效，跳过落地`);
-            return null;
+            return {
+                result: null,
+                compatFailure: false,
+            };
         }
 
+        logger.info(`${task} 准备进入提案落库：facts=${Array.isArray(envelope.proposal.facts) ? envelope.proposal.facts.length : 0}, patches=${Array.isArray(envelope.proposal.patches) ? envelope.proposal.patches.length : 0}, summaries=${Array.isArray(envelope.proposal.summaries) ? envelope.proposal.summaries.length : 0}`);
         const result = await memory.proposal.processProposal(envelope, MEMORY_OS_PLUGIN_ID);
         if (result.accepted) {
             logger.success(`${task} 通过：facts=${result.applied.factKeys.length}, patches=${result.applied.statePaths.length}, summaries=${result.applied.summaryIds.length}`);
         } else {
             logger.warn(`${task} 被拒绝：${result.rejectedReasons.join('; ')}`);
         }
-        return result;
+        return {
+            result,
+            compatFailure: false,
+        };
     }
 
     /**
@@ -926,6 +1339,97 @@ export class ExtractManager {
             STX?: { memory?: MemorySDK };
         };
         return globalRef.STX?.memory ?? null;
+    }
+
+    /**
+     * 功能：判断回复文本是否带有剧情 UI 包装标签。
+     * @param text 待判断文本。
+     * @returns 是否命中剧情 UI 包装。
+     */
+    private hasSceneUiWrapper(text: string): boolean {
+        const source = String(text ?? '');
+        return /<UI>|<world>|<user_status>|<char_status>|<story>|<options>/i.test(source);
+    }
+
+    /**
+     * 功能：判断最近一轮内容里是否存在明确的工具、代码、日志或报错信号。
+     * @param userLine 最近用户消息。
+     * @param assistantLine 最近助手消息。
+     * @returns 是否命中明确工具信号。
+     */
+    private hasExplicitToolSignal(userLine: string, assistantLine: string): boolean {
+        const mergedText = `${String(userLine ?? '')}\n${String(assistantLine ?? '')}`;
+        return /```|npm|pnpm|tsc|stack|error|exception|traceback|curl|sql|json schema|response_format|http\s*\d{3}|接口返回|日志|报错|命令|终端|控制台|代码|函数|编译|修复|配置/i.test(mergedText);
+    }
+
+    /**
+     * 功能：判断文本里是否更像设定、资料或世界问答信号。
+     * @param text 待判断文本。
+     * @returns 是否命中设定信号。
+     */
+    private hasSettingSignal(text: string): boolean {
+        return /设定|世界观|规则|地点|背景|是什么|谁是|哪国|历史|种族|阵营|资料|百科|介绍一下|在哪里/.test(String(text ?? ''));
+    }
+
+    /**
+     * 功能：判断文本里是否出现明显的关系变化信号。
+     * @param text 待判断文本。
+     * @returns 是否命中关系变化信号。
+     */
+    private hasRelationshipSignal(text: string): boolean {
+        return /关系|好感|敌人|盟友|恋人|队友|背叛|和解|信任|疏远|站在.*一边/.test(String(text ?? ''));
+    }
+
+    /**
+     * 功能：判断失败是否属于 Tavern 结构化输出兼容问题。
+     * @param errorText 错误文本。
+     * @param reasonCode 原因码。
+     * @returns 是否属于结构化兼容失败。
+     */
+    private isStructuredCompatibilityFailure(errorText: string | undefined, reasonCode: string | undefined): boolean {
+        const mergedText = `${String(errorText ?? '')}\n${String(reasonCode ?? '')}`.toLowerCase();
+        return mergedText.includes('bad request')
+            || mergedText.includes('json_schema')
+            || mergedText.includes('response_format')
+            || mergedText.includes('chat_completion_http_error');
+    }
+
+    /**
+     * 功能：合并任务原因码，并补充额外原因码。
+     * @param baseCodes 基础原因码。
+     * @param extraCodes 额外原因码。
+     * @returns 去重后的原因码数组。
+     */
+    private buildRecentTaskReasonCodes(baseCodes: string[], extraCodes: string[] = []): string[] {
+        return Array.from(new Set([...(baseCodes ?? []), ...(extraCodes ?? [])]));
+    }
+
+    /**
+     * 功能：判断当前聊天是否处于结构化兼容失败后的冷却期。
+     * @param currentAssistantTurnCount 当前助手回合数。
+     * @param triggerBySpecialEvent 是否由特殊事件触发。
+     * @returns 是否需要跳过本轮结构化任务。
+     */
+    private async shouldSkipForCompatFailureCooldown(
+        currentAssistantTurnCount: number,
+        triggerBySpecialEvent: boolean,
+    ): Promise<boolean> {
+        if (!this.chatStateManager || triggerBySpecialEvent) {
+            return false;
+        }
+        const extractHealth = await this.chatStateManager.getExtractHealth();
+        const recentTasks = Array.isArray(extractHealth.recentTasks) ? extractHealth.recentTasks : [];
+        const lastCompatFailure = [...recentTasks].reverse().find((task): boolean => {
+            return Array.isArray(task.reasonCodes) && task.reasonCodes.includes('tavern_compat_failure');
+        });
+        if (!lastCompatFailure) {
+            return false;
+        }
+        const lastAssistantTurnCount = Math.max(0, Number(lastCompatFailure.assistantTurnCount ?? 0));
+        if (lastAssistantTurnCount <= 0) {
+            return false;
+        }
+        return currentAssistantTurnCount - lastAssistantTurnCount < this.compatFailureCooldownTurns;
     }
 
     /**
@@ -1280,9 +1784,23 @@ export class ExtractManager {
         const userText = String(userLine ?? '').trim();
         const assistantText = String(assistantLine ?? '').trim();
         const mergedText = `${userText}\n${assistantText}`;
+        const sceneUiWrapper = this.hasSceneUiWrapper(assistantText);
+        const explicitToolSignal = this.hasExplicitToolSignal(userText, assistantText);
 
         if (!assistantText) {
             return 'small_talk_noise';
+        }
+        if (sceneUiWrapper) {
+            if (this.hasSettingSignal(mergedText)) {
+                return 'setting_confirmed';
+            }
+            if (this.hasRelationshipSignal(mergedText)) {
+                return 'relationship_shift';
+            }
+            return 'plot_progress';
+        }
+        if (explicitToolSignal) {
+            return 'tool_result';
         }
         if (/```|npm|pnpm|tsc|stack|error|函数|代码|命令|日志|修复|配置|接口|返回值/i.test(mergedText)) {
             return 'tool_result';

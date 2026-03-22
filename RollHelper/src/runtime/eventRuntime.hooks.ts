@@ -42,6 +42,7 @@ import {
   clearDiceMetaEventState as clearDiceMetaEventStateModuleEvent,
   findLatestAssistantEvent as findLatestAssistantModuleEvent,
   handleGenerationEndedEvent as handleGenerationEndedModuleEvent,
+  reconcilePendingRoundWithCurrentChatEvent as reconcilePendingRoundWithCurrentChatModuleEvent,
   registerEventHooksEvent as registerEventHooksModuleEvent,
   sanitizeAssistantMessageEventBlocksEvent as sanitizeAssistantMessageEventBlocksModuleEvent,
   sanitizeCurrentChatEventBlocksEvent as sanitizeCurrentChatEventBlocksModuleEvent,
@@ -61,9 +62,12 @@ import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, perfo
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
 import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
 import {
+  buildAssistantFloorKeyEvent,
   filterEventsByApplyScopeEvent,
   getLatestRollRecordForEvent,
   handlePromptReadyEvent,
+  invalidatePendingRoundFloorEvent,
+  invalidateSummaryHistoryFloorEvent,
   mergeEventsIntoPendingRoundEvent,
   normalizeCompareOperatorEvent,
   parseEventEnvelopesEvent,
@@ -88,7 +92,10 @@ function findLatestAssistantEvent(chat: TavernMessageEvent[]): { msg: TavernMess
 function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number): string {
   return buildAssistantMessageIdModuleEvent(message, index, {
     simpleHashEvent: simpleHashCoreEvent,
+    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
+    parseEventEnvelopesEvent,
+    removeRangesEvent,
   });
 }
 
@@ -212,11 +219,36 @@ function handleGenerationEndedEvent(retry = 0): void {
     hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
     persistChatSafeEvent: persistChatSafeStoreEvent,
     mergeEventsIntoPendingRoundEvent,
+    invalidatePendingRoundFloorEvent,
+    invalidateSummaryHistoryFloorEvent,
     autoRollEventsByAiModeEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+  });
+}
+
+/**
+ * 功能：用当前可见聊天内容对账未归档轮次，清除被重生成楼层的旧骰子状态。
+ * @param reason 触发本次对账的原因。
+ * @returns 若本次对账修改了未归档轮次则返回 `true`，否则返回 `false`。
+ */
+function reconcilePendingRoundWithCurrentChatEvent(reason = "chat_mutated"): boolean {
+  return reconcilePendingRoundWithCurrentChatModuleEvent(reason, {
+    getSettingsEvent: getSettingsStoreEvent,
+    getLiveContextEvent: getLiveContextCoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    isAssistantMessageEvent: isAssistantMessageModuleEvent,
+    buildAssistantMessageIdEvent,
+    buildAssistantFloorKeyEvent,
+    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
+    getMessageTextEvent: getMessageTextModuleEvent,
+    parseEventEnvelopesEvent,
+    filterEventsByApplyScopeEvent,
+    invalidatePendingRoundFloorEvent,
+    invalidateSummaryHistoryFloorEvent,
+    mergeEventsIntoPendingRoundEvent,
   });
 }
 
@@ -283,6 +315,7 @@ export function registerEventHooksEvent(): void {
     refreshCountdownDomEvent,
     loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
+    reconcilePendingRoundWithCurrentChatEvent,
   });
 }
 

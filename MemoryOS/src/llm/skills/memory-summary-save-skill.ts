@@ -13,6 +13,7 @@ export const MEMORY_SUMMARY_SAVE_SKILL: MemoryPromptSkill = {
         'state 卡优先描述当前稳定状态，event 卡优先描述已经发生的变化，二者不要混成一条。',
         'evidenceText 可以保留证据来源，但主记忆正文必须人类可读，便于召回解释与查看。',
         '如果无法确定内容是否值得长期保存，优先保守，不要为了凑数量生成低质量卡片。',
+        'summary.level 只允许使用 message、scene 或 arc，不要输出 short、medium、long 或其他旧口径。',
     ],
 };
 

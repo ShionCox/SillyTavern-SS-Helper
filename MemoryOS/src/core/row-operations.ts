@@ -1,5 +1,5 @@
 import { db, patchSdkChatShared, type DBFact } from '../db/db';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { ChatStateManager } from './chat-state-manager';
 import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay } from './memory-card-text';
 import { FactsManager } from './facts-manager';
@@ -9,7 +9,6 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import type { ProposalResult, WriteRequest } from '../proposal/types';
 import type { RowMergeResult, RowSeedData, LogicTableQueryOpts, LogicTableRow } from '../types';
 
-const logger = new Logger('RowOperations');
 
 /**
  * 功能：负责逻辑表的行级增删改查操作。

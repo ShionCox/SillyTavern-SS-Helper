@@ -1,7 +1,7 @@
 import { STX_PROTOCOL_VERSION, BroadcastEnvelope } from './protocol';
 import { Logger } from '../logger';
 
-const logger = new Logger('STXBus-Broadcast');
+const logger = new Logger('STXBus-Broadcast', { quiet: true });
 
 /**
  * 广域分发 (Broadcast)

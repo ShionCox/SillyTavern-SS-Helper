@@ -9,7 +9,7 @@
  * 注册接口是同步命令式；内部持久化、广播、异步落盘由注册中心自己排程处理。
  */
 
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     ConsumerRegistration,
     ConsumerPersistentSnapshot,
@@ -22,7 +22,6 @@ import type {
     CapabilityKind,
 } from '../schema/types';
 
-const logger = new Logger('LLMHub-Registry');
 
 /** 失效触发：插件长时间未注册（默认 7 天） */
 const PLUGIN_INACTIVE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;

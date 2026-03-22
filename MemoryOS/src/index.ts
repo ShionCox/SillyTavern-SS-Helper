@@ -62,7 +62,7 @@ export type {
     MemoryOSChatState, RetentionPolicy, StrategyDecision,
     AutoSchemaPolicy, SchemaDraftSession, AssistantTurnTracker,
     TurnLifecycle, TurnKind, TurnRecord, LogicalChatView, LogicalMessageNode, ChatMutationKind, ChatArchiveState,
-    ColdStartStage, MutationRepairTask, MemoryMutationAction, MemoryMutationActionCounts, MemoryMutationPlanItem, MemoryMutationPlanSnapshot, MemoryMutationTargetKind,
+    ColdStartBootstrapState, ColdStartBootstrapStatus, ColdStartStage, MutationRepairTask, MemoryMutationAction, MemoryMutationActionCounts, MemoryMutationPlanItem, MemoryMutationPlanSnapshot, MemoryMutationTargetKind,
     RowAliasIndex, RowRedirects, RowTombstones,
 } from './types/chat-state';
 export type {
@@ -124,6 +124,7 @@ import { filterRecordText } from './core/record-filter';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
+import { reconcileColdStartBootstrap } from './runtime/coldStartCoordinator';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -1107,6 +1108,7 @@ class MemoryOS {
                 (window as any).STX.memory = sdkInstance;
                 currentChatKey = chatKey;
                 ensureMemoryChatToolbar();
+                await reconcileColdStartBootstrap(sdkInstance, 'chat_bound');
                 logger.success(`当前会话 ${chatKey} 数据库存储系统已就绪！`);
                 toast.success(`数据库已就绪`);
 
@@ -1374,19 +1376,22 @@ class MemoryOS {
                 // 尝试补录最后一条助手回复（仅兜底）
                 appendLatestAssistantMessageFallback();
                 rebuildLogicalViewIfNeeded('generation_ended', true);
+                if (isAiModeEnabled()) {
+                    const scheduleRoundProcessing = (memory as any)?.extract?.scheduleRoundProcessing;
+                    const roundTask = typeof scheduleRoundProcessing === 'function'
+                        ? scheduleRoundProcessing.call((memory as any).extract, 'generation_ended')
+                        : Promise.resolve((memory as any)?.chatState?.primeColdStartExtract?.('generation_ended'))
+                            .then((): unknown => (memory as any)?.extract?.kickOffExtraction?.());
+                    roundTask.catch((e: Error) => {
+                        logger.error('?????????????', e);
+                    });
+                    return;
+                }
                 void Promise.resolve((memory as any)?.chatState?.primeColdStartExtract?.('generation_ended'))
                     .catch((error: unknown) => {
                         logger.warn('冷启动提取触发失败（generation_ended）', error);
                     });
 
-                // 若启用了 AI 模式，这里是触发总结与压缩的绝佳锚点
-                if (isAiModeEnabled()) {
-                    logger.info('AI 增强模式已开启，尝试挂起闲置记忆池压缩任务...');
-                    // 分发到 LLM Hub 的提取服务
-                    memory.extract.kickOffExtraction().catch((e: Error) => {
-                        logger.error('记忆提取与压缩后台任务失败', e);
-                    });
-                }
             }
         });
 
@@ -1458,11 +1463,13 @@ class MemoryOS {
 }
 
 // 模拟插件环境挂载
-(window as any).MemoryOSPlugin = new MemoryOS();
+if (typeof window !== 'undefined') {
+    (window as any).MemoryOSPlugin = new MemoryOS();
+}
 
 // 自动初始化 UI 挂载
 if (typeof document !== 'undefined') {
-    renderSettingsUi().catch(err => {
+    renderSettingsUi().catch((err: unknown) => {
         logger.error('UI 渲染失败:', err);
     });
 }

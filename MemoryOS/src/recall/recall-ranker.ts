@@ -132,6 +132,21 @@ function priorityWeight(priority: CandidatePriority): number {
 }
 
 /**
+ * 功能：根据实体词精确命中原因码，返回额外排序加权。
+ * @param candidate 召回候选。
+ * @returns 额外加权分数。
+ */
+function readExactEntityBonus(candidate: RecallCandidate): number {
+    if (candidate.reasonCodes.includes('entity_title_exact_match')) {
+        return 0.2;
+    }
+    if (candidate.reasonCodes.includes('entity_exact_match')) {
+        return 0.12;
+    }
+    return 0;
+}
+
+/**
  * 功能：将候选映射到内部召回池。
  * 参数：
  *   candidate：召回候选。
@@ -167,6 +182,7 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
             const sourceWeight = input.plan.sourceWeights[candidate.source] ?? 0.4;
             const sectionWeight = candidate.sectionHint ? (input.plan.sectionWeights[candidate.sectionHint] ?? 0.4) : 0.2;
             const priority = readPriority(candidate);
+            const exactEntityBonus = readExactEntityBonus(candidate);
             const focusWeight = candidate.actorFocusTier === 'primary'
                 ? 0.08
                 : candidate.actorFocusTier === 'secondary'
@@ -181,6 +197,7 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
                 + candidate.relationshipScore * 0.12
                 + candidate.emotionScore * 0.08
                 + candidate.continuityScore * 0.1
+                + exactEntityBonus
                 + candidate.actorVisibilityScore * 0.12
                 + focusWeight
                 - (candidate.actorForgotten ? 0.14 : 0)

@@ -162,6 +162,8 @@ function normalizeAutoSummary(input: unknown, fallback: AutoSummaryTriggerSettin
     };
     return {
         enabled: normalizeBoolean(record.enabled, fallback.enabled),
+        manualTurnThresholdEnabled: normalizeBoolean(record.manualTurnThresholdEnabled, fallback.manualTurnThresholdEnabled),
+        manualTurnThreshold: clampCount(record.manualTurnThreshold, fallback.manualTurnThreshold, 1, 120),
         roleplayTurnThreshold: clampCount(record.roleplayTurnThreshold, fallback.roleplayTurnThreshold, 1, 120),
         chatTurnThreshold: clampCount(record.chatTurnThreshold, fallback.chatTurnThreshold, 1, 120),
         storyTurnThreshold: clampCount(record.storyTurnThreshold, fallback.storyTurnThreshold, 1, 120),
@@ -315,7 +317,77 @@ export function normalizeSummarySettingsOverride(input?: Partial<SummarySettings
         }
     }
     if (isObjectRecord(record.autoSummary) && Object.keys(record.autoSummary).length > 0) {
-        override.autoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+        override.autoSummary = {};
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'enabled')) {
+            override.autoSummary.enabled = normalizeBoolean(record.autoSummary.enabled, DEFAULT_SUMMARY_SETTINGS.autoSummary.enabled);
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'manualTurnThresholdEnabled')) {
+            override.autoSummary.manualTurnThresholdEnabled = normalizeBoolean(
+                record.autoSummary.manualTurnThresholdEnabled,
+                DEFAULT_SUMMARY_SETTINGS.autoSummary.manualTurnThresholdEnabled,
+            );
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'manualTurnThreshold')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.manualTurnThreshold = normalizedAutoSummary.manualTurnThreshold;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'roleplayTurnThreshold')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.roleplayTurnThreshold = normalizedAutoSummary.roleplayTurnThreshold;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'chatTurnThreshold')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.chatTurnThreshold = normalizedAutoSummary.chatTurnThreshold;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'storyTurnThreshold')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.storyTurnThreshold = normalizedAutoSummary.storyTurnThreshold;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'mixedTurnThreshold')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.mixedTurnThreshold = normalizedAutoSummary.mixedTurnThreshold;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'minTurnsAfterLastSummary')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.minTurnsAfterLastSummary = normalizedAutoSummary.minTurnsAfterLastSummary;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'coolDownTurns')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.coolDownTurns = normalizedAutoSummary.coolDownTurns;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'enableTriggerRules')) {
+            override.autoSummary.enableTriggerRules = normalizeBoolean(
+                record.autoSummary.enableTriggerRules,
+                DEFAULT_SUMMARY_SETTINGS.autoSummary.enableTriggerRules,
+            );
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'enableSemanticChangeTrigger')) {
+            override.autoSummary.enableSemanticChangeTrigger = normalizeBoolean(
+                record.autoSummary.enableSemanticChangeTrigger,
+                DEFAULT_SUMMARY_SETTINGS.autoSummary.enableSemanticChangeTrigger,
+            );
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'enablePromptPressureTrigger')) {
+            override.autoSummary.enablePromptPressureTrigger = normalizeBoolean(
+                record.autoSummary.enablePromptPressureTrigger,
+                DEFAULT_SUMMARY_SETTINGS.autoSummary.enablePromptPressureTrigger,
+            );
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'triggerRuleMinScore')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.triggerRuleMinScore = normalizedAutoSummary.triggerRuleMinScore;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'semanticTriggerMinScore')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.semanticTriggerMinScore = normalizedAutoSummary.semanticTriggerMinScore;
+        }
+        if (Object.prototype.hasOwnProperty.call(record.autoSummary, 'promptPressureTokenRatio')) {
+            const normalizedAutoSummary = normalizeAutoSummary(record.autoSummary, DEFAULT_SUMMARY_SETTINGS.autoSummary);
+            override.autoSummary.promptPressureTokenRatio = normalizedAutoSummary.promptPressureTokenRatio;
+        }
+        if (Object.keys(override.autoSummary).length === 0) {
+            delete override.autoSummary;
+        }
     }
     return override;
 }

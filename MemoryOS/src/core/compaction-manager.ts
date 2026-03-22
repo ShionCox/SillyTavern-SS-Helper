@@ -33,15 +33,6 @@ export class CompactionManager {
     /**
      * 动态设置压缩阈值（从设置页读取后传入）
      */
-    setThresholds(opts: { eventThreshold?: number; timeThresholdMs?: number }): void {
-        if (opts.eventThreshold !== undefined && opts.eventThreshold > 0) {
-            this.eventThreshold = opts.eventThreshold;
-        }
-        if (opts.timeThresholdMs !== undefined && opts.timeThresholdMs > 0) {
-            this.timeThresholdMs = opts.timeThresholdMs;
-        }
-    }
-
     /**
      * 检查是否需要执行压缩
      */

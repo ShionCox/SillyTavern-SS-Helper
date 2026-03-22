@@ -10,7 +10,7 @@ import type {
     MemoryRecallPreviewResult,
     MemorySDK,
 } from '../../../SDK/stx';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
@@ -42,9 +42,8 @@ import { ensureSdkChatDocument } from '../../../SDK/db';
 import { buildDisplayTables } from '../template/table-derivation';
 import { MemoryEditorFacade } from './editor-facade';
 import { buildMemorySummaryEnvelope } from '../core/memory-summary-envelope';
-import { saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from '../core/memory-card-store';
+import { runWithMemoryCardVectorBatch, saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from '../core/memory-card-store';
 import { LogicTableFacade } from './logic-table-facade';
-import { openWorldbookInitPanel } from '../ui/index';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
 import type { TemplateTableDef } from '../template/types';
 import type {
@@ -53,6 +52,7 @@ import type {
     AutoSchemaPolicy,
     ChatSemanticSeed,
     ChatProfile,
+    ColdStartBootstrapStatus,
     ColdStartLorebookSelection,
     GroupMemoryState,
     InjectionIntent,
@@ -97,9 +97,7 @@ import type {
 } from '../proposal/types';
 import type { LatestRecallExplanation as SDKLatestRecallExplanation } from '../../../SDK/stx';
 
-const logger = new Logger('MemorySDK');
 const COLD_START_BOOTSTRAP_TASKS = new Map<string, Promise<void>>();
-const COLD_START_WORLD_SELECTION_TASKS = new Map<string, Promise<ColdStartLorebookSelection | null>>();
 const EMPTY_COLD_START_LOREBOOK_SELECTION: ColdStartLorebookSelection = { books: [], entries: [] };
 
 function hasColdStartLorebookSelection(selection: ColdStartLorebookSelection | null | undefined): boolean {
@@ -178,6 +176,9 @@ export class MemorySDKImpl implements MemorySDK {
     private logicTableFacade: LogicTableFacade;
     private coldStartPromptPrimeTask: Promise<boolean> | null = null;
     private coldStartExtractPrimeTask: Promise<boolean> | null = null;
+    private generationRoundTask: Promise<void> | null = null;
+    private generationRoundTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly pendingGenerationRoundReasons: Set<string> = new Set<string>();
 
     constructor(chatKey: string) {
         this.chatKey_ = chatKey;
@@ -260,7 +261,6 @@ export class MemorySDKImpl implements MemorySDK {
         await this.metaManager.ensureInit();
         await this.ensureChatDocumentReady();
         await this.chatStateManager.load();
-        await this.bootstrapSemanticSeedIfNeeded();
     }
 
     /**
@@ -324,7 +324,9 @@ export class MemorySDKImpl implements MemorySDK {
     private async bootstrapSemanticSeedIfNeeded(): Promise<void> {
         const existingTask = COLD_START_BOOTSTRAP_TASKS.get(this.chatKey_);
         if (existingTask) {
-            return existingTask;
+            await existingTask;
+            await this.chatStateManager.reload();
+            return;
         }
         const task = this.performBootstrapSemanticSeedIfNeeded()
             .finally((): void => {
@@ -337,30 +339,26 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     private async performBootstrapSemanticSeedIfNeeded(): Promise<void> {
-        const [existingSeed, currentFingerprint] = await Promise.all([
-            this.chatStateManager.getSemanticSeed(),
-            this.chatStateManager.getColdStartFingerprint(),
-        ]);
-        if (existingSeed || currentFingerprint) {
+        await this.chatStateManager.reload();
+        const status = await this.chatStateManager.getColdStartBootstrapStatus();
+        if (status.state === 'ready') {
+            return;
+        }
+        if (status.state !== 'bootstrapping') {
+            return;
+        }
+        const requestId = String(status.requestId ?? '').trim();
+        if (!requestId) {
+            await this.chatStateManager.failColdStartBootstrap(null, 'cold_start_missing_request_id');
             return;
         }
         const [savedSelection, skipped] = await Promise.all([
             this.chatStateManager.getColdStartLorebookSelection(),
             this.chatStateManager.isColdStartLorebookSelectionSkipped(),
         ]);
-        const selectedLorebooks = skipped
-            ? EMPTY_COLD_START_LOREBOOK_SELECTION
-            : await this.resolveColdStartLorebookSelection(savedSelection);
-        if (selectedLorebooks === null) {
-            return;
-        }
-        if (hasColdStartLorebookSelection(selectedLorebooks)) {
-            await this.chatStateManager.setColdStartLorebookSelection(selectedLorebooks);
-        } else {
-            await this.chatStateManager.setColdStartLorebookSelectionSkipped(true);
-        }
-        await this.chatStateManager.flush();
-        const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_, selectedLorebooks, {
+        const selectedLorebooks = resolveStoredColdStartLorebookSelection(savedSelection, skipped) ?? EMPTY_COLD_START_LOREBOOK_SELECTION;
+        try {
+            const bootstrap = await collectChatSemanticSeedWithAi(this.chatKey_, selectedLorebooks, {
             forceAi: true,
             taskDescription: '正在分析冷启动资料并填写初始化结果。',
             taskPresentation: {
@@ -373,8 +371,8 @@ export class MemorySDKImpl implements MemorySDK {
                 queueLabel: '冷启动资料分析',
                 dedupeVisualKey: `cold-start-ai:${this.chatKey_}`,
             },
-        });
-        if (!bootstrap.seed) {
+            });
+            if (!bootstrap.seed) {
             logger.warn('[ColdStart][BootstrapNoSeed]', {
                 chatKey: this.chatKey_,
                 bindingFingerprint: bootstrap.bindingFingerprint,
@@ -382,32 +380,30 @@ export class MemorySDKImpl implements MemorySDK {
                 selectedBookCount: selectedLorebooks.books.length,
                 selectedEntryCount: selectedLorebooks.entries.length,
             });
-            return;
-        }
-        const seed = bootstrap.seed;
-        if (bootstrap.bindingFingerprint) {
-            await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
-        }
-        await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
-        await this.persistSemanticSeed(seed, bootstrap.fingerprint, 'bootstrap_init');
-        await this.saveSemanticSeedMemoryCards(seed, bootstrap.fingerprint, 'bootstrap_init');
-        await this.chatStateManager.markColdStartStage('prompt_primed', bootstrap.fingerprint, { primedAt: Date.now() });
-        await this.chatStateManager.flush();
-    }
-
-    private async resolveColdStartLorebookSelection(defaultSelection: ColdStartLorebookSelection): Promise<ColdStartLorebookSelection | null> {
-        const existingTask = COLD_START_WORLD_SELECTION_TASKS.get(this.chatKey_);
-        if (existingTask) {
-            return existingTask;
-        }
-        const task = openWorldbookInitPanel({ initialSelection: defaultSelection })
-            .finally((): void => {
-                if (COLD_START_WORLD_SELECTION_TASKS.get(this.chatKey_) === task) {
-                    COLD_START_WORLD_SELECTION_TASKS.delete(this.chatKey_);
-                }
+                await this.chatStateManager.failColdStartBootstrap(requestId, 'cold_start_no_seed');
+                return;
+            }
+            const seed = bootstrap.seed;
+            if (bootstrap.bindingFingerprint) {
+                await this.chatStateManager.setCharacterBindingFingerprint(bootstrap.bindingFingerprint);
+            }
+            await this.persistSemanticSeed(seed, bootstrap.fingerprint, 'bootstrap_init');
+            await this.saveSemanticSeedMemoryCards(seed, bootstrap.fingerprint, 'bootstrap_init');
+            await this.chatStateManager.saveSemanticSeed(seed, bootstrap.fingerprint);
+            await this.chatStateManager.markColdStartStage('prompt_primed', bootstrap.fingerprint, { primedAt: Date.now() });
+            await this.chatStateManager.completeColdStartBootstrap(requestId, bootstrap.fingerprint);
+            await this.chatStateManager.flush();
+        } catch (error) {
+            const reason = String((error as Error)?.message ?? error ?? 'cold_start_bootstrap_failed').trim() || 'cold_start_bootstrap_failed';
+            logger.error('[ColdStart][BootstrapExecutorFailed]', {
+                chatKey: this.chatKey_,
+                requestId,
+                reason,
+                error,
             });
-        COLD_START_WORLD_SELECTION_TASKS.set(this.chatKey_, task);
-        return task;
+            await this.chatStateManager.failColdStartBootstrap(requestId, reason);
+            throw error;
+        }
     }
 
     /**
@@ -510,17 +506,51 @@ export class MemorySDKImpl implements MemorySDK {
         await saveMemoryCardsFromSemanticSeed(this.chatKey_, seed, fingerprint, reason);
     }
 
+    /**
+     * 功能：把同一轮触发的冷启动提取与正式抽取合并到同一条后处理任务里执行。
+     * @param reason 本次触发原因。
+     * @returns 当前轮次后处理任务。
+     */
+    private async scheduleGenerationRoundProcessing(reason: string): Promise<void> {
+        const normalizedReason = String(reason ?? '').trim() || 'generation_ended';
+        this.pendingGenerationRoundReasons.add(normalizedReason);
+        if (this.generationRoundTask) {
+            return this.generationRoundTask;
+        }
+
+        const nextTask = new Promise<void>((resolve, reject): void => {
+            this.generationRoundTimer = setTimeout((): void => {
+                this.generationRoundTimer = null;
+                const mergedReasons = Array.from(this.pendingGenerationRoundReasons.values());
+                this.pendingGenerationRoundReasons.clear();
+                runWithMemoryCardVectorBatch(this.chatKey_, async (): Promise<void> => {
+                    await this.primeColdStartExtract(`round:${mergedReasons.join('|')}`);
+                    await this.extractManager.kickOffExtraction();
+                })
+                    .then(resolve)
+                    .catch(reject)
+                    .finally((): void => {
+                        this.generationRoundTask = null;
+                    });
+            }, 180);
+        });
+
+        this.generationRoundTask = nextTask;
+        return nextTask;
+    }
+
     private async primeColdStartPrompt(reason: string): Promise<boolean> {
         return this.runColdStartPrimeTask('prompt', async (): Promise<boolean> => {
             if (await this.chatStateManager.isChatArchived()) {
                 return false;
             }
-            const [seed, fingerprint, stage] = await Promise.all([
+            const [bootstrapStatus, seed, fingerprint, stage] = await Promise.all([
+                this.chatStateManager.getColdStartBootstrapStatus(),
                 this.chatStateManager.getSemanticSeed(),
                 this.chatStateManager.getColdStartFingerprint(),
                 this.chatStateManager.getColdStartStage(),
             ]);
-            if (!seed || !fingerprint) {
+            if (bootstrapStatus.state !== 'ready' || !seed || !fingerprint) {
                 return false;
             }
             if (stage === 'prompt_primed' || stage === 'extract_primed') {
@@ -539,12 +569,13 @@ export class MemorySDKImpl implements MemorySDK {
                 logger.info(`冷启动提取已跳过：聊天已归档，reason=${reason}, chatKey=${this.chatKey_}`);
                 return false;
             }
-            const [seed, fingerprint, stage] = await Promise.all([
+            const [bootstrapStatus, seed, fingerprint, stage] = await Promise.all([
+                this.chatStateManager.getColdStartBootstrapStatus(),
                 this.chatStateManager.getSemanticSeed(),
                 this.chatStateManager.getColdStartFingerprint(),
                 this.chatStateManager.getColdStartStage(),
             ]);
-            if (!seed || !fingerprint) {
+            if (bootstrapStatus.state !== 'ready' || !seed || !fingerprint) {
                 logger.info(`冷启动提取已跳过：seed 或 fingerprint 缺失，reason=${reason}, chatKey=${this.chatKey_}, hasSeed=${Boolean(seed)}, hasFingerprint=${Boolean(fingerprint)}`);
                 return false;
             }
@@ -838,7 +869,10 @@ export class MemorySDKImpl implements MemorySDK {
     extract = {
         kickOffExtraction: () => {
             return this.extractManager.kickOffExtraction();
-        }
+        },
+        scheduleRoundProcessing: (reason: string = 'generation_ended') => {
+            return this.scheduleGenerationRoundProcessing(reason);
+        },
     };
 
     // 提议制写入网关（四道闸门）
@@ -1031,7 +1065,7 @@ export class MemorySDKImpl implements MemorySDK {
         getMemoryCardSnapshot: (): Promise<MemoryCardViewerSnapshot> => {
             return this.editorFacade.getMemoryCardSnapshot();
         },
-        runMemoryRecallPreview: (query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult> => {
+        runMemoryRecallPreview: (query: string, opts?: { maxTokens?: number; forceVector?: boolean }): Promise<MemoryRecallPreviewResult> => {
             return this.editorFacade.runMemoryRecallPreview(query, opts);
         },
         refreshCanonSnapshot: (): Promise<CanonSnapshot> => {
@@ -1152,6 +1186,25 @@ export class MemorySDKImpl implements MemorySDK {
         },
         bootstrapSemanticSeed: async (): Promise<void> => {
             await this.bootstrapSemanticSeedIfNeeded();
+        },
+        getColdStartBootstrapStatus: (): Promise<ColdStartBootstrapStatus> => {
+            return this.chatStateManager.getColdStartBootstrapStatus();
+        },
+        beginColdStartBootstrap: (
+            requestId: string,
+            selection: ColdStartLorebookSelection,
+            skipped: boolean = false,
+        ): Promise<ColdStartBootstrapStatus> => {
+            return this.chatStateManager.beginColdStartBootstrap(requestId, selection, skipped);
+        },
+        failColdStartBootstrap: (reason: string, requestId?: string): Promise<ColdStartBootstrapStatus> => {
+            return this.chatStateManager.failColdStartBootstrap(requestId ?? null, reason);
+        },
+        getColdStartLorebookSelection: (): Promise<ColdStartLorebookSelection> => {
+            return this.chatStateManager.getColdStartLorebookSelection();
+        },
+        isColdStartLorebookSelectionSkipped: (): Promise<boolean> => {
+            return this.chatStateManager.isColdStartLorebookSelectionSkipped();
         },
         getSemanticSeed: (): Promise<ChatSemanticSeed | null> => {
             return this.chatStateManager.getSemanticSeed();

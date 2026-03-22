@@ -9,7 +9,7 @@
  * - updateOverlay / closeOverlay 同步命令式接口（内部异步）
  */
 
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     LLMOverlaySpec,
     LLMSafeRichContent,
@@ -20,7 +20,6 @@ import type {
     SilentPermissionGrant,
 } from '../schema/types';
 
-const logger = new Logger('LLMHub-Display');
 
 /** 允许的 HTML 白名单标签 */
 const ALLOWED_TAGS = new Set([

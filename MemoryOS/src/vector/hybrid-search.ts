@@ -1,4 +1,4 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type { ChatStateManager } from '../core/chat-state-manager';
 import type { EventsManager } from '../core/events-manager';
 import type { FactsManager } from '../core/facts-manager';
@@ -6,7 +6,6 @@ import type { SummariesManager } from '../core/summaries-manager';
 import { runRerank } from '../llm/memoryLlmBridge';
 import { VectorManager } from './vector-manager';
 
-const logger = new Logger('HybridSearch');
 
 export interface HybridSearchResult {
     content: string;

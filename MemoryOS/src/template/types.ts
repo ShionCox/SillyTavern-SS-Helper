@@ -14,7 +14,7 @@ export interface TemplateFactType {
 
 /** 抽取策略 */
 export interface ExtractPolicies {
-    'memory.extract'?: {
+    'memory.ingest'?: {
         minConfidence?: number;
         allowWriteFacts?: boolean;
     };

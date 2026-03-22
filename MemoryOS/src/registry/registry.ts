@@ -1,4 +1,5 @@
 import type { PluginManifest, RegistryChangeEvent, STXRegistry } from '../../../SDK/stx';
+import { logger } from '../index';
 
 /** 当前 SDK 版本号 */
 export const STX_VERSION: string = '1.0.0';
@@ -146,7 +147,7 @@ export class PluginRegistry implements STXRegistry {
             try {
                 handler(event);
             } catch (error) {
-                console.warn('[STXRegistry] changed handler 执行失败', error);
+                logger.warn('[STXRegistry] changed handler 执行失败', error);
             }
         }
     }

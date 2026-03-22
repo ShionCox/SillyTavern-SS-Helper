@@ -1,3 +1,5 @@
+import { logger } from '../index';
+
 /**
  * 预算与熔断器 —— 控制每个 consumer 的调用频率和成本
  */
@@ -99,7 +101,7 @@ export class BudgetManager {
         // 触发熔断
         if (state.consecutiveFailures >= this.CIRCUIT_FAILURE_THRESHOLD) {
             state.circuitOpenUntil = Date.now() + this.CIRCUIT_OPEN_DURATION_MS;
-            console.warn(`[BudgetManager] 已为 consumer="${consumer}" 触发熔断，将于 ${this.CIRCUIT_OPEN_DURATION_MS / 1000}s 后恢复`);
+            logger.warn(`[BudgetManager] 已为 consumer="${consumer}" 触发熔断，将于 ${this.CIRCUIT_OPEN_DURATION_MS / 1000}s 后恢复`);
         }
     }
 

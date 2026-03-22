@@ -1,4 +1,4 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     LLMSDK,
     LLMRunResult,
@@ -19,12 +19,10 @@ import {
     isAiOperational,
 } from './ai-health-center';
 
-const logger = new Logger('MemoryLlmBridge');
 
 export const MEMORY_TASKS = {
     COLDSTART_SUMMARIZE: 'memory.coldstart.summarize',
-    SUMMARIZE: 'memory.summarize',
-    EXTRACT: 'memory.extract',
+    INGEST: 'memory.ingest',
     TEMPLATE_BUILD: 'world.template.build',
     VECTOR_EMBED: 'memory.vector.embed',
     SEARCH_RERANK: 'memory.search.rerank',
@@ -59,6 +57,19 @@ type EmbedBudget = {
     overlayDescription?: string;
     chatKey?: string;
     taskPresentation?: TaskPresentationOverride;
+};
+
+type PendingEmbedRequest = {
+    texts: string[];
+    budget?: EmbedBudget;
+    requestId: string | null;
+    resolve: (result: EmbedTaskResult) => void;
+};
+
+type EmbedBatchQueue = {
+    timer: ReturnType<typeof setTimeout> | null;
+    running: boolean;
+    requests: PendingEmbedRequest[];
 };
 
 type RerankBudget = {
@@ -111,6 +122,10 @@ export interface RerankTaskResult {
 }
 
 const REGISTERED_LLM_INSTANCES: WeakSet<object> = new WeakSet<object>();
+const EMBED_BATCH_WINDOW_MS: number = 30;
+const EMBED_BATCH_MAX_TEXTS: number = 64;
+const EMBED_BATCH_MAX_CHARS: number = 24000;
+const EMBED_BATCH_QUEUES: Map<string, EmbedBatchQueue> = new Map<string, EmbedBatchQueue>();
 
 /**
  * 功能：判断输入是否为可规范化的 generation 载荷。
@@ -178,10 +193,8 @@ function getDefaultTaskTitle(taskId: MemoryAiTaskId): string {
     switch (taskId) {
         case MEMORY_TASKS.COLDSTART_SUMMARIZE:
             return '冷启动摘要';
-        case MEMORY_TASKS.SUMMARIZE:
-            return '记忆摘要';
-        case MEMORY_TASKS.EXTRACT:
-            return '记忆提取';
+        case MEMORY_TASKS.INGEST:
+            return '统一记忆处理';
         case MEMORY_TASKS.TEMPLATE_BUILD:
             return '世界模板构建';
         case MEMORY_TASKS.VECTOR_EMBED:
@@ -207,10 +220,8 @@ function getRunningDescription(taskId: MemoryAiTaskId, taskDescription?: string)
     switch (taskId) {
         case MEMORY_TASKS.COLDSTART_SUMMARIZE:
             return '正在生成冷启动角色卡与世界观总结。';
-        case MEMORY_TASKS.SUMMARIZE:
-            return '正在生成最近对话的摘要。';
-        case MEMORY_TASKS.EXTRACT:
-            return '正在抽取事实、关系和可写入的记忆。';
+        case MEMORY_TASKS.INGEST:
+            return '正在统一处理摘要、事实与记忆写入。';
         case MEMORY_TASKS.TEMPLATE_BUILD:
             return '正在构建当前聊天可用的世界模板，请稍候。';
         case MEMORY_TASKS.VECTOR_EMBED:
@@ -274,18 +285,10 @@ function ensureRegistered(llm: LLMSDK): BridgeInitStatus {
                 recommendedDisplay: 'silent',
             },
             {
-                taskId: MEMORY_TASKS.SUMMARIZE,
+                taskId: MEMORY_TASKS.INGEST,
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
-                description: '对话摘要生成',
-                backgroundEligible: true,
-                recommendedDisplay: 'silent',
-            },
-            {
-                taskId: MEMORY_TASKS.EXTRACT,
-                taskKind: 'generation',
-                requiredCapabilities: ['chat', 'json'],
-                description: '结构化记忆提取',
+                description: '统一记忆摄取与摘要写入',
                 backgroundEligible: true,
                 recommendedDisplay: 'silent',
             },
@@ -571,6 +574,233 @@ function endTaskPresentation(
 }
 
 /**
+ * 功能：构建 embedding 批处理键，按聊天范围聚合同一时间窗口内的请求。
+ * @param budget embedding 预算配置。
+ * @returns 批处理键。
+ */
+function buildEmbedBatchKey(budget?: EmbedBudget): string {
+    const chatKey = String(budget?.chatKey || '').trim();
+    return chatKey || '__global__';
+}
+
+/**
+ * 功能：获取 embedding 批处理队列，不存在时自动创建。
+ * @param batchKey 批处理键。
+ * @returns 当前批处理队列。
+ */
+function getEmbedBatchQueue(batchKey: string): EmbedBatchQueue {
+    const existing = EMBED_BATCH_QUEUES.get(batchKey);
+    if (existing) {
+        return existing;
+    }
+    const queue: EmbedBatchQueue = {
+        timer: null,
+        running: false,
+        requests: [],
+    };
+    EMBED_BATCH_QUEUES.set(batchKey, queue);
+    return queue;
+}
+
+/**
+ * 功能：统计文本数组的总字符数，用于限制单批次大小。
+ * @param texts 文本数组。
+ * @returns 总字符数。
+ */
+function countEmbedTextsLength(texts: string[]): number {
+    return texts.reduce((total: number, text: string): number => total + String(text ?? '').length, 0);
+}
+
+/**
+ * 功能：结束 embedding 批处理队列中所有请求的任务卡。
+ * @param requests 本批次请求列表。
+ * @param finalState 最终状态。
+ * @param description 展示描述。
+ * @returns 无返回值。
+ */
+function finishEmbedBatchPresentations(
+    requests: PendingEmbedRequest[],
+    finalState: 'done' | 'error',
+    description: string,
+): void {
+    requests.forEach((request: PendingEmbedRequest): void => {
+        endTaskPresentation(request.requestId, finalState, description);
+    });
+}
+
+/**
+ * 功能：把一次批量 embedding 的生命周期事件同步给本批次所有请求。
+ * @param requests 本批次请求列表。
+ * @param event 生命周期事件。
+ * @returns 无返回值。
+ */
+function applyEmbedBatchLifecycle(requests: PendingEmbedRequest[], event: LLMTaskLifecycleEvent): void {
+    requests.forEach((request: PendingEmbedRequest): void => {
+        applyLifecyclePresentation(request.requestId, event);
+    });
+}
+
+/**
+ * 功能：从队列头部按限制切出一组可合并的 embedding 请求。
+ * @param queue 当前队列。
+ * @returns 本次要发送的请求列表。
+ */
+function takeEmbedBatchRequests(queue: EmbedBatchQueue): PendingEmbedRequest[] {
+    const batch: PendingEmbedRequest[] = [];
+    let textCount = 0;
+    let charCount = 0;
+
+    while (queue.requests.length > 0) {
+        const candidate = queue.requests[0];
+        const nextTextCount = textCount + candidate.texts.length;
+        const nextCharCount = charCount + countEmbedTextsLength(candidate.texts);
+        if (batch.length > 0 && (nextTextCount > EMBED_BATCH_MAX_TEXTS || nextCharCount > EMBED_BATCH_MAX_CHARS)) {
+            break;
+        }
+        queue.requests.shift();
+        batch.push(candidate);
+        textCount = nextTextCount;
+        charCount = nextCharCount;
+        if (textCount >= EMBED_BATCH_MAX_TEXTS || charCount >= EMBED_BATCH_MAX_CHARS) {
+            break;
+        }
+    }
+
+    return batch;
+}
+
+/**
+ * 功能：执行一批已经聚合好的 embedding 请求，并把结果按原调用切片返回。
+ * @param llm 当前可用的 LLM SDK。
+ * @param requests 本批次请求列表。
+ * @returns 无返回值。
+ */
+async function executeEmbedBatch(llm: LLMSDK, requests: PendingEmbedRequest[]): Promise<void> {
+    const allTexts = requests.flatMap((request: PendingEmbedRequest): string[] => request.texts);
+    const firstBudgetWithChatKey = requests.find((request: PendingEmbedRequest): boolean => Boolean(request.budget?.chatKey))?.budget;
+    const result = await llm.embed({
+        consumer: MEMORY_OS_PLUGIN_ID,
+        taskId: MEMORY_TASKS.VECTOR_EMBED,
+        taskDescription: allTexts.length > 1 ? `索引 ${allTexts.length} 段文本` : '向量查询',
+        texts: allTexts,
+        enqueue: {
+            displayMode: 'silent',
+            scope: { pluginId: MEMORY_OS_PLUGIN_ID, chatKey: firstBudgetWithChatKey?.chatKey },
+        },
+        onLifecycle: (event): void => {
+            applyEmbedBatchLifecycle(requests, event);
+        },
+    });
+
+    if (result?.ok === false) {
+        requests.forEach((request: PendingEmbedRequest): void => {
+            request.resolve({
+                ok: false,
+                error: result.error,
+                model: result.model,
+                reasonCode: result.reasonCode,
+                meta: result.meta,
+            });
+        });
+        finishEmbedBatchPresentations(requests, 'error', result.error || '向量任务失败');
+        return;
+    }
+
+    const allVectors = Array.isArray(result?.vectors) ? result.vectors : [];
+    let offset = 0;
+    requests.forEach((request: PendingEmbedRequest): void => {
+        const slice = allVectors.slice(offset, offset + request.texts.length);
+        offset += request.texts.length;
+        if (slice.length !== request.texts.length) {
+            request.resolve({
+                ok: false,
+                error: '向量返回数量与请求数量不匹配',
+                model: result?.model,
+                reasonCode: 'vector_result_mismatch',
+                meta: result?.meta,
+            });
+            return;
+        }
+        request.resolve({
+            ok: true,
+            vectors: slice,
+            model: result?.model,
+            reasonCode: result?.reasonCode,
+            meta: result?.meta,
+        });
+    });
+    finishEmbedBatchPresentations(requests, 'done', allTexts.length > 1 ? '向量索引已完成。' : '向量任务已完成。');
+}
+
+/**
+ * 功能：刷新指定批处理队列，把当前窗口内积累的 embedding 请求合并发送。
+ * @param llm 当前可用的 LLM SDK。
+ * @param batchKey 批处理键。
+ * @returns 无返回值。
+ */
+async function flushEmbedBatchQueue(llm: LLMSDK, batchKey: string): Promise<void> {
+    const queue = EMBED_BATCH_QUEUES.get(batchKey);
+    if (!queue || queue.running) {
+        return;
+    }
+    queue.running = true;
+    if (queue.timer) {
+        clearTimeout(queue.timer);
+        queue.timer = null;
+    }
+
+    try {
+        while (queue.requests.length > 0) {
+            const requests = takeEmbedBatchRequests(queue);
+            if (requests.length <= 0) {
+                break;
+            }
+            await executeEmbedBatch(llm, requests);
+        }
+    } finally {
+        queue.running = false;
+        if (queue.requests.length > 0) {
+            queue.timer = setTimeout((): void => {
+                void flushEmbedBatchQueue(llm, batchKey);
+            }, EMBED_BATCH_WINDOW_MS);
+        } else {
+            EMBED_BATCH_QUEUES.delete(batchKey);
+        }
+    }
+}
+
+/**
+ * 功能：把一次 embedding 请求加入批处理窗口，等待与同轮请求合并后统一发送。
+ * @param llm 当前可用的 LLM SDK。
+ * @param texts 当前请求的文本数组。
+ * @param budget embedding 预算配置。
+ * @param requestId 当前请求对应的任务卡编号。
+ * @returns 当前请求最终结果。
+ */
+function enqueueEmbedBatch(
+    llm: LLMSDK,
+    texts: string[],
+    budget: EmbedBudget | undefined,
+    requestId: string | null,
+): Promise<EmbedTaskResult> {
+    const batchKey = buildEmbedBatchKey(budget);
+    const queue = getEmbedBatchQueue(batchKey);
+    return new Promise<EmbedTaskResult>((resolve): void => {
+        queue.requests.push({
+            texts,
+            budget,
+            requestId,
+            resolve,
+        });
+        if (!queue.timer) {
+            queue.timer = setTimeout((): void => {
+                void flushEmbedBatchQueue(llm, batchKey);
+            }, EMBED_BATCH_WINDOW_MS);
+        }
+    });
+}
+
+/**
  * 功能：检查 AI 模式守卫。
  * @param taskId 任务标识。
  * @returns 若不可运行则返回失败结果，否则返回空值。
@@ -678,7 +908,7 @@ export async function runGeneration<T>(
 }
 
 /**
- * 功能：执行 embedding 任务，并按场景决定是否展示任务卡。
+ * 功能：执行 embedding 任务，并按场景决定是否显示任务卡。
  * @param texts 待向量化文本。
  * @param budget 预算与展示配置。
  * @returns embedding 结果。
@@ -718,26 +948,11 @@ export async function runEmbed(
         : null;
 
     try {
-        const result = await llm.embed({
-            consumer: MEMORY_OS_PLUGIN_ID,
-            taskId: MEMORY_TASKS.VECTOR_EMBED,
-            taskDescription: texts.length > 1 ? `索引 ${texts.length} 段文本` : '向量查询',
-            texts,
-            enqueue: {
-                displayMode: 'silent',
-                scope: { pluginId: MEMORY_OS_PLUGIN_ID, chatKey: budget?.chatKey },
-            },
-            onLifecycle: (event): void => {
-                applyLifecyclePresentation(requestId, event);
-            },
-        });
-
+        const result = await enqueueEmbedBatch(llm, texts, budget, requestId);
         if (result?.ok !== false) {
             recordTaskResult(buildSuccessRecord(tid, startTs, texts.length > 1 ? `chunks=${texts.length}` : 'query'));
-            endTaskPresentation(requestId, 'done', texts.length > 1 ? '向量索引已完成。' : '向量任务已完成。');
         } else {
             recordTaskResult(buildFailureRecord(tid, startTs, result?.error || '向量任务失败', result?.reasonCode));
-            endTaskPresentation(requestId, 'error', result?.error || '向量任务失败');
         }
         return result;
     } catch (error: unknown) {

@@ -683,7 +683,7 @@ export class MemoryEditorFacade {
      * @param opts 额外配置。
      * @returns 检索测试结果。
      */
-    async runMemoryRecallPreview(query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult> {
+    async runMemoryRecallPreview(query: string, opts?: { maxTokens?: number; forceVector?: boolean }): Promise<MemoryRecallPreviewResult> {
         return this.vectorMemoryViewer.runMemoryRecallPreview(query, opts);
     }
 

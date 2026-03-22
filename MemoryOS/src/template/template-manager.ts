@@ -1,13 +1,12 @@
 import { db, type DBTemplate, type DBTemplateBinding } from '../db/db';
 import type { WorldTemplate, WorldInfoEntry, WorldContextBundle } from './types';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { listTavernActiveWorldbooksEvent, loadTavernWorldbookEntriesEvent } from '../../../SDK/tavern';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';
 import { TemplateBuilder } from './template-builder';
 import { buildDisplayTables } from './table-derivation';
 
-const logger = new Logger('TemplateManager');
 
 /**
  * 功能：管理模板的保存、切换与世界书同步。

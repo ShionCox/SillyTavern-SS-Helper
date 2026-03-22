@@ -1,4 +1,5 @@
 import { stripRollHelperArtifactsEvent } from '../../../SDK/tavern';
+import { logger } from "../../index";
 
 export function getMessageTextSafe(message: any): string {
     if (!message) return '';
@@ -93,7 +94,7 @@ export function sanitizeAssistantMessageForSummary(message: any, options?: { blo
             skip_memory: true,
         };
     } catch (err) {
-        console.warn("[RollHelper] sanitizeAssistantMessageForSummary caught an error", err);
+        logger.warn("[RollHelper] sanitizeAssistantMessageForSummary caught an error", err);
     }
 
     return message;

@@ -15,11 +15,10 @@ import {
     parseAnyTavernChatRefEvent,
     withChatIdForScopeEvent,
 } from '../../../SDK/tavern';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { archiveMemoryChat, clearMemoryChatData } from '../db/db';
 import type { DeletionStrategy } from '../types';
 
-const logger = new Logger('MemoryChatLifecycle');
 
 const LLMHUB_PLUGIN_ID = 'stx_llmhub';
 const MEMORYOS_PLUGIN_ID = 'stx_memory_os';

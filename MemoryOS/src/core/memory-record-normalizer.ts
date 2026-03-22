@@ -227,9 +227,11 @@ export function normalizeFactMutationRecord(fact: FactProposal): NormalizedFactM
  */
 export function buildSummaryMutationCompareKey(summary: SummaryProposal): string {
     const level = normalizeMutationText(summary.level).toLowerCase() || 'summary';
+    const rangeFrom = normalizeMutationText(summary.range?.fromMessageId).toLowerCase() || '_';
+    const rangeTo = normalizeMutationText(summary.range?.toMessageId).toLowerCase() || '_';
     const title = normalizeMutationText(summary.title).toLowerCase();
     const contentPreview = normalizeMutationText(summary.content).toLowerCase().slice(0, 96);
-    return `summary::${level}::${title || contentPreview || 'untitled'}`;
+    return `summary::${level}::${rangeFrom}:${rangeTo}::${title || contentPreview || 'untitled'}`;
 }
 
 /**

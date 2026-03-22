@@ -1,4 +1,21 @@
-[
+[  {
+    "version": "v1.1.8",
+    "date": "2026-03-21",
+    "sections": [
+      {
+        "type": "added",
+        "items": [
+          "SS-Helper 底层SDK升级。"
+        ]
+      },
+      {
+        "type": "improved",
+        "items": [
+          "优化了楼层重roll残余旧数值的问题，确保重roll后事件卡片显示最新的骰子结果和状态变化。"
+        ]
+      }
+    ]
+  },
   {
     "version": "v1.1.7",
     "date": "2026-03-17",

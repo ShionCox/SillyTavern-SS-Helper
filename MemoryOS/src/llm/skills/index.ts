@@ -58,4 +58,5 @@ export {
     buildLongSummarizeTaskPrompt,
     buildShortSummarizeTaskPrompt,
     buildSummarizeTaskPrompt,
+    buildUnifiedIngestTaskPrompt,
 } from './extract-operation-skill';

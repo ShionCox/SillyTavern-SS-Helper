@@ -76,6 +76,8 @@ export interface SummarySettingsAdvanced {
 
 export interface AutoSummaryTriggerSettings {
     enabled: boolean;
+    manualTurnThresholdEnabled: boolean;
+    manualTurnThreshold: number;
     roleplayTurnThreshold: number;
     chatTurnThreshold: number;
     storyTurnThreshold: number;
@@ -95,6 +97,20 @@ export interface AutoSummaryRuntimeState {
     lastSummaryAt: number;
     lastTriggerReasonCodes: string[];
     lastMode: AutoSummaryMode;
+}
+
+export interface MemoryIngestProgressState {
+    lastProcessedAssistantTurnId?: string;
+    lastProcessedAssistantMessageId?: string;
+    lastProcessedAssistantTurnCount: number;
+    lastProcessedSnapshotHash: string;
+    lastProcessedRange?: {
+        fromMessageId?: string;
+        toMessageId?: string;
+    };
+    lastProcessedAt: number;
+    lastProcessedOutcome: 'accepted' | 'noop' | 'rejected' | 'skipped';
+    lastRepairGeneration: number;
 }
 
 export interface AutoSummaryDecisionSnapshot {
@@ -175,6 +191,17 @@ export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' |
 export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
 
 export type ColdStartStage = 'seeded' | 'prompt_primed' | 'extract_primed';
+
+export type ColdStartBootstrapState = 'selection_required' | 'bootstrapping' | 'ready' | 'failed';
+
+export interface ColdStartBootstrapStatus {
+    state: ColdStartBootstrapState;
+    requestId: string | null;
+    updatedAt: number;
+    error: string | null;
+    fingerprint: string | null;
+    stage: ColdStartStage | null;
+}
 
 export type MemoryTraceSource =
     | 'host_message'
@@ -454,7 +481,7 @@ export interface RetrievalHealthWindow {
 
 export interface ExtractHealthWindow {
     recentTasks: Array<{
-        task: 'memory.summarize' | 'memory.extract';
+        task: 'memory.ingest';
         accepted: boolean;
         appliedFacts: number;
         appliedPatches: number;
@@ -463,6 +490,7 @@ export interface ExtractHealthWindow {
         summaryTier?: SummaryExecutionTier;
         windowHash?: string;
         reasonCodes?: string[];
+        assistantTurnCount?: number;
         ts: number;
     }>;
     lastAcceptedAt: number;
@@ -1470,26 +1498,11 @@ export interface MemoryTuningProfile {
     updatedAt: number;
 }
 
-export type MemoryTaskPresentationTaskId =
-    | 'memory.coldstart.summarize'
-    | 'memory.summarize'
-    | 'memory.extract'
-    | 'world.template.build'
-    | 'memory.vector.embed'
-    | 'memory.search.rerank';
-
-export interface MemoryTaskPresentationPreset {
-    taskId: MemoryTaskPresentationTaskId;
-    label: string;
-    surfaceMode: TaskSurfaceMode;
-}
-
 export interface MemoryTaskPresentationSettings {
     blockingDefaultMode: Extract<TaskSurfaceMode, 'fullscreen_blocking' | 'toast_blocking'>;
     showBackgroundToast: boolean;
     disableComposerDuringBlocking: boolean;
     toastAutoCloseSeconds: number;
-    presets: Record<MemoryTaskPresentationTaskId, MemoryTaskPresentationPreset>;
     updatedAt: number;
 }
 
@@ -1644,6 +1657,8 @@ export const DEFAULT_SUMMARY_SETTINGS: SummarySettings = {
     },
     autoSummary: {
         enabled: true,
+        manualTurnThresholdEnabled: false,
+        manualTurnThreshold: 10,
         roleplayTurnThreshold: 8,
         chatTurnThreshold: 12,
         storyTurnThreshold: 10,
@@ -1728,6 +1743,17 @@ export const DEFAULT_AUTO_SUMMARY_RUNTIME_STATE: AutoSummaryRuntimeState = {
     lastSummaryAt: 0,
     lastTriggerReasonCodes: [],
     lastMode: 'mixed',
+};
+
+export const DEFAULT_MEMORY_INGEST_PROGRESS: MemoryIngestProgressState = {
+    lastProcessedAssistantTurnId: undefined,
+    lastProcessedAssistantMessageId: undefined,
+    lastProcessedAssistantTurnCount: 0,
+    lastProcessedSnapshotHash: '',
+    lastProcessedRange: undefined,
+    lastProcessedAt: 0,
+    lastProcessedOutcome: 'skipped',
+    lastRepairGeneration: 0,
 };
 
 export const DEFAULT_MEMORY_MUTATION_ACTION_COUNTS: MemoryMutationActionCounts = {
@@ -1833,7 +1859,7 @@ export const DEFAULT_MEMORY_TUNING_PROFILE: MemoryTuningProfile = {
     updatedAt: 0,
 };
 
-export const DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS: MemoryTaskPresentationSettings = {
+export const DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS = {
     blockingDefaultMode: 'fullscreen_blocking',
     showBackgroundToast: true,
     disableComposerDuringBlocking: true,
@@ -1844,14 +1870,9 @@ export const DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS: MemoryTaskPresentationSe
             label: '冷启动摘要',
             surfaceMode: 'fullscreen_blocking',
         },
-        'memory.summarize': {
-            taskId: 'memory.summarize',
-            label: '摘要生成',
-            surfaceMode: 'toast_background',
-        },
-        'memory.extract': {
-            taskId: 'memory.extract',
-            label: '结构提取',
+        'memory.ingest': {
+            taskId: 'memory.ingest',
+            label: '统一记忆处理',
             surfaceMode: 'toast_background',
         },
         'world.template.build': {
@@ -1908,6 +1929,10 @@ export interface MemoryOSChatState {
     coldStartFingerprint?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
+    coldStartBootstrapState?: ColdStartBootstrapState;
+    coldStartBootstrapRequestId?: string;
+    coldStartBootstrapUpdatedAt?: number;
+    coldStartBootstrapError?: string;
     lastLorebookDecision?: LorebookGateDecision;
     mainlineTraceSnapshot?: MemoryMainlineTraceSnapshot | null;
     promptInjectionProfile?: PromptInjectionProfile;
@@ -1948,6 +1973,7 @@ export interface MemoryOSChatState {
     recentProcessingDecisions?: MemoryProcessingDecision[];
     longSummaryCooldown?: LongSummaryCooldownState;
     autoSummaryRuntime?: AutoSummaryRuntimeState;
+    memoryIngestProgress?: MemoryIngestProgressState;
     lastAutoSummaryDecision?: AutoSummaryDecisionSnapshot | null;
     retentionPolicy?: RetentionPolicy;
     retentionArchives?: RetentionArchives;

@@ -1,7 +1,12 @@
 import type { MemorySDKImpl } from '../sdk/memory-sdk';
 import { Toast } from '../../../SDK/toast';
 import { parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
+import {
+    renderSharedWorldStateSectionTable,
+    type SharedWorldStateSectionColumn,
+} from '../../../_Components/sharedWorldStateSectionTable';
 import { escapeHtml, formatTimeLabel, normalizeLookup } from './editorShared';
+import vectorMemoryViewerCssText from './vectorMemoryViewer.css?inline';
 import type {
     MemoryCardSummary,
     MemoryRecallPreviewHit,
@@ -12,9 +17,23 @@ import type {
 type VectorMemorySortMode = 'recent_hit' | 'recent_index' | 'recent_created' | 'content_length' | 'usage';
 type VectorMemoryTimeFilter = '__all__' | 'indexed_7d' | 'indexed_30d' | 'hit_7d' | 'hit_30d';
 
+interface VectorMemoryViewerFilterState {
+    keyword: string;
+    sourceKind: 'all' | 'fact' | 'summary' | 'unknown';
+    statusKind: 'all' | 'normal' | 'recent_hit' | 'long_unused' | 'source_missing' | 'archived_residual' | 'needs_rebuild';
+    actorKey: '__all__' | '__current__' | string;
+    sortMode: VectorMemorySortMode;
+    timeFilter: VectorMemoryTimeFilter;
+    quickRecentHit: boolean;
+    quickLongUnused: boolean;
+    quickAbnormal: boolean;
+    quickCurrentActor: boolean;
+}
+
 interface VectorMemoryViewerState {
     snapshot: MemoryCardViewerSnapshot | null;
     testResult: MemoryRecallPreviewResult | null;
+    preservedFilterState: VectorMemoryViewerFilterState | null;
     selectedCardId: string | null;
     activeActorKey: string | null;
     keyword: string;
@@ -27,6 +46,8 @@ interface VectorMemoryViewerState {
     quickLongUnused: boolean;
     quickAbnormal: boolean;
     quickCurrentActor: boolean;
+    listPage: number;
+    listPageSize: number;
     testQuery: string;
     isLoading: boolean;
     isRunningTest: boolean;
@@ -56,72 +77,23 @@ export interface VectorMemoryViewerControllerOptions {
 
 const STYLE_ID = 'stx-vector-memory-viewer-style';
 const toast = new Toast('MemoryOS');
+const VECTOR_MEMORY_PAGE_SIZE_OPTIONS: number[] = [10, 20, 30, 50];
 
 /**
  * 功能：确保向量记忆查看器样式只注入一次。
  * @returns 无返回值。
  */
 function ensureStyles(): void {
-    if (document.getElementById(STYLE_ID)) {
+    const current = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
+    if (current) {
+        if (current.textContent !== vectorMemoryViewerCssText) {
+            current.textContent = vectorMemoryViewerCssText;
+        }
         return;
     }
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    style.textContent = `
-.stx-vmv{display:flex;flex-direction:column;gap:16px;color:var(--SmartThemeBodyColor,#f5f5f5);font-family:"Noto Sans SC",var(--mainFontFamily,sans-serif)}
-.stx-vmv-hero,.stx-vmv-layout{display:grid;gap:14px}
-.stx-vmv-hero{grid-template-columns:minmax(0,1.3fr) minmax(320px,.9fr)}
-.stx-vmv-layout{grid-template-columns:minmax(240px,.75fr) minmax(0,1.12fr) minmax(320px,.95fr);min-height:620px}
-.stx-vmv-card,.stx-vmv-panel,.stx-vmv-hero-card{border:1px solid color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.16)) 92%,transparent);background:radial-gradient(circle at top right,color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 18%,transparent) 0%,transparent 42%),color-mix(in srgb,var(--SmartThemeBlurTintColor,#161616) 88%,transparent);border-radius:18px;box-shadow:0 18px 46px rgba(0,0,0,.22)}
-.stx-vmv-hero-card,.stx-vmv-panel,.stx-vmv-card{padding:16px}
-.stx-vmv-kicker,.stx-vmv-chip,.stx-vmv-pill,.stx-vmv-badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;font-size:12px}
-.stx-vmv-kicker{padding:6px 10px;background:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 14%,transparent);color:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 78%,white 22%);letter-spacing:.08em;text-transform:uppercase}
-.stx-vmv-title{margin-bottom:14px;margin-top:14px;font-size:clamp(28px,4vw,42px);font-weight:900;letter-spacing:-.04em;line-height:1.04}
-.stx-vmv-subtitle,.stx-vmv-toolbar-meta,.stx-vmv-inline-note{font-size:12px;line-height:1.75;color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 74%,transparent)}
-.stx-vmv-chip,.stx-vmv-badge{padding:6px 10px;background:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.16)) 26%,transparent)}
-.stx-vmv-pill{padding:5px 9px;font-weight:700;background:rgba(255,255,255,.06)}
-.stx-vmv-pill.tone-success{background:rgba(22,163,74,.14);color:#78e08f}
-.stx-vmv-pill.tone-warning{background:rgba(245,158,11,.14);color:#fbbf24}
-.stx-vmv-pill.tone-danger{background:rgba(248,113,113,.16);color:#fca5a5}
-.stx-vmv-pill.tone-muted{background:rgba(148,163,184,.14);color:#cbd5f5}
-.stx-vmv-chip-row,.stx-vmv-actions,.stx-vmv-badge-row,.stx-vmv-toolbar-row,.stx-vmv-quick-grid,.stx-vmv-stat-grid,.stx-vmv-test-rank{display:flex;flex-wrap:wrap;gap:8px}
-.stx-vmv-toolbar-row{align-items:center;justify-content:space-between}
-.stx-vmv-section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-.stx-vmv-section-title strong,.stx-vmv-toolbar-row h3,.stx-vmv-detail-head h3,.stx-vmv-detail-card h4{margin:0;font-weight:800}
-.stx-vmv-section-title strong,.stx-vmv-detail-card h4{font-size:15px}
-.stx-vmv-toolbar-row h3,.stx-vmv-detail-head h3{font-size:18px}
-.stx-vmv-filter-field{display:flex;flex-direction:column;gap:7px}
-.stx-vmv-filter-field label,.stx-vmv-block-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 76%,transparent)}
-.stx-vmv-test-card textarea,.stx-vmv-filter-field input,.stx-vmv-filter-field select{width:100%;border-radius:14px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#121212) 94%,transparent);color:var(--SmartThemeBodyColor,#f5f5f5);padding:12px 14px;font-size:13px;outline:none}
-.stx-vmv-test-card textarea{min-height:92px;resize:vertical;line-height:1.6}
-.stx-vmv-list-stack,.stx-vmv-detail-stack{display:flex;flex-direction:column;gap:12px}
-.stx-vmv-list-scroller,.stx-vmv-detail-scroller{min-height:0;overflow:auto;padding-right:4px}
-.stx-vmv-card{display:flex;flex-direction:column;gap:10px;cursor:pointer;transition:border-color .18s ease,transform .18s ease}
-.stx-vmv-card:hover,.stx-vmv-quick-btn:hover,.stx-vmv-icon-btn:hover{border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 72%,white 28%)}
-.stx-vmv-card.is-selected{border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 80%,white 20%);box-shadow:0 0 0 1px color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 36%,transparent),0 22px 48px rgba(0,0,0,.24)}
-.stx-vmv-card-topline,.stx-vmv-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-.stx-vmv-card-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;line-height:1.65}
-.stx-vmv-card-meta{display:flex;flex-direction:column;gap:4px;font-size:12px;color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 74%,transparent)}
-.stx-vmv-content-box{white-space:pre-wrap;line-height:1.7;font-size:13px;padding:14px;border-radius:14px;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#0f0f0f) 96%,transparent);border:1px solid color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.16)) 76%,transparent)}
-.stx-vmv-stat-grid,.stx-vmv-test-rank{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.stx-vmv-test-rank{grid-template-columns:repeat(3,minmax(0,1fr))}
-.stx-vmv-stat{padding:10px 12px;border-radius:12px;background:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.16)) 22%,transparent);display:flex;flex-direction:column;gap:5px}
-.stx-vmv-stat label{font-size:11px;color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 70%,transparent)}
-.stx-vmv-kv-list{display:grid;grid-template-columns:minmax(88px,108px) minmax(0,1fr);gap:8px 10px;align-items:start;font-size:12px}
-.stx-vmv-kv-list dt{color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 68%,transparent)}
-.stx-vmv-kv-list dd{margin:0;line-height:1.65}
-.stx-vmv-empty,.stx-vmv-details{border-radius:16px;border:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.16));background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#121212) 88%,transparent)}
-.stx-vmv-empty{padding:20px 16px;font-size:13px;line-height:1.8;color:color-mix(in srgb,var(--SmartThemeBodyColor,#f5f5f5) 74%,transparent)}
-.stx-vmv-reasons{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.65}
-.stx-vmv-details summary{cursor:pointer;list-style:none;padding:12px 14px;font-size:13px;font-weight:700}
-.stx-vmv-details summary::-webkit-details-marker{display:none}
-.stx-vmv-details-body{padding:0 14px 14px;display:flex;flex-direction:column;gap:12px}
-.stx-vmv-quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.stx-vmv-quick-btn,.stx-vmv-icon-btn{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#121212) 92%,transparent);color:var(--SmartThemeBodyColor,#f5f5f5);border-radius:12px;padding:10px 12px;font-size:12px;cursor:pointer}
-.stx-vmv-quick-btn.is-active{background:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 18%,transparent);color:color-mix(in srgb,var(--SmartThemeQuoteColor,#ef7d2d) 84%,white 16%)}
-@media (max-width:1080px){.stx-vmv-hero,.stx-vmv-layout{grid-template-columns:1fr}}
-@media (max-width:720px){.stx-vmv-quick-grid,.stx-vmv-stat-grid,.stx-vmv-test-rank{grid-template-columns:1fr}}
-`;
+    style.textContent = vectorMemoryViewerCssText;
     document.head.appendChild(style);
 }
 
@@ -253,10 +225,78 @@ function formatViewerChatLabel(chatKey: string | null | undefined): string {
 }
 
 /**
- * 功能：把来源范围转换为中文。
- * @param scope 来源范围。
+ * 功能：将向量门控原因码格式化为更易读的中文说明。
+ * @param reasonCode 原始原因码。
+ * @returns 中文说明文本。
+ */
+function formatVectorGateReasonLabel(reasonCode: string): string {
+    const normalizedReasonCode = String(reasonCode ?? '').trim();
+    if (!normalizedReasonCode) {
+        return '未提供原因';
+    }
+    if (normalizedReasonCode === 'forced_vector_preview') {
+        return '已强制执行向量预演';
+    }
+    if (normalizedReasonCode === 'vector_disabled') {
+        return '已关闭向量召回';
+    }
+    if (normalizedReasonCode === 'structured_enough') {
+        return '结构化记忆已足够';
+    }
+    if (normalizedReasonCode === 'recent_events_enough') {
+        return '近期事件已足够';
+    }
+    if (normalizedReasonCode === 'cheap_layer_empty') {
+        return '廉价召回层为空';
+    }
+    if (normalizedReasonCode === 'recall_cache_hit') {
+        return '命中召回缓存';
+    }
+    if (normalizedReasonCode.startsWith('vector_mode:')) {
+        const mode = normalizedReasonCode.slice('vector_mode:'.length).trim() || 'unknown';
+        return `当前向量模式不支持：${mode}`;
+    }
+    if (normalizedReasonCode.startsWith('intent:')) {
+        const intent = normalizedReasonCode.slice('intent:'.length).trim() || 'auto';
+        return `当前意图不触发向量召回：${intent}`;
+    }
+    if (normalizedReasonCode.startsWith('recall_need:')) {
+        const need = normalizedReasonCode.slice('recall_need:'.length).trim() || 'unknown';
+        return `召回需求判定：${need}`;
+    }
+    return normalizedReasonCode;
+}
+
+/**
+ * 功能：汇总向量门控信息，便于在界面和提示中直接展示。
+ * @param gate 向量门控结果。
+ * @returns 汇总后的中文说明。
+ */
+function formatVectorGateSummary(gate: MemoryRecallPreviewResult['vectorGate'] | null | undefined): string {
+    if (!gate) {
+        return '未返回向量门控信息';
+    }
+    const reasonText = Array.isArray(gate.reasonCodes) && gate.reasonCodes.length > 0
+        ? gate.reasonCodes.map((reasonCode: string): string => formatVectorGateReasonLabel(reasonCode)).join(' / ')
+        : '无额外原因';
+    const laneText = Array.isArray(gate.lanes) && gate.lanes.length > 0
+        ? gate.lanes.join(' / ')
+        : '未限定';
+    return `${gate.enabled ? '已触发向量召回' : '未触发向量召回'}；需求 ${gate.primaryNeed}；通道 ${laneText}；原因 ${reasonText}`;
+}
+
+/**
+ * 功能：把预演模式转换为中文标签。
+ * @param previewMode 预演模式。
  * @returns 中文标签。
  */
+function formatPreviewModeLabel(previewMode: MemoryRecallPreviewResult['previewMode'] | null | undefined): string {
+    if (previewMode === 'forced_vector') {
+        return '强制向量预演';
+    }
+    return '真实策略预演';
+}
+
 function formatScopeLabel(scope: string | null | undefined): string {
     const normalized = normalizeLookup(scope);
     if (normalized === 'self') return '当前角色';
@@ -286,6 +326,63 @@ function formatMemoryLaneLabel(lane: string | null | undefined): string {
     if (normalized === 'event') return '事件';
     if (normalized === 'state') return '状态';
     return normalized || '其他';
+}
+
+/**
+ * 功能：抓取当前筛选区状态，用于预演模式前后恢复。
+ * @param state 当前查看器状态。
+ * @returns 可恢复的筛选快照。
+ */
+function captureFilterState(state: VectorMemoryViewerState): VectorMemoryViewerFilterState {
+    return {
+        keyword: state.keyword,
+        sourceKind: state.sourceKind,
+        statusKind: state.statusKind,
+        actorKey: state.actorKey,
+        sortMode: state.sortMode,
+        timeFilter: state.timeFilter,
+        quickRecentHit: state.quickRecentHit,
+        quickLongUnused: state.quickLongUnused,
+        quickAbnormal: state.quickAbnormal,
+        quickCurrentActor: state.quickCurrentActor,
+    };
+}
+
+/**
+ * 功能：将指定筛选快照恢复到查看器状态。
+ * @param state 当前查看器状态。
+ * @param filterState 需要恢复的筛选快照。
+ * @returns 无返回值。
+ */
+function restoreFilterState(state: VectorMemoryViewerState, filterState: VectorMemoryViewerFilterState): void {
+    state.keyword = filterState.keyword;
+    state.sourceKind = filterState.sourceKind;
+    state.statusKind = filterState.statusKind;
+    state.actorKey = filterState.actorKey;
+    state.sortMode = filterState.sortMode;
+    state.timeFilter = filterState.timeFilter;
+    state.quickRecentHit = filterState.quickRecentHit;
+    state.quickLongUnused = filterState.quickLongUnused;
+    state.quickAbnormal = filterState.quickAbnormal;
+    state.quickCurrentActor = filterState.quickCurrentActor;
+}
+
+/**
+ * 功能：将筛选区重置为便于查看预演结果的默认状态。
+ * @param state 当前查看器状态。
+ * @returns 无返回值。
+ */
+function applyPreviewFilterPreset(state: VectorMemoryViewerState): void {
+    state.keyword = '';
+    state.sourceKind = 'all';
+    state.statusKind = 'all';
+    state.actorKey = '__all__';
+    state.sortMode = 'recent_hit';
+    state.timeFilter = '__all__';
+    state.quickRecentHit = false;
+    state.quickLongUnused = false;
+    state.quickAbnormal = false;
+    state.quickCurrentActor = false;
 }
 
 function formatSourceKindLabel(kind: MemoryCardSummary['sourceRecordKind']): string {
@@ -577,6 +674,44 @@ function pickSelectedItem(items: VectorMemoryViewerDerivedItem[], selectedCardId
     }) ?? items[0] ?? null;
 }
 
+interface VectorMemoryViewerPageResult {
+    pageItems: VectorMemoryViewerDerivedItem[];
+    page: number;
+    pageSize: number;
+    pageCount: number;
+    startIndex: number;
+    endIndex: number;
+}
+
+/**
+ * 功能：根据当前分页状态切分记忆卡列表。
+ * @param items 当前全部列表项。
+ * @param requestedPage 当前请求页码。
+ * @param requestedPageSize 当前请求每页条数。
+ * @returns 分页后的列表结果。
+ */
+function paginateVectorMemoryViewerItems(
+    items: VectorMemoryViewerDerivedItem[],
+    requestedPage: number,
+    requestedPageSize: number,
+): VectorMemoryViewerPageResult {
+    const pageSize = VECTOR_MEMORY_PAGE_SIZE_OPTIONS.includes(requestedPageSize)
+        ? requestedPageSize
+        : VECTOR_MEMORY_PAGE_SIZE_OPTIONS[1];
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const page = Math.min(Math.max(1, requestedPage), pageCount);
+    const startIndex = items.length <= 0 ? 0 : (page - 1) * pageSize;
+    const endIndex = items.length <= 0 ? 0 : Math.min(items.length, startIndex + pageSize);
+    return {
+        pageItems: items.slice(startIndex, endIndex),
+        page,
+        pageSize,
+        pageCount,
+        startIndex,
+        endIndex,
+    };
+}
+
 /**
  * 功能：控制向量记忆查看器的渲染与交互。
  */
@@ -586,6 +721,7 @@ export class VectorMemoryViewerController {
     private onJumpToRaw: (target: VectorMemoryViewerSourceJumpTarget) => Promise<void> | void;
     private state: VectorMemoryViewerState;
     private bound = false;
+    private pendingRunTestAction: 'run-test' | 'run-test-force' | null = null;
 
     constructor(options: VectorMemoryViewerControllerOptions) {
         ensureStyles();
@@ -595,6 +731,7 @@ export class VectorMemoryViewerController {
         this.state = {
             snapshot: null,
             testResult: null,
+            preservedFilterState: null,
             selectedCardId: null,
             activeActorKey: null,
             keyword: '',
@@ -607,6 +744,8 @@ export class VectorMemoryViewerController {
             quickLongUnused: false,
             quickAbnormal: false,
             quickCurrentActor: false,
+            listPage: 1,
+            listPageSize: VECTOR_MEMORY_PAGE_SIZE_OPTIONS[1],
             testQuery: '',
             isLoading: false,
             isRunningTest: false,
@@ -622,6 +761,7 @@ export class VectorMemoryViewerController {
         this.state = {
             snapshot: null,
             testResult: null,
+            preservedFilterState: null,
             selectedCardId: null,
             activeActorKey: null,
             keyword: '',
@@ -634,6 +774,8 @@ export class VectorMemoryViewerController {
             quickLongUnused: false,
             quickAbnormal: false,
             quickCurrentActor: false,
+            listPage: 1,
+            listPageSize: VECTOR_MEMORY_PAGE_SIZE_OPTIONS[1],
             testQuery: '',
             isLoading: false,
             isRunningTest: false,
@@ -667,6 +809,29 @@ export class VectorMemoryViewerController {
     }
 
     /**
+     * 功能：把列表页码重置到第一页。
+     * @returns 无返回值。
+     */
+    private resetListPage(): void {
+        this.state.listPage = 1;
+    }
+
+    /**
+     * 功能：根据当前筛选结果同步页码与选中项。
+     * @returns 无返回值。
+     */
+    private syncListSelection(): void {
+        const allItems = deriveVectorMemoryViewerItems(this.state.snapshot, this.state);
+        const pageResult = paginateVectorMemoryViewerItems(allItems, this.state.listPage, this.state.listPageSize);
+        this.state.listPage = pageResult.page;
+        this.state.listPageSize = pageResult.pageSize;
+        this.state.selectedCardId = pickSelectedItem(
+            pageResult.pageItems,
+            this.state.selectedCardId,
+        )?.item.cardId ?? null;
+    }
+
+    /**
      * 功能：绑定容器事件委托。
      * @returns 无返回值。
      */
@@ -675,6 +840,12 @@ export class VectorMemoryViewerController {
             return;
         }
         this.bound = true;
+        this.container.addEventListener('pointerdown', (event: Event): void => {
+            this.handlePointerDown(event);
+        });
+        this.container.addEventListener('keydown', (event: Event): void => {
+            this.handleKeyDown(event);
+        });
         this.container.addEventListener('click', (event: Event): void => {
             void this.handleClick(event);
         });
@@ -686,7 +857,8 @@ export class VectorMemoryViewerController {
         });
         this.container.addEventListener('submit', (event: Event): void => {
             event.preventDefault();
-            void this.runSearchTest();
+            this.syncTestQueryFromDom();
+            void this.runSearchTest({ forceVector: false });
         });
     }
 
@@ -697,20 +869,20 @@ export class VectorMemoryViewerController {
     private async reloadData(): Promise<void> {
         const memory = await this.getMemory();
         const queryToRerun = String(this.state.testResult?.query ?? this.state.testQuery ?? '').trim();
+        const rerunForceVector = this.state.testResult?.previewMode === 'forced_vector';
         const [snapshot, activeActorKey] = await Promise.all([
             memory.editor.getMemoryCardSnapshot(),
             memory.chatState.getActiveActorKey(),
         ]);
         this.state.snapshot = snapshot;
         this.state.activeActorKey = String(activeActorKey ?? '').trim() || null;
-        this.state.testResult = queryToRerun ? await memory.editor.runMemoryRecallPreview(queryToRerun) : null;
+        this.state.testResult = queryToRerun
+            ? await memory.editor.runMemoryRecallPreview(queryToRerun, rerunForceVector ? { forceVector: true } : undefined)
+            : null;
         if (queryToRerun) {
             this.state.testQuery = queryToRerun;
         }
-        this.state.selectedCardId = pickSelectedItem(
-            deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-            this.state.selectedCardId,
-        )?.item.cardId ?? null;
+        this.syncListSelection();
     }
 
     /**
@@ -725,16 +897,75 @@ export class VectorMemoryViewerController {
         }
         const field = String(target.dataset.field ?? '').trim();
         if (field === 'keyword') {
+            if (this.state.testResult) {
+                return;
+            }
             this.state.keyword = target.value;
-            this.state.selectedCardId = pickSelectedItem(
-                deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedCardId,
-            )?.item.cardId ?? null;
+            this.resetListPage();
+            this.syncListSelection();
             this.paint();
         }
         if (field === 'testQuery') {
             this.state.testQuery = target.value;
         }
+    }
+
+    /**
+     * 功能：在点击预演按钮前同步当前输入框里的检索语句。
+     * @returns 无返回值。
+     */
+    private syncTestQueryFromDom(): void {
+        const input = this.container.querySelector<HTMLTextAreaElement>('textarea[data-field="testQuery"]');
+        if (!input) {
+            return;
+        }
+        this.state.testQuery = input.value;
+    }
+
+    /**
+     * 功能：在按钮按下阶段预排一次召回预演，避免首次点击被输入法确认吞掉。
+     * @param event 指针事件。
+     * @returns 无返回值。
+     */
+    private handlePointerDown(event: Event): void {
+        const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-action]');
+        if (!target) {
+            return;
+        }
+        const action = String(target.dataset.action ?? '').trim();
+        if ((action !== 'run-test' && action !== 'run-test-force') || this.state.isRunningTest) {
+            return;
+        }
+        this.pendingRunTestAction = action as 'run-test' | 'run-test-force';
+        this.syncTestQueryFromDom();
+        window.setTimeout((): void => {
+            if (!this.pendingRunTestAction) {
+                return;
+            }
+            const forceVector = this.pendingRunTestAction === 'run-test-force';
+            this.pendingRunTestAction = null;
+            void this.runSearchTest({ forceVector });
+        }, 0);
+    }
+
+    /**
+     * 功能：处理表格整行的键盘选中。
+     * @param event 键盘事件。
+     * @returns 无返回值。
+     */
+    private handleKeyDown(event: Event): void {
+        const keyboardEvent = event as KeyboardEvent;
+        if (keyboardEvent.key !== 'Enter' && keyboardEvent.key !== ' ') {
+            return;
+        }
+        const target = (keyboardEvent.target as HTMLElement | null)?.closest<HTMLElement>('[data-vmv-row-clickable="true"]');
+        const cardId = String(target?.dataset.cardId ?? '').trim();
+        if (!target || !cardId) {
+            return;
+        }
+        keyboardEvent.preventDefault();
+        this.state.selectedCardId = cardId;
+        this.paint();
     }
 
     /**
@@ -748,15 +979,23 @@ export class VectorMemoryViewerController {
             return;
         }
         const field = String(target.dataset.field ?? '').trim();
+        if (field === 'listPageSize') {
+            this.state.listPageSize = Number(target.value) || VECTOR_MEMORY_PAGE_SIZE_OPTIONS[1];
+            this.resetListPage();
+            this.syncListSelection();
+            this.paint();
+            return;
+        }
+        if (this.state.testResult) {
+            return;
+        }
         if (field === 'sourceKind') this.state.sourceKind = target.value as VectorMemoryViewerState['sourceKind'];
         if (field === 'statusKind') this.state.statusKind = target.value as VectorMemoryViewerState['statusKind'];
         if (field === 'actorKey') this.state.actorKey = target.value as VectorMemoryViewerState['actorKey'];
         if (field === 'sortMode') this.state.sortMode = target.value as VectorMemorySortMode;
         if (field === 'timeFilter') this.state.timeFilter = target.value as VectorMemoryTimeFilter;
-        this.state.selectedCardId = pickSelectedItem(
-            deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-            this.state.selectedCardId,
-        )?.item.cardId ?? null;
+        this.resetListPage();
+        this.syncListSelection();
         this.paint();
     }
 
@@ -778,30 +1017,65 @@ export class VectorMemoryViewerController {
             return;
         }
         if (action === 'toggle-quick') {
+            if (this.state.testResult) {
+                toast.info('退出预演结果后，才能继续调整左侧筛选。');
+                return;
+            }
             const key = String(target.dataset.key ?? '').trim();
             if (key === 'recent') this.state.quickRecentHit = !this.state.quickRecentHit;
             if (key === 'unused') this.state.quickLongUnused = !this.state.quickLongUnused;
             if (key === 'abnormal') this.state.quickAbnormal = !this.state.quickAbnormal;
             if (key === 'current') this.state.quickCurrentActor = !this.state.quickCurrentActor;
-            this.state.selectedCardId = pickSelectedItem(
-                deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedCardId,
-            )?.item.cardId ?? null;
+            this.resetListPage();
+            this.syncListSelection();
+            this.paint();
+            return;
+        }
+        if (action === 'page-prev') {
+            this.state.listPage = Math.max(1, this.state.listPage - 1);
+            this.syncListSelection();
+            this.paint();
+            return;
+        }
+        if (action === 'page-next') {
+            this.state.listPage += 1;
+            this.syncListSelection();
+            this.paint();
+            return;
+        }
+        if (action === 'page-go') {
+            const input = this.container.querySelector<HTMLInputElement>('input[data-field="listPageTarget"]');
+            const nextPage = Number(input?.value ?? 0);
+            if (!Number.isFinite(nextPage) || nextPage <= 0) {
+                toast.info('请输入有效页码。');
+                return;
+            }
+            this.state.listPage = Math.floor(nextPage);
+            this.syncListSelection();
             this.paint();
             return;
         }
         if (action === 'clear-test') {
             this.state.testQuery = '';
             this.state.testResult = null;
-            this.state.selectedCardId = pickSelectedItem(
-                deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedCardId,
-            )?.item.cardId ?? null;
+            if (this.state.preservedFilterState) {
+                restoreFilterState(this.state, this.state.preservedFilterState);
+                this.state.preservedFilterState = null;
+            }
+            this.resetListPage();
+            this.syncListSelection();
             this.paint();
             return;
         }
-        if (action === 'run-test') {
-            await this.runSearchTest();
+        if (action === 'run-test' || action === 'run-test-force') {
+            if (this.pendingRunTestAction === action) {
+                return;
+            }
+            if (this.state.isRunningTest) {
+                return;
+            }
+            this.syncTestQueryFromDom();
+            await this.runSearchTest({ forceVector: action === 'run-test-force' });
             return;
         }
         if (action === 'batch-rebuild') {
@@ -856,27 +1130,60 @@ export class VectorMemoryViewerController {
 
     /**
      * 功能：执行检索测试。
+     * @param opts 附加配置，可指定是否强制执行向量预演。
      * @returns 无返回值。
      */
-    private async runSearchTest(): Promise<void> {
+    private async runSearchTest(opts: { forceVector?: boolean } = {}): Promise<void> {
+        if (this.state.isRunningTest) {
+            return;
+        }
+        this.syncTestQueryFromDom();
         const query = String(this.state.testQuery ?? '').trim();
+        const forceVector = opts.forceVector === true;
         if (!query) {
             toast.info('先输入一句测试内容再检索。');
             return;
         }
-        const memory = await this.getMemory();
         this.state.isRunningTest = true;
         this.paint();
         try {
-            this.state.testResult = await memory.editor.runMemoryRecallPreview(query);
-            this.state.selectedCardId = pickSelectedItem(
-                deriveVectorMemoryViewerItems(this.state.snapshot, this.state),
-                this.state.selectedCardId,
-            )?.item.cardId ?? null;
-            toast.success(`召回预演完成，命中 ${this.state.testResult.hitCount} 张。`);
+            const memory = await this.getMemory();
+            if (!this.state.testResult || !this.state.preservedFilterState) {
+                this.state.preservedFilterState = captureFilterState(this.state);
+            }
+            applyPreviewFilterPreset(this.state);
+            this.resetListPage();
+            this.paint();
+            const result = await memory.editor.runMemoryRecallPreview(query, forceVector ? { forceVector: true } : undefined);
+            this.state.testResult = result;
+            this.syncListSelection();
+            if (forceVector) {
+                if (result.hitCount > 0) {
+                    toast.success(`强制向量预演完成，命中 ${result.hitCount} 张。`);
+                } else {
+                    const forceSummary = result.vectorGate ? ` ${formatVectorGateSummary(result.vectorGate)}` : '';
+                    toast.info(`强制向量预演已执行，但没有命中记忆卡。${forceSummary}`);
+                }
+            } else if (result.vectorGate && result.vectorGate.enabled === false) {
+                if (result.effectivePolicy && result.effectivePolicy.vectorEnabled === false) {
+                    toast.info(`当前策略关闭向量召回；可使用强制向量预演排查。${result.vectorGate ? ` ${formatVectorGateSummary(result.vectorGate)}` : ''}`);
+                } else {
+                    toast.info(`召回预演已执行，但本次未触发向量检索：${formatVectorGateSummary(result.vectorGate)}`);
+                }
+            } else if (result.hitCount > 0) {
+                toast.success(`召回预演完成，命中 ${result.hitCount} 张。`);
+            } else {
+                const gateSummary = result.vectorGate ? ` ${formatVectorGateSummary(result.vectorGate)}` : '';
+                toast.info(`召回预演完成，但没有命中记忆卡。${gateSummary}`);
+            }
         } catch (error) {
-            toast.error(`召回预演失败：${String(error)}`);
+            if (!this.state.testResult && this.state.preservedFilterState) {
+                restoreFilterState(this.state, this.state.preservedFilterState);
+                this.state.preservedFilterState = null;
+            }
+            toast.error(`${forceVector ? '强制向量预演' : '召回预演'}失败：${String(error)}`);
         } finally {
+            this.pendingRunTestAction = null;
             this.state.isRunningTest = false;
             this.paint();
         }
@@ -1089,18 +1396,46 @@ export class VectorMemoryViewerController {
         const chatKeyTitleAttr = rawChatKey && rawChatKey !== compactChatLabel
             ? ` title="${escapeHtml(rawChatKey)}"`
             : '';
-        const selected = pickSelectedItem(items, this.state.selectedCardId);
+        const pageResult = paginateVectorMemoryViewerItems(items, this.state.listPage, this.state.listPageSize);
+        this.state.listPage = pageResult.page;
+        this.state.listPageSize = pageResult.pageSize;
+        const selected = pickSelectedItem(pageResult.pageItems, this.state.selectedCardId);
         if (selected && selected.item.cardId !== this.state.selectedCardId) {
             this.state.selectedCardId = selected.item.cardId;
         }
         const selectedItem = selected?.item ?? null;
         const selectedHit = selected?.testHit ?? null;
-        const testMode = Boolean(this.state.testResult);
+        const previewResult = this.state.testResult;
+        const testMode = Boolean(previewResult);
+        const previewModeLabel = previewResult ? formatPreviewModeLabel(previewResult.previewMode) : '普通浏览模式';
+        const policyGateSummary = previewResult?.policyGate ? formatVectorGateSummary(previewResult.policyGate) : '';
+        const vectorGateSummary = previewResult?.vectorGate ? formatVectorGateSummary(previewResult.vectorGate) : '';
+        const effectivePolicyNote = previewResult?.effectivePolicy
+            ? `当前有效策略：${previewResult.effectivePolicy.vectorEnabled ? '已开启向量召回' : '已关闭向量召回'}；模式 ${previewResult.effectivePolicy.vectorMode}`
+            : '';
+        const previewWarningNote = previewResult?.previewMode === 'effective_policy'
+            && previewResult.vectorGate?.enabled === false
+            && previewResult.effectivePolicy?.vectorEnabled === false
+            ? '当前策略关闭向量召回；可使用强制向量预演排查。'
+            : '';
+        const previewForcedNote = previewResult?.previewMode === 'forced_vector'
+            ? '本次已强制执行向量检索，仅用于诊断，不会改写当前聊天策略。'
+            : '';
+        const previewModeNote = testMode
+            ? '预演结果模式已接管列表，左侧筛选会暂时冻结，退出后恢复到你进入预演前的设置。'
+            : '先缩小范围，再进入排查。';
         const actorOptionHtml = actorOptions
             .map((option: VectorMemoryActorOption): string => `<option value="${escapeHtml(option.key)}"${this.state.actorKey === option.key ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
             .join('');
         const listHtml = items.length > 0
-            ? items.map((entry: VectorMemoryViewerDerivedItem): string => this.renderListCard(entry)).join('')
+            ? this.renderListTable(pageResult.pageItems, {
+                total: items.length,
+                page: pageResult.page,
+                pageCount: pageResult.pageCount,
+                pageSize: pageResult.pageSize,
+                startIndex: pageResult.startIndex,
+                endIndex: pageResult.endIndex,
+            })
             : `<div class="stx-vmv-empty">${escapeHtml(testMode ? '当前测试语句没有命中可展示的记忆卡，建议换个说法再试一次。' : '当前筛选条件下没有记忆卡。')}</div>`;
         this.container.innerHTML = `
             <div class="stx-vmv">
@@ -1124,26 +1459,32 @@ export class VectorMemoryViewerController {
                                 <strong>召回预演</strong>
                                 <div class="stx-vmv-inline-note">输入一句话，直接预演这次召回会命中哪些记忆卡。</div>
                             </div>
-                            <span class="stx-vmv-chip">${this.state.isRunningTest ? '正在预演…' : testMode ? '预演结果模式' : '普通浏览模式'}</span>
+                            <span class="stx-vmv-chip">${this.state.isRunningTest ? '正在预演…' : previewModeLabel}</span>
                         </div>
                         <textarea data-field="testQuery" placeholder="例如：她最在意的承诺是什么？">${escapeHtml(this.state.testQuery)}</textarea>
                         <div class="stx-vmv-actions">
-                            <button class="stx-re-btn save" type="submit" data-action="run-test">${this.state.isRunningTest ? '正在预演…' : '召回预演'}</button>
+                            <button class="stx-re-btn save" type="button" data-action="run-test"${this.state.isRunningTest ? ' disabled' : ''}>${this.state.isRunningTest ? '正在预演…' : '召回预演'}</button>
+                            <button class="stx-re-btn" type="button" data-action="run-test-force"${this.state.isRunningTest ? ' disabled' : ''}>强制向量预演</button>
                             <button class="stx-re-btn" type="button" data-action="clear-test"${testMode ? '' : ' disabled'}>退出预演结果</button>
                         </div>
-                        <div class="stx-vmv-inline-note">${escapeHtml(testMode ? `本次命中 ${this.state.testResult?.hitCount ?? 0} 张，最终进入上下文 ${this.state.testResult?.selectedCount ?? 0} 张${this.state.testResult?.rerankApplied ? '，已执行二次整理。' : '。'}` : '这里会显示匹配顺序、二次整理前后位置，以及最终是否进入上下文。')}</div>
+                        <div class="stx-vmv-inline-note">${escapeHtml(testMode ? `当前模式：${previewModeLabel}。本次命中 ${previewResult?.hitCount ?? 0} 张，最终进入上下文 ${previewResult?.selectedCount ?? 0} 张${previewResult?.rerankApplied ? '，已执行二次整理。' : '。'}` : '这里会显示匹配顺序、二次整理前后位置，以及最终是否进入上下文。')}</div>
+                        ${testMode && effectivePolicyNote ? `<div class="stx-vmv-inline-note">${escapeHtml(effectivePolicyNote)}</div>` : ''}
+                        ${testMode && previewWarningNote ? `<div class="stx-vmv-inline-note">${escapeHtml(previewWarningNote)}</div>` : ''}
+                        ${testMode && previewResult?.previewMode === 'forced_vector' && policyGateSummary ? `<div class="stx-vmv-inline-note">${escapeHtml(`原策略门控：${policyGateSummary}`)}</div>` : ''}
+                        ${testMode && previewForcedNote ? `<div class="stx-vmv-inline-note">${escapeHtml(previewForcedNote)}</div>` : ''}
+                        ${testMode && vectorGateSummary ? `<div class="stx-vmv-inline-note">${escapeHtml(`${previewResult?.previewMode === 'forced_vector' ? '本次执行：' : '当前门控：'}${vectorGateSummary}`)}</div>` : ''}
                     </form>
                 </section>
                 <section class="stx-vmv-layout">
                     <aside class="stx-vmv-panel">
-                        <div class="stx-vmv-section-title"><div><strong>筛选区</strong><div class="stx-vmv-inline-note">先缩小范围，再进入排查。</div></div></div>
-                        <div class="stx-vmv-filter-field"><label>关键词搜索</label><input data-field="keyword" type="search" placeholder="搜索记忆内容、来源证据或角色名" value="${escapeHtml(this.state.keyword)}" /></div>
-                        <div class="stx-vmv-filter-field"><label>来源类型</label><select data-field="sourceKind"><option value="all"${this.state.sourceKind === 'all' ? ' selected' : ''}>全部来源</option><option value="fact"${this.state.sourceKind === 'fact' ? ' selected' : ''}>事实</option><option value="summary"${this.state.sourceKind === 'summary' ? ' selected' : ''}>摘要</option><option value="unknown"${this.state.sourceKind === 'unknown' ? ' selected' : ''}>未知来源</option></select></div>
-                        <div class="stx-vmv-filter-field"><label>当前状态</label><select data-field="statusKind"><option value="all"${this.state.statusKind === 'all' ? ' selected' : ''}>全部状态</option><option value="normal"${this.state.statusKind === 'normal' ? ' selected' : ''}>正常使用</option><option value="recent_hit"${this.state.statusKind === 'recent_hit' ? ' selected' : ''}>最近命中</option><option value="long_unused"${this.state.statusKind === 'long_unused' ? ' selected' : ''}>长期未用</option><option value="source_missing"${this.state.statusKind === 'source_missing' ? ' selected' : ''}>来源丢失</option><option value="archived_residual"${this.state.statusKind === 'archived_residual' ? ' selected' : ''}>已归档残留</option><option value="needs_rebuild"${this.state.statusKind === 'needs_rebuild' ? ' selected' : ''}>建议重建</option></select></div>
-                        <div class="stx-vmv-filter-field"><label>角色范围</label><select data-field="actorKey"><option value="__all__"${this.state.actorKey === '__all__' ? ' selected' : ''}>全部角色</option><option value="__current__"${this.state.actorKey === '__current__' ? ' selected' : ''}>当前主角色</option>${actorOptionHtml}</select></div>
-                        <div class="stx-vmv-filter-field"><label>时间窗口</label><select data-field="timeFilter"><option value="__all__"${this.state.timeFilter === '__all__' ? ' selected' : ''}>全部时间</option><option value="indexed_7d"${this.state.timeFilter === 'indexed_7d' ? ' selected' : ''}>最近 7 天索引</option><option value="indexed_30d"${this.state.timeFilter === 'indexed_30d' ? ' selected' : ''}>最近 30 天索引</option><option value="hit_7d"${this.state.timeFilter === 'hit_7d' ? ' selected' : ''}>最近 7 天命中</option><option value="hit_30d"${this.state.timeFilter === 'hit_30d' ? ' selected' : ''}>最近 30 天命中</option></select></div>
+                        <div class="stx-vmv-section-title"><div><strong>筛选区</strong><div class="stx-vmv-inline-note">${escapeHtml(previewModeNote)}</div></div></div>
+                        <div class="stx-vmv-filter-field"><label>关键词搜索</label><input data-field="keyword" type="search" placeholder="搜索记忆内容、来源证据或角色名" value="${escapeHtml(this.state.keyword)}"${testMode ? ' disabled' : ''} /></div>
+                        <div class="stx-vmv-filter-field"><label>来源类型</label><select data-field="sourceKind"${testMode ? ' disabled' : ''}><option value="all"${this.state.sourceKind === 'all' ? ' selected' : ''}>全部来源</option><option value="fact"${this.state.sourceKind === 'fact' ? ' selected' : ''}>事实</option><option value="summary"${this.state.sourceKind === 'summary' ? ' selected' : ''}>摘要</option><option value="unknown"${this.state.sourceKind === 'unknown' ? ' selected' : ''}>未知来源</option></select></div>
+                        <div class="stx-vmv-filter-field"><label>当前状态</label><select data-field="statusKind"${testMode ? ' disabled' : ''}><option value="all"${this.state.statusKind === 'all' ? ' selected' : ''}>全部状态</option><option value="normal"${this.state.statusKind === 'normal' ? ' selected' : ''}>正常使用</option><option value="recent_hit"${this.state.statusKind === 'recent_hit' ? ' selected' : ''}>最近命中</option><option value="long_unused"${this.state.statusKind === 'long_unused' ? ' selected' : ''}>长期未用</option><option value="source_missing"${this.state.statusKind === 'source_missing' ? ' selected' : ''}>来源丢失</option><option value="archived_residual"${this.state.statusKind === 'archived_residual' ? ' selected' : ''}>已归档残留</option><option value="needs_rebuild"${this.state.statusKind === 'needs_rebuild' ? ' selected' : ''}>建议重建</option></select></div>
+                        <div class="stx-vmv-filter-field"><label>角色范围</label><select data-field="actorKey"${testMode ? ' disabled' : ''}><option value="__all__"${this.state.actorKey === '__all__' ? ' selected' : ''}>全部角色</option><option value="__current__"${this.state.actorKey === '__current__' ? ' selected' : ''}>当前主角色</option>${actorOptionHtml}</select></div>
+                        <div class="stx-vmv-filter-field"><label>时间窗口</label><select data-field="timeFilter"${testMode ? ' disabled' : ''}><option value="__all__"${this.state.timeFilter === '__all__' ? ' selected' : ''}>全部时间</option><option value="indexed_7d"${this.state.timeFilter === 'indexed_7d' ? ' selected' : ''}>最近 7 天索引</option><option value="indexed_30d"${this.state.timeFilter === 'indexed_30d' ? ' selected' : ''}>最近 30 天索引</option><option value="hit_7d"${this.state.timeFilter === 'hit_7d' ? ' selected' : ''}>最近 7 天命中</option><option value="hit_30d"${this.state.timeFilter === 'hit_30d' ? ' selected' : ''}>最近 30 天命中</option></select></div>
                         <div class="stx-vmv-filter-field"><label>排序方式</label><select data-field="sortMode"${testMode ? ' disabled' : ''}><option value="recent_hit"${this.state.sortMode === 'recent_hit' ? ' selected' : ''}>按最近命中</option><option value="recent_index"${this.state.sortMode === 'recent_index' ? ' selected' : ''}>按最近索引</option><option value="recent_created"${this.state.sortMode === 'recent_created' ? ' selected' : ''}>按最近创建</option><option value="content_length"${this.state.sortMode === 'content_length' ? ' selected' : ''}>按内容长度</option><option value="usage"${this.state.sortMode === 'usage' ? ' selected' : ''}>按使用频率</option></select></div>
-                        <div><div class="stx-vmv-block-title">快捷入口</div><div class="stx-vmv-quick-grid" style="margin-top:10px;"><button class="stx-vmv-quick-btn ${this.state.quickRecentHit ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="recent">只看最近命中</button><button class="stx-vmv-quick-btn ${this.state.quickLongUnused ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="unused">只看长期未用</button><button class="stx-vmv-quick-btn ${this.state.quickAbnormal ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="abnormal">只看异常项</button><button class="stx-vmv-quick-btn ${this.state.quickCurrentActor ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="current">只看当前角色相关</button></div></div>
+                        <div><div class="stx-vmv-block-title">快捷入口</div><div class="stx-vmv-quick-grid" style="margin-top:10px;"><button class="stx-vmv-quick-btn ${this.state.quickRecentHit ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="recent"${testMode ? ' disabled' : ''}>只看最近命中</button><button class="stx-vmv-quick-btn ${this.state.quickLongUnused ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="unused"${testMode ? ' disabled' : ''}>只看长期未用</button><button class="stx-vmv-quick-btn ${this.state.quickAbnormal ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="abnormal"${testMode ? ' disabled' : ''}>只看异常项</button><button class="stx-vmv-quick-btn ${this.state.quickCurrentActor ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="current"${testMode ? ' disabled' : ''}>只看当前角色相关</button></div></div>
                         <div>
                         <div class="stx-vmv-block-title">批量处理</div>
                             <div class="stx-vmv-actions" style="margin-top:10px;">
@@ -1156,8 +1497,8 @@ export class VectorMemoryViewerController {
                         <div class="stx-vmv-empty">${escapeHtml(this.state.activeActorKey ? `当前主角色：${this.state.activeActorKey}` : '当前聊天暂未标记主角色，角色相关筛选仍可按来源角色使用。')}</div>
                     </aside>
                     <section class="stx-vmv-panel">
-                        <div class="stx-vmv-toolbar-row"><div><h3>${escapeHtml(testMode ? '预演结果列表' : '记忆卡列表')}</h3><div class="stx-vmv-toolbar-meta">${escapeHtml(testMode ? '当前按照预演中的命中顺序展示。' : '默认展示记忆内容、来源证据、最近使用和当前状态。')}</div></div><div class="stx-vmv-chip-row"><span class="stx-vmv-chip"${chatKeyTitleAttr}>${escapeHtml(compactChatLabel)}</span><span class="stx-vmv-chip">${items.length} 张卡片</span></div></div>
-                        <div class="stx-vmv-list-scroller"><div class="stx-vmv-list-stack">${this.state.isLoading && !snapshot ? '<div class="stx-vmv-empty">正在读取记忆卡...</div>' : listHtml}</div></div>
+                        <div class="stx-vmv-toolbar-row"><div><h3>${escapeHtml(testMode ? '预演结果列表' : '记忆卡列表')}</h3><div class="stx-vmv-toolbar-meta">${escapeHtml(testMode ? '当前按照预演中的命中顺序展示。' : '默认展示记忆内容、来源证据、最近使用和当前状态。')}</div></div><div class="stx-vmv-toolbar-actions"><label class="stx-vmv-toolbar-sort"><span>排序</span><select data-field="sortMode"${testMode ? ' disabled' : ''}><option value="recent_hit"${this.state.sortMode === 'recent_hit' ? ' selected' : ''}>最近命中</option><option value="recent_index"${this.state.sortMode === 'recent_index' ? ' selected' : ''}>最近索引</option><option value="recent_created"${this.state.sortMode === 'recent_created' ? ' selected' : ''}>最近创建</option><option value="content_length"${this.state.sortMode === 'content_length' ? ' selected' : ''}>内容长度</option><option value="usage"${this.state.sortMode === 'usage' ? ' selected' : ''}>使用频率</option></select></label><div class="stx-vmv-chip-row"><span class="stx-vmv-chip"${chatKeyTitleAttr}>${escapeHtml(compactChatLabel)}</span><span class="stx-vmv-chip">${items.length} 张卡片</span></div></div></div>
+                        <div class="stx-vmv-list-scroller">${this.state.isLoading && !snapshot ? '<div class="stx-vmv-empty">正在读取记忆卡...</div>' : listHtml}</div>
                     </section>
                     <aside class="stx-vmv-panel"><div class="stx-vmv-detail-scroller">${selectedItem ? this.renderDetail(selectedItem, selectedHit) : '<div class="stx-vmv-empty">左侧选一张记忆卡后，这里会显示完整正文、来源证据、最近使用情况、状态判断和详细信息。</div>'}</div></aside>
                 </section>
@@ -1220,6 +1561,205 @@ export class VectorMemoryViewerController {
      * @param hit 当前测试命中。
      * @returns 详情 HTML。
      */
+    /**
+     * 功能：按表格形式渲染当前页列表。
+     * @param items 当前页列表项。
+     * @param page 当前分页信息。
+     * @returns 表格 HTML。
+     */
+    private renderListTable(
+        items: VectorMemoryViewerDerivedItem[],
+        page: {
+            total: number;
+            page: number;
+            pageCount: number;
+            pageSize: number;
+            startIndex: number;
+            endIndex: number;
+        },
+    ): string {
+        const columns: SharedWorldStateSectionColumn<VectorMemoryViewerDerivedItem>[] = [
+            {
+                label: '记忆卡',
+                tip: '按行浏览记忆卡，完整正文与证据请查看右侧详情。',
+                width: '40%',
+                cellClassName: 'stx-vmv-table-main-cell',
+                render: (entry: VectorMemoryViewerDerivedItem): string => this.renderListMainCell(entry),
+            },
+            {
+                label: '分类',
+                tip: '显示来源、层级和记忆类型。',
+                width: '18%',
+                cellClassName: 'stx-vmv-table-meta-cell',
+                render: (entry: VectorMemoryViewerDerivedItem): string => this.renderListCategoryCell(entry),
+            },
+            {
+                label: '使用情况',
+                tip: '显示最近命中、索引时间与预演位置。',
+                width: '24%',
+                cellClassName: 'stx-vmv-table-meta-cell',
+                render: (entry: VectorMemoryViewerDerivedItem): string => this.renderListUsageCell(entry),
+            },
+            {
+                label: '状态',
+                tip: '显示当前状态与维护提醒。',
+                width: '18%',
+                cellClassName: 'stx-vmv-table-meta-cell',
+                render: (entry: VectorMemoryViewerDerivedItem): string => this.renderListStatusCell(entry),
+            },
+        ];
+        const tableHtml = renderSharedWorldStateSectionTable<VectorMemoryViewerDerivedItem>(
+            {
+                sectionKey: 'vector-memory-list',
+                title: '当前页记忆卡',
+                description: '列表按行展示摘要信息，详细内容统一在右侧查看。',
+                iconClass: 'fa-solid fa-table-list',
+                badgeText: `${page.startIndex + 1}-${page.endIndex}`,
+                badgeTip: `当前页展示第 ${page.startIndex + 1} 到第 ${page.endIndex} 条，共 ${page.total} 条结果。`,
+                rows: items,
+                rowKey: (entry: VectorMemoryViewerDerivedItem): string => entry.item.cardId,
+                rowAttributes: (entry: VectorMemoryViewerDerivedItem): Record<string, string | number | boolean> => ({
+                    'data-action': 'select-item',
+                    'data-card-id': entry.item.cardId,
+                    'data-vmv-row-clickable': 'true',
+                    'data-vmv-row-selected': entry.item.cardId === this.state.selectedCardId ? 'true' : 'false',
+                    tabindex: 0,
+                }),
+                columns,
+                tableLimit: page.pageSize,
+                open: true,
+            },
+            {
+                buildTipAttr: (text: string): string => text ? ` title="${escapeHtml(text)}"` : '',
+            },
+        );
+        return `
+            <div class="stx-vmv-table-shell">
+                ${tableHtml}
+                ${this.renderPagination(page)}
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：渲染表格中的主信息单元格。
+     * @param entry 当前列表项。
+     * @returns 单元格 HTML。
+     */
+    private renderListMainCell(entry: VectorMemoryViewerDerivedItem): string {
+        const item = entry.item;
+        return `
+            <div class="stx-vmv-row-main">
+                <div class="stx-vmv-row-title">${escapeHtml(item.title)}</div>
+                <div class="stx-vmv-row-preview">${escapeHtml(item.preview || item.content)}</div>
+                <div class="stx-vmv-row-subject">${escapeHtml(item.subject || '未标记主体')}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：渲染表格中的分类单元格。
+     * @param entry 当前列表项。
+     * @returns 单元格 HTML。
+     */
+    private renderListCategoryCell(entry: VectorMemoryViewerDerivedItem): string {
+        const item = entry.item;
+        return `
+            <div class="stx-vmv-row-meta-stack">
+                <span class="stx-vmv-badge">${escapeHtml(formatSourceKindLabel(item.sourceRecordKind))}</span>
+                <span class="stx-vmv-badge">${escapeHtml(formatMemoryLaneLabel(item.lane))}</span>
+                <span class="stx-vmv-badge">${escapeHtml(formatMemoryTypeLabel(item.memoryType))}</span>
+                <span class="stx-vmv-inline-mini">${escapeHtml(formatScopeLabel(item.sourceScope))}</span>
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：渲染表格中的使用情况单元格。
+     * @param entry 当前列表项。
+     * @returns 单元格 HTML。
+     */
+    private renderListUsageCell(entry: VectorMemoryViewerDerivedItem): string {
+        const item = entry.item;
+        const hit = entry.testHit;
+        const usageText = hit
+            ? `原始 ${hit.initialRank ?? '-'} / 整理 ${hit.rerankedRank ?? '-'} / 最终 ${hit.finalRank ?? '-'}`
+            : `累计命中 ${item.usage.totalHits} 次`;
+        const timeText = item.usage.lastHitAt
+            ? `最近命中 ${formatRelativeTime(item.usage.lastHitAt)}`
+            : `索引于 ${formatRelativeTime(item.createdAt)}`;
+        return `
+            <div class="stx-vmv-row-meta-stack">
+                <span class="stx-vmv-inline-mini">${escapeHtml(timeText)}</span>
+                <span class="stx-vmv-inline-mini">${escapeHtml(usageText)}</span>
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：渲染表格中的状态单元格。
+     * @param entry 当前列表项。
+     * @returns 单元格 HTML。
+     */
+    private renderListStatusCell(entry: VectorMemoryViewerDerivedItem): string {
+        const item = entry.item;
+        const hit = entry.testHit;
+        const extraTag = hit
+            ? `<span class="stx-vmv-pill ${hit.enteredContext ? 'tone-success' : hit.matchedInRecall ? 'tone-warning' : 'tone-muted'}">${escapeHtml(hit.enteredContext ? '进入上下文' : hit.matchedInRecall ? '命中未入选' : '测试命中')}</span>`
+            : '';
+        const flagList = [
+            item.needsRebuild ? '建议重建' : '',
+            item.isArchived ? '已归档' : '',
+            item.sourceMissing ? '来源丢失' : '',
+        ].filter(Boolean);
+        return `
+            <div class="stx-vmv-row-meta-stack">
+                <span class="stx-vmv-pill ${buildStatusToneClass(item)}">${escapeHtml(item.statusLabel)}</span>
+                ${extraTag}
+                ${flagList.length > 0 ? `<span class="stx-vmv-inline-mini">${escapeHtml(flagList.join(' / '))}</span>` : ''}
+            </div>
+        `;
+    }
+
+    /**
+     * 功能：渲染列表分页控制区。
+     * @param page 当前分页信息。
+     * @returns 分页区 HTML。
+     */
+    private renderPagination(page: {
+        total: number;
+        page: number;
+        pageCount: number;
+        pageSize: number;
+        startIndex: number;
+        endIndex: number;
+    }): string {
+        const pageSizeOptionsHtml = VECTOR_MEMORY_PAGE_SIZE_OPTIONS
+            .map((value: number): string => `<option value="${value}"${page.pageSize === value ? ' selected' : ''}>每页 ${value} 条</option>`)
+            .join('');
+        return `
+            <div class="stx-vmv-pagination">
+                <div class="stx-vmv-pagination-meta">
+                    <span class="stx-vmv-chip">第 ${page.page} / ${page.pageCount} 页</span>
+                    <span class="stx-vmv-chip">当前显示 ${page.startIndex + 1}-${page.endIndex} / ${page.total}</span>
+                </div>
+                <div class="stx-vmv-pagination-actions">
+                    <label class="stx-vmv-page-size">
+                        <span>显示条数</span>
+                        <select data-field="listPageSize">${pageSizeOptionsHtml}</select>
+                    </label>
+                    <label class="stx-vmv-page-jump">
+                        <span>跳到</span>
+                        <input data-field="listPageTarget" type="number" min="1" max="${page.pageCount}" value="${page.page}" />
+                    </label>
+                    <button class="stx-re-btn" type="button" data-action="page-go">跳转</button>
+                    <button class="stx-re-btn" type="button" data-action="page-prev"${page.page <= 1 ? ' disabled' : ''}>上一页</button>
+                    <button class="stx-re-btn" type="button" data-action="page-next"${page.page >= page.pageCount ? ' disabled' : ''}>下一页</button>
+                </div>
+            </div>
+        `;
+    }
+
     private renderDetail(item: MemoryCardSummary, hit: MemoryRecallPreviewHit | null): string {
         const reasonList = item.statusReasons.length > 0
             ? `<ul class="stx-vmv-reasons">${item.statusReasons.map((reason: string): string => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>`
@@ -1244,6 +1784,7 @@ export class VectorMemoryViewerController {
             <div class="stx-vmv-detail-stack">
                 <div class="stx-vmv-detail-head">
                     <div>
+                        <div class="stx-vmv-kicker">详情面板</div>
                         <h3>${escapeHtml(item.title)}</h3>
                         <div class="stx-vmv-inline-note">当前状态：${escapeHtml(item.statusLabel)} · 最近索引 ${escapeHtml(formatTimeLabel(item.createdAt))}</div>
                     </div>

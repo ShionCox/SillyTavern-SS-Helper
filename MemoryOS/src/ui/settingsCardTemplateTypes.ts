@@ -26,10 +26,7 @@ export interface MemoryOSSettingsIds {
     tabMainId: string;
     tabAiId: string;
     tabDbId: string;
-    tabTuningId: string;
     tabAboutId: string;
-    tabTemplateId: string;
-    tabAuditId: string;
     panelRoleId: string;
     panelRecentId: string;
     panelRelationId: string;
@@ -38,11 +35,7 @@ export interface MemoryOSSettingsIds {
     panelMainId: string;
     panelAiId: string;
     panelDbId: string;
-    panelTuningId: string;
     panelAboutId: string;
-    panelTemplateId: string;
-    panelAuditId: string;
-    panelMutationHistoryId: string;
     roleOverviewMetaId: string;
     rolePersonaBadgesId: string;
     rolePrimaryFactsId: string;
@@ -72,27 +65,19 @@ export interface MemoryOSSettingsIds {
     taskSurfaceDisableComposerId: string;
     taskSurfaceBlockingDefaultId: string;
     taskSurfaceAutoCloseSecondsId: string;
-    taskSurfaceSummarizeModeId: string;
-    taskSurfaceExtractModeId: string;
-    taskSurfaceTemplateBuildModeId: string;
-    taskSurfaceVectorEmbedModeId: string;
-    taskSurfaceSearchRerankModeId: string;
-    // 模板面板
     templateListId: string;
     templateRefreshBtnId: string;
     templateForceRebuildBtnId: string;
     templateActiveSelectId: string;
     templateSetActiveBtnId: string;
     templateLockId: string;
-
-    // Settings Controls
     enabledId: string;
     aiModeEnabledId: string;
-    aiModeStatusLightId: string; // [P0-4] 连接灯状态指标
+    aiModeStatusLightId: string;
     autoCompactionId: string;
-    compactionThresholdId: string;
     dbCompactionDividerId: string;
     contextMaxTokensId: string;
+    injectionPreviewEnabledId: string;
     recordFilterEnabledId: string;
     recordFilterSectionId: string;
     recordFilterDetailWrapId: string;
@@ -115,30 +100,22 @@ export interface MemoryOSSettingsIds {
     recordFilterPreviewInputId: string;
     recordFilterPreviewBtnId: string;
     recordFilterPreviewOutputId: string;
-
-    // 网络自检及工具 (P2-3)
     testPingBtnId: string;
     testHelloBtnId: string;
-
-    // DB Actions
     dbCompactBtnId: string;
     dbExportBtnId: string;
     dbImportBtnId: string;
     dbClearBtnId: string;
     recordEditorBtnId: string;
-    // 审计面板
     auditListId: string;
     auditCreateSnapshotBtnId: string;
     auditRefreshBtnId: string;
     mutationHistoryListId: string;
     mutationHistoryRefreshBtnId: string;
-    // 世界书写回
     wiPreviewId: string;
     wiPreviewBtnId: string;
     wiWritebackBtnId: string;
     wiWriteSummaryBtnId: string;
-
-    // AI 诊断面板
     aiDiagOverviewId: string;
     aiDiagCapabilitiesId: string;
     aiDiagRecentTasksId: string;

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildLatestRecallExplanation } from '../src/core/recall-explanation';
 import { planRecall } from '../src/recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../src/recall/recall-ranker';
+import { computeExactEntityMatchScore, extractEntityFocusTerms } from '../src/recall/sources/shared';
 import {
     DEFAULT_ADAPTIVE_POLICY,
     type GroupMemoryState,
@@ -157,6 +158,19 @@ describe('phase3 recall mainline', (): void => {
         expect(fallbackPlan.viewpoint.activeActorKey).toBeNull();
     });
 
+    it('能从名词问句里提取实体词并识别标题精确命中', (): void => {
+        const entityTerms = extractEntityFocusTerms('乾清宫的设定是什么');
+        const entityScore = computeExactEntityMatchScore(
+            '乾清宫的设定是什么',
+            '乾清宫 · 概览',
+            '乾清宫在当前设定中的关键信息是：内廷正殿，女帝寝宫。',
+        );
+
+        expect(entityTerms).toContain('乾清宫');
+        expect(entityScore.score).toBeGreaterThan(0);
+        expect(entityScore.reasonCodes).toContain('entity_title_exact_match');
+    });
+
     it('roleplay can infer the current speaker as the primary actor', (): void => {
         const plan = createPlan(
             'roleplay',
@@ -227,6 +241,42 @@ describe('phase3 recall mainline', (): void => {
         expect(plan.viewpoint.mode).toBe('actor_bounded');
         expect(plan.viewpoint.activeActorKey).toBe('alice');
         expect(plan.viewpoint.focus.reasonCodes).toContain('focus:current_speaker');
+    });
+
+    it('实体词精确命中的候选会优先排在同类泛化候选前面', (): void => {
+        const plan = createPlan('setting_qa', 180);
+        const selected = runSelection([
+            createCandidate({
+                candidateId: 'rule-generic',
+                recordKey: 'rule-generic',
+                recordKind: 'state',
+                source: 'memory_card',
+                sectionHint: 'SUMMARY',
+                title: '世界规则',
+                rawText: '该设定中的硬规则是：皇宫分外朝与内廷；外朝听政，内廷为后宫居所。',
+                keywordScore: 0.1,
+                vectorScore: 0.92,
+                continuityScore: 0.72,
+                finalScore: 0.64,
+                reasonCodes: ['memory_card_hit'],
+            }),
+            createCandidate({
+                candidateId: 'rule-target',
+                recordKey: 'rule-target',
+                recordKind: 'state',
+                source: 'memory_card',
+                sectionHint: 'SUMMARY',
+                title: '乾清宫 · 概览',
+                rawText: '乾清宫在当前设定中的关键信息是：内廷正殿，女帝寝宫。',
+                keywordScore: 0.16,
+                vectorScore: 0.88,
+                continuityScore: 0.84,
+                finalScore: 0.68,
+                reasonCodes: ['memory_card_hit', 'entity_title_exact_match', 'entity_exact_match'],
+            }),
+        ], plan);
+
+        expect(selected[0]?.candidateId).toBe('rule-target');
     });
 
     it('roleplay uses actor salience to pick primary and secondary actors', (): void => {

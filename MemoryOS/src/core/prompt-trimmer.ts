@@ -1,4 +1,4 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type { WorldTemplate, TemplateTableDef } from '../template/types';
 import type { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from './chat-state-manager';
@@ -6,7 +6,6 @@ import type { FactsManager } from './facts-manager';
 import type { DBFact } from '../db/db';
 import { DEFAULT_PROMPT_TRIM_BUDGET, type PromptTrimBudget } from '../types';
 
-const logger = new Logger('PromptTrimmer');
 
 export interface SchemaContextResult {
     /** 构建来源 */

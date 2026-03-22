@@ -44,11 +44,14 @@ import {
   trimSummaryHistoryEvent as trimSummaryHistoryModuleEvent,
 } from "../events/summaryEvent";
 import {
+  buildAssistantFloorKeyEvent as buildAssistantFloorKeyModuleEvent,
   createTimeoutFailureRecordEvent as createTimeoutFailureRecordModuleEvent,
   createSyntheticTimeoutDiceResultEvent as createSyntheticTimeoutDiceResultModuleEvent,
   ensureRoundEventTimersSyncedEvent as ensureRoundEventTimersSyncedModuleEvent,
   formatRollRecordSummaryEvent as formatRollRecordSummaryModuleEvent,
   getLatestRollRecordForEvent as getLatestRollRecordForModuleEvent,
+  invalidatePendingRoundFloorEvent as invalidatePendingRoundFloorModuleEvent,
+  invalidateSummaryHistoryFloorEvent as invalidateSummaryHistoryFloorModuleEvent,
   mergeEventsIntoPendingRoundEvent as mergeEventsIntoPendingRoundModuleEvent,
   recordTimeoutFailureIfNeededEvent as recordTimeoutFailureIfNeededModuleEvent,
   resolveTriggeredOutcomeEvent as resolveTriggeredOutcomeModuleEvent,
@@ -152,6 +155,39 @@ export function mergeEventsIntoPendingRoundEvent(events: DiceEventSpecEvent[], a
     parseIsoDurationToMsEvent,
     applyTimeLimitPolicyMsEvent: applyTimeLimitPolicyMsModuleEvent,
     resolveEventTargetEvent: resolveEventTargetModuleEvent,
+    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+  });
+}
+
+/**
+ * 功能：从完整助手消息标识中提取稳定楼层键。
+ * @param assistantMsgId 完整助手消息标识。
+ * @returns 稳定楼层键；无法解析时返回 `null`。
+ */
+export function buildAssistantFloorKeyEvent(assistantMsgId: string): string | null {
+  return buildAssistantFloorKeyModuleEvent(assistantMsgId);
+}
+
+/**
+ * 功能：按楼层清除当前未归档轮次中的旧事件与旧骰子结果。
+ * @param assistantMsgId 当前楼层对应的助手消息标识。
+ * @returns 若实际清除了楼层状态则返回 `true`，否则返回 `false`。
+ */
+export function invalidatePendingRoundFloorEvent(assistantMsgId: string): boolean {
+  return invalidatePendingRoundFloorModuleEvent(assistantMsgId, {
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+  });
+}
+
+/**
+ * 功能：按楼层清除历史轮次中的旧事件与旧骰子结果。
+ * @param assistantMsgId 当前楼层对应的助手消息标识。
+ * @returns 若实际清除了历史楼层状态则返回 `true`，否则返回 `false`。
+ */
+export function invalidateSummaryHistoryFloorEvent(assistantMsgId: string): boolean {
+  return invalidateSummaryHistoryFloorModuleEvent(assistantMsgId, {
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
   });
 }

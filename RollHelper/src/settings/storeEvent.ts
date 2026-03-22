@@ -147,10 +147,10 @@ let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
 
 function traceStoreThemeEvent(message: string, payload?: unknown): void {
   if (payload === undefined) {
-    console.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`);
+    logger.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`);
     return;
   }
-  console.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`, payload);
+  logger.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`, payload);
 }
 
 /**

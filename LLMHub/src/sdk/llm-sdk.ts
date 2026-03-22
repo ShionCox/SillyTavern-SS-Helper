@@ -17,7 +17,7 @@ import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
 import { ConsumerRegistry } from '../registry/consumer-registry';
 import { buildSdkChatKeyEvent } from '../../../SDK/tavern';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type {
     LLMRunResult,
     LLMRunMeta,
@@ -37,7 +37,48 @@ import type {
 import type { ZodType } from 'zod';
 import type { ApiType } from '../schema/types';
 
-const logger = new Logger('LLMHub-LLMSDK');
+/**
+ * 功能：判断输入是否为普通对象，便于拼装 generation 用户消息。
+ * @param value 待判断的值。
+ * @returns 是否为普通对象。
+ */
+function isPlainGenerationInputRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * 功能：为 generation 请求构建用户消息，避免把 systemPrompt 再次重复写进 user 载荷。
+ * @param input 原始 generation 输入。
+ * @returns 适合放入 user 消息的文本。
+ */
+function buildGenerationUserContent(input: unknown): string {
+    if (typeof input === 'string') {
+        return input;
+    }
+    if (!isPlainGenerationInputRecord(input)) {
+        return JSON.stringify(input);
+    }
+    const {
+        systemPrompt: _systemPrompt,
+        temperature: _temperature,
+        ...rest
+    } = input;
+    if (
+        typeof rest.events === 'string'
+        && typeof rest.schemaContext === 'string'
+        && Object.keys(rest).length <= 2
+    ) {
+        return [
+            '事件窗口：',
+            rest.events,
+            '',
+            'Schema 上下文：',
+            rest.schemaContext,
+        ].join('\n');
+    }
+    return JSON.stringify(rest);
+}
+
 
 /**
  * LLMSDK 门面层
@@ -714,7 +755,7 @@ export class LLMSDKImpl {
                     },
                     {
                         role: 'user',
-                        content: typeof args.input === 'string' ? args.input : JSON.stringify(args.input),
+                        content: buildGenerationUserContent(args.input),
                     },
                 ],
             model: resolved.model,
@@ -1275,10 +1316,24 @@ export class LLMSDKImpl {
             };
         } catch (error) {
             this.budgetManager.recordFailure(consumer);
-            const message = (error as Error).message;
-            const reasonCode = inferReasonCode(message);
+            const providerError = error as Error & {
+                reasonCode?: string;
+                detail?: string;
+                providerRequest?: Record<string, unknown>;
+                providerResponse?: unknown;
+            };
+            const message = providerError.message;
+            const reasonCode = providerError.reasonCode || inferReasonCode(message);
             const retryable = reasonCode === 'timeout' || reasonCode === 'rate_limited' || reasonCode === 'network_error';
-            return { ok: false, error: message, retryable, reasonCode };
+            return {
+                ok: false,
+                error: message,
+                retryable,
+                reasonCode,
+                rawResponseText: providerError.detail,
+                providerRequest: providerError.providerRequest,
+                providerResponse: providerError.providerResponse,
+            };
         }
     }
 

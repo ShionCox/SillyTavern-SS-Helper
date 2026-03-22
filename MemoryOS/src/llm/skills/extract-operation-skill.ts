@@ -1,4 +1,4 @@
-import type { MemoryProcessingLevel, PostGenerationGateDecision } from '../../types';
+import type { MemoryProcessingLevel, PostGenerationGateDecision, SummaryExecutionTier } from '../../types';
 
 function resolveLorebookHint(lorebookMode: string, mode: 'short' | 'long' | 'normal'): string {
     if (lorebookMode === 'block') {
@@ -162,6 +162,58 @@ export function buildExtractPromptByScopeTaskPrompt(
         'facts 数组的每一项都必须是对象，且至少包含 type 与 value。可选字段包括 factKey、entity、path、confidence。',
         'patches 数组只允许 add、replace、remove，且尽量只表达必要差异。',
         '{ "ok": true, "proposal": { "facts": [...], "patches": [...] }, "confidence": 0.0~1.0 }',
+    ].join('\n');
+}
+
+/**
+ * 功能：构建统一记忆摄取任务提示词，一次输出摘要、事实与补丁。
+ * @param lorebookMode 当前世界书裁剪模式。
+ * @param allowWorldFacts 是否允许抽取世界事实。
+ * @param postGate 生成后 gate 结果。
+ * @param summaryTier 摘要档位。
+ * @param scope 抽取处理档位。
+ * @param attachedSkillText 已渲染的记忆摘要保存技能文本。
+ * @returns 统一摄取提示词。
+ */
+export function buildUnifiedIngestTaskPrompt(
+    lorebookMode: string,
+    allowWorldFacts: boolean,
+    postGate: PostGenerationGateDecision,
+    summaryTier: SummaryExecutionTier,
+    scope: MemoryProcessingLevel,
+    attachedSkillText: string,
+): string {
+    const summaryHint = summaryTier === 'long'
+        ? '本轮允许输出阶段级长摘要，并可在单条摘要中附带少量高质量 memoryCards。'
+        : summaryTier === 'short'
+            ? '本轮只输出短摘要，聚焦最新窗口里的推进内容；如无必要，可少写 memoryCards。'
+            : '本轮不生成摘要，summaries 必须返回空数组。';
+    return [
+        attachedSkillText,
+        '你是统一记忆摄取助手，一次性完成 summaries、facts 与 patches 的提议生成。',
+        '输出必须是纯 JSON，不要输出 markdown、解释性正文或额外包裹文本。',
+        'proposal 下只允许包含 summaries、facts、patches 三组字段；不要使用顶层 memoryCards。',
+        '如果需要生成记忆卡草稿，只能挂在 summaries 数组元素的 memoryCards 字段下。',
+        'summaries 数组里的每一项都必须是对象，至少包含 level 和 content；可选字段只有 title、keywords、memoryCards、messageId、range、source。',
+        'facts 数组里的每一项都必须是对象，至少包含 type 和 value；可选字段包括 factKey、entity、path、confidence。',
+        'patches 数组里的每一项都必须是对象，至少包含 op 和 path；当 op 不是 remove 时，必须提供 value。',
+        `Lorebook gate mode: ${lorebookMode}.`,
+        `Post gate class: ${postGate.valueClass}.`,
+        `Persist long term: ${postGate.shouldPersistLongTerm}.`,
+        `Extract facts: ${postGate.shouldExtractFacts}.`,
+        `Extract relations: ${postGate.shouldExtractRelations}.`,
+        `Extract world state: ${postGate.shouldExtractWorldState}.`,
+        `Summary tier: ${summaryTier}.`,
+        `Processing scope: ${scope}.`,
+        resolveLorebookHint(lorebookMode, summaryTier === 'long' ? 'long' : 'short'),
+        resolveScopeHint(scope),
+        resolveWorldHint(allowWorldFacts, postGate),
+        resolveRelationHint(postGate, true),
+        summaryHint,
+        'summaries[].level 只能是 message、scene 或 arc；不要输出 short、medium、long、light、heavy、detailed 等任何其他值。',
+        '当 summaries 为空时，必须返回 []，不要为了凑数制造低价值摘要。',
+        '当 facts 与 patches 为空时，也必须返回 []，不要重复写入已有信息。',
+        '{ "ok": true, "proposal": { "summaries": [...], "facts": [...], "patches": [...] }, "confidence": 0.0~1.0 }',
     ].join('\n');
 }
 

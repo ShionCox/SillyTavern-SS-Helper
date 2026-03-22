@@ -29,6 +29,7 @@ import {
   applySettingsThemeSelectionEvent,
   syncThemeControlClassesByNodeEvent,
 } from "./uiThemeEvent";
+import { logger } from "../../index";
 import { syncSharedSelects } from "../../../_Components/sharedSelect";
 import {
   closeSharedDialog,
@@ -42,10 +43,10 @@ const LLMHUB_NAMESPACE_Event = "stx_llmhub";
 
 function traceRollHelperThemeInput(message: string, payload?: unknown): void {
   if (payload === undefined) {
-    console.info(`[SS-Helper][RollHelperThemeInput] ${message}`);
+    logger.info(`[SS-Helper][RollHelperThemeInput] ${message}`);
     return;
   }
-  console.info(`[SS-Helper][RollHelperThemeInput] ${message}`, payload);
+  logger.info(`[SS-Helper][RollHelperThemeInput] ${message}`, payload);
 }
 
 export {

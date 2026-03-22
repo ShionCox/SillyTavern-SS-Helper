@@ -138,7 +138,7 @@ describe('任务显示运行时', () => {
     it('会基于引用计数锁定和恢复发送区，即使没有 DOM 也不会报错', () => {
         flushTaskPresentationSurface();
         while (unlockComposer() > 0) {
-            // 清空可能残留的锁定计数
+            // 清空可能残留的锁定计数。
         }
 
         const requestId = enqueueTaskPresentation({
@@ -172,19 +172,11 @@ describe('任务显示设置', () => {
             blockingDefaultMode: 'toast_background',
             showBackgroundToast: false,
             toastAutoCloseSeconds: 999,
-            presets: {
-                'memory.summarize': {
-                    taskId: 'memory.summarize',
-                    label: '摘要',
-                    surfaceMode: 'unknown-mode',
-                },
-            },
         });
 
         expect(settings.blockingDefaultMode).toBe('fullscreen_blocking');
         expect(settings.showBackgroundToast).toBe(false);
         expect(settings.toastAutoCloseSeconds).toBe(30);
-        expect(settings.presets['memory.summarize'].surfaceMode).toBe('toast_background');
-        expect(settings.presets['world.template.build'].surfaceMode).toBe('fullscreen_blocking');
+        expect(settings.disableComposerDuringBlocking).toBe(true);
     });
 });

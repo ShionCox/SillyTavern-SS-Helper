@@ -150,6 +150,134 @@ export function extractKeywords(query: string): string[] {
     ).slice(0, 12);
 }
 
+const ENTITY_QUERY_STOPWORDS: Set<string> = new Set<string>([
+    '什么',
+    '是什么',
+    '设定',
+    '定义',
+    '含义',
+    '背景',
+    '来历',
+    '用途',
+    '作用',
+    '位置',
+    '地点',
+    '概况',
+    '信息',
+    '介绍',
+    '一下',
+    '说明',
+    '请问',
+    '告诉我',
+    '关于',
+    '哪里',
+    '在哪',
+    '在哪儿',
+]);
+
+/**
+ * 功能：清理实体问句中包裹目标词的常见虚词与问句尾巴。
+ * @param value 原始片段。
+ * @returns 清理后的实体候选文本。
+ */
+function trimEntityFocusTerm(value: string): string {
+    return normalizeText(value)
+        .toLowerCase()
+        .replace(/^[“"'《【\[(]+/, '')
+        .replace(/[”"'》】\])]+$/g, '')
+        .replace(/^(请问|告诉我|我想知道|想知道|关于|介绍一下|介绍|说明一下|说明)+/g, '')
+        .replace(/(的)?(设定|定义|含义|背景|来历|用途|作用|位置|地点|概况|信息|情况)$/g, '')
+        .replace(/(是什么|是啥|在哪里|在哪儿|在哪|位于哪里|有什么|叫什么|怎么样|呢|呀|啊|吧)+$/g, '')
+        .replace(/^[的是关于]+/g, '')
+        .replace(/[的是呢呀啊吧]+$/g, '')
+        .trim();
+}
+
+/**
+ * 功能：从名词问句里提取更适合做精确匹配的实体词。
+ * @param query 用户查询。
+ * @returns 实体词列表。
+ */
+export function extractEntityFocusTerms(query: string): string[] {
+    const normalizedQuery = normalizeText(query).toLowerCase();
+    if (!normalizedQuery) {
+        return [];
+    }
+    const candidates = new Set<string>();
+    const pushTerm = (value: string): void => {
+        const trimmedValue = trimEntityFocusTerm(value);
+        if (!trimmedValue || trimmedValue.length < 2 || ENTITY_QUERY_STOPWORDS.has(trimmedValue)) {
+            return;
+        }
+        candidates.add(trimmedValue);
+    };
+
+    pushTerm(normalizedQuery);
+
+    const patterns: RegExp[] = [
+        /^什么是(.+)$/,
+        /^(.+?)是什么(?:地方|东西|意思|设定|规则|情况)?$/,
+        /^(.+?)的?(?:设定|定义|含义|背景|来历|用途|作用|位置|地点|概况|信息|情况)是什么$/,
+        /^介绍(?:一下)?(.+)$/,
+        /^说明(?:一下)?(.+)$/,
+        /^关于(.+?)(?:的?(?:设定|定义|含义|背景|来历|用途|作用|位置|地点|概况|信息|情况))?$/,
+        /^(.+?)(?:在哪里|在哪儿|在哪|位于哪里)$/,
+    ];
+    patterns.forEach((pattern: RegExp): void => {
+        const matched = normalizedQuery.match(pattern);
+        if (!matched?.[1]) {
+            return;
+        }
+        pushTerm(matched[1]);
+    });
+
+    return Array.from(candidates)
+        .filter((value: string): boolean => value.length >= 2 && !ENTITY_QUERY_STOPWORDS.has(value))
+        .sort((left: string, right: string): number => right.length - left.length)
+        .slice(0, 6);
+}
+
+/**
+ * 功能：计算实体词在候选标题与正文中的精确命中加权。
+ * @param query 用户查询。
+ * @param title 候选标题。
+ * @param rawText 候选正文。
+ * @returns 命中加权结果。
+ */
+export function computeExactEntityMatchScore(
+    query: string,
+    title: string,
+    rawText: string,
+): {
+    score: number;
+    reasonCodes: string[];
+} {
+    const entityTerms = extractEntityFocusTerms(query);
+    if (entityTerms.length <= 0) {
+        return { score: 0, reasonCodes: [] };
+    }
+    const normalizedTitle = normalizeText(title).toLowerCase();
+    const normalizedRawText = normalizeText(rawText).toLowerCase();
+    const titleHitCount = entityTerms.filter((term: string): boolean => normalizedTitle.includes(term)).length;
+    const bodyHitCount = entityTerms.filter((term: string): boolean => normalizedRawText.includes(term)).length;
+    if (titleHitCount <= 0 && bodyHitCount <= 0) {
+        return { score: 0, reasonCodes: [] };
+    }
+    const titleHitScore = titleHitCount > 0 ? (titleHitCount / entityTerms.length) * 0.22 : 0;
+    const bodyHitScore = bodyHitCount > 0 ? (bodyHitCount / entityTerms.length) * 0.14 : 0;
+    const reasonCodes: string[] = [];
+    if (titleHitCount > 0) {
+        reasonCodes.push('entity_title_exact_match');
+    }
+    if (bodyHitCount > 0) {
+        reasonCodes.push('entity_exact_match');
+    }
+    return {
+        score: clamp01(titleHitScore + bodyHitScore),
+        reasonCodes,
+    };
+}
+
 export function countKeywordHit(text: string, keywords: string[]): number {
     if (keywords.length <= 0) {
         return 0;
@@ -689,6 +817,7 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         return null;
     }
     const keywords = extractKeywords(context.query);
+    const entityMatch = computeExactEntityMatchScore(context.query, String(params.title ?? ''), rawText);
     const normalizedText = rawText.toLowerCase();
     const lifecycle = readLifecycle(context, params.recordKey);
     const visibility = classifyCandidateVisibility(context, {
@@ -707,7 +836,10 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
     const updatedAt = Number(params.updatedAt ?? 0) || Date.now();
     const recencyScore = clamp01(1 - ((Date.now() - updatedAt) / recencyWindowMs));
     const keywordScore = keywords.length > 0 ? countKeywordHit(normalizedText, keywords) / Math.max(1, keywords.length) : 0;
-    const continuityScore = Number(params.continuityScore ?? (normalizeText(context.query) && normalizedText.includes(normalizeText(context.query).toLowerCase()) ? 1 : keywordScore > 0 ? 0.72 : 0.3)) || 0;
+    const continuityScore = Math.max(
+        Number(params.continuityScore ?? (normalizeText(context.query) && normalizedText.includes(normalizeText(context.query).toLowerCase()) ? 1 : keywordScore > 0 ? 0.72 : 0.3)) || 0,
+        entityMatch.score > 0 ? 0.7 + entityMatch.score * 0.25 : 0,
+    );
     const privacyPenalty = Number(params.privacyPenalty ?? (/秘密|隐私|private|secret/.test(rawText) ? 1 : 0)) || 0;
     const conflictPenalty = Number(params.conflictPenalty ?? (lifecycle?.stage === 'distorted' ? 0.5 : 0)) || 0;
     const vectorScore = Number(params.vectorScore ?? 0) || 0;
@@ -754,6 +886,10 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
     const tone = visibility.actorForgotten || actorForgetProbability >= 0.75
         ? 'possible_misremember'
         : result.tone;
+    const boostedFinalScore = clamp01(
+        (visibility.visibilityPool === 'blocked' ? Math.max(0, result.score * 0.12) : result.score)
+        + entityMatch.score,
+    );
     return {
         candidateId: params.candidateId,
         recordKey: params.recordKey,
@@ -781,10 +917,10 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         actorForgetProbability,
         actorForgotten: visibility.actorForgotten === true,
         actorRetentionBias: visibility.actorRetentionBias,
-        finalScore: visibility.visibilityPool === 'blocked' ? Math.max(0, result.score * 0.12) : result.score,
+        finalScore: boostedFinalScore,
         tone,
         selected: false,
-        reasonCodes: Array.from(new Set([...(params.extraReasonCodes ?? []), ...stageReason, ...visibilityReasonCodes, ...result.reasonCodes, `source:${params.source}`])),
+        reasonCodes: Array.from(new Set([...(params.extraReasonCodes ?? []), ...stageReason, ...visibilityReasonCodes, ...entityMatch.reasonCodes, ...result.reasonCodes, `source:${params.source}`])),
     };
 }
 

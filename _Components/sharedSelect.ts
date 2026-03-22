@@ -47,6 +47,13 @@ let SHARED_SELECT_GLOBAL_EVENTS_BOUND = false;
 let SHARED_SELECT_REPOSITION_FRAME = 0;
 let SHARED_SELECT_THEME_FRAME = 0;
 let SHARED_SELECT_OPEN_OBSERVER: MutationObserver | null = null;
+const SHARED_SELECT_DETACHED_STYLE_VARS: readonly string[] = [
+  "--stx-shared-select-control-height",
+  "--stx-shared-select-item-height",
+  "--stx-shared-select-media-size",
+  "--stx-shared-select-panel-bg",
+  "--stx-shared-select-panel-backdrop-filter",
+] as const;
 
 function traceSharedSelect(message: string, payload?: unknown): void {
   if (payload === undefined) {
@@ -327,20 +334,13 @@ export function buildSharedSelectStyles(scopeSelector: string): string {
  */
 function resolveSharedSelectList(
   root: HTMLElement,
-  listId: string,
+  _listId: string,
   inlineList: HTMLElement | null,
 ): HTMLElement | null {
   if (OPEN_SHARED_SELECT_REFS?.root === root) {
     return OPEN_SHARED_SELECT_REFS.list;
   }
-  if (inlineList && (!listId || inlineList.id === listId)) {
-    return inlineList;
-  }
-  if (!listId) {
-    return inlineList;
-  }
-  const controlledList = document.getElementById(listId);
-  return controlledList instanceof HTMLElement ? controlledList : inlineList;
+  return inlineList;
 }
 
 /**
@@ -522,6 +522,24 @@ function ensureSharedSelectListHost(refs: SharedSelectRefs): void {
 function syncSharedSelectDetachedThemeVars(refs: SharedSelectRefs): void {
   if (refs.list.dataset.sharedSelectDetached !== "true") return;
   mountThemeHost(refs.list);
+  syncSharedSelectDetachedStyleVars(refs);
+}
+
+/**
+ * 功能：同步共享下拉在脱离原作用域挂载后仍然依赖的尺寸与面板变量。
+ * @param refs 共享下拉运行时节点引用。
+ * @returns 无返回值。
+ */
+function syncSharedSelectDetachedStyleVars(refs: SharedSelectRefs): void {
+  const rootStyle: CSSStyleDeclaration = window.getComputedStyle(refs.root);
+  SHARED_SELECT_DETACHED_STYLE_VARS.forEach((propertyName: string): void => {
+    const propertyValue: string = rootStyle.getPropertyValue(propertyName).trim();
+    if (propertyValue) {
+      refs.list.style.setProperty(propertyName, propertyValue);
+      return;
+    }
+    refs.list.style.removeProperty(propertyName);
+  });
 }
 
 /**
@@ -531,6 +549,7 @@ function syncSharedSelectDetachedThemeVars(refs: SharedSelectRefs): void {
  */
 function positionSharedSelectList(refs: SharedSelectRefs): void {
   ensureSharedSelectListHost(refs);
+  syncSharedSelectDetachedThemeVars(refs);
   const triggerRect = refs.trigger.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;

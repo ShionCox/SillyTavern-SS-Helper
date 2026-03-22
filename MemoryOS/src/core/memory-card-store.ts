@@ -6,6 +6,15 @@ import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
 import { VectorManager } from '../vector/vector-manager';
 import type { ChatSemanticSeed } from '../types';
 
+interface MemoryCardVectorBatchState {
+    depth: number;
+    deleteCardIds: Set<string>;
+    upsertCards: Map<string, DBMemoryCard>;
+    flushPromise: Promise<void> | null;
+}
+
+const MEMORY_CARD_VECTOR_BATCHES: Map<string, MemoryCardVectorBatchState> = new Map<string, MemoryCardVectorBatchState>();
+
 /**
  * 功能：将任意值规整为紧凑文本。
  * @param value 原始值。
@@ -233,6 +242,134 @@ const SEMANTIC_SEED_SOURCE_RECORD_KEY = 'semantic_seed:active';
 const SEMANTIC_SEED_SOURCE_RECORD_KIND = 'semantic_seed';
 
 /**
+ * 功能：在当前聊天下开启记忆卡向量批处理上下文，统一合并同一轮内的向量写入与删除。
+ * @param chatKey 聊天键。
+ * @param task 需要在批处理中执行的任务。
+ * @returns 任务执行结果。
+ */
+export async function runWithMemoryCardVectorBatch<T>(chatKey: string, task: () => Promise<T>): Promise<T> {
+    const batchState = getMemoryCardVectorBatchState(chatKey);
+    batchState.depth += 1;
+    try {
+        return await task();
+    } finally {
+        batchState.depth = Math.max(0, batchState.depth - 1);
+        if (batchState.depth === 0) {
+            await flushMemoryCardVectorBatch(chatKey);
+        }
+    }
+}
+
+/**
+ * 功能：获取当前聊天的记忆卡向量批处理状态，不存在时自动创建。
+ * @param chatKey 聊天键。
+ * @returns 批处理状态对象。
+ */
+function getMemoryCardVectorBatchState(chatKey: string): MemoryCardVectorBatchState {
+    const normalizedChatKey = normalizeText(chatKey);
+    const existing = MEMORY_CARD_VECTOR_BATCHES.get(normalizedChatKey);
+    if (existing) {
+        return existing;
+    }
+    const nextState: MemoryCardVectorBatchState = {
+        depth: 0,
+        deleteCardIds: new Set<string>(),
+        upsertCards: new Map<string, DBMemoryCard>(),
+        flushPromise: null,
+    };
+    MEMORY_CARD_VECTOR_BATCHES.set(normalizedChatKey, nextState);
+    return nextState;
+}
+
+/**
+ * 功能：登记本轮记忆卡向量同步变更，支持删除与新增合并。
+ * @param chatKey 聊天键。
+ * @param deletedCardIds 需要删除向量的卡片编号列表。
+ * @param activeCards 需要写入向量的活动卡片列表。
+ * @returns 无返回值。
+ */
+function queueMemoryCardVectorSync(chatKey: string, deletedCardIds: string[], activeCards: DBMemoryCard[]): void {
+    const batchState = getMemoryCardVectorBatchState(chatKey);
+    deletedCardIds
+        .map((item: string): string => normalizeText(item))
+        .filter(Boolean)
+        .forEach((cardId: string): void => {
+            if (!batchState.upsertCards.has(cardId)) {
+                batchState.deleteCardIds.add(cardId);
+            }
+        });
+    activeCards.forEach((card: DBMemoryCard): void => {
+        const cardId = normalizeText(card.cardId);
+        if (!cardId) {
+            return;
+        }
+        batchState.deleteCardIds.delete(cardId);
+        batchState.upsertCards.set(cardId, card);
+    });
+}
+
+/**
+ * 功能：在未处于批处理上下文时立刻落盘当前队列；若仍在批处理中则延后到上下文结束。
+ * @param chatKey 聊天键。
+ * @returns 无返回值。
+ */
+async function flushMemoryCardVectorBatchIfReady(chatKey: string): Promise<void> {
+    const batchState = MEMORY_CARD_VECTOR_BATCHES.get(normalizeText(chatKey));
+    if (!batchState) {
+        return;
+    }
+    if (batchState.depth > 0) {
+        return;
+    }
+    await flushMemoryCardVectorBatch(chatKey);
+}
+
+/**
+ * 功能：把当前聊天批处理中累计的记忆卡向量变更一次性落盘。
+ * @param chatKey 聊天键。
+ * @returns 无返回值。
+ */
+async function flushMemoryCardVectorBatch(chatKey: string): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    const batchState = MEMORY_CARD_VECTOR_BATCHES.get(normalizedChatKey);
+    if (!batchState) {
+        return;
+    }
+    if (batchState.flushPromise) {
+        await batchState.flushPromise;
+        return;
+    }
+
+    const deletedCardIds = Array.from(batchState.deleteCardIds.values());
+    const activeCards = Array.from(batchState.upsertCards.values());
+    if (deletedCardIds.length <= 0 && activeCards.length <= 0) {
+        if (batchState.depth <= 0) {
+            MEMORY_CARD_VECTOR_BATCHES.delete(normalizedChatKey);
+        }
+        return;
+    }
+
+    batchState.deleteCardIds.clear();
+    batchState.upsertCards.clear();
+    batchState.flushPromise = (async (): Promise<void> => {
+        const vectorManager = new VectorManager(normalizedChatKey);
+        if (deletedCardIds.length > 0) {
+            await vectorManager.deleteMemoryCardEmbeddings(deletedCardIds);
+        }
+        if (activeCards.length > 0) {
+            await vectorManager.upsertMemoryCardEmbeddings(activeCards);
+        }
+    })().finally((): void => {
+        batchState.flushPromise = null;
+        if (batchState.depth <= 0 && batchState.deleteCardIds.size <= 0 && batchState.upsertCards.size <= 0) {
+            MEMORY_CARD_VECTOR_BATCHES.delete(normalizedChatKey);
+        }
+    });
+
+    await batchState.flushPromise;
+}
+
+/**
  * 功能：执行记忆卡主线存储。
  * @param chatKey 聊天键。
  * @param drafts 草稿卡列表。
@@ -260,7 +397,7 @@ async function persistMemoryCards(
     const [existingActiveCards, existingSourceCards] = await Promise.all([
         db.memory_cards.where('[chatKey+status]').equals([chatKey, 'active']).toArray(),
         fallbackSourceRecordKey
-            ? db.memory_cards.where('sourceRecordKey').equals(fallbackSourceRecordKey).toArray()
+            ? db.memory_cards.where('[chatKey+sourceRecordKey]').equals([chatKey, fallbackSourceRecordKey]).toArray()
             : Promise.resolve([] as DBMemoryCard[]),
     ]);
     const existingByDeterministicKey = new Map<string, DBMemoryCard>();
@@ -387,13 +524,8 @@ export async function saveMemoryCardsFromSummaryEnvelope(
         summary.summaryId,
         'summary',
     );
-    const vectorManager = new VectorManager(chatKey);
-    if (result.supersededCardIds.length > 0) {
-        await vectorManager.deleteMemoryCardEmbeddings(result.supersededCardIds);
-    }
-    if (result.activeCards.length > 0) {
-        await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
-    }
+    queueMemoryCardVectorSync(chatKey, result.supersededCardIds, result.activeCards);
+    await flushMemoryCardVectorBatchIfReady(chatKey);
     return [...result.reusedCards, ...result.activeCards].map(toSdkCard);
 }
 
@@ -426,13 +558,8 @@ export async function saveMemoryCardsFromEnvelope(
         sourceRecordKey,
         sourceRecordKind,
     );
-    const vectorManager = new VectorManager(chatKey);
-    if (result.supersededCardIds.length > 0) {
-        await vectorManager.deleteMemoryCardEmbeddings(result.supersededCardIds);
-    }
-    if (result.activeCards.length > 0) {
-        await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
-    }
+    queueMemoryCardVectorSync(chatKey, result.supersededCardIds, result.activeCards);
+    await flushMemoryCardVectorBatchIfReady(chatKey);
     return [...result.reusedCards, ...result.activeCards].map(toSdkCard);
 }
 
@@ -445,13 +572,8 @@ export async function saveMemoryCardsFromEnvelope(
 export async function saveMemoryCardsFromFactRecord(chatKey: string, fact: DBFact): Promise<MemoryCard[]> {
     const drafts = buildMemoryCardDraftsFromFact(fact);
     const result = await persistMemoryCards(chatKey, drafts, fact.factKey, 'fact');
-    const vectorManager = new VectorManager(chatKey);
-    if (result.supersededCardIds.length > 0) {
-        await vectorManager.deleteMemoryCardEmbeddings(result.supersededCardIds);
-    }
-    if (result.activeCards.length > 0) {
-        await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
-    }
+    queueMemoryCardVectorSync(chatKey, result.supersededCardIds, result.activeCards);
+    await flushMemoryCardVectorBatchIfReady(chatKey);
     return [...result.reusedCards, ...result.activeCards].map(toSdkCard);
 }
 
@@ -482,14 +604,9 @@ export async function saveMemoryCardsFromSemanticSeed(
     const keptCards = [...result.reusedCards, ...result.activeCards];
     const keptCardIds = new Set<string>(keptCards.map((item: DBMemoryCard): string => normalizeText(item.cardId)).filter(Boolean));
     const staleCardIds = await deleteStaleSemanticSeedCards(chatKey, keptCardIds);
-    const vectorManager = new VectorManager(chatKey);
     const deletedEmbeddingIds = Array.from(new Set([...result.supersededCardIds, ...staleCardIds]));
-    if (deletedEmbeddingIds.length > 0) {
-        await vectorManager.deleteMemoryCardEmbeddings(deletedEmbeddingIds);
-    }
-    if (result.activeCards.length > 0) {
-        await vectorManager.upsertMemoryCardEmbeddings(result.activeCards);
-    }
+    queueMemoryCardVectorSync(chatKey, deletedEmbeddingIds, result.activeCards);
+    await flushMemoryCardVectorBatchIfReady(chatKey);
     return keptCards.map(toSdkCard);
 }
 
@@ -536,8 +653,10 @@ export async function deleteMemoryCardsBySource(chatKey: string, recordKey: stri
     if (!normalizedRecordKey) {
         return [];
     }
-    const cards = await db.memory_cards.where('sourceRecordKey').equals(normalizedRecordKey).toArray();
-    const targetCards = cards.filter((card: DBMemoryCard): boolean => normalizeText(card.chatKey) === normalizeText(chatKey));
+    const targetCards = await db.memory_cards
+        .where('[chatKey+sourceRecordKey]')
+        .equals([chatKey, normalizedRecordKey])
+        .toArray();
     if (targetCards.length <= 0) {
         return [];
     }

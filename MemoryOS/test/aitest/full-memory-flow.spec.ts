@@ -239,12 +239,16 @@ describe('memory full flow', (): void => {
             semanticSeed: ChatSemanticSeed | null;
             coldStartFingerprint: string | null;
             coldStartStage: ColdStartStage | null;
+            bootstrapState: 'bootstrapping' | 'ready' | 'failed';
+            bootstrapRequestId: string | null;
             selectedLorebooks: ColdStartLorebookSelection;
             skipped: boolean;
         } = {
             semanticSeed: null,
             coldStartFingerprint: null,
             coldStartStage: null,
+            bootstrapState: 'bootstrapping',
+            bootstrapRequestId: 'bootstrap-001',
             selectedLorebooks: { books: [], entries: [] },
             skipped: false,
         };
@@ -265,18 +269,21 @@ describe('memory full flow', (): void => {
         const fakeThis = {
             chatKey_: 'chat-full-001',
             chatStateManager: {
+                reload: vi.fn(async () => {
+                    callOrder.push('reload');
+                }),
+                getColdStartBootstrapStatus: vi.fn(async () => ({
+                    state: persistedState.bootstrapState,
+                    requestId: persistedState.bootstrapRequestId,
+                    updatedAt: Date.now(),
+                    error: null,
+                    fingerprint: persistedState.coldStartFingerprint,
+                    stage: persistedState.coldStartStage,
+                })),
                 getSemanticSeed: vi.fn(async () => persistedState.semanticSeed),
                 getColdStartFingerprint: vi.fn(async () => persistedState.coldStartFingerprint),
                 getColdStartLorebookSelection: vi.fn(async () => persistedState.selectedLorebooks),
                 isColdStartLorebookSelectionSkipped: vi.fn(async () => persistedState.skipped),
-                setColdStartLorebookSelection: vi.fn(async (selection: ColdStartLorebookSelection) => {
-                    callOrder.push('set-selection');
-                    cacheState.selectedLorebooks = selection;
-                }),
-                setColdStartLorebookSelectionSkipped: vi.fn(async (skipped: boolean) => {
-                    callOrder.push('set-skipped');
-                    cacheState.skipped = skipped;
-                }),
                 setCharacterBindingFingerprint: vi.fn(async () => {
                     callOrder.push('set-binding');
                 }),
@@ -291,6 +298,16 @@ describe('memory full flow', (): void => {
                     if (cacheState.coldStartFingerprint === fingerprint) {
                         cacheState.coldStartStage = stage;
                     }
+                }),
+                completeColdStartBootstrap: vi.fn(async (requestId: string, fingerprint: string) => {
+                    callOrder.push(`complete-bootstrap:${requestId}`);
+                    persistedState.bootstrapState = 'ready';
+                    persistedState.bootstrapRequestId = requestId;
+                    persistedState.coldStartFingerprint = fingerprint;
+                }),
+                failColdStartBootstrap: vi.fn(async (requestId: string | null, reason: string) => {
+                    callOrder.push(`fail-bootstrap:${requestId ?? 'null'}:${reason}`);
+                    persistedState.bootstrapState = 'failed';
                 }),
                 flush: vi.fn(async () => {
                     callOrder.push('flush');
@@ -321,13 +338,13 @@ describe('memory full flow', (): void => {
         expect(persistedState.semanticSeed?.aiSummary?.worldSummary).toContain('黑塔');
         expect(persistedState.coldStartStage).toBe('prompt_primed');
         expect(callOrder).toEqual([
-            'set-selection',
-            'flush',
+            'reload',
             'set-binding',
-            'save-seed',
             'persist:bootstrap_init',
             'seed-cards:bootstrap_init',
+            'save-seed',
             'mark-stage:prompt_primed',
+            'complete-bootstrap:bootstrap-001',
             'flush',
         ]);
 

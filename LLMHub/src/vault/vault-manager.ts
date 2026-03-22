@@ -7,9 +7,8 @@
  */
 import Dexie from 'dexie';
 import { db, type DBLlmCredential } from '../../../SDK/db';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 
-const logger = new Logger('LLMHub-Vault');
 const MIGRATION_FLAG_KEY = 'stx_llm_vault_migrated_to_ss_helper_db';
 
 export class VaultManager {

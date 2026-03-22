@@ -1,4 +1,4 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { ChatStateManager } from './chat-state-manager';
 import type {
     AssistantTurnTracker,
@@ -7,7 +7,6 @@ import type {
     TurnRecord,
 } from '../types';
 
-const logger = new Logger('TurnTracker');
 
 interface ExtractionTriggerInput {
     lastExtractAssistantTurnCount: number;

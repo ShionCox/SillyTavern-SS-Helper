@@ -233,6 +233,7 @@ function matchesSummaryCompareKey(summary: DBSummary, compareKey: string): boole
         title: summary.title,
         content: summary.content,
         keywords: summary.keywords,
+        range: summary.range,
     }).compareKey === compareKey;
 }
 
@@ -378,6 +379,7 @@ function planSummaryMutation(
         title: item.title,
         content: item.content,
         keywords: item.keywords,
+        range: item.range,
     }).contentSignature === normalized.contentSignature) ?? null;
     const target = exactMatch ?? matches[0] ?? null;
     let action: MemoryMutationAction = 'ADD';

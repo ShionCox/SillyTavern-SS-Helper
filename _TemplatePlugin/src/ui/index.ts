@@ -3,6 +3,7 @@ import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
 import type { TemplateSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
+import { logger } from '../index';
 
 // UI 组件的唯一命名空间
 const NAMESPACE = 'stx-template';
@@ -108,7 +109,7 @@ export async function renderTemplateSettings() {
         // 3. 绑定内部交互逻辑
         bindUiEvents();
     } catch (error) {
-        console.error(`[TemplatePlugin] UI 渲染失败:`, error);
+        logger.error(`[TemplatePlugin] UI 渲染失败:`, error);
     }
 }
 

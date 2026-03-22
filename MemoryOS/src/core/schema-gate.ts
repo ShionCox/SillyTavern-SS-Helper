@@ -1,10 +1,9 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import type { SchemaChangeProposal } from '../proposal/types';
 import type { WorldTemplate, TemplateTableDef } from '../template/types';
 import type { ChatStateManager } from './chat-state-manager';
 import { BASE_TABLE_KEYS, DEFAULT_AUTO_SCHEMA_POLICY } from '../types';
 
-const logger = new Logger('SchemaGate');
 
 export interface SchemaGateResult {
     passed: boolean;

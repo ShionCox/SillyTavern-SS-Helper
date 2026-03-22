@@ -243,6 +243,8 @@ const EDITOR_IDS = {
     summaryFocusEmotionId: 'stx-memoryos-chat-ops-summary-focus-emotion',
     summaryFocusToolResultId: 'stx-memoryos-chat-ops-summary-focus-tool-result',
     summaryAutoEnabledId: 'stx-memoryos-chat-ops-summary-auto-enabled',
+    summaryAutoManualThresholdEnabledId: 'stx-memoryos-chat-ops-summary-auto-manual-threshold-enabled',
+    summaryAutoManualThresholdId: 'stx-memoryos-chat-ops-summary-auto-manual-threshold',
     summaryAutoRoleplayThresholdId: 'stx-memoryos-chat-ops-summary-auto-roleplay-threshold',
     summaryAutoChatThresholdId: 'stx-memoryos-chat-ops-summary-auto-chat-threshold',
     summaryAutoStoryThresholdId: 'stx-memoryos-chat-ops-summary-auto-story-threshold',
@@ -454,6 +456,8 @@ function collectSummarySettingsFromForm(overlay: HTMLElement): SummarySettings {
         },
         autoSummary: {
             enabled: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnabledId),
+            manualTurnThresholdEnabled: getCheckboxValue(overlay, EDITOR_IDS.summaryAutoManualThresholdEnabledId),
+            manualTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoManualThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.manualTurnThreshold),
             roleplayTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoRoleplayThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.roleplayTurnThreshold),
             chatTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoChatThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.chatTurnThreshold),
             storyTurnThreshold: getNumberValue(overlay, EDITOR_IDS.summaryAutoStoryThresholdId, DEFAULT_SUMMARY_SETTINGS.autoSummary.storyTurnThreshold),
@@ -558,6 +562,8 @@ function buildSummarySettingsOverrideDiff(base: SummarySettings, next: SummarySe
     }
     if (
         base.autoSummary.enabled !== next.autoSummary.enabled
+        || base.autoSummary.manualTurnThresholdEnabled !== next.autoSummary.manualTurnThresholdEnabled
+        || base.autoSummary.manualTurnThreshold !== next.autoSummary.manualTurnThreshold
         || base.autoSummary.roleplayTurnThreshold !== next.autoSummary.roleplayTurnThreshold
         || base.autoSummary.chatTurnThreshold !== next.autoSummary.chatTurnThreshold
         || base.autoSummary.storyTurnThreshold !== next.autoSummary.storyTurnThreshold
@@ -574,6 +580,12 @@ function buildSummarySettingsOverrideDiff(base: SummarySettings, next: SummarySe
         override.autoSummary = {};
         if (base.autoSummary.enabled !== next.autoSummary.enabled) {
             override.autoSummary.enabled = next.autoSummary.enabled;
+        }
+        if (base.autoSummary.manualTurnThresholdEnabled !== next.autoSummary.manualTurnThresholdEnabled) {
+            override.autoSummary.manualTurnThresholdEnabled = next.autoSummary.manualTurnThresholdEnabled;
+        }
+        if (base.autoSummary.manualTurnThreshold !== next.autoSummary.manualTurnThreshold) {
+            override.autoSummary.manualTurnThreshold = next.autoSummary.manualTurnThreshold;
         }
         if (base.autoSummary.roleplayTurnThreshold !== next.autoSummary.roleplayTurnThreshold) {
             override.autoSummary.roleplayTurnThreshold = next.autoSummary.roleplayTurnThreshold;
@@ -777,46 +789,85 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
       </div>
     `;
     const autoSummaryCards = `
-      <div class="stx-memory-chat-ops-toggle-wrap">
-        ${buildSummaryToggleMarkup(
-            EDITOR_IDS.summaryAutoEnabledId,
-            '启用自动长总结触发',
-            '只接管“是否允许进入长总结”，不改变抽取和短总结主线。',
-            settings.autoSummary.enabled,
-        )}
-      </div>
-      <div class="stx-memory-chat-ops-control-grid">
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoRoleplayThresholdId, '角色扮演阈值', '角色扮演聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoChatThresholdId, '日常聊天阈值', '日常聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoStoryThresholdId, '剧情聊天阈值', '剧情聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoMixedThresholdId, '混合聊天阈值', '混合聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
-      </div>
-      <div class="stx-memory-chat-ops-control-grid">
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoMinGapId, '最小间隔', '距离上次长总结不足该楼层时，直接阻止本轮长总结。', 'number', '0', '80', '1')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoCooldownTurnsId, '冷却楼层', '冷却期内仅记录信号，不重复触发长总结。', 'number', '0', '80', '1')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoTriggerScoreId, '触发词分数阈值', '触发词累计分达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoSemanticScoreId, '关键变化分数阈值', '关键变化分数达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
-        ${buildEditorInputField(EDITOR_IDS.summaryAutoPressureRatioId, '上下文压力阈值', '预压缩窗口长度 / 长总结预算达到该值后，视为命中。', 'number', '0', '1.2', '0.01')}
-      </div>
-      <div class="stx-memory-chat-ops-toggle-wrap">
-        ${buildSummaryToggleMarkup(
-            EDITOR_IDS.summaryAutoEnableTriggerRulesId,
-            '启用触发词规则',
-            '使用触发词规则（关键词/正则/权重）参与判定。',
-            settings.autoSummary.enableTriggerRules,
-        )}
-        ${buildSummaryToggleMarkup(
-            EDITOR_IDS.summaryAutoEnableSemanticId,
-            '启用关键变化',
-            '根据地点、时间、关系、世界状态、用户更正等变化参与判定。',
-            settings.autoSummary.enableSemanticChangeTrigger,
-        )}
-        ${buildSummaryToggleMarkup(
-            EDITOR_IDS.summaryAutoEnablePressureId,
-            '启用上下文压力',
-            '当窗口长度接近预算上限时，允许上下文压力信号参与判定。',
-            settings.autoSummary.enablePromptPressureTrigger,
-        )}
+      <div class="stx-memory-chat-ops-summary-auto-layout">
+        <section class="stx-memory-chat-ops-summary-auto-panel is-accent">
+          <div class="stx-memory-chat-ops-summary-auto-panel-head">
+            <span class="stx-memory-chat-ops-summary-auto-kicker">Primary Control</span>
+            <h5>统一入口</h5>
+            <p>先决定是否启用自动长总结，再决定是否改为手动统一楼层。</p>
+          </div>
+          <div class="stx-memory-chat-ops-toggle-wrap stx-memory-chat-ops-summary-auto-top">
+            ${buildSummaryToggleMarkup(
+                EDITOR_IDS.summaryAutoEnabledId,
+                '启用自动长总结触发',
+                '只接管“是否允许进入长总结”，不改变抽取和短总结主线。',
+                settings.autoSummary.enabled,
+            )}
+            ${buildSummaryToggleMarkup(
+                EDITOR_IDS.summaryAutoManualThresholdEnabledId,
+                '手动指定统一楼层',
+                '开启后，直接使用你手动输入的总结楼层，不再按聊天类型分开判断。',
+                settings.autoSummary.manualTurnThresholdEnabled,
+            )}
+          </div>
+          <div class="stx-memory-chat-ops-control-grid stx-memory-chat-ops-summary-auto-manual">
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoManualThresholdId, '手动楼层数', '开启手动统一楼层后，长总结将在达到该楼层时进入触发检查。', 'number', '1', '120', '1')}
+          </div>
+        </section>
+        <section class="stx-memory-chat-ops-summary-auto-panel">
+          <div class="stx-memory-chat-ops-summary-auto-panel-head">
+            <span class="stx-memory-chat-ops-summary-auto-kicker">Mode Thresholds</span>
+            <h5>模式阈值</h5>
+            <p>保留不同聊天类型的独立楼层节奏，适合继续用自动推断。</p>
+          </div>
+          <div class="stx-memory-chat-ops-control-grid stx-memory-chat-ops-summary-auto-threshold-grid">
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoRoleplayThresholdId, '角色扮演阈值', '角色扮演聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoChatThresholdId, '日常聊天阈值', '日常聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoStoryThresholdId, '剧情聊天阈值', '剧情聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoMixedThresholdId, '混合聊天阈值', '混合聊天达到该楼层后，才进入长总结触发检查。', 'number', '1', '120', '1')}
+          </div>
+        </section>
+        <section class="stx-memory-chat-ops-summary-auto-panel">
+          <div class="stx-memory-chat-ops-summary-auto-panel-head">
+            <span class="stx-memory-chat-ops-summary-auto-kicker">Signal Tuning</span>
+            <h5>信号阈值</h5>
+            <p>把冷却、间隔和命中分数拆开，参数更集中，也更容易扫一眼看懂。</p>
+          </div>
+          <div class="stx-memory-chat-ops-control-grid stx-memory-chat-ops-summary-auto-signal-grid">
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoMinGapId, '最小间隔', '距离上次长总结不足该楼层时，直接阻止本轮长总结。', 'number', '0', '80', '1')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoCooldownTurnsId, '冷却楼层', '冷却期内仅记录信号，不重复触发长总结。', 'number', '0', '80', '1')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoTriggerScoreId, '触发词分数阈值', '触发词累计分达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoSemanticScoreId, '关键变化分数阈值', '关键变化分数达到该值后，视为命中。', 'number', '0', '1.5', '0.01')}
+            ${buildEditorInputField(EDITOR_IDS.summaryAutoPressureRatioId, '上下文压力阈值', '预压缩窗口长度 / 长总结预算达到该值后，视为命中。', 'number', '0', '1.2', '0.01')}
+          </div>
+        </section>
+        <section class="stx-memory-chat-ops-summary-auto-panel is-muted">
+          <div class="stx-memory-chat-ops-summary-auto-panel-head">
+            <span class="stx-memory-chat-ops-summary-auto-kicker">Decision Signals</span>
+            <h5>判定来源</h5>
+            <p>决定自动总结到底参考哪些信号。</p>
+          </div>
+          <div class="stx-memory-chat-ops-toggle-wrap stx-memory-chat-ops-summary-auto-bottom">
+            ${buildSummaryToggleMarkup(
+                EDITOR_IDS.summaryAutoEnableTriggerRulesId,
+                '启用触发词规则',
+                '使用触发词规则（关键词/正则/权重）参与判定。',
+                settings.autoSummary.enableTriggerRules,
+            )}
+            ${buildSummaryToggleMarkup(
+                EDITOR_IDS.summaryAutoEnableSemanticId,
+                '启用关键变化',
+                '根据地点、时间、关系、世界状态、用户更正等变化参与判定。',
+                settings.autoSummary.enableSemanticChangeTrigger,
+            )}
+            ${buildSummaryToggleMarkup(
+                EDITOR_IDS.summaryAutoEnablePressureId,
+                '启用上下文压力',
+                '当窗口长度接近预算上限时，允许上下文压力信号参与判定。',
+                settings.autoSummary.enablePromptPressureTrigger,
+            )}
+          </div>
+        </section>
       </div>
     `;
     return `
@@ -856,7 +907,7 @@ function buildSummarySettingsMarkup(snapshot?: ChatStrategySnapshot | null): str
             ${triggerMarkup}
           </div>
         </div>
-        <div class="stx-memory-chat-ops-summary-section">
+        <div class="stx-memory-chat-ops-summary-section stx-memory-chat-ops-summary-section-auto">
           <div class="stx-memory-chat-ops-summary-section-head">
             <h4>自动总结触发器</h4>
             <p>把“楼层阈值触发”和“提前触发”分开配置，优先保证节奏稳定，再让关键变化提前触发长总结。</p>
@@ -913,6 +964,8 @@ function fillSummarySettingsForm(
         setCheckboxValue(overlay, buildSummaryTriggerControlId(rule.id), selectedTriggers.has(rule.id));
     });
     setCheckboxValue(overlay, EDITOR_IDS.summaryAutoEnabledId, summary.autoSummary.enabled);
+    setCheckboxValue(overlay, EDITOR_IDS.summaryAutoManualThresholdEnabledId, summary.autoSummary.manualTurnThresholdEnabled);
+    setInputValue(overlay, EDITOR_IDS.summaryAutoManualThresholdId, summary.autoSummary.manualTurnThreshold);
     setInputValue(overlay, EDITOR_IDS.summaryAutoRoleplayThresholdId, summary.autoSummary.roleplayTurnThreshold);
     setInputValue(overlay, EDITOR_IDS.summaryAutoChatThresholdId, summary.autoSummary.chatTurnThreshold);
     setInputValue(overlay, EDITOR_IDS.summaryAutoStoryThresholdId, summary.autoSummary.storyTurnThreshold);
@@ -944,6 +997,8 @@ function renderSummarySettingsSection(overlay: HTMLElement, snapshot: ChatStrate
     if (existingMount) {
         existingMount.innerHTML = buildSummarySettingsMarkup(snapshot);
         fillSummarySettingsForm(existingMount, snapshot.effectiveSummarySettings);
+        hydrateSharedSelects(existingMount);
+        refreshSharedSelectOptions(existingMount);
         hideLegacySummaryControls(overlay);
         return;
     }
@@ -956,6 +1011,8 @@ function renderSummarySettingsSection(overlay: HTMLElement, snapshot: ChatStrate
     const summaryMount: HTMLElement | null = summaryHost.querySelector(`#${EDITOR_IDS.summarySettingsMountId}`) as HTMLElement | null;
     if (summaryMount) {
         fillSummarySettingsForm(summaryMount, snapshot.effectiveSummarySettings);
+        hydrateSharedSelects(summaryMount);
+        refreshSharedSelectOptions(summaryMount);
     }
     hideLegacySummaryControls(overlay);
 }
@@ -1017,6 +1074,9 @@ function formatLongSummaryCooldownSummary(cooldown: LongSummaryCooldownState): s
  */
 function resolveAutoSummaryThreshold(snapshot: ChatStrategySnapshot, mode: AutoSummaryDecisionSnapshot['mode']): number {
     const settings = snapshot.effectiveSummarySettings.autoSummary;
+    if (settings.manualTurnThresholdEnabled) {
+        return settings.manualTurnThreshold;
+    }
     if (mode === 'roleplay') {
         return settings.roleplayTurnThreshold;
     }
@@ -1394,8 +1454,11 @@ function buildEditorMarkup(): string {
     });
     const applyButtonMarkup: string = buildSharedButton({
         id: EDITOR_IDS.applyBtnId,
-        label: '保存覆盖',
+        label: '保存当前聊天全部调整',
         iconClassName: 'fa-solid fa-floppy-disk',
+        attributes: {
+            'data-tip': '会同时保存当前聊天的画像、保留策略和 AI 记忆总结设置。',
+        },
     });
     return `
       <div class="stx-memory-chat-ops-editor">
@@ -1765,8 +1828,11 @@ function buildEditorMarkupV2(): string {
     });
     const applyButtonMarkup: string = buildSharedButton({
         id: EDITOR_IDS.applyBtnId,
-        label: '保存调整',
+        label: '保存当前聊天全部调整',
         iconClassName: 'fa-solid fa-floppy-disk',
+        attributes: {
+            'data-tip': '会同时保存当前聊天的画像、保留策略和 AI 记忆总结设置。',
+        },
     });
     return `
       <div class="stx-memory-chat-ops-editor">
@@ -3200,6 +3266,8 @@ async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string)
     } finally {
         await manager.destroy();
     }
+
+    await saveSummarySettingsForChat(overlay, chatKey, 'chat');
 }
 
 /**

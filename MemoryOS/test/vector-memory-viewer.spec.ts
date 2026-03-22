@@ -158,6 +158,7 @@ function createTestResult(): MemoryRecallPreviewResult {
     return {
         query: '测试',
         testedAt: Date.now(),
+        previewMode: 'effective_policy',
         rerankApplied: true,
         hitCount: 2,
         selectedCount: 1,
@@ -203,7 +204,24 @@ function createTestResult(): MemoryRecallPreviewResult {
                 reasonCodes: ['vector'],
             },
         ],
-        vectorGate: undefined,
+        policyGate: {
+            enabled: true,
+            reasonCodes: ['recall_need:mixed'],
+            lanes: ['event', 'identity'],
+            primaryNeed: 'mixed',
+            vectorMode: 'search_rerank',
+        },
+        vectorGate: {
+            enabled: true,
+            reasonCodes: ['recall_need:mixed'],
+            lanes: ['event', 'identity'],
+            primaryNeed: 'mixed',
+            vectorMode: 'search_rerank',
+        },
+        effectivePolicy: {
+            vectorEnabled: true,
+            vectorMode: 'search_rerank',
+        },
         cache: undefined,
         cheapRecall: null,
     };
@@ -250,5 +268,49 @@ describe('vectorMemoryViewer', (): void => {
         expect(items.map((item) => item.item.cardId)).toEqual(['card-b', 'card-a']);
         expect(items[0]?.testHit?.finalRank).toBe(1);
         expect(items[1]?.testHit?.rerankedRank).toBe(2);
+    });
+
+    it('在强制向量预演模式下仍按命中顺序返回结果', (): void => {
+        const snapshot = createSnapshot();
+        const testResult: MemoryRecallPreviewResult = {
+            ...createTestResult(),
+            previewMode: 'forced_vector',
+            policyGate: {
+                enabled: false,
+                reasonCodes: ['vector_disabled'],
+                lanes: [],
+                primaryNeed: 'rule_direct',
+                vectorMode: 'off',
+            },
+            vectorGate: {
+                enabled: true,
+                reasonCodes: ['forced_vector_preview', 'recall_need:rule_direct'],
+                lanes: ['identity'],
+                primaryNeed: 'rule_direct',
+                vectorMode: 'search_rerank',
+            },
+            effectivePolicy: {
+                vectorEnabled: false,
+                vectorMode: 'off',
+            },
+        };
+        const items = deriveVectorMemoryViewerItems(snapshot, {
+            keyword: '',
+            sourceKind: 'all',
+            statusKind: 'all',
+            actorKey: '__all__',
+            sortMode: 'recent_hit',
+            timeFilter: '__all__',
+            quickRecentHit: false,
+            quickLongUnused: false,
+            quickAbnormal: false,
+            quickCurrentActor: false,
+            activeActorKey: null,
+            testResult,
+        });
+
+        expect(items.map((item) => item.item.cardId)).toEqual(['card-b', 'card-a']);
+        expect(testResult.policyGate?.enabled).toBe(false);
+        expect(testResult.vectorGate?.enabled).toBe(true);
     });
 });

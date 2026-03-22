@@ -5,7 +5,7 @@ import {
 import { checkPermission } from './registry';
 import { Logger } from '../logger';
 
-const logger = new Logger('STXBus-RPC');
+const logger = new Logger('STXBus-RPC', { quiet: true });
 
 /**
  * 微服务级 RPC 通信底座 (STX RPC Client & Server Utils)

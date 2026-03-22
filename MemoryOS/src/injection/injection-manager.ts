@@ -20,6 +20,7 @@ import {
     type LorebookEntryCandidate,
 } from '../core/lorebook-relevance-gate';
 import { insertTavernPromptMessageEvent } from '../../../SDK/tavern';
+import { logger } from '../index';
 import type {
     AdaptivePolicy,
     GroupMemoryState,
@@ -71,6 +72,21 @@ type BuildContextDecision = {
 };
 
 type PromptInjectionPolicy = PromptInjectionProfile;
+
+/**
+ * 功能：读取 MemoryOS 的布尔设置项。
+ * @param settingKey 设置键名。
+ * @returns 是否启用。
+ */
+function readMemoryBooleanSetting(settingKey: string): boolean {
+    try {
+        const ctx = (window as any).SillyTavern?.getContext?.();
+        const settings = ctx?.extensionSettings?.stx_memory_os;
+        return settings?.[settingKey] === true;
+    } catch {
+        return false;
+    }
+}
 
 /**
  * 功能：归一化字符串数组，便于比较和存储。
@@ -877,6 +893,15 @@ export class InjectionManager {
                     reasonCodes: preDecision?.reasonCodes ?? ['pre_gate_skip'],
                 });
             }
+            if (readMemoryBooleanSetting('injectionPreviewEnabled')) {
+                logger.info('[注入预览] 本轮未插入记忆提示词', {
+                    chatKey: this.chatKey,
+                    shouldInject: Boolean(preDecision?.shouldInject),
+                    promptLength: injectedContext.length,
+                    reasonCodes: preDecision?.reasonCodes ?? ['pre_gate_skip'],
+                    previewText: injectedContext || '',
+                });
+            }
             return {
                 shouldInject: false,
                 inserted: false,
@@ -905,6 +930,15 @@ export class InjectionManager {
                 promptBefore: promptMessages.length - 1,
                 promptAfter: promptMessages.length,
                 insertedLength: injectedContext.length,
+            });
+        }
+        if (readMemoryBooleanSetting('injectionPreviewEnabled')) {
+            logger.info('[注入预览] 本轮已插入记忆提示词', {
+                chatKey: this.chatKey,
+                insertIndex,
+                insertedLength: injectedContext.length,
+                reasonCodes: preDecision?.reasonCodes ?? [],
+                previewText: injectedContext,
             });
         }
 

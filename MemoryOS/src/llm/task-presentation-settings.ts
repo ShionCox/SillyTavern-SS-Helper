@@ -1,27 +1,8 @@
 import type { TaskPresentationConfig, TaskSurfaceMode } from '../../../SDK/stx';
-import type {
-    MemoryTaskPresentationSettings,
-    MemoryTaskPresentationTaskId,
-    MemoryTaskPresentationPreset,
-} from '../types';
+import type { MemoryTaskPresentationSettings } from '../types';
 import { DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS } from '../types';
 
 const SETTINGS_NAMESPACE = 'stx_memory_os';
-
-export const MEMORY_TASK_PRESENTATION_TASK_ORDER: MemoryTaskPresentationTaskId[] = [
-    'memory.coldstart.summarize',
-    'memory.summarize',
-    'memory.extract',
-    'world.template.build',
-    'memory.vector.embed',
-    'memory.search.rerank',
-];
-
-export const TASK_SURFACE_MODE_OPTIONS: Array<{ value: TaskSurfaceMode; label: string }> = [
-    { value: 'fullscreen_blocking', label: '全屏阻塞' },
-    { value: 'toast_blocking', label: 'Toast 阻塞' },
-    { value: 'toast_background', label: 'Toast 后台' },
-];
 
 type StSettingsContext = {
     extensionSettings?: Record<string, Record<string, unknown>>;
@@ -61,15 +42,6 @@ function normalizeAutoCloseSeconds(value: unknown, fallback: number): number {
 }
 
 /**
- * 功能：获取任务的人类可读标签。
- * @param taskId 任务标识。
- * @returns 对应中文标签。
- */
-export function getMemoryTaskPresentationLabel(taskId: MemoryTaskPresentationTaskId): string {
-    return DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[taskId]?.label || taskId;
-}
-
-/**
  * 功能：把任意输入归一化为合法的任务展示设置。
  * @param value 原始设置值。
  * @returns 归一化后的任务展示设置。
@@ -77,23 +49,10 @@ export function getMemoryTaskPresentationLabel(taskId: MemoryTaskPresentationTas
 export function normalizeMemoryTaskPresentationSettings(value: unknown): MemoryTaskPresentationSettings {
     const raw = (value && typeof value === 'object') ? value as Partial<MemoryTaskPresentationSettings> : {};
     const rawBlockingDefaultMode = (raw as { blockingDefaultMode?: unknown }).blockingDefaultMode;
-    const blockingDefaultMode = isTaskSurfaceMode(rawBlockingDefaultMode) && rawBlockingDefaultMode !== 'toast_background'
+    const blockingDefaultMode: Extract<TaskSurfaceMode, 'fullscreen_blocking' | 'toast_blocking'> =
+        isTaskSurfaceMode(rawBlockingDefaultMode) && rawBlockingDefaultMode !== 'toast_background'
         ? rawBlockingDefaultMode
-        : DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.blockingDefaultMode;
-
-    const presets = MEMORY_TASK_PRESENTATION_TASK_ORDER.reduce<Record<MemoryTaskPresentationTaskId, MemoryTaskPresentationPreset>>(
-        (acc: Record<MemoryTaskPresentationTaskId, MemoryTaskPresentationPreset>, taskId: MemoryTaskPresentationTaskId) => {
-            const defaultPreset = DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[taskId];
-            const nextPreset = raw.presets?.[taskId];
-            acc[taskId] = {
-                taskId,
-                label: String(nextPreset?.label || defaultPreset.label || taskId),
-                surfaceMode: isTaskSurfaceMode(nextPreset?.surfaceMode) ? nextPreset.surfaceMode : defaultPreset.surfaceMode,
-            };
-            return acc;
-        },
-        {} as Record<MemoryTaskPresentationTaskId, MemoryTaskPresentationPreset>,
-    );
+        : DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.blockingDefaultMode as Extract<TaskSurfaceMode, 'fullscreen_blocking' | 'toast_blocking'>;
 
     return {
         blockingDefaultMode,
@@ -103,7 +62,6 @@ export function normalizeMemoryTaskPresentationSettings(value: unknown): MemoryT
             (raw as { toastAutoCloseSeconds?: unknown }).toastAutoCloseSeconds,
             DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.toastAutoCloseSeconds,
         ),
-        presets,
         updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
     };
 }
@@ -119,7 +77,7 @@ export function readMemoryTaskPresentationSettings(): MemoryTaskPresentationSett
 }
 
 export interface MemoryTaskPresentationRuntimeOptions {
-    taskId: MemoryTaskPresentationTaskId;
+    taskId: string;
     title: string;
     subtitle?: string;
     description?: string;
@@ -143,8 +101,7 @@ export function resolveMemoryTaskPresentationConfig(
     options: MemoryTaskPresentationRuntimeOptions,
 ): TaskPresentationConfig {
     const settings = readMemoryTaskPresentationSettings();
-    const preset = settings.presets[options.taskId] || DEFAULT_MEMORY_TASK_PRESENTATION_SETTINGS.presets[options.taskId];
-    let surfaceMode = options.surfaceMode || preset.surfaceMode;
+    let surfaceMode = options.surfaceMode;
     if (surfaceMode !== 'toast_background' && surfaceMode !== 'fullscreen_blocking' && surfaceMode !== 'toast_blocking') {
         surfaceMode = settings.blockingDefaultMode;
     }

@@ -4,7 +4,7 @@ type SharedCheckboxAttributeValue = string | number | boolean | null | undefined
 
 export interface SharedCheckboxCardOptions {
   id: string;
-  title: string;
+  title?: string;
   description?: string;
   checkedLabel?: string;
   uncheckedLabel?: string;
@@ -63,9 +63,11 @@ export function buildSharedCheckboxCard(options: SharedCheckboxCardOptions): str
       />
       <span class="${escapeAttr(joinClassNames("stx-shared-checkbox-body", options.bodyClassName))}">
         <span class="${escapeAttr(joinClassNames("stx-shared-checkbox-copy", options.copyClassName))}">
-          <span class="${escapeAttr(joinClassNames("stx-shared-checkbox-title", options.titleClassName))}">
-            ${escapeHtml(options.title)}
-          </span>
+          ${options.title
+            ? `<span class="${escapeAttr(joinClassNames("stx-shared-checkbox-title", options.titleClassName))}">
+                ${escapeHtml(options.title)}
+              </span>`
+            : ""}
           ${options.description
             ? `
           <span class="${escapeAttr(

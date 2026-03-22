@@ -1,6 +1,6 @@
 import { flushSdkChatDataNow, readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db';
 import { db, type DBFact, type DBMemoryCard, type DBSummary } from '../db/db';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import {
     advanceMemoryTraceContext,
@@ -25,6 +25,8 @@ import type {
     AutoSchemaPolicy,
     ChatLifecycleStage,
     ChatLifecycleState,
+    ColdStartBootstrapState,
+    ColdStartBootstrapStatus,
     ColdStartLorebookEntrySelection,
     ColdStartLorebookSelection,
     ColdStartStage,
@@ -52,6 +54,7 @@ import type {
     MaintenanceExecutionResult,
     MaintenanceInsight,
     ManualOverrides,
+    MemoryIngestProgressState,
     MemoryMutationPlanSnapshot,
     PersonaMemoryProfile,
     MemoryOSChatState,
@@ -98,6 +101,7 @@ import {
     DEFAULT_EXTRACT_HEALTH,
     DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
+    DEFAULT_MEMORY_INGEST_PROGRESS,
     DEFAULT_MEMORY_QUALITY,
     DEFAULT_MEMORY_MUTATION_ACTION_COUNTS,
     DEFAULT_MEMORY_TUNING_PROFILE,
@@ -155,7 +159,6 @@ import { normalizeMemoryTuningProfile } from './memory-tuning';
 import { normalizeLatestRecallExplanation } from './recall-explanation';
 import { buildGroupRelationshipSeeds } from './relationship-graph';
 
-const logger = new Logger('ChatStateManager');
 const REPAIR_TRIGGER_KINDS: ChatMutationKind[] = ['message_edited', 'message_swiped', 'message_deleted', 'chat_branched'];
 function shouldEnqueueMutationRepair(mutationKinds: ChatMutationKind[]): boolean {
     const set = new Set(Array.isArray(mutationKinds) ? mutationKinds : []);
@@ -924,6 +927,18 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：强制从聊天级存储重新加载当前状态，避免实例缓存落后于数据库。
+     * @returns 完整的聊天状态。
+     */
+    async reload(): Promise<MemoryOSChatState> {
+        if (this.dirty) {
+            await this.flush();
+        }
+        this.cache = null;
+        return this.load();
+    }
+
+    /**
      * 功能：对状态做默认值归一化。
      * @param state 原始状态。
      * @returns 归一化后的状态。
@@ -1285,6 +1300,7 @@ export class ChatStateManager {
                 : [],
             longSummaryCooldown: this.normalizeLongSummaryCooldownState(state.longSummaryCooldown ?? null),
             autoSummaryRuntime: this.normalizeAutoSummaryRuntimeState(state.autoSummaryRuntime ?? null),
+            memoryIngestProgress: this.normalizeMemoryIngestProgressState(state.memoryIngestProgress ?? null),
             lastAutoSummaryDecision: this.normalizeAutoSummaryDecision(state.lastAutoSummaryDecision ?? null),
             manualOverrides,
             lastStrategyDecision: state.lastStrategyDecision ?? null,
@@ -2031,6 +2047,31 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取统一记忆摄取进度。
+     * @returns 当前已消费楼层游标。
+     */
+    async getMemoryIngestProgress(): Promise<MemoryIngestProgressState> {
+        const state = await this.load();
+        state.memoryIngestProgress = this.normalizeMemoryIngestProgressState(state.memoryIngestProgress ?? null);
+        return state.memoryIngestProgress;
+    }
+
+    /**
+     * 功能：写入统一记忆摄取进度。
+     * @param patch 进度补丁。
+     * @returns 更新后的摄取进度。
+     */
+    async setMemoryIngestProgress(patch: Partial<MemoryIngestProgressState>): Promise<MemoryIngestProgressState> {
+        const state = await this.load();
+        state.memoryIngestProgress = this.normalizeMemoryIngestProgressState({
+            ...this.normalizeMemoryIngestProgressState(state.memoryIngestProgress ?? null),
+            ...(patch ?? {}),
+        });
+        this.markDirty();
+        return state.memoryIngestProgress;
+    }
+
+    /**
      * 功能：读取最近一次 mutation planner 执行快照。
      * @returns 最近一次 mutation planner 快照；没有记录时返回 null。
      */
@@ -2286,6 +2327,35 @@ export class ChatStateManager {
         });
         this.markDirty();
         return state.autoSummaryRuntime;
+    }
+
+    /**
+     * 功能：归一化统一记忆摄取进度。
+     * @param progress 原始摄取进度。
+     * @returns 归一化后的摄取进度。
+     */
+    private normalizeMemoryIngestProgressState(progress: MemoryIngestProgressState | null | undefined): MemoryIngestProgressState {
+        return {
+            ...DEFAULT_MEMORY_INGEST_PROGRESS,
+            ...(progress ?? {}),
+            lastProcessedAssistantTurnId: normalizeSeedText(progress?.lastProcessedAssistantTurnId) || undefined,
+            lastProcessedAssistantMessageId: normalizeSeedText(progress?.lastProcessedAssistantMessageId) || undefined,
+            lastProcessedAssistantTurnCount: Math.max(0, Number(progress?.lastProcessedAssistantTurnCount ?? 0) || 0),
+            lastProcessedSnapshotHash: normalizeSeedText(progress?.lastProcessedSnapshotHash),
+            lastProcessedRange: progress?.lastProcessedRange
+                ? {
+                    fromMessageId: normalizeSeedText(progress.lastProcessedRange.fromMessageId) || undefined,
+                    toMessageId: normalizeSeedText(progress.lastProcessedRange.toMessageId) || undefined,
+                }
+                : undefined,
+            lastProcessedAt: Math.max(0, Number(progress?.lastProcessedAt ?? 0) || 0),
+            lastProcessedOutcome: progress?.lastProcessedOutcome === 'accepted'
+                || progress?.lastProcessedOutcome === 'noop'
+                || progress?.lastProcessedOutcome === 'rejected'
+                ? progress.lastProcessedOutcome
+                : 'skipped',
+            lastRepairGeneration: Math.max(0, Number(progress?.lastRepairGeneration ?? 0) || 0),
+        };
     }
 
     /**
@@ -4092,6 +4162,164 @@ export class ChatStateManager {
         return value || null;
     }
 
+    /**
+     * 功能：将持久化状态归一化为冷启动引导状态快照。
+     * @param state 聊天状态对象。
+     * @returns 归一化后的冷启动引导状态。
+     */
+    private buildColdStartBootstrapStatus(state: MemoryOSChatState): ColdStartBootstrapStatus {
+        const fingerprint = normalizeSeedText(state.coldStartFingerprint) || null;
+        const requestId = normalizeSeedText(state.coldStartBootstrapRequestId) || null;
+        const error = normalizeSeedText(state.coldStartBootstrapError) || null;
+        const updatedAt = Math.max(0, Number(state.coldStartBootstrapUpdatedAt ?? state.coldStartPrimedAt ?? 0) || 0);
+        const rawStage = normalizeSeedText(state.coldStartStage);
+        const stage: ColdStartStage | null = rawStage === 'seeded' || rawStage === 'prompt_primed' || rawStage === 'extract_primed'
+            ? rawStage
+            : null;
+        const rawBootstrapState = normalizeSeedText(state.coldStartBootstrapState);
+        const bootstrapState: ColdStartBootstrapState = rawBootstrapState === 'bootstrapping'
+            || rawBootstrapState === 'ready'
+            || rawBootstrapState === 'failed'
+            || rawBootstrapState === 'selection_required'
+            ? rawBootstrapState
+            : 'selection_required';
+
+        if (state.semanticSeed && fingerprint) {
+            return {
+                state: 'ready',
+                requestId: null,
+                updatedAt,
+                error: null,
+                fingerprint,
+                stage,
+            };
+        }
+
+        return {
+            state: bootstrapState,
+            requestId: bootstrapState === 'bootstrapping' ? requestId : null,
+            updatedAt,
+            error: bootstrapState === 'failed' ? error : null,
+            fingerprint,
+            stage,
+        };
+    }
+
+    /**
+     * 功能：读取当前聊天的冷启动引导状态。
+     * @param 无。
+     * @returns 冷启动引导状态快照。
+     */
+    async getColdStartBootstrapStatus(): Promise<ColdStartBootstrapStatus> {
+        const state = await this.load();
+        return this.buildColdStartBootstrapStatus(state);
+    }
+
+    /**
+     * 功能：登记一次新的冷启动引导任务并立即持久化。
+     * @param requestId 本次引导任务的请求标识。
+     * @param selection 本次冷启动使用的世界书选择。
+     * @param skipped 是否显式跳过世界书选择。
+     * @returns 更新后的冷启动引导状态。
+     */
+    async beginColdStartBootstrap(
+        requestId: string,
+        selection: ColdStartLorebookSelection,
+        skipped: boolean = false,
+    ): Promise<ColdStartBootstrapStatus> {
+        const state = await this.load();
+        const current = this.buildColdStartBootstrapStatus(state);
+        if (current.state === 'ready') {
+            return current;
+        }
+        const normalizedRequestId = normalizeSeedText(requestId) || `cold-start:${Date.now()}`;
+        const normalizedSelection = normalizeColdStartLorebookSelection(selection);
+        const now = Date.now();
+
+        if (skipped) {
+            state.coldStartLorebookSelection = undefined;
+            state.coldStartLorebookEntrySelection = undefined;
+            state.coldStartSkipLorebookSelection = true;
+        } else {
+            state.coldStartLorebookSelection = normalizedSelection.books.length > 0 ? normalizedSelection.books : undefined;
+            state.coldStartLorebookEntrySelection = normalizedSelection.entries.length > 0 ? normalizedSelection.entries : undefined;
+            state.coldStartSkipLorebookSelection = undefined;
+        }
+
+        state.semanticSeed = undefined;
+        state.coldStartFingerprint = undefined;
+        state.coldStartStage = undefined;
+        state.coldStartPrimedAt = undefined;
+        state.coldStartBootstrapState = 'bootstrapping';
+        state.coldStartBootstrapRequestId = normalizedRequestId;
+        state.coldStartBootstrapUpdatedAt = now;
+        state.coldStartBootstrapError = undefined;
+        this.markDirty();
+        await this.flush();
+        return this.buildColdStartBootstrapStatus(state);
+    }
+
+    /**
+     * 功能：标记一次冷启动引导任务已经完成。
+     * @param requestId 本次引导任务的请求标识。
+     * @param fingerprint 冷启动语义种子的指纹。
+     * @returns 更新后的冷启动引导状态。
+     */
+    async completeColdStartBootstrap(requestId: string, fingerprint: string): Promise<ColdStartBootstrapStatus> {
+        const state = await this.load();
+        const current = this.buildColdStartBootstrapStatus(state);
+        if (current.state === 'ready') {
+            return current;
+        }
+        const currentRequestId = normalizeSeedText(state.coldStartBootstrapRequestId);
+        const normalizedRequestId = normalizeSeedText(requestId);
+        if (currentRequestId && normalizedRequestId && currentRequestId !== normalizedRequestId) {
+            return current;
+        }
+        const normalizedFingerprint = normalizeSeedText(fingerprint) || undefined;
+        state.coldStartFingerprint = normalizedFingerprint;
+        state.coldStartBootstrapState = 'ready';
+        state.coldStartBootstrapRequestId = undefined;
+        state.coldStartBootstrapUpdatedAt = Date.now();
+        state.coldStartBootstrapError = undefined;
+        this.markDirty();
+        await this.flush();
+        return this.buildColdStartBootstrapStatus(state);
+    }
+
+    /**
+     * 功能：标记一次冷启动引导任务失败。
+     * @param requestId 失败任务的请求标识，可为空以处理用户取消等场景。
+     * @param reason 失败原因。
+     * @returns 更新后的冷启动引导状态。
+     */
+    async failColdStartBootstrap(requestId: string | null, reason: string): Promise<ColdStartBootstrapStatus> {
+        const state = await this.load();
+        const current = this.buildColdStartBootstrapStatus(state);
+        if (current.state === 'ready') {
+            return current;
+        }
+        const currentRequestId = normalizeSeedText(state.coldStartBootstrapRequestId);
+        const normalizedRequestId = normalizeSeedText(requestId);
+        if (currentRequestId && normalizedRequestId && currentRequestId !== normalizedRequestId) {
+            return current;
+        }
+        state.coldStartBootstrapState = 'failed';
+        state.coldStartBootstrapRequestId = normalizedRequestId || currentRequestId || undefined;
+        state.coldStartBootstrapUpdatedAt = Date.now();
+        state.coldStartBootstrapError = normalizeSeedText(reason) || 'cold_start_failed';
+        this.markDirty();
+        await this.flush();
+        const status = this.buildColdStartBootstrapStatus(state);
+        logger.warn('[ColdStart][StateFailBootstrap]', {
+            chatKey: this.chatKey,
+            requestId: normalizedRequestId || currentRequestId || null,
+            reason: state.coldStartBootstrapError,
+            state: status.state,
+        });
+        return status;
+    }
+
     async getColdStartStage(): Promise<ColdStartStage | null> {
         const state = await this.load();
         const stage = normalizeSeedText(state.coldStartStage);
@@ -4146,6 +4374,10 @@ export class ChatStateManager {
         state.coldStartFingerprint = normalizeSeedText(fingerprint) || undefined;
         state.coldStartStage = 'seeded';
         state.coldStartPrimedAt = undefined;
+        state.coldStartBootstrapState = 'ready';
+        state.coldStartBootstrapRequestId = undefined;
+        state.coldStartBootstrapUpdatedAt = Date.now();
+        state.coldStartBootstrapError = undefined;
 
         const nextProfile: ChatProfile = {
             ...DEFAULT_CHAT_PROFILE,
@@ -5252,6 +5484,8 @@ export class ChatStateManager {
                 hadSelection: Array.isArray(state.coldStartLorebookSelection) || Array.isArray(state.coldStartLorebookEntrySelection),
                 hadSeed: Boolean(state.semanticSeed),
                 hadColdStartFingerprint: Boolean(state.coldStartFingerprint),
+                coldStartBootstrapState: normalizeSeedText(state.coldStartBootstrapState) || null,
+                coldStartBootstrapRequestId: normalizeSeedText(state.coldStartBootstrapRequestId) || null,
             });
             state.coldStartLorebookSelection = undefined;
             state.coldStartLorebookEntrySelection = undefined;
@@ -5259,6 +5493,10 @@ export class ChatStateManager {
             state.coldStartFingerprint = undefined;
             state.coldStartStage = undefined;
             state.coldStartPrimedAt = undefined;
+            state.coldStartBootstrapState = undefined;
+            state.coldStartBootstrapRequestId = undefined;
+            state.coldStartBootstrapUpdatedAt = undefined;
+            state.coldStartBootstrapError = undefined;
             state.semanticSeed = undefined;
             state.personaMemoryProfile = undefined;
             state.personaMemoryProfiles = undefined;

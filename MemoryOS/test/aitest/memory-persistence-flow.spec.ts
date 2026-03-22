@@ -20,6 +20,17 @@ vi.mock('../../src/db/db', () => {
                     },
                 };
             }
+            if (index === '[chatKey+sourceRecordKey]') {
+                return {
+                    equals([chatKey, recordKey]: [string, string]) {
+                        return {
+                            toArray: async (): Promise<Array<Record<string, any>>> => mockedState.memoryCards.filter((card) => {
+                                return card.chatKey === chatKey && card.sourceRecordKey === recordKey;
+                            }),
+                        };
+                    },
+                };
+            }
             if (index === 'sourceRecordKey') {
                 return {
                     equals(recordKey: string) {

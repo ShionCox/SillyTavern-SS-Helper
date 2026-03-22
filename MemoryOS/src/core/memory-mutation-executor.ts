@@ -2,7 +2,7 @@ import { db, type DBDerivationSource, type DBFact, type DBSummary, type DBWorldS
 import type { FactProposal, SummaryProposal } from '../proposal/types';
 import { normalizeWorldStatePatchValue } from './world-state-patch-normalizer';
 import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
-import { deleteMemoryCardsBySource, saveMemoryCardsFromEnvelope, saveMemoryCardsFromFactRecord } from './memory-card-store';
+import { deleteMemoryCardsBySource, runWithMemoryCardVectorBatch, saveMemoryCardsFromEnvelope, saveMemoryCardsFromFactRecord } from './memory-card-store';
 import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from './memory-card-text';
 import type { ChatStateManager } from './chat-state-manager';
 import { FactsManager } from './facts-manager';
@@ -397,6 +397,10 @@ async function executeSummaryMutation(
     if (candidate && !candidate.encoding.accepted) {
         return { applied: false };
     }
+    const summaryRange = {
+        fromMessageId: mutation.proposal.range?.fromMessageId ?? input.visibleMessageIds[0] ?? undefined,
+        toMessageId: mutation.proposal.range?.toMessageId ?? input.visibleMessageIds[input.visibleMessageIds.length - 1] ?? undefined,
+    };
     if (mutation.item.action === 'DELETE') {
         const summaryId = mutation.target?.summaryId ?? mutation.proposal.summaryId ?? mutation.item.targetRecordKey;
         if (!summaryId) {
@@ -422,10 +426,7 @@ async function executeSummaryMutation(
             title: mutation.nextTitle,
             content: mutation.nextContent,
             keywords: mutation.nextKeywords,
-            range: {
-                fromMessageId: input.visibleMessageIds[0] ?? undefined,
-                toMessageId: input.visibleMessageIds[input.visibleMessageIds.length - 1] ?? undefined,
-            },
+            range: summaryRange,
             source: {
                 extractor: 'ai',
                 provider: input.consumerPluginId,
@@ -476,10 +477,7 @@ async function executeSummaryMutation(
         title: mutation.nextTitle,
         content: mutation.nextContent,
         keywords: mutation.nextKeywords,
-        range: {
-            fromMessageId: input.visibleMessageIds[0] ?? undefined,
-            toMessageId: input.visibleMessageIds[input.visibleMessageIds.length - 1] ?? undefined,
-        },
+        range: summaryRange,
         source: {
             extractor: 'ai',
             provider: input.consumerPluginId,
@@ -587,48 +585,50 @@ async function executeStateMutation(
  * @returns 执行结果汇总。
  */
 export async function executeMemoryMutationPlan(input: MemoryMutationExecutorInput): Promise<MemoryMutationExecutionResult> {
-    const historyManager = new MemoryMutationHistoryManager(input.chatKey);
-    const applied = {
-        factKeys: [] as string[],
-        statePaths: [] as string[],
-        summaryIds: [] as string[],
-    };
-    let appliedItems = 0;
-    let shouldRefreshRelationshipState = false;
+    return runWithMemoryCardVectorBatch(input.chatKey, async (): Promise<MemoryMutationExecutionResult> => {
+        const historyManager = new MemoryMutationHistoryManager(input.chatKey);
+        const applied = {
+            factKeys: [] as string[],
+            statePaths: [] as string[],
+            summaryIds: [] as string[],
+        };
+        let appliedItems = 0;
+        let shouldRefreshRelationshipState = false;
 
-    for (const mutation of input.plan.factMutations) {
-        const result = await executeFactMutation(mutation, input, historyManager);
-        if (!result.applied || !result.factKey) {
-            continue;
+        for (const mutation of input.plan.factMutations) {
+            const result = await executeFactMutation(mutation, input, historyManager);
+            if (!result.applied || !result.factKey) {
+                continue;
+            }
+            applied.factKeys.push(result.factKey);
+            appliedItems += 1;
+            shouldRefreshRelationshipState = shouldRefreshRelationshipState || result.refreshRelationshipState;
         }
-        applied.factKeys.push(result.factKey);
-        appliedItems += 1;
-        shouldRefreshRelationshipState = shouldRefreshRelationshipState || result.refreshRelationshipState;
-    }
 
-    for (const [index, mutation] of input.plan.summaryMutations.entries()) {
-        const result = await executeSummaryMutation(mutation, index, input, historyManager);
-        if (!result.applied || !result.summaryId) {
-            continue;
+        for (const [index, mutation] of input.plan.summaryMutations.entries()) {
+            const result = await executeSummaryMutation(mutation, index, input, historyManager);
+            if (!result.applied || !result.summaryId) {
+                continue;
+            }
+            applied.summaryIds.push(result.summaryId);
+            appliedItems += 1;
         }
-        applied.summaryIds.push(result.summaryId);
-        appliedItems += 1;
-    }
 
-    for (const mutation of input.plan.stateMutations) {
-        const result = await executeStateMutation(mutation, input, historyManager);
-        if (!result.applied || !result.path) {
-            continue;
+        for (const mutation of input.plan.stateMutations) {
+            const result = await executeStateMutation(mutation, input, historyManager);
+            if (!result.applied || !result.path) {
+                continue;
+            }
+            applied.statePaths.push(result.path);
+            appliedItems += 1;
         }
-        applied.statePaths.push(result.path);
-        appliedItems += 1;
-    }
 
-    const snapshot = buildMemoryMutationPlanSnapshot(input.plan, appliedItems);
-    return {
-        applied,
-        appliedItems,
-        shouldRefreshRelationshipState,
-        snapshot,
-    };
+        const snapshot = buildMemoryMutationPlanSnapshot(input.plan, appliedItems);
+        return {
+            applied,
+            appliedItems,
+            shouldRefreshRelationshipState,
+            snapshot,
+        };
+    });
 }

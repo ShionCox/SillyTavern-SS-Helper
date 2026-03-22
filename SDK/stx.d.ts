@@ -586,7 +586,7 @@ export interface RetrievalHealthWindow {
 
 export interface ExtractHealthWindow {
     recentTasks: Array<{
-        task: 'memory.summarize' | 'memory.extract';
+        task: 'memory.ingest';
         accepted: boolean;
         appliedFacts: number;
         appliedPatches: number;
@@ -799,6 +799,8 @@ export interface MemoryRecallPreviewHit extends VectorMemorySearchTestHit {
     status: MemoryCardStatus;
 }
 
+export type MemoryRecallPreviewMode = 'effective_policy' | 'forced_vector';
+
   export interface VectorMemorySearchTestResult {
       query: string;
       testedAt: number;
@@ -813,6 +815,12 @@ export interface MemoryRecallPreviewHit extends VectorMemorySearchTestHit {
 
 export interface MemoryRecallPreviewResult extends VectorMemorySearchTestResult {
     hits: MemoryRecallPreviewHit[];
+    previewMode: MemoryRecallPreviewMode;
+    policyGate?: LatestRecallExplanation['vectorGate'];
+    effectivePolicy?: {
+        vectorEnabled: boolean;
+        vectorMode: VectorMode;
+    };
 }
 
 export interface VectorMemoryViewerSnapshot {
@@ -999,6 +1007,17 @@ export type LorebookGateMode = 'force_inject' | 'soft_inject' | 'summary_only' |
 export type StyleSeedMode = 'narrative' | 'rp' | 'setting_qa' | 'tool' | 'balanced';
 
 export type ColdStartStage = 'seeded' | 'prompt_primed' | 'extract_primed';
+
+export type ColdStartBootstrapState = 'selection_required' | 'bootstrapping' | 'ready' | 'failed';
+
+export interface ColdStartBootstrapStatus {
+    state: ColdStartBootstrapState;
+    requestId: string | null;
+    updatedAt: number;
+    error: string | null;
+    fingerprint: string | null;
+    stage: ColdStartStage | null;
+}
 
 export interface SeedSourceTrace {
     field: string;
@@ -1571,6 +1590,10 @@ export interface MemoryOSChatState {
     simpleMemoryPersonas?: SimpleMemoryPersonaMap;
     activeActorKey?: string;
     coldStartFingerprint?: string;
+    coldStartBootstrapState?: ColdStartBootstrapState;
+    coldStartBootstrapRequestId?: string;
+    coldStartBootstrapUpdatedAt?: number;
+    coldStartBootstrapError?: string;
     coldStartStage?: ColdStartStage;
     coldStartPrimedAt?: number;
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
@@ -2021,7 +2044,7 @@ export interface MemorySDK {
         getEditorHealth(): Promise<EditorHealthSnapshot>;
         getExperienceSnapshot(): Promise<EditorExperienceSnapshot>;
         getMemoryCardSnapshot(): Promise<MemoryCardViewerSnapshot>;
-        runMemoryRecallPreview(query: string, opts?: { maxTokens?: number }): Promise<MemoryRecallPreviewResult>;
+        runMemoryRecallPreview(query: string, opts?: { maxTokens?: number; forceVector?: boolean }): Promise<MemoryRecallPreviewResult>;
         refreshCanonSnapshot(): Promise<CanonSnapshot>;
         rebuildChatView(): Promise<LogicalChatView>;
         refreshSemanticSeed(): Promise<CanonSnapshot>;
@@ -2056,6 +2079,11 @@ export interface MemorySDK {
         getAutoSchemaPolicy(): Promise<AutoSchemaPolicy>;
         setAutoSchemaPolicy(policy: Partial<AutoSchemaPolicy>): Promise<void>;
         bootstrapSemanticSeed(): Promise<void>;
+        getColdStartBootstrapStatus(): Promise<ColdStartBootstrapStatus>;
+        beginColdStartBootstrap(requestId: string, selection: ColdStartLorebookSelection, skipped?: boolean): Promise<ColdStartBootstrapStatus>;
+        failColdStartBootstrap(reason: string, requestId?: string): Promise<ColdStartBootstrapStatus>;
+        getColdStartLorebookSelection(): Promise<ColdStartLorebookSelection>;
+        isColdStartLorebookSelectionSkipped(): Promise<boolean>;
         getSemanticSeed(): Promise<ChatSemanticSeed | null>;
         getPersonaMemoryProfile(): Promise<PersonaMemoryProfile | null>;
         getPersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>>;

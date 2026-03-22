@@ -5,7 +5,7 @@ import type {
     SemanticKnowledgeLevel,
     SemanticWorldFacetEntry,
 } from '../types/chat-state';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { runGeneration, MEMORY_TASKS, type TaskPresentationOverride } from '../llm/memoryLlmBridge';
 import { buildColdstartOperationSystemPrompt } from '../llm/skills';
 import {
@@ -15,7 +15,6 @@ import {
     nullableStringSchema,
 } from '../llm/strict-schema';
 
-const logger = new Logger('ColdStartAiSummary');
 
 export interface EnhanceSemanticSeedWithAiOptions {
     force?: boolean;

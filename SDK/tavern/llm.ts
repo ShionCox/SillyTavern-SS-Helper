@@ -10,6 +10,44 @@ export interface TavernChatResult {
   errorCode?: string;
   detail?: string;
   latencyMs?: number;
+  compatTrace?: TavernCompatAttempt[];
+  finalAttemptStage?: TavernCompatStage;
+  finalRequestBody?: Record<string, unknown>;
+}
+
+/**
+ * 功能：描述 Tavern 结构化请求兼容降级所处的阶段。
+ * 参数：无。
+ * 返回：无。
+ */
+export type TavernCompatStage =
+  | "standard"
+  | "structured_schema"
+  | "structured_json_object"
+  | "prompt_json_only"
+  | "minimal_prompt_json_only";
+
+/**
+ * 功能：记录一次 Tavern 兼容降级尝试的调试信息。
+ * 参数：无。
+ * 返回：无。
+ */
+export interface TavernCompatAttempt {
+  stage: TavernCompatStage;
+  removedFields: string[];
+  requestBodySummary: {
+    model: string;
+    source: string;
+    maxTokens: number;
+    hasJsonSchema: boolean;
+    responseFormat: string | null;
+    fieldKeys: string[];
+  };
+  httpStatus?: number;
+  backendMessage?: string;
+  errorCode?: string;
+  detail?: string;
+  succeeded: boolean;
 }
 
 /**
@@ -101,6 +139,22 @@ interface TavernResolvedJsonSchema {
   value: object;
 }
 
+interface TavernRequestBodyBuildResult {
+  body: Record<string, unknown>;
+  removedFields: string[];
+}
+
+interface TavernSingleAttemptResult {
+  ok: boolean;
+  content: string;
+  message?: string;
+  errorCode?: string;
+  detail?: string;
+  latencyMs: number;
+  httpStatus?: number;
+  backendMessage?: string;
+}
+
 const CHAT_COMPLETION_MODEL_KEY_BY_SOURCE: Record<string, string> = {
   openai: "openai_model",
   claude: "claude_model",
@@ -181,6 +235,49 @@ const CHAT_COMPLETION_SOURCE_LABELS: Record<string, string> = {
   zai: "智谱 ZAI",
   siliconflow: "SiliconFlow",
 };
+
+const TAVERN_MINIMAL_STAGE_REMOVED_FIELDS: string[] = [
+  "json_schema",
+  "response_format",
+  "include_reasoning",
+  "reasoning_effort",
+  "verbosity",
+  "enable_web_search",
+  "top_k",
+  "top_a",
+  "min_p",
+  "repetition_penalty",
+  "use_fallback",
+  "provider",
+  "quantizations",
+  "allow_fallbacks",
+  "middleout",
+  "use_sysprompt",
+  "seed",
+];
+
+const TAVERN_MINIMAL_STAGE_KEEP_FIELDS: Set<string> = new Set([
+  "type",
+  "messages",
+  "model",
+  "temperature",
+  "max_tokens",
+  "stream",
+  "chat_completion_source",
+  "reverse_proxy",
+  "proxy_password",
+  "azure_base_url",
+  "azure_deployment_name",
+  "azure_api_version",
+  "vertexai_auth_mode",
+  "vertexai_region",
+  "vertexai_express_project_id",
+  "zai_endpoint",
+  "custom_url",
+  "custom_include_body",
+  "custom_exclude_body",
+  "custom_include_headers",
+]);
 
 /**
  * 功能：读取酒馆静默生成接口。
@@ -747,8 +844,9 @@ function resolveJsonSchema(options?: TavernRawRequestOptions): TavernResolvedJso
  */
 function buildChatCompletionRequestBody(
   messages: TavernRawMessage[],
-  options?: TavernRawRequestOptions
-): Record<string, unknown> {
+  options: TavernRawRequestOptions | undefined,
+  stage: TavernCompatStage
+): TavernRequestBodyBuildResult {
   const resolved = resolveChatCompletionSettings();
   const settings = resolved.settings;
   const source = resolved.chatCompletionSource;
@@ -828,13 +926,182 @@ function buildChatCompletionRequestBody(
   }
 
   const jsonSchema = resolveJsonSchema(options);
-  if (jsonSchema) {
+  if (stage === "structured_schema" && jsonSchema) {
     body.json_schema = jsonSchema;
-  } else if (options?.jsonMode) {
+  } else if (stage === "structured_json_object" && options?.jsonMode) {
     body.response_format = { type: "json_object" };
   }
 
-  return body;
+  if (stage !== "minimal_prompt_json_only") {
+    return { body, removedFields: [] };
+  }
+
+  const minimalBody: Record<string, unknown> = {};
+  for (const key of Object.keys(body)) {
+    if (TAVERN_MINIMAL_STAGE_KEEP_FIELDS.has(key)) {
+      minimalBody[key] = body[key];
+    }
+  }
+  return {
+    body: minimalBody,
+    removedFields: TAVERN_MINIMAL_STAGE_REMOVED_FIELDS.slice(),
+  };
+}
+
+/**
+ * 功能：判断当前请求是否属于结构化输出请求。
+ * @param options 纯净发送选项。
+ * @returns 是否需要启用结构化兼容降级链。
+ */
+function isStructuredRequest(options?: TavernRawRequestOptions): boolean {
+  return Boolean(options?.jsonMode || resolveJsonSchema(options));
+}
+
+/**
+ * 功能：根据请求形态生成需要尝试的兼容阶段列表。
+ * @param options 纯净发送选项。
+ * @returns 兼容阶段列表。
+ */
+function resolveCompatStages(options?: TavernRawRequestOptions): TavernCompatStage[] {
+  const hasSchema = Boolean(resolveJsonSchema(options));
+  const wantsJson = Boolean(options?.jsonMode);
+  if (!hasSchema && !wantsJson) {
+    return ["standard"];
+  }
+  const stages: TavernCompatStage[] = [];
+  if (hasSchema) {
+    stages.push("structured_schema");
+  }
+  if (wantsJson || hasSchema) {
+    stages.push("structured_json_object", "prompt_json_only", "minimal_prompt_json_only");
+  }
+  return stages;
+}
+
+/**
+ * 功能：构建调试用的请求体摘要，避免日志里重复展开完整消息内容。
+ * @param body 请求体。
+ * @returns 精简后的请求摘要。
+ */
+function buildRequestBodySummary(body: Record<string, unknown>): TavernCompatAttempt["requestBodySummary"] {
+  const responseFormat = body.response_format;
+  const responseType = responseFormat && typeof responseFormat === "object"
+    ? normalizeString((responseFormat as { type?: unknown }).type) || "object"
+    : null;
+  return {
+    model: normalizeString(body.model),
+    source: normalizeString(body.chat_completion_source),
+    maxTokens: normalizeNumber(body.max_tokens, 0),
+    hasJsonSchema: Boolean(body.json_schema),
+    responseFormat: responseType,
+    fieldKeys: Object.keys(body).sort(),
+  };
+}
+
+/**
+ * 功能：复制最终请求体，供请求日志显示最终真正发送的内容。
+ * @param body 请求体。
+ * @returns 可安全写入日志的对象副本。
+ */
+function cloneRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+  } catch {
+    return { ...body };
+  }
+}
+
+/**
+ * 功能：判断失败是否属于结构化输出兼容问题，从而决定是否进入下一层降级。
+ * @param result 单次尝试结果。
+ * @returns 是否应该继续降级重试。
+ */
+function shouldRetryCompatAttempt(result: TavernSingleAttemptResult): boolean {
+  const text = `${result.message || ""}\n${result.detail || ""}\n${result.backendMessage || ""}`.toLowerCase();
+  return result.httpStatus === 400
+    || text.includes("bad request")
+    || text.includes("response_format")
+    || text.includes("json_schema");
+}
+
+/**
+ * 功能：执行单次 Tavern 纯净请求，不负责降级链决策。
+ * @param requestBody 当前阶段的请求体。
+ * @returns 单次请求结果。
+ */
+async function executeTavernChatCompletionAttempt(
+  requestBody: Record<string, unknown>
+): Promise<TavernSingleAttemptResult> {
+  const start = Date.now();
+  try {
+    const response = await fetch("/api/backends/chat-completions/generate", {
+      method: "POST",
+      headers: getRequestHeaders(),
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const rawText = await response.text().catch((): string => "");
+      const parsed = tryParseJson(rawText);
+      const backendMessage = extractErrorText(parsed);
+      const detail = typeof parsed === "string" ? parsed : rawText;
+      return {
+        ok: false,
+        content: "",
+        message: backendMessage
+          ? `酒馆纯净请求失败：${backendMessage}`
+          : `酒馆纯净请求失败 (${response.status})`,
+        errorCode: "CHAT_COMPLETION_HTTP_ERROR",
+        detail,
+        latencyMs: Date.now() - start,
+        httpStatus: response.status,
+        backendMessage,
+      };
+    }
+
+    const contentType = normalizeString(response.headers.get("content-type"));
+    const payload: unknown = contentType.includes("application/json") ? await response.json() : await response.text();
+    const backendError = extractErrorText(payload);
+    if (backendError) {
+      return {
+        ok: false,
+        content: "",
+        message: `酒馆纯净请求失败：${backendError}`,
+        errorCode: "CHAT_COMPLETION_ERROR",
+        detail: backendError,
+        latencyMs: Date.now() - start,
+        backendMessage: backendError,
+      };
+    }
+
+    const content = extractResultText(payload);
+    if (!content) {
+      // @ts-ignore 旧逻辑已废弃，仅保留历史代码占位。
+      return {
+        ok: false,
+        content: "",
+        message: "酒馆返回空响应",
+        errorCode: "EMPTY_RESPONSE",
+        latencyMs: Date.now() - start,
+      };
+    }
+
+    return {
+      ok: true,
+      content,
+      latencyMs: Date.now() - start,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      content: "",
+      message: `酒馆纯净请求失败：${message}`,
+      errorCode: "CHAT_COMPLETION_FETCH_ERROR",
+      detail: message,
+      latencyMs: Date.now() - start,
+    };
+  }
 }
 
 /**
@@ -863,7 +1130,7 @@ function tryParseJson(raw: string): unknown {
 async function runTavernDirectChatCompletion(
   messages: TavernRawMessage[],
   options?: TavernRawRequestOptions
-): Promise<TavernChatResult> {
+): Promise<any> {
   const start = Date.now();
   const resolved = resolveChatCompletionSettings();
 
@@ -898,7 +1165,63 @@ async function runTavernDirectChatCompletion(
   }
 
   try {
-    const requestBody = buildChatCompletionRequestBody(messages, options);
+    const compatStages = resolveCompatStages(options);
+    const compatTrace: TavernCompatAttempt[] = [];
+    let lastResult: TavernSingleAttemptResult | null = null;
+    let lastStage: TavernCompatStage = compatStages[compatStages.length - 1] ?? "standard";
+    let lastRequestBody: Record<string, unknown> | undefined;
+
+    for (let index = 0; index < compatStages.length; index += 1) {
+      const stage = compatStages[index];
+      const requestBuild = buildChatCompletionRequestBody(messages, options, stage);
+      const requestBody = requestBuild.body;
+      lastStage = stage;
+      lastRequestBody = cloneRequestBody(requestBody);
+
+      const attemptResult = await executeTavernChatCompletionAttempt(requestBody);
+      compatTrace.push({
+        stage,
+        removedFields: requestBuild.removedFields,
+        requestBodySummary: buildRequestBodySummary(requestBody),
+        httpStatus: attemptResult.httpStatus,
+        backendMessage: attemptResult.backendMessage,
+        errorCode: attemptResult.errorCode,
+        detail: attemptResult.detail,
+        succeeded: attemptResult.ok,
+      });
+
+      if (attemptResult.ok) {
+        return {
+          ok: true,
+          content: attemptResult.content,
+          latencyMs: Date.now() - start,
+          compatTrace,
+          finalAttemptStage: stage,
+          finalRequestBody: lastRequestBody,
+        };
+      }
+
+      lastResult = attemptResult;
+      const canRetry = isStructuredRequest(options)
+        && index < compatStages.length - 1
+        && shouldRetryCompatAttempt(attemptResult);
+      if (!canRetry) {
+        break;
+      }
+    }
+
+    return {
+      ok: false,
+      content: "",
+      message: lastResult?.message ?? "酒馆纯净请求失败",
+      errorCode: lastResult?.errorCode,
+      detail: lastResult?.detail,
+      latencyMs: Date.now() - start,
+      compatTrace,
+      finalAttemptStage: lastStage,
+      finalRequestBody: lastRequestBody,
+    };
+    const requestBody = buildChatCompletionRequestBody(messages, options, "standard").body;
     const response = await fetch("/api/backends/chat-completions/generate", {
       method: "POST",
       headers: getRequestHeaders(),

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatSemanticSeed, ColdStartLorebookSelection, ColdStartStage } from '../src/types/chat-state';
+import type {
+    ChatSemanticSeed,
+    ColdStartBootstrapStatus,
+    ColdStartLorebookSelection,
+    ColdStartStage,
+} from '../src/types/chat-state';
 
 const { collectChatSemanticSeedWithAi } = vi.hoisted(() => ({
     collectChatSemanticSeedWithAi: vi.fn(),
@@ -9,12 +14,13 @@ vi.mock('../src/core/chat-semantic-bootstrap', () => ({
     collectChatSemanticSeedWithAi,
 }));
 
-vi.mock('../src/ui/index', () => ({
-    openWorldbookInitPanel: vi.fn(),
-}));
-
 import { MemorySDKImpl } from '../src/sdk/memory-sdk';
 
+/**
+ * 功能：构造用于冷启动测试的语义种子。
+ * @param 无。
+ * @returns 语义种子样本。
+ */
 function buildSeed(): ChatSemanticSeed {
     return {
         collectedAt: Date.now(),
@@ -81,37 +87,49 @@ function buildSeed(): ChatSemanticSeed {
     };
 }
 
+/**
+ * 功能：构造冷启动状态快照。
+ * @param state 状态值。
+ * @param requestId 请求标识。
+ * @param fingerprint 指纹。
+ * @param stage 冷启动阶段。
+ * @param error 失败原因。
+ * @returns 冷启动状态快照。
+ */
+function buildBootstrapStatus(
+    state: ColdStartBootstrapStatus['state'],
+    requestId: string | null,
+    fingerprint: string | null = null,
+    stage: ColdStartStage | null = null,
+    error: string | null = null,
+): ColdStartBootstrapStatus {
+    return {
+        state,
+        requestId,
+        updatedAt: Date.now(),
+        error,
+        fingerprint,
+        stage,
+    };
+}
+
 describe('cold-start bootstrap persistence', (): void => {
     beforeEach((): void => {
         collectChatSemanticSeedWithAi.mockReset();
     });
 
-    it('会在自动冷启动完成后立即落盘并阻止后续重复初始化', async (): Promise<void> => {
+    it('执行器只会处理已登记的冷启动任务，并在成功后进入 ready', async (): Promise<void> => {
         const seed = buildSeed();
         const selectedLorebooks: ColdStartLorebookSelection = { books: ['book-a'], entries: [] };
         const callOrder: string[] = [];
-        const persistedState: {
-            semanticSeed: ChatSemanticSeed | null;
-            coldStartFingerprint: string | null;
-            coldStartStage: ColdStartStage | null;
-            selectedLorebooks: ColdStartLorebookSelection;
-            skipped: boolean;
-            bindingFingerprint: string | null;
-        } = {
-            semanticSeed: null,
-            coldStartFingerprint: null,
-            coldStartStage: null,
-            selectedLorebooks: { books: [], entries: [] },
+        const persistedState = {
+            status: buildBootstrapStatus('bootstrapping', 'req-001'),
+            selectedLorebooks,
             skipped: false,
-            bindingFingerprint: null,
-        };
-        const cacheState = {
+            bindingFingerprint: null as string | null,
             semanticSeed: null as ChatSemanticSeed | null,
             coldStartFingerprint: null as string | null,
             coldStartStage: null as ColdStartStage | null,
-            selectedLorebooks: { books: [], entries: [] } as ColdStartLorebookSelection,
-            skipped: false,
-            bindingFingerprint: null as string | null,
         };
 
         collectChatSemanticSeedWithAi.mockResolvedValue({
@@ -123,104 +141,100 @@ describe('cold-start bootstrap persistence', (): void => {
         const fakeThis = {
             chatKey_: 'chat-001',
             chatStateManager: {
-                getSemanticSeed: vi.fn(async () => persistedState.semanticSeed),
-                getColdStartFingerprint: vi.fn(async () => persistedState.coldStartFingerprint),
-                getColdStartLorebookSelection: vi.fn(async () => persistedState.selectedLorebooks),
-                isColdStartLorebookSelectionSkipped: vi.fn(async () => persistedState.skipped),
-                setColdStartLorebookSelection: vi.fn(async (selection: ColdStartLorebookSelection) => {
-                    callOrder.push('set-selection');
-                    cacheState.selectedLorebooks = selection;
-                    cacheState.skipped = false;
-                }),
-                setColdStartLorebookSelectionSkipped: vi.fn(async (skipped: boolean) => {
-                    callOrder.push('set-skip');
-                    cacheState.skipped = skipped;
-                }),
-                setCharacterBindingFingerprint: vi.fn(async (fingerprint: string) => {
+                reload: vi.fn(async (): Promise<typeof persistedState> => persistedState),
+                getColdStartBootstrapStatus: vi.fn(async (): Promise<ColdStartBootstrapStatus> => persistedState.status),
+                getColdStartLorebookSelection: vi.fn(async (): Promise<ColdStartLorebookSelection> => persistedState.selectedLorebooks),
+                isColdStartLorebookSelectionSkipped: vi.fn(async (): Promise<boolean> => persistedState.skipped),
+                setCharacterBindingFingerprint: vi.fn(async (fingerprint: string): Promise<void> => {
                     callOrder.push('set-binding');
-                    cacheState.bindingFingerprint = fingerprint;
+                    persistedState.bindingFingerprint = fingerprint;
                 }),
-                saveSemanticSeed: vi.fn(async (nextSeed: ChatSemanticSeed, fingerprint: string) => {
+                saveSemanticSeed: vi.fn(async (nextSeed: ChatSemanticSeed, fingerprint: string): Promise<void> => {
                     callOrder.push('save-seed');
-                    cacheState.semanticSeed = nextSeed;
-                    cacheState.coldStartFingerprint = fingerprint;
-                    cacheState.coldStartStage = 'seeded';
+                    persistedState.semanticSeed = nextSeed;
+                    persistedState.coldStartFingerprint = fingerprint;
+                    persistedState.coldStartStage = 'seeded';
+                    persistedState.status = buildBootstrapStatus('ready', null, fingerprint, 'seeded');
                 }),
-                markColdStartStage: vi.fn(async (stage: ColdStartStage, fingerprint: string) => {
+                markColdStartStage: vi.fn(async (stage: ColdStartStage, fingerprint: string): Promise<void> => {
                     callOrder.push(`mark-stage:${stage}`);
-                    if (cacheState.coldStartFingerprint === fingerprint) {
-                        cacheState.coldStartStage = stage;
-                    }
+                    persistedState.coldStartFingerprint = fingerprint;
+                    persistedState.coldStartStage = stage;
+                    persistedState.status = buildBootstrapStatus('ready', null, fingerprint, stage);
                 }),
-                flush: vi.fn(async () => {
+                completeColdStartBootstrap: vi.fn(async (requestId: string, fingerprint: string): Promise<ColdStartBootstrapStatus> => {
+                    callOrder.push(`complete:${requestId}`);
+                    persistedState.status = buildBootstrapStatus('ready', null, fingerprint, persistedState.coldStartStage);
+                    return persistedState.status;
+                }),
+                failColdStartBootstrap: vi.fn(async (_requestId: string | null, reason: string): Promise<ColdStartBootstrapStatus> => {
+                    callOrder.push(`fail:${reason}`);
+                    persistedState.status = buildBootstrapStatus('failed', 'req-001', null, null, reason);
+                    return persistedState.status;
+                }),
+                flush: vi.fn(async (): Promise<void> => {
                     callOrder.push('flush');
-                    persistedState.semanticSeed = cacheState.semanticSeed;
-                    persistedState.coldStartFingerprint = cacheState.coldStartFingerprint;
-                    persistedState.coldStartStage = cacheState.coldStartStage;
-                    persistedState.selectedLorebooks = cacheState.selectedLorebooks;
-                    persistedState.skipped = cacheState.skipped;
-                    persistedState.bindingFingerprint = cacheState.bindingFingerprint;
                 }),
             },
-            resolveColdStartLorebookSelection: vi.fn(async () => selectedLorebooks),
-            persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+            persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string): Promise<void> => {
                 callOrder.push(`persist:${reason}`);
             }),
-            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string): Promise<void> => {
                 callOrder.push(`seed-cards:${reason}`);
             }),
         };
 
-        const performBootstrap = (MemorySDKImpl.prototype as any).performBootstrapSemanticSeedIfNeeded as () => Promise<void>;
+        const performBootstrap = (MemorySDKImpl.prototype as unknown as {
+            performBootstrapSemanticSeedIfNeeded: () => Promise<void>;
+        }).performBootstrapSemanticSeedIfNeeded;
 
         await performBootstrap.call(fakeThis);
         await performBootstrap.call(fakeThis);
 
         expect(collectChatSemanticSeedWithAi).toHaveBeenCalledTimes(1);
-        expect(fakeThis.persistSemanticSeed).toHaveBeenCalledTimes(1);
         expect(fakeThis.persistSemanticSeed).toHaveBeenCalledWith(seed, 'fp-001', 'bootstrap_init');
-        expect(fakeThis.saveSemanticSeedMemoryCards).toHaveBeenCalledTimes(1);
         expect(fakeThis.saveSemanticSeedMemoryCards).toHaveBeenCalledWith(seed, 'fp-001', 'bootstrap_init');
-        expect(fakeThis.chatStateManager.markColdStartStage).toHaveBeenCalledWith('prompt_primed', 'fp-001', expect.any(Object));
-        expect(fakeThis.chatStateManager.flush).toHaveBeenCalledTimes(2);
-        expect(persistedState.semanticSeed).toEqual(seed);
-        expect(persistedState.coldStartFingerprint).toBe('fp-001');
+        expect(fakeThis.chatStateManager.completeColdStartBootstrap).toHaveBeenCalledWith('req-001', 'fp-001');
+        expect(persistedState.status.state).toBe('ready');
         expect(persistedState.coldStartStage).toBe('prompt_primed');
         expect(callOrder).toEqual([
-            'set-selection',
-            'flush',
             'set-binding',
-            'save-seed',
             'persist:bootstrap_init',
             'seed-cards:bootstrap_init',
+            'save-seed',
             'mark-stage:prompt_primed',
+            'complete:req-001',
             'flush',
         ]);
     });
-    it('prompt prime 会同步写入语义种子记忆卡', async (): Promise<void> => {
+
+    it('prompt prime 只有在冷启动状态 ready 时才会执行', async (): Promise<void> => {
         const seed = buildSeed();
         const callOrder: string[] = [];
         const fakeThis = {
             chatKey_: 'chat-001',
             chatStateManager: {
-                isChatArchived: vi.fn(async () => false),
-                getSemanticSeed: vi.fn(async () => seed),
-                getColdStartFingerprint: vi.fn(async () => 'fp-001'),
-                getColdStartStage: vi.fn(async () => 'seeded'),
-                markColdStartStage: vi.fn(async () => {
+                isChatArchived: vi.fn(async (): Promise<boolean> => false),
+                getColdStartBootstrapStatus: vi.fn(async (): Promise<ColdStartBootstrapStatus> => buildBootstrapStatus('ready', null, 'fp-001', 'seeded')),
+                getSemanticSeed: vi.fn(async (): Promise<ChatSemanticSeed> => seed),
+                getColdStartFingerprint: vi.fn(async (): Promise<string> => 'fp-001'),
+                getColdStartStage: vi.fn(async (): Promise<ColdStartStage> => 'seeded'),
+                markColdStartStage: vi.fn(async (): Promise<void> => {
                     callOrder.push('mark-stage');
                 }),
             },
-            persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+            persistSemanticSeed: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string): Promise<void> => {
                 callOrder.push(`persist:${reason}`);
             }),
-            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string) => {
+            saveSemanticSeedMemoryCards: vi.fn(async (_seed: ChatSemanticSeed, _fingerprint: string, reason: string): Promise<void> => {
                 callOrder.push(`seed-cards:${reason}`);
             }),
-            runColdStartPrimeTask: vi.fn(async (_kind: 'prompt' | 'extract', task: () => Promise<boolean>) => task()),
+            runColdStartPrimeTask: vi.fn(async (_kind: 'prompt' | 'extract', task: () => Promise<boolean>): Promise<boolean> => task()),
         };
 
-        const primePrompt = (MemorySDKImpl.prototype as any).primeColdStartPrompt as (reason: string) => Promise<boolean>;
+        const primePrompt = (MemorySDKImpl.prototype as unknown as {
+            primeColdStartPrompt: (reason: string) => Promise<boolean>;
+        }).primeColdStartPrompt;
         const result = await primePrompt.call(fakeThis, 'manual_prompt_prime');
 
         expect(result).toBe(true);
@@ -231,5 +245,37 @@ describe('cold-start bootstrap persistence', (): void => {
             'seed-cards:manual_prompt_prime',
             'mark-stage',
         ]);
+    });
+
+    it('缓存落后于持久化状态时不会重新触发冷启动执行', async (): Promise<void> => {
+        const persistedSeed = buildSeed();
+        const persistedStatus = buildBootstrapStatus('ready', null, 'fp-001', 'prompt_primed');
+
+        const fakeThis = {
+            chatKey_: 'chat-001',
+            chatStateManager: {
+                reload: vi.fn(async (): Promise<{ status: ColdStartBootstrapStatus }> => ({ status: persistedStatus })),
+                getColdStartBootstrapStatus: vi.fn(async (): Promise<ColdStartBootstrapStatus> => persistedStatus),
+                getColdStartLorebookSelection: vi.fn(async (): Promise<ColdStartLorebookSelection> => ({ books: [], entries: [] })),
+                isColdStartLorebookSelectionSkipped: vi.fn(async (): Promise<boolean> => false),
+                getSemanticSeed: vi.fn(async (): Promise<ChatSemanticSeed> => persistedSeed),
+                getColdStartFingerprint: vi.fn(async (): Promise<string> => 'fp-001'),
+                failColdStartBootstrap: vi.fn(async (_requestId: string | null, reason: string): Promise<ColdStartBootstrapStatus> => buildBootstrapStatus('failed', null, null, null, reason)),
+            },
+            persistSemanticSeed: vi.fn(async (): Promise<void> => undefined),
+            saveSemanticSeedMemoryCards: vi.fn(async (): Promise<void> => undefined),
+        };
+
+        const performBootstrap = (MemorySDKImpl.prototype as unknown as {
+            performBootstrapSemanticSeedIfNeeded: () => Promise<void>;
+        }).performBootstrapSemanticSeedIfNeeded;
+
+        await performBootstrap.call(fakeThis);
+
+        expect(fakeThis.chatStateManager.reload).toHaveBeenCalledTimes(1);
+        expect(fakeThis.chatStateManager.getColdStartBootstrapStatus).toHaveBeenCalledTimes(1);
+        expect(collectChatSemanticSeedWithAi).not.toHaveBeenCalled();
+        expect(fakeThis.persistSemanticSeed).not.toHaveBeenCalled();
+        expect(fakeThis.saveSemanticSeedMemoryCards).not.toHaveBeenCalled();
     });
 });

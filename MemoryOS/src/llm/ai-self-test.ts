@@ -134,24 +134,24 @@ async function ensureTaskReady(taskId: MemoryAiTaskId): Promise<{
  * 功能：执行摘要自测。
  * @returns 摘要自测结果。
  */
-async function testSummarize(): Promise<AiSelfTestResult> {
-    const taskId = MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId;
+async function testIngest(): Promise<AiSelfTestResult> {
+    const taskId = MEMORY_TASKS.INGEST as MemoryAiTaskId;
     const { routeStatus, blockedResult } = await ensureTaskReady(taskId);
     if (blockedResult) return blockedResult;
     const start = Date.now();
     try {
         const result = await runGeneration(taskId, {
-            systemPrompt: '你是摘要生成自测助手。请返回 JSON：{ "ok": true, "proposal": { "summaries": [{ "level": "message", "content": "自测摘要" }] }, "confidence": 0.9 }',
+            systemPrompt: '你是统一记忆摄取自测助手。请返回 JSON：{ "ok": true, "proposal": { "summaries": [{ "level": "message", "content": "自测摘要" }], "facts": [{ "type": "relationship", "value": "自测事实" }], "patches": [] }, "confidence": 0.9 }',
             events: SAMPLE_EVENTS_TEXT,
             schemaContext: '自测模式，请直接返回固定 JSON。',
-        }, { maxTokens: 300, maxLatencyMs: 0, maxCost: 0.05 });
+        }, { maxTokens: 500, maxLatencyMs: 0, maxCost: 0.05 });
         const duration = Date.now() - start;
         if (result.ok) {
             return attachRouteInfo(routeStatus, {
                 taskId,
                 ok: true,
                 durationMs: duration,
-                detail: '摘要生成正常',
+                detail: '统一记忆处理正常',
                 resourceId: result.meta?.resourceId,
                 model: result.meta?.model,
                 responsePreview: buildResponsePreview(result.data),
@@ -181,49 +181,6 @@ async function testSummarize(): Promise<AiSelfTestResult> {
  * 功能：执行结构化抽取自测。
  * @returns 抽取自测结果。
  */
-async function testExtract(): Promise<AiSelfTestResult> {
-    const taskId = MEMORY_TASKS.EXTRACT as MemoryAiTaskId;
-    const { routeStatus, blockedResult } = await ensureTaskReady(taskId);
-    if (blockedResult) return blockedResult;
-    const start = Date.now();
-    try {
-        const result = await runGeneration(taskId, {
-            systemPrompt: '你是结构化抽取自测助手。请返回 JSON：{ "ok": true, "proposal": { "facts": [{ "type": "relationship", "value": "自测事实" }] }, "confidence": 0.8 }',
-            events: SAMPLE_EVENTS_TEXT,
-            schemaContext: '自测模式，请直接返回固定 JSON。',
-        }, { maxTokens: 400, maxLatencyMs: 0, maxCost: 0.05 });
-        const duration = Date.now() - start;
-        if (result.ok) {
-            return attachRouteInfo(routeStatus, {
-                taskId,
-                ok: true,
-                durationMs: duration,
-                detail: '结构化抽取正常',
-                resourceId: result.meta?.resourceId,
-                model: result.meta?.model,
-                responsePreview: buildResponsePreview(result.data),
-            });
-        }
-        return attachRouteInfo(routeStatus, {
-            taskId,
-            ok: false,
-            durationMs: duration,
-            error: result.error,
-            detail: result.reasonCode,
-            blockedReason: result.reasonCode,
-            responsePreview: '',
-        });
-    } catch (error: unknown) {
-        return attachRouteInfo(routeStatus, {
-            taskId,
-            ok: false,
-            durationMs: Date.now() - start,
-            error: String((error as Error)?.message || error),
-            responsePreview: '',
-        });
-    }
-}
-
 /**
  * 功能：执行模板构建自测。
  * @returns 模板构建自测结果。
@@ -404,10 +361,8 @@ async function testRerank(): Promise<AiSelfTestResult> {
  */
 export async function runSingleSelfTest(taskId: MemoryAiTaskId): Promise<AiSelfTestResult> {
     switch (taskId) {
-        case MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId:
-            return testSummarize();
-        case MEMORY_TASKS.EXTRACT as MemoryAiTaskId:
-            return testExtract();
+        case MEMORY_TASKS.INGEST as MemoryAiTaskId:
+            return testIngest();
         case MEMORY_TASKS.TEMPLATE_BUILD as MemoryAiTaskId:
             return testTemplateBuild();
         case MEMORY_TASKS.VECTOR_EMBED as MemoryAiTaskId:
@@ -431,8 +386,7 @@ export async function runSingleSelfTest(taskId: MemoryAiTaskId): Promise<AiSelfT
  */
 export async function runAiSelfTests(): Promise<AiSelfTestResult[]> {
     return [
-        await runSingleSelfTest(MEMORY_TASKS.SUMMARIZE as MemoryAiTaskId),
-        await runSingleSelfTest(MEMORY_TASKS.EXTRACT as MemoryAiTaskId),
+        await runSingleSelfTest(MEMORY_TASKS.INGEST as MemoryAiTaskId),
         await runSingleSelfTest(MEMORY_TASKS.TEMPLATE_BUILD as MemoryAiTaskId),
         await runSingleSelfTest(MEMORY_TASKS.VECTOR_EMBED as MemoryAiTaskId),
         await runSingleSelfTest(MEMORY_TASKS.SEARCH_RERANK as MemoryAiTaskId),

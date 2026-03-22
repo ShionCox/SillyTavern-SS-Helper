@@ -320,6 +320,163 @@ export function getLatestRollRecordForEvent(round: PendingRoundEvent, eventId: s
   return null;
 }
 
+/**
+ * 功能：从助手消息标识中提取稳定的楼层键，忽略末尾内容哈希。
+ * @param assistantMsgId 完整的助手消息标识。
+ * @returns 稳定楼层键；无法解析时返回 `null`。
+ */
+export function buildAssistantFloorKeyEvent(assistantMsgId: string): string | null {
+  const normalized = String(assistantMsgId ?? "").trim();
+  if (!normalized) return null;
+  const parts = normalized.split(":");
+  if (parts.length < 3) return null;
+  const prefix = parts[0];
+  const idOrIndex = parts[1];
+  if (!prefix || !idOrIndex) return null;
+  if (prefix !== "assistant" && prefix !== "assistant_idx") return null;
+  return `${prefix}:${idOrIndex}`;
+}
+
+/**
+ * 功能：判断两个助手消息标识是否指向同一个楼层。
+ * @param left 左侧助手消息标识。
+ * @param right 右侧助手消息标识。
+ * @returns 若属于同一楼层则返回 `true`，否则返回 `false`。
+ */
+export function isSameAssistantFloorEvent(left: string, right: string): boolean {
+  const leftFloorKey = buildAssistantFloorKeyEvent(left);
+  const rightFloorKey = buildAssistantFloorKeyEvent(right);
+  return !!leftFloorKey && leftFloorKey === rightFloorKey;
+}
+
+export interface InvalidatePendingRoundFloorDepsEvent {
+  getDiceMetaEvent: () => DiceMetaEvent;
+  saveMetadataSafeEvent: () => void;
+}
+
+export interface InvalidateSummaryHistoryFloorDepsEvent {
+  getDiceMetaEvent: () => DiceMetaEvent;
+  saveMetadataSafeEvent: () => void;
+}
+
+/**
+ * 功能：按楼层清除当前未归档轮次中的事件、掷骰记录与计时器。
+ * @param assistantMsgId 当前楼层对应的助手消息标识。
+ * @param deps 楼层失效依赖。
+ * @returns 若实际清除了任意状态则返回 `true`，否则返回 `false`。
+ */
+export function invalidatePendingRoundFloorEvent(
+  assistantMsgId: string,
+  deps: InvalidatePendingRoundFloorDepsEvent
+): boolean {
+  const floorKey = buildAssistantFloorKeyEvent(assistantMsgId);
+  if (!floorKey) return false;
+
+  const meta = deps.getDiceMetaEvent();
+  const round = meta.pendingRound;
+  if (!round) return false;
+
+  const removedEventIds = new Set<string>();
+  const nextEvents = round.events.filter((event) => {
+    if (!event?.sourceAssistantMsgId) return true;
+    if (!isSameAssistantFloorEvent(event.sourceAssistantMsgId, assistantMsgId)) return true;
+    removedEventIds.add(event.id);
+    return false;
+  });
+
+  const nextRolls = round.rolls.filter((record) => {
+    if (record?.sourceAssistantMsgId) {
+      return !isSameAssistantFloorEvent(record.sourceAssistantMsgId, assistantMsgId);
+    }
+    return !removedEventIds.has(record?.eventId ?? "");
+  });
+
+  const nextSourceAssistantMsgIds = round.sourceAssistantMsgIds.filter(
+    (item) => !isSameAssistantFloorEvent(item, assistantMsgId)
+  );
+
+  const eventTimers = ensureEventTimerIndexEvent(round);
+  let timerChanged = false;
+  for (const eventId of removedEventIds) {
+    if (!Object.prototype.hasOwnProperty.call(eventTimers, eventId)) continue;
+    delete eventTimers[eventId];
+    timerChanged = true;
+  }
+
+  const changed =
+    nextEvents.length !== round.events.length
+    || nextRolls.length !== round.rolls.length
+    || nextSourceAssistantMsgIds.length !== round.sourceAssistantMsgIds.length
+    || timerChanged;
+
+  if (!changed) return false;
+
+  round.events = nextEvents;
+  round.rolls = nextRolls;
+  round.sourceAssistantMsgIds = nextSourceAssistantMsgIds;
+  deps.saveMetadataSafeEvent();
+  return true;
+}
+
+/**
+ * 功能：按楼层清除历史轮次中的旧事件与旧骰子结果。
+ * @param assistantMsgId 当前楼层对应的助手消息标识。
+ * @param deps 历史楼层失效依赖。
+ * @returns 若实际清除了任意历史状态则返回 `true`，否则返回 `false`。
+ */
+export function invalidateSummaryHistoryFloorEvent(
+  assistantMsgId: string,
+  deps: InvalidateSummaryHistoryFloorDepsEvent
+): boolean {
+  const floorKey = buildAssistantFloorKeyEvent(assistantMsgId);
+  if (!floorKey) return false;
+
+  const meta = deps.getDiceMetaEvent();
+  const history = Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [];
+  if (history.length === 0) return false;
+
+  let changed = false;
+  const nextHistory = history
+    .map((snapshot) => {
+      if (!snapshot) return snapshot;
+      const nextEvents = Array.isArray(snapshot.events)
+        ? snapshot.events.filter((event) => {
+            if (!event?.sourceAssistantMsgId) return true;
+            return !isSameAssistantFloorEvent(event.sourceAssistantMsgId, assistantMsgId);
+          })
+        : [];
+      const nextSourceAssistantMsgIds = Array.isArray(snapshot.sourceAssistantMsgIds)
+        ? snapshot.sourceAssistantMsgIds.filter((item) => !isSameAssistantFloorEvent(item, assistantMsgId))
+        : [];
+
+      if (
+        nextEvents.length !== (Array.isArray(snapshot.events) ? snapshot.events.length : 0)
+        || nextSourceAssistantMsgIds.length !== (Array.isArray(snapshot.sourceAssistantMsgIds) ? snapshot.sourceAssistantMsgIds.length : 0)
+      ) {
+        changed = true;
+      }
+
+      if (nextEvents.length <= 0 && nextSourceAssistantMsgIds.length <= 0) {
+        return null;
+      }
+
+      return {
+        ...snapshot,
+        events: nextEvents,
+        eventsCount: nextEvents.length,
+        rolledCount: nextEvents.filter((event) => event?.rollId || event?.resultSource).length,
+        sourceAssistantMsgIds: nextSourceAssistantMsgIds,
+      };
+    })
+    .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot != null);
+
+  if (!changed) return false;
+
+  meta.summaryHistory = nextHistory;
+  deps.saveMetadataSafeEvent();
+  return true;
+}
+
 export interface EnsureRoundEventTimersSyncedDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
   resolveEventTargetEvent: (

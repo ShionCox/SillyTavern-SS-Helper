@@ -26,6 +26,7 @@ export interface SharedWorldStateSectionTableOptions<T> {
     badgeTip: string;
     rows: T[];
     rowKey: (item: T, index: number) => string;
+    rowAttributes?: (item: T, index: number) => Record<string, string | number | boolean | null | undefined>;
     columns: SharedWorldStateSectionColumn<T>[];
     tableLimit?: number;
     typeTabs?: SharedWorldStateSectionTypeTab[];
@@ -39,6 +40,30 @@ function escapeHtml(input: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+/**
+ * 功能：把表格行属性对象转换为 HTML 属性字符串。
+ * @param attributes 行属性对象。
+ * @returns 可直接拼接到标签上的属性字符串。
+ */
+function buildAttributeHtml(
+    attributes: Record<string, string | number | boolean | null | undefined> | null | undefined,
+): string {
+    if (!attributes) {
+        return '';
+    }
+    return Object.entries(attributes)
+        .map(([key, value]: [string, string | number | boolean | null | undefined]): string => {
+            if (value == null || value === false) {
+                return '';
+            }
+            if (value === true) {
+                return ` ${escapeHtml(key)}`;
+            }
+            return ` ${escapeHtml(key)}="${escapeHtml(String(value))}"`;
+        })
+        .join('');
 }
 
 /**
@@ -66,7 +91,8 @@ export function renderSharedWorldStateSectionTable<T>(
 
     const bodyHtml = options.rows.map((item: T, index: number): string => {
         const cellsHtml = options.columns.map((column: SharedWorldStateSectionColumn<T>): string => `<td class="${escapeHtml(column.cellClassName || '')}">${column.render(item)}</td>`).join('');
-        return `<tr class="stx-re-row" data-world-row-key="${escapeHtml(options.rowKey(item, index))}">${cellsHtml}</tr>`;
+        const extraAttributes = buildAttributeHtml(options.rowAttributes?.(item, index));
+        return `<tr class="stx-re-row" data-world-row-key="${escapeHtml(options.rowKey(item, index))}"${extraAttributes}>${cellsHtml}</tr>`;
     }).join('');
 
     const tableLimit = Number.isFinite(options.tableLimit) && Number(options.tableLimit) > 0

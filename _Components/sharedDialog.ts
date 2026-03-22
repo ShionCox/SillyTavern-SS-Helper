@@ -258,10 +258,78 @@ function focusInitial(runtime: SharedDialogRuntime): void {
   target?.focus();
 }
 
+/**
+ * 功能：判断某个焦点目标是否适合在关闭弹窗后恢复。
+ * @param target 待恢复焦点的元素。
+ * @returns 是否允许恢复焦点。
+ */
+function canRestoreFocusToTarget(target: HTMLElement | null): boolean {
+  if (!(target instanceof HTMLElement) || !target.isConnected) {
+    return false;
+  }
+  if (target.closest("#extensions_settings")) {
+    return false;
+  }
+  if (target.closest(".inline-drawer")) {
+    return false;
+  }
+  return true;
+}
+
 function refreshDialogStack(state: SharedDialogState): void {
   state.dialogs.forEach((runtime: SharedDialogRuntime, index: number): void => {
     runtime.root.style.zIndex = String(100000 + index);
   });
+}
+
+/**
+ * 功能：在弹窗关闭期间短暂拦截后续指针事件，避免点击穿透到底层界面。
+ * @param durationMs 拦截持续时间。
+ * @returns 无返回值。
+ */
+function suppressFollowingPointerEvents(durationMs: number): void {
+  const eventNames: Array<keyof DocumentEventMap> = ['pointerup', 'mouseup', 'click', 'touchend'];
+  const detachList: Array<() => void> = [];
+  let active = true;
+
+  /**
+   * 功能：移除临时事件拦截器。
+   * @returns 无返回值。
+   */
+  function detachAll(): void {
+    if (!active) {
+      return;
+    }
+    active = false;
+    detachList.forEach((detach: () => void): void => detach());
+  }
+
+  /**
+   * 功能：阻止事件继续传递到底层界面。
+   * @param event 当前事件对象。
+   * @returns 无返回值。
+   */
+  function swallowEvent(event: Event): void {
+    if (!active) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const immediate = event as Event & { stopImmediatePropagation?: () => void };
+    immediate.stopImmediatePropagation?.();
+  }
+
+  eventNames.forEach((eventName: keyof DocumentEventMap): void => {
+    const handler = (event: Event): void => {
+      swallowEvent(event);
+    };
+    document.addEventListener(eventName, handler, true);
+    detachList.push((): void => {
+      document.removeEventListener(eventName, handler, true);
+    });
+  });
+
+  window.setTimeout(detachAll, Math.max(0, durationMs));
 }
 
 async function requestClose(runtime: SharedDialogRuntime, reason: SharedDialogCloseReason): Promise<boolean> {
@@ -275,6 +343,9 @@ async function requestClose(runtime: SharedDialogRuntime, reason: SharedDialogCl
   }
 
   runtime.closing = true;
+  if (reason === 'button' || reason === 'backdrop') {
+    suppressFollowingPointerEvents(220);
+  }
   runtime.root.classList.remove('is-open', 'is-visible');
   runtime.options.onClose?.(context);
 
@@ -288,8 +359,9 @@ async function requestClose(runtime: SharedDialogRuntime, reason: SharedDialogCl
     state.dialogs = state.dialogs.filter((item: SharedDialogRuntime): boolean => item !== runtime);
     refreshDialogStack(state);
     runtime.options.onAfterClose?.(context);
-    if (runtime.options.restoreFocus !== false && runtime.previousActiveElement?.isConnected) {
-      runtime.previousActiveElement.focus();
+    const previousActiveElement = runtime.previousActiveElement;
+    if (runtime.options.restoreFocus !== false && canRestoreFocusToTarget(previousActiveElement)) {
+      previousActiveElement?.focus();
     }
   }, animationDurationMs);
   return true;

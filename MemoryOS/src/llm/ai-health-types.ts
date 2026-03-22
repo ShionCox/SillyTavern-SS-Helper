@@ -10,8 +10,7 @@ import type { CapabilityKind, LLMCapability, RoutePreviewSnapshot } from '../../
 
 export type MemoryAiTaskId =
     | 'memory.coldstart.summarize'
-    | 'memory.summarize'
-    | 'memory.extract'
+    | 'memory.ingest'
     | 'world.template.build'
     | 'memory.vector.embed'
     | 'memory.search.rerank';

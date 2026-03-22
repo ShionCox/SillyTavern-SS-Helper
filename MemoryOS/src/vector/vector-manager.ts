@@ -1,8 +1,6 @@
 import { db, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryCardMeta, type DBVectorChunkMetadata } from '../db/db';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { runEmbed } from '../llm/memoryLlmBridge';
-
-const logger = new Logger('VectorManager');
 
 export interface VectorIndexStats {
     cardCount: number;
@@ -18,6 +16,16 @@ export interface MemoryCardSearchHit {
     score: number;
     metadata?: DBVectorChunkMetadata;
     createdAt?: number;
+}
+
+interface QueryVectorCacheEntry {
+    vector: number[];
+    expiresAt: number;
+}
+
+interface QueryVectorPendingEntry {
+    promise: Promise<number[] | null>;
+    createdAt: number;
 }
 
 /**
@@ -137,6 +145,9 @@ async function refreshMeta(chatKey: string): Promise<DBMemoryCardMeta> {
  *   VectorManager：记忆卡 embedding 的写入、删除、查询与统计能力。
  */
 export class VectorManager {
+    private static readonly QUERY_VECTOR_CACHE_TTL_MS: number = 5000;
+    private static readonly queryVectorCache: Map<string, QueryVectorCacheEntry> = new Map<string, QueryVectorCacheEntry>();
+    private static readonly pendingQueryVectors: Map<string, QueryVectorPendingEntry> = new Map<string, QueryVectorPendingEntry>();
     private chatKey: string;
     private defaultTopK: number = 5;
 
@@ -236,13 +247,8 @@ export class VectorManager {
             return [];
         }
         try {
-            const embedResult = await runEmbed([normalizedQuery], {
-                chatKey: this.chatKey,
-                showOverlay: false,
-                maxLatencyMs: 8000,
-            });
-            const queryVector = Array.isArray(embedResult?.vectors?.[0]) ? embedResult.vectors[0] : null;
-            if (!embedResult?.ok || !queryVector) {
+            const queryVector = await this.resolveQueryVector(normalizedQuery);
+            if (!queryVector) {
                 return [];
             }
 
@@ -285,6 +291,81 @@ export class VectorManager {
         } catch (error) {
             logger.warn('记忆卡向量搜索失败，已静默降级', error);
             return [];
+        }
+    }
+
+    /**
+     * 功能：获取查询文本对应的向量，优先复用短时缓存与并发中的同句请求。
+     * @param query 查询文本。
+     * @returns 查询向量；若生成失败则返回 null。
+     */
+    private async resolveQueryVector(query: string): Promise<number[] | null> {
+        const cacheKey = this.buildQueryVectorCacheKey(query);
+        VectorManager.pruneExpiredQueryVectorCache();
+
+        const cached = VectorManager.queryVectorCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now() && Array.isArray(cached.vector) && cached.vector.length > 0) {
+            return [...cached.vector];
+        }
+
+        const pending = VectorManager.pendingQueryVectors.get(cacheKey);
+        if (pending) {
+            return pending.promise;
+        }
+
+        const pendingPromise: Promise<number[] | null> = (async (): Promise<number[] | null> => {
+            const embedResult = await runEmbed([query], {
+                chatKey: this.chatKey,
+                showOverlay: false,
+                maxLatencyMs: 8000,
+            });
+            const queryVector = Array.isArray(embedResult?.vectors?.[0]) ? embedResult.vectors[0] : null;
+            if (!embedResult?.ok || !queryVector || queryVector.length <= 0) {
+                return null;
+            }
+            VectorManager.queryVectorCache.set(cacheKey, {
+                vector: [...queryVector],
+                expiresAt: Date.now() + VectorManager.QUERY_VECTOR_CACHE_TTL_MS,
+            });
+            return [...queryVector];
+        })();
+
+        VectorManager.pendingQueryVectors.set(cacheKey, {
+            promise: pendingPromise,
+            createdAt: Date.now(),
+        });
+
+        try {
+            return await pendingPromise;
+        } finally {
+            VectorManager.pendingQueryVectors.delete(cacheKey);
+        }
+    }
+
+    /**
+     * 功能：构建查询向量缓存键，按聊天与归一化查询内容隔离。
+     * @param query 查询文本。
+     * @returns 缓存键。
+     */
+    private buildQueryVectorCacheKey(query: string): string {
+        return `${normalizeText(this.chatKey)}::${normalizeText(query)}`;
+    }
+
+    /**
+     * 功能：清理已过期的查询向量缓存，避免短时缓存长期堆积。
+     * @returns 无返回值。
+     */
+    private static pruneExpiredQueryVectorCache(): void {
+        const now = Date.now();
+        for (const [cacheKey, entry] of VectorManager.queryVectorCache.entries()) {
+            if (!entry || entry.expiresAt <= now || !Array.isArray(entry.vector) || entry.vector.length <= 0) {
+                VectorManager.queryVectorCache.delete(cacheKey);
+            }
+        }
+        for (const [cacheKey, entry] of VectorManager.pendingQueryVectors.entries()) {
+            if (!entry || !entry.promise || entry.createdAt + VectorManager.QUERY_VECTOR_CACHE_TTL_MS * 2 <= now) {
+                VectorManager.pendingQueryVectors.delete(cacheKey);
+            }
         }
     }
 

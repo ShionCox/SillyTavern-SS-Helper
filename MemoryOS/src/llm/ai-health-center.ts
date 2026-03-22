@@ -26,8 +26,7 @@ const MAX_RECENT_RECORDS = 10;
 
 const ALL_TASK_IDS: MemoryAiTaskId[] = [
     'memory.coldstart.summarize',
-    'memory.summarize',
-    'memory.extract',
+    'memory.ingest',
     'world.template.build',
     'memory.vector.embed',
     'memory.search.rerank',
@@ -38,8 +37,7 @@ const REQUIRED_CAPABILITIES: LLMCapability[] = ['chat', 'json', 'embeddings', 'r
 
 const TASK_KIND_BY_ID: Record<MemoryAiTaskId, CapabilityKind> = {
     'memory.coldstart.summarize': 'generation',
-    'memory.summarize': 'generation',
-    'memory.extract': 'generation',
+    'memory.ingest': 'generation',
     'world.template.build': 'generation',
     'memory.vector.embed': 'embedding',
     'memory.search.rerank': 'rerank',
@@ -176,13 +174,6 @@ function syncTaskRoutesFromOverview(): void {
     const embeddingRoute = _routeOverview.embedding;
     const rerankRoute = _routeOverview.rerank;
 
-    _taskRoutes['memory.summarize'] = {
-        taskId: 'memory.summarize',
-        taskKind: 'generation',
-        available: generationRoute?.available === true,
-        blockedReason: generationRoute?.blockedReason,
-        route: generationRoute,
-    };
     _taskRoutes['memory.coldstart.summarize'] = {
         taskId: 'memory.coldstart.summarize',
         taskKind: 'generation',
@@ -190,8 +181,8 @@ function syncTaskRoutesFromOverview(): void {
         blockedReason: generationRoute?.blockedReason,
         route: generationRoute,
     };
-    _taskRoutes['memory.extract'] = {
-        taskId: 'memory.extract',
+    _taskRoutes['memory.ingest'] = {
+        taskId: 'memory.ingest',
         taskKind: 'generation',
         available: generationRoute?.available === true,
         blockedReason: generationRoute?.blockedReason,

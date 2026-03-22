@@ -1,4 +1,4 @@
 /**
- * @deprecated 兼容旧导入路径；新代码请直接从 `./recordEditorNext` 导入 `openRecordEditor`。
+ * 功能：兼容旧导入路径，避免旧入口与新目录入口形成循环引用。
  */
 export { openRecordEditor } from './recordEditorNext';

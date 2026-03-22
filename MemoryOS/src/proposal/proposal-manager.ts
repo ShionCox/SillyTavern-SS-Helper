@@ -1,4 +1,4 @@
-import type { ProposalEnvelope, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint } from './types';
+import type { ProposalEnvelope, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint, SummaryProposal } from './types';
 import type { WorldTemplate } from '../template/types';
 import { GateValidator } from './gate-validator';
 import { SchemaGate } from '../core/schema-gate';
@@ -10,14 +10,12 @@ import { MetaManager } from '../core/meta-manager';
 import { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from '../core/chat-state-manager';
 import { executeMemoryMutationPlan } from '../core/memory-mutation-executor';
-import { planMemoryMutations } from '../core/memory-mutation-planner';
+import { planMemoryMutations, type MemoryMutationPlan, type PlannedSummaryMutation } from '../core/memory-mutation-planner';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
 import { advanceMemoryTraceContext, buildMemoryMainlineTraceEntry, createMemoryTraceContext } from '../core/memory-trace';
-import { Logger } from '../../../SDK/logger';
-
-const logger = new Logger('ProposalManager');
+import { logger } from '../index';
 
 function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -29,6 +27,113 @@ function hashText(value: string): string {
         hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
     }
     return `h${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * 功能：为缺少范围信息的摘要提案补齐当前可见窗口范围，避免不同轮次摘要误判为同一条。
+ * @param summary 原始摘要提案。
+ * @param visibleMessageIds 当前可见消息键列表。
+ * @returns 补齐范围后的摘要提案。
+ */
+function ensureSummaryProposalRange(summary: SummaryProposal, visibleMessageIds: string[]): SummaryProposal {
+    const normalizedVisibleMessageIds = Array.isArray(visibleMessageIds)
+        ? visibleMessageIds.map((item: unknown): string => normalizeText(item)).filter(Boolean)
+        : [];
+    const fromMessageId = normalizeText(summary.range?.fromMessageId) || normalizedVisibleMessageIds[0] || undefined;
+    const toMessageId = normalizeText(summary.range?.toMessageId) || normalizedVisibleMessageIds[normalizedVisibleMessageIds.length - 1] || undefined;
+    if (!fromMessageId && !toMessageId) {
+        return summary;
+    }
+    return {
+        ...summary,
+        range: {
+            fromMessageId,
+            toMessageId,
+        },
+    };
+}
+
+const SUMMARY_ACTION_LABEL_MAP: Record<string, string> = {
+    ADD: '新增',
+    UPDATE: '更新',
+    MERGE: '合并',
+    DELETE: '删除',
+    INVALIDATE: '失效归档',
+    NOOP: '跳过',
+};
+
+const SUMMARY_REASON_LABEL_MAP: Record<string, string> = {
+    summary_add_new_record: '未命中旧摘要，直接新增',
+    summary_explicit_target_missing: '指定目标不存在，改为新增',
+    summary_update_existing_record: '命中旧摘要，直接更新',
+    summary_merge_existing_record: '命中旧摘要，合并内容',
+    summary_merge_no_change: '合并后无变化，跳过写入',
+    summary_exact_duplicate: '与已有摘要完全重复，跳过写入',
+    summary_delete_explicit_target: '按指定目标删除摘要',
+    summary_delete_missing_target: '指定删除目标不存在，跳过写入',
+    summary_invalidate_explicit_target: '按指定目标归档摘要',
+    summary_invalidate_missing_target: '指定归档目标不存在，跳过写入',
+    planner_keep_record_key: '沿用旧摘要键',
+    planner_skip_direct_write: '规划阶段已判定无需直写',
+};
+
+/**
+ * 功能：把摘要范围整理成便于日志排查的短文本。
+ * @param summary 摘要提案。
+ * @returns 范围文本。
+ */
+function formatSummaryRangeForLog(summary: SummaryProposal): string {
+    const fromMessageId = normalizeText(summary.range?.fromMessageId);
+    const toMessageId = normalizeText(summary.range?.toMessageId);
+    if (!fromMessageId && !toMessageId) {
+        return '未提供范围';
+    }
+    return `${fromMessageId || '?'} -> ${toMessageId || '?'}`;
+}
+
+/**
+ * 功能：把摘要规划原因码转换为更直观的中文说明。
+ * @param reasonCodes 原始原因码列表。
+ * @returns 中文说明列表。
+ */
+function formatSummaryReasonLabels(reasonCodes: string[]): string[] {
+    return reasonCodes.map((reasonCode: string): string => {
+        return SUMMARY_REASON_LABEL_MAP[reasonCode] || reasonCode;
+    });
+}
+
+/**
+ * 功能：输出摘要规划日志，直观说明每条摘要为何新增、合并或跳过。
+ * @param chatKey 当前聊天键。
+ * @param consumerPluginId 调用方插件标识。
+ * @param plan 摘要规划结果。
+ * @returns 无返回值。
+ */
+function logSummaryMutationPlan(
+    chatKey: string,
+    consumerPluginId: string,
+    plan: MemoryMutationPlan,
+): void {
+    if (!Array.isArray(plan.summaryMutations) || plan.summaryMutations.length <= 0) {
+        return;
+    }
+    logger.info(`[摘要规划] chatKey=${chatKey}, consumer=${consumerPluginId}, count=${plan.summaryMutations.length}`);
+    plan.summaryMutations.slice(0, 8).forEach((mutation: PlannedSummaryMutation, index: number): void => {
+        const title = normalizeText(mutation.nextTitle ?? mutation.proposal.title) || '未命名摘要';
+        const level = normalizeText(mutation.proposal.level) || 'summary';
+        const action = SUMMARY_ACTION_LABEL_MAP[mutation.item.action] || mutation.item.action;
+        const reasonLabels = formatSummaryReasonLabels(Array.isArray(mutation.item.reasonCodes) ? mutation.item.reasonCodes : []);
+        const targetRecordKey = normalizeText(mutation.target?.summaryId ?? mutation.item.targetRecordKey) || '-';
+        const existingRecordKeys = Array.isArray(mutation.item.existingRecordKeys) && mutation.item.existingRecordKeys.length > 0
+            ? mutation.item.existingRecordKeys.join('|')
+            : '-';
+        logger.info(
+            `[摘要规划#${index + 1}] level=${level}, action=${action}, title=${title}, range=${formatSummaryRangeForLog(mutation.proposal)}, target=${targetRecordKey}, existing=${existingRecordKeys}, reasons=${reasonLabels.join('；') || '无'}`,
+        );
+    });
+    if (plan.summaryMutations.length > 8) {
+        logger.info(`[摘要规划] 其余 ${plan.summaryMutations.length - 8} 条摘要规划已省略显示`);
+    }
 }
 
 /**
@@ -293,7 +398,9 @@ export class ProposalManager {
             logger.info('facts 单轮提议已达到预算上限，剩余条目将被跳过');
         }
         const plannedPatches = Array.isArray(patches) ? patches.slice() : [];
-        const plannedSummaries = Array.isArray(summaries) ? summaries.slice() : [];
+        const plannedSummaries = Array.isArray(summaries)
+            ? summaries.map((summary: SummaryProposal): SummaryProposal => ensureSummaryProposalRange(summary, visibleMessageIds))
+            : [];
 
         const mutationPlan = await planMemoryMutations({
             chatKey: this.chatKey,
@@ -304,6 +411,7 @@ export class ProposalManager {
             summaries: plannedSummaries,
             chatStateManager: this.chatStateManager,
         });
+        logSummaryMutationPlan(this.chatKey, consumerPluginId, mutationPlan);
         const execution = await executeMemoryMutationPlan({
             chatKey: this.chatKey,
             consumerPluginId,

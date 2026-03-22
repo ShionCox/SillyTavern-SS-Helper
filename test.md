@@ -1,276 +1,103 @@
-# 向量冷启动向量应该怎么收集信息
-
-我建议把冷启动拆成两层：
-
-## 第一层：真相层 seed
-
-这层继续保留你现在的做法，不动：
-
-* `identitySeed`
-* `styleSeed`
-* `worldSeed`
-* `aiSummary`
-* `activeLorebooks`
-* `groupMembers`
-
-这些仍然进 `facts/state`，因为它们是可编辑、可覆盖、可结构化的“源真相” 
-
-## 第二层：向量层 cold-start cards
-
-新增一条专用链：
-
-`ChatSemanticSeed -> ColdStartMemoryCardDrafts -> persistMemoryCards -> upsertMemoryCardEmbeddings`
-
-也就是冷启动不要直接把 seed 一坨塞向量，而是先**抽成 MemoryCardDraft**，再走你现在已经成型的 `memory-card-store` 主线。因为 store 里已经有：
-
-* admission 规则：`confidence >= 0.72 && importance >= 0.6 && isNaturalMemoryText(...)`
-* 去重 / 复用 / supersede
-* 保存后自动 embedding
-  这些机制你已经写好了，冷启动应该复用，而不是另起炉灶 
-
----
-
-# 冷启动该收集哪些信息
-
-我建议只收**高稳定、高复用、高语义价值**的信息，按 4 类收：
-
-## 1. 角色恒定画像
-
-来自：
-
-* `identitySeed.displayName`
-* `identitySeed.aliases`
-* `identitySeed.identity`
-* `identitySeed.catchphrases`
-* `identitySeed.relationshipAnchors`
-* `aiSummary.roleSummary`
-
-这些最适合做 `profile` / `trait` / `relationship anchor` 类卡。
-原因是它们跨回合稳定，召回价值高，而且不会因为一两轮剧情就失真。当前这些字段已经在 `persistSemanticSeed(...)` 被写入 `semantic.identity` fact，所以源数据是齐的 
-
-### 适合的卡
-
-* `lane: profile`
-* `lane: relationship`
-* 少量 `lane: state` 但只针对“当前身份状态”这类内容
-
----
-
-## 2. 世界硬约束
-
-来自：
-
-* `worldSeed.rules`
-* `worldSeed.hardConstraints`
-* `aiSummary.worldSummary`
-
-这部分是冷启动最应该进向量的，因为问答/写作时最常被召回。
-
-### 适合的卡
-
-* `lane: state`：世界规则、禁忌、硬设定
-* `lane: profile`：阵营/世界背景总览
-
-这里要注意：
-**世界规则要一条一张卡，不要拼成长摘要。**
-因为你现在检索单元已经是 MemoryCard，不是旧 chunk。规则拆卡后召回更准，supersede 也更容易。
-
----
-
-## 3. 重要实体和地点
-
-来自：
-
-* `worldSeed.entities`
-* `worldSeed.locations`
-* `inferStructuredSeedWorldStateEntries(seed)` 产出的结构化条目 
-
-这类信息最适合做“实体概览卡”，但不要全量灌。
-
-### 只收这三种
-
-* 主角色直接相关实体
-* 高频地点
-* 有明确规则/关系/作用的实体
-
-不要把世界书所有 entity/location 全进向量，否则会把 recall 噪声拉高。
-
----
-
-## 4. 当前会话绑定信息
-
-来自：
-
-* `activeLorebooks`
-* `groupMembers`
-* 当前 scope/roleKey/chat binding
-
-这类不适合作长期 profile 卡，但适合少量 `state` 卡，帮助冷启动初期做“当前场景上下文约束”。
-
----
-
-# 不该收什么
-
-这部分很关键。
-
-## 不要收原始大段世界书正文
-
-因为：
-
-* 噪声高
-* 文风混杂
-* 会和后续摘要链重复
-* admission 很难控制
-
-## 不要收低置信碎片
-
-你现在 `memory-card-store` 的 admission 已经要求置信和重要度门槛 
-冷启动也应该遵守，尤其不要把“猜测类描述”“装饰性文本”进向量。
-
-## 不要把 seed 整体做成一个 summaryText 丢进去
-
-你现在 `primeColdStartExtract()` 那种 `summaryLines.join('\n')` 更像调试观察，不适合最终向量写入。因为检索粒度太粗，也不利于 supersede 
-
----
-
-# 我建议的具体实现
-
-## 新增函数
-
-在 `memory-card-text.ts` 或新文件里加：
-
-* `buildMemoryCardDraftsFromSemanticSeed(seed, options?)`
-
-返回 `MemoryCardDraft[]`
-
-### 输出分层建议
-
-1. `profile` 卡
-2. `relationship` 卡
-3. `state` 卡（世界规则/硬约束）
-4. `profile/state` 混合卡（重要地点/组织/实体）
-
-### 每张卡字段建议
-
-* `subject`: 角色名 / 地点名 / 组织名 / 世界
-* `title`: 更短的展示标题
-* `memoryText`: 一句自然语言，禁止 JSON 感
-* `keywords`: roleKey、alias、entity name、rule tag
-* `entityKeys`: 稳定实体键
-* `replaceKey`: 用于 state/profile 覆盖
-* `confidence`: 角色核心 0.9，世界概览 0.8，实体概览 0.75
-* `importance`: 规则/硬约束 0.9，身份画像 0.85，次要实体 0.65
-
----
-
-## 新增保存入口
-
-在 `memory-card-store.ts` 增一个：
-
-* `saveMemoryCardsFromSemanticSeed(chatKey, seed, fingerprint, reason)`
-
-内部直接：
-
-1. `buildMemoryCardDraftsFromSemanticSeed(...)`
-2. `persistMemoryCards(...)`
-3. `deleteMemoryCardEmbeddings(...)` for superseded
-4. `upsertMemoryCardEmbeddings(...)`
-
-这样冷启动就完全复用你已经做好的 store 主线 
-
----
-
-# 最合适的接线位置
-
-## 位置 A：bootstrap 完成后立刻建卡
-
-在 `performBootstrapSemanticSeedIfNeeded()` 里：
-
-* `saveSemanticSeed(...)`
-* `persistSemanticSeed(...)`
-* **`saveMemoryCardsFromSemanticSeed(...)`**
-* `markColdStartStage('prompt_primed', ...)`
-
-这是最推荐的位置，因为首次进入聊天时，向量库就准备好了。当前这里正是缺的那一环 
-
-## 位置 B：editor refresh 后也重建一次
-
-`editor.refreshSemanticSeed()` 现在只会重新 `saveSemanticSeed(...)` 和 `persistSemanticSeed(...)`，也应该补一遍 `saveMemoryCardsFromSemanticSeed(...)`，这样编辑器刷新后向量卡也同步更新 
-
----
-
-# 我更推荐的卡片模板
-
-## 角色画像卡
-
-`subject = 角色名`
-
-`memoryText` 例子：
-
-* “Alice 是一名冷静克制的调查员，优先依据证据行动，不轻易透露真实情绪。”
-* “Alice 常用简短、克制的表达，避免夸张和戏剧化语气。”
-
-## 世界规则卡
-
-`subject = 世界`
-
-`memoryText` 例子：
-
-* “这个世界中魔法使用会留下可追踪痕迹，公开施法会显著提高暴露风险。”
-* “该设定下贵族不得公开与平民缔结婚约，否则会触发家族制裁。”
-
-## 实体概览卡
-
-`subject = 组织/地点/人物`
-
-`memoryText` 例子：
-
-* “黑塔是帝都的情报与档案中枢，进入权限严格分级，外来者通常无法接触核心记录。”
-
-这种写法最适合你当前 `isNaturalMemoryText(...)` 的准入规则，也最适合 embedding 检索 
-
----
-
-# 一个很重要的设计取舍
-
-我建议：
-
-**冷启动向量只做“静态基础卡”，不要做“剧情事件卡”。**
-
-因为剧情事件应该来自后续真实对话摘要链，已经有现成主线：
-
-* mutation executor 里的 summary/fact 写入会转 MemoryCard
-* 然后自动 embedding  
-
-也就是说：
-
-* 冷启动负责“角色是谁、世界怎么运作”
-* 正常运行负责“后来发生了什么”
-
-这个边界最干净。
-
----
-
-# 最后的设计结论
-
-我会给你的最终方案是：
-
-**向量冷启动 = 只从 `ChatSemanticSeed` 中抽取高稳定、高复用的信息，生成少量高质量 `MemoryCardDraft`，然后统一走 `memory-card-store` 主线。**
-
-最优收集面：
-
-* 角色恒定画像
-* 世界规则与硬约束
-* 关键实体/地点概览
-* 当前会话绑定上下文
-
-最优接线点：
-
-* `performBootstrapSemanticSeedIfNeeded()` 之后
-* `editor.refreshSemanticSeed()` 之后
-
-最该避免的：
-
-* 整段世界书原文入向量
-* 把 seed 拼成一坨 summaryText
-* 收低稳定、低重要度碎片
+# 记忆抽取稳态方案：更保守触发 + 结构化兼容降级
+
+## 概要
+保留现在“每次回复后做一次本地抽取判定”的架构，不改主入口；真正要改的是两件事：
+
+- 让 `memory.extract` 更保守，只在明显有价值时才真正发 AI 请求，减少“看起来每回合都在抽取”的体感。
+- 让 Tavern 路由对结构化输出更稳，遇到 `Bad Request` 时自动兼容降级，不再直接把抽取打死。
+
+这样能同时解决“请求太频繁”和“抽取偶发 400”两个问题，而且不破坏现有 MemoryOS 主流程。
+
+## 关键改动
+### 1. 抽取触发改为更保守
+在 `MemoryOS/src/core/extract-manager.ts` 调整抽取前置门控，保持 `generation_ended -> kickOffExtraction()` 不变，但更严格限制“真正发 AI 请求”的条件：
+
+- 保留现有 turn-based 判定与窗口去重，不改入口事件。
+- 提高兜底触发阈值：
+  - `minUserMessageDelta` 从 `3` 提到 `4`
+  - `minEventDelta` 从 `20` 提到 `28`
+  - `duplicateWindowMs` 从 `8000` 提到 `20000`
+- 调整 `buildProcessingDecision()` 的默认分支：
+  - 当前默认 `plot_progress` 很容易落到 `light` 或 `medium`
+  - 改为只有满足以下任一条件才允许进入 `light/medium/heavy`
+    - `specialEventHit`
+    - `mutationRepairSignal`
+    - `stageCompletionSignal`
+    - `longRunningSignal`
+    - `postGate.shouldExtractWorldState`
+    - `postGate.shouldExtractRelations`
+    - `postGate.rebuildSummary`
+  - 否则 `plot_progress` 直接落到 `level: 'none'`，并补充原因码 `plot_progress_deferred`
+- `small_talk_noise`、`tool_result`、`setting_confirmed`、`relationship_shift` 的现有价值分类保留，不做放宽。
+
+默认效果：
+- 普通闲聊和轻微剧情推进更容易只做本地判定，不真正发 `memory.extract`
+- 设定确认、关系变化、结构修复、长线阶段切换仍然会正常触发
+
+### 2. Tavern 结构化输出做三级降级
+在 `LLMHub/src/providers/tavern-provider.ts` 增加结构化兼容回退链，只在明显属于结构化参数不兼容时触发：
+
+- 第一次：按原始请求发送
+  - `jsonSchema + jsonMode`
+- 第二次：如果失败且错误像 `Bad Request / response_format / json_schema`，降级为
+  - `jsonMode: true`，不带 `jsonSchema`
+- 第三次：如果还失败，再降级为
+  - 不带 `jsonMode`、不带 `jsonSchema`
+- 如果失败原因不是结构化兼容问题，例如限流、余额、网络异常，不重试，保持原样失败。
+
+这个降级只发生在 Tavern Provider，不改 OpenAI Provider 现有逻辑。
+
+### 3. 请求日志与任务面板补清晰说明
+在 LLMHub 请求日志和任务记录里增加“本次是否发生结构化降级”的可见信息，避免用户只能看到一个模糊的 `Bad Request`：
+
+- 给 Provider 返回结果补充调试字段：
+  - `structuredFallbackStage: 'none' | 'json_object' | 'plain'`
+  - `structuredFallbackTriggered: boolean`
+- 请求日志里显示：
+  - 初始请求格式
+  - 最终成功格式
+  - 是否发生兼容降级
+- 如果最终是降级成功，不标成“硬失败”；显示为“已兼容降级成功”
+- 如果最终仍失败，日志里明确写成：
+  - “结构化输出不兼容，已尝试降级到 json_object/plain，仍失败”
+
+### 4. 用户侧提示改成“检查”与“真正请求”分离
+在 MemoryOS 的任务表现层保持现有 `memory.extract` 任务不变，但补一条轻量说明，避免误解成“每回复一次就一定请求模型”：
+
+- 不为本地 `kickOffExtraction()` 检查单独建 AI 任务
+- 仅在真正进入 `runProposalTask('memory.extract')` 时才显示 `memory.extract`
+- 在相关帮助文案或状态说明中明确：
+  - “每次回复后都会检查是否需要抽取，但只有满足条件时才会真正请求 AI”
+
+## 接口与类型变化
+- `LLMHub/src/providers/types.ts`
+  - `LLMResponse.debugRequest` 保持兼容，新增可选调试字段用于记录结构化降级阶段
+- 与外部调用方的公开调用方式不变：
+  - `runGeneration`
+  - `memory.extract`
+  - `kickOffExtraction`
+  都不改签名
+
+## 测试与验收
+### 抽取节奏
+- 连续普通闲聊 1 到 3 回合，不应真正发 `memory.extract`
+- 普通剧情推进但无设定/关系/世界状态变化时，应更常落到 `level: none`
+- 关系变化、设定确认、世界状态更新、消息修订、分支切换，仍应触发抽取
+- 同一窗口短时间重复触发，不应重复发相同抽取请求
+
+### 结构化兼容
+- Tavern 路由支持 `json_schema` 时，仍走原始结构化请求，不触发回退
+- Tavern 路由拒绝 `json_schema` 但支持 `json_object` 时，应自动降级并成功
+- Tavern 路由连 `json_object` 也不支持时，应自动退到 plain，并由后续 JSON 解析继续兜底
+- 非结构化兼容类错误，例如网络失败、余额不足、限流，不应错误触发降级链
+
+### 请求日志
+- 成功直连时，日志显示 `structuredFallbackStage = none`
+- 降级成功时，日志能看到原始格式与最终格式
+- 最终失败时，日志能明确写出“已尝试兼容降级但仍失败”
+
+## 假设与默认
+- 默认保留 `generation_ended` 作为抽取检查入口，不改事件架构。
+- 默认采用“静默自动降级”，不弹额外打扰式错误提示；详细信息进请求日志与任务详情。
+- 默认优先减少无价值抽取请求，而不是追求每回合都及时更新记忆。
+- 默认不新增新的设置项，先用更合理的内置策略解决；如果后续仍需细调，再考虑把“抽取节奏”开放成设置项。

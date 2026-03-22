@@ -1,10 +1,9 @@
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { ChatStateManager } from './chat-state-manager';
 import type { RowRefResolution, RowRefSource } from '../types';
 import type { DBFact } from '../db/db';
 import { FactsManager } from './facts-manager';
 
-const logger = new Logger('RowResolver');
 
 /**
  * 统一实体解析入口

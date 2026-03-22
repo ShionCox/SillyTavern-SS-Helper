@@ -8,7 +8,7 @@ import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOption
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { showSharedContextMenu } from '../../../_Components/sharedContextMenu';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
-import { Logger } from '../../../SDK/logger';
+import { logger } from '../index';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
 import type { TavernConnectionInfoItem, TavernConnectionSnapshot } from '../../../SDK/tavern';
@@ -39,7 +39,6 @@ import type {
 let LLMHUB_THEME_BINDING_READY = false;
 let LLMHUB_REGISTRY_SUBSCRIPTION_DISPOSE: (() => void) | null = null;
 let LLMHUB_CONSUMER_DISCOVERY_SEQ = 0;
-const logger = new Logger('LLMHub-UI');
 
 type ProviderLite = { id: string };
 
@@ -746,7 +745,7 @@ export async function renderSettingsUi(): Promise<void> {
         bindUiEvents();
         ensureSharedTooltip();
     } catch (error) {
-        console.error('UI 渲染失败:', error);
+        logger.error('UI 渲染失败:', error);
     }
 }
 
@@ -862,7 +861,7 @@ function bindUiEvents(): void {
                 current.globalProfile = profileEl.value;
                 saveSettings();
             } catch (error) {
-                console.error('设置全局 Profile 失败:', error);
+                logger.error('设置全局 Profile 失败:', error);
             }
         });
     }
@@ -1631,7 +1630,7 @@ function bindUiEvents(): void {
             if (resourceApiKeyEl) resourceApiKeyEl.value = '';
             showTestResult({ ok: true, message: `已保存 ${resourceId} 的凭据` });
         } catch (error) {
-            console.error('保存凭据失败:', error);
+            logger.error('保存凭据失败:', error);
             alert('保存凭据失败，请查看控制台');
         }
     });
