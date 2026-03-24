@@ -1218,6 +1218,374 @@
   margin: 0;
 }
 
+.stx-re-role-center-shell {
+  --stx-re-role-gold: color-mix(in srgb, var(--ss-theme-accent, #d2a64f) 84%, #f4d58d 16%);
+  --stx-re-role-cyan: color-mix(in srgb, var(--stx-memory-info, #78a8ff) 78%, #5eead4 22%);
+  --stx-re-role-panel:
+    linear-gradient(180deg, color-mix(in srgb, var(--stx-re-memory-surface) 96%, transparent) 0%, color-mix(in srgb, var(--stx-re-memory-surface-strong) 100%, transparent) 100%);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.stx-re-role-center-shell .stx-re-memory-layout {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  align-items: stretch;
+  overflow: visible;
+}
+
+.stx-re-role-center-shell .stx-re-memory-sidebar,
+.stx-re-role-center-shell .stx-re-memory-main {
+  min-height: 0;
+}
+
+.stx-re-role-center-console {
+  border-color: color-mix(in srgb, var(--stx-re-role-gold) 30%, var(--stx-re-memory-line) 70%);
+}
+
+.stx-re-role-center-console-ledger,
+.stx-re-role-center-logbook-ledger {
+  gap: 8px;
+}
+
+.stx-re-role-center-main {
+  gap: 12px;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.stx-re-role-center-main::-webkit-scrollbar {
+  width: 8px;
+}
+
+.stx-re-role-center-main::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--stx-re-role-gold) 40%, transparent);
+}
+
+.stx-re-role-center-main::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--stx-re-memory-surface-softer) 72%, transparent);
+}
+
+.stx-re-role-center-roster {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--stx-re-role-cyan) 9%, transparent) 0%, transparent 34%),
+    var(--stx-re-role-panel);
+}
+
+.stx-re-role-center-roster .stx-re-memory-actor-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.stx-re-role-center-roster .stx-re-memory-actor-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.stx-re-role-center-roster .stx-re-memory-actor-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--stx-re-role-cyan) 30%, transparent);
+}
+
+.stx-re-role-center-roster .stx-re-memory-actor-list::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--stx-re-memory-surface-softer) 70%, transparent);
+}
+
+.stx-re-role-center-hero,
+.stx-re-role-center-equipment-preview,
+.stx-re-role-center-attributes,
+.stx-re-role-center-origin,
+.stx-re-role-center-relations,
+.stx-re-role-center-inventory-panel,
+.stx-re-role-center-equipment-panel,
+.stx-re-role-center-logbook {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-text, #fff) 3%, transparent) 0%, transparent 100%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--stx-re-role-gold) 10%, transparent) 0%, transparent 26%),
+    var(--stx-re-role-panel);
+  border-color: color-mix(in srgb, var(--stx-re-role-gold) 18%, var(--stx-re-memory-line) 82%);
+}
+
+.stx-re-role-center-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.stx-re-role-center-avatar-panel {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.stx-re-role-center-avatar-frame {
+  width: 132px;
+  min-width: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.stx-re-role-center-avatar-core {
+  width: 132px;
+  height: 132px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--stx-re-role-gold) 36%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-text, #fff) 4%, transparent) 0%, transparent 100%),
+    radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--stx-re-role-cyan) 24%, transparent) 0%, transparent 45%),
+    color-mix(in srgb, var(--stx-re-memory-surface-strong) 96%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--ss-theme-text, #fff) 4%, transparent),
+    0 20px 36px -28px color-mix(in srgb, var(--stx-re-role-gold) 42%, transparent);
+}
+
+.stx-re-role-center-avatar-core i {
+  font-size: 48px;
+  color: color-mix(in srgb, var(--stx-re-role-gold) 82%, white 18%);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--stx-re-role-cyan) 22%, transparent);
+}
+
+.stx-re-role-center-avatar-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--stx-re-role-gold) 22%, transparent);
+  background: color-mix(in srgb, var(--stx-re-role-gold) 11%, rgba(10, 18, 26, 0.92) 89%);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stx-re-role-center-avatar-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stx-re-role-center-stat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stx-re-role-center-stat-grid,
+.stx-re-role-center-equipment-grid,
+.stx-re-role-center-inventory-grid,
+.stx-re-role-center-relations-grid,
+.stx-re-role-center-attribute-grid {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stx-re-role-center-stat-grid {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.stx-re-role-center-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--stx-re-memory-line);
+  background: color-mix(in srgb, var(--stx-re-memory-surface-softer) 92%, transparent);
+}
+
+.stx-re-role-center-stat-card.is-accent {
+  border-color: color-mix(in srgb, var(--stx-re-role-gold) 26%, transparent);
+}
+
+.stx-re-role-center-stat-card.is-warning {
+  border-color: color-mix(in srgb, var(--stx-memory-warning, #ffbf66) 26%, transparent);
+}
+
+.stx-re-role-center-stat-label,
+.stx-re-role-center-slot-label,
+.stx-re-role-center-fact-label,
+.stx-re-role-center-attribute-label {
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stx-re-memory-text-muted);
+  font-weight: 800;
+}
+
+.stx-re-role-center-stat-value,
+.stx-re-role-center-attribute-value {
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 900;
+  color: var(--stx-re-memory-text-strong);
+}
+
+.stx-re-role-center-stat-meta,
+.stx-re-role-center-slot-detail,
+.stx-re-role-center-asset-item div,
+.stx-re-role-center-origin-item span,
+.stx-re-role-center-relation-detail {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--stx-re-memory-text-soft);
+  overflow-wrap: anywhere;
+}
+
+.stx-re-role-center-attribute-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.stx-re-role-center-attribute-chip,
+.stx-re-role-center-fact-item,
+.stx-re-role-center-origin-item,
+.stx-re-role-center-relation-node {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--stx-re-memory-line);
+  background: color-mix(in srgb, var(--stx-re-memory-surface-softer) 94%, transparent);
+  min-width: 0;
+}
+
+.stx-re-role-center-fact-list,
+.stx-re-role-center-origin-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.stx-re-role-center-fact-value,
+.stx-re-role-center-origin-item strong,
+.stx-re-role-center-asset-item strong,
+.stx-re-role-center-slot-name {
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 800;
+  color: var(--stx-re-memory-text-strong);
+  overflow-wrap: anywhere;
+}
+
+.stx-re-role-center-equipment-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.stx-re-role-center-slot,
+.stx-re-role-center-asset-item,
+.stx-re-role-center-inventory-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 136px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--stx-re-role-gold) 18%, var(--stx-re-memory-line) 82%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-text, #fff) 3%, transparent) 0%, transparent 100%),
+    color-mix(in srgb, var(--stx-re-memory-surface) 96%, transparent);
+  overflow: hidden;
+}
+
+.stx-re-role-center-slot::before,
+.stx-re-role-center-asset-item::before,
+.stx-re-role-center-inventory-slot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, transparent 0, transparent calc(100% - 1px), color-mix(in srgb, var(--stx-re-role-gold) 12%, transparent) calc(100% - 1px)),
+    linear-gradient(0deg, transparent 0, transparent calc(100% - 1px), color-mix(in srgb, var(--stx-re-role-gold) 12%, transparent) calc(100% - 1px));
+  background-size: 18px 18px;
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+.stx-re-role-center-slot.is-empty {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.stx-re-role-center-slot-core,
+.stx-re-role-center-asset-icon,
+.stx-re-role-center-inventory-icon {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--stx-re-role-cyan) 20%, transparent);
+  background: color-mix(in srgb, var(--stx-re-role-cyan) 8%, var(--stx-re-memory-surface-strong) 92%);
+  color: color-mix(in srgb, var(--stx-re-role-gold) 86%, white 14%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ss-theme-text, #fff) 5%, transparent);
+}
+
+.stx-re-role-center-slot-rarity,
+.stx-re-role-center-asset-rarity,
+.stx-re-role-center-inventory-slot small {
+  margin-top: auto;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--stx-re-role-gold) 84%, white 16%);
+  letter-spacing: 0.06em;
+}
+
+.stx-re-role-center-inventory-grid {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.stx-re-role-center-relations-grid {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.stx-re-role-center-relation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stx-re-role-center-log-entry {
+  min-height: 0;
+}
+
+.stx-re-role-center-logbook .stx-re-memory-entry-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @keyframes stxRecordDiagNodePulse {
   0%,
   100% {
@@ -1239,6 +1607,7 @@
 @media (max-width: 1180px) {
   .stx-re-memory-console-grid,
   .stx-re-memory-layout,
+  .stx-re-role-center-hero-grid,
   .stx-re-memory-detail-grid,
   .stx-re-diag-console-grid,
   .stx-re-diag-main-layout,
@@ -1248,12 +1617,31 @@
 
   .stx-re-memory-console-strip,
   .stx-re-diag-console-strip,
+  .stx-re-role-center-stat-grid,
   .stx-re-diag-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 760px) {
+  .stx-re-role-center-main,
+  .stx-re-role-center-roster {
+    max-height: none;
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .stx-re-role-center-shell .stx-re-memory-layout {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .stx-re-role-center-roster .stx-re-memory-actor-list {
+    max-height: 320px;
+    padding-right: 0;
+  }
+
   .stx-re-memory-console-controls {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1277,6 +1665,13 @@
   .stx-re-memory-entry-list,
   .stx-re-memory-persona-panel,
   .stx-re-memory-suppressed-list,
+  .stx-re-role-center-stat-grid,
+  .stx-re-role-center-attribute-grid,
+  .stx-re-role-center-equipment-grid,
+  .stx-re-role-center-inventory-grid,
+  .stx-re-role-center-relations-grid,
+  .stx-re-role-center-fact-list,
+  .stx-re-role-center-origin-list,
   .stx-re-diag-console-strip,
   .stx-re-diag-summary-grid,
   .stx-re-diag-signal-grid,

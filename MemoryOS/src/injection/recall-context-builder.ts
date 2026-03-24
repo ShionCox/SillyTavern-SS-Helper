@@ -5,6 +5,7 @@ import type {
     MemoryTuningProfile,
     PersonaMemoryProfile,
     RelationshipState,
+    RoleProfile,
 } from '../types';
 
 /**
@@ -20,6 +21,7 @@ export interface PreparedRecallContext {
     relationships: RelationshipState[];
     fallbackRelationshipWeight: number;
     tuningProfile: MemoryTuningProfile | null;
+    roleProfiles: Record<string, RoleProfile>;
     recallQuery: string;
 }
 
@@ -57,6 +59,7 @@ export async function buildPreparedRecallContext(
         relationships: [],
         fallbackRelationshipWeight: 0,
         tuningProfile: null,
+        roleProfiles: {},
         recallQuery: String(query ?? ''),
     };
     if (!chatStateManager) {
@@ -67,6 +70,7 @@ export async function buildPreparedRecallContext(
     const personaProfile = await chatStateManager.getPersonaMemoryProfile();
     const personaProfiles = await chatStateManager.getPersonaMemoryProfiles();
     const tuningProfile = await chatStateManager.getMemoryTuningProfile();
+    const roleProfiles = await chatStateManager.getRoleProfiles();
     const lifecycleSummary = await chatStateManager.getMemoryLifecycleSummary(240);
     const lifecycleMap = new Map(
         lifecycleSummary.map((item: MemoryLifecycleState): [string, MemoryLifecycleState] => [item.recordKey, item]),
@@ -84,6 +88,7 @@ export async function buildPreparedRecallContext(
         relationships,
         fallbackRelationshipWeight,
         tuningProfile,
+        roleProfiles,
         recallQuery: String(query ?? ''),
     };
 }

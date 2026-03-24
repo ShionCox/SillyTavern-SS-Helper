@@ -4006,7 +4006,7 @@ function formatMemoryContextBlocksValue(value: unknown): string {
         const kind = String(item?.kind ?? '').trim();
         const actorKey = String(item?.actorKey ?? '').trim();
         const sectionHints = Array.isArray(item?.sectionHints) ? item.sectionHints.map((hint: unknown): string => String(hint ?? '').trim()).filter(Boolean) : [];
-        const prefix = kind === 'active_character_memory' ? '角色块' : '导演块';
+        const prefix = kind === 'memoryos_roles' ? '角色块' : '世界块';
         return actorKey
             ? `${prefix}(${actorKey})${sectionHints.length > 0 ? ` · ${sectionHints.join(',')}` : ''}`
             : `${prefix}${sectionHints.length > 0 ? ` · ${sectionHints.join(',')}` : ''}`;

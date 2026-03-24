@@ -5,8 +5,15 @@ import type { MemorySDKImpl } from '../../../sdk/memory-sdk';
 import type {
     EditorExperienceSnapshot,
     MemoryCardSummary,
+    RoleAssetEntry,
     RoleProfile,
 } from '../../../../../SDK/stx';
+import {
+    renderRoleCenterPanelHtml,
+    type RoleCenterAssetViewModel,
+    type RoleCenterPanelRenderHelpers,
+    type RoleCenterStatCard,
+} from './roleCenterPanel';
 import type { RecordEditorViewMeta } from '../types';
 
 type RoleMemoryCategory = 'all' | 'dialogue' | 'event' | 'relationship' | 'identity' | 'world' | 'status' | 'other';
@@ -244,6 +251,132 @@ function matchesMemoryQuery(card: MemoryCardSummary, query: string, title: strin
 }
 
 /**
+ * 功能：根据装备文本推断装备槽位名称。
+ * @param asset 装备条目。
+ * @returns 装备槽位标签。
+ */
+function resolveEquipmentSlotLabel(asset: RoleAssetEntry): string {
+    const haystack = normalizeLookup(`${asset.name} ${asset.detail}`);
+    if (/weapon|武器|剑|刀|枪|弓|杖|匕首|法器/.test(haystack)) return '主武器';
+    if (/shield|副手|盾|法典|书|挂件/.test(haystack)) return '副手';
+    if (/head|helmet|头|冠|帽/.test(haystack)) return '头部';
+    if (/chest|armor|胸|甲|衣|袍/.test(haystack)) return '躯干';
+    if (/hand|glove|臂|手套|护腕/.test(haystack)) return '手部';
+    if (/foot|boot|鞋|靴|足/.test(haystack)) return '足部';
+    if (/ring|戒|amulet|neck|项链|吊坠/.test(haystack)) return '饰品';
+    return '装备槽';
+}
+
+/**
+ * 功能：为资产条目选择更贴近 RPG 的图标。
+ * @param asset 资产条目。
+ * @returns Font Awesome 图标类名。
+ */
+function resolveRoleCenterAssetIcon(asset: RoleAssetEntry): string {
+    const haystack = normalizeLookup(`${asset.name} ${asset.detail}`);
+    if (/weapon|武器|剑|刀|枪|弓|杖|匕首/.test(haystack)) return 'fa-solid fa-sword';
+    if (/armor|甲|袍|胸|护甲/.test(haystack)) return 'fa-solid fa-shield-halved';
+    if (/ring|戒|amulet|neck|项链|吊坠/.test(haystack)) return 'fa-solid fa-gem';
+    if (/book|卷轴|法典|书/.test(haystack)) return 'fa-solid fa-book-open';
+    if (/potion|药|瓶|药剂/.test(haystack)) return 'fa-solid fa-flask';
+    if (/key|钥匙/.test(haystack)) return 'fa-solid fa-key';
+    if (/coin|金币|货币|钱/.test(haystack)) return 'fa-solid fa-coins';
+    return asset.kind === 'equipment' ? 'fa-solid fa-shield-halved' : 'fa-solid fa-box-open';
+}
+
+/**
+ * 功能：根据资产信息生成简易稀有度标签。
+ * @param asset 资产条目。
+ * @returns 稀有度标签。
+ */
+function resolveRoleCenterAssetRarity(asset: RoleAssetEntry): string {
+    const haystack = normalizeLookup(`${asset.name} ${asset.detail}`);
+    if (/legend|神器|传说|神圣/.test(haystack)) return '传说';
+    if (/epic|史诗|秘宝/.test(haystack)) return '史诗';
+    if (/rare|稀有|精工/.test(haystack)) return '稀有';
+    return '常规';
+}
+
+/**
+ * 功能：把装备条目整理成固定槽位视图模型，便于渲染装备面板。
+ * @param equipments 装备条目数组。
+ * @returns 适合装备槽显示的条目数组。
+ */
+function buildRoleCenterEquipmentSlots(equipments: RoleAssetEntry[]): RoleCenterAssetViewModel[] {
+    const preferredSlots = ['主武器', '副手', '头部', '躯干', '手部', '足部', '饰品'];
+    const normalizedEquipments = Array.isArray(equipments) ? equipments : [];
+    const assigned = new Map<string, RoleAssetEntry>();
+    normalizedEquipments.forEach((asset: RoleAssetEntry): void => {
+        const slotLabel = resolveEquipmentSlotLabel(asset);
+        if (!assigned.has(slotLabel)) {
+            assigned.set(slotLabel, asset);
+        }
+    });
+    return preferredSlots.map((slotLabel: string): RoleCenterAssetViewModel => {
+        const asset = assigned.get(slotLabel);
+        if (!asset) {
+            return {
+                slotLabel,
+                name: '空槽位',
+                detail: '尚未记录',
+                iconClassName: 'fa-regular fa-square',
+                rarityLabel: '空',
+                isEmpty: true,
+            };
+        }
+        return {
+            slotLabel,
+            name: normalizeText(asset.name) || '未命名装备',
+            detail: normalizeText(asset.detail) || '暂无说明',
+            iconClassName: resolveRoleCenterAssetIcon(asset),
+            rarityLabel: resolveRoleCenterAssetRarity(asset),
+        };
+    });
+}
+
+/**
+ * 功能：汇总角色的核心数值卡片，用于右侧属性面板。
+ * @param profile 当前角色资料。
+ * @param roleMemoryCards 当前角色记忆卡。
+ * @returns 属性卡片数组。
+ */
+function buildRoleCenterStatCards(profile: RoleProfile, roleMemoryCards: MemoryCardSummary[]): RoleCenterStatCard[] {
+    const relationshipCount = Array.isArray(profile.relationshipFacts) ? profile.relationshipFacts.length : 0;
+    const equipmentCount = Array.isArray(profile.equipments) ? profile.equipments.length : 0;
+    const itemCount = Array.isArray(profile.items) ? profile.items.length : 0;
+    const aliasCount = Array.isArray(profile.aliases) ? profile.aliases.length : 0;
+    return [
+        {
+            label: '档案完整度',
+            value: `${Math.min(99, 36 + profile.identityFacts.length * 8 + profile.originFacts.length * 6)}%`,
+            meta: `${profile.identityFacts.length} 条属性 / ${profile.originFacts.length} 条来历`,
+            toneClassName: 'is-accent',
+        },
+        {
+            label: '记忆负载',
+            value: `${roleMemoryCards.length}`,
+            meta: roleMemoryCards.length > 0 ? '当前角色已沉淀记忆卡' : '当前没有记忆卡',
+            toneClassName: roleMemoryCards.length > 6 ? 'is-warning' : '',
+        },
+        {
+            label: '关系节点',
+            value: `${relationshipCount}`,
+            meta: relationshipCount > 0 ? '已连接到其他角色' : '尚未建立关系节点',
+        },
+        {
+            label: '装备位',
+            value: `${equipmentCount}`,
+            meta: `${itemCount} 件背包物品`,
+        },
+        {
+            label: '身份标签',
+            value: `${aliasCount + profile.identityFacts.length}`,
+            meta: `${aliasCount} 个别名`,
+        },
+    ];
+}
+
+/**
  * 功能：渲染角色中心页面。
  * @param options 渲染参数。
  * @returns 无返回值。
@@ -441,175 +574,39 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
         },
     });
 
-    const renderSimpleList = (title: string, kicker: string, values: string[]): string => {
-        if (values.length <= 0) {
-            return '';
-        }
-        return `
-            <section class="stx-re-panel-card stx-re-memory-section">
-                <div class="stx-re-memory-section-head">
-                    <div>
-                        <div class="stx-re-memory-section-kicker">${helpers.escapeHtml(kicker)}</div>
-                        <div class="stx-re-memory-section-title">${helpers.escapeHtml(title)}</div>
-                    </div>
-                </div>
-                <div class="stx-re-role-center-fact-list">
-                    ${values.map((item: string): string => `<div class="stx-re-role-center-fact-item">${helpers.escapeHtml(item)}</div>`).join('')}
-                </div>
-            </section>
-        `;
+    const statCards = buildRoleCenterStatCards(selectedRole, roleMemoryCards);
+    const equipmentSlots = buildRoleCenterEquipmentSlots(selectedRole.equipments);
+    const activeLocation = selectedRole.relationshipFacts.find((item) => /地点|位于|驻留|常在|出没/.test(normalizeText(item.label) + normalizeText(item.detail)));
+    const activeLocationText = activeLocation
+        ? normalizeText(activeLocation.detail) || normalizeText(activeLocation.label)
+        : '未提取到稳定地点，可继续通过关系和记忆卡补全。';
+    const panelHelpers: RoleCenterPanelRenderHelpers = {
+        escapeHtml: helpers.escapeHtml,
+        formatMemorySubtypeLabel: helpers.formatMemorySubtypeLabel,
+        formatTimeLabel: helpers.formatTimeLabel,
     };
-
-    const relationshipSection = selectedRole.relationshipFacts.length > 0
-        ? `
-            <section class="stx-re-panel-card stx-re-memory-section">
-                <div class="stx-re-memory-section-head">
-                    <div>
-                        <div class="stx-re-memory-section-kicker">角色关系区</div>
-                        <div class="stx-re-memory-section-title">关系事实列表</div>
-                    </div>
-                </div>
-                <div class="stx-re-role-center-fact-list">
-                    ${selectedRole.relationshipFacts.map((item): string => `
-                        <article class="stx-re-role-center-relation-item">
-                            <div class="stx-re-role-center-relation-top">
-                                <strong>${helpers.escapeHtml(normalizeText(item.targetLabel) || '未标注对象')}</strong>
-                                <span class="stx-re-memory-chip">${helpers.escapeHtml(normalizeText(item.label) || '关系')}</span>
-                            </div>
-                            <div class="stx-re-role-center-relation-detail">${helpers.escapeHtml(normalizeText(item.detail))}</div>
-                        </article>
-                    `).join('')}
-                </div>
-            </section>
-        `
-        : '';
-
-    const renderAssetSection = (title: string, kicker: string, assets: Array<{ name: string; detail: string }>): string => {
-        if (assets.length <= 0) {
-            return '';
-        }
-        return `
-            <section class="stx-re-panel-card stx-re-memory-section">
-                <div class="stx-re-memory-section-head">
-                    <div>
-                        <div class="stx-re-memory-section-kicker">${helpers.escapeHtml(kicker)}</div>
-                        <div class="stx-re-memory-section-title">${helpers.escapeHtml(title)}</div>
-                    </div>
-                </div>
-                <div class="stx-re-role-center-asset-grid">
-                    ${assets.map((item: { name: string; detail: string }): string => `
-                        <article class="stx-re-role-center-asset-item">
-                            <strong>${helpers.escapeHtml(normalizeText(item.name) || '未命名条目')}</strong>
-                            ${normalizeText(item.detail) ? `<div>${helpers.escapeHtml(normalizeText(item.detail))}</div>` : ''}
-                        </article>
-                    `).join('')}
-                </div>
-            </section>
-        `;
-    };
-
-    const memoryListSection = `
-        <section class="stx-re-panel-card stx-re-memory-section">
-            <div class="stx-re-memory-section-head">
-                <div>
-                    <div class="stx-re-memory-section-kicker">角色记忆列表</div>
-                    <div class="stx-re-memory-section-title">${helpers.escapeHtml(selectedRoleLabel)} 的记忆卡</div>
-                </div>
-                <div class="stx-re-memory-chip-row">
-                    <span class="stx-re-memory-chip">总数 ${helpers.escapeHtml(String(roleMemoryCards.length))}</span>
-                    <span class="stx-re-memory-chip">对话 ${helpers.escapeHtml(String(categoryCountMap.get('dialogue') ?? 0))}</span>
-                    <span class="stx-re-memory-chip">事件 ${helpers.escapeHtml(String(categoryCountMap.get('event') ?? 0))}</span>
-                    <span class="stx-re-memory-chip">关系 ${helpers.escapeHtml(String(categoryCountMap.get('relationship') ?? 0))}</span>
-                </div>
-            </div>
-            ${filteredMemoryCards.length > 0
-                ? `<div class="stx-re-memory-entry-list">${filteredMemoryCards.map((card: MemoryCardSummary): string => {
-                    const extra = card as MemoryCardSummary & Record<string, unknown>;
-                    const title = buildReadableMemoryTitle(card, selectedRoleLabel);
-                    const subtypeText = normalizeText(card.memorySubtype) || 'other';
-                    const subtypeLabel = helpers.formatMemorySubtypeLabel(subtypeText);
-                    const memoryTypeLabel = normalizeText(card.memoryType) || 'other';
-                    const speakerLabel = normalizeText(extra.speakerLabel);
-                    const rememberReason = normalizeText(extra.rememberReason ?? card.sourceReason);
-                    const sourceMessageId = normalizeText(card.sourceMessageIds?.[0] ?? card.anchorMessageId);
-                    const bodyText = normalizeText(card.memoryText);
-                    return `
-                        <article class="stx-re-panel-card stx-re-memory-entry">
-                            <div class="stx-re-memory-entry-head">
-                                <div class="stx-re-memory-entry-title-wrap">
-                                    <div class="stx-re-memory-entry-main">
-                                        <div class="stx-re-memory-entry-title">${helpers.escapeHtml(title)}</div>
-                                        <div class="stx-re-memory-chip-row">
-                                            <span class="stx-re-memory-chip">类型 ${helpers.escapeHtml(memoryTypeLabel)}</span>
-                                            <span class="stx-re-memory-chip">细分 ${helpers.escapeHtml(subtypeLabel)}</span>
-                                            <span class="stx-re-memory-chip">归属 ${helpers.escapeHtml(selectedRoleLabel)}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="stx-re-memory-mini-copy">${helpers.escapeHtml(bodyText || '暂无正文')}</div>
-                            <div class="stx-re-memory-mini-links"><strong>说话人</strong> ${helpers.escapeHtml(speakerLabel || '暂无')}</div>
-                            <div class="stx-re-memory-mini-links"><strong>来源消息</strong> ${helpers.escapeHtml(sourceMessageId || '暂无')}</div>
-                            <div class="stx-re-memory-mini-links"><strong>重要原因</strong> ${helpers.escapeHtml(rememberReason || '暂无')}</div>
-                        </article>
-                    `;
-                }).join('')}</div>`
-                : '<div class="stx-re-empty">当前筛选条件下没有命中记忆卡。</div>'}
-        </section>
-    `;
-
-    contentArea.innerHTML = `
-        <div class="stx-re-memory-shell stx-re-role-center-shell">
-            <section class="stx-re-panel-card stx-re-memory-console">
-                <div class="stx-re-memory-console-grid">
-                    <div class="stx-re-memory-console-main">
-                        <div class="stx-re-memory-console-kicker">角色中心</div>
-                        <div class="stx-re-memory-console-title">${helpers.escapeHtml(selectedRoleLabel)}</div>
-                        <div class="stx-re-memory-console-subtitle">角色资料、关系、物品装备与角色记忆在同一视图下维护。</div>
-                        <div class="stx-re-memory-console-ledger">
-                            <span class="stx-re-memory-chip is-hero-chip">角色键 ${helpers.escapeHtml(selectedRole.actorKey)}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">别名 ${helpers.escapeHtml(selectedRole.aliases.join(' / ') || '无')}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">最近更新 ${helpers.escapeHtml(helpers.formatTimeLabel(selectedRole.updatedAt || 0))}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">记忆 ${helpers.escapeHtml(String(roleMemoryCards.length))} 条</span>
-                        </div>
-                    </div>
-                    <div class="stx-re-memory-console-controls">
-                        <label class="stx-re-memory-console-field">
-                            <span class="stx-re-memory-console-field-label">搜索</span>
-                            ${searchInput}
-                        </label>
-                        <label class="stx-re-memory-console-field">
-                            <span class="stx-re-memory-console-field-label">分类过滤</span>
-                            ${categorySelect}
-                        </label>
-                        <div class="stx-re-memory-console-actions">
-                            ${setActiveButton}
-                            ${recomputeButton}
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <div class="stx-re-memory-layout">
-                <aside class="stx-re-memory-sidebar">
-                    <section class="stx-re-panel-card stx-re-memory-side-card">
-                        <div class="stx-re-memory-section-kicker">角色名册</div>
-                        <div class="stx-re-memory-side-title">只列真实角色（不含世界/未归属）</div>
-                        <div class="stx-re-memory-actor-list">${actorButtons}</div>
-                    </section>
-                </aside>
-
-                <div class="stx-re-memory-main">
-                    ${renderSimpleList('角色属性区', '基础属性', selectedRole.identityFacts)}
-                    ${renderSimpleList('角色来历区', '来历事实', selectedRole.originFacts)}
-                    ${relationshipSection}
-                    ${renderAssetSection('角色物品区', '角色物品', selectedRole.items)}
-                    ${renderAssetSection('角色装备区', '角色装备', selectedRole.equipments)}
-                    ${memoryListSection}
-                </div>
-            </div>
-        </div>
-    `;
+    contentArea.innerHTML = renderRoleCenterPanelHtml({
+        helpers: panelHelpers,
+        selectedRole,
+        selectedRoleLabel,
+        activeActorKey,
+        roleMemoryCards,
+        filteredMemoryCards,
+        categoryCountMap: categoryCountMap as Map<string, number>,
+        actorButtonsHtml: actorButtons,
+        searchInputHtml: searchInput,
+        categorySelectHtml: categorySelect,
+        setActiveButtonHtml: setActiveButton,
+        recomputeButtonHtml: recomputeButton,
+        statCards,
+        equipmentSlots,
+        activeLocationText,
+        normalizeText,
+        normalizeActorKey,
+        buildReadableMemoryTitle,
+        resolveRoleCenterAssetIcon,
+        resolveRoleCenterAssetRarity,
+    });
 
     hydrateSharedSelects(contentArea);
 

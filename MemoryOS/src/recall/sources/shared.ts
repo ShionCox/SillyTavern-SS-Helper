@@ -917,6 +917,8 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         actorForgetProbability,
         actorForgotten: visibility.actorForgotten === true,
         actorRetentionBias: visibility.actorRetentionBias,
+        ownerActorKey: normalizeText(params.ownerActorKey ?? lifecycle?.ownerActorKey ?? '') || null,
+        participantActorKeys: Array.from(new Set((params.participantActorKeys ?? []).map((item: string): string => normalizeText(item)).filter(Boolean))),
         finalScore: boostedFinalScore,
         tone,
         selected: false,

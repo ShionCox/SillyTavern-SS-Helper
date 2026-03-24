@@ -886,7 +886,7 @@ export interface PromptInjectionProfile {
 }
 
 export interface MemoryContextBlockUsage {
-    kind: 'director_context' | 'active_character_memory';
+    kind: 'memoryos_worldinfo' | 'memoryos_roles';
     actorKey: string | null;
     candidateCount: number;
     sectionHints: InjectionSectionName[];

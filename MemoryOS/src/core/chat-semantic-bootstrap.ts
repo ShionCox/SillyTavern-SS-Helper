@@ -43,7 +43,7 @@ function normalizeLorebookNames(value: unknown): string[] {
         value
             .map((item: unknown): string => normalizeText(item))
             .filter(Boolean),
-    )).slice(0, 24);
+    ));
 }
 
 function normalizeText(value: unknown): string {
@@ -91,7 +91,7 @@ function normalizeColdStartLorebookSelection(
                     }))
                     .filter((item) => item.book && item.entryId)
                     .map((item) => [buildLorebookEntryKey(item.book, item.entryId), item] as const),
-            ).values()).slice(0, 256)
+            ).values())
             : [],
     };
 }
@@ -205,6 +205,22 @@ function splitSeedValues(...values: string[]): string[] {
             .map((item) => item.trim())
             .filter((item) => item.length >= 2),
     )).slice(0, 16);
+}
+
+/**
+ * Split seed text without a max-count cap.
+ * Newlines and punctuation are treated as separators.
+ * @param values Raw source text blocks.
+ * @returns Deduplicated seed segments.
+ */
+function splitSeedValuesAll(...values: string[]): string[] {
+    const combined = values.map((value) => substituteTavernMacrosIfPresentEvent(value)).join('\n');
+    return Array.from(new Set(
+        combined
+            .split(/[\r\n\u3002\uff01\uff1f!?;\uff1b,\uff0c\u3001]+/g)
+            .map((item) => normalizeText(item))
+            .filter((item) => item.length >= 2),
+    ));
 }
 
 function inferStyleMode(systemPrompt: string, instruct: string, jailbreak: string): StyleSeedMode {
@@ -334,12 +350,12 @@ function buildIdentitySeed(
 }
 
 function buildWorldSeed(worldText: string, source: string): WorldSeed {
-    const all = splitSeedValues(worldText);
+    const all = splitSeedValuesAll(worldText);
     return {
-        locations: all.filter((item: string): boolean => /城|镇|村|地点|神殿|遗迹|据点|学院|基地|空间站|房间|森林|峡谷/.test(item)).slice(0, 12),
-        rules: all.filter((item: string): boolean => /规则|法则|必须|不能|禁止|限制|流程|约定|制度|历法|货币|税制|习俗|传统/.test(item)).slice(0, 16),
-        hardConstraints: all.filter((item: string): boolean => /不得|禁止|绝不|必须|唯一|固定/.test(item)).slice(0, 12),
-        entities: all.filter((item: string): boolean => /组织|势力|阵营|宗派|家族|公会|议会|机构|装置|遗物/.test(item)).slice(0, 12),
+        locations: all.filter((item: string): boolean => /城|镇|村|地点|神殿|遗迹|据点|学院|基地|空间站|房间|森林|峡谷/.test(item)),
+        rules: all.filter((item: string): boolean => /规则|法则|必须|不能|禁止|限制|流程|约定|制度|历法|货币|税制|习俗|传统/.test(item)),
+        hardConstraints: all.filter((item: string): boolean => /不得|禁止|绝不|必须|唯一|固定/.test(item)),
+        entities: all.filter((item: string): boolean => /组织|势力|阵营|宗派|家族|公会|议会|机构|装置|遗物/.test(item)),
         sourceTrace: [buildSourceTrace('world', source, 0.75)],
     };
 }
@@ -410,8 +426,7 @@ function buildLorebookSeed(
 
 function buildSelectedLorebookContextText(entries: LoadedLorebookEntry[]): string {
     return entries
-        .slice(0, 24)
-        .map((entry: LoadedLorebookEntry): string => `${entry.book} / ${entry.entry}：${truncateText(entry.content, 220)}`)
+        .map((entry: LoadedLorebookEntry): string => `${entry.book} / ${entry.entry}：${normalizeLorebookContent(entry.content)}`)
         .join('\n');
 }
 
@@ -497,7 +512,7 @@ export async function collectChatSemanticSeed(
     );
     const jailbreak = normalizeText(contextRecord.jailbreak ?? contextRecord.jailbreak_prompt ?? '');
     const instruct = normalizeText(contextRecord.instruct ?? contextRecord.instruct_prompt ?? '');
-    const selection = normalizeColdStartLorebookSelection(activeLorebooksOverride, listTavernActiveWorldbooksEvent(24));
+    const selection = normalizeColdStartLorebookSelection(activeLorebooksOverride, listTavernActiveWorldbooksEvent(Number.MAX_SAFE_INTEGER));
     const lorebookSelection = await resolveSelectedLorebookEntries(selection);
     const activeLorebooks = lorebookSelection.activeLorebooks;
     const groupMembers = extractGroupMembers(contextRecord, groupRecord);

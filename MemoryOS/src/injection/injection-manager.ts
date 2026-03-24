@@ -693,6 +693,8 @@ export class InjectionManager {
         const memoryContext = buildLayeredMemoryContext({
             candidates: selectedCandidates,
             plan: recallPlan,
+            roleProfiles: recallContext.roleProfiles,
+            relationships: recallContext.relationships,
         });
         const text = this.trimToBudget(memoryContext.text, maxTokens);
         const preDecision = this.buildPreGenerationDecision(

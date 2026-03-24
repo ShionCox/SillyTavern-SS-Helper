@@ -73,6 +73,29 @@ function installMockWorldbookLoader(): void {
     };
 }
 
+/**
+ * 功能：安装包含大量规则条目的世界书加载器，验证冷启动规则不会被截断。
+ * @returns 无返回值。
+ */
+function installMockWorldbookLoaderWithDenseRules(): void {
+    const ruleLines = Array.from({ length: 36 }, (_, index: number): string => `规则${index + 1}：必须遵守第${index + 1}条流程`);
+    (globalThis as Record<string, unknown>).loadWorldInfo = async (bookName: string): Promise<Record<string, unknown> | null> => {
+        if (bookName !== 'book-rules') {
+            return null;
+        }
+        return {
+            entries: {
+                'entry-rules': {
+                    uid: 'entry-rules',
+                    comment: '规则总表',
+                    key: ['规则', '世界观'],
+                    content: ruleLines.join('\n'),
+                },
+            },
+        };
+    };
+}
+
 describe('tavern-user-sdk', (): void => {
     it('会通过官方 getContext 读取当前用户名并生成用户快照', (): void => {
         installMockTavernContext();
@@ -115,5 +138,17 @@ describe('tavern-user-sdk', (): void => {
         expect(result.seed?.lorebookSeed.flatMap((item) => item.snippets).join('\n')).toContain('暮影短刃');
         expect(result.seed?.identitySeeds).toBeUndefined();
         expect(result.seed?.roleProfileSeeds).toBeUndefined();
+    });
+
+    it('cold start imports all worldbook rules without truncation', async (): Promise<void> => {
+        installMockTavernContext();
+        installMockWorldbookLoaderWithDenseRules();
+
+        const result = await collectChatSemanticSeed('chat-001', ['book-rules']);
+        const rules = result.seed?.worldSeed.rules ?? [];
+
+        expect(rules.length).toBeGreaterThanOrEqual(36);
+        expect(rules.some((item) => /\u89c4\u5219\s*1/.test(item) && /\u5fc5\u987b\u9075\u5b88\u7b2c\s*1\u6761\u6d41\u7a0b/.test(item))).toBe(true);
+        expect(rules.some((item) => /\u89c4\u5219\s*36/.test(item) && /\u5fc5\u987b\u9075\u5b88\u7b2c\s*36\u6761\u6d41\u7a0b/.test(item))).toBe(true);
     });
 });

@@ -126,7 +126,7 @@ describe('memory mutation history manager', (): void => {
         expect(byKind.map((row) => row.mutationId)).toEqual(['history-2']);
     });
 
-    it('不会回退旧链路，没有记录时返回空数组', async (): Promise<void> => {
+    it('不会回退到历史分支，没有记录时返回空数组', async (): Promise<void> => {
         const manager = new MemoryMutationHistoryManager('chat-empty');
 
         await new MemoryMutationHistoryManager('chat-other').append({

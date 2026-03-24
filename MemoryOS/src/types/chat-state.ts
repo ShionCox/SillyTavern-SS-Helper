@@ -644,7 +644,7 @@ export interface PromptInjectionProfile {
  * @returns 分层块使用记录。
  */
 export interface MemoryContextBlockUsage {
-    kind: 'director_context' | 'active_character_memory';
+    kind: 'memoryos_worldinfo' | 'memoryos_roles';
     actorKey: string | null;
     candidateCount: number;
     sectionHints: InjectionSectionName[];
@@ -1310,6 +1310,8 @@ export interface RecallCandidate {
     actorForgetProbability?: number;
     actorForgotten?: boolean;
     actorRetentionBias?: number;
+    ownerActorKey?: string | null;
+    participantActorKeys?: string[];
     finalScore: number;
     tone: InjectedMemoryTone;
     selected: boolean;

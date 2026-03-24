@@ -113,6 +113,14 @@ interface WorldQuestBoardRow {
     summary: string;
     objective: string;
     relatedActors: string[];
+    ownerActorKeys?: string[];
+    sourceKind?: 'scene_snapshot' | 'memory_state' | 'world_state';
+    sourceKinds?: Array<'scene_snapshot' | 'memory_state' | 'world_state'>;
+    sourceRefs?: SourceRef[];
+    recordKey?: string;
+    statePath?: string;
+    stateKey?: string;
+    priorityLabel?: string;
     sourceLabel: string;
     statusLabel: string;
     updatedAt: number;
@@ -547,74 +555,637 @@ function renderWorldStateUpdateCell(entry: StructuredWorldStateEntry): string {
     `;
 }
 
+const WORLD_QUEST_SOURCE_LABELS: Record<'scene_snapshot' | 'memory_state' | 'world_state', string> = {
+    scene_snapshot: '场景快照',
+    memory_state: '记忆索引',
+    world_state: '世界状态',
+};
+
+const WORLD_QUEST_PRIORITY_RANK: Record<string, number> = {
+    当前冲突: 50,
+    待推进: 40,
+    角色目标: 32,
+    承诺: 28,
+    世界约束: 20,
+};
+
+const WORLD_QUEST_NOISE_TITLES = new Set<string>([
+    'hardconstraints',
+    'pendingevents',
+    'participants',
+    'currentconflict',
+    'worldoverview',
+    'overview',
+    'rules',
+    'locations',
+    'location',
+    'constraints',
+]);
+
+/**
+ * 功能：统一规范任务文本，避免把占位文案当成真实任务。
+ * @param value 原始文本。
+ * @returns 去噪后的文本。
+ */
+function normalizeQuestText(value: unknown): string {
+    return String(value ?? '').trim();
+}
+
+/**
+ * 功能：判断任务文本是否是派生占位值。
+ * @param value 任务文本。
+ * @returns 是否应从任务板过滤。
+ */
+function isQuestPlaceholderText(value: string): boolean {
+    const text = normalizeQuestText(value);
+    if (!text) {
+        return true;
+    }
+    if (text === '尚未稳定抽取') {
+        return true;
+    }
+    return /^可见消息\s*\d+\s*条$/.test(text);
+}
+
+/**
+ * 功能：判断任务标题是否属于结构键噪音值（不应直接展示成任务）。
+ * @param title 任务标题。
+ * @returns 是否属于噪音标题。
+ */
+function isQuestNoiseTitle(title: string): boolean {
+    const normalized = normalizeLookup(String(title ?? '').trim()).replace(/[\s_-]/g, '');
+    if (!normalized) {
+        return true;
+    }
+    return WORLD_QUEST_NOISE_TITLES.has(normalized);
+}
+
+/**
+ * 功能：判断任务文本是否包含可用内容。
+ * @param text 任务文本。
+ * @returns 是否可视作有效任务描述。
+ */
+function hasMeaningfulQuestText(text: string): boolean {
+    const normalized = normalizeQuestText(text);
+    if (!normalized || isQuestPlaceholderText(normalized)) {
+        return false;
+    }
+    const compact = normalizeLookup(normalized);
+    if (!compact) {
+        return false;
+    }
+    return compact !== 'null' && compact !== 'undefined' && compact !== 'na';
+}
+
+/**
+ * 功能：去重任务标签列表，避免状态列重复显示。
+ * @param labels 标签列表。
+ * @returns 去重后的标签列表。
+ */
+function dedupeQuestLabels(labels: string[]): string[] {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    labels.forEach((label: string): void => {
+        const text = String(label ?? '').trim();
+        const key = normalizeLookup(text);
+        if (!text || !key || seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        result.push(text);
+    });
+    return result;
+}
+
+/**
+ * 功能：按角色键或显示名反查 actorKey。
+ * @param actorHint 角色线索（可能是 key，也可能是显示名）。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 解析出的 actorKey；无法解析时返回空字符串。
+ */
+function resolveQuestActorKey(actorHint: string, actorLabelMap: Map<string, string>): string {
+    const normalizedHint = normalizeLookup(actorHint);
+    if (!normalizedHint) {
+        return '';
+    }
+    if (actorLabelMap.has(actorHint)) {
+        return actorHint;
+    }
+    for (const [actorKey, actorLabel] of actorLabelMap.entries()) {
+        if (normalizeLookup(actorKey) === normalizedHint || normalizeLookup(actorLabel) === normalizedHint) {
+            return actorKey;
+        }
+    }
+    return '';
+}
+
+/**
+ * 功能：把角色键列表去重并清理空值。
+ * @param actorKeys 原始角色键列表。
+ * @returns 去重后的角色键数组。
+ */
+function normalizeQuestActorKeys(actorKeys: Array<string | null | undefined>): string[] {
+    const unique = new Set<string>();
+    actorKeys.forEach((actorKey: string | null | undefined): void => {
+        const normalized = String(actorKey ?? '').trim();
+        if (!normalized) {
+            return;
+        }
+        unique.add(normalized);
+    });
+    return Array.from(unique);
+}
+
+/**
+ * 功能：把 actorKey 列表映射为展示标签。
+ * @param actorKeys 角色键列表。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 角色展示名列表。
+ */
+function mapQuestActorLabels(actorKeys: string[], actorLabelMap: Map<string, string>): string[] {
+    return actorKeys
+        .map((actorKey: string): string => actorLabelMap.get(actorKey) || actorKey)
+        .filter(Boolean);
+}
+
+/**
+ * 功能：从场景 participant 快照解析角色键与展示名。
+ * @param participants 场景参与者快照。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 角色键列表与展示标签列表。
+ */
+function resolveSceneParticipantActors(
+    participants: SnapshotValue[],
+    actorLabelMap: Map<string, string>,
+): { actorKeys: string[]; labels: string[] } {
+    const actorKeys = new Set<string>();
+    const labels = new Set<string>();
+    participants.forEach((item: SnapshotValue): void => {
+        const rawLabel = normalizeQuestText(item.value);
+        if (!rawLabel) {
+            return;
+        }
+        const actorKey = resolveQuestActorKey(rawLabel, actorLabelMap);
+        if (actorKey) {
+            actorKeys.add(actorKey);
+            labels.add(actorLabelMap.get(actorKey) || rawLabel);
+            return;
+        }
+        labels.add(rawLabel);
+    });
+    return {
+        actorKeys: Array.from(actorKeys),
+        labels: Array.from(labels),
+    };
+}
+
+/**
+ * 功能：将来源种类映射为 SourceRef kind。
+ * @param recordKind 记忆记录类型。
+ * @returns SourceRef kind。
+ */
+function mapQuestRecordKindToSourceKind(recordKind: string): SourceRef['kind'] {
+    const normalized = String(recordKind ?? '').trim().toLowerCase();
+    if (normalized === 'summary') {
+        return 'summary';
+    }
+    if (normalized === 'state') {
+        return 'world_state';
+    }
+    return 'fact';
+}
+
+/**
+ * 功能：去重合并 SourceRef。
+ * @param refs 原始来源列表。
+ * @returns 去重后的来源列表。
+ */
+function dedupeQuestSourceRefs(refs: SourceRef[]): SourceRef[] {
+    const uniqueMap = new Map<string, SourceRef>();
+    refs.forEach((item: SourceRef): void => {
+        const key = normalizeLookup([
+            item.kind,
+            item.label,
+            item.recordId || '',
+            item.path || '',
+            item.ts ?? '',
+            item.note || '',
+        ].join('|'));
+        if (!key || uniqueMap.has(key)) {
+            return;
+        }
+        uniqueMap.set(key, item);
+    });
+    return Array.from(uniqueMap.values()).sort((left: SourceRef, right: SourceRef): number => Number(right.ts ?? 0) - Number(left.ts ?? 0));
+}
+
+/**
+ * 功能：判断 world_state 条目是否具备任务语义。
+ * @param entry 世界状态条目。
+ * @returns 是否应该进入任务委托板。
+ */
+function isQuestLikeWorldStateEntry(entry: StructuredWorldStateEntry): boolean {
+    const stateType = String(entry.node.stateType ?? '').trim().toLowerCase();
+    if (stateType === 'goal') {
+        return true;
+    }
+    if (stateType !== 'constraint' && stateType !== 'relationship_hook') {
+        return false;
+    }
+    const raw = getWorldStateRawObject(entry);
+    const intentText = normalizeLookup([
+        entry.node.title,
+        entry.node.summary,
+        pickWorldStateText(raw, ['objective', 'goal', 'target', 'todo', 'nextStep', 'next', 'promise', 'constraint']),
+        ...(entry.node.keywords ?? []),
+        ...(entry.node.tags ?? []),
+    ].join(' '));
+    const questHints = ['任务', '目标', '推进', '待办', '承诺', '约束', 'quest', 'goal', 'todo', 'promise', 'constraint'];
+    const hasQuestHint = questHints.some((hint: string): boolean => intentText.includes(normalizeLookup(hint)));
+    if (!hasQuestHint) {
+        return false;
+    }
+    const genericConstraintOnly = normalizeLookup(intentText) === normalizeLookup('constraint');
+    return !genericConstraintOnly;
+}
+
+/**
+ * 功能：根据优先级标签计算排序权重。
+ * @param priorityLabel 优先级标签。
+ * @returns 排序分值。
+ */
+function getWorldQuestPriorityRank(priorityLabel: string | undefined): number {
+    return WORLD_QUEST_PRIORITY_RANK[String(priorityLabel ?? '').trim()] ?? 0;
+}
+
+/**
+ * 功能：合并任务摘要/目标文本，保留信息又避免重复。
+ * @param primary 主文本。
+ * @param incoming 待合并文本。
+ * @returns 合并后的文本。
+ */
+function mergeWorldQuestText(primary: string, incoming: string): string {
+    const current = normalizeQuestText(primary);
+    const next = normalizeQuestText(incoming);
+    if (!current) {
+        return next;
+    }
+    if (!next) {
+        return current;
+    }
+    if (normalizeLookup(current) === normalizeLookup(next)) {
+        return current;
+    }
+    return `${current} / ${next}`;
+}
+
+/**
+ * 功能：按来源组合生成任务来源标签。
+ * @param sourceKinds 来源种类列表。
+ * @returns 展示用来源标签。
+ */
+function formatWorldQuestSourceLabel(sourceKinds: Array<'scene_snapshot' | 'memory_state' | 'world_state'>): string {
+    if (sourceKinds.length <= 0) {
+        return '未知来源';
+    }
+    if (sourceKinds.length === 1) {
+        return WORLD_QUEST_SOURCE_LABELS[sourceKinds[0]];
+    }
+    return sourceKinds.map((kind: 'scene_snapshot' | 'memory_state' | 'world_state'): string => WORLD_QUEST_SOURCE_LABELS[kind]).join(' + ');
+}
+
+/**
+ * 功能：选取任务行主来源类型，便于 UI 归类显示。
+ * @param sourceKinds 来源种类列表。
+ * @returns 主来源类型。
+ */
+function pickPrimaryWorldQuestSourceKind(
+    sourceKinds: Array<'scene_snapshot' | 'memory_state' | 'world_state'>,
+): 'scene_snapshot' | 'memory_state' | 'world_state' {
+    if (sourceKinds.includes('memory_state')) {
+        return 'memory_state';
+    }
+    if (sourceKinds.includes('world_state')) {
+        return 'world_state';
+    }
+    return 'scene_snapshot';
+}
+
+/**
+ * 功能：把任务候选行并入聚合表，按语义和标题去重并叠加来源。
+ * @param rowMap 聚合表。
+ * @param row 候选任务行。
+ * @returns 无返回值。
+ */
+function mergeWorldQuestRow(rowMap: Map<string, WorldQuestBoardRow>, row: WorldQuestBoardRow): void {
+    const dedupeKey = normalizeLookup([row.priorityLabel || row.kind, row.title].join('|'));
+    if (!dedupeKey) {
+        return;
+    }
+    const existing = rowMap.get(dedupeKey);
+    if (!existing) {
+        rowMap.set(dedupeKey, {
+            ...row,
+            sourceRefs: dedupeQuestSourceRefs(row.sourceRefs ?? []),
+            ownerActorKeys: normalizeQuestActorKeys(row.ownerActorKeys ?? []),
+            sourceKinds: Array.from(new Set(row.sourceKinds ?? [])),
+        });
+        return;
+    }
+    existing.summary = mergeWorldQuestText(existing.summary, row.summary);
+    existing.objective = mergeWorldQuestText(existing.objective, row.objective);
+    existing.updatedAt = Math.max(existing.updatedAt, row.updatedAt);
+    existing.ownerActorKeys = normalizeQuestActorKeys([...(existing.ownerActorKeys ?? []), ...(row.ownerActorKeys ?? [])]);
+    existing.relatedActors = Array.from(new Set([...existing.relatedActors, ...row.relatedActors]));
+    existing.sourceKinds = Array.from(new Set([...(existing.sourceKinds ?? []), ...(row.sourceKinds ?? [])]));
+    existing.sourceKind = pickPrimaryWorldQuestSourceKind(existing.sourceKinds);
+    existing.sourceLabel = formatWorldQuestSourceLabel(existing.sourceKinds);
+    existing.sourceRefs = dedupeQuestSourceRefs([...(existing.sourceRefs ?? []), ...(row.sourceRefs ?? [])]);
+    if (!existing.recordKey && row.recordKey) {
+        existing.recordKey = row.recordKey;
+    }
+    if (!existing.statePath && row.statePath) {
+        existing.statePath = row.statePath;
+    }
+    if (!existing.stateKey && row.stateKey) {
+        existing.stateKey = row.stateKey;
+    }
+    if (getWorldQuestPriorityRank(row.priorityLabel) > getWorldQuestPriorityRank(existing.priorityLabel)) {
+        existing.priorityLabel = row.priorityLabel;
+        existing.kind = row.kind;
+        existing.statusLabel = row.statusLabel;
+    }
+}
+
+/**
+ * 功能：从任务行信息推断原始表跳转目标。
+ * @param row 任务行。
+ * @returns 可用于跳转 raw 视图的目标；无法判定时返回 null。
+ */
+function resolveQuestRowRawJumpTarget(row: WorldQuestBoardRow): VectorMemoryViewerSourceJumpTarget | null {
+    const recordKey = String(row.recordKey ?? '').trim();
+    const sourceRefs = row.sourceRefs ?? [];
+    if (!recordKey) {
+        return null;
+    }
+    const normalized = recordKey.toLowerCase();
+    if (normalized.startsWith('summary:') || sourceRefs.some((sourceRef: SourceRef): boolean => sourceRef.kind === 'summary')) {
+        return { tableName: 'summaries', recordId: recordKey };
+    }
+    if (normalized.startsWith('event:')) {
+        return { tableName: 'events', recordId: recordKey };
+    }
+    if (sourceRefs.some((sourceRef: SourceRef): boolean => sourceRef.kind === 'world_state')) {
+        return null;
+    }
+    return { tableName: 'facts', recordId: recordKey };
+}
+
+/**
+ * 功能：按“场景快照 + 记忆索引 + 世界状态”三路构建可追踪任务板行。
+ * @param experience 编辑器体验快照。
+ * @param ownedStates 记忆索引状态列表。
+ * @param worldEntries 结构化世界状态条目列表。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 任务板行列表。
+ */
 function buildWorldQuestBoardRows(
     experience: EditorExperienceSnapshot,
     ownedStates: OwnedMemoryState[],
+    worldEntries: StructuredWorldStateEntry[],
     actorLabelMap: Map<string, string>,
 ): WorldQuestBoardRow[] {
-    const rows: WorldQuestBoardRow[] = [];
-    const currentConflict = String(experience.canon.scene.currentConflict?.value ?? '').trim();
-    const pendingEvents = getStableSnapshotValues(experience.canon.scene.pendingEvents);
-    const participants = getStableSnapshotValues(experience.canon.scene.participants).map((item: SnapshotValue): string => String(item.value ?? '').trim()).filter(Boolean);
+    const rowMap = new Map<string, WorldQuestBoardRow>();
+    const currentConflict = isStableSnapshotValue(experience.canon.scene.currentConflict)
+        ? normalizeQuestText(experience.canon.scene.currentConflict?.value)
+        : '';
+    const pendingEvents = getStableSnapshotValues(experience.canon.scene.pendingEvents)
+        .filter((item: SnapshotValue): boolean => !isSyntheticVisibleMessageSnapshot(item));
+    const stableParticipants = getStableSnapshotValues(experience.canon.scene.participants);
+    const participantActors = resolveSceneParticipantActors(stableParticipants, actorLabelMap);
+    const participantActorKeys = participantActors.actorKeys;
+    const participantLabels = participantActors.labels;
+    const fallbackNow = Number(experience.canon.generatedAt ?? Date.now());
+    const fallbackSceneSourceRefs = dedupeQuestSourceRefs([
+        ...(experience.canon.scene.currentConflict?.sourceRefs ?? []),
+        ...stableParticipants.flatMap((item: SnapshotValue): SourceRef[] => item.sourceRefs ?? []),
+        ...pendingEvents.flatMap((item: SnapshotValue): SourceRef[] => item.sourceRefs ?? []),
+    ]);
 
-    if (currentConflict) {
-        rows.push({
-            rowKey: `scene-conflict:${currentConflict}`,
+    if (currentConflict && !isQuestPlaceholderText(currentConflict)) {
+        mergeWorldQuestRow(rowMap, {
+            rowKey: `scene-conflict:${normalizeLookup(currentConflict) || 'current'}`,
             title: currentConflict,
             kind: '当前冲突',
-            summary: String(experience.canon.scene.currentScene?.value ?? '').trim() || '当前场景正在推进中的主冲突。',
-            objective: pendingEvents.slice(0, 3).map((item: SnapshotValue): string => String(item.value ?? '').trim()).filter(Boolean).join(' / ') || '等待进一步推进',
-            relatedActors: participants,
-            sourceLabel: '场景快照',
-            statusLabel: '进行中',
-            updatedAt: Number(experience.canon.generatedAt ?? Date.now()),
+            summary: normalizeQuestText(experience.canon.scene.currentScene?.value) || '当前场景正在推进中的主冲突。',
+            objective: pendingEvents
+                .slice(0, 3)
+                .map((item: SnapshotValue): string => normalizeQuestText(item.value))
+                .filter((item: string): boolean => Boolean(item) && !isQuestPlaceholderText(item))
+                .join(' / ') || '等待进一步推进',
+            relatedActors: participantLabels,
+            ownerActorKeys: participantActorKeys,
+            sourceKind: 'scene_snapshot',
+            sourceKinds: ['scene_snapshot'],
+            sourceRefs: fallbackSceneSourceRefs.length > 0
+                ? fallbackSceneSourceRefs
+                : [{
+                    kind: 'group_memory',
+                    label: 'scene.current_conflict',
+                    ts: Number(experience.canon.scene.currentConflict?.updatedAt ?? fallbackNow),
+                    note: '来自场景快照 currentConflict',
+                }],
+            priorityLabel: '当前冲突',
+            sourceLabel: WORLD_QUEST_SOURCE_LABELS.scene_snapshot,
+            statusLabel: '当前冲突',
+            updatedAt: Number(experience.canon.scene.currentConflict?.updatedAt ?? fallbackNow),
         });
     }
 
     pendingEvents.forEach((item: SnapshotValue, index: number): void => {
-        const title = String(item.value ?? '').trim();
-        if (!title) {
+        const title = normalizeQuestText(item.value);
+        if (!title || isQuestPlaceholderText(title)) {
             return;
         }
-        rows.push({
-            rowKey: `pending:${index}:${title}`,
+        mergeWorldQuestRow(rowMap, {
+            rowKey: `pending:${index}:${normalizeLookup(title) || 'pending'}`,
             title,
-            kind: '待处理事件',
+            kind: '待推进',
             summary: currentConflict || '当前场景中被挂起、待推进的事件。',
             objective: '等待触发 / 等待角色推进',
-            relatedActors: participants,
-            sourceLabel: '场景待办',
+            relatedActors: participantLabels,
+            ownerActorKeys: participantActorKeys,
+            sourceKind: 'scene_snapshot',
+            sourceKinds: ['scene_snapshot'],
+            sourceRefs: dedupeQuestSourceRefs(item.sourceRefs ?? [{
+                kind: 'group_memory',
+                label: `scene.pending.${index + 1}`,
+                ts: Number(item.updatedAt ?? fallbackNow),
+                note: '来自场景快照 pendingEvents',
+            }]),
+            priorityLabel: '待推进',
+            sourceLabel: WORLD_QUEST_SOURCE_LABELS.scene_snapshot,
             statusLabel: '待推进',
-            updatedAt: Number(item.updatedAt ?? experience.canon.generatedAt ?? Date.now()),
+            updatedAt: Number(item.updatedAt ?? fallbackNow),
         });
     });
 
     ownedStates
         .filter((item: OwnedMemoryState): boolean => ['goal', 'promise', 'current_conflict'].includes(String(item.memorySubtype ?? '')))
         .forEach((item: OwnedMemoryState): void => {
-            const ownerLabel = item.ownerActorKey ? (actorLabelMap.get(item.ownerActorKey) || item.ownerActorKey) : '世界 / 未归属';
-            rows.push({
+            const title = normalizeQuestText(buildMemoryRecordHeadline(item.recordKey, undefined, item));
+            if (!title || isQuestPlaceholderText(title)) {
+                return;
+            }
+            const explicitOwnerActorKeys = normalizeQuestActorKeys([item.ownerActorKey]);
+            const ownerActorKeys = explicitOwnerActorKeys.length > 0 ? explicitOwnerActorKeys : participantActorKeys;
+            const relatedActors = ownerActorKeys.length > 0
+                ? mapQuestActorLabels(ownerActorKeys, actorLabelMap)
+                : participantLabels;
+            const subtype = String(item.memorySubtype ?? '').trim().toLowerCase();
+            const priorityLabel = subtype === 'current_conflict'
+                ? '当前冲突'
+                : subtype === 'promise'
+                    ? '承诺'
+                    : '角色目标';
+            mergeWorldQuestRow(rowMap, {
                 rowKey: `memory:${item.recordKey}`,
                 title: buildMemoryRecordHeadline(item.recordKey, undefined, item),
-                kind: formatMemorySubtypeLabel(item.memorySubtype),
+                kind: priorityLabel,
                 summary: formatMemoryImpactSummary(item),
                 objective: item.forgotten ? '已淡出当前焦点' : '仍在推进中',
-                relatedActors: [ownerLabel],
-                sourceLabel: '记忆索引',
-                statusLabel: item.forgotten ? '已搁置' : '追踪中',
+                relatedActors: relatedActors.length > 0 ? relatedActors : ['世界 / 未归属'],
+                ownerActorKeys,
+                sourceKind: 'memory_state',
+                sourceKinds: ['memory_state'],
+                sourceRefs: dedupeQuestSourceRefs([{
+                    kind: mapQuestRecordKindToSourceKind(item.recordKind),
+                    label: `memory.${item.recordKind}.${item.memorySubtype}`,
+                    recordId: item.recordKey,
+                    ts: Number(item.updatedAt ?? fallbackNow),
+                    note: item.ownerActorKey ? `owner=${item.ownerActorKey}` : 'owner=world',
+                }]),
+                recordKey: item.recordKey,
+                priorityLabel,
+                sourceLabel: WORLD_QUEST_SOURCE_LABELS.memory_state,
+                statusLabel: item.forgotten ? '已搁置' : priorityLabel,
                 updatedAt: Number(item.updatedAt ?? 0),
             });
         });
 
-    const seen = new Set<string>();
-    return rows.filter((row: WorldQuestBoardRow): boolean => {
-        const key = normalizeLookup(`${row.kind}|${row.title}|${row.sourceLabel}`);
-        if (!key || seen.has(key)) {
-            return false;
-        }
-        seen.add(key);
-        return true;
-    }).sort((left: WorldQuestBoardRow, right: WorldQuestBoardRow): number => right.updatedAt - left.updatedAt);
+    worldEntries
+        .filter((entry: StructuredWorldStateEntry): boolean => isQuestLikeWorldStateEntry(entry))
+        .forEach((entry: StructuredWorldStateEntry): void => {
+            const raw = getWorldStateRawObject(entry);
+            const title = normalizeQuestText(entry.node.title) || formatWorldStateDisplayTitle(entry);
+            if (!title || isQuestPlaceholderText(title)) {
+                return;
+            }
+            const summaryText = normalizeQuestText(entry.node.summary);
+            const stateType = String(entry.node.stateType ?? '').trim().toLowerCase();
+            const explicitOwnerActorKey = resolveQuestActorKey(String(entry.node.subjectId ?? '').trim(), actorLabelMap)
+                || resolveQuestActorKey(pickWorldStateText(raw, ['subject', 'owner', 'actor', 'character', 'ownerActorKey']), actorLabelMap);
+            const ownerActorKeys = normalizeQuestActorKeys([
+                explicitOwnerActorKey,
+                ...(explicitOwnerActorKey ? [] : participantActorKeys),
+            ]);
+            const priorityLabel = stateType === 'goal'
+                ? (ownerActorKeys.length > 0 ? '角色目标' : '待推进')
+                : '世界约束';
+            const objectiveHint = pickWorldStateText(raw, ['objective', 'goal', 'target', 'todo', 'nextStep', 'next', 'promise', 'constraint'])
+                || summaryText;
+            if (isQuestNoiseTitle(title) && !hasMeaningfulQuestText(objectiveHint) && !hasMeaningfulQuestText(summaryText)) {
+                return;
+            }
+            const objective = objectiveHint || formatWorldStateTypeLabel(entry.node.stateType);
+            mergeWorldQuestRow(rowMap, {
+                rowKey: `world:${entry.stateKey || entry.path || title}`,
+                title,
+                kind: priorityLabel,
+                summary: summaryText || formatWorldStateAnchorSummary(entry),
+                objective,
+                relatedActors: ownerActorKeys.length > 0
+                    ? mapQuestActorLabels(ownerActorKeys, actorLabelMap)
+                    : participantLabels,
+                ownerActorKeys,
+                sourceKind: 'world_state',
+                sourceKinds: ['world_state'],
+                sourceRefs: dedupeQuestSourceRefs([
+                    ...(Array.isArray(entry.node.sourceRefs)
+                        ? entry.node.sourceRefs.map((ref: string): SourceRef => ({
+                            kind: 'world_state',
+                            label: ref,
+                            recordId: entry.stateKey,
+                            path: entry.path,
+                            ts: Number(entry.updatedAt ?? fallbackNow),
+                            note: `stateType=${entry.node.stateType}`,
+                        }))
+                        : []),
+                    {
+                        kind: 'world_state',
+                        label: `state.${entry.node.stateType}`,
+                        recordId: entry.stateKey,
+                        path: entry.path,
+                        ts: Number(entry.updatedAt ?? fallbackNow),
+                        note: '来自结构化 world_state',
+                    },
+                ]),
+                statePath: entry.path,
+                stateKey: entry.stateKey,
+                priorityLabel,
+                sourceLabel: WORLD_QUEST_SOURCE_LABELS.world_state,
+                statusLabel: priorityLabel,
+                updatedAt: Number(entry.updatedAt ?? fallbackNow),
+            });
+        });
+
+    return Array.from(rowMap.values())
+        .filter((row: WorldQuestBoardRow): boolean => {
+            const normalizedTitle = normalizeQuestText(row.title);
+            if (!normalizedTitle || isQuestPlaceholderText(normalizedTitle)) {
+                return false;
+            }
+            return true;
+        })
+        .map((row: WorldQuestBoardRow, index: number): WorldQuestBoardRow => {
+            const dedupeKey = normalizeLookup([row.priorityLabel || row.kind, row.title].join('|')) || `quest-${index + 1}`;
+            const ownerActorKeys = normalizeQuestActorKeys(row.ownerActorKeys ?? []);
+            const sourceKinds = Array.from(new Set(row.sourceKinds ?? []));
+            return {
+                ...row,
+                rowKey: `quest:${dedupeKey}`,
+                ownerActorKeys,
+                sourceKinds,
+                sourceKind: pickPrimaryWorldQuestSourceKind(sourceKinds),
+                sourceLabel: formatWorldQuestSourceLabel(sourceKinds),
+                relatedActors: (row.relatedActors.length > 0 ? row.relatedActors : mapQuestActorLabels(ownerActorKeys, actorLabelMap)),
+                sourceRefs: dedupeQuestSourceRefs(row.sourceRefs ?? []),
+            };
+        })
+        .sort((left: WorldQuestBoardRow, right: WorldQuestBoardRow): number => {
+            const rankDiff = getWorldQuestPriorityRank(right.priorityLabel) - getWorldQuestPriorityRank(left.priorityLabel);
+            if (rankDiff !== 0) {
+                return rankDiff;
+            }
+            return Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
+        });
+}
+
+/**
+ * 功能：提供任务委托聚合逻辑给自动化测试使用。
+ * @param experience 编辑器体验快照。
+ * @param ownedStates 记忆索引状态列表。
+ * @param worldEntries 结构化世界状态条目列表。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 任务板行列表。
+ */
+export function buildWorldQuestBoardRowsForTest(
+    experience: EditorExperienceSnapshot,
+    ownedStates: OwnedMemoryState[],
+    worldEntries: StructuredWorldStateEntry[],
+    actorLabelMap: Map<string, string>,
+): WorldQuestBoardRow[] {
+    return buildWorldQuestBoardRows(experience, ownedStates, worldEntries, actorLabelMap);
 }
 
 function applyWorldTableViewportLimits(root: ParentNode): void {
@@ -1167,6 +1738,16 @@ function getStableSnapshotValues(values: SnapshotValue[] | null | undefined): Sn
     return Array.isArray(values)
         ? values.filter((item: SnapshotValue): boolean => isStableSnapshotValue(item))
         : [];
+}
+
+/**
+ * 功能：判断快照值是否为“可见消息 N 条”这类派生占位文案。
+ * @param value 快照值。
+ * @returns 是否应视作任务板占位项。
+ */
+function isSyntheticVisibleMessageSnapshot(value: SnapshotValue | null | undefined): boolean {
+    const text = String(value?.value ?? '').trim();
+    return /^可见消息\s*\d+\s*条$/.test(text);
 }
 
 function summarizeSnapshotValues(values: SnapshotValue[] | null | undefined, limit: number = 3): string {
@@ -3178,6 +3759,7 @@ const currentWorldStateSectionTypeFilters = new Map<string, string>();
 let currentWorldStateRenderSeq = 0;
 let pendingWorldStateFocusSectionKey: string | null = null;
 let pendingWorldStateOpenSectionKeys: Set<string> | null = null;
+let pendingWorldStateFocusRowKey: string | null = null;
 let pendingRawFocus: PendingRawFocus | null = options.focusRaw ?? null;
 let vectorViewerController: VectorMemoryViewerController | null = null;
     if ((options.rawTable || options.focusRaw) && !options.initialView) {
@@ -3274,6 +3856,30 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
         };
         currentViewMode = 'raw';
         currentRawTable = target.tableName;
+        currentSort = { col: '', asc: false };
+        updateChromeState();
+        await renderActiveView();
+    }
+
+    /**
+     * 功能：跳转到 world_state 相关任务来源，并尝试定位对应条目。
+     * @param row 任务行数据。
+     * @returns 无返回值。
+     */
+    async function jumpToWorldStateQuestSource(row: WorldQuestBoardRow): Promise<void> {
+        const stateKey = String(row.stateKey ?? '').trim();
+        const statePath = String(row.statePath ?? '').trim();
+        pendingWorldStateFocusSectionKey = null;
+        pendingWorldStateOpenSectionKeys = null;
+        pendingWorldStateFocusRowKey = stateKey || null;
+        currentWorldStateScopeFilter = '__all__';
+        if (stateKey) {
+            currentWorldStateKeywordFilter = '';
+        } else if (statePath) {
+            currentWorldStateKeywordFilter = statePath;
+        }
+        currentViewMode = 'raw';
+        currentRawTable = 'world_state';
         currentSort = { col: '', asc: false };
         updateChromeState();
         await renderActiveView();
@@ -3623,6 +4229,8 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
         }
         const nextFocusSectionKey = pendingWorldStateFocusSectionKey;
         pendingWorldStateFocusSectionKey = null;
+        const nextFocusRowKey = pendingWorldStateFocusRowKey;
+        pendingWorldStateFocusRowKey = null;
         const nextScrollTop = nextFocusSectionKey ? null : contentArea.scrollTop;
         if (!preserveContent) {
             contentArea.innerHTML = '<div class="stx-re-empty">正在加载世界状态...</div>';
@@ -3702,12 +4310,15 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
         const currentSceneValue = isStableSnapshotValue(experience.canon.scene.currentScene)
             ? String(experience.canon.scene.currentScene?.value ?? '').trim()
             : '';
-        const currentConflictValue = String(experience.canon.scene.currentConflict?.value ?? '').trim();
+        const currentConflictValue = isStableSnapshotValue(experience.canon.scene.currentConflict)
+            ? String(experience.canon.scene.currentConflict?.value ?? '').trim()
+            : '';
         const worldOverviewRaw = String(experience.canon.world.overview?.value ?? '').trim();
         const participantLabels = getStableSnapshotValues(experience.canon.scene.participants)
             .map((item: SnapshotValue): string => String(item.value ?? '').trim())
             .filter(Boolean);
         const pendingEventLabels = getStableSnapshotValues(experience.canon.scene.pendingEvents)
+            .filter((item: SnapshotValue): boolean => !isSyntheticVisibleMessageSnapshot(item))
             .map((item: SnapshotValue): string => String(item.value ?? '').trim())
             .filter(Boolean);
         const lorebookLabels = getStableSnapshotValues(experience.canon.world.activeLorebooks)
@@ -4471,12 +5082,21 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             },
         ];
 
-        const questRows = buildWorldQuestBoardRows(experience, ownedStates, actorLabelMap).filter((row: WorldQuestBoardRow): boolean => {
+        const questRows = buildWorldQuestBoardRows(experience, ownedStates, entries, actorLabelMap).filter((row: WorldQuestBoardRow): boolean => {
             if (!currentWorldStateKeywordFilter) {
                 return true;
             }
-            return normalizeLookup([row.title, row.kind, row.summary, row.objective, row.relatedActors.join(' ')].join(' ')).includes(normalizeLookup(currentWorldStateKeywordFilter));
+            return normalizeLookup([
+                row.title,
+                row.kind,
+                row.priorityLabel || '',
+                row.summary,
+                row.objective,
+                row.sourceLabel,
+                (row.relatedActors ?? []).join(' '),
+            ].join(' ')).includes(normalizeLookup(currentWorldStateKeywordFilter));
         });
+        const questRowMap = new Map<string, WorldQuestBoardRow>(questRows.map((row: WorldQuestBoardRow): [string, WorldQuestBoardRow] => [row.rowKey, row]));
         const showQuestSection = currentWorldStateScopeFilter === '__all__' || currentWorldStateScopeFilter === 'scene' || currentWorldStateScopeFilter === 'global';
 
         const sectionHtml = [
@@ -4521,6 +5141,12 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 badgeTip: `当前共整理出 ${questRows.length} 条任务 / 冲突线索。`,
                 rows: questRows,
                 rowKey: (row: WorldQuestBoardRow): string => row.rowKey,
+                rowAttributes: (row: WorldQuestBoardRow): Record<string, string> => ({
+                    'data-quest-row-key': row.rowKey,
+                    'data-quest-record-key': row.recordKey || '',
+                    'data-quest-state-key': row.stateKey || '',
+                    'data-quest-state-path': row.statePath || '',
+                }),
                 columns: [
                     {
                         label: '任务 / 冲突',
@@ -4543,6 +5169,14 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         render: (row: WorldQuestBoardRow): string => `
                             <div class="stx-re-record-sub">${escapeHtml(row.objective || '等待推进')}</div>
                             <div class="stx-re-record-code">来源：${escapeHtml(row.sourceLabel)}</div>
+                            <div class="stx-re-actions" style="margin-top:6px; flex-wrap:wrap;">
+                                ${(row.sourceRefs?.length ?? 0) > 0
+        ? `<button class="stx-re-btn" data-quest-row-action="sources" data-quest-row-key="${escapeHtml(row.rowKey)}"${buildTipAttr('查看这条任务的来源详情。')}>来源</button>`
+        : ''}
+                                ${(row.recordKey || row.statePath || row.stateKey)
+        ? `<button class="stx-re-btn" data-quest-row-action="jump" data-quest-row-key="${escapeHtml(row.rowKey)}"${buildTipAttr('跳转到这条任务对应的原始记录或世界状态。')}>跳转</button>`
+        : ''}
+                            </div>
                         `,
                     },
                     {
@@ -4555,7 +5189,10 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         label: '状态',
                         tip: '当前任务状态。',
                         width: '16%',
-                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList([row.statusLabel, row.kind], '暂无状态'),
+                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList(
+                            dedupeQuestLabels([row.statusLabel, row.priorityLabel || '', row.kind]),
+                            '暂无状态',
+                        ),
                     },
                     {
                         label: '更新时间',
@@ -5004,6 +5641,40 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             });
         });
 
+        contentArea.querySelectorAll('[data-quest-row-action]').forEach((button: Element): void => {
+            button.addEventListener('click', (): void => {
+                const element = button as HTMLElement;
+                const action = String(element.dataset.questRowAction ?? '').trim();
+                const rowKey = String(element.dataset.questRowKey ?? '').trim();
+                if (!action || !rowKey) {
+                    return;
+                }
+                const row = questRowMap.get(rowKey);
+                if (!row) {
+                    return;
+                }
+                if (action === 'sources') {
+                    openLogicSourceDetailsDialog(
+                        `任务委托 / ${row.title}`,
+                        `来源 ${row.sourceRefs?.length ?? 0} 条 · ${row.sourceLabel}`,
+                        row.sourceRefs ?? [],
+                    );
+                    return;
+                }
+                if (action !== 'jump') {
+                    return;
+                }
+                const rawTarget = resolveQuestRowRawJumpTarget(row);
+                if (rawTarget) {
+                    void jumpToRawTarget(rawTarget);
+                    return;
+                }
+                if (row.statePath || row.stateKey) {
+                    void jumpToWorldStateQuestSource(row);
+                }
+            });
+        });
+
         worldUiInteractionController?.abort();
         worldUiInteractionController = new AbortController();
         const worldUiSignal = worldUiInteractionController.signal;
@@ -5123,6 +5794,24 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 }
             } else if (nextScrollTop != null) {
                 contentArea.scrollTo({ top: Math.max(0, nextScrollTop), behavior: 'auto' });
+            }
+            if (nextFocusRowKey) {
+                const escapeSelector = (window as Window & { CSS?: { escape?: (value: string) => string } }).CSS?.escape;
+                const rowSelector = escapeSelector
+                    ? `[data-world-row-key="${escapeSelector(nextFocusRowKey)}"]`
+                    : `[data-world-row-key="${nextFocusRowKey.replace(/"/g, '\\"')}"]`;
+                const row = contentArea.querySelector(rowSelector) as HTMLElement | null;
+                if (row) {
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    const previousOutline = row.style.outline;
+                    const previousBackground = row.style.background;
+                    row.style.outline = '2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #ef7d2d) 88%, white 12%)';
+                    row.style.background = 'color-mix(in srgb, var(--SmartThemeQuoteColor, #ef7d2d) 12%, transparent)';
+                    window.setTimeout((): void => {
+                        row.style.outline = previousOutline;
+                        row.style.background = previousBackground;
+                    }, 2200);
+                }
             }
             scheduleWorldUiRefresh();
             window.setTimeout((): void => applyWorldTableViewportLimits(contentArea), 120);

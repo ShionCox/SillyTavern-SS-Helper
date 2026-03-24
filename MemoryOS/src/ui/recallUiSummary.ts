@@ -307,7 +307,7 @@ export function formatVectorIndexVersionLabel(version: string | null | undefined
     if (normalized === 'source_metadata_v3') {
         return '严格 Metadata 回源';
     }
-    return '旧链路已失效';
+    return '非严格版本';
 }
 
 /**

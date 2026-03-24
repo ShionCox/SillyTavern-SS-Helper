@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatStateManager } from '../src/core/chat-state-manager';
 import { buildPreparedRecallContext } from '../src/injection/recall-context-builder';
-import { buildLayeredMemoryContext, buildSectionText } from '../src/injection/prompt-memory-renderer';
+import { buildLayeredMemoryContext } from '../src/injection/prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries, toRecallLogRecordKind } from '../src/injection/recall-log-mapper';
 import type { RecallCandidate, RecallPlan } from '../src/types';
 import { insertTavernPromptMessageEvent, findLastTavernPromptUserIndexEvent } from '../../SDK/tavern';
@@ -13,6 +13,7 @@ describe('注入重构模块', (): void => {
             getPersonaMemoryProfile: async (): Promise<null> => null,
             getPersonaMemoryProfiles: async (): Promise<Record<string, unknown>> => ({}),
             getMemoryTuningProfile: async (): Promise<null> => null,
+            getRoleProfiles: async (): Promise<Record<string, unknown>> => ({}),
             getMemoryLifecycleSummary: async (): Promise<Array<{
                 recordKey: string;
                 stage: 'clear' | 'blur' | 'distorted';
@@ -82,6 +83,7 @@ describe('注入重构模块', (): void => {
         expect(context.activeActorKey).toBe('actor_a');
         expect(context.lifecycleMap.has('r1')).toBe(true);
         expect(context.fallbackRelationshipWeight).toBeGreaterThan(0);
+        expect(context.roleProfiles).toEqual({});
     });
 
     it('可以把分区与注入风格渲染成稳定文本', (): void => {
@@ -114,9 +116,6 @@ describe('注入重构模块', (): void => {
             selected: true,
             reasonCodes: [],
         };
-        const sectionText = buildSectionText('FACTS', [candidate], 120);
-        expect(sectionText).toContain('【事实】');
-        expect(sectionText).toContain('旧城门');
         const layeredPlan: RecallPlan = {
             intent: 'story_continue',
             sections: ['FACTS'],
@@ -170,11 +169,30 @@ describe('注入重构模块', (): void => {
                 },
             ],
             plan: layeredPlan,
+            roleProfiles: {
+                actor_a: {
+                    actorKey: 'actor_a',
+                    displayName: 'Actor A',
+                    aliases: [],
+                    identityFacts: ['职业:侦探'],
+                    originFacts: ['来自旧城'],
+                    relationshipFacts: [],
+                    items: [{ kind: 'item', name: '旧地图', detail: '通往旧城门', sourceRefs: [] }],
+                    equipments: [{ kind: 'equipment', name: '短刃', detail: '近战武器', sourceRefs: [] }],
+                    updatedAt: 1,
+                },
+            },
+            relationships: [],
         });
         expect(layeredContext.text).toContain('[Memory Context]');
-        expect(layeredContext.text).toContain('<director_context>');
-        expect(layeredContext.text).toContain('<active_character_memory actor="actor_a">');
-        expect(layeredContext.blocksUsed.map((block) => block.kind)).toEqual(['director_context', 'active_character_memory']);
+        expect(layeredContext.text).toContain('<memoryos_context>');
+        expect(layeredContext.text).toContain('<worldinfo>');
+        expect(layeredContext.text).toContain('<roles>');
+        expect(layeredContext.text).toContain('<actor_a>');
+        expect(layeredContext.text).toContain('<items>');
+        expect(layeredContext.text).toContain('<equipments>');
+        expect(layeredContext.text).toContain('<memories>');
+        expect(layeredContext.blocksUsed.map((block) => block.kind)).toEqual(['memoryos_worldinfo', 'memoryos_roles']);
         expect(layeredContext.text).not.toContain('不存在的块');
     });
 
@@ -188,7 +206,7 @@ describe('注入重构模块', (): void => {
         const insertIndex = findLastTavernPromptUserIndexEvent(promptMessages);
         insertTavernPromptMessageEvent(promptMessages, {
             role: 'user',
-            text: '[Memory Context]\n<director_context>\n【事实】\n- 旧城门\n</director_context>',
+            text: '[Memory Context]\n<memoryos_context>\n<worldinfo><summary>旧城门</summary></worldinfo>\n<roles></roles>\n</memoryos_context>',
             insertMode: 'before_index',
             insertBeforeIndex: insertIndex,
             template: promptMessages[Math.max(0, insertIndex - 1)] ?? promptMessages[0],
@@ -272,5 +290,183 @@ describe('注入重构模块', (): void => {
         });
         expect(explanation.selected.items.length).toBeGreaterThan(0);
         expect(explanation.rejectedCandidates.items.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('结构化 XML 会输出角色物品和装备并转义特殊字符', (): void => {
+        const plan: RecallPlan = {
+            intent: 'story_continue',
+            sections: ['FACTS'],
+            sectionBudgets: { FACTS: 120 },
+            maxTokens: 240,
+            sourceWeights: {
+                facts: 1,
+                summaries: 0.8,
+                state: 0.7,
+                relationships: 0.5,
+                events: 1,
+                vector: 0.6,
+                lorebook: 0.3,
+            },
+            sourceLimits: {},
+            sectionWeights: { FACTS: 1 },
+            coarseTopK: 8,
+            fineTopK: 4,
+            viewpoint: {
+                mode: 'actor_bounded',
+                activeActorKey: 'actor_a',
+                allowSharedScene: true,
+                allowWorldState: true,
+                allowForeignPrivateMemory: false,
+                focus: {
+                    primaryActorKey: 'actor_a',
+                    secondaryActorKeys: [],
+                    budgetShare: {
+                        global: 0.5,
+                        primaryActor: 0.5,
+                        secondaryActors: 0,
+                    },
+                    reasonCodes: ['focus:explicit_active_actor'],
+                },
+            },
+            reasonCodes: [],
+        };
+        const context = buildLayeredMemoryContext({
+            candidates: [{
+                candidateId: 'c1',
+                recordKey: 'fact-1',
+                recordKind: 'fact',
+                source: 'facts',
+                sectionHint: 'FACTS',
+                title: '事实一',
+                rawText: 'Alice 持有 <旧地图>',
+                renderedLine: '- Alice 持有 <旧地图>',
+                confidence: 0.8,
+                updatedAt: 100,
+                keywordScore: 0.8,
+                vectorScore: 0,
+                recencyScore: 0.7,
+                continuityScore: 0.6,
+                relationshipScore: 0,
+                emotionScore: 0,
+                conflictPenalty: 0,
+                privacyPenalty: 0,
+                visibilityPool: 'actor',
+                privacyClass: 'shared',
+                viewpointReason: 'owner_actor',
+                actorFocusTier: 'primary',
+                actorVisibilityScore: 0.9,
+                finalScore: 0.9,
+                tone: 'clear_recall',
+                selected: true,
+                ownerActorKey: 'actor_a',
+                reasonCodes: ['source:facts'],
+            }],
+            plan,
+            roleProfiles: {
+                actor_a: {
+                    actorKey: 'actor_a',
+                    displayName: 'Alice',
+                    aliases: [],
+                    identityFacts: ['身份:调查员'],
+                    originFacts: [],
+                    relationshipFacts: [],
+                    items: [{ kind: 'item', name: '旧地图<&>', detail: '含密文', sourceRefs: [] }],
+                    equipments: [{ kind: 'equipment', name: '短刃', detail: '近战', sourceRefs: [] }],
+                    updatedAt: 1,
+                },
+            },
+            relationships: [],
+        });
+        expect(context.text).toContain('<memoryos_context>');
+        expect(context.text).toContain('<items>');
+        expect(context.text).toContain('<equipments>');
+        expect(context.text).toContain('旧地图&lt;&amp;&gt;');
+    });
+
+    it('无物品和装备时不会输出空集合节点', (): void => {
+        const plan: RecallPlan = {
+            intent: 'story_continue',
+            sections: ['SUMMARY'],
+            sectionBudgets: { SUMMARY: 120 },
+            maxTokens: 240,
+            sourceWeights: {
+                facts: 1,
+                summaries: 0.8,
+                state: 0.7,
+                relationships: 0.5,
+                events: 1,
+                vector: 0.6,
+                lorebook: 0.3,
+            },
+            sourceLimits: {},
+            sectionWeights: { SUMMARY: 1 },
+            coarseTopK: 8,
+            fineTopK: 4,
+            viewpoint: {
+                mode: 'actor_bounded',
+                activeActorKey: 'actor_a',
+                allowSharedScene: true,
+                allowWorldState: true,
+                allowForeignPrivateMemory: false,
+                focus: {
+                    primaryActorKey: 'actor_a',
+                    secondaryActorKeys: [],
+                    budgetShare: {
+                        global: 0.5,
+                        primaryActor: 0.5,
+                        secondaryActors: 0,
+                    },
+                    reasonCodes: ['focus:explicit_active_actor'],
+                },
+            },
+            reasonCodes: [],
+        };
+        const context = buildLayeredMemoryContext({
+            candidates: [{
+                candidateId: 'c1',
+                recordKey: 's1',
+                recordKind: 'summary',
+                source: 'summaries',
+                sectionHint: 'SUMMARY',
+                title: '摘要',
+                rawText: '世界规则稳定',
+                confidence: 0.8,
+                updatedAt: 100,
+                keywordScore: 0.8,
+                vectorScore: 0,
+                recencyScore: 0.7,
+                continuityScore: 0.6,
+                relationshipScore: 0,
+                emotionScore: 0,
+                conflictPenalty: 0,
+                privacyPenalty: 0,
+                visibilityPool: 'global',
+                privacyClass: 'shared',
+                viewpointReason: 'shared',
+                actorFocusTier: 'shared',
+                actorVisibilityScore: 0.9,
+                finalScore: 0.9,
+                tone: 'clear_recall',
+                selected: true,
+                reasonCodes: ['source:summaries'],
+            }],
+            plan,
+            roleProfiles: {
+                actor_a: {
+                    actorKey: 'actor_a',
+                    displayName: 'Alice',
+                    aliases: [],
+                    identityFacts: ['身份:调查员'],
+                    originFacts: [],
+                    relationshipFacts: [],
+                    items: [],
+                    equipments: [],
+                    updatedAt: 1,
+                },
+            },
+            relationships: [],
+        });
+        expect(context.text).not.toContain('<items></items>');
+        expect(context.text).not.toContain('<equipments></equipments>');
     });
 });
