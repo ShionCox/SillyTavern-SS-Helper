@@ -28,17 +28,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           <div class="stx-ui-mode-bar">
             <div class="stx-ui-mode-copy">
               <span class="stx-ui-mode-kicker">MemoryOS</span>
-              <div class="stx-ui-mode-title">记忆视图</div>
-            </div>
-            <div class="stx-ui-mode-switch">
-              <button id="${ids.modeBasicId}" type="button" class="stx-ui-mode-chip is-active">
-                <i class="fa-solid fa-sparkles"></i>
-                <span>普通模式</span>
-              </button>
-              <button id="${ids.modeAdvancedId}" type="button" class="stx-ui-mode-chip">
-                <i class="fa-solid fa-sliders"></i>
-                <span>高级模式</span>
-              </button>
+              <div class="stx-ui-mode-title">设置总览</div>
             </div>
             <button id="${ids.experienceRefreshBtnId}" type="button" class="stx-ui-btn secondary stx-ui-refresh-btn">
               <i class="fa-solid fa-rotate"></i>&nbsp;刷新
@@ -46,19 +36,19 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           </div>
 
           <div class="stx-ui-tabs stx-ui-tabs-primary">
-            <button id="${ids.tabRoleId}" data-stx-mode="basic" data-tip="查看当前聊天的整体总览、场景和健康度。" type="button" class="stx-ui-tab is-active">
+            <button id="${ids.tabRoleId}" data-tip="查看当前聊天的整体总览、场景和健康度。" type="button" class="stx-ui-tab is-active">
               <i class="fa-solid fa-compass"></i>
               <span>总览</span>
             </button>
-            <button id="${ids.tabRecentId}" data-stx-mode="basic" data-tip="按角色和地点浏览当前聊天实体。" type="button" class="stx-ui-tab">
+            <button id="${ids.tabRecentId}" data-tip="按角色和地点浏览当前聊天实体。" type="button" class="stx-ui-tab">
               <i class="fa-solid fa-map-location-dot"></i>
               <span>角色与地点</span>
             </button>
-            <button id="${ids.tabRelationId}" data-stx-mode="basic" data-tip="查看关系与结构状态、空态解释及维护入口。" type="button" class="stx-ui-tab">
+            <button id="${ids.tabRelationId}" data-tip="查看关系与结构状态、空态解释及系统诊断入口。" type="button" class="stx-ui-tab">
               <i class="fa-solid fa-table-cells-large"></i>
               <span>关系与结构</span>
             </button>
-            <button id="${ids.tabInjectionId}" data-stx-mode="basic" data-tip="查看数据分层诊断、问题列表和修复动作。" type="button" class="stx-ui-tab">
+            <button id="${ids.tabInjectionId}" data-tip="查看数据分层诊断、问题列表和修复动作。" type="button" class="stx-ui-tab">
               <i class="fa-solid fa-stethoscope"></i>
               <span>诊断</span>
             </button>
@@ -69,7 +59,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
           ${buildRelationsStructureTabPanel(ids)}
           ${buildDiagnosticsTabPanel(ids)}
 
-          <div id="${ids.panelAdvancedToolsId}" class="stx-ui-panel stx-ui-advanced-panel" hidden>
+          <div id="${ids.panelAdvancedToolsId}" class="stx-ui-panel stx-ui-advanced-panel">
             <div class="stx-ui-advanced-head">
               <div class="stx-ui-advanced-head-title">高级工具</div>
               <div class="stx-ui-advanced-head-search">

@@ -623,10 +623,10 @@
 
 .stx-re-view-hero[data-view-mode="diagnostics"] .stx-re-view-hero-glyph {
   background:
-    radial-gradient(circle at 30% 28%, color-mix(in srgb, #ff7d9d 24%, transparent) 0%, transparent 42%),
+    radial-gradient(circle at 30% 28%, color-mix(in srgb, var(--stx-memory-info, #78a8ff) 24%, transparent) 0%, transparent 42%),
     linear-gradient(180deg,
-      color-mix(in srgb, #c55279 24%, transparent) 0%,
-      color-mix(in srgb, #452033 32%, var(--ss-theme-surface-3, rgba(255,255,255,0.06)) 68%) 100%);
+      color-mix(in srgb, var(--ss-theme-accent, #c5a059) 22%, transparent) 0%,
+      color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18,18,24,0.82)) 74%, var(--ss-theme-surface-3, rgba(255,255,255,0.06)) 26%) 100%);
 }
 
 .stx-re-view-hero[data-view-mode="raw"] .stx-re-view-hero-glyph {

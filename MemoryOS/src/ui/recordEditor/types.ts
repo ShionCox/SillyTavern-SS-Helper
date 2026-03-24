@@ -6,7 +6,7 @@ export type RawTableName = 'events' | 'facts' | 'summaries' | 'world_state' | 'a
 /**
  * 功能：记录编辑器支持的页面视图类型。
  */
-export type ViewMode = 'world' | 'maintenance' | 'memory' | 'vector' | 'diagnostics' | 'raw';
+export type ViewMode = 'world' | 'memory' | 'vector' | 'diagnostics' | 'raw';
 
 /**
  * 功能：记录编辑器中可见的原始数据表标签类型。

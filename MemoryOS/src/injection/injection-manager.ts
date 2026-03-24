@@ -17,18 +17,15 @@ import {
 import {
     evaluateLorebookRelevance,
     loadActiveWorldInfoEntriesFromHost,
-    type LorebookEntryCandidate,
 } from '../core/lorebook-relevance-gate';
 import { insertTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { logger } from '../index';
 import type {
     AdaptivePolicy,
-    GroupMemoryState,
     InjectionIntent,
     InjectionSectionName,
     MemoryContextBlockUsage,
     LorebookGateDecision,
-    LogicalChatView,
     PreGenerationGateDecision,
     PromptInjectionProfile,
     PromptQueryMode,
@@ -36,7 +33,6 @@ import type {
     RecallGateDecision,
     RecallLogEntry,
     RecallPlan,
-    StrategyDecision,
 } from '../types';
 import {
     DEFAULT_PROMPT_INJECTION_PROFILE,
@@ -276,7 +272,7 @@ export class InjectionManager {
      */
     private async resolvePromptInjectionProfile(
         intent: InjectionIntent,
-        profile: {
+        _profile: {
             chatType: 'solo' | 'group' | 'worldbook' | 'tool';
             stylePreference: 'story' | 'qa' | 'trpg' | 'info';
         } | null,

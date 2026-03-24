@@ -1,6 +1,5 @@
 import type { RecordEditorViewMeta, ViewMode } from '../types';
 import { DIAGNOSTICS_PAGE_META } from './diagnosticsPage';
-import { MAINTENANCE_PAGE_META } from './maintenancePage';
 import { MEMORY_PAGE_META } from './memoryPage';
 import { RAW_PAGE_META, RECORD_EDITOR_RAW_TAB_META } from './rawPage';
 import { VECTOR_PAGE_META } from './vectorPage';
@@ -11,7 +10,6 @@ import { WORLD_PAGE_META } from './worldPage';
  */
 export const RECORD_EDITOR_VIEW_META: Record<ViewMode, RecordEditorViewMeta> = {
     world: WORLD_PAGE_META,
-    maintenance: MAINTENANCE_PAGE_META,
     memory: MEMORY_PAGE_META,
     vector: VECTOR_PAGE_META,
     diagnostics: DIAGNOSTICS_PAGE_META,

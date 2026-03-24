@@ -1,7 +1,6 @@
 import { logger } from '../index';
 import { ChatStateManager } from './chat-state-manager';
-import type { RowRefResolution, RowRefSource } from '../types';
-import type { DBFact } from '../db/db';
+import type { RowRefResolution } from '../types';
 import { FactsManager } from './facts-manager';
 
 

@@ -1,4 +1,4 @@
-import type { EditorHealthSnapshot } from '../../../SDK/stx';
+import type { RecordEditorOpenOptions } from './recordEditor/types';
 
 interface EditorActionToastLike {
     success(message: string): void;
@@ -8,31 +8,31 @@ interface EditorActionToastLike {
 export interface EditorActionExecutorOptions {
     dialogIdPrefix: string;
     formatCandidateKindLabel: (kind: string) => string;
-    openRecordEditor: () => void;
-    openDiagnostics: () => void;
+    openRecordEditor: (options?: RecordEditorOpenOptions) => void | Promise<void>;
+    openDiagnostics: () => void | Promise<void>;
     refreshExperiencePanels: () => Promise<void>;
     toast: EditorActionToastLike;
 }
 
 /**
- * 功能：创建 settings 页使用的编辑器动作执行器。
+ * 功能：创建 settings 页面使用的记录编辑器动作执行器。
  * @param options 依赖项。
  * @returns 动作执行函数。
  */
 export function createEditorActionExecutor(options: EditorActionExecutorOptions): (action: string, triggerButton?: HTMLElement | null) => Promise<void> {
     const showHiddenRowsEntry = async (): Promise<void> => {
-        const memory = (window as any).STX?.memory;
-        if (!memory?.editor?.getEditorHealth) {
-            options.openRecordEditor();
-            return;
-        }
-        const health = await memory.editor.getEditorHealth() as EditorHealthSnapshot;
-        options.openRecordEditor();
-        options.toast.info(`已打开记录编辑器，可进一步查看 alias ${health.dataLayers.aliasCount} / redirect ${health.dataLayers.redirectCount} / tombstone ${health.dataLayers.tombstoneCount}。`);
+        await options.openDiagnostics();
+        options.toast.info('已打开系统诊断，可继续查看隐藏项、别名、重定向和候选修复状态。');
     };
 
     return async (action: string, triggerButton?: HTMLElement | null): Promise<void> => {
-        const memory = (window as any).STX?.memory;
+        const memory = (window as Window & { STX?: { memory?: unknown } }).STX?.memory as unknown as {
+            editor?: {
+                refreshSemanticSeed?: () => Promise<unknown>;
+                rebuildChatView?: () => Promise<unknown>;
+                refreshCanonSnapshot?: () => Promise<unknown>;
+            };
+        } | undefined;
         if (!memory) {
             alert('Memory OS 尚未就绪。');
             return;
@@ -70,8 +70,8 @@ export function createEditorActionExecutor(options: EditorActionExecutorOptions)
                 return;
             }
             if (action === 'review-structured-sources') {
-                options.openRecordEditor();
-                options.toast.info('已打开记录编辑器，请从逻辑维护与诊断页查看当前主链来源。');
+                await options.openDiagnostics();
+                options.toast.info('已打开系统诊断，可继续查看当前主链来源和修复建议。');
                 return;
             }
             if (action === 'view-hidden-rows') {
@@ -79,14 +79,14 @@ export function createEditorActionExecutor(options: EditorActionExecutorOptions)
                 return;
             }
             if (action === 'open-record-editor') {
-                options.openRecordEditor();
+                await options.openRecordEditor();
                 return;
             }
             if (action === 'open-diagnostics') {
-                options.openDiagnostics();
+                await options.openDiagnostics();
             }
         } catch (error) {
-            alert('操作失败：' + String(error));
+            alert(`操作失败：${String(error)}`);
         } finally {
             triggerButton?.removeAttribute('disabled');
         }

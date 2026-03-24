@@ -19,9 +19,6 @@ export function buildOverviewTabPanel(ids: MemoryOSSettingsIds): string {
             <button data-stx-editor-action="refresh-seed" type="button" class="stx-ui-btn secondary" data-tip="重新提取并刷新 semantic seed。">
               <i class="fa-solid fa-seedling"></i>&nbsp;刷新 Seed
             </button>
-            <button id="${ids.experienceAdvancedBtnId}" type="button" class="stx-ui-btn secondary" data-tip="切换到高级工具模式。">
-              <i class="fa-solid fa-sliders"></i>&nbsp;进入高级工具
-            </button>
           </div>
           <div id="${ids.roleOverviewMetaId}" style="display:flex;flex-direction:column;gap:10px;"></div>
           <div class="stx-ui-experience-grid">
@@ -59,9 +56,3 @@ export function buildOverviewTabPanel(ids: MemoryOSSettingsIds): string {
     `.trim();
 }
 
-/**
- * 功能：绑定“总览”页签事件。
- * @returns 无返回值。
- */
-export function bindOverviewTab(): void {
-}

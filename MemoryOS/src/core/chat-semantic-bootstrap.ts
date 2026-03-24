@@ -8,6 +8,7 @@ import {
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
+import { logger } from '../index';
 import { enhanceSemanticSeedWithAiWithOptions } from './chat-semantic-ai-summary';
 import type { TaskPresentationOverride } from '../llm/memoryLlmBridge';
 import type {
@@ -118,11 +119,32 @@ function buildSemanticSeedFingerprint(chatKey: string, seed: ChatSemanticSeed): 
         characterAnchors: seed.characterAnchors,
         presetStyle: seed.presetStyle,
         identitySeed: seed.identitySeed,
+        identitySeeds: seed.identitySeeds,
+        roleProfileSeeds: seed.roleProfileSeeds,
         worldSeed: seed.worldSeed,
         styleSeed: seed.styleSeed,
         aiSummary: seed.aiSummary,
     });
     return hashString(fingerprintBase);
+}
+
+/**
+ * 功能：统一构建语义冷启动结果对象，并在有种子时同步重算指纹。
+ * @param chatKey 当前聊天键。
+ * @param seed 当前语义种子；为空时返回空指纹。
+ * @param bindingFingerprint 当前绑定指纹。
+ * @returns 标准化后的冷启动结果对象。
+ */
+function buildSemanticBootstrapResult(
+    chatKey: string,
+    seed: ChatSemanticSeed | null,
+    bindingFingerprint: string,
+): SemanticBootstrapResult {
+    return {
+        seed,
+        fingerprint: seed ? buildSemanticSeedFingerprint(chatKey, seed) : '',
+        bindingFingerprint,
+    };
 }
 
 async function resolveSelectedLorebookEntries(selection: ColdStartLorebookSelection): Promise<{
@@ -207,6 +229,56 @@ function buildSourceTrace(field: string, source: string, confidence: number): Se
         field,
         source,
         confidence: Math.max(0, Math.min(1, confidence)),
+    };
+}
+
+/**
+ * 功能：构建冷启动种子使用的统一来源追踪列表。
+ * @param usedCustomLorebookSelection 是否使用了自定义世界书选择。
+ * @returns 规范化后的来源追踪数组。
+ */
+function buildBootstrapSourceTrace(usedCustomLorebookSelection: boolean): SeedSourceTrace[] {
+    return [
+        buildSourceTrace('character_core', 'context.character', 0.9),
+        buildSourceTrace('system_prompt', 'context.system_prompt', 0.85),
+        buildSourceTrace('first_message', 'context.first_mes', 0.7),
+        buildSourceTrace('lorebook', usedCustomLorebookSelection ? 'memoryos.cold_start_selection' : 'global.selected_world_info', 0.8),
+    ];
+}
+
+/**
+ * 功能：构建冷启动阶段的角色核心上下文对象。
+ * @param contextRecord 原始上下文记录。
+ * @param role 当前角色身份解析结果。
+ * @param groupId 当前群组标识。
+ * @param characterId 当前角色标识。
+ * @param currentUserName 当前用户名。
+ * @returns 角色核心上下文对象。
+ */
+function buildCharacterCoreRecord(
+    contextRecord: Record<string, unknown>,
+    role: {
+        roleKey: string;
+        roleId: string;
+        displayName: string;
+        avatarName: string;
+    },
+    groupId: string,
+    characterId: string,
+    currentUserName: string,
+): Record<string, unknown> {
+    return {
+        roleKey: role.roleKey,
+        roleId: role.roleId,
+        displayName: role.displayName,
+        avatarName: role.avatarName,
+        groupId,
+        characterId,
+        cardName: normalizeText(contextRecord.characterName ?? contextRecord.name2),
+        description: normalizeText(contextRecord.description ?? contextRecord.desc ?? contextRecord.personality),
+        scenario: normalizeText(contextRecord.scenario),
+        tags: Array.isArray(contextRecord.tags) ? contextRecord.tags : [],
+        userName: currentUserName,
     };
 }
 
@@ -371,17 +443,19 @@ function buildCharacterAnchors(input: {
     return anchors.slice(0, 12);
 }
 
+/**
+ * 功能：采集当前会话的基础语义种子，但不触发 AI 结构化增强。
+ * @param chatKey 当前聊天键。
+ * @param activeLorebooksOverride 可选的世界书覆盖选择。
+ * @returns 基础冷启动种子与对应指纹。
+ */
 export async function collectChatSemanticSeed(
     chatKey: string,
     activeLorebooksOverride?: ColdStartLorebookSelection | string[],
 ): Promise<SemanticBootstrapResult> {
     const context = getSillyTavernContextEvent();
     if (!context) {
-        return {
-            seed: null,
-            fingerprint: '',
-            bindingFingerprint: '',
-        };
+        return buildSemanticBootstrapResult(chatKey, null, '');
     }
 
     const contextRecord = context as unknown as Record<string, unknown>;
@@ -394,19 +468,13 @@ export async function collectChatSemanticSeed(
     const characterId = normalizeText(currentCharacter?.index ?? contextRecord.characterId ?? contextRecord.this_chid);
     const bindingFingerprint = `${groupId || '-'}|${characterId || '-'}`;
 
-    const characterCore: Record<string, unknown> = {
-        roleKey: role.roleKey,
-        roleId: role.roleId,
-        displayName: role.displayName,
-        avatarName: role.avatarName,
+    const characterCore = buildCharacterCoreRecord(
+        contextRecord,
+        role,
         groupId,
         characterId,
-        cardName: normalizeText(contextRecord.characterName ?? contextRecord.name2),
-        description: normalizeText(contextRecord.description ?? contextRecord.desc ?? contextRecord.personality),
-        scenario: normalizeText(contextRecord.scenario),
-        tags: Array.isArray(contextRecord.tags) ? contextRecord.tags : [],
-        userName: currentUserName,
-    };
+        currentUserName,
+    );
 
     const systemPrompt = normalizeText(
         contextRecord.systemPrompt
@@ -491,20 +559,18 @@ export async function collectChatSemanticSeed(
         identitySeed,
         worldSeed,
         styleSeed,
-        sourceTrace: [
-            buildSourceTrace('character_core', 'context.character', 0.9),
-            buildSourceTrace('system_prompt', 'context.system_prompt', 0.85),
-            buildSourceTrace('first_message', 'context.first_mes', 0.7),
-            buildSourceTrace('lorebook', activeLorebooksOverride ? 'memoryos.cold_start_selection' : 'global.selected_world_info', 0.8),
-        ],
+        sourceTrace: buildBootstrapSourceTrace(Boolean(activeLorebooksOverride)),
     };
-    return {
-        seed,
-        fingerprint: buildSemanticSeedFingerprint(chatKey, seed),
-        bindingFingerprint,
-    };
+    return buildSemanticBootstrapResult(chatKey, seed, bindingFingerprint);
 }
 
+/**
+ * 功能：采集基础语义种子后立刻接入 AI JSON 增强链路，返回增强后的冷启动结果。
+ * @param chatKey 当前聊天键。
+ * @param activeLorebooksOverride 可选的世界书覆盖选择。
+ * @param options 冷启动增强选项。
+ * @returns 增强后的冷启动结果；AI 失败时回退基础结果。
+ */
 export async function collectChatSemanticSeedWithAi(
     chatKey: string,
     activeLorebooksOverride?: ColdStartLorebookSelection | string[],
@@ -526,12 +592,12 @@ export async function collectChatSemanticSeedWithAi(
             taskPresentation: options?.taskPresentation,
             taskDescription: options?.taskDescription,
         });
-        return {
-            ...base,
-            seed: enhancedSeed,
-            fingerprint: buildSemanticSeedFingerprint(chatKey, enhancedSeed),
-        };
-    } catch {
+        return buildSemanticBootstrapResult(chatKey, enhancedSeed, base.bindingFingerprint);
+    } catch (error: unknown) {
+        logger.warn('[ColdStart][AiEnhanceFailed]', {
+            chatKey,
+            error: error instanceof Error ? error.message : String(error ?? 'unknown'),
+        });
         return base;
     }
 }

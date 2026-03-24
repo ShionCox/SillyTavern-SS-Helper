@@ -30,9 +30,7 @@ import {
 import type {
     RawTableName,
     RecordEditorOpenOptions,
-    RecordEditorRawTabMeta,
-    RecordEditorViewMeta,
-    PendingRawFocus,
+            PendingRawFocus,
     ViewMode,
     VisibleRawTableName,
 } from './recordEditor/types';
@@ -41,6 +39,7 @@ import { VectorMemoryViewerController, type VectorMemoryViewerSourceJumpTarget }
 import type {
     DerivedRowCandidate,
     EditorExperienceSnapshot,
+    EditorHealthSnapshot,
     LogicRowView,
     LogicTableStatus,
     LogicTableSummary,
@@ -48,7 +47,6 @@ import type {
     MemoryActorRetentionMap,
     MemoryActorRetentionState,
     MemoryLifecycleState,
-    MemoryMutationHistoryEntry,
     OwnedMemoryState,
     PersonaMemoryProfile,
     SourceRef,
@@ -491,53 +489,13 @@ function renderWorldStatePillList(items: string[], emptyLabel: string = '暂无'
         return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
     }
     return `<div class="stx-re-world-pill-list">${items.slice(0, 6).map((item: string): string => `<span class="stx-re-world-pill">${escapeHtml(item)}</span>`).join('')}</div>`;
-}
-
-function renderWorldStateFlagList(items: string[], emptyLabel: string = '暂无'): string {
-    if (items.length <= 0) {
-        return `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
-    }
-    return `<div class="stx-re-world-pill-list">${items.slice(0, 6).map((item: string): string => `<span class="stx-re-record-flag">${escapeHtml(item)}</span>`).join('')}</div>`;
-}
-
-function renderWorldStateMiniMeta(label: string, value: string, emptyLabel: string = '暂无'): string {
+}function renderWorldStateMiniMeta(label: string, value: string, emptyLabel: string = '暂无'): string {
     return `
         <div class="stx-re-world-meta-line">
             <span class="stx-re-world-meta-label">${escapeHtml(label)}</span>
             <span class="stx-re-world-meta-value">${escapeHtml(value || emptyLabel)}</span>
         </div>
     `;
-}
-
-function renderWorldStateFlagMeta(label: string, value: unknown, emptyLabel: string = '暂无'): string {
-    const hasValue = value != null && (!(typeof value === 'string') || Boolean(value.trim()));
-    const contentHtml = hasValue
-        ? renderWorldStateFlagMetaContent(value)
-        : `<span class="stx-re-record-sub">${escapeHtml(emptyLabel)}</span>`;
-    return `
-        <div class="stx-re-world-flag-meta-line">
-            <span class="stx-re-record-flag">${escapeHtml(label)}</span>
-            <div class="stx-re-world-flag-meta-value">${contentHtml}</div>
-        </div>
-    `;
-}
-
-function renderWorldStateFlagMetaContent(value: unknown): string {
-    const listItems = extractDisplayListItems(value);
-    if (listItems.length > 0) {
-        return `
-            <div class="stx-re-world-detail-list">
-                ${listItems.slice(0, 8).map((item: string): string => `<div class="stx-re-world-detail-item">${escapeHtml(item)}</div>`).join('')}
-            </div>
-        `;
-    }
-
-    const text = formatReadableValueText(value);
-    if (!text || text === '未填写') {
-        return `<span class="stx-re-record-sub">暂无</span>`;
-    }
-
-    return `<div class="stx-re-world-detail-text">${escapeHtml(text)}</div>`;
 }
 
 function renderWorldStateCompactInfoCard(label: string, value: unknown, emptyLabel: string = '暂无'): string {
@@ -1100,6 +1058,79 @@ function formatHealthSeverityLabel(severity: 'critical' | 'warning' | 'info'): s
     return '提示';
 }
 
+/**
+ * 功能：根据健康快照推导记录编辑器诊断主信号。
+ * @param health 当前聊天的健康快照。
+ * @returns 诊断中控台使用的状态文案与样式信息。
+ */
+function resolveRecordDiagnosticsSignalState(health: EditorHealthSnapshot): {
+    toneClassName: 'is-danger' | 'is-warning' | 'is-stable';
+    title: string;
+    summary: string;
+    badge: string;
+} {
+    const criticalCount = health.issues.filter((issue): boolean => issue.severity === 'critical').length;
+    const warningCount = health.issues.filter((issue): boolean => issue.severity === 'warning').length;
+    const orphanFactsCount = Number(health.orphanFactsCount ?? 0);
+    const duplicateEntityRisk = Number(health.duplicateEntityRisk ?? 0);
+
+    if (criticalCount > 0) {
+        return {
+            toneClassName: 'is-danger',
+            title: '高风险链路待处理',
+            summary: `当前发现 ${criticalCount} 项高优先级问题，建议先处理结构修复，再继续查看证据快照。`,
+            badge: '立即处理',
+        };
+    }
+
+    if (warningCount > 0 || health.hasDraftRevision || orphanFactsCount > 0 || duplicateEntityRisk >= 0.35) {
+        return {
+            toneClassName: 'is-warning',
+            title: '存在待整理信号',
+            summary: `当前有 ${warningCount} 项注意项，并伴随草稿、孤儿事实或重复实体风险，适合在这一页连续完成整理。`,
+            badge: '建议整理',
+        };
+    }
+
+    return {
+        toneClassName: 'is-stable',
+        title: '结构状态相对平稳',
+        summary: '当前没有明显高风险问题，建议把重点放在角色画像、事件影响与边界压制证据上。',
+        badge: '运行平稳',
+    };
+}
+
+/**
+ * 功能：把健康问题等级映射为诊断面板样式类名。
+ * @param severity 健康问题等级。
+ * @returns 样式类名。
+ */
+function resolveRecordDiagnosticsIssueToneClass(severity: 'critical' | 'warning' | 'info'): 'is-danger' | 'is-warning' | 'is-soft' {
+    if (severity === 'critical') {
+        return 'is-danger';
+    }
+    if (severity === 'warning') {
+        return 'is-warning';
+    }
+    return 'is-soft';
+}
+
+/**
+ * 功能：把逻辑表状态映射为诊断面板样式类名。
+ * @param status 逻辑表状态。
+ * @returns 样式类名。
+ */
+function resolveRecordDiagnosticsTableToneClass(status: LogicTableStatus): 'is-danger' | 'is-warning' | 'is-stable' {
+    const normalized = String(status ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'healthy' || normalized === 'ready' || normalized === 'ok' || normalized === 'clean') {
+        return 'is-stable';
+    }
+    if (normalized.includes('candidate') || normalized.includes('draft') || normalized.includes('warning') || normalized.includes('pending')) {
+        return 'is-warning';
+    }
+    return 'is-danger';
+}
+
 function openLogicSourceDetailsDialog(title: string, summary: string, sourceRefs: SourceRef[]): void {
     const bodyHtml = sourceRefs.length <= 0
         ? '<div style="padding:12px; border-radius:12px; border:1px solid var(--SmartThemeBorderColor);">当前没有可展示的来源明细。</div>'
@@ -1474,6 +1505,7 @@ function formatEntityKindLabel(kind: string): string {
     if (RE_ENTITY_KIND_I18N[normalized]) {
         return RE_ENTITY_KIND_I18N[normalized];
     }
+    if (normalized === 'dialogue') return '对话记忆';
     return formatRecordEditorKeyLabel(normalized);
 }
 
@@ -1515,23 +1547,6 @@ function formatEntityDisplayLabel(entity: Record<string, unknown> | undefined): 
         return kind;
     }
     return `${kind}：${entityId}`;
-}
-
-/**
- * 功能：生成实体的原始引用提示，方便需要时核对。
- * @param entity 原始实体对象。
- * @returns 原始引用文本。
- */
-function formatEntityRawHint(entity: Record<string, unknown> | undefined): string {
-    if (!entity) {
-        return '未填写实体引用';
-    }
-    const kind = String(entity.kind ?? '').trim();
-    const entityId = String(entity.id ?? '').trim();
-    if (!kind || !entityId) {
-        return '实体信息不完整';
-    }
-    return `[${kind}:${entityId}]`;
 }
 
 /**
@@ -1961,20 +1976,7 @@ function formatMemoryReasonLabel(value: string): string {
         owner_missing: '缺少归属角色',
     };
     return labels[normalized] || formatRecordEditorKeyLabel(normalized || 'reason');
-}
-
-function formatMemoryRecordCodeLabel(recordKey: string): string {
-    const trimmed = String(recordKey ?? '').trim();
-    if (!trimmed) {
-        return '暂无';
-    }
-    if (trimmed.includes('/') || trimmed.includes(':')) {
-        return formatHumanReadableTopic(trimmed.replace(/:/g, '/'), compactInternalIdentifier(trimmed, 48));
-    }
-    return compactInternalIdentifier(trimmed, 48);
-}
-
-function formatChatKeyLabel(value: string): string {
+}function formatChatKeyLabel(value: string): string {
     const trimmed = String(value ?? '').trim();
     if (!trimmed) {
         return '全局记录';
@@ -2543,7 +2545,7 @@ function formatMemorySubtypeLabel(value: string): string {
         minor_event: '普通事件',
         combat_event: '战斗事件',
         travel_event: '旅途事件',
-        conversation_event: '对话事件',
+        dialogue_quote: '对话原句',
         global_rule: '全局规则',
         city_rule: '城市规则',
         location_fact: '地点信息',
@@ -2574,18 +2576,7 @@ function formatMemoryStageLabel(value: string): string {
     if (normalized === 'blur') return '开始模糊';
     if (normalized === 'distorted') return '已经偏差';
     return formatRecordEditorKeyLabel(normalized || 'clear');
-}
-
-function formatRecordKindLabel(value: string): string {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    if (normalized === 'fact') return '事实';
-    if (normalized === 'summary') return '摘要';
-    if (normalized === 'state') return '世界状态';
-    if (normalized === 'relationship') return '关系';
-    return formatRecordEditorKeyLabel(normalized || 'fact');
-}
-
-function formatMemoryRecordSegmentLabel(segment: string): string {
+}function formatMemoryRecordSegmentLabel(segment: string): string {
     const trimmed = String(segment ?? '').trim();
     if (!trimmed) {
         return '';
@@ -2732,7 +2723,7 @@ function buildMemoryRecordTooltip(recordKey: string, owned: OwnedMemoryState): s
     ].filter(Boolean).join('\n');
 }
 
-function buildMemoryRecordHeadline(recordKey: string, lifecycle: MemoryLifecycleState | undefined, owned: OwnedMemoryState): string {
+function buildMemoryRecordHeadline(recordKey: string, _lifecycle: MemoryLifecycleState | undefined, owned: OwnedMemoryState): string {
     const normalizedKey = String(recordKey ?? '').trim();
     if (!normalizedKey) {
         return '未命名记忆';
@@ -2791,7 +2782,7 @@ const MEMORY_SUBTYPE_OPTIONS: string[] = [
     'minor_event',
     'combat_event',
     'travel_event',
-    'conversation_event',
+    'dialogue_quote',
     'global_rule',
     'city_rule',
     'location_fact',
@@ -2804,7 +2795,7 @@ const MEMORY_SUBTYPE_OPTIONS: string[] = [
     'other',
 ];
 
-function parseImportanceInput(input: string | null, fallback: number): number | null {
+function parseImportanceInput(input: string | null, _fallback: number): number | null {
     const text = String(input ?? '').trim();
     if (!text) {
         return null;
@@ -2949,23 +2940,6 @@ function buildSummarySubtitle(record: RawRecord): string {
     const createdAt = Number(record.createdAt ?? 0);
     if (createdAt > 0) {
         parts.push(`生成于 ${formatTimeLabel(createdAt)}`);
-    }
-    return joinReadableMeta(parts);
-}
-
-/**
- * 功能：构建世界状态记录的辅助说明。
- * @param record 原始状态记录。
- * @returns 辅助说明文本。
- */
-function buildWorldStateSubtitle(record: RawRecord): string {
-    const path = String(record.path ?? '').trim();
-    const parts = [
-        path ? `归类到：${formatHumanReadableTopic(path, '未填写路径')}` : '当前还没有填写状态主题',
-    ];
-    const updatedAt = Number(record.updatedAt ?? 0);
-    if (updatedAt > 0) {
-        parts.push(`最近更新于 ${formatTimeLabel(updatedAt)}`);
     }
     return joinReadableMeta(parts);
 }
@@ -3148,7 +3122,6 @@ export async function openRecordEditor(options: RecordEditorOpenOptions = {}): P
                     <div class="stx-re-tab is-active" data-view="world"${buildTipAttr(RECORD_EDITOR_VIEW_META.world.tip)}><span>${RECORD_EDITOR_VIEW_META.world.label}</span></div>
                     <div class="stx-re-tab" data-view="memory"${buildTipAttr(RECORD_EDITOR_VIEW_META.memory.tip)}><span>${RECORD_EDITOR_VIEW_META.memory.label}</span></div>
                     <div class="stx-re-tab" data-view="vector"${buildTipAttr(RECORD_EDITOR_VIEW_META.vector.tip)}><span>${RECORD_EDITOR_VIEW_META.vector.label}</span></div>
-                    <div class="stx-re-tab" data-view="maintenance"${buildTipAttr(RECORD_EDITOR_VIEW_META.maintenance.tip)}><span>${RECORD_EDITOR_VIEW_META.maintenance.label}</span></div>
                     <div class="stx-re-tab" data-view="diagnostics"${buildTipAttr(RECORD_EDITOR_VIEW_META.diagnostics.tip)}><span>${RECORD_EDITOR_VIEW_META.diagnostics.label}</span></div>
                     <div class="stx-re-tab" data-view="raw"${buildTipAttr(RECORD_EDITOR_VIEW_META.raw.tip)}><span>${RECORD_EDITOR_VIEW_META.raw.label}</span></div>
                 </div>
@@ -3200,13 +3173,13 @@ let currentWorldStateKeywordFilter = '';
 let logicCreateExpanded = false;
 let recordMemory: MemorySDKImpl | null = null;
 let recordMemoryChatKey = '';
+const selectedLogicRowIds = new Set<string>();
 const currentWorldStateSectionTypeFilters = new Map<string, string>();
 let currentWorldStateRenderSeq = 0;
 let pendingWorldStateFocusSectionKey: string | null = null;
 let pendingWorldStateOpenSectionKeys: Set<string> | null = null;
 let pendingRawFocus: PendingRawFocus | null = options.focusRaw ?? null;
 let vectorViewerController: VectorMemoryViewerController | null = null;
-const selectedLogicRowIds = new Set<string>();
     if ((options.rawTable || options.focusRaw) && !options.initialView) {
         currentViewMode = 'raw';
     }
@@ -3887,7 +3860,6 @@ const selectedLogicRowIds = new Set<string>();
                 tip: '城市状态主卡，显示城市、区域与摘要。',
                 width: '28%',
                 render: (entry: StructuredWorldStateEntry): string => {
-                    const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前城市的主状态说明。', [
                         renderWorldStateMiniMeta('城市', resolveWorldStateCityLabel(entry) || '未知'),
                         renderWorldStateMiniMeta('区域', resolveWorldStateRegionLabel(entry, { strictParent: true }) || '未知'),
@@ -3994,7 +3966,6 @@ const selectedLogicRowIds = new Set<string>();
                 tip: '区域、地理带、地貌与广域环境主卡。',
                 width: '28%',
                 render: (entry: StructuredWorldStateEntry): string => {
-                    const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前区域/地理说明。', [
                         renderWorldStateMiniMeta('区域', resolveWorldStateRegionLabel(entry, { strictParent: true }) || '未知'),
                         renderWorldStateMiniMeta('国家', resolveWorldStateNationLabel(entry, { strictParent: true }) || '未知'),
@@ -4046,7 +4017,6 @@ const selectedLogicRowIds = new Set<string>();
                 tip: '地点主卡，适合展示场景、位置、房间、区域节点。',
                 width: '28%',
                 render: (entry: StructuredWorldStateEntry): string => {
-                    const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '当前地点的状态说明。', [
                         renderWorldStateMiniMeta('地点', resolveWorldStateLocationLabel(entry) || '未知'),
                         renderWorldStateMiniMeta('城市', resolveWorldStateCityLabel(entry, { strictParent: true }) || '未知'),
@@ -5605,7 +5575,7 @@ const selectedLogicRowIds = new Set<string>();
     async function renderLogicView(): Promise<void> {
         contentArea.innerHTML = '<div class="stx-re-empty">正在加载逻辑表...</div>';
         if (!currentChatKey) {
-            contentArea.innerHTML = '<div class="stx-re-empty">逻辑维护需要先选择一个具体聊天。</div>';
+            contentArea.innerHTML = '<div class="stx-re-empty">请先在左侧选择一个聊天，然后即可进入逻辑表维护，处理候选行、别名和隐藏项。</div>';
             return;
         }
 
@@ -5623,7 +5593,7 @@ const selectedLogicRowIds = new Set<string>();
         ]);
         const orderedSummaries = sortLogicTableSummaries(summaries);
         if (!template || orderedSummaries.length === 0) {
-            contentArea.innerHTML = '<div class="stx-re-empty">当前聊天还没有可展示的逻辑维护表。</div>';
+            contentArea.innerHTML = '<div class="stx-re-empty">当前聊天还没有可展示的逻辑表。请先生成结构视图，或切到系统诊断检查数据链路。</div>';
             return;
         }
 
@@ -5691,7 +5661,7 @@ const selectedLogicRowIds = new Set<string>();
             }).join('');
 
         const topMaintenanceLabels = experience.canon.health.maintenanceLabels.slice(0, 3).join(' / ') || '当前结构状态稳定';
-        const worldOverview = String(experience.canon.world.overview?.value ?? '').trim() || '当前记录编辑器以维护为主，总览细节仍以设置面板为准。';
+        const worldOverview = String(experience.canon.world.overview?.value ?? '').trim() || '这里会直接展示当前聊天的逻辑表、候选行、别名、重定向和隐藏项维护状态。';
         const quickLocation = isStableSnapshotValue(experience.canon.world.currentLocation) ? experience.canon.world.currentLocation!.value : '尚未稳定抽取';
         const tableSummary = orderedSummaries.find((item: LogicTableSummary): boolean => item.tableKey === view.tableKey) || orderedSummaries[0];
         const summaryButtonsHtml = orderedSummaries.slice(0, 8).map((summary: LogicTableSummary): string => `
@@ -5715,7 +5685,7 @@ const selectedLogicRowIds = new Set<string>();
             <div class="stx-re-shell-stack">
                 <div class="stx-re-panel-grid">
                     <div class="stx-re-panel-card stx-re-panel-card-emphasis">
-                        <div class="stx-re-world-section-title">维护概览</div>
+                        <div class="stx-re-world-section-title">逻辑表维护概览</div>
                         <div class="stx-re-record-sub">${escapeHtml(worldOverview)}</div>
                         <div class="stx-re-record-code">地点：${escapeHtml(quickLocation)}</div>
                     </div>
@@ -5726,7 +5696,7 @@ const selectedLogicRowIds = new Set<string>();
                         <div class="stx-re-record-code">活跃世界书：${escapeHtml(summarizeSnapshotValues(experience.canon.world.activeLorebooks, 2))}</div>
                     </div>
                     <div class="stx-re-panel-card">
-                        <div class="stx-re-world-section-title">逻辑维护状态</div>
+                        <div class="stx-re-world-section-title">逻辑表维护状态</div>
                         <div class="stx-re-record-sub">${escapeHtml(topMaintenanceLabels)}</div>
                         <div class="stx-re-record-code">角色 ${experience.canon.characters.length} / 表 ${orderedSummaries.length}</div>
                         <div class="stx-re-record-code">事实 ${experience.canon.health.dataLayers.factsCount} / 世界状态 ${experience.canon.health.dataLayers.worldStateCount}</div>
@@ -5764,7 +5734,7 @@ const selectedLogicRowIds = new Set<string>();
                     </div>
                     <div class="stx-re-main-column">
                         <div class="stx-re-panel-card">
-                            <div class="stx-re-world-section-title">表覆盖统计</div>
+                            <div class="stx-re-world-section-title">逻辑表覆盖统计</div>
                             <div class="stx-re-chip-wrap">${coverageCardsHtml}</div>
                         </div>
                         ${view.warnings.length > 0 ? `<div class="stx-re-panel-card stx-re-panel-card-warning"><div class="stx-re-world-section-title">当前预警</div><div class="stx-re-record-sub">${escapeHtml(view.warnings.join(' / '))}</div></div>` : ''}
@@ -6049,9 +6019,9 @@ const selectedLogicRowIds = new Set<string>();
     }
 
     async function renderDiagnosticsView(): Promise<void> {
-        contentArea.innerHTML = '<div class="stx-re-empty">正在加载诊断维护...</div>';
+        contentArea.innerHTML = '<div class="stx-re-empty">正在加载系统诊断...</div>';
         if (!currentChatKey) {
-            contentArea.innerHTML = '<div class="stx-re-empty">诊断维护需要先选择一个具体聊天。</div>';
+            contentArea.innerHTML = '<div class="stx-re-empty">系统诊断需要先选择一个具体聊天。</div>';
             return;
         }
 
@@ -6124,6 +6094,15 @@ const selectedLogicRowIds = new Set<string>();
                 return leftLabel.localeCompare(rightLabel, 'zh-CN');
             });
         const activeActorLabel = activeActorKey ? (actorLabelMap.get(activeActorKey) || activeActorKey) : '自动 / 未指定';
+        const criticalCount = health.issues.filter((issue): boolean => issue.severity === 'critical').length;
+        const warningCount = health.issues.filter((issue): boolean => issue.severity === 'warning').length;
+        const infoCount = health.issues.filter((issue): boolean => issue.severity === 'info').length;
+        const majorEventCount = ownedStates.filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event').length;
+        const signalState = resolveRecordDiagnosticsSignalState(health);
+        const maintenanceSummaryText = health.maintenanceLabels.slice(0, 4).join(' / ') || '当前没有明显维护提示';
+        const currentLocationText = isStableSnapshotValue(canon.world.currentLocation) ? canon.world.currentLocation!.value : '尚未稳定抽取';
+        const worldRulesText = summarizeSnapshotValues(canon.world.rules, 2);
+        const hardConstraintsText = summarizeSnapshotValues(canon.world.hardConstraints, 2);
         const personaCardsHtml = sortedPersonaProfiles.length > 0
             ? sortedPersonaProfiles.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
                 const actorLabel = actorLabelMap.get(actorKey) || actorKey;
@@ -6159,137 +6138,326 @@ const selectedLogicRowIds = new Set<string>();
             .sort((left, right): number => right.forgottenRate - left.forgottenRate || right.total - left.total)
             .slice(0, 8);
         const actorForgetRateHtml = actorForgetRateRows.length > 0
-            ? actorForgetRateRows.map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number; forgottenRate: number }): string => `
-                <div class="stx-re-panel-card stx-re-panel-chip">
-                    <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
-                        <strong>${escapeHtml(item.actorLabel)}</strong>
-                        <span>${escapeHtml(formatPercent(item.forgottenRate))}</span>
+            ? actorForgetRateRows.map((item: { actorKey: string; actorLabel: string; total: number; forgotten: number; avgProbability: number; forgottenRate: number }): string => {
+                const toneClassName = item.forgottenRate >= 0.5 ? 'is-danger' : item.forgottenRate >= 0.25 ? 'is-warning' : 'is-stable';
+                return `
+                    <div class="stx-re-diag-forget-card ${toneClassName}">
+                        <div class="stx-re-diag-forget-head">
+                            <strong>${escapeHtml(item.actorLabel)}</strong>
+                            <span class="stx-re-diag-issue-pill ${toneClassName}">${escapeHtml(formatPercent(item.forgottenRate))}</span>
+                        </div>
+                        <div class="stx-re-retention-bar is-compact"><div class="stx-re-retention-fill" style="width:${Math.max(4, Math.round(item.forgottenRate * 1000) / 10)}%"></div></div>
+                        <div class="stx-re-diag-forget-meta">已遗忘 ${escapeHtml(String(item.forgotten))} / ${escapeHtml(String(item.total))}</div>
+                        <div class="stx-re-diag-forget-meta">平均遗忘概率 ${escapeHtml(formatPercent(item.avgProbability))}</div>
                     </div>
-                    <div class="stx-re-retention-bar is-compact"><div class="stx-re-retention-fill" style="width:${Math.max(4, Math.round(item.forgottenRate * 1000) / 10)}%"></div></div>
-                    <div style="margin-top:6px;">已遗忘 ${escapeHtml(String(item.forgotten))} / ${escapeHtml(String(item.total))}</div>
-                    <div style="margin-top:6px; opacity:0.78;">平均遗忘概率 ${escapeHtml(formatPercent(item.avgProbability))}</div>
-                </div>
-            `).join('')
+                `;
+            }).join('')
             : '<div class="stx-re-empty">当前没有可统计的角色遗忘分布。</div>';
-
-        contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px;">
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor, #4a90e2) 8%, transparent);">
-                        <div style="font-weight:700; margin-bottom:6px;">世界观速览</div>
-                        <div>地点：${escapeHtml(isStableSnapshotValue(canon.world.currentLocation) ? canon.world.currentLocation!.value : '尚未稳定抽取')}</div>
-                        <div style="margin-top:6px;">规则：${escapeHtml(summarizeSnapshotValues(canon.world.rules, 2))}</div>
-                        <div style="margin-top:6px;">硬约束：${escapeHtml(summarizeSnapshotValues(canon.world.hardConstraints, 2))}</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">数据层覆盖</div>
-                        <div>事实 ${health.dataLayers.factsCount ?? 0} / 世界状态 ${health.dataLayers.worldStateCount ?? 0}</div>
-                        <div style="margin-top:6px;">摘要 ${health.dataLayers.summaryCount ?? 0} / 事件 ${health.dataLayers.eventCount ?? 0}</div>
-                        <div style="margin-top:6px;">别名 ${health.dataLayers.aliasCount ?? 0} / 重定向 ${health.dataLayers.redirectCount ?? 0} / 已隐藏 ${health.dataLayers.tombstoneCount ?? 0}</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">结构风险</div>
-                        <div>孤儿事实：${escapeHtml(String(health.orphanFactsCount ?? 0))} 条</div>
-                        <div style="margin-top:6px;">重复实体风险：${escapeHtml(formatPercent(health.duplicateEntityRisk))}</div>
-                        <div style="margin-top:6px;">草稿修订：${health.hasDraftRevision ? '存在' : '无'}</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">维护提示</div>
-                        <div>${escapeHtml(health.maintenanceLabels.slice(0, 4).join(' / ') || '当前没有明显维护提示')}</div>
-                        <div style="margin-top:6px;">角色 ${canon.characters.length} / 表 ${orderedSummaries.length}</div>
-                    </div>
+        const consoleStripHtml = [
+            {
+                label: '高优先问题',
+                value: String(criticalCount),
+                meta: `${health.issues.length} 项诊断结果`,
+            },
+            {
+                label: '注意项',
+                value: String(warningCount),
+                meta: `提示 ${infoCount} 项`,
+            },
+            {
+                label: '逻辑表',
+                value: String(orderedSummaries.length),
+                meta: `角色 ${canon.characters.length} 个`,
+            },
+            {
+                label: '角色画像',
+                value: String(sortedPersonaProfiles.length),
+                meta: `主视角 ${activeActorLabel}`,
+            },
+            {
+                label: '事件影响',
+                value: String(affectedByEvent.length),
+                meta: `重大事件 ${majorEventCount} 条`,
+            },
+        ].map((item: { label: string; value: string; meta: string }): string => `
+            <div class="stx-re-diag-strip-cell">
+                <span class="stx-re-diag-strip-label">${escapeHtml(item.label)}</span>
+                <strong class="stx-re-diag-strip-value">${escapeHtml(item.value)}</strong>
+                <span class="stx-re-diag-strip-meta">${escapeHtml(item.meta)}</span>
+            </div>
+        `).join('');
+        const signalTilesHtml = [
+            {
+                label: '孤儿事实',
+                value: `${health.orphanFactsCount ?? 0} 条`,
+            },
+            {
+                label: '重复风险',
+                value: formatPercent(health.duplicateEntityRisk),
+            },
+            {
+                label: '草稿修订',
+                value: health.hasDraftRevision ? '存在' : '无',
+            },
+            {
+                label: '已遗忘',
+                value: `${forgottenCount} 条`,
+            },
+        ].map((item: { label: string; value: string }): string => `
+            <div class="stx-re-diag-signal-cell">
+                <span class="stx-re-diag-signal-cell-label">${escapeHtml(item.label)}</span>
+                <strong class="stx-re-diag-signal-cell-value">${escapeHtml(item.value)}</strong>
+            </div>
+        `).join('');
+        const overviewCardsHtml = [
+            {
+                eyebrow: '世界观速览',
+                title: currentLocationText,
+                detail: `规则：${worldRulesText}`,
+                meta: `硬约束：${hardConstraintsText}`,
+                toneClassName: 'is-accent',
+                iconClassName: 'fa-solid fa-globe',
+            },
+            {
+                eyebrow: '数据层覆盖',
+                title: `事实 ${health.dataLayers.factsCount ?? 0} / 世界状态 ${health.dataLayers.worldStateCount ?? 0}`,
+                detail: `摘要 ${health.dataLayers.summaryCount ?? 0} / 事件 ${health.dataLayers.eventCount ?? 0}`,
+                meta: `别名 ${health.dataLayers.aliasCount ?? 0} / 重定向 ${health.dataLayers.redirectCount ?? 0} / 已隐藏 ${health.dataLayers.tombstoneCount ?? 0}`,
+                toneClassName: 'is-soft',
+                iconClassName: 'fa-solid fa-layer-group',
+            },
+            {
+                eyebrow: '遗忘矩阵',
+                title: `清晰 ${stageCounts.clear} / 模糊 ${stageCounts.blur}`,
+                detail: `偏差 ${stageCounts.distorted} / 已遗忘 ${forgottenCount}`,
+                meta: `受事件影响 ${affectedByEvent.length} 条 / 强化 ${reinforcedCount} 条`,
+                toneClassName: 'is-warning',
+                iconClassName: 'fa-solid fa-brain',
+            },
+            {
+                eyebrow: '维护提示',
+                title: maintenanceSummaryText,
+                detail: `角色 ${canon.characters.length} / 表 ${orderedSummaries.length} / 重大事件 ${majorEventCount}`,
+                meta: `当前主视角：${activeActorLabel}`,
+                toneClassName: signalState.toneClassName === 'is-danger' ? 'is-danger' : signalState.toneClassName === 'is-warning' ? 'is-warning' : 'is-soft',
+                iconClassName: 'fa-solid fa-screwdriver-wrench',
+            },
+        ].map((card: { eyebrow: string; title: string; detail: string; meta: string; toneClassName: string; iconClassName: string }): string => `
+            <article class="stx-re-diag-summary-card ${card.toneClassName}">
+                <div class="stx-re-diag-summary-head">
+                    <span class="stx-re-diag-summary-icon"><i class="${escapeHtml(card.iconClassName)}" aria-hidden="true"></i></span>
+                    <span class="stx-re-diag-summary-eyebrow">${escapeHtml(card.eyebrow)}</span>
                 </div>
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">遗忘分布</div>
-                        <div>清晰 ${stageCounts.clear} / 模糊 ${stageCounts.blur}</div>
-                        <div style="margin-top:6px;">偏差 ${stageCounts.distorted} / 已遗忘 ${forgottenCount}</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">重大事件影响</div>
-                        <div>受影响记忆 ${affectedByEvent.length} 条</div>
-                        <div style="margin-top:6px;">被强化 ${reinforcedCount} 条 / 被覆盖或冲淡 ${invalidatedCount} 条</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">重大事件条目</div>
-                        <div>当前聊天共 ${ownedStates.filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event').length} 条重大事件</div>
-                        <div style="margin-top:6px;">这部分现在已经会反向影响相关记忆</div>
-                    </div>
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor);">
-                        <div style="font-weight:700; margin-bottom:6px;">角色画像</div>
-                        <div>已建画像 ${sortedPersonaProfiles.length} 份</div>
-                        <div style="margin-top:6px;">当前主视角：${escapeHtml(activeActorLabel)}</div>
-                    </div>
+                <div class="stx-re-diag-summary-title">${escapeHtml(card.title)}</div>
+                <div class="stx-re-diag-summary-detail">${escapeHtml(card.detail)}</div>
+                <div class="stx-re-diag-summary-meta">${escapeHtml(card.meta)}</div>
+            </article>
+        `).join('');
+        const issueCardsHtml = health.issues.length > 0
+            ? health.issues.map((issue): string => {
+                const toneClassName = resolveRecordDiagnosticsIssueToneClass(issue.severity);
+                return `
+                    <article class="stx-re-diag-issue-card ${toneClassName}">
+                        <div class="stx-re-diag-issue-top">
+                            <strong>${escapeHtml(issue.label)}</strong>
+                            <span class="stx-re-diag-issue-pill ${toneClassName}">${escapeHtml(formatHealthSeverityLabel(issue.severity))}</span>
+                        </div>
+                        <div class="stx-re-diag-issue-copy">${escapeHtml(issue.detail)}</div>
+                        <div class="stx-re-diag-issue-meta">${escapeHtml(issue.actionLabel || '建议继续在系统诊断中处理')}</div>
+                    </article>
+                `;
+            }).join('')
+            : '<div class="stx-re-empty">当前没有明显诊断问题。</div>';
+        const logicTableCardsHtml = orderedSummaries.length > 0
+            ? orderedSummaries.map((summary: LogicTableSummary): string => {
+                const toneClassName = resolveRecordDiagnosticsTableToneClass(summary.status);
+                return `
+                    <article class="stx-re-diag-table-card ${toneClassName}">
+                        <div class="stx-re-diag-table-top">
+                            <strong>${escapeHtml(summary.title)}</strong>
+                            <span class="stx-re-diag-issue-pill ${toneClassName}">${escapeHtml(formatLogicStatusLabel(summary.status))}</span>
+                        </div>
+                        <div class="stx-re-diag-table-copy">${escapeHtml(formatLogicTableSummaryLine(summary))}</div>
+                    </article>
+                `;
+            }).join('')
+            : '<div class="stx-re-empty">当前没有逻辑表摘要。</div>';
+        const recentAffectedCardsHtml = recentAffectedRows.length > 0
+            ? recentAffectedRows.map(({ owned, lifecycle }: { owned: OwnedMemoryState; lifecycle: MemoryLifecycleState | undefined }): string => {
+                const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
+                return `
+                    <article class="stx-re-diag-event-card"${buildTipAttr('这条记忆最近受到了重大事件的强化或冲淡影响。')}>
+                        <div class="stx-re-diag-event-top">
+                            <div class="stx-re-diag-event-title">${escapeHtml(title)}</div>
+                            <span class="stx-re-diag-issue-pill is-soft">${escapeHtml(formatMemoryStageLabel(lifecycle?.stage || 'clear'))}</span>
+                        </div>
+                        <div class="stx-re-diag-event-copy">${escapeHtml(formatMemoryImpactSummary(owned))}</div>
+                        <div class="stx-re-diag-event-links">
+                            <div class="stx-re-diag-event-link-row"><strong>强化来源</strong>${renderMemoryEventRefs(owned.reinforcedByEventIds, eventTitleMap, '暂无')}</div>
+                            <div class="stx-re-diag-event-link-row"><strong>覆盖 / 冲淡来源</strong>${renderMemoryEventRefs(owned.invalidatedByEventIds, eventTitleMap, '暂无')}</div>
+                        </div>
+                    </article>
+                `;
+            }).join('')
+            : '<div class="stx-re-empty">当前还没有被重大事件显式影响的记忆。</div>';
+        const actionDeckHtml = `
+            <article class="stx-re-diag-action-card is-accent">
+                <div class="stx-re-diag-action-head">
+                    <span class="stx-re-diag-section-kicker">同步修复</span>
+                    <div class="stx-re-diag-action-title">先把结构和种子拉回同一条链路</div>
+                    <div class="stx-re-diag-action-copy">适合在结构视图不同步、世界设定刚发生变化，或者你怀疑编辑器快照已经滞后时执行。</div>
                 </div>
-                ${buildRecallSummaryCardsMarkup(experience)}
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">最近被角色边界压制的候选</div>
-                    ${buildSuppressedRecallListMarkup(experience)}
-                </div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                <div class="stx-re-action-row stx-re-diag-action-row">
                     <button class="stx-re-btn" data-diag-action="rebuild-chat-view"${buildTipAttr('重新构建当前聊天的编辑器结构视图，适合结构不同步时使用。')}>重建结构视图</button>
                     <button class="stx-re-btn" data-diag-action="refresh-seed"${buildTipAttr('重新拉取或刷新当前聊天的初始设定种子。')}>刷新初始设定</button>
+                </div>
+            </article>
+            <article class="stx-re-diag-action-card is-soft">
+                <div class="stx-re-diag-action-head">
+                    <span class="stx-re-diag-section-kicker">角色校准</span>
+                    <div class="stx-re-diag-action-title">把诊断视角收束到更可信的角色画像</div>
+                    <div class="stx-re-diag-action-copy">用于重建角色画像、清除手动主视角，让后续观察重新回到自动判断或新的主视角上。</div>
+                </div>
+                <div class="stx-re-action-row stx-re-diag-action-row">
                     <button class="stx-re-btn" data-diag-action="recompute-personas"${buildTipAttr('重新计算所有角色画像，用于修正角色记忆面板。')}>重算角色画像</button>
                     <button class="stx-re-btn" data-diag-action="clear-active-actor"${buildTipAttr('取消手动指定的主视角，让系统自动选择活跃角色。')}>清除主视角</button>
+                </div>
+            </article>
+            <article class="stx-re-diag-action-card is-warning">
+                <div class="stx-re-diag-action-head">
+                    <span class="stx-re-diag-section-kicker">结构修复</span>
+                    <div class="stx-re-diag-action-title">对逻辑表做集中整理，而不是逐处散修</div>
+                    <div class="stx-re-diag-action-copy">当问题集中在别名、隐藏项或候选生成时，直接在这里执行修复比回到其他页签更快。</div>
+                </div>
+                <div class="stx-re-action-row stx-re-diag-action-row">
                     <button class="stx-re-btn" data-diag-repair="normalize_aliases"${buildTipAttr('针对合适的逻辑表执行别名规范化修复。')}>规范别名</button>
                     <button class="stx-re-btn" data-diag-repair="compact_tombstones"${buildTipAttr('针对合适的逻辑表执行隐藏项整理。')}>整理隐藏项</button>
                     <button class="stx-re-btn" data-diag-repair="rebuild_candidates"${buildTipAttr('针对合适的逻辑表重新生成候选。')}>重建候选</button>
-                    <button class="stx-re-btn" data-diag-action="open-maintenance"${buildTipAttr('跳转回逻辑维护视图，继续处理具体逻辑表。')}>打开逻辑维护</button>
                 </div>
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">多角色记忆画像</div>
-                    ${personaCardsHtml}
-                </div>
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">每角色遗忘率</div>
-                    ${actorForgetRateHtml}
-                </div>
-                <div style="display:grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap:12px; align-items:start;">
-                    <div style="display:flex; flex-direction:column; gap:10px;">
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">问题列表</div>
-                        ${health.issues.length > 0 ? health.issues.map((issue) => `
-                            <div class="stx-re-panel-card stx-re-panel-chip">
-                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
-                                    <strong>${escapeHtml(issue.label)}</strong>
-                                    <span>${escapeHtml(formatHealthSeverityLabel(issue.severity))}</span>
-                                </div>
-                                <div>${escapeHtml(issue.detail)}</div>
-                                <div style="margin-top:6px; opacity:0.75;">${escapeHtml(issue.actionLabel || '建议转到逻辑维护继续处理')}</div>
+            </article>
+        `;
+
+        contentArea.innerHTML = `
+            <div class="stx-re-diag-shell">
+                <section class="stx-re-panel-card stx-re-diag-console">
+                    <div class="stx-re-diag-console-grid">
+                        <div class="stx-re-diag-console-main">
+                            <div class="stx-re-diag-kicker">记录编辑器诊断台</div>
+                            <div class="stx-re-diag-title">系统诊断中控台</div>
+                            <div class="stx-re-diag-subtitle">把结构风险、修复动作、角色画像和事件影响压到同一个操作面上，减少在不同页签之间来回跳转。</div>
+                            <div class="stx-re-diag-ledger">
+                                ${[
+                                    `当前聊天 ${formatChatKeyLabel(currentChatKey)}`,
+                                    `当前主视角 ${activeActorLabel}`,
+                                    `维护提示 ${maintenanceSummaryText}`,
+                                    `逻辑表 ${orderedSummaries.length} 张`,
+                                ].map((item: string): string => `<span class="stx-re-diag-chip">${escapeHtml(item)}</span>`).join('')}
                             </div>
-                        `).join('') : '<div class="stx-re-empty">当前没有明显诊断问题。</div>'}
+                        </div>
+                        <div class="stx-re-diag-console-side">
+                            <div class="stx-re-diag-signal ${signalState.toneClassName}">
+                                <div class="stx-re-diag-signal-top">
+                                    <span class="stx-re-diag-signal-label">诊断信号</span>
+                                    <span class="stx-re-diag-chip ${signalState.toneClassName}">${escapeHtml(signalState.badge)}</span>
+                                </div>
+                                <div class="stx-re-diag-signal-title">${escapeHtml(signalState.title)}</div>
+                                <div class="stx-re-diag-signal-copy">${escapeHtml(signalState.summary)}</div>
+                                <div class="stx-re-diag-signal-grid">${signalTilesHtml}</div>
+                            </div>
+                            <div class="stx-re-diag-wave" aria-hidden="true">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                        </div>
                     </div>
-                    <div style="display:flex; flex-direction:column; gap:10px;">
-                        <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">逻辑表状态</div>
-                        ${orderedSummaries.length > 0 ? orderedSummaries.map((summary: LogicTableSummary) => `
-                            <div class="stx-re-panel-card stx-re-panel-chip">
-                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:6px;">
-                                    <strong>${escapeHtml(summary.title)}</strong>
-                                    <span>${escapeHtml(formatLogicStatusLabel(summary.status))}</span>
+                    <div class="stx-re-diag-console-strip">${consoleStripHtml}</div>
+                </section>
+
+                <div class="stx-re-diag-summary-grid">${overviewCardsHtml}</div>
+
+                <div class="stx-re-diag-main-layout">
+                    <div class="stx-re-diag-main">
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">召回证据</div>
+                                    <div class="stx-re-diag-section-title">最近一轮召回与注入摘要</div>
                                 </div>
-                                <div>${escapeHtml(formatLogicTableSummaryLine(summary))}</div>
-                                <div style="margin-top:8px;"><button class="stx-re-btn" data-diag-open-table="${escapeHtml(summary.tableKey)}"${buildTipAttr(`切换到 ${summary.title} 逻辑表继续维护。`)}>打开该表维护</button></div>
+                                <div class="stx-re-diag-section-copy">先确认这一轮究竟命中了什么，再决定是否需要动结构层。</div>
                             </div>
-                        `).join('') : '<div class="stx-re-empty">当前没有逻辑表摘要。</div>'}
+                            ${buildRecallSummaryCardsMarkup(experience)}
+                        </section>
+
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">边界压制</div>
+                                    <div class="stx-re-diag-section-title">最近被角色边界挡下来的候选</div>
+                                </div>
+                                <div class="stx-re-diag-section-copy">这里适合判断问题是“该放出来”还是“本来就不该进主视角”。</div>
+                            </div>
+                            ${buildSuppressedRecallListMarkup(experience)}
+                        </section>
+
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">风险与修复</div>
+                                    <div class="stx-re-diag-section-title">把问题列表和动作甲板并排放到一起</div>
+                                </div>
+                                <div class="stx-re-diag-section-copy">发现问题后可以直接执行修复，不需要再切去别的维护页。</div>
+                            </div>
+                            <div class="stx-re-diag-split-grid">
+                                <div class="stx-re-diag-issue-list">${issueCardsHtml}</div>
+                                <div class="stx-re-diag-action-deck">${actionDeckHtml}</div>
+                            </div>
+                        </section>
+
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">事件影响</div>
+                                    <div class="stx-re-diag-section-title">最近被重大事件牵动的记忆证据</div>
+                                </div>
+                                <div class="stx-re-diag-section-copy">用于确认哪些记忆是被事件强化，哪些则被覆盖或冲淡。</div>
+                            </div>
+                            <div class="stx-re-diag-event-list">${recentAffectedCardsHtml}</div>
+                        </section>
                     </div>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div class="stx-re-json" style="padding:12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor); font-weight:700;">最近被重大事件影响的记忆</div>
-                    ${recentAffectedRows.length > 0 ? recentAffectedRows.map(({ owned, lifecycle }): string => {
-                        const title = buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned);
-                        return `
-                            <div class="stx-re-panel-card stx-re-panel-chip"${buildTipAttr('这条记忆最近受到了重大事件的强化或冲淡影响。')}>
-                                <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-                                    <div style="font-weight:700; word-break:break-word;">${escapeHtml(title)}</div>
-                                    <span>${escapeHtml(formatMemoryStageLabel(lifecycle?.stage || 'clear'))}</span>
-                                </div>
-                                <div style="opacity:0.8;">${escapeHtml(formatMemoryImpactSummary(owned))}</div>
-                                <div style="display:flex; flex-direction:column; gap:6px;">
-                                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>强化来源：</strong>${renderMemoryEventRefs(owned.reinforcedByEventIds, eventTitleMap, '暂无')}</div>
-                                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;"><strong>覆盖/冲淡来源：</strong>${renderMemoryEventRefs(owned.invalidatedByEventIds, eventTitleMap, '暂无')}</div>
+
+                    <aside class="stx-re-diag-side">
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">角色画像</div>
+                                    <div class="stx-re-diag-section-title">多角色记忆画像面板</div>
                                 </div>
                             </div>
-                        `;
-                    }).join('') : '<div class="stx-re-empty">当前还没有被重大事件显式影响的记忆。</div>'}
+                            <div class="stx-re-diag-persona-grid">${personaCardsHtml}</div>
+                        </section>
+
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">遗忘率</div>
+                                    <div class="stx-re-diag-section-title">每个角色的遗忘压力分布</div>
+                                </div>
+                            </div>
+                            <div class="stx-re-diag-forget-grid">${actorForgetRateHtml}</div>
+                        </section>
+
+                        <section class="stx-re-panel-card stx-re-diag-section">
+                            <div class="stx-re-diag-section-head">
+                                <div>
+                                    <div class="stx-re-diag-section-kicker">逻辑表状态</div>
+                                    <div class="stx-re-diag-section-title">当前聊天的结构表摘要</div>
+                                </div>
+                            </div>
+                            <div class="stx-re-diag-table-list">${logicTableCardsHtml}</div>
+                        </section>
+                    </aside>
                 </div>
             </div>
         `;
@@ -6313,8 +6481,6 @@ const selectedLogicRowIds = new Set<string>();
                     } else if (action === 'clear-active-actor') {
                         await memoryInstance.chatState.setActiveActorKey(null);
                         toast.success('主视角已切回自动模式');
-                    } else if (action === 'open-maintenance') {
-                        currentViewMode = 'maintenance';
                     }
                     await loadChatKeys();
                     await renderActiveView();
@@ -6344,16 +6510,6 @@ const selectedLogicRowIds = new Set<string>();
                 }).catch((error: unknown): void => {
                     toast.error(`执行维护失败: ${String(error)}`);
                 });
-            });
-        });
-
-        contentArea.querySelectorAll('[data-diag-open-table]').forEach((button: Element): void => {
-            button.addEventListener('click', (): void => {
-                currentLogicTableKey = String((button as HTMLElement).dataset.diagOpenTable ?? '').trim();
-                currentViewMode = 'maintenance';
-                selectedLogicRowIds.clear();
-                logicCreateExpanded = false;
-                void renderActiveView();
             });
         });
 
@@ -6394,12 +6550,10 @@ const selectedLogicRowIds = new Set<string>();
             return;
         }
 
-        const [experience, ownedStates, lifecycleList, recallLog, personaProfiles, activeActorKey] = await Promise.all([
+        const [experience, memoryCardSnapshot, roleProfiles, activeActorKey] = await Promise.all([
             memory.editor.getExperienceSnapshot() as Promise<EditorExperienceSnapshot>,
-            memory.chatState.getOwnedMemoryStates(240) as Promise<OwnedMemoryState[]>,
-            memory.chatState.getMemoryLifecycleSummary(240) as Promise<MemoryLifecycleState[]>,
-            memory.chatState.getRecallLog(120),
-            memory.chatState.getPersonaMemoryProfiles(),
+            memory.editor.getMemoryCardSnapshot(),
+            memory.chatState.getRoleProfiles(),
             memory.chatState.getActiveActorKey(),
         ]);
         await renderMemoryPage({
@@ -6420,12 +6574,9 @@ const selectedLogicRowIds = new Set<string>();
             showError(message: string): void {
                 toast.error(message);
             },
-            memorySubtypeOptions: MEMORY_SUBTYPE_OPTIONS,
             experience,
-            ownedStates,
-            lifecycleList,
-            recallLog,
-            personaProfiles,
+            roleProfiles,
+            memoryCards: memoryCardSnapshot.items,
             activeActorKey,
             helpers: {
                 escapeHtml,
@@ -6433,14 +6584,6 @@ const selectedLogicRowIds = new Set<string>();
                 formatTimeLabel,
                 formatActorKeyLabel,
                 formatMemorySubtypeLabel,
-                resolveActorDisplayLabel,
-                buildMemoryRecordHeadline,
-                parseImportanceInput,
-                renderMemoryDashboardCardMarkup,
-                buildRecallSummaryCardsMarkup,
-                buildSuppressedRecallListMarkup,
-                renderPersonaProfileCardMarkup,
-                renderMemoryRecordCardMarkup,
             },
         });
     }
@@ -6472,7 +6615,8 @@ const selectedLogicRowIds = new Set<string>();
             await renderDiagnosticsView();
             return;
         }
-        await renderLogicView();
+        currentViewMode = 'world';
+        await renderWorldStateStructuredView();
     }
 
     /**

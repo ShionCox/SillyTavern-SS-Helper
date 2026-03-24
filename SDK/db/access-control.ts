@@ -1,5 +1,5 @@
 import { db } from './database';
-import type { DBChatPluginState, DBChatPluginRecord, DBChatDocumentShared } from './database';
+import type { DBChatDocumentShared } from './database';
 import { Logger } from '../logger';
 
 const logger = new Logger('SDK-AccessControl');

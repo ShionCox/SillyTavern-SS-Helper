@@ -2,16 +2,16 @@
  * 通用主题系统 —— 基于 SDK/settings 的持久化读写与旧值归一化。
  */
 
-import type { ThemeId, ThemeState } from "./types";
+import type { ThemeId } from "./types";
 
 const THEME_SETTINGS_KEY = "stx_sdk_theme_global_v2";
 
-/** 把任意字符串归一化为合法 ThemeId；"tavern" 统一映射为内部 "host" */
+/** 把任意字符串归一化为合法 ThemeId。 */
 export function normalizeThemeId(raw: string): ThemeId {
   const s = String(raw ?? "").trim().toLowerCase();
   if (s === "dark") return "dark";
   if (s === "light") return "light";
-  if (s === "host" || s === "tavern") return "host";
+  if (s === "host") return "host";
   return "default";
 }
 

@@ -1,4 +1,4 @@
-import { db, type DBFact, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryRecallLog, type DBSummary, type DBVectorChunkMetadata } from '../db/db';
+import { db, type DBFact, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryRecallLog, type DBSummary } from '../db/db';
 import type {
     MemoryCardLane,
     MemoryCardStatus,
@@ -9,7 +9,6 @@ import type {
     MemoryRecallPreviewResult,
     MemoryCardViewerSnapshot,
     VectorMemoryRecordSummary,
-    VectorMemorySearchTestHit,
     VectorMemoryUsageSnapshot,
 } from '../../../SDK/stx';
 import type {
@@ -23,7 +22,6 @@ import type {
 import { ChatStateManager } from '../core/chat-state-manager';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
-import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from '../core/memory-card-text';
 import { StateManager } from '../core/state-manager';
 import { SummariesManager } from '../core/summaries-manager';
 import { VectorManager } from '../vector/vector-manager';
@@ -157,22 +155,6 @@ function buildPreview(text: string, maxLength: number = 120): string {
  * @returns 中文标签。
  */
 /**
- * 功能：把记忆卡层的 lane 归一到可展示的中文语义标签。
- * @param lane 记忆卡 lane。
- * @returns 中文标签。
- */
-function formatMemoryLaneLabel(lane: MemoryCardLane | null | undefined): string {
-    const normalized = normalizeLookup(lane);
-    if (normalized === 'identity') return '身份';
-    if (normalized === 'style') return '风格';
-    if (normalized === 'relationship') return '关系';
-    if (normalized === 'rule') return '规则';
-    if (normalized === 'event') return '事件';
-    if (normalized === 'state') return '状态';
-    return normalized || '其他';
-}
-
-/**
  * 功能：根据来源类型推断记忆卡的 lane。
  * @param sourceRecordKind 来源类型。
  * @param memoryType 记忆类型。
@@ -204,7 +186,7 @@ function inferMemoryLane(
     if (subtype === 'current_scene' || subtype === 'current_conflict' || subtype === 'temporary_status' || label.includes('状态')) {
         return 'state';
     }
-    if (sourceRecordKind === 'summary' || subtype === 'major_plot_event' || subtype === 'minor_event' || subtype === 'combat_event' || subtype === 'travel_event' || subtype === 'conversation_event' || type === 'event') {
+    if (sourceRecordKind === 'summary' || subtype === 'major_plot_event' || subtype === 'minor_event' || subtype === 'combat_event' || subtype === 'travel_event' || subtype === 'dialogue_quote' || type === 'event' || type === 'dialogue') {
         return 'event';
     }
     return 'other';
@@ -277,161 +259,10 @@ function formatSourceKindLabel(kind: VectorMemoryRecordSummary['sourceRecordKind
 }
 
 /**
- * 功能：格式化来源范围。
- * @param scope 来源范围。
- * @returns 中文标签。
- */
-function formatScopeLabel(scope: string | null | undefined): string {
-    const normalized = normalizeLookup(scope);
-    if (normalized === 'self') return '当前角色';
-    if (normalized === 'target') return '目标角色';
-    if (normalized === 'group') return '群组共享';
-    if (normalized === 'world') return '世界共享';
-    if (normalized === 'system') return '系统生成';
-    return normalized || '未标记';
-}
-
-/**
- * 功能：格式化记忆类型。
- * @param value 类型值。
- * @returns 中文标签。
- */
-function formatMemoryTypeLabel(value: string | null | undefined): string {
-    const normalized = normalizeLookup(value);
-    if (normalized === 'identity') return '身份';
-    if (normalized === 'event') return '事件';
-    if (normalized === 'relationship') return '关系';
-    if (normalized === 'world') return '世界';
-    if (normalized === 'status') return '状态';
-    return normalized || '其他';
-}
-
-/**
- * 功能：格式化记忆细分类。
- * @param value 细分类值。
- * @returns 中文标签。
- */
-function formatMemorySubtypeLabel(value: string | null | undefined): string {
-    const normalized = normalizeLookup(value);
-    const map: Record<string, string> = {
-        identity: '身份',
-        trait: '特征',
-        preference: '偏好',
-        bond: '关系纽带',
-        emotion_imprint: '情绪印记',
-        goal: '目标',
-        promise: '承诺',
-        secret: '秘密',
-        rumor: '传闻',
-        major_plot_event: '重大事件',
-        minor_event: '小事件',
-        combat_event: '战斗事件',
-        travel_event: '旅途事件',
-        conversation_event: '对话事件',
-        global_rule: '全局规则',
-        city_rule: '城市规则',
-        location_fact: '地点事实',
-        item_rule: '物品规则',
-        faction_rule: '势力规则',
-        world_history: '世界历史',
-        current_scene: '当前场景',
-        current_conflict: '当前冲突',
-        temporary_status: '临时状态',
-        other: '其他',
-    };
-    return map[normalized] ?? (normalized || '其他');
-}
-
-/**
  * 功能：从 metadata 中读取锚点消息编号。
  * @param metadata 向量 metadata。
  * @returns 锚点消息编号。
  */
-/**
- * 功能：把按 chunk 展开的旧记录折叠成记忆卡视图。
- * @param items 旧向量记录列表。
- * @param recallMap 命中日志映射。
- * @returns 记忆卡列表。
- */
-function buildMemoryCardSnapshotItems(
-    items: VectorMemoryRecordSummary[],
-    recallMap: Map<string, DBMemoryRecallLog[]>,
-): MemoryCardSummary[] {
-    const groups = new Map<string, MemoryCardSummary[]>();
-    for (const item of items) {
-        const sourceKey = normalizeText(item.sourceRecordKey) || normalizeText(item.cardId) || normalizeText(item.chunkId);
-        const groupKey = `${normalizeText(item.sourceRecordKind)}:${sourceKey}`;
-        const bucket = groups.get(groupKey) ?? [];
-        bucket.push(item as MemoryCardSummary);
-        groups.set(groupKey, bucket);
-    }
-
-    const cardItems = Array.from(groups.entries()).map(([groupKey, groupItems]): MemoryCardSummary => {
-        const sortedItems = [...groupItems].sort((left: MemoryCardSummary, right: MemoryCardSummary): number => Number(left.createdAt ?? 0) - Number(right.createdAt ?? 0));
-        const representative = sortedItems[sortedItems.length - 1] ?? groupItems[0];
-        const cardIds = sortedItems.map((item: MemoryCardSummary): string => normalizeText(item.cardId) || normalizeText(item.chunkId)).filter(Boolean);
-        const memoryText = sortedItems
-            .map((item: MemoryCardSummary): string => normalizeText(item.content))
-            .filter(Boolean)
-            .join('\n')
-            .trim();
-        const lane = inferMemoryLane(
-            representative.sourceRecordKind,
-            representative.memoryType,
-            representative.memorySubtype,
-            representative.sourceLabel,
-        );
-        const ttl = inferMemoryTtl(lane);
-        const sourceRecordKey = normalizeText(representative.sourceRecordKey) || null;
-        const usage = buildUsageSnapshot(sourceRecordKey ? (recallMap.get(sourceRecordKey) ?? []) : []);
-        const contentHash = hashText(normalizeText(memoryText));
-        const cardId = `memory-card:${groupKey}`;
-        const title = inferMemoryCardTitle(representative);
-        const subject = inferMemoryCardSubject(representative);
-        const evidenceText = [representative.sourceLabel, representative.sourceDetail]
-            .map((value: unknown): string => normalizeText(value))
-            .filter(Boolean)
-            .join(' · ');
-        return {
-            ...representative,
-            chunkId: cardIds[0] ?? representative.cardId ?? representative.chunkId,
-            cardId,
-            lane,
-            subject,
-            title,
-            memoryText,
-            evidenceText: evidenceText || null,
-            ttl,
-            replaceKey: lane === 'state' ? (sourceRecordKey || cardId) : null,
-            status: inferMemoryCardStatus(representative.statusKind, representative.sourceMissing),
-            cardIds,
-            content: memoryText,
-            preview: buildPreview(memoryText),
-            contentHash,
-            contentLength: memoryText.length,
-            usage,
-        };
-    });
-
-    const duplicateMap = cardItems.reduce<Map<string, number>>((map: Map<string, number>, item: MemoryCardSummary): Map<string, number> => {
-        const key = normalizeText(item.contentHash);
-        map.set(key, Number(map.get(key) ?? 0) + 1);
-        return map;
-    }, new Map<string, number>());
-
-    return cardItems.map((item: MemoryCardSummary): MemoryCardSummary => {
-        const duplicateCount = Number(duplicateMap.get(normalizeText(item.contentHash)) ?? 0);
-        const statusReasons = duplicateCount > 1
-            ? [...item.statusReasons, `检测到 ${duplicateCount} 条重复记忆内容`]
-            : item.statusReasons;
-        return {
-            ...item,
-            duplicateCount,
-            statusReasons,
-        };
-    });
-}
-
 /**
  * 功能：把记忆卡表直接转成查看器卡片。
  * @param cards 记忆卡表数据。
@@ -532,14 +363,18 @@ function buildMemoryCardSnapshotItemsFromCards(
                 ownerActorKey,
                 ownerActorLabel: ownerActorKey ? (actorLabelMap.get(ownerActorKey) || formatActorLabel(ownerActorKey)) : null,
                 sourceScope: normalizeText(card.scope) || null,
-                memoryType: normalizeText(card.lane) || null,
-                memorySubtype: normalizeText(card.ttl) || null,
+                memoryType: normalizeText(card.memoryType) || normalizeText(card.lane) || null,
+                memorySubtype: normalizeText(card.memorySubtype) || null,
                 participantActorKeys,
                 participantActorLabels: participantActorKeys.map((item: string): string => actorLabelMap.get(item) || formatActorLabel(item)),
-                anchorMessageId: null,
-                sourceMessageIds: [],
+                anchorMessageId: normalizeText(card.sourceMessageIds?.[0]) || null,
+                sourceMessageIds: normalizeStringList(Array.isArray(card.sourceMessageIds) ? card.sourceMessageIds : []),
                 sourceTraceKind: null,
-                sourceReason: null,
+                sourceReason: normalizeText(card.rememberReason) || null,
+                speakerActorKey: normalizeText(card.speakerActorKey) || null,
+                speakerLabel: normalizeText(card.speakerLabel) || null,
+                rememberedByActorKey: normalizeText(card.rememberedByActorKey) || null,
+                rememberReason: normalizeText(card.rememberReason) || null,
                 sourceViewHash: null,
                 sourceSnapshotHash: null,
                 sourceRepairGeneration: null,
@@ -584,34 +419,7 @@ function buildMemoryCardSnapshotItemsFromCards(
             statusReasons,
         };
     });
-}
-
-function readAnchorMessageId(metadata?: DBVectorChunkMetadata): string | null {
-    const source = metadata?.source;
-    if (!source || typeof source !== 'object') {
-        return null;
-    }
-    return normalizeText((source as Record<string, unknown>).anchorMessageId) || null;
-}
-
-/**
- * 功能：从 metadata 中读取命中消息编号列表。
- * @param metadata 向量 metadata。
- * @returns 关联消息编号列表。
- */
-function readSourceMessageIds(metadata?: DBVectorChunkMetadata): string[] {
-    const source = metadata?.source;
-    if (!source || typeof source !== 'object') {
-        return [];
-    }
-    const raw = (source as Record<string, unknown>).messageIds;
-    if (!Array.isArray(raw)) {
-        return [];
-    }
-    return raw.map((item: unknown): string => normalizeText(item)).filter(Boolean);
-}
-
-/**
+}/**
  * 功能：聚合召回日志，得到使用情况快照。
  * @param rows 召回日志列表。
  * @returns 使用情况快照。
@@ -689,64 +497,6 @@ function buildActorLabelMap(state: Awaited<ReturnType<ChatStateManager['load']>>
 }
 
 /**
- * 功能：检查当前片段是否需要重建。
- * @param chunk 向量片段。
- * @param sourceMeta 严格来源 metadata。
- * @param sourceRecord 来源记录。
- * @returns 重建检查结果。
- */
-function inspectRebuildNeed(
-    chunk: {
-        chunkId: string;
-        content: string;
-        metadata?: DBVectorChunkMetadata | null;
-    },
-    sourceMeta: {
-        sourceRecordKey: string;
-        sourceRecordKind: 'fact' | 'summary';
-        ownerActorKey: string | null;
-        sourceScope?: string;
-        memoryType?: string;
-        memorySubtype?: string;
-        participantActorKeys: string[];
-    } | null,
-    sourceRecord: DBFact | DBSummary | null,
-): { needsRebuild: boolean; reasons: string[] } {
-    const reasons: string[] = [];
-    const content = normalizeText(chunk.content);
-    if (!content || content.length < 8) {
-        reasons.push('片段正文过短或为空');
-    }
-    if (!sourceMeta) {
-        reasons.push('缺少严格来源标记');
-        return { needsRebuild: reasons.length > 0, reasons };
-    }
-    if (!sourceRecord) {
-        return { needsRebuild: false, reasons };
-    }
-    const expectedContent = sourceMeta.sourceRecordKind === 'fact'
-        ? normalizeText(formatFactMemoryTextForDisplay(sourceRecord as DBFact))
-        : normalizeText(formatSummaryMemoryText(sourceRecord as DBSummary));
-    if (expectedContent && expectedContent !== content) {
-        reasons.push('来源记录已更新，但片段尚未同步');
-    }
-    const metadata = chunk.metadata ?? {};
-    if (normalizeText(metadata.ownerActorKey) !== normalizeText(sourceRecord.ownerActorKey)) {
-        reasons.push('角色归属与来源记录不一致');
-    }
-    if (normalizeText(metadata.sourceScope) !== normalizeText(sourceRecord.sourceScope ?? 'system')) {
-        reasons.push('来源范围与来源记录不一致');
-    }
-    if (normalizeText(metadata.memoryType) !== normalizeText(sourceRecord.memoryType ?? 'other')) {
-        reasons.push('记忆类型与来源记录不一致');
-    }
-    if (normalizeText(metadata.memorySubtype) !== normalizeText(sourceRecord.memorySubtype ?? 'other')) {
-        reasons.push('记忆细分类与来源记录不一致');
-    }
-    return { needsRebuild: reasons.length > 0, reasons };
-}
-
-/**
  * 功能：对一次检索命中执行和主链一致的 rerank。
  * @param query 查询文本。
  * @param hits 原始命中。
@@ -808,134 +558,7 @@ export class VectorMemoryViewerFacade {
         }, new Map<string, DBMemoryRecallLog[]>());
         const memoryEmbeddingMap = new Map<string, DBMemoryCardEmbedding>(memoryCardEmbeddings.map((item: DBMemoryCardEmbedding): [string, DBMemoryCardEmbedding] => [normalizeText(item.cardId), item]));
         const cardItems = buildMemoryCardSnapshotItemsFromCards(memoryCards, recallMap, memoryEmbeddingMap, facts, summaries, state);
-        /*
-        if (false) {
-            chunks
-                .slice()
-                .sort((left: DBVectorChunk, right: DBVectorChunk): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))
-                .map((chunk: DBVectorChunk): VectorMemoryRecordSummary => {
-                const chunkId = normalizeText(chunk.chunkId);
-                const sourceMeta = readVectorSourceMetadata({
-                    chunkId,
-                    content: String(chunk.content ?? ''),
-                    score: 0,
-                    bookId: chunk.bookId,
-                    metadata: chunk.metadata,
-                    createdAt: Number(chunk.createdAt ?? 0) || undefined,
-                });
-                const sourceRecordKind = sourceMeta?.sourceRecordKind ?? 'unknown';
-                const sourceRecordKey = sourceMeta?.sourceRecordKey ?? null;
-                const sourceRecord = sourceRecordKind === 'fact'
-                    ? (sourceRecordKey ? factMap.get(sourceRecordKey) ?? null : null)
-                    : sourceRecordKind === 'summary'
-                        ? (sourceRecordKey ? summaryMap.get(sourceRecordKey) ?? null : null)
-                        : null;
-                const usage = buildUsageSnapshot(sourceRecordKey ? (recallMap.get(sourceRecordKey) ?? []) : []);
-                const duplicateCount = Number(duplicateMap.get(hashText(normalizeText(chunk.content))) ?? 0);
-                const rebuild = inspectRebuildNeed(chunk, sourceMeta, sourceRecord);
-                const sourceArchived = sourceRecordKind === 'fact'
-                    ? Boolean(sourceRecordKey && archivedFactSet.has(sourceRecordKey))
-                    : sourceRecordKind === 'summary'
-                        ? Boolean(sourceRecordKey && archivedSummarySet.has(sourceRecordKey))
-                        : false;
-                const lastHitAt = Number(usage.lastHitAt ?? 0) || 0;
-                const sourceMissing = Boolean(sourceMeta && sourceRecordKey && !sourceRecord && sourceRecordKind !== 'semantic_seed');
-                const isArchived = archivedChunkSet.has(chunkId) || sourceArchived;
-                const now = Date.now();
-                const longUnused = ((lastHitAt <= 0 && now - Number(chunk.createdAt ?? 0) > 14 * 24 * 60 * 60 * 1000) || (lastHitAt > 0 && now - lastHitAt > 30 * 24 * 60 * 60 * 1000));
-                const recentHit = lastHitAt > 0 && now - lastHitAt <= 7 * 24 * 60 * 60 * 1000;
-                const statusKind = sourceMissing
-                    ? 'source_missing'
-                    : isArchived
-                        ? 'archived_residual'
-                        : rebuild.needsRebuild
-                            ? 'needs_rebuild'
-                            : recentHit
-                                ? 'recent_hit'
-                                : longUnused
-                                    ? 'long_unused'
-                                    : 'normal';
-                const statusLabel = statusKind === 'source_missing'
-                    ? '来源丢失'
-                    : statusKind === 'archived_residual'
-                        ? '已归档残留'
-                        : statusKind === 'needs_rebuild'
-                            ? '建议重建'
-                            : statusKind === 'recent_hit'
-                                ? '最近命中'
-                                : statusKind === 'long_unused'
-                                    ? '长期未用'
-                                    : '正常使用';
-                const statusTone = statusKind === 'source_missing'
-                    ? 'danger'
-                    : statusKind === 'archived_residual'
-                        ? 'muted'
-                        : statusKind === 'needs_rebuild' || statusKind === 'long_unused'
-                            ? 'warning'
-                            : 'success';
-                const ownerActorKey = normalizeText(sourceMeta?.ownerActorKey ?? chunk.metadata?.ownerActorKey) || null;
-                const participantActorKeys = Array.isArray(sourceMeta?.participantActorKeys)
-                    ? sourceMeta!.participantActorKeys.map((item: string): string => normalizeText(item)).filter(Boolean)
-                    : [];
-                const chunkSource = chunk.metadata?.source && typeof chunk.metadata.source === 'object'
-                    ? chunk.metadata.source as Record<string, unknown>
-                    : {};
-                const embedding = embeddingMap.get(chunkId) ?? null;
-                const summaryKeywords = Array.isArray((sourceRecord as DBSummary | null)?.keywords)
-                    ? (((sourceRecord as DBSummary).keywords ?? []) as unknown[])
-                    : [];
-                return {
-                    chunkId,
-                    chatKey: this.chatKey,
-                    content: String(chunk.content ?? ''),
-                    preview: buildPreview(String(chunk.content ?? '')),
-                    contentHash: hashText(normalizeText(chunk.content)),
-                    contentLength: normalizeText(chunk.content).length,
-                    createdAt: Number(chunk.createdAt ?? 0) || 0,
-                    sourceRecordKey,
-                    sourceRecordKind,
-                    sourceLabel: sourceRecordKind === 'fact'
-                        ? (sourceRecord ? `${normalizeText((sourceRecord as DBFact).type) || '未命名事实'}${normalizeText((sourceRecord as DBFact).path) ? ` · ${normalizeText((sourceRecord as DBFact).path)}` : ''}` : '事实来源缺失')
-                        : sourceRecordKind === 'summary'
-                            ? (sourceRecord ? (normalizeText((sourceRecord as DBSummary).title) || `${normalizeText((sourceRecord as DBSummary).level) || 'scene'} 摘要`) : '摘要来源缺失')
-                            : '缺少严格来源',
-                    sourceDetail: sourceRecordKind === 'fact'
-                        ? (sourceRecord ? [formatMemoryTypeLabel((sourceRecord as DBFact).memoryType), formatMemorySubtypeLabel((sourceRecord as DBFact).memorySubtype)].filter(Boolean).join(' · ') || '结构化事实来源' : '原始事实记录已不存在')
-                        : sourceRecordKind === 'summary'
-                            ? (sourceRecord ? [normalizeText((sourceRecord as DBSummary).level) || 'scene', summaryKeywords.length > 0 ? `关键词：${summaryKeywords.slice(0, 4).map((item: unknown): string => normalizeText(item)).filter(Boolean).join(' / ')}` : ''].filter(Boolean).join(' · ') || '分层摘要来源' : '原始摘要记录已不存在')
-                            : '当前片段没有可回溯的严格 metadata',
-                    ownerActorKey,
-                    ownerActorLabel: ownerActorKey ? (actorLabelMap.get(ownerActorKey) || formatActorLabel(ownerActorKey)) : null,
-                    sourceScope: normalizeText(sourceMeta?.sourceScope ?? chunk.metadata?.sourceScope) || null,
-                    memoryType: normalizeText(sourceMeta?.memoryType ?? chunk.metadata?.memoryType) || null,
-                    memorySubtype: normalizeText(sourceMeta?.memorySubtype ?? chunk.metadata?.memorySubtype) || null,
-                    participantActorKeys,
-                    participantActorLabels: participantActorKeys.map((item: string): string => actorLabelMap.get(item) || formatActorLabel(item)),
-                    anchorMessageId: readAnchorMessageId(chunk.metadata),
-                    sourceMessageIds: readSourceMessageIds(chunk.metadata),
-                    sourceTraceKind: normalizeText(chunkSource.kind) || null,
-                    sourceReason: normalizeText(chunkSource.reason) || null,
-                    sourceViewHash: normalizeText(chunkSource.viewHash) || null,
-                    sourceSnapshotHash: normalizeText(chunkSource.snapshotHash) || null,
-                    sourceRepairGeneration: Number.isFinite(Number(chunkSource.repairGeneration))
-                        ? Number(chunkSource.repairGeneration)
-                        : null,
-                    embeddingModel: normalizeText(embedding?.model) || null,
-                    embeddingDimensions: Array.isArray(embedding?.vector) ? embedding!.vector.length : null,
-                    statusKind,
-                    statusLabel,
-                    statusTone,
-                    statusReasons: duplicateCount > 1 ? [...rebuild.reasons, `检测到 ${duplicateCount} 条重复内容`] : rebuild.reasons,
-                    isArchived,
-                    sourceMissing,
-                    needsRebuild: rebuild.needsRebuild,
-                    duplicateCount,
-                    usage,
-                };
-                });
-        }
 
-        */
 
         return {
             chatKey: this.chatKey,

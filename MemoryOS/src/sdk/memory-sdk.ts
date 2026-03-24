@@ -71,6 +71,7 @@ import type {
     MemoryTraceContext,
     OwnedMemoryState,
     PersonaMemoryProfile,
+    RoleProfile,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
     PromptInjectionProfile,
@@ -92,6 +93,7 @@ import type {
     LogicalChatView,
 } from '../types';
 import type {
+    MemoryProposalDocument,
     ProposalResult,
     WriteRequest,
 } from '../proposal/types';
@@ -177,7 +179,6 @@ export class MemorySDKImpl implements MemorySDK {
     private coldStartPromptPrimeTask: Promise<boolean> | null = null;
     private coldStartExtractPrimeTask: Promise<boolean> | null = null;
     private generationRoundTask: Promise<void> | null = null;
-    private generationRoundTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly pendingGenerationRoundReasons: Set<string> = new Set<string>();
 
     constructor(chatKey: string) {
@@ -519,8 +520,7 @@ export class MemorySDKImpl implements MemorySDK {
         }
 
         const nextTask = new Promise<void>((resolve, reject): void => {
-            this.generationRoundTimer = setTimeout((): void => {
-                this.generationRoundTimer = null;
+            setTimeout((): void => {
                 const mergedReasons = Array.from(this.pendingGenerationRoundReasons.values());
                 this.pendingGenerationRoundReasons.clear();
                 runWithMemoryCardVectorBatch(this.chatKey_, async (): Promise<void> => {
@@ -878,8 +878,8 @@ export class MemorySDKImpl implements MemorySDK {
     // 提议制写入网关（四道闸门）
     proposal = {
         /** AI 任务提议入口：经过 schema / diff / 权限 / 审计 四道闸门后才会真正落盘 */
-        processProposal: (envelope: any, consumerPluginId: string) => {
-            return this.proposalManager.processProposal(envelope, consumerPluginId);
+        processProposal: (document: MemoryProposalDocument, consumerPluginId: string) => {
+            return this.proposalManager.processProposal(document, consumerPluginId);
         },
         /** 外部插件直接提交结构化写入请求的接口 */
         requestWrite: (request: any) => {
@@ -987,28 +987,6 @@ export class MemorySDKImpl implements MemorySDK {
         },
         preview: () => {
             return this.worldInfoWriter.previewWriteback();
-        },
-        /**
-         * @deprecated 仅保留给旧世界书/事实表兼容调用；计划在 v0.8 移除。
-         * 新编辑器请改用 logicTable.* / rows.*。
-         */
-        getLogicTable: async (entityType: string, opts?: LogicTableQueryOpts) => {
-            const rows = await this.rowOperations.listTableRows(entityType, opts);
-            return rows.map((row: LogicTableRow) => ({
-                factKey: row.factKeys?.['__primary__'] || row.factKeys?.[Object.keys(row.factKeys || {})[0] || ''] || undefined,
-                type: row.tableKey,
-                entity: { kind: row.tableKey, id: row.rowId },
-                path: '',
-                value: row.values,
-                tombstoned: row.tombstoned,
-                redirectedTo: row.redirectedTo,
-                aliases: row.aliases,
-                updatedAt: row.updatedAt,
-                _legacyRow: row,
-            }));
-        },
-        updateFact: (factKey: string | undefined, type: string, entity: { kind: string; id: string }, path: string, value: any) => {
-            return this.facts.upsert({ factKey, type, entity, path, value, confidence: 1.0, provenance: { extractor: 'manual' } });
         },
     };
 
@@ -1209,6 +1187,12 @@ export class MemorySDKImpl implements MemorySDK {
         getSemanticSeed: (): Promise<ChatSemanticSeed | null> => {
             return this.chatStateManager.getSemanticSeed();
         },
+        getRoleProfiles: (): Promise<Record<string, RoleProfile>> => {
+            return this.chatStateManager.getRoleProfiles();
+        },
+        getRoleProfile: (actorKey: string): Promise<RoleProfile | null> => {
+            return this.chatStateManager.getRoleProfile(actorKey);
+        },
         getPersonaMemoryProfile: (): Promise<PersonaMemoryProfile | null> => {
             return this.chatStateManager.getPersonaMemoryProfile();
         },
@@ -1232,6 +1216,9 @@ export class MemorySDKImpl implements MemorySDK {
         },
         recomputePersonaMemoryProfiles: (): Promise<Record<string, PersonaMemoryProfile>> => {
             return this.chatStateManager.recomputePersonaMemoryProfiles();
+        },
+        recomputeRoleProfiles: (): Promise<Record<string, RoleProfile>> => {
+            return this.chatStateManager.recomputeRoleProfiles();
         },
         getRecallLog: (limit?: number): Promise<RecallLogEntry[]> => {
             return this.chatStateManager.getRecallLog(limit);
@@ -1328,7 +1315,7 @@ export class MemorySDKImpl implements MemorySDK {
             await this.chatStateManager.restoreArchivedMemoryChat();
             await restoreArchivedMemoryChat(this.chatKey_);
         },
-        purgeChat: async (options?: { includeAudit?: boolean }): Promise<void> => {
+        purgeChat: async (_options?: { includeAudit?: boolean }): Promise<void> => {
             await this.chatStateManager.setRetentionPolicyOverride({
                 deletionStrategy: 'immediate_purge',
             });

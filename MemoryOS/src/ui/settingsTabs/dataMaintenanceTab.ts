@@ -10,9 +10,9 @@ import type {
 } from '../../db/db';
 import type { MemoryOSSettingsIds } from '../settingsCardTemplateTypes';
 import { filterRecordText } from '../../core/record-filter';
-import { logger, request, toast } from '../../index';
+import { logger, toast } from '../../index';
 import { bindToggle, readRecordFilterSettings, readSettingBoolean, saveRecordFilterSettings } from './sharedRuntime';
-import { openRecordEditor } from '../recordEditor';
+import { openRecordEditor } from '../recordEditorNext';
 import { bindDataMaintenanceAuditSection } from './dataMaintenanceAuditSection';
 import { bindDataMaintenanceMutationHistorySection } from './dataMaintenanceMutationHistorySection';
 import { bindDataMaintenanceTemplateSection } from './dataMaintenanceTemplateSection';
@@ -63,16 +63,6 @@ export function buildDataMaintenanceTabPanel(ids: MemoryOSSettingsIds): string {
             <button id="${ids.dbExportBtnId}" type="button" class="stx-ui-btn secondary">导出记忆包</button>
             <button id="${ids.dbImportBtnId}" type="button" class="stx-ui-btn secondary">导入记忆包</button>
             <button id="${ids.dbClearBtnId}" type="button" class="stx-ui-btn secondary" style="color:#ff8787;border-color:rgba(255,135,135,0.3);">清空当前聊天数据</button>
-          </div>
-        </div>
-        <div class="stx-ui-item stx-ui-search-item" data-stx-ui-search="bus inspector connection test ping hello">
-          <div class="stx-ui-item-main">
-            <div class="stx-ui-item-title">微服务通信自检（Bus Inspector）</div>
-            <div class="stx-ui-item-desc">用于检查 MemoryOS 与 LLMHub 是否连通。</div>
-          </div>
-          <div class="stx-ui-actions">
-            <button id="${ids.testPingBtnId}" type="button" class="stx-ui-btn secondary">发送 Ping 测试</button>
-            <button id="${ids.testHelloBtnId}" type="button" class="stx-ui-btn secondary">向 LLMHub 打招呼</button>
           </div>
         </div>
         <div class="stx-ui-divider">
@@ -654,42 +644,6 @@ export function bindDataMaintenanceTab(options: DataMaintenanceTabBindOptions): 
 
     document.getElementById(ids.recordEditorBtnId)?.addEventListener('click', (): void => {
         openRecordEditor();
-    });
-
-    document.getElementById(ids.testPingBtnId)?.addEventListener('click', async (): Promise<void> => {
-        const button = document.getElementById(ids.testPingBtnId) as HTMLButtonElement | null;
-        if (!button) {
-            return;
-        }
-        button.textContent = '探测中...';
-        try {
-            const response = await request('plugin:request:ping', {}, 'stx_memory_os', { to: 'stx_llmhub' });
-            toast.success('网络 Ping 已通，详情已打印到控制台。');
-            logger.info('[Bus Inspector Ping]', response);
-        } catch (error) {
-            toast.error('网络探测失败，详情请看控制台。');
-            logger.error('[Bus Inspector Error]', error);
-        } finally {
-            button.textContent = '发送 Ping 测试';
-        }
-    });
-
-    document.getElementById(ids.testHelloBtnId)?.addEventListener('click', async (): Promise<void> => {
-        const button = document.getElementById(ids.testHelloBtnId) as HTMLButtonElement | null;
-        if (!button) {
-            return;
-        }
-        button.textContent = '呼叫中...';
-        try {
-            const response = await request('plugin:request:hello', { testPayload: 'From MemoryOS Inspector' }, 'stx_memory_os', { to: 'stx_llmhub' });
-            toast.success('双向握手完成（Hello OK）。详情见控制台。');
-            logger.success('[Bus Inspector Hello Reply]', response);
-        } catch (error) {
-            toast.error('请求 LLMHub 失败或超时，详情见控制台。');
-            logger.error('[Bus Inspector Error]', error);
-        } finally {
-            button.textContent = '向 LLMHub 打招呼';
-        }
     });
 
     document.getElementById(ids.tabDbId)?.addEventListener('click', (): void => {

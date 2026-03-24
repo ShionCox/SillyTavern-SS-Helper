@@ -4,7 +4,7 @@ import type { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from './chat-state-manager';
 import type { FactsManager } from './facts-manager';
 import type { DBFact } from '../db/db';
-import { DEFAULT_PROMPT_TRIM_BUDGET, type PromptTrimBudget } from '../types';
+import { DEFAULT_PROMPT_TRIM_BUDGET } from '../types';
 
 
 export interface SchemaContextResult {
@@ -32,18 +32,16 @@ export interface SchemaContextResult {
  * 降级不阻断抽取
  */
 export class PromptTrimmer {
-    private chatKey: string;
     private templateManager: TemplateManager;
     private chatStateManager: ChatStateManager;
     private factsManager: FactsManager;
 
     constructor(
-        chatKey: string,
+        _chatKey: string,
         templateManager: TemplateManager,
         chatStateManager: ChatStateManager,
         factsManager: FactsManager,
     ) {
-        this.chatKey = chatKey;
         this.templateManager = templateManager;
         this.chatStateManager = chatStateManager;
         this.factsManager = factsManager;

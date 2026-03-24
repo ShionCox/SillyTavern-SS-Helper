@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildColdstartOperationSystemPrompt,
-    buildExtractPromptByScopeTaskPrompt,
-    buildExtractTaskPrompt,
-    buildLongSummarizeTaskPrompt,
     buildMemorySummarySaveSystemPrompt,
-    buildShortSummarizeTaskPrompt,
-    buildSummarizeTaskPrompt,
+    buildUnifiedIngestTaskPrompt,
     COLDSTART_OPERATION_SKILL,
     joinPromptSkills,
     MEMORY_SUMMARY_SAVE_SKILL,
@@ -14,6 +10,10 @@ import {
 } from '../src/llm/skills';
 import type { PostGenerationGateDecision } from '../src/types';
 
+/**
+ * 功能：创建测试用的生成后闸门结果。
+ * @returns 生成后闸门结果对象。
+ */
 function createPostGateDecision(): PostGenerationGateDecision {
     return {
         valueClass: 'relationship_signal',
@@ -64,20 +64,21 @@ describe('memory-prompt-skills', (): void => {
         expect(prompt).toContain('state 卡优先描述当前稳定状态');
     });
 
-    it('能构建摘要与抽取任务提示词', (): void => {
+    it('能构建统一记忆摄取主提示词', (): void => {
         const postGate = createPostGateDecision();
-        const attachedSkillText = buildMemorySummarySaveSystemPrompt();
+        const prompt = buildUnifiedIngestTaskPrompt(
+            'full',
+            true,
+            postGate,
+            'long',
+            'medium',
+            buildMemorySummarySaveSystemPrompt(),
+        );
 
-        const shortPrompt = buildShortSummarizeTaskPrompt('summary_only', postGate, attachedSkillText);
-        const longPrompt = buildLongSummarizeTaskPrompt('block', postGate, attachedSkillText);
-        const summarizePrompt = buildSummarizeTaskPrompt('full', postGate, attachedSkillText);
-        const extractPrompt = buildExtractTaskPrompt('full', true, postGate);
-        const scopedExtractPrompt = buildExtractPromptByScopeTaskPrompt('block', false, postGate, 'medium');
-
-        expect(shortPrompt).toContain('你是短总结助手');
-        expect(longPrompt).toContain('你是长总结助手');
-        expect(summarizePrompt).toContain('你是对话摘要助手');
-        expect(extractPrompt).toContain('你是结构化记忆提取助手');
-        expect(scopedExtractPrompt).toContain('Processing scope: medium.');
+        expect(prompt).toContain('你是统一记忆摄取助手');
+        expect(prompt).toContain('必须输出统一 JSON 外壳');
+        expect(prompt).toContain('summaries[].level 只能是 message、scene 或 arc');
+        expect(prompt).toContain('Summary tier: long.');
+        expect(prompt).toContain('Processing scope: medium.');
     });
 });

@@ -42,9 +42,9 @@ function normalizeText(value: unknown): string {
  * @param level 摘要层级。
  * @returns 默认记忆卡层级。
  */
-function inferPrimaryLane(level: DBSummary['level']): MemoryCardLane {
+/*
     return level === 'arc' ? 'state' : 'event';
-}
+*/
 
 /**
  * 功能：按记忆卡层级推断生命周期。

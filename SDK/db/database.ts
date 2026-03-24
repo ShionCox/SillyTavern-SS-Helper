@@ -322,6 +322,13 @@ export interface DBMemoryCard {
     sourceRecordKey: string | null;
     sourceRecordKind: 'fact' | 'summary' | 'state' | 'event' | 'relationship' | 'semantic_seed' | 'unknown';
     ownerActorKey?: string | null;
+    memoryType?: string | null;
+    memorySubtype?: string | null;
+    sourceMessageIds?: string[];
+    speakerActorKey?: string | null;
+    speakerLabel?: string | null;
+    rememberedByActorKey?: string | null;
+    rememberReason?: string | null;
     participantActorKeys: string[];
     validFrom?: number;
     validTo?: number;

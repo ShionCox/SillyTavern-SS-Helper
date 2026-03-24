@@ -391,7 +391,7 @@ export function readActorRetention(context: RecallSourceContext, recordKey: stri
  *   CandidateVisibilityClassification：可见性分类结果。
  */
 export function classifyMemoryPrivacy(
-    context: RecallSourceContext,
+    _context: RecallSourceContext,
     params: CandidateVisibilityInput,
     lifecycle: MemoryLifecycleState | null,
 ): CandidateVisibilityClassification {

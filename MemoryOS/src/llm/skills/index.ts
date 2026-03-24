@@ -53,10 +53,5 @@ export { buildColdstartOperationSystemPrompt } from './coldstart-operation-skill
 export { MEMORY_SUMMARY_SAVE_SKILL } from './memory-summary-save-skill';
 export { buildMemorySummarySaveSystemPrompt } from './memory-summary-save-skill';
 export {
-    buildExtractPromptByScopeTaskPrompt,
-    buildExtractTaskPrompt,
-    buildLongSummarizeTaskPrompt,
-    buildShortSummarizeTaskPrompt,
-    buildSummarizeTaskPrompt,
     buildUnifiedIngestTaskPrompt,
 } from './extract-operation-skill';

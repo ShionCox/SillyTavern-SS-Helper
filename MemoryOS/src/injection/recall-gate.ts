@@ -1,6 +1,6 @@
 import type { EventEnvelope } from '../../../SDK/stx';
 import type { ChatStateManager } from '../core/chat-state-manager';
-import { classifyRecallNeed, shouldRunVectorRecall } from '../core/chat-strategy-engine';
+import { classifyRecallNeed } from '../core/chat-strategy-engine';
 import type { FactsManager } from '../core/facts-manager';
 import type { LorebookEntryCandidate } from '../core/lorebook-relevance-gate';
 import type { GroupMemoryState, InjectionIntent, LogicalChatView, LorebookGateDecision, MemoryCardLane, MemoryLifecycleState, MemoryTuningProfile, PersonaMemoryProfile, RecallCandidate, RecallGateDecision, RecallPlan, RelationshipState } from '../types';

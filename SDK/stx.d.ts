@@ -97,19 +97,16 @@ export interface SummaryProposal {
     };
 }
 
-export interface ProposalEnvelope {
-    ok: boolean;
-    proposal: {
-        facts?: FactProposal[];
-        patches?: PatchProposal[];
-        summaries?: SummaryProposal[];
-        notes?: string;
+export interface MemoryProposalDocument {
+    facts?: FactProposal[];
+    patches?: PatchProposal[];
+    summaries?: SummaryProposal[];
+    notes?: string;
         /** v2: 模板 schema 变更提案 */
-        schemaChanges?: SchemaChangeProposal[];
+    schemaChanges?: SchemaChangeProposal[];
         /** v2: 实体解析提案 */
-        entityResolutions?: EntityResolutionProposal[];
-    };
-    confidence: number;
+    entityResolutions?: EntityResolutionProposal[];
+    confidence?: number;
 }
 
 /** v2: Schema 变更提案 */
@@ -696,13 +693,20 @@ export interface MemoryCardDraft {
     entityKeys: string[];
     keywords: string[];
     importance: number;
-    confidence: number;
+    confidence?: number;
     ttl: MemoryCardTtl;
     replaceKey?: string | null;
     sourceRefs: string[];
     sourceRecordKey: string | null;
     sourceRecordKind: string | null;
     ownerActorKey?: string | null;
+    memoryType?: MemoryType | null;
+    memorySubtype?: MemorySubtype | null;
+    sourceMessageIds?: string[];
+    speakerActorKey?: string | null;
+    speakerLabel?: string | null;
+    rememberedByActorKey?: string | null;
+    rememberReason?: string | null;
     participantActorKeys: string[];
     validFrom?: number;
     validTo?: number;
@@ -1068,6 +1072,30 @@ export interface SemanticWorldFacetEntry {
     tags?: string[];
 }
 
+export interface SemanticAiRoleRelationshipSummary {
+    targetActorKey?: string;
+    targetLabel: string;
+    label: string;
+    detail: string;
+}
+
+export interface SemanticAiRoleAssetSummary {
+    kind: 'item' | 'equipment';
+    name: string;
+    detail: string;
+}
+
+export interface SemanticAiRoleProfileSummary {
+    actorKey?: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    relationshipFacts: SemanticAiRoleRelationshipSummary[];
+    items: SemanticAiRoleAssetSummary[];
+    equipments: SemanticAiRoleAssetSummary[];
+}
+
 export interface SemanticAiSummary {
     roleSummary: string;
     worldSummary: string;
@@ -1104,6 +1132,7 @@ export interface SemanticAiSummary {
     dangerDetails: SemanticWorldFacetEntry[];
     entityDetails: SemanticWorldFacetEntry[];
     otherWorldDetailDetails: SemanticWorldFacetEntry[];
+    roleProfiles: SemanticAiRoleProfileSummary[];
     generatedAt: number;
     source: 'ai';
 }
@@ -1146,6 +1175,7 @@ export interface ChatSemanticSeed {
     presetStyle: string;
     identitySeed: IdentitySeed;
     identitySeeds?: Record<string, IdentitySeed>;
+    roleProfileSeeds?: Record<string, RoleProfile>;
     worldSeed: WorldSeed;
     styleSeed: StyleSeed;
     aiSummary?: SemanticAiSummary;
@@ -1219,7 +1249,7 @@ export type MemoryPrivacyClass = 'shared' | 'private' | 'contextual';
 
 export type RecallViewpointReason = 'shared' | 'owned_by_actor' | 'retained_for_actor' | 'foreign_private_suppressed';
 
-export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
+export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'dialogue' | 'other';
 
 export type MemorySubtype =
     | 'identity'
@@ -1235,7 +1265,7 @@ export type MemorySubtype =
     | 'minor_event'
     | 'combat_event'
     | 'travel_event'
-    | 'conversation_event'
+    | 'dialogue_quote'
     | 'global_rule'
     | 'city_rule'
     | 'location_fact'
@@ -1286,6 +1316,43 @@ export interface PersonaMemoryProfile {
 }
 
 export type PersonaMemoryProfileMap = Record<string, PersonaMemoryProfile>;
+
+export interface RoleRelationshipFact {
+    targetActorKey?: string;
+    targetLabel: string;
+    label: string;
+    detail: string;
+    sourceRefs: string[];
+}
+
+export interface RoleAssetEntry {
+    kind: 'item' | 'equipment';
+    name: string;
+    detail: string;
+    sourceRefs: string[];
+}
+
+export interface RoleProfile {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    relationshipFacts: RoleRelationshipFact[];
+    items: RoleAssetEntry[];
+    equipments: RoleAssetEntry[];
+    updatedAt: number;
+}
+
+export interface DialogueMemoryFact {
+    ownerActorKey: string;
+    speakerActorKey: string;
+    speakerLabel: string;
+    quoteText: string;
+    reason: string;
+    sourceMessageId: string;
+    updatedAt: number;
+}
 
 export interface SimpleMemoryPersona {
     memoryStrength: 'weak' | 'balanced' | 'strong';
@@ -1584,9 +1651,8 @@ export interface MutationRepairTask {
 export interface MemoryOSChatState {
     logicalChatView?: LogicalChatView;
     semanticSeed?: ChatSemanticSeed;
-    personaMemoryProfile?: PersonaMemoryProfile;
     personaMemoryProfiles?: PersonaMemoryProfileMap;
-    simpleMemoryPersona?: SimpleMemoryPersona;
+    roleProfiles?: Record<string, RoleProfile>;
     simpleMemoryPersonas?: SimpleMemoryPersonaMap;
     activeActorKey?: string;
     coldStartFingerprint?: string;
@@ -1857,6 +1923,7 @@ export interface EditorExperienceSnapshot {
     activeActorKey: string | null;
     retention: RetentionPolicy;
     semanticSeed: ChatSemanticSeed | null;
+    roleProfiles: Record<string, RoleProfile>;
     simplePersona: SimpleMemoryPersona | null;
     groupMemory: GroupMemoryState | null;
     relationshipState: RelationshipState[];
@@ -1976,7 +2043,7 @@ export interface MemorySDK {
     };
 
     proposal: {
-        processProposal(envelope: ProposalEnvelope, consumerPluginId: string): Promise<ProposalResult>;
+        processProposal(document: MemoryProposalDocument, consumerPluginId: string): Promise<ProposalResult>;
         requestWrite(request: WriteRequest): Promise<ProposalResult>;
         grantPermission(pluginId: string): void;
         revokePermission(pluginId: string): void;
@@ -2016,14 +2083,6 @@ export interface MemorySDK {
         writeback(mode?: 'facts' | 'summaries' | 'all'): Promise<{ written: number; bookName: string }>;
         preview(): Promise<Array<{ entry: string; keywords: string[]; contentLength: number }>>;
         /** @deprecated 仅保留给旧世界书/事实表兼容调用；新编辑器请改用 `logicTable.getLogicTableView()`、`logicTable.listLogicTables()` 或 `rows.listTableRows()`。 */
-        getLogicTable(entityType: string, opts?: LogicTableQueryOpts): Promise<any[]>;
-        updateFact(
-            factKey: string | undefined,
-            type: string,
-            entity: { kind: string; id: string },
-            path: string,
-            value: any
-        ): Promise<string>;
     };
 
     logicTable: {
@@ -2085,6 +2144,8 @@ export interface MemorySDK {
         getColdStartLorebookSelection(): Promise<ColdStartLorebookSelection>;
         isColdStartLorebookSelectionSkipped(): Promise<boolean>;
         getSemanticSeed(): Promise<ChatSemanticSeed | null>;
+        getRoleProfiles(): Promise<Record<string, RoleProfile>>;
+        getRoleProfile(actorKey: string): Promise<RoleProfile | null>;
         getPersonaMemoryProfile(): Promise<PersonaMemoryProfile | null>;
         getPersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>>;
         getPersonaMemoryProfileForActor(actorKey: string): Promise<PersonaMemoryProfile | null>;
@@ -2093,6 +2154,7 @@ export interface MemorySDK {
         getSimpleMemoryPersona(): Promise<SimpleMemoryPersona | null>;
         recomputePersonaMemoryProfile(): Promise<PersonaMemoryProfile>;
         recomputePersonaMemoryProfiles(): Promise<Record<string, PersonaMemoryProfile>>;
+        recomputeRoleProfiles(): Promise<Record<string, RoleProfile>>;
         getRecallLog(limit?: number): Promise<RecallLogEntry[]>;
         getLatestRecallExplanation(): Promise<LatestRecallExplanation | null>;
         getMemoryLifecycleSummary(limit?: number): Promise<MemoryLifecycleState[]>;

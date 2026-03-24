@@ -71,19 +71,15 @@ export interface DeferredSchemaHint {
     reason: string;
 }
 
-/** 统一提议信封（所有 AI 任务的标准返回） */
-export interface ProposalEnvelope {
-    ok: boolean;
-    proposal: {
-        facts?: FactProposal[];
-        patches?: PatchProposal[];
-        summaries?: SummaryProposal[];
-        memoryCards?: MemoryCardDraft[];
-        notes?: string;
-        schemaChanges?: SchemaChangeProposal[];
-        entityResolutions?: EntityResolutionProposal[];
-    };
-    confidence: number;
+/** 统一提案文档（所有 AI 任务的标准返回） */
+export interface MemoryProposalDocument {
+    facts?: FactProposal[];
+    patches?: PatchProposal[];
+    summaries?: SummaryProposal[];
+    notes?: string;
+    schemaChanges?: SchemaChangeProposal[];
+    entityResolutions?: EntityResolutionProposal[];
+    confidence?: number;
 }
 
 /** 闸门校验结果 */

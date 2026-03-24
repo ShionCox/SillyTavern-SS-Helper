@@ -58,7 +58,7 @@ export function bindDataMaintenanceWorldInfoSection(options: DataMaintenanceWorl
                 alert('Memory OS 尚未就绪。');
                 return;
             }
-            if (!confirm(`确定将${mode === 'all' ? '事实 + 摘要' : '摘要'}写回到 SillyTavern WorldInfo 吗？\n已有旧条目将被替换。`)) {
+            if (!confirm(`确定将${mode === 'all' ? '事实 + 摘要' : '摘要'}写回到 SillyTavern WorldInfo 吗？\n已有同名条目将被更新。`)) {
                 return;
             }
             button?.setAttribute('disabled', 'true');

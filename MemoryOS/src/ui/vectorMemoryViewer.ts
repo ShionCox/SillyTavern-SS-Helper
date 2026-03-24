@@ -404,6 +404,7 @@ function formatMemoryTypeLabel(value: string | null | undefined): string {
     if (normalized === 'relationship') return '关系';
     if (normalized === 'world') return '世界';
     if (normalized === 'status') return '状态';
+    if (normalized === 'dialogue') return '对话';
     return normalized || '其他';
 }
 
@@ -425,7 +426,7 @@ function formatMemorySubtypeLabel(value: string | null | undefined): string {
         rumor: '传闻',
         major_plot_event: '重大事件',
         minor_event: '小事件',
-        conversation_event: '对话事件',
+        dialogue_quote: '对话原句',
         temporary_status: '临时状态',
         global_rule: '全局规则',
         city_rule: '城市规则',
@@ -1506,56 +1507,7 @@ export class VectorMemoryViewerController {
         `;
     }
 
-    /**
-     * 功能：渲染单条列表卡片。
-     * @param entry 列表项。
-     * @returns 卡片 HTML。
-     */
-    private renderListCard(entry: VectorMemoryViewerDerivedItem): string {
-        const item = entry.item;
-        const hit = entry.testHit;
-        const timeLabel = item.usage.lastHitAt ? `最近命中 ${formatRelativeTime(item.usage.lastHitAt)}` : `索引于 ${formatRelativeTime(item.createdAt)}`;
-        const topBadges = [
-            `<span class="stx-vmv-pill">${escapeHtml(formatSourceKindLabel(item.sourceRecordKind))}</span>`,
-            `<span class="stx-vmv-pill ${buildStatusToneClass(item)}">${escapeHtml(item.statusLabel)}</span>`,
-            hit
-                ? `<span class="stx-vmv-pill ${hit.enteredContext ? 'tone-success' : hit.matchedInRecall ? 'tone-warning' : 'tone-muted'}">${escapeHtml(hit.enteredContext ? '进入上下文' : hit.matchedInRecall ? '命中未入选' : '测试命中')}</span>`
-                : (item.statusKind === 'recent_hit'
-                    ? '<span class="stx-vmv-pill tone-success">最近命中</span>'
-                    : item.statusKind === 'long_unused'
-                        ? '<span class="stx-vmv-pill tone-warning">长期未用</span>'
-                        : ''),
-        ].filter(Boolean).join('');
-        const bottomBadges = [
-            `<span class="stx-vmv-badge">卡片层级 路 ${escapeHtml(formatMemoryLaneLabel(item.lane))}</span>`,
-            `<span class="stx-vmv-badge">来源范围 · ${escapeHtml(formatScopeLabel(item.sourceScope))}</span>`,
-            `<span class="stx-vmv-badge">记忆类型 · ${escapeHtml(formatMemoryTypeLabel(item.memoryType))}</span>`,
-            `<span class="stx-vmv-badge">生命周期 路 ${escapeHtml(item.ttl)}</span>`,
-            item.memorySubtype ? `<span class="stx-vmv-badge">${escapeHtml(formatMemorySubtypeLabel(item.memorySubtype))}</span>` : '',
-            item.isArchived ? '<span class="stx-vmv-badge">已归档</span>' : '',
-            item.needsRebuild ? '<span class="stx-vmv-badge">建议重建</span>' : '',
-        ].filter(Boolean).join('');
-        const extraMeta = hit
-            ? `测试顺位：原始 ${hit.initialRank ?? '-'} · 整理后 ${hit.rerankedRank ?? '-'} · 最终 ${hit.finalRank ?? '-'}`
-            : `累计命中 ${item.usage.totalHits} 次`;
-        return `
-            <article class="stx-vmv-card ${item.cardId === this.state.selectedCardId ? 'is-selected' : ''}" data-action="select-item" data-card-id="${escapeHtml(item.cardId)}">
-                <div class="stx-vmv-card-topline">
-                    <div class="stx-vmv-chip-row">${topBadges}</div>
-                    <button class="stx-vmv-icon-btn" type="button" data-action="select-item" data-card-id="${escapeHtml(item.cardId)}">查看详情</button>
-                </div>
-                <div class="stx-vmv-card-preview">${escapeHtml(item.preview)}</div>
-                <div class="stx-vmv-card-meta">
-                    <div><strong>${escapeHtml(item.title)}</strong></div>
-                    <div>${escapeHtml(item.subject)} · ${escapeHtml(timeLabel)}</div>
-                    <div>${escapeHtml(extraMeta)}</div>
-                </div>
-                <div class="stx-vmv-badge-row">${bottomBadges}</div>
-            </article>
-        `;
-    }
-
-    /**
+        /**
      * 功能：渲染右侧详情区。
      * @param item 当前选中的向量记忆。
      * @param hit 当前测试命中。

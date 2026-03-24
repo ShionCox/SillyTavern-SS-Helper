@@ -13,19 +13,16 @@ export function buildRelationsStructureTabPanel(ids: MemoryOSSettingsIds): strin
           <section class="stx-ui-experience-card stx-ui-experience-card-wide">
             <div class="stx-ui-experience-card-head">
               <h3>结构状态说明</h3>
-              <p>解释稳定结构化层的当前状态；空表时也会提示数据可能停留在哪一层。</p>
+              <p>解释稳定结构化层的当前状态；就算表暂时为空，也会继续提示数据可能停留在哪一层。</p>
             </div>
             <div id="${ids.relationLanesId}"></div>
           </section>
           <section class="stx-ui-experience-card stx-ui-experience-card-wide">
             <div class="stx-ui-experience-card-head">
-              <h3>维护入口</h3>
-              <p>设置页只保留关系 / 状态摘要；需要查阅结构维护、诊断维护或原始库表时，请统一进入记录编辑器。</p>
+              <h3>系统诊断入口</h3>
+              <p>关系和结构问题统一从系统诊断进入，集中查看风险、候选修复、别名整理和隐藏项状态。</p>
             </div>
             <div class="stx-ui-actions">
-              <button data-stx-editor-action="view-hidden-rows" type="button" class="stx-ui-btn">
-                <i class="fa-solid fa-pen-to-square"></i>&nbsp;打开记录编辑器
-              </button>
               <button data-stx-editor-action="open-diagnostics" type="button" class="stx-ui-btn secondary">
                 <i class="fa-solid fa-stethoscope"></i>&nbsp;查看诊断
               </button>
@@ -41,11 +38,4 @@ export function buildRelationsStructureTabPanel(ids: MemoryOSSettingsIds): strin
         </div>
       </div>
     `.trim();
-}
-
-/**
- * 功能：绑定“关系与结构”页签事件。
- * @returns 无返回值。
- */
-export function bindRelationsStructureTab(): void {
 }

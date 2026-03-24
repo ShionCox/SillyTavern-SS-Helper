@@ -1,6 +1,4 @@
 import { db, type DBEvent } from '../db/db';
-import { SummariesManager } from './summaries-manager';
-import { StateManager } from './state-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from './memory-trace';
@@ -15,8 +13,6 @@ import { advanceMemoryTraceContext, createMemoryTraceContext } from './memory-tr
  */
 export class CompactionManager {
     private chatKey: string;
-    private summariesManager: SummariesManager;
-    private stateManager: StateManager;
     private proposalManager: ProposalManager;
 
     /** 默认触发阈值（可通过 setThresholds 覆盖） */
@@ -25,8 +21,6 @@ export class CompactionManager {
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
-        this.summariesManager = new SummariesManager(chatKey);
-        this.stateManager = new StateManager(chatKey);
         this.proposalManager = new ProposalManager(chatKey);
     }
 

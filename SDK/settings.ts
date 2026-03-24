@@ -79,10 +79,6 @@ function normalizeNamespaceEvent(namespace: string): string {
   return String(namespace ?? "").trim();
 }
 
-function isValidNamespaceEvent(namespace: string): boolean {
-  return normalizeNamespaceEvent(namespace).length > 0;
-}
-
 function readAccountStorageValueEvent(key: string): string {
   const accountStorage = getAccountStorageEvent();
   return accountStorage && typeof accountStorage.getItem === "function"

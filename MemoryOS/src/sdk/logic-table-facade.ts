@@ -442,7 +442,6 @@ export class LogicTableFacade {
     private buildDerivedCandidates(context: LogicTableContext): DerivedRowCandidate[] {
         const candidateMap = new Map<string, CandidateAccumulator>();
         const primaryField = getPrimaryField(context.table);
-        const fieldLookup = new Set((context.table.fields ?? []).map((field) => normalizeLookup(field.key)));
         const nameField = (context.table.fields ?? []).find((field) => /name|title|label|名称|标题/.test(normalizeLookup(field.key)))?.key || primaryField;
         const summaryField = (context.table.fields ?? []).find((field) => /summary|description|desc|内容|摘要|描述/.test(normalizeLookup(field.key)))?.key || null;
 

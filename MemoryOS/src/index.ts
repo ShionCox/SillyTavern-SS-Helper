@@ -80,7 +80,7 @@ export type {
 export { GateValidator } from './proposal/gate-validator';
 export { ProposalManager } from './proposal/proposal-manager';
 export type {
-    ProposalEnvelope, ProposalResult, WriteRequest,
+    MemoryProposalDocument, ProposalResult, WriteRequest,
     FactProposal, PatchProposal, SummaryProposal, GateResult,
     SchemaChangeProposal as ProposalSchemaChange,
     EntityResolutionProposal as ProposalEntityResolution,
@@ -215,14 +215,6 @@ class MemoryOS {
             } catch {
                 return false;
             }
-        };
-        const readRecordFilterSettings = (): Record<string, unknown> => {
-            const settings = readSettings();
-            const raw = settings?.recordFilter;
-            if (!raw || typeof raw !== 'object') {
-                return {};
-            }
-            return raw as Record<string, unknown>;
         };
         respond('plugin:request:ping', 'stx_memory_os', async () => {
             return {
@@ -674,27 +666,6 @@ class MemoryOS {
                 }
             }
             return idSet;
-        };
-        const hasStoredMessageEvents = async (chatKey: string): Promise<boolean> => {
-            try {
-                const [received, sent] = await Promise.all([
-                    db.events
-                        .where('[chatKey+type+ts]')
-                        .between([chatKey, 'chat.message.received', 0], [chatKey, 'chat.message.received', Infinity])
-                        .reverse()
-                        .limit(1)
-                        .toArray(),
-                    db.events
-                        .where('[chatKey+type+ts]')
-                        .between([chatKey, 'chat.message.sent', 0], [chatKey, 'chat.message.sent', Infinity])
-                        .reverse()
-                        .limit(1)
-                        .toArray(),
-                ]);
-                return received.length > 0 || sent.length > 0;
-            } catch {
-                return false;
-            }
         };
 
         // ── 历史消息差量补录 ──

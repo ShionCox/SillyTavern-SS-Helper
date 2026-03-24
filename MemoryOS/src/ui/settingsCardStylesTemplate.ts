@@ -60,6 +60,24 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       --stx-memory-scrollbar-hover: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 72%, transparent);
       --stx-memory-edit-soft: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 12%, transparent);
       --stx-memory-edit-border: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 42%, transparent);
+      --stx-diag-hero-border: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 24%, var(--ss-theme-border, rgba(255, 255, 255, 0.18)));
+      --stx-diag-hero-top-glow: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 22%, transparent);
+      --stx-diag-hero-bottom-glow: color-mix(in srgb, var(--stx-memory-info, #78a8ff) 18%, transparent);
+      --stx-diag-hero-bg-start: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 84%, black 16%);
+      --stx-diag-hero-bg-end: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.18)) 92%, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 8%);
+      --stx-diag-hero-highlight: color-mix(in srgb, var(--ss-theme-text, #fff) 8%, transparent);
+      --stx-diag-card-bg-top: color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 72%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 28%);
+      --stx-diag-card-bg-bottom: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.18)) 88%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 12%);
+      --stx-diag-card-border: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 82%, var(--ss-theme-accent, #c5a059) 18%);
+      --stx-diag-terminal-bg-top: color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 82%, black 18%);
+      --stx-diag-terminal-bg-bottom: color-mix(in srgb, var(--ss-theme-surface-1, rgba(0, 0, 0, 0.14)) 84%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 16%);
+      --stx-diag-terminal-border: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 78%, var(--stx-memory-info, #78a8ff) 22%);
+      --stx-diag-tag-bg: color-mix(in srgb, var(--ss-theme-surface-1, rgba(0, 0, 0, 0.14)) 84%, black 16%);
+      --stx-diag-tag-border: color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 82%, var(--ss-theme-accent, #c5a059) 18%);
+      --stx-diag-text-strong: color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent);
+      --stx-diag-text-soft: color-mix(in srgb, var(--ss-theme-text, #fff) 78%, transparent);
+      --stx-diag-text-mute: color-mix(in srgb, var(--ss-theme-text, #fff) 68%, transparent);
+      --stx-diag-accent-strong: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 88%, white 12%);
     }
 
     .stx-record-editor-overlay {
@@ -199,18 +217,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       background: var(--ss-theme-list-item-active-bg, rgba(197, 160, 89, 0.58));
     }
 
-    #${cardId}[data-stx-ui-mode="basic"] [data-stx-ui-mode="advanced"] {
-      display: none !important;
-    }
-
-    #${cardId}[data-stx-ui-mode="advanced"] .stx-ui-tabs-primary {
-      display: none;
-    }
-
-    #${cardId}[data-stx-ui-mode="basic"] .stx-ui-filters[data-stx-ui-mode="advanced"] {
-      display: none !important;
-    }
-
     #${cardId} .stx-ui-mode-bar {
       display: flex;
       align-items: center;
@@ -254,42 +260,6 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-weight: 800;
       color: color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent);
       word-break: break-word;
-    }
-
-    #${cardId} .stx-ui-mode-desc {
-      display: none;
-    }
-
-    #${cardId} .stx-ui-mode-switch {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px;
-      border-radius: 999px;
-      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.14));
-      background: color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2)) 100%, transparent);
-    }
-
-    #${cardId} .stx-ui-mode-chip {
-      border: 0;
-      border-radius: 999px;
-      padding: 7px 11px;
-      background: transparent;
-      color: inherit;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      opacity: 0.72;
-      transition: background-color 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
-    }
-
-    #${cardId} .stx-ui-mode-chip.is-active {
-      opacity: 1;
-      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 24%, transparent);
-      box-shadow: inset 0 1px 0 color-mix(in srgb, white 14%, transparent);
     }
 
     #${cardId} .stx-ui-refresh-btn {
@@ -406,6 +376,313 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       line-height: 1.5;
       color: color-mix(in srgb, var(--ss-theme-text, #fff) 70%, transparent);
       word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-diagnostics-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero {
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--stx-diag-hero-border, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 24%, var(--ss-theme-border, rgba(255, 255, 255, 0.18))));
+      background:
+        radial-gradient(circle at top right, var(--stx-diag-hero-top-glow, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 22%, transparent)) 0%, transparent 36%),
+        radial-gradient(circle at bottom left, var(--stx-diag-hero-bottom-glow, color-mix(in srgb, var(--stx-memory-info, #78a8ff) 18%, transparent)) 0%, transparent 42%),
+        linear-gradient(135deg, var(--stx-diag-hero-bg-start, color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 84%, black 16%)) 0%, var(--stx-diag-hero-bg-end, color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.18)) 92%, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 8%)) 100%);
+      box-shadow:
+        inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
+        0 18px 36px rgba(15, 23, 42, 0.22);
+      overflow: hidden;
+      position: relative;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0%, var(--stx-diag-hero-highlight, color-mix(in srgb, var(--ss-theme-text, #fff) 8%, transparent)) 50%, transparent 100%);
+      opacity: 0.22;
+      pointer-events: none;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      z-index: 1;
+    }
+
+    #${cardId} .stx-ui-diagnostics-kicker,
+    #${cardId} .stx-ui-diagnostics-terminal-kicker,
+    #${cardId} .stx-ui-diagnostics-status-label,
+    #${cardId} .stx-ui-diagnostics-issue-summary-label,
+    #${cardId} .stx-ui-diagnostics-card-index {
+      font-size: 11px;
+      line-height: 1.2;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: "Fira Code", "Cascadia Code", Consolas, monospace;
+    }
+
+    #${cardId} .stx-ui-diagnostics-kicker {
+      color: var(--stx-diag-accent-strong, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 88%, white 12%));
+      opacity: 0.95;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero h3 {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.08;
+      font-weight: 900;
+      color: var(--stx-diag-text-strong, color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent));
+      font-family: "Fira Sans", "Segoe UI", sans-serif;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero p {
+      margin: 0;
+      max-width: 620px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--stx-diag-text-soft, color-mix(in srgb, var(--ss-theme-text, #fff) 78%, transparent));
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero-signal {
+      flex: 0 0 auto;
+      display: grid;
+      align-content: center;
+      gap: 10px;
+      min-width: 120px;
+      position: relative;
+      z-index: 1;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero-signal span {
+      display: block;
+      height: 9px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 22%, transparent), var(--ss-theme-accent, #c5a059), color-mix(in srgb, var(--stx-memory-info, #78a8ff) 68%, transparent));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ss-theme-accent, #c5a059) 28%, transparent);
+      animation: stx-diagnostics-pulse 2.6s ease-in-out infinite;
+      transform-origin: left center;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero-signal span:nth-child(2) {
+      width: 84%;
+      animation-delay: 0.18s;
+    }
+
+    #${cardId} .stx-ui-diagnostics-hero-signal span:nth-child(3) {
+      width: 62%;
+      animation-delay: 0.36s;
+    }
+
+    #${cardId} .stx-ui-diagnostics-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
+      gap: 12px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-diagnostics-card {
+      gap: 12px;
+      padding: 16px;
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, var(--stx-diag-card-bg-top, color-mix(in srgb, var(--ss-theme-surface-3, rgba(255, 255, 255, 0.05)) 72%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 28%)) 0%, var(--stx-diag-card-bg-bottom, color-mix(in srgb, var(--ss-theme-surface-2, rgba(0, 0, 0, 0.18)) 88%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 12%)) 100%);
+      border-color: var(--stx-diag-card-border, color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 82%, var(--ss-theme-accent, #c5a059) 18%));
+      box-shadow:
+        inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+        0 14px 28px rgba(15, 23, 42, 0.12);
+    }
+
+    #${cardId} .stx-ui-diagnostics-card-overview,
+    #${cardId} .stx-ui-diagnostics-card-reason {
+      grid-column: 1 / -1;
+    }
+
+    #${cardId} .stx-ui-diagnostics-card-head {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    #${cardId} .stx-ui-diagnostics-card-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 36px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: var(--stx-diag-accent-strong, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 88%, white 12%));
+      background: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 16%, transparent);
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 26%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-diagnostics-status,
+    #${cardId} .stx-ui-diagnostics-issue-board,
+    #${cardId} .stx-ui-diagnostics-terminal {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid var(--stx-diag-terminal-border, color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 78%, var(--stx-memory-info, #78a8ff) 22%));
+      background:
+        linear-gradient(180deg, var(--stx-diag-terminal-bg-top, color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 82%, black 18%)) 0%, var(--stx-diag-terminal-bg-bottom, color-mix(in srgb, var(--ss-theme-surface-1, rgba(0, 0, 0, 0.14)) 84%, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 16%)) 100%);
+    }
+
+    #${cardId} .stx-ui-diagnostics-status.is-danger {
+      border-color: color-mix(in srgb, #ff6b6b 38%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, #ff6b6b 10%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-status.is-warning {
+      border-color: color-mix(in srgb, #ffbf66 38%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, #ffbf66 10%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-status.is-healthy {
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 38%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-status-head,
+    #${cardId} .stx-ui-diagnostics-terminal-head,
+    #${cardId} .stx-ui-diagnostics-issue-board {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-diagnostics-status-title,
+    #${cardId} .stx-ui-diagnostics-issue-summary-value,
+    #${cardId} .stx-ui-diagnostics-terminal-head strong {
+      font-size: 16px;
+      line-height: 1.3;
+      color: var(--stx-diag-text-strong, color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent));
+    }
+
+    #${cardId} .stx-ui-diagnostics-status-copy,
+    #${cardId} .stx-ui-diagnostics-terminal-copy {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.65;
+      color: var(--stx-diag-text-soft, color-mix(in srgb, var(--ss-theme-text, #fff) 78%, transparent));
+    }
+
+    #${cardId} .stx-ui-diagnostics-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 11px;
+      border-radius: 14px;
+      border: 1px solid var(--stx-diag-tag-border, color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 82%, var(--ss-theme-accent, #c5a059) 18%));
+      background: var(--stx-diag-tag-bg, color-mix(in srgb, var(--ss-theme-surface-1, rgba(0, 0, 0, 0.14)) 84%, black 16%));
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric.is-danger {
+      border-color: color-mix(in srgb, #ff6b6b 34%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric.is-warning {
+      border-color: color-mix(in srgb, #ffbf66 34%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric.is-healthy {
+      border-color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 34%, transparent);
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric.is-muted {
+      opacity: 0.82;
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric-label {
+      font-size: 11px;
+      line-height: 1.3;
+      color: var(--stx-diag-text-mute, color-mix(in srgb, var(--ss-theme-text, #fff) 68%, transparent));
+    }
+
+    #${cardId} .stx-ui-diagnostics-metric-value {
+      font-size: 22px;
+      line-height: 1;
+      color: var(--stx-diag-text-strong, color-mix(in srgb, var(--ss-theme-text, #fff) 96%, transparent));
+      font-family: "Fira Code", "Cascadia Code", Consolas, monospace;
+    }
+
+    #${cardId} .stx-ui-diagnostics-actions-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-diagnostics-actions-row {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
+    #${cardId} .stx-ui-diagnostics-issue-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    #${cardId} .stx-ui-diagnostics-issue-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1.2;
+      border: 1px solid var(--stx-diag-tag-border, color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.14)) 82%, var(--ss-theme-accent, #c5a059) 18%));
+      background: var(--stx-diag-tag-bg, color-mix(in srgb, var(--ss-theme-surface-1, rgba(0, 0, 0, 0.14)) 84%, black 16%));
+      color: color-mix(in srgb, var(--ss-theme-text, #fff) 84%, transparent);
+      font-family: "Fira Code", "Cascadia Code", Consolas, monospace;
+    }
+
+    #${cardId} .stx-ui-diagnostics-issue-tag.is-danger {
+      border-color: color-mix(in srgb, #ff6b6b 34%, transparent);
+      color: color-mix(in srgb, #ff6b6b 86%, white 14%);
+    }
+
+    #${cardId} .stx-ui-diagnostics-issue-tag.is-warning {
+      border-color: color-mix(in srgb, #ffbf66 34%, transparent);
+      color: color-mix(in srgb, #ffbf66 88%, white 12%);
+    }
+
+    #${cardId} .stx-ui-diagnostics-issue-tag.is-muted {
+      color: var(--stx-diag-text-mute, color-mix(in srgb, var(--ss-theme-text, #fff) 68%, transparent));
     }
 
     #${cardId} .stx-ui-summary-callout {
@@ -996,9 +1273,42 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: none !important;
     }
 
+    @keyframes stx-diagnostics-pulse {
+      0%,
+      100% {
+        opacity: 0.72;
+        transform: scaleX(0.92);
+      }
+
+      50% {
+        opacity: 1;
+        transform: scaleX(1);
+      }
+    }
+
     @media (max-width: 760px) {
+      #${cardId} .stx-ui-diagnostics-hero {
+        flex-direction: column;
+      }
+
+      #${cardId} .stx-ui-diagnostics-grid,
       #${cardId} .stx-ui-fact-field {
         grid-template-columns: minmax(0, 1fr);
+      }
+
+      #${cardId} .stx-ui-diagnostics-hero-signal {
+        min-width: 0;
+      }
+
+      #${cardId} .stx-ui-diagnostics-metrics,
+      #${cardId} .stx-ui-summary-tile-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #${cardId} .stx-ui-diagnostics-hero-signal span {
+        animation: none;
       }
     }
 

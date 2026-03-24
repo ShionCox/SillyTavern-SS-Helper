@@ -4,7 +4,7 @@ import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { logger, toast } from '../index';
-import { openRecordEditor } from './recordEditor';
+import { openRecordEditor } from './recordEditorNext';
 import { hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
@@ -12,16 +12,10 @@ import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } fro
 import { renderSettingsExperience } from './settingsCardExperience';
 import { showSnapshotSourceDetails } from './candidateSourceDialogs';
 import { createEditorActionExecutor } from './editorActions';
-import { bindOverviewTab } from './settingsTabs/overviewTab';
-import { bindRolesAndLocationsTab } from './settingsTabs/rolesAndLocationsTab';
-import { bindRelationsStructureTab } from './settingsTabs/relationsStructureTab';
-import { bindDiagnosticsTab } from './settingsTabs/diagnosticsTab';
 import { bindRuntimeControlTab } from './settingsTabs/runtimeControlTab';
 import { bindMemoryStrategyTab } from './settingsTabs/memoryStrategyTab';
 import { bindDataMaintenanceTab } from './settingsTabs/dataMaintenanceTab';
 import { bindAboutDiagnosticsTab } from './settingsTabs/aboutDiagnosticsTab';
-
-type UiMode = 'basic' | 'advanced';
 
 interface SettingsTabEntry {
     tabId: string;
@@ -79,17 +73,13 @@ const IDS: MemoryOSSettingsIds = {
         : 'GitHub',
     githubUrl: (manifestJson as { homePage?: string }).homePage || '#',
     searchId: `${NAMESPACE}-search`,
-    modeBasicId: `${NAMESPACE}-mode-basic`,
-    modeAdvancedId: `${NAMESPACE}-mode-advanced`,
     experienceRefreshBtnId: `${NAMESPACE}-experience-refresh`,
     experienceRecordEditorBtnId: `${NAMESPACE}-experience-record-editor`,
     experienceSnapshotBtnId: `${NAMESPACE}-experience-snapshot`,
-    experienceAdvancedBtnId: `${NAMESPACE}-experience-advanced`,
     tabRoleId: `${NAMESPACE}-tab-role`,
     tabRecentId: `${NAMESPACE}-tab-recent`,
     tabRelationId: `${NAMESPACE}-tab-relation`,
     tabInjectionId: `${NAMESPACE}-tab-injection`,
-    tabAdvancedToolsId: `${NAMESPACE}-tab-advanced-tools`,
     tabMainId: `${NAMESPACE}-tab-main`,
     tabAiId: `${NAMESPACE}-tab-ai`,
     tabDbId: `${NAMESPACE}-tab-db`,
@@ -167,8 +157,6 @@ const IDS: MemoryOSSettingsIds = {
     recordFilterPreviewInputId: `${NAMESPACE}-record-filter-preview-input`,
     recordFilterPreviewBtnId: `${NAMESPACE}-record-filter-preview-btn`,
     recordFilterPreviewOutputId: `${NAMESPACE}-record-filter-preview-output`,
-    testPingBtnId: `${NAMESPACE}-test-ping-btn`,
-    testHelloBtnId: `${NAMESPACE}-test-hello-btn`,
     dbCompactBtnId: `${NAMESPACE}-db-compact-btn`,
     dbExportBtnId: `${NAMESPACE}-db-export-btn`,
     dbImportBtnId: `${NAMESPACE}-db-import-btn`,
@@ -188,11 +176,6 @@ const IDS: MemoryOSSettingsIds = {
     aiDiagRecentTasksId: `${NAMESPACE}-ai-diag-recent-tasks`,
     aiDiagRefreshBtnId: `${NAMESPACE}-ai-diag-refresh`,
     aiRoutePreviewId: `${NAMESPACE}-ai-route-preview`,
-    aiSelfTestSelectId: `${NAMESPACE}-ai-self-test-select`,
-    aiSelfTestRunBtnId: `${NAMESPACE}-ai-self-test-run`,
-    aiSelfTestAllBtnId: `${NAMESPACE}-ai-self-test-all`,
-    aiSelfTestResultsId: `${NAMESPACE}-ai-self-test-results`,
-    aiSelfTestDetailId: `${NAMESPACE}-ai-self-test-detail`,
 };
 
 /**
@@ -346,7 +329,6 @@ export async function renderSettingsUi(): Promise<void> {
         }
 
         cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
-        cardWrapper.dataset.stxUiMode = 'basic';
         hydrateSharedSelects(cardWrapper);
         refreshSharedSelectOptions(cardWrapper);
         unmountThemeHost(cardWrapper);
@@ -375,21 +357,15 @@ function bindUiEvents(): void {
     const drawerToggle = document.getElementById(IDS.drawerToggleId) as HTMLElement | null;
     const drawerContent = document.getElementById(IDS.drawerContentId) as HTMLElement | null;
     const drawerIcon = document.getElementById(IDS.drawerIconId) as HTMLElement | null;
-    const modeBasicButton = document.getElementById(IDS.modeBasicId) as HTMLButtonElement | null;
-    const modeAdvancedButton = document.getElementById(IDS.modeAdvancedId) as HTMLButtonElement | null;
-    const advancedPanel = document.getElementById(IDS.panelAdvancedToolsId) as HTMLElement | null;
     const searchInput = document.getElementById(IDS.searchId) as HTMLInputElement | null;
 
-    if (!cardRoot || !drawerToggle || !drawerContent || !drawerIcon || !modeBasicButton || !modeAdvancedButton || !advancedPanel) {
+    if (!cardRoot || !drawerToggle || !drawerContent || !drawerIcon) {
         return;
     }
     const cardRootEl = cardRoot;
     const drawerToggleEl = drawerToggle;
     const drawerContentEl = drawerContent;
     const drawerIconEl = drawerIcon;
-    const modeBasicButtonEl = modeBasicButton;
-    const modeAdvancedButtonEl = modeAdvancedButton;
-    const advancedPanelEl = advancedPanel;
 
     const basicTabs: SettingsTabEntry[] = [
         { tabId: IDS.tabRoleId, panelId: IDS.panelRoleId },
@@ -446,16 +422,15 @@ function bindUiEvents(): void {
      * @param entries 页签集合。
      * @param activeTabId 当前激活的按钮 ID。
      * @param activePanelId 当前激活的面板 ID。
-     * @param shouldShow 面板是否允许显示。
      * @returns 无返回值。
      */
-    function applyTabState(entries: SettingsTabEntry[], activeTabId: string, activePanelId: string, shouldShow: boolean): void {
+    function applyTabState(entries: SettingsTabEntry[], activeTabId: string, activePanelId: string): void {
         entries.forEach((entry: SettingsTabEntry): void => {
             const tabButton = document.getElementById(entry.tabId);
             const panel = document.getElementById(entry.panelId) as HTMLElement | null;
             tabButton?.classList.toggle('is-active', entry.tabId === activeTabId);
             if (panel) {
-                panel.hidden = !(shouldShow && entry.panelId === activePanelId);
+                panel.hidden = entry.panelId !== activePanelId;
             }
         });
     }
@@ -468,7 +443,7 @@ function bindUiEvents(): void {
      */
     function activateBasicTab(tabId: string, panelId: string): void {
         activeBasicPanelId = panelId;
-        applyTabState(basicTabs, tabId, panelId, cardRootEl.dataset.stxUiMode !== 'advanced');
+        applyTabState(basicTabs, tabId, panelId);
     }
 
     /**
@@ -479,30 +454,15 @@ function bindUiEvents(): void {
      */
     function activateAdvancedTab(tabId: string, panelId: string): void {
         activeAdvancedPanelId = panelId;
-        applyTabState(advancedTabs, tabId, panelId, cardRootEl.dataset.stxUiMode === 'advanced');
+        applyTabState(advancedTabs, tabId, panelId);
     }
 
     /**
-     * 功能：应用页面模式。
-     * @param mode 目标模式。
-     * @returns 无返回值。
-     */
-    function applyUiMode(mode: UiMode): void {
-        cardRootEl.dataset.stxUiMode = mode;
-        modeBasicButtonEl.classList.toggle('is-active', mode === 'basic');
-        modeAdvancedButtonEl.classList.toggle('is-active', mode === 'advanced');
-        advancedPanelEl.hidden = mode !== 'advanced';
-        applyTabState(basicTabs, basicTabs.find((entry: SettingsTabEntry): boolean => entry.panelId === activeBasicPanelId)?.tabId || IDS.tabRoleId, activeBasicPanelId, mode === 'basic');
-        applyTabState(advancedTabs, advancedTabs.find((entry: SettingsTabEntry): boolean => entry.panelId === activeAdvancedPanelId)?.tabId || IDS.tabMainId, activeAdvancedPanelId, mode === 'advanced');
-    }
-
-    /**
-     * 功能：打开诊断页签。
+     * 功能：打开记录编辑器中的系统诊断页。
      * @returns 无返回值。
      */
     function openDiagnostics(): void {
-        applyUiMode('basic');
-        activateBasicTab(IDS.tabInjectionId, IDS.panelInjectionId);
+        void openRecordEditor({ initialView: 'diagnostics' });
     }
 
     const executeEditorAction = createEditorActionExecutor({
@@ -534,24 +494,14 @@ function bindUiEvents(): void {
 
     basicTabs.forEach((entry: SettingsTabEntry): void => {
         document.getElementById(entry.tabId)?.addEventListener('click', (): void => {
-            applyUiMode('basic');
             activateBasicTab(entry.tabId, entry.panelId);
         });
     });
 
     advancedTabs.forEach((entry: SettingsTabEntry): void => {
         document.getElementById(entry.tabId)?.addEventListener('click', (): void => {
-            applyUiMode('advanced');
             activateAdvancedTab(entry.tabId, entry.panelId);
         });
-    });
-
-    modeBasicButtonEl.addEventListener('click', (): void => {
-        applyUiMode('basic');
-    });
-
-    modeAdvancedButtonEl.addEventListener('click', (): void => {
-        applyUiMode('advanced');
     });
 
     document.getElementById(IDS.experienceRefreshBtnId)?.addEventListener('click', (): void => {
@@ -564,11 +514,6 @@ function bindUiEvents(): void {
 
     document.getElementById(IDS.experienceSnapshotBtnId)?.addEventListener('click', (): void => {
         void executeEditorAction('rebuild-chat-view');
-    });
-
-    document.getElementById(IDS.experienceAdvancedBtnId)?.addEventListener('click', (): void => {
-        applyUiMode('advanced');
-        activateAdvancedTab(IDS.tabMainId, IDS.panelMainId);
     });
 
     cardRootEl.addEventListener('click', (event: Event): void => {
@@ -616,10 +561,6 @@ function bindUiEvents(): void {
         }
     });
 
-    bindOverviewTab();
-    bindRolesAndLocationsTab();
-    bindRelationsStructureTab();
-    bindDiagnosticsTab();
     bindRuntimeControlTab({ ids: IDS });
     bindMemoryStrategyTab({ ids: IDS, refreshExperiencePanels });
     const { syncSearchState } = bindDataMaintenanceTab({ ids: IDS, cardId: IDS.cardId });
@@ -637,7 +578,6 @@ function bindUiEvents(): void {
         });
     }
 
-    applyUiMode('basic');
     activateBasicTab(IDS.tabRoleId, IDS.panelRoleId);
     activateAdvancedTab(IDS.tabMainId, IDS.panelMainId);
     drawerContentEl.style.display = 'none';

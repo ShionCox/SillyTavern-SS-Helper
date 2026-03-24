@@ -46,6 +46,193 @@ function normalizeCompareText(value: unknown): string {
     return normalizeText(value).toLowerCase();
 }
 
+const MEMORY_TYPE_VALUES: ReadonlyArray<NonNullable<MemoryCardDraft['memoryType']>> = [
+    'identity',
+    'event',
+    'relationship',
+    'world',
+    'status',
+    'dialogue',
+    'other',
+];
+
+const MEMORY_SUBTYPE_VALUES: ReadonlyArray<NonNullable<MemoryCardDraft['memorySubtype']>> = [
+    'identity',
+    'trait',
+    'preference',
+    'bond',
+    'emotion_imprint',
+    'goal',
+    'promise',
+    'secret',
+    'rumor',
+    'major_plot_event',
+    'minor_event',
+    'combat_event',
+    'travel_event',
+    'dialogue_quote',
+    'global_rule',
+    'city_rule',
+    'location_fact',
+    'item_rule',
+    'faction_rule',
+    'world_history',
+    'current_scene',
+    'current_conflict',
+    'temporary_status',
+    'other',
+];
+
+/**
+ * 功能：把输入值收敛为合法的记忆类型。
+ * @param value 原始值。
+ * @returns 合法记忆类型；无法识别时返回 null。
+ */
+function normalizeMemoryType(value: unknown): MemoryCardDraft['memoryType'] {
+    const normalized = normalizeCompareText(value);
+    return MEMORY_TYPE_VALUES.includes(normalized as NonNullable<MemoryCardDraft['memoryType']>)
+        ? (normalized as NonNullable<MemoryCardDraft['memoryType']>)
+        : null;
+}
+
+/**
+ * 功能：把输入值收敛为合法的记忆子类型。
+ * @param value 原始值。
+ * @returns 合法记忆子类型；无法识别时返回 null。
+ */
+function normalizeMemorySubtype(value: unknown): MemoryCardDraft['memorySubtype'] {
+    const normalized = normalizeCompareText(value);
+    return MEMORY_SUBTYPE_VALUES.includes(normalized as NonNullable<MemoryCardDraft['memorySubtype']>)
+        ? (normalized as NonNullable<MemoryCardDraft['memorySubtype']>)
+        : null;
+}
+
+/**
+ * 功能：把任意输入转换为去重文本数组。
+ * @param value 原始输入。
+ * @returns 去重后的文本数组。
+ */
+function normalizeTextList(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return Array.from(new Set(value.map((item: unknown): string => normalizeText(item)).filter(Boolean)));
+    }
+    const text = normalizeText(value);
+    return text ? [text] : [];
+}
+
+/**
+ * 功能：从总结正文中提取关键引号原句。
+ * @param content 总结正文。
+ * @returns 引号文本数组。
+ */
+function extractQuotedTexts(content: string): string[] {
+    const result: string[] = [];
+    const normalized = normalizeText(content);
+    if (!normalized) {
+        return result;
+    }
+    const pattern = /[“"「『]([^”"」』]{4,220})[”"」』]/g;
+    let matched: RegExpExecArray | null = pattern.exec(normalized);
+    while (matched) {
+        const quote = normalizeText(matched[1]);
+        if (quote) {
+            result.push(quote);
+        }
+        matched = pattern.exec(normalized);
+    }
+    return Array.from(new Set(result));
+}
+
+/**
+ * 功能：基于总结文本生成对话原句记忆卡草稿。
+ * @param summary 总结记录。
+ * @param envelope 已有记忆封装。
+ * @returns 对话原句草稿列表。
+ */
+function buildDialogueQuoteDraftsFromSummary(summary: DBSummary, envelope: MemorySummaryEnvelope): MemoryCardDraft[] {
+    const content = normalizeText(summary.content);
+    if (!content) {
+        return [];
+    }
+    const ownerActorKey = normalizeText(summary.ownerActorKey);
+    if (!ownerActorKey) {
+        return [];
+    }
+    const sourceMessageIds = normalizeTextList([
+        summary.range?.toMessageId,
+        summary.range?.fromMessageId,
+    ]);
+    const sourceMessageId = sourceMessageIds[0] || normalizeText(summary.summaryId);
+    const quotes = extractQuotedTexts(content);
+    if (quotes.length <= 0) {
+        return [];
+    }
+    const existingSignatures = new Set<string>();
+    (Array.isArray(envelope.memoryCards) ? envelope.memoryCards : []).forEach((card: MemoryCardDraft): void => {
+        const isDialogue = normalizeCompareText(card.memorySubtype) === 'dialogue_quote'
+            || normalizeCompareText(card.memoryType) === 'dialogue'
+            || normalizeTextList(card.keywords).some((item: string): boolean => normalizeCompareText(item) === 'dialogue_quote');
+        if (!isDialogue) {
+            return;
+        }
+        const signature = [
+            normalizeCompareText(card.sourceMessageIds?.[0] || sourceMessageId),
+            normalizeCompareText(card.speakerActorKey || card.speakerLabel),
+            normalizeCompareText(card.memoryText),
+        ].join('::');
+        existingSignatures.add(signature);
+    });
+    const speakerPattern = /([^\s，。；：:]{1,20})(?:说|提到|表示|强调|提醒|回应|低声说|喊道)/g;
+    const speakers = Array.from(content.matchAll(speakerPattern)).map((item: RegExpMatchArray): string => normalizeText(item[1])).filter(Boolean);
+    const fallbackSpeaker = speakers[0] || '';
+    const reasonPattern = /因为([^。！？!?]{4,80})/;
+    const reasonMatched = content.match(reasonPattern);
+    const reason = normalizeText(reasonMatched?.[1]) || '影响后续行动或关系判断';
+    const drafts: MemoryCardDraft[] = [];
+    quotes.forEach((quote: string, index: number): void => {
+        const nearSpeaker = speakers[index] || fallbackSpeaker;
+        const speakerLabel = nearSpeaker || '未知说话者';
+        const signature = [
+            normalizeCompareText(sourceMessageId),
+            normalizeCompareText(nearSpeaker),
+            normalizeCompareText(quote),
+        ].join('::');
+        if (existingSignatures.has(signature)) {
+            return;
+        }
+        existingSignatures.add(signature);
+        drafts.push({
+            scope: 'character',
+            lane: 'event',
+            subject: ownerActorKey,
+            title: quote.length > 18 ? `${quote.slice(0, 18)}…` : quote,
+            memoryText: quote,
+            evidenceText: `${speakerLabel}：${quote}`,
+            entityKeys: [ownerActorKey, nearSpeaker].map((item: string): string => normalizeText(item)).filter(Boolean),
+            keywords: ['dialogue_quote', '对话', '原句', ownerActorKey, speakerLabel].map((item: string): string => normalizeText(item)).filter(Boolean),
+            importance: Math.max(0.68, Math.min(0.93, Number(summary.importance ?? summary.salience ?? summary.encodeScore ?? 0.78) || 0.78)),
+            confidence: Math.max(0.74, Math.min(0.96, Number(summary.encodeScore ?? 0.82) || 0.82)),
+            ttl: 'medium',
+            replaceKey: `dialogue_quote:${sourceMessageId}:${normalizeCompareText(nearSpeaker)}:${hashText(quote)}`,
+            sourceRefs: [summary.summaryId].filter(Boolean),
+            sourceRecordKey: summary.summaryId,
+            sourceRecordKind: 'summary',
+            ownerActorKey,
+            memoryType: 'dialogue',
+            memorySubtype: 'dialogue_quote',
+            sourceMessageIds,
+            speakerActorKey: nearSpeaker || null,
+            speakerLabel: speakerLabel || null,
+            rememberedByActorKey: ownerActorKey,
+            rememberReason: reason,
+            participantActorKeys: [ownerActorKey, nearSpeaker].map((item: string): string => normalizeText(item)).filter(Boolean),
+            validFrom: Number(summary.createdAt ?? 0) || Date.now(),
+            validTo: undefined,
+        });
+    });
+    return drafts;
+}
+
 /**
  * 功能：判断记忆正文是否足够自然，适合进入长期记忆。
  * @param memoryText 记忆正文。
@@ -121,6 +308,13 @@ function normalizeDraft(
         sourceRecordKey: normalizeText(draft.sourceRecordKey) || fallbackSourceRecordKey,
         sourceRecordKind: (normalizeText(draft.sourceRecordKind) as DBMemoryCard['sourceRecordKind']) || fallbackSourceRecordKind,
         ownerActorKey: normalizeText(draft.ownerActorKey) || null,
+        memoryType: normalizeMemoryType(draft.memoryType),
+        memorySubtype: normalizeMemorySubtype(draft.memorySubtype),
+        sourceMessageIds: normalizeTextList(draft.sourceMessageIds),
+        speakerActorKey: normalizeText(draft.speakerActorKey) || null,
+        speakerLabel: normalizeText(draft.speakerLabel) || null,
+        rememberedByActorKey: normalizeText(draft.rememberedByActorKey) || null,
+        rememberReason: normalizeText(draft.rememberReason) || null,
         participantActorKeys: Array.from(new Set((draft.participantActorKeys ?? []).map((item: string): string => normalizeText(item)).filter(Boolean))),
         confidence: Math.max(0, Math.min(1, Number(draft.confidence ?? 0) || 0)),
         importance: Math.max(0, Math.min(1, Number(draft.importance ?? 0) || 0)),
@@ -139,7 +333,7 @@ function normalizeDraft(
         entityKeys: normalizedDraft.entityKeys,
         keywords: normalizedDraft.keywords,
         importance: normalizedDraft.importance,
-        confidence: normalizedDraft.confidence,
+        confidence: normalizedDraft.confidence ?? 0,
         ttl: normalizedDraft.ttl,
         replaceKey: normalizedDraft.lane === 'state'
             ? (normalizedDraft.replaceKey || `${normalizedDraft.subject}:${normalizedDraft.lane}`)
@@ -148,6 +342,13 @@ function normalizeDraft(
         sourceRecordKey: normalizedDraft.sourceRecordKey,
         sourceRecordKind: normalizedDraft.sourceRecordKind as DBMemoryCard['sourceRecordKind'],
         ownerActorKey: normalizedDraft.ownerActorKey,
+        memoryType: normalizedDraft.memoryType || null,
+        memorySubtype: normalizedDraft.memorySubtype || null,
+        sourceMessageIds: normalizedDraft.sourceMessageIds ?? [],
+        speakerActorKey: normalizedDraft.speakerActorKey || null,
+        speakerLabel: normalizedDraft.speakerLabel || null,
+        rememberedByActorKey: normalizedDraft.rememberedByActorKey || null,
+        rememberReason: normalizedDraft.rememberReason || null,
         participantActorKeys: normalizedDraft.participantActorKeys,
         validFrom: normalizedDraft.validFrom,
         validTo: normalizedDraft.validTo,
@@ -223,6 +424,13 @@ function toSdkCard(card: DBMemoryCard): MemoryCard {
         sourceRecordKey: card.sourceRecordKey,
         sourceRecordKind: card.sourceRecordKind,
         ownerActorKey: card.ownerActorKey ?? null,
+        memoryType: normalizeMemoryType(card.memoryType),
+        memorySubtype: normalizeMemorySubtype(card.memorySubtype),
+        sourceMessageIds: normalizeTextList(card.sourceMessageIds),
+        speakerActorKey: card.speakerActorKey ?? null,
+        speakerLabel: card.speakerLabel ?? null,
+        rememberedByActorKey: card.rememberedByActorKey ?? null,
+        rememberReason: card.rememberReason ?? null,
         participantActorKeys: card.participantActorKeys,
         validFrom: card.validFrom,
         validTo: card.validTo,
@@ -518,9 +726,14 @@ export async function saveMemoryCardsFromSummaryEnvelope(
     envelope?: MemorySummaryEnvelope | null,
 ): Promise<MemoryCard[]> {
     const normalizedEnvelope = envelope ?? buildMemorySummaryEnvelope(summary);
+    const dialogueDrafts = buildDialogueQuoteDraftsFromSummary(summary, normalizedEnvelope);
+    const mergedEnvelope: MemorySummaryEnvelope = {
+        ...normalizedEnvelope,
+        memoryCards: [...(normalizedEnvelope.memoryCards ?? []), ...dialogueDrafts],
+    };
     const result = await persistMemoryCards(
         chatKey,
-        normalizedEnvelope.memoryCards,
+        mergedEnvelope.memoryCards,
         summary.summaryId,
         'summary',
     );

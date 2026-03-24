@@ -4,35 +4,12 @@ import { buildSharedSelectField, hydrateSharedSelects } from '../../../../../_Co
 import type { MemorySDKImpl } from '../../../sdk/memory-sdk';
 import type {
     EditorExperienceSnapshot,
-    MemoryLifecycleState,
-    OwnedMemoryState,
-    PersonaMemoryProfile,
+    MemoryCardSummary,
+    RoleProfile,
 } from '../../../../../SDK/stx';
 import type { RecordEditorViewMeta } from '../types';
 
-interface MemoryPageRecallLogEntry {
-    recordKey: string;
-    loggedAt?: number | null;
-}
-
-interface MemoryPageActorFilter {
-    key: string;
-    label: string;
-}
-
-interface MemoryPageCardOptions {
-    icon: string;
-    eyebrow: string;
-    value: string;
-    detail?: string;
-    meta?: string;
-    tone?: 'gold' | 'azure' | 'crimson' | 'slate';
-}
-
-interface MemoryPagePersonaCardOptions {
-    active?: boolean;
-    extraActionsHtml?: string;
-}
+type RoleMemoryCategory = 'all' | 'dialogue' | 'event' | 'relationship' | 'identity' | 'world' | 'status' | 'other';
 
 interface MemoryPageRenderHelpers {
     escapeHtml(text: string): string;
@@ -40,30 +17,7 @@ interface MemoryPageRenderHelpers {
     formatTimeLabel(value: number): string;
     formatActorKeyLabel(actorKey: string): string;
     formatMemorySubtypeLabel(memorySubtype: string): string;
-    resolveActorDisplayLabel(actorKey: string, actorLabel: string): string;
-    buildMemoryRecordHeadline(
-        recordKey: string,
-        lifecycle: MemoryLifecycleState | undefined,
-        owned: OwnedMemoryState,
-    ): string;
-    parseImportanceInput(input: string, fallback: number): number | null;
-    renderMemoryDashboardCardMarkup(options: MemoryPageCardOptions): string;
-    buildRecallSummaryCardsMarkup(experience: EditorExperienceSnapshot): string;
-    buildSuppressedRecallListMarkup(experience: EditorExperienceSnapshot): string;
-    renderPersonaProfileCardMarkup(
-        actorKey: string,
-        actorLabel: string,
-        profile: PersonaMemoryProfile,
-        options?: MemoryPagePersonaCardOptions,
-    ): string;
-    renderMemoryRecordCardMarkup(
-        owned: OwnedMemoryState,
-        lifecycle: MemoryLifecycleState | undefined,
-        recall: { count: number; lastAt: number } | undefined,
-        actorLabelMap: Map<string, string>,
-        activeActorKey: string | null,
-        eventTitleMap: Map<string, string>,
-    ): string;
+    [key: string]: unknown;
 }
 
 interface MemoryPageRenderOptions {
@@ -76,65 +30,222 @@ interface MemoryPageRenderOptions {
     rerender(): Promise<void>;
     showSuccess(message: string): void;
     showError(message: string): void;
-    memorySubtypeOptions: string[];
     experience: EditorExperienceSnapshot;
-    ownedStates: OwnedMemoryState[];
-    lifecycleList: MemoryLifecycleState[];
-    recallLog: MemoryPageRecallLogEntry[];
-    personaProfiles: Record<string, PersonaMemoryProfile>;
+    roleProfiles: Record<string, RoleProfile>;
+    memoryCards: MemoryCardSummary[];
     activeActorKey: string | null;
     helpers: MemoryPageRenderHelpers;
 }
 
 /**
- * 功能：提供角色记忆页的展示元数据。
+ * 功能：收集当前聊天里真实出现过的角色键，仅用于角色中心左侧名册过滤。
+ * @param experience 记录编辑器体验快照。
+ * @param memoryCards 当前记忆卡列表。
+ * @param profiles 当前角色资料映射。
+ * @returns 当前聊天中实际出现过的角色键集合。
+ */
+function collectAppearedActorKeys(
+    experience: EditorExperienceSnapshot,
+    memoryCards: MemoryCardSummary[],
+    profiles: Record<string, RoleProfile>,
+): Set<string> {
+    const appearedActorKeys = new Set<string>();
+    const addActorKey = (value: unknown): void => {
+        const actorKey = normalizeActorKey(value);
+        if (!actorKey || isVirtualActorKey(actorKey) || !profiles[actorKey]) {
+            return;
+        }
+        appearedActorKeys.add(actorKey);
+    };
+
+    addActorKey(experience.activeActorKey);
+    memoryCards.forEach((card: MemoryCardSummary): void => addActorKey(card.ownerActorKey));
+    (experience.groupMemory?.lanes ?? []).forEach((lane): void => addActorKey(lane.actorKey));
+    (experience.groupMemory?.actorSalience ?? []).forEach((item): void => addActorKey(item.actorKey));
+    (experience.groupMemory?.sharedScene?.participantActorKeys ?? []).forEach((actorKey: string): void => addActorKey(actorKey));
+    (experience.canon?.characters ?? []).forEach((character): void => addActorKey(character.actorKey));
+
+    return appearedActorKeys;
+}
+
+let currentRoleMemoryCategory: RoleMemoryCategory = 'all';
+
+/**
+ * 功能：角色中心页面元数据。
  */
 export const MEMORY_PAGE_META: RecordEditorViewMeta = {
-    label: '角色记忆',
-    icon: 'fa-solid fa-user-helmet-safety',
-    title: '角色记忆面板',
-    subtitle: '用 RPG 角色卡方式查看记忆、遗忘、重大事件影响和角色画像。',
-    tip: '查看每个角色的记忆状态、遗忘阶段、主视角与重大事件影响。',
+    label: '角色中心',
+    icon: 'fa-solid fa-id-card-clip',
+    title: '角色中心',
+    subtitle: '按角色查看资料、关系、物品装备与角色记忆卡。',
+    tip: '只展示真实角色；空区块不渲染。',
 };
 
 /**
- * 功能：判断角色记忆条目是否命中当前检索词。
- * @param owned 角色记忆状态。
- * @param actorLabelMap 角色标签映射。
- * @param lifecycle 生命周期信息。
- * @param query 当前检索词。
- * @param helpers 页面渲染工具。
+ * 功能：归一化文本。
+ * @param value 原始值。
+ * @returns 清洗后的文本。
+ */
+function normalizeText(value: unknown): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 功能：归一化查找键。
+ * @param value 原始值。
+ * @returns 小写查找键。
+ */
+function normalizeLookup(value: unknown): string {
+    return normalizeText(value).toLowerCase();
+}
+
+/**
+ * 功能：归一化角色键，去掉常见内部噪音段。
+ * @param value 原始角色键。
+ * @returns 清洗后的角色键。
+ */
+function normalizeActorKey(value: unknown): string {
+    let actorKey = normalizeText(value);
+    if (!actorKey) {
+        return '';
+    }
+    actorKey = actorKey.replace(/\s+[·•]\s+(proposal_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
+    if (/^(character|assistant|role|name):/i.test(actorKey)) {
+        actorKey = actorKey.split(':').slice(1).join(':').trim();
+    }
+    actorKey = actorKey.replace(/(?:^|[\\/:])proposal_summary:[\w-]+$/i, '').trim();
+    actorKey = actorKey.replace(/[\s._:-]+$/g, '').trim();
+    return actorKey;
+}
+
+/**
+ * 功能：判断是否是虚拟角色键。
+ * @param actorKey 角色键。
+ * @returns 是否应忽略。
+ */
+function isVirtualActorKey(actorKey: string): boolean {
+    const normalized = normalizeLookup(actorKey);
+    if (!normalized) {
+        return true;
+    }
+    if (normalized.startsWith('__')) {
+        return true;
+    }
+    return ['world', 'system', 'unowned', 'unknown', 'none', 'global', 'scene'].includes(normalized)
+        || /^(world|system|global)[:/]/.test(normalized)
+        || /proposal_summary/.test(normalized);
+}
+
+/**
+ * 功能：数组去重并清洗。
+ * @param values 文本数组。
+ * @returns 去重后的数组。
+ */
+function dedupeTexts(values: string[]): string[] {
+    return Array.from(new Set(values.map((item: string): string => normalizeText(item)).filter(Boolean)));
+}
+
+/**
+ * 功能：根据记忆卡推断分类。
+ * @param card 记忆卡。
+ * @returns 分类键。
+ */
+function resolveMemoryCategory(card: MemoryCardSummary): RoleMemoryCategory {
+    const memoryType = normalizeLookup(card.memoryType);
+    const memorySubtype = normalizeLookup(card.memorySubtype);
+    if (memorySubtype === 'dialogue_quote' || memoryType === 'dialogue') {
+        return 'dialogue';
+    }
+    if (memoryType === 'event') return 'event';
+    if (memoryType === 'relationship') return 'relationship';
+    if (memoryType === 'identity') return 'identity';
+    if (memoryType === 'world') return 'world';
+    if (memoryType === 'status') return 'status';
+    return 'other';
+}
+
+/**
+ * 功能：生成可读记忆标题，过滤内部键噪音。
+ * @param card 记忆卡。
+ * @param ownerLabel 归属角色名。
+ * @returns 标题文本。
+ */
+function buildReadableMemoryTitle(card: MemoryCardSummary, ownerLabel: string): string {
+    const stripOwnerPrefix = (text: string): string => {
+        const normalized = normalizeText(text);
+        if (!normalized || !ownerLabel) {
+            return normalized;
+        }
+        const ownerPrefixes = [
+            `${ownerLabel} · `,
+            `${ownerLabel}路`,
+            `${ownerLabel} - `,
+        ];
+        for (const prefix of ownerPrefixes) {
+            if (normalized.startsWith(prefix)) {
+                return normalizeText(normalized.slice(prefix.length));
+            }
+        }
+        return normalized;
+    };
+    const isNoisy = (text: string): boolean => {
+        const value = normalizeLookup(text);
+        if (!value) {
+            return true;
+        }
+        return /proposal_summary|recordkey|lifecycle|source_record|^h[0-9a-f]{6,}$|^_+$/.test(value)
+            || /[:]{2}/.test(value);
+    };
+    const candidates = [
+        stripOwnerPrefix(card.title),
+        stripOwnerPrefix(card.subject),
+    ];
+    for (const candidate of candidates) {
+        if (!candidate || isNoisy(candidate)) {
+            continue;
+        }
+        return candidate;
+    }
+    const memoryText = normalizeText(card.memoryText);
+    if (memoryText) {
+        return memoryText.length > 24 ? `${memoryText.slice(0, 24)}…` : memoryText;
+    }
+    return '关键记忆';
+}
+
+/**
+ * 功能：按查询词匹配记忆卡。
+ * @param card 记忆卡。
+ * @param query 查询词。
+ * @param title 可读标题。
+ * @param subtypeLabel 细分标签。
  * @returns 是否命中。
  */
-function matchesMemorySearch(
-    owned: OwnedMemoryState,
-    actorLabelMap: Map<string, string>,
-    lifecycle: MemoryLifecycleState | undefined,
-    query: string,
-    helpers: MemoryPageRenderHelpers,
-): boolean {
-    const normalizedQuery = String(query ?? '').trim().toLowerCase();
+function matchesMemoryQuery(card: MemoryCardSummary, query: string, title: string, subtypeLabel: string): boolean {
+    const normalizedQuery = normalizeLookup(query);
     if (!normalizedQuery) {
         return true;
     }
-    const ownerLabel = owned.ownerActorKey ? (actorLabelMap.get(owned.ownerActorKey) || owned.ownerActorKey) : '世界 未归属';
+    const extra = card as MemoryCardSummary & Record<string, unknown>;
+    const speakerLabel = normalizeText(extra.speakerLabel);
+    const reason = normalizeText(extra.rememberReason ?? card.sourceReason);
+    const sourceMessage = normalizeText(card.sourceMessageIds?.[0] ?? card.anchorMessageId);
     const haystack = [
-        owned.recordKey,
-        owned.memoryType,
-        owned.memorySubtype,
-        owned.sourceScope,
-        owned.recordKind,
-        ownerLabel,
-        helpers.buildMemoryRecordHeadline(owned.recordKey, lifecycle, owned),
-    ]
-        .map((item: unknown): string => String(item ?? '').trim().toLowerCase())
-        .join('\n');
+        title,
+        card.memoryText,
+        card.memorySubtype,
+        card.memoryType,
+        subtypeLabel,
+        speakerLabel,
+        reason,
+        sourceMessage,
+    ].map((item: unknown): string => normalizeLookup(item)).join('\n');
     return haystack.includes(normalizedQuery);
 }
 
 /**
- * 功能：渲染角色记忆页主体并绑定页面交互。
- * @param options 页面渲染所需的上下文与工具集合。
+ * 功能：渲染角色中心页面。
+ * @param options 渲染参数。
  * @returns 无返回值。
  */
 export async function renderMemoryPage(options: MemoryPageRenderOptions): Promise<void> {
@@ -144,434 +255,357 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
         rerender,
         showSuccess,
         showError,
-        memorySubtypeOptions,
         experience,
-        ownedStates,
-        lifecycleList,
-        recallLog,
-        personaProfiles,
+        roleProfiles,
+        memoryCards,
         activeActorKey,
         helpers,
     } = options;
 
-    const lifecycleMap = new Map<string, MemoryLifecycleState>(
-        lifecycleList.map((item: MemoryLifecycleState): [string, MemoryLifecycleState] => [item.recordKey, item]),
-    );
-    const recallStats = recallLog.reduce<Map<string, { count: number; lastAt: number }>>((map, entry) => {
-        const current = map.get(entry.recordKey) ?? { count: 0, lastAt: 0 };
-        current.count += 1;
-        current.lastAt = Math.max(current.lastAt, Number(entry.loggedAt ?? 0));
-        map.set(entry.recordKey, current);
-        return map;
-    }, new Map<string, { count: number; lastAt: number }>());
-
-    const actorLabelMap = new Map<string, string>();
-    experience.canon.characters.forEach((character): void => {
-        const actorKey = String(character.actorKey ?? '').trim();
-        if (!actorKey) {
-            return;
-        }
-        actorLabelMap.set(actorKey, helpers.resolveActorDisplayLabel(actorKey, String(character.displayName ?? actorKey).trim() || actorKey));
-    });
-
-    const seedActorKey = String(experience.semanticSeed?.identitySeed?.roleKey ?? '').trim();
-    const seedActorName = String(experience.semanticSeed?.identitySeed?.displayName ?? '').trim();
-    if (seedActorKey) {
-        actorLabelMap.set(seedActorKey, helpers.resolveActorDisplayLabel(seedActorKey, seedActorName || actorLabelMap.get(seedActorKey) || seedActorKey));
-    }
-
-    ownedStates.forEach((item: OwnedMemoryState): void => {
-        const ownerActorKey = String(item.ownerActorKey ?? '').trim();
-        if (ownerActorKey && !actorLabelMap.has(ownerActorKey)) {
-            actorLabelMap.set(ownerActorKey, helpers.formatActorKeyLabel(ownerActorKey));
-        }
-    });
-
-    Object.keys(personaProfiles ?? {}).forEach((actorKey: string): void => {
-        if (actorKey && !actorLabelMap.has(actorKey)) {
-            actorLabelMap.set(actorKey, helpers.formatActorKeyLabel(actorKey));
-        }
-    });
-
-    const actorFilters: MemoryPageActorFilter[] = [
-        { key: '__all__', label: '全部记忆' },
-        { key: '__world__', label: '世界 / 未归属' },
-        ...Array.from(actorLabelMap.entries()).map(([key, label]: [string, string]) => ({ key, label })),
-    ];
-
-    let currentMemoryActorKey = options.currentMemoryActorKey;
-    let currentMemorySearchQuery = String(options.currentMemorySearchQuery ?? '');
-    if (!actorFilters.some((item: MemoryPageActorFilter): boolean => item.key === currentMemoryActorKey)) {
-        currentMemoryActorKey = '__all__';
-        options.setCurrentMemoryActorKey(currentMemoryActorKey);
-    }
-
-    const actorMemoryCountMap = ownedStates.reduce<Map<string, number>>((map, item: OwnedMemoryState): Map<string, number> => {
-        const ownerActorKey = String(item.ownerActorKey ?? '').trim();
-        if (!ownerActorKey) {
-            return map;
-        }
-        map.set(ownerActorKey, (map.get(ownerActorKey) ?? 0) + 1);
-        return map;
-    }, new Map<string, number>());
-
-    const worldMemoryCount = ownedStates.filter((item: OwnedMemoryState): boolean => !item.ownerActorKey || item.sourceScope === 'world' || item.sourceScope === 'system').length;
-    const actorScopedOwned = ownedStates.filter((item: OwnedMemoryState): boolean => {
-        if (currentMemoryActorKey === '__all__') {
-            return true;
-        }
-        if (currentMemoryActorKey === '__world__') {
-            return !item.ownerActorKey || item.sourceScope === 'world' || item.sourceScope === 'system';
-        }
-        return item.ownerActorKey === currentMemoryActorKey;
-    });
-    const filteredOwned = actorScopedOwned.filter((item: OwnedMemoryState): boolean => {
-        return matchesMemorySearch(
-            item,
-            actorLabelMap,
-            lifecycleMap.get(item.recordKey),
-            currentMemorySearchQuery,
-            helpers,
-        );
-    });
-    const filteredLifecycles = filteredOwned
-        .map((item: OwnedMemoryState): MemoryLifecycleState | null => lifecycleMap.get(item.recordKey) ?? null)
-        .filter((item: MemoryLifecycleState | null): item is MemoryLifecycleState => Boolean(item));
-
-    const eventTitleMap = new Map<string, string>();
-    ownedStates.forEach((item: OwnedMemoryState): void => {
-        if (item.memorySubtype !== 'major_plot_event') {
-            return;
-        }
-        eventTitleMap.set(item.recordKey, helpers.buildMemoryRecordHeadline(item.recordKey, lifecycleMap.get(item.recordKey), item));
-    });
-
-    const stageCounts = {
-        clear: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'clear').length,
-        blur: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'blur').length,
-        distorted: filteredLifecycles.filter((item: MemoryLifecycleState): boolean => item.stage === 'distorted').length,
-        forgotten: filteredOwned.filter((item: OwnedMemoryState): boolean => item.forgotten === true).length,
-    };
-    const majorEventCount = filteredOwned.filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event').length;
-    const reinforcedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0).length;
-    const invalidatedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.invalidatedByEventIds?.length ?? 0) > 0).length;
-    const recentAffectedCount = filteredOwned.filter((item: OwnedMemoryState): boolean => (item.reinforcedByEventIds?.length ?? 0) > 0 || (item.invalidatedByEventIds?.length ?? 0) > 0).length;
-    const topSubtypeRates = Array.from(filteredOwned.reduce<Map<string, { total: number; forgotten: number }>>((map, item: OwnedMemoryState) => {
-        const key = item.memorySubtype || 'other';
-        const current = map.get(key) ?? { total: 0, forgotten: 0 };
-        current.total += 1;
-        if (item.forgotten) {
-            current.forgotten += 1;
-        }
-        map.set(key, current);
-        return map;
-    }, new Map<string, { total: number; forgotten: number }>()).entries())
-        .sort((left, right): number => right[1].forgotten - left[1].forgotten || right[1].total - left[1].total)
-        .slice(0, 6);
-
-    const sortedPersonaProfiles = Object.entries(personaProfiles ?? {})
-        .sort((left: [string, PersonaMemoryProfile], right: [string, PersonaMemoryProfile]): number => {
-            const leftLabel = actorLabelMap.get(left[0]) || left[0];
-            const rightLabel = actorLabelMap.get(right[0]) || right[0];
-            return leftLabel.localeCompare(rightLabel, 'zh-CN');
-        });
-    const actorScopedPersonaEntries = currentMemoryActorKey.startsWith('__')
-        ? sortedPersonaProfiles
-        : sortedPersonaProfiles.filter(([actorKey]: [string, PersonaMemoryProfile]): boolean => actorKey === currentMemoryActorKey);
-    const selectedPersonaEntries = actorScopedPersonaEntries.filter(([actorKey]: [string, PersonaMemoryProfile]): boolean => {
-        const query = String(currentMemorySearchQuery ?? '').trim().toLowerCase();
-        if (!query) {
-            return true;
-        }
-        const actorLabel = String(actorLabelMap.get(actorKey) || actorKey).toLowerCase();
-        return actorLabel.includes(query) || actorKey.toLowerCase().includes(query);
-    });
-
-    const personaPanelHtml = selectedPersonaEntries.length > 0
-        ? `<div class="stx-re-memory-persona-panel">${selectedPersonaEntries.map(([actorKey, profile]: [string, PersonaMemoryProfile]): string => {
-            const actorLabel = actorLabelMap.get(actorKey) || actorKey;
-            const extraActionsHtml = [
-                `<button class="stx-re-btn ${actorKey === activeActorKey ? 'save' : ''}" data-memory-persona-set-active="${helpers.escapeHtml(actorKey)}"${helpers.buildTipAttr(actorKey === activeActorKey ? '当前已经是主视角角色。' : '将这个角色设为当前主视角。')}>${actorKey === activeActorKey ? '当前主视角' : '设为主视角'}</button>`,
-                `<button class="stx-re-btn" data-memory-actor-focus="${helpers.escapeHtml(actorKey)}"${helpers.buildTipAttr('只显示这个角色的记忆与画像。')}>只看该角色</button>`,
-            ].join('');
-            return helpers.renderPersonaProfileCardMarkup(actorKey, actorLabel, profile, {
-                active: actorKey === activeActorKey,
-                extraActionsHtml,
-            });
-        }).join('')}</div>`
-        : '<div class="stx-re-empty">当前筛选下没有角色画像。</div>';
-
-    const activeActorLabel = activeActorKey ? (actorLabelMap.get(activeActorKey) || activeActorKey) : '自动 / 未指定';
-    const currentFilterLabel = actorFilters.find((item: MemoryPageActorFilter): boolean => item.key === currentMemoryActorKey)?.label || '全部记忆';
-    const searchSummaryLabel = currentMemorySearchQuery.trim()
-        ? `检索：${currentMemorySearchQuery.trim()}`
-        : '检索：未启用';
-
-    const searchInputMarkup = buildSharedInputField({
-        id: 'stx-re-memory-search-input',
-        type: 'search',
-        value: currentMemorySearchQuery,
-        className: 'stx-re-memory-search-input',
-        attributes: {
-            placeholder: '搜索条目 / 角色 / 细分 / recordKey',
-            'data-tip': '按角色名、记忆标题、细分类型或内部键快速过滤记忆卡。',
-        },
-    });
-    const actorSelectMarkup = buildSharedSelectField({
-        id: 'stx-re-memory-actor-select',
-        containerClassName: 'stx-shared-select-fluid',
-        value: currentMemoryActorKey,
-        triggerClassName: 'stx-re-memory-actor-select-trigger stx-shared-select-trigger-input stx-shared-select-trigger-36',
-        listClassName: 'stx-re-memory-actor-select-list',
-        optionClassName: 'stx-re-memory-actor-select-option',
-        options: actorFilters.map((item: MemoryPageActorFilter) => {
-            const iconClassName = item.key === '__all__'
-                ? 'fa-solid fa-layer-group'
-                : item.key === '__world__'
-                    ? 'fa-solid fa-globe'
-                    : item.key === activeActorKey
-                        ? 'fa-solid fa-crown'
-                        : 'fa-solid fa-user';
-            return {
-                value: item.key,
-                label: item.label,
-                media: {
-                    type: 'icon' as const,
-                    iconClassName,
-                },
+    const normalizedProfiles = Object.values(roleProfiles ?? {})
+        .filter((profile: RoleProfile): boolean => {
+            const actorKey = normalizeActorKey(profile.actorKey);
+            return Boolean(actorKey) && !isVirtualActorKey(actorKey);
+        })
+        .reduce<Record<string, RoleProfile>>((result: Record<string, RoleProfile>, profile: RoleProfile): Record<string, RoleProfile> => {
+            const actorKey = normalizeActorKey(profile.actorKey);
+            result[actorKey] = {
+                ...profile,
+                actorKey,
+                displayName: normalizeText(profile.displayName) || actorKey,
+                aliases: dedupeTexts(profile.aliases ?? []),
+                identityFacts: dedupeTexts(profile.identityFacts ?? []),
+                originFacts: dedupeTexts(profile.originFacts ?? []),
+                relationshipFacts: Array.isArray(profile.relationshipFacts) ? profile.relationshipFacts : [],
+                items: Array.isArray(profile.items) ? profile.items : [],
+                equipments: Array.isArray(profile.equipments) ? profile.equipments : [],
+                updatedAt: Math.max(0, Number(profile.updatedAt ?? 0) || 0),
             };
-        }),
-    });
-    const recomputeButtonMarkup = buildSharedButton({
-        label: '重算画像',
-        variant: 'secondary',
-        iconClassName: 'fa-solid fa-wand-magic-sparkles',
-        className: 'stx-re-memory-toolbar-btn',
-        attributes: {
-            'data-memory-persona-recompute': 'true',
-        },
-    });
-    const clearActiveButtonMarkup = buildSharedButton({
-        label: '主视角自动',
-        variant: 'secondary',
-        iconClassName: 'fa-solid fa-compass',
-        className: 'stx-re-memory-toolbar-btn',
-        attributes: {
-            'data-memory-persona-clear-active': 'true',
-        },
-    });
-    const resetFilterButtonMarkup = buildSharedButton({
-        label: '重置筛选',
-        variant: 'secondary',
-        iconClassName: 'fa-solid fa-rotate-left',
-        className: 'stx-re-memory-toolbar-btn',
-        attributes: {
-            'data-memory-reset-filters': 'true',
-        },
+            return result;
+        }, {});
+    const appearedActorKeys = collectAppearedActorKeys(experience, memoryCards, normalizedProfiles);
+    const allProfiles = Object.values(normalizedProfiles)
+        .filter((profile: RoleProfile): boolean => appearedActorKeys.has(profile.actorKey))
+        .sort((left: RoleProfile, right: RoleProfile): number => {
+            const timeDiff = Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
+            if (timeDiff !== 0) {
+                return timeDiff;
+            }
+            return normalizeText(left.displayName).localeCompare(normalizeText(right.displayName), 'zh-CN');
+        });
+
+    if (allProfiles.length <= 0) {
+        const recomputeButton = buildSharedButton({
+            label: '重算角色资料',
+            variant: 'secondary',
+            iconClassName: 'fa-solid fa-wand-magic-sparkles',
+            className: 'stx-re-memory-toolbar-btn',
+            attributes: {
+                'data-role-recompute': 'true',
+            },
+        });
+        contentArea.innerHTML = `
+            <div class="stx-re-memory-shell stx-re-role-center-shell">
+                <section class="stx-re-panel-card stx-re-memory-console">
+                    <div class="stx-re-memory-console-kicker">角色中心</div>
+                    <div class="stx-re-memory-console-title">当前没有可展示的真实角色</div>
+                    <div class="stx-re-memory-console-subtitle">可先执行一次重算角色资料，再回到这里查看角色属性与角色记忆。</div>
+                    <div class="stx-re-action-row">${recomputeButton}</div>
+                </section>
+            </div>
+        `;
+        contentArea.querySelector('[data-role-recompute]')?.addEventListener('click', (): void => {
+            void ensureRecordMemory().then(async (memory: MemorySDKImpl | null): Promise<void> => {
+                if (!memory) {
+                    return;
+                }
+                await memory.chatState.recomputeRoleProfiles();
+                await rerender();
+                showSuccess('角色资料已重算');
+            }).catch((error: unknown): void => {
+                showError(`重算角色资料失败: ${String(error)}`);
+            });
+        });
+        return;
+    }
+
+    const roleMap = new Map<string, RoleProfile>(allProfiles.map((profile: RoleProfile): [string, RoleProfile] => [profile.actorKey, profile]));
+    const searchQuery = normalizeText(options.currentMemorySearchQuery);
+    const filteredRoles = allProfiles.filter((profile: RoleProfile): boolean => {
+        if (!searchQuery) {
+            return true;
+        }
+        const aliasText = normalizeLookup((profile.aliases ?? []).join(' '));
+        return normalizeLookup(profile.displayName).includes(normalizeLookup(searchQuery))
+            || normalizeLookup(profile.actorKey).includes(normalizeLookup(searchQuery))
+            || aliasText.includes(normalizeLookup(searchQuery));
     });
 
-    const memoryRowsHtml = filteredOwned.length <= 0
-        ? `<div class="stx-re-empty">${currentMemorySearchQuery.trim() ? '当前检索条件下没有命中的角色记忆。' : '当前筛选下还没有角色记忆。'}</div>`
-        : `<div class="stx-re-memory-entry-list">${filteredOwned.map((owned: OwnedMemoryState): string => helpers.renderMemoryRecordCardMarkup(
-            owned,
-            lifecycleMap.get(owned.recordKey),
-            recallStats.get(owned.recordKey),
-            actorLabelMap,
-            activeActorKey,
-            eventTitleMap,
-        )).join('')}</div>`;
+    let selectedActorKey = normalizeActorKey(options.currentMemoryActorKey);
+    if (!selectedActorKey || !roleMap.has(selectedActorKey)) {
+        selectedActorKey = (filteredRoles[0] ?? allProfiles[0]).actorKey;
+        options.setCurrentMemoryActorKey(selectedActorKey);
+    }
+    const selectedRole = roleMap.get(selectedActorKey) ?? allProfiles[0];
+    const selectedRoleLabel = normalizeText(selectedRole.displayName) || helpers.formatActorKeyLabel(selectedRole.actorKey);
 
-    const actorButtonsHtml = actorFilters.map((item: MemoryPageActorFilter): string => {
-        const count = item.key === '__all__'
-            ? ownedStates.length
-            : item.key === '__world__'
-                ? worldMemoryCount
-                : (actorMemoryCountMap.get(item.key) ?? 0);
-        const iconClassName = item.key === '__all__'
-            ? 'fa-layer-group'
-            : item.key === '__world__'
-                ? 'fa-globe'
-                : (item.key === activeActorKey ? 'fa-crown' : 'fa-user');
-        const subLabel = item.key === '__all__'
-            ? '浏览全部角色与世界记忆'
-            : item.key === '__world__'
-                ? '查看世界与未归属条目'
-                : (item.key === activeActorKey ? '当前主视角角色' : '切换到该角色记忆');
+    const roleMemoryCards = memoryCards
+        .filter((card: MemoryCardSummary): boolean => normalizeActorKey(card.ownerActorKey) === selectedRole.actorKey)
+        .sort((left: MemoryCardSummary, right: MemoryCardSummary): number => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0));
+
+    const memoryCategoryOptions: Array<{ value: RoleMemoryCategory; label: string }> = [
+        { value: 'all', label: '全部分类' },
+        { value: 'dialogue', label: '对话' },
+        { value: 'event', label: '事件' },
+        { value: 'relationship', label: '关系' },
+        { value: 'identity', label: '身份' },
+        { value: 'world', label: '世界' },
+        { value: 'status', label: '状态' },
+        { value: 'other', label: '其他' },
+    ];
+    if (!memoryCategoryOptions.some((item: { value: RoleMemoryCategory; label: string }): boolean => item.value === currentRoleMemoryCategory)) {
+        currentRoleMemoryCategory = 'all';
+    }
+
+    const filteredMemoryCards = roleMemoryCards.filter((card: MemoryCardSummary): boolean => {
+        const category = resolveMemoryCategory(card);
+        if (currentRoleMemoryCategory !== 'all' && category !== currentRoleMemoryCategory) {
+            return false;
+        }
+        const title = buildReadableMemoryTitle(card, selectedRoleLabel);
+        const subtypeLabel = helpers.formatMemorySubtypeLabel(normalizeText(card.memorySubtype) || 'other');
+        return matchesMemoryQuery(card, searchQuery, title, subtypeLabel);
+    });
+
+    const categoryCountMap = roleMemoryCards.reduce<Map<RoleMemoryCategory, number>>((map: Map<RoleMemoryCategory, number>, card: MemoryCardSummary): Map<RoleMemoryCategory, number> => {
+        const category = resolveMemoryCategory(card);
+        map.set(category, Number(map.get(category) ?? 0) + 1);
+        return map;
+    }, new Map<RoleMemoryCategory, number>());
+
+    const actorButtons = (filteredRoles.length > 0 ? filteredRoles : allProfiles).map((profile: RoleProfile): string => {
+        const actorKey = profile.actorKey;
+        const roleCardsCount = memoryCards.filter((card: MemoryCardSummary): boolean => normalizeActorKey(card.ownerActorKey) === actorKey).length;
+        const roleLabel = normalizeText(profile.displayName) || helpers.formatActorKeyLabel(actorKey);
+        const aliasSummary = (profile.aliases ?? []).slice(0, 2).join(' / ');
         return `
-            <button class="stx-re-memory-actor-btn${item.key === currentMemoryActorKey ? ' is-active' : ''}${item.key === activeActorKey ? ' is-focus' : ''}" data-memory-actor="${helpers.escapeHtml(item.key)}"${helpers.buildTipAttr(`筛选为 ${item.label} 的角色记忆。`)}>
-                <span class="stx-re-memory-actor-icon"><i class="fa-solid ${iconClassName}" aria-hidden="true"></i></span>
+            <button class="stx-re-memory-actor-btn${actorKey === selectedRole.actorKey ? ' is-active' : ''}${normalizeActorKey(activeActorKey) === actorKey ? ' is-focus' : ''}" data-role-actor="${helpers.escapeHtml(actorKey)}"${helpers.buildTipAttr(`切换到 ${roleLabel}`)}>
+                <span class="stx-re-memory-actor-icon"><i class="fa-solid ${normalizeActorKey(activeActorKey) === actorKey ? 'fa-crown' : 'fa-user'}" aria-hidden="true"></i></span>
                 <span class="stx-re-memory-actor-copy">
-                    <span class="stx-re-memory-actor-name">${helpers.escapeHtml(item.label)}</span>
-                    <span class="stx-re-memory-actor-sub">${helpers.escapeHtml(subLabel)}</span>
+                    <span class="stx-re-memory-actor-name">${helpers.escapeHtml(roleLabel)}</span>
+                    <span class="stx-re-memory-actor-sub">${helpers.escapeHtml(aliasSummary || actorKey)}</span>
                 </span>
-                <span class="stx-re-memory-actor-count">${helpers.escapeHtml(String(count))}</span>
+                <span class="stx-re-memory-actor-count">${helpers.escapeHtml(String(roleCardsCount))}</span>
             </button>
         `;
     }).join('');
 
-    const subtypeRateHtml = topSubtypeRates.length > 0
-        ? `<div class="stx-re-memory-threat-list">${topSubtypeRates.map(([key, stats]: [string, { total: number; forgotten: number }]): string => `
-            <div class="stx-re-memory-threat-row">
-                <span>${helpers.escapeHtml(helpers.formatMemorySubtypeLabel(key))}</span>
-                <span>${helpers.escapeHtml(String(stats.forgotten))}/${helpers.escapeHtml(String(stats.total))}</span>
+    const searchInput = buildSharedInputField({
+        id: 'stx-re-memory-search-input',
+        type: 'search',
+        value: searchQuery,
+        className: 'stx-re-memory-search-input',
+        attributes: {
+            placeholder: '搜索角色名、记忆标题、细分或对话关键字',
+            'data-tip': '用于角色名册和角色记忆列表的联动搜索。',
+        },
+    });
+    const categorySelect = buildSharedSelectField({
+        id: 'stx-re-role-memory-category',
+        containerClassName: 'stx-shared-select-fluid',
+        value: currentRoleMemoryCategory,
+        triggerClassName: 'stx-re-memory-actor-select-trigger stx-shared-select-trigger-input stx-shared-select-trigger-36',
+        listClassName: 'stx-re-memory-actor-select-list',
+        optionClassName: 'stx-re-memory-actor-select-option',
+        options: memoryCategoryOptions.map((item: { value: RoleMemoryCategory; label: string }) => ({
+            value: item.value,
+            label: item.label,
+        })),
+    });
+    const recomputeButton = buildSharedButton({
+        label: '重算角色资料',
+        variant: 'secondary',
+        iconClassName: 'fa-solid fa-wand-magic-sparkles',
+        className: 'stx-re-memory-toolbar-btn',
+        attributes: {
+            'data-role-recompute': 'true',
+        },
+    });
+    const setActiveButton = buildSharedButton({
+        label: normalizeActorKey(activeActorKey) === selectedRole.actorKey ? '当前主视角' : '设为主视角',
+        variant: normalizeActorKey(activeActorKey) === selectedRole.actorKey ? 'primary' : 'secondary',
+        iconClassName: normalizeActorKey(activeActorKey) === selectedRole.actorKey ? 'fa-solid fa-crown' : 'fa-solid fa-compass',
+        className: 'stx-re-memory-toolbar-btn',
+        attributes: {
+            'data-role-set-active': selectedRole.actorKey,
+        },
+    });
+
+    const renderSimpleList = (title: string, kicker: string, values: string[]): string => {
+        if (values.length <= 0) {
+            return '';
+        }
+        return `
+            <section class="stx-re-panel-card stx-re-memory-section">
+                <div class="stx-re-memory-section-head">
+                    <div>
+                        <div class="stx-re-memory-section-kicker">${helpers.escapeHtml(kicker)}</div>
+                        <div class="stx-re-memory-section-title">${helpers.escapeHtml(title)}</div>
+                    </div>
+                </div>
+                <div class="stx-re-role-center-fact-list">
+                    ${values.map((item: string): string => `<div class="stx-re-role-center-fact-item">${helpers.escapeHtml(item)}</div>`).join('')}
+                </div>
+            </section>
+        `;
+    };
+
+    const relationshipSection = selectedRole.relationshipFacts.length > 0
+        ? `
+            <section class="stx-re-panel-card stx-re-memory-section">
+                <div class="stx-re-memory-section-head">
+                    <div>
+                        <div class="stx-re-memory-section-kicker">角色关系区</div>
+                        <div class="stx-re-memory-section-title">关系事实列表</div>
+                    </div>
+                </div>
+                <div class="stx-re-role-center-fact-list">
+                    ${selectedRole.relationshipFacts.map((item): string => `
+                        <article class="stx-re-role-center-relation-item">
+                            <div class="stx-re-role-center-relation-top">
+                                <strong>${helpers.escapeHtml(normalizeText(item.targetLabel) || '未标注对象')}</strong>
+                                <span class="stx-re-memory-chip">${helpers.escapeHtml(normalizeText(item.label) || '关系')}</span>
+                            </div>
+                            <div class="stx-re-role-center-relation-detail">${helpers.escapeHtml(normalizeText(item.detail))}</div>
+                        </article>
+                    `).join('')}
+                </div>
+            </section>
+        `
+        : '';
+
+    const renderAssetSection = (title: string, kicker: string, assets: Array<{ name: string; detail: string }>): string => {
+        if (assets.length <= 0) {
+            return '';
+        }
+        return `
+            <section class="stx-re-panel-card stx-re-memory-section">
+                <div class="stx-re-memory-section-head">
+                    <div>
+                        <div class="stx-re-memory-section-kicker">${helpers.escapeHtml(kicker)}</div>
+                        <div class="stx-re-memory-section-title">${helpers.escapeHtml(title)}</div>
+                    </div>
+                </div>
+                <div class="stx-re-role-center-asset-grid">
+                    ${assets.map((item: { name: string; detail: string }): string => `
+                        <article class="stx-re-role-center-asset-item">
+                            <strong>${helpers.escapeHtml(normalizeText(item.name) || '未命名条目')}</strong>
+                            ${normalizeText(item.detail) ? `<div>${helpers.escapeHtml(normalizeText(item.detail))}</div>` : ''}
+                        </article>
+                    `).join('')}
+                </div>
+            </section>
+        `;
+    };
+
+    const memoryListSection = `
+        <section class="stx-re-panel-card stx-re-memory-section">
+            <div class="stx-re-memory-section-head">
+                <div>
+                    <div class="stx-re-memory-section-kicker">角色记忆列表</div>
+                    <div class="stx-re-memory-section-title">${helpers.escapeHtml(selectedRoleLabel)} 的记忆卡</div>
+                </div>
+                <div class="stx-re-memory-chip-row">
+                    <span class="stx-re-memory-chip">总数 ${helpers.escapeHtml(String(roleMemoryCards.length))}</span>
+                    <span class="stx-re-memory-chip">对话 ${helpers.escapeHtml(String(categoryCountMap.get('dialogue') ?? 0))}</span>
+                    <span class="stx-re-memory-chip">事件 ${helpers.escapeHtml(String(categoryCountMap.get('event') ?? 0))}</span>
+                    <span class="stx-re-memory-chip">关系 ${helpers.escapeHtml(String(categoryCountMap.get('relationship') ?? 0))}</span>
+                </div>
             </div>
-        `).join('')}</div>`
-        : '<div class="stx-re-empty">暂无可统计项目。</div>';
+            ${filteredMemoryCards.length > 0
+                ? `<div class="stx-re-memory-entry-list">${filteredMemoryCards.map((card: MemoryCardSummary): string => {
+                    const extra = card as MemoryCardSummary & Record<string, unknown>;
+                    const title = buildReadableMemoryTitle(card, selectedRoleLabel);
+                    const subtypeText = normalizeText(card.memorySubtype) || 'other';
+                    const subtypeLabel = helpers.formatMemorySubtypeLabel(subtypeText);
+                    const memoryTypeLabel = normalizeText(card.memoryType) || 'other';
+                    const speakerLabel = normalizeText(extra.speakerLabel);
+                    const rememberReason = normalizeText(extra.rememberReason ?? card.sourceReason);
+                    const sourceMessageId = normalizeText(card.sourceMessageIds?.[0] ?? card.anchorMessageId);
+                    const bodyText = normalizeText(card.memoryText);
+                    return `
+                        <article class="stx-re-panel-card stx-re-memory-entry">
+                            <div class="stx-re-memory-entry-head">
+                                <div class="stx-re-memory-entry-title-wrap">
+                                    <div class="stx-re-memory-entry-main">
+                                        <div class="stx-re-memory-entry-title">${helpers.escapeHtml(title)}</div>
+                                        <div class="stx-re-memory-chip-row">
+                                            <span class="stx-re-memory-chip">类型 ${helpers.escapeHtml(memoryTypeLabel)}</span>
+                                            <span class="stx-re-memory-chip">细分 ${helpers.escapeHtml(subtypeLabel)}</span>
+                                            <span class="stx-re-memory-chip">归属 ${helpers.escapeHtml(selectedRoleLabel)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="stx-re-memory-mini-copy">${helpers.escapeHtml(bodyText || '暂无正文')}</div>
+                            <div class="stx-re-memory-mini-links"><strong>说话人</strong> ${helpers.escapeHtml(speakerLabel || '暂无')}</div>
+                            <div class="stx-re-memory-mini-links"><strong>来源消息</strong> ${helpers.escapeHtml(sourceMessageId || '暂无')}</div>
+                            <div class="stx-re-memory-mini-links"><strong>重要原因</strong> ${helpers.escapeHtml(rememberReason || '暂无')}</div>
+                        </article>
+                    `;
+                }).join('')}</div>`
+                : '<div class="stx-re-empty">当前筛选条件下没有命中记忆卡。</div>'}
+        </section>
+    `;
 
     contentArea.innerHTML = `
-        <div class="stx-re-memory-shell">
+        <div class="stx-re-memory-shell stx-re-role-center-shell">
             <section class="stx-re-panel-card stx-re-memory-console">
                 <div class="stx-re-memory-console-grid">
                     <div class="stx-re-memory-console-main">
-                        <div class="stx-re-memory-console-kicker">记忆卡检索台</div>
-                        <div class="stx-re-memory-console-title">以 RPG 指挥台方式巡检角色记忆、主视角与召回风险</div>
-                        <div class="stx-re-memory-console-subtitle">用更紧凑的检索条快速锁定观察对象，再沿着卡片查看遗忘、事件联动和角色画像。</div>
+                        <div class="stx-re-memory-console-kicker">角色中心</div>
+                        <div class="stx-re-memory-console-title">${helpers.escapeHtml(selectedRoleLabel)}</div>
+                        <div class="stx-re-memory-console-subtitle">角色资料、关系、物品装备与角色记忆在同一视图下维护。</div>
                         <div class="stx-re-memory-console-ledger">
-                            <span class="stx-re-memory-chip is-hero-chip">当前对象 ${helpers.escapeHtml(currentFilterLabel)}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">主视角 ${helpers.escapeHtml(activeActorLabel)}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">${helpers.escapeHtml(searchSummaryLabel)}</span>
-                            <span class="stx-re-memory-chip is-hero-chip">命中 ${helpers.escapeHtml(String(filteredOwned.length))} / ${helpers.escapeHtml(String(actorScopedOwned.length))}</span>
+                            <span class="stx-re-memory-chip is-hero-chip">角色键 ${helpers.escapeHtml(selectedRole.actorKey)}</span>
+                            <span class="stx-re-memory-chip is-hero-chip">别名 ${helpers.escapeHtml(selectedRole.aliases.join(' / ') || '无')}</span>
+                            <span class="stx-re-memory-chip is-hero-chip">最近更新 ${helpers.escapeHtml(helpers.formatTimeLabel(selectedRole.updatedAt || 0))}</span>
+                            <span class="stx-re-memory-chip is-hero-chip">记忆 ${helpers.escapeHtml(String(roleMemoryCards.length))} 条</span>
                         </div>
                     </div>
                     <div class="stx-re-memory-console-controls">
                         <label class="stx-re-memory-console-field">
-                            <span class="stx-re-memory-console-field-label">检索词</span>
-                            ${searchInputMarkup}
+                            <span class="stx-re-memory-console-field-label">搜索</span>
+                            ${searchInput}
                         </label>
                         <label class="stx-re-memory-console-field">
-                            <span class="stx-re-memory-console-field-label">观察对象</span>
-                            ${actorSelectMarkup}
+                            <span class="stx-re-memory-console-field-label">分类过滤</span>
+                            ${categorySelect}
                         </label>
                         <div class="stx-re-memory-console-actions">
-                            ${resetFilterButtonMarkup}
-                            ${clearActiveButtonMarkup}
-                            ${recomputeButtonMarkup}
+                            ${setActiveButton}
+                            ${recomputeButton}
                         </div>
                     </div>
                 </div>
-                <div class="stx-re-memory-console-strip">
-                    <div class="stx-re-memory-console-cell">
-                        <span class="stx-re-memory-console-cell-label">记忆命中</span>
-                        <strong>${helpers.escapeHtml(String(filteredOwned.length))}</strong>
-                        <small>总量 ${helpers.escapeHtml(String(actorScopedOwned.length))}</small>
-                    </div>
-                    <div class="stx-re-memory-console-cell">
-                        <span class="stx-re-memory-console-cell-label">画像命中</span>
-                        <strong>${helpers.escapeHtml(String(selectedPersonaEntries.length))}</strong>
-                        <small>候选 ${helpers.escapeHtml(String(actorScopedPersonaEntries.length))}</small>
-                    </div>
-                    <div class="stx-re-memory-console-cell">
-                        <span class="stx-re-memory-console-cell-label">重大事件</span>
-                        <strong>${helpers.escapeHtml(String(majorEventCount))}</strong>
-                        <small>影响 ${helpers.escapeHtml(String(recentAffectedCount))}</small>
-                    </div>
-                    <div class="stx-re-memory-console-cell">
-                        <span class="stx-re-memory-console-cell-label">遗忘警报</span>
-                        <strong>${helpers.escapeHtml(String(stageCounts.forgotten + stageCounts.distorted))}</strong>
-                        <small>清晰 ${helpers.escapeHtml(String(stageCounts.clear))}</small>
-                    </div>
-                </div>
-            </section>
-
-            <div class="stx-re-memory-dashboard-grid">
-                ${helpers.renderMemoryDashboardCardMarkup({
-                    icon: 'fa-solid fa-crosshairs',
-                    eyebrow: '当前筛选',
-                    value: currentFilterLabel,
-                    detail: `共 ${filteredOwned.length} 条角色记忆`,
-                    meta: `当前主视角：${activeActorLabel}`,
-                    tone: 'gold',
-                })}
-                ${helpers.renderMemoryDashboardCardMarkup({
-                    icon: 'fa-solid fa-hourglass-half',
-                    eyebrow: '遗忘分布',
-                    value: `清晰 ${stageCounts.clear} / 模糊 ${stageCounts.blur}`,
-                    detail: `偏差 ${stageCounts.distorted} / 已遗忘 ${stageCounts.forgotten}`,
-                    meta: '清晰度越低，维护优先级越高',
-                    tone: 'crimson',
-                })}
-                ${helpers.renderMemoryDashboardCardMarkup({
-                    icon: 'fa-solid fa-users',
-                    eyebrow: '角色名册',
-                    value: `可切换 ${Math.max(0, actorFilters.length - 2)} 个角色`,
-                    detail: `当前主视角：${activeActorLabel}`,
-                    meta: '左侧名册可快速切换观察对象',
-                    tone: 'azure',
-                })}
-                ${helpers.renderMemoryDashboardCardMarkup({
-                    icon: 'fa-solid fa-star',
-                    eyebrow: '事件联动',
-                    value: `重大事件 ${majorEventCount} 条`,
-                    detail: `已影响 ${recentAffectedCount} 条 / 强化 ${reinforcedCount} 条`,
-                    meta: `覆盖或冲淡 ${invalidatedCount} 条`,
-                    tone: 'slate',
-                })}
-            </div>
-
-            <section class="stx-re-panel-card stx-re-memory-section">
-                <div class="stx-re-memory-section-head">
-                    <div>
-                        <div class="stx-re-memory-section-kicker">召回战况</div>
-                        <div class="stx-re-memory-section-title">最近一轮检索与长期记忆维护</div>
-                    </div>
-                </div>
-                ${helpers.buildRecallSummaryCardsMarkup(experience)}
-            </section>
-
-            <section class="stx-re-panel-card stx-re-memory-section">
-                <div class="stx-re-memory-section-head">
-                    <div>
-                        <div class="stx-re-memory-section-kicker">边界压制</div>
-                        <div class="stx-re-memory-section-title">最近被主视角边界压制的候选记忆</div>
-                    </div>
-                </div>
-                ${helpers.buildSuppressedRecallListMarkup(experience)}
             </section>
 
             <div class="stx-re-memory-layout">
                 <aside class="stx-re-memory-sidebar">
                     <section class="stx-re-panel-card stx-re-memory-side-card">
                         <div class="stx-re-memory-section-kicker">角色名册</div>
-                        <div class="stx-re-memory-side-title">按角色快速切换视角</div>
-                        <div class="stx-re-memory-actor-list">${actorButtonsHtml}</div>
-                    </section>
-
-                        <section class="stx-re-panel-card stx-re-memory-side-card">
-                            <div class="stx-re-memory-section-kicker">画像控制</div>
-                            <div class="stx-re-memory-side-title">主视角和画像调整</div>
-                            <div class="stx-re-memory-side-toolbar">
-                                ${clearActiveButtonMarkup}
-                                ${recomputeButtonMarkup}
-                            </div>
-                        </section>
-
-                    <section class="stx-re-panel-card stx-re-memory-side-card">
-                        <div class="stx-re-memory-section-kicker">高风险细分</div>
-                        <div class="stx-re-memory-side-title">遗忘率较高的记忆类型</div>
-                        ${subtypeRateHtml}
+                        <div class="stx-re-memory-side-title">只列真实角色（不含世界/未归属）</div>
+                        <div class="stx-re-memory-actor-list">${actorButtons}</div>
                     </section>
                 </aside>
 
                 <div class="stx-re-memory-main">
-                    <section class="stx-re-panel-card stx-re-memory-section">
-                        <div class="stx-re-memory-section-head">
-                            <div>
-                                <div class="stx-re-memory-section-kicker">角色画像</div>
-                                <div class="stx-re-memory-section-title">像角色面板一样看每个角色的记忆倾向</div>
-                            </div>
-                        </div>
-                        ${personaPanelHtml}
-                    </section>
-
-                    <section class="stx-re-panel-card stx-re-memory-section">
-                        <div class="stx-re-memory-section-head">
-                            <div>
-                                <div class="stx-re-memory-section-kicker">角色记忆列表</div>
-                                <div class="stx-re-memory-section-title">按条维护重要度、归属与遗忘状态</div>
-                            </div>
-                        </div>
-                        ${memoryRowsHtml}
-                    </section>
+                    ${renderSimpleList('角色属性区', '基础属性', selectedRole.identityFacts)}
+                    ${renderSimpleList('角色来历区', '来历事实', selectedRole.originFacts)}
+                    ${relationshipSection}
+                    ${renderAssetSection('角色物品区', '角色物品', selectedRole.items)}
+                    ${renderAssetSection('角色装备区', '角色装备', selectedRole.equipments)}
+                    ${memoryListSection}
                 </div>
             </div>
         </div>
@@ -579,11 +613,11 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
 
     hydrateSharedSelects(contentArea);
 
-    const searchInput = contentArea.querySelector('#stx-re-memory-search-input') as HTMLInputElement | null;
-    searchInput?.addEventListener('input', (): void => {
-        const nextQuery = String(searchInput.value ?? '');
-        const nextSelectionStart = searchInput.selectionStart ?? nextQuery.length;
-        const nextSelectionEnd = searchInput.selectionEnd ?? nextQuery.length;
+    const searchInputElement = contentArea.querySelector('#stx-re-memory-search-input') as HTMLInputElement | null;
+    searchInputElement?.addEventListener('input', (): void => {
+        const nextQuery = normalizeText(searchInputElement.value);
+        const nextSelectionStart = searchInputElement.selectionStart ?? nextQuery.length;
+        const nextSelectionEnd = searchInputElement.selectionEnd ?? nextQuery.length;
         options.setCurrentMemorySearchQuery(nextQuery);
         void rerender().then((): void => {
             const nextInput = contentArea.querySelector('#stx-re-memory-search-input') as HTMLInputElement | null;
@@ -597,151 +631,49 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
         });
     });
 
-    const actorSelect = contentArea.querySelector('#stx-re-memory-actor-select') as HTMLSelectElement | null;
-    actorSelect?.addEventListener('change', (): void => {
-        options.setCurrentMemoryActorKey(String(actorSelect.value ?? '__all__'));
+    const categoryElement = contentArea.querySelector('#stx-re-role-memory-category') as HTMLSelectElement | null;
+    categoryElement?.addEventListener('change', (): void => {
+        const nextCategory = normalizeText(categoryElement.value) as RoleMemoryCategory;
+        currentRoleMemoryCategory = memoryCategoryOptions.some((item: { value: RoleMemoryCategory; label: string }): boolean => item.value === nextCategory)
+            ? nextCategory
+            : 'all';
         void rerender();
     });
 
-    contentArea.querySelectorAll('[data-memory-actor]').forEach((button: Element): void => {
+    contentArea.querySelectorAll('[data-role-actor]').forEach((button: Element): void => {
         button.addEventListener('click', (): void => {
-            options.setCurrentMemoryActorKey(String((button as HTMLElement).dataset.memoryActor ?? '__all__'));
-            void rerender();
-        });
-    });
-
-    contentArea.querySelectorAll('[data-memory-actor-focus]').forEach((button: Element): void => {
-        button.addEventListener('click', (): void => {
-            options.setCurrentMemoryActorKey(String((button as HTMLElement).dataset.memoryActorFocus ?? '__all__'));
-            void rerender();
-        });
-    });
-
-    contentArea.querySelector('[data-memory-reset-filters]')?.addEventListener('click', (): void => {
-        options.setCurrentMemoryActorKey('__all__');
-        options.setCurrentMemorySearchQuery('');
-        void rerender();
-    });
-
-    contentArea.querySelectorAll('[data-memory-persona-recompute]').forEach((button: Element): void => {
-        button.addEventListener('click', (): void => {
-            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
-                if (!memoryInstance) {
-                    return;
-                }
-                await memoryInstance.chatState.recomputePersonaMemoryProfiles();
-                await rerender();
-                showSuccess('角色画像已重算');
-            }).catch((error: unknown): void => {
-                showError(`重算角色画像失败: ${String(error)}`);
-            });
-        });
-    });
-
-    contentArea.querySelectorAll('[data-memory-persona-clear-active]').forEach((button: Element): void => {
-        button.addEventListener('click', (): void => {
-            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
-                if (!memoryInstance) {
-                    return;
-                }
-                await memoryInstance.chatState.setActiveActorKey(null);
-                await rerender();
-                showSuccess('主视角已切回自动模式');
-            }).catch((error: unknown): void => {
-                showError(`切换主视角失败: ${String(error)}`);
-            });
-        });
-    });
-
-    contentArea.querySelectorAll('[data-memory-persona-set-active]').forEach((button: Element): void => {
-        button.addEventListener('click', (): void => {
-            const actorKey = String((button as HTMLElement).dataset.memoryPersonaSetActive ?? '').trim();
+            const actorKey = normalizeActorKey((button as HTMLElement).dataset.roleActor);
             if (!actorKey) {
                 return;
             }
-            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
-                if (!memoryInstance) {
-                    return;
-                }
-                await memoryInstance.chatState.setActiveActorKey(actorKey);
-                await rerender();
-                showSuccess('主视角已更新');
-            }).catch((error: unknown): void => {
-                showError(`切换主视角失败: ${String(error)}`);
-            });
+            options.setCurrentMemoryActorKey(actorKey);
+            void rerender();
         });
     });
 
-    contentArea.querySelectorAll('[data-memory-action]').forEach((button: Element): void => {
-        button.addEventListener('click', (): void => {
-            const element = button as HTMLElement;
-            const action = String(element.dataset.memoryAction ?? '').trim();
-            const recordKey = String(element.dataset.recordKey ?? '').trim();
-            const targetOwned = filteredOwned.find((item: OwnedMemoryState): boolean => item.recordKey === recordKey);
-            if (!action || !recordKey || !targetOwned) {
+    contentArea.querySelector('[data-role-recompute]')?.addEventListener('click', (): void => {
+        void ensureRecordMemory().then(async (memory: MemorySDKImpl | null): Promise<void> => {
+            if (!memory) {
                 return;
             }
-            void ensureRecordMemory().then(async (memoryInstance: MemorySDKImpl | null): Promise<void> => {
-                if (!memoryInstance) {
-                    return;
-                }
-                if (action === 'toggle-forgotten') {
-                    await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
-                        forgotten: !targetOwned.forgotten,
-                        forgottenReasonCodes: [targetOwned.forgotten ? 'manual_restore' : 'manual_mark_forgotten'],
-                    });
-                    showSuccess(targetOwned.forgotten ? '记忆已恢复' : '已标记为遗忘');
-                } else if (action === 'change-owner') {
-                    const ownerGuide = actorFilters
-                        .filter((item: MemoryPageActorFilter): boolean => !item.key.startsWith('__'))
-                        .map((item: MemoryPageActorFilter): string => `${item.key} = ${item.label}`)
-                        .join('\n');
-                    const input = prompt(`请输入新的角色归属键，留空表示归到世界或未归属：\n\n${ownerGuide}`, targetOwned.ownerActorKey ?? '');
-                    if (input === null) {
-                        return;
-                    }
-                    const nextOwner = String(input ?? '').trim() || null;
-                    await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
-                        ownerActorKey: nextOwner,
-                    });
-                    showSuccess('记忆归属已更新');
-                } else if (action === 'change-subtype') {
-                    const subtypeGuide = memorySubtypeOptions.map((item: string): string => `${item} = ${helpers.formatMemorySubtypeLabel(item)}`).join('\n');
-                    const input = prompt(`请输入新的记忆细分类型：\n\n${subtypeGuide}`, targetOwned.memorySubtype ?? 'other');
-                    if (input === null) {
-                        return;
-                    }
-                    const nextSubtype = String(input ?? '').trim();
-                    if (!memorySubtypeOptions.includes(nextSubtype)) {
-                        alert('输入的细分类型不在允许列表中。');
-                        return;
-                    }
-                    await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
-                        memorySubtype: nextSubtype as OwnedMemoryState['memorySubtype'],
-                    });
-                    showSuccess('记忆细分已更新');
-                } else if (action === 'change-importance') {
-                    const input = prompt('请输入新的重要度（支持 0-1 或 0-100）：', String(Math.round((targetOwned.importance ?? 0) * 100)));
-                    if (input === null) {
-                        return;
-                    }
-                    const nextImportance = helpers.parseImportanceInput(input, targetOwned.importance ?? 0);
-                    if (nextImportance == null) {
-                        alert('请输入有效数字。');
-                        return;
-                    }
-                    await memoryInstance.chatState.updateOwnedMemoryState(recordKey, {
-                        importance: nextImportance,
-                    });
-                    showSuccess('记忆重要度已更新');
-                } else if (action === 'recompute') {
-                    await memoryInstance.chatState.recomputeOwnedMemoryState(recordKey);
-                    showSuccess('遗忘概率已重新计算');
-                }
-                await rerender();
-            }).catch((error: unknown): void => {
-                showError(`角色记忆操作失败: ${String(error)}`);
-            });
+            await memory.chatState.recomputeRoleProfiles();
+            await rerender();
+            showSuccess('角色资料已重算');
+        }).catch((error: unknown): void => {
+            showError(`重算角色资料失败: ${String(error)}`);
+        });
+    });
+
+    contentArea.querySelector('[data-role-set-active]')?.addEventListener('click', (): void => {
+        void ensureRecordMemory().then(async (memory: MemorySDKImpl | null): Promise<void> => {
+            if (!memory) {
+                return;
+            }
+            await memory.chatState.setActiveActorKey(selectedRole.actorKey);
+            await rerender();
+            showSuccess('主视角已更新');
+        }).catch((error: unknown): void => {
+            showError(`设置主视角失败: ${String(error)}`);
         });
     });
 }

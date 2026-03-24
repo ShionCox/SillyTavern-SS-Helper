@@ -1,4 +1,4 @@
-import type { ProposalEnvelope, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint, SummaryProposal } from './types';
+import type { MemoryProposalDocument, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint, SummaryProposal } from './types';
 import type { WorldTemplate } from '../template/types';
 import { GateValidator } from './gate-validator';
 import { SchemaGate } from '../core/schema-gate';
@@ -14,7 +14,7 @@ import { planMemoryMutations, type MemoryMutationPlan, type PlannedSummaryMutati
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
-import { advanceMemoryTraceContext, buildMemoryMainlineTraceEntry, createMemoryTraceContext } from '../core/memory-trace';
+import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
 import { logger } from '../index';
 
 function normalizeText(value: unknown): string {
@@ -225,12 +225,12 @@ export class ProposalManager {
 
     /**
      * 功能：处理 AI 提议，并在四道 gate 校验通过后执行长期记忆 CRUD。
-     * @param envelope 提议信封。
+     * @param document 提案文档。
      * @param consumerPluginId 调用方插件标识。
      * @returns 提议处理结果。
      */
     async processProposal(
-        envelope: ProposalEnvelope,
+        document: MemoryProposalDocument,
         consumerPluginId: string,
     ): Promise<ProposalResult> {
         const activeTemplateId = await this.metaManager.getActiveTemplateId();
@@ -240,7 +240,7 @@ export class ProposalManager {
         }
 
         const gateResults = await this.gateValidator.validate(
-            envelope,
+            document,
             activeTemplate,
             consumerPluginId,
             this.allowedPlugins,
@@ -253,7 +253,7 @@ export class ProposalManager {
                 action: 'proposal.rejected',
                 actor: { pluginId: consumerPluginId, mode: 'ai' },
                 before: {},
-                after: { envelope, reasons },
+                after: { document, reasons },
             });
             return {
                 accepted: false,
@@ -263,7 +263,7 @@ export class ProposalManager {
             };
         }
 
-        return this.applyProposal(envelope, consumerPluginId, gateResults);
+        return this.applyProposal(document, consumerPluginId, gateResults);
     }
 
     /**
@@ -289,12 +289,11 @@ export class ProposalManager {
                 },
             );
         }
-        const envelope: ProposalEnvelope = {
-            ok: true,
-            proposal: request.proposal,
+        const document: MemoryProposalDocument = {
+            ...request.proposal,
             confidence: 1.0,
         };
-        const result = await this.processProposal(envelope, request.source.pluginId);
+        const result = await this.processProposal(document, request.source.pluginId);
         if (this.chatStateManager) {
             await this.chatStateManager.recordMainlineTrace(
                 advanceMemoryTraceContext(trace, 'memory_trusted_write_finished', 'trusted_write'),
@@ -314,13 +313,13 @@ export class ProposalManager {
 
     /**
      * 功能：执行经过 gate 校验后的提议写入，并统一走 mutation planner / executor 主链。
-     * @param envelope 提议信封。
+     * @param document 提案文档。
      * @param consumerPluginId 调用方插件标识。
      * @param gateResults gate 校验结果。
      * @returns 提议处理结果。
      */
     private async applyProposal(
-        envelope: ProposalEnvelope,
+        document: MemoryProposalDocument,
         consumerPluginId: string,
         gateResults: Array<{ passed: boolean; gate: string; errors: string[] }>,
     ): Promise<ProposalResult> {
@@ -333,7 +332,7 @@ export class ProposalManager {
             entityResolutions: 0,
         };
 
-        const { facts, patches, summaries, schemaChanges, entityResolutions } = envelope.proposal;
+        const { facts, patches, summaries, schemaChanges, entityResolutions } = document;
         const deferredHints: DeferredSchemaHint[] = [];
         const logicalView = this.chatStateManager
             ? await this.chatStateManager.getLogicalChatView()
@@ -415,7 +414,7 @@ export class ProposalManager {
         const execution = await executeMemoryMutationPlan({
             chatKey: this.chatKey,
             consumerPluginId,
-            envelopeConfidence: envelope.confidence,
+            envelopeConfidence: Number(document.confidence ?? 0) || 0,
             derivationSource,
             visibleMessageIds,
             plan: mutationPlan,
@@ -478,7 +477,7 @@ export class ProposalManager {
             before: {},
             after: {
                 applied,
-                confidence: envelope.confidence,
+                confidence: Number(document.confidence ?? 0) || 0,
                 deferredSchemaHints: deferredHints.length,
                 mutationPlan: execution.snapshot,
             },

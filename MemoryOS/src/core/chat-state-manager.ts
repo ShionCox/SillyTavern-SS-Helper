@@ -1,5 +1,5 @@
 import { flushSdkChatDataNow, readSdkPluginChatState, writeSdkPluginChatState } from '../../../SDK/db';
-import { db, type DBFact, type DBMemoryCard, type DBSummary } from '../db/db';
+import { db, type DBFact, type DBMemoryCard, type DBSummary, type DBWorldState } from '../db/db';
 import { logger } from '../index';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import {
@@ -40,8 +40,7 @@ import type {
     MemoryActorRetentionMap,
     MemoryActorRetentionState,
     MemoryCandidate,
-    MemoryCandidateKind,
-    MemoryLifecycleState,
+        MemoryLifecycleState,
     MemoryMutationHistoryAction,
     MemoryMutationHistoryEntry,
     IngestHealthWindow,
@@ -57,6 +56,9 @@ import type {
     MemoryIngestProgressState,
     MemoryMutationPlanSnapshot,
     PersonaMemoryProfile,
+    RoleAssetEntry,
+    RoleProfile,
+    RoleRelationshipFact,
     MemoryOSChatState,
     MemoryQualityScorecard,
     OwnedMemoryState,
@@ -70,8 +72,7 @@ import type {
     MemoryProcessingDecision,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
-    PrecompressedWindowStats,
-    PromptInjectionProfile,
+        PromptInjectionProfile,
     RetentionArchives,
     RetentionPolicy,
     RetrievalHealthWindow,
@@ -87,8 +88,7 @@ import type {
     MutationRepairTask,
     SummarySettings,
     SummarySettingsOverride,
-    SummaryExecutionTier,
-    VectorLifecycleState,
+        VectorLifecycleState,
     EffectiveSummarySettings,
 } from '../types';
 import {
@@ -111,7 +111,6 @@ import {
     DEFAULT_RETENTION_ARCHIVES,
     DEFAULT_RETRIEVAL_HEALTH,
     DEFAULT_SCHEMA_DRAFT_SESSION,
-    DEFAULT_SIMPLE_MEMORY_PERSONA,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
 import { MemoryMutationHistoryManager } from './memory-mutation-history';
@@ -130,7 +129,7 @@ import {
 import { CompactionManager } from './compaction-manager';
 import { ProposalManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
-import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay, formatSummaryMemoryText } from './memory-card-text';
+import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay } from './memory-card-text';
 import { deleteMemoryCardsBySource, rebuildMemoryCardsFromSource, saveMemoryCardsFromFactRecord, saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from './memory-card-store';
 import {
     buildPerActorRetentionMap,
@@ -139,10 +138,7 @@ import {
     buildSimpleMemoryPersona,
     clamp01,
     computeRelationshipWeight,
-    detectEmotionTag,
-    detectRelationScope,
     enrichLifecycleOwnedState,
-    inferPersonaMemoryProfile,
     inferPersonaMemoryProfiles,
     normalizeMemoryText,
     type MemoryCandidateInput,
@@ -151,7 +147,9 @@ import {
 
 import {
     getPrimaryPersonaActorKey,
-    migratePersonaState,
+    normalizeIdentitySeedMap,
+    normalizePersonaProfileMap,
+    normalizeSimplePersonaMap,
     resolvePersonaProfile,
     resolveSimplePersona,
 } from './persona-compat';
@@ -911,7 +909,7 @@ export class ChatStateManager {
         try {
             const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, this.chatKey);
             const raw = (row?.state ?? {}) as MemoryOSChatState;
-            this.cache = migratePersonaState(this.normalizeState(raw));
+            this.cache = this.normalizeState(raw);
             await this.refreshLifecycleState(this.cache, 'load');
             if (!Array.isArray(this.cache.maintenanceInsights) || this.cache.maintenanceInsights.length === 0) {
                 this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
@@ -919,7 +917,7 @@ export class ChatStateManager {
             return this.cache;
         } catch (error) {
             logger.warn('加载聊天状态失败，已回退默认值', error);
-            this.cache = migratePersonaState(this.normalizeState({}));
+            this.cache = this.normalizeState({});
             await this.refreshLifecycleState(this.cache, 'load_fallback');
             this.cache.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(this.cache.maintenanceAdvice ?? [], this.cache);
             return this.cache;
@@ -1015,6 +1013,34 @@ export class ChatStateManager {
             ...buildRetentionPolicy(inferredProfile),
             ...(state.retentionPolicy ?? {}),
         };
+        const normalizedSemanticSeed = state.semanticSeed
+            ? (() => {
+                const identitySeeds = normalizeIdentitySeedMap(state.semanticSeed);
+                const roleProfileSeeds = this.normalizeRoleProfilesInput(state.semanticSeed.roleProfileSeeds ?? {});
+                return {
+                    ...state.semanticSeed,
+                    identitySeeds: Object.keys(identitySeeds).length > 0 ? identitySeeds : undefined,
+                    roleProfileSeeds: Object.keys(roleProfileSeeds).length > 0 ? roleProfileSeeds : undefined,
+                };
+            })()
+            : undefined;
+        const normalizedPersonaProfiles = normalizePersonaProfileMap({
+            ...state,
+            semanticSeed: normalizedSemanticSeed,
+        });
+        const normalizedSimplePersonas = normalizeSimplePersonaMap({
+            ...state,
+            semanticSeed: normalizedSemanticSeed,
+        });
+        const normalizedRoleProfiles = this.normalizeRoleProfilesInput(state.roleProfiles ?? {});
+        const normalizedActiveActorKey = normalizeMemoryText(state.activeActorKey)
+            || getPrimaryPersonaActorKey({
+                ...state,
+                semanticSeed: normalizedSemanticSeed,
+                personaMemoryProfiles: normalizedPersonaProfiles,
+                simpleMemoryPersonas: normalizedSimplePersonas,
+            })
+            || undefined;
         return {
             ...state,
             autoSchemaPolicy: {
@@ -1069,22 +1095,11 @@ export class ChatStateManager {
             characterBindingFingerprint: typeof state.characterBindingFingerprint === 'string'
                 ? state.characterBindingFingerprint
                 : undefined,
-            semanticSeed: state.semanticSeed ?? undefined,
-            personaMemoryProfile: state.personaMemoryProfile
-                ? {
-                    ...DEFAULT_PERSONA_MEMORY_PROFILE,
-                    ...(state.personaMemoryProfile ?? {}),
-                    derivedFrom: Array.isArray(state.personaMemoryProfile?.derivedFrom)
-                        ? state.personaMemoryProfile.derivedFrom
-                        : [],
-                }
-                : undefined,
-            simpleMemoryPersona: state.simpleMemoryPersona
-                ? {
-                    ...DEFAULT_SIMPLE_MEMORY_PERSONA,
-                    ...(state.simpleMemoryPersona ?? {}),
-                }
-                : undefined,
+            semanticSeed: normalizedSemanticSeed,
+            personaMemoryProfiles: Object.keys(normalizedPersonaProfiles).length > 0 ? normalizedPersonaProfiles : undefined,
+            roleProfiles: Object.keys(normalizedRoleProfiles).length > 0 ? normalizedRoleProfiles : undefined,
+            simpleMemoryPersonas: Object.keys(normalizedSimplePersonas).length > 0 ? normalizedSimplePersonas : undefined,
+            activeActorKey: normalizedActiveActorKey,
             coldStartFingerprint: typeof state.coldStartFingerprint === 'string'
                 ? state.coldStartFingerprint
                 : undefined,
@@ -1508,10 +1523,10 @@ export class ChatStateManager {
     async recomputeAdaptivePolicy(): Promise<AdaptivePolicy> {
         const state = await this.load();
         const lifecycle = await this.refreshLifecycleState(state, 'recompute_policy');
-        const profile = await this.recomputeChatProfile({ markDirty: false });
         const metrics = await this.getAdaptiveMetrics();
         const vectorLifecycle = await this.getVectorLifecycle();
         const memoryQuality = await this.getMemoryQuality();
+        const profile = await this.getChatProfile();
         const summarySettings = resolveEffectiveSummarySettings({
             chatProfile: profile,
             globalSettings: readGlobalSummarySettings(),
@@ -2979,7 +2994,6 @@ export class ChatStateManager {
      */
     async setLogicalChatView(view: LogicalChatView, mutationSource: string = 'snapshot_diff'): Promise<void> {
         const state = await this.load();
-        const previousViewHash = normalizeSeedText(state.logicalChatView?.viewHash);
         state.logicalChatView = view;
         await this.recordLifecycleMutation(
             state,
@@ -3337,23 +3351,7 @@ export class ChatStateManager {
         });
     }
 
-    /**
-     * 功能：基于当前状态重建角色记忆画像。
-     * 参数：
-     *   state：当前聊天状态。
-     * 返回：
-     *   PersonaMemoryProfile：重建后的角色记忆画像。
-     */
-    private rebuildPersonaFromState(state: MemoryOSChatState): PersonaMemoryProfile {
-        return inferPersonaMemoryProfile(
-            state.semanticSeed ?? null,
-            state.chatProfile ?? DEFAULT_CHAT_PROFILE,
-            state.groupMemory ?? null,
-            (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null,
-        );
-    }
-
-    private rebuildPersonaProfilesFromState(state: MemoryOSChatState): Record<string, PersonaMemoryProfile> {
+        private rebuildPersonaProfilesFromState(state: MemoryOSChatState): Record<string, PersonaMemoryProfile> {
         return inferPersonaMemoryProfiles(
             state.semanticSeed ?? null,
             state.chatProfile ?? DEFAULT_CHAT_PROFILE,
@@ -3374,9 +3372,7 @@ export class ChatStateManager {
             || Object.keys(nextProfiles)[0]
             || '';
         state.activeActorKey = primaryActorKey || undefined;
-        state.personaMemoryProfile = resolvePersonaProfile({ ...state, personaMemoryProfiles: nextProfiles, activeActorKey: primaryActorKey }, primaryActorKey) ?? DEFAULT_PERSONA_MEMORY_PROFILE;
-        state.simpleMemoryPersona = resolveSimplePersona({ ...state, simpleMemoryPersonas: state.simpleMemoryPersonas, activeActorKey: primaryActorKey }, primaryActorKey) ?? buildSimpleMemoryPersona(state.personaMemoryProfile);
-        return state.personaMemoryProfile;
+        return resolvePersonaProfile({ ...state, personaMemoryProfiles: nextProfiles, activeActorKey: primaryActorKey }, primaryActorKey) ?? DEFAULT_PERSONA_MEMORY_PROFILE;
     }
 
     private resolvePersonaProfileForActor(state: MemoryOSChatState, actorKey?: string | null): PersonaMemoryProfile {
@@ -3398,6 +3394,571 @@ export class ChatStateManager {
         }
         this.syncPersonaProfilesFromState(state, state.activeActorKey);
         return state.personaMemoryProfiles ?? {};
+    }
+
+    /**
+     * 功能：归一化角色键，去掉内部噪音片段，减少同名角色被拆成多条。
+     * @param value 原始角色键。
+     * @returns 清洗后的角色键。
+     */
+    private normalizeRoleActorKey(value: unknown): string {
+        let actorKey = normalizeMemoryText(value);
+        if (!actorKey) {
+            return '';
+        }
+        actorKey = actorKey.replace(/\s+[·•]\s+(proposal_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
+        if (/^(character|assistant|role|name):/i.test(actorKey)) {
+            actorKey = actorKey.split(':').slice(1).join(':').trim();
+        }
+        if (actorKey.includes('::')) {
+            const segments = actorKey.split('::').map((item: string): string => normalizeMemoryText(item)).filter(Boolean);
+            const tail = segments[segments.length - 1] ?? '';
+            if (tail && (/[^\x00-\x7f]/.test(tail) || !/^[a-z0-9:_-]+$/i.test(tail))) {
+                actorKey = tail;
+            }
+        }
+        actorKey = actorKey.replace(/(?:^|[\\/:])proposal_summary:[\w-]+$/i, '').trim();
+        actorKey = actorKey.replace(/[\s._:-]+$/g, '').trim();
+        return actorKey;
+    }
+
+    /**
+     * 功能：判断角色键是否是系统占位或世界域对象，避免进入角色中心名册。
+     * @param actorKey 角色键。
+     * @returns 是否应当忽略。
+     */
+    private isVirtualRoleActorKey(actorKey: string): boolean {
+        const normalized = normalizeMemoryText(actorKey).toLowerCase();
+        if (!normalized) {
+            return true;
+        }
+        if (normalized.startsWith('__')) {
+            return true;
+        }
+        if (['world', 'system', 'unowned', 'unknown', 'none', 'global', 'scene'].includes(normalized)) {
+            return true;
+        }
+        return /^(world|system|global)[:/]/.test(normalized)
+            || /proposal_summary/.test(normalized);
+    }
+
+    /**
+     * 功能：归一化并去重角色资料映射，确保状态落盘结构稳定。
+     * @param input 原始角色资料映射。
+     * @returns 归一化后的角色资料映射。
+     */
+    private normalizeRoleProfilesInput(input: Record<string, RoleProfile> | null | undefined): Record<string, RoleProfile> {
+        const source = input && typeof input === 'object' ? input : {};
+        const result: Record<string, RoleProfile> = {};
+        const normalizeList = (value: unknown): string[] => {
+            if (!Array.isArray(value)) {
+                return [];
+            }
+            return Array.from(new Set(value.map((item: unknown): string => normalizeMemoryText(item)).filter(Boolean)));
+        };
+        const normalizeSourceRefs = (value: unknown): string[] => {
+            if (!Array.isArray(value)) {
+                return [];
+            }
+            return Array.from(new Set(value.map((item: unknown): string => normalizeMemoryText(item)).filter(Boolean))).slice(0, 12);
+        };
+        Object.entries(source).forEach(([rawKey, profile]): void => {
+            if (!profile || typeof profile !== 'object') {
+                return;
+            }
+            const normalizedProfile = profile as RoleProfile;
+            const actorKey = this.normalizeRoleActorKey(normalizedProfile.actorKey || rawKey);
+            if (!actorKey || this.isVirtualRoleActorKey(actorKey)) {
+                return;
+            }
+            const normalizeAssets = (value: unknown, kind: 'item' | 'equipment'): RoleAssetEntry[] => {
+                if (!Array.isArray(value)) {
+                    return [];
+                }
+                const map = new Map<string, RoleAssetEntry>();
+                value.forEach((item: unknown): void => {
+                    if (!item || typeof item !== 'object') {
+                        return;
+                    }
+                    const record = item as RoleAssetEntry;
+                    const name = normalizeMemoryText(record.name);
+                    const detail = normalizeMemoryText(record.detail);
+                    if (!name && !detail) {
+                        return;
+                    }
+                    const key = `${name.toLowerCase()}::${detail.toLowerCase()}`;
+                    if (map.has(key)) {
+                        return;
+                    }
+                    map.set(key, {
+                        kind,
+                        name: name || detail || '未命名条目',
+                        detail,
+                        sourceRefs: normalizeSourceRefs(record.sourceRefs),
+                    });
+                });
+                return Array.from(map.values());
+            };
+            const normalizeRelations = (value: unknown): RoleRelationshipFact[] => {
+                if (!Array.isArray(value)) {
+                    return [];
+                }
+                const map = new Map<string, RoleRelationshipFact>();
+                value.forEach((item: unknown): void => {
+                    if (!item || typeof item !== 'object') {
+                        return;
+                    }
+                    const record = item as RoleRelationshipFact;
+                    const targetActorKey = this.normalizeRoleActorKey(record.targetActorKey);
+                    const targetLabel = normalizeMemoryText(record.targetLabel) || targetActorKey || '未标注对象';
+                    const label = normalizeMemoryText(record.label) || '关系';
+                    const detail = normalizeMemoryText(record.detail);
+                    if (!detail) {
+                        return;
+                    }
+                    const signature = `${targetLabel.toLowerCase()}::${label.toLowerCase()}::${detail.toLowerCase()}`;
+                    if (map.has(signature)) {
+                        return;
+                    }
+                    map.set(signature, {
+                        targetActorKey: targetActorKey || undefined,
+                        targetLabel,
+                        label,
+                        detail,
+                        sourceRefs: normalizeSourceRefs(record.sourceRefs),
+                    });
+                });
+                return Array.from(map.values());
+            };
+            result[actorKey] = {
+                actorKey,
+                displayName: normalizeMemoryText(normalizedProfile.displayName) || actorKey,
+                aliases: normalizeList(normalizedProfile.aliases),
+                identityFacts: normalizeList(normalizedProfile.identityFacts),
+                originFacts: normalizeList(normalizedProfile.originFacts),
+                relationshipFacts: normalizeRelations(normalizedProfile.relationshipFacts),
+                items: normalizeAssets(normalizedProfile.items, 'item'),
+                equipments: normalizeAssets(normalizedProfile.equipments, 'equipment'),
+                updatedAt: Math.max(0, Number(normalizedProfile.updatedAt ?? 0) || 0),
+            };
+        });
+        return result;
+    }
+
+    /**
+     * 功能：基于语义种子、事实、世界状态和关系状态重算角色资料。
+     * @param state 聊天状态。
+     * @param facts 事实列表。
+     * @param worldStates 世界状态列表。
+     * @param relationshipState 关系状态列表。
+     * @returns 角色资料映射。
+     */
+    private buildRoleProfilesFromSources(
+        state: MemoryOSChatState,
+        facts: DBFact[],
+        worldStates: DBWorldState[],
+        relationshipState: RelationshipState[],
+    ): Record<string, RoleProfile> {
+        const profileMap = new Map<string, RoleProfile>();
+        const now = Date.now();
+        const equipmentPattern = /(装备|武器|护甲|饰品|法器|载具|equipment|equip|weapon|armor|armour|gear|artifact|vehicle|mount)/i;
+        const dedupeTextList = (values: string[]): string[] => {
+            return Array.from(new Set(values.map((item: string): string => normalizeMemoryText(item)).filter(Boolean)));
+        };
+        const collectValueTexts = (value: unknown, depth: number = 0): string[] => {
+            if (depth > 3 || value == null) {
+                return [];
+            }
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                const text = normalizeMemoryText(value);
+                return text ? [text] : [];
+            }
+            if (Array.isArray(value)) {
+                return value.flatMap((item: unknown): string[] => collectValueTexts(item, depth + 1));
+            }
+            if (typeof value === 'object') {
+                return Object.values(value as Record<string, unknown>).flatMap((item: unknown): string[] => collectValueTexts(item, depth + 1));
+            }
+            return [];
+        };
+        const ensureProfile = (rawActorKey: unknown, preferredName?: unknown): RoleProfile | null => {
+            const actorKey = this.normalizeRoleActorKey(rawActorKey);
+            if (!actorKey || this.isVirtualRoleActorKey(actorKey)) {
+                return null;
+            }
+            const existing = profileMap.get(actorKey);
+            if (existing) {
+                const nextName = normalizeMemoryText(preferredName);
+                if (nextName && existing.displayName === existing.actorKey) {
+                    existing.displayName = nextName;
+                }
+                return existing;
+            }
+            const created: RoleProfile = {
+                actorKey,
+                displayName: normalizeMemoryText(preferredName) || actorKey,
+                aliases: [],
+                identityFacts: [],
+                originFacts: [],
+                relationshipFacts: [],
+                items: [],
+                equipments: [],
+                updatedAt: now,
+            };
+            profileMap.set(actorKey, created);
+            return created;
+        };
+        const pushTextFacts = (target: string[], values: string[]): void => {
+            const merged = dedupeTextList(target.concat(values));
+            target.splice(0, target.length, ...merged);
+        };
+        const pushAsset = (
+            profile: RoleProfile,
+            kind: 'item' | 'equipment',
+            name: string,
+            detail: string,
+            sourceRef: string,
+            updatedAt: number,
+        ): void => {
+            const normalizedName = normalizeMemoryText(name);
+            const normalizedDetail = normalizeMemoryText(detail);
+            if (!normalizedName && !normalizedDetail) {
+                return;
+            }
+            const bucket = kind === 'equipment' ? profile.equipments : profile.items;
+            const signature = `${(normalizedName || normalizedDetail).toLowerCase()}::${normalizedDetail.toLowerCase()}`;
+            const exists = bucket.some((item: RoleAssetEntry): boolean => `${normalizeMemoryText(item.name).toLowerCase()}::${normalizeMemoryText(item.detail).toLowerCase()}` === signature);
+            if (exists) {
+                return;
+            }
+            bucket.push({
+                kind,
+                name: normalizedName || normalizedDetail || '未命名条目',
+                detail: normalizedDetail,
+                sourceRefs: sourceRef ? [sourceRef] : [],
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, updatedAt || now);
+        };
+        const pushRelationship = (
+            profile: RoleProfile,
+            input: {
+                targetActorKey?: string | null;
+                targetLabel?: string;
+                label?: string;
+                detail?: string;
+                sourceRef?: string;
+                updatedAt?: number;
+            },
+        ): void => {
+            const detail = normalizeMemoryText(input.detail);
+            if (!detail) {
+                return;
+            }
+            const normalizedTargetActorKey = this.normalizeRoleActorKey(input.targetActorKey);
+            const targetLabel = normalizeMemoryText(input.targetLabel) || normalizedTargetActorKey || '未标注对象';
+            const label = normalizeMemoryText(input.label) || '关系';
+            const signature = `${targetLabel.toLowerCase()}::${label.toLowerCase()}::${detail.toLowerCase()}`;
+            const exists = profile.relationshipFacts.some((item: RoleRelationshipFact): boolean => {
+                return `${normalizeMemoryText(item.targetLabel).toLowerCase()}::${normalizeMemoryText(item.label).toLowerCase()}::${normalizeMemoryText(item.detail).toLowerCase()}` === signature;
+            });
+            if (exists) {
+                return;
+            }
+            profile.relationshipFacts.push({
+                targetActorKey: normalizedTargetActorKey || undefined,
+                targetLabel,
+                label,
+                detail,
+                sourceRefs: input.sourceRef ? [input.sourceRef] : [],
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, Number(input.updatedAt ?? now) || now);
+        };
+
+        const seed = state.semanticSeed ?? null;
+        Object.entries(seed?.roleProfileSeeds ?? {}).forEach(([actorKey, profileSeed]): void => {
+            const profile = ensureProfile(actorKey, profileSeed?.displayName);
+            if (!profile || !profileSeed) {
+                return;
+            }
+            pushTextFacts(profile.aliases, dedupeTextList(profileSeed.aliases ?? []));
+            pushTextFacts(profile.identityFacts, dedupeTextList(profileSeed.identityFacts ?? []));
+            pushTextFacts(profile.originFacts, dedupeTextList(profileSeed.originFacts ?? []));
+            (profileSeed.relationshipFacts ?? []).forEach((item: RoleRelationshipFact): void => {
+                pushRelationship(profile, {
+                    targetActorKey: item.targetActorKey,
+                    targetLabel: item.targetLabel,
+                    label: item.label,
+                    detail: item.detail,
+                    sourceRef: (item.sourceRefs ?? [])[0] || `semantic_seed:roleProfileSeeds:${actorKey}`,
+                    updatedAt: Number(profileSeed.updatedAt ?? now) || now,
+                });
+            });
+            (profileSeed.items ?? []).forEach((item: RoleAssetEntry): void => {
+                pushAsset(
+                    profile,
+                    'item',
+                    item.name,
+                    item.detail,
+                    (item.sourceRefs ?? [])[0] || `semantic_seed:roleProfileSeeds:${actorKey}`,
+                    Number(profileSeed.updatedAt ?? now) || now,
+                );
+            });
+            (profileSeed.equipments ?? []).forEach((item: RoleAssetEntry): void => {
+                pushAsset(
+                    profile,
+                    'equipment',
+                    item.name,
+                    item.detail,
+                    (item.sourceRefs ?? [])[0] || `semantic_seed:roleProfileSeeds:${actorKey}`,
+                    Number(profileSeed.updatedAt ?? now) || now,
+                );
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, Number(profileSeed.updatedAt ?? now) || now);
+        });
+        if (seed?.identitySeed) {
+            const actorKey = this.normalizeRoleActorKey(seed.identitySeed.roleKey);
+            const profile = ensureProfile(actorKey, seed.identitySeed.displayName);
+            if (profile) {
+                pushTextFacts(profile.aliases, dedupeTextList(seed.identitySeed.aliases ?? []));
+                pushTextFacts(profile.identityFacts, dedupeTextList([
+                    ...(seed.identitySeed.identity ?? []),
+                    normalizeMemoryText(seed.aiSummary?.roleSummary),
+                    ...(seed.aiSummary?.characterGoals ?? []),
+                ]));
+                (seed.identitySeed.relationshipAnchors ?? []).forEach((text: string): void => {
+                    pushRelationship(profile, {
+                        label: '关系锚点',
+                        detail: text,
+                        sourceRef: 'semantic_seed:identitySeed.relationshipAnchors',
+                        updatedAt: now,
+                    });
+                });
+            }
+        }
+        Object.entries(seed?.identitySeeds ?? {}).forEach(([actorKey, identitySeed]): void => {
+            const profile = ensureProfile(actorKey, identitySeed?.displayName);
+            if (!profile) {
+                return;
+            }
+            pushTextFacts(profile.aliases, dedupeTextList(identitySeed?.aliases ?? []));
+            pushTextFacts(profile.identityFacts, dedupeTextList([
+                ...(identitySeed?.identity ?? []),
+            ]));
+            (identitySeed?.relationshipAnchors ?? []).forEach((text: string): void => {
+                pushRelationship(profile, {
+                    label: '关系锚点',
+                    detail: text,
+                    sourceRef: `semantic_seed:identitySeeds:${actorKey}`,
+                    updatedAt: now,
+                });
+            });
+        });
+
+        facts.forEach((fact: DBFact): void => {
+            const entityActorKey = normalizeMemoryText(fact.entity?.kind).toLowerCase() === 'character'
+                ? this.normalizeRoleActorKey(fact.entity?.id)
+                : '';
+            const ownerActorKey = this.normalizeRoleActorKey(fact.ownerActorKey);
+            const pathActorKey = (() => {
+                const path = normalizeMemoryText(fact.path);
+                const matched = path.match(/character[s]?[/:]+([^/]+)/i);
+                return this.normalizeRoleActorKey(matched?.[1] ?? '');
+            })();
+            const actorKey = entityActorKey || ownerActorKey || pathActorKey;
+            const valueRecord = (fact.value && typeof fact.value === 'object' && !Array.isArray(fact.value))
+                ? fact.value as Record<string, unknown>
+                : {};
+            const displayName = normalizeMemoryText(valueRecord.displayName)
+                || normalizeMemoryText(valueRecord.name)
+                || normalizeMemoryText(valueRecord.title)
+                || actorKey;
+            const profile = ensureProfile(actorKey, displayName);
+            if (!profile) {
+                return;
+            }
+            const factSource = `fact:${normalizeMemoryText(fact.factKey) || normalizeMemoryText(fact.path) || normalizeMemoryText(fact.type) || 'unknown'}`;
+            const updatedAt = Number(fact.updatedAt ?? now) || now;
+            const aliases = dedupeTextList([
+                ...collectValueTexts(valueRecord.aliases),
+                ...collectValueTexts(valueRecord.alias),
+                ...collectValueTexts(valueRecord.aka),
+            ]);
+            const identityFacts = dedupeTextList([
+                ...collectValueTexts(valueRecord.identity),
+                ...collectValueTexts(valueRecord.identities),
+                ...collectValueTexts(valueRecord.profile),
+                ...collectValueTexts(valueRecord.summary),
+                ...collectValueTexts(valueRecord.roleSummary),
+            ]);
+            const originFacts = dedupeTextList([
+                ...collectValueTexts(valueRecord.origin),
+                ...collectValueTexts(valueRecord.background),
+                ...collectValueTexts(valueRecord.backstory),
+                ...collectValueTexts(valueRecord.history),
+                ...collectValueTexts(valueRecord.from),
+            ]);
+            pushTextFacts(profile.aliases, aliases);
+            pushTextFacts(profile.identityFacts, identityFacts);
+            pushTextFacts(profile.originFacts, originFacts);
+            const relationLines = dedupeTextList([
+                ...collectValueTexts(valueRecord.relationship),
+                ...collectValueTexts(valueRecord.relationships),
+                ...collectValueTexts(valueRecord.relation),
+                ...collectValueTexts(valueRecord.relations),
+                ...collectValueTexts(valueRecord.bond),
+            ]);
+            const relationTarget = normalizeMemoryText(valueRecord.targetLabel)
+                || normalizeMemoryText(valueRecord.targetName)
+                || normalizeMemoryText(valueRecord.target);
+            relationLines.forEach((line: string): void => {
+                pushRelationship(profile, {
+                    targetLabel: relationTarget,
+                    targetActorKey: normalizeMemoryText(valueRecord.targetActorKey),
+                    label: '关系事实',
+                    detail: line,
+                    sourceRef: factSource,
+                    updatedAt,
+                });
+            });
+            const assetTexts = dedupeTextList([
+                ...collectValueTexts(valueRecord.items),
+                ...collectValueTexts(valueRecord.item),
+                ...collectValueTexts(valueRecord.inventory),
+                ...collectValueTexts(valueRecord.owned),
+                ...collectValueTexts(valueRecord.equipments),
+                ...collectValueTexts(valueRecord.equipment),
+                ...collectValueTexts(valueRecord.weapon),
+                ...collectValueTexts(valueRecord.armor),
+                ...collectValueTexts(valueRecord.armour),
+                ...collectValueTexts(valueRecord.accessory),
+                ...collectValueTexts(valueRecord.artifact),
+                ...collectValueTexts(valueRecord.vehicle),
+                ...collectValueTexts(valueRecord.mount),
+            ]);
+            assetTexts.forEach((assetText: string): void => {
+                const kind: 'item' | 'equipment' = equipmentPattern.test(assetText) ? 'equipment' : 'item';
+                pushAsset(profile, kind, assetText, '', factSource, updatedAt);
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, updatedAt);
+            if (displayName && profile.displayName === profile.actorKey) {
+                profile.displayName = displayName;
+            }
+        });
+
+        worldStates.forEach((entry: DBWorldState): void => {
+            const valueRecord = (entry.value && typeof entry.value === 'object' && !Array.isArray(entry.value))
+                ? entry.value as Record<string, unknown>
+                : {};
+            const scopeType = normalizeMemoryText((valueRecord as { scopeType?: unknown }).scopeType).toLowerCase();
+            const subjectId = this.normalizeRoleActorKey((valueRecord as { subjectId?: unknown }).subjectId);
+            const pathActor = (() => {
+                const path = normalizeMemoryText(entry.path);
+                const matched = path.match(/character[s]?[/:]+([^/]+)/i);
+                return this.normalizeRoleActorKey(matched?.[1] ?? '');
+            })();
+            const actorKey = subjectId || (scopeType === 'character' ? pathActor : '');
+            const profile = ensureProfile(actorKey, normalizeMemoryText((valueRecord as { title?: unknown }).title));
+            if (!profile) {
+                return;
+            }
+            const sourceRef = `world_state:${normalizeMemoryText(entry.stateKey) || normalizeMemoryText(entry.path)}`;
+            const updatedAt = Number(entry.updatedAt ?? now) || now;
+            const summaryText = dedupeTextList([
+                ...collectValueTexts((valueRecord as { title?: unknown }).title),
+                ...collectValueTexts((valueRecord as { summary?: unknown }).summary),
+                ...collectValueTexts((valueRecord as { description?: unknown }).description),
+            ]);
+            const pathText = normalizeMemoryText(entry.path).toLowerCase();
+            const stateType = normalizeMemoryText((valueRecord as { stateType?: unknown }).stateType).toLowerCase();
+            if (/identity|profile|character/.test(pathText) || /identity|profile/.test(stateType)) {
+                pushTextFacts(profile.identityFacts, summaryText);
+            }
+            if (/origin|background|history/.test(pathText) || /origin|background|history/.test(stateType)) {
+                pushTextFacts(profile.originFacts, summaryText);
+            }
+            if (/relationship|relation|bond/.test(pathText) || /relationship|relation|bond/.test(stateType)) {
+                summaryText.forEach((line: string): void => {
+                    pushRelationship(profile, {
+                        label: '关系状态',
+                        detail: line,
+                        sourceRef,
+                        updatedAt,
+                    });
+                });
+            }
+            const assets = dedupeTextList([
+                ...collectValueTexts((valueRecord as { items?: unknown }).items),
+                ...collectValueTexts((valueRecord as { inventory?: unknown }).inventory),
+                ...collectValueTexts((valueRecord as { equipments?: unknown }).equipments),
+                ...collectValueTexts((valueRecord as { equipment?: unknown }).equipment),
+                ...collectValueTexts((valueRecord as { weapon?: unknown }).weapon),
+                ...collectValueTexts((valueRecord as { armor?: unknown }).armor),
+            ]);
+            assets.forEach((assetText: string): void => {
+                const kind: 'item' | 'equipment' = equipmentPattern.test(assetText) ? 'equipment' : 'item';
+                pushAsset(profile, kind, assetText, '', sourceRef, updatedAt);
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, updatedAt);
+        });
+
+        relationshipState.forEach((item: RelationshipState): void => {
+            const actorKey = this.normalizeRoleActorKey(item.actorKey);
+            const profile = ensureProfile(actorKey, actorKey);
+            if (!profile) {
+                return;
+            }
+            pushRelationship(profile, {
+                targetActorKey: item.targetKey,
+                targetLabel: this.normalizeRoleActorKey(item.targetKey) || normalizeMemoryText(item.targetKey),
+                label: '关系状态',
+                detail: normalizeMemoryText(item.summary),
+                sourceRef: `relationship:${normalizeMemoryText(item.relationshipKey)}`,
+                updatedAt: Number(item.updatedAt ?? now) || now,
+            });
+            profile.updatedAt = Math.max(profile.updatedAt, Number(item.updatedAt ?? now) || now);
+        });
+
+        const mergedByDisplay = new Map<string, RoleProfile>();
+        Array.from(profileMap.values()).forEach((profile: RoleProfile): void => {
+            profile.aliases = dedupeTextList(profile.aliases);
+            profile.identityFacts = dedupeTextList(profile.identityFacts);
+            profile.originFacts = dedupeTextList(profile.originFacts);
+            const displayName = normalizeMemoryText(profile.displayName) || profile.actorKey;
+            profile.displayName = displayName;
+            const displayKey = displayName.toLowerCase();
+            const existing = mergedByDisplay.get(displayKey);
+            if (!existing) {
+                mergedByDisplay.set(displayKey, profile);
+                return;
+            }
+            if (profile.actorKey.length < existing.actorKey.length) {
+                existing.actorKey = profile.actorKey;
+            }
+            existing.aliases = dedupeTextList(existing.aliases.concat(profile.aliases));
+            existing.identityFacts = dedupeTextList(existing.identityFacts.concat(profile.identityFacts));
+            existing.originFacts = dedupeTextList(existing.originFacts.concat(profile.originFacts));
+            existing.relationshipFacts = existing.relationshipFacts.concat(profile.relationshipFacts);
+            existing.items = existing.items.concat(profile.items);
+            existing.equipments = existing.equipments.concat(profile.equipments);
+            existing.updatedAt = Math.max(existing.updatedAt, profile.updatedAt);
+        });
+
+        const ordered = Array.from(mergedByDisplay.values())
+            .filter((profile: RoleProfile): boolean => !this.isVirtualRoleActorKey(profile.actorKey))
+            .sort((left: RoleProfile, right: RoleProfile): number => {
+                const timeDiff = Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0);
+                if (timeDiff !== 0) {
+                    return timeDiff;
+                }
+                return normalizeMemoryText(left.displayName).localeCompare(normalizeMemoryText(right.displayName), 'zh-CN');
+            });
+
+        return this.normalizeRoleProfilesInput(
+            ordered.reduce<Record<string, RoleProfile>>((result: Record<string, RoleProfile>, profile: RoleProfile): Record<string, RoleProfile> => {
+                result[profile.actorKey] = profile;
+                return result;
+            }, {}),
+        );
     }
 
     private buildPerActorRetentionMetrics(
@@ -3940,6 +4501,57 @@ export class ChatStateManager {
     }
 
     /**
+     * 功能：读取角色资料映射；若缓存为空则自动重算。
+     * @returns 角色资料映射。
+     */
+    async getRoleProfiles(): Promise<Record<string, RoleProfile>> {
+        const state = await this.load();
+        if (!state.roleProfiles || Object.keys(state.roleProfiles).length <= 0) {
+            await this.recomputeRoleProfiles();
+        }
+        return { ...(state.roleProfiles ?? {}) };
+    }
+
+    /**
+     * 功能：读取单个角色资料。
+     * @param actorKey 角色键。
+     * @returns 角色资料，不存在时返回 null。
+     */
+    async getRoleProfile(actorKey: string): Promise<RoleProfile | null> {
+        const normalizedActorKey = this.normalizeRoleActorKey(actorKey);
+        if (!normalizedActorKey) {
+            return null;
+        }
+        const profiles = await this.getRoleProfiles();
+        return profiles[normalizedActorKey] ?? null;
+    }
+
+    /**
+     * 功能：重算角色资料并写回聊天状态。
+     * @returns 重算后的角色资料映射。
+     */
+    async recomputeRoleProfiles(): Promise<Record<string, RoleProfile>> {
+        const state = await this.load();
+        const [facts, worldStates, relationships] = await Promise.all([
+            db.facts
+                .where('[chatKey+updatedAt]')
+                .between([this.chatKey, Dexie.minKey], [this.chatKey, Dexie.maxKey])
+                .reverse()
+                .limit(320)
+                .toArray(),
+            db.world_state
+                .where('[chatKey+path]')
+                .between([this.chatKey, ''], [this.chatKey, '\uffff'])
+                .toArray(),
+            this.getRelationshipState(),
+        ]);
+        const nextProfiles = this.buildRoleProfilesFromSources(state, facts, worldStates, relationships);
+        state.roleProfiles = Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined;
+        this.markDirty();
+        return { ...(state.roleProfiles ?? {}) };
+    }
+
+    /**
      * 功能：读取冷启动初始化使用的世界书选择。
      * 参数：
      *   无。
@@ -4056,7 +4668,7 @@ export class ChatStateManager {
      */
     async getPersonaMemoryProfile(): Promise<PersonaMemoryProfile | null> {
         const state = await this.load();
-        if ((!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) && !state.personaMemoryProfile) {
+        if (!state.personaMemoryProfiles || Object.keys(state.personaMemoryProfiles).length <= 0) {
             await this.recomputePersonaMemoryProfile();
         }
         return resolvePersonaProfile(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null) ?? null;
@@ -4094,8 +4706,6 @@ export class ChatStateManager {
         }
         const normalizedActorKey = normalizeMemoryText(actorKey) || getPrimaryPersonaActorKey(state) || Object.keys(state.personaMemoryProfiles ?? {})[0] || '';
         state.activeActorKey = normalizedActorKey || undefined;
-        state.personaMemoryProfile = resolvePersonaProfile(state, normalizedActorKey || null) ?? state.personaMemoryProfile ?? DEFAULT_PERSONA_MEMORY_PROFILE;
-        state.simpleMemoryPersona = resolveSimplePersona(state, normalizedActorKey || null) ?? state.simpleMemoryPersona ?? buildSimpleMemoryPersona(state.personaMemoryProfile);
         this.markDirty();
         return normalizedActorKey || null;
     }
@@ -4109,7 +4719,7 @@ export class ChatStateManager {
      */
     async getSimpleMemoryPersona(): Promise<SimpleMemoryPersona | null> {
         const state = await this.load();
-        if ((!state.simpleMemoryPersonas || Object.keys(state.simpleMemoryPersonas).length <= 0) && !state.simpleMemoryPersona) {
+        if (!state.simpleMemoryPersonas || Object.keys(state.simpleMemoryPersonas).length <= 0) {
             await this.recomputePersonaMemoryProfile();
         }
         return resolveSimplePersona(state, (state.activeActorKey ?? getPrimaryPersonaActorKey(state)) || null) ?? null;
@@ -4144,7 +4754,7 @@ export class ChatStateManager {
      *   Promise<MemoryCandidate>：带评分的候选记忆。
      */
     async buildMemoryCandidate(input: MemoryCandidateInput): Promise<MemoryCandidate> {
-        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
+        const profile = (await this.getPersonaMemoryProfile()) ?? DEFAULT_PERSONA_MEMORY_PROFILE;
         const tuning = await this.getMemoryTuningProfile();
         return buildScoredMemoryCandidate(input, profile, tuning);
     }
@@ -4705,7 +5315,6 @@ export class ChatStateManager {
             return 0;
         }
         await this.hydrateLifecycleIndexFromDb(state);
-        const profile = await this.getPersonaMemoryProfile() ?? DEFAULT_PERSONA_MEMORY_PROFILE;
         const eventInput = await this.buildOwnedMemoryInferenceInput(state, eventLifecycle.recordKey, eventLifecycle.recordKind, eventLifecycle);
         const eventTokens = this.extractMemoryTopicTokens(eventInput);
         const eventOwner = normalizeMemoryText(eventLifecycle.ownerActorKey);
@@ -4729,7 +5338,7 @@ export class ChatStateManager {
             let action: 'reinforce' | 'blur' | 'overwrite' | null = null;
             if (sameRelationScope || targetLifecycle.memoryType === 'relationship' || ['bond', 'emotion_imprint', 'goal', 'promise'].includes(String(targetLifecycle.memorySubtype ?? ''))) {
                 action = 'reinforce';
-            } else if (['minor_event', 'conversation_event', 'temporary_status', 'rumor'].includes(String(targetLifecycle.memorySubtype ?? ''))) {
+            } else if (['minor_event', 'dialogue_quote', 'temporary_status', 'rumor'].includes(String(targetLifecycle.memorySubtype ?? ''))) {
                 action = 'overwrite';
             } else if (targetLifecycle.memoryType === 'event' || targetLifecycle.memoryType === 'world' || sameWorldLane) {
                 action = 'blur';
@@ -5498,9 +6107,7 @@ export class ChatStateManager {
             state.coldStartBootstrapUpdatedAt = undefined;
             state.coldStartBootstrapError = undefined;
             state.semanticSeed = undefined;
-            state.personaMemoryProfile = undefined;
             state.personaMemoryProfiles = undefined;
-            state.simpleMemoryPersona = undefined;
             state.simpleMemoryPersonas = undefined;
             state.activeActorKey = undefined;
             state.memoryLifecycleIndex = {};

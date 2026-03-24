@@ -725,7 +725,7 @@ export function resolveEffectiveSummarySettings(input: {
 export function resolveSummaryRuntimeSettings(
     settings: EffectiveSummarySettings,
     metrics?: AdaptiveMetrics | null,
-    cooldown?: LongSummaryCooldownState | null,
+    _cooldown?: LongSummaryCooldownState | null,
 ): SummaryRuntimeSettings {
     const lengthBudgetMap: Record<SummaryLength, { short: number; long: number }> = {
         short: { short: 1800, long: 4800 },

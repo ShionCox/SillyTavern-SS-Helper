@@ -20,7 +20,7 @@ function readPersonaSettingsRecord(
 }
 
 function readChatMetadataPersona(
-  context: SdkTavernContextEvent | null,
+  _context: SdkTavernContextEvent | null,
 ): string {
   const runtime = getTavernRuntimeContextEvent();
   const chatMetadata = runtime?.chatMetadata;

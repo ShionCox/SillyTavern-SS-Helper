@@ -173,12 +173,6 @@ export function normalizePersonaProfileMap(state: MemoryOSChatState): PersonaMem
             ? existingProfile
             : normalizedProfile;
     });
-
-    const primaryActorKey = getPrimaryPersonaActorKey(state);
-    const legacyProfile = normalizePersonaProfile(state.personaMemoryProfile);
-    if (legacyProfile && primaryActorKey && !result[primaryActorKey]) {
-        result[primaryActorKey] = legacyProfile;
-    }
     return result;
 }
 
@@ -199,11 +193,6 @@ export function normalizeSimplePersonaMap(state: MemoryOSChatState): SimpleMemor
             ? existingProfile
             : normalizedProfile;
     });
-    const primaryActorKey = getPrimaryPersonaActorKey(state);
-    const legacyProfile = normalizeSimplePersona(state.simpleMemoryPersona);
-    if (legacyProfile && primaryActorKey && !result[primaryActorKey]) {
-        result[primaryActorKey] = legacyProfile;
-    }
     return result;
 }
 
@@ -217,7 +206,7 @@ export function resolvePersonaProfile(state: MemoryOSChatState, actorKey?: strin
     if (primaryActorKey && map[primaryActorKey]) {
         return map[primaryActorKey];
     }
-    return normalizePersonaProfile(state.personaMemoryProfile) ?? null;
+    return null;
 }
 
 export function resolveSimplePersona(state: MemoryOSChatState, actorKey?: string | null): SimpleMemoryPersona | null {
@@ -230,62 +219,5 @@ export function resolveSimplePersona(state: MemoryOSChatState, actorKey?: string
     if (primaryActorKey && map[primaryActorKey]) {
         return map[primaryActorKey];
     }
-    return normalizeSimplePersona(state.simpleMemoryPersona) ?? null;
-}
-
-export function setPersonaProfile(state: MemoryOSChatState, actorKey: string | null | undefined, profile: PersonaMemoryProfile): PersonaMemoryProfileMap {
-    const normalizedActorKey = normalizePersonaText(actorKey) || getPrimaryPersonaActorKey(state) || normalizePersonaText(state.semanticSeed?.identitySeed?.roleKey) || 'primary';
-    const nextMap = {
-        ...normalizePersonaProfileMap(state),
-        [normalizedActorKey]: normalizePersonaProfile(profile) ?? DEFAULT_PERSONA_MEMORY_PROFILE,
-    };
-    state.personaMemoryProfiles = nextMap;
-    const primaryActorKey = getPrimaryPersonaActorKey(state) || normalizedActorKey;
-    if (nextMap[primaryActorKey]) {
-        state.personaMemoryProfile = nextMap[primaryActorKey];
-    }
-    if (!state.activeActorKey) {
-        state.activeActorKey = primaryActorKey;
-    }
-    return nextMap;
-}
-
-export function setSimplePersona(state: MemoryOSChatState, actorKey: string | null | undefined, profile: SimpleMemoryPersona): SimpleMemoryPersonaMap {
-    const normalizedActorKey = normalizePersonaText(actorKey) || getPrimaryPersonaActorKey(state) || normalizePersonaText(state.semanticSeed?.identitySeed?.roleKey) || 'primary';
-    const nextMap = {
-        ...normalizeSimplePersonaMap(state),
-        [normalizedActorKey]: normalizeSimplePersona(profile) ?? DEFAULT_SIMPLE_MEMORY_PERSONA,
-    };
-    state.simpleMemoryPersonas = nextMap;
-    const primaryActorKey = getPrimaryPersonaActorKey(state) || normalizedActorKey;
-    if (nextMap[primaryActorKey]) {
-        state.simpleMemoryPersona = nextMap[primaryActorKey];
-    }
-    return nextMap;
-}
-
-export function migratePersonaState(state: MemoryOSChatState): MemoryOSChatState {
-    const primaryActorKey = getPrimaryPersonaActorKey(state) || normalizePersonaText(state.semanticSeed?.identitySeed?.roleKey) || 'primary';
-    state.personaMemoryProfiles = normalizePersonaProfileMap({
-        ...state,
-        activeActorKey: normalizePersonaText(state.activeActorKey) || primaryActorKey,
-    });
-    state.simpleMemoryPersonas = normalizeSimplePersonaMap({
-        ...state,
-        activeActorKey: normalizePersonaText(state.activeActorKey) || primaryActorKey,
-    });
-    state.activeActorKey = normalizePersonaText(state.activeActorKey) || primaryActorKey;
-    if (state.personaMemoryProfiles[primaryActorKey]) {
-        state.personaMemoryProfile = state.personaMemoryProfiles[primaryActorKey];
-    }
-    if (state.simpleMemoryPersonas[primaryActorKey]) {
-        state.simpleMemoryPersona = state.simpleMemoryPersonas[primaryActorKey];
-    }
-    if (state.semanticSeed) {
-        const nextIdentitySeeds = normalizeIdentitySeedMap(state.semanticSeed);
-        if (Object.keys(nextIdentitySeeds).length > 0) {
-            state.semanticSeed.identitySeeds = nextIdentitySeeds;
-        }
-    }
-    return state;
+    return null;
 }

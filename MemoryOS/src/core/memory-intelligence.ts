@@ -506,7 +506,7 @@ function inferMemorySubtypeFromText(input: OwnedMemoryInferenceInput): MemorySub
     if (/major|关键|重大|转折|决战|真相|plot/.test(text)) return 'major_plot_event';
     if (/combat|战斗|交战|战场/.test(text)) return 'combat_event';
     if (/travel|旅途|出发|抵达|赶路/.test(text)) return 'travel_event';
-    if (/conversation|对话|交谈|聊天/.test(text)) return 'conversation_event';
+    if (/conversation|对话|交谈|聊天|原话|引用/.test(text)) return 'dialogue_quote';
     if (/history|历史|过去|往事|起源/.test(text)) return 'world_history';
     if (/scene|场景|现场/.test(text) || /scene/.test(path)) return 'current_scene';
     if (/conflict|冲突|对立|矛盾/.test(text) || /conflict/.test(path)) return 'current_conflict';
@@ -525,7 +525,8 @@ function inferMemoryTypeFromSubtype(subtype: MemorySubtype): MemoryType {
     if (['identity', 'trait', 'preference', 'promise', 'secret'].includes(subtype)) return 'identity';
     if (['bond', 'emotion_imprint'].includes(subtype)) return 'relationship';
     if (['goal', 'current_scene', 'current_conflict', 'temporary_status'].includes(subtype)) return 'status';
-    if (['major_plot_event', 'minor_event', 'combat_event', 'travel_event', 'conversation_event', 'rumor'].includes(subtype)) return 'event';
+    if (['major_plot_event', 'minor_event', 'combat_event', 'travel_event', 'rumor'].includes(subtype)) return 'event';
+    if (subtype === 'dialogue_quote') return 'dialogue';
     if (['global_rule', 'city_rule', 'location_fact', 'item_rule', 'faction_rule', 'world_history'].includes(subtype)) return 'world';
     return 'other';
 }
@@ -577,8 +578,8 @@ function getSubtypeForgettingBase(subtype: MemorySubtype): number {
             return 0.18;
         case 'major_plot_event':
             return 0.16;
-        case 'conversation_event':
-            return 0.28;
+        case 'dialogue_quote':
+            return 0.24;
         case 'combat_event':
         case 'travel_event':
             return 0.34;
@@ -606,7 +607,7 @@ function getSubtypeAgeWindowDays(subtype: MemorySubtype): number {
             return 90;
         case 'major_plot_event':
             return 60;
-        case 'conversation_event':
+        case 'dialogue_quote':
             return 21;
         case 'combat_event':
         case 'travel_event':

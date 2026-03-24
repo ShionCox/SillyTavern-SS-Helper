@@ -6,8 +6,6 @@
  * 主题 ID：`default`（金棕默认）、`dark`（深蓝）、`light`（浅色）、`host`（跟随宿主）。
  *
  * - `host` 是 SDK 内部宿主题 ID，所有内核 API 仅使用此值。
- * - `tavern` 只是设置层 / 兼容层别名，不进入 `ThemeId`；
- *   通过 `normalizeThemeId("tavern")` 自动映射为 `"host"`。
  */
 export type ThemeId = "default" | "dark" | "light" | "host";
 

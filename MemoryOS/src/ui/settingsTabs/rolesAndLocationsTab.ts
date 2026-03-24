@@ -29,9 +29,3 @@ export function buildRolesAndLocationsTabPanel(ids: MemoryOSSettingsIds): string
     `.trim();
 }
 
-/**
- * 功能：绑定“角色与地点”页签事件。
- * @returns 无返回值。
- */
-export function bindRolesAndLocationsTab(): void {
-}

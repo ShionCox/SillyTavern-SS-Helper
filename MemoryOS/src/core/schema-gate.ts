@@ -1,4 +1,3 @@
-import { logger } from '../index';
 import type { SchemaChangeProposal } from '../proposal/types';
 import type { WorldTemplate, TemplateTableDef } from '../template/types';
 import type { ChatStateManager } from './chat-state-manager';
@@ -174,7 +173,7 @@ export class SchemaGate {
      */
     private runDiffGate(
         change: SchemaChangeProposal,
-        activeTemplate: WorldTemplate | null,
+        _activeTemplate: WorldTemplate | null,
     ): string[] {
         const errors: string[] = [];
 

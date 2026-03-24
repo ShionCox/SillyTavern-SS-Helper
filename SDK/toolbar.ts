@@ -51,7 +51,6 @@ const SDK_FLOATING_TOOLBAR_SHELL_ATTR = "data-stx-sdk-toolbar-shell";
 const SDK_FLOATING_TOOLBAR_ACTIONS_ATTR = "data-stx-sdk-toolbar-actions";
 const SDK_FLOATING_TOOLBAR_GROUP_ATTR = "data-stx-sdk-toolbar-group";
 const SDK_FLOATING_TOOLBAR_TOGGLE_ATTR = "data-stx-sdk-toolbar-toggle";
-const SDK_FLOATING_TOOLBAR_OBSERVER_ATTR = "data-stx-sdk-toolbar-observer-bound";
 
 const sdkFloatingToolbarObserverMap = new WeakMap<HTMLElement, MutationObserver>();
 

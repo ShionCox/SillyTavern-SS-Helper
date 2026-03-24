@@ -2,7 +2,7 @@
  * 通用主题系统 —— 生成主题作用域 CSS 文本。
  */
 
-import type { ThemeId, ThemeTokens } from "./types";
+import type { ThemeTokens } from "./types";
 import { CSS_VAR_NAMES } from "./tokens";
 import { getThemeTokens } from "./presets";
 
@@ -92,11 +92,5 @@ export function buildThemeVars(scopeSelector: string): string {
     hostTokens
   );
 
-  const tavernAliasRule = buildScopedRule(
-    scopes,
-    `[data-ss-theme="tavern"]`,
-    hostTokens
-  );
-
-  return `${baseRule}\n${defaultRule}\n${darkRule}\n${lightRule}\n${hostRule}\n${tavernAliasRule}`;
+  return `${baseRule}\n${defaultRule}\n${darkRule}\n${lightRule}\n${hostRule}`;
 }

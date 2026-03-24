@@ -1,5 +1,5 @@
 import { db, type DBDerivationSource, type DBFact, type DBSummary, type DBWorldState } from '../db/db';
-import type { FactProposal, SummaryProposal } from '../proposal/types';
+import type { SummaryProposal } from '../proposal/types';
 import { normalizeWorldStatePatchValue } from './world-state-patch-normalizer';
 import { buildMemorySummaryEnvelope } from './memory-summary-envelope';
 import { deleteMemoryCardsBySource, runWithMemoryCardVectorBatch, saveMemoryCardsFromEnvelope, saveMemoryCardsFromFactRecord } from './memory-card-store';
@@ -11,7 +11,7 @@ import { SummariesManager } from './summaries-manager';
 import { MemoryMutationHistoryManager } from './memory-mutation-history';
 import type { MemoryMutationPlan, PlannedFactMutation, PlannedStateMutation, PlannedSummaryMutation } from './memory-mutation-planner';
 import { buildMemoryMutationPlanSnapshot } from './memory-mutation-planner';
-import type { MemoryCandidate, MemoryMutationHistoryAction, MemoryMutationHistoryEntry, MemoryMutationTargetKind } from '../types';
+import type { MemoryCandidate, MemoryMutationHistoryAction, MemoryMutationTargetKind } from '../types';
 import type { MemoryMutationPlanSnapshot } from '../types';
 import type { MemoryCardDraft } from '../../../SDK/stx';
 

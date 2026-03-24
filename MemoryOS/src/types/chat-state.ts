@@ -920,6 +920,30 @@ export interface SemanticWorldFacetEntry {
     tags?: string[];
 }
 
+export interface SemanticAiRoleRelationshipSummary {
+    targetActorKey?: string;
+    targetLabel: string;
+    label: string;
+    detail: string;
+}
+
+export interface SemanticAiRoleAssetSummary {
+    kind: 'item' | 'equipment';
+    name: string;
+    detail: string;
+}
+
+export interface SemanticAiRoleProfileSummary {
+    actorKey?: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    relationshipFacts: SemanticAiRoleRelationshipSummary[];
+    items: SemanticAiRoleAssetSummary[];
+    equipments: SemanticAiRoleAssetSummary[];
+}
+
 export interface SemanticAiSummary {
     roleSummary: string;
     worldSummary: string;
@@ -956,6 +980,7 @@ export interface SemanticAiSummary {
     dangerDetails: SemanticWorldFacetEntry[];
     entityDetails: SemanticWorldFacetEntry[];
     otherWorldDetailDetails: SemanticWorldFacetEntry[];
+    roleProfiles: SemanticAiRoleProfileSummary[];
     generatedAt: number;
     source: 'ai';
 }
@@ -1010,6 +1035,7 @@ export interface ChatSemanticSeed {
     presetStyle: string;
     identitySeed: IdentitySeed;
     identitySeeds?: Record<string, IdentitySeed>;
+    roleProfileSeeds?: Record<string, RoleProfile>;
     worldSeed: WorldSeed;
     styleSeed: StyleSeed;
     aiSummary?: SemanticAiSummary;
@@ -1115,7 +1141,7 @@ export type MemoryPrivacyClass = 'shared' | 'private' | 'contextual';
 
 export type RecallViewpointReason = 'shared' | 'owned_by_actor' | 'retained_for_actor' | 'foreign_private_suppressed';
 
-export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'other';
+export type MemoryType = 'identity' | 'event' | 'relationship' | 'world' | 'status' | 'dialogue' | 'other';
 
 export type MemorySubtype =
     | 'identity'
@@ -1131,7 +1157,7 @@ export type MemorySubtype =
     | 'minor_event'
     | 'combat_event'
     | 'travel_event'
-    | 'conversation_event'
+    | 'dialogue_quote'
     | 'global_rule'
     | 'city_rule'
     | 'location_fact'
@@ -1182,6 +1208,43 @@ export interface PersonaMemoryProfile {
 }
 
 export type PersonaMemoryProfileMap = Record<string, PersonaMemoryProfile>;
+
+export interface RoleRelationshipFact {
+    targetActorKey?: string;
+    targetLabel: string;
+    label: string;
+    detail: string;
+    sourceRefs: string[];
+}
+
+export interface RoleAssetEntry {
+    kind: 'item' | 'equipment';
+    name: string;
+    detail: string;
+    sourceRefs: string[];
+}
+
+export interface RoleProfile {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    relationshipFacts: RoleRelationshipFact[];
+    items: RoleAssetEntry[];
+    equipments: RoleAssetEntry[];
+    updatedAt: number;
+}
+
+export interface DialogueMemoryFact {
+    ownerActorKey: string;
+    speakerActorKey: string;
+    speakerLabel: string;
+    quoteText: string;
+    reason: string;
+    sourceMessageId: string;
+    updatedAt: number;
+}
 
 export interface SimpleMemoryPersona {
     memoryStrength: 'weak' | 'balanced' | 'strong';
@@ -1921,9 +1984,8 @@ export interface MemoryOSChatState {
     coldStartLorebookSelection?: string[];
     coldStartLorebookEntrySelection?: ColdStartLorebookEntrySelection[];
     coldStartSkipLorebookSelection?: boolean;
-    personaMemoryProfile?: PersonaMemoryProfile;
     personaMemoryProfiles?: PersonaMemoryProfileMap;
-    simpleMemoryPersona?: SimpleMemoryPersona;
+    roleProfiles?: Record<string, RoleProfile>;
     simpleMemoryPersonas?: SimpleMemoryPersonaMap;
     activeActorKey?: string;
     coldStartFingerprint?: string;

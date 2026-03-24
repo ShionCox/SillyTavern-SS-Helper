@@ -86,6 +86,7 @@ function createAiSummary(overrides: Partial<Omit<SemanticAiSummary, 'generatedAt
         dangerDetails: [],
         entityDetails: [],
         otherWorldDetailDetails: [],
+        roleProfiles: [],
         ...overrides,
         generatedAt: Date.now(),
         source: 'ai',
@@ -136,6 +137,76 @@ function createSeed(): ChatSemanticSeed {
 }
 
 describe('chat-semantic-ai-summary', (): void => {
+    it('能解析统一 AI JSON 外壳中的角色与语义摘要', (): void => {
+        const normalized = normalizeSemanticSeedAiSummary({
+            mode: 'init',
+            namespaces: {
+                semantic_summary: {
+                    roleSummary: '艾莉卡·暮影是雾港调查者',
+                    worldSummary: '雾港夜间巡查严格',
+                    identityFacts: ['暮影巡礼者'],
+                    worldRules: ['公开施法会留下痕迹'],
+                    hardConstraints: [],
+                    cities: ['雾港'],
+                    locations: [],
+                    entities: [],
+                    nations: [],
+                    regions: [],
+                    factions: [],
+                    calendarSystems: [],
+                    currencySystems: [],
+                    socialSystems: [],
+                    culturalPractices: [],
+                    historicalEvents: [],
+                    dangers: [],
+                    otherWorldDetails: [],
+                    characterGoals: [],
+                    relationshipFacts: [],
+                    catchphrases: [],
+                    relationshipAnchors: [],
+                    styleCues: [],
+                    nationDetails: [],
+                    regionDetails: [],
+                    cityDetails: [],
+                    locationDetails: [],
+                    ruleDetails: [],
+                    constraintDetails: [],
+                    socialSystemDetails: [],
+                    culturalPracticeDetails: [],
+                    historicalEventDetails: [],
+                    dangerDetails: [],
+                    entityDetails: [],
+                    otherWorldDetailDetails: [],
+                },
+                role: {
+                    profiles: {
+                        erika: {
+                            displayName: '艾莉卡·暮影',
+                            aliases: ['暮影'],
+                            identityFacts: ['暮影巡礼者'],
+                            originFacts: ['来自雾港'],
+                            relationshipFacts: [],
+                            items: [],
+                            equipments: [],
+                            updatedAt: 1735689600000,
+                        },
+                    },
+                    activeActorKey: 'erika',
+                    summary: {
+                        overview: '当前主角色资料已建立',
+                        updatedAt: 1735689600000,
+                    },
+                },
+            },
+            updates: [],
+            meta: {},
+        });
+
+        expect(normalized).not.toBeNull();
+        expect(normalized?.roleSummary).toBe('艾莉卡·暮影是雾港调查者');
+        expect(normalized?.roleProfiles[0]?.actorKey).toBe('erika');
+        expect(normalized?.roleProfiles[0]?.originFacts).toContain('来自雾港');
+    });
     it('能保留世界明细数组与知识级别字段', (): void => {
         const normalized = normalizeSemanticSeedAiSummary({
             roleSummary: '凤阙王朝女帝',
@@ -242,5 +313,46 @@ describe('chat-semantic-ai-summary', (): void => {
         expect(merged.aiSummary?.cities).toContain('京畿王都');
         expect(merged.aiSummary?.locations).toContain('太和殿');
         expect(merged.worldSeed.locations).toContain('太和殿');
+    });
+    it('mergeAiSummary 会把 AI 角色资料 JSON 回填到角色模板', (): void => {
+        const seed = createSeed();
+        const merged = mergeAiSummary(seed, createAiSummary({
+            roleProfiles: [
+                {
+                    actorKey: 'ailika',
+                    displayName: '艾莉卡·暮影',
+                    aliases: ['暮影'],
+                    identityFacts: ['暮影巡礼者'],
+                    originFacts: ['来自北境雾港'],
+                    relationshipFacts: [
+                        {
+                            targetActorKey: 'liya',
+                            targetLabel: '莉娅',
+                            label: '同伴',
+                            detail: '与莉娅长期同行',
+                        },
+                    ],
+                    items: [
+                        {
+                            kind: 'item',
+                            name: '旧地图',
+                            detail: '记着北境旧路',
+                        },
+                    ],
+                    equipments: [
+                        {
+                            kind: 'equipment',
+                            name: '暮影短刃',
+                            detail: '常用佩刃',
+                        },
+                    ],
+                },
+            ],
+        }));
+
+        expect(merged.roleProfileSeeds?.ailika?.displayName).toBe('艾莉卡·暮影');
+        expect(merged.roleProfileSeeds?.ailika?.equipments.map((item) => item.name)).toContain('暮影短刃');
+        expect(merged.roleProfileSeeds?.ailika?.relationshipFacts[0]?.targetLabel).toBe('莉娅');
+        expect(merged.identitySeeds?.ailika?.identity).toContain('暮影巡礼者');
     });
 });

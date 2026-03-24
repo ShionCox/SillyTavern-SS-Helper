@@ -9,11 +9,11 @@ import { buildLatestRecallExplanation } from '../core/recall-explanation';
 
 type LifecycleIndexInput = Record<string, MemoryLifecycleState> | Map<string, MemoryLifecycleState> | null | undefined;
 
-function normalizeText(value: unknown): string {
+/*
     return String(value ?? '').replace(/\s+/g, ' ').trim();
-}
+*/
 
-function readLifecycleStage(recordKey: string, lifecycleIndex: LifecycleIndexInput): string | null {
+/*
     const normalizedKey = normalizeText(recordKey);
     if (!normalizedKey || !lifecycleIndex) {
         return null;
@@ -22,7 +22,7 @@ function readLifecycleStage(recordKey: string, lifecycleIndex: LifecycleIndexInp
         return lifecycleIndex.get(normalizedKey)?.stage ?? null;
     }
     return lifecycleIndex[normalizedKey]?.stage ?? null;
-}
+*/
 
 /**
  * 功能：把召回候选转成记录日志条目。

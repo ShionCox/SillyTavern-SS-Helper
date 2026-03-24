@@ -7,7 +7,9 @@ import {
     buildMemorySummarySaveSystemPrompt,
     buildUnifiedIngestTaskPrompt,
 } from '../llm/skills';
-import type { ProposalEnvelope, SummaryProposal } from '../proposal/types';
+import type { MemoryProposalDocument, SummaryProposal } from '../proposal/types';
+import { buildAiJsonPromptBundle } from './ai-json-builder';
+import { applyAiJsonOutput, validateAiJsonOutput } from './ai-json-system';
 import type {
     AutoSummaryDecisionSnapshot,
     ChatLifecycleState,
@@ -43,11 +45,12 @@ import type { TurnTracker } from './turn-tracker';
 
 type ProposalTask = 'memory.ingest';
 type SchemaContextPayload = Record<string, unknown> | string;
+const MEMORY_PROPOSAL_NAMESPACE_KEYS = ['memory_proposal'] as const;
+
 type ProposalTaskRunResult = {
     result: ProposalResult | null;
     reasonCode?: string;
     error?: string;
-    compatFailure: boolean;
 };
 
 type IngestWindowSelection = {
@@ -62,46 +65,6 @@ type IngestWindowSelection = {
     repairTriggered: boolean;
 };
 
-type IngestSkipDebugInfo = {
-    currentAssistantTurnCount: number;
-    pendingAssistantTurns: number;
-    normalizedInterval: number;
-    lastProcessedAssistantTurnCount: number;
-    repairTriggered: boolean;
-    triggerBySpecialEvent: boolean;
-    repairGeneration: number;
-    lastRepairGeneration: number;
-};
-
-/**
- * 功能：从事件窗口中提取最近一条用户文本。
- * @param events 最近事件窗口。
- * @returns 用户文本；不存在时返回空字符串。
- */
-function normalizeTextFromEventWindow(events: Array<EventEnvelope<unknown>>): string {
-    const userEvent = [...events].find((event: EventEnvelope<unknown>): boolean => {
-        return event.type === 'chat.message.sent' || event.type === 'user_message_rendered';
-    });
-    if (!userEvent) {
-        return '';
-    }
-    const payload = userEvent.payload;
-    if (typeof payload === 'string') {
-        return payload;
-    }
-    if (payload && typeof payload === 'object') {
-        const source = payload as { text?: unknown; content?: unknown; message?: unknown };
-        const text = source.text ?? source.content ?? source.message;
-        return typeof text === 'string' ? text : '';
-    }
-    return '';
-}
-
-/**
- * 功能：把模型返回的摘要层级归一化为系统允许的 level。
- * @param level 模型返回的原始摘要层级。
- * @returns 合法的摘要层级。
- */
 /**
  * 功能：调度 MemoryOS 的摘要与抽取任务。
  * @param chatKey 当前聊天键。
@@ -118,10 +81,7 @@ export class ExtractManager {
     private metaManager: MetaManager;
     private turnTracker: TurnTracker | null;
     private chatStateManager: ChatStateManager | null;
-    private readonly minUserMessageDelta: number = 3;
-    private readonly minEventDelta: number = 20;
     private readonly duplicateWindowMs: number = 8000;
-    private readonly compatFailureCooldownTurns: number = 3;
     private readonly specialTriggerTypes: Set<string> = new Set([
         'memory.template.changed',
         'world.template.changed',
@@ -231,11 +191,6 @@ export class ExtractManager {
         }
 
         const currentAssistantTurnCount = await this.resolveAssistantTurnCount(logicalView, recentEvents);
-        if (await this.shouldSkipForCompatFailureCooldown(currentAssistantTurnCount, triggerBySpecialEvent)) {
-            logger.info(`统一记忆摄取跳过：命中结构化兼容失败冷却窗口，chatKey=${this.chatKey}, assistantTurns=${currentAssistantTurnCount}`);
-            return;
-        }
-
         const turnLedger = this.chatStateManager
             ? await this.chatStateManager.getTurnLedger()
             : [];
@@ -441,11 +396,9 @@ export class ExtractManager {
                 const factsApplied = Number(ingestResult?.applied?.factKeys?.length ?? 0);
                 const patchesApplied = Number(ingestResult?.applied?.statePaths?.length ?? 0);
                 const summariesApplied = Number(ingestResult?.applied?.summaryIds?.length ?? 0);
-                const failureReasonCodes = ingestExecution.compatFailure
-                    ? ['tavern_compat_failure', 'task_request_failed']
-                    : ingestExecution.error
-                        ? ['task_request_failed']
-                        : [];
+                const failureReasonCodes = ingestExecution.error
+                    ? ['task_request_failed']
+                    : [];
 
                 await this.recordUnifiedExtractHealth({
                     accepted: Boolean(ingestResult?.accepted),
@@ -895,7 +848,11 @@ export class ExtractManager {
         summaryTier: SummaryExecutionTier,
         scope: MemoryProcessingLevel,
     ): string {
-        return buildUnifiedIngestTaskPrompt(
+        const promptBundle = buildAiJsonPromptBundle({
+            mode: 'init',
+            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
+        });
+        const basePrompt = buildUnifiedIngestTaskPrompt(
             lorebookMode,
             allowWorldFacts,
             postGate,
@@ -903,6 +860,19 @@ export class ExtractManager {
             scope,
             buildMemorySummarySaveSystemPrompt(),
         );
+        return [
+            basePrompt,
+            '你必须严格按照下面的统一 JSON 结构输出。',
+            '',
+            '命名空间说明：',
+            promptBundle.systemInstructions,
+            '',
+            '使用方法：',
+            promptBundle.usageGuide,
+            '',
+            '填写示例：',
+            promptBundle.exampleJson,
+        ].join('\n');
     }
 
     /**
@@ -1076,16 +1046,35 @@ export class ExtractManager {
     }
 
     /**
-     * 功能：归一化统一记忆摄取返回的提议信封，并把记忆卡草稿挂到摘要条目上。
-     * @param envelope 原始提议信封。
+     * 功能：归一化统一记忆摄取返回的提案文档。
+     * @param payload 原始提案文档负载。
      * @param rangeFallback 摘要缺失范围时使用的回填范围。
-     * @returns 归一化后的提议信封。
+     * @returns 归一化后的提案文档。
      */
-    private normalizeUnifiedIngestEnvelope(
-        envelope: ProposalEnvelope,
+    private buildMemoryProposalDocumentFromAiJsonPayload(
+        payload: unknown,
         rangeFallback?: { fromMessageId?: string; toMessageId?: string },
-    ): ProposalEnvelope {
-        const proposal = envelope?.proposal ?? {};
+    ): MemoryProposalDocument | null {
+        const validated = validateAiJsonOutput({
+            mode: 'init',
+            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
+            payload,
+        });
+        if (!validated.ok || !validated.payload) {
+            return null;
+        }
+
+        const applied = applyAiJsonOutput({
+            document: {},
+            payload: validated.payload,
+            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
+        });
+        const proposalRecord = applied.document.memory_proposal;
+        if (!proposalRecord || typeof proposalRecord !== 'object' || Array.isArray(proposalRecord)) {
+            return null;
+        }
+
+        const proposal = proposalRecord as Record<string, unknown>;
         const summaries = Array.isArray(proposal.summaries)
             ? proposal.summaries
                 .filter((summary: SummaryProposal | null | undefined): summary is SummaryProposal => {
@@ -1110,104 +1099,46 @@ export class ExtractManager {
                     };
                 })
             : [];
-        const memoryCards = Array.isArray(proposal.memoryCards)
-            ? proposal.memoryCards.filter((card): boolean => {
-                return Boolean(card && typeof card === 'object' && String(card.memoryText ?? '').trim());
-            })
-            : [];
-
-        if (summaries.length > 0 && memoryCards.length > 0) {
-            const firstSummary = summaries[0];
-            summaries[0] = {
-                ...firstSummary,
-                memoryCards: [
-                    ...(Array.isArray(firstSummary.memoryCards) ? firstSummary.memoryCards : []),
-                    ...memoryCards,
-                ],
-            };
-        }
-
         return {
-            ...envelope,
-            proposal: {
-                ...proposal,
-                summaries,
-                memoryCards: undefined,
-            },
+            facts: Array.isArray(proposal.facts) ? proposal.facts : [],
+            patches: Array.isArray(proposal.patches) ? proposal.patches : [],
+            summaries,
+            notes: typeof proposal.notes === 'string' ? proposal.notes : undefined,
+            schemaChanges: Array.isArray(proposal.schemaChanges) ? proposal.schemaChanges : [],
+            entityResolutions: Array.isArray(proposal.entityResolutions) ? proposal.entityResolutions : [],
+            confidence: Number(proposal.confidence ?? 0) || 0,
         };
     }
 
     /**
-     * 功能：把可能为 JSON 字符串的提议信封输入解析成对象，避免字符串被误当作对象展开。
-     * @param value 原始提议信封输入。
-     * @returns 解析后的提议信封对象；无法解析时返回原值。
+     * 功能：把可能为 JSON 字符串的提案文档输入解析成对象，避免字符串被误当作对象展开。
+     * @param value 原始提案文档输入。
+     * @returns 解析后的提案文档对象；无法解析时返回原值。
      */
-    private coerceProposalEnvelopeInput(value: unknown): unknown {
-        if (typeof value !== 'string') {
-            return value;
-        }
-        const normalized = String(value).trim();
-        if (!normalized) {
-            return value;
-        }
-        try {
-            return JSON.parse(normalized) as unknown;
-        } catch {
-            const jsonBlockMatch = normalized.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
-            const candidate = jsonBlockMatch?.[1]?.trim() || normalized;
-            try {
-                return JSON.parse(candidate) as unknown;
-            } catch {
-                const firstBrace = candidate.indexOf('{');
-                const lastBrace = candidate.lastIndexOf('}');
-                if (firstBrace >= 0 && lastBrace > firstBrace) {
-                    try {
-                        return JSON.parse(candidate.slice(firstBrace, lastBrace + 1)) as unknown;
-                    } catch {
-                        return value;
-                    }
-                }
-                return value;
-            }
-        }
-    }
 
     /**
-     * 功能：判断任意值是否已经具备提议信封的基本结构。
+     * 功能：判断任意值是否已经具备提案文档的基本结构。
      * @param value 待判断的值。
-     * @returns 是否可视为提议信封对象。
+     * @returns 是否可视为提案文档对象。
      */
-    private isProposalEnvelopeLike(value: unknown): value is ProposalEnvelope {
-        if (!value || typeof value !== 'object') {
-            return false;
-        }
-        const record = value as Record<string, unknown>;
-        return 'ok' in record && 'proposal' in record;
-    }
-
     /**
-     * 功能：把统一记忆摄取提议信封压缩成简短日志摘要，便于判断是否真正进入落库链路。
-     * @param envelope 提议信封。
+     * 功能：把统一记忆摄取提案文档压缩成简短日志摘要，便于判断是否真正进入落库链路。
+     * @param document 提案文档。
      * @returns 适合日志打印的摘要对象。
      */
-    private summarizeProposalEnvelopeForLog(envelope: ProposalEnvelope | null | undefined): {
-        ok: boolean;
+    private summarizeMemoryProposalDocumentForLog(document: MemoryProposalDocument | null | undefined): {
         facts: number;
         patches: number;
         summaries: number;
-        memoryCards: number;
         confidence: number;
         summaryRanges: string[];
     } {
-        const proposal = envelope?.proposal ?? {};
-        const summaries = Array.isArray(proposal.summaries) ? proposal.summaries : [];
+        const summaries = Array.isArray(document?.summaries) ? document.summaries : [];
         return {
-            ok: Boolean(envelope?.ok),
-            facts: Array.isArray(proposal.facts) ? proposal.facts.length : 0,
-            patches: Array.isArray(proposal.patches) ? proposal.patches.length : 0,
+            facts: Array.isArray(document?.facts) ? document.facts.length : 0,
+            patches: Array.isArray(document?.patches) ? document.patches.length : 0,
             summaries: summaries.length,
-            memoryCards: Array.isArray(proposal.memoryCards) ? proposal.memoryCards.length : 0,
-            confidence: Number(envelope?.confidence ?? 0) || 0,
+            confidence: Number(document?.confidence ?? 0) || 0,
             summaryRanges: summaries.slice(0, 4).map((summary: SummaryProposal): string => {
                 const level = String(summary.level ?? 'summary').trim() || 'summary';
                 const fromMessageId = String(summary.range?.fromMessageId ?? '').trim() || '?';
@@ -1240,7 +1171,6 @@ export class ExtractManager {
             logger.warn(`${task} 跳过落地：窗口中没有可用的提案写入接口`);
             return {
                 result: null,
-                compatFailure: false,
             };
         }
 
@@ -1248,7 +1178,7 @@ export class ExtractManager {
             prompt: string,
             attemptBudget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
         ) => {
-            return runGeneration<ProposalEnvelope>(
+            return runGeneration<unknown>(
                 task,
                 {
                     systemPrompt: prompt,
@@ -1275,50 +1205,36 @@ export class ExtractManager {
         }
         if (!response.ok) {
             const failedResponse = response as { ok: false; error?: string; reasonCode?: string };
-            const failedResponseAny: any = failedResponse;
             logger.warn(`${task} 请求失败：${failedResponse.error || '未知错误'} (${failedResponse.reasonCode || 'unknown'})`);
             return {
                 result: null,
                 reasonCode: failedResponse.reasonCode,
                 error: failedResponse.error,
-                compatFailure: this.isStructuredCompatibilityFailure(failedResponse.error, failedResponse.reasonCode),
             };
             logger.warn(`${task} 请求失败：${response.error} (${response.reasonCode || 'unknown'})`);
             return {
                 result: null,
-                compatFailure: false,
             };
         }
 
-        const normalizedResponseData = this.coerceProposalEnvelopeInput(response.data);
-        const envelope: ProposalEnvelope | null = this.isProposalEnvelopeLike(normalizedResponseData)
-            ? (task === 'memory.ingest'
-                ? this.normalizeUnifiedIngestEnvelope(normalizedResponseData, rangeFallback)
-                : normalizedResponseData)
+        const proposalDocument = task === 'memory.ingest'
+            ? this.buildMemoryProposalDocumentFromAiJsonPayload(response.data, rangeFallback)
             : null;
-        logger.info(`${task} 返回提案摘要：${JSON.stringify(this.summarizeProposalEnvelopeForLog(envelope))}`);
-        if (!envelope?.ok || !envelope?.proposal) {
+        logger.info(`${task} 返回提案摘要：${JSON.stringify(this.summarizeMemoryProposalDocumentForLog(proposalDocument))}`);
+        if (!proposalDocument) {
             logger.warn(`${task} 返回结构无效，跳过落地：${JSON.stringify({
-                hasEnvelope: Boolean(envelope),
-                ok: Boolean(envelope?.ok),
-                hasProposal: Boolean(envelope?.proposal),
-                keys: envelope && typeof envelope === 'object'
-                    ? Object.keys(envelope as unknown as Record<string, unknown>).slice(0, 12)
+                hasDocument: Boolean(proposalDocument),
+                keys: response.data && typeof response.data === 'object' && !Array.isArray(response.data)
+                    ? Object.keys(response.data as Record<string, unknown>).slice(0, 12)
                     : [],
             })}`);
             return {
                 result: null,
-                compatFailure: false,
-            };
-            logger.warn(`${task} 返回结构无效，跳过落地`);
-            return {
-                result: null,
-                compatFailure: false,
             };
         }
 
-        logger.info(`${task} 准备进入提案落库：facts=${Array.isArray(envelope.proposal.facts) ? envelope.proposal.facts.length : 0}, patches=${Array.isArray(envelope.proposal.patches) ? envelope.proposal.patches.length : 0}, summaries=${Array.isArray(envelope.proposal.summaries) ? envelope.proposal.summaries.length : 0}`);
-        const result = await memory.proposal.processProposal(envelope, MEMORY_OS_PLUGIN_ID);
+        logger.info(`${task} 准备进入提案落库：facts=${Array.isArray(proposalDocument.facts) ? proposalDocument.facts.length : 0}, patches=${Array.isArray(proposalDocument.patches) ? proposalDocument.patches.length : 0}, summaries=${Array.isArray(proposalDocument.summaries) ? proposalDocument.summaries.length : 0}`);
+        const result = await memory.proposal.processProposal(proposalDocument, MEMORY_OS_PLUGIN_ID);
         if (result.accepted) {
             logger.success(`${task} 通过：facts=${result.applied.factKeys.length}, patches=${result.applied.statePaths.length}, summaries=${result.applied.summaryIds.length}`);
         } else {
@@ -1326,7 +1242,6 @@ export class ExtractManager {
         }
         return {
             result,
-            compatFailure: false,
         };
     }
 
@@ -1381,20 +1296,6 @@ export class ExtractManager {
     }
 
     /**
-     * 功能：判断失败是否属于 Tavern 结构化输出兼容问题。
-     * @param errorText 错误文本。
-     * @param reasonCode 原因码。
-     * @returns 是否属于结构化兼容失败。
-     */
-    private isStructuredCompatibilityFailure(errorText: string | undefined, reasonCode: string | undefined): boolean {
-        const mergedText = `${String(errorText ?? '')}\n${String(reasonCode ?? '')}`.toLowerCase();
-        return mergedText.includes('bad request')
-            || mergedText.includes('json_schema')
-            || mergedText.includes('response_format')
-            || mergedText.includes('chat_completion_http_error');
-    }
-
-    /**
      * 功能：合并任务原因码，并补充额外原因码。
      * @param baseCodes 基础原因码。
      * @param extraCodes 额外原因码。
@@ -1404,44 +1305,7 @@ export class ExtractManager {
         return Array.from(new Set([...(baseCodes ?? []), ...(extraCodes ?? [])]));
     }
 
-    /**
-     * 功能：判断当前聊天是否处于结构化兼容失败后的冷却期。
-     * @param currentAssistantTurnCount 当前助手回合数。
-     * @param triggerBySpecialEvent 是否由特殊事件触发。
-     * @returns 是否需要跳过本轮结构化任务。
-     */
-    private async shouldSkipForCompatFailureCooldown(
-        currentAssistantTurnCount: number,
-        triggerBySpecialEvent: boolean,
-    ): Promise<boolean> {
-        if (!this.chatStateManager || triggerBySpecialEvent) {
-            return false;
-        }
-        const extractHealth = await this.chatStateManager.getExtractHealth();
-        const recentTasks = Array.isArray(extractHealth.recentTasks) ? extractHealth.recentTasks : [];
-        const lastCompatFailure = [...recentTasks].reverse().find((task): boolean => {
-            return Array.isArray(task.reasonCodes) && task.reasonCodes.includes('tavern_compat_failure');
-        });
-        if (!lastCompatFailure) {
-            return false;
-        }
-        const lastAssistantTurnCount = Math.max(0, Number(lastCompatFailure.assistantTurnCount ?? 0));
-        if (lastAssistantTurnCount <= 0) {
-            return false;
-        }
-        return currentAssistantTurnCount - lastAssistantTurnCount < this.compatFailureCooldownTurns;
-    }
-
-    /**
-     * 功能：判断事件是否属于用户消息。
-     * @param eventType 事件类型。
-     * @returns 是否属于用户消息。
-     */
-    private isUserMessageEvent(eventType: string): boolean {
-        return eventType === 'chat.message.sent' || eventType === 'user_message_rendered';
-    }
-
-    /**
+        /**
      * 功能：构建生成后 gate 决策。
      * @param input 判定输入。
      * @returns 生成后 gate 决策。
@@ -1548,13 +1412,6 @@ export class ExtractManager {
         };
     }
 
-    /**
-     * 功能：对最近一轮回复进行轻量价值分类。
-     * @param userLine 最近一条用户消息。
-     * @param assistantLine 最近一条助手消息。
-     * @param stylePreference 当前聊天风格偏好。
-     * @returns 生成价值分类。
-     */
     /**
      * 功能：把当前窗口预压缩成更适合模型消费的文本。
      * @param windowText 原始窗口文本。
@@ -1821,67 +1678,6 @@ export class ExtractManager {
             return 'setting_confirmed';
         }
         return 'plot_progress';
-    }
-
-    /**
-     * 功能：为事件窗口计算哈希，避免重复抽取。
-     * @param events 事件窗口。
-     * @returns 哈希字符串。
-     */
-    private computeWindowHash(events: Array<EventEnvelope<unknown>>): string {
-        const payload = events
-            .map((event: EventEnvelope<unknown>): string => `${event.id}|${event.type}|${this.getEventPayloadText(event)}`)
-            .join('\n');
-        return this.hashString(payload);
-    }
-
-    /**
-     * 功能：对逻辑消息视图窗口计算哈希，避免重复抽取。
-     * @param view 逻辑消息视图。
-     * @param limit 窗口长度。
-     * @returns 窗口哈希值。
-     */
-    private computeLogicalViewHash(view: LogicalChatView, limit: number): string {
-        const windowMessages = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - limit));
-        const payload = windowMessages
-            .map((node) => `${node.messageId}|${node.role}|${node.textSignature}`)
-            .join('\n');
-        return this.hashString(`${payload}|${view.snapshotHash}|${(view.mutationKinds || []).join(',')}`);
-    }
-
-    /**
-     * 功能：把逻辑消息视图转换为抽取窗口文本。
-     * @param view 逻辑消息视图。
-     * @param limit 窗口长度。
-     * @returns 窗口文本。
-     */
-    private buildLogicalWindowText(view: LogicalChatView, limit: number): string {
-        const windowMessages = view.visibleMessages.slice(Math.max(0, view.visibleMessages.length - limit));
-        return windowMessages
-            .map((node) => {
-                return `[${new Date(node.updatedAt || node.createdAt || Date.now()).toLocaleTimeString()}] chat.message.${node.role}: ${node.text}`;
-            })
-            .join('\n');
-    }
-
-    /**
-     * 功能：读取事件中的文本。
-     * @param event 事件对象。
-     * @returns 事件文本。
-     */
-    private getEventPayloadText(event: EventEnvelope<unknown>): string {
-        const payload = event?.payload;
-        if (typeof payload === 'string') {
-            return payload;
-        }
-        if (payload && typeof payload === 'object' && typeof (payload as { text?: unknown }).text === 'string') {
-            return String((payload as { text: string }).text);
-        }
-        try {
-            return JSON.stringify(payload);
-        } catch {
-            return String(payload ?? '');
-        }
     }
 
     /**

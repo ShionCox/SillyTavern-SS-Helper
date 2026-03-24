@@ -12,17 +12,13 @@ export interface MemoryOSSettingsIds {
     githubText: string;
     githubUrl: string;
     searchId: string;
-    modeBasicId: string;
-    modeAdvancedId: string;
     experienceRefreshBtnId: string;
     experienceRecordEditorBtnId: string;
     experienceSnapshotBtnId: string;
-    experienceAdvancedBtnId: string;
     tabRoleId: string;
     tabRecentId: string;
     tabRelationId: string;
     tabInjectionId: string;
-    tabAdvancedToolsId: string;
     tabMainId: string;
     tabAiId: string;
     tabDbId: string;
@@ -100,8 +96,6 @@ export interface MemoryOSSettingsIds {
     recordFilterPreviewInputId: string;
     recordFilterPreviewBtnId: string;
     recordFilterPreviewOutputId: string;
-    testPingBtnId: string;
-    testHelloBtnId: string;
     dbCompactBtnId: string;
     dbExportBtnId: string;
     dbImportBtnId: string;
@@ -121,9 +115,4 @@ export interface MemoryOSSettingsIds {
     aiDiagRecentTasksId: string;
     aiDiagRefreshBtnId: string;
     aiRoutePreviewId: string;
-    aiSelfTestSelectId: string;
-    aiSelfTestRunBtnId: string;
-    aiSelfTestAllBtnId: string;
-    aiSelfTestResultsId: string;
-    aiSelfTestDetailId: string;
 }
