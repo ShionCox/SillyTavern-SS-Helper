@@ -20,8 +20,11 @@ function expectStrictObjectShape(schema: unknown): void {
     }
     const record = schema as Record<string, unknown>;
     if (record.type === 'object' || record.properties) {
-        expect(record.additionalProperties).toBe(false);
         const properties = record.properties as Record<string, unknown> | undefined;
+        const isLooseJsonObject = record.additionalProperties === true && properties && Object.keys(properties).length <= 0;
+        if (!isLooseJsonObject) {
+            expect(record.additionalProperties).toBe(false);
+        }
         if (properties) {
             const keys = Object.keys(properties);
             const required = Array.isArray(record.required) ? [...record.required].sort() : [];
@@ -391,5 +394,156 @@ describe('ai-json-system', (): void => {
 
         const equipments = ((((applied.document.role as Record<string, unknown>).profiles as Record<string, unknown>).erika as Record<string, unknown>).equipments as Array<Record<string, unknown>>);
         expect(equipments).toEqual([]);
+    });
+
+    it('memory_proposal 出现旧版 *Json 字段时会被拒绝', (): void => {
+        initAiJsonSystem();
+        const payload = {
+            mode: 'init',
+            namespaces: {
+                memory_proposal: {
+                    facts: [
+                        {
+                            type: 'relationship_fact',
+                            value: { label: '同伴', detail: '长期协作' },
+                            valueJson: '{"label":"同伴","detail":"长期协作"}',
+                            provenance: {},
+                        },
+                    ],
+                    patches: [],
+                    summaries: [],
+                    notes: '',
+                    schemaChanges: [],
+                    entityResolutions: [],
+                    confidence: 0.8,
+                },
+            },
+            updates: [],
+            meta: { note: '' },
+        };
+        const validated = validateAiJsonOutput({
+            mode: 'init',
+            namespaceKeys: ['memory_proposal'],
+            payload,
+            context: {
+                factTypes: [
+                    {
+                        type: 'relationship_fact',
+                        pathPattern: '/relationships/:from/:to',
+                        slots: ['from', 'to'],
+                        valueSchema: {
+                            type: 'object',
+                            fields: {
+                                label: { type: 'string' },
+                                detail: { type: 'string' },
+                            },
+                            requiredFields: ['label', 'detail'],
+                        },
+                    },
+                ],
+                patchSchemas: [],
+            },
+        });
+        expect(validated.ok).toBe(false);
+        expect(validated.errors.join('\n')).toContain('valueJson');
+    });
+
+    it('memory_proposal 会按模板 valueSchema 校验 facts[].value', (): void => {
+        initAiJsonSystem();
+        const payload = {
+            mode: 'init',
+            namespaces: {
+                memory_proposal: {
+                    facts: [
+                        {
+                            type: 'relationship_fact',
+                            value: { label: 123, detail: '长期协作' },
+                            provenance: {},
+                        },
+                    ],
+                    patches: [],
+                    summaries: [],
+                    notes: '',
+                    schemaChanges: [],
+                    entityResolutions: [],
+                    confidence: 0.8,
+                },
+            },
+            updates: [],
+            meta: { note: '' },
+        };
+        const validated = validateAiJsonOutput({
+            mode: 'init',
+            namespaceKeys: ['memory_proposal'],
+            payload,
+            context: {
+                factTypes: [
+                    {
+                        type: 'relationship_fact',
+                        pathPattern: '/relationships/:from/:to',
+                        slots: ['from', 'to'],
+                        valueSchema: {
+                            type: 'object',
+                            fields: {
+                                label: { type: 'string' },
+                                detail: { type: 'string' },
+                            },
+                            requiredFields: ['label', 'detail'],
+                        },
+                    },
+                ],
+                patchSchemas: [],
+            },
+        });
+        expect(validated.ok).toBe(false);
+        expect(validated.errors.join('\n')).toContain('facts[0].value.label');
+    });
+
+    it('memory_proposal 在缺少 patchSchema 时会拒绝 patches[].value', (): void => {
+        initAiJsonSystem();
+        const payload = {
+            mode: 'init',
+            namespaces: {
+                memory_proposal: {
+                    facts: [],
+                    patches: [
+                        {
+                            op: 'replace',
+                            path: '/unknown/path',
+                            value: { mood: '戒备' },
+                        },
+                    ],
+                    summaries: [],
+                    notes: '',
+                    schemaChanges: [],
+                    entityResolutions: [],
+                    confidence: 0.8,
+                },
+            },
+            updates: [],
+            meta: { note: '' },
+        };
+        const validated = validateAiJsonOutput({
+            mode: 'init',
+            namespaceKeys: ['memory_proposal'],
+            payload,
+            context: {
+                factTypes: [],
+                patchSchemas: [
+                    {
+                        pathPattern: '/groupMemory/lanes/:actor/latestMood',
+                        valueSchema: {
+                            type: 'object',
+                            fields: {
+                                mood: { type: 'string' },
+                            },
+                            requiredFields: ['mood'],
+                        },
+                    },
+                ],
+            },
+        });
+        expect(validated.ok).toBe(false);
+        expect(validated.errors.join('\n')).toContain('缺少模板 patchSchema');
     });
 });

@@ -56,14 +56,6 @@ function normalizeLorebookContent(value: unknown): string {
     return expanded.replace(/\r\n?/g, '\n').trim();
 }
 
-function truncateText(value: string, limit: number): string {
-    const normalized = normalizeText(value);
-    if (normalized.length <= limit) {
-        return normalized;
-    }
-    return `${normalized.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
 function buildLorebookEntryKey(book: string, entryId: string): string {
     return `${normalizeText(book)}::${normalizeText(entryId)}`;
 }
@@ -379,47 +371,40 @@ function buildLorebookSeed(
     selectedEntries: LoadedLorebookEntry[],
     worldText: string,
 ): Array<{ book: string; hash: string; snippets: string[] }> {
-    const fallbackSnippets = splitSeedValues(worldText).slice(0, 8);
-    const totalSelectedEntryCount = selectedEntries.length;
-    const perEntryCharLimit = totalSelectedEntryCount <= 3
-        ? 1200
-        : totalSelectedEntryCount <= 6
-            ? 600
-            : 220;
-    const maxSnippetsPerBook = totalSelectedEntryCount <= 6 ? 12 : 6;
+    const fallbackSnippets = splitSeedValuesAll(worldText);
     const entryGroups = new Map<string, LoadedLorebookEntry[]>();
     for (const entry of selectedEntries) {
-        const current = entryGroups.get(entry.book) ?? [];
+        const book = normalizeText(entry.book);
+        if (!book) {
+            continue;
+        }
+        const current = entryGroups.get(book) ?? [];
         current.push(entry);
-        entryGroups.set(entry.book, current);
+        entryGroups.set(book, current);
     }
     return activeLorebooks
         .map((book: string): string => normalizeText(book))
         .filter(Boolean)
-        .slice(0, 12)
         .map((book: string) => ({
             book,
             hash: hashString(book.toLowerCase()),
             snippets: (() => {
                 const selectedSnippets = Array.from(new Set(
                     (entryGroups.get(book) ?? [])
-                        .slice(0, maxSnippetsPerBook)
                         .map((entry: LoadedLorebookEntry): string => {
+                            const entryTitle = normalizeText(entry.entry) || '未命名条目';
                             const rawContent = normalizeLorebookContent(entry.content);
                             if (!rawContent) {
                                 return '';
                             }
-                            if (totalSelectedEntryCount <= 3) {
-                                return `${entry.entry}：${rawContent}`;
-                            }
-                            return `${entry.entry}：${truncateText(rawContent, perEntryCharLimit)}`;
+                            return `${entryTitle}：${rawContent}`;
                         })
                         .filter(Boolean),
                 ));
                 if (selectedSnippets.length > 0) {
                     return selectedSnippets;
                 }
-                return fallbackSnippets.slice(0, 4);
+                return fallbackSnippets;
             })(),
         }));
 }

@@ -49,6 +49,44 @@ export type RecordFilterResult = {
     reasonCode: 'ok' | 'empty' | 'min_effective' | 'pure_code';
     appliedRules: string[];
     extractedTexts: string[];
+    usedJsonExtractMode: JsonExtractMode;
+    usedRegexRuleIds: string[];
+    filterProfileVersion: string;
+};
+
+/**
+ * 功能：定义事件审计记录中的入口提示类型。
+ */
+export type RecordFilterIngestHint = 'normal' | 'bootstrap';
+
+/**
+ * 功能：定义事件审计记录中的去重来源类型。
+ */
+export type RecordFilterDedupSource = 'message_id' | 'text_signature' | 'none';
+
+/**
+ * 功能：定义过滤阶段生成的可审计元数据结构。
+ */
+export type RecordFilterAuditMetadata = {
+    filterReasonCode: RecordFilterResult['reasonCode'];
+    filterProfileVersion: string;
+    rawTextHash: string;
+    filteredTextHash: string;
+    usedJsonExtractMode: JsonExtractMode;
+    usedRegexRuleIds: string[];
+    ingestHint: RecordFilterIngestHint;
+    dedupSource: RecordFilterDedupSource;
+};
+
+/**
+ * 功能：定义构建过滤审计元数据所需输入。
+ */
+export type BuildRecordFilterAuditMetadataInput = {
+    rawText: string;
+    filterResult: RecordFilterResult;
+    normalizedSettings: RecordFilterSettings;
+    ingestHint: RecordFilterIngestHint;
+    dedupSource: RecordFilterDedupSource;
 };
 
 const DEFAULT_JSON_KEYS: string[] = ['content', 'text', 'message', 'summary', 'description', 'title', 'reason'];
@@ -127,6 +165,39 @@ function normalizeText(rawText: string): string {
         .replace(/\r\n?/g, '\n')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
         .trim();
+}
+
+/**
+ * 功能：使用轻量稳定算法计算文本哈希。
+ * @param value 输入文本。
+ * @returns 以 h 开头的稳定哈希串。
+ */
+function hashStableText(value: string): string {
+    let hash = 5381;
+    for (let index = 0; index < value.length; index += 1) {
+        hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+    }
+    return `h${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * 功能：稳定序列化任意值，保证对象键顺序不影响结果。
+ * @param value 输入值。
+ * @returns 稳定序列化结果。
+ */
+function stableSerialize(value: unknown): string {
+    if (value == null) {
+        return 'null';
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((item: unknown) => stableSerialize(item)).join(',')}]`;
+    }
+    if (typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        const keys = Object.keys(record).sort();
+        return `{${keys.map((key: string) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
 }
 
 /**
@@ -295,28 +366,47 @@ function isLikelyCodeText(value: string): boolean {
 }
 
 /**
- * 功能：解析并构建自定义正则。
- * @param rulesText 规则文本（多行）。
- * @returns 正则对象数组。
+ * 功能：定义自定义正则规则条目。
  */
-function buildCustomRegexes(rulesText: string): RegExp[] {
+type CustomRegexEntry = {
+    regex: RegExp;
+    ruleId: string;
+};
+
+/**
+ * 功能：为自定义正则规则生成稳定规则 ID。
+ * @param line 原始规则行。
+ * @returns 稳定规则 ID。
+ */
+function buildCustomRegexRuleId(line: string): string {
+    const normalizedLine = normalizeText(line).toLowerCase();
+    return `custom_regex:${hashStableText(normalizedLine)}`;
+}
+
+/**
+ * 功能：解析并构建自定义正则条目。
+ * @param rulesText 规则文本（多行）。
+ * @returns 正则条目数组。
+ */
+function buildCustomRegexEntries(rulesText: string): CustomRegexEntry[] {
     const lines: string[] = splitLines(rulesText);
-    const regexes: RegExp[] = [];
+    const entries: CustomRegexEntry[] = [];
     for (const line of lines) {
+        const ruleId = buildCustomRegexRuleId(line);
         if (line.startsWith('/') && line.lastIndexOf('/') > 0) {
             const lastSlash = line.lastIndexOf('/');
             const body = line.slice(1, lastSlash);
             const flags = line.slice(lastSlash + 1) || 'g';
             try {
-                regexes.push(new RegExp(body, flags));
+                entries.push({ regex: new RegExp(body, flags), ruleId });
                 continue;
             } catch {
                 continue;
             }
         }
-        regexes.push(new RegExp(escapeRegExp(line), 'g'));
+        entries.push({ regex: new RegExp(escapeRegExp(line), 'g'), ruleId });
     }
-    return regexes;
+    return entries;
 }
 
 /**
@@ -531,16 +621,41 @@ export function normalizeRecordFilterSettings(rawSettings?: Partial<RecordFilter
 }
 
 /**
+ * 功能：根据归一化过滤配置生成稳定的过滤配置版本号。
+ * @param settings 归一化后的过滤配置。
+ * @returns 可读前缀 + 稳定哈希版本号。
+ */
+export function buildRecordFilterProfileVersion(settings: RecordFilterSettings): string {
+    const payload = stableSerialize({
+        enabled: settings.enabled,
+        level: settings.level,
+        filterTypes: [...settings.filterTypes],
+        customCodeblockEnabled: settings.customCodeblockEnabled,
+        customCodeblockTags: [...settings.customCodeblockTags],
+        jsonExtractMode: settings.jsonExtractMode,
+        jsonExtractKeys: [...settings.jsonExtractKeys],
+        pureCodePolicy: settings.pureCodePolicy,
+        placeholderText: settings.placeholderText,
+        customRegexEnabled: settings.customRegexEnabled,
+        customRegexRules: settings.customRegexRules,
+        maxTextLength: settings.maxTextLength,
+        minEffectiveChars: settings.minEffectiveChars,
+    });
+    return `record_filter.v1:${hashStableText(payload)}`;
+}
+
+/**
  * 功能：对记录文本执行完整过滤流程。
  * @param rawText 原始消息文本。
  * @param rawSettings 原始设置对象。
  * @returns 过滤结果。
  */
-export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFilterSettings> | Record<string, unknown> | null): RecordFilterResult {
-    const settings = normalizeRecordFilterSettings(rawSettings);
+function filterRecordTextWithNormalizedSettings(rawText: string, settings: RecordFilterSettings): RecordFilterResult {
     const originalText = normalizeText(rawText);
     const appliedRules: string[] = [];
     const extractedTexts: string[] = [];
+    const usedRegexRuleIds: string[] = [];
+    const filterProfileVersion = buildRecordFilterProfileVersion(settings);
 
     if (!settings.enabled) {
         const passthrough = originalText.slice(0, settings.maxTextLength);
@@ -551,6 +666,9 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
             reasonCode: passthrough.length === 0 ? 'empty' : 'ok',
             appliedRules,
             extractedTexts,
+            usedJsonExtractMode: settings.jsonExtractMode,
+            usedRegexRuleIds,
+            filterProfileVersion,
         };
     }
 
@@ -614,10 +732,16 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
     appliedRules.push(`level:${settings.level}`);
 
     if (settings.customRegexEnabled && settings.customRegexRules.trim()) {
-        const customRegexes = buildCustomRegexes(settings.customRegexRules);
-        if (customRegexes.length > 0) {
-            workingText = applyCustomRegexes(workingText, customRegexes);
+        const customRegexEntries = buildCustomRegexEntries(settings.customRegexRules);
+        if (customRegexEntries.length > 0) {
+            workingText = applyCustomRegexes(
+                workingText,
+                customRegexEntries.map((entry: CustomRegexEntry): RegExp => entry.regex),
+            );
             appliedRules.push('custom_regex');
+            usedRegexRuleIds.push(
+                ...Array.from(new Set(customRegexEntries.map((entry: CustomRegexEntry): string => entry.ruleId))).sort(),
+            );
         }
     }
 
@@ -647,6 +771,9 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
                 reasonCode: isEmpty ? 'empty' : likelyCode ? 'pure_code' : 'min_effective',
                 appliedRules,
                 extractedTexts: Array.from(new Set(extractedTexts)),
+                usedJsonExtractMode: settings.jsonExtractMode,
+                usedRegexRuleIds,
+                filterProfileVersion,
             };
         }
         if (settings.pureCodePolicy === 'keep') {
@@ -658,6 +785,9 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
                 reasonCode: fallbackText.length === 0 ? 'empty' : 'ok',
                 appliedRules,
                 extractedTexts: Array.from(new Set(extractedTexts)),
+                usedJsonExtractMode: settings.jsonExtractMode,
+                usedRegexRuleIds,
+                filterProfileVersion,
             };
         }
         return {
@@ -667,6 +797,9 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
             reasonCode: isEmpty ? 'empty' : likelyCode ? 'pure_code' : 'min_effective',
             appliedRules,
             extractedTexts: Array.from(new Set(extractedTexts)),
+            usedJsonExtractMode: settings.jsonExtractMode,
+            usedRegexRuleIds,
+            filterProfileVersion,
         };
     }
 
@@ -677,5 +810,54 @@ export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFi
         reasonCode: 'ok',
         appliedRules,
         extractedTexts: Array.from(new Set(extractedTexts)),
+        usedJsonExtractMode: settings.jsonExtractMode,
+        usedRegexRuleIds,
+        filterProfileVersion,
+    };
+}
+
+/**
+ * 功能：使用已归一化配置执行记录过滤，避免重复归一化开销。
+ * @param rawText 原始消息文本。
+ * @param settings 已归一化过滤配置。
+ * @returns 过滤结果。
+ */
+export function filterRecordTextBySettings(rawText: string, settings: RecordFilterSettings): RecordFilterResult {
+    return filterRecordTextWithNormalizedSettings(rawText, settings);
+}
+
+/**
+ * 功能：对记录文本执行完整过滤流程。
+ * @param rawText 原始消息文本。
+ * @param rawSettings 原始设置对象。
+ * @returns 过滤结果。
+ */
+export function filterRecordText(rawText: string, rawSettings?: Partial<RecordFilterSettings> | Record<string, unknown> | null): RecordFilterResult {
+    const settings = normalizeRecordFilterSettings(rawSettings);
+    return filterRecordTextWithNormalizedSettings(rawText, settings);
+}
+
+/**
+ * 功能：基于过滤结果构建事件审计元数据。
+ * @param input 审计构建输入。
+ * @returns 可直接落库的审计元数据对象。
+ */
+export function buildRecordFilterAuditMetadata(input: BuildRecordFilterAuditMetadataInput): RecordFilterAuditMetadata {
+    const rawTextHash = hashStableText(input.filterResult.originalText || normalizeText(input.rawText));
+    const filteredTextHash = hashStableText(normalizeText(input.filterResult.filteredText));
+    const usedRegexRuleIds = Array.from(
+        new Set((input.filterResult.usedRegexRuleIds || []).map((item: string) => String(item || '').trim()).filter(Boolean)),
+    ).sort();
+    const filterProfileVersion = String(input.filterResult.filterProfileVersion || '').trim()
+        || buildRecordFilterProfileVersion(input.normalizedSettings);
+    return {
+        filterReasonCode: input.filterResult.reasonCode,
+        filterProfileVersion,
+        rawTextHash,
+        filteredTextHash,
+        usedJsonExtractMode: input.filterResult.usedJsonExtractMode,
+        usedRegexRuleIds,
+        ingestHint: input.ingestHint,
+        dedupSource: input.dedupSource,
     };
 }

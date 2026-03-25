@@ -36,8 +36,6 @@ export { ChatLifecycleManager } from './core/chat-lifecycle-manager';
 // 注入管理器
 export { InjectionManager } from './injection/injection-manager';
 
-// 编排胶水层
-
 // SDK 门面层
 export { MemorySDKImpl } from './sdk/memory-sdk';
 
@@ -87,7 +85,6 @@ export type {
     DeferredSchemaHint as ProposalDeferredHint,
 } from './proposal/types';
 
-// 插件注册表
 // AI 状态中心
 export type {
     MemoryAiHealthSnapshot, MemoryAiTaskId, MemoryAiTaskRecord,
@@ -120,7 +117,22 @@ import {
 import type { SdkTavernPromptMessageEvent } from '../../SDK/tavern';
 import { db } from './db/db';
 import { PluginRegistry } from './registry/registry';
-import { filterRecordText } from './core/record-filter';
+import { buildRecordFilterAuditMetadata, filterRecordTextBySettings, normalizeRecordFilterSettings } from './core/record-filter';
+import {
+    buildExistingMessageDedupIndex,
+    buildMessageTextSignature,
+    createIngestDedupRuntimeState,
+    normalizeIncomingMessageId,
+    resolveMessageIngestDedupSource,
+    recordAcceptedMessage,
+    releasePendingKey,
+    resetIngestDedupRuntimeState,
+    seedIngestDedupHydrationState,
+    shouldAcceptIncomingMessage,
+    shouldBackfillHistoricalMessage,
+    shouldAcceptPersistedMessage,
+    type MessageIngestEventType,
+} from './core/message-ingest-dedup';
 import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memoryLlmBridge';
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
@@ -495,7 +507,7 @@ class MemoryOS {
         };
         // 功能：过滤消息文本并写入事件流。
         const appendFilteredMessageEvent = (
-            eventType: string,
+            eventType: MessageIngestEventType,
             msgText: string,
             msgId: unknown,
             ingestHint: 'normal' | 'bootstrap' = 'normal'
@@ -527,7 +539,8 @@ class MemoryOS {
                         .catch(() => undefined);
                 };
 
-                const result = filterRecordText(msgText, readRecordFilterSettings());
+                const normalizedFilterSettings = normalizeRecordFilterSettings(readRecordFilterSettings());
+                const result = filterRecordTextBySettings(msgText, normalizedFilterSettings);
                 const compactText = String(result.filteredText || '').replace(/\s+/g, '');
                 if (result.dropped || compactText.length === 0) {
                     logger.info(`记录过滤后跳过入库 type=${eventType}, msgId=${String(msgId ?? '')}, reason=${result.reasonCode}`);
@@ -535,7 +548,7 @@ class MemoryOS {
                     return;
                 }
 
-                const normalizedMsgId = normalizeMessageId(msgId);
+                const now = Date.now();
                 const activeChatKey = String(
                     currentChatKey
                     || (typeof memory?.getChatKey === 'function' ? memory.getChatKey() : '')
@@ -544,20 +557,44 @@ class MemoryOS {
                 if (!activeChatKey) {
                     return;
                 }
-                const nextTextSignature = normalizeTextSignature(result.filteredText);
-                const pendingEventKey = normalizedMsgId
-                    ? `${activeChatKey}|${eventType}|id:${normalizedMsgId}`
-                    : nextTextSignature
-                        ? `${activeChatKey}|${eventType}|text:${nextTextSignature}`
-                        : '';
-                if (pendingEventKey && pendingMessageEventKeys.has(pendingEventKey)) {
-                    logger.info(`命中运行时并发去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId || '(none)'}`);
+                const ingestSource = ingestHint === 'bootstrap' ? 'bootstrap' : 'runtime';
+                const messageRole = eventType === 'chat.message.sent' ? 'user' : 'assistant';
+                const pendingDecision = shouldAcceptIncomingMessage({
+                    state: ingestDedupState,
+                    chatKey: activeChatKey,
+                    eventType,
+                    role: messageRole,
+                    messageId: msgId,
+                    text: result.filteredText,
+                    source: ingestSource,
+                    now,
+                });
+                if (!pendingDecision.accepted) {
+                    logger.info(`命中运行时并发去重，跳过重复入库 type=${eventType}, msgId=${pendingDecision.normalizedMessageId || '(none)'}, reason=${pendingDecision.reasonCodes.join(',')}`);
                     recordIngestHealth(true);
                     return;
                 }
-                if (pendingEventKey) {
-                    pendingMessageEventKeys.add(pendingEventKey);
-                }
+                recordAcceptedMessage(ingestDedupState, {
+                    decision: pendingDecision,
+                    role: messageRole,
+                    now,
+                    source: ingestSource,
+                    chatKey: activeChatKey,
+                    text: result.filteredText,
+                });
+                const pendingEventKey = pendingDecision.pendingKey;
+                const normalizedMsgId = pendingDecision.normalizedMessageId;
+                const dedupSource = resolveMessageIngestDedupSource(
+                    pendingDecision.normalizedMessageId,
+                    pendingDecision.textSignature,
+                );
+                const auditMetadata = buildRecordFilterAuditMetadata({
+                    rawText: msgText,
+                    filterResult: result,
+                    normalizedSettings: normalizedFilterSettings,
+                    ingestHint,
+                    dedupSource,
+                });
 
                 const appendTask = (async (): Promise<void> => {
                     try {
@@ -567,45 +604,27 @@ class MemoryOS {
                             .reverse()
                             .limit(200)
                             .toArray();
-
-                        if (normalizedMsgId) {
-                            const duplicatedByMsgId = recentEvents.some((item) => {
-                                return normalizeMessageId(item?.refs?.messageId) === normalizedMsgId;
-                            });
-                            if (duplicatedByMsgId) {
-                                logger.info(`命中数据库去重，跳过重复入库 type=${eventType}, msgId=${normalizedMsgId}`);
-                                recordIngestHealth(true);
-                                return;
-                            }
-                        }
-
-                        // 某些历史消息/欢迎语没有稳定 messageId，按文本签名兜底去重
-                        if (!normalizedMsgId && nextTextSignature) {
-                            const duplicatedByText = recentEvents.some((item) => {
-                                const storedText = String((item?.payload as { text?: unknown } | undefined)?.text ?? '');
-                                return normalizeTextSignature(storedText) === nextTextSignature;
-                            });
-                            if (duplicatedByText) {
-                                logger.info(`命中文本签名去重，跳过重复入库 type=${eventType}`);
-                                recordIngestHealth(true);
-                                return;
-                            }
-                        }
-
-                        if (ingestHint === 'bootstrap') {
-                            const latestEvent = recentEvents[0];
-                            const latestText = normalizeTextSignature(String((latestEvent?.payload as { text?: unknown } | undefined)?.text ?? ''));
-                            const nextText = normalizeTextSignature(result.filteredText);
-                            if (latestText && nextText && latestText === nextText) {
-                                logger.info(`bootstrap 补录命中最新文本去重，跳过 type=${eventType}`);
-                                recordIngestHealth(true);
-                                return;
-                            }
+                        const recentDedupIndex = buildExistingMessageDedupIndex({ events: recentEvents });
+                        const persistedDecision = shouldAcceptPersistedMessage({
+                            existingMessageIds: recentDedupIndex.messageIds,
+                            existingTextSignatures: recentDedupIndex.textSignatures,
+                            latestTextSignature: recentDedupIndex.latestTextSignature,
+                            messageId: normalizedMsgId,
+                            text: result.filteredText,
+                            source: ingestSource,
+                        });
+                        if (!persistedDecision.accepted) {
+                            logger.info(`命中落库去重，跳过重复入库 type=${eventType}, msgId=${persistedDecision.normalizedMessageId || '(none)'}, reason=${persistedDecision.reasonCodes.join(',')}`);
+                            recordIngestHealth(true);
+                            return;
                         }
 
                         await memory.events.append(
                             eventType,
-                            { text: result.filteredText },
+                            {
+                                text: result.filteredText,
+                                audit: auditMetadata,
+                            },
                             {
                                 sourcePlugin: 'sillytavern-core',
                                 sourceMessageId: normalizedMsgId || undefined,
@@ -613,9 +632,7 @@ class MemoryOS {
                         );
                         recordIngestHealth(false);
                     } finally {
-                        if (pendingEventKey) {
-                            pendingMessageEventKeys.delete(pendingEventKey);
-                        }
+                        releasePendingKey(ingestDedupState, pendingEventKey);
                     }
                 })();
                 Promise.resolve(appendTask).catch((error: unknown) => {
@@ -627,40 +644,30 @@ class MemoryOS {
         };
 
         // 用 Set 追踪已记录的消息 ID，切换聊天时重置，防止重复事件写入两条记录
-        const processedMessageKeys = new Set<string>();
-        const pendingMessageEventKeys = new Set<string>();
-        const bootstrapAssistantByChatKey = new Map<string, string>();
-        const historicalMessageIdsOnBind = new Set<string>();
-            const historicalMessageTextSignaturesOnBind = new Set<string>();
-        let bindHydrationUntilTs = 0;
-            let bindHydrationTextGuardUntilTs = 0;
+        const ingestDedupState = createIngestDedupRuntimeState(3000);
         let currentChatKey = '';
-        let lastAssistantSignature = '';
-        let lastAssistantSignatureAt = 0;
-        let lastAssistantTextSignature = '';
-        let lastAssistantTextSignatureAt = 0;
-        let lastUserSignature = '';
-        let lastUserSignatureAt = 0;
         let lastChatStructureSignature = '';
-        const DUPLICATE_SIGNATURE_WINDOW_MS = 3000;
-        // 功能：将消息 ID 归一化为字符串。
-        const normalizeMessageId = (msgId: unknown): string => {
-            return String(msgId ?? '').trim();
+        /**
+         * 功能：从消息对象中读取原始消息 ID，兼容 `_id/id/messageId/mesid` 字段。
+         * @param message 消息对象。
+         * @returns 原始消息 ID 候选值，未命中时返回空字符串。
+         */
+        const readRawMessageId = (message: unknown): unknown => {
+            if (!message || typeof message !== 'object') {
+                return '';
+            }
+            const source = message as Record<string, unknown>;
+            return source._id
+                ?? source.id
+                ?? source.messageId
+                ?? source.mesid
+                ?? '';
         };
-            const normalizeStableMessageId = (msgId: unknown): string => {
-                const normalized = normalizeMessageId(msgId);
-                return normalized === '0' ? '' : normalized;
-            };
         const collectHistoricalMessageIdsFromChat = (chatList: unknown): Set<string> => {
             const idSet = new Set<string>();
             if (!Array.isArray(chatList)) return idSet;
             for (const item of chatList) {
-                    const normalized = normalizeStableMessageId(
-                    (item as any)?._id
-                    ?? (item as any)?.id
-                    ?? (item as any)?.messageId
-                    ?? (item as any)?.mesid
-                );
+                const normalized = normalizeIncomingMessageId(readRawMessageId(item), true);
                 if (normalized) {
                     idSet.add(normalized);
                 }
@@ -705,18 +712,13 @@ class MemoryOS {
                     .between([chatKey, 'chat.message.sent', 0], [chatKey, 'chat.message.sent', Infinity])
                     .toArray(),
             ]);
-            const allExisting = [...existingReceived, ...existingSent];
-            const existingMsgIds = new Set<string>();
-            const existingTextSigs = new Set<string>();
-            for (const ev of allExisting) {
-                const refId = normalizeMessageId(ev?.refs?.messageId);
-                if (refId) existingMsgIds.add(refId);
-                const storedText = String((ev?.payload as { text?: unknown } | undefined)?.text ?? '');
-                const sig = normalizeTextSignature(storedText);
-                if (sig) existingTextSigs.add(sig);
-            }
+            const existingDedupIndex = buildExistingMessageDedupIndex({
+                events: [...existingReceived, ...existingSent],
+            });
+            const existingMsgIds = existingDedupIndex.messageIds;
+            const existingTextSigs = existingDedupIndex.textSignatures;
 
-            const filterSettings = readRecordFilterSettings();
+            const filterSettings = normalizeRecordFilterSettings(readRecordFilterSettings());
 
             for (const msg of chatList) {
                 stats.scanned++;
@@ -729,45 +731,63 @@ class MemoryOS {
                 const text = readMessageText(msg);
                 if (!text) continue;
 
-                const eventType = isUser ? 'chat.message.sent' : 'chat.message.received';
-                const rawMsgId = normalizeMessageId(
-                    (msg as any)?._id ?? (msg as any)?.id ?? (msg as any)?.messageId ?? (msg as any)?.mesid
-                );
-
-                // 按消息 ID 去重
-                if (rawMsgId && existingMsgIds.has(rawMsgId)) {
-                    stats.deduplicatedById++;
-                    continue;
-                }
+                const eventType: MessageIngestEventType = isUser ? 'chat.message.sent' : 'chat.message.received';
+                const rawMsgId = readRawMessageId(msg);
 
                 // 过滤
-                const result = filterRecordText(text, filterSettings);
+                const result = filterRecordTextBySettings(text, filterSettings);
                 const compactText = String(result.filteredText || '').replace(/\s+/g, '');
                 if (result.dropped || compactText.length === 0) {
                     stats.droppedByFilter++;
                     continue;
                 }
 
-                // 按文本签名去重（无稳定 messageId 或 ID 未命中时兜底）
-                const textSig = normalizeTextSignature(result.filteredText);
-                if (textSig && existingTextSigs.has(textSig)) {
-                    stats.deduplicatedByText++;
+                // 按 messageId / 文本签名去重
+                const backfillDecision = shouldBackfillHistoricalMessage({
+                    existingMessageIds: existingMsgIds,
+                    existingTextSignatures: existingTextSigs,
+                    isSystemMessage: false,
+                    messageId: rawMsgId,
+                    text: result.filteredText,
+                });
+                if (!backfillDecision.accepted) {
+                    if (backfillDecision.reasonCodes.includes('skip:db_message_id_duplicate')) {
+                        stats.deduplicatedById++;
+                    } else if (backfillDecision.reasonCodes.includes('skip:db_text_signature_duplicate')) {
+                        stats.deduplicatedByText++;
+                    } else if (backfillDecision.reasonCodes.includes('skip:filtered_empty')) {
+                        stats.droppedByFilter++;
+                    }
                     continue;
                 }
+                const dedupSource = resolveMessageIngestDedupSource(
+                    backfillDecision.normalizedMessageId,
+                    backfillDecision.textSignature,
+                );
+                const auditMetadata = buildRecordFilterAuditMetadata({
+                    rawText: text,
+                    filterResult: result,
+                    normalizedSettings: filterSettings,
+                    ingestHint: 'bootstrap',
+                    dedupSource,
+                });
 
                 // 写入
                 await memory.events.append(
                     eventType,
-                    { text: result.filteredText },
+                    {
+                        text: result.filteredText,
+                        audit: auditMetadata,
+                    },
                     {
                         sourcePlugin: 'sillytavern-core',
-                        sourceMessageId: rawMsgId || undefined,
+                        sourceMessageId: backfillDecision.normalizedMessageId || undefined,
                     },
                 );
 
                 // 更新本地索引，防止同一轮内重复
-                if (rawMsgId) existingMsgIds.add(rawMsgId);
-                if (textSig) existingTextSigs.add(textSig);
+                if (backfillDecision.normalizedMessageId) existingMsgIds.add(backfillDecision.normalizedMessageId);
+                if (backfillDecision.textSignature) existingTextSigs.add(backfillDecision.textSignature);
                 stats.backfilled++;
             }
 
@@ -782,16 +802,10 @@ class MemoryOS {
                 return '';
             }
             if (typeof eventPayload === 'string') {
-                    return normalizeStableMessageId(eventPayload);
+                return normalizeIncomingMessageId(eventPayload, true);
             }
             if (typeof eventPayload === 'object') {
-                const source = eventPayload as Record<string, unknown>;
-                    return normalizeStableMessageId(
-                    source._id
-                    ?? source.id
-                    ?? source.messageId
-                    ?? source.mesid
-                );
+                return normalizeIncomingMessageId(readRawMessageId(eventPayload), true);
             }
             return '';
         };
@@ -813,33 +827,28 @@ class MemoryOS {
         const readMessageText = (message: unknown): string => {
             return getTavernMessageTextEvent(message);
         };
-        const normalizeTextSignature = (value: string): string => {
-            return String(value || '')
-                .replace(/\s+/g, ' ')
-                .trim();
-        };
-            const collectHistoricalMessageTextSignaturesFromChat = (chatList: unknown): Set<string> => {
-                const signatureSet = new Set<string>();
-                if (!Array.isArray(chatList)) return signatureSet;
-                for (const item of chatList) {
-                    if (isSystemMessage(item)) {
-                        continue;
-                    }
-                    const textSignature = normalizeTextSignature(readMessageText(item));
-                    if (textSignature) {
-                        signatureSet.add(textSignature);
-                    }
+        const collectHistoricalMessageTextSignaturesFromChat = (chatList: unknown): Set<string> => {
+            const signatureSet = new Set<string>();
+            if (!Array.isArray(chatList)) return signatureSet;
+            for (const item of chatList) {
+                if (isSystemMessage(item)) {
+                    continue;
                 }
-                return signatureSet;
-            };
+                const textSignature = buildMessageTextSignature(readMessageText(item));
+                if (textSignature) {
+                    signatureSet.add(textSignature);
+                }
+            }
+            return signatureSet;
+        };
         // 功能：计算轻量聊天结构签名，用于快照差异兜底。
         const computeChatStructureSignature = (chatList: unknown): string => {
             if (!Array.isArray(chatList)) return '';
             const payload = chatList
                 .map((item: any, index: number): string => {
-                        const msgId = normalizeStableMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid ?? '');
+                    const msgId = normalizeIncomingMessageId(readRawMessageId(item), true);
                     const role = isSystemMessage(item) ? 'system' : (isUserMessage(item) ? 'user' : 'assistant');
-                    const text = normalizeTextSignature(readMessageText(item));
+                    const text = buildMessageTextSignature(readMessageText(item));
                     return `${index}|${msgId}|${role}|${text}`;
                 })
                 .join('\n');
@@ -872,7 +881,7 @@ class MemoryOS {
                 return null;
             }
             return chatList.find((item: any) => {
-                const left = normalizeMessageId(item?._id ?? item?.id ?? item?.messageId ?? item?.mesid);
+                const left = normalizeIncomingMessageId(readRawMessageId(item), false);
                 return left === messageId;
             }) || null;
         };
@@ -889,19 +898,6 @@ class MemoryOS {
                 }
             }
             return eventPayload && typeof eventPayload === 'object' ? eventPayload : null;
-        };
-        // 功能：判断消息事件是否重复。
-        const isDuplicateMessageEvent = (eventType: string, msgId: unknown): boolean => {
-            const normalizedMsgId = normalizeMessageId(msgId);
-            if (!normalizedMsgId) {
-                return false;
-            }
-            const key = `${eventType}:${normalizedMsgId}`;
-            if (processedMessageKeys.has(key)) {
-                return true;
-            }
-            processedMessageKeys.add(key);
-            return false;
         };
         // 功能：判断消息是否为用户消息。
         const isUserMessage = (message: any): boolean => {
@@ -931,30 +927,6 @@ class MemoryOS {
             const text = readMessageText(latestAssistant);
             if (!text) return;
             const assistantMsgId = extractMessageId(latestAssistant);
-            const signature = `${assistantMsgId}|${text}`;
-            const textSignature = normalizeTextSignature(text);
-            const now = Date.now();
-            if (source === 'bootstrap' && currentChatKey) {
-                const latestBootstrappedSignature = bootstrapAssistantByChatKey.get(currentChatKey) || '';
-                if (latestBootstrappedSignature === textSignature) {
-                    return;
-                }
-                bootstrapAssistantByChatKey.set(currentChatKey, textSignature);
-            }
-            if (signature === lastAssistantSignature) {
-                return;
-            }
-            if (
-                textSignature &&
-                textSignature === lastAssistantTextSignature &&
-                now - lastAssistantTextSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
-            ) {
-                return;
-            }
-            lastAssistantSignature = signature;
-            lastAssistantSignatureAt = now;
-            lastAssistantTextSignature = textSignature;
-            lastAssistantTextSignatureAt = now;
             appendFilteredMessageEvent(
                 'chat.message.received',
                 text,
@@ -970,18 +942,7 @@ class MemoryOS {
             removeMemoryChatToolbar();
 
             // 无论是否启用，切换时都清空消息去重 Set
-            processedMessageKeys.clear();
-            pendingMessageEventKeys.clear();
-            historicalMessageIdsOnBind.clear();
-                historicalMessageTextSignaturesOnBind.clear();
-            bindHydrationUntilTs = 0;
-                bindHydrationTextGuardUntilTs = 0;
-            lastAssistantSignature = '';
-            lastAssistantSignatureAt = 0;
-            lastAssistantTextSignature = '';
-            lastAssistantTextSignatureAt = 0;
-            lastUserSignature = '';
-            lastUserSignatureAt = 0;
+            resetIngestDedupRuntimeState(ingestDedupState);
             lastChatStructureSignature = '';
 
             // 先打印切换通知，帮助排查事件是否正常触发
@@ -1040,15 +1001,14 @@ class MemoryOS {
             logger.info(`已切换记忆，ChatKey: ${chatKey}`);
 
             const historicalIds = collectHistoricalMessageIdsFromChat(ctx?.chat);
-            for (const historyId of historicalIds) {
-                historicalMessageIdsOnBind.add(historyId);
-            }
-                const historicalTextSignatures = collectHistoricalMessageTextSignaturesFromChat(ctx?.chat);
-                for (const textSignature of historicalTextSignatures) {
-                    historicalMessageTextSignaturesOnBind.add(textSignature);
-                }
-            bindHydrationUntilTs = Date.now() + 1500;
-                bindHydrationTextGuardUntilTs = Date.now() + 10000;
+            const historicalTextSignatures = collectHistoricalMessageTextSignaturesFromChat(ctx?.chat);
+            seedIngestDedupHydrationState(ingestDedupState, {
+                messageIds: historicalIds,
+                textSignatures: historicalTextSignatures,
+                now: Date.now(),
+                idGuardWindowMs: 1500,
+                textGuardWindowMs: 10000,
+            });
 
             const currentBindingSerial = ++bindingSerial;
             bindingFlightChatKey = chatKey;
@@ -1170,19 +1130,6 @@ class MemoryOS {
         const onAssistantMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
             const msgId = extractMessageId(eventPayload);
-            const messageIndex = extractMessageIndex(eventPayload);
-            if (msgId && historicalMessageIdsOnBind.has(msgId)) {
-                logger.info(`历史助手消息已存在，跳过入库 msgId=${msgId}`);
-                return;
-            }
-            if (!msgId && Date.now() <= bindHydrationUntilTs) {
-                logger.info('聊天刚绑定完成，跳过无 msgId 的助手事件');
-                return;
-            }
-            if (isDuplicateMessageEvent('chat.message.received', msgId)) {
-                logger.info(`MESSAGE_RECEIVED 重复触发已跳过，msgId: ${msgId}`);
-                return;
-            }
             const ctx = getCtx();
             if (!ctx) return;
             const memory = (window as any).STX.memory;
@@ -1191,39 +1138,8 @@ class MemoryOS {
                 const text = readMessageText(messageObj);
                 logger.info(`监听到新回复进入，msgId: ${msgId}，准备记录记忆事件...`);
                 if (text && !isUserMessage(messageObj) && !isSystemMessage(messageObj)) {
-                    const signature = `${msgId}|${text}`;
-                    const textSignature = normalizeTextSignature(text);
-                    const now = Date.now();
-                    if (
-                        !msgId
-                        && textSignature
-                        && historicalMessageTextSignaturesOnBind.has(textSignature)
-                        && now <= bindHydrationTextGuardUntilTs
-                    ) {
-                        logger.info(`绑定期历史助手文本重复已跳过，messageIndex=${messageIndex >= 0 ? messageIndex : '(none)'}`);
-                        return;
-                    }
-                    if (
-                        signature === lastAssistantSignature &&
-                        now - lastAssistantSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
-                    ) {
-                        logger.info(`助手消息签名重复已跳过，msgId: ${msgId}`);
-                        return;
-                    }
-                    if (
-                        textSignature &&
-                        textSignature === lastAssistantTextSignature &&
-                        now - lastAssistantTextSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
-                    ) {
-                        logger.info(`助手消息文本签名重复已跳过，msgId: ${msgId}`);
-                        return;
-                    }
                     appendFilteredMessageEvent('chat.message.received', text, msgId || undefined);
                     rebuildLogicalViewIfNeeded('assistant_message');
-                    lastAssistantSignature = signature;
-                    lastAssistantSignatureAt = now;
-                    lastAssistantTextSignature = textSignature;
-                    lastAssistantTextSignatureAt = now;
                 } else {
                     appendLatestAssistantMessageFallback();
                     rebuildLogicalViewIfNeeded('assistant_fallback');
@@ -1234,19 +1150,6 @@ class MemoryOS {
         const onUserMessageCaptured = (eventPayload: unknown): void => {
             if (!isPluginEnabled()) return;
             const msgId = extractMessageId(eventPayload);
-            const messageIndex = extractMessageIndex(eventPayload);
-            if (msgId && historicalMessageIdsOnBind.has(msgId)) {
-                logger.info(`历史用户消息已存在，跳过入库 msgId=${msgId}`);
-                return;
-            }
-            if (!msgId && Date.now() <= bindHydrationUntilTs) {
-                logger.info('聊天刚绑定完成，跳过无 msgId 的用户事件');
-                return;
-            }
-            if (isDuplicateMessageEvent('chat.message.sent', msgId)) {
-                logger.info(`USER_MESSAGE_RENDERED 重复触发已跳过，msgId: ${msgId}`);
-                return;
-            }
             const ctx = getCtx();
             if (!ctx) return;
             const memory = (window as any).STX.memory;
@@ -1256,28 +1159,8 @@ class MemoryOS {
                 const text = readMessageText(messageObj);
                 logger.info(`监听到用户发言，msgId: ${msgId}，准备记录记忆事件...`);
                 if (text) {
-                    const signature = `${msgId}|${text}`;
-                    const textSignature = normalizeTextSignature(text);
-                    if (
-                        !msgId
-                        && textSignature
-                        && historicalMessageTextSignaturesOnBind.has(textSignature)
-                        && Date.now() <= bindHydrationTextGuardUntilTs
-                    ) {
-                        logger.info(`绑定期历史用户文本重复已跳过，messageIndex=${messageIndex >= 0 ? messageIndex : '(none)'}`);
-                        return;
-                    }
-                    if (
-                        signature === lastUserSignature &&
-                        Date.now() - lastUserSignatureAt <= DUPLICATE_SIGNATURE_WINDOW_MS
-                    ) {
-                        logger.info(`用户消息签名重复已跳过，msgId: ${msgId}`);
-                        return;
-                    }
                     appendFilteredMessageEvent('chat.message.sent', text, msgId || undefined);
                     rebuildLogicalViewIfNeeded('user_message');
-                    lastUserSignature = signature;
-                    lastUserSignatureAt = Date.now();
                 }
             }
         };

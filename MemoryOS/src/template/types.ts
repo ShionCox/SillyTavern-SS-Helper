@@ -9,7 +9,71 @@ export interface TemplateFactType {
     type: string;
     pathPattern: string;
     slots: string[];
+    valueSchema: TemplateSchemaNode;
     defaultInjection?: string;
+}
+
+/** 模板 schema：string 节点 */
+export interface TemplateStringSchemaNode {
+    type: 'string';
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema：number 节点 */
+export interface TemplateNumberSchemaNode {
+    type: 'number';
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema：boolean 节点 */
+export interface TemplateBooleanSchemaNode {
+    type: 'boolean';
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema：enum 节点 */
+export interface TemplateEnumSchemaNode {
+    type: 'enum';
+    values: string[];
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema：object 节点 */
+export interface TemplateObjectSchemaNode {
+    type: 'object';
+    fields: Record<string, TemplateSchemaNode>;
+    requiredFields?: string[];
+    allowUnknownFields?: boolean;
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema：list 节点 */
+export interface TemplateListSchemaNode {
+    type: 'list';
+    item: TemplateSchemaNode;
+    nullable?: boolean;
+    description?: string;
+}
+
+/** 模板 schema 联合节点 */
+export type TemplateSchemaNode =
+    | TemplateStringSchemaNode
+    | TemplateNumberSchemaNode
+    | TemplateBooleanSchemaNode
+    | TemplateEnumSchemaNode
+    | TemplateObjectSchemaNode
+    | TemplateListSchemaNode;
+
+/** patch 路径与值 schema 约束 */
+export interface TemplatePatchSchema {
+    pathPattern: string;
+    valueSchema: TemplateSchemaNode;
+    description?: string;
 }
 
 /** 抽取策略 */
@@ -58,6 +122,7 @@ export interface WorldTemplate {
     worldType: 'fantasy' | 'urban' | 'custom';
     name: string;
     factTypes: TemplateFactType[];
+    patchSchemas: TemplatePatchSchema[];
     extractPolicies: ExtractPolicies;
     injectionLayout: InjectionLayout;
     worldInfoRef?: { book: string; hash: string };

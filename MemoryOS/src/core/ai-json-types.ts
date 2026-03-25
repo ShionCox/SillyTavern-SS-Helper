@@ -1,6 +1,6 @@
 export type AiJsonMode = 'init' | 'update';
 
-export type AiJsonFieldType = 'string' | 'number' | 'boolean' | 'enum' | 'object' | 'list';
+export type AiJsonFieldType = 'string' | 'number' | 'boolean' | 'enum' | 'object' | 'list' | 'json';
 
 export type AiJsonUpdateMode = 'replace_scalar' | 'replace_object' | 'upsert_item' | 'remove_item';
 
@@ -41,6 +41,27 @@ export interface AiJsonFieldDefinition {
     itemDefinition?: AiJsonFieldDefinition;
     itemPrimaryKey?: string;
     hiddenInUpdate?: boolean;
+    allowUnknownProperties?: boolean;
+    requiredFieldKeys?: string[];
+}
+
+/**
+ * 功能：描述命名空间二级结构校验上下文。
+ * @param mode 当前输出模式。
+ * @param namespaceKey 当前命名空间键名。
+ * @param namespaceKeys 本次允许的命名空间列表。
+ * @param payload 外层 envelope 归一化结果。
+ * @param namespaceValue 当前命名空间值。
+ * @param context 调用方透传的附加上下文。
+ * @returns 命名空间结构校验上下文。
+ */
+export interface AiJsonNamespaceValidationContext {
+    mode: AiJsonMode;
+    namespaceKey: string;
+    namespaceKeys: string[];
+    payload: AiJsonOutputEnvelope;
+    namespaceValue: unknown;
+    context?: Record<string, unknown>;
 }
 
 /**
@@ -52,6 +73,7 @@ export interface AiJsonFieldDefinition {
 export interface AiJsonNamespaceHooks {
     normalizeInitDocument?: (value: unknown) => unknown;
     afterApply?: (value: unknown) => unknown;
+    validateInitDocument?: (value: unknown, context: AiJsonNamespaceValidationContext) => string[];
 }
 
 /**

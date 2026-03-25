@@ -176,6 +176,7 @@ export interface DBTemplate {
     worldType: 'fantasy' | 'urban' | 'custom';
     name: string;
     factTypes: any[];
+    patchSchemas?: any[];
     policies: any;
     layout: any;
     tables?: any[];

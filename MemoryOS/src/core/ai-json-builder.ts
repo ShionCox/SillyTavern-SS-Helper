@@ -95,15 +95,21 @@ function buildEnvelopeSchema(
  * @param fields 字段定义集合。
  * @returns 对象 schema。
  */
-function buildObjectSchema(fields: Record<string, AiJsonFieldDefinition>): Record<string, unknown> {
+function buildObjectSchema(
+    fields: Record<string, AiJsonFieldDefinition>,
+    options: { allowUnknownProperties?: boolean; requiredFieldKeys?: string[] } = {},
+): Record<string, unknown> {
     const properties = Object.values(fields).reduce<Record<string, unknown>>((result: Record<string, unknown>, field: AiJsonFieldDefinition): Record<string, unknown> => {
         result[field.fieldKey] = buildFieldSchema(field);
         return result;
     }, {});
+    const required = Array.isArray(options.requiredFieldKeys) && options.requiredFieldKeys.length > 0
+        ? options.requiredFieldKeys.filter((fieldKey: string): boolean => Object.prototype.hasOwnProperty.call(properties, fieldKey))
+        : Object.keys(properties);
     return {
         type: 'object',
-        additionalProperties: false,
-        required: Object.keys(properties),
+        additionalProperties: options.allowUnknownProperties === true,
+        required,
         properties,
     };
 }
@@ -116,7 +122,29 @@ function buildObjectSchema(fields: Record<string, AiJsonFieldDefinition>): Recor
 function buildFieldSchema(field: AiJsonFieldDefinition): Record<string, unknown> {
     let schema: Record<string, unknown>;
     if (field.type === 'object') {
-        schema = buildObjectSchema(field.fields ?? {});
+        schema = buildObjectSchema(field.fields ?? {}, {
+            allowUnknownProperties: field.allowUnknownProperties,
+            requiredFieldKeys: field.requiredFieldKeys,
+        });
+    } else if (field.type === 'json') {
+        schema = {
+            anyOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' },
+                {
+                    type: 'object',
+                    additionalProperties: true,
+                    required: [],
+                    properties: {},
+                },
+                {
+                    type: 'array',
+                    items: {},
+                },
+                { type: 'null' },
+            ],
+        };
     } else if (field.type === 'list') {
         schema = {
             type: 'array',

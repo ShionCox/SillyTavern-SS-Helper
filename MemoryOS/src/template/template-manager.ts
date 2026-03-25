@@ -183,6 +183,7 @@ export class TemplateManager {
             worldType: template.worldType,
             name: template.name,
             factTypes: template.factTypes || [],
+            patchSchemas: template.patchSchemas || [],
             policies: template.extractPolicies,
             layout: template.injectionLayout,
             tables: template.tables,
@@ -313,6 +314,7 @@ export class TemplateManager {
             worldType: record.worldType as 'fantasy' | 'urban' | 'custom',
             name: record.name,
             factTypes: record.factTypes || [],
+            patchSchemas: Array.isArray((record as any).patchSchemas) ? (record as any).patchSchemas : [],
             extractPolicies: record.policies || {},
             injectionLayout: record.layout || {},
             worldInfoRef: {

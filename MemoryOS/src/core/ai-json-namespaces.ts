@@ -2,9 +2,11 @@ import type {
     AiJsonDescription,
     AiJsonFieldDefinition,
     AiJsonNamespaceDefinition,
+    AiJsonNamespaceValidationContext,
 } from './ai-json-types';
 import {    normalizeAiJsonDescription,
 } from './ai-json-types';
+import type { TemplatePatchSchema, TemplateSchemaNode, TemplateFactType } from '../template/types';
 
 type MutableRecord = Record<string, unknown>;
 
@@ -186,6 +188,33 @@ function createListField(
 }
 
 /**
+ * 功能：创建任意 JSON 字段定义。
+ * @param fieldKey 字段键名。
+ * @param description 字段说明。
+ * @param example 示例值。
+ * @param extra 额外配置。
+ * @returns 任意 JSON 字段定义。
+ */
+function createJsonField(
+    fieldKey: string,
+    description: AiJsonDescription,
+    example: unknown,
+    extra: Partial<AiJsonFieldDefinition> = {},
+): AiJsonFieldDefinition {
+    return {
+        fieldKey,
+        type: 'json',
+        requiredOnInit: true,
+        nullable: false,
+        description: normalizeAiJsonDescription(description),
+        example,
+        updatable: true,
+        updateMode: 'replace_object',
+        ...extra,
+    };
+}
+
+/**
  * 功能：判断值是否为普通对象。
  * @param value 待判断的值。
  * @returns 是否为普通对象。
@@ -275,22 +304,30 @@ function cloneValue<T>(value: T): T {
  * @param fallback 解析失败时使用的兜底值。
  * @returns 解析后的对象或兜底值。
  */
-function parseJsonText(value: unknown, fallback: unknown): unknown {
-    if (value == null) {
+/**
+ * 功能：归一化任意 JSON 值。
+ * @param value 原始值。
+ * @param fallback 值缺失时使用的兜底值。
+ * @returns 归一化后的 JSON 值。
+ */
+function normalizeJsonValue(value: unknown, fallback: unknown): unknown {
+    if (value === undefined) {
         return cloneValue(fallback);
     }
-    if (typeof value !== 'string') {
-        return cloneValue(value);
+    return cloneValue(value);
+}
+
+/**
+ * 功能：归一化对象值。
+ * @param value 原始值。
+ * @param fallback 兜底对象值。
+ * @returns 归一化后的对象值。
+ */
+function normalizeJsonObjectValue(value: unknown, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+    if (!isRecord(value)) {
+        return cloneValue(fallback) as Record<string, unknown>;
     }
-    const text = value.trim();
-    if (!text) {
-        return cloneValue(fallback);
-    }
-    try {
-        return JSON.parse(text);
-    } catch {
-        return cloneValue(fallback);
-    }
+    return cloneValue(value) as Record<string, unknown>;
 }
 
 /**
@@ -617,9 +654,9 @@ function normalizeProposalFactArray(value: unknown): Array<Record<string, unknow
                 id: normalizeText(entity.id),
             },
             path: normalizeText(record.path),
-            value: parseJsonText(record.valueJson, {}),
+            value: normalizeJsonValue(record.value, {}),
             confidence: normalizeNumber(record.confidence),
-            provenance: parseJsonText(record.provenanceJson, {}),
+            provenance: normalizeJsonObjectValue(record.provenance, {}),
         };
     }).filter((item: Record<string, unknown>): boolean => Boolean(String(item.type ?? '').trim()));
 }
@@ -638,7 +675,7 @@ function normalizeProposalPatchArray(value: unknown): Array<Record<string, unkno
         return {
             op: normalizeText(record.op) || 'replace',
             path: normalizeText(record.path),
-            value: parseJsonText(record.valueJson, null),
+            value: normalizeJsonValue(record.value, null),
         };
     }).filter((item: Record<string, unknown>): boolean => Boolean(String(item.path ?? '').trim()));
 }
@@ -653,7 +690,7 @@ function normalizeProposalSummarySource(value: unknown): Record<string, unknown>
     return {
         extractor: normalizeText(record.extractor),
         provider: normalizeText(record.provider),
-        provenance: parseJsonText(record.provenanceJson, {}),
+        provenance: normalizeJsonObjectValue(record.provenance, {}),
     };
 }
 
@@ -703,7 +740,7 @@ function normalizeProposalSchemaChangeArray(value: unknown): Array<Record<string
             kind: normalizeEnumValue(record.kind, MEMORY_SCHEMA_CHANGE_VALUES, 'add_field'),
             tableKey: normalizeText(record.tableKey),
             fieldKey: normalizeText(record.fieldKey),
-            payload: parseJsonText(record.payloadJson, {}),
+            payload: normalizeJsonObjectValue(record.payload, {}),
             requiredByFacts: Boolean(record.requiredByFacts),
         };
     }).filter((item: Record<string, unknown>): boolean => Boolean(String(item.tableKey ?? '').trim()));
@@ -748,6 +785,277 @@ function normalizeMemoryProposalDocument(value: unknown): Record<string, unknown
         entityResolutions: normalizeProposalEntityResolutionArray(record.entityResolutions),
         confidence: normalizeNumber(record.confidence),
     };
+}
+
+const MEMORY_PROPOSAL_LEGACY_FIELD_MAP: Record<string, string> = {
+    valueJson: 'value',
+    payloadJson: 'payload',
+    provenanceJson: 'provenance',
+};
+
+/**
+ * 功能：校验 memory_proposal 命名空间的二级结构。
+ * @param value 命名空间原始值。
+ * @param context 校验上下文。
+ * @returns 校验错误列表。
+ */
+function validateMemoryProposalInitDocument(value: unknown, context: AiJsonNamespaceValidationContext): string[] {
+    const errors: string[] = [];
+    if (!isRecord(value)) {
+        return ['必须是对象'];
+    }
+    const record = value as MutableRecord;
+    const factTypeMap = buildTemplateFactTypeMap(context.context);
+    const patchSchemas = buildTemplatePatchSchemaList(context.context);
+
+    const facts = Array.isArray(record.facts) ? record.facts : [];
+    facts.forEach((item: unknown, index: number): void => {
+        if (!isRecord(item)) {
+            errors.push(`facts[${index}] 必须是对象`);
+            return;
+        }
+        const fact = item as MutableRecord;
+        collectLegacyJsonFieldErrors(fact, `facts[${index}]`, errors);
+        if (!Object.prototype.hasOwnProperty.call(fact, 'value')) {
+            errors.push(`facts[${index}].value 缺失`);
+            return;
+        }
+        const factType = normalizeText(fact.type);
+        if (!factType) {
+            errors.push(`facts[${index}].type 缺失`);
+            return;
+        }
+        const factSchema = factTypeMap.get(factType);
+        if (!factSchema) {
+            errors.push(`facts[${index}].value 缺少模板 valueSchema: fact.type=${factType}`);
+            return;
+        }
+        errors.push(...validateTemplateSchemaValue(fact.value, factSchema, `facts[${index}].value`));
+    });
+
+    const patches = Array.isArray(record.patches) ? record.patches : [];
+    patches.forEach((item: unknown, index: number): void => {
+        if (!isRecord(item)) {
+            errors.push(`patches[${index}] 必须是对象`);
+            return;
+        }
+        const patch = item as MutableRecord;
+        collectLegacyJsonFieldErrors(patch, `patches[${index}]`, errors);
+        if (!Object.prototype.hasOwnProperty.call(patch, 'value')) {
+            errors.push(`patches[${index}].value 缺失`);
+            return;
+        }
+        const patchPath = normalizeText(patch.path);
+        if (!patchPath) {
+            errors.push(`patches[${index}].path 缺失`);
+            return;
+        }
+        const patchSchema = resolvePatchSchema(patchPath, patchSchemas);
+        if (!patchSchema) {
+            errors.push(`patches[${index}].value 缺少模板 patchSchema: patch.path=${patchPath}`);
+            return;
+        }
+        errors.push(...validateTemplateSchemaValue(patch.value, patchSchema.valueSchema, `patches[${index}].value`));
+    });
+
+    const summaries = Array.isArray(record.summaries) ? record.summaries : [];
+    summaries.forEach((item: unknown, index: number): void => {
+        if (!isRecord(item)) {
+            return;
+        }
+        const source = isRecord((item as MutableRecord).source) ? (item as MutableRecord).source as MutableRecord : null;
+        if (!source) {
+            return;
+        }
+        collectLegacyJsonFieldErrors(source, `summaries[${index}].source`, errors);
+        if (Object.prototype.hasOwnProperty.call(source, 'provenance') && source.provenance != null && !isRecord(source.provenance)) {
+            errors.push(`summaries[${index}].source.provenance 必须是对象`);
+        }
+    });
+
+    const schemaChanges = Array.isArray(record.schemaChanges) ? record.schemaChanges : [];
+    schemaChanges.forEach((item: unknown, index: number): void => {
+        if (!isRecord(item)) {
+            return;
+        }
+        const schemaChange = item as MutableRecord;
+        collectLegacyJsonFieldErrors(schemaChange, `schemaChanges[${index}]`, errors);
+        if (!Object.prototype.hasOwnProperty.call(schemaChange, 'payload')) {
+            errors.push(`schemaChanges[${index}].payload 缺失`);
+            return;
+        }
+        if (!isRecord(schemaChange.payload)) {
+            errors.push(`schemaChanges[${index}].payload 必须是对象`);
+        }
+    });
+
+    return errors;
+}
+
+/**
+ * 功能：收集旧版 *Json 字段错误。
+ * @param record 当前对象。
+ * @param path 字段路径前缀。
+ * @param errors 错误列表。
+ * @returns 无返回值。
+ */
+function collectLegacyJsonFieldErrors(record: MutableRecord, path: string, errors: string[]): void {
+    Object.entries(MEMORY_PROPOSAL_LEGACY_FIELD_MAP).forEach(([legacyField, nextField]: [string, string]): void => {
+        if (!Object.prototype.hasOwnProperty.call(record, legacyField)) {
+            return;
+        }
+        errors.push(`${path}.${legacyField} 已废弃，请改用 ${path}.${nextField}`);
+    });
+}
+
+/**
+ * 功能：构建 fact.type 到 valueSchema 的映射。
+ * @param context 校验上下文附加信息。
+ * @returns fact.type 到 schema 的映射。
+ */
+function buildTemplateFactTypeMap(context?: Record<string, unknown>): Map<string, TemplateSchemaNode> {
+    const result = new Map<string, TemplateSchemaNode>();
+    const factTypes = Array.isArray(context?.factTypes) ? context.factTypes as TemplateFactType[] : [];
+    factTypes.forEach((item: TemplateFactType): void => {
+        const type = normalizeText(item?.type);
+        if (!type || !item?.valueSchema) {
+            return;
+        }
+        result.set(type, item.valueSchema);
+    });
+    return result;
+}
+
+/**
+ * 功能：读取模板 patchSchemas 列表。
+ * @param context 校验上下文附加信息。
+ * @returns 可用 patch schema 列表。
+ */
+function buildTemplatePatchSchemaList(context?: Record<string, unknown>): TemplatePatchSchema[] {
+    if (!Array.isArray(context?.patchSchemas)) {
+        return [];
+    }
+    return context.patchSchemas.filter((item: unknown): item is TemplatePatchSchema => {
+        return isRecord(item)
+            && Boolean(normalizeText((item as MutableRecord).pathPattern))
+            && isRecord((item as MutableRecord).valueSchema);
+    });
+}
+
+/**
+ * 功能：按 patch.path 解析命中的 patch schema。
+ * @param patchPath patch 路径。
+ * @param patchSchemas 模板 patch schema 列表。
+ * @returns 命中的 patch schema，未命中时返回 null。
+ */
+function resolvePatchSchema(patchPath: string, patchSchemas: TemplatePatchSchema[]): TemplatePatchSchema | null {
+    for (const patchSchema of patchSchemas) {
+        if (matchPathPattern(patchPath, patchSchema.pathPattern)) {
+            return patchSchema;
+        }
+    }
+    return null;
+}
+
+/**
+ * 功能：判断路径是否匹配模板 pathPattern。
+ * @param value 当前路径。
+ * @param pattern 模板路径模式。
+ * @returns 是否匹配。
+ */
+function matchPathPattern(value: string, pattern: string): boolean {
+    const normalizedValue = normalizeText(value);
+    const normalizedPattern = normalizeText(pattern);
+    if (!normalizedValue || !normalizedPattern) {
+        return false;
+    }
+    if (normalizedValue === normalizedPattern) {
+        return true;
+    }
+    const escapedPattern = normalizedPattern
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\\\*/g, '.*')
+        .replace(/:[^/]+/g, '[^/]+');
+    return new RegExp(`^${escapedPattern}$`).test(normalizedValue);
+}
+
+/**
+ * 功能：按模板 schema 节点校验值。
+ * @param value 待校验值。
+ * @param schema 模板 schema 节点。
+ * @param path 当前路径。
+ * @returns 错误列表。
+ */
+function validateTemplateSchemaValue(value: unknown, schema: TemplateSchemaNode, path: string): string[] {
+    const errors: string[] = [];
+    if (schema.nullable && value === null) {
+        return errors;
+    }
+
+    if (schema.type === 'string') {
+        if (typeof value !== 'string') {
+            errors.push(`${path} 必须是 string`);
+        }
+        return errors;
+    }
+    if (schema.type === 'number') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+            errors.push(`${path} 必须是 number`);
+        }
+        return errors;
+    }
+    if (schema.type === 'boolean') {
+        if (typeof value !== 'boolean') {
+            errors.push(`${path} 必须是 boolean`);
+        }
+        return errors;
+    }
+    if (schema.type === 'enum') {
+        if (typeof value !== 'string' || !schema.values.includes(value)) {
+            errors.push(`${path} 必须命中枚举值 [${schema.values.join(', ')}]`);
+        }
+        return errors;
+    }
+    if (schema.type === 'list') {
+        if (!Array.isArray(value)) {
+            errors.push(`${path} 必须是 list`);
+            return errors;
+        }
+        value.forEach((item: unknown, index: number): void => {
+            errors.push(...validateTemplateSchemaValue(item, schema.item, `${path}[${index}]`));
+        });
+        return errors;
+    }
+
+    if (!isRecord(value)) {
+        errors.push(`${path} 必须是 object`);
+        return errors;
+    }
+    const objectValue = value as MutableRecord;
+    const fieldEntries = Object.entries(schema.fields ?? {});
+    const requiredFieldKeys = Array.isArray(schema.requiredFields) && schema.requiredFields.length > 0
+        ? schema.requiredFields.map((fieldKey: string): string => normalizeText(fieldKey)).filter(Boolean)
+        : fieldEntries.map(([fieldKey]: [string, TemplateSchemaNode]): string => fieldKey);
+
+    requiredFieldKeys.forEach((fieldKey: string): void => {
+        if (!Object.prototype.hasOwnProperty.call(objectValue, fieldKey)) {
+            errors.push(`${path}.${fieldKey} 缺失`);
+        }
+    });
+    if (!schema.allowUnknownFields) {
+        Object.keys(objectValue).forEach((fieldKey: string): void => {
+            if (!Object.prototype.hasOwnProperty.call(schema.fields ?? {}, fieldKey)) {
+                errors.push(`${path}.${fieldKey} 未在模板 schema 中定义`);
+            }
+        });
+    }
+    fieldEntries.forEach(([fieldKey, childSchema]: [string, TemplateSchemaNode]): void => {
+        if (!Object.prototype.hasOwnProperty.call(objectValue, fieldKey)) {
+            return;
+        }
+        errors.push(...validateTemplateSchemaValue(objectValue[fieldKey], childSchema, `${path}.${fieldKey}`));
+    });
+    return errors;
 }
 
 /**
@@ -1136,14 +1444,14 @@ const proposalSummarySourceDefinition = createObjectField(
     {
         extractor: createStringField('extractor', '提取器。', 'memory.ingest'),
         provider: createStringField('provider', '模型来源。', 'openrouter'),
-        provenanceJson: createStringField('provenanceJson', '来源补充 JSON。', '{"reason":"来自最近一段对话。"}', {
+        provenance: createJsonField('provenance', '来源补充 JSON。', { reason: '来自最近一段对话。' }, {
             updatable: false,
         }),
     },
     {
         extractor: 'memory.ingest',
         provider: 'openrouter',
-        provenanceJson: '{"reason":"来自最近一段对话。"}',
+        provenance: {},
     },
     {
         updatable: false,
@@ -1255,7 +1563,7 @@ const proposalSummaryDefinition = createObjectField(
         source: {
             extractor: 'memory.ingest',
             provider: 'openrouter',
-            provenanceJson: '{"reason":"来自最近一段对话。"}',
+            provenance: {},
         },
     },
     {
@@ -1271,9 +1579,9 @@ const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
         type: createStringField('type', '事实类型。', 'relationship_fact'),
         entity: proposalEntityDefinition,
         path: createStringField('path', '目标路径。', '/relationships/erika/liya'),
-        valueJson: createStringField('valueJson', '事实值 JSON。', '{"label":"同伴","detail":"艾莉卡依赖莉娅提供撤离判断。"}', { updatable: false }),
+        value: createJsonField('value', '事实值 JSON。', { label: '同伴', detail: '艾莉卡依赖莉娅提供撤离判断。' }, { updatable: false }),
         confidence: createNumberField('confidence', '置信度。', 0.88),
-        provenanceJson: createStringField('provenanceJson', '来源补充 JSON。', '{"sourceMessageIds":["msg_105"]}', { updatable: false }),
+        provenance: createJsonField('provenance', '来源补充 JSON。', { sourceMessageIds: ['msg_105'] }, { updatable: false }),
     }, {
         factKey: 'fact_erika_relation_01',
         targetRecordKey: 'record_fact_01',
@@ -1281,18 +1589,18 @@ const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
         type: 'relationship_fact',
         entity: { kind: 'character', id: 'erika' },
         path: '/relationships/erika/liya',
-        valueJson: '{"label":"同伴","detail":"艾莉卡依赖莉娅提供撤离判断。"}',
+        value: {},
         confidence: 0.88,
-        provenanceJson: '{"sourceMessageIds":["msg_105"]}',
+        provenance: {},
     }, { updatable: false }), [], { updatable: false }),
     patches: createListField('patches', '状态补丁。', createObjectField('patch', '状态补丁。', {
         op: createEnumField('op', '补丁操作。', 'replace', ['add', 'replace', 'remove']),
         path: createStringField('path', '补丁路径。', '/groupMemory/lanes/erika/latestMood'),
-        valueJson: createStringField('valueJson', '补丁值 JSON。', '{"mood":"戒备"}', { updatable: false }),
+        value: createJsonField('value', '补丁值 JSON。', { mood: '戒备' }, { updatable: false }),
     }, {
         op: 'replace',
         path: '/groupMemory/lanes/erika/latestMood',
-        valueJson: '{"mood":"戒备"}',
+        value: {},
     }, { updatable: false }), [], { updatable: false }),
     summaries: createListField('summaries', '摘要提案。', proposalSummaryDefinition, [], { updatable: false }),
     notes: createStringField('notes', '补充说明。', '本轮重点保留撤离阶段形成的新关系和关键对话。', { updatable: false }),
@@ -1300,13 +1608,13 @@ const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
         kind: createEnumField('kind', '变更类型。', 'add_field', MEMORY_SCHEMA_CHANGE_VALUES),
         tableKey: createStringField('tableKey', '目标表键。', 'character_relationships'),
         fieldKey: createStringField('fieldKey', '字段键。', 'bond_reason'),
-        payloadJson: createStringField('payloadJson', '结构负载 JSON。', '{"type":"string","description":"关系形成原因"}', { updatable: false }),
+        payload: createJsonField('payload', '结构负载 JSON。', { type: 'string', description: '关系形成原因' }, { updatable: false }),
         requiredByFacts: createBooleanField('requiredByFacts', '事实驱动。', true),
     }, {
         kind: 'add_field',
         tableKey: 'character_relationships',
         fieldKey: 'bond_reason',
-        payloadJson: '{"type":"string","description":"关系形成原因"}',
+        payload: {},
         requiredByFacts: true,
     }, { updatable: false }), [], { updatable: false }),
     entityResolutions: createListField('entityResolutions', '实体解析建议。', createObjectField('entityResolution', '实体解析建议。', {
@@ -1453,6 +1761,7 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
             hooks: {
                 normalizeInitDocument: normalizeMemoryProposalDocument,
                 afterApply: normalizeMemoryProposalDocument,
+                validateInitDocument: validateMemoryProposalInitDocument,
             },
         },
     ];

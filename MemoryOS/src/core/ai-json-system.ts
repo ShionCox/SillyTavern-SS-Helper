@@ -102,6 +102,7 @@ export function validateAiJsonOutput(input: {
     mode: AiJsonMode;
     namespaceKeys: string[];
     payload: unknown;
+    context?: Record<string, unknown>;
 }): AiJsonValidationResult {
     const definitions = getAiNamespaceDefinitions(input.namespaceKeys);
     const updateDefinitions = new Map<string, AiJsonRegisteredUpdateDefinition>(
@@ -141,19 +142,43 @@ export function validateAiJsonOutput(input: {
         errors.push('更新模式至少需要一条 updates');
     }
 
+    const normalizedPayload: AiJsonOutputEnvelope = {
+        mode: input.mode,
+        namespaces,
+        updates,
+        meta: {
+            note: metaNote,
+        },
+    };
+    if (errors.length <= 0 && input.mode === 'init') {
+        definitions.forEach((definition: AiJsonNamespaceDefinition): void => {
+            const validateInitDocument = definition.hooks?.validateInitDocument;
+            if (!validateInitDocument) {
+                return;
+            }
+            const namespaceValue = namespaces[definition.namespaceKey];
+            const namespaceErrors = validateInitDocument(namespaceValue, {
+                mode: input.mode,
+                namespaceKey: definition.namespaceKey,
+                namespaceKeys: [...input.namespaceKeys],
+                payload: normalizedPayload,
+                namespaceValue,
+                context: input.context,
+            });
+            namespaceErrors.forEach((message: string): void => {
+                const normalizedMessage = normalizeText(message);
+                if (!normalizedMessage) {
+                    return;
+                }
+                errors.push(`${definition.namespaceKey}.${normalizedMessage}`);
+            });
+        });
+    }
+
     return {
         ok: errors.length <= 0,
         errors,
-        payload: errors.length <= 0
-            ? {
-                mode: input.mode,
-                namespaces,
-                updates,
-                meta: {
-                    note: metaNote,
-                },
-            }
-            : null,
+        payload: errors.length <= 0 ? normalizedPayload : null,
     };
 }
 
@@ -634,8 +659,15 @@ function validateFieldDefinition(field: AiJsonFieldDefinition, path: string): vo
     if (field.type === 'enum' && (!Array.isArray(field.enumValues) || field.enumValues.length <= 0)) {
         throw new Error(`AI JSON 枚举字段 ${path} 缺少 enumValues`);
     }
-    if (field.type === 'object' && (!field.fields || Object.keys(field.fields).length <= 0)) {
+    if (field.type === 'object' && field.allowUnknownProperties !== true && (!field.fields || Object.keys(field.fields).length <= 0)) {
         throw new Error(`AI JSON 对象字段 ${path} 缺少 fields`);
+    }
+    if (field.type === 'object' && Array.isArray(field.requiredFieldKeys) && field.requiredFieldKeys.length > 0) {
+        field.requiredFieldKeys.forEach((requiredFieldKey: string): void => {
+            if (!field.fields || !field.fields[requiredFieldKey]) {
+                throw new Error(`AI JSON object field ${path} requiredFieldKeys 缺少定义: ${requiredFieldKey}`);
+            }
+        });
     }
     if (field.type === 'list' && !field.itemDefinition) {
         throw new Error(`AI JSON 列表字段 ${path} 缺少 itemDefinition`);

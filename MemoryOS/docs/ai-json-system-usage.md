@@ -380,7 +380,8 @@ const applied = applyAiJsonOutput({
 说明：
 
 - `memory_proposal` 当前主要用于提案输出，不参与常规字段级更新。
-- 其内部的动态对象负载统一使用 JSON 字符串字段，例如 `valueJson`、`payloadJson`、`provenanceJson`，以满足 strict schema 要求。
+- 其内部动态负载已改为真实对象字段：`facts[].value`、`facts[].provenance`、`patches[].value`、`summaries[].source.provenance`、`schemaChanges[].payload`。
+- `memory_proposal` 现在在外层 envelope 校验通过后还会执行命名空间二级校验，并按模板 `valueSchema/patchSchemas` 校验对象结构。
 
 ## 新增一个命名空间
 

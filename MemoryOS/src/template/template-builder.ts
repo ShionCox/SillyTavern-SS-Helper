@@ -96,10 +96,11 @@ export class TemplateBuilder {
 要求：
 1. 只输出 JSON，不要附加解释。
     1.1 所有 label、name、description 等自然语言字段必须使用简体中文。
-2. 至少包含 templateId、worldType、name、tables、factTypes、extractPolicies、injectionLayout。
+2. 至少包含 templateId、worldType、name、tables、factTypes、patchSchemas、extractPolicies、injectionLayout。
 3. worldType 只能是 "fantasy"、"urban"、"custom" 之一。
 4. tables 的每一项都要包含 key、label、primaryKeyField 与 fields 数组。
-5. factTypes 的每项至少包含 type、pathPattern、slots。
+5. factTypes 的每项至少包含 type、pathPattern、slots、valueSchema。
+5.1 patchSchemas 的每项至少包含 pathPattern、valueSchema。
 6. tables.fields 的每一项都要包含 key、label、tier，如为主键请标记 isPrimaryKey=true。
 7. 额外元数据可以包含 fieldSynonyms、tableSynonyms、templateFamilyId、revisionNo、revisionState、parentTemplateId、schemaFingerprint、lastTouchedAt、finalizedAt。`;
         const userPrompt = `世界观资料：
@@ -140,6 +141,7 @@ ${bundle.characterCard ? `角色卡：${bundle.characterCard.name} - ${bundle.ch
             worldType: data.worldType || 'custom',
             name: data.name || '自动生成模板',
             factTypes: data.factTypes || [],
+            patchSchemas: data.patchSchemas || [],
             extractPolicies: data.extractPolicies || {},
             injectionLayout: data.injectionLayout || {},
             worldInfoRef: {
@@ -182,6 +184,7 @@ const TEMPLATE_SCHEMA = buildStrictObjectSchema({
     name: { type: 'string' },
     tables: { type: 'array' },
     factTypes: { type: 'array' },
+    patchSchemas: { type: 'array' },
     extractPolicies: { type: ['object', 'null'] },
     injectionLayout: { type: ['object', 'null'] },
     fieldSynonyms: { type: ['object', 'null'] },

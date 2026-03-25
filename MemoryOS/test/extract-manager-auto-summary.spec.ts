@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { ExtractManager } from '../src/core/extract-manager';
+import { IngestPlanner } from '../src/core/ingest-planner';
 import type { AutoSummaryDecisionResult } from '../src/core/auto-summary-trigger';
 import type { MemoryProcessingDecision } from '../src/types';
+
+function buildPlanner(): IngestPlanner {
+    return new IngestPlanner({
+        chatKey: 'chat-001',
+        specialTriggerTypes: new Set<string>(),
+        turnTracker: null,
+        chatStateManager: null,
+        metaManager: { markRefreshCheckpoints: async () => undefined } as any,
+    });
+}
 
 function buildDecisionPatch(input?: Partial<MemoryProcessingDecision>): MemoryProcessingDecision {
     return {
@@ -45,13 +55,8 @@ function buildAutoDecision(input?: Partial<AutoSummaryDecisionResult>): AutoSumm
 }
 
 describe('extract-manager auto summary gating', (): void => {
-    it('原本 long 但未通过自动判定时会降级', (): void => {
-        const fn = (ExtractManager.prototype as any).applyAutoSummaryDecision as (input: {
-            baseDecision: MemoryProcessingDecision;
-            autoDecision: AutoSummaryDecisionResult;
-            summaryEnabled: boolean;
-        }) => MemoryProcessingDecision;
-        const result = fn.call({}, {
+    it('long 总结未通过自动判定时会降级', (): void => {
+        const result = buildPlanner().applyAutoSummaryDecision({
             baseDecision: buildDecisionPatch({ summaryTier: 'long' }),
             autoDecision: buildAutoDecision({ shouldRun: false, reasonCodes: ['auto_summary:not_reached'] }),
             summaryEnabled: true,
@@ -60,13 +65,8 @@ describe('extract-manager auto summary gating', (): void => {
         expect(result.reasonCodes).toContain('auto_summary_gate:long_blocked');
     });
 
-    it('命中提前触发时，medium/heavy 可从 short 提升为 long', (): void => {
-        const fn = (ExtractManager.prototype as any).applyAutoSummaryDecision as (input: {
-            baseDecision: MemoryProcessingDecision;
-            autoDecision: AutoSummaryDecisionResult;
-            summaryEnabled: boolean;
-        }) => MemoryProcessingDecision;
-        const result = fn.call({}, {
+    it('命中提前触发时 medium/heavy 可以从 short 升为 long', (): void => {
+        const result = buildPlanner().applyAutoSummaryDecision({
             baseDecision: buildDecisionPatch({
                 level: 'medium',
                 summaryTier: 'short',
@@ -82,13 +82,8 @@ describe('extract-manager auto summary gating', (): void => {
         expect(result.reasonCodes).toContain('auto_summary_gate:early_promoted');
     });
 
-    it('light 级别即使提前触发也不会被强行提升为 long', (): void => {
-        const fn = (ExtractManager.prototype as any).applyAutoSummaryDecision as (input: {
-            baseDecision: MemoryProcessingDecision;
-            autoDecision: AutoSummaryDecisionResult;
-            summaryEnabled: boolean;
-        }) => MemoryProcessingDecision;
-        const result = fn.call({}, {
+    it('light 级别即使命中提前触发也不会强升 long', (): void => {
+        const result = buildPlanner().applyAutoSummaryDecision({
             baseDecision: buildDecisionPatch({
                 level: 'light',
                 summaryTier: 'short',
