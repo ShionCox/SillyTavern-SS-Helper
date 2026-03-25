@@ -904,7 +904,7 @@ export interface StyleSeed {
 
 export type SemanticKnowledgeLevel = 'confirmed' | 'rumor' | 'inferred';
 
-export type SemanticWorldFacet = 'rule' | 'constraint' | 'social' | 'culture' | 'history' | 'danger' | 'entity' | 'other';
+export type SemanticWorldFacet = 'rule' | 'constraint' | 'social' | 'culture' | 'event' | 'danger' | 'entity' | 'other';
 
 export interface SemanticWorldFacetEntry {
     title: string;
@@ -942,6 +942,43 @@ export interface SemanticAiRoleProfileSummary {
     relationshipFacts: SemanticAiRoleRelationshipSummary[];
     items: SemanticAiRoleAssetSummary[];
     equipments: SemanticAiRoleAssetSummary[];
+    currentLocation: string;
+    organizationMemberships: string[];
+    activeTasks: string[];
+}
+
+export type SemanticTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
+
+export interface SemanticTaskDetailSummary {
+    title: string;
+    summary: string;
+    status: SemanticTaskStatus;
+    objective: string;
+    completionCriteria: string;
+    progressNote: string;
+    ownerActorKeys: string[];
+    organizationNames: string[];
+    locationName: string;
+}
+
+export interface SemanticOrganizationDetailSummary {
+    name: string;
+    summary: string;
+    aliases: string[];
+    parentOrganizationName: string;
+    ownershipStatus: string;
+    relatedActorKeys: string[];
+    locationName: string;
+}
+
+export interface SemanticMajorEventDetailSummary {
+    title: string;
+    summary: string;
+    phase: string;
+    locationName: string;
+    relatedActorKeys: string[];
+    organizationNames: string[];
+    impact: string;
 }
 
 export interface SemanticAiSummary {
@@ -955,15 +992,15 @@ export interface SemanticAiSummary {
     entities: string[];
     nations: string[];
     regions: string[];
-    factions: string[];
+    organizations: string[];
     calendarSystems: string[];
     currencySystems: string[];
     socialSystems: string[];
     culturalPractices: string[];
-    historicalEvents: string[];
+    majorEvents: string[];
     dangers: string[];
     otherWorldDetails: string[];
-    characterGoals: string[];
+    tasks: string[];
     relationshipFacts: string[];
     catchphrases: string[];
     relationshipAnchors: string[];
@@ -972,11 +1009,13 @@ export interface SemanticAiSummary {
     regionDetails: SemanticCatalogEntrySummary[];
     cityDetails: SemanticCatalogEntrySummary[];
     locationDetails: SemanticCatalogEntrySummary[];
+    organizationDetails: SemanticOrganizationDetailSummary[];
+    taskDetails: SemanticTaskDetailSummary[];
+    majorEventDetails: SemanticMajorEventDetailSummary[];
     ruleDetails: SemanticWorldFacetEntry[];
     constraintDetails: SemanticWorldFacetEntry[];
     socialSystemDetails: SemanticWorldFacetEntry[];
     culturalPracticeDetails: SemanticWorldFacetEntry[];
-    historicalEventDetails: SemanticWorldFacetEntry[];
     dangerDetails: SemanticWorldFacetEntry[];
     entityDetails: SemanticWorldFacetEntry[];
     otherWorldDetailDetails: SemanticWorldFacetEntry[];
@@ -1233,6 +1272,9 @@ export interface RoleProfile {
     relationshipFacts: RoleRelationshipFact[];
     items: RoleAssetEntry[];
     equipments: RoleAssetEntry[];
+    currentLocation: string;
+    organizationMemberships: string[];
+    activeTasks: string[];
     updatedAt: number;
 }
 
@@ -1379,9 +1421,9 @@ export interface OwnedMemoryState {
     updatedAt: number;
 }
 
-export type WorldStateScopeType = 'global' | 'nation' | 'region' | 'city' | 'location' | 'faction' | 'item' | 'character' | 'scene' | 'unclassified';
+export type WorldStateScopeType = 'global' | 'nation' | 'region' | 'city' | 'location' | 'organization' | 'item' | 'character' | 'scene' | 'unclassified';
 
-export type WorldStateType = 'rule' | 'constraint' | 'history' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship' | 'goal' | 'relationship_hook' | 'other' | 'anomaly';
+export type WorldStateType = 'rule' | 'constraint' | 'event' | 'status' | 'capability' | 'ownership' | 'culture' | 'danger' | 'relationship' | 'task' | 'relationship_hook' | 'other' | 'anomaly';
 
 export interface WorldStateNodeValue {
     title: string;

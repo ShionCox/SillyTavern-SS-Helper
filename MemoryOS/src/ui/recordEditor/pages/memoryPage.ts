@@ -345,6 +345,8 @@ function buildRoleCenterStatCards(profile: RoleProfile, roleMemoryCards: MemoryC
     const equipmentCount = Array.isArray(profile.equipments) ? profile.equipments.length : 0;
     const itemCount = Array.isArray(profile.items) ? profile.items.length : 0;
     const aliasCount = Array.isArray(profile.aliases) ? profile.aliases.length : 0;
+    const organizationCount = Array.isArray(profile.organizationMemberships) ? profile.organizationMemberships.length : 0;
+    const activeTaskCount = Array.isArray(profile.activeTasks) ? profile.activeTasks.length : 0;
     return [
         {
             label: '档案完整度',
@@ -372,6 +374,11 @@ function buildRoleCenterStatCards(profile: RoleProfile, roleMemoryCards: MemoryC
             label: '身份标签',
             value: `${aliasCount + profile.identityFacts.length}`,
             meta: `${aliasCount} 个别名`,
+        },
+        {
+            label: '组织 / 任务',
+            value: `${organizationCount} / ${activeTaskCount}`,
+            meta: '所属势力组织 / 当前任务',
         },
     ];
 }
@@ -412,6 +419,9 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
                 relationshipFacts: Array.isArray(profile.relationshipFacts) ? profile.relationshipFacts : [],
                 items: Array.isArray(profile.items) ? profile.items : [],
                 equipments: Array.isArray(profile.equipments) ? profile.equipments : [],
+                currentLocation: normalizeText(profile.currentLocation),
+                organizationMemberships: dedupeTexts(profile.organizationMemberships ?? []),
+                activeTasks: dedupeTexts(profile.activeTasks ?? []),
                 updatedAt: Math.max(0, Number(profile.updatedAt ?? 0) || 0),
             };
             return result;
@@ -577,9 +587,15 @@ export async function renderMemoryPage(options: MemoryPageRenderOptions): Promis
     const statCards = buildRoleCenterStatCards(selectedRole, roleMemoryCards);
     const equipmentSlots = buildRoleCenterEquipmentSlots(selectedRole.equipments);
     const activeLocation = selectedRole.relationshipFacts.find((item) => /地点|位于|驻留|常在|出没/.test(normalizeText(item.label) + normalizeText(item.detail)));
-    const activeLocationText = activeLocation
-        ? normalizeText(activeLocation.detail) || normalizeText(activeLocation.label)
-        : '未提取到稳定地点，可继续通过关系和记忆卡补全。';
+    const locationText = normalizeText(selectedRole.currentLocation)
+        || (activeLocation ? normalizeText(activeLocation.detail) || normalizeText(activeLocation.label) : '');
+    const organizationText = (selectedRole.organizationMemberships ?? []).slice(0, 3).join('、');
+    const activeTaskText = (selectedRole.activeTasks ?? []).slice(0, 2).join('、');
+    const activeLocationText = [
+        `位置：${locationText || '未提取到稳定地点'}`,
+        `组织：${organizationText || '暂无'}`,
+        `任务：${activeTaskText || '暂无'}`,
+    ].join(' ｜ ');
     const panelHelpers: RoleCenterPanelRenderHelpers = {
         escapeHtml: helpers.escapeHtml,
         formatMemorySubtypeLabel: helpers.formatMemorySubtypeLabel,

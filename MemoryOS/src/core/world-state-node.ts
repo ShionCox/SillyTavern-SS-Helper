@@ -43,7 +43,7 @@ export function inferWorldStateAnomalyFlags(path: string, rawObject: Record<stri
     const inferredCityId = pickAnchorAfter(pathSegments, ['city', 'cities']);
     const inferredLocationId = pickAnchorAfter(pathSegments, ['location', 'locations']);
     const inferredItemId = pickAnchorAfter(pathSegments, ['item', 'items']);
-    const inferredFactionAnchor = Boolean(pickAnchorAfter(pathSegments, ['faction', 'factions']));
+    const inferredOrganizationAnchor = Boolean(pickAnchorAfter(pathSegments, ['organization', 'organizations']));
     const rawTitle = rawObject ? normalizeWorldStateText(rawObject.title) : title;
     const rawSummary = rawObject ? normalizeWorldStateText(rawObject.summary) : summary;
     if (!normalizedPath) {
@@ -69,7 +69,7 @@ export function inferWorldStateAnomalyFlags(path: string, rawObject: Record<stri
             || inferredCityId
             || inferredLocationId
             || inferredItemId
-            || inferredFactionAnchor
+            || inferredOrganizationAnchor
         );
         if (!hasAnchor && !/^global\//.test(normalizedPath) && !/^scene\//.test(normalizedPath) && !/\/semantic\/world\//.test(normalizedPath)) {
             flags.push('missing_anchor');
@@ -83,12 +83,12 @@ export function inferWorldStateScopeType(path: string, text: string): WorldState
     const normalizedText = normalizeWorldStateText(text).toLowerCase();
     if (/^global\//.test(normalizedPath) || /global|world\//.test(normalizedPath)) return 'global';
     if (/^\/?semantic\/rules\//.test(normalizedPath) || /^\/?semantic\/constraints\//.test(normalizedPath)) return 'global';
-    if (/^\/?semantic\/world\/(systems|history|danger|other)\//.test(normalizedPath)) return 'global';
+    if (/^\/?semantic\/world\/(systems|danger|other)\//.test(normalizedPath) || /^\/?semantic\/events\//.test(normalizedPath)) return 'global';
     if (/^nation\//.test(normalizedPath) || /^country\//.test(normalizedPath) || /\/nations?\//.test(normalizedPath)) return 'nation';
     if (/^region\//.test(normalizedPath) || /\/regions?\//.test(normalizedPath)) return 'region';
     if (/^city\//.test(normalizedPath) || /\/cities\//.test(normalizedPath)) return 'city';
     if (/^location\//.test(normalizedPath) || /\/locations?\//.test(normalizedPath)) return 'location';
-    if (/^faction\//.test(normalizedPath) || /\/factions?\//.test(normalizedPath)) return 'faction';
+    if (/^organization\//.test(normalizedPath) || /\/organizations?\//.test(normalizedPath)) return 'organization';
     if (/^item\//.test(normalizedPath) || /\/items?\//.test(normalizedPath)) return 'item';
     if (/^character\//.test(normalizedPath) || /\/characters\//.test(normalizedPath)) return 'character';
     if (/政治|经济|军事|制度|法则|法律|婚姻制度|社会结构|阶级|礼制|习俗/.test(normalizedText)) return 'global';
@@ -96,7 +96,7 @@ export function inferWorldStateScopeType(path: string, text: string): WorldState
     if (/region|区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领/.test(normalizedPath + ' ' + normalizedText)) return 'region';
     if (/city|城市|都城|城邦|主城|镇|村|聚落|港口|港城|城镇/.test(normalizedPath + ' ' + normalizedText)) return 'city';
     if (/location|地点|场所|遗迹|据点|神殿|学院|基地|空间站|房间|森林|峡谷|湖泊/.test(normalizedPath + ' ' + normalizedText)) return 'location';
-    if (/faction|派系|阵营|组织|公会|教团|军团|学派|议会|协会|结社/.test(normalizedPath + ' ' + normalizedText)) return 'faction';
+    if (/organization|faction|派系|阵营|组织|公会|教团|军团|学派|议会|协会|结社/.test(normalizedPath + ' ' + normalizedText)) return 'organization';
     if (/item|物品|装备|道具|遗物/.test(normalizedPath + ' ' + normalizedText)) return 'item';
     if (/character|角色|人物|主角|同伴|npc/.test(normalizedPath + ' ' + normalizedText)) return 'character';
     if (/^scene\//.test(normalizedPath) || /scene|场景|现场/.test(normalizedPath + ' ' + normalizedText)) return 'scene';
@@ -106,12 +106,12 @@ export function inferWorldStateScopeType(path: string, text: string): WorldState
 export function inferWorldStateType(path: string, text: string): WorldStateType {
     const normalizedPath = normalizeWorldStateText(path).toLowerCase();
     const normalizedText = normalizeWorldStateText(text).toLowerCase();
-    if (/\/goals\//.test(normalizedPath) || /goal|objective|intent|mission|目标|打算|意图|任务|计划|想要|必须/.test(normalizedPath + ' ' + normalizedText)) return 'goal';
+    if (/\/tasks?\//.test(normalizedPath) || /goal|objective|intent|mission|task|目标|打算|意图|任务|计划|想要|必须/.test(normalizedPath + ' ' + normalizedText)) return 'task';
     if (/\/relationships\//.test(normalizedPath) || /relationship|关系|羁绊|信任|敌对|亲密|牵连|盟友|导师|恋人/.test(normalizedPath + ' ' + normalizedText)) return 'relationship';
     if (/\/other\//.test(normalizedPath) || /其他设定|设定细节|世界细节|other world/.test(normalizedPath + ' ' + normalizedText)) return 'other';
     if (/rule|规则|law|法则|法律|法典|条例/.test(normalizedPath + ' ' + normalizedText)) return 'rule';
     if (/constraint|限制|禁忌|不能|不可|不得|禁止|绝不|唯一|固定/.test(normalizedPath + ' ' + normalizedText)) return 'constraint';
-    if (/history|历史|往事|起源|旧日|战争|历史事件/.test(normalizedPath + ' ' + normalizedText)) return 'history';
+    if (/event|历史|往事|起源|旧日|战争|事件|重大事件/.test(normalizedPath + ' ' + normalizedText)) return 'event';
     if (/capability|能力|技能|效果/.test(normalizedPath + ' ' + normalizedText)) return 'capability';
     if (/ownership|归属|拥有|持有/.test(normalizedPath + ' ' + normalizedText)) return 'ownership';
     if (/culture|文化|习俗|风俗|历法|纪年|祭典|节庆/.test(normalizedPath + ' ' + normalizedText)) return 'culture';

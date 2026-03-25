@@ -43,7 +43,7 @@ export interface TableDef {
 export const BASE_TABLE_KEYS = [
     'characters',
     'locations',
-    'factions',
+    'organizations',
     'items',
     'relations',
     'quests',

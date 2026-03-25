@@ -144,7 +144,7 @@ function buildStructuredWorldDrafts(
             return;
         }
         const isLocation = /\/semantic\/catalog\/(locations|cities)\//.test(path);
-        const isEntity = /\/semantic\/catalog\/(factions|nations|regions|entities)\//.test(path);
+        const isEntity = /\/semantic\/catalog\/(organizations|nations|regions|entities)\//.test(path);
         if (!isLocation && !isEntity) {
             return;
         }

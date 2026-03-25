@@ -11,10 +11,11 @@ import type { TemplatePatchSchema, TemplateSchemaNode, TemplateFactType } from '
 type MutableRecord = Record<string, unknown>;
 
 const KNOWLEDGE_LEVEL_VALUES = ['confirmed', 'rumor', 'inferred'] as const;
-const WORLD_SCOPE_VALUES = ['global', 'nation', 'region', 'city', 'location', 'faction', 'item', 'character', 'scene', 'unclassified'] as const;
+const WORLD_SCOPE_VALUES = ['global', 'nation', 'region', 'city', 'location', 'organization', 'item', 'character', 'scene', 'unclassified'] as const;
 const MEMORY_CARD_SCOPE_VALUES = ['global', 'character', 'group', 'world', 'scene'] as const;
 const MEMORY_CARD_TTL_VALUES = ['short', 'medium', 'long'] as const;
 const MEMORY_SCHEMA_CHANGE_VALUES = ['add_table', 'add_field', 'modify_primary_key', 'modify_description', 'alias_suggestion'] as const;
+const TASK_STATUS_VALUES = ['pending', 'in_progress', 'blocked', 'completed'] as const;
 
 /**
  * 功能：创建字符串字段定义。
@@ -377,7 +378,7 @@ function normalizeWorldFacetEntry(value: unknown): Record<string, unknown> {
     return {
         title: normalizeText(record.title),
         summary: normalizeText(record.summary),
-        facet: normalizeEnumValue(record.facet, ['rule', 'constraint', 'social', 'culture', 'history', 'danger', 'entity', 'other'], 'other'),
+        facet: normalizeEnumValue(record.facet, ['rule', 'constraint', 'social', 'culture', 'event', 'danger', 'entity', 'other'], 'other'),
         knowledgeLevel: normalizeEnumValue(record.knowledgeLevel, KNOWLEDGE_LEVEL_VALUES, 'confirmed'),
         scopeType: normalizeEnumValue(record.scopeType, WORLD_SCOPE_VALUES, 'unclassified'),
         nationName: normalizeText(record.nationName),
@@ -482,6 +483,9 @@ function normalizeRoleProfile(actorKey: string, value: unknown): Record<string, 
         relationshipFacts: normalizeRoleRelationshipArray(record.relationshipFacts),
         items: normalizeRoleAssetArray(record.items, 'item'),
         equipments: normalizeRoleAssetArray(record.equipments, 'equipment'),
+        currentLocation: normalizeText(record.currentLocation),
+        organizationMemberships: normalizeStringArray(record.organizationMemberships, 12),
+        activeTasks: normalizeStringArray(record.activeTasks, 16),
         updatedAt: normalizeNumber(record.updatedAt),
     };
 }
@@ -552,15 +556,15 @@ function normalizeSemanticSummaryDocument(value: unknown): Record<string, unknow
         entities: normalizeStringArray(record.entities, 24),
         nations: normalizeStringArray(record.nations, 16),
         regions: normalizeStringArray(record.regions, 16),
-        factions: normalizeStringArray(record.factions, 24),
+        organizations: normalizeStringArray(record.organizations, 24),
         calendarSystems: normalizeStringArray(record.calendarSystems, 12),
         currencySystems: normalizeStringArray(record.currencySystems, 12),
         socialSystems: normalizeStringArray(record.socialSystems, 16),
         culturalPractices: normalizeStringArray(record.culturalPractices, 16),
-        historicalEvents: normalizeStringArray(record.historicalEvents, 16),
+        majorEvents: normalizeStringArray(record.majorEvents, 16),
         dangers: normalizeStringArray(record.dangers, 16),
         otherWorldDetails: normalizeStringArray(record.otherWorldDetails, 16),
-        characterGoals: normalizeStringArray(record.characterGoals, 12),
+        tasks: normalizeStringArray(record.tasks, 24),
         relationshipFacts: normalizeStringArray(record.relationshipFacts, 12),
         catchphrases: normalizeStringArray(record.catchphrases, 12),
         relationshipAnchors: normalizeStringArray(record.relationshipAnchors, 12),
@@ -569,11 +573,63 @@ function normalizeSemanticSummaryDocument(value: unknown): Record<string, unknow
         regionDetails: normalizeCatalogEntryArray(record.regionDetails),
         cityDetails: normalizeCatalogEntryArray(record.cityDetails),
         locationDetails: normalizeCatalogEntryArray(record.locationDetails),
+        organizationDetails: Array.isArray(record.organizationDetails)
+            ? record.organizationDetails
+                .map((item: unknown): Record<string, unknown> => {
+                    const detail = isRecord(item) ? item : {};
+                    return {
+                        name: normalizeText(detail.name),
+                        summary: normalizeText(detail.summary),
+                        aliases: normalizeStringArray(detail.aliases, 8),
+                        parentOrganizationName: normalizeText(detail.parentOrganizationName),
+                        ownershipStatus: normalizeText(detail.ownershipStatus),
+                        relatedActorKeys: normalizeStringArray(detail.relatedActorKeys, 16),
+                        locationName: normalizeText(detail.locationName),
+                    };
+                })
+                .filter((item: Record<string, unknown>): boolean => Boolean(String(item.name ?? '').trim()))
+                .slice(0, 32)
+            : [],
+        taskDetails: Array.isArray(record.taskDetails)
+            ? record.taskDetails
+                .map((item: unknown): Record<string, unknown> => {
+                    const detail = isRecord(item) ? item : {};
+                    return {
+                        title: normalizeText(detail.title),
+                        summary: normalizeText(detail.summary),
+                        status: normalizeEnumValue(detail.status, TASK_STATUS_VALUES, 'pending'),
+                        objective: normalizeText(detail.objective),
+                        completionCriteria: normalizeText(detail.completionCriteria),
+                        progressNote: normalizeText(detail.progressNote),
+                        ownerActorKeys: normalizeStringArray(detail.ownerActorKeys, 16),
+                        organizationNames: normalizeStringArray(detail.organizationNames, 12),
+                        locationName: normalizeText(detail.locationName),
+                    };
+                })
+                .filter((item: Record<string, unknown>): boolean => Boolean(String(item.title ?? '').trim() || String(item.summary ?? '').trim()))
+                .slice(0, 48)
+            : [],
+        majorEventDetails: Array.isArray(record.majorEventDetails)
+            ? record.majorEventDetails
+                .map((item: unknown): Record<string, unknown> => {
+                    const detail = isRecord(item) ? item : {};
+                    return {
+                        title: normalizeText(detail.title),
+                        summary: normalizeText(detail.summary),
+                        phase: normalizeText(detail.phase),
+                        locationName: normalizeText(detail.locationName),
+                        relatedActorKeys: normalizeStringArray(detail.relatedActorKeys, 16),
+                        organizationNames: normalizeStringArray(detail.organizationNames, 12),
+                        impact: normalizeText(detail.impact),
+                    };
+                })
+                .filter((item: Record<string, unknown>): boolean => Boolean(String(item.title ?? '').trim() || String(item.summary ?? '').trim()))
+                .slice(0, 48)
+            : [],
         ruleDetails: normalizeWorldFacetArray(record.ruleDetails),
         constraintDetails: normalizeWorldFacetArray(record.constraintDetails),
         socialSystemDetails: normalizeWorldFacetArray(record.socialSystemDetails),
         culturalPracticeDetails: normalizeWorldFacetArray(record.culturalPracticeDetails),
-        historicalEventDetails: normalizeWorldFacetArray(record.historicalEventDetails),
         dangerDetails: normalizeWorldFacetArray(record.dangerDetails),
         entityDetails: normalizeWorldFacetArray(record.entityDetails),
         otherWorldDetailDetails: normalizeWorldFacetArray(record.otherWorldDetailDetails),
@@ -1141,7 +1197,7 @@ function createWorldFacetDetailDefinition(fieldKey: string, facet: string): AiJs
         {
             title: createStringField('title', '主题', '公开施法'),
             summary: createStringField('summary', '摘要', '公开施法会留下可追踪痕迹。'),
-            facet: createEnumField('facet', '分面', facet, ['rule', 'constraint', 'social', 'culture', 'history', 'danger', 'entity', 'other']),
+            facet: createEnumField('facet', '分面', facet, ['rule', 'constraint', 'social', 'culture', 'event', 'danger', 'entity', 'other']),
             knowledgeLevel: createEnumField('knowledgeLevel', '可靠程度', 'confirmed', KNOWLEDGE_LEVEL_VALUES),
             scopeType: createEnumField('scopeType', '作用范围', 'global', WORLD_SCOPE_VALUES),
             nationName: createStringField('nationName', '关联国家', '', {
@@ -1288,6 +1344,19 @@ const roleProfileDefinition = createObjectField(
             updateMode: 'upsert_item',
             itemPrimaryKey: 'name',
         }),
+        currentLocation: createStringField('currentLocation', '当前位置', '黑塔档案厅'),
+        organizationMemberships: createListField('organizationMemberships', '所属势力组织', createStringField('value', '势力组织', '白塔议会', {
+            fieldKey: 'value',
+        }), ['白塔议会'], {
+            updatable: true,
+            updateMode: 'replace_scalar',
+        }),
+        activeTasks: createListField('activeTasks', '当前任务', createStringField('value', '任务', '查清黑塔档案失窃案。', {
+            fieldKey: 'value',
+        }), ['查清黑塔档案失窃案。'], {
+            updatable: true,
+            updateMode: 'replace_scalar',
+        }),
         updatedAt: createNumberField('updatedAt', '更新时间', 1735689600000),
     },
     {
@@ -1318,11 +1387,87 @@ const roleProfileDefinition = createObjectField(
                 detail: '刀柄包着旧皮革，适合近身防卫。',
             },
         ],
+        currentLocation: '黑塔档案厅',
+        organizationMemberships: ['白塔议会'],
+        activeTasks: ['查清黑塔档案失窃案。'],
         updatedAt: 1735689600000,
     },
     {
         updateMode: 'upsert_item',
         itemPrimaryKey: 'actorKey',
+    },
+);
+
+const organizationDetailDefinition = createObjectField(
+    'organizationDetail',
+    '势力组织细节',
+    {
+        name: createStringField('name', '名称', '白塔议会'),
+        summary: createStringField('summary', '摘要', '主导暮光城法术许可与档案审议。'),
+        aliases: createListField('aliases', '别名', createStringField('value', '别名', '白塔', { fieldKey: 'value' }), ['白塔'], { updatable: true, updateMode: 'replace_scalar' }),
+        parentOrganizationName: createStringField('parentOrganizationName', '上级组织', ''),
+        ownershipStatus: createStringField('ownershipStatus', '归属状态', '控制黑塔档案区。'),
+        relatedActorKeys: createListField('relatedActorKeys', '关联角色键', createStringField('value', '角色键', 'erika', { fieldKey: 'value' }), ['erika'], { updatable: true, updateMode: 'replace_scalar' }),
+        locationName: createStringField('locationName', '关联地点', '黑塔档案厅'),
+    },
+    {
+        name: '白塔议会',
+        summary: '主导暮光城法术许可与档案审议。',
+        aliases: ['白塔'],
+        parentOrganizationName: '',
+        ownershipStatus: '控制黑塔档案区。',
+        relatedActorKeys: ['erika'],
+        locationName: '黑塔档案厅',
+    },
+);
+
+const taskDetailDefinition = createObjectField(
+    'taskDetail',
+    '任务细节',
+    {
+        title: createStringField('title', '任务标题', '查清黑塔档案失窃案'),
+        summary: createStringField('summary', '任务摘要', '追踪失窃档案流向并锁定内应。'),
+        status: createEnumField('status', '任务状态', 'in_progress', TASK_STATUS_VALUES),
+        objective: createStringField('objective', '任务目标', '定位失窃档案与幕后操作者。'),
+        completionCriteria: createStringField('completionCriteria', '完成条件', '找回档案并确认责任方。'),
+        progressNote: createStringField('progressNote', '推进记录', '已确认档案最后出现于黑塔内库。'),
+        ownerActorKeys: createListField('ownerActorKeys', '负责角色键', createStringField('value', '角色键', 'erika', { fieldKey: 'value' }), ['erika'], { updatable: true, updateMode: 'replace_scalar' }),
+        organizationNames: createListField('organizationNames', '关联势力组织', createStringField('value', '势力组织', '白塔议会', { fieldKey: 'value' }), ['白塔议会'], { updatable: true, updateMode: 'replace_scalar' }),
+        locationName: createStringField('locationName', '关联地点', '黑塔档案厅'),
+    },
+    {
+        title: '查清黑塔档案失窃案',
+        summary: '追踪失窃档案流向并锁定内应。',
+        status: 'in_progress',
+        objective: '定位失窃档案与幕后操作者。',
+        completionCriteria: '找回档案并确认责任方。',
+        progressNote: '已确认档案最后出现于黑塔内库。',
+        ownerActorKeys: ['erika'],
+        organizationNames: ['白塔议会'],
+        locationName: '黑塔档案厅',
+    },
+);
+
+const majorEventDetailDefinition = createObjectField(
+    'majorEventDetail',
+    '重大事件细节',
+    {
+        title: createStringField('title', '事件标题', '黑塔档案失窃'),
+        summary: createStringField('summary', '事件摘要', '失窃事件引发了城内多方势力博弈。'),
+        phase: createStringField('phase', '事件阶段', '调查中'),
+        locationName: createStringField('locationName', '关联地点', '黑塔档案厅'),
+        relatedActorKeys: createListField('relatedActorKeys', '关联角色键', createStringField('value', '角色键', 'erika', { fieldKey: 'value' }), ['erika'], { updatable: true, updateMode: 'replace_scalar' }),
+        organizationNames: createListField('organizationNames', '关联势力组织', createStringField('value', '势力组织', '白塔议会', { fieldKey: 'value' }), ['白塔议会'], { updatable: true, updateMode: 'replace_scalar' }),
+        impact: createStringField('impact', '事件影响', '黑塔封锁升级，外城情报流通受阻。'),
+    },
+    {
+        title: '黑塔档案失窃',
+        summary: '失窃事件引发了城内多方势力博弈。',
+        phase: '调查中',
+        locationName: '黑塔档案厅',
+        relatedActorKeys: ['erika'],
+        organizationNames: ['白塔议会'],
+        impact: '黑塔封锁升级，外城情报流通受阻。',
     },
 );
 
@@ -1337,15 +1482,15 @@ const semanticSummaryFields: Record<string, AiJsonFieldDefinition> = {
     entities: createListField('entities', '实体', createStringField('value', '实体', '黑塔', { fieldKey: 'value' }), ['黑塔'], { updatable: true, updateMode: 'replace_scalar' }),
     nations: createListField('nations', '国家', createStringField('value', '国家', '晨星王国', { fieldKey: 'value' }), ['晨星王国'], { updatable: true, updateMode: 'replace_scalar' }),
     regions: createListField('regions', '区域', createStringField('value', '区域', '北境', { fieldKey: 'value' }), ['北境'], { updatable: true, updateMode: 'replace_scalar' }),
-    factions: createListField('factions', '势力', createStringField('value', '势力', '白塔议会', { fieldKey: 'value' }), ['白塔议会'], { updatable: true, updateMode: 'replace_scalar' }),
+    organizations: createListField('organizations', '势力组织', createStringField('value', '势力组织', '白塔议会', { fieldKey: 'value' }), ['白塔议会'], { updatable: true, updateMode: 'replace_scalar' }),
     calendarSystems: createListField('calendarSystems', '历法', createStringField('value', '历法', '以永恒盟约签订为纪元元年。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     currencySystems: createListField('currencySystems', '货币系统', createStringField('value', '货币系统', '金齿轮、银齿轮、铜螺丝并行流通。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     socialSystems: createListField('socialSystems', '社会制度', createStringField('value', '社会制度', '暮光城存在严格的阶层分化。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     culturalPractices: createListField('culturalPractices', '文化习俗', createStringField('value', '文化习俗', '每月满月之夜举办纯血舞会。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
-    historicalEvents: createListField('historicalEvents', '历史事件', createStringField('value', '历史事件', '圣树焚毁事件改变了大陆秩序。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
+    majorEvents: createListField('majorEvents', '重大事件', createStringField('value', '重大事件', '圣树焚毁事件改变了大陆秩序。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     dangers: createListField('dangers', '危险', createStringField('value', '危险', '暗影窟深处存在危险猎食者。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     otherWorldDetails: createListField('otherWorldDetails', '其他世界细节', createStringField('value', '其他世界细节', '工业污染正在稀释以太浓度。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
-    characterGoals: createListField('characterGoals', '角色目标', createStringField('value', '角色目标', '查清黑塔档案失窃案。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
+    tasks: createListField('tasks', '任务', createStringField('value', '任务', '查清黑塔档案失窃案。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     relationshipFacts: createListField('relationshipFacts', '关系事实', createStringField('value', '关系事实', '艾莉卡信任莉娅。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     catchphrases: createListField('catchphrases', '口头禅', createStringField('value', '口头禅', '不要回头。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
     relationshipAnchors: createListField('relationshipAnchors', '关系锚点', createStringField('value', '关系锚点', '遇险时会优先让莉娅先撤。', { fieldKey: 'value' }), [], { updatable: true, updateMode: 'replace_scalar' }),
@@ -1354,11 +1499,13 @@ const semanticSummaryFields: Record<string, AiJsonFieldDefinition> = {
     regionDetails: createListField('regionDetails', '区域细节', createCatalogEntryDefinition('regionDetail'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'name' }),
     cityDetails: createListField('cityDetails', '城市细节', createCatalogEntryDefinition('cityDetail'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'name' }),
     locationDetails: createListField('locationDetails', '地点细节', createCatalogEntryDefinition('locationDetail'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'name' }),
+    organizationDetails: createListField('organizationDetails', '势力组织细节', organizationDetailDefinition, [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'name' }),
+    taskDetails: createListField('taskDetails', '任务细节', taskDetailDefinition, [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
+    majorEventDetails: createListField('majorEventDetails', '重大事件细节', majorEventDetailDefinition, [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     ruleDetails: createListField('ruleDetails', '规则细节', createWorldFacetDetailDefinition('ruleDetail', 'rule'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     constraintDetails: createListField('constraintDetails', '硬约束细节', createWorldFacetDetailDefinition('constraintDetail', 'constraint'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     socialSystemDetails: createListField('socialSystemDetails', '社会制度细节', createWorldFacetDetailDefinition('socialSystemDetail', 'social'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     culturalPracticeDetails: createListField('culturalPracticeDetails', '文化习俗细节', createWorldFacetDetailDefinition('culturalPracticeDetail', 'culture'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
-    historicalEventDetails: createListField('historicalEventDetails', '历史事件细节', createWorldFacetDetailDefinition('historicalEventDetail', 'history'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     dangerDetails: createListField('dangerDetails', '危险细节', createWorldFacetDetailDefinition('dangerDetail', 'danger'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     entityDetails: createListField('entityDetails', '实体细节', createWorldFacetDetailDefinition('entityDetail', 'entity'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
     otherWorldDetailDetails: createListField('otherWorldDetailDetails', '其他世界细节', createWorldFacetDetailDefinition('otherWorldDetail', 'other'), [], { updatable: true, updateMode: 'upsert_item', itemPrimaryKey: 'title' }),
@@ -1382,6 +1529,9 @@ const roleNamespaceFields: Record<string, AiJsonFieldDefinition> = {
             ],
             items: [],
             equipments: [],
+            currentLocation: '黑塔档案厅',
+            organizationMemberships: ['白塔议会'],
+            activeTasks: ['查清黑塔档案失窃案。'],
             updatedAt: 1735689600000,
         },
         {
@@ -1400,6 +1550,9 @@ const roleNamespaceFields: Record<string, AiJsonFieldDefinition> = {
             ],
             items: [],
             equipments: [],
+            currentLocation: '',
+            organizationMemberships: [],
+            activeTasks: [],
             updatedAt: 1735689600000,
         },
     ], {
@@ -1655,15 +1808,15 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
                 entities: ['黑塔'],
                 nations: ['晨星王国'],
                 regions: ['北境'],
-                factions: ['白塔议会'],
+                organizations: ['白塔议会'],
                 calendarSystems: [],
                 currencySystems: [],
                 socialSystems: [],
                 culturalPractices: [],
-                historicalEvents: [],
+                majorEvents: [],
                 dangers: [],
                 otherWorldDetails: [],
-                characterGoals: [],
+                tasks: [],
                 relationshipFacts: [],
                 catchphrases: [],
                 relationshipAnchors: [],
@@ -1672,11 +1825,13 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
                 regionDetails: [],
                 cityDetails: [],
                 locationDetails: [],
+                organizationDetails: [],
+                taskDetails: [],
+                majorEventDetails: [],
                 ruleDetails: [],
                 constraintDetails: [],
                 socialSystemDetails: [],
                 culturalPracticeDetails: [],
-                historicalEventDetails: [],
                 dangerDetails: [],
                 entityDetails: [],
                 otherWorldDetailDetails: [],
@@ -1712,6 +1867,9 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
                         ],
                         items: [],
                         equipments: [],
+                        currentLocation: '黑塔档案厅',
+                        organizationMemberships: ['白塔议会'],
+                        activeTasks: ['查清黑塔档案失窃案。'],
                         updatedAt: 1735689600000,
                     },
                     {
@@ -1730,6 +1888,9 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
                         ],
                         items: [],
                         equipments: [],
+                        currentLocation: '',
+                        organizationMemberships: [],
+                        activeTasks: [],
                         updatedAt: 1735689600000,
                     },
                 ],
