@@ -145,7 +145,7 @@ function mergeSeedTaskStatus(current: unknown, incoming: unknown): SeedTaskStatu
 }
 
 /**
- * 功能：判定标题是否是旧链路噪音键名。
+ * 功能：判定标题是否是噪音键名。
  * @param title 标题文本。
  * @returns 是否应被忽略。
  */

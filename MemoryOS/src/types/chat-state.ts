@@ -6,6 +6,7 @@
 
 import type { TaskSurfaceMode } from '../../../SDK/stx';
 import type { DBDerivationSource } from '../../../SDK/db';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 
 export type ChatType = 'solo' | 'group' | 'worldbook' | 'tool';
 
@@ -1703,9 +1704,9 @@ export const DEFAULT_ADAPTIVE_METRICS: AdaptiveMetrics = {
 };
 
 export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
-    extractInterval: 12,
-    extractWindowSize: 40,
-    summaryEnabled: true,
+    extractInterval: MEMORY_OS_POLICY.extract.defaultSummaryInterval,
+    extractWindowSize: MEMORY_OS_POLICY.extract.defaultSummaryWindowSize,
+    summaryEnabled: MEMORY_OS_POLICY.extract.defaultSummaryEnabled,
     summaryMode: 'layered',
     entityResolutionLevel: 'medium',
     speakerTrackingLevel: 'medium',

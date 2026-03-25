@@ -21,7 +21,7 @@ import { MetaManager } from '../core/meta-manager';
 import { ExtractManager } from '../core/extract-manager';
 import { InjectionManager } from '../injection/injection-manager';
 import { TemplateManager } from '../template/template-manager';
-import { ProposalManager, buildStableProposalSummaryId } from '../proposal/proposal-manager';
+import { MutationManager, buildStableSummaryId } from '../proposal/proposal-manager';
 import { HybridSearchManager } from '../vector/hybrid-search';
 import { CompactionManager } from '../core/compaction-manager';
 import { WorldInfoWriter } from '../template/worldinfo-writer';
@@ -93,9 +93,9 @@ import type {
     LogicalChatView,
 } from '../types';
 import type {
-    MemoryProposalDocument,
-    ProposalResult,
-    WriteRequest,
+    MemoryMutationDocument,
+    MutationResult,
+    MutationRequest,
 } from '../proposal/types';
 import type { LatestRecallExplanation as SDKLatestRecallExplanation } from '../../../SDK/stx';
 
@@ -164,7 +164,7 @@ export class MemorySDKImpl implements MemorySDK {
     private extractManager: ExtractManager;
     private injectionManager: InjectionManager;
     private templateManager: TemplateManager;
-    private proposalManager: ProposalManager;
+    private mutationManager: MutationManager;
     private hybridSearch: HybridSearchManager;
     private compactionManager: CompactionManager;
     private worldInfoWriter: WorldInfoWriter;
@@ -208,9 +208,9 @@ export class MemorySDKImpl implements MemorySDK {
             this.summariesManager,
             this.chatStateManager,
         );
-        this.proposalManager = new ProposalManager(chatKey, this.chatStateManager);
+        this.mutationManager = new MutationManager(chatKey, this.chatStateManager);
         const writeGateway = {
-            requestWrite: (request: WriteRequest): Promise<ProposalResult> => this.proposalManager.processWriteRequest(request),
+            requestWrite: (request: MutationRequest): Promise<MutationResult> => this.mutationManager.applyMutationRequest(request),
         };
         this.hybridSearch = new HybridSearchManager(
             chatKey,
@@ -230,20 +230,20 @@ export class MemorySDKImpl implements MemorySDK {
     }
 
     /**
-     * 功能：向 proposal 主链发起一次受信任的结构化写请求。
-     * @param proposal 写入提议。
+     * 功能：向 mutation 写入链路发起一次受信任的结构化写请求。
+     * @param mutations 写入变更。
      * @param reason 写入原因。
      * @returns 写请求执行结果。
      */
     private async requestTrustedWrite(
-        proposal: WriteRequest['proposal'],
+        mutations: MutationRequest['mutations'],
         reason: string,
         trace?: MemoryTraceContext,
-    ): Promise<ProposalResult> {
-        return this.proposalManager.processWriteRequest({
+    ): Promise<MutationResult> {
+        return this.mutationManager.applyMutationRequest({
             source: buildMemoryWriteSource(),
             chatKey: this.chatKey_,
-            proposal,
+            mutations,
             reason,
             trace: trace ?? createMemoryTraceContext({
                 chatKey: this.chatKey_,
@@ -303,7 +303,7 @@ export class MemorySDKImpl implements MemorySDK {
 
     /**
      * 功能：返回当前聊天可展示的逻辑表定义。
-     * @returns 兼容旧模板回退后的表定义列表
+     * @returns 当前模板回退后的表定义列表
      */
     private async listDisplayTables(): Promise<TemplateTableDef[]> {
         const activeTemplate = await this.templateManager.getActiveTemplate();
@@ -737,7 +737,7 @@ export class MemorySDKImpl implements MemorySDK {
     // 摘要
     summaries = {
         upsert: async (summary: { level: "message" | "scene" | "arc"; messageId?: string; title?: string; content: string; keywords?: string[] }) => {
-            const summaryId = buildStableProposalSummaryId({
+            const summaryId = buildStableSummaryId({
                 chatKey: this.chatKey_,
                 consumerPluginId: MEMORY_OS_PLUGIN_ID,
                 level: summary.level,
@@ -876,22 +876,22 @@ export class MemorySDKImpl implements MemorySDK {
     };
 
     // 提议制写入网关（四道闸门）
-    proposal = {
-        /** AI 任务提议入口：经过 schema / diff / 权限 / 审计 四道闸门后才会真正落盘 */
-        processProposal: (document: MemoryProposalDocument, consumerPluginId: string) => {
-            return this.proposalManager.processProposal(document, consumerPluginId);
+    mutation = {
+        /** AI 任务变更入口：经过 gate 与审计后执行写入 */
+        applyMutationDocument: (document: MemoryMutationDocument, consumerPluginId: string) => {
+            return this.mutationManager.applyMutationDocument(document, consumerPluginId);
         },
         /** 外部插件直接提交结构化写入请求的接口 */
-        requestWrite: (request: any) => {
-            return this.proposalManager.processWriteRequest(request);
+        applyMutationRequest: (request: any) => {
+            return this.mutationManager.applyMutationRequest(request);
         },
         /** 授权某个插件可以提交 fact/state 写入 */
         grantPermission: (pluginId: string) => {
-            this.proposalManager.grantPermission(pluginId);
+            this.mutationManager.grantPermission(pluginId);
         },
         /** 撤销某个插件的写入权限 */
         revokePermission: (pluginId: string) => {
-            this.proposalManager.revokePermission(pluginId);
+            this.mutationManager.revokePermission(pluginId);
         }
     };
 

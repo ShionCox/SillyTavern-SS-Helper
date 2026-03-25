@@ -557,7 +557,7 @@ export async function planMemoryMutations(input: MemoryMutationPlannerInput): Pr
         .filter((item: PatchProposal | null | undefined): item is PatchProposal => Boolean(item))
         .map((patch: PatchProposal): PlannedStateMutation => planStateMutation(patch, states, actionCounts, items));
     return {
-        source: normalizeMutationText(input.source) || 'proposal_manager',
+        source: normalizeMutationText(input.source) || 'mutation_manager',
         consumerPluginId: normalizeMutationText(input.consumerPluginId) || 'unknown_plugin',
         generatedAt: Date.now(),
         actionCounts,

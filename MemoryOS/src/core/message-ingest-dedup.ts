@@ -18,6 +18,8 @@ export type MessageIngestSource = 'runtime' | 'bootstrap';
  */
 export type MessageIngestDedupSource = 'message_id' | 'text_signature' | 'none';
 
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
+
 /**
  * 功能：保存单个角色最近一次写入的签名快照。
  */
@@ -41,6 +43,44 @@ export interface IngestDedupRuntimeState {
     bindHydrationTextGuardUntilTs: number;
     lastAcceptedByRole: Record<MessageIngestRole, MessageRoleSignatureState>;
     duplicateSignatureWindowMs: number;
+    persistedRecentDedupBuckets: Map<string, PersistedRecentDedupBucket>;
+}
+
+/**
+ * 功能：定义单个 chatKey + eventType 分桶的近期落库去重缓存。
+ */
+export interface PersistedRecentDedupBucket {
+    messageIds: Set<string>;
+    messageIdQueue: string[];
+    textSignatures: Set<string>;
+    textSignatureQueue: string[];
+    latestTextSignature: string;
+}
+
+/**
+ * 功能：定义近期落库缓存读取输入。
+ */
+export interface PersistedRecentDedupBucketInput {
+    chatKey: string;
+    eventType: MessageIngestEventType;
+}
+
+/**
+ * 功能：定义根据最近事件回填分桶缓存的输入。
+ */
+export interface SeedPersistedRecentDedupBucketInput extends PersistedRecentDedupBucketInput {
+    events: Iterable<{
+        refs?: { messageId?: unknown } | null;
+        payload?: { text?: unknown } | null;
+    } | null | undefined>;
+}
+
+/**
+ * 功能：定义把单条已落库消息写入分桶缓存的输入。
+ */
+export interface RecordPersistedRecentAcceptedMessageInput extends PersistedRecentDedupBucketInput {
+    messageId: unknown;
+    text: string;
 }
 
 /**
@@ -173,12 +213,65 @@ function createEmptyRoleSignatureState(): MessageRoleSignatureState {
     };
 }
 
+function createPersistedRecentDedupBucket(): PersistedRecentDedupBucket {
+    return {
+        messageIds: new Set<string>(),
+        messageIdQueue: [],
+        textSignatures: new Set<string>(),
+        textSignatureQueue: [],
+        latestTextSignature: '',
+    };
+}
+
+function buildPersistedRecentDedupBucketKey(chatKey: string, eventType: MessageIngestEventType): string {
+    return `${String(chatKey ?? '').trim()}|${eventType}`;
+}
+
+function pushBucketValue(set: Set<string>, queue: string[], value: string): void {
+    if (!value) {
+        return;
+    }
+    if (set.has(value)) {
+        const existedIndex = queue.indexOf(value);
+        if (existedIndex >= 0) {
+            queue.splice(existedIndex, 1);
+        }
+    } else {
+        set.add(value);
+    }
+    queue.push(value);
+    while (queue.length > MEMORY_OS_POLICY.dedup.persistedBucketCapacity) {
+        const removed = queue.shift();
+        if (!removed) {
+            continue;
+        }
+        if (!queue.includes(removed)) {
+            set.delete(removed);
+        }
+    }
+}
+
+function getOrCreatePersistedRecentDedupBucket(
+    state: IngestDedupRuntimeState,
+    input: PersistedRecentDedupBucketInput,
+): PersistedRecentDedupBucket {
+    const bucketKey = buildPersistedRecentDedupBucketKey(input.chatKey, input.eventType);
+    let bucket = state.persistedRecentDedupBuckets.get(bucketKey);
+    if (!bucket) {
+        bucket = createPersistedRecentDedupBucket();
+        state.persistedRecentDedupBuckets.set(bucketKey, bucket);
+    }
+    return bucket;
+}
+
 /**
  * 功能：创建运行期去重状态容器。
  * @param duplicateSignatureWindowMs 签名短窗时长（毫秒）。
  * @returns 初始化后的运行期状态。
  */
-export function createIngestDedupRuntimeState(duplicateSignatureWindowMs: number = 3000): IngestDedupRuntimeState {
+export function createIngestDedupRuntimeState(
+    duplicateSignatureWindowMs: number = MEMORY_OS_POLICY.dedup.runtimeSignatureWindowMs,
+): IngestDedupRuntimeState {
     return {
         processedEventKeys: new Set<string>(),
         pendingKeys: new Set<string>(),
@@ -192,6 +285,7 @@ export function createIngestDedupRuntimeState(duplicateSignatureWindowMs: number
             user: createEmptyRoleSignatureState(),
         },
         duplicateSignatureWindowMs: Math.max(0, Number(duplicateSignatureWindowMs) || 0),
+        persistedRecentDedupBuckets: new Map<string, PersistedRecentDedupBucket>(),
     };
 }
 
@@ -209,6 +303,7 @@ export function resetIngestDedupRuntimeState(state: IngestDedupRuntimeState): vo
     state.bindHydrationTextGuardUntilTs = 0;
     state.lastAcceptedByRole.assistant = createEmptyRoleSignatureState();
     state.lastAcceptedByRole.user = createEmptyRoleSignatureState();
+    state.persistedRecentDedupBuckets.clear();
 }
 
 /**
@@ -465,6 +560,95 @@ export function buildExistingMessageDedupIndex(input: BuildExistingMessageDedupI
         messageIds,
         textSignatures,
         latestTextSignature,
+    };
+}
+
+/**
+ * 功能：读取指定 chatKey + eventType 的近期落库去重缓存快照。
+ * @param state 去重状态对象。
+ * @param input 分桶输入。
+ * @returns 去重索引快照；未命中时返回 null。
+ */
+export function getPersistedRecentDedupIndexSnapshot(
+    state: IngestDedupRuntimeState,
+    input: PersistedRecentDedupBucketInput,
+): ExistingMessageDedupIndex | null {
+    const bucketKey = buildPersistedRecentDedupBucketKey(input.chatKey, input.eventType);
+    const bucket = state.persistedRecentDedupBuckets.get(bucketKey);
+    if (!bucket) {
+        return null;
+    }
+    return {
+        messageIds: new Set<string>(bucket.messageIds),
+        textSignatures: new Set<string>(bucket.textSignatures),
+        latestTextSignature: bucket.latestTextSignature,
+    };
+}
+
+/**
+ * 功能：使用最近事件列表回填指定分桶缓存，并返回对应快照。
+ * @param state 去重状态对象。
+ * @param input 分桶输入与事件列表。
+ * @returns 回填后的去重索引快照。
+ */
+export function seedPersistedRecentDedupBucketFromEvents(
+    state: IngestDedupRuntimeState,
+    input: SeedPersistedRecentDedupBucketInput,
+): ExistingMessageDedupIndex {
+    const bucket = getOrCreatePersistedRecentDedupBucket(state, input);
+    bucket.messageIds.clear();
+    bucket.messageIdQueue = [];
+    bucket.textSignatures.clear();
+    bucket.textSignatureQueue = [];
+    bucket.latestTextSignature = '';
+
+    const events = Array.from(input.events ?? []);
+    if (events.length > 0) {
+        bucket.latestTextSignature = buildMessageTextSignature(
+            ((events[0]?.payload as { text?: unknown } | undefined)?.text ?? ''),
+        );
+    }
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+        const item = events[index];
+        const normalizedMessageId = normalizeIncomingMessageId(
+            (item?.refs as { messageId?: unknown } | undefined)?.messageId,
+            false,
+        );
+        const textSignature = buildMessageTextSignature(
+            ((item?.payload as { text?: unknown } | undefined)?.text ?? ''),
+        );
+        pushBucketValue(bucket.messageIds, bucket.messageIdQueue, normalizedMessageId);
+        pushBucketValue(bucket.textSignatures, bucket.textSignatureQueue, textSignature);
+    }
+    return {
+        messageIds: new Set<string>(bucket.messageIds),
+        textSignatures: new Set<string>(bucket.textSignatures),
+        latestTextSignature: bucket.latestTextSignature,
+    };
+}
+
+/**
+ * 功能：把单条已落库消息写入指定分桶缓存，并返回更新后的快照。
+ * @param state 去重状态对象。
+ * @param input 分桶输入与单条消息信息。
+ * @returns 更新后的去重索引快照。
+ */
+export function recordPersistedRecentAcceptedMessage(
+    state: IngestDedupRuntimeState,
+    input: RecordPersistedRecentAcceptedMessageInput,
+): ExistingMessageDedupIndex {
+    const bucket = getOrCreatePersistedRecentDedupBucket(state, input);
+    const normalizedMessageId = normalizeIncomingMessageId(input.messageId, false);
+    const textSignature = buildMessageTextSignature(input.text);
+    pushBucketValue(bucket.messageIds, bucket.messageIdQueue, normalizedMessageId);
+    pushBucketValue(bucket.textSignatures, bucket.textSignatureQueue, textSignature);
+    if (textSignature) {
+        bucket.latestTextSignature = textSignature;
+    }
+    return {
+        messageIds: new Set<string>(bucket.messageIds),
+        textSignatures: new Set<string>(bucket.textSignatures),
+        latestTextSignature: bucket.latestTextSignature,
     };
 }
 

@@ -4,16 +4,20 @@ import {
     buildDedupFingerprint,
     buildMessageTextSignature,
     createIngestDedupRuntimeState,
+    getPersistedRecentDedupIndexSnapshot,
     normalizeIncomingMessageId,
+    recordPersistedRecentAcceptedMessage,
     recordAcceptedMessage,
     resolveMessageIngestDedupSource,
     releasePendingKey,
     resetIngestDedupRuntimeState,
+    seedPersistedRecentDedupBucketFromEvents,
     seedIngestDedupHydrationState,
     shouldAcceptIncomingMessage,
     shouldAcceptPersistedMessage,
     shouldBackfillHistoricalMessage,
 } from '../src/core/message-ingest-dedup';
+import { MEMORY_OS_POLICY } from '../src/policy/memory-policy';
 
 describe('message-ingest-dedup', (): void => {
     it('normalizeIncomingMessageId 能处理空值、对象字段与 "0" 稳定化规则', (): void => {
@@ -48,7 +52,7 @@ describe('message-ingest-dedup', (): void => {
     });
 
     it('shouldAcceptIncomingMessage 支持事件重放与 pending 去重', (): void => {
-        const state = createIngestDedupRuntimeState(3000);
+        const state = createIngestDedupRuntimeState();
         const now = Date.now();
         const first = shouldAcceptIncomingMessage({
             state,
@@ -130,7 +134,7 @@ describe('message-ingest-dedup', (): void => {
     });
 
     it('shouldAcceptIncomingMessage 支持角色签名短窗与 bootstrap 文本去重', (): void => {
-        const state = createIngestDedupRuntimeState(3000);
+        const state = createIngestDedupRuntimeState();
         const now = Date.now();
         const first = shouldAcceptIncomingMessage({
             state,
@@ -200,7 +204,7 @@ describe('message-ingest-dedup', (): void => {
     });
 
     it('seedIngestDedupHydrationState 支持绑定期无 ID 文本去重与过窗放行', (): void => {
-        const state = createIngestDedupRuntimeState(3000);
+        const state = createIngestDedupRuntimeState();
         const now = Date.now();
         seedIngestDedupHydrationState(state, {
             messageIds: ['m-1'],
@@ -355,8 +359,120 @@ describe('message-ingest-dedup', (): void => {
         expect(accepted.reasonCodes).toContain('accepted');
     });
 
+    it('近期落库缓存支持分桶隔离与缓存命中判定', (): void => {
+        const state = createIngestDedupRuntimeState();
+        recordPersistedRecentAcceptedMessage(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.received',
+            messageId: 'm-1',
+            text: 'hello world',
+        });
+        recordPersistedRecentAcceptedMessage(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.sent',
+            messageId: 'u-1',
+            text: 'user text',
+        });
+
+        const assistantBucket = getPersistedRecentDedupIndexSnapshot(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.received',
+        });
+        const userBucket = getPersistedRecentDedupIndexSnapshot(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.sent',
+        });
+        expect(assistantBucket).not.toBeNull();
+        expect(userBucket).not.toBeNull();
+        expect(assistantBucket?.messageIds.has('m-1')).toBe(true);
+        expect(assistantBucket?.messageIds.has('u-1')).toBe(false);
+        expect(userBucket?.messageIds.has('u-1')).toBe(true);
+        expect(userBucket?.messageIds.has('m-1')).toBe(false);
+
+        const blockedByCache = shouldAcceptPersistedMessage({
+            existingMessageIds: assistantBucket!.messageIds,
+            existingTextSignatures: assistantBucket!.textSignatures,
+            latestTextSignature: assistantBucket!.latestTextSignature,
+            messageId: 'm-1',
+            text: 'hello world',
+            source: 'runtime',
+        });
+        expect(blockedByCache.accepted).toBe(false);
+        expect(blockedByCache.reasonCodes).toContain('skip:db_message_id_duplicate');
+    });
+
+    it('近期落库缓存容量超过策略上限时会淘汰最旧项', (): void => {
+        const state = createIngestDedupRuntimeState();
+        const capacity = MEMORY_OS_POLICY.dedup.persistedBucketCapacity;
+        for (let index = 1; index <= capacity + 6; index += 1) {
+            recordPersistedRecentAcceptedMessage(state, {
+                chatKey: 'chat-001',
+                eventType: 'chat.message.received',
+                messageId: `m-${index}`,
+                text: `text-${index}`,
+            });
+        }
+        const bucket = getPersistedRecentDedupIndexSnapshot(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.received',
+        });
+        expect(bucket).not.toBeNull();
+        expect(bucket!.messageIds.size).toBeLessThanOrEqual(capacity);
+        expect(bucket!.textSignatures.size).toBeLessThanOrEqual(capacity);
+        expect(bucket!.messageIds.has('m-1')).toBe(false);
+        expect(bucket!.textSignatures.has('text-1')).toBe(false);
+        expect(bucket!.messageIds.has(`m-${capacity + 6}`)).toBe(true);
+        expect(bucket!.latestTextSignature).toBe(`text-${capacity + 6}`);
+    });
+
+    it('按 DB 最近事件回填缓存后，判定结果与现有索引逻辑一致', (): void => {
+        const state = createIngestDedupRuntimeState();
+        const recentEvents = [
+            {
+                refs: { messageId: 'm-new' },
+                payload: { text: 'latest text' },
+            },
+            {
+                refs: { messageId: 'm-old' },
+                payload: { text: 'old text' },
+            },
+            {
+                refs: { messageId: '' },
+                payload: { text: 'same text' },
+            },
+        ];
+        const originalIndex = buildExistingMessageDedupIndex({ events: recentEvents });
+        const cachedIndex = seedPersistedRecentDedupBucketFromEvents(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.received',
+            events: recentEvents,
+        });
+
+        const checkInput = {
+            messageId: '',
+            text: 'same   text',
+            source: 'runtime' as const,
+        };
+        const byOriginal = shouldAcceptPersistedMessage({
+            existingMessageIds: originalIndex.messageIds,
+            existingTextSignatures: originalIndex.textSignatures,
+            latestTextSignature: originalIndex.latestTextSignature,
+            ...checkInput,
+        });
+        const byCached = shouldAcceptPersistedMessage({
+            existingMessageIds: cachedIndex.messageIds,
+            existingTextSignatures: cachedIndex.textSignatures,
+            latestTextSignature: cachedIndex.latestTextSignature,
+            ...checkInput,
+        });
+
+        expect(byCached.accepted).toBe(byOriginal.accepted);
+        expect(byCached.reasonCodes).toEqual(byOriginal.reasonCodes);
+        expect(cachedIndex.latestTextSignature).toBe('latest text');
+    });
+
     it('resetIngestDedupRuntimeState 会清空运行时状态', (): void => {
-        const state = createIngestDedupRuntimeState(3000);
+        const state = createIngestDedupRuntimeState();
         const now = Date.now();
         const decision = shouldAcceptIncomingMessage({
             state,
@@ -376,8 +492,15 @@ describe('message-ingest-dedup', (): void => {
             chatKey: 'chat-001',
             text: 'hello',
         });
+        recordPersistedRecentAcceptedMessage(state, {
+            chatKey: 'chat-001',
+            eventType: 'chat.message.sent',
+            messageId: 'm-1',
+            text: 'hello',
+        });
         expect(state.pendingKeys.size).toBeGreaterThan(0);
         expect(state.processedEventKeys.size).toBeGreaterThan(0);
+        expect(state.persistedRecentDedupBuckets.size).toBeGreaterThan(0);
 
         resetIngestDedupRuntimeState(state);
         expect(state.pendingKeys.size).toBe(0);
@@ -385,5 +508,6 @@ describe('message-ingest-dedup', (): void => {
         expect(state.historicalMessageIdsOnBind.size).toBe(0);
         expect(state.historicalMessageTextSignaturesOnBind.size).toBe(0);
         expect(state.lastAcceptedByRole.user.signature).toBe('');
+        expect(state.persistedRecentDedupBuckets.size).toBe(0);
     });
 });

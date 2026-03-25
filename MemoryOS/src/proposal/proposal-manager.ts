@@ -1,4 +1,4 @@
-import type { MemoryProposalDocument, ProposalResult, WriteRequest, SchemaChangeProposal, DeferredSchemaHint, SummaryProposal } from './types';
+import type { MemoryMutationDocument, MutationResult, MutationRequest, SchemaChangeProposal, DeferredSchemaHint, SummaryProposal } from './types';
 import type { WorldTemplate } from '../template/types';
 import { GateValidator } from './gate-validator';
 import { SchemaGate } from '../core/schema-gate';
@@ -30,10 +30,10 @@ function hashText(value: string): string {
 }
 
 /**
- * 功能：为缺少范围信息的摘要提案补齐当前可见窗口范围，避免不同轮次摘要误判为同一条。
- * @param summary 原始摘要提案。
+ * 功能：为缺少范围信息的摘要写入补齐当前可见窗口范围，避免不同轮次摘要误判为同一条。
+ * @param summary 原始摘要写入。
  * @param visibleMessageIds 当前可见消息键列表。
- * @returns 补齐范围后的摘要提案。
+ * @returns 补齐范围后的摘要写入。
  */
 function ensureSummaryProposalRange(summary: SummaryProposal, visibleMessageIds: string[]): SummaryProposal {
     const normalizedVisibleMessageIds = Array.isArray(visibleMessageIds)
@@ -79,7 +79,7 @@ const SUMMARY_REASON_LABEL_MAP: Record<string, string> = {
 
 /**
  * 功能：把摘要范围整理成便于日志排查的短文本。
- * @param summary 摘要提案。
+ * @param summary 摘要写入。
  * @returns 范围文本。
  */
 function formatSummaryRangeForLog(summary: SummaryProposal): string {
@@ -141,7 +141,7 @@ function logSummaryMutationPlan(
  * @param input 提议摘要的稳定特征。
  * @returns 可复用的稳定摘要 ID。
  */
-export function buildStableProposalSummaryId(input: {
+export function buildStableSummaryId(input: {
     chatKey: string;
     consumerPluginId: string;
     level: string;
@@ -169,13 +169,13 @@ export function buildStableProposalSummaryId(input: {
             : '',
         String(Math.max(0, Number(input.ordinal ?? 0) || 0)),
     ].join('::');
-    return `proposal_summary:${hashText(payload)}`;
+    return `mutation_summary:${hashText(payload)}`;
 }
 
 /**
  * 功能：接收 AI 或外部插件的写入提议，并统一交给 gate、planner 和 executor 处理。
  */
-export class ProposalManager {
+export class MutationManager {
     private chatKey: string;
     private factsManager: FactsManager;
     private stateManager: StateManager;
@@ -224,15 +224,15 @@ export class ProposalManager {
     }
 
     /**
-     * 功能：处理 AI 提议，并在四道 gate 校验通过后执行长期记忆 CRUD。
-     * @param document 提案文档。
+     * 功能：处理 AI mutation 文档，并在四道 gate 校验通过后执行长期记忆 CRUD。
+     * @param document mutation 文档。
      * @param consumerPluginId 调用方插件标识。
-     * @returns 提议处理结果。
+     * @returns mutation 处理结果。
      */
-    async processProposal(
-        document: MemoryProposalDocument,
+    async applyMutationDocument(
+        document: MemoryMutationDocument,
         consumerPluginId: string,
-    ): Promise<ProposalResult> {
+    ): Promise<MutationResult> {
         const activeTemplateId = await this.metaManager.getActiveTemplateId();
         let activeTemplate: WorldTemplate | null = null;
         if (activeTemplateId) {
@@ -250,7 +250,7 @@ export class ProposalManager {
         if (failedGates.length > 0) {
             const reasons = failedGates.flatMap((gate) => gate.errors);
             await this.auditManager.log({
-                action: 'proposal.rejected',
+                action: 'mutation.rejected',
                 actor: { pluginId: consumerPluginId, mode: 'ai' },
                 before: {},
                 after: { document, reasons },
@@ -263,15 +263,15 @@ export class ProposalManager {
             };
         }
 
-        return this.applyProposal(document, consumerPluginId, gateResults);
+        return this.applyMutationDocumentInternal(document, consumerPluginId, gateResults);
     }
 
     /**
-     * 功能：把外部插件的 requestWrite 适配为统一 proposal 入口。
+     * 功能：把外部插件的 requestWrite 适配为统一 mutation 入口。
      * @param request 外部写入请求。
-     * @returns 提议处理结果。
+     * @returns mutation 处理结果。
      */
-    async processWriteRequest(request: WriteRequest): Promise<ProposalResult> {
+    async applyMutationRequest(request: MutationRequest): Promise<MutationResult> {
         const trace = request.trace ?? createMemoryTraceContext({
             chatKey: request.chatKey,
             source: 'trusted_write',
@@ -289,11 +289,11 @@ export class ProposalManager {
                 },
             );
         }
-        const document: MemoryProposalDocument = {
-            ...request.proposal,
+        const document: MemoryMutationDocument = {
+            ...request.mutations,
             confidence: 1.0,
         };
-        const result = await this.processProposal(document, request.source.pluginId);
+        const result = await this.applyMutationDocument(document, request.source.pluginId);
         if (this.chatStateManager) {
             await this.chatStateManager.recordMainlineTrace(
                 advanceMemoryTraceContext(trace, 'memory_trusted_write_finished', 'trusted_write'),
@@ -312,17 +312,17 @@ export class ProposalManager {
     }
 
     /**
-     * 功能：执行经过 gate 校验后的提议写入，并统一走 mutation planner / executor 主链。
-     * @param document 提案文档。
+     * 功能：执行经过 gate 校验后的 mutation 写入，并统一走 mutation planner / executor 主链。
+     * @param document mutation 文档。
      * @param consumerPluginId 调用方插件标识。
      * @param gateResults gate 校验结果。
-     * @returns 提议处理结果。
+     * @returns mutation 处理结果。
      */
-    private async applyProposal(
-        document: MemoryProposalDocument,
+    private async applyMutationDocumentInternal(
+        document: MemoryMutationDocument,
         consumerPluginId: string,
         gateResults: Array<{ passed: boolean; gate: string; errors: string[] }>,
-    ): Promise<ProposalResult> {
+    ): Promise<MutationResult> {
         const applied = {
             factKeys: [] as string[],
             statePaths: [] as string[],
@@ -347,7 +347,7 @@ export class ProposalManager {
                 .filter(Boolean)
             : [];
         const derivationSource = {
-            kind: 'proposal_apply',
+            kind: 'mutation_apply',
             reason: `consumer:${consumerPluginId}`,
             viewHash: normalizeText(logicalView?.viewHash),
             snapshotHash: normalizeText(logicalView?.snapshotHash),
@@ -422,7 +422,7 @@ export class ProposalManager {
             stateManager: this.stateManager,
             summariesManager: this.summariesManager,
             chatStateManager: this.chatStateManager,
-            buildSummaryId: ({ summary, ordinal, nextTitle, nextContent, nextKeywords }): string => buildStableProposalSummaryId({
+            buildSummaryId: ({ summary, ordinal, nextTitle, nextContent, nextKeywords }): string => buildStableSummaryId({
                 chatKey: this.chatKey,
                 consumerPluginId,
                 level: summary.level,
@@ -472,7 +472,7 @@ export class ProposalManager {
         }
 
         await this.auditManager.log({
-            action: 'proposal.applied',
+            action: 'mutation.applied',
             actor: { pluginId: consumerPluginId, mode: 'ai' },
             before: {},
             after: {

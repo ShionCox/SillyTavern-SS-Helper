@@ -27,6 +27,7 @@ import {
     DEFAULT_RETENTION_POLICY,
     DEFAULT_VECTOR_LIFECYCLE,
 } from '../types';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 
 export interface StrategyInferenceInput {
     query?: string;
@@ -676,8 +677,16 @@ export function buildAdaptivePolicy(
     vectorLifecycle?: Partial<VectorLifecycleState> | null,
     memoryQuality?: Partial<MemoryQualityScorecard> | null,
 ): AdaptivePolicy {
-    let extractInterval = profile.memoryStrength === 'high' ? 8 : profile.memoryStrength === 'low' ? 18 : 12;
-    let extractWindowSize = profile.summaryStrategy === 'timeline' ? 56 : profile.summaryStrategy === 'short' ? 24 : 40;
+    let extractInterval = profile.memoryStrength === 'high'
+        ? 8
+        : profile.memoryStrength === 'low'
+            ? 18
+            : MEMORY_OS_POLICY.extract.defaultSummaryInterval;
+    let extractWindowSize = profile.summaryStrategy === 'timeline'
+        ? 56
+        : profile.summaryStrategy === 'short'
+            ? 24
+            : MEMORY_OS_POLICY.extract.defaultSummaryWindowSize;
     let summaryEnabled = profile.stylePreference !== 'qa' || metrics.avgMessageLength >= 120;
     let entityResolutionLevel: AdaptivePolicy['entityResolutionLevel'] = profile.chatType === 'group' ? 'high' : 'medium';
     let speakerTrackingLevel: AdaptivePolicy['speakerTrackingLevel'] = profile.chatType === 'group' ? 'high' : 'medium';

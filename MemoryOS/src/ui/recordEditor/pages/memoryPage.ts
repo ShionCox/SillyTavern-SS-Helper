@@ -116,11 +116,11 @@ function normalizeActorKey(value: unknown): string {
     if (!actorKey) {
         return '';
     }
-    actorKey = actorKey.replace(/\s+[·•]\s+(proposal_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
+    actorKey = actorKey.replace(/\s+[·•]\s+(mutation_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
     if (/^(character|assistant|role|name):/i.test(actorKey)) {
         actorKey = actorKey.split(':').slice(1).join(':').trim();
     }
-    actorKey = actorKey.replace(/(?:^|[\\/:])proposal_summary:[\w-]+$/i, '').trim();
+    actorKey = actorKey.replace(/(?:^|[\\/:])mutation_summary:[\w-]+$/i, '').trim();
     actorKey = actorKey.replace(/[\s._:-]+$/g, '').trim();
     return actorKey;
 }
@@ -140,7 +140,7 @@ function isVirtualActorKey(actorKey: string): boolean {
     }
     return ['world', 'system', 'unowned', 'unknown', 'none', 'global', 'scene'].includes(normalized)
         || /^(world|system|global)[:/]/.test(normalized)
-        || /proposal_summary/.test(normalized);
+        || /mutation_summary/.test(normalized);
 }
 
 /**
@@ -200,7 +200,7 @@ function buildReadableMemoryTitle(card: MemoryCardSummary, ownerLabel: string): 
         if (!value) {
             return true;
         }
-        return /proposal_summary|recordkey|lifecycle|source_record|^h[0-9a-f]{6,}$|^_+$/.test(value)
+        return /mutation_summary|recordkey|lifecycle|source_record|^h[0-9a-f]{6,}$|^_+$/.test(value)
             || /[:]{2}/.test(value);
     };
     const candidates = [

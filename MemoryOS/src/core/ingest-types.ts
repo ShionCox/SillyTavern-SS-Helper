@@ -1,5 +1,5 @@
-import type { EventEnvelope, ProposalResult } from '../../../SDK/stx';
-import type { MemoryProposalDocument } from '../proposal/types';
+import type { EventEnvelope } from '../../../SDK/stx';
+import type { MemoryMutationDocument, MutationResult } from '../proposal/types';
 import type {
     AutoSummaryDecisionSnapshot,
     ChatLifecycleState,
@@ -13,12 +13,12 @@ import type {
 } from '../types';
 
 /**
- * 功能：统一定义 ingest 提案任务标识，供执行层调用模型时复用。
+ * 功能：统一定义 ingest 任务标识，供执行层调用模型时复用。
  */
-export type ProposalTask = 'memory.ingest';
+export type IngestTask = 'memory.ingest';
 
 /**
- * 功能：定义提案执行所需的 schema 上下文载荷类型。
+ * 功能：定义执行所需的 schema 上下文载荷类型。
  */
 export type SchemaContextPayload = Record<string, unknown> | string;
 
@@ -85,11 +85,11 @@ export interface IngestMetaSnapshot {
 }
 
 /**
- * 功能：定义执行层返回结果，统一封装提案执行结果与统计信息。
+ * 功能：定义执行层返回结果，统一封装 mutation 执行结果与统计信息。
  */
 export interface IngestExecutionResult {
-    proposalResult: ProposalResult | null;
-    proposalDocument: MemoryProposalDocument | null;
+    mutationResult: MutationResult | null;
+    mutationDocument: MemoryMutationDocument | null;
     accepted: boolean;
     factsApplied: number;
     patchesApplied: number;

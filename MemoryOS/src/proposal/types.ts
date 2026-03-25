@@ -71,8 +71,8 @@ export interface DeferredSchemaHint {
     reason: string;
 }
 
-/** 统一提案文档（所有 AI 任务的标准返回） */
-export interface MemoryProposalDocument {
+/** 统一 mutation 文档（所有 AI 任务的标准返回） */
+export interface MemoryMutationDocument {
     facts?: FactProposal[];
     patches?: PatchProposal[];
     summaries?: SummaryProposal[];
@@ -90,7 +90,7 @@ export interface GateResult {
 }
 
 /** 提议处理结果 */
-export interface ProposalResult {
+export interface MutationResult {
     accepted: boolean;
     applied: {
         factKeys: string[];
@@ -107,10 +107,10 @@ export interface ProposalResult {
 }
 
 /** 外部插件写入请求 */
-export interface WriteRequest {
+export interface MutationRequest {
     source: { pluginId: string; version: string };
     chatKey: string;
-    proposal: {
+    mutations: {
         facts?: FactProposal[];
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];

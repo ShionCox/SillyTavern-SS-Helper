@@ -634,8 +634,6 @@ const WORLD_QUEST_NOISE_TITLES = new Set<string>([
     'constraints',
 ]);
 
-const WORLD_QUEST_LEGACY_PAYLOAD_PATTERN = /"?(hardconstraints|hard_constraints|rules|constraints|social_structure|description)"?\s*[:=]/i;
-
 /**
  * 功能：统一规范任务文本，避免把占位文案当成真实任务。
  * @param value 原始文本。
@@ -672,19 +670,6 @@ function isQuestNoiseTitle(title: string): boolean {
         return true;
     }
     return WORLD_QUEST_NOISE_TITLES.has(normalized);
-}
-
-/**
- * 功能：识别旧链路遗留的规则/约束 JSON 文本，避免污染任务板。
- * @param value 原始文本。
- * @returns 是否属于旧版污染片段。
- */
-function containsLegacyQuestPayload(value: unknown): boolean {
-    const normalized = normalizeQuestText(value);
-    if (!normalized || !/[{}\[\]"]/.test(normalized)) {
-        return false;
-    }
-    return WORLD_QUEST_LEGACY_PAYLOAD_PATTERN.test(normalized);
 }
 
 /**
@@ -860,13 +845,6 @@ function isQuestLikeWorldStateEntry(entry: StructuredWorldStateEntry): boolean {
     if (isQuestNoiseTitle(String(entry.node.title ?? ''))) {
         return false;
     }
-    if ([
-        entry.node.title,
-        entry.node.summary,
-        pickWorldStateText(raw, ['objective', 'completionCriteria', 'progressNote', 'nextStep', 'next']),
-    ].some((text: unknown): boolean => containsLegacyQuestPayload(text))) {
-        return false;
-    }
     const intentText = normalizeQuestText([
         entry.node.title,
         entry.node.summary,
@@ -1040,7 +1018,7 @@ function buildWorldQuestBoardRows(
     const fallbackNow = Number(experience.canon.generatedAt ?? Date.now());
     pendingEvents.forEach((item: SnapshotValue, index: number): void => {
         const title = normalizeQuestText(item.value);
-        if (!title || isQuestPlaceholderText(title) || isQuestNoiseTitle(title) || containsLegacyQuestPayload(title)) {
+        if (!title || isQuestPlaceholderText(title) || isQuestNoiseTitle(title)) {
             return;
         }
         mergeWorldQuestRow(rowMap, {
@@ -1094,9 +1072,6 @@ function buildWorldQuestBoardRows(
                         : '任务进展';
             const objectiveHint = pickWorldStateText(raw, ['objective', 'completionCriteria', 'progressNote', 'nextStep', 'next'])
                 || summaryText;
-            if ([title, summaryText, objectiveHint, pickWorldStateText(raw, ['description'])].some((text: unknown): boolean => containsLegacyQuestPayload(text))) {
-                return;
-            }
             if (isQuestNoiseTitle(title) && !hasMeaningfulQuestText(objectiveHint) && !hasMeaningfulQuestText(summaryText)) {
                 return;
             }
@@ -4121,7 +4096,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
 
             if (writeRequests.length > 0 && currentChatKey) {
                 const memory = (window as any).STX?.memory;
-                if (memory?.proposal?.requestWrite) {
+                if (memory?.mutation?.applyMutationRequest) {
                     const facts: Array<Record<string, unknown>> = [];
                     const summaries: Array<Record<string, unknown>> = [];
                     const patches: Array<{ op: 'add' | 'replace' | 'remove'; path: string; value?: unknown }> = [];
@@ -4167,11 +4142,11 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         }
                     }
 
-                    await memory.proposal.requestWrite({
+                    await (memory as any).mutation.applyMutationRequest({
                         source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                         chatKey: currentChatKey,
                         reason: 'raw_editor_save',
-                        proposal: {
+                        mutations: {
                             facts: facts.length > 0 ? facts as any[] : undefined,
                             summaries: summaries.length > 0 ? summaries as any[] : undefined,
                             patches: patches.length > 0 ? patches : undefined,

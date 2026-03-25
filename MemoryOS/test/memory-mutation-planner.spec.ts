@@ -58,7 +58,7 @@ describe('memory mutation planner', (): void => {
         const plan = await planMemoryMutations({
             chatKey: 'chat-1',
             consumerPluginId: 'tester',
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             facts: [{
                 type: 'trait',
                 entity: { kind: 'character', id: 'alice' },
@@ -84,7 +84,7 @@ describe('memory mutation planner', (): void => {
         const plan = await planMemoryMutations({
             chatKey: 'chat-1',
             consumerPluginId: 'tester',
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             summaries: [{
                 level: 'scene',
                 title: 'Camp',
@@ -109,7 +109,7 @@ describe('memory mutation planner', (): void => {
         const plan = await planMemoryMutations({
             chatKey: 'chat-1',
             consumerPluginId: 'tester',
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             patches: [
                 { op: 'replace', path: 'scene.weather', value: 'rain' },
                 { op: 'remove', path: 'scene.missing' },

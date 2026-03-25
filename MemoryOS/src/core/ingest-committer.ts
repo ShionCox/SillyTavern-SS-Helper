@@ -72,10 +72,10 @@ export class IngestCommitter {
         logicalView: LogicalChatView;
         meta: IngestMetaSnapshot | null;
     }): Promise<IngestCommitResult> {
-        const proposalResult = input.execution.proposalResult;
+        const mutationResult = input.execution.mutationResult;
 
         await this.recordUnifiedExtractHealth({
-            accepted: Boolean(proposalResult?.accepted),
+            accepted: Boolean(mutationResult?.accepted),
             processingDecision: input.plan.processingDecision,
             assistantTurnCount: input.plan.currentAssistantTurnCount,
             windowHash: input.plan.selection.windowHash,
@@ -85,7 +85,7 @@ export class IngestCommitter {
             extraReasonCodes: input.execution.reasonCodes,
         });
 
-        if (!proposalResult) {
+        if (!mutationResult) {
             return {
                 shouldSettleWindow: false,
                 finalOutcome: 'rejected',
@@ -93,7 +93,7 @@ export class IngestCommitter {
             };
         }
 
-        if (proposalResult.accepted && typeof (input.memory as any)?.chatState?.primeColdStartExtract === 'function') {
+        if (mutationResult.accepted && typeof (input.memory as any)?.chatState?.primeColdStartExtract === 'function') {
             logger.info(`统一记忆摄取成功后触发 cold-start extract，chatKey=${this.chatKey}`);
             await (input.memory as any).chatState.primeColdStartExtract('ingest_success');
         }
@@ -111,7 +111,7 @@ export class IngestCommitter {
                     : 0,
             });
 
-            if (input.plan.processingDecision.summaryTier === 'long' && proposalResult.accepted) {
+            if (input.plan.processingDecision.summaryTier === 'long' && mutationResult.accepted) {
                 const now = Date.now();
                 await this.chatStateManager.setLongSummaryCooldown({
                     lastLongSummaryAt: now,
@@ -127,7 +127,7 @@ export class IngestCommitter {
                     lastTriggerReasonCodes: input.plan.autoSummaryDecisionSnapshot?.reasonCodes ?? input.plan.processingDecision.reasonCodes,
                     lastMode: input.plan.autoSummaryDecisionSnapshot?.mode ?? 'mixed',
                 });
-            } else if (proposalResult.accepted) {
+            } else if (mutationResult.accepted) {
                 await this.chatStateManager.setLongSummaryCooldown({
                     lastHeavyProcessAt: Date.now(),
                 });
@@ -145,7 +145,7 @@ export class IngestCommitter {
                     input.plan.lorebookDecision.mode,
                 );
             }
-            if (!proposalResult.accepted && input.plan.processingDecision.summaryTier !== 'none') {
+            if (!mutationResult.accepted && input.plan.processingDecision.summaryTier !== 'none') {
                 await this.chatStateManager.enqueueSummaryFixTask(
                     `ingest_retry:${input.plan.processingDecision.summaryTier}:${input.plan.postGate.valueClass}`,
                     input.plan.lorebookDecision.mode,
@@ -168,7 +168,7 @@ export class IngestCommitter {
             }
         }
 
-        const finalOutcome: MemoryIngestProgressState['lastProcessedOutcome'] = proposalResult.accepted
+        const finalOutcome: MemoryIngestProgressState['lastProcessedOutcome'] = mutationResult.accepted
             ? (input.execution.factsApplied > 0 || input.execution.patchesApplied > 0 || input.execution.summariesApplied > 0 ? 'accepted' : 'noop')
             : 'rejected';
         await this.advanceMemoryIngestProgress({

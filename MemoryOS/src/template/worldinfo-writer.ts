@@ -12,7 +12,7 @@ import { StateManager } from '../core/state-manager';
 import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from '../core/lorebook-relevance-gate';
 
 /**
- * 世界书写回兼容层 —— 将稳定事实/摘要写回 ST WorldInfo
+ * 世界书写回层 —— 将稳定事实/摘要写回 ST WorldInfo
  *
  * 目的：
  * - 能被 ST 原生 worldinfo 引擎触发注入（兼容性强）

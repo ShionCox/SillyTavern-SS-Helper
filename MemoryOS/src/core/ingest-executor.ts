@@ -1,28 +1,29 @@
 import { logger } from '../index';
-import type { MemorySDK, ProposalResult } from '../../../SDK/stx';
+import type { MemorySDK } from '../../../SDK/stx';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { runGeneration } from '../llm/memoryLlmBridge';
 import {
     buildMemorySummarySaveSystemPrompt,
     buildUnifiedIngestTaskPrompt,
 } from '../llm/skills';
-import type { MemoryProposalDocument, SummaryProposal } from '../proposal/types';
+import type { MemoryMutationDocument, MutationResult, SummaryProposal } from '../proposal/types';
 import type { TemplateManager } from '../template/template-manager';
 import { buildAiJsonPromptBundle } from './ai-json-builder';
-import { applyAiJsonOutput, validateAiJsonOutput } from './ai-json-system';
+import { validateAiJsonOutput } from './ai-json-system';
 import type { MemoryProcessingLevel, PostGenerationGateDecision, SummaryExecutionTier } from '../types';
-import type { IngestExecutionResult, IngestPlan, ProposalTask, SchemaContextPayload } from './ingest-types';
+import type { IngestExecutionResult, IngestPlan, IngestTask, SchemaContextPayload } from './ingest-types';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 
-const MEMORY_PROPOSAL_NAMESPACE_KEYS = ['memory_proposal'] as const;
+const MEMORY_UPDATE_NAMESPACE_KEYS = ['memory_facts', 'world_state', 'memory_summaries', 'schema_changes', 'entity_resolutions'] as const;
 
-type ProposalTaskRunResult = {
-    result: ProposalResult | null;
-    proposalDocument: MemoryProposalDocument | null;
+type IngestTaskRunResult = {
+    result: MutationResult | null;
+    mutationDocument: MemoryMutationDocument | null;
     error?: string;
 };
 
 /**
- * 功能：统一封装 ingest 执行层，负责 prompt 构建、模型执行、结果解析与提案落地。
+ * 功能：统一封装 ingest 执行层，负责 prompt 构建、模型执行、结果解析与写入落地。
  */
 export class IngestExecutor {
     private readonly templateManager: TemplateManager;
@@ -40,11 +41,11 @@ export class IngestExecutor {
         plan: IngestPlan;
         memory: MemorySDK | null;
     }): Promise<IngestExecutionResult> {
-        if (!input.memory?.proposal?.processProposal) {
-            logger.warn('memory.ingest 跳过执行：窗口中没有可用的提案写入接口');
+        if (!(input.memory as any)?.mutation?.applyMutationDocument) {
+            logger.warn('memory.ingest 跳过执行：窗口中没有可用的 mutation 写入接口');
             return {
-                proposalResult: null,
-                proposalDocument: null,
+                mutationResult: null,
+                mutationDocument: null,
                 accepted: false,
                 factsApplied: 0,
                 patchesApplied: 0,
@@ -53,7 +54,8 @@ export class IngestExecutor {
             };
         }
 
-        const schemaContext = await this.buildSchemaContext(input.memory);
+        const memory = input.memory as MemorySDK;
+        const schemaContext = await this.buildSchemaContext(memory);
         const systemPrompt = this.buildUnifiedIngestPrompt(
             input.plan.lorebookDecision.mode,
             input.plan.lorebookDecision.shouldExtractWorldFacts,
@@ -61,7 +63,7 @@ export class IngestExecutor {
             input.plan.processingDecision.summaryTier,
             input.plan.processingDecision.extractScope,
         );
-        const runResult = await this.runProposalTask(
+        const runResult = await this.runIngestTask(
             'memory.ingest',
             input.plan.taskDescription,
             systemPrompt,
@@ -72,24 +74,24 @@ export class IngestExecutor {
                 fromMessageId: input.plan.selection.fromMessageId,
                 toMessageId: input.plan.selection.toMessageId,
             },
-            input.memory,
+            memory,
         );
-        const proposalResult = runResult.result;
-        const factsApplied = Number(proposalResult?.applied?.factKeys?.length ?? 0);
-        const patchesApplied = Number(proposalResult?.applied?.statePaths?.length ?? 0);
-        const summariesApplied = Number(proposalResult?.applied?.summaryIds?.length ?? 0);
+        const mutationResult = runResult.result;
+        const factsApplied = Number(mutationResult?.applied?.factKeys?.length ?? 0);
+        const patchesApplied = Number(mutationResult?.applied?.statePaths?.length ?? 0);
+        const summariesApplied = Number(mutationResult?.applied?.summaryIds?.length ?? 0);
         const reasonCodes: string[] = [];
         if (runResult.error) {
             reasonCodes.push('task_request_failed');
         }
-        if (!runResult.proposalDocument) {
+        if (!runResult.mutationDocument) {
             reasonCodes.push('task_payload_invalid');
         }
 
         return {
-            proposalResult,
-            proposalDocument: runResult.proposalDocument,
-            accepted: Boolean(proposalResult?.accepted),
+            mutationResult,
+            mutationDocument: runResult.mutationDocument,
+            accepted: Boolean(mutationResult?.accepted),
             factsApplied,
             patchesApplied,
             summariesApplied,
@@ -114,8 +116,8 @@ export class IngestExecutor {
         scope: MemoryProcessingLevel,
     ): string {
         const promptBundle = buildAiJsonPromptBundle({
-            mode: 'init',
-            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
+            mode: 'update',
+            namespaceKeys: [...MEMORY_UPDATE_NAMESPACE_KEYS],
         });
         const basePrompt = buildUnifiedIngestTaskPrompt(
             lorebookMode,
@@ -146,7 +148,7 @@ export class IngestExecutor {
      * @param task 当前任务。
      * @returns 重试提示词。
      */
-    private buildCompactRetryPrompt(basePrompt: string, task: ProposalTask): string {
+    private buildCompactRetryPrompt(basePrompt: string, task: IngestTask): string {
         if (task === 'memory.ingest') {
             return [
                 basePrompt,
@@ -186,19 +188,19 @@ export class IngestExecutor {
     }
 
     /**
-     * 功能：归一化统一摄取返回的提案文档。
-     * @param payload 原始提案载荷。
+     * 功能：归一化统一摄取返回的 mutation 文档。
+     * @param payload 原始 mutation 载荷。
      * @param rangeFallback 摘要缺失范围时使用的回填范围。
-     * @returns 归一化后的提案文档。
+     * @returns 归一化后的 mutation 文档。
      */
-    private buildMemoryProposalDocumentFromAiJsonPayload(
+    private buildMemoryMutationDocumentFromAiJsonPayload(
         payload: unknown,
         rangeFallback?: { fromMessageId?: string; toMessageId?: string },
         schemaContext?: Record<string, unknown>,
-    ): MemoryProposalDocument | null {
+    ): MemoryMutationDocument | null {
         const validated = validateAiJsonOutput({
-            mode: 'init',
-            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
+            mode: 'update',
+            namespaceKeys: [...MEMORY_UPDATE_NAMESPACE_KEYS],
             payload,
             context: schemaContext,
         });
@@ -206,23 +208,35 @@ export class IngestExecutor {
             return null;
         }
 
-        const applied = applyAiJsonOutput({
-            document: {},
-            payload: validated.payload,
-            namespaceKeys: [...MEMORY_PROPOSAL_NAMESPACE_KEYS],
-        });
-        const proposalRecord = applied.document.memory_proposal;
-        if (!proposalRecord || typeof proposalRecord !== 'object' || Array.isArray(proposalRecord)) {
-            return null;
-        }
-
-        const proposal = proposalRecord as Record<string, unknown>;
-        const summaries = Array.isArray(proposal.summaries)
-            ? proposal.summaries
-                .filter((summary: SummaryProposal | null | undefined): summary is SummaryProposal => {
-                    return Boolean(summary && typeof summary === 'object' && String(summary.content ?? '').trim());
-                })
-                .map((summary: SummaryProposal): SummaryProposal => {
+        const facts: unknown[] = [];
+        const patches: unknown[] = [];
+        const summaries: SummaryProposal[] = [];
+        const schemaChanges: unknown[] = [];
+        const entityResolutions: unknown[] = [];
+        validated.payload.updates.forEach((update: any): void => {
+            const namespaceKey = String(update.namespaceKey ?? '').trim();
+            const op = String(update.op ?? '').trim();
+            if (namespaceKey === 'memory_facts') {
+                if (op === 'upsert_item' && update.item) {
+                    facts.push(update.item);
+                }
+                return;
+            }
+            if (namespaceKey === 'world_state') {
+                if (op === 'upsert_item' && update.item) {
+                    patches.push(update.item);
+                }
+                if (op === 'remove_item') {
+                    patches.push({
+                        op: 'remove',
+                        path: String(update.itemPrimaryKeyValue ?? '').trim(),
+                    });
+                }
+                return;
+            }
+            if (namespaceKey === 'memory_summaries') {
+                if (op === 'upsert_item' && update.item && typeof update.item === 'object') {
+                    const summary = update.item as SummaryProposal;
                     const normalizedRange = summary.range?.fromMessageId || summary.range?.toMessageId
                         ? {
                             fromMessageId: String(summary.range?.fromMessageId ?? '').trim() || rangeFallback?.fromMessageId,
@@ -234,30 +248,48 @@ export class IngestExecutor {
                                 toMessageId: rangeFallback.toMessageId,
                             }
                             : undefined;
-                    return {
+                    summaries.push({
                         ...summary,
                         content: String(summary.content ?? '').trim(),
                         range: normalizedRange,
-                    };
-                })
-            : [];
+                    });
+                }
+                if (op === 'remove_item') {
+                    summaries.push({
+                        level: 'scene',
+                        summaryId: String(update.itemPrimaryKeyValue ?? '').trim(),
+                        action: 'delete',
+                        content: '',
+                    });
+                }
+                return;
+            }
+            if (namespaceKey === 'schema_changes') {
+                if (op === 'upsert_item' && update.item) {
+                    schemaChanges.push(update.item);
+                }
+                return;
+            }
+            if (namespaceKey === 'entity_resolutions' && op === 'upsert_item' && update.item) {
+                entityResolutions.push(update.item);
+            }
+        });
         return {
-            facts: Array.isArray(proposal.facts) ? proposal.facts : [],
-            patches: Array.isArray(proposal.patches) ? proposal.patches : [],
+            facts: facts as any[],
+            patches: patches as any[],
             summaries,
-            notes: typeof proposal.notes === 'string' ? proposal.notes : undefined,
-            schemaChanges: Array.isArray(proposal.schemaChanges) ? proposal.schemaChanges : [],
-            entityResolutions: Array.isArray(proposal.entityResolutions) ? proposal.entityResolutions : [],
-            confidence: Number(proposal.confidence ?? 0) || 0,
+            schemaChanges: schemaChanges as any[],
+            entityResolutions: entityResolutions as any[],
+            confidence: 1,
         };
     }
 
     /**
-     * 功能：压缩提案文档日志摘要，便于快速判断是否进入落库链路。
-     * @param document 提案文档。
+     * 功能：压缩 mutation 文档日志摘要，便于快速判断是否进入落库链路。
+     * @param document mutation 文档。
      * @returns 日志摘要对象。
      */
-    private summarizeMemoryProposalDocumentForLog(document: MemoryProposalDocument | null | undefined): {
+    private summarizeMemoryMutationDocumentForLog(document: MemoryMutationDocument | null | undefined): {
         facts: number;
         patches: number;
         summaries: number;
@@ -280,7 +312,7 @@ export class IngestExecutor {
     }
 
     /**
-     * 功能：执行单个提案任务并提交落地。
+     * 功能：执行单个 ingest 任务并提交落地。
      * @param task 任务名。
      * @param taskDescription 任务描述。
      * @param systemPrompt 系统提示词。
@@ -289,10 +321,10 @@ export class IngestExecutor {
      * @param budget 预算配置。
      * @param rangeFallback 摘要范围回填。
      * @param memory 当前 memory 实例。
-     * @returns 提案任务执行结果。
+     * @returns ingest 任务执行结果。
      */
-    private async runProposalTask(
-        task: ProposalTask,
+    private async runIngestTask(
+        task: IngestTask,
         taskDescription: string,
         systemPrompt: string,
         eventsText: string,
@@ -300,7 +332,7 @@ export class IngestExecutor {
         budget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
         rangeFallback: { fromMessageId?: string; toMessageId?: string } | undefined,
         memory: MemorySDK,
-    ): Promise<ProposalTaskRunResult> {
+    ): Promise<IngestTaskRunResult> {
         const executeAttempt = async (
             prompt: string,
             attemptBudget: { maxTokens: number; maxLatencyMs: number; maxCost: number },
@@ -322,10 +354,14 @@ export class IngestExecutor {
 
         let response: any = await executeAttempt(systemPrompt, budget);
         if (!response.ok && response.reasonCode === 'invalid_json') {
+            const retryPolicy = MEMORY_OS_POLICY.budget.invalidJsonRetry;
             const retryBudget = {
-                maxTokens: Math.min(3200, Math.max(Number(budget.maxTokens ?? 0) + 400, 2200)),
+                maxTokens: Math.min(
+                    retryPolicy.maxTokens,
+                    Math.max(Number(budget.maxTokens ?? 0) + retryPolicy.tokenIncrement, retryPolicy.minTokens),
+                ),
                 maxLatencyMs: budget.maxLatencyMs,
-                maxCost: Math.max(Number(budget.maxCost ?? 0), task === 'memory.ingest' ? 0.5 : 0.25),
+                maxCost: Math.max(Number(budget.maxCost ?? 0), retryPolicy.memoryIngestMinCost),
             };
             logger.warn(`${task} 返回无效 JSON，启用紧凑模式重试一次`);
             response = await executeAttempt(this.buildCompactRetryPrompt(systemPrompt, task), retryBudget);
@@ -335,28 +371,28 @@ export class IngestExecutor {
             logger.warn(`${task} 请求失败：${failedResponse.error || 'unknown'} (${failedResponse.reasonCode || 'unknown'})`);
             return {
                 result: null,
-                proposalDocument: null,
+                mutationDocument: null,
                 error: failedResponse.error,
             };
         }
 
-        const proposalDocument = task === 'memory.ingest'
-            ? this.buildMemoryProposalDocumentFromAiJsonPayload(
+        const mutationDocument = task === 'memory.ingest'
+            ? this.buildMemoryMutationDocumentFromAiJsonPayload(
                 response.data,
                 rangeFallback,
                 typeof schemaContext === 'string' ? undefined : schemaContext,
             )
             : null;
-        logger.info(`${task} 返回提案摘要：${JSON.stringify(this.summarizeMemoryProposalDocumentForLog(proposalDocument))}`);
-        if (!proposalDocument) {
+        logger.info(`${task} 返回 mutation 摘要：${JSON.stringify(this.summarizeMemoryMutationDocumentForLog(mutationDocument))}`);
+        if (!mutationDocument) {
             logger.warn(`${task} 返回结构无效，跳过落地`);
             return {
                 result: null,
-                proposalDocument: null,
+                mutationDocument: null,
             };
         }
 
-        const result = await memory.proposal.processProposal(proposalDocument, MEMORY_OS_PLUGIN_ID);
+        const result = await (memory as any).mutation.applyMutationDocument(mutationDocument, MEMORY_OS_PLUGIN_ID);
         if (result.accepted) {
             logger.success(`${task} 通过：facts=${result.applied.factKeys.length}, patches=${result.applied.statePaths.length}, summaries=${result.applied.summaryIds.length}`);
         } else {
@@ -364,7 +400,7 @@ export class IngestExecutor {
         }
         return {
             result,
-            proposalDocument,
+            mutationDocument,
         };
     }
 }

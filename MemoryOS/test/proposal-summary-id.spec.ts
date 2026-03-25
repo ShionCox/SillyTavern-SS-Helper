@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildStableProposalSummaryId } from '../src/proposal/proposal-manager';
+import { buildStableSummaryId } from '../src/proposal/proposal-manager';
 
-describe('stable proposal summary id', () => {
+describe('stable summary id', () => {
     it('对同一摘要内容生成稳定 ID', () => {
         const baseInput = {
             chatKey: 'char:erika::chat:welcome',
@@ -15,8 +15,8 @@ describe('stable proposal summary id', () => {
             ordinal: 0,
         };
 
-        const first = buildStableProposalSummaryId(baseInput);
-        const second = buildStableProposalSummaryId({
+        const first = buildStableSummaryId(baseInput);
+        const second = buildStableSummaryId({
             ...baseInput,
             content: '艾莉卡在新的对话中再次登场。',
         });
@@ -25,7 +25,7 @@ describe('stable proposal summary id', () => {
     });
 
     it('在摘要内容变化时生成不同 ID', () => {
-        const first = buildStableProposalSummaryId({
+        const first = buildStableSummaryId({
             chatKey: 'char:erika::chat:welcome',
             consumerPluginId: 'stx_memory_os',
             level: 'scene',
@@ -36,7 +36,7 @@ describe('stable proposal summary id', () => {
             viewHash: 'vh_1',
             ordinal: 0,
         });
-        const second = buildStableProposalSummaryId({
+        const second = buildStableSummaryId({
             chatKey: 'char:erika::chat:welcome',
             consumerPluginId: 'stx_memory_os',
             level: 'scene',

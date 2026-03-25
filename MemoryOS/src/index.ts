@@ -74,15 +74,12 @@ export type {
     RowDeleteMode, RowSeedData, LogicTableRow, LogicTableQueryOpts,
 } from './types/row-operations';
 
-// 提议制与闸门验证
+// Mutation 写入与闸门验证
 export { GateValidator } from './proposal/gate-validator';
-export { ProposalManager } from './proposal/proposal-manager';
+export { MutationManager } from './proposal/proposal-manager';
 export type {
-    MemoryProposalDocument, ProposalResult, WriteRequest,
+    MemoryMutationDocument, MutationResult, MutationRequest,
     FactProposal, PatchProposal, SummaryProposal, GateResult,
-    SchemaChangeProposal as ProposalSchemaChange,
-    EntityResolutionProposal as ProposalEntityResolution,
-    DeferredSchemaHint as ProposalDeferredHint,
 } from './proposal/types';
 
 // AI 状态中心
@@ -122,11 +119,14 @@ import {
     buildExistingMessageDedupIndex,
     buildMessageTextSignature,
     createIngestDedupRuntimeState,
+    getPersistedRecentDedupIndexSnapshot,
     normalizeIncomingMessageId,
+    recordPersistedRecentAcceptedMessage,
     resolveMessageIngestDedupSource,
     recordAcceptedMessage,
     releasePendingKey,
     resetIngestDedupRuntimeState,
+    seedPersistedRecentDedupBucketFromEvents,
     seedIngestDedupHydrationState,
     shouldAcceptIncomingMessage,
     shouldBackfillHistoricalMessage,
@@ -137,6 +137,7 @@ import { initBridge as initLlmBridge, type BridgeInitStatus } from './llm/memory
 import { setAiModeEnabled, setLlmHubMounted, setConsumerRegistered } from './llm/ai-health-center';
 import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChatToolbar } from './runtime/chatToolbar';
 import { reconcileColdStartBootstrap } from './runtime/coldStartCoordinator';
+import { MEMORY_OS_POLICY } from './policy/memory-policy';
 import manifestJson from '../manifest.json';
 export { request, respond } from '../../SDK/bus/rpc';
 export { broadcast, subscribe } from '../../SDK/bus/broadcast';
@@ -598,13 +599,37 @@ class MemoryOS {
 
                 const appendTask = (async (): Promise<void> => {
                     try {
+                        const cachedDedupIndex = getPersistedRecentDedupIndexSnapshot(
+                            ingestDedupState,
+                            { chatKey: activeChatKey, eventType },
+                        );
+                        if (cachedDedupIndex) {
+                            const cachedDecision = shouldAcceptPersistedMessage({
+                                existingMessageIds: cachedDedupIndex.messageIds,
+                                existingTextSignatures: cachedDedupIndex.textSignatures,
+                                latestTextSignature: cachedDedupIndex.latestTextSignature,
+                                messageId: normalizedMsgId,
+                                text: result.filteredText,
+                                source: ingestSource,
+                            });
+                            if (!cachedDecision.accepted) {
+                                logger.info(`命中落库缓存去重，跳过重复入库 type=${eventType}, msgId=${cachedDecision.normalizedMessageId || '(none)'}, reason=${cachedDecision.reasonCodes.join(',')}`);
+                                recordIngestHealth(true);
+                                return;
+                            }
+                        }
+
                         const recentEvents = await db.events
                             .where('[chatKey+type+ts]')
                             .between([activeChatKey, eventType, 0], [activeChatKey, eventType, Infinity])
                             .reverse()
-                            .limit(200)
+                            .limit(MEMORY_OS_POLICY.dedup.persistedRecentQueryLimit)
                             .toArray();
-                        const recentDedupIndex = buildExistingMessageDedupIndex({ events: recentEvents });
+                        const recentDedupIndex = seedPersistedRecentDedupBucketFromEvents(ingestDedupState, {
+                            chatKey: activeChatKey,
+                            eventType,
+                            events: recentEvents,
+                        });
                         const persistedDecision = shouldAcceptPersistedMessage({
                             existingMessageIds: recentDedupIndex.messageIds,
                             existingTextSignatures: recentDedupIndex.textSignatures,
@@ -630,6 +655,12 @@ class MemoryOS {
                                 sourceMessageId: normalizedMsgId || undefined,
                             }
                         );
+                        recordPersistedRecentAcceptedMessage(ingestDedupState, {
+                            chatKey: activeChatKey,
+                            eventType,
+                            messageId: normalizedMsgId,
+                            text: result.filteredText,
+                        });
                         recordIngestHealth(false);
                     } finally {
                         releasePendingKey(ingestDedupState, pendingEventKey);
@@ -644,7 +675,7 @@ class MemoryOS {
         };
 
         // 用 Set 追踪已记录的消息 ID，切换聊天时重置，防止重复事件写入两条记录
-        const ingestDedupState = createIngestDedupRuntimeState(3000);
+        const ingestDedupState = createIngestDedupRuntimeState(MEMORY_OS_POLICY.dedup.runtimeSignatureWindowMs);
         let currentChatKey = '';
         let lastChatStructureSignature = '';
         /**

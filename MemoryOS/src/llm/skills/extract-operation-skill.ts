@@ -90,7 +90,7 @@ export function buildUnifiedIngestTaskPrompt(
     return [
         attachedSkillText,
         '你是统一记忆摄取助手，一次性完成 summaries、facts、patches 等提案生成。',
-        '你必须输出统一 JSON 外壳，不要输出 Markdown、解释正文、代码块或旧 proposal 包装。',
+        '你必须输出统一 JSON 外壳，不要输出 Markdown、解释正文、代码块或旧中间包装。',
         '你只允许填写当前窗口中真正出现、且适合落库的内容，不要把同一信息重复拆成很多近义条目。',
         'summaries 中每一项都必须是对象，至少包含 level 和 content；可选字段包括 title、keywords、memoryCards、messageId、range、source。',
         'facts 中每一项都必须是对象，至少包含 type 和 value；只有确实值得长期保留的事实才写入。',

@@ -2,11 +2,9 @@ import type {
     AiJsonDescription,
     AiJsonFieldDefinition,
     AiJsonNamespaceDefinition,
-    AiJsonNamespaceValidationContext,
 } from './ai-json-types';
 import {    normalizeAiJsonDescription,
 } from './ai-json-types';
-import type { TemplatePatchSchema, TemplateSchemaNode, TemplateFactType } from '../template/types';
 
 type MutableRecord = Record<string, unknown>;
 
@@ -689,11 +687,11 @@ function normalizeMemoryCardArray(value: unknown): Array<Record<string, unknown>
 }
 
 /**
- * 功能：归一化提案事实数组。
+ * 功能：归一化事实写入数组。
  * @param value 原始值。
- * @returns 归一化后的提案事实数组。
+ * @returns 归一化后的事实写入数组。
  */
-function normalizeProposalFactArray(value: unknown): Array<Record<string, unknown>> {
+function normalizeMemoryFactArray(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
         return [];
     }
@@ -718,11 +716,11 @@ function normalizeProposalFactArray(value: unknown): Array<Record<string, unknow
 }
 
 /**
- * 功能：归一化提案补丁数组。
+ * 功能：归一化状态补丁写入数组。
  * @param value 原始值。
- * @returns 归一化后的提案补丁数组。
+ * @returns 归一化后的状态补丁写入数组。
  */
-function normalizeProposalPatchArray(value: unknown): Array<Record<string, unknown>> {
+function normalizeWorldStatePatchArray(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
         return [];
     }
@@ -741,7 +739,7 @@ function normalizeProposalPatchArray(value: unknown): Array<Record<string, unkno
  * @param value 原始值。
  * @returns 归一化后的摘要来源对象。
  */
-function normalizeProposalSummarySource(value: unknown): Record<string, unknown> {
+function normalizeMemorySummarySource(value: unknown): Record<string, unknown> {
     const record = isRecord(value) ? value : {};
     return {
         extractor: normalizeText(record.extractor),
@@ -751,11 +749,11 @@ function normalizeProposalSummarySource(value: unknown): Record<string, unknown>
 }
 
 /**
- * 功能：归一化提案摘要数组。
+ * 功能：归一化摘要写入数组。
  * @param value 原始值。
- * @returns 归一化后的提案摘要数组。
+ * @returns 归一化后的摘要写入数组。
  */
-function normalizeProposalSummaryArray(value: unknown): Array<Record<string, unknown>> {
+function normalizeMemorySummaryArray(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
         return [];
     }
@@ -776,7 +774,7 @@ function normalizeProposalSummaryArray(value: unknown): Array<Record<string, unk
                 fromMessageId: normalizeText(range.fromMessageId),
                 toMessageId: normalizeText(range.toMessageId),
             },
-            source: normalizeProposalSummarySource(record.source),
+            source: normalizeMemorySummarySource(record.source),
         };
     }).filter((item: Record<string, unknown>): boolean => Boolean(String(item.content ?? '').trim()));
 }
@@ -786,7 +784,7 @@ function normalizeProposalSummaryArray(value: unknown): Array<Record<string, unk
  * @param value 原始值。
  * @returns 归一化后的结构变更建议数组。
  */
-function normalizeProposalSchemaChangeArray(value: unknown): Array<Record<string, unknown>> {
+function normalizeSchemaChangeArray(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
         return [];
     }
@@ -807,7 +805,7 @@ function normalizeProposalSchemaChangeArray(value: unknown): Array<Record<string
  * @param value 原始值。
  * @returns 归一化后的实体解析建议数组。
  */
-function normalizeProposalEntityResolutionArray(value: unknown): Array<Record<string, unknown>> {
+function normalizeEntityResolutionArray(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
         return [];
     }
@@ -823,295 +821,6 @@ function normalizeProposalEntityResolutionArray(value: unknown): Array<Record<st
     }).filter((item: Record<string, unknown>): boolean => {
         return Boolean(String(item.tableKey ?? '').trim() && String(item.fromRowId ?? '').trim() && String(item.toRowId ?? '').trim());
     });
-}
-
-/**
- * 功能：归一化记忆提案命名空间文档。
- * @param value 原始值。
- * @returns 归一化后的记忆提案文档。
- */
-function normalizeMemoryProposalDocument(value: unknown): Record<string, unknown> {
-    const record = isRecord(value) ? value : {};
-    return {
-        facts: normalizeProposalFactArray(record.facts),
-        patches: normalizeProposalPatchArray(record.patches),
-        summaries: normalizeProposalSummaryArray(record.summaries),
-        notes: normalizeText(record.notes),
-        schemaChanges: normalizeProposalSchemaChangeArray(record.schemaChanges),
-        entityResolutions: normalizeProposalEntityResolutionArray(record.entityResolutions),
-        confidence: normalizeNumber(record.confidence),
-    };
-}
-
-const MEMORY_PROPOSAL_LEGACY_FIELD_MAP: Record<string, string> = {
-    valueJson: 'value',
-    payloadJson: 'payload',
-    provenanceJson: 'provenance',
-};
-
-/**
- * 功能：校验 memory_proposal 命名空间的二级结构。
- * @param value 命名空间原始值。
- * @param context 校验上下文。
- * @returns 校验错误列表。
- */
-function validateMemoryProposalInitDocument(value: unknown, context: AiJsonNamespaceValidationContext): string[] {
-    const errors: string[] = [];
-    if (!isRecord(value)) {
-        return ['必须是对象'];
-    }
-    const record = value as MutableRecord;
-    const factTypeMap = buildTemplateFactTypeMap(context.context);
-    const patchSchemas = buildTemplatePatchSchemaList(context.context);
-
-    const facts = Array.isArray(record.facts) ? record.facts : [];
-    facts.forEach((item: unknown, index: number): void => {
-        if (!isRecord(item)) {
-            errors.push(`facts[${index}] 必须是对象`);
-            return;
-        }
-        const fact = item as MutableRecord;
-        collectLegacyJsonFieldErrors(fact, `facts[${index}]`, errors);
-        if (!Object.prototype.hasOwnProperty.call(fact, 'value')) {
-            errors.push(`facts[${index}].value 缺失`);
-            return;
-        }
-        const factType = normalizeText(fact.type);
-        if (!factType) {
-            errors.push(`facts[${index}].type 缺失`);
-            return;
-        }
-        const factSchema = factTypeMap.get(factType);
-        if (!factSchema) {
-            errors.push(`facts[${index}].value 缺少模板 valueSchema: fact.type=${factType}`);
-            return;
-        }
-        errors.push(...validateTemplateSchemaValue(fact.value, factSchema, `facts[${index}].value`));
-    });
-
-    const patches = Array.isArray(record.patches) ? record.patches : [];
-    patches.forEach((item: unknown, index: number): void => {
-        if (!isRecord(item)) {
-            errors.push(`patches[${index}] 必须是对象`);
-            return;
-        }
-        const patch = item as MutableRecord;
-        collectLegacyJsonFieldErrors(patch, `patches[${index}]`, errors);
-        if (!Object.prototype.hasOwnProperty.call(patch, 'value')) {
-            errors.push(`patches[${index}].value 缺失`);
-            return;
-        }
-        const patchPath = normalizeText(patch.path);
-        if (!patchPath) {
-            errors.push(`patches[${index}].path 缺失`);
-            return;
-        }
-        const patchSchema = resolvePatchSchema(patchPath, patchSchemas);
-        if (!patchSchema) {
-            errors.push(`patches[${index}].value 缺少模板 patchSchema: patch.path=${patchPath}`);
-            return;
-        }
-        errors.push(...validateTemplateSchemaValue(patch.value, patchSchema.valueSchema, `patches[${index}].value`));
-    });
-
-    const summaries = Array.isArray(record.summaries) ? record.summaries : [];
-    summaries.forEach((item: unknown, index: number): void => {
-        if (!isRecord(item)) {
-            return;
-        }
-        const source = isRecord((item as MutableRecord).source) ? (item as MutableRecord).source as MutableRecord : null;
-        if (!source) {
-            return;
-        }
-        collectLegacyJsonFieldErrors(source, `summaries[${index}].source`, errors);
-        if (Object.prototype.hasOwnProperty.call(source, 'provenance') && source.provenance != null && !isRecord(source.provenance)) {
-            errors.push(`summaries[${index}].source.provenance 必须是对象`);
-        }
-    });
-
-    const schemaChanges = Array.isArray(record.schemaChanges) ? record.schemaChanges : [];
-    schemaChanges.forEach((item: unknown, index: number): void => {
-        if (!isRecord(item)) {
-            return;
-        }
-        const schemaChange = item as MutableRecord;
-        collectLegacyJsonFieldErrors(schemaChange, `schemaChanges[${index}]`, errors);
-        if (!Object.prototype.hasOwnProperty.call(schemaChange, 'payload')) {
-            errors.push(`schemaChanges[${index}].payload 缺失`);
-            return;
-        }
-        if (!isRecord(schemaChange.payload)) {
-            errors.push(`schemaChanges[${index}].payload 必须是对象`);
-        }
-    });
-
-    return errors;
-}
-
-/**
- * 功能：收集旧版 *Json 字段错误。
- * @param record 当前对象。
- * @param path 字段路径前缀。
- * @param errors 错误列表。
- * @returns 无返回值。
- */
-function collectLegacyJsonFieldErrors(record: MutableRecord, path: string, errors: string[]): void {
-    Object.entries(MEMORY_PROPOSAL_LEGACY_FIELD_MAP).forEach(([legacyField, nextField]: [string, string]): void => {
-        if (!Object.prototype.hasOwnProperty.call(record, legacyField)) {
-            return;
-        }
-        errors.push(`${path}.${legacyField} 已废弃，请改用 ${path}.${nextField}`);
-    });
-}
-
-/**
- * 功能：构建 fact.type 到 valueSchema 的映射。
- * @param context 校验上下文附加信息。
- * @returns fact.type 到 schema 的映射。
- */
-function buildTemplateFactTypeMap(context?: Record<string, unknown>): Map<string, TemplateSchemaNode> {
-    const result = new Map<string, TemplateSchemaNode>();
-    const factTypes = Array.isArray(context?.factTypes) ? context.factTypes as TemplateFactType[] : [];
-    factTypes.forEach((item: TemplateFactType): void => {
-        const type = normalizeText(item?.type);
-        if (!type || !item?.valueSchema) {
-            return;
-        }
-        result.set(type, item.valueSchema);
-    });
-    return result;
-}
-
-/**
- * 功能：读取模板 patchSchemas 列表。
- * @param context 校验上下文附加信息。
- * @returns 可用 patch schema 列表。
- */
-function buildTemplatePatchSchemaList(context?: Record<string, unknown>): TemplatePatchSchema[] {
-    if (!Array.isArray(context?.patchSchemas)) {
-        return [];
-    }
-    return context.patchSchemas.filter((item: unknown): item is TemplatePatchSchema => {
-        return isRecord(item)
-            && Boolean(normalizeText((item as MutableRecord).pathPattern))
-            && isRecord((item as MutableRecord).valueSchema);
-    });
-}
-
-/**
- * 功能：按 patch.path 解析命中的 patch schema。
- * @param patchPath patch 路径。
- * @param patchSchemas 模板 patch schema 列表。
- * @returns 命中的 patch schema，未命中时返回 null。
- */
-function resolvePatchSchema(patchPath: string, patchSchemas: TemplatePatchSchema[]): TemplatePatchSchema | null {
-    for (const patchSchema of patchSchemas) {
-        if (matchPathPattern(patchPath, patchSchema.pathPattern)) {
-            return patchSchema;
-        }
-    }
-    return null;
-}
-
-/**
- * 功能：判断路径是否匹配模板 pathPattern。
- * @param value 当前路径。
- * @param pattern 模板路径模式。
- * @returns 是否匹配。
- */
-function matchPathPattern(value: string, pattern: string): boolean {
-    const normalizedValue = normalizeText(value);
-    const normalizedPattern = normalizeText(pattern);
-    if (!normalizedValue || !normalizedPattern) {
-        return false;
-    }
-    if (normalizedValue === normalizedPattern) {
-        return true;
-    }
-    const escapedPattern = normalizedPattern
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/\\\*/g, '.*')
-        .replace(/:[^/]+/g, '[^/]+');
-    return new RegExp(`^${escapedPattern}$`).test(normalizedValue);
-}
-
-/**
- * 功能：按模板 schema 节点校验值。
- * @param value 待校验值。
- * @param schema 模板 schema 节点。
- * @param path 当前路径。
- * @returns 错误列表。
- */
-function validateTemplateSchemaValue(value: unknown, schema: TemplateSchemaNode, path: string): string[] {
-    const errors: string[] = [];
-    if (schema.nullable && value === null) {
-        return errors;
-    }
-
-    if (schema.type === 'string') {
-        if (typeof value !== 'string') {
-            errors.push(`${path} 必须是 string`);
-        }
-        return errors;
-    }
-    if (schema.type === 'number') {
-        if (typeof value !== 'number' || !Number.isFinite(value)) {
-            errors.push(`${path} 必须是 number`);
-        }
-        return errors;
-    }
-    if (schema.type === 'boolean') {
-        if (typeof value !== 'boolean') {
-            errors.push(`${path} 必须是 boolean`);
-        }
-        return errors;
-    }
-    if (schema.type === 'enum') {
-        if (typeof value !== 'string' || !schema.values.includes(value)) {
-            errors.push(`${path} 必须命中枚举值 [${schema.values.join(', ')}]`);
-        }
-        return errors;
-    }
-    if (schema.type === 'list') {
-        if (!Array.isArray(value)) {
-            errors.push(`${path} 必须是 list`);
-            return errors;
-        }
-        value.forEach((item: unknown, index: number): void => {
-            errors.push(...validateTemplateSchemaValue(item, schema.item, `${path}[${index}]`));
-        });
-        return errors;
-    }
-
-    if (!isRecord(value)) {
-        errors.push(`${path} 必须是 object`);
-        return errors;
-    }
-    const objectValue = value as MutableRecord;
-    const fieldEntries = Object.entries(schema.fields ?? {});
-    const requiredFieldKeys = Array.isArray(schema.requiredFields) && schema.requiredFields.length > 0
-        ? schema.requiredFields.map((fieldKey: string): string => normalizeText(fieldKey)).filter(Boolean)
-        : fieldEntries.map(([fieldKey]: [string, TemplateSchemaNode]): string => fieldKey);
-
-    requiredFieldKeys.forEach((fieldKey: string): void => {
-        if (!Object.prototype.hasOwnProperty.call(objectValue, fieldKey)) {
-            errors.push(`${path}.${fieldKey} 缺失`);
-        }
-    });
-    if (!schema.allowUnknownFields) {
-        Object.keys(objectValue).forEach((fieldKey: string): void => {
-            if (!Object.prototype.hasOwnProperty.call(schema.fields ?? {}, fieldKey)) {
-                errors.push(`${path}.${fieldKey} 未在模板 schema 中定义`);
-            }
-        });
-    }
-    fieldEntries.forEach(([fieldKey, childSchema]: [string, TemplateSchemaNode]): void => {
-        if (!Object.prototype.hasOwnProperty.call(objectValue, fieldKey)) {
-            return;
-        }
-        errors.push(...validateTemplateSchemaValue(objectValue[fieldKey], childSchema, `${path}.${fieldKey}`));
-    });
-    return errors;
 }
 
 /**
@@ -1575,7 +1284,7 @@ const roleNamespaceFields: Record<string, AiJsonFieldDefinition> = {
     ),
 };
 
-const proposalEntityDefinition = createObjectField(
+const memoryEntityDefinition = createObjectField(
     'entity',
     '关联实体。',
     {
@@ -1591,7 +1300,7 @@ const proposalEntityDefinition = createObjectField(
     },
 );
 
-const proposalSummarySourceDefinition = createObjectField(
+const memorySummarySourceDefinition = createObjectField(
     'source',
     '摘要来源。',
     {
@@ -1611,7 +1320,7 @@ const proposalSummarySourceDefinition = createObjectField(
     },
 );
 
-const proposalMemoryCardDefinition = createObjectField(
+const memoryCardDefinition = createObjectField(
     'memoryCard',
     '记忆卡。',
     {
@@ -1675,9 +1384,9 @@ const proposalMemoryCardDefinition = createObjectField(
     },
 );
 
-const proposalSummaryDefinition = createObjectField(
+const memorySummaryDefinition = createObjectField(
     'summary',
-    '摘要提案。',
+    '摘要记录。',
     {
         level: createEnumField('level', '层级。', 'scene', ['message', 'scene', 'arc']),
         summaryId: createStringField('summaryId', '摘要 ID。', 'summary_scene_01'),
@@ -1686,7 +1395,7 @@ const proposalSummaryDefinition = createObjectField(
         title: createStringField('title', '标题。', '雾港撤离'),
         content: createStringField('content', '正文。', '艾莉卡与莉娅在雾港完成撤离确认，并留下新的线索。'),
         keywords: createListField('keywords', '关键词。', createStringField('value', '关键词。', '雾港', { fieldKey: 'value' }), ['雾港', '撤离'], { updatable: false }),
-        memoryCards: createListField('memoryCards', '记忆卡。', proposalMemoryCardDefinition, [], { updatable: false }),
+        memoryCards: createListField('memoryCards', '记忆卡。', memoryCardDefinition, [], { updatable: false }),
         messageId: createStringField('messageId', '消息 ID。', 'msg_105'),
         range: createObjectField('range', '消息范围。', {
             fromMessageId: createStringField('fromMessageId', '起始消息 ID。', 'msg_101'),
@@ -1697,7 +1406,7 @@ const proposalSummaryDefinition = createObjectField(
         }, {
             updatable: false,
         }),
-        source: proposalSummarySourceDefinition,
+        source: memorySummarySourceDefinition,
     },
     {
         level: 'scene',
@@ -1724,13 +1433,13 @@ const proposalSummaryDefinition = createObjectField(
     },
 );
 
-const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
-    facts: createListField('facts', '事实提案。', createObjectField('fact', '事实提案。', {
+const memoryWriteFields: Record<string, AiJsonFieldDefinition> = {
+    facts: createListField('facts', '事实记录。', createObjectField('fact', '事实记录。', {
         factKey: createStringField('factKey', '事实键。', 'fact_erika_relation_01'),
         targetRecordKey: createStringField('targetRecordKey', '目标记录键。', 'record_fact_01'),
         action: createEnumField('action', '动作。', 'auto', ['auto', 'update', 'merge', 'delete', 'invalidate']),
         type: createStringField('type', '事实类型。', 'relationship_fact'),
-        entity: proposalEntityDefinition,
+        entity: memoryEntityDefinition,
         path: createStringField('path', '目标路径。', '/relationships/erika/liya'),
         value: createJsonField('value', '事实值 JSON。', { label: '同伴', detail: '艾莉卡依赖莉娅提供撤离判断。' }, { updatable: false }),
         confidence: createNumberField('confidence', '置信度。', 0.88),
@@ -1755,7 +1464,7 @@ const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
         path: '/groupMemory/lanes/erika/latestMood',
         value: {},
     }, { updatable: false }), [], { updatable: false }),
-    summaries: createListField('summaries', '摘要提案。', proposalSummaryDefinition, [], { updatable: false }),
+    summaries: createListField('summaries', '摘要记录。', memorySummaryDefinition, [], { updatable: false }),
     notes: createStringField('notes', '补充说明。', '本轮重点保留撤离阶段形成的新关系和关键对话。', { updatable: false }),
     schemaChanges: createListField('schemaChanges', '结构变更建议。', createObjectField('schemaChange', '结构变更建议。', {
         kind: createEnumField('kind', '变更类型。', 'add_field', MEMORY_SCHEMA_CHANGE_VALUES),
@@ -1785,6 +1494,111 @@ const memoryProposalFields: Record<string, AiJsonFieldDefinition> = {
     }, { updatable: false }), [], { updatable: false }),
     confidence: createNumberField('confidence', '整体置信度。', 0.86, { updatable: false }),
 };
+
+const memoryFactsNamespaceFields: Record<string, AiJsonFieldDefinition> = {
+    records: createListField(
+        'records',
+        '事实记录。',
+        memoryWriteFields.facts.itemDefinition ?? createObjectField('fact', '事实记录。', {}, {}),
+        [],
+        {
+            updatable: true,
+            updateMode: 'upsert_item',
+            itemPrimaryKey: 'factKey',
+        },
+    ),
+};
+
+const worldStateNamespaceFields: Record<string, AiJsonFieldDefinition> = {
+    nodes: createListField(
+        'nodes',
+        '世界状态节点。',
+        memoryWriteFields.patches.itemDefinition ?? createObjectField('patch', '世界状态节点。', {}, {}),
+        [],
+        {
+            updatable: true,
+            updateMode: 'upsert_item',
+            itemPrimaryKey: 'path',
+        },
+    ),
+};
+
+const memorySummariesNamespaceFields: Record<string, AiJsonFieldDefinition> = {
+    records: createListField(
+        'records',
+        '摘要记录。',
+        memoryWriteFields.summaries.itemDefinition ?? createObjectField('summary', '摘要记录。', {}, {}),
+        [],
+        {
+            updatable: true,
+            updateMode: 'upsert_item',
+            itemPrimaryKey: 'summaryId',
+        },
+    ),
+};
+
+const schemaChangesNamespaceFields: Record<string, AiJsonFieldDefinition> = {
+    records: createListField(
+        'records',
+        '结构变更记录。',
+        memoryWriteFields.schemaChanges.itemDefinition ?? createObjectField('schemaChange', '结构变更记录。', {}, {}),
+        [],
+        {
+            updatable: true,
+            updateMode: 'upsert_item',
+            itemPrimaryKey: 'tableKey',
+        },
+    ),
+};
+
+const entityResolutionsNamespaceFields: Record<string, AiJsonFieldDefinition> = {
+    records: createListField(
+        'records',
+        '实体解析记录。',
+        memoryWriteFields.entityResolutions.itemDefinition ?? createObjectField('entityResolution', '实体解析记录。', {}, {}),
+        [],
+        {
+            updatable: true,
+            updateMode: 'upsert_item',
+            itemPrimaryKey: 'fromRowId',
+        },
+    ),
+};
+
+function normalizeMemoryFactsNamespace(value: unknown): Record<string, unknown> {
+    const record = isRecord(value) ? value : {};
+    return {
+        records: normalizeMemoryFactArray(record.records),
+    };
+}
+
+function normalizeWorldStateNamespace(value: unknown): Record<string, unknown> {
+    const record = isRecord(value) ? value : {};
+    return {
+        nodes: normalizeWorldStatePatchArray(record.nodes),
+    };
+}
+
+function normalizeMemorySummariesNamespace(value: unknown): Record<string, unknown> {
+    const record = isRecord(value) ? value : {};
+    return {
+        records: normalizeMemorySummaryArray(record.records),
+    };
+}
+
+function normalizeSchemaChangesNamespace(value: unknown): Record<string, unknown> {
+    const record = isRecord(value) ? value : {};
+    return {
+        records: normalizeSchemaChangeArray(record.records),
+    };
+}
+
+function normalizeEntityResolutionsNamespace(value: unknown): Record<string, unknown> {
+    const record = isRecord(value) ? value : {};
+    return {
+        records: normalizeEntityResolutionArray(record.records),
+    };
+}
 
 /**
  * 功能：返回默认命名空间注册表。
@@ -1906,23 +1720,68 @@ export function getDefaultAiJsonNamespaces(): AiJsonNamespaceDefinition[] {
             },
         },
         {
-            namespaceKey: 'memory_proposal',
-            title: '记忆提案',
-            description: '记忆提案与结构建议。',
-            fields: memoryProposalFields,
+            namespaceKey: 'memory_facts',
+            title: '事实写入域',
+            description: '事实记录写入域。',
+            fields: memoryFactsNamespaceFields,
             example: {
-                facts: [],
-                patches: [],
-                summaries: [],
-                notes: '',
-                schemaChanges: [],
-                entityResolutions: [],
-                confidence: 0,
+                records: [],
             },
             hooks: {
-                normalizeInitDocument: normalizeMemoryProposalDocument,
-                afterApply: normalizeMemoryProposalDocument,
-                validateInitDocument: validateMemoryProposalInitDocument,
+                normalizeInitDocument: normalizeMemoryFactsNamespace,
+                afterApply: normalizeMemoryFactsNamespace,
+            },
+        },
+        {
+            namespaceKey: 'world_state',
+            title: '状态写入域',
+            description: '世界状态写入域。',
+            fields: worldStateNamespaceFields,
+            example: {
+                nodes: [],
+            },
+            hooks: {
+                normalizeInitDocument: normalizeWorldStateNamespace,
+                afterApply: normalizeWorldStateNamespace,
+            },
+        },
+        {
+            namespaceKey: 'memory_summaries',
+            title: '摘要写入域',
+            description: '摘要记录写入域。',
+            fields: memorySummariesNamespaceFields,
+            example: {
+                records: [],
+            },
+            hooks: {
+                normalizeInitDocument: normalizeMemorySummariesNamespace,
+                afterApply: normalizeMemorySummariesNamespace,
+            },
+        },
+        {
+            namespaceKey: 'schema_changes',
+            title: '结构变更写入域',
+            description: '结构变更写入域。',
+            fields: schemaChangesNamespaceFields,
+            example: {
+                records: [],
+            },
+            hooks: {
+                normalizeInitDocument: normalizeSchemaChangesNamespace,
+                afterApply: normalizeSchemaChangesNamespace,
+            },
+        },
+        {
+            namespaceKey: 'entity_resolutions',
+            title: '实体解析写入域',
+            description: '实体解析写入域。',
+            fields: entityResolutionsNamespaceFields,
+            example: {
+                records: [],
+            },
+            hooks: {
+                normalizeInitDocument: normalizeEntityResolutionsNamespace,
+                afterApply: normalizeEntityResolutionsNamespace,
             },
         },
     ];

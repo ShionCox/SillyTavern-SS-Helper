@@ -6,7 +6,7 @@ import { FactsManager } from './facts-manager';
 import { AuditManager } from './audit-manager';
 import { MemoryMutationHistoryManager } from './memory-mutation-history';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
-import type { ProposalResult, WriteRequest } from '../proposal/types';
+import type { MutationResult, MutationRequest } from '../proposal/types';
 import type { RowMergeResult, RowSeedData, LogicTableQueryOpts, LogicTableRow } from '../types';
 
 
@@ -28,14 +28,14 @@ export class RowOperationsManager {
     private factsManager: FactsManager;
     private auditManager: AuditManager;
     private mutationHistoryManager: MemoryMutationHistoryManager;
-    private writeGateway: { requestWrite(request: WriteRequest): Promise<ProposalResult> };
+    private writeGateway: { requestWrite(request: MutationRequest): Promise<MutationResult> };
 
     constructor(
         chatKey: string,
         chatStateManager: ChatStateManager,
         factsManager: FactsManager,
         auditManager: AuditManager,
-        writeGateway: { requestWrite(request: WriteRequest): Promise<ProposalResult> },
+        writeGateway: { requestWrite(request: MutationRequest): Promise<MutationResult> },
     ) {
         this.chatKey = chatKey;
         this.chatStateManager = chatStateManager;
@@ -419,7 +419,7 @@ export class RowOperationsManager {
                         source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                         chatKey: this.chatKey,
                         reason: 'logic_table.merge_rows',
-                        proposal: {
+                        mutations: {
                             facts: [{
                                 factKey: targetFactKey,
                                 targetRecordKey: targetFactKey,
@@ -438,7 +438,7 @@ export class RowOperationsManager {
                         source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                         chatKey: this.chatKey,
                         reason: 'logic_table.merge_rows_cleanup',
-                        proposal: {
+                        mutations: {
                             facts: [{
                                 factKey: fact.factKey,
                                 targetRecordKey: fact.factKey,
@@ -593,7 +593,7 @@ export class RowOperationsManager {
                         source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                         chatKey: this.chatKey,
                         reason: 'logic_table.delete_row_purge',
-                        proposal: {
+                        mutations: {
                             facts: [{
                                 factKey: fact.factKey,
                                 targetRecordKey: fact.factKey,
@@ -627,7 +627,7 @@ export class RowOperationsManager {
                     source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                     chatKey: this.chatKey,
                     reason: 'logic_table.delete_row_soft',
-                    proposal: {
+                    mutations: {
                         facts: [{
                             factKey: fact.factKey,
                             targetRecordKey: fact.factKey,
@@ -724,7 +724,7 @@ export class RowOperationsManager {
                     source: { pluginId: MEMORY_OS_PLUGIN_ID, version: '1.0.0' },
                     chatKey: this.chatKey,
                     reason: 'logic_table.restore_row',
-                    proposal: {
+                    mutations: {
                         facts: [{
                             factKey: fact.factKey,
                             targetRecordKey: fact.factKey,

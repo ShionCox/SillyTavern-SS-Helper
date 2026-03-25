@@ -62,7 +62,7 @@ function buildEmbeddingId(chatKey: string, cardId: string, model: string): strin
 }
 
 /**
- * 功能：把记忆卡转换成兼容旧检索结果结构的 metadata。
+ * 功能：把记忆卡转换成统一检索结果结构的 metadata。
  * @param card 记忆卡。
  * @returns 检索结果 metadata。
  */

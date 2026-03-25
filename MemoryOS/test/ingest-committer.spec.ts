@@ -144,7 +144,7 @@ describe('ingest-committer', (): void => {
         });
 
         const execution: IngestExecutionResult = {
-            proposalResult: {
+            mutationResult: {
                 accepted: true,
                 applied: {
                     factKeys: ['f1'],
@@ -153,7 +153,7 @@ describe('ingest-committer', (): void => {
                 },
                 rejectedReasons: [],
             } as any,
-            proposalDocument: null,
+            mutationDocument: null,
             accepted: true,
             factsApplied: 1,
             patchesApplied: 1,

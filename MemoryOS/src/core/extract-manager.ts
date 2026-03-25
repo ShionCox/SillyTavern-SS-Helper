@@ -10,6 +10,7 @@ import { MetaManager } from './meta-manager';
 import { IngestPlanner } from './ingest-planner';
 import { IngestExecutor } from './ingest-executor';
 import { IngestCommitter } from './ingest-committer';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 
 /**
  * 功能：统一记忆抽取入口编排器，只负责串联 planner / executor / committer 与并发去重。
@@ -19,13 +20,9 @@ export class ExtractManager {
     private readonly eventsManager: EventsManager;
     private readonly metaManager: MetaManager;
     private readonly chatStateManager: ChatStateManager | null;
-    private readonly duplicateWindowMs: number = 8000;
-    private readonly specialTriggerTypes: Set<string> = new Set([
-        'memory.template.changed',
-        'world.template.changed',
-        'combat.end',
-        'combat.round.end',
-    ]);
+    private readonly duplicateWindowMs: number = MEMORY_OS_POLICY.extract.settledWindowDuplicateMs;
+    private readonly specialTriggerTypes: Set<string> = new Set(MEMORY_OS_POLICY.extract.specialTriggerTypes);
+    private readonly recentEventsQueryLimit: number = MEMORY_OS_POLICY.extract.recentEventsQueryLimit;
     private extractionFlight: Promise<void> | null = null;
     private extractionFlightWindowHash: string = '';
     private lastSettledWindowHash: string = '';
@@ -88,7 +85,7 @@ export class ExtractManager {
             return;
         }
 
-        const recentEvents = await this.eventsManager.query({ limit: 120 });
+        const recentEvents = await this.eventsManager.query({ limit: this.recentEventsQueryLimit });
         const logicalView = this.chatStateManager
             ? await this.chatStateManager.getLogicalChatView()
             : null;

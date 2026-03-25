@@ -396,12 +396,12 @@ describe('ai-json-system', (): void => {
         expect(equipments).toEqual([]);
     });
 
-    it('memory_proposal 出现旧版 *Json 字段时会被拒绝', (): void => {
+    it('memory_facts 出现旧版 *Json 字段时会被拒绝', (): void => {
         initAiJsonSystem();
         const payload = {
             mode: 'init',
             namespaces: {
-                memory_proposal: {
+                memory_facts: {
                     facts: [
                         {
                             type: 'relationship_fact',
@@ -423,7 +423,7 @@ describe('ai-json-system', (): void => {
         };
         const validated = validateAiJsonOutput({
             mode: 'init',
-            namespaceKeys: ['memory_proposal'],
+            namespaceKeys: ['memory_facts'],
             payload,
             context: {
                 factTypes: [
@@ -448,12 +448,12 @@ describe('ai-json-system', (): void => {
         expect(validated.errors.join('\n')).toContain('valueJson');
     });
 
-    it('memory_proposal 会按模板 valueSchema 校验 facts[].value', (): void => {
+    it('memory_facts 会按模板 valueSchema 校验 facts[].value', (): void => {
         initAiJsonSystem();
         const payload = {
             mode: 'init',
             namespaces: {
-                memory_proposal: {
+                memory_facts: {
                     facts: [
                         {
                             type: 'relationship_fact',
@@ -474,7 +474,7 @@ describe('ai-json-system', (): void => {
         };
         const validated = validateAiJsonOutput({
             mode: 'init',
-            namespaceKeys: ['memory_proposal'],
+            namespaceKeys: ['memory_facts'],
             payload,
             context: {
                 factTypes: [
@@ -499,12 +499,12 @@ describe('ai-json-system', (): void => {
         expect(validated.errors.join('\n')).toContain('facts[0].value.label');
     });
 
-    it('memory_proposal 在缺少 patchSchema 时会拒绝 patches[].value', (): void => {
+    it('world_state 在缺少 patchSchema 时会拒绝 patches[].value', (): void => {
         initAiJsonSystem();
         const payload = {
             mode: 'init',
             namespaces: {
-                memory_proposal: {
+                world_state: {
                     facts: [],
                     patches: [
                         {
@@ -525,7 +525,7 @@ describe('ai-json-system', (): void => {
         };
         const validated = validateAiJsonOutput({
             mode: 'init',
-            namespaceKeys: ['memory_proposal'],
+            namespaceKeys: ['world_state'],
             payload,
             context: {
                 factTypes: [],

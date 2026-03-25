@@ -1,4 +1,5 @@
 import { stripRuntimePlaceholderArtifactsEvent } from '../../../SDK/tavern';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 
 /**
  * 功能：记录过滤强度。
@@ -89,7 +90,9 @@ export type BuildRecordFilterAuditMetadataInput = {
     dedupSource: RecordFilterDedupSource;
 };
 
-const DEFAULT_JSON_KEYS: string[] = ['content', 'text', 'message', 'summary', 'description', 'title', 'reason'];
+const DEFAULT_JSON_KEYS: string[] = [...MEMORY_OS_POLICY.filter.defaultJsonExtractKeys];
+const DEFAULT_FILTER_TYPES: RecordFilterType[] = MEMORY_OS_POLICY.filter.defaultFilterTypes as RecordFilterType[];
+const DEFAULT_CODEBLOCK_TAGS: string[] = [...MEMORY_OS_POLICY.filter.defaultCodeblockTags];
 
 /**
  * 功能：记录过滤默认配置。
@@ -97,17 +100,17 @@ const DEFAULT_JSON_KEYS: string[] = ['content', 'text', 'message', 'summary', 'd
 export const DEFAULT_RECORD_FILTER_SETTINGS: RecordFilterSettings = {
     enabled: true,
     level: 'balanced',
-    filterTypes: ['html', 'xml', 'json', 'codeblock'],
+    filterTypes: DEFAULT_FILTER_TYPES,
     customCodeblockEnabled: false,
-    customCodeblockTags: ['rolljson'],
+    customCodeblockTags: DEFAULT_CODEBLOCK_TAGS,
     jsonExtractMode: 'off',
     jsonExtractKeys: DEFAULT_JSON_KEYS,
     pureCodePolicy: 'drop',
-    placeholderText: '[代码内容已过滤]',
+    placeholderText: MEMORY_OS_POLICY.filter.defaultPlaceholderText,
     customRegexEnabled: false,
     customRegexRules: '',
-    maxTextLength: 4000,
-    minEffectiveChars: 2,
+    maxTextLength: MEMORY_OS_POLICY.filter.defaultMaxTextLength,
+    minEffectiveChars: MEMORY_OS_POLICY.filter.defaultMinEffectiveChars,
 };
 
 type JsonSegment = {
@@ -590,12 +593,18 @@ export function normalizeRecordFilterSettings(rawSettings?: Partial<RecordFilter
     );
 
     const maxTextLength = Math.max(
-        200,
-        Math.min(20000, Number(raw.maxTextLength ?? DEFAULT_RECORD_FILTER_SETTINGS.maxTextLength) || DEFAULT_RECORD_FILTER_SETTINGS.maxTextLength)
+        MEMORY_OS_POLICY.filter.maxTextLengthRange.min,
+        Math.min(
+            MEMORY_OS_POLICY.filter.maxTextLengthRange.max,
+            Number(raw.maxTextLength ?? DEFAULT_RECORD_FILTER_SETTINGS.maxTextLength) || DEFAULT_RECORD_FILTER_SETTINGS.maxTextLength,
+        ),
     );
     const minEffectiveChars = Math.max(
-        1,
-        Math.min(200, Number(raw.minEffectiveChars ?? DEFAULT_RECORD_FILTER_SETTINGS.minEffectiveChars) || DEFAULT_RECORD_FILTER_SETTINGS.minEffectiveChars)
+        MEMORY_OS_POLICY.filter.minEffectiveCharsRange.min,
+        Math.min(
+            MEMORY_OS_POLICY.filter.minEffectiveCharsRange.max,
+            Number(raw.minEffectiveChars ?? DEFAULT_RECORD_FILTER_SETTINGS.minEffectiveChars) || DEFAULT_RECORD_FILTER_SETTINGS.minEffectiveChars,
+        ),
     );
 
     const customCodeblockEnabled = raw.customCodeblockEnabled === true;
@@ -608,11 +617,12 @@ export function normalizeRecordFilterSettings(rawSettings?: Partial<RecordFilter
         customCodeblockEnabled,
         customCodeblockTags: customCodeblockTags.length > 0
             ? customCodeblockTags
-            : [...DEFAULT_RECORD_FILTER_SETTINGS.customCodeblockTags],
+            : DEFAULT_CODEBLOCK_TAGS,
         jsonExtractMode,
         jsonExtractKeys: jsonExtractKeys.length > 0 ? jsonExtractKeys : DEFAULT_JSON_KEYS,
         pureCodePolicy,
-        placeholderText: String(raw.placeholderText ?? DEFAULT_RECORD_FILTER_SETTINGS.placeholderText).trim() || DEFAULT_RECORD_FILTER_SETTINGS.placeholderText,
+        placeholderText: String(raw.placeholderText ?? MEMORY_OS_POLICY.filter.defaultPlaceholderText).trim()
+            || MEMORY_OS_POLICY.filter.defaultPlaceholderText,
         customRegexEnabled: raw.customRegexEnabled === true,
         customRegexRules: String(raw.customRegexRules ?? ''),
         maxTextLength,

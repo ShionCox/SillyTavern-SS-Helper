@@ -18,7 +18,7 @@ export interface SchemaGateResult {
  * schemaChanges 三段闸门
  * 1. Schema Gate：校验合法性、保护基础表、检查冲突
  * 2. Diff Gate：归一化 diff、去重、识别破坏性变更
- * 3. Apply Gate：事务层由 ProposalManager 负责
+ * 3. Apply Gate：事务层由 MutationManager 负责
  */
 export class SchemaGate {
     private chatStateManager: ChatStateManager;
@@ -29,7 +29,7 @@ export class SchemaGate {
 
     /**
      * 对 schemaChanges 执行 Schema Gate + Diff Gate
-     * Apply Gate 留给 ProposalManager 在事务中执行
+     * Apply Gate 留给 MutationManager 在事务中执行
      */
     async validate(
         changes: SchemaChangeProposal[],

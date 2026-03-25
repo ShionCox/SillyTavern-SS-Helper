@@ -127,7 +127,7 @@ import {
     inferVectorMode,
 } from './chat-strategy-engine';
 import { CompactionManager } from './compaction-manager';
-import { ProposalManager } from '../proposal/proposal-manager';
+import { MutationManager } from '../proposal/proposal-manager';
 import { VectorManager } from '../vector/vector-manager';
 import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay } from './memory-card-text';
 import { deleteMemoryCardsBySource, rebuildMemoryCardsFromSource, saveMemoryCardsFromFactRecord, saveMemoryCardsFromSemanticSeed, saveMemoryCardsFromSummaryEnvelope } from './memory-card-store';
@@ -302,7 +302,7 @@ function normalizeMutationPlanSnapshot(value: unknown): MemoryMutationPlanSnapsh
         }, []).slice(0, 16)
         : [];
     return {
-        source: normalizeSeedText(record.source) || 'proposal_apply',
+        source: normalizeSeedText(record.source) || 'mutation_apply',
         consumerPluginId: normalizeSeedText(record.consumerPluginId) || 'unknown_plugin',
         generatedAt: Math.max(0, Number(record.generatedAt ?? 0) || 0),
         totalItems: Math.max(0, Number(record.totalItems ?? items.length) || 0),
@@ -562,21 +562,21 @@ export class ChatStateManager {
     private dirty = false;
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly flushIntervalMs = 1000;
-    private proposalManager: ProposalManager | null = null;
+    private mutationManager: MutationManager | null = null;
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
     }
 
     /**
-     * 功能：延迟创建用于结构化长期记忆写入的 proposal 管道。
-     * @returns proposal 管道实例。
+     * 功能：延迟创建用于结构化长期记忆写入的 mutation 管道。
+     * @returns mutation 管道实例。
      */
-    private getProposalManager(): ProposalManager {
-        if (!this.proposalManager) {
-            this.proposalManager = new ProposalManager(this.chatKey, this);
+    private getMutationManager(): MutationManager {
+        if (!this.mutationManager) {
+            this.mutationManager = new MutationManager(this.chatKey, this);
         }
-        return this.proposalManager;
+        return this.mutationManager;
     }
 
     /**
@@ -1759,14 +1759,14 @@ export class ChatStateManager {
                 if (sourceLines.length > 0) {
                     const summaryId = buildManagedSummaryStableId(this.chatKey, 'maintenance_rebuild_scene');
                     await this.deleteManagedMaintenanceSummaries(summaryId);
-                    await this.getProposalManager().processWriteRequest({
+                    await this.getMutationManager().applyMutationRequest({
                         source: {
                             pluginId: MEMORY_OS_PLUGIN_ID,
                             version: '1.0.0',
                         },
                         chatKey: this.chatKey,
                         reason: 'maintenance.rebuild_summary',
-                        proposal: {
+                        mutations: {
                             summaries: [{
                                 summaryId,
                                 targetRecordKey: summaryId,
@@ -2820,10 +2820,6 @@ export class ChatStateManager {
     }
 
     /**
-     * 功能：读取兼容旧接口的摘要策略。
-     * @returns 兼容旧接口的摘要策略。
-     */
-    /**
      * 功能：读取全局摘要设置。
      * @returns 全局摘要设置。
      */
@@ -3218,14 +3214,14 @@ export class ChatStateManager {
                 if (!summary) {
                     continue;
                 }
-                await this.getProposalManager().processWriteRequest({
+                await this.getMutationManager().applyMutationRequest({
                     source: {
                         pluginId: MEMORY_OS_PLUGIN_ID,
                         version: '1.0.0',
                     },
                     chatKey: this.chatKey,
                     reason: 'mutation_repair.cleanup',
-                    proposal: {
+                    mutations: {
                         summaries: [{
                             summaryId,
                             targetRecordKey: summaryId,
@@ -3270,14 +3266,14 @@ export class ChatStateManager {
                 if (!summary) {
                     continue;
                 }
-                await this.getProposalManager().processWriteRequest({
+                await this.getMutationManager().applyMutationRequest({
                     source: {
                         pluginId: MEMORY_OS_PLUGIN_ID,
                         version: '1.0.0',
                     },
                     chatKey: this.chatKey,
                     reason: 'maintenance.cleanup',
-                    proposal: {
+                    mutations: {
                         summaries: [{
                             summaryId,
                             targetRecordKey: summaryId,
@@ -3308,14 +3304,14 @@ export class ChatStateManager {
         const lastMessageId = normalizeSeedText(recentVisible[recentVisible.length - 1]?.messageId);
         const summaryId = buildManagedSummaryStableId(this.chatKey, 'mutation_repair_scene');
         await this.deleteManagedRepairSummaries(summaryId);
-        await this.getProposalManager().processWriteRequest({
+        await this.getMutationManager().applyMutationRequest({
             source: {
                 pluginId: MEMORY_OS_PLUGIN_ID,
                 version: '1.0.0',
             },
             chatKey: this.chatKey,
             reason: 'mutation_repair.summary',
-            proposal: {
+            mutations: {
                 summaries: [{
                     summaryId,
                     targetRecordKey: summaryId,
@@ -3406,7 +3402,7 @@ export class ChatStateManager {
         if (!actorKey) {
             return '';
         }
-        actorKey = actorKey.replace(/\s+[·•]\s+(proposal_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
+        actorKey = actorKey.replace(/\s+[·•]\s+(mutation_summary|summary|memory|state|record|lifecycle)[^/]*$/i, '').trim();
         if (/^(character|assistant|role|name):/i.test(actorKey)) {
             actorKey = actorKey.split(':').slice(1).join(':').trim();
         }
@@ -3417,7 +3413,7 @@ export class ChatStateManager {
                 actorKey = tail;
             }
         }
-        actorKey = actorKey.replace(/(?:^|[\\/:])proposal_summary:[\w-]+$/i, '').trim();
+        actorKey = actorKey.replace(/(?:^|[\\/:])mutation_summary:[\w-]+$/i, '').trim();
         actorKey = actorKey.replace(/[\s._:-]+$/g, '').trim();
         return actorKey;
     }
@@ -3439,7 +3435,7 @@ export class ChatStateManager {
             return true;
         }
         return /^(world|system|global)[:/]/.test(normalized)
-            || /proposal_summary/.test(normalized);
+            || /mutation_summary/.test(normalized);
     }
 
     /**

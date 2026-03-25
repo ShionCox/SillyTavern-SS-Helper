@@ -141,7 +141,7 @@ async function testIngest(): Promise<AiSelfTestResult> {
     const start = Date.now();
     try {
         const result = await runGeneration(taskId, {
-            systemPrompt: '你是统一记忆摄取自测助手。请返回 JSON：{ "ok": true, "proposal": { "summaries": [{ "level": "message", "content": "自测摘要" }], "facts": [{ "type": "relationship", "value": "自测事实" }], "patches": [] }, "confidence": 0.9 }',
+            systemPrompt: '你是统一记忆摄取自测助手。请返回 JSON：{ "mode": "update", "updates": [{ "namespaceKey": "memory_summaries", "op": "upsert_item", "item": { "summaryId": "self_test_summary", "level": "message", "content": "自测摘要" } }, { "namespaceKey": "memory_facts", "op": "upsert_item", "item": { "factKey": "self_test_fact", "type": "relationship", "path": "/self/test", "value": { "text": "自测事实" } } }] }',
             events: SAMPLE_EVENTS_TEXT,
             schemaContext: '自测模式，请直接返回固定 JSON。',
         }, { maxTokens: 500, maxLatencyMs: 0, maxCost: 0.05 });

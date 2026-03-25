@@ -1,5 +1,5 @@
 import { db, type DBEvent } from '../db/db';
-import { ProposalManager } from '../proposal/proposal-manager';
+import { MutationManager } from '../proposal/proposal-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from './memory-trace';
 
@@ -13,7 +13,7 @@ import { advanceMemoryTraceContext, createMemoryTraceContext } from './memory-tr
  */
 export class CompactionManager {
     private chatKey: string;
-    private proposalManager: ProposalManager;
+    private mutationManager: MutationManager;
 
     /** 默认触发阈值（可通过 setThresholds 覆盖） */
     private eventThreshold = 5000;
@@ -21,7 +21,7 @@ export class CompactionManager {
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
-        this.proposalManager = new ProposalManager(chatKey);
+        this.mutationManager = new MutationManager(chatKey);
     }
 
     /**
@@ -92,7 +92,7 @@ export class CompactionManager {
             const lastEvent = groupEvents[groupEvents.length - 1]!;
 
             const summaryId = this.buildRuleSummaryId(type, groupEvents);
-            await this.proposalManager.processWriteRequest({
+            await this.mutationManager.applyMutationRequest({
                 source: {
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     version: '1.0.0',
@@ -100,7 +100,7 @@ export class CompactionManager {
                 chatKey: this.chatKey,
                 reason: 'compaction.rule_summary',
                 trace: advanceMemoryTraceContext(trace, 'memory_maintenance_started', 'maintenance'),
-                proposal: {
+                mutations: {
                     summaries: [{
                         summaryId,
                         targetRecordKey: summaryId,
@@ -216,7 +216,7 @@ export class CompactionManager {
             value,
         }));
         if (patches.length > 0) {
-            await this.proposalManager.processWriteRequest({
+            await this.mutationManager.applyMutationRequest({
                 source: {
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     version: '1.0.0',
@@ -224,7 +224,7 @@ export class CompactionManager {
                 chatKey: this.chatKey,
                 reason: 'compaction.replay_to_state',
                 trace: advanceMemoryTraceContext(trace, 'memory_maintenance_started', 'maintenance'),
-                proposal: { patches },
+                mutations: { patches },
             });
             statesUpdated = patches.length;
         }

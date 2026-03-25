@@ -25,8 +25,8 @@ export function normalizeWorldStatePatchValue(path: string, value: unknown): unk
 
     const updatedAt = typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : Date.now();
     const normalizedNode = buildWorldStateNodeFromRaw(normalizedPath, rawRecord, updatedAt);
-    const tags = Array.from(new Set([...(normalizedNode.tags ?? []), normalizedNode.scopeType, normalizedNode.stateType, 'proposal_patch'])).slice(0, 12);
-    const sourceRefs = Array.from(new Set([...(normalizedNode.sourceRefs ?? []), 'proposal_patch'])).slice(0, 8);
+    const tags = Array.from(new Set([...(normalizedNode.tags ?? []), normalizedNode.scopeType, normalizedNode.stateType, 'mutation_patch'])).slice(0, 12);
+    const sourceRefs = Array.from(new Set([...(normalizedNode.sourceRefs ?? []), 'mutation_patch'])).slice(0, 8);
     const normalizedValue: WorldStateNodeValue = {
         ...normalizedNode,
         tags,

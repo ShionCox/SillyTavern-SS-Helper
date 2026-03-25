@@ -9,6 +9,7 @@ import {
     type AutoSummaryDecisionResult,
     type SemanticChangeSummary,
 } from './auto-summary-trigger';
+import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 import { resolveSummaryRuntimeSettings } from './summary-settings-store';
 import { evaluateLorebookRelevance, loadActiveWorldInfoEntriesFromHost } from './lorebook-relevance-gate';
 import type { MetaManager } from './meta-manager';
@@ -71,9 +72,9 @@ export class IngestPlanner {
         logicalView: LogicalChatView;
         meta: IngestMetaSnapshot | null;
     }): Promise<IngestPlanBuildResult> {
-        let summaryInterval = 12;
-        let summaryWindowSize = 40;
-        let summaryEnabled = true;
+        let summaryInterval = MEMORY_OS_POLICY.extract.defaultSummaryInterval;
+        let summaryWindowSize = MEMORY_OS_POLICY.extract.defaultSummaryWindowSize;
+        let summaryEnabled = MEMORY_OS_POLICY.extract.defaultSummaryEnabled;
 
         if (this.chatStateManager) {
             const previousMetrics = await this.chatStateManager.getAdaptiveMetrics();
@@ -480,13 +481,14 @@ export class IngestPlanner {
         maxLatencyMs: number;
         maxCost: number;
     } {
+        const ingestBudgetPolicy = MEMORY_OS_POLICY.budget.ingestTiers;
         if (processingDecision.summaryTier === 'long' || processingDecision.extractScope === 'heavy') {
-            return { maxTokens: 8200, maxLatencyMs: 0, maxCost: 0.65 };
+            return { ...ingestBudgetPolicy.heavy };
         }
         if (processingDecision.summaryTier === 'short' || processingDecision.extractScope === 'medium') {
-            return { maxTokens: 3200, maxLatencyMs: 0, maxCost: 0.38 };
+            return { ...ingestBudgetPolicy.medium };
         }
-        return { maxTokens: 1800, maxLatencyMs: 0, maxCost: 0.24 };
+        return { ...ingestBudgetPolicy.light };
     }
 
     /**
@@ -842,7 +844,10 @@ export class IngestPlanner {
         );
         const longRunningSignal = stage === 'long_running';
         const shouldSummarize = Boolean(input.summaryEnabled);
-        const cooldownWindow = Math.max(8, Math.round(Number(input.extractInterval ?? 0) || 0));
+        const cooldownWindow = Math.max(
+            MEMORY_OS_POLICY.extract.longSummaryCooldownMinTurns,
+            Math.round(Number(input.extractInterval ?? 0) || 0),
+        );
         const lastSummaryTurns = Math.max(0, Number(input.cooldown?.lastLongSummaryAssistantTurnCount ?? 0));
         const turnDelta = Math.max(0, Math.round(Number(input.currentAssistantTurnCount ?? 0)) - lastSummaryTurns);
         const cooldownActive = Boolean(input.cooldown?.lastLongSummaryWindowHash)

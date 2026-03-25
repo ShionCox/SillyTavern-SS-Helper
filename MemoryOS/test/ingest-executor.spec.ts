@@ -8,12 +8,11 @@ vi.mock('../src/core/ai-json-system', async (importOriginal) => {
     return {
         ...actual,
         validateAiJsonOutput: vi.fn(),
-        applyAiJsonOutput: vi.fn(),
     };
 });
 
 import { runGeneration } from '../src/llm/memoryLlmBridge';
-import { validateAiJsonOutput, applyAiJsonOutput } from '../src/core/ai-json-system';
+import { validateAiJsonOutput } from '../src/core/ai-json-system';
 import { IngestExecutor } from '../src/core/ingest-executor';
 import type { IngestPlan } from '../src/core/ingest-types';
 
@@ -105,7 +104,7 @@ describe('ingest-executor', (): void => {
             plan: buildPlan(),
             memory: null,
         });
-        expect(result.proposalResult).toBeNull();
+        expect(result.mutationResult).toBeNull();
         expect(result.reasonCodes).toContain('task_request_failed');
     });
 
@@ -116,20 +115,12 @@ describe('ingest-executor', (): void => {
             .mockResolvedValueOnce({ ok: true, data: { any: 'payload' } });
         vi.mocked(validateAiJsonOutput as any).mockReturnValue({
             ok: true,
-            payload: { any: 'payload' },
-        });
-        vi.mocked(applyAiJsonOutput as any).mockReturnValue({
-            document: {
-                memory_proposal: {
-                    facts: [],
-                    patches: [],
-                    summaries: [],
-                    confidence: 0,
-                },
+            payload: {
+                updates: [],
             },
         });
 
-        const processProposal = vi.fn().mockResolvedValue({
+        const applyMutationDocument = vi.fn().mockResolvedValue({
             accepted: true,
             applied: {
                 factKeys: ['f1'],
@@ -142,13 +133,13 @@ describe('ingest-executor', (): void => {
         const result = await executor.execute({
             plan: buildPlan(),
             memory: {
-                proposal: { processProposal },
+                mutation: { applyMutationDocument },
                 getActiveTemplateId: async () => '',
             } as any,
         });
 
         expect(generationMock).toHaveBeenCalledTimes(2);
-        expect(processProposal).toHaveBeenCalledTimes(1);
+        expect(applyMutationDocument).toHaveBeenCalledTimes(1);
         expect(result.accepted).toBe(true);
         expect(result.factsApplied).toBe(1);
         expect(result.patchesApplied).toBe(1);

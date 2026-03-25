@@ -43,7 +43,7 @@ describe('memory mutation history manager', (): void => {
         await manager.append({
             mutationId: 'history-1',
             ts: 100,
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             consumerPluginId: 'tester',
             targetKind: 'fact',
             action: 'ADD',
@@ -79,7 +79,7 @@ describe('memory mutation history manager', (): void => {
         await manager.append({
             mutationId: 'history-1',
             ts: 100,
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             consumerPluginId: 'tester',
             targetKind: 'fact',
             action: 'MERGE',
@@ -93,7 +93,7 @@ describe('memory mutation history manager', (): void => {
         await manager.append({
             mutationId: 'history-2',
             ts: 200,
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             consumerPluginId: 'tester',
             targetKind: 'state',
             action: 'DELETE',
@@ -106,7 +106,7 @@ describe('memory mutation history manager', (): void => {
         await manager.append({
             mutationId: 'history-3',
             ts: 300,
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             consumerPluginId: 'tester',
             targetKind: 'fact',
             action: 'UPDATE',
@@ -132,7 +132,7 @@ describe('memory mutation history manager', (): void => {
         await new MemoryMutationHistoryManager('chat-other').append({
             mutationId: 'history-other',
             ts: 50,
-            source: 'proposal_apply',
+            source: 'mutation_apply',
             consumerPluginId: 'tester',
             targetKind: 'fact',
             action: 'ADD',

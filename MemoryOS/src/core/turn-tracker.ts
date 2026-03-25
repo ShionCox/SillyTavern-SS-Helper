@@ -19,7 +19,7 @@ interface ExtractionTriggerInput {
 }
 
 /**
- * 功能：维护聊天楼层追踪状态，兼容旧计数并支持逻辑视图语义楼层。
+ * 功能：维护聊天楼层追踪状态，并支持逻辑视图语义楼层。
  * 参数：
  *   chatStateManager (ChatStateManager)：聊天状态管理器。
  * 返回：
@@ -47,13 +47,6 @@ export class TurnTracker {
         return this.cachedTracker;
     }
 
-    /**
-     * 功能：兼容旧事件追加流，尝试按助手消息计数。
-     * 参数：
-     *   input (TurnCountInput)：计数输入。
-     * 返回：
-     *   Promise<boolean>：是否成功计入。
-     */
     /**
      * 功能：根据逻辑消息视图重建语义楼层与生命周期索引。
      * 参数：
@@ -162,13 +155,6 @@ export class TurnTracker {
     }
 
     /**
-     * 功能：读取兼容字段助手楼层计数。
-     * 参数：
-     *   无。
-     * 返回：
-     *   Promise<number>：兼容楼层计数。
-     */
-    /**
      * 功能：读取当前可见助手楼层计数。
      * 参数：
      *   无。
@@ -242,13 +228,6 @@ export class TurnTracker {
         this.cachedTracker = null;
     }
 
-    /**
-     * 功能：标准化文本签名用于去重。
-     * 参数：
-     *   text (string)：原始文本。
-     * 返回：
-     *   string：归一化签名。
-     */
     /**
      * 功能：计算轻量哈希值。
      * 参数：

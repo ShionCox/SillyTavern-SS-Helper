@@ -85,15 +85,6 @@ export class PluginRegistry implements STXRegistry {
     }
 
     /**
-     * 功能：兼容旧接口，按 pluginId 获取清单。
-     * @param pluginId 插件唯一标识。
-     * @returns 命中返回清单，否则返回 undefined。
-     */
-    /**
-     * 功能：兼容旧接口，列出全部插件。
-     * @returns 清单数组。
-     */
-    /**
      * 功能：判断插件是否声明某项能力。
      * @param pluginId 插件唯一标识。
      * @param capabilityType 能力类别。

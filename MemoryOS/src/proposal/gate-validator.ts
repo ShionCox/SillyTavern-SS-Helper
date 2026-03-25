@@ -1,11 +1,11 @@
 import type { WorldTemplate } from '../template/types';
-import type { GateResult, MemoryProposalDocument } from './types';
+import type { GateResult, MemoryMutationDocument } from './types';
 import { FactsManager } from '../core/facts-manager';
 import { StateManager } from '../core/state-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 
 /**
- * 功能：执行提案文档的闸门校验。
+ * 功能：执行 mutation 文档的闸门校验。
  * @param factsManager 事实管理器。
  * @param stateManager 状态管理器。
  * @returns 闸门校验器实例。
@@ -21,14 +21,14 @@ export class GateValidator {
 
     /**
      * 功能：执行全部闸门校验。
-     * @param document 提案文档。
+     * @param document mutation 文档。
      * @param activeTemplate 当前激活模板。
      * @param consumerPluginId 调用方插件标识。
      * @param allowedPlugins 已授权插件列表。
      * @returns 闸门结果列表。
      */
     async validate(
-        document: MemoryProposalDocument,
+        document: MemoryMutationDocument,
         activeTemplate: WorldTemplate | null,
         consumerPluginId: string,
         allowedPlugins: string[]
@@ -41,13 +41,13 @@ export class GateValidator {
     }
 
     /**
-     * 功能：校验提案文档的结构是否合法。
-     * @param document 提案文档。
+     * 功能：校验 mutation 文档的结构是否合法。
+     * @param document mutation 文档。
      * @param activeTemplate 当前激活模板。
      * @returns Schema 闸门结果。
      */
     private validateSchema(
-        document: MemoryProposalDocument,
+        document: MemoryMutationDocument,
         activeTemplate: WorldTemplate | null
     ): GateResult {
         const errors: string[] = [];
@@ -111,11 +111,11 @@ export class GateValidator {
     }
 
     /**
-     * 功能：校验提案文档是否包含真实变化。
-     * @param document 提案文档。
+     * 功能：校验 mutation 文档是否包含真实变化。
+     * @param document mutation 文档。
      * @returns Diff 闸门结果。
      */
-    private async validateDiff(document: MemoryProposalDocument): Promise<GateResult> {
+    private async validateDiff(document: MemoryMutationDocument): Promise<GateResult> {
         const errors: string[] = [];
         const { facts, patches, summaries } = document;
 
@@ -159,7 +159,7 @@ export class GateValidator {
         }
 
         if (!hasChange) {
-            errors.push('提案内容与现有数据完全一致，没有实际变化');
+            errors.push('mutation 内容与现有数据完全一致，没有实际变化');
         }
 
         return { passed: hasChange, gate: 'diff', errors };

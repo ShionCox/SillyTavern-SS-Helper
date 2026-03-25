@@ -97,7 +97,7 @@ export interface SummaryProposal {
     };
 }
 
-export interface MemoryProposalDocument {
+export interface MemoryMutationDocument {
     facts?: FactProposal[];
     patches?: PatchProposal[];
     summaries?: SummaryProposal[];
@@ -140,7 +140,7 @@ export interface GateResult {
     errors: string[];
 }
 
-export interface ProposalResult {
+export interface MutationResult {
     accepted: boolean;
     applied: {
         factKeys: string[];
@@ -160,10 +160,10 @@ export interface ProposalResult {
     mutationPlan?: MemoryMutationPlanSnapshot | null;
 }
 
-export interface WriteRequest {
+export interface MutationRequest {
     source: { pluginId: string; version: string };
     chatKey: string;
-    proposal: {
+    mutations: {
         facts?: FactProposal[];
         patches?: PatchProposal[];
         summaries?: SummaryProposal[];
@@ -2084,9 +2084,9 @@ export interface MemorySDK {
         kickOffExtraction(): Promise<void>;
     };
 
-    proposal: {
-        processProposal(document: MemoryProposalDocument, consumerPluginId: string): Promise<ProposalResult>;
-        requestWrite(request: WriteRequest): Promise<ProposalResult>;
+    mutation: {
+        applyMutationDocument(document: MemoryMutationDocument, consumerPluginId: string): Promise<MutationResult>;
+        applyMutationRequest(request: MutationRequest): Promise<MutationResult>;
         grantPermission(pluginId: string): void;
         revokePermission(pluginId: string): void;
     };
