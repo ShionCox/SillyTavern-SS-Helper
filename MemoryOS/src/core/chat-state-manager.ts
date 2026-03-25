@@ -3539,6 +3539,9 @@ export class ChatStateManager {
                 relationshipFacts: normalizeRelations(normalizedProfile.relationshipFacts),
                 items: normalizeAssets(normalizedProfile.items, 'item'),
                 equipments: normalizeAssets(normalizedProfile.equipments, 'equipment'),
+                currentLocation: normalizeMemoryText(normalizedProfile.currentLocation),
+                organizationMemberships: normalizeList(normalizedProfile.organizationMemberships),
+                activeTasks: normalizeList(normalizedProfile.activeTasks),
                 updatedAt: Math.max(0, Number(normalizedProfile.updatedAt ?? 0) || 0),
             };
         });
@@ -3603,6 +3606,9 @@ export class ChatStateManager {
                 relationshipFacts: [],
                 items: [],
                 equipments: [],
+                currentLocation: '',
+                organizationMemberships: [],
+                activeTasks: [],
                 updatedAt: now,
             };
             profileMap.set(actorKey, created);
@@ -3713,6 +3719,11 @@ export class ChatStateManager {
                     Number(profileSeed.updatedAt ?? now) || now,
                 );
             });
+            if (normalizeMemoryText(profileSeed.currentLocation)) {
+                profile.currentLocation = normalizeMemoryText(profileSeed.currentLocation);
+            }
+            pushTextFacts(profile.organizationMemberships, dedupeTextList(profileSeed.organizationMemberships ?? []));
+            pushTextFacts(profile.activeTasks, dedupeTextList(profileSeed.activeTasks ?? []));
             profile.updatedAt = Math.max(profile.updatedAt, Number(profileSeed.updatedAt ?? now) || now);
         });
         if (seed?.identitySeed) {
@@ -3723,7 +3734,7 @@ export class ChatStateManager {
                 pushTextFacts(profile.identityFacts, dedupeTextList([
                     ...(seed.identitySeed.identity ?? []),
                     normalizeMemoryText(seed.aiSummary?.roleSummary),
-                    ...(seed.aiSummary?.characterGoals ?? []),
+                    ...(seed.aiSummary?.tasks ?? []),
                 ]));
                 (seed.identitySeed.relationshipAnchors ?? []).forEach((text: string): void => {
                     pushRelationship(profile, {
@@ -3940,6 +3951,11 @@ export class ChatStateManager {
             existing.relationshipFacts = existing.relationshipFacts.concat(profile.relationshipFacts);
             existing.items = existing.items.concat(profile.items);
             existing.equipments = existing.equipments.concat(profile.equipments);
+            if (normalizeMemoryText(profile.currentLocation)) {
+                existing.currentLocation = normalizeMemoryText(profile.currentLocation);
+            }
+            existing.organizationMemberships = dedupeTextList(existing.organizationMemberships.concat(profile.organizationMemberships));
+            existing.activeTasks = dedupeTextList(existing.activeTasks.concat(profile.activeTasks));
             existing.updatedAt = Math.max(existing.updatedAt, profile.updatedAt);
         });
 

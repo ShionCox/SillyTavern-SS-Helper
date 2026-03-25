@@ -2,7 +2,7 @@ import type { WorldStateNodeValue } from '../types';
 import { buildWorldStateNodeFromRaw, normalizeWorldStateText } from './world-state-node';
 
 function shouldNormalizeWorldStatePath(path: string): boolean {
-    return /^\/semantic\/(catalog|rules|constraints|world|characters)\//i.test(normalizeWorldStateText(path));
+    return /^\/semantic\/(catalog|rules|constraints|world|characters|tasks|events)\//i.test(normalizeWorldStateText(path));
 }
 
 export function normalizeWorldStatePatchValue(path: string, value: unknown): unknown {

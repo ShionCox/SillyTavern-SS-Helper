@@ -1,11 +1,15 @@
 import type {
     ChatSemanticSeed,
     SemanticAiSummary,
+    SemanticMajorEventDetailSummary,
+    SemanticOrganizationDetailSummary,
     SemanticAiRoleAssetSummary,
     SemanticAiRoleProfileSummary,
     SemanticAiRoleRelationshipSummary,
     SemanticCatalogEntrySummary,
     SemanticKnowledgeLevel,
+    SemanticTaskDetailSummary,
+    SemanticTaskStatus,
     SemanticWorldFacetEntry,
     IdentitySeed,
     RoleAssetEntry,
@@ -30,21 +34,22 @@ export interface EnhanceSemanticSeedWithAiOptions {
 type SemanticSeedAiSummary = Omit<SemanticAiSummary, 'generatedAt' | 'source'>;
 
 const SEMANTIC_AI_JSON_NAMESPACE_KEYS = ['semantic_summary', 'role'] as const;
+const TASK_STATUS_VALUES: SemanticTaskStatus[] = ['pending', 'in_progress', 'blocked', 'completed'];
 
 const NATION_PATTERN = /国家|政体|王国|帝国|联邦|共和国|王朝|nation|country|kingdom|empire|republic|federation|realm/i;
 const REGION_PATTERN = /区域|地理|大陆|边境|北境|南境|西境|东境|州|郡|领|region|area|province|territory|continent|frontier/i;
 const CITY_PATTERN = /城市|都城|城邦|主城|镇|村|聚落|港口|港城|城镇|city|capital|metropolis|town|village|settlement|harbor/i;
 const LOCATION_PATTERN = /地点|场所|遗迹|据点|神殿|学院|基地|空间站|房间|森林|峡谷|湖泊|location|place|site|ruin|outpost|temple|academy|base|station|room|forest|canyon|lake/i;
-const FACTION_PATTERN = /组织|阵营|派系|公会|教团|军团|学派|议会|协会|结社|faction|guild|order|clan|alliance|council|union/i;
+const ORGANIZATION_PATTERN = /组织|阵营|派系|公会|教团|军团|学派|议会|协会|结社|organization|faction|guild|order|clan|alliance|council|union/i;
 const RULE_PATTERN = /规则|法则|法律|法典|条例|机制|运作规律|法理|rule|law|canon|principle|system/i;
 const CONSTRAINT_PATTERN = /限制|禁忌|不能|不可|不得|禁止|绝不|唯一|固定|必须遵守|constraint|taboo|restriction|forbidden|must not/i;
 const CALENDAR_PATTERN = /历法|纪年|历年|年号|月相|节气|calendar|chronology|era|dating system/i;
 const CURRENCY_PATTERN = /货币|钱币|金币|银币|铜币|纸钞|税制|汇兑|面额|currency|coin|money|tax|exchange/i;
 const SOCIAL_PATTERN = /阶级|等级|身份制度|政治制度|社会制度|贵族制|君主制|共和制|议会制|social system|hierarchy|caste|class/i;
 const CULTURE_PATTERN = /文化|习俗|风俗|礼仪|传统|节庆|祭典|成年礼|婚俗|葬礼|culture|custom|tradition|ritual|festival/i;
-const HISTORY_PATTERN = /历史|往事|旧日|起源|战争|历史事件|history|origin|past|war/i;
+const EVENT_PATTERN = /历史|往事|旧日|起源|战争|历史事件|重大事件|event|history|origin|past|war/i;
 const DANGER_PATTERN = /危险|威胁|风险|灾难|危机|danger|threat|risk|crisis/i;
-const GOAL_PATTERN = /目标|想要|必须|计划|打算|任务|goal|objective|intent|mission|plan/i;
+const TASK_PATTERN = /目标|想要|必须|计划|打算|任务|task|goal|objective|intent|mission|plan/i;
 const RELATIONSHIP_PATTERN = /关系|信任|敌对|盟友|同伴|羁绊|恋人|导师|relationship|bond|trust|ally|enemy/i;
 const IDENTITY_PATTERN = /身份|血统|别名|称号|职业|来历|出身|identity|alias|title|background|lineage/i;
 const ENTITY_PATTERN = /机构|设施|装置|神器|遗物|系统核心|核心装置|entity|artifact|relic|device|institution/i;
@@ -186,9 +191,121 @@ function normalizeAiRoleProfileArray(value: unknown): SemanticAiRoleProfileSumma
             relationshipFacts: normalizeAiRoleRelationshipArray(record.relationshipFacts),
             items: normalizeAiRoleAssetArray(record.items).filter((asset: SemanticAiRoleAssetSummary): boolean => asset.kind === 'item'),
             equipments: normalizeAiRoleAssetArray(record.equipments).filter((asset: SemanticAiRoleAssetSummary): boolean => asset.kind === 'equipment'),
+            currentLocation: normalizeText(record.currentLocation),
+            organizationMemberships: toStringArray(record.organizationMemberships, 12),
+            activeTasks: toStringArray(record.activeTasks, 16),
         });
     });
     return result.slice(0, 24);
+}
+
+function normalizeTaskStatus(value: unknown, fallback: SemanticTaskStatus = 'pending'): SemanticTaskStatus {
+    const normalized = normalizeText(value).toLowerCase();
+    return TASK_STATUS_VALUES.includes(normalized as SemanticTaskStatus) ? normalized as SemanticTaskStatus : fallback;
+}
+
+function normalizeOrganizationDetailArray(value: unknown): SemanticOrganizationDetailSummary[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: SemanticOrganizationDetailSummary[] = [];
+    const seen = new Set<string>();
+    value.forEach((item: unknown): void => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return;
+        }
+        const record = item as Record<string, unknown>;
+        const name = normalizeText(record.name);
+        const summary = normalizeText(record.summary);
+        if (!name && !summary) {
+            return;
+        }
+        const signature = `${normalizeText(name || summary).toLowerCase()}`;
+        if (seen.has(signature)) {
+            return;
+        }
+        seen.add(signature);
+        result.push({
+            name: name || extractNamedLeadSegment(summary),
+            summary: summary || name,
+            aliases: toStringArray(record.aliases, 8),
+            parentOrganizationName: normalizeText(record.parentOrganizationName),
+            ownershipStatus: normalizeText(record.ownershipStatus),
+            relatedActorKeys: toStringArray(record.relatedActorKeys, 16),
+            locationName: normalizeText(record.locationName),
+        });
+    });
+    return result.filter((item: SemanticOrganizationDetailSummary): boolean => Boolean(item.name)).slice(0, 24);
+}
+
+function normalizeTaskDetailArray(value: unknown): SemanticTaskDetailSummary[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: SemanticTaskDetailSummary[] = [];
+    const seen = new Set<string>();
+    value.forEach((item: unknown): void => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return;
+        }
+        const record = item as Record<string, unknown>;
+        const title = normalizeText(record.title);
+        const summary = normalizeText(record.summary);
+        if (!title && !summary) {
+            return;
+        }
+        const signature = `${normalizeText(title || summary).toLowerCase()}`;
+        if (seen.has(signature)) {
+            return;
+        }
+        seen.add(signature);
+        result.push({
+            title: title || extractNamedLeadSegment(summary),
+            summary: summary || title,
+            status: normalizeTaskStatus(record.status, 'pending'),
+            objective: normalizeText(record.objective),
+            completionCriteria: normalizeText(record.completionCriteria),
+            progressNote: normalizeText(record.progressNote),
+            ownerActorKeys: toStringArray(record.ownerActorKeys, 16),
+            organizationNames: toStringArray(record.organizationNames, 12),
+            locationName: normalizeText(record.locationName),
+        });
+    });
+    return result.filter((item: SemanticTaskDetailSummary): boolean => Boolean(item.title)).slice(0, 32);
+}
+
+function normalizeMajorEventDetailArray(value: unknown): SemanticMajorEventDetailSummary[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: SemanticMajorEventDetailSummary[] = [];
+    const seen = new Set<string>();
+    value.forEach((item: unknown): void => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return;
+        }
+        const record = item as Record<string, unknown>;
+        const title = normalizeText(record.title);
+        const summary = normalizeText(record.summary);
+        if (!title && !summary) {
+            return;
+        }
+        const signature = `${normalizeText(title || summary).toLowerCase()}`;
+        if (seen.has(signature)) {
+            return;
+        }
+        seen.add(signature);
+        result.push({
+            title: title || extractNamedLeadSegment(summary),
+            summary: summary || title,
+            phase: normalizeText(record.phase),
+            locationName: normalizeText(record.locationName),
+            relatedActorKeys: toStringArray(record.relatedActorKeys, 16),
+            organizationNames: toStringArray(record.organizationNames, 12),
+            impact: normalizeText(record.impact),
+        });
+    });
+    return result.filter((item: SemanticMajorEventDetailSummary): boolean => Boolean(item.title)).slice(0, 32);
 }
 
 /**
@@ -207,15 +324,15 @@ function createEmptySemanticSeedAiSummary(): SemanticSeedAiSummary {
         entities: [],
         nations: [],
         regions: [],
-        factions: [],
+        organizations: [],
         calendarSystems: [],
         currencySystems: [],
         socialSystems: [],
         culturalPractices: [],
-        historicalEvents: [],
+        majorEvents: [],
         dangers: [],
         otherWorldDetails: [],
-        characterGoals: [],
+        tasks: [],
         relationshipFacts: [],
         catchphrases: [],
         relationshipAnchors: [],
@@ -224,11 +341,13 @@ function createEmptySemanticSeedAiSummary(): SemanticSeedAiSummary {
         regionDetails: [],
         cityDetails: [],
         locationDetails: [],
+        organizationDetails: [],
+        taskDetails: [],
+        majorEventDetails: [],
         ruleDetails: [],
         constraintDetails: [],
         socialSystemDetails: [],
         culturalPracticeDetails: [],
-        historicalEventDetails: [],
         dangerDetails: [],
         entityDetails: [],
         otherWorldDetailDetails: [],
@@ -256,15 +375,15 @@ function buildSemanticSummaryNamespace(summary?: SemanticAiSummary | null): Reco
         entities: uniqueTexts(12, current?.entities ?? []),
         nations: normalizeNationSummaryTexts(current?.nations ?? []),
         regions: normalizeNamedSummaryTexts(current?.regions ?? []),
-        factions: uniqueTexts(12, current?.factions ?? []),
+        organizations: uniqueTexts(12, current?.organizations ?? []),
         calendarSystems: uniqueTexts(12, current?.calendarSystems ?? []),
         currencySystems: uniqueTexts(12, current?.currencySystems ?? []),
         socialSystems: uniqueTexts(12, current?.socialSystems ?? []),
         culturalPractices: uniqueTexts(12, current?.culturalPractices ?? []),
-        historicalEvents: uniqueTexts(12, current?.historicalEvents ?? []),
+        majorEvents: uniqueTexts(12, current?.majorEvents ?? []),
         dangers: uniqueTexts(12, current?.dangers ?? []),
         otherWorldDetails: uniqueTexts(12, current?.otherWorldDetails ?? []),
-        characterGoals: uniqueTexts(8, current?.characterGoals ?? []),
+        tasks: uniqueTexts(16, current?.tasks ?? []),
         relationshipFacts: uniqueTexts(8, current?.relationshipFacts ?? []),
         catchphrases: uniqueTexts(8, current?.catchphrases ?? []),
         relationshipAnchors: uniqueTexts(8, current?.relationshipAnchors ?? []),
@@ -273,11 +392,13 @@ function buildSemanticSummaryNamespace(summary?: SemanticAiSummary | null): Reco
         regionDetails: normalizeCatalogEntrySummaryArray(current?.regionDetails ?? []),
         cityDetails: normalizeCatalogEntrySummaryArray(current?.cityDetails ?? []),
         locationDetails: normalizeCatalogEntrySummaryArray(current?.locationDetails ?? []),
+        organizationDetails: normalizeOrganizationDetailArray(current?.organizationDetails ?? []),
+        taskDetails: normalizeTaskDetailArray(current?.taskDetails ?? []),
+        majorEventDetails: normalizeMajorEventDetailArray(current?.majorEventDetails ?? []),
         ruleDetails: normalizeWorldFacetEntryArray(current?.ruleDetails ?? [], 'rule'),
         constraintDetails: normalizeWorldFacetEntryArray(current?.constraintDetails ?? [], 'constraint'),
         socialSystemDetails: normalizeWorldFacetEntryArray(current?.socialSystemDetails ?? [], 'social'),
         culturalPracticeDetails: normalizeWorldFacetEntryArray(current?.culturalPracticeDetails ?? [], 'culture'),
-        historicalEventDetails: normalizeWorldFacetEntryArray(current?.historicalEventDetails ?? [], 'history'),
         dangerDetails: normalizeWorldFacetEntryArray(current?.dangerDetails ?? [], 'danger'),
         entityDetails: normalizeWorldFacetEntryArray(current?.entityDetails ?? [], 'entity'),
         otherWorldDetailDetails: normalizeWorldFacetEntryArray(current?.otherWorldDetailDetails ?? [], 'other'),
@@ -317,6 +438,9 @@ function buildRoleNamespace(seed: ChatSemanticSeed): Record<string, unknown> {
                 name: normalizeText(item.name),
                 detail: normalizeText(item.detail),
             })),
+            currentLocation: normalizeText(profile.currentLocation),
+            organizationMemberships: uniqueTexts(12, profile.organizationMemberships ?? []),
+            activeTasks: uniqueTexts(16, profile.activeTasks ?? []),
             updatedAt: Number(profile.updatedAt ?? 0) || 0,
         };
         return result;
@@ -432,6 +556,9 @@ function extractAiJsonSummaryRecord(value: unknown): Record<string, unknown> | n
             relationshipFacts: Array.isArray(profile.relationshipFacts) ? profile.relationshipFacts : [],
             items: Array.isArray(profile.items) ? profile.items : [],
             equipments: Array.isArray(profile.equipments) ? profile.equipments : [],
+            currentLocation: normalizeText(profile.currentLocation),
+            organizationMemberships: toStringArray(profile.organizationMemberships, 12),
+            activeTasks: toStringArray(profile.activeTasks, 16),
         };
     });
     return {
@@ -467,7 +594,7 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
         || Array.isArray(direct.cities)
         || Array.isArray(direct.nations)
         || Array.isArray(direct.regions)
-        || Array.isArray(direct.factions)
+        || Array.isArray(direct.organizations)
         || Array.isArray(direct.calendarSystems)
         || Array.isArray(direct.currencySystems)
         || Array.isArray(direct.socialSystems)
@@ -481,7 +608,9 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
         || Array.isArray(direct.constraintDetails)
         || Array.isArray(direct.socialSystemDetails)
         || Array.isArray(direct.culturalPracticeDetails)
-        || Array.isArray(direct.historicalEventDetails)
+        || Array.isArray(direct.organizationDetails)
+        || Array.isArray(direct.taskDetails)
+        || Array.isArray(direct.majorEventDetails)
         || Array.isArray(direct.dangerDetails)
         || Array.isArray(direct.entityDetails)
         || Array.isArray(direct.otherWorldDetailDetails)
@@ -498,15 +627,15 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
             entities: toStringArray(direct.entities, 12),
             nations: normalizeNationSummaryTexts(toStringArray(direct.nations, 12)),
             regions: normalizeNamedSummaryTexts(toStringArray(direct.regions, 12)),
-            factions: toStringArray(direct.factions, 12),
+            organizations: toStringArray(direct.organizations, 12),
             calendarSystems: toStringArray(direct.calendarSystems, 12),
             currencySystems: toStringArray(direct.currencySystems, 12),
             socialSystems: toStringArray(direct.socialSystems, 12),
             culturalPractices: toStringArray(direct.culturalPractices, 12),
-            historicalEvents: toStringArray(direct.historicalEvents, 12),
+            majorEvents: toStringArray(direct.majorEvents, 12),
             dangers: toStringArray(direct.dangers, 12),
             otherWorldDetails: toStringArray(direct.otherWorldDetails, 12),
-            characterGoals: toStringArray(direct.characterGoals, 8),
+            tasks: toStringArray(direct.tasks, 16),
             relationshipFacts: toStringArray(direct.relationshipFacts, 8),
             catchphrases: toStringArray(direct.catchphrases, 8),
             relationshipAnchors: toStringArray(direct.relationshipAnchors, 8),
@@ -515,11 +644,13 @@ export function normalizeSemanticSeedAiSummary(value: unknown): SemanticSeedAiSu
             regionDetails: normalizeCatalogEntrySummaryArray(direct.regionDetails),
             cityDetails: normalizeCatalogEntrySummaryArray(direct.cityDetails),
             locationDetails: normalizeCatalogEntrySummaryArray(direct.locationDetails),
+            organizationDetails: normalizeOrganizationDetailArray(direct.organizationDetails),
+            taskDetails: normalizeTaskDetailArray(direct.taskDetails),
+            majorEventDetails: normalizeMajorEventDetailArray(direct.majorEventDetails),
             ruleDetails: normalizeWorldFacetEntryArray(direct.ruleDetails, 'rule'),
             constraintDetails: normalizeWorldFacetEntryArray(direct.constraintDetails, 'constraint'),
             socialSystemDetails: normalizeWorldFacetEntryArray(direct.socialSystemDetails, 'social'),
             culturalPracticeDetails: normalizeWorldFacetEntryArray(direct.culturalPracticeDetails, 'culture'),
-            historicalEventDetails: normalizeWorldFacetEntryArray(direct.historicalEventDetails, 'history'),
             dangerDetails: normalizeWorldFacetEntryArray(direct.dangerDetails, 'danger'),
             entityDetails: normalizeWorldFacetEntryArray(direct.entityDetails, 'entity'),
             otherWorldDetailDetails: normalizeWorldFacetEntryArray(direct.otherWorldDetailDetails, 'other'),
@@ -693,7 +824,7 @@ function normalizeWorldFacetEntryArray(value: unknown, fallbackFacet: SemanticWo
             || facetRaw === 'constraint'
             || facetRaw === 'social'
             || facetRaw === 'culture'
-            || facetRaw === 'history'
+            || facetRaw === 'event'
             || facetRaw === 'danger'
             || facetRaw === 'entity'
             || facetRaw === 'other'
@@ -705,7 +836,7 @@ function normalizeWorldFacetEntryArray(value: unknown, fallbackFacet: SemanticWo
             || scopeTypeRaw === 'region'
             || scopeTypeRaw === 'city'
             || scopeTypeRaw === 'location'
-            || scopeTypeRaw === 'faction'
+            || scopeTypeRaw === 'organization'
             || scopeTypeRaw === 'item'
             || scopeTypeRaw === 'character'
             || scopeTypeRaw === 'scene'
@@ -746,6 +877,54 @@ function shouldUseAiSummary(seed: ChatSemanticSeed): boolean {
     return description.length >= 24 || scenario.length >= 24 || worldHints.length >= 3;
 }
 
+function buildSummaryReferenceBlock(seed: ChatSemanticSeed): string {
+    const ai = seed.aiSummary;
+    const roleProfiles = seed.roleProfileSeeds ?? {};
+    const roleLocationRows = Object.entries(roleProfiles)
+        .map(([actorKey, profile]: [string, RoleProfile]): string => {
+            const label = normalizeText(profile.displayName) || normalizeText(actorKey);
+            const location = normalizeText(profile.currentLocation);
+            return `${label}:${location || '未记录'}`;
+        })
+        .filter((row: string): boolean => Boolean(normalizeText(row)));
+    const locationCatalog = uniqueTexts(
+        48,
+        seed.worldSeed.locations,
+        ai?.locations ?? [],
+        Object.values(roleProfiles).map((profile: RoleProfile): string => normalizeText(profile.currentLocation)),
+        (ai?.organizationDetails ?? []).map((item: SemanticOrganizationDetailSummary): string => normalizeText(item.locationName)),
+        (ai?.taskDetails ?? []).map((item: SemanticTaskDetailSummary): string => normalizeText(item.locationName)),
+        (ai?.majorEventDetails ?? []).map((item: SemanticMajorEventDetailSummary): string => normalizeText(item.locationName)),
+    );
+    const incompleteTaskRows = (ai?.taskDetails ?? [])
+        .filter((item: SemanticTaskDetailSummary): boolean => normalizeTaskStatus(item.status, 'pending') !== 'completed')
+        .map((item: SemanticTaskDetailSummary): string => {
+            const owners = uniqueTexts(8, item.ownerActorKeys).join('、') || '未指定';
+            const status = normalizeTaskStatus(item.status, 'pending');
+            return `${normalizeText(item.title) || normalizeText(item.summary) || '未命名任务'}|状态=${status}|负责=${owners}`;
+        });
+    const organizationRows = (ai?.organizationDetails ?? [])
+        .map((item: SemanticOrganizationDetailSummary): string => {
+            const members = uniqueTexts(8, item.relatedActorKeys).join('、') || '无';
+            const ownership = normalizeText(item.ownershipStatus) || '未记录';
+            const parent = normalizeText(item.parentOrganizationName) || '无';
+            return `${normalizeText(item.name) || '未命名组织'}|归属=${ownership}|上级=${parent}|关联角色=${members}`;
+        });
+    const majorEventRows = (ai?.majorEventDetails ?? [])
+        .map((item: SemanticMajorEventDetailSummary): string => {
+            const phase = normalizeText(item.phase) || '未分期';
+            return `${normalizeText(item.title) || normalizeText(item.summary) || '未命名事件'}|阶段=${phase}`;
+        });
+    return [
+        '状态参考块（用于比对更新）',
+        `全部角色当前位置：${roleLocationRows.length > 0 ? roleLocationRows.join('；') : '暂无'}`,
+        `全部地点名录：${locationCatalog.length > 0 ? locationCatalog.join('、') : '暂无'}`,
+        `未完成任务：${incompleteTaskRows.length > 0 ? incompleteTaskRows.join('；') : '暂无'}`,
+        `势力组织名录：${organizationRows.length > 0 ? organizationRows.join('；') : '暂无'}`,
+        `重大事件名录：${majorEventRows.length > 0 ? majorEventRows.join('；') : '暂无'}`,
+    ].join('\n');
+}
+
 function buildPromptPayload(seed: ChatSemanticSeed): string {
     const characterCore = (seed.characterCore ?? {}) as Record<string, unknown>;
     const lorebookSnippets = uniqueSnippetTexts(
@@ -773,6 +952,7 @@ function buildPromptPayload(seed: ChatSemanticSeed): string {
             ? `世界书条目摘录：\n${lorebookSnippets.join('\n\n')}`
             : '世界书条目摘录：无',
         `现有风格线索：${uniqueTexts(10, seed.styleSeed.cues).join('；') || '无'}`,
+        buildSummaryReferenceBlock(seed),
     ].join('\n');
 }
 
@@ -838,6 +1018,9 @@ function convertAiRoleProfileToSeed(item: SemanticAiRoleProfileSummary): RolePro
         relationshipFacts: convertAiRelationshipsToRoleFacts(item.relationshipFacts),
         items: convertAiAssetsToRoleAssets(item.items).filter((asset: RoleAssetEntry): boolean => asset.kind === 'item'),
         equipments: convertAiAssetsToRoleAssets(item.equipments).filter((asset: RoleAssetEntry): boolean => asset.kind === 'equipment'),
+        currentLocation: normalizeText(item.currentLocation),
+        organizationMemberships: uniqueTexts(12, item.organizationMemberships),
+        activeTasks: uniqueTexts(16, item.activeTasks),
         updatedAt: Date.now(),
     };
 }
@@ -912,6 +1095,24 @@ function mergeRoleProfileSeed(base: RoleProfile, incoming: RoleProfile): RolePro
         });
         return result.slice(0, 24);
     };
+    const resolveCurrentLocation = (): string => {
+        const baseLocation = normalizeText(base.currentLocation);
+        const incomingLocation = normalizeText(incoming.currentLocation);
+        if (!incomingLocation || incomingLocation === baseLocation) {
+            return baseLocation;
+        }
+        const hasDirectEvidence = incoming.relationshipFacts.some((item: RoleRelationshipFact): boolean => {
+            const joined = `${normalizeText(item.label)} ${normalizeText(item.detail)}`;
+            if (!joined) {
+                return false;
+            }
+            if (!/地点|位于|驻留|常在|出没|移动|抵达|前往|返回|location|arrive|move|travel|return/.test(joined)) {
+                return false;
+            }
+            return joined.includes(incomingLocation) || /地点|location/.test(normalizeText(item.label));
+        });
+        return hasDirectEvidence ? incomingLocation : baseLocation;
+    };
     return {
         actorKey: normalizeText(base.actorKey) || normalizeText(incoming.actorKey),
         displayName: normalizeText(base.displayName) || normalizeText(incoming.displayName),
@@ -921,6 +1122,9 @@ function mergeRoleProfileSeed(base: RoleProfile, incoming: RoleProfile): RolePro
         relationshipFacts: mergeRelations(base.relationshipFacts, incoming.relationshipFacts),
         items: mergeAssets(base.items, incoming.items),
         equipments: mergeAssets(base.equipments, incoming.equipments),
+        currentLocation: resolveCurrentLocation(),
+        organizationMemberships: uniqueTexts(12, base.organizationMemberships, incoming.organizationMemberships),
+        activeTasks: uniqueTexts(16, base.activeTasks, incoming.activeTasks),
         updatedAt: Math.max(Number(base.updatedAt ?? 0) || 0, Number(incoming.updatedAt ?? 0) || 0),
     };
 }
@@ -957,15 +1161,15 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         entities: uniqueTexts(12, summary.entities),
         nations: normalizeNationSummaryTexts(summary.nations),
         regions: normalizeNamedSummaryTexts(summary.regions),
-        factions: uniqueTexts(12, summary.factions),
+        organizations: uniqueTexts(12, summary.organizations),
         calendarSystems: uniqueTexts(12, summary.calendarSystems),
         currencySystems: uniqueTexts(12, summary.currencySystems),
         socialSystems: uniqueTexts(12, summary.socialSystems),
         culturalPractices: uniqueTexts(12, summary.culturalPractices),
-        historicalEvents: uniqueTexts(12, summary.historicalEvents),
+        majorEvents: uniqueTexts(12, summary.majorEvents),
         dangers: uniqueTexts(12, summary.dangers),
         otherWorldDetails: uniqueTexts(12, summary.otherWorldDetails),
-        characterGoals: uniqueTexts(8, summary.characterGoals),
+        tasks: uniqueTexts(16, summary.tasks),
         relationshipFacts: uniqueTexts(8, summary.relationshipFacts),
         catchphrases: uniqueTexts(8, summary.catchphrases),
         relationshipAnchors: uniqueTexts(8, summary.relationshipAnchors),
@@ -974,11 +1178,13 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
         regionDetails: normalizeCatalogEntrySummaryArray(summary.regionDetails),
         cityDetails: normalizeCatalogEntrySummaryArray(summary.cityDetails),
         locationDetails: normalizeCatalogEntrySummaryArray(summary.locationDetails),
+        organizationDetails: normalizeOrganizationDetailArray(summary.organizationDetails),
+        taskDetails: normalizeTaskDetailArray(summary.taskDetails),
+        majorEventDetails: normalizeMajorEventDetailArray(summary.majorEventDetails),
         ruleDetails: normalizeWorldFacetEntryArray(summary.ruleDetails, 'rule'),
         constraintDetails: normalizeWorldFacetEntryArray(summary.constraintDetails, 'constraint'),
         socialSystemDetails: normalizeWorldFacetEntryArray(summary.socialSystemDetails, 'social'),
         culturalPracticeDetails: normalizeWorldFacetEntryArray(summary.culturalPracticeDetails, 'culture'),
-        historicalEventDetails: normalizeWorldFacetEntryArray(summary.historicalEventDetails, 'history'),
         dangerDetails: normalizeWorldFacetEntryArray(summary.dangerDetails, 'danger'),
         entityDetails: normalizeWorldFacetEntryArray(summary.entityDetails, 'entity'),
         otherWorldDetailDetails: normalizeWorldFacetEntryArray(summary.otherWorldDetailDetails, 'other'),
@@ -991,6 +1197,9 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
     aiSummary.regions = uniqueTexts(12, aiSummary.regions, aiSummary.regionDetails.map((item): string => item.name));
     aiSummary.cities = uniqueTexts(12, aiSummary.cities, aiSummary.cityDetails.map((item): string => item.name));
     aiSummary.locations = uniqueTexts(12, aiSummary.locations, aiSummary.locationDetails.map((item): string => item.name));
+    aiSummary.organizations = uniqueTexts(16, aiSummary.organizations, aiSummary.organizationDetails.map((item): string => item.name));
+    aiSummary.tasks = uniqueTexts(24, aiSummary.tasks, aiSummary.taskDetails.map((item): string => item.title));
+    aiSummary.majorEvents = uniqueTexts(24, aiSummary.majorEvents, aiSummary.majorEventDetails.map((item): string => item.title));
     const nextRoleProfileSeeds = Object.entries(seed.roleProfileSeeds ?? {}).reduce<Record<string, RoleProfile>>((result: Record<string, RoleProfile>, [actorKey, profile]: [string, RoleProfile]): Record<string, RoleProfile> => {
         const normalizedActorKey = normalizeAiActorKey(actorKey || profile.actorKey);
         if (normalizedActorKey) {
@@ -1020,6 +1229,52 @@ export function mergeAiSummary(seed: ChatSemanticSeed, summary: SemanticSeedAiSu
                 nextIdentitySeed,
             );
         }
+    });
+    const taskByActor = new Map<string, string[]>();
+    aiSummary.taskDetails
+        .filter((item: SemanticTaskDetailSummary): boolean => normalizeTaskStatus(item.status, 'pending') !== 'completed')
+        .forEach((item: SemanticTaskDetailSummary): void => {
+            const title = normalizeText(item.title) || normalizeText(item.summary);
+            if (!title) {
+                return;
+            }
+            item.ownerActorKeys.forEach((ownerKey: string): void => {
+                const actorKey = normalizeAiActorKey(ownerKey);
+                if (!actorKey) {
+                    return;
+                }
+                const current = taskByActor.get(actorKey) ?? [];
+                taskByActor.set(actorKey, uniqueTexts(16, current, [title]));
+            });
+        });
+    const organizationByActor = new Map<string, string[]>();
+    aiSummary.organizationDetails.forEach((item: SemanticOrganizationDetailSummary): void => {
+        const organizationName = normalizeText(item.name);
+        if (!organizationName) {
+            return;
+        }
+        item.relatedActorKeys.forEach((actorKeyRaw: string): void => {
+            const actorKey = normalizeAiActorKey(actorKeyRaw);
+            if (!actorKey) {
+                return;
+            }
+            const current = organizationByActor.get(actorKey) ?? [];
+            organizationByActor.set(actorKey, uniqueTexts(12, current, [organizationName]));
+        });
+    });
+    Object.entries(nextRoleProfileSeeds).forEach(([actorKey, profile]): void => {
+        const normalizedActorKey = normalizeAiActorKey(actorKey || profile.actorKey);
+        if (!normalizedActorKey) {
+            return;
+        }
+        const mergedTasks = uniqueTexts(16, profile.activeTasks, taskByActor.get(normalizedActorKey) ?? []);
+        const mergedOrganizations = uniqueTexts(12, profile.organizationMemberships, organizationByActor.get(normalizedActorKey) ?? []);
+        nextRoleProfileSeeds[normalizedActorKey] = {
+            ...profile,
+            actorKey: normalizedActorKey,
+            activeTasks: mergedTasks,
+            organizationMemberships: mergedOrganizations,
+        };
     });
     const primaryActorKey = normalizeAiActorKey(seed.identitySeed.roleKey || seed.identitySeed.displayName);
     const mergedPrimaryIdentity = primaryActorKey ? nextIdentitySeeds[primaryActorKey] : null;
@@ -1097,9 +1352,12 @@ ${promptBundle.exampleJson}`;
 8. relationshipFacts[].targetLabel 只能写目标角色名字；房东、同伴、老板娘、上司、老师等关系说明必须写进 relationshipFacts[].label 或 relationshipFacts[].detail。
 9. aliases 只放简称、别名、误写或稳定称呼，不要把整句描述放进去。
 10. 如果文本里明确出现“艾莉卡”和“薇拉”，就应尽量输出两个 profile；“房东”写入关系说明，不要并入角色名字。
-
-4. 你必须只输出统一 AI JSON 外壳，并把内容填写到对应命名空间里，不要输出旧格式字段。
-5. 不要输出解释、Markdown 或代码块，只输出 JSON。`;
+11. 你会看到“状态参考块”，其中包含：全部角色当前位置、全部地点名录、未完成任务、势力组织名录、重大事件名录；请据此比对并更新新结构字段。
+12. 只有在输入文本里有明确证据时，才允许更新角色 currentLocation、任务状态、势力归属与关联角色；没有证据就保持不变。
+13. taskDetails.status 只允许：pending、in_progress、blocked、completed；若任务已完成必须标记 completed。
+14. 已完成任务不会在下一轮继续提供，请不要把 completed 任务改回未完成。
+15. 你必须只输出统一 AI JSON 外壳，并把内容填写到对应命名空间里，不要输出旧格式字段。
+16. 不要输出解释、Markdown 或代码块，只输出 JSON。`;
     const result = await runGeneration<unknown>(
         MEMORY_TASKS.COLDSTART_SUMMARIZE,
         {

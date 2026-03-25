@@ -27,15 +27,15 @@ export const COLDSTART_OPERATION_SKILL: MemoryPromptSkill = {
 };
 
 const COLDSTART_REQUIRED_KEYS_TEXT: string[] = [
-    '严格使用以下 JSON 键名：roleSummary、worldSummary、identityFacts、worldRules、hardConstraints、nations、regions、cities、locations、factions、entities、calendarSystems、currencySystems、socialSystems、culturalPractices、historicalEvents、dangers、otherWorldDetails、characterGoals、relationshipFacts、catchphrases、relationshipAnchors、styleCues、nationDetails、regionDetails、cityDetails、locationDetails、ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、historicalEventDetails、dangerDetails、entityDetails、otherWorldDetailDetails。',
+    '严格使用以下 JSON 键名：roleSummary、worldSummary、identityFacts、worldRules、hardConstraints、nations、regions、cities、locations、organizations、entities、calendarSystems、currencySystems、socialSystems、culturalPractices、majorEvents、dangers、otherWorldDetails、tasks、relationshipFacts、catchphrases、relationshipAnchors、styleCues、nationDetails、regionDetails、cityDetails、locationDetails、organizationDetails、taskDetails、majorEventDetails、ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、dangerDetails、entityDetails、otherWorldDetailDetails。',
     'roleSummary 和 worldSummary 是字符串。',
     'nationDetails、regionDetails、cityDetails、locationDetails 必须是对象数组，每个对象至少包含 name 和 summary。',
-    'ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、historicalEventDetails、dangerDetails、entityDetails、otherWorldDetailDetails 必须是对象数组。',
+    'organizationDetails、taskDetails、majorEventDetails、ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、dangerDetails、entityDetails、otherWorldDetailDetails 必须是对象数组。',
     '每个世界 detail 条目必须包含 title、summary、facet、knowledgeLevel、scopeType，其中 knowledgeLevel 只能是 confirmed、rumor、inferred。',
 ];
 
 const COLDSTART_EXTRA_RULES_TEXT: string[] = [
-    '新增硬性要求：必须输出 ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、historicalEventDetails、dangerDetails、entityDetails、otherWorldDetailDetails。',
+    '新增硬性要求：必须输出 organizationDetails、taskDetails、majorEventDetails、ruleDetails、constraintDetails、socialSystemDetails、culturalPracticeDetails、dangerDetails、entityDetails、otherWorldDetailDetails。',
     '地点条目必须拆成地点名与描述，不得把整句描述塞进 name；没有明确父级时 nationName、regionName、cityName 留空，不得用地点名回填城市名。',
     'worldSummary 只能写总览，不得重复平铺规则条目；规则类内容应写入 detail 数组。',
     '如果资料里只有制度描述、社会结构描述或朝代特征，但没有明确国家名字，就不要把整句放进 nations，可改放 socialSystems 或 otherWorldDetails。',
@@ -45,10 +45,10 @@ const COLDSTART_EXTRA_RULES_TEXT: string[] = [
     'regions 只放大区、边境、行省、州郡、大陆分区。',
     'cities 只放城市、都城、主城、镇、村、聚落、港口城等聚居地。',
     'locations 只放神庙、遗迹、房间、据点、学院、基地、空间站、森林、峡谷等具体地点节点，不要放国家、区域、城市。',
-    'factions 只放组织、派系、公会、教团、军团、家族势力；entities 只放不属于前述分类、但可单独索引的对象或机构。',
+    'organizations 只放组织、派系、公会、教团、军团、家族势力；entities 只放不属于前述分类、但可单独索引的对象或机构。',
     'worldRules 放普遍规则与运行机制；hardConstraints 放绝对禁忌和硬限制。',
     'calendarSystems 放历法、纪年、节气与月份体系；currencySystems 放货币、面额、税制、交易度量；socialSystems 放阶级、身份等级、社会制度；culturalPractices 放礼俗、传统、节庆、仪式习惯。',
-    'historicalEvents 放历史事件；dangers 放危险和威胁；characterGoals 放角色目标；relationshipFacts 与 relationshipAnchors 放稳定关系事实与检索锚点。',
+    'majorEvents 放重大事件；dangers 放危险和威胁；tasks 放任务进展；relationshipFacts 与 relationshipAnchors 放稳定关系事实与检索锚点。',
     'otherWorldDetails 只放明确属于世界设定、但不适合放入上述任一分类的合法条目；不要把无法理解、残缺或噪音文本放进去。',
     '同一条内容只能进入一个最合适的字段。nation > region > city > location，系统类内容不要放入地点类字段。',
     '不要返回 character_summary、world_summary、seed_key_entries 或任何其他替代键名。',

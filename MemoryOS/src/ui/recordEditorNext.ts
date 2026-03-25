@@ -141,6 +141,58 @@ function getWorldStateRawObject(entry: StructuredWorldStateEntry): Record<string
     return {};
 }
 
+/**
+ * 功能：把记忆索引中的重大剧情事件转换成统一 world_state 事件条目。
+ * @param ownedStates 记忆索引状态列表。
+ * @param actorLabelMap 角色标签映射。
+ * @returns 可直接并入世界状态分区的重大事件条目。
+ */
+function buildMajorEventWorldStateEntries(
+    ownedStates: OwnedMemoryState[],
+    actorLabelMap: Map<string, string>,
+): StructuredWorldStateEntry[] {
+    return ownedStates
+        .filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event' && item.forgotten !== true)
+        .sort((left: OwnedMemoryState, right: OwnedMemoryState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
+        .slice(0, 24)
+        .map((item: OwnedMemoryState, index: number): StructuredWorldStateEntry => {
+            const ownerActorKey = String(item.ownerActorKey ?? '').trim();
+            const ownerLabel = ownerActorKey ? (actorLabelMap.get(ownerActorKey) || ownerActorKey) : '世界 / 未归属';
+            const title = normalizeQuestText(buildMemoryRecordHeadline(item.recordKey, undefined, item)) || `重大事件 ${index + 1}`;
+            const impact = normalizeQuestText(formatMemoryImpactSummary(item));
+            const summary = [impact, `归属：${ownerLabel}`].filter(Boolean).join('；') || '重大事件';
+            const updatedAt = Number(item.updatedAt ?? Date.now()) || Date.now();
+            const stateKey = `memory-event:${item.recordKey || `major-${index + 1}`}`;
+            const rawValue: Record<string, unknown> = {
+                title,
+                summary,
+                scopeType: ownerActorKey ? 'character' : 'global',
+                stateType: 'event',
+                subjectId: ownerActorKey || undefined,
+                sourceRefs: [`memory_state:${item.recordKey}`],
+                updatedAt,
+            };
+            return {
+                stateKey,
+                path: `/semantic/events/memory-${encodeURIComponent(String(item.recordKey || `major-${index + 1}`))}`,
+                rawValue,
+                node: {
+                    title,
+                    summary,
+                    scopeType: ownerActorKey ? 'character' : 'global',
+                    stateType: 'event',
+                    subjectId: ownerActorKey || undefined,
+                    keywords: [ownerLabel, '重大事件'].filter((text: string): boolean => Boolean(normalizeQuestText(text))),
+                    tags: ['major_plot_event', 'memory_state'],
+                    sourceRefs: [`memory_state:${item.recordKey}`],
+                    confidence: 0.72,
+                    updatedAt,
+                },
+                updatedAt,
+            };
+        });
+}
+
 function hasExplicitWorldStateKeywords(entry: StructuredWorldStateEntry): boolean {
     const raw = getWorldStateRawObject(entry);
     return Array.isArray(raw.keywords) && raw.keywords.some((item: unknown): boolean => Boolean(String(item ?? '').trim()));
@@ -562,11 +614,11 @@ const WORLD_QUEST_SOURCE_LABELS: Record<'scene_snapshot' | 'memory_state' | 'wor
 };
 
 const WORLD_QUEST_PRIORITY_RANK: Record<string, number> = {
-    当前冲突: 50,
+    待处理事件: 50,
     待推进: 40,
-    角色目标: 32,
-    承诺: 28,
-    世界约束: 20,
+    进行中: 35,
+    已阻塞: 30,
+    任务进展: 24,
 };
 
 const WORLD_QUEST_NOISE_TITLES = new Set<string>([
@@ -581,6 +633,8 @@ const WORLD_QUEST_NOISE_TITLES = new Set<string>([
     'location',
     'constraints',
 ]);
+
+const WORLD_QUEST_LEGACY_PAYLOAD_PATTERN = /"?(hardconstraints|hard_constraints|rules|constraints|social_structure|description)"?\s*[:=]/i;
 
 /**
  * 功能：统一规范任务文本，避免把占位文案当成真实任务。
@@ -618,6 +672,19 @@ function isQuestNoiseTitle(title: string): boolean {
         return true;
     }
     return WORLD_QUEST_NOISE_TITLES.has(normalized);
+}
+
+/**
+ * 功能：识别旧链路遗留的规则/约束 JSON 文本，避免污染任务板。
+ * @param value 原始文本。
+ * @returns 是否属于旧版污染片段。
+ */
+function containsLegacyQuestPayload(value: unknown): boolean {
+    const normalized = normalizeQuestText(value);
+    if (!normalized || !/[{}\[\]"]/.test(normalized)) {
+        return false;
+    }
+    return WORLD_QUEST_LEGACY_PAYLOAD_PATTERN.test(normalized);
 }
 
 /**
@@ -782,31 +849,30 @@ function dedupeQuestSourceRefs(refs: SourceRef[]): SourceRef[] {
 /**
  * 功能：判断 world_state 条目是否具备任务语义。
  * @param entry 世界状态条目。
- * @returns 是否应该进入任务委托板。
+ * @returns 是否应该进入任务进展板。
  */
 function isQuestLikeWorldStateEntry(entry: StructuredWorldStateEntry): boolean {
     const stateType = String(entry.node.stateType ?? '').trim().toLowerCase();
-    if (stateType === 'goal') {
-        return true;
-    }
-    if (stateType !== 'constraint' && stateType !== 'relationship_hook') {
+    if (stateType !== 'task') {
         return false;
     }
     const raw = getWorldStateRawObject(entry);
-    const intentText = normalizeLookup([
-        entry.node.title,
-        entry.node.summary,
-        pickWorldStateText(raw, ['objective', 'goal', 'target', 'todo', 'nextStep', 'next', 'promise', 'constraint']),
-        ...(entry.node.keywords ?? []),
-        ...(entry.node.tags ?? []),
-    ].join(' '));
-    const questHints = ['任务', '目标', '推进', '待办', '承诺', '约束', 'quest', 'goal', 'todo', 'promise', 'constraint'];
-    const hasQuestHint = questHints.some((hint: string): boolean => intentText.includes(normalizeLookup(hint)));
-    if (!hasQuestHint) {
+    if (isQuestNoiseTitle(String(entry.node.title ?? ''))) {
         return false;
     }
-    const genericConstraintOnly = normalizeLookup(intentText) === normalizeLookup('constraint');
-    return !genericConstraintOnly;
+    if ([
+        entry.node.title,
+        entry.node.summary,
+        pickWorldStateText(raw, ['objective', 'completionCriteria', 'progressNote', 'nextStep', 'next']),
+    ].some((text: unknown): boolean => containsLegacyQuestPayload(text))) {
+        return false;
+    }
+    const intentText = normalizeQuestText([
+        entry.node.title,
+        entry.node.summary,
+        pickWorldStateText(raw, ['objective', 'completionCriteria', 'progressNote', 'nextStep', 'next']),
+    ].join(' / '));
+    return hasMeaningfulQuestText(intentText);
 }
 
 /**
@@ -816,6 +882,15 @@ function isQuestLikeWorldStateEntry(entry: StructuredWorldStateEntry): boolean {
  */
 function getWorldQuestPriorityRank(priorityLabel: string | undefined): number {
     return WORLD_QUEST_PRIORITY_RANK[String(priorityLabel ?? '').trim()] ?? 0;
+}
+
+function formatTaskStatusLabel(value: string): string {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'pending') return '待推进';
+    if (normalized === 'in_progress') return '进行中';
+    if (normalized === 'blocked') return '已阻塞';
+    if (normalized === 'completed') return '已完成';
+    return '待推进';
 }
 
 /**
@@ -956,9 +1031,6 @@ function buildWorldQuestBoardRows(
     actorLabelMap: Map<string, string>,
 ): WorldQuestBoardRow[] {
     const rowMap = new Map<string, WorldQuestBoardRow>();
-    const currentConflict = isStableSnapshotValue(experience.canon.scene.currentConflict)
-        ? normalizeQuestText(experience.canon.scene.currentConflict?.value)
-        : '';
     const pendingEvents = getStableSnapshotValues(experience.canon.scene.pendingEvents)
         .filter((item: SnapshotValue): boolean => !isSyntheticVisibleMessageSnapshot(item));
     const stableParticipants = getStableSnapshotValues(experience.canon.scene.participants);
@@ -966,52 +1038,16 @@ function buildWorldQuestBoardRows(
     const participantActorKeys = participantActors.actorKeys;
     const participantLabels = participantActors.labels;
     const fallbackNow = Number(experience.canon.generatedAt ?? Date.now());
-    const fallbackSceneSourceRefs = dedupeQuestSourceRefs([
-        ...(experience.canon.scene.currentConflict?.sourceRefs ?? []),
-        ...stableParticipants.flatMap((item: SnapshotValue): SourceRef[] => item.sourceRefs ?? []),
-        ...pendingEvents.flatMap((item: SnapshotValue): SourceRef[] => item.sourceRefs ?? []),
-    ]);
-
-    if (currentConflict && !isQuestPlaceholderText(currentConflict)) {
-        mergeWorldQuestRow(rowMap, {
-            rowKey: `scene-conflict:${normalizeLookup(currentConflict) || 'current'}`,
-            title: currentConflict,
-            kind: '当前冲突',
-            summary: normalizeQuestText(experience.canon.scene.currentScene?.value) || '当前场景正在推进中的主冲突。',
-            objective: pendingEvents
-                .slice(0, 3)
-                .map((item: SnapshotValue): string => normalizeQuestText(item.value))
-                .filter((item: string): boolean => Boolean(item) && !isQuestPlaceholderText(item))
-                .join(' / ') || '等待进一步推进',
-            relatedActors: participantLabels,
-            ownerActorKeys: participantActorKeys,
-            sourceKind: 'scene_snapshot',
-            sourceKinds: ['scene_snapshot'],
-            sourceRefs: fallbackSceneSourceRefs.length > 0
-                ? fallbackSceneSourceRefs
-                : [{
-                    kind: 'group_memory',
-                    label: 'scene.current_conflict',
-                    ts: Number(experience.canon.scene.currentConflict?.updatedAt ?? fallbackNow),
-                    note: '来自场景快照 currentConflict',
-                }],
-            priorityLabel: '当前冲突',
-            sourceLabel: WORLD_QUEST_SOURCE_LABELS.scene_snapshot,
-            statusLabel: '当前冲突',
-            updatedAt: Number(experience.canon.scene.currentConflict?.updatedAt ?? fallbackNow),
-        });
-    }
-
     pendingEvents.forEach((item: SnapshotValue, index: number): void => {
         const title = normalizeQuestText(item.value);
-        if (!title || isQuestPlaceholderText(title)) {
+        if (!title || isQuestPlaceholderText(title) || isQuestNoiseTitle(title) || containsLegacyQuestPayload(title)) {
             return;
         }
         mergeWorldQuestRow(rowMap, {
             rowKey: `pending:${index}:${normalizeLookup(title) || 'pending'}`,
             title,
-            kind: '待推进',
-            summary: currentConflict || '当前场景中被挂起、待推进的事件。',
+            kind: '待处理事件',
+            summary: '当前场景中被挂起、待处理的事件。',
             objective: '等待触发 / 等待角色推进',
             relatedActors: participantLabels,
             ownerActorKeys: participantActorKeys,
@@ -1021,79 +1057,46 @@ function buildWorldQuestBoardRows(
                 kind: 'group_memory',
                 label: `scene.pending.${index + 1}`,
                 ts: Number(item.updatedAt ?? fallbackNow),
-                note: '来自场景快照 pendingEvents',
-            }]),
-            priorityLabel: '待推进',
+                    note: '来自场景快照 pendingEvents',
+                }]),
+            priorityLabel: '待处理事件',
             sourceLabel: WORLD_QUEST_SOURCE_LABELS.scene_snapshot,
-            statusLabel: '待推进',
+            statusLabel: '待处理事件',
             updatedAt: Number(item.updatedAt ?? fallbackNow),
         });
     });
-
-    ownedStates
-        .filter((item: OwnedMemoryState): boolean => ['goal', 'promise', 'current_conflict'].includes(String(item.memorySubtype ?? '')))
-        .forEach((item: OwnedMemoryState): void => {
-            const title = normalizeQuestText(buildMemoryRecordHeadline(item.recordKey, undefined, item));
-            if (!title || isQuestPlaceholderText(title)) {
-                return;
-            }
-            const explicitOwnerActorKeys = normalizeQuestActorKeys([item.ownerActorKey]);
-            const ownerActorKeys = explicitOwnerActorKeys.length > 0 ? explicitOwnerActorKeys : participantActorKeys;
-            const relatedActors = ownerActorKeys.length > 0
-                ? mapQuestActorLabels(ownerActorKeys, actorLabelMap)
-                : participantLabels;
-            const subtype = String(item.memorySubtype ?? '').trim().toLowerCase();
-            const priorityLabel = subtype === 'current_conflict'
-                ? '当前冲突'
-                : subtype === 'promise'
-                    ? '承诺'
-                    : '角色目标';
-            mergeWorldQuestRow(rowMap, {
-                rowKey: `memory:${item.recordKey}`,
-                title: buildMemoryRecordHeadline(item.recordKey, undefined, item),
-                kind: priorityLabel,
-                summary: formatMemoryImpactSummary(item),
-                objective: item.forgotten ? '已淡出当前焦点' : '仍在推进中',
-                relatedActors: relatedActors.length > 0 ? relatedActors : ['世界 / 未归属'],
-                ownerActorKeys,
-                sourceKind: 'memory_state',
-                sourceKinds: ['memory_state'],
-                sourceRefs: dedupeQuestSourceRefs([{
-                    kind: mapQuestRecordKindToSourceKind(item.recordKind),
-                    label: `memory.${item.recordKind}.${item.memorySubtype}`,
-                    recordId: item.recordKey,
-                    ts: Number(item.updatedAt ?? fallbackNow),
-                    note: item.ownerActorKey ? `owner=${item.ownerActorKey}` : 'owner=world',
-                }]),
-                recordKey: item.recordKey,
-                priorityLabel,
-                sourceLabel: WORLD_QUEST_SOURCE_LABELS.memory_state,
-                statusLabel: item.forgotten ? '已搁置' : priorityLabel,
-                updatedAt: Number(item.updatedAt ?? 0),
-            });
-        });
 
     worldEntries
         .filter((entry: StructuredWorldStateEntry): boolean => isQuestLikeWorldStateEntry(entry))
         .forEach((entry: StructuredWorldStateEntry): void => {
             const raw = getWorldStateRawObject(entry);
             const title = normalizeQuestText(entry.node.title) || formatWorldStateDisplayTitle(entry);
-            if (!title || isQuestPlaceholderText(title)) {
+            if (!title || isQuestPlaceholderText(title) || isQuestNoiseTitle(title)) {
                 return;
             }
             const summaryText = normalizeQuestText(entry.node.summary);
-            const stateType = String(entry.node.stateType ?? '').trim().toLowerCase();
             const explicitOwnerActorKey = resolveQuestActorKey(String(entry.node.subjectId ?? '').trim(), actorLabelMap)
                 || resolveQuestActorKey(pickWorldStateText(raw, ['subject', 'owner', 'actor', 'character', 'ownerActorKey']), actorLabelMap);
             const ownerActorKeys = normalizeQuestActorKeys([
                 explicitOwnerActorKey,
                 ...(explicitOwnerActorKey ? [] : participantActorKeys),
             ]);
-            const priorityLabel = stateType === 'goal'
-                ? (ownerActorKeys.length > 0 ? '角色目标' : '待推进')
-                : '世界约束';
-            const objectiveHint = pickWorldStateText(raw, ['objective', 'goal', 'target', 'todo', 'nextStep', 'next', 'promise', 'constraint'])
+            const statusLabel = formatTaskStatusLabel(pickWorldStateText(raw, ['status']));
+            if (statusLabel === '已完成') {
+                return;
+            }
+            const priorityLabel = statusLabel === '待推进'
+                ? '待推进'
+                : statusLabel === '进行中'
+                    ? '进行中'
+                    : statusLabel === '已阻塞'
+                        ? '已阻塞'
+                        : '任务进展';
+            const objectiveHint = pickWorldStateText(raw, ['objective', 'completionCriteria', 'progressNote', 'nextStep', 'next'])
                 || summaryText;
+            if ([title, summaryText, objectiveHint, pickWorldStateText(raw, ['description'])].some((text: unknown): boolean => containsLegacyQuestPayload(text))) {
+                return;
+            }
             if (isQuestNoiseTitle(title) && !hasMeaningfulQuestText(objectiveHint) && !hasMeaningfulQuestText(summaryText)) {
                 return;
             }
@@ -1134,7 +1137,7 @@ function buildWorldQuestBoardRows(
                 stateKey: entry.stateKey,
                 priorityLabel,
                 sourceLabel: WORLD_QUEST_SOURCE_LABELS.world_state,
-                statusLabel: priorityLabel,
+                statusLabel,
                 updatedAt: Number(entry.updatedAt ?? fallbackNow),
             });
         });
@@ -1172,7 +1175,7 @@ function buildWorldQuestBoardRows(
 }
 
 /**
- * 功能：提供任务委托聚合逻辑给自动化测试使用。
+ * 功能：提供任务进展聚合逻辑给自动化测试使用。
  * @param experience 编辑器体验快照。
  * @param ownedStates 记忆索引状态列表。
  * @param worldEntries 结构化世界状态条目列表。
@@ -2247,7 +2250,7 @@ function formatWorldStateScopeLabel(value: string): string {
         region: '区域',
         city: '城市',
         location: '地点',
-        faction: '派系',
+        organization: '组织',
         item: '物品',
         character: '角色',
         scene: '场景',
@@ -2261,14 +2264,14 @@ function formatWorldStateTypeLabel(value: string): string {
     const labels: Record<string, string> = {
         rule: '规则',
         constraint: '约束',
-        history: '历史',
+        event: '重大事件',
         status: '状态',
         capability: '能力',
         ownership: '归属',
         culture: '文化',
         danger: '危险',
         relationship: '关系',
-        goal: '目标',
+        task: '任务',
         relationship_hook: '关系钩子',
         other: '其他设定',
         anomaly: '结构异常',
@@ -4273,7 +4276,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             const nextScore = Number(entry.updatedAt ?? 0) + Number(entry.node.confidence ?? 0);
             dedupedEntryMap.set(dedupeKey, nextScore >= existingScore ? entry : existing);
         });
-        const entries = Array.from(dedupedEntryMap.values());
+        const worldStateEntries = Array.from(dedupedEntryMap.values());
         const actorLabelMap = new Map<string, string>();
         experience.canon.characters.forEach((character): void => {
             const actorKey = String(character.actorKey ?? '').trim();
@@ -4288,6 +4291,8 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 actorLabelMap.set(ownerActorKey, ownerActorKey);
             }
         });
+        const majorEventEntries = buildMajorEventWorldStateEntries(ownedStates, actorLabelMap);
+        const entries = [...worldStateEntries, ...majorEventEntries];
         const scopeStats = entries.reduce<Map<string, number>>((map, entry: StructuredWorldStateEntry): Map<string, number> => {
             const key = String(entry.node.scopeType ?? 'scene');
             map.set(key, (map.get(key) ?? 0) + 1);
@@ -4300,10 +4305,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             .filter((entry: StructuredWorldStateEntry): boolean => matchWorldStateKeyword(entry, currentWorldStateKeywordFilter))
             .sort((left: StructuredWorldStateEntry, right: StructuredWorldStateEntry): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0));
         const sectionCategoryShortcutItems: WorldStateSectionCategoryShortcutItem[] = [];
-        const majorPlotEvents = ownedStates
-            .filter((item: OwnedMemoryState): boolean => item.memorySubtype === 'major_plot_event' && item.forgotten !== true)
-            .sort((left: OwnedMemoryState, right: OwnedMemoryState): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))
-            .slice(0, 8);
+        const majorEventCount = entries.filter((entry: StructuredWorldStateEntry): boolean => entry.node.stateType === 'event').length;
         const currentLocationValue = isStableSnapshotValue(experience.canon.world.currentLocation)
             ? String(experience.canon.world.currentLocation?.value ?? '').trim()
             : '';
@@ -4347,7 +4349,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             return String(entry.node.subjectId || pickWorldStateText(raw, ['subject', 'actor', 'character']) || '').trim();
         }).filter(Boolean));
         const ruleEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => ['rule', 'constraint', 'culture', 'capability'].includes(String(entry.node.stateType ?? ''))).length;
-        const factionEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'faction' || entry.node.stateType === 'ownership').length;
+        const organizationEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'organization' || entry.node.stateType === 'ownership').length;
         const anomalyEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => hasWorldStateStructuralAnomaly(entry)).length;
         const explicitKeywordEntryCount = entries.filter((entry: StructuredWorldStateEntry): boolean => hasExplicitWorldStateKeywords(entry)).length;
         const autoKeywordEntryCount = Math.max(0, entries.length - explicitKeywordEntryCount);
@@ -4738,14 +4740,15 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
 
         const factionColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
             {
-                label: '对象 / 阵营',
-                tip: '展示归属对象、阵营或物品主卡。',
+                label: '对象 / 组织',
+                tip: '展示归属对象、势力组织或物品主卡。',
                 width: '28%',
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '归属关系说明。', [
                         renderWorldStateMiniMeta('主体', entry.node.subjectId || pickWorldStateText(raw, ['subject', 'owner', 'holder']) || '未标记'),
-                        renderWorldStateMiniMeta('派系 / 归属', pickWorldStateText(raw, ['faction', 'ownerFaction', 'ownership']) || entry.node.itemId || '未标记'),
+                        renderWorldStateMiniMeta('组织 / 归属', pickWorldStateText(raw, ['organization', 'organizationName', 'ownerOrganization', 'ownershipStatus']) || entry.node.itemId || '未标记'),
+                        renderWorldStateMiniMeta('位置', entry.node.locationId || pickWorldStateText(raw, ['location', 'locationName']) || '未标记'),
                     ]);
                 },
             },
@@ -4757,8 +4760,8 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                     const raw = getWorldStateRawObject(entry);
                     const items = [
                         formatWorldStateTypeLabel(entry.node.stateType),
-                        pickWorldStateText(raw, ['status', 'ownership', 'relation', 'alignment']),
-                        ...pickWorldStateTextList(raw, ['relations', 'owners', 'affiliations']),
+                        pickWorldStateText(raw, ['status', 'ownership', 'ownershipStatus', 'relation', 'alignment', 'parentOrganizationName']),
+                        ...pickWorldStateTextList(raw, ['relations', 'owners', 'affiliations', 'organizationAliases']),
                     ].filter(Boolean);
                     return renderWorldStatePillList(items, '暂无归属信息');
                 },
@@ -4771,7 +4774,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                     const raw = getWorldStateRawObject(entry);
                     const related = [
                         ...getWorldStateAwareActors(entry, ownedStates, actorLabelMap),
-                        ...pickWorldStateTextList(raw, ['items', 'characters', 'participants']),
+                        ...pickWorldStateTextList(raw, ['items', 'characters', 'participants', 'relatedActorKeys']),
                     ];
                     return renderWorldStatePillList(Array.from(new Set(related)), '暂无关联对象');
                 },
@@ -4804,27 +4807,27 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 },
             },
             {
-                label: '当前状态',
-                tip: '角色当前的状态、情绪、伤势或阶段。',
+                label: '组织归属',
+                tip: '角色当前所属势力组织及归属关系。',
                 width: '20%',
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
-                    const stateItems = [
-                        pickWorldStateText(raw, ['status', 'condition', 'emotion', 'phase']),
-                        ...pickWorldStateTextList(raw, ['states', 'conditions', 'traits']),
+                    const organizationItems = [
+                        pickWorldStateText(raw, ['organization', 'organizationName', 'ownerOrganization']),
+                        ...pickWorldStateTextList(raw, ['organizationNames', 'organizations', 'organizationMemberships']),
                     ].filter(Boolean);
-                    return renderWorldStatePillList(stateItems, '暂无状态标签');
+                    return renderWorldStatePillList(organizationItems, '暂无组织归属');
                 },
             },
             {
-                label: '位置 / 目标',
-                tip: '角色当前位置和当前目标。',
+                label: '当前位置 / 当前任务',
+                tip: '角色当前位置与当前任务推进。',
                 width: '20%',
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     const lines = [
                         renderWorldStateMiniMeta('位置', entry.node.locationId || pickWorldStateText(raw, ['location', 'currentLocation']) || '未知'),
-                        renderWorldStateMiniMeta('目标', pickWorldStateText(raw, ['goal', 'objective', 'intent']) || '暂无'),
+                        renderWorldStateMiniMeta('任务', pickWorldStateText(raw, ['task', 'objective', 'activeTask']) || pickWorldStateTextList(raw, ['activeTasks', 'tasks'])[0] || '暂无'),
                     ];
                     return `<div class="stx-re-world-meta-stack">${lines.join('')}</div>`;
                 },
@@ -4848,27 +4851,27 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
 
         const characterGoalColumns: WorldStateSectionColumn<StructuredWorldStateEntry>[] = [
             {
-                label: '角色 / 目标关系',
-                tip: '角色目标、意图、关系链与绑定对象。',
+                label: '角色 / 关系',
+                tip: '角色关系链与绑定对象。',
                 width: '30%',
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
-                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '角色目标/关系说明。', [
+                    return renderWorldStateEntryPrimaryCell(entry, entry.node.summary || '角色关系说明。', [
                         renderWorldStateMiniMeta('角色', entry.node.subjectId || pickWorldStateText(raw, ['character', 'actor', 'subject']) || '未标记'),
                         renderWorldStateMiniMeta('类型', formatWorldStateTypeLabel(entry.node.stateType)),
                     ]);
                 },
             },
             {
-                label: '目标 / 意图',
-                tip: '角色当前目标、任务和推进方向。',
+                label: '关系标签',
+                tip: '角色关系类型与关系状态标签。',
                 width: '20%',
                 render: (entry: StructuredWorldStateEntry): string => {
                     const raw = getWorldStateRawObject(entry);
                     return renderWorldStatePillList([
-                        pickWorldStateText(raw, ['goal', 'objective', 'intent', 'mission']),
-                        ...pickWorldStateTextList(raw, ['goals', 'objectives']),
-                    ].filter(Boolean), '暂无目标');
+                        pickWorldStateText(raw, ['relationship', 'relationType', 'bond', 'label']),
+                        ...pickWorldStateTextList(raw, ['relations', 'relationships', 'relationTags']),
+                    ].filter(Boolean), '暂无关系');
                 },
             },
             {
@@ -5134,11 +5137,11 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             }),
             showQuestSection ? renderWorldStateSectionTable<WorldQuestBoardRow>({
                 sectionKey: 'quest',
-                title: '任务委托',
-                description: '把当前冲突、待处理事件和关键目标整理成更像任务板的委托视图。',
+                title: '任务进展',
+                description: '仅展示结构化任务与场景待处理事件，按目标推进统一汇总。',
                 iconClass: 'fa-solid fa-list-check',
                 badgeText: `${questRows.length} 条`,
-                badgeTip: `当前共整理出 ${questRows.length} 条任务 / 冲突线索。`,
+                badgeTip: `当前共整理出 ${questRows.length} 条任务进展线索。`,
                 rows: questRows,
                 rowKey: (row: WorldQuestBoardRow): string => row.rowKey,
                 rowAttributes: (row: WorldQuestBoardRow): Record<string, string> => ({
@@ -5189,10 +5192,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         label: '状态',
                         tip: '当前任务状态。',
                         width: '16%',
-                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList(
-                            dedupeQuestLabels([row.statusLabel, row.priorityLabel || '', row.kind]),
-                            '暂无状态',
-                        ),
+                        render: (row: WorldQuestBoardRow): string => renderWorldStatePillList([row.statusLabel], '暂无状态'),
                     },
                     {
                         label: '更新时间',
@@ -5219,27 +5219,27 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 columns: otherColumns,
             }),
             pickStateSection({
-                sectionKey: 'faction',
-                title: '阵营与组织',
-                description: '派系、组织、归属、持有关系与对象控制链。',
+                sectionKey: 'organization',
+                title: '势力组织',
+                description: '组织归属、层级关系、关联角色与控制范围。',
                 iconClass: 'fa-solid fa-flag',
-                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'faction' || entry.node.scopeType === 'item' || entry.node.stateType === 'ownership',
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'organization' || entry.node.scopeType === 'item' || entry.node.stateType === 'ownership',
                 columns: factionColumns,
             }),
             pickStateSection({
                 sectionKey: 'character',
-                title: '角色状态',
-                description: '跟角色直接绑定的状态、目标、位置与局势挂钩。',
+                title: '角色档案',
+                description: '展示角色当前位置、组织归属与当前任务关联。',
                 iconClass: 'fa-solid fa-user',
-                predicate: (entry: StructuredWorldStateEntry): boolean => (entry.node.scopeType === 'character' || Boolean(entry.node.subjectId)) && !['goal', 'relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
+                predicate: (entry: StructuredWorldStateEntry): boolean => (entry.node.scopeType === 'character' || Boolean(entry.node.subjectId)) && !['task', 'relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
                 columns: characterColumns,
             }),
             pickStateSection({
                 sectionKey: 'character-goal',
-                title: '角色目标 / 关系',
-                description: '角色目标、关系、羁绊和对象导向的结构条目。',
+                title: '角色关系',
+                description: '角色之间的关系、羁绊和关联线索。',
                 iconClass: 'fa-solid fa-people-arrows',
-                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'character' && ['goal', 'relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
+                predicate: (entry: StructuredWorldStateEntry): boolean => entry.node.scopeType === 'character' && ['relationship', 'relationship_hook'].includes(String(entry.node.stateType ?? '')),
                 columns: characterGoalColumns,
             }),
             renderWorldStateSectionTable<StructuredWorldStateEntry>({
@@ -5254,11 +5254,11 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 columns: dangerColumns,
             }, { buildTipAttr }),
             pickStateSection({
-                sectionKey: 'history',
-                title: '历史事件',
-                description: '历史、局势推进与已形成背景影响的事件。',
+                sectionKey: 'event',
+                title: '重大事件',
+                description: '统一展示世界级与角色级的关键事件进展。',
                 iconClass: 'fa-solid fa-landmark-flag',
-                predicate: (entry: StructuredWorldStateEntry): boolean => ['history'].includes(String(entry.node.stateType ?? '')),
+                predicate: (entry: StructuredWorldStateEntry): boolean => ['event'].includes(String(entry.node.stateType ?? '')),
                 columns: historyColumns,
             }),
             renderWorldStateSectionTable<StructuredWorldStateEntry>({
@@ -5274,49 +5274,10 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
             }, { buildTipAttr }),
         ].filter(Boolean).join('');
 
-        const majorEventPanelHtml = majorPlotEvents.length > 0 ? `
-            <details class="stx-re-world-section stx-re-world-section-collapsible" data-world-section-key="major-events" id="stx-re-world-section-major-events"${nextOpenSectionKeys.has('major-events') ? ' open' : ''}>
-                <summary class="stx-re-world-section-summary"${buildTipAttr('点击展开或收起重大事件分区。')}>
-                    <div class="stx-re-world-section-head">
-                        <div>
-                            <div class="stx-re-world-section-title"><span>重大事件</span></div>
-                            <div class="stx-re-world-section-sub">只在当前聊天已识别到重大剧情事件时显示，用来提醒哪些事件正在反向影响记忆系统。</div>
-                        </div>
-                        <div class="stx-re-world-section-head-side">
-                            <div class="stx-re-rpg-badge"${buildTipAttr(`当前已识别 ${majorPlotEvents.length} 条重大事件。`)}>${escapeHtml(String(majorPlotEvents.length))} 条</div>
-                            <div class="stx-re-world-section-toggle"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i><span>展开 / 收起</span></div>
-                        </div>
-                    </div>
-                </summary>
-                <div class="stx-re-world-section-body">
-                    <div class="stx-re-world-event-list">
-                        ${majorPlotEvents.map((item: OwnedMemoryState): string => {
-                            const ownerLabel = item.ownerActorKey ? (actorLabelMap.get(item.ownerActorKey) || item.ownerActorKey) : '世界 / 未归属';
-                            return `
-                                <div class="stx-re-world-event-card">
-                                    <div class="stx-re-record-title"><i class="fa-solid fa-star" aria-hidden="true" style="margin-right:6px;"></i>${escapeHtml(buildMemoryRecordHeadline(item.recordKey, undefined, item))}</div>
-                                    <div class="stx-re-record-sub">归属：${escapeHtml(ownerLabel)} · 类型：${escapeHtml(formatMemorySubtypeLabel(item.memorySubtype))}</div>
-                                    <div class="stx-re-record-code"${buildTipAttr(`完整内部键：${item.recordKey}`)}>内部键：${escapeHtml(compactInternalIdentifier(item.recordKey, 28))}</div>
-                                    <div class="stx-re-record-sub">${escapeHtml(formatMemoryImpactSummary(item))}</div>
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
-                </div>
-            </details>
-        ` : '';
-        if (majorPlotEvents.length > 0) {
-            renderedSectionNavItems.unshift({
-                key: 'major-events',
-                title: '重大事件',
-                iconClass: 'fa-solid fa-burst',
-                badgeText: `${majorPlotEvents.length} 条`,
-            });
-        }
         if (showQuestSection && questRows.length > 0) {
             renderedSectionNavItems.splice(Math.min(renderedSectionNavItems.length, 3), 0, {
                 key: 'quest',
-                title: '任务委托',
+                title: '任务进展',
                 iconClass: 'fa-solid fa-list-check',
                 badgeText: `${questRows.length} 条`,
             });
@@ -5361,7 +5322,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                     <div class="stx-re-world-pill-list">
                         <span class="stx-re-world-pill">世界状态：${escapeHtml(String(entries.length))} 条</span>
                         <span class="stx-re-world-pill">任务线索：${escapeHtml(String(questRows.length))} 条</span>
-                        <span class="stx-re-world-pill">重大事件：${escapeHtml(String(majorPlotEvents.length))} 条</span>
+                        <span class="stx-re-world-pill">重大事件：${escapeHtml(String(majorEventCount))} 条</span>
                     </div>
                 `,
             });
@@ -5424,7 +5385,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         ${renderWorldStateMiniMeta('城市', String(uniqueCities.size), '0')}
                         ${renderWorldStateMiniMeta('地点', String(uniqueLocations.size), '0')}
                         ${renderWorldStateMiniMeta('国家 / 区域', `${uniqueNations.size} / ${uniqueRegions.size}`, '0 / 0')}
-                        ${renderWorldStateMiniMeta('阵营 / 异常', `${factionEntryCount} / ${anomalyEntryCount}`, '0 / 0')}
+                        ${renderWorldStateMiniMeta('组织 / 异常', `${organizationEntryCount} / ${anomalyEntryCount}`, '0 / 0')}
                     </div>
                 `,
             }),
@@ -5437,7 +5398,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                     <div class="stx-re-world-meta-stack">
                         ${renderWorldStateMiniMeta('绑定主体', String(boundSubjects.size), '0')}
                         ${renderWorldStateMiniMeta('场景参与者', participantLabels.slice(0, 4).join(' / ') || '暂无', '暂无')}
-                        ${renderWorldStateMiniMeta('重大事件', String(majorPlotEvents.length), '0')}
+                        ${renderWorldStateMiniMeta('重大事件', String(majorEventCount), '0')}
                     </div>
                 `,
             }),
@@ -5549,7 +5510,6 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                         </div>
                     </div>
                     <div class="stx-re-world-sections">
-                        ${majorEventPanelHtml}
                         ${contentHtml}
                     </div>
                 </div>
@@ -5655,7 +5615,7 @@ let vectorViewerController: VectorMemoryViewerController | null = null;
                 }
                 if (action === 'sources') {
                     openLogicSourceDetailsDialog(
-                        `任务委托 / ${row.title}`,
+                        `任务进展 / ${row.title}`,
                         `来源 ${row.sourceRefs?.length ?? 0} 条 · ${row.sourceLabel}`,
                         row.sourceRefs ?? [],
                     );

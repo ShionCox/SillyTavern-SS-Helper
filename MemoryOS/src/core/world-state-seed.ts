@@ -19,12 +19,14 @@ type MergedEntry = {
     parentCompleteness: number;
 };
 
+type SeedTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
+
 const FACET_PRIORITY: Record<SemanticWorldFacet, number> = {
     constraint: 8,
     rule: 7,
     social: 6,
     culture: 5,
-    history: 4,
+    event: 4,
     danger: 3,
     entity: 2,
     other: 1,
@@ -35,6 +37,25 @@ const KNOWLEDGE_PRIORITY: Record<SemanticKnowledgeLevel, number> = {
     rumor: 2,
     inferred: 1,
 };
+
+const TASK_STATUS_PRIORITY: Record<SeedTaskStatus, number> = {
+    pending: 1,
+    in_progress: 2,
+    blocked: 2,
+    completed: 3,
+};
+
+const LEGACY_TASK_NOISE_TITLES = new Set<string>([
+    'hardconstraints',
+    'hardconstraint',
+    'hard_constraints',
+    'rules',
+    'rule',
+    'constraints',
+    'constraint',
+]);
+
+const LEGACY_TASK_PAYLOAD_PATTERN = /"?(hardconstraints|hard_constraints|rules|constraints|social_structure|description)"?\s*[:=]/i;
 
 /**
  * 功能：规范化文本，去除多余空白。
@@ -87,6 +108,87 @@ function uniqueSeedTexts(limit: number, ...groups: Array<ArrayLike<unknown> | nu
         });
     });
     return result.slice(0, limit);
+}
+
+/**
+ * 功能：规范化任务状态，非法值返回空字符串。
+ * @param value 输入状态值。
+ * @returns 标准任务状态或空字符串。
+ */
+function normalizeSeedTaskStatus(value: unknown): SeedTaskStatus | '' {
+    const normalized = normalizeSeedText(value).toLowerCase();
+    if (normalized === 'pending' || normalized === 'in_progress' || normalized === 'blocked' || normalized === 'completed') {
+        return normalized;
+    }
+    return '';
+}
+
+/**
+ * 功能：选择更可靠的任务状态，避免 completed 被回退。
+ * @param current 当前状态。
+ * @param incoming 新状态。
+ * @returns 合并后的任务状态。
+ */
+function mergeSeedTaskStatus(current: unknown, incoming: unknown): SeedTaskStatus | undefined {
+    const currentStatus = normalizeSeedTaskStatus(current);
+    const incomingStatus = normalizeSeedTaskStatus(incoming);
+    if (!currentStatus && !incomingStatus) {
+        return undefined;
+    }
+    if (!currentStatus) {
+        return incomingStatus || undefined;
+    }
+    if (!incomingStatus) {
+        return currentStatus;
+    }
+    return TASK_STATUS_PRIORITY[incomingStatus] >= TASK_STATUS_PRIORITY[currentStatus] ? incomingStatus : currentStatus;
+}
+
+/**
+ * 功能：判定标题是否是旧链路噪音键名。
+ * @param title 标题文本。
+ * @returns 是否应被忽略。
+ */
+function isLegacyTaskNoiseTitle(title: unknown): boolean {
+    const normalized = normalizeSeedText(title).toLowerCase().replace(/[\s_-]/g, '');
+    if (!normalized) {
+        return true;
+    }
+    return LEGACY_TASK_NOISE_TITLES.has(normalized);
+}
+
+/**
+ * 功能：判定文本是否包含旧版规则/约束 JSON 片段。
+ * @param value 输入文本。
+ * @returns 是否命中旧版污染片段。
+ */
+function containsLegacyTaskPayload(value: unknown): boolean {
+    const text = normalizeSeedText(value);
+    if (!text || !/[{}\[\]"]/.test(text)) {
+        return false;
+    }
+    return LEGACY_TASK_PAYLOAD_PATTERN.test(text);
+}
+
+/**
+ * 功能：在任务字段合并时优先保留信息量更高的文本。
+ * @param current 旧文本。
+ * @param incoming 新文本。
+ * @returns 合并后的文本。
+ */
+function pickPreferredTaskText(current: unknown, incoming: unknown): string | undefined {
+    const currentText = normalizeSeedText(current);
+    const incomingText = normalizeSeedText(incoming);
+    if (!currentText && !incomingText) {
+        return undefined;
+    }
+    if (!currentText) {
+        return incomingText;
+    }
+    if (!incomingText) {
+        return currentText;
+    }
+    return incomingText.length >= currentText.length ? incomingText : currentText;
 }
 
 /**
@@ -402,6 +504,34 @@ function mergeStateValue(current: Record<string, unknown>, incoming: Record<stri
     merged.confidence = Math.max(Number(current.confidence ?? 0), Number(incoming.confidence ?? 0)) || undefined;
     merged.updatedAt = Math.max(Number(current.updatedAt ?? 0), Number(incoming.updatedAt ?? 0), Date.now());
     merged.canonicalKey = normalizeSeedText(current.canonicalKey) || normalizeSeedText(incoming.canonicalKey) || undefined;
+
+    const mergedStateType = normalizeSeedText(merged.stateType || current.stateType || incoming.stateType).toLowerCase();
+    if (mergedStateType === 'task') {
+        const mergedStatus = mergeSeedTaskStatus(current.status, incoming.status);
+        if (mergedStatus) {
+            merged.status = mergedStatus;
+        }
+        const objective = pickPreferredTaskText(current.objective, incoming.objective);
+        const completionCriteria = pickPreferredTaskText(current.completionCriteria, incoming.completionCriteria);
+        const progressNote = pickPreferredTaskText(current.progressNote, incoming.progressNote);
+        if (objective) {
+            merged.objective = objective;
+        }
+        if (completionCriteria) {
+            merged.completionCriteria = completionCriteria;
+        }
+        if (progressNote) {
+            merged.progressNote = progressNote;
+        }
+        const ownerActorKeys = uniqueSeedTexts(16, (current.ownerActorKeys as unknown[]) ?? [], (incoming.ownerActorKeys as unknown[]) ?? []);
+        if (ownerActorKeys.length > 0) {
+            merged.ownerActorKeys = ownerActorKeys;
+        }
+        const organizationNames = uniqueSeedTexts(12, (current.organizationNames as unknown[]) ?? [], (incoming.organizationNames as unknown[]) ?? []);
+        if (organizationNames.length > 0) {
+            merged.organizationNames = organizationNames;
+        }
+    }
     return merged;
 }
 
@@ -415,7 +545,7 @@ function resolveFacetStateType(facet: SemanticWorldFacet): WorldStateType {
     if (facet === 'rule') return 'rule';
     if (facet === 'social') return 'constraint';
     if (facet === 'culture') return 'culture';
-    if (facet === 'history') return 'history';
+    if (facet === 'event') return 'event';
     if (facet === 'danger') return 'danger';
     if (facet === 'entity') return 'status';
     return 'other';
@@ -430,7 +560,7 @@ function resolveFacetPathPrefix(facet: SemanticWorldFacet): string {
     if (facet === 'constraint') return '/semantic/constraints';
     if (facet === 'rule') return '/semantic/rules';
     if (facet === 'social' || facet === 'culture') return '/semantic/world/systems';
-    if (facet === 'history') return '/semantic/world/history';
+    if (facet === 'event') return '/semantic/events';
     if (facet === 'danger') return '/semantic/world/danger';
     return '/semantic/world/other';
 }
@@ -447,7 +577,16 @@ function collectWorldFacetEntries(seed: ChatSemanticSeed): SemanticWorldFacetEnt
         ...(ai?.constraintDetails ?? []),
         ...(ai?.socialSystemDetails ?? []),
         ...(ai?.culturalPracticeDetails ?? []),
-        ...(ai?.historicalEventDetails ?? []),
+        ...(ai?.majorEventDetails ?? []).map((item): SemanticWorldFacetEntry => ({
+            title: normalizeSeedText(item.title) || extractNamedLeadSegment(normalizeSeedText(item.summary)) || '未命名事件',
+            summary: normalizeSeedText(item.summary) || normalizeSeedText(item.title),
+            facet: 'event',
+            knowledgeLevel: 'confirmed',
+            scopeType: item.locationName ? 'location' : 'global',
+            locationName: normalizeSeedText(item.locationName) || undefined,
+            appliesTo: uniqueSeedTexts(1, item.relatedActorKeys ?? [])[0] || undefined,
+            tags: uniqueSeedTexts(10, item.organizationNames ?? [], [normalizeSeedText(item.phase)], [normalizeSeedText(item.impact)]),
+        })),
         ...(ai?.dangerDetails ?? []),
         ...(ai?.entityDetails ?? []),
         ...(ai?.otherWorldDetailDetails ?? []),
@@ -482,10 +621,10 @@ function collectWorldFacetEntries(seed: ChatSemanticSeed): SemanticWorldFacetEnt
             knowledgeLevel: 'confirmed',
             scopeType: 'global',
         })),
-        ...uniqueSeedTexts(16, ai?.historicalEvents).map((text: string): SemanticWorldFacetEntry => ({
+        ...uniqueSeedTexts(16, ai?.majorEvents).map((text: string): SemanticWorldFacetEntry => ({
             title: extractNamedLeadSegment(text) || text,
             summary: text,
-            facet: 'history',
+            facet: 'event',
             knowledgeLevel: 'confirmed',
             scopeType: 'global',
         })),
@@ -796,19 +935,46 @@ export function inferStructuredSeedWorldStateEntries(seed: ChatSemanticSeed): St
         });
     });
 
-    uniqueSeedTexts(16, ai?.factions).forEach((faction: string, index: number): void => {
-        const title = extractNamedLeadSegment(faction) || faction;
-        const strictCanonical = ['catalog', 'faction', normalizeCanonicalPart(title) || '_'].join('::');
+    const organizationDetails = ai?.organizationDetails ?? [];
+    const organizationEntries = organizationDetails.length > 0
+        ? organizationDetails
+        : uniqueSeedTexts(16, ai?.organizations).map((name: string) => ({
+            name,
+            summary: name,
+            aliases: [],
+            parentOrganizationName: '',
+            ownershipStatus: '',
+            relatedActorKeys: [],
+            locationName: '',
+        }));
+
+    organizationEntries.forEach((organization, index: number): void => {
+        const title = extractNamedLeadSegment(normalizeSeedText(organization.name)) || normalizeSeedText(organization.name);
+        if (!title) {
+            return;
+        }
+        const strictCanonical = ['catalog', 'organization', normalizeCanonicalPart(title) || '_'].join('::');
+        const mergedSummary = uniqueSeedTexts(
+            2,
+            [normalizeSeedText(organization.summary)],
+            [normalizeSeedText(organization.ownershipStatus)],
+        ).join('；') || title;
         const value = buildStateValue({
             title,
-            summary: faction,
-            scopeType: 'faction',
-            stateType: 'status',
-            sourceLabel: 'seed_ai_faction',
+            summary: mergedSummary,
+            scopeType: 'organization',
+            stateType: 'ownership',
+            sourceLabel: 'seed_ai_organization',
+            locationName: normalizeSeedText(organization.locationName) || undefined,
             canonicalKey: strictCanonical,
+            tags: uniqueSeedTexts(12, organization.aliases ?? [], organization.relatedActorKeys ?? []),
         });
+        value.parentOrganizationName = normalizeSeedText(organization.parentOrganizationName) || undefined;
+        value.ownershipStatus = normalizeSeedText(organization.ownershipStatus) || undefined;
+        value.relatedActorKeys = uniqueSeedTexts(16, organization.relatedActorKeys ?? []);
+        value.organizationAliases = uniqueSeedTexts(8, organization.aliases ?? []);
         upsertMergedEntry(entries, canonicalToPath, {
-            path: `/semantic/catalog/factions/${slugifySeedText(title, `faction-${index + 1}`)}`,
+            path: `/semantic/catalog/organizations/${slugifySeedText(title, `organization-${index + 1}`)}`,
             value,
             strictCanonical,
         });
@@ -876,19 +1042,80 @@ export function inferStructuredSeedWorldStateEntries(seed: ChatSemanticSeed): St
         });
     });
 
-    uniqueSeedTexts(16, ai?.characterGoals).forEach((text: string, index: number): void => {
-        const canonical = ['character-goal', actorSlug, normalizeCanonicalPart(text) || `_g_${index + 1}`].join('::');
+    const taskDetails = ai?.taskDetails ?? [];
+    const explicitTaskSignatures = new Set<string>();
+    taskDetails.forEach((task, index: number): void => {
+        const title = extractNamedLeadSegment(normalizeSeedText(task.title)) || normalizeSeedText(task.title) || extractNamedLeadSegment(normalizeSeedText(task.summary));
+        if (!title || isLegacyTaskNoiseTitle(title)) {
+            return;
+        }
+        if ([
+            task.title,
+            task.summary,
+            task.objective,
+            task.completionCriteria,
+            task.progressNote,
+        ].some((item: unknown): boolean => containsLegacyTaskPayload(item))) {
+            return;
+        }
+        const taskSignature = normalizeCanonicalPart(title);
+        if (taskSignature) {
+            explicitTaskSignatures.add(taskSignature);
+        }
+        const canonical = ['task', normalizeCanonicalPart(title) || `_t_${index + 1}`].join('::');
+        const status = normalizeSeedTaskStatus(task.status) || 'pending';
+        const summary = uniqueSeedTexts(
+            3,
+            [normalizeSeedText(task.summary)],
+            [normalizeSeedText(task.objective)],
+            [normalizeSeedText(task.progressNote)],
+        ).join('；') || title;
         const value = buildStateValue({
-            title: extractNamedLeadSegment(text) || text,
+            title,
+            summary,
+            scopeType: normalizeSeedText(task.locationName) ? 'location' : 'global',
+            stateType: 'task',
+            sourceLabel: 'seed_ai_task',
+            subjectId: uniqueSeedTexts(1, task.ownerActorKeys ?? [])[0] || (roleKey || actorSlug),
+            locationName: normalizeSeedText(task.locationName) || undefined,
+            canonicalKey: canonical,
+            tags: uniqueSeedTexts(12, task.organizationNames ?? [], task.ownerActorKeys ?? []),
+        });
+        value.status = status;
+        value.objective = normalizeSeedText(task.objective) || undefined;
+        value.completionCriteria = normalizeSeedText(task.completionCriteria) || undefined;
+        value.progressNote = normalizeSeedText(task.progressNote) || undefined;
+        value.ownerActorKeys = uniqueSeedTexts(16, task.ownerActorKeys ?? []);
+        value.organizationNames = uniqueSeedTexts(12, task.organizationNames ?? []);
+        upsertMergedEntry(entries, canonicalToPath, {
+            path: `/semantic/tasks/${slugifySeedText(title, `task-${index + 1}`)}`,
+            value,
+            strictCanonical: canonical,
+        });
+    });
+
+    uniqueSeedTexts(16, ai?.tasks).forEach((text: string, index: number): void => {
+        const title = extractNamedLeadSegment(text) || text;
+        const taskSignature = normalizeCanonicalPart(title || text);
+        if (!title || isLegacyTaskNoiseTitle(title) || containsLegacyTaskPayload(text)) {
+            return;
+        }
+        if (taskSignature && explicitTaskSignatures.has(taskSignature)) {
+            return;
+        }
+        const canonical = ['task', normalizeCanonicalPart(title) || `_t_text_${index + 1}`].join('::');
+        const value = buildStateValue({
+            title,
             summary: text,
-            scopeType: 'character',
-            stateType: 'goal',
-            sourceLabel: 'seed_goal',
+            scopeType: 'global',
+            stateType: 'task',
+            sourceLabel: 'seed_task',
             subjectId: roleKey || actorSlug,
             canonicalKey: canonical,
         });
+        value.status = 'pending';
         upsertMergedEntry(entries, canonicalToPath, {
-            path: `/semantic/characters/${actorSlug}/goals/${slugifySeedText(text, `goal-${index + 1}`)}`,
+            path: `/semantic/tasks/${slugifySeedText(title, `task-${index + 1}`)}`,
             value,
             strictCanonical: canonical,
         });
