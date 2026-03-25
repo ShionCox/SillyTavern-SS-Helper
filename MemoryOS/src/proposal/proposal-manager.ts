@@ -15,7 +15,7 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { db, patchSdkChatShared } from '../db/db';
 import { DEFAULT_CHANGE_BUDGET } from '../types';
 import { advanceMemoryTraceContext, createMemoryTraceContext } from '../core/memory-trace';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 
 function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();

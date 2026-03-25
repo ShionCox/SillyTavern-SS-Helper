@@ -222,6 +222,14 @@ function createTestResult(): MemoryRecallPreviewResult {
             vectorEnabled: true,
             vectorMode: 'search_rerank',
         },
+        comparison: {
+            effectiveSelectedCardIds: ['card-b'],
+            forcedSelectedCardIds: ['card-b', 'card-a'],
+            selectedOverlapRate: 0.5,
+            selectedCountGap: 1,
+            missingForcedCardIds: ['card-a'],
+            gapReasonCodes: [],
+        },
         cache: undefined,
         cheapRecall: null,
     };
@@ -268,6 +276,7 @@ describe('vectorMemoryViewer', (): void => {
         expect(items.map((item) => item.item.cardId)).toEqual(['card-b', 'card-a']);
         expect(items[0]?.testHit?.finalRank).toBe(1);
         expect(items[1]?.testHit?.rerankedRank).toBe(2);
+        expect(createTestResult().comparison?.selectedOverlapRate).toBe(0.5);
     });
 
     it('在强制向量预演模式下仍按命中顺序返回结果', (): void => {

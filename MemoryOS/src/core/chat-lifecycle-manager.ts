@@ -15,7 +15,7 @@ import {
     parseAnyTavernChatRefEvent,
     withChatIdForScopeEvent,
 } from '../../../SDK/tavern';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { archiveMemoryChat, clearMemoryChatData } from '../db/db';
 import type { DeletionStrategy } from '../types';
 

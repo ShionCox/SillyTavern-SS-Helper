@@ -16,7 +16,7 @@ import type {
     RoleProfile,
     RoleRelationshipFact,
 } from '../types/chat-state';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { runGeneration, MEMORY_TASKS, type TaskPresentationOverride } from '../llm/memoryLlmBridge';
 import { buildColdstartOperationSystemPrompt } from '../llm/skills';
 import { normalizeTavernRoleKeyEvent } from '../../../SDK/tavern';

@@ -3,7 +3,7 @@ import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
 import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
-import { logger, toast } from '../index';
+import { logger, toast } from '../runtime/runtime-services';
 import { openRecordEditor } from './recordEditorNext';
 import { hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
@@ -176,6 +176,10 @@ const IDS: MemoryOSSettingsIds = {
     aiDiagRecentTasksId: `${NAMESPACE}-ai-diag-recent-tasks`,
     aiDiagRefreshBtnId: `${NAMESPACE}-ai-diag-refresh`,
     aiRoutePreviewId: `${NAMESPACE}-ai-route-preview`,
+    aiSelfTestPanelId: `${NAMESPACE}-ai-self-test-panel`,
+    aiSelfTestSummaryId: `${NAMESPACE}-ai-self-test-summary`,
+    aiSelfTestResultId: `${NAMESPACE}-ai-self-test-result`,
+    aiSelfTestRunAllBtnId: `${NAMESPACE}-ai-self-test-run-all`,
 };
 
 /**

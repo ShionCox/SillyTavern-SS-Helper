@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type { MemorySDK } from '../../../SDK/stx';
 import { MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmBridge';
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
@@ -37,6 +37,9 @@ export class ExtractManager {
         templateMgr: TemplateManager,
         turnTracker?: TurnTracker,
         chatStateManager?: ChatStateManager,
+        options?: {
+            primeColdStartExtractAfterIngest?: ((reason: string) => Promise<boolean>) | null;
+        },
     ) {
         this.chatKey = chatKey;
         this.eventsManager = events;
@@ -56,6 +59,7 @@ export class ExtractManager {
             chatStateManager: this.chatStateManager,
             metaManager: this.metaManager,
             turnTracker: normalizedTurnTracker,
+            primeColdStartExtractAfterIngest: options?.primeColdStartExtractAfterIngest ?? null,
         });
     }
 
@@ -132,7 +136,6 @@ export class ExtractManager {
                             plan,
                             memory,
                         }),
-                        memory,
                         logicalView,
                         meta: meta ?? null,
                     });

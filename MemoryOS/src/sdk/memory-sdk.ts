@@ -10,7 +10,7 @@ import type {
     MemoryRecallPreviewResult,
     MemorySDK,
 } from '../../../SDK/stx';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { getTavernContextSnapshotEvent, isStableTavernRoleKeyEvent, parseAnyTavernChatRefEvent } from '../../../SDK/tavern';
 import { EventsManager } from '../core/events-manager';
 import { FactsManager } from '../core/facts-manager';
@@ -199,6 +199,9 @@ export class MemorySDKImpl implements MemorySDK {
             this.templateManager,
             this.turnTrackerManager,
             this.chatStateManager,
+            {
+                primeColdStartExtractAfterIngest: (reason: string): Promise<boolean> => this.primeColdStartExtract(reason),
+            },
         );
         this.injectionManager = new InjectionManager(
             chatKey,
@@ -866,10 +869,7 @@ export class MemorySDKImpl implements MemorySDK {
     };
 
     // 提取机制触发钩子
-    extract = {
-        kickOffExtraction: () => {
-            return this.extractManager.kickOffExtraction();
-        },
+    postGeneration = {
         scheduleRoundProcessing: (reason: string = 'generation_ended') => {
             return this.scheduleGenerationRoundProcessing(reason);
         },
@@ -1270,9 +1270,6 @@ export class MemorySDKImpl implements MemorySDK {
         },
         primeColdStartPrompt: async (reason: string = 'chat_completion_prompt_ready'): Promise<boolean> => {
             return this.primeColdStartPrompt(reason);
-        },
-        primeColdStartExtract: async (reason: string = 'generation_ended'): Promise<boolean> => {
-            return this.primeColdStartExtract(reason);
         },
         getLorebookDecision: (): Promise<LorebookGateDecision | null> => {
             return this.chatStateManager.getLorebookDecision();

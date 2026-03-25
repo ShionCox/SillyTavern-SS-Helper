@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type { EventEnvelope } from '../../../SDK/stx';
 import type { ChatStateManager } from './chat-state-manager';
 import { collectAdaptiveMetricsFromEvents } from './chat-strategy-engine';

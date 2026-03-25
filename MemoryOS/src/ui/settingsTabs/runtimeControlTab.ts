@@ -1,5 +1,6 @@
 import type { MemoryOSSettingsIds } from '../settingsCardTemplateTypes';
-import { broadcast, logger, request, subscribe, toast } from '../../index';
+import { broadcast, request, subscribe } from '../../index';
+import { logger, toast } from '../../runtime/runtime-services';
 import { getHealthSnapshot, setAiModeEnabled } from '../../llm/ai-health-center';
 import { bindToggle, ensureMemorySettings, getStContext, syncCardDisabledState } from './sharedRuntime';
 

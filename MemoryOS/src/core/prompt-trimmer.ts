@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type { WorldTemplate, TemplateTableDef } from '../template/types';
 import type { TemplateManager } from '../template/template-manager';
 import type { ChatStateManager } from './chat-state-manager';

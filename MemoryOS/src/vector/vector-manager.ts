@@ -1,5 +1,5 @@
 import { db, type DBMemoryCard, type DBMemoryCardEmbedding, type DBMemoryCardMeta, type DBVectorChunkMetadata } from '../db/db';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { runEmbed } from '../llm/memoryLlmBridge';
 
 export interface VectorIndexStats {

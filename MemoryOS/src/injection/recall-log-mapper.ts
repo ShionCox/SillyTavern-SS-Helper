@@ -9,9 +9,9 @@ import { buildLatestRecallExplanation } from '../core/recall-explanation';
 
 type LifecycleIndexInput = Record<string, MemoryLifecycleState> | Map<string, MemoryLifecycleState> | null | undefined;
 
-/*
+function normalizeText(value: unknown): string {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
-*/
+}
 
 /*
     const normalizedKey = normalizeText(recordKey);
@@ -38,6 +38,9 @@ export function buildRecallLogEntries(candidates: RecallCandidate[], query: stri
         query,
         section: candidate.sectionHint ?? 'PREVIEW',
         recordKey: candidate.recordKey,
+        cardId: candidate.source === 'memory_card'
+            ? (normalizeText(candidate.memoryCardId) || null)
+            : null,
         recordKind: toRecallLogRecordKind(candidate),
         recordTitle: candidate.title,
         score: candidate.finalScore,

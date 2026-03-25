@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type { MemorySDK } from '../../../SDK/stx';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { runGeneration } from '../llm/memoryLlmBridge';

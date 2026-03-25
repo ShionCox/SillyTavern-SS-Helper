@@ -1,5 +1,5 @@
 import { db, patchSdkChatShared, type DBFact } from '../db/db';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { ChatStateManager } from './chat-state-manager';
 import { buildMemoryCardDraftsFromFact, formatFactMemoryTextForDisplay } from './memory-card-text';
 import { FactsManager } from './facts-manager';

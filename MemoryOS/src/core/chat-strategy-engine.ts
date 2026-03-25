@@ -155,42 +155,12 @@ export function shouldRunVectorRecall(input: RecallGateInput): RecallGateDecisio
     const primaryNeed = classifyRecallNeed(input);
     const reasonCodes: string[] = [];
     const lanes = dedupeMemoryCardLanes(resolveVectorRecallLanes(input));
-    const policyAllows = input.policy.vectorEnabled === true && ['search', 'search_rerank'].includes(input.policy.vectorMode);
-    const intentAllows = input.intent !== 'tool_qa'
-        && (input.intent === 'story_continue'
-            || input.intent === 'roleplay'
-            || (input.intent === 'setting_qa' && (primaryNeed === 'historical_event' || primaryNeed === 'causal_trace' || primaryNeed === 'ambiguous_recall' || primaryNeed === 'mixed')));
-    const structuredEnough = input.structuredEnough === true
-        || (
-            (primaryNeed === 'identity_direct'
-                || primaryNeed === 'relationship_direct'
-                || primaryNeed === 'rule_direct'
-                || primaryNeed === 'state_direct')
-            && (input.structuredCount ?? 0) > 0
-        );
-    const recentEventsEnough = input.recentEventsEnough === true;
-    const cacheHit = input.cacheHit === true;
-
-    if (!policyAllows) {
+    const policyAllows = input.policy.vectorEnabled === true && (input.policy.vectorMode === 'search' || input.policy.vectorMode === 'search_rerank');
+    if (!policyAllows || input.policy.vectorMode === 'off') {
         reasonCodes.push(input.policy.vectorEnabled !== true ? 'vector_disabled' : `vector_mode:${input.policy.vectorMode}`);
         return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
     }
-    if (!intentAllows) {
-        reasonCodes.push(`intent:${input.intent ?? 'auto'}`);
-        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
-    }
-    if (cacheHit) {
-        reasonCodes.push('recall_cache_hit');
-        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
-    }
-    if (structuredEnough && (primaryNeed === 'identity_direct' || primaryNeed === 'relationship_direct' || primaryNeed === 'rule_direct' || primaryNeed === 'state_direct')) {
-        reasonCodes.push('structured_enough');
-        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
-    }
-    if (recentEventsEnough && (primaryNeed === 'historical_event' || primaryNeed === 'causal_trace' || primaryNeed === 'mixed')) {
-        reasonCodes.push('recent_events_enough');
-        return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
-    }
+    reasonCodes.push(`intent:${input.intent ?? 'auto'}`);
     if (input.structuredCount != null && input.structuredCount <= 0 && input.recentEventCount != null && input.recentEventCount <= 0) {
         reasonCodes.push('cheap_layer_empty');
     }
@@ -268,8 +238,7 @@ export function inferVectorMode(
         ...(vectorLifecycle ?? {}),
     };
     const reasonCodes: string[] = [];
-    const facts = Math.max(0, Number(lifecycle.factCount ?? 0));
-    const summaries = Math.max(0, Number(lifecycle.summaryCount ?? 0));
+    const memoryCardCount = Math.max(0, Number(lifecycle.memoryCardCount ?? 0));
     const precisionWindow = Array.isArray(lifecycle.recentPrecisionWindow) ? lifecycle.recentPrecisionWindow : [];
     const retrievalPrecision = precisionWindow.length > 0
         ? averageWindow(precisionWindow)
@@ -277,20 +246,20 @@ export function inferVectorMode(
     const now = Date.now();
     const lastAccessAt = Number(lifecycle.lastAccessAt ?? metrics.lastVectorAccessAt ?? 0);
     const idleDays = lastAccessAt > 0 ? (now - lastAccessAt) / (24 * 60 * 60 * 1000) : Number.POSITIVE_INFINITY;
-    const activationFacts = Math.max(1, Number(normalizedProfile.vectorStrategy.activationFacts ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts));
-    const activationSummaries = Math.max(1, Number(normalizedProfile.vectorStrategy.activationSummaries ?? DEFAULT_CHAT_PROFILE.vectorStrategy.activationSummaries));
     const idleDecayDays = Math.max(1, Number(normalizedProfile.vectorStrategy.idleDecayDays ?? DEFAULT_CHAT_PROFILE.vectorStrategy.idleDecayDays));
     let vectorSearchStride = Math.max(1, Number(normalizedProfile.vectorStrategy.lowPrecisionSearchStride ?? DEFAULT_CHAT_PROFILE.vectorStrategy.lowPrecisionSearchStride));
+    const indexReady = memoryCardCount > 0 || Number(lifecycle.lastIndexAt ?? 0) > 0;
 
     if (!normalizedProfile.vectorStrategy.enabled) {
         pushReason(reasonCodes, true, 'vector_disabled_by_profile');
         return { vectorMode: 'off', vectorSearchStride, rerankEnabled: false, reasonCodes };
     }
 
-    if (facts < activationFacts && summaries < activationSummaries) {
-        pushReason(reasonCodes, true, 'vector_not_activated');
+    if (!indexReady) {
+        pushReason(reasonCodes, true, 'memory_card_index_unavailable');
         return { vectorMode: 'off', vectorSearchStride, rerankEnabled: false, reasonCodes };
     }
+    pushReason(reasonCodes, true, memoryCardCount > 0 ? 'memory_card_index_ready' : 'vector_index_ready');
 
     if (retrievalPrecision < 0.1) {
         vectorSearchStride = 5;
@@ -299,14 +268,9 @@ export function inferVectorMode(
         pushReason(reasonCodes, true, 'vector_low_precision_stride');
     }
 
-    if (retrievalPrecision < 0.2 || idleDays > 30) {
-        pushReason(reasonCodes, retrievalPrecision < 0.2, 'vector_precision_too_low');
-        pushReason(reasonCodes, idleDays > 30, 'vector_long_term_idle');
-        return { vectorMode: 'index_only', vectorSearchStride, rerankEnabled: false, reasonCodes };
-    }
-
     if (idleDays > idleDecayDays || retrievalPrecision < 0.35) {
         pushReason(reasonCodes, idleDays > idleDecayDays, 'vector_idle_decay');
+        pushReason(reasonCodes, idleDays > 30, 'vector_long_term_idle');
         pushReason(reasonCodes, retrievalPrecision < 0.35, 'vector_precision_mid');
         return { vectorMode: 'search', vectorSearchStride, rerankEnabled: false, reasonCodes };
     }
@@ -738,7 +702,7 @@ export function buildAdaptivePolicy(
         entityResolutionLevel,
         speakerTrackingLevel,
         worldStateWeight: clampNumber(worldStateWeight, 0.1, 1),
-        vectorEnabled: profile.vectorStrategy.enabled && profile.stylePreference !== 'qa' && vectorDecision.vectorMode !== 'off',
+        vectorEnabled: profile.vectorStrategy.enabled && vectorDecision.vectorMode !== 'off',
         vectorChunkThreshold: Math.max(120, Math.round(profile.vectorStrategy.chunkThreshold)),
         rerankThreshold: Math.max(2, Math.round(profile.vectorStrategy.rerankThreshold)),
         vectorMode: vectorDecision.vectorMode,

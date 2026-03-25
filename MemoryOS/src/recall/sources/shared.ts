@@ -790,6 +790,7 @@ export function readSourceLimit(context: RecallSourceContext, source: RecallCand
 
 export function buildScoredCandidate(context: RecallSourceContext, params: {
     candidateId: string;
+    memoryCardId?: string | null;
     recordKey: string;
     recordKind: RecallCandidateRecordKind;
     source: RecallCandidateSource;
@@ -919,6 +920,7 @@ export function buildScoredCandidate(context: RecallSourceContext, params: {
         actorRetentionBias: visibility.actorRetentionBias,
         ownerActorKey: normalizeText(params.ownerActorKey ?? lifecycle?.ownerActorKey ?? '') || null,
         participantActorKeys: Array.from(new Set((params.participantActorKeys ?? []).map((item: string): string => normalizeText(item)).filter(Boolean))),
+        memoryCardId: normalizeText(params.memoryCardId) || null,
         finalScore: boostedFinalScore,
         tone,
         selected: false,

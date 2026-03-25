@@ -32,8 +32,9 @@ import { buildViewpointPolicyInput } from '../injection/viewpoint-policy';
 import { collectRecallCandidates } from '../recall/recall-assembler';
 import { planRecall } from '../recall/recall-planner';
 import { cutRecallCandidatesByBudget, rankRecallCandidates } from '../recall/recall-ranker';
+import { buildMemoryCardDiagnosticsFeedbackIndex, buildMemoryCardUsageFeedbackIndex } from '../recall/memory-card-feedback';
 import { runRerank } from '../llm/memoryLlmBridge';
-import { buildRecallTopicHash, collectCheapRecall, resolveRecallGateLanes } from '../injection/recall-gate';
+import { collectCheapRecall, resolveRecallGateLanes } from '../injection/recall-gate';
 
 type VectorHit = {
     chunkId: string;
@@ -296,7 +297,8 @@ function buildMemoryCardSnapshotItemsFromCards(
                 : sourceRecordKind === 'summary'
                     ? (sourceRecordKey ? summaryMap.get(sourceRecordKey) ?? null : null)
                     : null;
-            const usage = buildUsageSnapshot(sourceRecordKey ? (recallMap.get(sourceRecordKey) ?? []) : []);
+            const usageKey = normalizeText(card.cardId);
+            const usage = buildUsageSnapshot(usageKey ? (recallMap.get(usageKey) ?? []) : []);
             const embedding = embeddings.get(card.cardId) ?? null;
             const content = normalizeText(card.memoryText);
             const isArchived = card.status !== 'active';
@@ -547,7 +549,7 @@ export class VectorMemoryViewerFacade {
             db.memory_recall_log.where('chatKey').equals(this.chatKey).toArray(),
         ]);
         const recallMap = recallRows.reduce<Map<string, DBMemoryRecallLog[]>>((map: Map<string, DBMemoryRecallLog[]>, row: DBMemoryRecallLog): Map<string, DBMemoryRecallLog[]> => {
-            const key = normalizeText(row.recordKey);
+            const key = normalizeText(row.cardId);
             if (!key) {
                 return map;
             }
@@ -651,7 +653,7 @@ export class VectorMemoryViewerFacade {
         });
         const cheapRecall = await collectCheapRecall({
             chatKey: this.chatKey,
-            query: normalizedQuery,
+            query: recallContext.recallQuery,
             intent,
             plan: recallPlan,
             recentEvents,
@@ -677,17 +679,15 @@ export class VectorMemoryViewerFacade {
         const currentTurn = Math.max(0, Number(currentTurnTracker?.activeAssistantTurnCount ?? 0) || 0);
         const recallCache = await this.chatStateManager.getRecallCache();
         const recallCacheVersion = await this.chatStateManager.getRecallCacheVersion();
-        const cheapTopicHash = buildRecallTopicHash(cheapRecall);
         const cacheActiveCards = recallCache?.selectedCardIds?.length
             ? await db.memory_cards.bulkGet(recallCache.selectedCardIds)
             : [];
-        const cacheHit = Boolean(
+        const cacheBoostActive = Boolean(
             recallCache
             && recallCache.intent === intent
             && recallCache.baseVersion === recallCacheVersion
             && currentTurn <= recallCache.expiresTurn
             && normalizeStringList(recallCache.entityKeys).join('|') === normalizeStringList(cheapRecall.entityKeys).join('|')
-            && String(recallCache.topicHash ?? '').trim() === String(cheapTopicHash ?? '').trim()
             && cacheActiveCards.length > 0
             && cacheActiveCards.every((card): boolean => Boolean(card && card.status === 'active' && String(card.chatKey ?? '').trim() === this.chatKey)),
         );
@@ -698,9 +698,6 @@ export class VectorMemoryViewerFacade {
             structuredCount: cheapRecall.structuredCount,
             coveredLanes: cheapRecall.coveredLanes,
             recentEventCount: cheapRecall.recentEventCount,
-            structuredEnough: cheapRecall.enough,
-            recentEventsEnough: cheapRecall.recentEventCount > 0 && (cheapRecall.primaryNeed === 'historical_event' || cheapRecall.primaryNeed === 'causal_trace' || cheapRecall.primaryNeed === 'mixed'),
-            cacheHit,
         });
         const resolvedPolicyGate: RecallGateDecision = {
             ...policyGate,
@@ -726,7 +723,7 @@ export class VectorMemoryViewerFacade {
             : resolvedPolicyGate;
         const vectorManager = new VectorManager(this.chatKey);
         const rawHits = executionVectorGate.enabled
-            ? await vectorManager.search(normalizedQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? 5) * 2, Number(recallPlan.fineTopK ?? 8)), {
+            ? await vectorManager.search(recallContext.recallQuery, Math.max(Number(recallPlan.sourceLimits.vector ?? recallPlan.sourceLimits.memory_card ?? 8) * 2, Number(recallPlan.fineTopK ?? 8)), {
                 lanes: executionVectorGate.lanes,
                 activeOnly: true,
             })
@@ -738,37 +735,65 @@ export class VectorMemoryViewerFacade {
         const rerankedHits = await rerankVectorHits(normalizedQuery, activeHits, rerankEnabled, Math.max(2, Number(executionPolicy.rerankThreshold ?? 6)));
         const beforeRankMap = new Map<string, number>(activeHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
         const afterRankMap = new Map<string, number>(rerankedHits.map((item: VectorHit, index: number): [string, number] => [normalizeText(item.chunkId), index + 1]));
-        const candidates = executionVectorGate.enabled
-            ? await collectRecallCandidates({
-                chatKey: this.chatKey,
-                plan: recallPlan,
-                query: normalizedQuery,
-                recentEvents,
-                logicalView,
-                groupMemory,
-                policy: executionPolicy,
-                lorebookDecision,
-                lorebookEntries,
-                factsManager: new FactsManager(this.chatKey),
-                stateManager: new StateManager(this.chatKey),
-                summariesManager: new SummariesManager(this.chatKey),
-                chatStateManager: this.chatStateManager,
-                lifecycleIndex: recallContext.lifecycleMap,
-                activeActorKey: recallContext.activeActorKey,
-                personaProfiles: recallContext.personaProfiles,
-                personaProfile: recallContext.personaProfile,
-                tuningProfile: recallContext.tuningProfile,
-                relationships: recallContext.relationships,
-                fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
-                vectorGate: executionVectorGate,
-            })
-            : [...cheapRecall.candidates];
+        const candidates = await collectRecallCandidates({
+            chatKey: this.chatKey,
+            plan: recallPlan,
+            query: recallContext.recallQuery,
+            recentEvents,
+            logicalView,
+            groupMemory,
+            policy: executionPolicy,
+            lorebookDecision,
+            lorebookEntries,
+            factsManager: new FactsManager(this.chatKey),
+            stateManager: new StateManager(this.chatKey),
+            summariesManager: new SummariesManager(this.chatKey),
+            chatStateManager: this.chatStateManager,
+            lifecycleIndex: recallContext.lifecycleMap,
+            activeActorKey: recallContext.activeActorKey,
+            personaProfiles: recallContext.personaProfiles,
+            personaProfile: recallContext.personaProfile,
+            tuningProfile: recallContext.tuningProfile,
+            relationships: recallContext.relationships,
+            fallbackRelationshipWeight: recallContext.fallbackRelationshipWeight,
+            vectorGate: executionVectorGate,
+        });
+        const memoryCardIds = Array.from(new Set(
+            candidates
+                .filter((item: RecallCandidate): boolean => item.source === 'memory_card')
+                .map((item: RecallCandidate): string => normalizeText(item.memoryCardId))
+                .filter(Boolean),
+        ));
+        const [recallRows, memoryCardRows] = await Promise.all([
+            db.memory_recall_log
+                .where('[chatKey+ts]')
+                .between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER])
+                .reverse()
+                .limit(320)
+                .toArray(),
+            memoryCardIds.length > 0
+                ? db.memory_cards.bulkGet(memoryCardIds)
+                : Promise.resolve([]),
+        ]);
+        const memoryCardUsage = buildMemoryCardUsageFeedbackIndex(recallRows);
+        const loadedMemoryCards: DBMemoryCard[] = (memoryCardRows ?? []).filter((item): boolean => item != null) as DBMemoryCard[];
+        const memoryCardDiagnostics = await buildMemoryCardDiagnosticsFeedbackIndex(
+            loadedMemoryCards,
+        );
         const ranked = rankRecallCandidates({
             candidates,
             plan: recallPlan,
             recentVisibleMessages: logicalView?.visibleMessages.map((item) => item.text) ?? [],
             worldStateText,
             lorebookConflictDetected: lorebookDecision.conflictDetected,
+            memoryCardUsage,
+            memoryCardDiagnostics,
+            cacheBoost: {
+                enabled: cacheBoostActive,
+                selectedCardIds: recallCache?.selectedCardIds ?? [],
+                entityKeys: recallCache?.entityKeys ?? [],
+                laneSet: recallCache?.laneSet ?? [],
+            },
         });
         const finalized = cutRecallCandidatesByBudget({
             candidates: ranked,
@@ -777,15 +802,22 @@ export class VectorMemoryViewerFacade {
         });
         const vectorCandidateMap = new Map<string, RecallCandidate>();
         ranked.filter((item: RecallCandidate): boolean => item.source === 'memory_card').forEach((item: RecallCandidate): void => {
-            const chunkId = normalizeText(String(item.candidateId ?? '').replace(/^memory-card:/, ''));
-            if (chunkId) {
-                vectorCandidateMap.set(chunkId, item);
+            const memoryCardId = normalizeText(item.memoryCardId);
+            if (memoryCardId) {
+                vectorCandidateMap.set(memoryCardId, item);
             }
         });
         const selectedVectorCandidates = finalized
             .filter((item: RecallCandidate): boolean => item.source === 'memory_card' && item.selected)
             .sort((left: RecallCandidate, right: RecallCandidate): number => Number(right.finalScore ?? 0) - Number(left.finalScore ?? 0));
-        const finalRankMap = new Map<string, number>(selectedVectorCandidates.map((item: RecallCandidate, index: number): [string, number] => [normalizeText(String(item.candidateId ?? '').replace(/^memory-card:/, '')), index + 1]));
+        const finalRankMap = new Map<string, number>(
+            selectedVectorCandidates
+                .map((item: RecallCandidate, index: number): [string, number] | null => {
+                    const memoryCardId = normalizeText(item.memoryCardId);
+                    return memoryCardId ? [memoryCardId, index + 1] : null;
+                })
+                .filter((item: [string, number] | null): item is [string, number] => item != null),
+        );
         const hits: MemoryRecallPreviewHit[] = rerankedHits.map((hit: VectorHit): MemoryRecallPreviewHit => {
             const chunkId = normalizeText(hit.chunkId);
             const item = itemMap.get(chunkId);
@@ -803,7 +835,7 @@ export class VectorMemoryViewerFacade {
                 matchedInRecall: Boolean(candidate),
                 enteredContext: finalRankMap.has(chunkId),
                 reasonCodes: candidate?.reasonCodes ?? [],
-                cardId: item?.cardId ?? `memory-card:${chunkId}`,
+                cardId: item?.cardId ?? chunkId,
                 lane: item?.lane ?? inferMemoryLane(item?.sourceRecordKind ?? 'unknown', item?.memoryType ?? null, item?.memorySubtype ?? null, item?.sourceLabel ?? ''),
                 subject: item?.subject ?? inferMemoryCardSubject(item ?? ({} as MemoryCardSummary)),
                 title: item?.title ?? inferMemoryCardTitle(item ?? ({} as MemoryCardSummary)),
@@ -811,7 +843,10 @@ export class VectorMemoryViewerFacade {
                 status: item?.status ?? inferMemoryCardStatus(item?.statusKind ?? 'normal', Boolean(item?.sourceMissing)),
             };
         });
-        return {
+        const selectedCardIds = selectedVectorCandidates
+            .map((item: RecallCandidate): string => normalizeText(item.memoryCardId).toLowerCase())
+            .filter(Boolean);
+        const result: MemoryRecallPreviewResult = {
             query: normalizedQuery,
             testedAt: Date.now(),
             previewMode,
@@ -826,11 +861,12 @@ export class VectorMemoryViewerFacade {
                 vectorMode: policy.vectorMode,
             },
             cache: {
-                hit: cacheHit,
-                reasonCodes: cacheHit ? ['recall_cache_hit'] : [],
-                topicHash: cheapTopicHash,
+                hit: cacheBoostActive,
+                reasonCodes: cacheBoostActive ? ['cache_rank_boost'] : [],
                 entityKeys: normalizeStringList(cheapRecall.entityKeys),
-                expiresTurn: recallCache?.expiresTurn ?? 0,
+                laneSet: cacheBoostActive ? (recallCache?.laneSet ?? []) : [],
+                selectedCardIds: cacheBoostActive ? normalizeStringList(recallCache?.selectedCardIds ?? []) : [],
+                expiresTurn: cacheBoostActive ? (recallCache?.expiresTurn ?? 0) : 0,
             },
             cheapRecall: {
                 primaryNeed: cheapRecall.primaryNeed,
@@ -840,6 +876,48 @@ export class VectorMemoryViewerFacade {
                 enough: cheapRecall.enough,
             },
         };
+        if (previewMode === 'effective_policy') {
+            const forcedResult = await this.runMemoryRecallPreview(normalizedQuery, {
+                maxTokens: opts.maxTokens,
+                forceVector: true,
+            });
+            const effectiveTop = selectedCardIds.slice(0, 6);
+            const forcedTop = (forcedResult.hits ?? [])
+                .filter((item: MemoryRecallPreviewHit): boolean => item.enteredContext)
+                .sort((left: MemoryRecallPreviewHit, right: MemoryRecallPreviewHit): number => {
+                    const leftRank = Number(left.finalRank ?? Number.MAX_SAFE_INTEGER);
+                    const rightRank = Number(right.finalRank ?? Number.MAX_SAFE_INTEGER);
+                    return leftRank - rightRank;
+                })
+                .map((item: MemoryRecallPreviewHit): string => normalizeText(item.cardId).toLowerCase())
+                .filter(Boolean)
+                .slice(0, 6);
+            const effectiveSet = new Set(effectiveTop);
+            const forcedSet = new Set(forcedTop);
+            const overlap = forcedTop.filter((cardId: string): boolean => effectiveSet.has(cardId));
+            const overlapRate = forcedTop.length > 0 ? overlap.length / forcedTop.length : 1;
+            const countGap = Math.max(0, forcedTop.length - effectiveTop.length);
+            const missingForcedCardIds = Array.from(forcedSet).filter((cardId: string): boolean => !effectiveSet.has(cardId));
+            const gapReasonCodes: string[] = [];
+            if (forcedTop.length >= 2 && overlapRate < 0.5) {
+                gapReasonCodes.push('gap_low_overlap');
+            }
+            if (countGap >= 3) {
+                gapReasonCodes.push('gap_large_count_gap');
+            }
+            if (gapReasonCodes.length > 0) {
+                gapReasonCodes.push('strategy_gap_high');
+            }
+            result.comparison = {
+                effectiveSelectedCardIds: effectiveTop,
+                forcedSelectedCardIds: forcedTop,
+                selectedOverlapRate: Number(overlapRate.toFixed(4)),
+                selectedCountGap: countGap,
+                missingForcedCardIds,
+                gapReasonCodes,
+            };
+        }
+        return result;
     }
 
 }

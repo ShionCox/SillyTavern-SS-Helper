@@ -382,6 +382,7 @@ export interface DBMemoryRecallLog {
     query: string;
     section: string;
     recordKey: string;
+    cardId?: string | null;
     recordKind: 'fact' | 'summary' | 'state' | 'relationship';
     recordTitle: string;
     score: number;
@@ -565,7 +566,30 @@ export class SSHelperDatabase extends Dexie {
             memory_card_embeddings: '&embeddingId, cardId, chatKey',
             memory_card_meta: '&metaKey, chatKey, [chatKey+updatedAt]',
             relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
-            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], chatKey, section, recordKey, ts',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], [chatKey+cardId+ts], chatKey, section, recordKey, cardId, ts',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, consumer, taskId, taskKind, state, reasonCode, sortTs, queuedAt, finishedAt, createdAt, [sourcePluginId+sortTs], [state+sortTs]',
+        });
+
+        this.version(7).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts], pluginId, chatKey, collection, recordId, ts',
+            events: '&eventId, [chatKey+ts], [chatKey+type+ts], [chatKey+source.pluginId+ts]',
+            facts: '&factKey, [chatKey+type], [chatKey+entity.kind+entity.id], [chatKey+path], [chatKey+updatedAt]',
+            world_state: '&stateKey, [chatKey+path]',
+            summaries: '&summaryId, [chatKey+level+createdAt]',
+            templates: '&templateId, [chatKey+createdAt], [chatKey+worldType], [chatKey+worldInfoHash]',
+            audit: '&auditId, chatKey, ts, action',
+            memory_mutation_history: '&mutationId, [chatKey+ts], [chatKey+targetRecordKey+ts], [chatKey+targetKind+ts], [chatKey+action+ts], chatKey, targetRecordKey, targetKind, action',
+            meta: '&chatKey',
+            worldinfo_cache: '&cacheKey, chatKey, [chatKey+bookName]',
+            template_bindings: '&bindingKey, chatKey',
+            memory_cards: '&cardId, chatKey, [chatKey+status], [chatKey+sourceRecordKey], [chatKey+lane], [chatKey+updatedAt]',
+            memory_card_embeddings: '&embeddingId, cardId, chatKey',
+            memory_card_meta: '&metaKey, chatKey, [chatKey+updatedAt]',
+            relationship_memory: '&relationshipKey, [chatKey+updatedAt], [chatKey+actorKey+targetKey], chatKey, actorKey, targetKey, updatedAt',
+            memory_recall_log: '&recallId, [chatKey+ts], [chatKey+section+ts], [chatKey+selected+ts], [chatKey+cardId+ts], chatKey, section, recordKey, cardId, ts',
             llm_credentials: '&providerId, updatedAt',
             llm_request_logs: '&logId, requestId, sourcePluginId, consumer, taskId, taskKind, state, reasonCode, sortTs, queuedAt, finishedAt, createdAt, [sourcePluginId+sortTs], [state+sortTs]',
         });

@@ -428,7 +428,7 @@ export type InjectionSectionName =
     | 'LAST_SCENE'
     | 'SHORT_SUMMARY';
 
-export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
+export type VectorMode = 'off' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
@@ -824,6 +824,14 @@ export interface MemoryRecallPreviewResult extends VectorMemorySearchTestResult 
     effectivePolicy?: {
         vectorEnabled: boolean;
         vectorMode: VectorMode;
+    };
+    comparison?: {
+        effectiveSelectedCardIds: string[];
+        forcedSelectedCardIds: string[];
+        selectedOverlapRate: number;
+        selectedCountGap: number;
+        missingForcedCardIds: string[];
+        gapReasonCodes: string[];
     };
 }
 
@@ -1523,6 +1531,7 @@ export type WorldStateGroupingResult = Record<string, Record<string, StructuredW
       query: string;
       section: InjectionSectionName | 'PREVIEW';
       recordKey: string;
+      cardId?: string | null;
     recordKind: MemoryRecordKind;
     recordTitle: string;
     score: number;
@@ -1552,8 +1561,7 @@ export type WorldStateGroupingResult = Record<string, Record<string, StructuredW
       vectorMode: VectorMode;
   }
 
-  export interface RecallCacheEntry {
-      topicHash: string;
+export interface RecallCacheEntry {
       intent: InjectionIntent;
       entityKeys: string[];
       laneSet: MemoryCardLane[];
@@ -1611,8 +1619,9 @@ export interface RecallExplanationBucket {
       cache?: {
           hit: boolean;
           reasonCodes: string[];
-          topicHash: string;
           entityKeys: string[];
+          laneSet: MemoryCardLane[];
+          selectedCardIds: string[];
           expiresTurn: number;
       } | null;
       cheapRecall?: CheapRecallSnapshot | null;
@@ -1690,6 +1699,21 @@ export interface MutationRepairTask {
     lastError?: string;
 }
 
+export type MemoryCardMaintenanceTaskType = 'rebuild_index' | 'rebuild_from_source';
+
+export interface MemoryCardMaintenanceTask {
+    taskId: string;
+    taskType: MemoryCardMaintenanceTaskType;
+    fingerprint: string;
+    sourceRecordKey?: string;
+    sourceRecordKind?: 'fact' | 'summary';
+    reasonCodes: string[];
+    enqueuedAt: number;
+    attempts: number;
+    status: 'pending' | 'running' | 'failed';
+    lastError?: string;
+}
+
 export interface MemoryOSChatState {
     logicalChatView?: LogicalChatView;
     semanticSeed?: ChatSemanticSeed;
@@ -1713,6 +1737,8 @@ export interface MemoryOSChatState {
     summarySettingsOverride?: SummarySettingsOverride | null;
     memoryTuningProfile?: MemoryTuningProfile;
     mutationRepairQueue?: MutationRepairTask[];
+    memoryCardMaintenanceQueue?: MemoryCardMaintenanceTask[];
+    memoryCardMaintenanceLastExecutedAtByFingerprint?: Record<string, number>;
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
     mutationRepairGeneration?: number;
@@ -2080,8 +2106,8 @@ export interface MemorySDK {
         createSnapshot(note?: string): Promise<string>;
     };
 
-    extract: {
-        kickOffExtraction(): Promise<void>;
+    postGeneration: {
+        scheduleRoundProcessing(reason?: string): Promise<void>;
     };
 
     mutation: {
@@ -2214,7 +2240,6 @@ export interface MemorySDK {
         setMemoryCardArchived(cardId: string, archived: boolean): Promise<void>;
         getColdStartStage(): Promise<ColdStartStage | null>;
         primeColdStartPrompt(reason?: string): Promise<boolean>;
-        primeColdStartExtract(reason?: string): Promise<boolean>;
         getLorebookDecision(): Promise<LorebookGateDecision | null>;
         getGroupMemory(): Promise<GroupMemoryState | null>;
         getPromptInjectionProfile(): Promise<PromptInjectionProfile>;

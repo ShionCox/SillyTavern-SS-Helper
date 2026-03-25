@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type {
     LLMSDK,
     LLMRunResult,

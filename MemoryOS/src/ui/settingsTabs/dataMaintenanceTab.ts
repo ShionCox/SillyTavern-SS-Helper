@@ -10,7 +10,7 @@ import type {
 } from '../../db/db';
 import type { MemoryOSSettingsIds } from '../settingsCardTemplateTypes';
 import { filterRecordText } from '../../core/record-filter';
-import { logger, toast } from '../../index';
+import { logger, toast } from '../../runtime/runtime-services';
 import { bindToggle, readRecordFilterSettings, readSettingBoolean, saveRecordFilterSettings } from './sharedRuntime';
 import { openRecordEditor } from '../recordEditorNext';
 import { bindDataMaintenanceAuditSection } from './dataMaintenanceAuditSection';

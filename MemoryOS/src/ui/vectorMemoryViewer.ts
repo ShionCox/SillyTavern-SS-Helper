@@ -240,17 +240,11 @@ function formatVectorGateReasonLabel(reasonCode: string): string {
     if (normalizedReasonCode === 'vector_disabled') {
         return '已关闭向量召回';
     }
-    if (normalizedReasonCode === 'structured_enough') {
-        return '结构化记忆已足够';
-    }
-    if (normalizedReasonCode === 'recent_events_enough') {
-        return '近期事件已足够';
-    }
     if (normalizedReasonCode === 'cheap_layer_empty') {
         return '廉价召回层为空';
     }
-    if (normalizedReasonCode === 'recall_cache_hit') {
-        return '命中召回缓存';
+    if (normalizedReasonCode === 'cache_rank_boost') {
+        return '命中缓存排序加分';
     }
     if (normalizedReasonCode.startsWith('vector_mode:')) {
         const mode = normalizedReasonCode.slice('vector_mode:'.length).trim() || 'unknown';
@@ -1425,6 +1419,9 @@ export class VectorMemoryViewerController {
         const previewModeNote = testMode
             ? '预演结果模式已接管列表，左侧筛选会暂时冻结，退出后恢复到你进入预演前的设置。'
             : '先缩小范围，再进入排查。';
+        const previewComparisonNote = previewResult?.previewMode === 'effective_policy' && previewResult.comparison
+            ? `主策略 ${previewResult.comparison.effectiveSelectedCardIds.length} 张，对照 ${previewResult.comparison.forcedSelectedCardIds.length} 张，重合率 ${Math.round((previewResult.comparison.selectedOverlapRate ?? 0) * 100)}%${Array.isArray(previewResult.comparison.gapReasonCodes) && previewResult.comparison.gapReasonCodes.includes('strategy_gap_high') ? '（策略差距偏高）' : ''}`
+            : '';
         const actorOptionHtml = actorOptions
             .map((option: VectorMemoryActorOption): string => `<option value="${escapeHtml(option.key)}"${this.state.actorKey === option.key ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
             .join('');
@@ -1473,6 +1470,7 @@ export class VectorMemoryViewerController {
                         ${testMode && previewWarningNote ? `<div class="stx-vmv-inline-note">${escapeHtml(previewWarningNote)}</div>` : ''}
                         ${testMode && previewResult?.previewMode === 'forced_vector' && policyGateSummary ? `<div class="stx-vmv-inline-note">${escapeHtml(`原策略门控：${policyGateSummary}`)}</div>` : ''}
                         ${testMode && previewForcedNote ? `<div class="stx-vmv-inline-note">${escapeHtml(previewForcedNote)}</div>` : ''}
+                        ${testMode && previewComparisonNote ? `<div class="stx-vmv-inline-note">${escapeHtml(previewComparisonNote)}</div>` : ''}
                         ${testMode && vectorGateSummary ? `<div class="stx-vmv-inline-note">${escapeHtml(`${previewResult?.previewMode === 'forced_vector' ? '本次执行：' : '当前门控：'}${vectorGateSummary}`)}</div>` : ''}
                     </form>
                 </section>

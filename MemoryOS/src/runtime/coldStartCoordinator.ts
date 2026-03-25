@@ -1,5 +1,5 @@
 import type { MemorySDK } from '../../../SDK/stx';
-import { logger } from '../index';
+import { logger } from './runtime-services';
 import type { ColdStartLorebookSelection } from '../types';
 import { openWorldbookInitPanel } from '../ui/index';
 const ACTIVE_COLD_START_PANEL_TASKS = new Map<string, Promise<void>>();

@@ -1,6 +1,6 @@
 import { db, clearAllMemoryData, clearMemoryChatData, patchSdkChatShared } from '../db/db';
 import type { DBMeta } from '../db/db';
-import { logger, toast } from '../index';
+import { logger, toast } from '../runtime/runtime-services';
 import { openSharedDialog } from '../../../_Components/sharedDialog';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { renderSharedWorldStateSectionTable as renderWorldStateSectionTable, type SharedWorldStateSectionColumn as WorldStateSectionColumn, type SharedWorldStateSectionTypeTab as WorldStateSectionTypeTab } from '../../../_Components/sharedWorldStateSectionTable';

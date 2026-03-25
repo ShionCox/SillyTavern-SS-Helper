@@ -94,11 +94,12 @@ export async function collectMemoryCardRecallCandidates(context: RecallSourceCon
         loadFacts(context),
         loadRecentSummaries(context),
     ]);
-    const sourceLimit = readSourceLimit(context, 'vector', 5);
+    const sourceLimit = readSourceLimit(context, 'memory_card', 8);
+    const cardSearchDepth = Math.max(sourceLimit, readSourceLimit(context, 'vector', sourceLimit));
     const vectorManager = new VectorManager(context.chatKey);
     const rawHits = await vectorManager.search(
         context.query,
-        Math.max(sourceLimit * 2, Number(context.plan.fineTopK ?? 8)),
+        Math.max(cardSearchDepth * 2, Number(context.plan.fineTopK ?? 8)),
         {
             lanes: Array.from(allowedLanes) as string[],
             activeOnly: true,
@@ -129,6 +130,7 @@ export async function collectMemoryCardRecallCandidates(context: RecallSourceCon
             }
             const candidate = buildScoredCandidate(context, {
                 candidateId: `memory-card:${hit.cardId}`,
+                memoryCardId: normalizeText(hit.cardId) || null,
                 recordKey: normalizeText(sourceMeta.sourceRecordKey || hit.cardId),
                 recordKind: lane === 'relationship'
                     ? 'relationship'
@@ -167,6 +169,7 @@ export async function collectMemoryCardRecallCandidates(context: RecallSourceCon
             const rawText = buildMemoryCardDraftsFromFact(fact as unknown as DBFact).map((item): string => item.memoryText).join('\n') || formatFactMemoryTextForDisplay(fact as unknown as DBFact);
             const candidate = buildScoredCandidate(context, {
                 candidateId: `memory-card:${hit.cardId}`,
+                memoryCardId: normalizeText(hit.cardId) || null,
                 recordKey: normalizeText(fact.factKey || hit.cardId),
                 recordKind: 'fact',
                 source: 'memory_card',
@@ -195,6 +198,7 @@ export async function collectMemoryCardRecallCandidates(context: RecallSourceCon
         }
         const candidate = buildScoredCandidate(context, {
             candidateId: `memory-card:${hit.cardId}`,
+            memoryCardId: normalizeText(hit.cardId) || null,
             recordKey: normalizeText(summary.summaryId || hit.cardId),
             recordKind: 'summary',
             source: 'memory_card',

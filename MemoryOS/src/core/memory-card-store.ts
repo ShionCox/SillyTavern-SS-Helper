@@ -238,20 +238,76 @@ function buildDialogueQuoteDraftsFromSummary(summary: DBSummary, envelope: Memor
  * @param memoryText 记忆正文。
  * @returns 是否通过基本文本准入。
  */
-function isNaturalMemoryText(memoryText: string): boolean {
+function isNaturalMemoryText(
+    memoryText: string,
+    lane: MemoryCardLane,
+    memorySubtype: DBMemoryCard['memorySubtype'],
+): boolean {
     const normalized = normalizeText(memoryText);
-    if (!normalized || normalized.length < 10) {
+    if (!normalized) {
         return false;
     }
-    if (/[{}[\]"]/.test(normalized)) {
+    if (/^\s*[\[{<].+[:=].+[\]}>]\s*$/.test(normalized)) {
         return false;
     }
-    const separatorCount = (normalized.match(/[；;]\s*/g) || []).length;
-    return separatorCount <= 4;
+    if (/^```/.test(normalized) || /^<(html|body|script)/i.test(normalized)) {
+        return false;
+    }
+    if (memorySubtype === 'dialogue_quote') {
+        return normalized.length >= 2;
+    }
+    if (lane === 'identity' || lane === 'rule' || lane === 'relationship') {
+        return normalized.length >= 4;
+    }
+    if (lane === 'event') {
+        return normalized.length >= 6;
+    }
+    if (lane === 'state') {
+        return normalized.length >= 8;
+    }
+    return normalized.length >= 6;
+    
 }
 
 /**
  * 功能：根据草稿构建稳定卡片编号。
+ * @param chatKey 聊天键。
+ * @param draft 记忆卡草稿。
+ * @returns 稳定卡片编号。
+ */
+/**
+ * 功能：判断对话原句类记忆是否满足“来源可靠”准入条件。
+ * @param draft 数据库记忆卡草稿。
+ * @returns 是否满足可靠来源条件。
+ */
+function isReliableDialogueQuoteDraft(draft: DBMemoryCard): boolean {
+    const sourceRecordKind = normalizeCompareText(draft.sourceRecordKind);
+    const hasTrustedRecord = sourceRecordKind === 'summary' || sourceRecordKind === 'fact';
+    const hasMessageTrace = normalizeTextList(draft.sourceMessageIds).length > 0;
+    const hasOwner = Boolean(normalizeText(draft.ownerActorKey));
+    return (hasTrustedRecord && hasMessageTrace) || (hasMessageTrace && hasOwner);
+}
+
+/**
+ * 功能：按 lane 读取记忆卡准入阈值。
+ * @param lane 记忆卡 lane。
+ * @returns 对应的置信度与重要性阈值。
+ */
+function readAdmissionThreshold(lane: MemoryCardLane): { confidence: number; importance: number } {
+    if (lane === 'identity' || lane === 'rule') {
+        return { confidence: 0.55, importance: 0.45 };
+    }
+    if (lane === 'relationship' || lane === 'event') {
+        return { confidence: 0.6, importance: 0.5 };
+    }
+    if (lane === 'state') {
+        return { confidence: 0.65, importance: 0.55 };
+    }
+    return { confidence: 0.6, importance: 0.5 };
+}
+
+/**
+ * 功能：根据草稿生成稳定记忆卡 ID。
  * @param chatKey 聊天键。
  * @param draft 记忆卡草稿。
  * @returns 稳定卡片编号。
@@ -364,9 +420,14 @@ function normalizeDraft(
  * @returns 是否允许进入 active 记忆层。
  */
 function passesAdmission(draft: DBMemoryCard): boolean {
-    return draft.confidence >= 0.72
-        && draft.importance >= 0.6
-        && isNaturalMemoryText(draft.memoryText);
+    if (normalizeCompareText(draft.memorySubtype) === 'dialogue_quote') {
+        return isReliableDialogueQuoteDraft(draft)
+            && isNaturalMemoryText(draft.memoryText, draft.lane, draft.memorySubtype);
+    }
+    const threshold = readAdmissionThreshold(draft.lane);
+    return draft.confidence >= threshold.confidence
+        && draft.importance >= threshold.importance
+        && isNaturalMemoryText(draft.memoryText, draft.lane, draft.memorySubtype);
 }
 
 /**

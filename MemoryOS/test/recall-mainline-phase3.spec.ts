@@ -87,6 +87,7 @@ function createCandidate(input: {
     actorForgotten?: boolean;
     actorRetentionBias?: number;
     reasonCodes?: string[];
+    memoryCardId?: string;
 }): RecallCandidate {
     return {
         candidateId: input.candidateId,
@@ -115,6 +116,7 @@ function createCandidate(input: {
         actorForgetProbability: input.actorForgetProbability,
         actorForgotten: input.actorForgotten,
         actorRetentionBias: input.actorRetentionBias,
+        memoryCardId: input.memoryCardId ?? null,
         finalScore: input.finalScore ?? 0.45,
         tone: input.tone ?? 'stable_fact',
         selected: false,
@@ -248,6 +250,7 @@ describe('phase3 recall mainline', (): void => {
         const selected = runSelection([
             createCandidate({
                 candidateId: 'rule-generic',
+                memoryCardId: 'rule-generic',
                 recordKey: 'rule-generic',
                 recordKind: 'state',
                 source: 'memory_card',
@@ -262,6 +265,7 @@ describe('phase3 recall mainline', (): void => {
             }),
             createCandidate({
                 candidateId: 'rule-target',
+                memoryCardId: 'rule-target',
                 recordKey: 'rule-target',
                 recordKind: 'state',
                 source: 'memory_card',
@@ -550,5 +554,68 @@ describe('phase3 recall mainline', (): void => {
         expect(explanation?.selected.items.map((item) => item.recordKey)).toEqual(['fact:port']);
         expect(explanation?.rejectedCandidates.items.map((item) => item.recordKey)).toEqual(['relationship:foreign-private']);
         expect(explanation?.rejectedCandidates.items[0]?.reasonCodes).toContain('viewpoint:foreign_private_suppressed');
+    });
+
+    it('memory card usage feedback can boost useful cards and suppress unhealthy cards', (): void => {
+        const plan = createPlan('roleplay', 220);
+        const ranked = rankRecallCandidates({
+            candidates: [
+                createCandidate({
+                    candidateId: 'memory-card:card-good',
+                    memoryCardId: 'card-good',
+                    recordKey: 'fact:card-good',
+                    recordKind: 'fact',
+                    source: 'memory_card',
+                    sectionHint: 'FACTS',
+                    title: 'good card',
+                    rawText: 'this card is frequently selected and still relevant',
+                    keywordScore: 0.7,
+                    vectorScore: 0.68,
+                    finalScore: 0.62,
+                }),
+                createCandidate({
+                    candidateId: 'memory-card:card-bad',
+                    memoryCardId: 'card-bad',
+                    recordKey: 'fact:card-bad',
+                    recordKind: 'fact',
+                    source: 'memory_card',
+                    sectionHint: 'FACTS',
+                    title: 'bad card',
+                    rawText: 'this card has stale source and duplicate payload',
+                    keywordScore: 0.72,
+                    vectorScore: 0.7,
+                    finalScore: 0.64,
+                }),
+            ],
+            plan,
+            memoryCardUsage: {
+                'card-good': {
+                    selectedHits: 12,
+                    lastSelectedAt: Date.now() - 2 * 60 * 60 * 1000,
+                    lastScore: 0.93,
+                },
+                'card-bad': {
+                    selectedHits: 0,
+                    lastSelectedAt: null,
+                    lastScore: 0.4,
+                },
+            },
+            memoryCardDiagnostics: {
+                'card-good': {
+                    sourceMissing: false,
+                    needsRebuild: false,
+                    duplicateCount: 1,
+                },
+                'card-bad': {
+                    sourceMissing: true,
+                    needsRebuild: true,
+                    duplicateCount: 3,
+                },
+            },
+        });
+        expect(ranked[0]?.candidateId).toBe('memory-card:card-good');
+        const penalized = ranked.find((item) => item.candidateId === 'memory-card:card-bad');
+        expect(penalized?.reasonCodes).toContain('feedback_source_missing_penalty');
+        expect(penalized?.reasonCodes).toContain('feedback_needs_rebuild_penalty');
     });
 });

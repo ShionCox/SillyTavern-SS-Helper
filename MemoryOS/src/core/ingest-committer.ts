@@ -1,5 +1,4 @@
-import { logger } from '../index';
-import type { MemorySDK } from '../../../SDK/stx';
+import { logger } from '../runtime/runtime-services';
 import type { ChatStateManager } from './chat-state-manager';
 import type { MetaManager } from './meta-manager';
 import type { TurnTracker } from './turn-tracker';
@@ -14,6 +13,7 @@ export interface IngestCommitterDeps {
     chatStateManager: ChatStateManager | null;
     metaManager: MetaManager;
     turnTracker: TurnTracker | null;
+    primeColdStartExtractAfterIngest?: ((reason: string) => Promise<boolean>) | null;
 }
 
 /**
@@ -24,12 +24,14 @@ export class IngestCommitter {
     private readonly chatStateManager: ChatStateManager | null;
     private readonly metaManager: MetaManager;
     private readonly turnTracker: TurnTracker | null;
+    private readonly primeColdStartExtractAfterIngest: ((reason: string) => Promise<boolean>) | null;
 
     constructor(deps: IngestCommitterDeps) {
         this.chatKey = deps.chatKey;
         this.chatStateManager = deps.chatStateManager;
         this.metaManager = deps.metaManager;
         this.turnTracker = deps.turnTracker;
+        this.primeColdStartExtractAfterIngest = deps.primeColdStartExtractAfterIngest ?? null;
     }
 
     /**
@@ -68,7 +70,6 @@ export class IngestCommitter {
     public async commitExecution(input: {
         plan: IngestPlan;
         execution: IngestExecutionResult;
-        memory: MemorySDK | null;
         logicalView: LogicalChatView;
         meta: IngestMetaSnapshot | null;
     }): Promise<IngestCommitResult> {
@@ -93,9 +94,9 @@ export class IngestCommitter {
             };
         }
 
-        if (mutationResult.accepted && typeof (input.memory as any)?.chatState?.primeColdStartExtract === 'function') {
+        if (mutationResult.accepted && this.primeColdStartExtractAfterIngest) {
             logger.info(`统一记忆摄取成功后触发 cold-start extract，chatKey=${this.chatKey}`);
-            await (input.memory as any).chatState.primeColdStartExtract('ingest_success');
+            await this.primeColdStartExtractAfterIngest('ingest_success');
         }
 
         if (this.chatStateManager) {

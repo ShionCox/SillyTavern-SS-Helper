@@ -87,9 +87,14 @@ function normalizeRecallCacheSnapshot(value: unknown): LatestRecallExplanation['
         reasonCodes: Array.isArray(record.reasonCodes)
             ? record.reasonCodes.map((item: string): string => normalizeExplanationText(item)).filter(Boolean)
             : [],
-        topicHash: normalizeExplanationText(record.topicHash),
         entityKeys: Array.isArray(record.entityKeys)
             ? record.entityKeys.map((item: unknown): string => normalizeExplanationText(item)).filter(Boolean)
+            : [],
+        laneSet: Array.isArray(record.laneSet)
+            ? record.laneSet.map((item: unknown): string => normalizeExplanationText(item).toLowerCase()).filter(Boolean) as MemoryCardLane[]
+            : [],
+        selectedCardIds: Array.isArray(record.selectedCardIds)
+            ? record.selectedCardIds.map((item: unknown): string => normalizeExplanationText(item)).filter(Boolean)
             : [],
         expiresTurn: Math.max(0, Number(record.expiresTurn ?? 0) || 0),
     };

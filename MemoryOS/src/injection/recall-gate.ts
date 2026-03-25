@@ -61,16 +61,7 @@ export interface CheapRecallResult {
     structuredCount: number;
     recentEventCount: number;
     enough: boolean;
-    topicHash: string;
     isEnough: (intent: InjectionIntent) => boolean;
-}
-
-function hashText(value: string): string {
-    let hash = 5381;
-    for (let index = 0; index < value.length; index += 1) {
-        hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
-    }
-    return `h${(hash >>> 0).toString(16)}`;
 }
 
 function dedupeLanes(lanes: MemoryCardLane[]): MemoryCardLane[] {
@@ -153,7 +144,7 @@ export async function collectCheapRecall(input: CheapRecallInput): Promise<Cheap
     const candidates = await collectRecallCandidates({
         chatKey: input.chatKey,
         plan: input.plan,
-        query: input.query,
+        query: input.preparedContext.recallQuery || input.query,
         recentEvents: input.recentEvents,
         logicalView: input.logicalView,
         groupMemory: input.groupMemory,
@@ -198,7 +189,8 @@ export async function collectCheapRecall(input: CheapRecallInput): Promise<Cheap
             item.targetKey,
             ...(Array.isArray(item.participantKeys) ? item.participantKeys : []),
         ]),
-        ...extractKeywords(input.query),
+        ...(Array.isArray(input.preparedContext.recallQueryTerms) ? input.preparedContext.recallQueryTerms : []),
+        ...extractKeywords(input.preparedContext.recallQuery || input.query),
     ].filter((item: string | null | undefined): item is string => Boolean(item)));
     const cheapResult: CheapRecallResult = {
         candidates,
@@ -211,27 +203,10 @@ export async function collectCheapRecall(input: CheapRecallInput): Promise<Cheap
         structuredCount: structuredCandidates.length,
         recentEventCount: recentEventCandidates.length,
         enough: false,
-        topicHash: hashText([
-            normalizeText(input.intent),
-            normalizeText(input.query).toLowerCase(),
-            entityKeys.join('|'),
-            coveredLanes.join('|'),
-        ].join('::')),
         isEnough: (intent: InjectionIntent): boolean => isCheapEnough(cheapResult, intent),
     };
     cheapResult.enough = cheapResult.isEnough(input.intent);
     return cheapResult;
-}
-
-/**
- * 功能：把当前回合的召回结果摘要成缓存键。
- * 参数：
- *   cheap：便宜召回结果。
- * 返回：
- *   string：主题哈希。
- */
-export function buildRecallTopicHash(cheap: CheapRecallResult): string {
-    return cheap.topicHash;
 }
 
 /**

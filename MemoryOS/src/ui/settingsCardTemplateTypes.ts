@@ -115,4 +115,8 @@ export interface MemoryOSSettingsIds {
     aiDiagRecentTasksId: string;
     aiDiagRefreshBtnId: string;
     aiRoutePreviewId: string;
+    aiSelfTestPanelId: string;
+    aiSelfTestSummaryId: string;
+    aiSelfTestResultId: string;
+    aiSelfTestRunAllBtnId: string;
 }

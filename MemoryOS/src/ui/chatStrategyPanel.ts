@@ -1,7 +1,7 @@
 import { buildTavernChatScopedKeyEvent, listTavernChatsForCurrentTavernEvent } from '../../../SDK/tavern';
 import type { SdkTavernChatLocatorEvent } from '../../../SDK/tavern/types';
 import { readSdkPluginChatState } from '../../../SDK/db';
-import { toast } from '../index';
+import { toast } from '../runtime/runtime-services';
 import { buildSharedButton } from '../../../_Components/sharedButton';
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { closeSharedDialog, openSharedDialog } from '../../../_Components/sharedDialog';
@@ -3591,9 +3591,6 @@ function formatVectorModeLabel(value: string, isEnabled: boolean = false): strin
     }
     if (value === 'off') {
         return '待机 (未达阈值)';
-    }
-    if (value === 'index_only') {
-        return '仅索引 (构建中)';
     }
     if (value === 'search') {
         return '检索激活';

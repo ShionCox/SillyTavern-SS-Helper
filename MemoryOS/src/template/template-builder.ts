@@ -6,7 +6,7 @@ import { runGeneration, MEMORY_TASKS, checkAiModeGuard } from '../llm/memoryLlmB
 import type { MemoryAiTaskId } from '../llm/ai-health-types';
 import { buildStrictObjectSchema, nullableStringSchema } from '../llm/strict-schema';
 import { buildDisplayTables } from './table-derivation';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 
 /**
  * 功能：负责根据世界书内容生成并保存模板。

@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import type { ChatStateManager } from '../core/chat-state-manager';
 import type { EventsManager } from '../core/events-manager';
 import type { FactsManager } from '../core/facts-manager';

@@ -1,5 +1,5 @@
 import type { PluginManifest, RegistryChangeEvent, STXRegistry } from '../../../SDK/stx';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 
 /** 当前 SDK 版本号 */
 export const STX_VERSION: string = '1.0.0';

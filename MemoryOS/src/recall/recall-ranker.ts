@@ -4,6 +4,7 @@ import {
 } from '../core/memory-intelligence';
 import type {
     InjectionSectionName,
+    MemoryCardLane,
     RecallCandidate,
     RecallPlan,
 } from '../types';
@@ -17,6 +18,22 @@ type RankRecallCandidatesInput = {
     recentVisibleMessages?: string[];
     worldStateText?: string;
     lorebookConflictDetected?: boolean;
+    cacheBoost?: {
+        selectedCardIds?: string[];
+        entityKeys?: string[];
+        laneSet?: MemoryCardLane[];
+        enabled?: boolean;
+    } | null;
+    memoryCardUsage?: Record<string, {
+        selectedHits: number;
+        lastSelectedAt: number | null;
+        lastScore: number | null;
+    }> | null;
+    memoryCardDiagnostics?: Record<string, {
+        sourceMissing?: boolean;
+        needsRebuild?: boolean;
+        duplicateCount?: number;
+    }> | null;
 };
 
 type CutRecallCandidatesInput = {
@@ -40,11 +57,137 @@ function normalizeCandidateText(value: string): string {
     return normalizeMemoryText(value).toLowerCase();
 }
 
+function normalizeCacheTextSet(values: string[] | undefined): Set<string> {
+    return new Set((Array.isArray(values) ? values : []).map((item: string): string => normalizeCandidateText(item)).filter(Boolean));
+}
+
+function resolveCandidateLane(candidate: RecallCandidate): MemoryCardLane | null {
+    if (candidate.source === 'relationships') return 'relationship';
+    if (candidate.source === 'state') return 'state';
+    if (candidate.source === 'events' || candidate.recordKind === 'summary') return 'event';
+    if (candidate.source === 'lorebook') return 'rule';
+    if (candidate.sectionHint === 'RELATIONSHIPS') return 'relationship';
+    if (candidate.sectionHint === 'WORLD_STATE') return 'state';
+    if (candidate.sectionHint === 'LAST_SCENE' || candidate.sectionHint === 'EVENTS' || candidate.sectionHint === 'SUMMARY' || candidate.sectionHint === 'SHORT_SUMMARY') return 'event';
+    if (candidate.sectionHint === 'CHARACTER_FACTS') return 'identity';
+    return null;
+}
+
+function applyCacheBoost(candidates: RecallCandidate[], cacheBoost: RankRecallCandidatesInput['cacheBoost']): RecallCandidate[] {
+    if (!cacheBoost || cacheBoost.enabled !== true) {
+        return candidates;
+    }
+    const selectedCardIds = normalizeCacheTextSet(cacheBoost.selectedCardIds);
+    const entityKeys = normalizeCacheTextSet(cacheBoost.entityKeys);
+    const laneSet = normalizeCacheTextSet(cacheBoost.laneSet as string[] | undefined);
+    if (selectedCardIds.size <= 0 && entityKeys.size <= 0 && laneSet.size <= 0) {
+        return candidates;
+    }
+    return candidates.map((candidate: RecallCandidate): RecallCandidate => {
+        let boost = 0;
+        let reasonCodes = candidate.reasonCodes;
+        const cardId = readMemoryCardId(candidate);
+        if (cardId && selectedCardIds.has(cardId)) {
+            boost += 0.22;
+            reasonCodes = appendReason(reasonCodes, 'cache_selected_card_boost');
+        }
+        if (entityKeys.size > 0) {
+            const haystacks = [
+                normalizeCandidateText(candidate.title),
+                normalizeCandidateText(candidate.rawText),
+                normalizeCandidateText(candidate.recordKey),
+            ];
+            if (Array.from(entityKeys).some((key: string): boolean => haystacks.some((text: string): boolean => Boolean(text) && text.includes(key)))) {
+                boost += 0.05;
+                reasonCodes = appendReason(reasonCodes, 'cache_entity_boost');
+            }
+        }
+        const lane = resolveCandidateLane(candidate);
+        if (lane && laneSet.has(lane)) {
+            boost += 0.04;
+            reasonCodes = appendReason(reasonCodes, 'cache_lane_boost');
+        }
+        if (boost <= 0) {
+            return candidate;
+        }
+        return {
+            ...candidate,
+            finalScore: clamp01(candidate.finalScore + boost),
+            reasonCodes,
+        };
+    });
+}
+
 function appendReason(reasonCodes: string[], reasonCode: string): string[] {
     if (reasonCodes.includes(reasonCode)) {
         return reasonCodes;
     }
     return [...reasonCodes, reasonCode];
+}
+
+function readMemoryCardId(candidate: RecallCandidate): string {
+    if (candidate.source !== 'memory_card') {
+        return '';
+    }
+    return normalizeCandidateText(String(candidate.memoryCardId ?? '').trim());
+}
+
+function applyMemoryCardFeedback(candidate: RecallCandidate, input: RankRecallCandidatesInput): { scoreDelta: number; reasonCodes: string[] } {
+    if (candidate.source !== 'memory_card') {
+        return {
+            scoreDelta: 0,
+            reasonCodes: candidate.reasonCodes,
+        };
+    }
+    const cardId = readMemoryCardId(candidate);
+    if (!cardId) {
+        return {
+            scoreDelta: 0,
+            reasonCodes: appendReason(candidate.reasonCodes, 'feedback_card_id_missing'),
+        };
+    }
+    const usage = input.memoryCardUsage?.[cardId] ?? null;
+    const diagnostics = input.memoryCardDiagnostics?.[cardId] ?? null;
+    let delta = 0;
+    let reasonCodes = candidate.reasonCodes;
+    const selectedHits = Math.max(0, Number(usage?.selectedHits ?? 0) || 0);
+    if (selectedHits > 0) {
+        const selectedBoost = Math.min(0.2, Math.log1p(selectedHits) * 0.06);
+        delta += selectedBoost;
+        reasonCodes = appendReason(reasonCodes, `feedback_selected_hits:${Math.min(selectedHits, 99)}`);
+    }
+    const lastSelectedAt = Math.max(0, Number(usage?.lastSelectedAt ?? 0) || 0);
+    if (lastSelectedAt > 0) {
+        const ageDays = Math.max(0, (Date.now() - lastSelectedAt) / (24 * 60 * 60 * 1000));
+        const recentBoost = 0.12 * Math.exp(-ageDays / 7);
+        if (recentBoost > 0.005) {
+            delta += recentBoost;
+            reasonCodes = appendReason(reasonCodes, 'feedback_recent_selected_boost');
+        }
+    }
+    const lastScore = clamp01(Number(usage?.lastScore ?? 0));
+    if (lastScore > 0) {
+        const lastScoreBoost = Math.min(0.04, lastScore * 0.04);
+        delta += lastScoreBoost;
+        reasonCodes = appendReason(reasonCodes, 'feedback_last_score_boost');
+    }
+    if (diagnostics?.sourceMissing === true) {
+        delta -= 0.24;
+        reasonCodes = appendReason(reasonCodes, 'feedback_source_missing_penalty');
+    }
+    if (diagnostics?.needsRebuild === true) {
+        delta -= 0.12;
+        reasonCodes = appendReason(reasonCodes, 'feedback_needs_rebuild_penalty');
+    }
+    const duplicateCount = Math.max(1, Number(diagnostics?.duplicateCount ?? 1) || 1);
+    if (duplicateCount > 1) {
+        delta -= Math.min(0.18, (duplicateCount - 1) * 0.06);
+        reasonCodes = appendReason(reasonCodes, `feedback_duplicate_penalty:${Math.min(duplicateCount, 9)}`);
+    }
+    return {
+        scoreDelta: delta,
+        reasonCodes,
+    };
 }
 
 function setTonePrefix(line: string, tone: RecallCandidate['tone']): string {
@@ -183,6 +326,7 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
             const sectionWeight = candidate.sectionHint ? (input.plan.sectionWeights[candidate.sectionHint] ?? 0.4) : 0.2;
             const priority = readPriority(candidate);
             const exactEntityBonus = readExactEntityBonus(candidate);
+            const memoryCardPriorityBonus = candidate.source === 'memory_card' ? 0.12 : 0;
             const focusWeight = candidate.actorFocusTier === 'primary'
                 ? 0.08
                 : candidate.actorFocusTier === 'secondary'
@@ -190,6 +334,7 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
                     : candidate.actorFocusTier === 'shared'
                         ? 0.03
                         : 0;
+            const feedback = applyMemoryCardFeedback(candidate, input);
             const roughScore = clamp01(
                 candidate.keywordScore * 0.22
                 + candidate.vectorScore * 0.2
@@ -198,6 +343,7 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
                 + candidate.emotionScore * 0.08
                 + candidate.continuityScore * 0.1
                 + exactEntityBonus
+                + memoryCardPriorityBonus
                 + candidate.actorVisibilityScore * 0.12
                 + focusWeight
                 - (candidate.actorForgotten ? 0.14 : 0)
@@ -207,8 +353,8 @@ function rankCandidateBatch(candidates: RecallCandidate[], input: RankRecallCand
             );
             return {
                 ...candidate,
-                finalScore: clamp01(candidate.finalScore * 0.54 + roughScore * 0.32 + priorityWeight(priority)),
-                reasonCodes: [...candidate.reasonCodes, `priority:${priority}`],
+                finalScore: clamp01(candidate.finalScore * 0.54 + roughScore * 0.32 + priorityWeight(priority) + feedback.scoreDelta),
+                reasonCodes: [...feedback.reasonCodes, `priority:${priority}`, ...(candidate.source === 'memory_card' ? ['card_primary_surface'] : [])],
                 selected: false,
                 suppressedBy: Array.isArray(candidate.suppressedBy) ? [...candidate.suppressedBy] : undefined,
             };
@@ -415,8 +561,9 @@ export function applySafetyGate(candidates: RecallCandidate[]): RecallCandidate[
 }
 
 export function rankRecallCandidates(input: RankRecallCandidatesInput): RecallCandidate[] {
-    const blockedCandidates = appendBlockedCandidates(input.candidates);
-    const pooledCandidates = input.candidates.filter((candidate: RecallCandidate): boolean => candidate.visibilityPool !== 'blocked');
+    const boostedCandidates = applyCacheBoost(input.candidates, input.cacheBoost);
+    const blockedCandidates = appendBlockedCandidates(boostedCandidates);
+    const pooledCandidates = boostedCandidates.filter((candidate: RecallCandidate): boolean => candidate.visibilityPool !== 'blocked');
     const directorMode = input.plan.viewpoint.mode === 'omniscient_director';
     if (directorMode) {
         return [

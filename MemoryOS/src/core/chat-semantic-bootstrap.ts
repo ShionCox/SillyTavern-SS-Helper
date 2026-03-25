@@ -8,7 +8,7 @@ import {
     resolveCurrentGroupEvent,
     resolveTavernRoleIdentityEvent,
 } from '../../../SDK/tavern';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { enhanceSemanticSeedWithAiWithOptions } from './chat-semantic-ai-summary';
 import type { TaskPresentationOverride } from '../llm/memoryLlmBridge';
 import type {

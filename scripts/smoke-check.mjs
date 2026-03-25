@@ -34,6 +34,8 @@ const sdkToolbarText = readText('SDK/toolbar.ts');
 const sharedTooltipText = readText('_Components/sharedTooltip.ts');
 const sharedTooltipCssText = readText('_Components/sharedTooltip.css');
 const memoryIndexText = readText('MemoryOS/src/index.ts');
+const memoryRuntimeEntryText = readText('MemoryOS/src/runtime-entry.ts');
+const memoryRuntimeAppText = readText('MemoryOS/src/runtime/runtime-app.ts');
 const memoryUiText = readText('MemoryOS/src/ui/index.ts');
 const memoryToolbarText = readText('MemoryOS/src/runtime/chatToolbar.ts');
 const memoryStrategyText = readText('MemoryOS/src/ui/chatStrategyPanel.ts');
@@ -43,8 +45,25 @@ const rollHooksText = readText('RollHelper/src/events/hooksEvent.ts');
 const rollUiText = readText('RollHelper/src/settings/uiCardEvent.ts');
 
 const checks = [
-    runCheck('MemorySDK 已扩展 extract 子域', () => /extract:\s*\{[\s\S]*kickOffExtraction/.test(sdkText)),
-    runCheck('MemorySDK 已扩展 proposal 子域', () => /proposal:\s*\{[\s\S]*processProposal[\s\S]*requestWrite/.test(sdkText)),
+    runCheck('MemorySDK 已收口 postGeneration 子域', () => /postGeneration:\s*\{[\s\S]*scheduleRoundProcessing/.test(sdkText)),
+    runCheck('MemorySDK 已收口 mutation 子域', () => /mutation:\s*\{[\s\S]*applyMutationDocument[\s\S]*applyMutationRequest/.test(sdkText)),
+    runCheck('MemoryOS index ???????????runtime-entry ???', () =>
+        /startMemoryOSRuntime/.test(memoryIndexText) &&
+        /startMemoryOSRuntime\(\)/.test(memoryIndexText) &&
+        !/class\s+MemoryOS/.test(memoryIndexText) &&
+        !/new Logger/.test(memoryIndexText) &&
+        !/new Toast/.test(memoryIndexText)),
+    runCheck('MemoryOS runtime-entry ???????????????', () =>
+        /new MemoryOS\(\)/.test(memoryRuntimeEntryText) &&
+        /renderSettingsUi/.test(memoryRuntimeEntryText) &&
+        /from '\.\/runtime\/runtime-app'/.test(memoryRuntimeEntryText) &&
+        /from '\.\/runtime\/runtime-services'/.test(memoryRuntimeEntryText) &&
+        !/from '\.\/index'/.test(memoryRuntimeEntryText)),
+    runCheck('MemoryOS runtime-app ??????????????', () =>
+        /class MemoryOS/.test(memoryRuntimeAppText) &&
+        /bindHostEvents/.test(memoryRuntimeAppText) &&
+        /new Logger/.test(memoryRuntimeAppText) === false &&
+        /new Toast/.test(memoryRuntimeAppText) === false),
     runCheck('MemorySDK 已扩展 template/vector/compaction/worldInfo 子域', () => /template:\s*\{[\s\S]*vector:\s*\{[\s\S]*compaction:\s*\{[\s\S]*worldInfo:\s*\{/.test(sdkText)),
     runCheck('UI 含路由管理处理', () => /applyGlobalAssignments/.test(uiIndexText) && /applyPluginAssignments/.test(uiIndexText) && /applyTaskAssignments/.test(uiIndexText)),
     runCheck('UI 含预算增删处理', () => /setBudgetConfig/.test(uiIndexText) && /removeBudgetConfig/.test(uiIndexText)),

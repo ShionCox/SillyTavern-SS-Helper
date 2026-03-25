@@ -1,6 +1,6 @@
 import { db, type DBTemplate, type DBTemplateBinding } from '../db/db';
 import type { WorldTemplate, WorldInfoEntry, WorldContextBundle } from './types';
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { listTavernActiveWorldbooksEvent, loadTavernWorldbookEntriesEvent } from '../../../SDK/tavern';
 import { WorldInfoReader } from './worldinfo-reader';
 import { MetaManager } from '../core/meta-manager';

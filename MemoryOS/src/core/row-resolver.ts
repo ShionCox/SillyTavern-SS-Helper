@@ -1,4 +1,4 @@
-import { logger } from '../index';
+import { logger } from '../runtime/runtime-services';
 import { ChatStateManager } from './chat-state-manager';
 import type { RowRefResolution } from '../types';
 import { FactsManager } from './facts-manager';

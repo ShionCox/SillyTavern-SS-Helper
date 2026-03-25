@@ -379,7 +379,7 @@ export interface AdaptiveMetrics {
     lastUpdatedAt: number;
 }
 
-export type VectorMode = 'off' | 'index_only' | 'search' | 'search_rerank';
+export type VectorMode = 'off' | 'search' | 'search_rerank';
 
 export type MemoryQualityLevel = 'excellent' | 'healthy' | 'watch' | 'poor' | 'critical';
 
@@ -1355,6 +1355,7 @@ export interface RecallCandidate {
     actorRetentionBias?: number;
     ownerActorKey?: string | null;
     participantActorKeys?: string[];
+    memoryCardId?: string | null;
     finalScore: number;
     tone: InjectedMemoryTone;
     selected: boolean;
@@ -1466,6 +1467,7 @@ export interface RecallLogEntry {
     query: string;
     section: InjectionSectionName | 'PREVIEW';
     recordKey: string;
+    cardId?: string | null;
     recordKind: MemoryRecordKind;
     recordTitle: string;
     score: number;
@@ -1496,7 +1498,6 @@ export interface RecallGateDecision {
 }
 
 export interface RecallCacheEntry {
-    topicHash: string;
     intent: InjectionIntent;
     entityKeys: string[];
     laneSet: MemoryCardLane[];
@@ -1554,8 +1555,9 @@ export interface LatestRecallExplanation {
     cache?: {
         hit: boolean;
         reasonCodes: string[];
-        topicHash: string;
         entityKeys: string[];
+        laneSet: MemoryCardLane[];
+        selectedCardIds: string[];
         expiresTurn: number;
     } | null;
     cheapRecall?: CheapRecallSnapshot | null;
@@ -1629,6 +1631,21 @@ export interface MutationRepairTask {
     activeMessageIds: string[];
     repairAnchorMessageId?: string | null;
     repairGeneration: number;
+    enqueuedAt: number;
+    attempts: number;
+    status: 'pending' | 'running' | 'failed';
+    lastError?: string;
+}
+
+export type MemoryCardMaintenanceTaskType = 'rebuild_index' | 'rebuild_from_source';
+
+export interface MemoryCardMaintenanceTask {
+    taskId: string;
+    taskType: MemoryCardMaintenanceTaskType;
+    fingerprint: string;
+    sourceRecordKey?: string;
+    sourceRecordKind?: 'fact' | 'summary';
+    reasonCodes: string[];
     enqueuedAt: number;
     attempts: number;
     status: 'pending' | 'running' | 'failed';
@@ -1835,6 +1852,14 @@ export const DEFAULT_RETRIEVAL_HEALTH: RetrievalHealthWindow = {
 export const DEFAULT_EXTRACT_HEALTH: ExtractHealthWindow = {
     recentTasks: [],
     lastAcceptedAt: 0,
+};
+
+export const DEFAULT_MEMORY_CARD_MAINTENANCE_STATE: {
+    queue: MemoryCardMaintenanceTask[];
+    lastExecutedAtByFingerprint: Record<string, number>;
+} = {
+    queue: [],
+    lastExecutedAtByFingerprint: {},
 };
 
 export const DEFAULT_LONG_SUMMARY_COOLDOWN: LongSummaryCooldownState = {
@@ -2055,6 +2080,8 @@ export interface MemoryOSChatState {
     memoryTaskPresentationSettings?: MemoryTaskPresentationSettings;
     summaryFixQueue?: SummaryFixTask[];
     mutationRepairQueue?: MutationRepairTask[];
+    memoryCardMaintenanceQueue?: MemoryCardMaintenanceTask[];
+    memoryCardMaintenanceLastExecutedAtByFingerprint?: Record<string, number>;
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
     mutationRepairGeneration?: number;
