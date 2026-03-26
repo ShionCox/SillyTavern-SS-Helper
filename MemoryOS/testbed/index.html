@@ -3,250 +3,215 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MemoryOS 注入测试台</title>
+  <title>MemoryOS 测试台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
-      <div class="hero-copy">
-        <span class="eyebrow">Replay Console</span>
-        <h1>MemoryOS Prompt Injection Test Console</h1>
-        <p>以酒馆真实 `prompt_ready` 为基线，紧凑对照输入、注入与诊断结果。</p>
+    <!-- 左侧控制面板 -->
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <div class="title-group">
+          <h1>注入测试控制台</h1>
+          <span class="eyebrow">MemoryOS</span>
+        </div>
+        <span class="chip" id="active-chat-chip">chat: (none)</span>
+      </header>
+
+      <div class="scroll-area">
+        <!-- 基础输入 -->
+        <section class="card">
+          <div class="card-header">
+            <h3>基础输入</h3>
+            <span class="badge">核心</span>
+          </div>
+          <div class="form-group stack">
+            <label class="field-label">当前测试 ChatKey</label>
+            <input id="chat-key-input" class="field" placeholder="memory_test::demo" spellcheck="false" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="field-label">查询语句</label>
+              <input id="query-input" class="field" placeholder="厄尔多利亚是什么地方" spellcheck="false" />
+            </div>
+            <div class="form-group">
+              <label class="field-label">触发源 ID</label>
+              <input id="source-message-id-input" class="field" placeholder="u-last" spellcheck="false" />
+            </div>
+          </div>
+        </section>
+
+        <!-- 测试包操作 -->
+        <section class="card">
+          <div class="card-header">
+            <h3>环境与工具</h3>
+            <span class="badge">工具</span>
+          </div>
+          <div class="btn-grid">
+            <button id="import-file-btn" class="btn">文件导入</button>
+            <button id="import-json-btn" class="btn">JSON 导入</button>
+            <button id="export-chat-btn" class="btn">导出当前会话</button>
+            <button id="export-file-btn" class="btn btn-primary">另存文件</button>
+            <button id="preview-db-btn" class="btn">预览数据库</button>
+            <button id="clear-db-btn" class="btn btn-danger">清空数据库</button>
+          </div>
+          <input id="import-file-input" type="file" accept="application/json" hidden />
+        </section>
+
+        <!-- 编辑输入 -->
+        <section class="card">
+          <div class="card-header">
+            <h3>编辑器</h3>
+            <span class="badge">配置</span>
+          </div>
+          <div class="form-group stack">
+            <div class="label-row">
+              <label class="field-label">Prompt 消息列 (JSON)</label>
+              <button class="copy-btn" data-target="prompt-input">复制</button>
+            </div>
+            <textarea id="prompt-input" class="field area code-font"></textarea>
+          </div>
+          <div class="form-group stack">
+            <div class="label-row">
+              <label class="field-label">全局设置 (JSON)</label>
+              <button class="copy-btn" data-target="settings-input">复制</button>
+            </div>
+            <textarea id="settings-input" class="field area code-font"></textarea>
+          </div>
+          <div class="form-group stack">
+            <div class="label-row">
+              <label class="field-label">完整测试包数据 (JSON)</label>
+              <button class="copy-btn" data-target="bundle-input">复制</button>
+            </div>
+            <textarea id="bundle-input" class="field area code-font large-area"></textarea>
+          </div>
+        </section>
       </div>
-      <div class="chip-group">
-        <span class="chip">memory:test</span>
-        <span class="chip chip-success" id="active-chat-chip">chat: (none)</span>
+    </aside>
+
+    <!-- 右侧数据对比视图 -->
+    <main class="main-view">
+      <!-- 顶部操作栏 -->
+      <div class="topbar">
+        <div class="topbar-actions">
+          <button id="run-btn" class="btn btn-success action-run">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            运行完整注入验证
+          </button>
+          <button id="clear-result-btn" class="btn">清空对比数据</button>
+        </div>
       </div>
-    </header>
 
-    <section class="status-strip">
-      <article class="status-card">
-        <span class="status-label">Mode</span>
-        <strong>Exact Replay First</strong>
-        <span class="status-note">真实 prompt 捕获优先</span>
-      </article>
-      <article class="status-card">
-        <span class="status-label">System</span>
-        <strong>Base + Main</strong>
-        <span class="status-note">system/user 双链对照</span>
-      </article>
-      <article class="status-card">
-        <span class="status-label">Focus</span>
-        <strong>Why Not Injected</strong>
-        <span class="status-note">直接排查裁剪与跳过原因</span>
-      </article>
-    </section>
-
-    <main class="layout">
-      <section class="panel panel-sidebar">
-        <div class="panel-head">
-          <h2>案例与输入</h2>
-          <span class="panel-kicker">Input</span>
-        </div>
-
-        <details class="stack-card accordion-card" open>
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>基础输入</h3>
-              <span class="mini-tag">Core</span>
+      <div class="view-content">
+        <!-- 核心比对区 (三列并排) -->
+        <div class="comparison-grid">
+          <div class="compare-col">
+            <div class="col-header">
+              <div>原始输入 <span>Captured</span></div>
+              <button class="copy-btn" data-target="captured-prompt-output">复制</button>
             </div>
-          </summary>
-          <div class="accordion-body">
-            <div class="input-grid">
-              <label class="field-block field-block-wide">
-                <span class="label">当前测试 ChatKey</span>
-                <input id="chat-key-input" class="field" placeholder="memory_test::demo" />
-              </label>
-              <label class="field-block">
-                <span class="label">Query</span>
-                <input id="query-input" class="field" placeholder="厄尔多利亚是什么地方" />
-              </label>
-              <label class="field-block">
-                <span class="label">Source Message Id</span>
-                <input id="source-message-id-input" class="field" placeholder="u-last" />
-              </label>
-            </div>
+            <pre id="captured-prompt-output" class="output-box tall"></pre>
           </div>
-        </details>
-
-        <details class="stack-card accordion-card" open>
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>测试包操作</h3>
-              <span class="mini-tag">Bundle</span>
+          <div class="compare-col">
+            <div class="col-header highlight-header">
+              <div>注入完成 <span>Final</span></div>
+              <button class="copy-btn" data-target="final-prompt-output">复制</button>
             </div>
-          </summary>
-          <div class="accordion-body">
-            <div class="button-grid">
-              <button id="import-file-btn" class="btn">导入文件</button>
-              <button id="import-json-btn" class="btn">导入 JSON</button>
-              <button id="export-chat-btn" class="btn">导出当前 Chat</button>
-              <button id="export-file-btn" class="btn btn-success">导出文件</button>
-              <button id="preview-db-btn" class="btn">预览数据库</button>
-              <button id="clear-db-btn" class="btn btn-danger">清空数据库</button>
-            </div>
-            <input id="import-file-input" type="file" accept="application/json" hidden />
+            <pre id="final-prompt-output" class="output-box tall primary-border"></pre>
           </div>
-        </details>
-
-        <details class="stack-card accordion-card">
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>编辑输入</h3>
-              <span class="mini-tag">Fixture</span>
+          <div class="compare-col">
+            <div class="col-header diff-header">
+              <div>核心差异 <span>Diff</span></div>
+              <button class="copy-btn" data-target="prompt-diff-output">复制</button>
             </div>
-          </summary>
-          <div class="accordion-body">
-            <label class="label">Prompt Messages (JSON)</label>
-            <textarea id="prompt-input" class="field area medium-area" spellcheck="false"></textarea>
-            <label class="label">Settings (JSON)</label>
-            <textarea id="settings-input" class="field area medium-area" spellcheck="false"></textarea>
-          </div>
-        </details>
-
-        <details class="stack-card accordion-card">
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>测试包 JSON</h3>
-              <span class="mini-tag">Import / Export</span>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <textarea id="bundle-input" class="field area large" spellcheck="false"></textarea>
-          </div>
-        </details>
-
-        <details class="stack-card accordion-card">
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>数据库快照</h3>
-              <span class="mini-tag">Database</span>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <pre id="db-preview-output" class="output db-preview"></pre>
-          </div>
-        </details>
-      </section>
-
-      <section class="panel panel-main">
-        <div class="panel-head">
-          <h2>回放与结果</h2>
-          <span class="panel-kicker">Replay</span>
-        </div>
-
-        <div class="toolbar-card">
-          <div class="button-row">
-            <button id="run-btn" class="btn btn-success">运行完整注入流程</button>
-            <button id="clear-result-btn" class="btn">清空结果</button>
+            <pre id="prompt-diff-output" class="output-box tall diff-border"></pre>
           </div>
         </div>
 
-        <div class="result-grid">
-          <details class="stack-card stack-card-dense accordion-card" open>
-            <summary class="accordion-summary">
-              <div class="card-title-row">
-                <h3>Prompt 对照</h3>
-                <span class="mini-tag">Compare</span>
+        <!-- 详细诊断区 -->
+        <div class="diagnostics-grid">
+          <!-- 角色切片输出 -->
+          <div class="diag-group">
+            <div class="sec-title">按角色切片</div>
+            
+            <div class="label-row">
+              <label class="info-label">核心注入片段</label>
+              <button class="copy-btn" data-target="system-inserted-output">复制</button>
+            </div>
+            <pre id="system-inserted-output" class="output-box brief"></pre>
+
+            <div class="label-row">
+              <label class="info-label">系统层级总计</label>
+              <button class="copy-btn" data-target="system-prompt-output">复制</button>
+            </div>
+            <pre id="system-prompt-output" class="output-box brief"></pre>
+
+            <div class="label-row">
+              <label class="info-label">用户层级总计</label>
+              <button class="copy-btn" data-target="user-prompt-output">复制</button>
+            </div>
+            <pre id="user-prompt-output" class="output-box brief"></pre>
+          </div>
+
+          <!-- 诊断漏斗 & 日志 -->
+          <div class="diag-group">
+            <div class="sec-title">运行状态</div>
+            <label class="info-label mb-4" style="margin-bottom:4px;display:block;">系统诊断漏斗</label>
+            <div id="funnel-output" class="funnel-container"></div>
+            
+            <div class="label-row mt-10">
+              <label class="info-label">执行日志</label>
+              <button class="copy-btn" data-target="pipeline-log-output">复制</button>
+            </div>
+            <pre id="pipeline-log-output" class="output-box standard"></pre>
+          </div>
+
+          <!-- 配置与候选追踪 -->
+          <div class="diag-group wide-span">
+            <div class="sec-title">深度召回分析</div>
+            <div class="split-col-2">
+              <div class="sub-col">
+                 <div class="label-row">
+                   <label class="info-label">召回解析说明</label>
+                   <button class="copy-btn" data-target="explanation-output">复制</button>
+                 </div>
+                 <pre id="explanation-output" class="output-box standard"></pre>
+
+                 <div class="label-row">
+                   <label class="info-label">运行设置概览</label>
+                   <button class="copy-btn" data-target="settings-preview-output">复制</button>
+                 </div>
+                 <pre id="settings-preview-output" class="output-box brief"></pre>
               </div>
-            </summary>
-            <div class="accordion-body">
-              <label class="label">原始捕获 Prompt（Replay Input）</label>
-              <pre id="captured-prompt-output" class="output compact-output"></pre>
-              <label class="label">注入后 Prompt（Final Messages）</label>
-              <pre id="final-prompt-output" class="output large-output"></pre>
-              <label class="label">Diff（仅新增消息）</label>
-              <pre id="prompt-diff-output" class="output compact-output"></pre>
-            </div>
-          </details>
+              <div class="sub-col">
+                 <div class="label-row">
+                   <label class="info-label">初步命中候选组</label>
+                   <button class="copy-btn" data-target="selected-candidates-output">复制</button>
+                 </div>
+                 <pre id="selected-candidates-output" class="output-box standard"></pre>
 
-          <details class="stack-card stack-card-dense accordion-card" open>
-            <summary class="accordion-summary">
-              <div class="card-title-row">
-                <h3>分角色输出</h3>
-                <span class="mini-tag">Role View</span>
+                 <div class="label-row">
+                   <label class="info-label">整体召回预览数据</label>
+                   <button class="copy-btn" data-target="recall-preview-output">复制</button>
+                 </div>
+                 <pre id="recall-preview-output" class="output-box brief"></pre>
               </div>
-            </summary>
-            <div class="accordion-body">
-              <label class="label">基础 System 注入（本轮新增）</label>
-              <pre id="system-inserted-output" class="output compact-output"></pre>
-              <label class="label">System 输出（最终 messages）</label>
-              <pre id="system-prompt-output" class="output compact-output"></pre>
-              <label class="label">User 输出（最终 messages）</label>
-              <pre id="user-prompt-output" class="output compact-output"></pre>
             </div>
-          </details>
-
-          <details class="stack-card stack-card-dense accordion-card">
-            <summary class="accordion-summary">
-              <div class="card-title-row">
-                <h3>运行概览</h3>
-                <span class="mini-tag">Runtime</span>
-              </div>
-            </summary>
-            <div class="accordion-body">
-              <label class="label">本轮设置与层诊断</label>
-              <pre id="settings-preview-output" class="output compact-output"></pre>
-              <label class="label">结构化日志</label>
-              <pre id="pipeline-log-output" class="output medium-output"></pre>
+            <div class="db-section mt-10">
+               <div class="label-row">
+                 <label class="info-label">当前数据库状态预览</label>
+                 <button class="copy-btn" data-target="db-preview-output">复制</button>
+               </div>
+               <pre id="db-preview-output" class="output-box standard"></pre>
             </div>
-          </details>
+          </div>
         </div>
-      </section>
-
-      <section class="panel panel-diagnostics">
-        <div class="panel-head">
-          <h2>诊断漏斗</h2>
-          <span class="panel-kicker">Diagnosis</span>
-        </div>
-
-        <details class="stack-card stack-card-dense accordion-card" open>
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>漏斗</h3>
-              <span class="mini-tag">Funnel</span>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <div id="funnel-output" class="funnel"></div>
-          </div>
-        </details>
-
-        <details class="stack-card stack-card-dense accordion-card">
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>Recall Explanation</h3>
-              <span class="mini-tag">Trace</span>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <label class="label">Latest Recall Explanation</label>
-            <pre id="explanation-output" class="output medium-output"></pre>
-          </div>
-        </details>
-
-        <details class="stack-card stack-card-dense accordion-card">
-          <summary class="accordion-summary">
-            <div class="card-title-row">
-              <h3>召回候选</h3>
-              <span class="mini-tag">Recall</span>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <label class="label">Selected Candidates</label>
-            <pre id="selected-candidates-output" class="output compact-output"></pre>
-            <label class="label">Recall Preview</label>
-            <pre id="recall-preview-output" class="output compact-output"></pre>
-          </div>
-        </details>
-      </section>
+      </div>
     </main>
   </div>
-
   <script type="module" src="./main.ts"></script>
 </body>
 </html>

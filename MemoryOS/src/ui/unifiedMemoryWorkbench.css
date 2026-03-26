@@ -1,0 +1,756 @@
+/* Full rebuilt css with Circuit Board Animations and RPG Sub Tabs */
+.stx-memory-workbench {
+  --mw-bg: #090a0d;
+  --mw-panel: #111318;
+  --mw-panel-strong: #171920;
+  --mw-line: #212530;
+  --mw-line-strong: #2e3444;
+  --mw-text: #e2e8f0;
+  --mw-muted: #64748b;
+  --mw-accent: #c4a062; /* RPG Gold */
+  --mw-accent-cyan: #38bdf8; /* Tech Cyan */
+  --mw-accent-glow: rgba(196, 160, 98, 0.12);
+  --mw-warn: #ef4444;
+  
+  font-family: inherit;
+  color: var(--mw-text);
+  background: var(--mw-bg);
+  width: 85vw;
+  height: 90vh;
+  margin: auto;
+  border-radius: 2px;
+  border: 1px solid var(--mw-line-strong);
+  box-shadow: 0 0 0 1px #000, inset 0 0 60px rgba(0,0,0,0.8), 0 20px 80px rgba(0,0,0,0.9);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Animated Cyber/Circuit Traces */
+@keyframes stx-trace-x {
+  0% { left: -200px; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+@keyframes stx-scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(1000%); }
+}
+
+.stx-memory-workbench * {
+  box-sizing: border-box;
+}
+
+.stx-memory-workbench__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--mw-panel-strong);
+  border-bottom: 2px solid var(--mw-line-strong);
+  padding: 0 24px;
+  height: 48px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.stx-memory-workbench__header::before {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 120px;
+  height: 2px;
+  background: var(--mw-accent-cyan);
+  box-shadow: 0 0 12px var(--mw-accent-cyan), 0 0 24px var(--mw-accent-cyan);
+  animation: stx-trace-x 5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.stx-memory-workbench__brand {
+  font-family: "Cinzel", "Fira Code", serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--mw-accent);
+  letter-spacing: 3px;
+  text-shadow: 0 0 12px var(--mw-accent-glow);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stx-memory-workbench__nav {
+  display: flex;
+  height: 100%;
+  margin-left: 32px;
+}
+
+.stx-memory-workbench__nav-btn {
+  background: transparent;
+  color: var(--mw-muted);
+  border: none;
+  padding: 0 20px;
+  font-family: "Cinzel", "Fira Code", serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  position: relative;
+  letter-spacing: 1px;
+  transition: color 0ms;
+}
+
+.stx-memory-workbench__nav-btn:hover {
+  color: var(--mw-text);
+  background: rgba(255,255,255,0.02);
+}
+
+.stx-memory-workbench__nav-btn.is-active {
+  color: var(--mw-accent);
+  background: linear-gradient(0deg, var(--mw-accent-glow), transparent);
+}
+
+.stx-memory-workbench__nav-btn.is-active::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--mw-accent);
+  box-shadow: 0 -2px 12px var(--mw-accent);
+}
+
+.stx-memory-workbench__stats {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  font-family: "Fira Code", "IBM Plex Mono", monospace;
+  color: var(--mw-muted);
+}
+
+.stx-memory-workbench__stats strong {
+  color: var(--mw-accent-cyan);
+}
+
+.stx-memory-workbench__main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background-color: var(--mw-bg);
+  background-image: 
+    linear-gradient(rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(45deg, transparent 49%, rgba(196, 160, 98, 0.05) 50%, transparent 51%);
+  background-size: 40px 40px, 40px 40px, 80px 80px;
+  position: relative;
+}
+
+.stx-memory-workbench__main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg width='200' height='200' viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><defs><filter id='g' x='-20%25' y='-20%25' width='140%25' height='140%25'><feGaussianBlur stdDeviation='1.5' result='b'/><feMerge><feMergeNode in='b'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs><style>@keyframes f{to{stroke-dashoffset:-150;}}@keyframes h{0%,100%{opacity:0.2;}50%{opacity:1;}}.b{fill:none;stroke:%2338bdf8;stroke-width:1;opacity:0.1;}.l{fill:none;stroke:%2338bdf8;stroke-width:0.8;stroke-dasharray:10 140;animation:f 4s linear infinite;opacity:1;filter:url(%23g);}.d{fill:%2338bdf8;animation:h 3s infinite ease-in-out;filter:url(%23g);}</style><polyline points='20,20 60,20 100,60 100,160 160,160' class='b'/><polyline points='20,20 60,20 100,60 100,160 160,160' class='l'/><polyline points='180,40 140,40 100,80 40,80' class='b'/><polyline points='180,40 140,40 100,80 40,80' class='l' style='animation-delay:-1s; animation-duration:5s;'/><polyline points='20,180 60,140 160,140 200,100' class='b'/><polyline points='20,180 60,140 160,140 200,100' class='l' style='animation-delay:-2s; animation-duration:3s;'/><circle cx='20' cy='20' r='2' class='d' style='animation-delay:0s'/><circle cx='60' cy='20' r='1.5' class='d' style='animation-delay:1s'/><circle cx='100' cy='60' r='2' class='d' style='animation-delay:2s'/><circle cx='100' cy='160' r='1.5' class='d' style='animation-delay:0.5s'/><circle cx='160' cy='160' r='2.5' class='d' style='animation-delay:1.5s'/><circle cx='180' cy='40' r='2' class='d' style='animation-delay:0s'/><circle cx='140' cy='40' r='2' class='d' style='animation-delay:1.2s'/><circle cx='100' cy='80' r='1.5' class='d' style='animation-delay:2.5s'/><circle cx='40' cy='80' r='2' class='d' style='animation-delay:0.8s'/><circle cx='20' cy='180' r='2' class='d' style='animation-delay:0.3s'/><circle cx='60' cy='140' r='1.5' class='d' style='animation-delay:1.8s'/><circle cx='160' cy='140' r='2' class='d' style='animation-delay:2.1s'/><circle cx='200' cy='100' r='2.5' class='d' style='animation-delay:1s'/></svg>");
+  background-size: 300px 300px;
+  background-position: center;
+  opacity: 0.25;
+  z-index: 1;
+}
+
+.stx-memory-workbench__view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+  z-index: 2;
+}
+
+.stx-memory-workbench__view[hidden] {
+  display: none !important;
+}
+
+.stx-memory-workbench__view-head,
+.stx-memory-workbench__list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(17, 19, 24, 0.85);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--mw-line);
+  padding: 8px 12px;
+  box-shadow: inset 0 0 16px rgba(0,0,0,0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.stx-memory-workbench__view-head::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent, rgba(56, 189, 248, 0.05), transparent);
+  height: 200%;
+  width: 100%;
+  pointer-events: none;
+  animation: stx-scanline 8s linear infinite;
+}
+
+.stx-memory-workbench__toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 2;
+}
+
+.stx-memory-workbench__button,
+.stx-memory-workbench__ghost-btn {
+  background: var(--mw-panel-strong);
+  color: var(--mw-text);
+  border: 1px solid var(--mw-line-strong);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 14px;
+  cursor: pointer;
+  transition: all 0ms;
+}
+
+.stx-memory-workbench__button {
+  background: var(--mw-line-strong);
+  color: #fff;
+}
+
+.stx-memory-workbench__button:hover {
+  background: var(--mw-accent);
+  color: #000;
+  border-color: var(--mw-accent);
+  box-shadow: 0 0 8px var(--mw-accent-glow);
+}
+
+.stx-memory-workbench__ghost-btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: var(--mw-text);
+  color: #fff;
+}
+
+.stx-memory-workbench__grid,
+.stx-memory-workbench__preview-grid {
+  display: grid;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.stx-memory-workbench__grid {
+  grid-template-columns: 320px 1fr;
+}
+
+.stx-memory-workbench__preview-grid {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.stx-memory-workbench__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stx-memory-workbench__list,
+.stx-memory-workbench__type-list,
+.stx-memory-workbench__memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding-right: 4px;
+  max-height: 100%;
+}
+
+.stx-memory-workbench__list-item {
+  background: rgba(17, 19, 24, 0.9);
+  backdrop-filter: blur(2px);
+  border: 1px solid var(--mw-line);
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background 0ms, border-color 0ms;
+}
+
+.stx-memory-workbench__list-item:hover {
+  border-color: var(--mw-muted);
+}
+
+.stx-memory-workbench__list-item.is-active {
+  background: rgba(196, 160, 98, 0.12);
+  border-color: var(--mw-accent);
+  border-left: 3px solid var(--mw-accent);
+  box-shadow: inset 4px 0 12px rgba(196, 160, 98, 0.15);
+}
+
+.stx-memory-workbench__editor,
+.stx-memory-workbench__preview-box {
+  background: rgba(17, 19, 24, 0.9);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--mw-line);
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: inset 0 0 24px rgba(0,0,0,0.5);
+  position: relative;
+}
+
+.stx-memory-workbench__editor::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--mw-accent-cyan), transparent);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.stx-memory-workbench__field,
+.stx-memory-workbench__field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stx-memory-workbench__form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stx-memory-workbench__field label,
+.stx-memory-workbench__field-stack label {
+  font-size: 11px;
+  color: var(--mw-accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-family: inherit;
+  letter-spacing: 0.5px;
+  z-index: 2;
+}
+
+.stx-memory-workbench__input,
+.stx-memory-workbench__select,
+.stx-memory-workbench__textarea {
+  background: rgba(0,0,0,0.5);
+  color: var(--mw-text);
+  border: 1px solid var(--mw-line);
+  border-bottom: 2px solid var(--mw-line-strong);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  transition: all 0ms;
+  position: relative;
+  z-index: 2;
+}
+
+.stx-memory-workbench__input:focus,
+.stx-memory-workbench__select:focus,
+.stx-memory-workbench__textarea:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.4);
+  border-bottom-color: var(--mw-accent-cyan);
+  background: rgba(0,0,0,0.8);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2), 0 1px 4px rgba(56, 189, 248, 0.2);
+}
+
+.stx-memory-workbench__textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.stx-memory-workbench__list-item h4,
+.stx-memory-workbench__panel-title,
+.stx-memory-workbench__section-title {
+  font-family: inherit;
+  font-weight: 700;
+  margin: 0;
+  font-size: 14px;
+  color: var(--mw-text);
+  letter-spacing: 0.5px;
+  z-index: 2;
+}
+
+.stx-memory-workbench__meta,
+.stx-memory-workbench__muted,
+.stx-memory-workbench__empty {
+  font-size: 11px;
+  color: var(--mw-muted);
+}
+
+.stx-memory-workbench__empty {
+  padding: 16px;
+  text-align: center;
+  font-style: italic;
+}
+
+.stx-memory-workbench__badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.stx-memory-workbench__badge {
+  background: rgba(33, 37, 48, 0.8);
+  color: var(--mw-text);
+  padding: 2px 6px;
+  font-size: 10px;
+  border: 1px solid var(--mw-line-strong);
+}
+
+.stx-memory-workbench__badge.is-warn {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--mw-warn);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.stx-memory-workbench__card {
+  border: 1px solid var(--mw-line);
+  background: rgba(0,0,0,0.3);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stx-memory-workbench__preview-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 11px;
+  font-family: "Fira Code", "IBM Plex Mono", monospace;
+  color: var(--mw-text);
+  line-height: 1.6;
+}
+
+.stx-memory-workbench__memory-meter {
+  height: 4px;
+  background: var(--mw-line-strong);
+  width: 100%;
+  margin-top: 2px;
+}
+
+.stx-memory-workbench__memory-meter span {
+  display: block;
+  height: 100%;
+  background: var(--mw-accent-cyan);
+  box-shadow: 0 0 4px var(--mw-accent-cyan);
+}
+
+.stx-memory-workbench *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.stx-memory-workbench *::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.1);
+}
+.stx-memory-workbench *::-webkit-scrollbar-thumb {
+  background: var(--mw-line-strong);
+  border-radius: 0;
+}
+.stx-memory-workbench *::-webkit-scrollbar-thumb:hover {
+  background: var(--mw-accent);
+}
+
+@media (max-width: 1200px) {
+  .stx-memory-workbench__grid,
+  .stx-memory-workbench__preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ========================================================= */
+/* ACTOR SUB-TABS & RPG STYLES                               */
+/* ========================================================= */
+
+.stx-memory-workbench__sub-nav {
+  display: flex;
+  background: rgba(0,0,0,0.4);
+  border-bottom: 2px solid var(--mw-line-strong);
+  height: 48px;
+  flex-shrink: 0;
+}
+.stx-memory-workbench__sub-nav-btn {
+  flex: 1;
+  background: transparent;
+  color: var(--mw-muted);
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  position: relative;
+  z-index: 5;
+  transition: all 0ms;
+}
+.stx-memory-workbench__sub-nav-btn:hover {
+  color: var(--mw-text);
+  background: rgba(255,255,255,0.03);
+}
+.stx-memory-workbench__sub-nav-btn.is-active {
+  color: var(--mw-accent-cyan);
+  border-bottom-color: var(--mw-accent-cyan);
+  background: linear-gradient(0deg, rgba(56, 189, 248, 0.1), transparent);
+  text-shadow: 0 0 8px var(--mw-accent-cyan);
+}
+.stx-memory-workbench__sub-view-container {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.stx-memory-workbench__actor-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 16px;
+}
+
+/* RPG PAPERDOLL & BACKPACK */
+.stx-rpg-inventory {
+  display: grid;
+  grid-template-columns: 240px 1fr 280px;
+  gap: 16px;
+  height: 100%;
+}
+.stx-rpg-paperdoll {
+  position: relative;
+  border: 1px solid var(--mw-line-strong);
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.8);
+}
+.stx-rpg-paperdoll-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 120px;
+  color: rgba(255,255,255,0.02);
+  pointer-events: none;
+}
+.stx-rpg-slot {
+  width: 44px;
+  height: 44px;
+  background: rgba(0,0,0,0.8);
+  border: 1px solid var(--mw-line-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--mw-muted);
+  box-shadow: inset 0 0 10px rgba(0,0,0,0.9);
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  transition: all 0ms;
+}
+.stx-rpg-slot:hover {
+  border-color: var(--mw-accent);
+  box-shadow: 0 0 8px var(--mw-accent-glow), inset 0 0 10px rgba(196,160,98,0.2);
+  color: var(--mw-accent);
+}
+
+.stx-rpg-slot--head { position: absolute; top: 10%; left: 50%; transform: translateX(-50%); }
+.stx-rpg-slot--chest { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); }
+.stx-rpg-slot--legs { position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%); }
+.stx-rpg-slot--mainhand { position: absolute; top: 40%; left: 10%; }
+.stx-rpg-slot--offhand { position: absolute; top: 40%; right: 10%; }
+.stx-rpg-slot--accessory { position: absolute; top: 15%; right: 15%; }
+
+.stx-rpg-backpack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stx-rpg-backpack-header {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mw-text);
+  border-bottom: 1px solid var(--mw-line);
+  padding-bottom: 4px;
+}
+.stx-rpg-backpack-header span { color: var(--mw-muted); font-size: 12px; font-weight: normal; }
+.stx-rpg-backpack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+  align-items: start;
+}
+.stx-rpg-slot.is-empty { color: transparent; cursor: default; }
+.stx-rpg-slot.is-empty:hover { border-color: var(--mw-line-strong); box-shadow: none; }
+
+.stx-rpg-item-epic { border-color: #a855f7; color: #a855f7; box-shadow: inset 0 0 10px rgba(168,85,247,0.2); background: rgba(168,85,247,0.1); }
+.stx-rpg-item-legendary { border-color: #f59e0b; color: #f59e0b; box-shadow: inset 0 0 10px rgba(245,158,11,0.2); background: rgba(245,158,11,0.1); }
+.stx-rpg-slot-qty {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 10px;
+  font-family: monospace;
+  color: #fff;
+  text-shadow: 0 0 2px #000;
+}
+
+.stx-rpg-inspector {
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--mw-line);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.stx-rpg-inspector-title { font-size: 16px; font-weight: 700; font-family: "Cinzel", serif; border-bottom: 1px solid var(--mw-line-strong); padding-bottom: 8px; }
+.stx-rpg-inspector-type { font-size: 12px; color: var(--mw-muted); }
+.stx-rpg-inspector-stats { display: flex; flex-direction: column; gap: 8px; font-size: 13px; margin: 12px 0; }
+.stx-rpg-inspector-stats strong { color: var(--mw-accent-cyan); }
+.stx-rpg-inspector-lore { font-size: 12px; color: #a1a1aa; line-height: 1.6; font-style: italic; border-top: 1px dashed var(--mw-line-strong); padding-top: 12px; }
+
+/* Attributes */
+.stx-rpg-attributes {
+  display: flex;
+  gap: 24px;
+  height: 100%;
+}
+.stx-rpg-attr-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--mw-line-strong);
+  padding: 16px;
+}
+.stx-rpg-attr-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.stx-rpg-attr-row .label { width: 100px; color: var(--mw-muted); font-weight: 700; text-transform: uppercase; }
+.stx-rpg-attr-row .value { width: 30px; font-weight: 700; color: var(--mw-text); text-align: right; }
+.stx-rpg-attr-row .bar { flex: 1; height: 6px; background: rgba(0,0,0,0.5); border: 1px solid var(--mw-line); }
+.stx-rpg-attr-row .bar div { height: 100%; }
+
+.stx-rpg-stat-box {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--mw-line);
+  font-size: 13px;
+  color: var(--mw-muted);
+}
+
+/* Relationships & Graph */
+.stx-rpg-rel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--mw-panel-strong);
+  border-bottom: 2px solid var(--mw-line-strong);
+  z-index: 10;
+  position: relative;
+}
+
+.stx-rpg-graph-canvas {
+  transition: transform 0s linear;
+}
+
+.stx-rpg-graph-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.3s ease;
+}
+
+.stx-rpg-graph-node .avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--mw-panel);
+  border: 2px solid var(--mw-accent-cyan);
+  color: var(--mw-accent-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.4), inset 0 0 10px rgba(0,0,0,1);
+  transition: all 0.3s ease;
+}
+
+.stx-rpg-graph-node:hover .avatar {
+  transform: scale(1.1);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.8), inset 0 0 10px rgba(0,0,0,1);
+}
+
+.stx-rpg-graph-node.is-focused .avatar {
+  border-color: var(--mw-accent);
+  color: var(--mw-accent);
+  box-shadow: 0 0 32px var(--mw-accent-glow), inset 0 0 10px rgba(0,0,0,1);
+  transform: scale(1.2);
+}
+
+.stx-rpg-graph-node .name {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mw-text);
+  background: rgba(0,0,0,0.8);
+  padding: 2px 10px;
+  border: 1px solid var(--mw-line-strong);
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: all 0.3s ease;
+}
+
+.stx-rpg-graph-node.is-focused .name {
+  color: var(--mw-accent);
+  border-color: var(--mw-accent);
+  text-shadow: 0 0 8px var(--mw-accent);
+}
+
+.stx-rpg-graph-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(17, 19, 24, 0.95);
+  border: 1px solid;
+  padding: 2px 6px;
+  border-radius: 4px;
+  z-index: 5;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.stx-rpg-graph-edge {
+  transition: opacity 0.3s ease;
+}

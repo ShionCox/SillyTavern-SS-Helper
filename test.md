@@ -1,100 +1,235 @@
-### 1. 把 recall need 从“硬规则判 lane”收成“宽 gate + lane hint”
+# MemoryOS 统一条目记忆系统重构方案
 
-现在 `shouldRunVectorRecall()` 已经是宽 gate 了，只要策略允许，就会开搜；但 `classifyRecallNeed()` 仍然主要靠 regex 把 query 归类，然后 `resolveVectorRecallLanes()` 决定 lane。也就是说，**主 gate 已经对了，但 lane 侧还偏规则驱动**。
+## 摘要
+本次重构直接废弃现有 `facts / world_state / summaries / memory_cards / relationship_memory / 旧 recall / 旧 injection / 旧相关 UI` 的并行体系，改为一条新的主干：
 
-这一阶段里建议直接收成：
+- 以“统一条目表”作为唯一长期知识来源
+- 以“角色-条目记忆表”承载每个角色对条目的记忆度与遗忘状态
+- 以“总结驱动刷新 + 角色记性衰减”作为唯一记忆变化规则
+- 以“双层提示词注入”替代现有混乱链路：
+  - 世界基础设定始终写入 `system`
+  - 角色记忆按记忆度与遗忘结果写入角色记忆块
+- 完整重做 UI，围绕“条目、类型、角色记忆、注入预览”设计，不保留旧面板思路
 
-* `shouldRunVectorRecall()` 保持现在这种“只看 policy + mode”的宽 gate，不再加回任何 cheap/cache 硬阻断。
-* `classifyRecallNeed()` 从“强决定器”降成“lane hint 生成器”。
-* `resolveVectorRecallLanes()` 默认给一个更宽的候选 lane 集，identity / relationship / rule / state 这种强 query 再做 lane 收窄；`ambiguous_recall` 不要只落到 `['event','style']`，至少补上 `relationship` 和 `state`。
+默认决策已锁定：
 
-这样做的目标是：**query 理解错误时，最多影响排序效率，不再影响召回是否发生。**
+- 数据模型：统一条目主模型
+- 遗忘作用层：按“角色-条目绑定”生效
+- 角色记性属性：独立数值，范围 `0-100`
+- 刷新规则：只有“总结命中且角色在场”才恢复到 `100%`
+- 兼容策略：不兼容旧数据，不做迁移保留
+- UI 范式：完整新 UI，旧 UI 直接删
+- 视觉方向：叙事式高密度管理台，强对比极简，代码感标题 + 编辑式布局
 
-### 2. 去掉 `new` 生命周期对 vector 的 hard-off
+## 核心实现变更
+### 1. 新数据模型
+建立新的长期存储主模型，只保留下列核心表：
 
-目前 `applyLifecycleBias()` 在 `stage === 'new'` 时仍然直接把：
+- `memory_entries`
+  - 字段包含：`entryId`、`chatKey`、`title`、`entryType`、`category`、`tags`、`summary`、`detail`、`detailSchemaVersion`、`detailPayload`、`sourceSummaryIds`、`createdAt`、`updatedAt`
+  - `category` 用于顶层归类，如：`世界基础`、`地点`、`城市`、`组织`、`事件`、`角色关系`、`任务`、`物品`、`其他`
+  - `entryType` 采用“核心类型 + 自定义类型”模型
+- `memory_entry_types`
+  - 保存类型定义、字段定义、展示模板、是否允许进入世界基础设定、是否允许角色记忆
+- `role_entry_memory`
+  - 字段包含：`roleMemoryId`、`chatKey`、`actorKey`、`entryId`、`memoryPercent`、`lastRefreshSummaryId`、`lastDecaySummaryId`、`lastMentionSummaryId`、`forgotten`、`forgottenAt`、`updatedAt`
+  - 不再保留 `confidence`
+- `summary_snapshots`
+  - 保留总结结果，但职责改为“驱动条目创建 / 更新 / 角色记忆刷新 / 衰减”
+- `runtime_events`
+  - 只保留原始消息与运行日志用途，不再作为长期知识主表
 
-* `vectorEnabled = false`
-* `vectorMode = 'off'`
-  这会导致你前面已经修好的宽 gate，在新聊天里又被生命周期偏置二次打回去。
+直接删除旧模型对长期知识的承载职责：
 
-这一阶段里建议直接改成：
+- 删除 `facts`
+- 删除 `world_state`
+- 删除 `memory_cards`
+- 删除 `relationship_memory`
+- 删除基于这些表的旧 recall ranking / memory card / vector 主链
 
-* `new` 阶段只放宽预算和刷新频率，不再强关 vector。
-* 真正是否搜索，统一交给 `inferVectorMode()`：
+### 2. 条目与类型系统
+重构为“核心类型 + 自定义类型”：
 
-  * 没 index 才 `off`
-  * 精度差或 idle 才退到 `search`
-  * 状态健康才 `search_rerank`。
+- 核心类型内置：
+  - `世界规则`
+  - `国家`
+  - `城市`
+  - `地点`
+  - `组织`
+  - `事件`
+  - `物品`
+  - `任务`
+  - `关系`
+  - `其他`
+- 每个类型定义自己的详情字段模板
+  - 例如 `城市` 可有：所属国家、区域、特征、当前状态
+  - `地点` 可有：所属城市、危险度、功能、进入条件
+  - `事件` 可有：发生时间、参与方、结果、后续影响
+- 自定义类型允许用户新增，并配置：
+  - 类型名
+  - 分类
+  - 详情字段
+  - 在 UI 中的渲染方式
+  - 是否可注入到世界基础设定
+  - 是否可绑定角色记忆
 
-也就是说，**生命周期不再决定“能不能搜”，只决定“搜得多激进”。**
+### 3. 角色记忆与遗忘规则
+角色不再“记住一段自由文本”，而是“记住某个条目”。
 
-### 3. 把 maintenance 从“建议/面板”收成“自动闭环”
+规则固定如下：
 
-你现在已经有 maintenance 的信号和建议体系了：
+- 每个角色可绑定任意条目
+- 每个绑定关系只有一个核心值：`memoryPercent`
+- 新绑定或被总结明确刷新后，`memoryPercent = 100`
+- 每次总结完成后，对所有已绑定条目执行衰减
+- 衰减幅度由角色的 `记性` 属性决定
+  - `记性` 越高，衰减越慢
+  - `记性` 为独立属性，范围 `0-100`
+- 只有当“总结中提到该条目相关内容”且“该角色在本次总结覆盖范围内在场”时，该条目对该角色恢复为 `100`
+- 若后续召回命中该条目，但角色此前未被总结刷新，则执行一次遗忘判定
+  - 判定基于当前 `memoryPercent`
+  - 命中后若判定遗忘，则该角色在本轮提示词中显示：
+    - `条目标题`
+    - `内容已遗忘`
+- 世界基础设定不走遗忘
+  - 它们始终完整写入 `system`
+  - 角色遗忘只作用于“角色-条目记忆”
 
-* `retrieval_precision_low`
-* `memory_card_embeddings_missing`
-* `memory_card_rebuild`
-* `compress / rebuild_summary / schema_cleanup`
-* 以及维护冷却和队列上限常量。 
+### 4. 新注入链路
+完全重写注入链路，拆成两层：
 
-但从现在能看到的链路看，更多还是：
-**评分 -> reasonCodes -> advice -> insight/UI**，而不是明确的
-**评分 -> 自动入队 -> 后台执行 -> 回写生命周期/诊断**。 
+- `基础 system 层`
+  - 只注入被标记为“世界基础设定”的条目
+  - 按类型分组输出，如：世界规则 / 国家 / 城市 / 地点
+  - 每条始终以 `标题 + 类型 + 摘要/详情摘要` 形式写入
+  - 默认每轮都写到 `system`
+- `角色记忆层`
+  - 只注入当前相关角色绑定过的条目
+  - 按角色分组
+  - 未遗忘：输出标题 + 内容摘要
+  - 已遗忘：只输出标题 + `内容已遗忘`
+- 彻底删除旧的 `base_injection + main_injection` 双旧链概念
+  - 改为新总管线统一生成最终 prompt 块
+- 召回不再围绕旧表打分
+  - 改为：
+    - 先定当前相关角色
+    - 再按条目类型、标题、标签、详情字段命中
+    - 再叠加角色记忆状态
+  - 运行期可以保留相关性分数，但它只用于本轮排序，不落库存储，不叫置信度
 
-所以这一阶段建议一次补齐：
+### 5. 总结与更新链路
+总结结果改为驱动统一条目系统：
 
-* 当 `retrieval_precision_low` 连续命中，或 `memory_card_embeddings_missing` 命中时，直接 enqueue `memory_card_rebuild`
-* 当 `duplicate_rate_high` 命中时，enqueue `compress`
-* 当 `summary_freshness_low` 命中时，enqueue `rebuild_summary`
-* 执行后必须回写：
+- 总结输出需要结构化为：
+  - 新增条目
+  - 更新条目
+  - 涉及角色
+  - 哪些角色对哪些条目应刷新记忆
+- 总结执行后：
+  - 写入 / 更新 `memory_entries`
+  - 若命中角色在场 + 条目相关，则刷新对应 `role_entry_memory.memoryPercent = 100`
+  - 对未刷新项统一做衰减
+- 后续若运行期消息命中条目，不直接刷新记忆度
+  - 只参与本轮检索与遗忘判定
+  - 刷新权威入口仍然只有总结
 
-  * `lastMaintenanceAt`
-  * `lastMaintenanceAction`
-  * `vectorLifecycle.reasonCodes / memoryQuality`
-  * 对应卡片的 `needsRebuild / sourceMissing / duplicateCount` 派生状态。
+## UI 重构方案
+UI 按完整新架构重做，不沿用现有零碎面板。
 
-目标是把 maintenance 从“能看见问题”变成“问题会自己收敛”。
+### 1. 新界面结构
+重做为四个主视图：
 
-### 4. 把旧配置字段和 UI 残留一次删干净
+- `世界基座`
+  - 专门管理始终进入 `system` 的基础条目
+  - 支持按类型浏览：世界规则 / 国家 / 城市 / 地点 / 组织
+- `条目中心`
+  - 全部条目的主列表页
+  - 支持按类型、标签、最近更新、是否被角色记住筛选
+  - 右侧详情面板按类型动态渲染字段
+- `角色记忆`
+  - 以角色为主视角
+  - 查看角色记性属性
+  - 查看该角色记住的全部条目
+  - 以矩阵或列表显示 `memoryPercent / 是否遗忘 / 最近刷新来源`
+- `提示词预览`
+  - 直接展示：
+    - 基础 `system` 注入
+    - 角色记忆注入
+    - 遗忘后的显示效果
+    - 本轮命中与未命中原因
 
-现在 `VectorMode` 已经收敛成 `off | search | search_rerank`，这是对的。
+### 2. 视觉与交互方向
+采用 `ui-ux-pro-max` 的“叙事式管理台 + 强对比极简”思路，但避免紫色默认风格，改为更适合 MemoryOS 的配色：
 
-但 `ChatProfileVectorStrategy` 里还留着：
+- 标题字体：等宽或半等宽技术感标题
+- 正文字体：高可读无衬线
+- 配色：
+  - 深石墨 / 米白底
+  - 青铜金作为层级强调
+  - 冷青色作为状态高亮
+  - 红橙只用于遗忘或风险提示
+- 布局：
+  - 左侧导航窄栏
+  - 中间主工作区
+  - 右侧上下文详情 / 预览抽屉
+- 必备交互：
+  - 类型切换
+  - 条目搜索
+  - 角色过滤
+  - 记忆度可视化条
+  - 遗忘状态标签
+  - 注入前后即时预览
 
-* `activationFacts`
-* `activationSummaries`
-  而且 UI 面板上也还有 `vectorActivationFactsId / vectorActivationSummariesId`。这两个字段和现在的主链已经不匹配了，会继续误导配置语义。 
+### 3. 删除旧 UI
+直接删除或下线旧入口：
 
-这一阶段里建议直接：
+- 旧注入策略面板
+- 旧 recall 诊断中依赖旧表结构的区块
+- 旧 memory card 视图
+- 旧 world_state / facts 导向的编辑入口
+- 旧“基础注入 preset/aggressiveness”控制项
 
-* 从 `SDK/stx.d.ts`
-* `MemoryOS/src/types/chat-state.ts`
-* 面板表单与默认值
-* 任意 profile override / persistence 映射
-  里**一并删掉**这两个字段。 
+## 公开接口与类型调整
+需要同步替换的公开类型 / 接口：
 
----
+- 新增：
+  - `MemoryEntry`
+  - `MemoryEntryType`
+  - `RoleEntryMemory`
+  - `SummaryEntryMutation`
+  - `PromptAssemblySnapshot`
+- 删除或废弃：
+  - 旧 `MemoryCardSummary`
+  - 旧 `RecallCandidate` 的旧表耦合字段
+  - 旧 `BaseInjectionDiagnosticsSnapshot`
+  - 旧 `PromptInjectionProfile` 中与旧链路绑定的字段
+- SDK 层改为暴露：
+  - 条目 CRUD
+  - 类型 CRUD
+  - 角色记忆读取 / 刷新 / 衰减
+  - 新 prompt 预览接口
+  - 新总结应用接口
 
-## 我会把这个单阶段定义成什么
+## 测试方案
+必须重写测试，重点覆盖以下场景：
 
-我建议名字就叫：
+- 世界基础条目始终进入 `system`
+- 城市 / 地点 / 事件条目可被创建、编辑、删除、按类型渲染
+- 角色可绑定条目，初始记忆度为 `100`
+- 总结后按角色记性正确衰减
+- 总结命中且角色在场时恢复到 `100`
+- 未刷新但本轮命中时，会按 `memoryPercent` 执行遗忘判定
+- 遗忘后提示词显示“标题 + 内容已遗忘”
+- 同一条目可被多个角色分别记忆，记忆度互不影响
+- 自定义类型可定义字段并正确进入列表、详情页和 prompt
+- 提示词预览可准确展示 `system` 基础块与角色记忆块
+- 旧链路相关测试全部删除，替换为新链路测试
 
-**阶段：Recall Mainline Closure**
-
-只做一件事：
-**让“召回是否发生、召回怎么收敛、维护怎么自愈、配置怎么表达”全部统一到同一套心智模型里。**
-
----
-
-## 这个阶段的完成标准
-
-你可以直接把 Done 定成下面 6 条：
-
-1. 任意允许 vector 的聊天里，召回开关只由 `policy.vectorEnabled + vectorMode` 决定，不再被 cheap/cache/lifecycle 二次硬关。
-2. `classifyRecallNeed` 只影响 lane hint，不再成为召回成败的决定因素。
-3. `new` 阶段不再 hard-off vector，vector 降级统一走 `inferVectorMode()`。
-4. recall cache 继续只做 rank boost，不做 shortcut；这点现在已经对了，保持即可。
-5. maintenance 能从质量分和 reason code 自动入队、执行、回写，而不是只给 advice。
-6. `activationFacts / activationSummaries` 从类型、配置、UI 一起移除。
+## 假设与默认值
+- 不做旧数据迁移；升级后旧聊天数据视为无效，可清库
+- 不保留旧 recall / vector / memory card 架构
+- 运行期相关性分数仅作临时排序，不写库，不命名为置信度
+- 世界基础设定由条目类型配置决定是否进入 `system`
+- 角色记忆刷新只认总结，不认普通消息命中
+- 角色记性默认值可先设为 `60`
+- 遗忘判定阈值与公式在实现时统一收敛到单一策略函数，避免散落在 recall / injection / UI

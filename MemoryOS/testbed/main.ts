@@ -155,9 +155,9 @@ function isDatabaseSnapshotLike(value: unknown): value is MemoryChatDatabaseSnap
     const record = value as Record<string, unknown>;
     return typeof record.chatKey === 'string'
         && Array.isArray(record.events)
-        && Array.isArray(record.facts)
-        && Array.isArray(record.worldState)
-        && Array.isArray(record.memoryCardEmbeddings);
+        && Array.isArray(record.memoryEntries)
+        && Array.isArray(record.summarySnapshots)
+        && Array.isArray(record.roleEntryMemory);
 }
 
 /**
@@ -198,19 +198,14 @@ function buildDatabasePreviewSummary(snapshot: MemoryChatDatabaseSnapshot): Reco
         generatedAt: snapshot.generatedAt,
         counts: {
             events: snapshot.events.length,
-            facts: snapshot.facts.length,
-            worldState: snapshot.worldState.length,
-            summaries: snapshot.summaries.length,
             templates: snapshot.templates.length,
             audit: snapshot.audit.length,
-            worldinfoCache: snapshot.worldinfoCache.length,
-            templateBindings: snapshot.templateBindings.length,
-            memoryCards: snapshot.memoryCards.length,
-            memoryCardEmbeddings: snapshot.memoryCardEmbeddings.length,
-            memoryCardMeta: snapshot.memoryCardMeta.length,
-            relationshipMemory: snapshot.relationshipMemory.length,
-            memoryRecallLog: snapshot.memoryRecallLog.length,
             memoryMutationHistory: snapshot.memoryMutationHistory.length,
+            memoryEntries: snapshot.memoryEntries.length,
+            memoryEntryTypes: snapshot.memoryEntryTypes.length,
+            actorMemoryProfiles: snapshot.actorMemoryProfiles.length,
+            roleEntryMemory: snapshot.roleEntryMemory.length,
+            summarySnapshots: snapshot.summarySnapshots.length,
             pluginRecords: Array.isArray((snapshot as Record<string, unknown>).pluginRecords)
                 ? ((snapshot as Record<string, unknown>).pluginRecords as unknown[]).length
                 : 0,
@@ -464,64 +459,7 @@ function normalizeBundleFromUnknown(raw: unknown): Nullable<MemoryPromptTestBund
         return null;
     }
     const record = raw as Record<string, unknown>;
-    const readMaintenanceExportDatabase = (): Nullable<MemoryChatDatabaseSnapshot> => {
-        const hasMaintenanceFields = typeof record.chatKey === 'string'
-            && Array.isArray(record.events)
-            && Array.isArray(record.facts)
-            && Array.isArray(record.state);
-        if (!hasMaintenanceFields) {
-            return null;
-        }
-        const bindingValue = record.binding;
-        const templateBindings = bindingValue && typeof bindingValue === 'object'
-            ? [bindingValue]
-            : [];
-        const chatKey = String(record.chatKey ?? '').trim();
-        const inferredActorKey = inferActorKeyFromChatKey(chatKey);
-        const fallbackPluginState = inferredActorKey
-            ? {
-                pluginId: 'stx_memory_os',
-                chatKey,
-                schemaVersion: 1,
-                state: {
-                    activeActorKey: inferredActorKey,
-                    roleProfiles: {
-                        [inferredActorKey]: {
-                            actorKey: inferredActorKey,
-                            displayName: inferredActorKey,
-                        },
-                    },
-                },
-                summary: {},
-                updatedAt: Date.now(),
-            }
-            : null;
-        const exportedAtValue = record.exportedAt;
-        const exportedAtMs = typeof exportedAtValue === 'string'
-            ? Date.parse(exportedAtValue)
-            : Number(exportedAtValue);
-        return {
-            chatKey,
-            generatedAt: Number.isFinite(exportedAtMs) ? exportedAtMs : Date.now(),
-            events: Array.isArray(record.events) ? record.events : [],
-            facts: Array.isArray(record.facts) ? record.facts : [],
-            worldState: Array.isArray(record.state) ? record.state : [],
-            summaries: Array.isArray(record.summaries) ? record.summaries : [],
-            templates: Array.isArray(record.templates) ? record.templates : [],
-            audit: [],
-            meta: (record.meta && typeof record.meta === 'object') ? record.meta : null,
-            worldinfoCache: [],
-            templateBindings,
-            memoryCards: [],
-            memoryCardEmbeddings: [],
-            memoryCardMeta: [],
-            relationshipMemory: [],
-            memoryRecallLog: [],
-            memoryMutationHistory: [],
-            pluginState: fallbackPluginState as unknown as MemoryChatDatabaseSnapshot['pluginState'],
-            pluginRecords: [],
-        } as unknown as MemoryChatDatabaseSnapshot;
-    };
+    const readMaintenanceExportDatabase = (): Nullable<MemoryChatDatabaseSnapshot> => null;
 
     const wrappedRecord = (() => {
         if (record.payload && typeof record.payload === 'object') {
@@ -739,7 +677,7 @@ async function importBundleFromEditor(): Promise<void> {
         const keys = raw && typeof raw === 'object'
             ? Object.keys(raw as Record<string, unknown>).join(', ')
             : '(not-an-object)';
-        pipelineLogOutput.textContent = `测试包 JSON 无效。支持：完整测试包、数据库快照（worldState）或维护导出包（state）。\n检测到根字段：${keys}`;
+        pipelineLogOutput.textContent = `测试包 JSON 无效。当前只支持统一记忆测试包或统一数据库快照。\n检测到根字段：${keys}`;
         return;
     }
     const targetChatKey = String(chatKeyInput.value || '').trim() || `memory_test::${Date.now()}`;
@@ -826,20 +764,15 @@ async function clearCurrentTestDatabase(): Promise<void> {
                 chatKey,
                 generatedAt: Date.now(),
                 events: [],
-                facts: [],
-                worldState: [],
-                summaries: [],
                 templates: [],
                 audit: [],
                 meta: null,
-                worldinfoCache: [],
-                templateBindings: [],
-                memoryCards: [],
-                memoryCardEmbeddings: [],
-                memoryCardMeta: [],
-                relationshipMemory: [],
-                memoryRecallLog: [],
                 memoryMutationHistory: [],
+                memoryEntries: [],
+                memoryEntryTypes: [],
+                actorMemoryProfiles: [],
+                roleEntryMemory: [],
+                summarySnapshots: [],
                 pluginState: null,
                 pluginRecords: [],
             },
@@ -920,3 +853,32 @@ function bootstrapPage(): void {
 }
 
 bootstrapPage();
+
+/**
+ * 快捷复制功能
+ */
+document.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement;
+    if (target.matches('.copy-btn')) {
+        const targetId = target.getAttribute('data-target');
+        if (!targetId) return;
+        const el = document.getElementById(targetId) as HTMLTextAreaElement | HTMLPreElement;
+        if (!el) return;
+        
+        const textToCopy = 'value' in el ? el.value : el.textContent;
+        if (textToCopy) {
+            try {
+                await navigator.clipboard.writeText(textToCopy);
+                const originalText = target.textContent;
+                target.textContent = '已复制!';
+                target.classList.add('copied');
+                setTimeout(() => {
+                    target.textContent = originalText;
+                    target.classList.remove('copied');
+                }, 2000);
+            } catch (err) {
+                console.error('复制失败', err);
+            }
+        }
+    }
+});
