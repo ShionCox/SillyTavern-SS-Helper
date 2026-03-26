@@ -72,7 +72,8 @@ import type {
     MemoryProcessingDecision,
     PostGenerationGateDecision,
     PreGenerationGateDecision,
-        PromptInjectionProfile,
+    PromptInjectionProfile,
+    PromptReadyCaptureSnapshot,
     RetentionArchives,
     RetentionPolicy,
     RetrievalHealthWindow,
@@ -86,7 +87,6 @@ import type {
     StrategyDecision,
     SummaryFixTask,
     MutationRepairTask,
-    MemoryCardMaintenanceTask,
     SummarySettings,
     SummarySettingsOverride,
         VectorLifecycleState,
@@ -103,7 +103,6 @@ import {
     DEFAULT_GROUP_MEMORY,
     DEFAULT_INGEST_HEALTH,
     DEFAULT_MEMORY_INGEST_PROGRESS,
-    DEFAULT_MEMORY_CARD_MAINTENANCE_STATE,
     DEFAULT_MEMORY_QUALITY,
     DEFAULT_MEMORY_MUTATION_ACTION_COUNTS,
     DEFAULT_MEMORY_TUNING_PROFILE,
@@ -160,8 +159,8 @@ import { normalizeLatestRecallExplanation } from './recall-explanation';
 import { buildGroupRelationshipSeeds } from './relationship-graph';
 
 const REPAIR_TRIGGER_KINDS: ChatMutationKind[] = ['message_edited', 'message_swiped', 'message_deleted', 'chat_branched'];
-const MEMORY_CARD_MAINTENANCE_COOLDOWN_MS = 10 * 60 * 1000;
-const MEMORY_CARD_MAINTENANCE_QUEUE_LIMIT = 48;
+const MAINTENANCE_ACTION_COOLDOWN_MS = 10 * 60 * 1000;
+const MAINTENANCE_ACTION_QUEUE_LIMIT = 16;
 function shouldEnqueueMutationRepair(mutationKinds: ChatMutationKind[]): boolean {
     const set = new Set(Array.isArray(mutationKinds) ? mutationKinds : []);
     return REPAIR_TRIGGER_KINDS.some((kind: ChatMutationKind): boolean => set.has(kind));
@@ -246,6 +245,34 @@ function normalizeRecallCacheEntry(value: unknown): RecallCacheEntry | null {
         generatedTurn: Math.max(0, Number(record.generatedTurn ?? 0) || 0),
         expiresTurn: Math.max(0, Number(record.expiresTurn ?? 0) || 0),
         baseVersion: Math.max(0, Number(record.baseVersion ?? 0) || 0),
+    };
+}
+
+/**
+ * 功能：归一化最近一次 `prompt_ready` 捕获快照，确保回放输入结构稳定可用。
+ * @param value 待归一化的快照对象。
+ * @returns 合法快照；无效时返回 null。
+ */
+function normalizePromptReadyCaptureSnapshot(value: unknown): PromptReadyCaptureSnapshot | null {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    const promptFixture = Array.isArray(record.promptFixture)
+        ? (record.promptFixture as Array<Record<string, unknown>>).filter((item: unknown): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        : [];
+    const query = normalizeSeedText(record.query);
+    if (promptFixture.length <= 0) {
+        return null;
+    }
+    return {
+        promptFixture,
+        query,
+        sourceMessageId: normalizeSeedText(record.sourceMessageId) || undefined,
+        capturedAt: Math.max(0, Number(record.capturedAt ?? 0) || 0) || Date.now(),
+        requestMeta: record.requestMeta && typeof record.requestMeta === 'object'
+            ? (record.requestMeta as Record<string, unknown>)
+            : undefined,
     };
 }
 
@@ -566,6 +593,7 @@ export class ChatStateManager {
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly flushIntervalMs = 1000;
     private mutationManager: MutationManager | null = null;
+    private autoMaintenanceRunning = false;
 
     constructor(chatKey: string) {
         this.chatKey = chatKey;
@@ -697,11 +725,9 @@ export class ChatStateManager {
         if (stage === 'new') {
             return {
                 ...basePolicy,
-                extractInterval: Math.max(basePolicy.extractInterval, 18),
-                extractWindowSize: Math.max(16, Math.min(basePolicy.extractWindowSize, 24)),
-                vectorEnabled: false,
-                vectorMode: 'off',
-                contextMaxTokensShare: Math.min(basePolicy.contextMaxTokensShare, 0.45),
+                extractInterval: Math.min(Math.max(2, basePolicy.extractInterval), 4),
+                extractWindowSize: Math.max(10, Math.min(basePolicy.extractWindowSize, 18)),
+                contextMaxTokensShare: Math.min(basePolicy.contextMaxTokensShare, 0.5),
             };
         }
         if (stage === 'stable') {
@@ -1224,6 +1250,7 @@ export class ChatStateManager {
                 {},
             ),
             latestRecallExplanation: normalizeLatestRecallExplanation(state.latestRecallExplanation ?? null),
+            promptReadyCaptureSnapshot: normalizePromptReadyCaptureSnapshot(state.promptReadyCaptureSnapshot ?? null),
             lastRecallCache: normalizeRecallCacheEntry(state.lastRecallCache ?? null),
             recallCacheVersion: Math.max(0, Number(state.recallCacheVersion ?? 0) || 0),
             memoryTuningProfile: normalizeMemoryTuningProfile(state.memoryTuningProfile ?? null),
@@ -1246,32 +1273,32 @@ export class ChatStateManager {
                     }))
                     .slice(-16)
                 : [],
-            memoryCardMaintenanceQueue: Array.isArray(state.memoryCardMaintenanceQueue)
-                ? state.memoryCardMaintenanceQueue
-                    .map((task): MemoryCardMaintenanceTask => ({
-                        taskId: normalizeSeedText(task.taskId) || crypto.randomUUID(),
-                        taskType: task.taskType === 'rebuild_from_source' ? 'rebuild_from_source' : 'rebuild_index',
-                        fingerprint: normalizeSeedText(task.fingerprint),
-                        sourceRecordKey: normalizeSeedText(task.sourceRecordKey) || undefined,
-                        sourceRecordKind: task.sourceRecordKind === 'summary' ? 'summary' : task.sourceRecordKind === 'fact' ? 'fact' : undefined,
-                        reasonCodes: Array.isArray(task.reasonCodes) ? task.reasonCodes.map((item: string): string => normalizeSeedText(item)).filter(Boolean) : [],
-                        enqueuedAt: Number(task.enqueuedAt ?? Date.now()) || Date.now(),
-                        attempts: Math.max(0, Number(task.attempts ?? 0) || 0),
-                        status: task.status === 'failed' ? 'failed' : task.status === 'running' ? 'running' : 'pending',
-                        lastError: normalizeSeedText(task.lastError) || undefined,
-                    }))
-                    .slice(-48)
-                : [...DEFAULT_MEMORY_CARD_MAINTENANCE_STATE.queue],
-            memoryCardMaintenanceLastExecutedAtByFingerprint: state.memoryCardMaintenanceLastExecutedAtByFingerprint && typeof state.memoryCardMaintenanceLastExecutedAtByFingerprint === 'object'
-                ? Object.entries(state.memoryCardMaintenanceLastExecutedAtByFingerprint).reduce<Record<string, number>>((result: Record<string, number>, [fingerprint, ts]: [string, unknown]): Record<string, number> => {
-                    const key = normalizeSeedText(fingerprint);
-                    const value = Math.max(0, Number(ts ?? 0) || 0);
-                    if (key && value > 0) {
-                        result[key] = value;
-                    }
-                    return result;
-                }, {})
-                : { ...DEFAULT_MEMORY_CARD_MAINTENANCE_STATE.lastExecutedAtByFingerprint },
+            maintenanceActionQueue: Array.isArray(state.maintenanceActionQueue)
+                ? state.maintenanceActionQueue
+                    .map((action): MaintenanceActionType | null => {
+                        if (action === 'compress' || action === 'rebuild_summary' || action === 'memory_card_rebuild' || action === 'schema_cleanup' || action === 'group_maintenance') {
+                            return action;
+                        }
+                        return null;
+                    })
+                    .filter((action): action is MaintenanceActionType => Boolean(action))
+                    .slice(-MAINTENANCE_ACTION_QUEUE_LIMIT)
+                : [],
+            maintenanceActionLastExecutedAtByAction: state.maintenanceActionLastExecutedAtByAction && typeof state.maintenanceActionLastExecutedAtByAction === 'object'
+                ? Object.entries(state.maintenanceActionLastExecutedAtByAction).reduce<Partial<Record<MaintenanceActionType, number>>>(
+                    (result: Partial<Record<MaintenanceActionType, number>>, [action, ts]: [string, unknown]): Partial<Record<MaintenanceActionType, number>> => {
+                        if (action !== 'compress' && action !== 'rebuild_summary' && action !== 'memory_card_rebuild' && action !== 'schema_cleanup' && action !== 'group_maintenance') {
+                            return result;
+                        }
+                        const value = Math.max(0, Number(ts ?? 0) || 0);
+                        if (value > 0) {
+                            result[action] = value;
+                        }
+                        return result;
+                    },
+                    {},
+                )
+                : {},
             lastMutationRepairViewHash: normalizeSeedText(state.lastMutationRepairViewHash) || undefined,
             lastMutationRepairAt: Number(state.lastMutationRepairAt ?? 0) || undefined,
             mutationRepairGeneration: Math.max(0, Number(state.mutationRepairGeneration ?? 0) || 0),
@@ -2195,8 +2222,10 @@ export class ChatStateManager {
             ]
             : nextAdvice;
         state.maintenanceInsights = this.buildMaintenanceInsightsFromAdvice(state.maintenanceAdvice, state);
-        await this.enqueueMemoryCardMaintenanceByQuality(state, nextMetrics);
-        await this.runMemoryCardMaintenanceQueue(state);
+        if (!this.autoMaintenanceRunning) {
+            this.enqueueMaintenanceActionsByQuality(state, quality);
+            await this.runMaintenanceActionQueue(state);
+        }
         await this.refreshLifecycleState(state, 'recompute_quality');
         state.adaptivePolicy = {
             ...this.applyLifecycleBias(
@@ -3102,167 +3131,84 @@ export class ChatStateManager {
         state.mutationRepairQueue = queue;
     }
 
-    private enqueueMemoryCardMaintenanceTask(state: MemoryOSChatState, task: Omit<MemoryCardMaintenanceTask, 'taskId' | 'enqueuedAt' | 'attempts' | 'status'>): void {
-        const queue = Array.isArray(state.memoryCardMaintenanceQueue) ? state.memoryCardMaintenanceQueue : [];
-        const fingerprint = normalizeSeedText(task.fingerprint);
-        if (!fingerprint) {
-            state.memoryCardMaintenanceQueue = queue;
-            return;
-        }
-        const runningOrPending = queue.find((item: MemoryCardMaintenanceTask): boolean => normalizeSeedText(item.fingerprint) === fingerprint && item.status !== 'failed');
-        if (runningOrPending) {
-            state.memoryCardMaintenanceQueue = queue;
-            return;
-        }
-        const executedMap = state.memoryCardMaintenanceLastExecutedAtByFingerprint ?? {};
-        const lastExecutedAt = Math.max(0, Number(executedMap[fingerprint] ?? 0) || 0);
-        if (lastExecutedAt > 0 && Date.now() - lastExecutedAt < MEMORY_CARD_MAINTENANCE_COOLDOWN_MS) {
-            state.memoryCardMaintenanceQueue = queue;
-            return;
-        }
-        const nextTask: MemoryCardMaintenanceTask = {
-            taskId: crypto.randomUUID(),
-            taskType: task.taskType,
-            fingerprint,
-            sourceRecordKey: normalizeSeedText(task.sourceRecordKey) || undefined,
-            sourceRecordKind: task.sourceRecordKind,
-            reasonCodes: Array.isArray(task.reasonCodes) ? task.reasonCodes.map((item: string): string => normalizeSeedText(item)).filter(Boolean) : [],
-            enqueuedAt: Date.now(),
-            attempts: 0,
-            status: 'pending',
-            lastError: undefined,
-        };
-        state.memoryCardMaintenanceQueue = [...queue, nextTask].slice(-MEMORY_CARD_MAINTENANCE_QUEUE_LIMIT);
-    }
-
-    private async enqueueMemoryCardMaintenanceByQuality(state: MemoryOSChatState, metrics: AdaptiveMetrics): Promise<void> {
-        const queue = Array.isArray(state.memoryCardMaintenanceQueue) ? state.memoryCardMaintenanceQueue : [];
-        state.memoryCardMaintenanceQueue = queue;
-        state.memoryCardMaintenanceLastExecutedAtByFingerprint = state.memoryCardMaintenanceLastExecutedAtByFingerprint ?? {};
+    /**
+     * 功能：根据质量 reason code 自动入队维护动作。
+     * @param state 当前聊天状态。
+     * @param quality 质量评分结果。
+     * @returns 无返回值。
+     */
+    private enqueueMaintenanceActionsByQuality(state: MemoryOSChatState, quality: MemoryQualityScorecard): void {
+        const reasonCodes = Array.isArray(quality.reasonCodes) ? quality.reasonCodes : [];
+        const reasonSet = new Set(reasonCodes);
         const precisionWindowRaw = Array.isArray(state.vectorLifecycle?.recentPrecisionWindow) && state.vectorLifecycle!.recentPrecisionWindow.length > 0
             ? state.vectorLifecycle!.recentPrecisionWindow
             : (state.retrievalHealth?.recentPrecisionWindow ?? []);
-        const recentPrecisionWindow = (Array.isArray(precisionWindowRaw) ? precisionWindowRaw : []).slice(-3).map((item: number): number => clamp01(Number(item ?? 0) || 0));
-        const recentPrecisionAverage = averagePrecisionWindow(recentPrecisionWindow);
-        const vectorLifecycle = state.vectorLifecycle ?? DEFAULT_VECTOR_LIFECYCLE;
-        const factCount = Math.max(0, Number(vectorLifecycle.factCount ?? 0) || 0);
-        const summaryCount = Math.max(0, Number(vectorLifecycle.summaryCount ?? 0) || 0);
-        const memoryCardCount = Math.max(0, Number(vectorLifecycle.memoryCardCount ?? 0) || 0);
-        const sourceBaseCount = factCount + summaryCount;
-        if (recentPrecisionWindow.length >= 3 && recentPrecisionAverage < 0.2) {
-            this.enqueueMemoryCardMaintenanceTask(state, {
-                taskType: 'rebuild_index',
-                fingerprint: 'maintenance:precision_low',
-                reasonCodes: ['retrieval_precision_low', 'queue:auto_rebuild_index'],
-            });
+        const recentPrecisionWindow = (Array.isArray(precisionWindowRaw) ? precisionWindowRaw : [])
+            .slice(-3)
+            .map((item: number): number => clamp01(Number(item ?? 0) || 0));
+        const precisionLowConsecutive = recentPrecisionWindow.length >= 3 && recentPrecisionWindow.every((value: number): boolean => value < 0.2);
+        if (precisionLowConsecutive || reasonSet.has('memory_card_embeddings_missing')) {
+            this.enqueueMaintenanceAction(state, 'memory_card_rebuild');
         }
-        if (memoryCardCount === 0 && sourceBaseCount > 0) {
-            this.enqueueMemoryCardMaintenanceTask(state, {
-                taskType: 'rebuild_index',
-                fingerprint: 'maintenance:card_empty',
-                reasonCodes: ['memory_card_embeddings_missing', 'queue:auto_rebuild_index'],
-            });
+        if (reasonSet.has('duplicate_rate_high')) {
+            this.enqueueMaintenanceAction(state, 'compress');
         }
-        const expectedLowerBound = Math.max(6, Math.floor(sourceBaseCount * 0.25));
-        if (sourceBaseCount > 0 && memoryCardCount < expectedLowerBound) {
-            this.enqueueMemoryCardMaintenanceTask(state, {
-                taskType: 'rebuild_index',
-                fingerprint: 'maintenance:card_ratio_low',
-                reasonCodes: ['memory_card_rebuild', 'queue:auto_rebuild_index'],
-            });
+        if (reasonSet.has('summary_freshness_low')) {
+            this.enqueueMaintenanceAction(state, 'rebuild_summary');
         }
-        const allCards = await db.memory_cards
-            .where('chatKey')
-            .equals(this.chatKey)
-            .toArray();
-        const factKeys = Array.from(new Set(
-            allCards
-                .filter((card) => card.sourceRecordKind === 'fact')
-                .map((card): string => normalizeSeedText(card.sourceRecordKey))
-                .filter(Boolean),
-        ));
-        const summaryKeys = Array.from(new Set(
-            allCards
-                .filter((card) => card.sourceRecordKind === 'summary')
-                .map((card): string => normalizeSeedText(card.sourceRecordKey))
-                .filter(Boolean),
-        ));
-        const [factRows, summaryRows] = await Promise.all([
-            factKeys.length > 0 ? db.facts.bulkGet(factKeys) : Promise.resolve([]),
-            summaryKeys.length > 0 ? db.summaries.bulkGet(summaryKeys) : Promise.resolve([]),
-        ]);
-        const factSet = new Set((factRows ?? []).map((item) => normalizeSeedText(item?.factKey)).filter(Boolean));
-        const summarySet = new Set((summaryRows ?? []).map((item) => normalizeSeedText(item?.summaryId)).filter(Boolean));
-        const abnormalCards = allCards.filter((card): boolean => {
-            const sourceNeedsRebuild = card.status !== 'active';
-            if (card.sourceRecordKind === 'fact') {
-                const key = normalizeSeedText(card.sourceRecordKey);
-                return sourceNeedsRebuild || (Boolean(key) && !factSet.has(key));
-            }
-            if (card.sourceRecordKind === 'summary') {
-                const key = normalizeSeedText(card.sourceRecordKey);
-                return sourceNeedsRebuild || (Boolean(key) && !summarySet.has(key));
-            }
-            return false;
-        });
-        if (abnormalCards.length >= 5) {
-            const dedupSource = new Set<string>();
-            abnormalCards.forEach((card): void => {
-                const sourceRecordKey = normalizeSeedText(card.sourceRecordKey);
-                if (!sourceRecordKey) {
-                    return;
-                }
-                const sourceRecordKind = card.sourceRecordKind === 'summary' ? 'summary' : 'fact';
-                const sourceFingerprint = `${sourceRecordKind}:${sourceRecordKey}`;
-                if (dedupSource.has(sourceFingerprint)) {
-                    return;
-                }
-                dedupSource.add(sourceFingerprint);
-                this.enqueueMemoryCardMaintenanceTask(state, {
-                    taskType: 'rebuild_from_source',
-                    fingerprint: `maintenance:source:${sourceFingerprint}`,
-                    sourceRecordKey,
-                    sourceRecordKind,
-                    reasonCodes: ['memory_card_source_missing', 'queue:auto_rebuild_source'],
-                });
-            });
-        }
-        state.adaptiveMetrics = {
-            ...metrics,
-            lastUpdatedAt: Date.now(),
-        };
     }
 
-    private async runMemoryCardMaintenanceQueue(state: MemoryOSChatState): Promise<void> {
-        const queue = Array.isArray(state.memoryCardMaintenanceQueue) ? state.memoryCardMaintenanceQueue : [];
-        if (queue.length <= 0 || state.archived === true) {
-            state.memoryCardMaintenanceQueue = queue;
+    /**
+     * 功能：将维护动作加入统一队列，带冷却与去重。
+     * @param state 当前聊天状态。
+     * @param action 维护动作。
+     * @returns 无返回值。
+     */
+    private enqueueMaintenanceAction(state: MemoryOSChatState, action: MaintenanceActionType): void {
+        const queue = Array.isArray(state.maintenanceActionQueue) ? state.maintenanceActionQueue : [];
+        const executedMap = state.maintenanceActionLastExecutedAtByAction ?? {};
+        const lastExecutedAt = Math.max(0, Number(executedMap[action] ?? 0) || 0);
+        if (queue.includes(action)) {
+            state.maintenanceActionQueue = queue;
             return;
         }
-        const currentTask = queue[0];
-        if (!currentTask) {
-            state.memoryCardMaintenanceQueue = queue;
+        if (lastExecutedAt > 0 && Date.now() - lastExecutedAt < MAINTENANCE_ACTION_COOLDOWN_MS) {
+            state.maintenanceActionQueue = queue;
             return;
         }
-        currentTask.status = 'running';
-        currentTask.attempts = Math.max(0, Number(currentTask.attempts ?? 0) || 0) + 1;
+        state.maintenanceActionQueue = [...queue, action].slice(-MAINTENANCE_ACTION_QUEUE_LIMIT);
+    }
+
+    /**
+     * 功能：执行统一维护动作队列，单次只消费一个动作。
+     * @param state 当前聊天状态。
+     * @returns 无返回值。
+     */
+    private async runMaintenanceActionQueue(state: MemoryOSChatState): Promise<void> {
+        const queue = Array.isArray(state.maintenanceActionQueue) ? state.maintenanceActionQueue : [];
+        if (queue.length <= 0 || state.archived === true || this.autoMaintenanceRunning) {
+            state.maintenanceActionQueue = queue;
+            return;
+        }
+        const currentAction = queue[0];
+        if (!currentAction) {
+            state.maintenanceActionQueue = queue;
+            return;
+        }
+        this.autoMaintenanceRunning = true;
         try {
-            if (currentTask.taskType === 'rebuild_index') {
-                await this.rebuildMemoryCardIndex();
-            } else if (currentTask.taskType === 'rebuild_from_source' && currentTask.sourceRecordKey && currentTask.sourceRecordKind) {
-                await this.rebuildMemoryCardsFromSource(currentTask.sourceRecordKey, currentTask.sourceRecordKind);
-            }
+            await this.runMaintenanceAction(currentAction);
             queue.shift();
-            state.memoryCardMaintenanceLastExecutedAtByFingerprint = {
-                ...(state.memoryCardMaintenanceLastExecutedAtByFingerprint ?? {}),
-                [normalizeSeedText(currentTask.fingerprint)]: Date.now(),
+            state.maintenanceActionLastExecutedAtByAction = {
+                ...(state.maintenanceActionLastExecutedAtByAction ?? {}),
+                [currentAction]: Date.now(),
             };
         } catch (error) {
-            currentTask.status = 'failed';
-            currentTask.lastError = String((error as Error)?.message ?? error);
-            logger.warn(`Memory card maintenance task failed chatKey=${this.chatKey}, fingerprint=${currentTask.fingerprint}`, error);
+            logger.warn(`Auto maintenance action failed chatKey=${this.chatKey}, action=${currentAction}`, error);
+        } finally {
+            this.autoMaintenanceRunning = false;
         }
-        state.memoryCardMaintenanceQueue = queue;
+        state.maintenanceActionQueue = queue;
     }
 
     private async executeMutationRepairTask(state: MemoryOSChatState, task: MutationRepairTask): Promise<void> {
@@ -5858,6 +5804,27 @@ export class ChatStateManager {
         const state = await this.load();
         state.latestRecallExplanation = normalizeLatestRecallExplanation(state.latestRecallExplanation ?? null);
         return state.latestRecallExplanation ?? null;
+    }
+
+    /**
+     * 功能：写入最近一次酒馆 `prompt_ready` 捕获快照，供测试包精确回放使用。
+     * @param snapshot 捕获快照；传 null 时清空。
+     * @returns Promise<void>：异步完成。
+     */
+    async setPromptReadyCaptureSnapshot(snapshot: PromptReadyCaptureSnapshot | null): Promise<void> {
+        const state = await this.load();
+        state.promptReadyCaptureSnapshot = snapshot ? normalizePromptReadyCaptureSnapshot(snapshot) : null;
+        this.markDirty();
+    }
+
+    /**
+     * 功能：读取最近一次酒馆 `prompt_ready` 捕获快照。
+     * @returns Promise<PromptReadyCaptureSnapshot | null>：捕获快照。
+     */
+    async getPromptReadyCaptureSnapshot(): Promise<PromptReadyCaptureSnapshot | null> {
+        const state = await this.load();
+        state.promptReadyCaptureSnapshot = normalizePromptReadyCaptureSnapshot(state.promptReadyCaptureSnapshot ?? null);
+        return state.promptReadyCaptureSnapshot ?? null;
     }
 
     /**

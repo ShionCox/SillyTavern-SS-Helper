@@ -34,7 +34,15 @@ import { PromptTrimmer } from '../core/prompt-trimmer';
 import { ChatViewManager } from '../core/chat-view-manager';
 import { collectChatSemanticSeedWithAi } from '../core/chat-semantic-bootstrap';
 import { inferStructuredSeedWorldStateEntries } from '../core/world-state-seed';
-import { db, restoreArchivedMemoryChat, type DBFact, type DBSummary } from '../db/db';
+import {
+    db,
+    exportMemoryChatDatabaseSnapshot,
+    exportMemoryPromptTestBundle,
+    importMemoryPromptTestBundle,
+    restoreArchivedMemoryChat,
+    type DBFact,
+    type DBSummary,
+} from '../db/db';
 import manifestJson from '../../manifest.json';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -1225,6 +1233,64 @@ export class MemorySDKImpl implements MemorySDK {
         },
         getLatestRecallExplanation: (): Promise<SDKLatestRecallExplanation | null> => {
             return this.chatStateManager.getLatestRecallExplanation() as Promise<SDKLatestRecallExplanation | null>;
+        },
+        setLatestRecallExplanation: (explanation: SDKLatestRecallExplanation | null): Promise<void> => {
+            return this.chatStateManager.setLatestRecallExplanation(explanation as any);
+        },
+        getPromptReadyCaptureSnapshotForTest: (): Promise<{
+            promptFixture: Array<Record<string, unknown>>;
+            query: string;
+            sourceMessageId?: string;
+            capturedAt: number;
+            requestMeta?: Record<string, unknown>;
+        } | null> => {
+            return this.chatStateManager.getPromptReadyCaptureSnapshot();
+        },
+        setPromptReadyCaptureSnapshotForTest: (snapshot: {
+            promptFixture: Array<Record<string, unknown>>;
+            query: string;
+            sourceMessageId?: string;
+            capturedAt: number;
+            requestMeta?: Record<string, unknown>;
+        } | null): Promise<void> => {
+            return this.chatStateManager.setPromptReadyCaptureSnapshot(snapshot as any);
+        },
+        exportCurrentChatDatabaseSnapshotForTest: () => {
+            return exportMemoryChatDatabaseSnapshot(this.chatKey_);
+        },
+        exportPromptTestBundleForTest: async (options?: {
+            promptFixture?: Array<Record<string, unknown>>;
+            query?: string;
+            sourceMessageId?: string;
+            settings?: Record<string, unknown>;
+            expectation?: { shouldInject?: boolean; requiredKeywords?: string[] };
+            runResult?: Record<string, unknown>;
+        }) => {
+            const captureSnapshot = await this.chatStateManager.getPromptReadyCaptureSnapshot();
+            return exportMemoryPromptTestBundle(this.chatKey_, {
+                ...(options ?? {}),
+                captureSnapshot: captureSnapshot ?? undefined,
+            });
+        },
+        importPromptTestBundleForTest: (bundle: {
+            version: '1.0.0';
+            exportedAt: number;
+            sourceChatKey: string;
+            database: import('../db/db').MemoryChatDatabaseSnapshot;
+            promptFixture: Array<Record<string, unknown>>;
+            query: string;
+            sourceMessageId?: string;
+            settings: Record<string, unknown>;
+            captureMeta?: {
+                mode?: 'exact_replay' | 'simulated_prompt';
+                capturedAt?: number;
+                source?: string;
+                note?: string;
+            };
+            expectation?: { shouldInject?: boolean; requiredKeywords?: string[] };
+            runResult?: Record<string, unknown>;
+        }, options?: { targetChatKey?: string; skipClear?: boolean }) => {
+            return importMemoryPromptTestBundle(bundle as any, options);
         },
         getMemoryLifecycleSummary: (limit?: number): Promise<MemoryLifecycleState[]> => {
             return this.chatStateManager.getMemoryLifecycleSummary(limit);

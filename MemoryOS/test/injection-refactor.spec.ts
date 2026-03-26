@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatStateManager } from '../src/core/chat-state-manager';
 import { buildPreparedRecallContext } from '../src/injection/recall-context-builder';
+import { dedupeMemoryContextAgainstSystem } from '../src/injection/injection-manager';
 import { buildLayeredMemoryContext } from '../src/injection/prompt-memory-renderer';
 import { buildLatestRecallExplanationSnapshot, buildRecallLogEntries, toRecallLogRecordKind } from '../src/injection/recall-log-mapper';
 import type { RecallCandidate, RecallPlan } from '../src/types';
@@ -468,5 +469,221 @@ describe('注入重构模块', (): void => {
         });
         expect(context.text).not.toContain('<items></items>');
         expect(context.text).not.toContain('<equipments></equipments>');
+    });
+    it('XML 文本节点会保留引号，避免输出 &quot; 之类的实体', (): void => {
+        const plan: RecallPlan = {
+            intent: 'setting_qa',
+            sections: ['WORLD_STATE'],
+            sectionBudgets: { WORLD_STATE: 120 },
+            maxTokens: 240,
+            sourceWeights: {
+                facts: 1,
+                summaries: 0.8,
+                state: 1,
+                relationships: 0.5,
+                events: 1,
+                vector: 0.6,
+                lorebook: 0.3,
+            },
+            sourceLimits: {},
+            sectionWeights: { WORLD_STATE: 1 },
+            coarseTopK: 8,
+            fineTopK: 4,
+            viewpoint: {
+                mode: 'actor_bounded',
+                activeActorKey: 'actor_a',
+                allowSharedScene: true,
+                allowWorldState: true,
+                allowForeignPrivateMemory: false,
+                focus: {
+                    primaryActorKey: 'actor_a',
+                    secondaryActorKeys: [],
+                    budgetShare: {
+                        global: 0.7,
+                        primaryActor: 0.3,
+                        secondaryActors: 0,
+                    },
+                    reasonCodes: ['focus:explicit_active_actor'],
+                },
+            },
+            reasonCodes: [],
+        };
+        const context = buildLayeredMemoryContext({
+            candidates: [{
+                candidateId: 'c-world-1',
+                recordKey: 'state-1',
+                recordKind: 'state',
+                source: 'state',
+                sectionHint: 'WORLD_STATE',
+                title: '规则',
+                rawText: '厄尔多利亚规则: {"title":"林间空地的庇护","summary":"不会受到任何伤害"}',
+                renderedLine: '- 厄尔多利亚规则',
+                confidence: 0.9,
+                updatedAt: 100,
+                keywordScore: 0.9,
+                vectorScore: 0,
+                recencyScore: 0.7,
+                continuityScore: 0.6,
+                relationshipScore: 0,
+                emotionScore: 0,
+                conflictPenalty: 0,
+                privacyPenalty: 0,
+                visibilityPool: 'global',
+                privacyClass: 'shared',
+                viewpointReason: 'shared',
+                actorFocusTier: 'shared',
+                actorVisibilityScore: 0.9,
+                finalScore: 0.95,
+                tone: 'clear_recall',
+                selected: true,
+                reasonCodes: ['source:state'],
+            }],
+            plan,
+            roleProfiles: {},
+            relationships: [],
+        });
+        expect(context.text).toContain('"title":"林间空地的庇护"');
+        expect(context.text).not.toContain('&quot;');
+    });
+    it('世界规则数组会展开为多条 rule，状态对象优先使用 summary', (): void => {
+        const plan: RecallPlan = {
+            intent: 'setting_qa',
+            sections: ['WORLD_STATE'],
+            sectionBudgets: { WORLD_STATE: 160 },
+            maxTokens: 280,
+            sourceWeights: {
+                facts: 1,
+                summaries: 0.8,
+                state: 1,
+                relationships: 0.5,
+                events: 1,
+                vector: 0.6,
+                lorebook: 0.3,
+            },
+            sourceLimits: {},
+            sectionWeights: { WORLD_STATE: 1 },
+            coarseTopK: 8,
+            fineTopK: 4,
+            viewpoint: {
+                mode: 'actor_bounded',
+                activeActorKey: 'actor_a',
+                allowSharedScene: true,
+                allowWorldState: true,
+                allowForeignPrivateMemory: false,
+                focus: {
+                    primaryActorKey: 'actor_a',
+                    secondaryActorKeys: [],
+                    budgetShare: {
+                        global: 0.8,
+                        primaryActor: 0.2,
+                        secondaryActors: 0,
+                    },
+                    reasonCodes: ['focus:explicit_active_actor'],
+                },
+            },
+            reasonCodes: [],
+        };
+        const context = buildLayeredMemoryContext({
+            candidates: [
+                {
+                    candidateId: 'c-rule-1',
+                    recordKey: 'state-rule-1',
+                    recordKind: 'state',
+                    source: 'state',
+                    sectionHint: 'WORLD_STATE',
+                    title: 'rule',
+                    rawText: '/semantic/world/rules: ["林间空地受古老魔法守护","影牙能散播诅咒"]',
+                    renderedLine: '- world rules',
+                    confidence: 0.9,
+                    updatedAt: 100,
+                    keywordScore: 0.9,
+                    vectorScore: 0,
+                    recencyScore: 0.7,
+                    continuityScore: 0.6,
+                    relationshipScore: 0,
+                    emotionScore: 0,
+                    conflictPenalty: 0,
+                    privacyPenalty: 0,
+                    visibilityPool: 'global',
+                    privacyClass: 'shared',
+                    viewpointReason: 'shared',
+                    actorFocusTier: 'shared',
+                    actorVisibilityScore: 0.9,
+                    finalScore: 0.95,
+                    tone: 'clear_recall',
+                    selected: true,
+                    reasonCodes: ['source:state'],
+                },
+                {
+                    candidateId: 'c-state-1',
+                    recordKey: 'state-rel-1',
+                    recordKind: 'state',
+                    source: 'state',
+                    sectionHint: 'WORLD_STATE',
+                    title: 'relationship',
+                    rawText: '/semantic/characters/seraphina/relationships/foo: {"title":"塞拉菲娜守护林间空地","summary":"塞拉菲娜守护林间空地，保护所有寻求庇护者"}',
+                    renderedLine: '- relationship state',
+                    confidence: 0.88,
+                    updatedAt: 100,
+                    keywordScore: 0.88,
+                    vectorScore: 0,
+                    recencyScore: 0.7,
+                    continuityScore: 0.6,
+                    relationshipScore: 0,
+                    emotionScore: 0,
+                    conflictPenalty: 0,
+                    privacyPenalty: 0,
+                    visibilityPool: 'global',
+                    privacyClass: 'shared',
+                    viewpointReason: 'shared',
+                    actorFocusTier: 'shared',
+                    actorVisibilityScore: 0.9,
+                    finalScore: 0.92,
+                    tone: 'clear_recall',
+                    selected: true,
+                    reasonCodes: ['source:state'],
+                },
+            ],
+            plan,
+            roleProfiles: {},
+            relationships: [],
+        });
+        expect(context.text).toContain('<rule>林间空地受古老魔法守护</rule>');
+        expect(context.text).toContain('<rule>影牙能散播诅咒</rule>');
+        expect(context.text).not.toContain('/semantic/world/rules:');
+        expect(context.text).toContain('<state>塞拉菲娜守护林间空地，保护所有寻求庇护者</state>');
+        expect(context.text).not.toContain('/semantic/characters/seraphina/relationships/foo:');
+    });
+
+    it('主链 user 注入会跳过与基础 system 注入重复的记忆叶子节点', (): void => {
+        const promptMessages = [
+            {
+                role: 'system',
+                is_system: true,
+                content: [
+                    '[Memory Context]',
+                    '<memoryos_context>',
+                    '<worldinfo><rules><rule>林间空地受古老魔法守护</rule></rules><states><state>塞拉菲娜守护林间空地</state></states></worldinfo>',
+                    '<roles><seraphina><profile><display_name>Seraphina</display_name><identity><fact>厄尔多利亚林间空地的守护者</fact></identity></profile></seraphina></roles>',
+                    '</memoryos_context>',
+                ].join('\n'),
+            },
+        ] as any[];
+        const mainlineContext = [
+            '[Memory Context]',
+            '<memoryos_context>',
+            '<worldinfo><rules><rule>林间空地受古老魔法守护</rule><rule>影牙能散播诅咒</rule></rules><states><state>塞拉菲娜守护林间空地</state><state>厄尔多利亚夜晚怪物潜行</state></states></worldinfo>',
+            '<roles><seraphina><profile><display_name>Seraphina</display_name><identity><fact>厄尔多利亚林间空地的守护者</fact><fact>拥有治愈、保护、自然魔法能力</fact></identity></profile></seraphina></roles>',
+            '</memoryos_context>',
+        ].join('\n');
+
+        const deduped = dedupeMemoryContextAgainstSystem(mainlineContext, promptMessages as any);
+
+        expect(deduped).toContain('影牙能散播诅咒');
+        expect(deduped).toContain('厄尔多利亚夜晚怪物潜行');
+        expect(deduped).toContain('拥有治愈、保护、自然魔法能力');
+        expect(deduped).not.toContain('<rule>林间空地受古老魔法守护</rule>');
+        expect(deduped).not.toContain('<state>塞拉菲娜守护林间空地</state>');
+        expect(deduped).not.toContain('<fact>厄尔多利亚林间空地的守护者</fact>');
     });
 });

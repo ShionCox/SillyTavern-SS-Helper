@@ -5,6 +5,7 @@ import {
     renderSharedWorldStateSectionTable,
     type SharedWorldStateSectionColumn,
 } from '../../../_Components/sharedWorldStateSectionTable';
+import { buildSharedSelectField, hydrateSharedSelects } from '../../../_Components/sharedSelect';
 import { escapeHtml, formatTimeLabel, normalizeLookup } from './editorShared';
 import vectorMemoryViewerCssText from './vectorMemoryViewer.css?inline';
 import type {
@@ -78,6 +79,42 @@ export interface VectorMemoryViewerControllerOptions {
 const STYLE_ID = 'stx-vector-memory-viewer-style';
 const toast = new Toast('MemoryOS');
 const VECTOR_MEMORY_PAGE_SIZE_OPTIONS: number[] = [10, 20, 30, 50];
+
+interface VectorMemoryViewerSelectOption {
+    value: string;
+    label: string;
+}
+
+/**
+ * 功能：构建记忆卡检索台使用的共享下拉框 HTML。
+ * @param options 共享下拉框配置。
+ * @returns 共享下拉框 HTML 字符串。
+ */
+function buildVectorMemoryViewerSharedSelect(options: {
+    id: string;
+    field: string;
+    value: string;
+    disabled?: boolean;
+    optionList: VectorMemoryViewerSelectOption[];
+    containerClassName?: string;
+}): string {
+    return buildSharedSelectField({
+        id: options.id,
+        value: options.value,
+        containerClassName: `stx-shared-select-fluid stx-vmv-shared-select ${String(options.containerClassName ?? '').trim()}`.trim(),
+        triggerClassName: 'stx-shared-select-trigger-input stx-vmv-shared-select-trigger',
+        listClassName: 'stx-vmv-shared-select-list',
+        optionClassName: 'stx-vmv-shared-select-option',
+        selectAttributes: {
+            'data-field': options.field,
+            disabled: Boolean(options.disabled),
+        },
+        options: options.optionList.map((item: VectorMemoryViewerSelectOption) => ({
+            value: item.value,
+            label: item.label,
+        })),
+    });
+}
 
 /**
  * 功能：确保向量记忆查看器样式只注入一次。
@@ -1422,9 +1459,85 @@ export class VectorMemoryViewerController {
         const previewComparisonNote = previewResult?.previewMode === 'effective_policy' && previewResult.comparison
             ? `主策略 ${previewResult.comparison.effectiveSelectedCardIds.length} 张，对照 ${previewResult.comparison.forcedSelectedCardIds.length} 张，重合率 ${Math.round((previewResult.comparison.selectedOverlapRate ?? 0) * 100)}%${Array.isArray(previewResult.comparison.gapReasonCodes) && previewResult.comparison.gapReasonCodes.includes('strategy_gap_high') ? '（策略差距偏高）' : ''}`
             : '';
-        const actorOptionHtml = actorOptions
-            .map((option: VectorMemoryActorOption): string => `<option value="${escapeHtml(option.key)}"${this.state.actorKey === option.key ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
-            .join('');
+        const sourceKindSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-filter-source-kind',
+            field: 'sourceKind',
+            value: this.state.sourceKind,
+            disabled: testMode,
+            optionList: [
+                { value: 'all', label: '全部来源' },
+                { value: 'fact', label: '事实' },
+                { value: 'summary', label: '摘要' },
+                { value: 'unknown', label: '未知来源' },
+            ],
+        });
+        const statusKindSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-filter-status-kind',
+            field: 'statusKind',
+            value: this.state.statusKind,
+            disabled: testMode,
+            optionList: [
+                { value: 'all', label: '全部状态' },
+                { value: 'normal', label: '正常使用' },
+                { value: 'recent_hit', label: '最近命中' },
+                { value: 'long_unused', label: '长期未用' },
+                { value: 'source_missing', label: '来源丢失' },
+                { value: 'archived_residual', label: '已归档残留' },
+                { value: 'needs_rebuild', label: '建议重建' },
+            ],
+        });
+        const actorKeySelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-filter-actor-key',
+            field: 'actorKey',
+            value: this.state.actorKey,
+            disabled: testMode,
+            optionList: [
+                { value: '__all__', label: '全部角色' },
+                { value: '__current__', label: '当前主角色' },
+                ...actorOptions.map((option: VectorMemoryActorOption): VectorMemoryViewerSelectOption => ({
+                    value: option.key,
+                    label: option.label,
+                })),
+            ],
+        });
+        const timeFilterSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-filter-time-filter',
+            field: 'timeFilter',
+            value: this.state.timeFilter,
+            disabled: testMode,
+            optionList: [
+                { value: '__all__', label: '全部时间' },
+                { value: 'indexed_7d', label: '最近 7 天索引' },
+                { value: 'indexed_30d', label: '最近 30 天索引' },
+                { value: 'hit_7d', label: '最近 7 天命中' },
+                { value: 'hit_30d', label: '最近 30 天命中' },
+            ],
+        });
+        const sortOptionList: VectorMemoryViewerSelectOption[] = [
+            { value: 'recent_hit', label: '最近命中' },
+            { value: 'recent_index', label: '最近索引' },
+            { value: 'recent_created', label: '最近创建' },
+            { value: 'content_length', label: '内容长度' },
+            { value: 'usage', label: '使用频率' },
+        ];
+        const sideSortModeSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-filter-sort-mode',
+            field: 'sortMode',
+            value: this.state.sortMode,
+            disabled: testMode,
+            optionList: sortOptionList.map((item: VectorMemoryViewerSelectOption): VectorMemoryViewerSelectOption => ({
+                value: item.value,
+                label: `按${item.label}`,
+            })),
+        });
+        const toolbarSortModeSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-toolbar-sort-mode',
+            field: 'sortMode',
+            value: this.state.sortMode,
+            disabled: testMode,
+            optionList: sortOptionList,
+            containerClassName: 'stx-vmv-toolbar-shared-select',
+        });
         const listHtml = items.length > 0
             ? this.renderListTable(pageResult.pageItems, {
                 total: items.length,
@@ -1478,11 +1591,11 @@ export class VectorMemoryViewerController {
                     <aside class="stx-vmv-panel">
                         <div class="stx-vmv-section-title"><div><strong>筛选区</strong><div class="stx-vmv-inline-note">${escapeHtml(previewModeNote)}</div></div></div>
                         <div class="stx-vmv-filter-field"><label>关键词搜索</label><input data-field="keyword" type="search" placeholder="搜索记忆内容、来源证据或角色名" value="${escapeHtml(this.state.keyword)}"${testMode ? ' disabled' : ''} /></div>
-                        <div class="stx-vmv-filter-field"><label>来源类型</label><select data-field="sourceKind"${testMode ? ' disabled' : ''}><option value="all"${this.state.sourceKind === 'all' ? ' selected' : ''}>全部来源</option><option value="fact"${this.state.sourceKind === 'fact' ? ' selected' : ''}>事实</option><option value="summary"${this.state.sourceKind === 'summary' ? ' selected' : ''}>摘要</option><option value="unknown"${this.state.sourceKind === 'unknown' ? ' selected' : ''}>未知来源</option></select></div>
-                        <div class="stx-vmv-filter-field"><label>当前状态</label><select data-field="statusKind"${testMode ? ' disabled' : ''}><option value="all"${this.state.statusKind === 'all' ? ' selected' : ''}>全部状态</option><option value="normal"${this.state.statusKind === 'normal' ? ' selected' : ''}>正常使用</option><option value="recent_hit"${this.state.statusKind === 'recent_hit' ? ' selected' : ''}>最近命中</option><option value="long_unused"${this.state.statusKind === 'long_unused' ? ' selected' : ''}>长期未用</option><option value="source_missing"${this.state.statusKind === 'source_missing' ? ' selected' : ''}>来源丢失</option><option value="archived_residual"${this.state.statusKind === 'archived_residual' ? ' selected' : ''}>已归档残留</option><option value="needs_rebuild"${this.state.statusKind === 'needs_rebuild' ? ' selected' : ''}>建议重建</option></select></div>
-                        <div class="stx-vmv-filter-field"><label>角色范围</label><select data-field="actorKey"${testMode ? ' disabled' : ''}><option value="__all__"${this.state.actorKey === '__all__' ? ' selected' : ''}>全部角色</option><option value="__current__"${this.state.actorKey === '__current__' ? ' selected' : ''}>当前主角色</option>${actorOptionHtml}</select></div>
-                        <div class="stx-vmv-filter-field"><label>时间窗口</label><select data-field="timeFilter"${testMode ? ' disabled' : ''}><option value="__all__"${this.state.timeFilter === '__all__' ? ' selected' : ''}>全部时间</option><option value="indexed_7d"${this.state.timeFilter === 'indexed_7d' ? ' selected' : ''}>最近 7 天索引</option><option value="indexed_30d"${this.state.timeFilter === 'indexed_30d' ? ' selected' : ''}>最近 30 天索引</option><option value="hit_7d"${this.state.timeFilter === 'hit_7d' ? ' selected' : ''}>最近 7 天命中</option><option value="hit_30d"${this.state.timeFilter === 'hit_30d' ? ' selected' : ''}>最近 30 天命中</option></select></div>
-                        <div class="stx-vmv-filter-field"><label>排序方式</label><select data-field="sortMode"${testMode ? ' disabled' : ''}><option value="recent_hit"${this.state.sortMode === 'recent_hit' ? ' selected' : ''}>按最近命中</option><option value="recent_index"${this.state.sortMode === 'recent_index' ? ' selected' : ''}>按最近索引</option><option value="recent_created"${this.state.sortMode === 'recent_created' ? ' selected' : ''}>按最近创建</option><option value="content_length"${this.state.sortMode === 'content_length' ? ' selected' : ''}>按内容长度</option><option value="usage"${this.state.sortMode === 'usage' ? ' selected' : ''}>按使用频率</option></select></div>
+                        <div class="stx-vmv-filter-field"><label>来源类型</label>${sourceKindSelectHtml}</div>
+                        <div class="stx-vmv-filter-field"><label>当前状态</label>${statusKindSelectHtml}</div>
+                        <div class="stx-vmv-filter-field"><label>角色范围</label>${actorKeySelectHtml}</div>
+                        <div class="stx-vmv-filter-field"><label>时间窗口</label>${timeFilterSelectHtml}</div>
+                        <div class="stx-vmv-filter-field"><label>排序方式</label>${sideSortModeSelectHtml}</div>
                         <div><div class="stx-vmv-block-title">快捷入口</div><div class="stx-vmv-quick-grid" style="margin-top:10px;"><button class="stx-vmv-quick-btn ${this.state.quickRecentHit ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="recent"${testMode ? ' disabled' : ''}>只看最近命中</button><button class="stx-vmv-quick-btn ${this.state.quickLongUnused ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="unused"${testMode ? ' disabled' : ''}>只看长期未用</button><button class="stx-vmv-quick-btn ${this.state.quickAbnormal ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="abnormal"${testMode ? ' disabled' : ''}>只看异常项</button><button class="stx-vmv-quick-btn ${this.state.quickCurrentActor ? 'is-active' : ''}" type="button" data-action="toggle-quick" data-key="current"${testMode ? ' disabled' : ''}>只看当前角色相关</button></div></div>
                         <div>
                         <div class="stx-vmv-block-title">批量处理</div>
@@ -1496,13 +1609,14 @@ export class VectorMemoryViewerController {
                         <div class="stx-vmv-empty">${escapeHtml(this.state.activeActorKey ? `当前主角色：${this.state.activeActorKey}` : '当前聊天暂未标记主角色，角色相关筛选仍可按来源角色使用。')}</div>
                     </aside>
                     <section class="stx-vmv-panel">
-                        <div class="stx-vmv-toolbar-row"><div><h3>${escapeHtml(testMode ? '预演结果列表' : '记忆卡列表')}</h3><div class="stx-vmv-toolbar-meta">${escapeHtml(testMode ? '当前按照预演中的命中顺序展示。' : '默认展示记忆内容、来源证据、最近使用和当前状态。')}</div></div><div class="stx-vmv-toolbar-actions"><label class="stx-vmv-toolbar-sort"><span>排序</span><select data-field="sortMode"${testMode ? ' disabled' : ''}><option value="recent_hit"${this.state.sortMode === 'recent_hit' ? ' selected' : ''}>最近命中</option><option value="recent_index"${this.state.sortMode === 'recent_index' ? ' selected' : ''}>最近索引</option><option value="recent_created"${this.state.sortMode === 'recent_created' ? ' selected' : ''}>最近创建</option><option value="content_length"${this.state.sortMode === 'content_length' ? ' selected' : ''}>内容长度</option><option value="usage"${this.state.sortMode === 'usage' ? ' selected' : ''}>使用频率</option></select></label><div class="stx-vmv-chip-row"><span class="stx-vmv-chip"${chatKeyTitleAttr}>${escapeHtml(compactChatLabel)}</span><span class="stx-vmv-chip">${items.length} 张卡片</span></div></div></div>
+                        <div class="stx-vmv-toolbar-row"><div><h3>${escapeHtml(testMode ? '预演结果列表' : '记忆卡列表')}</h3><div class="stx-vmv-toolbar-meta">${escapeHtml(testMode ? '当前按照预演中的命中顺序展示。' : '默认展示记忆内容、来源证据、最近使用和当前状态。')}</div></div><div class="stx-vmv-toolbar-actions"><label class="stx-vmv-toolbar-sort"><span>排序</span>${toolbarSortModeSelectHtml}</label><div class="stx-vmv-chip-row"><span class="stx-vmv-chip"${chatKeyTitleAttr}>${escapeHtml(compactChatLabel)}</span><span class="stx-vmv-chip">${items.length} 张卡片</span></div></div></div>
                         <div class="stx-vmv-list-scroller">${this.state.isLoading && !snapshot ? '<div class="stx-vmv-empty">正在读取记忆卡...</div>' : listHtml}</div>
                     </section>
                     <aside class="stx-vmv-panel"><div class="stx-vmv-detail-scroller">${selectedItem ? this.renderDetail(selectedItem, selectedHit) : '<div class="stx-vmv-empty">左侧选一张记忆卡后，这里会显示完整正文、来源证据、最近使用情况、状态判断和详细信息。</div>'}</div></aside>
                 </section>
             </div>
         `;
+        hydrateSharedSelects(this.container);
     }
 
         /**
@@ -1684,9 +1798,16 @@ export class VectorMemoryViewerController {
         startIndex: number;
         endIndex: number;
     }): string {
-        const pageSizeOptionsHtml = VECTOR_MEMORY_PAGE_SIZE_OPTIONS
-            .map((value: number): string => `<option value="${value}"${page.pageSize === value ? ' selected' : ''}>每页 ${value} 条</option>`)
-            .join('');
+        const pageSizeSelectHtml = buildVectorMemoryViewerSharedSelect({
+            id: 'stx-vmv-pagination-page-size',
+            field: 'listPageSize',
+            value: String(page.pageSize),
+            optionList: VECTOR_MEMORY_PAGE_SIZE_OPTIONS.map((value: number): VectorMemoryViewerSelectOption => ({
+                value: String(value),
+                label: `每页 ${value} 条`,
+            })),
+            containerClassName: 'stx-vmv-page-size-shared-select',
+        });
         return `
             <div class="stx-vmv-pagination">
                 <div class="stx-vmv-pagination-meta">
@@ -1696,7 +1817,7 @@ export class VectorMemoryViewerController {
                 <div class="stx-vmv-pagination-actions">
                     <label class="stx-vmv-page-size">
                         <span>显示条数</span>
-                        <select data-field="listPageSize">${pageSizeOptionsHtml}</select>
+                        ${pageSizeSelectHtml}
                     </label>
                     <label class="stx-vmv-page-jump">
                         <span>跳到</span>

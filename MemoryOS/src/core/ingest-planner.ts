@@ -111,6 +111,11 @@ export class IngestPlanner {
         }
 
         const currentAssistantTurnCount = await this.resolveAssistantTurnCount(input.logicalView, input.recentEvents);
+        if (currentAssistantTurnCount > 0 && currentAssistantTurnCount <= 4) {
+            summaryEnabled = false;
+            summaryInterval = Math.min(Math.max(2, Number(summaryInterval || 0)), 3);
+            summaryWindowSize = Math.max(8, Math.min(16, Number(summaryWindowSize || 0)));
+        }
         const turnLedger = this.chatStateManager ? await this.chatStateManager.getTurnLedger() : [];
         const ingestProgress = this.chatStateManager
             ? await this.chatStateManager.getMemoryIngestProgress()

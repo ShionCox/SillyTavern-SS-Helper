@@ -1,103 +1,100 @@
-# 记忆抽取稳态方案：更保守触发 + 结构化兼容降级
+### 1. 把 recall need 从“硬规则判 lane”收成“宽 gate + lane hint”
 
-## 概要
-保留现在“每次回复后做一次本地抽取判定”的架构，不改主入口；真正要改的是两件事：
+现在 `shouldRunVectorRecall()` 已经是宽 gate 了，只要策略允许，就会开搜；但 `classifyRecallNeed()` 仍然主要靠 regex 把 query 归类，然后 `resolveVectorRecallLanes()` 决定 lane。也就是说，**主 gate 已经对了，但 lane 侧还偏规则驱动**。
 
-- 让 `memory.extract` 更保守，只在明显有价值时才真正发 AI 请求，减少“看起来每回合都在抽取”的体感。
-- 让 Tavern 路由对结构化输出更稳，遇到 `Bad Request` 时自动兼容降级，不再直接把抽取打死。
+这一阶段里建议直接收成：
 
-这样能同时解决“请求太频繁”和“抽取偶发 400”两个问题，而且不破坏现有 MemoryOS 主流程。
+* `shouldRunVectorRecall()` 保持现在这种“只看 policy + mode”的宽 gate，不再加回任何 cheap/cache 硬阻断。
+* `classifyRecallNeed()` 从“强决定器”降成“lane hint 生成器”。
+* `resolveVectorRecallLanes()` 默认给一个更宽的候选 lane 集，identity / relationship / rule / state 这种强 query 再做 lane 收窄；`ambiguous_recall` 不要只落到 `['event','style']`，至少补上 `relationship` 和 `state`。
 
-## 关键改动
-### 1. 抽取触发改为更保守
-在 `MemoryOS/src/core/extract-manager.ts` 调整抽取前置门控，保持 `generation_ended -> kickOffExtraction()` 不变，但更严格限制“真正发 AI 请求”的条件：
+这样做的目标是：**query 理解错误时，最多影响排序效率，不再影响召回是否发生。**
 
-- 保留现有 turn-based 判定与窗口去重，不改入口事件。
-- 提高兜底触发阈值：
-  - `minUserMessageDelta` 从 `3` 提到 `4`
-  - `minEventDelta` 从 `20` 提到 `28`
-  - `duplicateWindowMs` 从 `8000` 提到 `20000`
-- 调整 `buildProcessingDecision()` 的默认分支：
-  - 当前默认 `plot_progress` 很容易落到 `light` 或 `medium`
-  - 改为只有满足以下任一条件才允许进入 `light/medium/heavy`
-    - `specialEventHit`
-    - `mutationRepairSignal`
-    - `stageCompletionSignal`
-    - `longRunningSignal`
-    - `postGate.shouldExtractWorldState`
-    - `postGate.shouldExtractRelations`
-    - `postGate.rebuildSummary`
-  - 否则 `plot_progress` 直接落到 `level: 'none'`，并补充原因码 `plot_progress_deferred`
-- `small_talk_noise`、`tool_result`、`setting_confirmed`、`relationship_shift` 的现有价值分类保留，不做放宽。
+### 2. 去掉 `new` 生命周期对 vector 的 hard-off
 
-默认效果：
-- 普通闲聊和轻微剧情推进更容易只做本地判定，不真正发 `memory.extract`
-- 设定确认、关系变化、结构修复、长线阶段切换仍然会正常触发
+目前 `applyLifecycleBias()` 在 `stage === 'new'` 时仍然直接把：
 
-### 2. Tavern 结构化输出做三级降级
-在 `LLMHub/src/providers/tavern-provider.ts` 增加结构化兼容回退链，只在明显属于结构化参数不兼容时触发：
+* `vectorEnabled = false`
+* `vectorMode = 'off'`
+  这会导致你前面已经修好的宽 gate，在新聊天里又被生命周期偏置二次打回去。
 
-- 第一次：按原始请求发送
-  - `jsonSchema + jsonMode`
-- 第二次：如果失败且错误像 `Bad Request / response_format / json_schema`，降级为
-  - `jsonMode: true`，不带 `jsonSchema`
-- 第三次：如果还失败，再降级为
-  - 不带 `jsonMode`、不带 `jsonSchema`
-- 如果失败原因不是结构化兼容问题，例如限流、余额、网络异常，不重试，保持原样失败。
+这一阶段里建议直接改成：
 
-这个降级只发生在 Tavern Provider，不改 OpenAI Provider 现有逻辑。
+* `new` 阶段只放宽预算和刷新频率，不再强关 vector。
+* 真正是否搜索，统一交给 `inferVectorMode()`：
 
-### 3. 请求日志与任务面板补清晰说明
-在 LLMHub 请求日志和任务记录里增加“本次是否发生结构化降级”的可见信息，避免用户只能看到一个模糊的 `Bad Request`：
+  * 没 index 才 `off`
+  * 精度差或 idle 才退到 `search`
+  * 状态健康才 `search_rerank`。
 
-- 给 Provider 返回结果补充调试字段：
-  - `structuredFallbackStage: 'none' | 'json_object' | 'plain'`
-  - `structuredFallbackTriggered: boolean`
-- 请求日志里显示：
-  - 初始请求格式
-  - 最终成功格式
-  - 是否发生兼容降级
-- 如果最终是降级成功，不标成“硬失败”；显示为“已兼容降级成功”
-- 如果最终仍失败，日志里明确写成：
-  - “结构化输出不兼容，已尝试降级到 json_object/plain，仍失败”
+也就是说，**生命周期不再决定“能不能搜”，只决定“搜得多激进”。**
 
-### 4. 用户侧提示改成“检查”与“真正请求”分离
-在 MemoryOS 的任务表现层保持现有 `memory.extract` 任务不变，但补一条轻量说明，避免误解成“每回复一次就一定请求模型”：
+### 3. 把 maintenance 从“建议/面板”收成“自动闭环”
 
-- 不为本地 `kickOffExtraction()` 检查单独建 AI 任务
-- 仅在真正进入 `runProposalTask('memory.extract')` 时才显示 `memory.extract`
-- 在相关帮助文案或状态说明中明确：
-  - “每次回复后都会检查是否需要抽取，但只有满足条件时才会真正请求 AI”
+你现在已经有 maintenance 的信号和建议体系了：
 
-## 接口与类型变化
-- `LLMHub/src/providers/types.ts`
-  - `LLMResponse.debugRequest` 保持兼容，新增可选调试字段用于记录结构化降级阶段
-- 与外部调用方的公开调用方式不变：
-  - `runGeneration`
-  - `memory.extract`
-  - `kickOffExtraction`
-  都不改签名
+* `retrieval_precision_low`
+* `memory_card_embeddings_missing`
+* `memory_card_rebuild`
+* `compress / rebuild_summary / schema_cleanup`
+* 以及维护冷却和队列上限常量。 
 
-## 测试与验收
-### 抽取节奏
-- 连续普通闲聊 1 到 3 回合，不应真正发 `memory.extract`
-- 普通剧情推进但无设定/关系/世界状态变化时，应更常落到 `level: none`
-- 关系变化、设定确认、世界状态更新、消息修订、分支切换，仍应触发抽取
-- 同一窗口短时间重复触发，不应重复发相同抽取请求
+但从现在能看到的链路看，更多还是：
+**评分 -> reasonCodes -> advice -> insight/UI**，而不是明确的
+**评分 -> 自动入队 -> 后台执行 -> 回写生命周期/诊断**。 
 
-### 结构化兼容
-- Tavern 路由支持 `json_schema` 时，仍走原始结构化请求，不触发回退
-- Tavern 路由拒绝 `json_schema` 但支持 `json_object` 时，应自动降级并成功
-- Tavern 路由连 `json_object` 也不支持时，应自动退到 plain，并由后续 JSON 解析继续兜底
-- 非结构化兼容类错误，例如网络失败、余额不足、限流，不应错误触发降级链
+所以这一阶段建议一次补齐：
 
-### 请求日志
-- 成功直连时，日志显示 `structuredFallbackStage = none`
-- 降级成功时，日志能看到原始格式与最终格式
-- 最终失败时，日志能明确写出“已尝试兼容降级但仍失败”
+* 当 `retrieval_precision_low` 连续命中，或 `memory_card_embeddings_missing` 命中时，直接 enqueue `memory_card_rebuild`
+* 当 `duplicate_rate_high` 命中时，enqueue `compress`
+* 当 `summary_freshness_low` 命中时，enqueue `rebuild_summary`
+* 执行后必须回写：
 
-## 假设与默认
-- 默认保留 `generation_ended` 作为抽取检查入口，不改事件架构。
-- 默认采用“静默自动降级”，不弹额外打扰式错误提示；详细信息进请求日志与任务详情。
-- 默认优先减少无价值抽取请求，而不是追求每回合都及时更新记忆。
-- 默认不新增新的设置项，先用更合理的内置策略解决；如果后续仍需细调，再考虑把“抽取节奏”开放成设置项。
+  * `lastMaintenanceAt`
+  * `lastMaintenanceAction`
+  * `vectorLifecycle.reasonCodes / memoryQuality`
+  * 对应卡片的 `needsRebuild / sourceMissing / duplicateCount` 派生状态。
+
+目标是把 maintenance 从“能看见问题”变成“问题会自己收敛”。
+
+### 4. 把旧配置字段和 UI 残留一次删干净
+
+现在 `VectorMode` 已经收敛成 `off | search | search_rerank`，这是对的。
+
+但 `ChatProfileVectorStrategy` 里还留着：
+
+* `activationFacts`
+* `activationSummaries`
+  而且 UI 面板上也还有 `vectorActivationFactsId / vectorActivationSummariesId`。这两个字段和现在的主链已经不匹配了，会继续误导配置语义。 
+
+这一阶段里建议直接：
+
+* 从 `SDK/stx.d.ts`
+* `MemoryOS/src/types/chat-state.ts`
+* 面板表单与默认值
+* 任意 profile override / persistence 映射
+  里**一并删掉**这两个字段。 
+
+---
+
+## 我会把这个单阶段定义成什么
+
+我建议名字就叫：
+
+**阶段：Recall Mainline Closure**
+
+只做一件事：
+**让“召回是否发生、召回怎么收敛、维护怎么自愈、配置怎么表达”全部统一到同一套心智模型里。**
+
+---
+
+## 这个阶段的完成标准
+
+你可以直接把 Done 定成下面 6 条：
+
+1. 任意允许 vector 的聊天里，召回开关只由 `policy.vectorEnabled + vectorMode` 决定，不再被 cheap/cache/lifecycle 二次硬关。
+2. `classifyRecallNeed` 只影响 lane hint，不再成为召回成败的决定因素。
+3. `new` 阶段不再 hard-off vector，vector 降级统一走 `inferVectorMode()`。
+4. recall cache 继续只做 rank boost，不做 shortcut；这点现在已经对了，保持即可。
+5. maintenance 能从质量分和 reason code 自动入队、执行、回写，而不是只给 advice。
+6. `activationFacts / activationSummaries` 从类型、配置、UI 一起移除。

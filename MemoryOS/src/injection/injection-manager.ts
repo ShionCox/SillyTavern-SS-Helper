@@ -57,6 +57,7 @@ type BuildContextOptions = {
     preferSummary?: boolean;
     intentHint?: InjectionIntent;
     includeDecisionMeta?: boolean;
+    bypassPreGenerationGate?: boolean;
 };
 
 type BuildContextDecision = {
@@ -124,6 +125,129 @@ function resolveMemoryContextInsertIndex(chat: SdkTavernPromptMessageEvent[]): n
     }
     const lastUserIndex = findLastTavernPromptUserIndexEvent(chat);
     return lastUserIndex >= 0 ? lastUserIndex : chat.length;
+}
+
+const MEMORY_CONTEXT_DEDUPE_LEAF_TAGS = new Set([
+    'rule',
+    'state',
+    'fact',
+    'summary',
+    'recent_scene',
+    'detail',
+    'memory',
+]);
+
+/**
+ * 功能：归一化记忆 XML 叶子节点文本，用于跨链去重比较。
+ * @param text 原始文本。
+ * @returns 归一化后的文本。
+ */
+function normalizeMemoryContextLeafText(text: unknown): string {
+    return String(text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * 功能：从记忆上下文文本中提取可去重的叶子节点文本集合。
+ * @param text 记忆上下文文本。
+ * @returns 叶子节点归一化文本集合。
+ */
+function collectMemoryContextLeafTexts(text: string): Set<string> {
+    const result = new Set<string>();
+    const leafPattern = /<([a-zA-Z_][\w.-]*)>([^<>]+)<\/\1>/g;
+    let match: RegExpExecArray | null = leafPattern.exec(text);
+    while (match) {
+        const tagName = String(match[1] ?? '').trim().toLowerCase();
+        if (MEMORY_CONTEXT_DEDUPE_LEAF_TAGS.has(tagName)) {
+            const normalized = normalizeMemoryContextLeafText(match[2] ?? '');
+            if (normalized) {
+                result.add(normalized);
+            }
+        }
+        match = leafPattern.exec(text);
+    }
+    return result;
+}
+
+/**
+ * 功能：提取当前 prompt 中已经由 system 基础注入带入的记忆叶子文本，供主链做跨链去重。
+ * @param promptMessages 当前 prompt 消息数组。
+ * @returns 已存在于 system 注入中的叶子文本集合。
+ */
+function collectSystemMemoryContextLeafTexts(promptMessages: SdkTavernPromptMessageEvent[]): Set<string> {
+    const collected = new Set<string>();
+    for (const message of Array.isArray(promptMessages) ? promptMessages : []) {
+        const role = String(message?.role ?? '').trim().toLowerCase();
+        if (role !== 'system' && message?.is_system !== true) {
+            continue;
+        }
+        const text = String((message as any)?.content ?? (message as any)?.mes ?? (message as any)?.text ?? '').trim();
+        if (!text.includes('[Memory Context]') || !text.includes('<memoryos_context>')) {
+            continue;
+        }
+        collectMemoryContextLeafTexts(text).forEach((item: string): void => {
+            collected.add(item);
+        });
+    }
+    return collected;
+}
+
+/**
+ * 功能：清理记忆 XML 中因去重留下的空容器，避免出现大段空结构。
+ * @param text 已去重的记忆上下文文本。
+ * @returns 清理空节点后的文本。
+ */
+function pruneEmptyMemoryContextContainers(text: string): string {
+    let nextText = String(text ?? '');
+    const emptyContainerPattern = /<(worldinfo|roles|rules|states|relationships|identity|origin|items|equipments|memories|profile|memoryos_context|[A-Za-z_][\w.-]*)>\s*<\/\1>/g;
+    let previous = '';
+    while (previous !== nextText) {
+        previous = nextText;
+        nextText = nextText.replace(emptyContainerPattern, '');
+    }
+    return nextText
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/**
+ * 功能：在主链 user 注入前，移除与基础 system 注入完全重复的记忆叶子节点。
+ * @param injectedContext 主链待注入文本。
+ * @param promptMessages 当前 prompt 消息数组。
+ * @returns 去重后的主链记忆上下文文本。
+ */
+export function dedupeMemoryContextAgainstSystem(
+    injectedContext: string,
+    promptMessages: SdkTavernPromptMessageEvent[],
+): string {
+    const baseLeafTexts = collectSystemMemoryContextLeafTexts(promptMessages);
+    if (baseLeafTexts.size <= 0) {
+        return String(injectedContext ?? '');
+    }
+    let removedCount = 0;
+    const dedupedText = String(injectedContext ?? '').replace(
+        /<([a-zA-Z_][\w.-]*)>([^<>]+)<\/\1>/g,
+        (fullMatch: string, rawTagName: string, rawInnerText: string): string => {
+            const tagName = String(rawTagName ?? '').trim().toLowerCase();
+            if (!MEMORY_CONTEXT_DEDUPE_LEAF_TAGS.has(tagName)) {
+                return fullMatch;
+            }
+            const normalized = normalizeMemoryContextLeafText(rawInnerText);
+            if (!normalized || !baseLeafTexts.has(normalized)) {
+                return fullMatch;
+            }
+            removedCount += 1;
+            return '';
+        },
+    );
+    if (removedCount <= 0) {
+        return String(injectedContext ?? '');
+    }
+    const cleaned = pruneEmptyMemoryContextContainers(dedupedText);
+    if (!cleaned.includes('[Memory Context]') || !cleaned.includes('<memoryos_context>')) {
+        return '';
+    }
+    return cleaned;
 }
 
 /**
@@ -248,8 +372,6 @@ export class InjectionManager {
             vectorChunkThreshold: 240,
             rerankThreshold: 6,
             vectorMode: 'search_rerank',
-            vectorMinFacts: 18,
-            vectorMinSummaries: 8,
             vectorSearchStride: 1,
             rerankEnabled: true,
             vectorIdleDecayDays: 14,
@@ -314,8 +436,6 @@ export class InjectionManager {
                 enabled: boolean;
                 chunkThreshold: number;
                 rerankThreshold: number;
-                activationFacts: number;
-                activationSummaries: number;
                 idleDecayDays: number;
                 lowPrecisionSearchStride: number;
             };
@@ -340,8 +460,6 @@ export class InjectionManager {
                     enabled: true,
                     chunkThreshold: 240,
                     rerankThreshold: 6,
-                    activationFacts: 18,
-                    activationSummaries: 8,
                     idleDecayDays: 14,
                     lowPrecisionSearchStride: 3,
                 },
@@ -359,7 +477,21 @@ export class InjectionManager {
      * 返回：区段顺序。
      */
     private resolveSectionOrder(intent: InjectionIntent, preferSummary: boolean): InjectionSectionName[] {
-        const sections = resolveIntentSections(intent);
+        const sectionSet = new Set<InjectionSectionName>(resolveIntentSections(intent));
+        if (intent === 'setting_qa') {
+            sectionSet.add('WORLD_STATE');
+            sectionSet.add('CHARACTER_FACTS');
+            sectionSet.add('LAST_SCENE');
+        } else if (intent === 'story_continue') {
+            sectionSet.add('LAST_SCENE');
+            sectionSet.add('EVENTS');
+            sectionSet.add('RELATIONSHIPS');
+        } else if (intent === 'roleplay') {
+            sectionSet.add('RELATIONSHIPS');
+            sectionSet.add('CHARACTER_FACTS');
+            sectionSet.add('EVENTS');
+        }
+        const sections = Array.from(sectionSet);
         if (!preferSummary && sections.includes('SUMMARY')) {
             return sections.filter((section: InjectionSectionName): boolean => section !== 'SUMMARY').concat(['EVENTS']);
         }
@@ -734,7 +866,9 @@ export class InjectionManager {
             text,
             memoryContext.blocksUsed,
         );
-        if (!preDecision.shouldInject || !text) {
+        const bypassPreGenerationGate = opts?.bypassPreGenerationGate === true;
+        const canBypassWithContent = bypassPreGenerationGate && text.trim().length > 0;
+        if ((!preDecision.shouldInject && !canBypassWithContent) || !text) {
             if (this.chatStateManager) {
                 await this.chatStateManager.setLastPreGenerationDecision(preDecision);
                 await this.chatStateManager.setLastStrategyDecision(buildStrategyDecision(intent, sections, budgets, preDecision.reasonCodes));
@@ -784,6 +918,7 @@ export class InjectionManager {
             `layout:${promptProfile.layoutMode}`,
             `insertion_role:${promptProfile.insertionRole}`,
             `insertion_position:${promptProfile.insertionPosition}`,
+            ...(canBypassWithContent ? ['pre_gate:bypassed_for_base_injection'] : []),
             ...lorebookDecision.reasonCodes.map((code: string): string => `lorebook:${code}`),
         ]));
         const decision = buildStrategyDecision(intent, sections, budgets, mergedReasonCodes);
@@ -894,9 +1029,10 @@ export class InjectionManager {
             ...opts,
             includeDecisionMeta: true,
         });
-        const injectedContext = typeof injectedContextResult === 'string'
+        const injectedContextText = typeof injectedContextResult === 'string'
             ? injectedContextResult
             : injectedContextResult?.text || '';
+        const injectedContext = dedupeMemoryContextAgainstSystem(injectedContextText, promptMessages);
         const preDecision = typeof injectedContextResult === 'object' && injectedContextResult
             ? (injectedContextResult.preDecision as PreGenerationGateDecision | undefined)
             : undefined;

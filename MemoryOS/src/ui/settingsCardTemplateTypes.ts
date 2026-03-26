@@ -21,6 +21,7 @@ export interface MemoryOSSettingsIds {
     tabInjectionId: string;
     tabMainId: string;
     tabAiId: string;
+    tabPromptId: string;
     tabDbId: string;
     tabAboutId: string;
     panelRoleId: string;
@@ -30,6 +31,7 @@ export interface MemoryOSSettingsIds {
     panelAdvancedToolsId: string;
     panelMainId: string;
     panelAiId: string;
+    panelPromptId: string;
     panelDbId: string;
     panelAboutId: string;
     roleOverviewMetaId: string;
@@ -74,6 +76,15 @@ export interface MemoryOSSettingsIds {
     dbCompactionDividerId: string;
     contextMaxTokensId: string;
     injectionPreviewEnabledId: string;
+    injectionPromptEnabledId: string;
+    injectionPromptPresetId: string;
+    injectionPromptAggressivenessId: string;
+    injectionPromptForceDynamicFloorId: string;
+    injectionPromptWorldSettingId: string;
+    injectionPromptCharacterSettingId: string;
+    injectionPromptRelationshipStateId: string;
+    injectionPromptCurrentSceneId: string;
+    injectionPromptRecentPlotId: string;
     recordFilterEnabledId: string;
     recordFilterSectionId: string;
     recordFilterDetailWrapId: string;

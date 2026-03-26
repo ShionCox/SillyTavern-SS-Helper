@@ -143,7 +143,7 @@ export function resolveVectorRecallLanes(input: RecallNeedInput): MemoryCardLane
     if (need === 'mixed') {
         return dedupeMemoryCardLanes([...(input.coveredLanes ?? []), 'event', 'style', 'relationship', 'state']);
     }
-    return ['event', 'style'];
+    return dedupeMemoryCardLanes([...(input.coveredLanes ?? []), 'event', 'style', 'relationship', 'state']);
 }
 
 /**
@@ -155,8 +155,7 @@ export function shouldRunVectorRecall(input: RecallGateInput): RecallGateDecisio
     const primaryNeed = classifyRecallNeed(input);
     const reasonCodes: string[] = [];
     const lanes = dedupeMemoryCardLanes(resolveVectorRecallLanes(input));
-    const policyAllows = input.policy.vectorEnabled === true && (input.policy.vectorMode === 'search' || input.policy.vectorMode === 'search_rerank');
-    if (!policyAllows || input.policy.vectorMode === 'off') {
+    if (input.policy.vectorEnabled !== true || input.policy.vectorMode === 'off') {
         reasonCodes.push(input.policy.vectorEnabled !== true ? 'vector_disabled' : `vector_mode:${input.policy.vectorMode}`);
         return { enabled: false, lanes, reasonCodes, primaryNeed, vectorMode: input.policy.vectorMode };
     }
@@ -706,8 +705,6 @@ export function buildAdaptivePolicy(
         vectorChunkThreshold: Math.max(120, Math.round(profile.vectorStrategy.chunkThreshold)),
         rerankThreshold: Math.max(2, Math.round(profile.vectorStrategy.rerankThreshold)),
         vectorMode: vectorDecision.vectorMode,
-        vectorMinFacts: Math.max(1, Math.round(profile.vectorStrategy.activationFacts)),
-        vectorMinSummaries: Math.max(1, Math.round(profile.vectorStrategy.activationSummaries)),
         vectorSearchStride: Math.max(1, Math.round(vectorDecision.vectorSearchStride)),
         rerankEnabled: vectorDecision.rerankEnabled && quality.dimensions.retrievalPrecision >= 0.35,
         vectorIdleDecayDays: Math.max(1, Math.round(profile.vectorStrategy.idleDecayDays)),
@@ -799,6 +796,18 @@ export function decideInjectionIntent(input: StrategyInferenceInput): InjectionI
         }
         return 'story_continue';
     }
+    if (isExplicitSettingQuestion(query)) {
+        return 'setting_qa';
+    }
+    if (isExplicitToolQuestion(query)) {
+        return 'tool_qa';
+    }
+    if (isExplicitStoryContinuation(query)) {
+        return 'story_continue';
+    }
+    if (isExplicitRoleplayQuestion(query)) {
+        return 'roleplay';
+    }
     if (/设定|世界观|百科|背景|规则|资料|地点|阵营|历史|年表/.test(query)) {
         return 'setting_qa';
     }
@@ -821,6 +830,82 @@ export function decideInjectionIntent(input: StrategyInferenceInput): InjectionI
         return 'story_continue';
     }
     return 'auto';
+}
+
+/**
+ * 功能：判断查询是否是明确的设定问答，优先走世界/地点/背景召回。
+ * @param query 归一化后的用户查询。
+ * @returns 命中时返回 `true`。
+ */
+function isExplicitSettingQuestion(query: string): boolean {
+    const normalized = String(query ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const directKeywords = [
+        '设定',
+        '世界观',
+        '背景',
+        '规则',
+        '资料',
+        '地点',
+        '地理',
+        '历史',
+        '百科',
+        '是什么地方',
+        '是什么',
+        '在哪里',
+        '位于',
+        '哪个城市',
+        '哪座城',
+        '哪儿',
+    ];
+    if (directKeywords.some((keyword: string): boolean => normalized.includes(keyword))) {
+        return true;
+    }
+    return /.+是(什么|啥).*(地方|地区|城市|国家|组织|人物|角色|设定)?/.test(normalized);
+}
+
+/**
+ * 功能：判断查询是否是明确工具问答。
+ * @param query 归一化后的用户查询。
+ * @returns 命中时返回 `true`。
+ */
+function isExplicitToolQuestion(query: string): boolean {
+    const normalized = String(query ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const keywords = ['怎么', '如何', '修复', '命令', '配置', '步骤', '报错', 'api', 'sdk', 'tsc'];
+    return keywords.some((keyword: string): boolean => normalized.includes(keyword));
+}
+
+/**
+ * 功能：判断查询是否是明确剧情续写请求。
+ * @param query 归一化后的用户查询。
+ * @returns 命中时返回 `true`。
+ */
+function isExplicitStoryContinuation(query: string): boolean {
+    const normalized = String(query ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const keywords = ['继续', '续写', '接着', '然后', '下一章', '下一段'];
+    return keywords.some((keyword: string): boolean => normalized.includes(keyword));
+}
+
+/**
+ * 功能：判断查询是否是明确角色扮演/人物互动请求。
+ * @param query 归一化后的用户查询。
+ * @returns 命中时返回 `true`。
+ */
+function isExplicitRoleplayQuestion(query: string): boolean {
+    const normalized = String(query ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const keywords = ['扮演', '角色', '对话', '人设', '互动'];
+    return keywords.some((keyword: string): boolean => normalized.includes(keyword));
 }
 
 /**

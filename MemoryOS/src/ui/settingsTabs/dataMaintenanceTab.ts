@@ -314,9 +314,13 @@ async function handleExportPackage(): Promise<void> {
         STX?: {
             memory?: {
                 getChatKey?: () => string;
-                events?: { query?: (options: { limit: number }) => Promise<unknown[]> };
-                facts?: { query?: (options: { limit: number }) => Promise<unknown[]> };
-                summaries?: { query?: (options: { limit: number }) => Promise<unknown[]> };
+                chatState?: {
+                    exportPromptTestBundleForTest?: (options?: {
+                        query?: string;
+                        sourceMessageId?: string;
+                        settings?: Record<string, unknown>;
+                    }) => Promise<Record<string, unknown>>;
+                };
             };
         };
     }).STX?.memory;
@@ -326,36 +330,25 @@ async function handleExportPackage(): Promise<void> {
     }
     try {
         const chatKey = memory.getChatKey?.() ?? 'unknown';
-        const { db } = await import('../../db/db');
-        const [events, facts, state, summaries, templates, meta, binding] = await Promise.all([
-            memory.events?.query?.({ limit: 5000 }) ?? Promise.resolve([]),
-            memory.facts?.query?.({ limit: 5000 }) ?? Promise.resolve([]),
-            db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).toArray(),
-            memory.summaries?.query?.({ limit: 1000 }) ?? Promise.resolve([]),
-            db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).toArray(),
-            db.meta.get(chatKey),
-            db.template_bindings.get(chatKey),
-        ]);
-        const exportData = {
-            exportedAt: new Date().toISOString(),
-            schemaVersion: meta?.schemaVersion ?? 1,
-            chatKey,
-            events,
-            facts,
-            state,
-            summaries,
-            templates,
-            meta,
-            binding,
-        };
+        if (typeof memory.chatState?.exportPromptTestBundleForTest !== 'function') {
+            throw new Error('chat_state_export_unavailable');
+        }
+        const exportData = await memory.chatState.exportPromptTestBundleForTest();
+        const promptFixture = Array.isArray((exportData as Record<string, unknown>).promptFixture)
+            ? ((exportData as Record<string, unknown>).promptFixture as unknown[])
+            : [];
+        if (promptFixture.length <= 0) {
+            alert('当前聊天尚未捕获到可回放的 prompt_ready 请求。请先让酒馆触发至少一次回复，再导出记忆包。');
+            return;
+        }
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = url;
-        anchor.download = `stx_memory_os_export_${chatKey}_${Date.now()}.json`;
+        anchor.download = `stx_memory_os_prompt_test_bundle_${chatKey}_${Date.now()}.json`;
         anchor.click();
         URL.revokeObjectURL(url);
-        toast.success('记忆包已导出。');
+        toast.success('测试回放包已导出。');
     } catch (error) {
         alert(`导出失败：${String(error)}`);
     }

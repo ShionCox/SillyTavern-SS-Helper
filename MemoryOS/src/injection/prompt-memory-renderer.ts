@@ -24,13 +24,16 @@ function countTokens(text: string): number {
  * @param input 原始文本。
  * @returns 可安全写入 XML 的文本。
  */
+/**
+ * 功能：转义 XML 文本节点中的必要特殊字符，避免破坏结构且保留可读引号。
+ * @param input 原始文本。
+ * @returns 可安全写入 XML 文本节点的内容。
+ */
 function escapeXml(input: unknown): string {
     return String(input ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
+        .replace(/>/g, '&gt;');
 }
 
 /**
@@ -138,6 +141,87 @@ function buildMemoryEntry(candidate: RecallCandidate): RoleMemoryEntry {
     };
 }
 
+/**
+ * 功能：尝试解析 `/semantic/...: payload` 形式的文本，提取结构化值。
+ * @param text 原始文本。
+ * @returns 成功时返回路径和值，否则返回 `null`。
+ */
+function tryParseSemanticPayload(text: string): { path: string; value: unknown } | null {
+    const normalized = normalizeText(text);
+    if (!normalized.startsWith('/semantic/')) {
+        return null;
+    }
+    const separatorIndex = normalized.indexOf(':');
+    if (separatorIndex <= 0) {
+        return null;
+    }
+    const path = normalized.slice(0, separatorIndex).trim();
+    const payloadText = normalized.slice(separatorIndex + 1).trim();
+    if (!payloadText) {
+        return { path, value: '' };
+    }
+    try {
+        return {
+            path,
+            value: JSON.parse(payloadText),
+        };
+    } catch {
+        return {
+            path,
+            value: payloadText,
+        };
+    }
+}
+
+/**
+ * 功能：把世界规则记录规整成适合注入的规则列表。
+ * @param text 原始规则文本。
+ * @returns 展开的规则文本列表。
+ */
+function normalizeRuleTexts(text: string): string[] {
+    const parsed = tryParseSemanticPayload(text);
+    if (!parsed) {
+        return [normalizeText(text)].filter(Boolean);
+    }
+    if (Array.isArray(parsed.value)) {
+        return dedupeTexts(parsed.value.map((item: unknown): string => normalizeText(item)));
+    }
+    if (parsed.value && typeof parsed.value === 'object') {
+        const record = parsed.value as Record<string, unknown>;
+        return dedupeTexts([
+            normalizeText(record.summary),
+            normalizeText(record.title),
+            normalizeText(record.detail),
+            normalizeText(record.content),
+        ]);
+    }
+    return dedupeTexts([normalizeText(parsed.value)]);
+}
+
+/**
+ * 功能：把世界状态记录规整成简洁状态描述，避免把整段原始 JSON 直接注入。
+ * @param text 原始状态文本。
+ * @returns 适合 prompt 的状态描述。
+ */
+function normalizeStateText(text: string): string {
+    const parsed = tryParseSemanticPayload(text);
+    if (!parsed) {
+        return normalizeText(text);
+    }
+    if (parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value)) {
+        const record = parsed.value as Record<string, unknown>;
+        return normalizeText(record.summary)
+            || normalizeText(record.title)
+            || normalizeText(record.detail)
+            || normalizeText(record.content)
+            || normalizeText(text);
+    }
+    if (Array.isArray(parsed.value)) {
+        return dedupeTexts(parsed.value.map((item: unknown): string => normalizeText(item))).join('；');
+    }
+    return normalizeText(parsed.value) || normalizeText(text);
+}
+
 function classifyWorldInfo(candidates: RecallCandidate[]): WorldInfoNode {
     const summary: string[] = [];
     const rules: string[] = [];
@@ -156,10 +240,10 @@ function classifyWorldInfo(candidates: RecallCandidate[]): WorldInfoNode {
             continue;
         }
         if (section === 'WORLD_STATE' && /(规则|约束|rule|constraint)/i.test(text + ' ' + candidate.title)) {
-            rules.push(text);
+            rules.push(...normalizeRuleTexts(text));
             continue;
         }
-        states.push(text);
+        states.push(normalizeStateText(text));
     }
     return {
         summary: dedupeTexts(summary).slice(0, 4),

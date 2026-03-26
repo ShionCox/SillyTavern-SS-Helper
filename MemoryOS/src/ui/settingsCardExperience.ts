@@ -646,6 +646,47 @@ function buildInjectionReasonBucketMarkup(bucket: RecallExplanationBucket): stri
 }
 
 /**
+ * 功能：构建基础注入漏斗诊断卡片。
+ * @param explanation 最近一轮解释快照。
+ * @returns 基础注入诊断 HTML。
+ */
+function buildBaseInjectionFunnelMarkup(explanation: LatestRecallExplanation | null): string {
+    const base = explanation?.baseInjection ?? null;
+    if (!base) {
+        return '';
+    }
+    const statusText = base.inserted
+        ? `已插入（索引 ${base.insertedIndex}）`
+        : `未插入（${base.skippedReason || 'unknown'}）`;
+    const layerMeta = (Array.isArray(base.layerBudgets) ? base.layerBudgets : [])
+        .map((layer) => `${layer.layer}:${layer.usedTokens}/${layer.maxTokens}`)
+        .join(' · ');
+    const optionText = Array.isArray(base.selectedOptions) && base.selectedOptions.length > 0
+        ? base.selectedOptions.join(' / ')
+        : '无';
+    return `
+      <section class="stx-ui-explanation-group">
+        <div class="stx-ui-explanation-group-head">
+          <strong>基础注入漏斗</strong>
+          <span>${escapeHtml(statusText)}</span>
+        </div>
+        <div class="stx-ui-empty-hint">
+          预设 ${escapeHtml(String(base.preset ?? ''))} · 积极度 ${escapeHtml(String(base.aggressiveness ?? ''))} · 动态保底 ${base.forceDynamicFloor ? '开启' : '关闭'}
+        </div>
+        <div class="stx-ui-empty-hint">
+          候选 ${Number(base.candidateCounts?.total ?? 0)} · 前置裁剪 ${Number(base.candidateCounts?.pretrimDropped ?? 0)} · 预算裁剪 ${Number(base.candidateCounts?.budgetDropped ?? 0)}
+        </div>
+        <div class="stx-ui-empty-hint">
+          选项 ${escapeHtml(optionText)}
+        </div>
+        <div class="stx-ui-empty-hint">
+          层预算 ${escapeHtml(layerMeta || '无')}
+        </div>
+      </section>
+    `;
+}
+
+/**
  * 功能：构建最近一轮注入解释区域。
  * @param explanation 最近一轮解释快照。
  * @returns HTML 字符串。
@@ -680,6 +721,7 @@ function buildInjectionReasonMarkup(explanation: LatestRecallExplanation | null)
     }
     return `
       <div class="stx-ui-explanation-groups">
+        ${buildBaseInjectionFunnelMarkup(explanation)}
         ${buildInjectionReasonBucketMarkup(explanation.selected)}
         ${buildInjectionReasonBucketMarkup(explanation.conflictSuppressed)}
         ${buildInjectionReasonBucketMarkup(explanation.rejectedCandidates)}

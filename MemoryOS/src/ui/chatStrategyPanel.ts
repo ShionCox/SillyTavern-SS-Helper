@@ -256,7 +256,6 @@ const EDITOR_IDS = {
     summaryHeavyLookbackId: 'stx-memoryos-chat-ops-summary-heavy-lookback',
     profileRefreshDirectId: 'stx-memoryos-chat-ops-direct-profile-refresh',
     qualityRefreshDirectId: 'stx-memoryos-chat-ops-direct-quality-refresh',
-    vectorFactsDirectId: 'stx-memoryos-chat-ops-direct-vector-facts',
     deletionStrategyDirectId: 'stx-memoryos-chat-ops-direct-delete',
     autoBootstrapSeedId: 'stx-memoryos-chat-ops-auto-bootstrap-seed',
     groupLaneEnabledId: 'stx-memoryos-chat-ops-group-lane-enabled',
@@ -269,8 +268,6 @@ const EDITOR_IDS = {
     vectorEnabledId: 'stx-memoryos-chat-ops-vector-enabled',
     vectorChunkThresholdId: 'stx-memoryos-chat-ops-vector-chunk',
     rerankThresholdId: 'stx-memoryos-chat-ops-rerank-threshold',
-    vectorActivationFactsId: 'stx-memoryos-chat-ops-vector-activation-facts',
-    vectorActivationSummariesId: 'stx-memoryos-chat-ops-vector-activation-summaries',
     vectorIdleDecayDaysId: 'stx-memoryos-chat-ops-vector-idle-decay-days',
     vectorLowPrecisionStrideId: 'stx-memoryos-chat-ops-vector-low-precision-stride',
     keepSummaryCountId: 'stx-memoryos-chat-ops-keep-summary',
@@ -1622,11 +1619,8 @@ function buildEditorMarkupV2(): string {
                     ])}
                     ${buildEditorInputField(EDITOR_IDS.profileRefreshDirectId, '多久重判一次聊天状态', '重新判断聊天类型、风格和记忆强度的间隔。', 'number', '1', '100', '1')}
                     ${buildEditorInputField(EDITOR_IDS.qualityRefreshDirectId, '多久刷新一次健康度', '重新评估记忆质量和维护提醒的间隔。', 'number', '1', '100', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorFactsDirectId, '多少条事实后开始联想', '达到这个数量后，会更积极调用长期记忆。', 'number', '1', '5000', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorChunkThresholdId, '记忆提炼阈值', '内容达到这个长度后更容易进入记忆卡提炼。', 'number', '50', '4000', '10')}
                     ${buildEditorInputField(EDITOR_IDS.rerankThresholdId, '候选多少条后精排', '结果越多时越需要二次筛选。', 'number', '1', '50', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorActivationFactsId, '事实启动阈值', '事实数达到这个值后，才优先走长期记忆检索。', 'number', '1', '5000', '1')}
-                    ${buildEditorInputField(EDITOR_IDS.vectorActivationSummariesId, '摘要启动阈值', '摘要数达到这个值后，才优先走长期记忆检索。', 'number', '1', '5000', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorIdleDecayDaysId, '多久不命中就降温', '长期没命中的向量内容会逐渐降权。', 'number', '1', '365', '1')}
                     ${buildEditorInputField(EDITOR_IDS.vectorLowPrecisionStrideId, '低精度时的降频步长', '控制向量搜索在低命中期的节奏。', 'number', '1', '30', '1')}
                     ${buildEditorInputField(EDITOR_IDS.keepSummaryCountId, '保留多少条摘要', '超过上限后会优先清理较旧摘要。', 'number', '10', '1000', '10')}
@@ -2596,11 +2590,6 @@ async function clearSummarySettingsOverrideForChat(chatKey: string): Promise<voi
 }
 
 async function applySelectedChatOverrides(overlay: HTMLElement, chatKey: string): Promise<void> {
-    setInputValue(
-        overlay,
-        EDITOR_IDS.vectorActivationFactsId,
-        getNumberValue(overlay, EDITOR_IDS.vectorFactsDirectId, DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts),
-    );
     setSelectValue(
         overlay,
         EDITOR_IDS.deletionStrategyId,
@@ -3057,8 +3046,6 @@ function fillEditorForm(overlay: HTMLElement, profile: ChatProfile, retention: R
     setCheckboxValue(overlay, EDITOR_IDS.vectorEnabledId, profile.vectorStrategy.enabled);
     setInputValue(overlay, EDITOR_IDS.vectorChunkThresholdId, profile.vectorStrategy.chunkThreshold);
     setInputValue(overlay, EDITOR_IDS.rerankThresholdId, profile.vectorStrategy.rerankThreshold);
-    setInputValue(overlay, EDITOR_IDS.vectorActivationFactsId, profile.vectorStrategy.activationFacts);
-    setInputValue(overlay, EDITOR_IDS.vectorActivationSummariesId, profile.vectorStrategy.activationSummaries);
     setInputValue(overlay, EDITOR_IDS.vectorIdleDecayDaysId, profile.vectorStrategy.idleDecayDays);
     setInputValue(overlay, EDITOR_IDS.vectorLowPrecisionStrideId, profile.vectorStrategy.lowPrecisionSearchStride);
     setInputValue(overlay, EDITOR_IDS.keepSummaryCountId, retention.keepSummaryCount);
@@ -3076,7 +3063,6 @@ function fillEditorForm(overlay: HTMLElement, profile: ChatProfile, retention: R
 function fillPresetAndDirectFields(overlay: HTMLElement, snapshot: ChatStrategySnapshot): void {
     setInputValue(overlay, EDITOR_IDS.profileRefreshDirectId, snapshot.effectivePolicy.profileRefreshInterval);
     setInputValue(overlay, EDITOR_IDS.qualityRefreshDirectId, snapshot.effectivePolicy.qualityRefreshInterval);
-    setInputValue(overlay, EDITOR_IDS.vectorFactsDirectId, snapshot.effectiveProfile.vectorStrategy.activationFacts);
     setSelectValue(overlay, EDITOR_IDS.deletionStrategyDirectId, snapshot.effectiveRetention.deletionStrategy);
     setCheckboxValue(overlay, EDITOR_IDS.autoBootstrapSeedId, snapshot.effectivePolicy.groupLaneEnabled);
     setCheckboxValue(overlay, EDITOR_IDS.groupLaneEnabledId, snapshot.effectivePolicy.groupLaneEnabled);
@@ -3110,8 +3096,6 @@ function collectProfileOverrideFromForm(overlay: HTMLElement): Partial<ChatProfi
             enabled: getCheckboxValue(overlay, EDITOR_IDS.vectorEnabledId),
             chunkThreshold: getNumberValue(overlay, EDITOR_IDS.vectorChunkThresholdId, DEFAULT_CHAT_PROFILE.vectorStrategy.chunkThreshold),
             rerankThreshold: getNumberValue(overlay, EDITOR_IDS.rerankThresholdId, DEFAULT_CHAT_PROFILE.vectorStrategy.rerankThreshold),
-            activationFacts: getNumberValue(overlay, EDITOR_IDS.vectorActivationFactsId, DEFAULT_CHAT_PROFILE.vectorStrategy.activationFacts),
-            activationSummaries: getNumberValue(overlay, EDITOR_IDS.vectorActivationSummariesId, DEFAULT_CHAT_PROFILE.vectorStrategy.activationSummaries),
             idleDecayDays: getNumberValue(overlay, EDITOR_IDS.vectorIdleDecayDaysId, DEFAULT_CHAT_PROFILE.vectorStrategy.idleDecayDays),
             lowPrecisionSearchStride: getNumberValue(overlay, EDITOR_IDS.vectorLowPrecisionStrideId, DEFAULT_CHAT_PROFILE.vectorStrategy.lowPrecisionSearchStride),
         },
@@ -3172,8 +3156,6 @@ function translateDiagnosticKey(key: string): string {
         enabled: '总开关',
         chunkThreshold: '切分字数',
         rerankThreshold: '重排触发线',
-        activationFacts: '事实启动水位',
-        activationSummaries: '摘要启动水位',
         idleDecayDays: '冷却休眠期(天)',
         lowPrecisionSearchStride: '低清步进补偿',
         keepSummaryCount: '保留摘要数',
@@ -3185,8 +3167,6 @@ function translateDiagnosticKey(key: string): string {
         extractWindowSize: '抽取窗口大小',
         summaryEnabled: '摘要总开关',
         worldStateWeight: '世界状态权重',
-        vectorMinFacts: '事实启动水位',
-        vectorMinSummaries: '摘要启动水位',
         vectorSearchStride: '搜索步进比例',
         rerankEnabled: '深度重排开关',
         contextMaxTokensShare: '上下文预算占比',
@@ -3315,8 +3295,6 @@ function buildDiagnosticKeyTip(key: string): string {
         extractWindowSize: '总结记忆时回溯的对话轮数。窗口越大，单次总结覆盖的信息越全。',
         summaryEnabled: '是否允许系统自动生成历史摘要，关闭后将只依赖短期记忆。',
         worldStateWeight: '决定在生成时给“世界设定/当前环境”分配多少影响力。',
-        vectorMinFacts: '至少累积多少条事实后，系统才会开始通过向量库检索知识。',
-        vectorMinSummaries: '至少累积多少条摘要后，系统才会开始检索长周期历史摘要。',
         vectorSearchStride: '向量搜索时的广度因子。步长越大，找回的记忆越跳跃、越丰富。',
         rerankEnabled: '开启后，系统会进行二次筛选，确保检索到的记忆与当前语境高度契合。',
         contextMaxTokensShare: '给记忆留出的最大上下文额度。占比越高，AI 能记住的陈年旧事越多。',

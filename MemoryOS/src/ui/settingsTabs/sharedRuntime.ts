@@ -5,6 +5,10 @@ import {
     type MemoryTaskPresentationSettings,
 } from '../../types';
 import { normalizeMemoryTaskPresentationSettings } from '../../llm/task-presentation-settings';
+import {
+    normalizeInjectionPromptSettings,
+    type InjectionPromptSettings,
+} from '../../injection/injection-prompt-settings';
 
 export type MemorySettingsRecord = Record<string, unknown>;
 
@@ -281,6 +285,36 @@ export function saveRecordFilterSettings(nextPartial: Partial<RecordFilterUiSett
     }
     const settings = ensureMemorySettings(ctx);
     settings.recordFilter = { ...merged };
+    ctx.saveSettingsDebounced?.();
+    return merged;
+}
+
+/**
+ * 功能：读取基础注入提示词配置。
+ * @returns 归一化后的基础注入提示词配置。
+ */
+export function readInjectionPromptSettings(): InjectionPromptSettings {
+    const ctx = getStContext();
+    const settings = ensureMemorySettings(ctx);
+    return normalizeInjectionPromptSettings(settings.injectionPromptSettings);
+}
+
+/**
+ * 功能：保存基础注入提示词配置。
+ * @param nextPartial 待写入的局部配置。
+ * @returns 归一化后的完整配置。
+ */
+export function saveInjectionPromptSettings(nextPartial: Partial<InjectionPromptSettings>): InjectionPromptSettings {
+    const ctx = getStContext();
+    const merged = normalizeInjectionPromptSettings({
+        ...(readInjectionPromptSettings() || {}),
+        ...(nextPartial || {}),
+    });
+    if (!ctx) {
+        return merged;
+    }
+    const settings = ensureMemorySettings(ctx);
+    settings.injectionPromptSettings = { ...merged };
     ctx.saveSettingsDebounced?.();
     return merged;
 }

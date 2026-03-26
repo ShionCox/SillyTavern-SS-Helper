@@ -301,8 +301,6 @@ export interface ChatProfileVectorStrategy {
     enabled: boolean;
     chunkThreshold: number;
     rerankThreshold: number;
-    activationFacts: number;
-    activationSummaries: number;
     idleDecayDays: number;
     lowPrecisionSearchStride: number;
 }
@@ -613,8 +611,6 @@ export interface AdaptivePolicy {
     vectorChunkThreshold: number;
     rerankThreshold: number;
     vectorMode: VectorMode;
-    vectorMinFacts: number;
-    vectorMinSummaries: number;
     vectorSearchStride: number;
     rerankEnabled: boolean;
     vectorIdleDecayDays: number;
@@ -633,6 +629,9 @@ export interface PromptInjectionProfile {
     insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
     settingOnlyMinScore: number;
+    baseInjectionPreset?: 'balanced_enhanced' | 'story_priority' | 'setting_priority';
+    baseInjectionForceDynamicFloor?: boolean;
+    baseInjectionAggressiveness?: 'stable' | 'balanced' | 'aggressive';
 }
 
 /**
@@ -1561,6 +1560,34 @@ export interface LatestRecallExplanation {
         expiresTurn: number;
     } | null;
     cheapRecall?: CheapRecallSnapshot | null;
+    baseInjection?: BaseInjectionDiagnosticsSnapshot | null;
+}
+
+export interface BaseInjectionLayerBudget {
+    layer: 'background' | 'dynamic' | 'reserve';
+    maxTokens: number;
+    usedTokens: number;
+    sections: InjectionSectionName[];
+}
+
+export interface BaseInjectionDiagnosticsSnapshot {
+    enabled: boolean;
+    inserted: boolean;
+    skippedReason: 'disabled' | 'no_sections' | 'empty_content' | 'build_error' | null;
+    preset: 'balanced_enhanced' | 'story_priority' | 'setting_priority';
+    aggressiveness: 'stable' | 'balanced' | 'aggressive';
+    forceDynamicFloor: boolean;
+    selectedOptions: string[];
+    candidateCounts: {
+        total: number;
+        pretrimDropped: number;
+        budgetDropped: number;
+    };
+    layerBudgets: BaseInjectionLayerBudget[];
+    finalTextLength: number;
+    finalTokenRatio: number;
+    insertedIndex: number;
+    generatedAt: number;
 }
 
 export interface RelationshipDelta {
@@ -1637,21 +1664,6 @@ export interface MutationRepairTask {
     lastError?: string;
 }
 
-export type MemoryCardMaintenanceTaskType = 'rebuild_index' | 'rebuild_from_source';
-
-export interface MemoryCardMaintenanceTask {
-    taskId: string;
-    taskType: MemoryCardMaintenanceTaskType;
-    fingerprint: string;
-    sourceRecordKey?: string;
-    sourceRecordKind?: 'fact' | 'summary';
-    reasonCodes: string[];
-    enqueuedAt: number;
-    attempts: number;
-    status: 'pending' | 'running' | 'failed';
-    lastError?: string;
-}
-
 export interface AssistantTurnTracker {
     activeAssistantTurnCount: number;
     turnRecords: TurnRecord[];
@@ -1684,8 +1696,6 @@ export const DEFAULT_CHAT_PROFILE: ChatProfile = {
         enabled: true,
         chunkThreshold: 240,
         rerankThreshold: 6,
-        activationFacts: 18,
-        activationSummaries: 8,
         idleDecayDays: 14,
         lowPrecisionSearchStride: 3,
     },
@@ -1732,8 +1742,6 @@ export const DEFAULT_ADAPTIVE_POLICY: AdaptivePolicy = {
     vectorChunkThreshold: 240,
     rerankThreshold: 6,
     vectorMode: 'search_rerank',
-    vectorMinFacts: 18,
-    vectorMinSummaries: 8,
     vectorSearchStride: 1,
     rerankEnabled: true,
     vectorIdleDecayDays: 14,
@@ -1752,6 +1760,9 @@ export const DEFAULT_PROMPT_INJECTION_PROFILE: PromptInjectionProfile = {
     insertionPosition: 'before_last_user',
     queryMode: 'always',
     settingOnlyMinScore: 0.35,
+    baseInjectionPreset: 'balanced_enhanced',
+    baseInjectionForceDynamicFloor: true,
+    baseInjectionAggressiveness: 'balanced',
 };
 
 export const DEFAULT_SUMMARY_SETTINGS: SummarySettings = {
@@ -1855,7 +1866,18 @@ export const DEFAULT_EXTRACT_HEALTH: ExtractHealthWindow = {
 };
 
 export const DEFAULT_MEMORY_CARD_MAINTENANCE_STATE: {
-    queue: MemoryCardMaintenanceTask[];
+    queue: Array<{
+        taskId: string;
+        taskType: 'rebuild_index' | 'rebuild_from_source';
+        fingerprint: string;
+        sourceRecordKey?: string;
+        sourceRecordKind?: 'fact' | 'summary';
+        reasonCodes: string[];
+        enqueuedAt: number;
+        attempts: number;
+        status: 'pending' | 'running' | 'failed';
+        lastError?: string;
+    }>;
     lastExecutedAtByFingerprint: Record<string, number>;
 } = {
     queue: [],
@@ -2039,6 +2061,22 @@ export const DEFAULT_CHAT_LIFECYCLE_STATE: ChatLifecycleState = {
     mutationKinds: [],
 };
 
+/**
+ * 功能：保存最近一次酒馆 `prompt_ready` 事件捕获到的真实请求快照，用于测试台精确回放。
+ * @param promptFixture 当场捕获到的原始 prompt messages。
+ * @param query 当轮解析出的用户查询文本。
+ * @param sourceMessageId 当轮末尾用户消息 ID（若可解析）。
+ * @param capturedAt 快照捕获时间戳。
+ * @param requestMeta 可选请求元信息（模型、采样参数等）。
+ */
+export interface PromptReadyCaptureSnapshot {
+    promptFixture: Array<Record<string, unknown>>;
+    query: string;
+    sourceMessageId?: string;
+    capturedAt: number;
+    requestMeta?: Record<string, unknown>;
+}
+
 export interface MemoryOSChatState {
     autoSchemaPolicy?: AutoSchemaPolicy;
     schemaDraftSession?: SchemaDraftSession;
@@ -2074,14 +2112,15 @@ export interface MemoryOSChatState {
     memoryLifecycleIndex?: Record<string, MemoryLifecycleState>;
     ownedMemoryIndex?: Record<string, OwnedMemoryState>;
     latestRecallExplanation?: LatestRecallExplanation | null;
+    promptReadyCaptureSnapshot?: PromptReadyCaptureSnapshot | null;
     lastRecallCache?: RecallCacheEntry | null;
     recallCacheVersion?: number;
     memoryTuningProfile?: MemoryTuningProfile;
     memoryTaskPresentationSettings?: MemoryTaskPresentationSettings;
     summaryFixQueue?: SummaryFixTask[];
     mutationRepairQueue?: MutationRepairTask[];
-    memoryCardMaintenanceQueue?: MemoryCardMaintenanceTask[];
-    memoryCardMaintenanceLastExecutedAtByFingerprint?: Record<string, number>;
+    maintenanceActionQueue?: MaintenanceActionType[];
+    maintenanceActionLastExecutedAtByAction?: Partial<Record<MaintenanceActionType, number>>;
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
     mutationRepairGeneration?: number;

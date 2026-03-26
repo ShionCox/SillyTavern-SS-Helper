@@ -6,6 +6,7 @@ import { buildRolesAndLocationsTabPanel } from './settingsTabs/rolesAndLocations
 import { buildAboutDiagnosticsTabPanel } from './settingsTabs/aboutDiagnosticsTab';
 import { buildDataMaintenanceTabPanel } from './settingsTabs/dataMaintenanceTab';
 import { buildMemoryStrategyTabPanel } from './settingsTabs/memoryStrategyTab';
+import { buildInjectionPromptTabPanel } from './settingsTabs/injectionPromptTab';
 import { buildRuntimeControlTabPanel } from './settingsTabs/runtimeControlTab';
 
 /**
@@ -76,6 +77,10 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
                 <i class="fa-solid fa-microchip"></i>
                 <span>记忆策略</span>
               </button>
+              <button id="${ids.tabPromptId}" data-tip="配置每轮默认注入的基础信息内容。" type="button" class="stx-ui-tab">
+                <i class="fa-solid fa-file-lines"></i>
+                <span>注入提示词</span>
+              </button>
               <button id="${ids.tabDbId}" data-tip="查看数据库、模板和维护操作。" type="button" class="stx-ui-tab">
                 <i class="fa-solid fa-database"></i>
                 <span>数据维护</span>
@@ -88,6 +93,7 @@ export function buildSettingsCardHtmlTemplate(ids: MemoryOSSettingsIds): string 
 
             ${buildRuntimeControlTabPanel(ids)}
             ${buildMemoryStrategyTabPanel(ids)}
+            ${buildInjectionPromptTabPanel(ids)}
             ${buildDataMaintenanceTabPanel(ids)}
             ${buildAboutDiagnosticsTabPanel(ids)}
           </div>

@@ -444,8 +444,6 @@ export interface ChatProfileVectorStrategy {
     enabled: boolean;
     chunkThreshold: number;
     rerankThreshold: number;
-    activationFacts: number;
-    activationSummaries: number;
     idleDecayDays: number;
     lowPrecisionSearchStride: number;
 }
@@ -871,8 +869,6 @@ export interface AdaptivePolicy {
     vectorChunkThreshold: number;
     rerankThreshold: number;
     vectorMode: VectorMode;
-    vectorMinFacts: number;
-    vectorMinSummaries: number;
     vectorSearchStride: number;
     rerankEnabled: boolean;
     vectorIdleDecayDays: number;
@@ -891,6 +887,9 @@ export interface PromptInjectionProfile {
     insertionPosition: PromptInsertionPosition;
     queryMode: PromptQueryMode;
     settingOnlyMinScore: number;
+    baseInjectionPreset?: 'balanced_enhanced' | 'story_priority' | 'setting_priority';
+    baseInjectionForceDynamicFloor?: boolean;
+    baseInjectionAggressiveness?: 'stable' | 'balanced' | 'aggressive';
 }
 
 export interface MemoryContextBlockUsage {
@@ -1601,6 +1600,91 @@ export interface RecallExplanationBucket {
     }>;
 }
 
+export interface BaseInjectionLayerBudget {
+    layer: 'background' | 'dynamic' | 'reserve';
+    maxTokens: number;
+    usedTokens: number;
+    sections: InjectionSectionName[];
+}
+
+export interface BaseInjectionDiagnosticsSnapshot {
+    enabled: boolean;
+    inserted: boolean;
+    skippedReason: 'disabled' | 'no_sections' | 'empty_content' | 'build_error' | null;
+    preset: 'balanced_enhanced' | 'story_priority' | 'setting_priority';
+    aggressiveness: 'stable' | 'balanced' | 'aggressive';
+    forceDynamicFloor: boolean;
+    selectedOptions: string[];
+    candidateCounts: {
+        total: number;
+        pretrimDropped: number;
+        budgetDropped: number;
+    };
+    layerBudgets: BaseInjectionLayerBudget[];
+    finalTextLength: number;
+    finalTokenRatio: number;
+    insertedIndex: number;
+    generatedAt: number;
+}
+
+export interface MemoryChatDatabaseSnapshot {
+    chatKey: string;
+    generatedAt: number;
+    events: unknown[];
+    facts: unknown[];
+    worldState: unknown[];
+    summaries: unknown[];
+    templates: unknown[];
+    audit: unknown[];
+    meta: unknown | null;
+    worldinfoCache: unknown[];
+    templateBindings: unknown[];
+    memoryCards: unknown[];
+    memoryCardEmbeddings: unknown[];
+    memoryCardMeta: unknown[];
+    relationshipMemory: unknown[];
+    memoryRecallLog: unknown[];
+    memoryMutationHistory: unknown[];
+    pluginState?: Record<string, unknown> | null;
+    pluginRecords?: Array<Record<string, unknown>>;
+}
+
+export interface MemoryPromptTestBundle {
+    version: '1.0.0';
+    exportedAt: number;
+    sourceChatKey: string;
+    database: MemoryChatDatabaseSnapshot;
+    promptFixture: Array<Record<string, unknown>>;
+    query: string;
+    sourceMessageId?: string;
+    settings: Record<string, unknown>;
+    captureMeta?: {
+        mode: 'exact_replay' | 'simulated_prompt';
+        capturedAt?: number;
+        source?: string;
+        note?: string;
+    };
+    expectation?: {
+        shouldInject?: boolean;
+        requiredKeywords?: string[];
+    };
+    runResult?: Record<string, unknown>;
+}
+
+export interface PromptReadyCaptureSnapshot {
+    promptFixture: Array<Record<string, unknown>>;
+    query: string;
+    sourceMessageId?: string;
+    capturedAt: number;
+    requestMeta?: Record<string, unknown>;
+}
+
+export interface ImportMemoryPromptTestBundleResult {
+    chatKey: string;
+    importedAt: number;
+    bundle: MemoryPromptTestBundle;
+}
+
   export interface LatestRecallExplanation {
       generatedAt: number;
       query: string;
@@ -1625,6 +1709,7 @@ export interface RecallExplanationBucket {
           expiresTurn: number;
       } | null;
       cheapRecall?: CheapRecallSnapshot | null;
+      baseInjection?: BaseInjectionDiagnosticsSnapshot | null;
   }
 
 export interface RelationshipDelta {
@@ -1699,21 +1784,6 @@ export interface MutationRepairTask {
     lastError?: string;
 }
 
-export type MemoryCardMaintenanceTaskType = 'rebuild_index' | 'rebuild_from_source';
-
-export interface MemoryCardMaintenanceTask {
-    taskId: string;
-    taskType: MemoryCardMaintenanceTaskType;
-    fingerprint: string;
-    sourceRecordKey?: string;
-    sourceRecordKind?: 'fact' | 'summary';
-    reasonCodes: string[];
-    enqueuedAt: number;
-    attempts: number;
-    status: 'pending' | 'running' | 'failed';
-    lastError?: string;
-}
-
 export interface MemoryOSChatState {
     logicalChatView?: LogicalChatView;
     semanticSeed?: ChatSemanticSeed;
@@ -1737,8 +1807,8 @@ export interface MemoryOSChatState {
     summarySettingsOverride?: SummarySettingsOverride | null;
     memoryTuningProfile?: MemoryTuningProfile;
     mutationRepairQueue?: MutationRepairTask[];
-    memoryCardMaintenanceQueue?: MemoryCardMaintenanceTask[];
-    memoryCardMaintenanceLastExecutedAtByFingerprint?: Record<string, number>;
+    maintenanceActionQueue?: MaintenanceActionType[];
+    maintenanceActionLastExecutedAtByAction?: Partial<Record<MaintenanceActionType, number>>;
     lastMutationRepairViewHash?: string;
     lastMutationRepairAt?: number;
     mutationRepairGeneration?: number;
@@ -2225,6 +2295,19 @@ export interface MemorySDK {
         recomputeRoleProfiles(): Promise<Record<string, RoleProfile>>;
         getRecallLog(limit?: number): Promise<RecallLogEntry[]>;
         getLatestRecallExplanation(): Promise<LatestRecallExplanation | null>;
+        setLatestRecallExplanation(explanation: LatestRecallExplanation | null): Promise<void>;
+        getPromptReadyCaptureSnapshotForTest(): Promise<PromptReadyCaptureSnapshot | null>;
+        setPromptReadyCaptureSnapshotForTest(snapshot: PromptReadyCaptureSnapshot | null): Promise<void>;
+        exportCurrentChatDatabaseSnapshotForTest(): Promise<MemoryChatDatabaseSnapshot>;
+        exportPromptTestBundleForTest(options?: {
+            promptFixture?: Array<Record<string, unknown>>;
+            query?: string;
+            sourceMessageId?: string;
+            settings?: Record<string, unknown>;
+            expectation?: { shouldInject?: boolean; requiredKeywords?: string[] };
+            runResult?: Record<string, unknown>;
+        }): Promise<MemoryPromptTestBundle>;
+        importPromptTestBundleForTest(bundle: MemoryPromptTestBundle, options?: { targetChatKey?: string; skipClear?: boolean }): Promise<ImportMemoryPromptTestBundleResult>;
         getMemoryLifecycleSummary(limit?: number): Promise<MemoryLifecycleState[]>;
         getOwnedMemoryStates(limit?: number): Promise<OwnedMemoryState[]>;
         updateOwnedMemoryState(recordKey: string, patch: Partial<Pick<OwnedMemoryState, 'ownerActorKey' | 'memoryType' | 'memorySubtype' | 'sourceScope' | 'importance' | 'forgotten' | 'forgottenReasonCodes'>>): Promise<OwnedMemoryState | null>;

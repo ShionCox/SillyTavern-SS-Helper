@@ -124,6 +124,50 @@ function normalizeCheapRecallSnapshot(value: unknown): LatestRecallExplanation['
 }
 
 /**
+ * 功能：归一化基础注入诊断快照。
+ * @param value 原始快照。
+ * @returns 归一化后的基础注入诊断。
+ */
+function normalizeBaseInjectionSnapshot(value: unknown): LatestRecallExplanation['baseInjection'] {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    const rawLayerBudgets = Array.isArray(record.layerBudgets) ? record.layerBudgets : [];
+    return {
+        enabled: Boolean(record.enabled),
+        inserted: Boolean(record.inserted),
+        skippedReason: String(record.skippedReason ?? '').trim() as LatestRecallExplanation['baseInjection'] extends { skippedReason: infer T } ? T : never,
+        preset: String(record.preset ?? '').trim() as LatestRecallExplanation['baseInjection'] extends { preset: infer T } ? T : never,
+        aggressiveness: String(record.aggressiveness ?? '').trim() as LatestRecallExplanation['baseInjection'] extends { aggressiveness: infer T } ? T : never,
+        forceDynamicFloor: Boolean(record.forceDynamicFloor),
+        selectedOptions: Array.isArray(record.selectedOptions)
+            ? record.selectedOptions.map((item: unknown): string => normalizeExplanationText(item)).filter(Boolean)
+            : [],
+        candidateCounts: {
+            total: Math.max(0, Number((record.candidateCounts as Record<string, unknown> | undefined)?.total ?? 0) || 0),
+            pretrimDropped: Math.max(0, Number((record.candidateCounts as Record<string, unknown> | undefined)?.pretrimDropped ?? 0) || 0),
+            budgetDropped: Math.max(0, Number((record.candidateCounts as Record<string, unknown> | undefined)?.budgetDropped ?? 0) || 0),
+        },
+        layerBudgets: rawLayerBudgets.map((item: unknown) => {
+            const entry = item as Record<string, unknown>;
+            return {
+                layer: String(entry.layer ?? '').trim() as 'background' | 'dynamic' | 'reserve',
+                maxTokens: Math.max(0, Number(entry.maxTokens ?? 0) || 0),
+                usedTokens: Math.max(0, Number(entry.usedTokens ?? 0) || 0),
+                sections: Array.isArray(entry.sections)
+                    ? entry.sections.map((section: unknown): InjectionSectionName => String(section ?? '').trim() as InjectionSectionName).filter(Boolean)
+                    : [],
+            };
+        }),
+        finalTextLength: Math.max(0, Number(record.finalTextLength ?? 0) || 0),
+        finalTokenRatio: Math.max(0, Number(record.finalTokenRatio ?? 0) || 0),
+        insertedIndex: Number(record.insertedIndex ?? -1),
+        generatedAt: Math.max(0, Number(record.generatedAt ?? 0) || 0),
+    };
+}
+
+/**
  * 功能：构建召回日志解释分组。
  * @param bucketKey 分组键。
  * @param label 分组标题。
@@ -258,6 +302,7 @@ export function normalizeLatestRecallExplanation(
         vectorGate: normalizeRecallGateSnapshot(explanation.vectorGate ?? null),
         cache: normalizeRecallCacheSnapshot(explanation.cache ?? null),
         cheapRecall: normalizeCheapRecallSnapshot(explanation.cheapRecall ?? null),
+        baseInjection: normalizeBaseInjectionSnapshot(explanation.baseInjection ?? null),
     };
 }
 
@@ -281,6 +326,7 @@ export function buildLatestRecallExplanation(params: {
     vectorGate?: LatestRecallExplanation['vectorGate'];
     cache?: LatestRecallExplanation['cache'];
     cheapRecall?: LatestRecallExplanation['cheapRecall'];
+    baseInjection?: LatestRecallExplanation['baseInjection'];
 }): LatestRecallExplanation {
     const selectedEntries: RecallLogEntry[] = Array.isArray(params.recallEntries)
         ? params.recallEntries.filter((entry: RecallLogEntry): boolean => entry.selected)
@@ -298,6 +344,7 @@ export function buildLatestRecallExplanation(params: {
         vectorGate: params.vectorGate ?? null,
         cache: params.cache ?? null,
         cheapRecall: params.cheapRecall ?? null,
+        baseInjection: params.baseInjection ?? null,
         selected: buildRecallLogBucket(
             'selected',
             '命中的记忆',

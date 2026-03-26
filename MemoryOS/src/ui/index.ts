@@ -14,6 +14,7 @@ import { showSnapshotSourceDetails } from './candidateSourceDialogs';
 import { createEditorActionExecutor } from './editorActions';
 import { bindRuntimeControlTab } from './settingsTabs/runtimeControlTab';
 import { bindMemoryStrategyTab } from './settingsTabs/memoryStrategyTab';
+import { bindInjectionPromptTab } from './settingsTabs/injectionPromptTab';
 import { bindDataMaintenanceTab } from './settingsTabs/dataMaintenanceTab';
 import { bindAboutDiagnosticsTab } from './settingsTabs/aboutDiagnosticsTab';
 
@@ -82,6 +83,7 @@ const IDS: MemoryOSSettingsIds = {
     tabInjectionId: `${NAMESPACE}-tab-injection`,
     tabMainId: `${NAMESPACE}-tab-main`,
     tabAiId: `${NAMESPACE}-tab-ai`,
+    tabPromptId: `${NAMESPACE}-tab-prompt`,
     tabDbId: `${NAMESPACE}-tab-db`,
     tabAboutId: `${NAMESPACE}-tab-about`,
     panelRoleId: `${NAMESPACE}-panel-role`,
@@ -91,6 +93,7 @@ const IDS: MemoryOSSettingsIds = {
     panelAdvancedToolsId: `${NAMESPACE}-panel-advanced-tools`,
     panelMainId: `${NAMESPACE}-panel-main`,
     panelAiId: `${NAMESPACE}-panel-ai`,
+    panelPromptId: `${NAMESPACE}-panel-prompt`,
     panelDbId: `${NAMESPACE}-panel-db`,
     panelAboutId: `${NAMESPACE}-panel-about`,
     roleOverviewMetaId: `${NAMESPACE}-role-overview-meta`,
@@ -135,6 +138,15 @@ const IDS: MemoryOSSettingsIds = {
     dbCompactionDividerId: `${NAMESPACE}-db-divider-compaction`,
     contextMaxTokensId: `${NAMESPACE}-context-max-tokens`,
     injectionPreviewEnabledId: `${NAMESPACE}-injection-preview-enabled`,
+    injectionPromptEnabledId: `${NAMESPACE}-injection-prompt-enabled`,
+    injectionPromptPresetId: `${NAMESPACE}-injection-prompt-preset`,
+    injectionPromptAggressivenessId: `${NAMESPACE}-injection-prompt-aggressiveness`,
+    injectionPromptForceDynamicFloorId: `${NAMESPACE}-injection-prompt-force-dynamic-floor`,
+    injectionPromptWorldSettingId: `${NAMESPACE}-injection-prompt-world-setting`,
+    injectionPromptCharacterSettingId: `${NAMESPACE}-injection-prompt-character-setting`,
+    injectionPromptRelationshipStateId: `${NAMESPACE}-injection-prompt-relationship-state`,
+    injectionPromptCurrentSceneId: `${NAMESPACE}-injection-prompt-current-scene`,
+    injectionPromptRecentPlotId: `${NAMESPACE}-injection-prompt-recent-plot`,
     recordFilterEnabledId: `${NAMESPACE}-record-filter-enabled`,
     recordFilterSectionId: `${NAMESPACE}-record-filter-section`,
     recordFilterDetailWrapId: `${NAMESPACE}-record-filter-detail-wrap`,
@@ -380,6 +392,7 @@ function bindUiEvents(): void {
     const advancedTabs: SettingsTabEntry[] = [
         { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
         { tabId: IDS.tabAiId, panelId: IDS.panelAiId },
+        { tabId: IDS.tabPromptId, panelId: IDS.panelPromptId },
         { tabId: IDS.tabDbId, panelId: IDS.panelDbId },
         { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
     ];
@@ -567,6 +580,7 @@ function bindUiEvents(): void {
 
     bindRuntimeControlTab({ ids: IDS });
     bindMemoryStrategyTab({ ids: IDS, refreshExperiencePanels });
+    bindInjectionPromptTab({ ids: IDS });
     const { syncSearchState } = bindDataMaintenanceTab({ ids: IDS, cardId: IDS.cardId });
     bindAboutDiagnosticsTab({ ids: IDS });
 

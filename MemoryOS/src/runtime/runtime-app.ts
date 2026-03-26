@@ -4,13 +4,11 @@ import type { PluginManifest, RegistryChangeEvent } from '../../../SDK/stx';
 import { EventBus } from '../../../SDK/bus/bus';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import { ChatLifecycleManager } from '../core/chat-lifecycle-manager';
-import { createMemoryTraceContext } from '../core/memory-trace';
 import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
     getCurrentTavernCharacterSnapshotEvent,
     getTavernMessageTextEvent,
-    getTavernPromptMessageTextEvent,
 } from '../../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { db } from '../db/db';
@@ -43,6 +41,7 @@ import { bindMemoryChatToolbarActions, ensureMemoryChatToolbar, removeMemoryChat
 import { reconcileColdStartBootstrap } from './coldStartCoordinator';
 import { MEMORY_OS_POLICY } from '../policy/memory-policy';
 import { logger, toast } from './runtime-services';
+import { runPromptReadyInjectionPipeline } from './prompt-injection-pipeline';
 import manifestJson from '../../manifest.json';
 
 const MEMORY_OS_MANIFEST: PluginManifest = {
@@ -63,6 +62,7 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
     requiresSDK: '^1.0.0',
     source: 'manifest_json',
 };
+
 
 export class MemoryOS {
     private stxBus: EventBus;
@@ -85,7 +85,10 @@ export class MemoryOS {
         bindMemoryChatToolbarActions();
         this.bindHostEvents();
     }
-    // 功能：在运行中手动刷新当前聊天与 MemorySDK 绑定。
+    /**
+     * 功能：在运行中手动刷新当前聊天与 MemorySDK 绑定。
+     * @returns 无返回值。
+     */
     public async refreshCurrentChatBinding(): Promise<void> {
         if (!this.refreshChatBindingHandler) {
             logger.warn('当前尚未建立聊天绑定处理器，跳过刷新');
@@ -93,7 +96,11 @@ export class MemoryOS {
         }
         await this.refreshChatBindingHandler(true);
     }
-    // 功能：监听注册中心变更并通过 STX.bus 广播。
+
+    /**
+     * 功能：监听注册中心变更并通过 STX.bus 广播。
+     * @returns 无返回值。
+     */
     private bindRegistryEvents(): void {
         this.registry.onChanged((event: RegistryChangeEvent): void => {
             this.stxBus.emit(
@@ -111,18 +118,26 @@ export class MemoryOS {
             );
         });
     }
-    // 功能：注册 MemoryOS 自身 manifest。
+
+    /**
+     * 功能：注册 MemoryOS 自身 manifest。
+     * @returns 无返回值。
+     */
     private registerSelfManifest(): void {
         this.registry.register(MEMORY_OS_MANIFEST);
     }
 
-    private setupPluginBusEndpoints() {
+    /**
+     * 功能：注册插件总线的 RPC 端点，并在初始化后广播当前启用状态。
+     * @returns 无返回值。
+     */
+    private setupPluginBusEndpoints(): void {
         const readSettings = (): Record<string, any> => {
             const ctx = (window as any).SillyTavern?.getContext?.() || {};
             const extensionSettings = ctx?.extensionSettings || {};
             return extensionSettings['stx_memory_os'] || {};
         };
-        const getEnabledFlag = () => {
+        const getEnabledFlag = (): boolean => {
             try {
                 return readSettings().enabled === true;
             } catch {
@@ -145,33 +160,12 @@ export class MemoryOS {
                     db.meta.toCollection().primaryKeys(),
                     db.events.orderBy('chatKey').uniqueKeys(),
                 ]);
-                const allKeys = Array.from(
-                    new Set(
-                        [...metaKeys, ...eventKeys]
-                            .map((item) => String(item ?? '').trim())
-                            .filter(Boolean)
-                    )
-                );
-
-                const chatKeys = (await Promise.all(allKeys.map(async (chatKey: string): Promise<string | null> => {
-                    const [eventRow, factRow, worldStateRow, summaryRow, templateRow, auditRow, mutationHistoryRow, bindingRow] = await Promise.all([
-                        db.events.where('chatKey').equals(chatKey).first(),
-                        db.facts.where('[chatKey+updatedAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
-                        db.world_state.where('[chatKey+path]').between([chatKey, ''], [chatKey, '\uffff']).first(),
-                        db.summaries.where('[chatKey+level+createdAt]').between([chatKey, '', 0], [chatKey, '\uffff', Infinity]).first(),
-                        db.templates.where('[chatKey+createdAt]').between([chatKey, 0], [chatKey, Infinity]).first(),
-                        db.audit.where('chatKey').equals(chatKey).first(),
-                        db.memory_mutation_history.where('chatKey').equals(chatKey).first(),
-                        db.template_bindings.where('chatKey').equals(chatKey).first(),
-                    ]);
-
-                    return eventRow || factRow || worldStateRow || summaryRow || templateRow || auditRow || mutationHistoryRow || bindingRow
-                        ? chatKey
-                        : null;
-                }))).filter((item): item is string => Boolean(item));
-
+                const mergedKeys = Array.from(new Set([
+                    ...metaKeys.map((value) => String(value ?? '').trim()).filter(Boolean),
+                    ...eventKeys.map((value) => String(value ?? '').trim()).filter(Boolean),
+                ]));
                 return {
-                    chatKeys,
+                    chatKeys: mergedKeys,
                     updatedAt: Date.now(),
                 };
             } catch (error) {
@@ -1162,6 +1156,43 @@ export class MemoryOS {
                 logger.warn(`PROMPT_READY 跳过：memory=${!!memory}, payload=${!!payload}, promptMessages=${Array.isArray(promptMessages)}`);
                 return;
             }
+            const latestUserMessage = [...promptMessages]
+                .reverse()
+                .find((item: Record<string, unknown>): boolean => {
+                    const role = String(item?.role ?? '').trim().toLowerCase();
+                    return role === 'user' || item?.is_user === true;
+                });
+            const captureQuery = String(
+                (latestUserMessage as Record<string, unknown> | undefined)?.content
+                ?? (latestUserMessage as Record<string, unknown> | undefined)?.mes
+                ?? (latestUserMessage as Record<string, unknown> | undefined)?.text
+                ?? '',
+            ).trim();
+            const captureSourceMessageId = String(
+                (latestUserMessage as Record<string, unknown> | undefined)?.mes_id
+                ?? (latestUserMessage as Record<string, unknown> | undefined)?.message_id
+                ?? (latestUserMessage as Record<string, unknown> | undefined)?.id
+                ?? '',
+            ).trim() || undefined;
+            void Promise.resolve((memory as any)?.chatState?.setPromptReadyCaptureSnapshotForTest?.({
+                promptFixture: promptMessages.map((message: unknown): Record<string, unknown> => ({
+                    ...(message as Record<string, unknown>),
+                })),
+                query: captureQuery,
+                sourceMessageId: captureSourceMessageId,
+                capturedAt: Date.now(),
+                requestMeta: {
+                    source: 'chat_completion_prompt_ready',
+                    model: String(payload?.model ?? '').trim() || undefined,
+                    temperature: payload?.temperature,
+                    max_tokens: payload?.max_tokens,
+                    max_completion_tokens: payload?.max_completion_tokens,
+                    top_p: payload?.top_p,
+                    stream: payload?.stream,
+                },
+            })).catch((error: unknown) => {
+                logger.warn('prompt_ready 快照写入失败', error);
+            });
 
             // 节流去重：500ms 内重复触发只处理一次
             const now = Date.now();
@@ -1178,37 +1209,28 @@ export class MemoryOS {
                 });
 
             try {
-                const latestUserMessage = [...promptMessages]
-                    .reverse()
-                    .find((item: SdkTavernPromptMessageEvent) => {
-                        return String(item?.role ?? '').trim().toLowerCase() === 'user' || item?.is_user === true;
-                    });
-                const query = getTavernPromptMessageTextEvent(latestUserMessage).trim();
-                const sourceMessageId = String((latestUserMessage as any)?.mes_id ?? (latestUserMessage as any)?.message_id ?? (latestUserMessage as any)?.id ?? '').trim() || undefined;
-                const settingsMaxTokens = Number(readSettings().contextMaxTokens) || 1200;
-                const promptTrace = createMemoryTraceContext({
-                    chatKey: String(memory?.getChatKey?.() ?? currentChatKey ?? '').trim() || 'unknown',
-                    source: 'prompt_injection',
-                    stage: 'memory_recall_started',
-                    sourceMessageId,
-                    requestId: query || undefined,
-                });
-                const injectionResult = await memory.injection.runMemoryPromptInjection({
+                const pipelineResult = await runPromptReadyInjectionPipeline({
+                    memory,
                     promptMessages,
-                    maxTokens: settingsMaxTokens,
-                    query,
-                    preferSummary: true,
-                    intentHint: 'auto',
+                    readSettings,
                     source: 'chat_completion_prompt_ready',
-                    sourceMessageId,
-                    trace: promptTrace,
+                    currentChatKey: currentChatKey || undefined,
                 });
-                const traceSummary = injectionResult.trace
-                    ? `${injectionResult.trace.stage} · ${injectionResult.trace.label} · ${injectionResult.trace.traceId}`
+                const pipelineTraceSummary = pipelineResult.injectionResult.trace
+                    ? `${pipelineResult.injectionResult.trace.stage} 路 ${pipelineResult.injectionResult.trace.label} 路 ${pipelineResult.injectionResult.trace.traceId}`
                     : 'no-trace';
+                if (readSettings().injectionPreviewEnabled === true) {
+                    pipelineResult.logs.forEach((entry) => {
+                        logger.info(`[测试流水线] ${entry.stage} | ${entry.status} | ${entry.summary}`, {
+                            reasonCodes: entry.reasonCodes,
+                            details: entry.details ?? {},
+                        });
+                    });
+                }
                 logger.info(
-                    `prompt 注入主链结束：shouldInject=${injectionResult.shouldInject}, inserted=${injectionResult.inserted}, insertIndex=${injectionResult.insertIndex}, promptLength=${injectionResult.promptLength}, insertedLength=${injectionResult.insertedLength}, trace=${traceSummary}`
+                    `prompt 注入主链结束：shouldInject=${pipelineResult.injectionResult.shouldInject}, inserted=${pipelineResult.injectionResult.inserted}, insertIndex=${pipelineResult.injectionResult.insertIndex}, promptLength=${pipelineResult.injectionResult.promptLength}, insertedLength=${pipelineResult.injectionResult.insertedLength}, trace=${pipelineTraceSummary}`
                 );
+
 
             } catch (error) {
                 logger.error('Prompt Context 构建或注入失败', error);
