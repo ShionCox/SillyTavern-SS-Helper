@@ -9,6 +9,19 @@ export interface RetrievalCandidate {
     summary: string;
     updatedAt: number;
     memoryPercent: number;
+
+    category?: string;
+    tags?: string[];
+    sourceSummaryIds?: string[];
+
+    actorKeys?: string[];
+    relationKeys?: string[];
+    participantActorKeys?: string[];
+    locationKey?: string;
+    worldKeys?: string[];
+
+    compareKey?: string;
+    injectToSystem?: boolean;
 }
 
 /**
@@ -16,11 +29,36 @@ export interface RetrievalCandidate {
  */
 export interface RetrievalQuery {
     query: string;
-    budget: {
-        maxCandidates: number;
-    };
+    activeActorKey?: string;
     candidateTypes?: string[];
     enableEmbedding?: boolean;
+
+    budget: {
+        maxCandidates?: number;
+        maxChars?: number;
+    };
+
+    expectedFacets?: RetrievalFacet[];
+}
+
+/**
+ * 功能：定义检索语境 facet 类型。
+ */
+export type RetrievalFacet = 'world' | 'scene' | 'relationship' | 'event' | 'interpretation';
+
+/**
+ * 功能：定义检索语境路由结果。
+ */
+export interface RetrievalContextRoute {
+    facets: RetrievalFacet[];
+    entityAnchors: {
+        actorKeys: string[];
+        locationKeys: string[];
+        relationKeys: string[];
+        worldKeys: string[];
+    };
+    topicHints: string[];
+    confidence: number;
 }
 
 /**
@@ -31,6 +69,9 @@ export interface RetrievalScoreBreakdown {
     ngram: number;
     editDistance: number;
     memoryWeight: number;
+    recencyWeight?: number;
+    graphBoost?: number;
+    diversityPenalty?: number;
 }
 
 /**
@@ -48,5 +89,14 @@ export interface RetrievalResultItem {
 export interface RetrievalProvider {
     providerId: string;
     search(query: RetrievalQuery, candidates: RetrievalCandidate[]): Promise<RetrievalResultItem[]>;
+}
+
+/**
+ * 功能：定义编排器返回结果。
+ */
+export interface RetrievalOrchestratorResult {
+    providerId: string;
+    contextRoute: RetrievalContextRoute | null;
+    items: RetrievalResultItem[];
 }
 

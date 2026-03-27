@@ -5,7 +5,7 @@ import type {
     RetrievalResultItem,
     RetrievalScoreBreakdown,
 } from './types';
-import { clamp01, computeEditSimilarity, computeNGramSimilarity, tokenizeText } from './scoring';
+import { clamp01, computeEditSimilarity, computeMemoryWeight, computeNGramSimilarity, computeRecencyWeight, mergeSeedScoreBreakdown, tokenizeText } from './scoring';
 
 /**
  * 功能：基于 BM25 + n-gram + 编辑距离的词法检索 Provider。
@@ -47,14 +47,10 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             const bm25 = clamp01(bm25RawScores[index] / maxBm25);
             const ngram = computeNGramSimilarity(normalizedQuery, candidateText);
             const editDistance = computeEditSimilarity(normalizedQuery, candidateText);
-            const memoryWeight = clamp01(candidate.memoryPercent / 100);
-            const score = Number((
-                (bm25 * 0.66)
-                + (ngram * 0.16)
-                + (editDistance * 0.1)
-                + (memoryWeight * 0.08)
-            ).toFixed(6));
-            const breakdown: RetrievalScoreBreakdown = { bm25, ngram, editDistance, memoryWeight };
+            const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
+            const recencyWeight = computeRecencyWeight(candidate.updatedAt);
+            const score = mergeSeedScoreBreakdown({ bm25, ngram, editDistance, memoryWeight, recencyWeight });
+            const breakdown: RetrievalScoreBreakdown = { bm25, ngram, editDistance, memoryWeight, recencyWeight };
             return {
                 candidate,
                 score,
@@ -62,7 +58,7 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             };
         });
 
-        const maxCandidates = Math.max(1, Number(query.budget?.maxCandidates ?? 8) || 8);
+        const maxCandidates = Math.max(1, Number(query.budget?.maxCandidates ?? 30) || 30);
         return scored
             .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score)
             .slice(0, maxCandidates);

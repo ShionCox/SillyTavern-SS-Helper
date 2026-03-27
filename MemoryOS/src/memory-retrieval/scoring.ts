@@ -119,6 +119,68 @@ export function clamp01(value: number): number {
 }
 
 /**
+ * 功能：计算时间衰减权重。
+ * @param updatedAt 更新时间戳。
+ * @param halfLifeMs 半衰期（毫秒），默认 30 天。
+ * @returns 0~1 权重。
+ */
+export function computeRecencyWeight(updatedAt: number, halfLifeMs: number = 30 * 24 * 3600 * 1000): number {
+    const elapsed = Math.max(0, Date.now() - (Number(updatedAt) || 0));
+    return clamp01(Math.exp(-0.693 * elapsed / Math.max(1, halfLifeMs)));
+}
+
+/**
+ * 功能：计算记忆度权重。
+ * @param memoryPercent 记忆度百分比。
+ * @returns 0~1 权重。
+ */
+export function computeMemoryWeight(memoryPercent: number): number {
+    return clamp01((Number(memoryPercent) || 0) / 100);
+}
+
+/**
+ * 功能：合并种子评分细节。
+ * @param parts 各项分值。
+ * @returns 加权总分。
+ */
+export function mergeSeedScoreBreakdown(parts: {
+    bm25: number;
+    ngram: number;
+    editDistance: number;
+    memoryWeight: number;
+    recencyWeight: number;
+}): number {
+    return clamp01(Number((
+        parts.bm25 * 0.55
+        + parts.ngram * 0.15
+        + parts.editDistance * 0.08
+        + parts.memoryWeight * 0.12
+        + parts.recencyWeight * 0.10
+    ).toFixed(6)));
+}
+
+/**
+ * 功能：计算图扩散增益。
+ * @param seedScore 种子分数。
+ * @param edgeWeight 边权重。
+ * @param decay 衰减系数。
+ * @returns 扩散增益。
+ */
+export function applyGraphBoost(seedScore: number, edgeWeight: number, decay: number = 0.65): number {
+    return clamp01(Number((seedScore * edgeWeight * decay).toFixed(6)));
+}
+
+/**
+ * 功能：施加多样性惩罚。
+ * @param score 原始分数。
+ * @param penalty 惩罚值。
+ * @returns 惩罚后分数。
+ */
+export function applyDiversityPenalty(score: number, penalty: number): number {
+    return clamp01(Number((score - Math.abs(penalty)).toFixed(6)));
+}
+
+/**
  * 功能：构建中文双字 token。
  * @param text 输入文本。
  * @returns 双字 token 列表。

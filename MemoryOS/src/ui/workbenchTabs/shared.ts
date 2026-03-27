@@ -12,7 +12,7 @@ import type {
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview' | 'memory-graph';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family';
 
@@ -62,6 +62,9 @@ export interface WorkbenchState {
     actorQuery: string;
     actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
     actorTagFilter: string;
+    selectedGraphNodeId: string;
+    memoryGraphQuery: string;
+    memoryGraphFilterType: string;
 }
 
 export interface WorkbenchSnapshot {
@@ -75,6 +78,7 @@ export interface WorkbenchSnapshot {
     mutationHistory: MemoryMutationHistoryRecord[];
     recallExplanation: WorkbenchRecallExplanation | null;
     actorGraph: WorkbenchActorGraph;
+    memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
 }
 
 /**

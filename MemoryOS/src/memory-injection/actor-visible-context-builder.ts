@@ -53,12 +53,12 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
 
     const identityLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isIdentityType(entry.entryType))
-        .slice(0, 8)
+        .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => entry.renderedText);
 
     const relationshipLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isRelationshipType(entry.entryType))
-        .slice(0, 10)
+        .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => renderRelationshipNarrative(
             entry.renderedText,
             resolveRetentionStageFromRoleEntry(entry),
@@ -66,7 +66,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
 
     const eventLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isVisibleEventType(entry.entryType))
-        .slice(0, 12)
+        .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => renderEventMemoryNarrative(
             entry.renderedText,
             resolveRetentionStageFromRoleEntry(entry),
@@ -74,7 +74,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
 
     const interpretationLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isInterpretationType(entry.entryType))
-        .slice(0, 10)
+        .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => entry.renderedText);
 
     return {

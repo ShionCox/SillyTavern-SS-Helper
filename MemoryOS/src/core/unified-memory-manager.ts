@@ -847,7 +847,7 @@ export class UnifiedMemoryManager {
     private async ensureDefaultUserActorCard(): Promise<void> {
         const actorKey = 'user';
         const displayName = this.resolveUserActorDisplayName();
-        const userSnapshot = getCurrentTavernUserSnapshotEvent(null);
+        const userSnapshot = getCurrentTavernUserSnapshotEvent();
         const identityFacts = this.normalizeTags([
             userSnapshot?.personaDescription,
             userSnapshot?.metadataPersona,
@@ -1355,7 +1355,7 @@ export class UnifiedMemoryManager {
      * @returns 用户显示名称。
      */
     private resolveUserActorDisplayName(): string {
-        return this.normalizeText(getCurrentTavernUserNameEvent(null, '用户')) || '用户';
+        return this.normalizeText(getCurrentTavernUserNameEvent(undefined, '用户')) || '用户';
     }
 
     /**
