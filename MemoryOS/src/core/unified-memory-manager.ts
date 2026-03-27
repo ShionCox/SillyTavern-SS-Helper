@@ -14,6 +14,7 @@ import {
     type MemoryEntry,
     type MemoryEntryType,
     type MemoryEntryTypeField,
+    type MemoryMutationHistoryRecord,
     type PromptAssemblyRoleEntry,
     type PromptAssemblySnapshot,
     type RoleEntryMemory,
@@ -475,6 +476,21 @@ export class UnifiedMemoryManager {
             ts: Date.now(),
         };
         await db.memory_mutation_history.put(row);
+    }
+
+    /**
+     * 功能：读取最近的记忆变更历史。
+     * @param limit 返回数量。
+     * @returns 变更历史列表。
+     */
+    async listMutationHistory(limit: number = 20): Promise<MemoryMutationHistoryRecord[]> {
+        const rows = await db.memory_mutation_history
+            .where('[chatKey+ts]')
+            .between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER])
+            .reverse()
+            .limit(Math.max(1, limit))
+            .toArray();
+        return rows.map((row: DBMemoryMutationHistory): MemoryMutationHistoryRecord => this.mapMutationHistory(row));
     }
 
     /**
@@ -1144,6 +1160,21 @@ export class UnifiedMemoryManager {
             refreshBindings: Array.isArray(row.refreshBindings) ? row.refreshBindings as unknown as SummaryRefreshBinding[] : [],
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
+        };
+    }
+
+    /**
+     * 功能：映射记忆变更历史记录。
+     * @param row 原始行。
+     * @returns 业务层记录。
+     */
+    private mapMutationHistory(row: DBMemoryMutationHistory): MemoryMutationHistoryRecord {
+        return {
+            historyId: row.historyId,
+            chatKey: row.chatKey,
+            action: this.normalizeText(row.action),
+            payload: this.normalizeRecord(row.payload),
+            ts: row.ts,
         };
     }
 

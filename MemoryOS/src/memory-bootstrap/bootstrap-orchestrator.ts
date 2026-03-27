@@ -60,7 +60,9 @@ export interface RunBootstrapOrchestratorResult {
  * @returns 编排结果。
  */
 export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorInput): Promise<RunBootstrapOrchestratorResult> {
+    const coldStartLanguageInstruction = '除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。';
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
+    const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_started',
         payload: {
@@ -77,10 +79,15 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     }
     const promptPack = await loadPromptPackSections();
     const coldStartSchema = parseJsonSection(promptPack.COLD_START_SCHEMA);
-    const sourcePayload = { sourceBundle: input.sourceBundle };
+    const coldStartOutputSample = parseJsonSection(promptPack.COLD_START_OUTPUT_SAMPLE);
+    const sourcePayload = {
+        sourceBundle: input.sourceBundle,
+        actorKeyHints,
+    };
     const userPayload = buildStructuredTaskUserPayload(
         JSON.stringify(sourcePayload, null, 2),
         JSON.stringify(coldStartSchema ?? {}, null, 2),
+        JSON.stringify(coldStartOutputSample ?? {}, null, 2),
     );
     const result = await input.llm.runTask<ColdStartDocument>({
         consumer: input.pluginId,
@@ -88,13 +95,12 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         taskKind: 'generation',
         input: {
             messages: [
-                { role: 'system', content: promptPack.COLD_START_SYSTEM },
+                { role: 'system', content: `${promptPack.COLD_START_SYSTEM}\n\n${coldStartLanguageInstruction}` },
                 { role: 'user', content: userPayload },
             ],
         },
         schema: coldStartSchema,
-        budget: { maxLatencyMs: 12_000 },
-        enqueue: { displayMode: 'compact' },
+        enqueue: { displayMode: 'fullscreen' },
     });
     if (!result.ok) {
         const reasonCode = result.reasonCode || 'cold_start_failed';
@@ -112,29 +118,41 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'invalid_cold_start_document' };
     }
+    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(parsed, input.sourceBundle);
+    const actorCardValidation = validateRelationshipActorCards(parsed, input.sourceBundle);
+    if (!actorCardValidation.ok) {
+        await input.dependencies.appendMutationHistory({
+            action: 'cold_start_failed',
+            payload: {
+                reasonCode: 'relationship_actor_card_missing',
+                missingActorKeys: actorCardValidation.missingActorKeys,
+            },
+        });
+        return { ok: false, reasonCode: 'relationship_actor_card_missing' };
+    }
     await input.dependencies.ensureActorProfile({
         actorKey: parsed.identity.actorKey,
-        displayName: parsed.identity.displayName,
+        displayName: resolveBootstrapActorDisplayName(parsed.identity.actorKey, actorDisplayNameMap),
     });
-    const actorProfileEntry = await input.dependencies.saveEntry({
-        entryType: 'actor_profile',
-        title: parsed.identity.displayName || parsed.identity.actorKey,
-        summary: dedupeStrings([
-            ...parsed.identity.identityFacts,
-            ...parsed.identity.originFacts,
-            ...parsed.identity.traits,
-        ]).join('；'),
-        detailPayload: {
-            fields: {
-                aliases: dedupeStrings(parsed.identity.aliases),
-                identityFacts: dedupeStrings(parsed.identity.identityFacts),
-                originFacts: dedupeStrings(parsed.identity.originFacts),
-                traits: dedupeStrings(parsed.identity.traits),
-            },
-        },
-        tags: ['cold_start', 'actor_profile'],
+    await saveColdStartActorProfile(input.dependencies, {
+        actorKey: parsed.identity.actorKey,
+        displayName: parsed.identity.displayName || parsed.identity.actorKey,
+        aliases: parsed.identity.aliases,
+        identityFacts: parsed.identity.identityFacts,
+        originFacts: parsed.identity.originFacts,
+        traits: parsed.identity.traits,
     });
-    await input.dependencies.bindRoleToEntry(parsed.identity.actorKey, actorProfileEntry.entryId);
+    for (const actorCard of parsed.actorCards) {
+        const normalizedActorKey = normalizeActorKey(actorCard.actorKey);
+        if (!normalizedActorKey || normalizedActorKey === 'user' || normalizedActorKey === normalizeActorKey(parsed.identity.actorKey)) {
+            continue;
+        }
+        await input.dependencies.ensureActorProfile({
+            actorKey: actorCard.actorKey,
+            displayName: resolveBootstrapActorDisplayName(actorCard.actorKey, actorDisplayNameMap),
+        });
+        await saveColdStartActorProfile(input.dependencies, actorCard);
+    }
 
     for (const worldEntry of parsed.worldBase) {
         await input.dependencies.saveEntry({
@@ -148,18 +166,32 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
     }
     for (const relation of parsed.relationships) {
+        const normalizedRelation = normalizeBootstrapRelationship(relation, parsed.identity.actorKey, input.sourceBundle);
+        const relationActorKeys = collectRelationshipActorKeys(normalizedRelation);
+        for (const actorKey of relationActorKeys) {
+            await input.dependencies.ensureActorProfile({
+                actorKey,
+                displayName: resolveBootstrapActorDisplayName(actorKey, actorDisplayNameMap),
+            });
+        }
         const relationEntry = await input.dependencies.saveEntry({
             entryType: 'relationship',
-            title: `${relation.sourceActorKey} -> ${relation.targetActorKey}`,
-            summary: relation.summary,
+            title: `${normalizedRelation.sourceActorKey} -> ${normalizedRelation.targetActorKey}`,
+            summary: normalizedRelation.summary,
             detailPayload: {
-                trust: relation.trust,
-                affection: relation.affection,
-                tension: relation.tension,
+                sourceActorKey: normalizedRelation.sourceActorKey,
+                targetActorKey: normalizedRelation.targetActorKey,
+                participants: dedupeStrings(normalizedRelation.participants),
+                state: normalizedRelation.state,
+                trust: normalizedRelation.trust,
+                affection: normalizedRelation.affection,
+                tension: normalizedRelation.tension,
             },
             tags: ['cold_start', 'relationship'],
         });
-        await input.dependencies.bindRoleToEntry(relation.sourceActorKey, relationEntry.entryId);
+        for (const actorKey of relationActorKeys) {
+            await input.dependencies.bindRoleToEntry(actorKey, relationEntry.entryId);
+        }
     }
     for (const memoryRecord of parsed.memoryRecords) {
         const saved = await input.dependencies.saveEntry({
@@ -234,6 +266,221 @@ function dedupeStrings(values: string[]): string[] {
         }
     }
     return result;
+}
+
+/**
+ * 功能：构建冷启动可复用的角色键提示，约束模型不要发明用户侧键名。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 可注入到提示词上下文中的角色键提示。
+ */
+function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
+    currentUser: {
+        actorKey: string;
+        displayName: string;
+        note: string;
+    };
+} {
+    return {
+        currentUser: {
+            actorKey: 'user',
+            displayName: String(sourceBundle.user.userName ?? '').trim() || '用户',
+            note: '当关系对象是当前用户时，必须固定使用 actorKey `user`，不要自行扩展成 user_xxx、player_xxx 或其它变体。',
+        },
+    };
+}
+
+/**
+ * 功能：构建冷启动阶段的角色显示名映射。
+ * @param parsed 冷启动解析结果。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 角色键到显示名的映射表。
+ */
+function buildBootstrapActorDisplayNameMap(parsed: ColdStartDocument, sourceBundle: ColdStartSourceBundle): Map<string, string> {
+    const displayNameMap = new Map<string, string>();
+    const mainActorKey = normalizeActorKey(parsed.identity.actorKey);
+    const mainDisplayName = String(parsed.identity.displayName ?? '').trim();
+    if (mainActorKey && mainDisplayName) {
+        displayNameMap.set(mainActorKey, mainDisplayName);
+    }
+    for (const actorCard of parsed.actorCards) {
+        const actorKey = normalizeActorKey(actorCard.actorKey);
+        const displayName = String(actorCard.displayName ?? '').trim();
+        if (actorKey && displayName) {
+            displayNameMap.set(actorKey, displayName);
+        }
+    }
+    const userDisplayName = String(sourceBundle.user.userName ?? '').trim() || '用户';
+    displayNameMap.set('user', userDisplayName);
+    return displayNameMap;
+}
+
+/**
+ * 功能：校验关系网中的非用户角色是否都带有角色卡。
+ * @param parsed 冷启动文档。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 校验结果。
+ */
+function validateRelationshipActorCards(
+    parsed: ColdStartDocument,
+    sourceBundle: ColdStartSourceBundle,
+): { ok: boolean; missingActorKeys: string[] } {
+    const mainActorKey = normalizeActorKey(parsed.identity.actorKey);
+    const actorCardKeys = new Set(
+        parsed.actorCards
+            .map((actorCard): string => normalizeActorKey(actorCard.actorKey))
+            .filter(Boolean),
+    );
+    const requiredActorKeys = new Set<string>();
+
+    for (const relation of parsed.relationships) {
+        const normalizedRelation = normalizeBootstrapRelationship(relation, parsed.identity.actorKey, sourceBundle);
+        for (const actorKey of collectRelationshipActorKeys(normalizedRelation)) {
+            const normalizedActorKey = normalizeActorKey(actorKey);
+            if (!normalizedActorKey || normalizedActorKey === 'user' || normalizedActorKey === mainActorKey) {
+                continue;
+            }
+            requiredActorKeys.add(normalizedActorKey);
+        }
+    }
+
+    const missingActorKeys = Array.from(requiredActorKeys).filter((actorKey: string): boolean => !actorCardKeys.has(actorKey));
+    return {
+        ok: missingActorKeys.length === 0,
+        missingActorKeys,
+    };
+}
+
+/**
+ * 功能：保存冷启动角色卡并绑定到对应角色。
+ * @param dependencies 编排依赖。
+ * @param actorCard 角色卡数据。
+ * @returns 角色卡条目。
+ */
+async function saveColdStartActorProfile(
+    dependencies: BootstrapOrchestratorDependencies,
+    actorCard: {
+        actorKey: string;
+        displayName: string;
+        aliases: string[];
+        identityFacts: string[];
+        originFacts: string[];
+        traits: string[];
+    },
+): Promise<MemoryEntry> {
+    const summaryParts = dedupeStrings([
+        ...actorCard.identityFacts,
+        ...actorCard.originFacts,
+        ...actorCard.traits,
+    ]);
+    const savedEntry = await dependencies.saveEntry({
+        entryType: 'actor_profile',
+        title: actorCard.displayName || actorCard.actorKey,
+        summary: summaryParts.length > 0 ? summaryParts.join('；') : `${actorCard.displayName}的角色卡信息。`,
+        detailPayload: {
+            fields: {
+                aliases: dedupeStrings(actorCard.aliases),
+                identityFacts: dedupeStrings(actorCard.identityFacts),
+                originFacts: dedupeStrings(actorCard.originFacts),
+                traits: dedupeStrings(actorCard.traits),
+            },
+        },
+        tags: ['cold_start', 'actor_profile'],
+    });
+    await dependencies.bindRoleToEntry(actorCard.actorKey, savedEntry.entryId);
+    return savedEntry;
+}
+
+/**
+ * 功能：统一冷启动关系中的角色键，优先收敛到系统约定键名。
+ * @param relation 原始关系条目。
+ * @param mainActorKey 主角色键。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 归一化后的关系条目。
+ */
+function normalizeBootstrapRelationship(
+    relation: ColdStartDocument['relationships'][number],
+    mainActorKey: string,
+    sourceBundle: ColdStartSourceBundle,
+): ColdStartDocument['relationships'][number] {
+    const sourceActorKey = normalizeBootstrapActorKey(relation.sourceActorKey, mainActorKey, sourceBundle);
+    const targetActorKey = normalizeBootstrapActorKey(relation.targetActorKey, mainActorKey, sourceBundle);
+    return {
+        ...relation,
+        sourceActorKey,
+        targetActorKey,
+        participants: dedupeStrings([
+            sourceActorKey,
+            targetActorKey,
+            ...relation.participants.map((actorKey: string): string => normalizeBootstrapActorKey(actorKey, mainActorKey, sourceBundle)),
+        ]),
+    };
+}
+
+/**
+ * 功能：收集关系条目涉及的全部角色键。
+ * @param relation 归一化后的关系条目。
+ * @returns 去重后的角色键列表。
+ */
+function collectRelationshipActorKeys(relation: ColdStartDocument['relationships'][number]): string[] {
+    return dedupeStrings([
+        relation.sourceActorKey,
+        relation.targetActorKey,
+        ...relation.participants,
+    ]);
+}
+
+/**
+ * 功能：按角色键解析冷启动阶段应展示的角色名。
+ * @param actorKey 角色键。
+ * @param displayNameMap 显示名映射。
+ * @returns 可用于建档的显示名。
+ */
+function resolveBootstrapActorDisplayName(actorKey: string, displayNameMap: Map<string, string>): string {
+    const normalizedActorKey = normalizeActorKey(actorKey);
+    return displayNameMap.get(normalizedActorKey) || actorKey;
+}
+
+/**
+ * 功能：归一化冷启动中的角色键，并把用户侧别名收敛到固定 `user`。
+ * @param actorKey 原始角色键。
+ * @param mainActorKey 主角色键。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 归一化后的角色键。
+ */
+function normalizeBootstrapActorKey(actorKey: string, mainActorKey: string, sourceBundle: ColdStartSourceBundle): string {
+    const normalizedActorKey = normalizeActorKey(actorKey);
+    const normalizedMainActorKey = normalizeActorKey(mainActorKey);
+    if (!normalizedActorKey) {
+        return '';
+    }
+    if (normalizedActorKey === normalizedMainActorKey) {
+        return normalizedMainActorKey;
+    }
+    const normalizedUserName = normalizeActorKey(sourceBundle.user.userName);
+    if (
+        normalizedActorKey === 'user'
+        || normalizedActorKey === normalizedUserName
+        || normalizedActorKey === 'player'
+        || normalizedActorKey === 'mc'
+        || normalizedActorKey.startsWith('user_')
+        || normalizedActorKey.startsWith('player_')
+    ) {
+        return 'user';
+    }
+    return normalizedActorKey;
+}
+
+/**
+ * 功能：按统一规则归一化角色键文本。
+ * @param value 原始值。
+ * @returns 归一化后的角色键。
+ */
+function normalizeActorKey(value: unknown): string {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
 }
 
 /**

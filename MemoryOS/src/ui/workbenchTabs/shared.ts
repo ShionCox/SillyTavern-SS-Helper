@@ -4,13 +4,50 @@ import type {
     MemoryEntry,
     MemoryEntryType,
     MemoryEntryTypeField,
+    MemoryMutationHistoryRecord,
     PromptAssemblySnapshot,
     RoleEntryMemory,
     SummarySnapshot,
+    WorldProfileBinding,
 } from '../../types';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview';
-export type ActorSubView = 'items' | 'attributes' | 'relationships' | 'memory';
+export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
+export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family';
+
+export interface WorkbenchRecallExplanation {
+    generatedAt?: number;
+    query?: string;
+    matchedActorKeys: string[];
+    matchedEntryIds: string[];
+    reasonCodes: string[];
+    source?: string;
+}
+
+export interface WorkbenchActorGraphNode {
+    id: string;
+    label: string;
+    memoryStat: number;
+    x: number;
+    y: number;
+    relationCount: number;
+}
+
+export interface WorkbenchActorGraphLink {
+    id: string;
+    source: string;
+    target: string;
+    entryId: string;
+    label: string;
+    summary: string;
+    type: WorkbenchGraphLinkType;
+    updatedAt: number;
+}
+
+export interface WorkbenchActorGraph {
+    nodes: WorkbenchActorGraphNode[];
+    links: WorkbenchActorGraphLink[];
+}
 
 export interface WorkbenchState {
     currentView: WorkbenchView;
@@ -30,31 +67,62 @@ export interface WorkbenchSnapshot {
     roleMemories: RoleEntryMemory[];
     summaries: SummarySnapshot[];
     preview: PromptAssemblySnapshot | null;
+    worldProfileBinding: WorldProfileBinding | null;
+    mutationHistory: MemoryMutationHistoryRecord[];
+    recallExplanation: WorkbenchRecallExplanation | null;
+    actorGraph: WorkbenchActorGraph;
 }
 
+/**
+ * 功能：转义 HTML 属性值。
+ * @param value 原始值。
+ * @returns 可安全写入属性的文本。
+ */
 export function escapeAttr(value: unknown): string {
     return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
+/**
+ * 功能：读取输入控件的字符串值。
+ * @param root 根节点。
+ * @param selector 选择器。
+ * @returns 去首尾空白后的文本。
+ */
 export function readInputValue(root: HTMLElement, selector: string): string {
     const element = root.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
     return String(element?.value ?? '').trim();
 }
 
+/**
+ * 功能：读取复选框状态。
+ * @param root 根节点。
+ * @param selector 选择器。
+ * @returns 是否勾选。
+ */
 export function readCheckedValue(root: HTMLElement, selector: string): boolean {
     const element = root.querySelector(selector) as HTMLInputElement | null;
     return element?.checked === true;
 }
 
+/**
+ * 功能：把标签输入文本拆解为字符串数组。
+ * @param value 原始文本。
+ * @returns 去重后的标签列表。
+ */
 export function parseTagText(value: string): string[] {
     return Array.from(new Set(
         String(value ?? '')
-            .split(/[,\n，、]/)
-            .map((item: string) => item.trim())
+            .split(/[,，\n]+/)
+            .map((item: string): string => item.trim())
             .filter(Boolean),
     ));
 }
 
+/**
+ * 功能：解析条目类型字段定义 JSON。
+ * @param raw 原始 JSON 文本。
+ * @returns 字段定义列表。
+ */
 export function parseTypeFieldsJson(raw: string): MemoryEntryTypeField[] {
     const normalized = String(raw ?? '').trim();
     if (!normalized) {
@@ -62,7 +130,7 @@ export function parseTypeFieldsJson(raw: string): MemoryEntryTypeField[] {
     }
     const parsed = JSON.parse(normalized);
     if (!Array.isArray(parsed)) {
-        throw new Error('字段定义必须是数组');
+        throw new Error('字段定义必须是数组。');
     }
     return parsed.map((item: unknown): MemoryEntryTypeField => {
         const record = (item && typeof item === 'object') ? item as Record<string, unknown> : {};
@@ -73,12 +141,17 @@ export function parseTypeFieldsJson(raw: string): MemoryEntryTypeField[] {
             placeholder: String(record.placeholder ?? '').trim() || undefined,
             required: record.required === true,
         };
-    }).filter((item: MemoryEntryTypeField) => Boolean(item.key));
+    }).filter((item: MemoryEntryTypeField): boolean => Boolean(item.key));
 }
 
+/**
+ * 功能：从动态字段控件收集结构化 payload。
+ * @param root 表单根节点。
+ * @returns 结构化 payload。
+ */
 export function collectDetailPayload(root: HTMLElement): Record<string, unknown> {
     const payload: Record<string, unknown> = {};
-    root.querySelectorAll<HTMLElement>('[data-entry-field-key]').forEach((element: HTMLElement) => {
+    root.querySelectorAll<HTMLElement>('[data-entry-field-key]').forEach((element: HTMLElement): void => {
         const fieldKey = String(element.dataset.entryFieldKey ?? '').trim();
         if (!fieldKey) {
             return;
@@ -106,15 +179,30 @@ export function collectDetailPayload(root: HTMLElement): Record<string, unknown>
     return payload;
 }
 
+/**
+ * 功能：把字段定义列表格式化为 JSON 文本。
+ * @param fields 字段定义列表。
+ * @returns 便于编辑的 JSON 字符串。
+ */
 export function formatTypeFieldsJson(fields: MemoryEntryTypeField[]): string {
     return JSON.stringify(fields ?? [], null, 2);
 }
 
+/**
+ * 功能：生成百分比进度样式。
+ * @param percent 百分比。
+ * @returns 内联样式文本。
+ */
 export function buildMeterStyle(percent: number): string {
     const safe = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
     return `width:${safe}%;`;
 }
 
+/**
+ * 功能：创建新条目的默认草稿。
+ * @param entryType 当前类型。
+ * @returns 草稿对象。
+ */
 export function createDraftEntry(entryType?: MemoryEntryType | null): Partial<MemoryEntry> {
     return {
         entryType: entryType?.key || 'other',
@@ -126,23 +214,47 @@ export function createDraftEntry(entryType?: MemoryEntryType | null): Partial<Me
     };
 }
 
+/**
+ * 功能：解析当前选中的条目。
+ * @param snapshot 快照。
+ * @param state 当前状态。
+ * @returns 条目或空值。
+ */
 export function resolveSelectedEntry(snapshot: WorkbenchSnapshot, state: WorkbenchState): MemoryEntry | null {
-    return snapshot.entries.find((entry) => entry.entryId === state.selectedEntryId) ?? null;
+    return snapshot.entries.find((entry: MemoryEntry): boolean => entry.entryId === state.selectedEntryId) ?? null;
 }
 
+/**
+ * 功能：解析当前选中的类型。
+ * @param snapshot 快照。
+ * @param state 当前状态。
+ * @returns 类型或空值。
+ */
 export function resolveSelectedType(snapshot: WorkbenchSnapshot, state: WorkbenchState): MemoryEntryType | null {
-    return snapshot.entryTypes.find((item) => item.key === state.selectedTypeKey) ?? null;
+    return snapshot.entryTypes.find((item: MemoryEntryType): boolean => item.key === state.selectedTypeKey) ?? null;
 }
 
+/**
+ * 功能：解析当前选中的角色。
+ * @param snapshot 快照。
+ * @param state 当前状态。
+ * @returns 角色或空值。
+ */
 export function resolveSelectedActor(snapshot: WorkbenchSnapshot, state: WorkbenchState): ActorMemoryProfile | null {
-    return snapshot.actors.find((item) => item.actorKey === state.selectedActorKey) ?? null;
+    return snapshot.actors.find((item: ActorMemoryProfile): boolean => item.actorKey === state.selectedActorKey) ?? null;
 }
 
+/**
+ * 功能：根据类型定义构建动态字段表单。
+ * @param selectedEntryType 选中的条目类型。
+ * @param detailPayload 结构化 payload。
+ * @returns 动态字段 HTML。
+ */
 export function buildDynamicFieldMarkup(
     selectedEntryType: MemoryEntryType | null,
     detailPayload: Record<string, unknown> | undefined,
 ): string {
-    return (selectedEntryType?.fields ?? []).map((field: MemoryEntryTypeField) => {
+    return (selectedEntryType?.fields ?? []).map((field: MemoryEntryTypeField): string => {
         const fieldValue = detailPayload?.[field.key];
         if (field.kind === 'textarea') {
             return `
@@ -167,4 +279,157 @@ export function buildDynamicFieldMarkup(
             </div>
         `;
     }).join('');
+}
+
+/**
+ * 功能：把时间戳格式化为中文时间。
+ * @param value 原始时间值。
+ * @returns 格式化结果。
+ */
+export function formatTimestamp(value: unknown): string {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return '暂无';
+    }
+    return new Date(Math.trunc(numericValue)).toLocaleString('zh-CN');
+}
+
+/**
+ * 功能：把未知值格式化为可读文本。
+ * @param value 原始值。
+ * @returns 展示文本。
+ */
+export function formatDisplayValue(value: unknown): string {
+    if (value === null || value === undefined) {
+        return '暂无';
+    }
+    if (typeof value === 'boolean') {
+        return value ? '是' : '否';
+    }
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? String(value) : '暂无';
+    }
+    if (Array.isArray(value)) {
+        const items = value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+        return items.length > 0 ? items.join('、') : '暂无';
+    }
+    if (typeof value === 'object') {
+        const keys = Object.keys(toRecord(value));
+        return keys.length > 0 ? stringifyData(value) : '暂无';
+    }
+    const normalized = String(value).trim();
+    return normalized || '暂无';
+}
+
+/**
+ * 功能：生成紧凑的 detailPayload 摘要。
+ * @param detailPayload 结构化 payload。
+ * @returns 摘要文本。
+ */
+const KEY_LOCALE_MAP: Record<string, string> = {
+    sourceActorKey: '源属角色',
+    targetActorKey: '目标角色',
+    participants: '参与者',
+    state: '关系现状',
+    affection: '亲近度',
+    trust: '信任度',
+    tension: '紧张度',
+    milestones: '关键节点',
+    identityFacts: '身份事实',
+    originFacts: '起源事实',
+    traits: '特征',
+    aliases: '别名',
+    scope: '作用范围',
+    impact: '影响',
+    unresolvedConflict: '未解冲突',
+    location: '地点',
+    visibilityScope: '可见度',
+    outcome: '结果'
+};
+
+export function summarizeDetailPayload(detailPayload: Record<string, unknown> | undefined): string {
+    const payload = toRecord(detailPayload);
+    const keys = Object.keys(payload);
+    if (keys.length <= 0) {
+        return '无结构化事实';
+    }
+    const summary = keys.slice(0, 4).map((key: string): string => {
+        const value = payload[key];
+        const translatedKey = KEY_LOCALE_MAP[key] || key;
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const childKeys = Object.keys(toRecord(value));
+            return `${translatedKey}: ${childKeys.length > 0 ? childKeys.slice(0, 3).join('、') : '对象'}`;
+        }
+        return `${translatedKey}: ${truncateText(formatDisplayValue(value), 18)}`;
+    }).join('；');
+    return keys.length > 4 ? `${summary} 等 ${keys.length} 项` : summary;
+}
+
+/**
+ * 功能：把数据格式化为 JSON 字符串。
+ * @param value 原始值。
+ * @returns JSON 文本。
+ */
+export function stringifyData(value: unknown): string {
+    try {
+        return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+        return '{}';
+    }
+}
+
+/**
+ * 功能：按路径读取对象值。
+ * @param record 对象。
+ * @param path 点分路径。
+ * @returns 读取结果。
+ */
+export function readRecordPath(record: Record<string, unknown>, path: string): unknown {
+    const segments = String(path ?? '').split('.').map((segment: string): string => segment.trim()).filter(Boolean);
+    let current: unknown = record;
+    for (const segment of segments) {
+        if (!current || typeof current !== 'object' || Array.isArray(current)) {
+            return undefined;
+        }
+        current = (current as Record<string, unknown>)[segment];
+    }
+    return current;
+}
+
+/**
+ * 功能：截断过长文本。
+ * @param value 原始文本。
+ * @param maxLength 最大长度。
+ * @returns 截断后的文本。
+ */
+export function truncateText(value: string, maxLength: number = 72): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    return normalized.length > maxLength ? `${normalized.slice(0, Math.max(8, maxLength - 1))}…` : normalized;
+}
+
+/**
+ * 功能：归一化对象。
+ * @param value 原始值。
+ * @returns 安全对象。
+ */
+export function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：归一化字符串数组。
+ * @param value 原始值。
+ * @returns 字符串数组。
+ */
+export function toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
 }

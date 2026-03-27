@@ -6,6 +6,7 @@ export type {
     ColdStartSourceBundle,
     ColdStartDocument,
     ColdStartIdentity,
+    ColdStartActorCard,
     ColdStartWorldBaseEntry,
     ColdStartRelationshipEntry,
     ColdStartMemoryRecord,

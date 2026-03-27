@@ -112,6 +112,14 @@ export interface SummarySnapshot {
     updatedAt: number;
 }
 
+export interface MemoryMutationHistoryRecord {
+    historyId: string;
+    chatKey: string;
+    action: string;
+    payload: Record<string, unknown>;
+    ts: number;
+}
+
 export interface WorldProfileBinding {
     chatKey: string;
     primaryProfile: string;

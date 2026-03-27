@@ -9,6 +9,7 @@ export type {
     SummaryEntryUpsert,
     SummaryRefreshBinding,
     SummarySnapshot,
+    MemoryMutationHistoryRecord,
     WorldProfileBinding,
     PromptAssemblyRoleEntry,
     PromptAssemblySnapshot,

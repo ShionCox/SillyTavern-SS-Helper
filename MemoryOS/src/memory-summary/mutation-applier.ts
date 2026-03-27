@@ -103,7 +103,7 @@ async function applySingleAction(input: {
                     ...toStringArray(payload.reasonCodes),
                 ]),
             };
-            const mergedDetailPayload = {
+            const mergedDetailPayload: Record<string, unknown> = {
                 ...currentDetailPayload,
                 lifecycle,
             };

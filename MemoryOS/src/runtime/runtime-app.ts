@@ -7,14 +7,17 @@ import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
     getTavernMessageTextEvent,
+    isFallbackTavernChatEvent,
+    parseTavernChatScopedKeyEvent,
 } from '../../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { db } from '../db/db';
 import { PluginRegistry } from '../registry/registry';
-import { logger } from './runtime-services';
+import { logger, toast } from './runtime-services';
 import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } from './prompt-injection-pipeline';
 import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
+import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -137,6 +140,8 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
 export class MemoryOS {
     private readonly stxBus: EventBus;
     private readonly registry: PluginRegistry;
+    private readonly coldStartPromptedChats: Set<string>;
+    private readonly coldStartRunningChats: Set<string>;
     private refreshChatBindingHandler: ((force?: boolean) => Promise<void>) | null;
 
     /**
@@ -145,6 +150,8 @@ export class MemoryOS {
     constructor() {
         this.stxBus = new EventBus();
         this.registry = new PluginRegistry();
+        this.coldStartPromptedChats = new Set<string>();
+        this.coldStartRunningChats = new Set<string>();
         this.refreshChatBindingHandler = null;
         this.initGlobalSTX();
         this.bindRegistryEvents();
@@ -182,6 +189,86 @@ export class MemoryOS {
 
     private readSettings(): MemoryOSSettings {
         return readMemoryOSSettings();
+    }
+
+    /**
+     * 功能：清理当前挂载的聊天级 Memory SDK 绑定。
+     * @returns 无返回值。
+     */
+    private clearActiveMemoryBinding(): void {
+        try {
+            const oldMemory = (window as unknown as { STX?: { memory?: { template?: { destroy?: () => void } } } })?.STX?.memory;
+            oldMemory?.template?.destroy?.();
+        } catch {
+            // noop
+        }
+        (window as unknown as { STX?: Record<string, unknown> }).STX = {
+            ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
+            memory: null,
+        };
+    }
+
+    /**
+     * 功能：在新聊天绑定后按需弹出冷启动确认框。
+     * @param chatKey 当前聊天键。
+     * @param sdk 当前聊天的 Memory SDK。
+     * @returns 异步完成。
+     */
+    private async maybePromptColdStart(chatKey: string, sdk: MemorySDKImpl): Promise<void> {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        if (!normalizedChatKey) {
+            return;
+        }
+        const parsedChatRef = parseTavernChatScopedKeyEvent(normalizedChatKey);
+        if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
+            logger.info(`跳过冷启动确认：当前聊天仍是占位 chatId (${parsedChatRef.chatId})`);
+            return;
+        }
+        const settings = this.readSettings();
+        if (!settings.enabled) {
+            return;
+        }
+        if (this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
+            return;
+        }
+        const coldStartStatus = await sdk.chatState.getColdStartStatus();
+        if (coldStartStatus.completed) {
+            this.coldStartPromptedChats.add(normalizedChatKey);
+            return;
+        }
+
+        this.coldStartPromptedChats.add(normalizedChatKey);
+        const selection = await openMemoryBootstrapDialog();
+        if (!selection.confirmed) {
+            return;
+        }
+
+        const activeChatKey = String(
+            ((window as unknown as { STX?: { memory?: { getChatKey?: () => string } } })?.STX?.memory?.getChatKey?.())
+            ?? '',
+        ).trim();
+        if (activeChatKey !== normalizedChatKey) {
+            return;
+        }
+
+        this.coldStartRunningChats.add(normalizedChatKey);
+        try {
+            const result = await sdk.chatState.primeColdStartPrompt('chat_bind_confirm', {
+                selectedWorldbooks: selection.selectedWorldbooks,
+                selectedEntries: selection.selectedEntries,
+            });
+            if (!result.ok) {
+                this.coldStartPromptedChats.delete(normalizedChatKey);
+                toast.error(`冷启动执行失败：${result.reasonCode}`);
+                return;
+            }
+            toast.success('冷启动已完成，当前聊天已建立初始记忆。');
+        } catch (error) {
+            this.coldStartPromptedChats.delete(normalizedChatKey);
+            toast.error(`冷启动执行失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            this.coldStartRunningChats.delete(normalizedChatKey);
+        }
     }
 
     /**
@@ -286,6 +373,17 @@ export class MemoryOS {
         const rebindChat = async (_force: boolean = false): Promise<void> => {
             const chatKey = String(buildSdkChatKeyEvent() ?? '').trim();
             if (!chatKey) {
+                currentChatKey = '';
+                this.clearActiveMemoryBinding();
+                return;
+            }
+            const parsedChatRef = parseTavernChatScopedKeyEvent(chatKey);
+            if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
+                if (currentChatKey) {
+                    logger.info(`跳过首页占位聊天绑定: ${chatKey}`);
+                }
+                currentChatKey = '';
+                this.clearActiveMemoryBinding();
                 return;
             }
             if (chatKey === currentChatKey) {
@@ -297,18 +395,16 @@ export class MemoryOS {
             if (serial !== bindingSerial) {
                 return;
             }
-            try {
-                const oldMemory = (window as unknown as { STX?: { memory?: { template?: { destroy?: () => void } } } })?.STX?.memory;
-                oldMemory?.template?.destroy?.();
-            } catch {
-                // noop
-            }
+            this.clearActiveMemoryBinding();
             (window as unknown as { STX?: Record<string, unknown> }).STX = {
                 ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
                 memory: sdk,
             };
             currentChatKey = chatKey;
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);
+            void this.maybePromptColdStart(chatKey, sdk).catch((error: unknown): void => {
+                logger.warn('冷启动确认流程失败', error);
+            });
         };
 
         this.refreshChatBindingHandler = rebindChat;

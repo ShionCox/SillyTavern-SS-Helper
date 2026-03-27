@@ -10,13 +10,14 @@ import type {
     RoleEntryMemory,
 } from '../types';
 import unifiedMemoryWorkbenchCssText from './unifiedMemoryWorkbench.css?inline';
-
-// 引入抽象模块
 import {
     type WorkbenchView,
     type ActorSubView,
     type WorkbenchState,
     type WorkbenchSnapshot,
+    type WorkbenchActorGraph,
+    type WorkbenchActorGraphLink,
+    type WorkbenchGraphLinkType,
     escapeAttr,
     readInputValue,
     readCheckedValue,
@@ -27,19 +28,21 @@ import {
     resolveSelectedEntry,
     resolveSelectedType,
     resolveSelectedActor,
-    buildDynamicFieldMarkup
+    buildDynamicFieldMarkup,
+    toRecord,
+    toStringArray,
+    truncateText,
 } from './workbenchTabs/shared';
-
 import { buildEntriesViewMarkup } from './workbenchTabs/tabEntries';
 import { buildTypesViewMarkup } from './workbenchTabs/tabTypes';
 import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
-import { mountRelationshipGraph, type GraphData } from './workbenchTabs/actorTabs/relationshipGraph';
+import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 
 /**
- * 功能：确保统一记忆工作台样式只被注入一次。
+ * 功能：确保工作台样式只注入一次。
  * @returns 无返回值。
  */
 function ensureWorkbenchStyle(): void {
@@ -57,20 +60,26 @@ function ensureWorkbenchStyle(): void {
 }
 
 /**
- * 功能：将旧视图别名映射为统一记忆工作台的视图。
+ * 功能：兼容旧入口视图名称。
  * @param initialView 打开时传入的旧视图。
- * @returns 新工作台视图。
+ * @returns 工作台视图名。
  */
 function resolveInitialWorkbenchView(initialView?: UnifiedWorkbenchViewMode): WorkbenchView {
-    if (initialView === 'memory') return 'actors';
-    if (initialView === 'diagnostics' || initialView === 'raw') return 'preview';
-    if (initialView === 'world') return 'entries';
+    if (initialView === 'memory') {
+        return 'actors';
+    }
+    if (initialView === 'diagnostics' || initialView === 'raw') {
+        return 'preview';
+    }
+    if (initialView === 'world') {
+        return 'entries';
+    }
     return 'entries';
 }
 
 /**
  * 功能：读取当前聊天的 MemorySDK 实例。
- * @returns MemorySDK；不存在时返回 null。
+ * @returns SDK 实例或空值。
  */
 function getActiveMemorySdk(): MemorySDKImpl | null {
     const memory = (window as any)?.STX?.memory as MemorySDKImpl | null | undefined;
@@ -78,18 +87,22 @@ function getActiveMemorySdk(): MemorySDKImpl | null {
 }
 
 /**
- * 功能：构建统一记忆工作台主体 HTML。
+ * 功能：构建工作台整体 HTML。
  * @param snapshot 工作台快照。
- * @param state 工作台状态。
+ * @param state 当前状态。
  * @returns 页面 HTML。
  */
 function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const typeMap = new Map(snapshot.entryTypes.map((item: MemoryEntryType): [string, MemoryEntryType] => [item.key, item]));
     const filteredEntries = snapshot.entries.filter((entry: MemoryEntry): boolean => {
         const query = state.entryQuery.toLowerCase();
-        if (!query) return true;
+        if (!query) {
+            return true;
+        }
         return [entry.title, entry.summary, entry.detail, entry.entryType, entry.category, ...(entry.tags ?? [])]
-            .join(' ').toLowerCase().includes(query);
+            .join(' ')
+            .toLowerCase()
+            .includes(query);
     });
     const selectedEntry = resolveSelectedEntry(snapshot, state);
     const selectedEntryType = typeMap.get(selectedEntry?.entryType ?? '') ?? resolveSelectedType(snapshot, state);
@@ -106,7 +119,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
         <div class="stx-memory-workbench">
             <header class="stx-memory-workbench__header">
                 <div class="stx-memory-workbench__brand">
-                    <i class="fa-solid fa-microchip"></i> MEMORY·OS
+                    <i class="fa-solid fa-microchip"></i> MemoryOS 记忆工作台
                 </div>
                 <nav class="stx-memory-workbench__nav">
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'entries' ? ' is-active' : ''}" data-workbench-view="entries">
@@ -119,13 +132,13 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                         角色档案
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'preview' ? ' is-active' : ''}" data-workbench-view="preview">
-                        提示词快照
+                        诊断中心
                     </button>
                 </nav>
                 <div class="stx-memory-workbench__stats">
-                    <span title="环境总计字典数量">TOTAL ENTRIES <strong>${snapshot.entries.length}</strong></span>
-                    <span title="系统可识别类别数">CORE TYPES <strong>${snapshot.entryTypes.length}</strong></span>
-                    <span title="动态活跃链接">ACTIVE LINKS <strong>${snapshot.roleMemories.length}</strong></span>
+                    <span title="当前聊天中的记忆条目数量">条目 <strong>${snapshot.entries.length}</strong></span>
+                    <span title="当前聊天可用的条目类型数量">类型 <strong>${snapshot.entryTypes.length}</strong></span>
+                    <span title="角色与条目之间的真实绑定数量">绑定 <strong>${snapshot.roleMemories.length}</strong></span>
                 </div>
             </header>
             <main class="stx-memory-workbench__main">
@@ -153,8 +166,8 @@ export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOp
         bodyHtml: '<div id="stx-memory-workbench-root"></div>',
         onMount: (instance: SharedDialogInstance): void => {
             void mountWorkbench(instance, options).catch((error: unknown): void => {
-                logger.error('挂载 MemoryOS 终端失败', error);
-                toast.error(`环境遭遇系统级故障：${String(error)}`);
+                logger.error('挂载 MemoryOS 工作台失败', error);
+                toast.error(`工作台加载失败：${String((error as Error)?.message ?? error)}`);
             });
         },
     });
@@ -169,7 +182,7 @@ export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOp
 async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMemoryWorkbenchOpenOptions): Promise<void> {
     const memory = getActiveMemorySdk();
     if (!memory) {
-        instance.content.innerHTML = '<div class="stx-memory-workbench__empty">[FATAL ERROR] 内核离线，无法建立连接通道。</div>';
+        instance.content.innerHTML = '<div class="stx-memory-workbench__empty">当前未连接到记忆主链，无法打开工作台。</div>';
         return;
     }
 
@@ -180,7 +193,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
 
     const state: WorkbenchState = {
         currentView: resolveInitialWorkbenchView(options.initialView),
-        currentActorTab: 'items',
+        currentActorTab: 'attributes',
         selectedEntryId: '',
         selectedTypeKey: '',
         selectedActorKey: '',
@@ -190,18 +203,32 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
-     * 功能：读取工作台所需的全部数据。
+     * 功能：读取工作台所需快照。
      * @returns 工作台快照。
      */
     const loadSnapshot = async (): Promise<WorkbenchSnapshot> => {
-        const [entryTypes, entries, actors, roleMemories, summaries, preview] = await Promise.all([
+        const [
+            entryTypes,
+            entries,
+            actors,
+            roleMemories,
+            summaries,
+            preview,
+            worldProfileBinding,
+            mutationHistory,
+            recallExplanation,
+        ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
             memory.unifiedMemory.actors.list(),
             memory.unifiedMemory.roleMemory.list(),
             memory.unifiedMemory.summaries.list(8),
             memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
+            memory.unifiedMemory.diagnostics.getWorldProfileBinding(),
+            memory.unifiedMemory.diagnostics.listMutationHistory(16),
+            memory.chatState.getLatestRecallExplanation(),
         ]);
+
         return {
             entryTypes,
             entries,
@@ -209,11 +236,15 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             roleMemories,
             summaries,
             preview,
+            worldProfileBinding,
+            mutationHistory,
+            recallExplanation: normalizeRecallExplanation(recallExplanation),
+            actorGraph: buildActorGraph(actors, entries),
         };
     };
 
     /**
-     * 功能：确保当前选择状态始终有效。
+     * 功能：保证当前选择始终有效。
      * @param snapshot 当前快照。
      * @returns 无返回值。
      */
@@ -239,6 +270,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         if (!state.bindEntryId && snapshot.entries.length > 0) {
             state.bindEntryId = snapshot.entries[0]!.entryId;
         }
+        if (state.bindEntryId && !snapshot.entries.some((entry: MemoryEntry): boolean => entry.entryId === state.bindEntryId)) {
+            state.bindEntryId = snapshot.entries[0]?.entryId ?? '';
+        }
     };
 
     /**
@@ -260,27 +294,33 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (action === 'save-entry') {
                 const entryTypeKey = readInputValue(root, '#stx-memory-entry-type') || state.selectedTypeKey || 'other';
                 const type = snapshot.entryTypes.find((item: MemoryEntryType): boolean => item.key === entryTypeKey);
+                const existingEntry = snapshot.entries.find((entry: MemoryEntry): boolean => entry.entryId === String(button.dataset.entryId ?? '').trim());
                 const saved = await memory.unifiedMemory.entries.save({
-                    entryId: String((button.dataset.entryId ?? '')).trim() || undefined,
+                    entryId: String(button.dataset.entryId ?? '').trim() || undefined,
                     title: readInputValue(root, '#stx-memory-entry-title'),
                     entryType: entryTypeKey,
                     category: readInputValue(root, '#stx-memory-entry-category') || type?.category || '其他',
                     tags: parseTagText(readInputValue(root, '#stx-memory-entry-tags')),
                     summary: readInputValue(root, '#stx-memory-entry-summary'),
                     detail: readInputValue(root, '#stx-memory-entry-detail'),
-                    detailPayload: collectDetailPayload(root),
+                    detailPayload: {
+                        ...toRecord(existingEntry?.detailPayload),
+                        ...collectDetailPayload(root),
+                    },
                 });
                 state.selectedEntryId = saved.entryId;
-                toast.success('存储块已覆写');
+                toast.success('条目已保存。');
                 await render();
                 return;
             }
             if (action === 'delete-entry') {
                 const entryId = String(button.dataset.entryId ?? '').trim();
-                if (!entryId) return;
+                if (!entryId) {
+                    return;
+                }
                 await memory.unifiedMemory.entries.remove(entryId);
                 state.selectedEntryId = '';
-                toast.success('扇区已销毁');
+                toast.success('条目已删除。');
                 await render();
                 return;
             }
@@ -302,21 +342,24 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     fields: parseTypeFieldsJson(readInputValue(root, '#stx-memory-type-fields')),
                 });
                 state.selectedTypeKey = savedType.key;
-                toast.success('架构矩阵已保存');
+                toast.success('类型已保存。');
                 await render();
                 return;
             }
             if (action === 'delete-type') {
                 const typeKey = String(button.dataset.typeKey ?? '').trim();
-                if (!typeKey) return;
+                if (!typeKey) {
+                    return;
+                }
                 await memory.unifiedMemory.entryTypes.remove(typeKey);
                 state.selectedTypeKey = '';
-                toast.success('架构已被系统抹除');
+                toast.success('类型已删除。');
                 await render();
                 return;
             }
             if (action === 'create-actor') {
                 state.selectedActorKey = '';
+                state.currentActorTab = 'attributes';
                 await render();
                 return;
             }
@@ -327,7 +370,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 const actor = await memory.unifiedMemory.actors.ensure({ actorKey, displayName, memoryStat });
                 await memory.unifiedMemory.actors.setMemoryStat(actor.actorKey, memoryStat);
                 state.selectedActorKey = actor.actorKey;
-                toast.success('节点数据已同步');
+                toast.success('角色资料已保存。');
                 await render();
                 return;
             }
@@ -335,20 +378,22 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 const actorKey = readInputValue(root, '#stx-memory-actor-key') || state.selectedActorKey;
                 const entryId = String((root.querySelector('#stx-memory-bind-entry') as HTMLSelectElement | null)?.value ?? state.bindEntryId).trim();
                 if (!actorKey || !entryId) {
-                    toast.info('无法建立链接：无有效标靶');
+                    toast.info('请先选择角色和条目。');
                     return;
                 }
                 await memory.unifiedMemory.roleMemory.bind(actorKey, entryId);
-                toast.success('强链接已确立');
+                toast.success('条目已绑定到角色。');
                 await render();
                 return;
             }
             if (action === 'unbind-entry') {
                 const actorKey = state.selectedActorKey;
                 const entryId = String(button.dataset.entryId ?? '').trim();
-                if (!actorKey || !entryId) return;
+                if (!actorKey || !entryId) {
+                    return;
+                }
                 await memory.unifiedMemory.roleMemory.unbind(actorKey, entryId);
-                toast.success('链接由于主动切断而终止');
+                toast.success('角色绑定已解除。');
                 await render();
                 return;
             }
@@ -359,12 +404,33 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             if (action === 'capture-summary') {
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench');
-                toast.success('已强转储快照归档');
+                toast.success('已触发强制快照归档。');
                 await render();
             }
+            if (action === 'export-chat-database') {
+                const databaseSnapshot = await memory.chatState.exportCurrentChatDatabaseSnapshotForTest();
+                const fileName = buildChatDatabaseExportFileName(memory.getChatKey());
+                downloadJsonFile(fileName, databaseSnapshot);
+                toast.success('当前聊天记忆库已导出。');
+                return;
+            }
+            if (action === 'clear-chat-database') {
+                const confirmed = window.confirm('确定要删除当前聊天数据库吗？此操作会清空当前聊天的记忆条目、角色绑定、总结、世界画像和历史记录，且无法恢复。');
+                if (!confirmed) {
+                    return;
+                }
+                await memory.chatState.clearCurrentChatData();
+                state.selectedEntryId = '';
+                state.selectedTypeKey = '';
+                state.selectedActorKey = '';
+                state.bindEntryId = '';
+                toast.success('当前聊天数据库已删除。');
+                await render();
+                return;
+            }
         } catch (error) {
-            logger.error(`终端发生异常指令: ${action}`, error);
-            toast.error(`环境故障：${String((error as Error)?.message ?? error)}`);
+            logger.error(`工作台动作执行失败: ${action}`, error);
+            toast.error(`操作失败：${String((error as Error)?.message ?? error)}`);
         }
     };
 
@@ -381,10 +447,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             });
         });
 
-        // 绑定次级子页签路由 (Actors Nav)
         root.querySelectorAll<HTMLElement>('[data-actor-tab]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
-                state.currentActorTab = String(button.dataset.actorTab ?? 'items') as ActorSubView;
+                state.currentActorTab = String(button.dataset.actorTab ?? 'attributes') as ActorSubView;
                 void render();
             });
         });
@@ -443,39 +508,221 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         root.innerHTML = buildWorkbenchMarkup(snapshot, state);
         bindEvents(snapshot);
 
-        if (state.currentView === 'actors') {
+        if (state.currentView === 'actors' && state.currentActorTab === 'relationships') {
             const container = root.querySelector('#stx-rpg-graph-container') as HTMLElement | null;
             if (container) {
-                const nodes = snapshot.actors.map((actor, i) => ({
-                    id: actor.actorKey,
-                    label: actor.displayName || '未知载体',
-                    x: Math.cos((i / Math.max(1, snapshot.actors.length)) * Math.PI * 2) * 200,
-                    y: Math.sin((i / Math.max(1, snapshot.actors.length)) * Math.PI * 2) * 200,
-                    icon: 'fa-user-secret'
-                }));
-                const links: any[] = [];
-                if (nodes.length > 1) {
-                    for (let i = 0; i < nodes.length; i++) {
-                        const targets = [ (i+1)%nodes.length, (i+2)%nodes.length ];
-                        targets.forEach(t => {
-                           if (i !== t) {
-                               const typeMap = ['ally', 'enemy', 'neutral', 'family'];
-                               const type = typeMap[(i+t)%4];
-                               const labels: Record<string,string> = {ally:'同源互信', enemy:'致命阻断', neutral:'信息交换', family:'血统重合'};
-                               links.push({
-                                   source: nodes[i].id,
-                                   target: nodes[t].id,
-                                   label: labels[type] || '未知连接',
-                                   type
-                               });
-                           }
-                        });
-                    }
-                }
-                mountRelationshipGraph(container, { nodes, links });
+                mountRelationshipGraph(container, snapshot.actorGraph, {
+                    selectedNodeId: state.selectedActorKey,
+                    onSelectNode: (nodeId: string): void => {
+                        if (nodeId !== state.selectedActorKey) {
+                            state.selectedActorKey = nodeId;
+                            void render();
+                        }
+                    },
+                });
             }
         }
     };
 
     await render();
+}
+
+/**
+ * 功能：归一化命中说明对象。
+ * @param value 原始对象。
+ * @returns 命中说明或空值。
+ */
+function normalizeRecallExplanation(value: Record<string, unknown> | null): WorkbenchSnapshot['recallExplanation'] {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+    return {
+        generatedAt: Number(value.generatedAt ?? 0) || undefined,
+        query: String(value.query ?? '').trim() || undefined,
+        matchedActorKeys: toStringArray(value.matchedActorKeys),
+        matchedEntryIds: toStringArray(value.matchedEntryIds),
+        reasonCodes: toStringArray(value.reasonCodes),
+        source: String(value.source ?? '').trim() || undefined,
+    };
+}
+
+/**
+ * 功能：根据真实条目构建角色关系图。
+ * @param actors 角色列表。
+ * @param entries 条目列表。
+ * @returns 真实图数据。
+ */
+function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): WorkbenchActorGraph {
+    const nodes = actors.map((actor: ActorMemoryProfile, index: number): WorkbenchActorGraph['nodes'][number] => {
+        const angle = actors.length <= 1 ? 0 : (index / actors.length) * Math.PI * 2;
+        const radius = actors.length <= 1 ? 0 : 220;
+        return {
+            id: actor.actorKey,
+            label: actor.displayName || actor.actorKey,
+            memoryStat: actor.memoryStat,
+            x: Math.round(Math.cos(angle) * radius),
+            y: Math.round(Math.sin(angle) * radius),
+            relationCount: 0,
+        };
+    });
+    const actorKeySet = new Set(nodes.map((node): string => node.id));
+    const nodeMap = new Map(nodes.map((node): [string, WorkbenchActorGraph['nodes'][number]] => [node.id, node]));
+    const links: WorkbenchActorGraphLink[] = [];
+
+    entries
+        .filter((entry: MemoryEntry): boolean => entry.entryType === 'relationship')
+        .forEach((entry: MemoryEntry): void => {
+            const relation = resolveRelationshipEdge(entry, actorKeySet);
+            if (!relation) {
+                return;
+            }
+            const sourceNode = nodeMap.get(relation.sourceActorKey);
+            const targetNode = nodeMap.get(relation.targetActorKey);
+            if (!sourceNode || !targetNode) {
+                return;
+            }
+            sourceNode.relationCount += 1;
+            targetNode.relationCount += 1;
+            links.push({
+                id: `graph-link:${entry.entryId}`,
+                source: relation.sourceActorKey,
+                target: relation.targetActorKey,
+                entryId: entry.entryId,
+                label: truncateText(relation.label || entry.summary || entry.title || '关系', 24),
+                summary: relation.label || entry.summary || entry.detail || '',
+                type: relation.type,
+                updatedAt: entry.updatedAt,
+            });
+        });
+
+    return { nodes, links };
+}
+
+/**
+ * 功能：从 relationship 条目中解析真实边。
+ * @param entry 关系条目。
+ * @param actorKeySet 真实角色键集合。
+ * @returns 边信息或空值。
+ */
+function resolveRelationshipEdge(
+    entry: MemoryEntry,
+    actorKeySet: Set<string>,
+): {
+    sourceActorKey: string;
+    targetActorKey: string;
+    label: string;
+    type: WorkbenchGraphLinkType;
+} | null {
+    const payload = toRecord(entry.detailPayload);
+    const fields = toRecord(payload.fields);
+    const sourceActorKey = normalizeActorKeyCandidate(payload.sourceActorKey ?? fields.sourceActorKey);
+    const targetActorKey = normalizeActorKeyCandidate(payload.targetActorKey ?? fields.targetActorKey);
+    const titlePair = parseActorKeysFromTitle(entry.title, actorKeySet);
+    const resolvedSource = sourceActorKey || titlePair?.sourceActorKey || '';
+    const resolvedTarget = targetActorKey || titlePair?.targetActorKey || '';
+    if (!resolvedSource || !resolvedTarget || resolvedSource === resolvedTarget) {
+        return null;
+    }
+    if (!actorKeySet.has(resolvedSource) || !actorKeySet.has(resolvedTarget)) {
+        return null;
+    }
+    return {
+        sourceActorKey: resolvedSource,
+        targetActorKey: resolvedTarget,
+        label: String(payload.state ?? fields.state ?? entry.summary ?? '').trim(),
+        type: resolveRelationshipTone(entry),
+    };
+}
+
+/**
+ * 功能：从标题里提取冷启动写入的角色键。
+ * @param title 条目标题。
+ * @param actorKeySet 角色键集合。
+ * @returns 解析结果或空值。
+ */
+function parseActorKeysFromTitle(
+    title: string,
+    actorKeySet: Set<string>,
+): { sourceActorKey: string; targetActorKey: string } | null {
+    const normalized = String(title ?? '').trim();
+    const match = normalized.match(/^([a-z0-9_-]+)\s*(?:->|=>|→)\s*([a-z0-9_-]+)$/i);
+    if (!match) {
+        return null;
+    }
+    const sourceActorKey = normalizeActorKeyCandidate(match[1]);
+    const targetActorKey = normalizeActorKeyCandidate(match[2]);
+    if (!sourceActorKey || !targetActorKey) {
+        return null;
+    }
+    if (!actorKeySet.has(sourceActorKey) || !actorKeySet.has(targetActorKey)) {
+        return null;
+    }
+    return { sourceActorKey, targetActorKey };
+}
+
+/**
+ * 功能：根据关系信号估算图边颜色。
+ * @param entry 关系条目。
+ * @returns 图边类型。
+ */
+function resolveRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkType {
+    const payload = toRecord(entry.detailPayload);
+    const trust = Number(payload.trust ?? 0);
+    const affection = Number(payload.affection ?? 0);
+    const tension = Number(payload.tension ?? 0);
+    if (Number.isFinite(tension) && tension >= Math.max(trust, affection) && tension >= 60) {
+        return 'enemy';
+    }
+    if ((Number.isFinite(trust) && trust >= 70) || (Number.isFinite(affection) && affection >= 70)) {
+        return 'ally';
+    }
+    return 'neutral';
+}
+
+/**
+ * 功能：归一化候选角色键。
+ * @param value 原始值。
+ * @returns 角色键。
+ */
+function normalizeActorKeyCandidate(value: unknown): string {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * 功能：构建聊天记忆库导出文件名。
+ * @param chatKey 当前聊天键。
+ * @returns 可下载的文件名。
+ */
+function buildChatDatabaseExportFileName(chatKey: string): string {
+    const normalizedChatKey = String(chatKey ?? '')
+        .trim()
+        .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 96) || 'memory_chat';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `memory-chat-database-${normalizedChatKey}-${timestamp}.json`;
+}
+
+/**
+ * 功能：把 JSON 数据触发为浏览器下载。
+ * @param fileName 文件名。
+ * @param data JSON 数据。
+ * @returns 无返回值。
+ */
+function downloadJsonFile(fileName: string, data: unknown): void {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout((): void => {
+        URL.revokeObjectURL(objectUrl);
+    }, 0);
 }

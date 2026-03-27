@@ -11,12 +11,13 @@ export function resolveBootstrapWorldProfile(
     document: ColdStartDocument,
     sourceBundle: ColdStartSourceBundle,
 ): WorldProfileDetectionResult {
-    if (isCompleteWorldProfileDetection(document.worldProfileDetection)) {
+    const worldProfileDetection = document.worldProfileDetection;
+    if (isCompleteWorldProfileDetection(worldProfileDetection)) {
         return {
-            primaryProfile: normalizeText(document.worldProfileDetection.primaryProfile) || 'urban_modern',
-            secondaryProfiles: dedupeStrings(document.worldProfileDetection.secondaryProfiles ?? []),
-            confidence: clamp01(document.worldProfileDetection.confidence ?? 0.5),
-            reasonCodes: dedupeStrings(document.worldProfileDetection.reasonCodes ?? []),
+            primaryProfile: normalizeText(worldProfileDetection.primaryProfile) || 'urban_modern',
+            secondaryProfiles: dedupeStrings(worldProfileDetection.secondaryProfiles ?? []),
+            confidence: clamp01(worldProfileDetection.confidence ?? 0.5),
+            reasonCodes: dedupeStrings(worldProfileDetection.reasonCodes ?? []),
         };
     }
     return detectWorldProfile({ texts: collectFallbackTexts(sourceBundle) });
@@ -27,7 +28,9 @@ export function resolveBootstrapWorldProfile(
  * @param detection 模型返回的检测结果。
  * @returns 是否完整。
  */
-function isCompleteWorldProfileDetection(detection: ColdStartDocument['worldProfileDetection']): boolean {
+function isCompleteWorldProfileDetection(
+    detection: ColdStartDocument['worldProfileDetection'],
+): detection is NonNullable<ColdStartDocument['worldProfileDetection']> {
     if (!detection) {
         return false;
     }

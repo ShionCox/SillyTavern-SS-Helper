@@ -31,6 +31,7 @@ const ALLOWED_TAGS = new Set([
 
 /** 平台内部插件 ID（默认具备 silent 权限） */
 const PLATFORM_INTERNAL_PLUGINS = new Set(['stx_llmhub', 'stx_memory_os']);
+const MEMORY_OS_AUTO_CLOSE_TASKS = new Set(['memory_cold_start']);
 
 function formatTaskTitle(record: RequestRecord): string {
     const taskLabel = String(record.taskDescription || record.taskId || '').trim() || record.taskId;
@@ -211,14 +212,26 @@ export class DisplayController {
         spec.status = result.ok ? 'done' : 'error';
         spec.content = this.buildSafeContent(result);
         spec.displayMode = displayMode;
-        spec.autoClose = false;
-        spec.autoCloseMs = undefined;
+        spec.autoClose = Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskId));
+        spec.autoCloseMs = spec.autoClose ? 300 : undefined;
 
         this.activeOverlays.set(record.requestId, spec);
 
         // 渲染
         if (this.renderCallback) {
             this.renderCallback(spec);
+        }
+
+        const existingTimer = this.autoCloseTimers.get(record.requestId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            this.autoCloseTimers.delete(record.requestId);
+        }
+        if (spec.autoClose && typeof spec.autoCloseMs === 'number' && spec.autoCloseMs > 0) {
+            const timer = setTimeout((): void => {
+                this.closeOverlay(record.requestId, 'auto_close');
+            }, spec.autoCloseMs);
+            this.autoCloseTimers.set(record.requestId, timer);
         }
     }
 

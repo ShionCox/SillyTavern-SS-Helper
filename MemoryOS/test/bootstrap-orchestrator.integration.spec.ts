@@ -92,6 +92,16 @@ describe('runBootstrapOrchestrator integration', () => {
                             originFacts: ['North'],
                             traits: ['Calm'],
                         },
+                        actorCards: [
+                            {
+                                actorKey: 'char_mc',
+                                displayName: '旅人',
+                                aliases: [],
+                                identityFacts: ['外来者'],
+                                originFacts: ['刚进入王都'],
+                                traits: ['谨慎'],
+                            },
+                        ],
                         worldProfileDetection: {
                             primaryProfile: 'fantasy_magic',
                             secondaryProfiles: ['ancient_traditional'],
@@ -110,8 +120,12 @@ describe('runBootstrapOrchestrator integration', () => {
                             {
                                 sourceActorKey: 'char_erin',
                                 targetActorKey: 'char_mc',
+                                participants: ['char_erin', 'char_mc'],
+                                state: '保持观察',
                                 summary: 'watching',
                                 trust: 0.2,
+                                affection: 0.1,
+                                tension: 0.3,
                             },
                         ],
                         memoryRecords: [
@@ -136,5 +150,68 @@ describe('runBootstrapOrchestrator integration', () => {
         expect(historyActions).toContain('cold_start_started');
         expect(historyActions).toContain('world_profile_bound');
         expect(historyActions).toContain('cold_start_succeeded');
+    });
+
+    it('fails when relationship actors do not provide actor cards', async () => {
+        const result = await runBootstrapOrchestrator({
+            dependencies: {
+                ensureActorProfile: vi.fn(async () => ({})),
+                saveEntry: vi.fn(async (input) => ({
+                    ...input,
+                    entryId: 'entry_1',
+                    chatKey: 'chat',
+                    category: input.category || 'other',
+                    tags: input.tags || [],
+                    summary: input.summary || '',
+                    detail: input.detail || '',
+                    detailSchemaVersion: 1,
+                    detailPayload: input.detailPayload || {},
+                    sourceSummaryIds: [],
+                    createdAt: 1,
+                    updatedAt: 1,
+                })),
+                bindRoleToEntry: vi.fn(async () => ({})),
+                putWorldProfileBinding: vi.fn(async () => ({})),
+                appendMutationHistory: vi.fn(async () => ({})),
+            },
+            llm: {
+                registerConsumer: () => {},
+                unregisterConsumer: () => {},
+                runTask: vi.fn(async () => ({
+                    ok: true,
+                    data: {
+                        schemaVersion: '1.0.0',
+                        identity: {
+                            actorKey: 'char_erin',
+                            displayName: 'Erin',
+                            aliases: [],
+                            identityFacts: ['Agent'],
+                            originFacts: ['North'],
+                            traits: ['Calm'],
+                        },
+                        actorCards: [],
+                        worldBase: [],
+                        relationships: [
+                            {
+                                sourceActorKey: 'char_erin',
+                                targetActorKey: 'char_mc',
+                                participants: ['char_erin', 'char_mc'],
+                                state: '保持观察',
+                                summary: 'watching',
+                                trust: 0.2,
+                                affection: 0.1,
+                                tension: 0.3,
+                            },
+                        ],
+                        memoryRecords: [],
+                    },
+                })),
+            },
+            pluginId: 'MemoryOS',
+            sourceBundle: buildBundle(),
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.reasonCode).toBe('relationship_actor_card_missing');
     });
 });

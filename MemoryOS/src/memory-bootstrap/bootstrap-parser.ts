@@ -1,4 +1,5 @@
 import type {
+    ColdStartActorCard,
     ColdStartDocument,
     ColdStartIdentity,
     ColdStartMemoryRecord,
@@ -24,6 +25,7 @@ export function parseColdStartDocument(rawDocument: unknown): ColdStartDocument 
     return {
         schemaVersion,
         identity,
+        actorCards: normalizeActorCards(source.actorCards),
         worldProfileDetection: normalizeWorldProfileDetection(source.worldProfileDetection),
         worldBase: normalizeWorldBase(source.worldBase),
         relationships: normalizeRelationships(source.relationships),
@@ -119,20 +121,76 @@ function normalizeRelationships(value: unknown): ColdStartRelationshipEntry[] {
             const record = row as Record<string, unknown>;
             const sourceActorKey = normalizeText(record.sourceActorKey);
             const targetActorKey = normalizeText(record.targetActorKey);
+            const participants = dedupeStrings(record.participants);
+            const state = normalizeText(record.state);
             const summary = normalizeText(record.summary);
-            if (!sourceActorKey || !targetActorKey || !summary) {
+            if (!sourceActorKey || !targetActorKey || !state || !summary) {
                 return null;
             }
+            const normalizedParticipants = dedupeKnownParticipants(participants, sourceActorKey, targetActorKey);
             return {
                 sourceActorKey,
                 targetActorKey,
+                participants: normalizedParticipants,
+                state,
                 summary,
-                trust: optionalClampedNumber(record.trust),
-                affection: optionalClampedNumber(record.affection),
-                tension: optionalClampedNumber(record.tension),
+                trust: clamp01(Number(record.trust)),
+                affection: clamp01(Number(record.affection)),
+                tension: clamp01(Number(record.tension)),
             };
         })
         .filter(Boolean) as ColdStartRelationshipEntry[];
+}
+
+/**
+ * 功能：归一化关系角色卡列表。
+ * @param value 原始值。
+ * @returns 可用的关系角色卡列表。
+ */
+function normalizeActorCards(value: unknown): ColdStartActorCard[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: ColdStartActorCard[] = [];
+    const seenActorKeys = new Set<string>();
+    for (const row of value) {
+        const card = normalizeActorCard(row);
+        if (!card) {
+            continue;
+        }
+        const normalizedActorKey = normalizeText(card.actorKey).toLowerCase();
+        if (!normalizedActorKey || seenActorKeys.has(normalizedActorKey)) {
+            continue;
+        }
+        seenActorKeys.add(normalizedActorKey);
+        result.push(card);
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化单个关系角色卡。
+ * @param value 原始值。
+ * @returns 关系角色卡；非法时返回 null。
+ */
+function normalizeActorCard(value: unknown): ColdStartActorCard | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const row = value as Record<string, unknown>;
+    const actorKey = normalizeText(row.actorKey);
+    const displayName = normalizeText(row.displayName);
+    if (!actorKey || !displayName) {
+        return null;
+    }
+    return {
+        actorKey,
+        displayName,
+        aliases: dedupeStrings(row.aliases),
+        identityFacts: dedupeStrings(row.identityFacts),
+        originFacts: dedupeStrings(row.originFacts),
+        traits: dedupeStrings(row.traits),
+    };
 }
 
 /**
@@ -187,6 +245,24 @@ function dedupeStrings(value: unknown): string[] {
     const merged: string[] = [];
     for (const item of value) {
         const normalized = normalizeText(item);
+        if (normalized && !merged.includes(normalized)) {
+            merged.push(normalized);
+        }
+    }
+    return merged;
+}
+
+/**
+ * 功能：确保关系参与角色列表至少包含源角色与目标角色。
+ * @param participants 原始参与角色列表。
+ * @param sourceActorKey 源角色键。
+ * @param targetActorKey 目标角色键。
+ * @returns 归一化后的参与角色列表。
+ */
+function dedupeKnownParticipants(participants: string[], sourceActorKey: string, targetActorKey: string): string[] {
+    const merged: string[] = [];
+    for (const value of [sourceActorKey, targetActorKey, ...participants]) {
+        const normalized = normalizeText(value);
         if (normalized && !merged.includes(normalized)) {
             merged.push(normalized);
         }

@@ -59,6 +59,7 @@ describe('resolveBootstrapWorldProfile', () => {
                 originFacts: [],
                 traits: [],
             },
+            actorCards: [],
             worldProfileDetection: {
                 primaryProfile: 'urban_modern',
                 secondaryProfiles: [],
@@ -85,6 +86,7 @@ describe('resolveBootstrapWorldProfile', () => {
                 originFacts: [],
                 traits: [],
             },
+            actorCards: [],
             worldProfileDetection: {
                 primaryProfile: 'supernatural_hidden',
                 secondaryProfiles: ['urban_modern'],

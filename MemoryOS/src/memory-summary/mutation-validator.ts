@@ -54,11 +54,12 @@ export function validateSummaryMutationDocument(
             errors: dedupeStrings(errors),
         };
     }
+    const normalizedWindow = window as SummaryMutationDocument['window'];
     return {
         valid: true,
         document: {
             schemaVersion,
-            window,
+            window: normalizedWindow,
             actions: actionNormalizeResult.actions,
         },
         errors: [],

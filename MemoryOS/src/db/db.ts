@@ -134,6 +134,25 @@ export interface ImportMemoryPromptTestBundleResult {
 }
 
 /**
+ * 功能：读取 MemoryOS 当前聊天的插件状态。
+ * @param chatKey 聊天键。
+ * @returns 插件状态；不存在时返回 null。
+ */
+export async function readMemoryOSChatState(chatKey: string): Promise<DBChatPluginState | null> {
+    return readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey));
+}
+
+/**
+ * 功能：写入 MemoryOS 当前聊天的插件状态。
+ * @param chatKey 聊天键。
+ * @param state 状态补丁。
+ * @returns 异步完成。
+ */
+export async function writeMemoryOSChatState(chatKey: string, state: Record<string, unknown>): Promise<void> {
+    await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), state);
+}
+
+/**
  * 功能：安全归一化文本。
  * @param value 原始值。
  * @returns 归一化结果。

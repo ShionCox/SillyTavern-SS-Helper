@@ -20,12 +20,18 @@ export function renderPromptTemplate(template: string, variables: PromptRenderVa
  * 功能：把上下文对象和 schema 组装为结构化任务 user payload。
  * @param contextJson 总结或冷启动上下文 JSON。
  * @param schemaJson 结构化输出 schema JSON。
+ * @param outputSampleJson 标准输出示例 JSON。
  * @returns 拼装后的 user payload。
  */
-export function buildStructuredTaskUserPayload(contextJson: string, schemaJson: string): string {
+export function buildStructuredTaskUserPayload(
+    contextJson: string,
+    schemaJson: string,
+    outputSampleJson?: string,
+): string {
     const context = String(contextJson ?? '').trim();
     const schema = String(schemaJson ?? '').trim();
-    return [
+    const outputSample = String(outputSampleJson ?? '').trim();
+    const sections = [
         '<memory_task_context>',
         context || '{}',
         '</memory_task_context>',
@@ -33,7 +39,16 @@ export function buildStructuredTaskUserPayload(contextJson: string, schemaJson: 
         '<output_schema>',
         schema || '{}',
         '</output_schema>',
-    ].join('\n');
+    ];
+    if (outputSample) {
+        sections.push(
+            '',
+            '<output_example>',
+            outputSample,
+            '</output_example>',
+        );
+    }
+    return sections.join('\n');
 }
 
 /**

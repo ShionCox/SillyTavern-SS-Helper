@@ -75,6 +75,18 @@ export interface ColdStartIdentity {
 }
 
 /**
+ * 功能：定义冷启动关系角色卡对象。
+ */
+export interface ColdStartActorCard {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    traits: string[];
+}
+
+/**
  * 功能：定义冷启动世界基础条目。
  */
 export interface ColdStartWorldBaseEntry {
@@ -90,10 +102,12 @@ export interface ColdStartWorldBaseEntry {
 export interface ColdStartRelationshipEntry {
     sourceActorKey: string;
     targetActorKey: string;
+    participants: string[];
+    state: string;
     summary: string;
-    trust?: number;
-    affection?: number;
-    tension?: number;
+    trust: number;
+    affection: number;
+    tension: number;
 }
 
 /**
@@ -112,6 +126,7 @@ export interface ColdStartMemoryRecord {
 export interface ColdStartDocument {
     schemaVersion: string;
     identity: ColdStartIdentity;
+    actorCards: ColdStartActorCard[];
     worldProfileDetection?: {
         primaryProfile: string;
         secondaryProfiles: string[];

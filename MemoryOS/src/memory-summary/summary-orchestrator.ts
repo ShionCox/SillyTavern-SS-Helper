@@ -55,6 +55,7 @@ export interface RunSummaryOrchestratorResult {
  * @returns 编排结果。
  */
 export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput): Promise<RunSummaryOrchestratorResult> {
+    const summaryLanguageInstruction = '除 action、targetKind、candidateId、compareKey、reasonCodes 及各类键名外，所有自然语言内容必须使用简体中文。';
     await input.dependencies.appendMutationHistory({
         action: 'summary_started',
         payload: { messageCount: input.messages.length },
@@ -139,12 +140,14 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     }
     const promptPack = await loadPromptPackSections();
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
-    const summarySystemPrompt = renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
+    const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
+    const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
-    });
+    })}\n\n${summaryLanguageInstruction}`;
     const summaryUserPayload = buildStructuredTaskUserPayload(
         JSON.stringify(plannerResult.context, null, 2),
         JSON.stringify(summarySchema ?? {}, null, 2),
+        JSON.stringify(summaryOutputSample ?? {}, null, 2),
     );
     const result = await input.llm.runTask<SummaryMutationDocument>({
         consumer: input.pluginId,
