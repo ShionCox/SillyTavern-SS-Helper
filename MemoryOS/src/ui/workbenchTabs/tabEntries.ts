@@ -189,6 +189,7 @@ function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
             rows: [
                 { label: '源角色', value: payload.sourceActorKey ?? fields.sourceActorKey },
                 { label: '目标角色', value: payload.targetActorKey ?? fields.targetActorKey },
+                { label: '关系标签', value: fields.relationTag },
                 { label: '参与角色', value: payload.participants ?? fields.participants },
                 { label: '关系现状', value: payload.state ?? fields.state },
                 { label: '信任度', value: payload.trust },

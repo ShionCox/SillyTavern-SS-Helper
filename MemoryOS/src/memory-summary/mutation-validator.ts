@@ -1,4 +1,5 @@
 import type { SummaryMutationAction, SummaryMutationDocument } from './mutation-types';
+import { isRelationTag } from '../constants/relationTags';
 
 /**
  * 功能：定义总结 mutation 校验结果。
@@ -140,6 +141,7 @@ function normalizeAction(
     }
     const allowedFields = editableFieldMap.get(targetKind) ?? new Set<string>();
     const payloadResult = sanitizePayloadByAllowedFields(row.payload, allowedFields);
+    const enumErrors = validatePayloadEnums(targetKind, payloadResult.payload);
     return {
         action: {
             action: action as SummaryMutationAction['action'],
@@ -149,8 +151,29 @@ function normalizeAction(
             payload: payloadResult.payload,
             reasonCodes: dedupeStrings(Array.isArray(row.reasonCodes) ? (row.reasonCodes as string[]) : []),
         },
-        errors: payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
+        errors: [
+            ...payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
+            ...enumErrors,
+        ],
     };
+}
+
+/**
+ * 功能：校验 payload 中的枚举字段是否合法。
+ * @param targetKind 目标 schemaId。
+ * @param payload 已过滤的 payload。
+ * @returns 错误列表。
+ */
+function validatePayloadEnums(targetKind: string, payload: Record<string, unknown>): string[] {
+    const errors: string[] = [];
+    if (String(targetKind ?? '').trim() !== 'relationship') {
+        return errors;
+    }
+    const relationTag = flattenRecord(payload)['fields.relationTag'];
+    if (relationTag !== undefined && !isRelationTag(relationTag)) {
+        errors.push(`payload_field_invalid_enum:${targetKind}:fields.relationTag`);
+    }
+    return errors;
 }
 
 /**

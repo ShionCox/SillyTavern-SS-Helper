@@ -10,6 +10,7 @@ import type {
     SummarySnapshot,
     WorldProfileBinding,
 } from '../../types';
+import { listRelationTagPresets } from '../../constants/relationTags';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
@@ -58,6 +59,9 @@ export interface WorkbenchState {
     entryQuery: string;
     previewQuery: string;
     bindEntryId: string;
+    actorQuery: string;
+    actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
+    actorTagFilter: string;
 }
 
 export interface WorkbenchSnapshot {
@@ -71,6 +75,15 @@ export interface WorkbenchSnapshot {
     mutationHistory: MemoryMutationHistoryRecord[];
     recallExplanation: WorkbenchRecallExplanation | null;
     actorGraph: WorkbenchActorGraph;
+}
+
+/**
+ * 功能：判断当前角色是否为用户角色。
+ * @param actorKey 角色键。
+ * @returns 是否为用户角色。
+ */
+export function isUserActorKey(actorKey: string | null | undefined): boolean {
+    return String(actorKey ?? '').trim().toLowerCase() === 'user';
 }
 
 /**
@@ -153,11 +166,12 @@ export function collectDetailPayload(root: HTMLElement): Record<string, unknown>
     const payload: Record<string, unknown> = {};
     root.querySelectorAll<HTMLElement>('[data-entry-field-key]').forEach((element: HTMLElement): void => {
         const fieldKey = String(element.dataset.entryFieldKey ?? '').trim();
+        const fieldPath = String(element.dataset.entryFieldPath ?? fieldKey).trim();
         if (!fieldKey) {
             return;
         }
         if (element instanceof HTMLInputElement && element.type === 'checkbox') {
-            payload[fieldKey] = element.checked;
+            setDetailPayloadValue(payload, fieldPath, element.checked);
             return;
         }
         if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
@@ -166,17 +180,39 @@ export function collectDetailPayload(root: HTMLElement): Record<string, unknown>
                 return;
             }
             if (element.dataset.entryFieldKind === 'number') {
-                payload[fieldKey] = Number(rawValue);
+                setDetailPayloadValue(payload, fieldPath, Number(rawValue));
                 return;
             }
             if (element.dataset.entryFieldKind === 'tags') {
-                payload[fieldKey] = parseTagText(rawValue);
+                setDetailPayloadValue(payload, fieldPath, parseTagText(rawValue));
                 return;
             }
-            payload[fieldKey] = rawValue;
+            setDetailPayloadValue(payload, fieldPath, rawValue);
         }
     });
     return payload;
+}
+
+/**
+ * 功能：合并工作台编辑产生的 detailPayload，保留已有的嵌套字段。
+ * @param base 原始 detailPayload。
+ * @param patch 编辑后收集到的 detailPayload。
+ * @returns 合并后的 detailPayload。
+ */
+export function mergeWorkbenchDetailPayload(
+    base: Record<string, unknown> | undefined,
+    patch: Record<string, unknown>,
+): Record<string, unknown> {
+    const source = toRecord(base);
+    const result: Record<string, unknown> = { ...source };
+    for (const [key, value] of Object.entries(toRecord(patch))) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            result[key] = mergeWorkbenchDetailPayload(toRecord(source[key]), toRecord(value));
+            continue;
+        }
+        result[key] = value;
+    }
+    return result;
 }
 
 /**
@@ -255,12 +291,16 @@ export function buildDynamicFieldMarkup(
     detailPayload: Record<string, unknown> | undefined,
 ): string {
     return (selectedEntryType?.fields ?? []).map((field: MemoryEntryTypeField): string => {
-        const fieldValue = detailPayload?.[field.key];
+        const fieldPath = resolveWorkbenchFieldPath(selectedEntryType, field);
+        const fieldValue = resolveWorkbenchFieldValue(detailPayload, fieldPath, field.key);
+        if (selectedEntryType?.key === 'relationship' && field.key === 'relationTag') {
+            return buildRelationTagSelectMarkup(field, fieldPath, fieldValue);
+        }
         if (field.kind === 'textarea') {
             return `
                 <div class="stx-memory-workbench__field-stack">
                     <label>${escapeHtml(field.label)}</label>
-                    <textarea class="stx-memory-workbench__textarea" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-kind="${escapeAttr(field.kind)}" placeholder="${escapeAttr(field.placeholder ?? '')}">${escapeHtml(fieldValue ?? '')}</textarea>
+                    <textarea class="stx-memory-workbench__textarea" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-path="${escapeAttr(fieldPath)}" data-entry-field-kind="${escapeAttr(field.kind)}" placeholder="${escapeAttr(field.placeholder ?? '')}">${escapeHtml(fieldValue ?? '')}</textarea>
                 </div>
             `;
         }
@@ -268,17 +308,76 @@ export function buildDynamicFieldMarkup(
             return `
                 <div class="stx-memory-workbench__field-stack">
                     <label>${escapeHtml(field.label)}</label>
-                    <input class="stx-memory-workbench__input" style="width:auto;margin-top:4px;" type="checkbox" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-kind="${escapeAttr(field.kind)}"${fieldValue === true ? ' checked' : ''}>
+                    <input class="stx-memory-workbench__input" style="width:auto;margin-top:4px;" type="checkbox" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-path="${escapeAttr(fieldPath)}" data-entry-field-kind="${escapeAttr(field.kind)}"${fieldValue === true ? ' checked' : ''}>
                 </div>
             `;
         }
         return `
             <div class="stx-memory-workbench__field">
                 <label>${escapeHtml(field.label)}</label>
-                <input class="stx-memory-workbench__input" type="${field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'}" value="${escapeAttr(Array.isArray(fieldValue) ? fieldValue.join(', ') : fieldValue ?? '')}" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-kind="${escapeAttr(field.kind)}" placeholder="${escapeAttr(field.placeholder ?? '')}">
+                <input class="stx-memory-workbench__input" type="${field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'}" value="${escapeAttr(Array.isArray(fieldValue) ? fieldValue.join(', ') : fieldValue ?? '')}" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-path="${escapeAttr(fieldPath)}" data-entry-field-kind="${escapeAttr(field.kind)}" placeholder="${escapeAttr(field.placeholder ?? '')}">
             </div>
         `;
     }).join('');
+}
+
+/**
+ * 功能：解析工作台字段的 detailPayload 存储路径。
+ * @param selectedEntryType 当前条目类型。
+ * @param field 字段定义。
+ * @returns 字段存储路径。
+ */
+function resolveWorkbenchFieldPath(selectedEntryType: MemoryEntryType | null, field: MemoryEntryTypeField): string {
+    if (selectedEntryType?.key === 'relationship' && field.key === 'relationTag') {
+        return 'fields.relationTag';
+    }
+    return field.key;
+}
+
+/**
+ * 功能：读取工作台字段当前值。
+ * @param detailPayload 结构化 payload。
+ * @param fieldPath 字段路径。
+ * @param fieldKey 字段键名。
+ * @returns 当前字段值。
+ */
+function resolveWorkbenchFieldValue(
+    detailPayload: Record<string, unknown> | undefined,
+    fieldPath: string,
+    fieldKey: string,
+): unknown {
+    const payload = toRecord(detailPayload);
+    const pathValue = readRecordPath(payload, fieldPath);
+    if (pathValue !== undefined) {
+        return pathValue;
+    }
+    return payload[fieldKey];
+}
+
+/**
+ * 功能：构建关系 TAG 的预设下拉框。
+ * @param field 字段定义。
+ * @param fieldPath 字段路径。
+ * @param fieldValue 当前值。
+ * @returns 下拉框 HTML。
+ */
+function buildRelationTagSelectMarkup(field: MemoryEntryTypeField, fieldPath: string, fieldValue: unknown): string {
+    const currentValue = String(fieldValue ?? '').trim();
+    const optionsHtml = [
+        '<option value="">请选择关系标签</option>',
+        ...listRelationTagPresets().map((tag: string): string => {
+            const selected = currentValue === tag ? ' selected' : '';
+            return `<option value="${escapeAttr(tag)}"${selected}>${escapeHtml(tag)}</option>`;
+        }),
+    ].join('');
+    return `
+        <div class="stx-memory-workbench__field">
+            <label>${escapeHtml(field.label)}</label>
+            <select class="stx-memory-workbench__select" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-path="${escapeAttr(fieldPath)}" data-entry-field-kind="text">
+                ${optionsHtml}
+            </select>
+        </div>
+    `;
 }
 
 /**
@@ -329,6 +428,7 @@ export function formatDisplayValue(value: unknown): string {
 const KEY_LOCALE_MAP: Record<string, string> = {
     sourceActorKey: '源属角色',
     targetActorKey: '目标角色',
+    relationTag: '关系标签',
     participants: '参与者',
     state: '关系现状',
     affection: '亲近度',
@@ -432,4 +532,28 @@ export function toStringArray(value: unknown): string[] {
         return [];
     }
     return value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+}
+
+/**
+ * 功能：按点路径写入 detailPayload。
+ * @param target 目标 payload。
+ * @param path 字段路径。
+ * @param value 待写入的值。
+ * @returns 无返回值。
+ */
+function setDetailPayloadValue(target: Record<string, unknown>, path: string, value: unknown): void {
+    const segments = String(path ?? '').split('.').map((segment: string): string => segment.trim()).filter(Boolean);
+    if (segments.length <= 0) {
+        return;
+    }
+    let cursor: Record<string, unknown> = target;
+    for (let index = 0; index < segments.length - 1; index += 1) {
+        const key = segments[index];
+        const next = cursor[key];
+        if (!next || typeof next !== 'object' || Array.isArray(next)) {
+            cursor[key] = {};
+        }
+        cursor = cursor[key] as Record<string, unknown>;
+    }
+    cursor[segments[segments.length - 1]] = value;
 }

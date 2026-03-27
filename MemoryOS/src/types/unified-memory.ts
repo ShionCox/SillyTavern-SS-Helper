@@ -409,6 +409,7 @@ export const CORE_MEMORY_ENTRY_TYPES: Array<{
         icon: 'fa-solid fa-link',
         accentColor: '#c04b7f',
         fields: [
+            { key: 'relationTag', label: '关系标签', kind: 'text' },
             { key: 'participants', label: '参与角色', kind: 'tags' },
             { key: 'state', label: '关系现状', kind: 'textarea' },
         ],

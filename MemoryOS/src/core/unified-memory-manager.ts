@@ -25,6 +25,7 @@ import {
     type WorldProfileBinding,
 } from '../types';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import { getCurrentTavernUserNameEvent, getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
 import { readMemoryOSSettings } from '../settings/store';
 import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -79,7 +80,8 @@ export class UnifiedMemoryManager {
      */
     async init(): Promise<void> {
         await this.ensureCoreEntryTypes();
-        await this.ensureActorProfile({ actorKey: 'user', displayName: '用户' });
+        await this.ensureActorProfile({ actorKey: 'user', displayName: this.resolveUserActorDisplayName() });
+        await this.ensureDefaultUserActorCard();
     }
 
     /**
@@ -234,7 +236,15 @@ export class UnifiedMemoryManager {
      * @returns 角色资料列表。
      */
     async listActorProfiles(): Promise<ActorMemoryProfile[]> {
-        const rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
+        let rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
+        const hasUserActor = rows.some((row: DBActorMemoryProfile): boolean => this.normalizeActorKey(row.actorKey) === 'user');
+        if (!hasUserActor) {
+            await this.ensureActorProfile({
+                actorKey: 'user',
+                displayName: this.resolveUserActorDisplayName(),
+            });
+            rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
+        }
         return rows
             .map((row: DBActorMemoryProfile): ActorMemoryProfile => this.mapActorProfile(row))
             .sort((left: ActorMemoryProfile, right: ActorMemoryProfile): number => left.displayName.localeCompare(right.displayName, 'zh-CN'));
@@ -253,10 +263,17 @@ export class UnifiedMemoryManager {
         const actorKey = this.normalizeActorKey(input.actorKey);
         const existing = await db.actor_memory_profiles.get(actorKey);
         const now = Date.now();
+        const resolvedUserDisplayName = actorKey === 'user'
+            ? this.resolveUserActorDisplayName()
+            : '';
+        const fallbackDisplayName = resolvedUserDisplayName || actorKey;
         const row: DBActorMemoryProfile = {
             actorKey,
             chatKey: this.chatKey,
-            displayName: this.normalizeText(input.displayName) || existing?.displayName || actorKey,
+            displayName: this.normalizeText(input.displayName)
+                || resolvedUserDisplayName
+                || existing?.displayName
+                || fallbackDisplayName,
             memoryStat: this.clampPercent(input.memoryStat ?? existing?.memoryStat ?? DEFAULT_ACTOR_MEMORY_STAT),
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
@@ -824,6 +841,60 @@ export class UnifiedMemoryManager {
     }
 
     /**
+     * 功能：确保默认用户角色卡条目存在，并为后续 AI 复用提供稳定锚点。
+     * @returns 初始化结果。
+     */
+    private async ensureDefaultUserActorCard(): Promise<void> {
+        const actorKey = 'user';
+        const displayName = this.resolveUserActorDisplayName();
+        const userSnapshot = getCurrentTavernUserSnapshotEvent(null);
+        const identityFacts = this.normalizeTags([
+            userSnapshot?.personaDescription,
+            userSnapshot?.metadataPersona,
+        ]);
+        const existingEntry = await this.findBoundActorProfileEntry(actorKey);
+        if (existingEntry) {
+            const normalizedExistingTitle = this.normalizeText(existingEntry.title);
+            const shouldRefreshTitle = !normalizedExistingTitle || normalizedExistingTitle === '用户' || normalizedExistingTitle !== displayName;
+            const shouldRefreshSummary = !this.normalizeText(existingEntry.summary);
+            if (!shouldRefreshTitle && !shouldRefreshSummary) {
+                return;
+            }
+            await this.saveEntry({
+                entryId: existingEntry.entryId,
+                title: shouldRefreshTitle ? displayName : existingEntry.title,
+                entryType: existingEntry.entryType,
+                category: existingEntry.category,
+                tags: existingEntry.tags,
+                summary: shouldRefreshSummary
+                    ? (identityFacts.join('；') || `${displayName}的默认用户角色卡`)
+                    : existingEntry.summary,
+                detail: existingEntry.detail,
+                detailPayload: existingEntry.detailPayload,
+                sourceSummaryIds: existingEntry.sourceSummaryIds,
+            });
+            return;
+        }
+
+        const savedEntry = await this.saveEntry({
+            title: displayName,
+            entryType: 'actor_profile',
+            category: '角色关系',
+            tags: ['system', 'user_profile'],
+            summary: identityFacts.join('；') || `${displayName}的默认用户角色卡`,
+            detailPayload: {
+                fields: {
+                    aliases: [],
+                    identityFacts,
+                    originFacts: [],
+                    traits: [],
+                },
+            },
+        });
+        await this.bindRoleToEntry(actorKey, savedEntry.entryId);
+    }
+
+    /**
      * 功能：读取并回退条目类型。
      * @param key 类型键。
      * @returns 条目类型。
@@ -876,6 +947,28 @@ export class UnifiedMemoryManager {
             .equals([this.chatKey, actorKey, entryId] as [string, string, string])
             .toArray();
         return rows[0] ?? null;
+    }
+
+    /**
+     * 功能：查找指定角色当前已绑定的角色卡条目。
+     * @param actorKey 角色键。
+     * @returns 已绑定的角色卡条目；不存在时返回 null。
+     */
+    private async findBoundActorProfileEntry(actorKey: string): Promise<MemoryEntry | null> {
+        const normalizedActorKey = this.normalizeActorKey(actorKey);
+        const memories = await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, normalizedActorKey]).toArray();
+        if (memories.length <= 0) {
+            return null;
+        }
+        const entryIds = memories.map((row: DBRoleEntryMemory): string => row.entryId);
+        const rows = await db.memory_entries.bulkGet(entryIds);
+        for (const row of rows) {
+            if (!row || row.chatKey !== this.chatKey || row.entryType !== 'actor_profile') {
+                continue;
+            }
+            return this.mapEntry(row);
+        }
+        return null;
     }
 
     /**
@@ -1122,10 +1215,14 @@ export class UnifiedMemoryManager {
      * @returns 角色资料。
      */
     private mapActorProfile(row: DBActorMemoryProfile): ActorMemoryProfile {
+        const actorKey = this.normalizeActorKey(row.actorKey);
+        const displayName = actorKey === 'user'
+            ? (this.resolveUserActorDisplayName() || this.normalizeText(row.displayName) || actorKey)
+            : (this.normalizeText(row.displayName) || actorKey);
         return {
             ...row,
-            actorKey: this.normalizeActorKey(row.actorKey),
-            displayName: this.normalizeText(row.displayName) || this.normalizeActorKey(row.actorKey),
+            actorKey,
+            displayName,
             memoryStat: this.clampPercent(row.memoryStat),
         };
     }
@@ -1251,6 +1348,14 @@ export class UnifiedMemoryManager {
      */
     private normalizeActorKey(value: unknown): string {
         return this.normalizeKey(value) || 'actor';
+    }
+
+    /**
+     * 功能：解析当前酒馆用户在用户角色卡中应显示的名称。
+     * @returns 用户显示名称。
+     */
+    private resolveUserActorDisplayName(): string {
+        return this.normalizeText(getCurrentTavernUserNameEvent(null, '用户')) || '用户';
     }
 
     /**

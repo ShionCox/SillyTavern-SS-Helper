@@ -13,16 +13,18 @@
 1. 仅提取有依据的结构化信息，禁止编造。
 2. `worldBase.schemaId` 只能使用：`world_core_setting | world_hard_rule | world_global_state`。
 3. `memoryRecords.schemaId` 与 `relationships` 必须可落库。
-4. 每条 `relationships` 都必须完整填写：`sourceActorKey / targetActorKey / participants / state / summary / trust / affection / tension`，不能省略字段，不能只写部分字段。
-5. 只要某个非 `user` 角色出现在 `relationships` 中，就必须在 `actorCards` 中提供同 `actorKey` 的角色卡。
-6. 每条 `actorCards` 都必须完整填写：`actorKey / displayName / aliases / identityFacts / originFacts / traits`，其中 `displayName` 必须是可直接展示的人名或称呼，不能留空，不能直接照抄下划线风格的 `actorKey`。
-7. `participants` 必须是字符串数组，且至少包含 `sourceActorKey` 与 `targetActorKey`。
-8. `state` 必须是一句简体中文的关系现状描述，表达当前关系状态，不要留空，不要只重复键名。
-9. 数值字段 `trust / affection / tension` 必须填写 `0~1` 之间的小数。
-10. 若可判断世界模板，输出 `worldProfileDetection`；否则可留空。
-11. 当关系对象指向当前用户时，`targetActorKey` 或 `participants` 中必须固定使用 `user`，不要自行发明 `user_xxx`、`player_xxx`、用户名拼接键等变体。
-12. 严格参照输出示例的字段结构与完整度。
-13. 仅输出 JSON，不输出解释文本。
+4. 每条 `relationships` 都必须完整填写：`sourceActorKey / targetActorKey / participants / relationTag / state / summary / trust / affection / tension`，不能省略字段，不能只写部分字段。
+5. 系统已经预置固定的用户角色卡，`actorKey` 固定为 `user`；不要在 `actorCards` 中重复输出 `user`，只需在关系里直接引用它。
+6. 只要某个非 `user` 角色出现在 `relationships` 中，就必须在 `actorCards` 中提供同 `actorKey` 的角色卡。
+7. 每条 `actorCards` 都必须完整填写：`actorKey / displayName / aliases / identityFacts / originFacts / traits`，其中 `displayName` 必须是可直接展示的人名或称呼，不能为空，不能直接照抄下划线风格的 `actorKey`。
+8. `participants` 必须是字符串数组，且至少包含 `sourceActorKey` 与 `targetActorKey`。
+9. `relationTag` 必须从以下预设中单选其一：`亲人 | 朋友 | 盟友 | 恋人 | 暧昧 | 师徒 | 上下级 | 竞争者 | 情敌 | 宿敌 | 陌生人`，禁止自由发明新标签。
+10. `state` 必须是一句简体中文的关系现状描述，表达当前关系状态，不要留空，不要只重复键名。
+11. 数值字段 `trust / affection / tension` 必须填写 `0~1` 之间的小数。
+12. 若可判断世界模板，则输出 `worldProfileDetection`；否则可留空。
+13. 当关系对象指向当前用户时，`targetActorKey` 或 `participants` 中必须固定使用 `user`，不要自行发明 `user_xxx`、`player_xxx`、用户名拼接键等变体。
+14. 严格参照输出示例的字段结构与完整度。
+15. 仅输出 JSON，不输出解释文本。
 
 <!-- section: COLD_START_SCHEMA -->
 
@@ -93,7 +95,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["sourceActorKey", "targetActorKey", "participants", "state", "summary", "trust", "affection", "tension"],
+        "required": ["sourceActorKey", "targetActorKey", "participants", "relationTag", "state", "summary", "trust", "affection", "tension"],
         "additionalProperties": false,
         "properties": {
           "sourceActorKey": { "type": "string" },
@@ -102,6 +104,10 @@
             "type": "array",
             "minItems": 2,
             "items": { "type": "string" }
+          },
+          "relationTag": {
+            "type": "string",
+            "enum": ["亲人", "朋友", "盟友", "恋人", "暧昧", "师徒", "上下级", "竞争者", "情敌", "宿敌", "陌生人"]
           },
           "state": { "type": "string" },
           "summary": { "type": "string" },
@@ -177,6 +183,7 @@
       "sourceActorKey": "char_erin",
       "targetActorKey": "user",
       "participants": ["char_erin", "user"],
+      "relationTag": "陌生人",
       "state": "艾琳把对方视为需要持续观察的可疑对象，保持距离但暂未敌对。",
       "summary": "艾琳刚与主角接触后，对其保持明显戒备与观察，尚未建立稳定信任。",
       "trust": 0.22,
@@ -207,9 +214,10 @@
 1. `action` 仅可使用：`ADD | MERGE | UPDATE | INVALIDATE | DELETE | NOOP`。
 2. `targetKind` 必须是精确 schemaId，禁止使用泛化类型（例如 `memory_record`）。
 3. 只有出现在 `editableFields` 的字段可写，特别是 `fields.*` 也必须是显式路径。
-4. 本任务是 mutation-only 语义；`NOOP` 仅代表“无结构变化”。
+4. 本任务是 mutation-only 语义，`NOOP` 仅代表“无结构变化”。
 5. 若发生世界状态替换，请使用“旧状态 INVALIDATE + 新状态 ADD/UPDATE”的组合表达。
-6. 仅输出 JSON，不输出解释文本。
+6. 当 `targetKind` 为 `relationship` 且需要新增或更新 `fields.relationTag` 时，`relationTag` 只能从以下预设中单选其一：`亲人 | 朋友 | 盟友 | 恋人 | 暧昧 | 师徒 | 上下级 | 竞争者 | 情敌 | 宿敌 | 陌生人`，禁止自由发明新标签。
+7. 仅输出 JSON，不输出解释文本。
 
 <!-- section: SUMMARY_SCHEMA -->
 

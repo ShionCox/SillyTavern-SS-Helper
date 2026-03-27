@@ -7,7 +7,7 @@ export interface GraphOptions {
 }
 
 const LINK_COLORS: Record<WorkbenchGraphLinkType, string> = {
-    ally: '#38bdf8',
+    ally: '#22c55e',
     enemy: '#ef4444',
     neutral: '#94a3b8',
     family: '#c4a062',
@@ -105,18 +105,44 @@ export function mountRelationshipGraph(container: HTMLElement, data: WorkbenchAc
         if (!source || !target) {
             return;
         }
+        
+        // 计算从中心到边缘的坐标 (头像半径 24)
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        let x1 = source.x;
+        let y1 = source.y;
+        let x2 = target.x;
+        let y2 = target.y;
+        
+        if (distance > 48) {
+            const ratio = 24 / distance;
+            x1 += dx * ratio; // 从源头像边缘开始
+            y1 += dy * ratio;
+            x2 -= dx * ratio; // 在目标头像边缘结束
+            y2 -= dy * ratio;
+        }
+
         const color = LINK_COLORS[link.type] || LINK_COLORS.neutral;
         svgHtml += '<line ' +
             'data-link-source="' + escapeAttr(source.id) + '" ' +
             'data-link-target="' + escapeAttr(target.id) + '" ' +
-            'x1="' + source.x + '" y1="' + source.y + '" ' +
-            'x2="' + target.x + '" y2="' + target.y + '" ' +
+            'x1="' + x1 + '" y1="' + y1 + '" ' +
+            'x2="' + x2 + '" y2="' + y2 + '" ' +
             'stroke="' + color + '" stroke-width="1.5" opacity="0.6" ' +
             'marker-end="url(#arrow-' + link.type + ')" ' +
             'class="stx-rpg-graph-edge" />';
     });
     svgHtml += '</svg>';
     canvas.innerHTML += svgHtml;
+
+    canvas.innerHTML += '<style>' +
+        '.stx-rpg-graph-label .label-detail { display: none; } ' +
+        '.stx-rpg-graph-label:hover { z-index: 100 !important; max-width: 400px !important; background: var(--mw-bg) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.5); } ' +
+        '.stx-rpg-graph-label:hover .label-short { display: none; } ' +
+        '.stx-rpg-graph-label:hover .label-detail { display: block; font-size: 12px; white-space: pre-wrap; }' +
+    '</style>';
 
     data.links.forEach((link): void => {
         const source = nodeMap.get(link.source);
@@ -127,17 +153,19 @@ export function mountRelationshipGraph(container: HTMLElement, data: WorkbenchAc
         const cx = (source.x + target.x) / 2;
         const cy = (source.y + target.y) / 2;
         const color = LINK_COLORS[link.type] || LINK_COLORS.neutral;
+        const summaryText = link.summary || link.label;
         canvas.innerHTML += '<div class="stx-rpg-graph-label stx-rpg-graph-edge" ' +
             'data-link-source="' + escapeAttr(source.id) + '" ' +
             'data-link-target="' + escapeAttr(target.id) + '" ' +
-            'style="left:' + cx + 'px; top:' + cy + 'px; color:' + color + '; border-color:' + color + '; width: max-content; max-width: 240px; padding: 4px 8px; text-align: left; line-height: 1.4;">' +
-            escapeHtml(link.label) +
+            'style="left:' + cx + 'px; top:' + cy + 'px; transform: translate(-50%, -50%); color:' + color + '; border-color:' + color + '; background: rgba(17, 19, 24, 0.8); border: 1px solid; border-radius: 4px; z-index: 10; width: max-content; max-width: 240px; padding: 4px 8px; text-align: left; line-height: 1.4; transition: all 0.2s;">' +
+            '<span class="label-short">' + escapeHtml(link.label) + '</span>' +
+            '<span class="label-detail">' + escapeHtml(summaryText) + '</span>' +
         '</div>';
     });
 
     data.nodes.forEach((node): void => {
         const activeClass = node.id === options.selectedNodeId ? ' is-focused' : '';
-        canvas.innerHTML += '<button type="button" class="stx-rpg-graph-node' + activeClass + '" data-node-id="' + escapeAttr(node.id) + '" style="left:' + node.x + 'px; top:' + node.y + 'px;">' +
+        canvas.innerHTML += '<button type="button" class="stx-rpg-graph-node' + activeClass + '" data-node-id="' + escapeAttr(node.id) + '" style="left:' + node.x + 'px; top:' + node.y + 'px; transform: translate(-50%, -24px);">' +
             '<div class="avatar" style="flex-shrink:0; min-width:48px; min-height:48px; width:48px; height:48px; box-sizing:border-box;">' +
                 '<i class="fa-solid fa-user"></i>' +
             '</div>' +

@@ -24,11 +24,13 @@ import {
     parseTagText,
     parseTypeFieldsJson,
     collectDetailPayload,
+    mergeWorkbenchDetailPayload,
     createDraftEntry,
     resolveSelectedEntry,
     resolveSelectedType,
     resolveSelectedActor,
     buildDynamicFieldMarkup,
+    isUserActorKey,
     toRecord,
     toStringArray,
     truncateText,
@@ -200,6 +202,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         entryQuery: '',
         previewQuery: '',
         bindEntryId: '',
+        actorQuery: '',
+        actorSortOrder: 'stat-desc',
+        actorTagFilter: '',
     };
 
     /**
@@ -303,10 +308,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     tags: parseTagText(readInputValue(root, '#stx-memory-entry-tags')),
                     summary: readInputValue(root, '#stx-memory-entry-summary'),
                     detail: readInputValue(root, '#stx-memory-entry-detail'),
-                    detailPayload: {
-                        ...toRecord(existingEntry?.detailPayload),
-                        ...collectDetailPayload(root),
-                    },
+                    detailPayload: mergeWorkbenchDetailPayload(existingEntry?.detailPayload, collectDetailPayload(root)),
                 });
                 state.selectedEntryId = saved.entryId;
                 toast.success('条目已保存。');
@@ -366,9 +368,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (action === 'save-actor') {
                 const actorKey = readInputValue(root, '#stx-memory-actor-key');
                 const displayName = readInputValue(root, '#stx-memory-actor-label');
+                const isUserActor = isUserActorKey(actorKey);
                 const memoryStat = Number(readInputValue(root, '#stx-memory-actor-stat') || 60);
-                const actor = await memory.unifiedMemory.actors.ensure({ actorKey, displayName, memoryStat });
-                await memory.unifiedMemory.actors.setMemoryStat(actor.actorKey, memoryStat);
+                const actor = await memory.unifiedMemory.actors.ensure(
+                    isUserActor
+                        ? { actorKey, displayName }
+                        : { actorKey, displayName, memoryStat },
+                );
+                if (!isUserActor) {
+                    await memory.unifiedMemory.actors.setMemoryStat(actor.actorKey, memoryStat);
+                }
                 state.selectedActorKey = actor.actorKey;
                 toast.success('角色资料已保存。');
                 await render();
@@ -486,6 +495,24 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             state.previewQuery = String(previewQueryInput.value ?? '').trim();
         });
 
+        const actorQueryInput = root.querySelector('#stx-memory-actor-query') as HTMLInputElement | null;
+        actorQueryInput?.addEventListener('input', (): void => {
+            state.actorQuery = String(actorQueryInput.value ?? '').trim();
+            void render();
+        });
+
+        const actorSortSelect = root.querySelector('#stx-memory-actor-sort') as HTMLSelectElement | null;
+        actorSortSelect?.addEventListener('change', (): void => {
+            state.actorSortOrder = String(actorSortSelect.value ?? '') as WorkbenchState['actorSortOrder'];
+            void render();
+        });
+
+        const actorTagSelect = root.querySelector('#stx-memory-actor-tag-filter') as HTMLSelectElement | null;
+        actorTagSelect?.addEventListener('change', (): void => {
+            state.actorTagFilter = String(actorTagSelect.value ?? '').trim();
+            void render();
+        });
+
         const bindEntrySelect = root.querySelector('#stx-memory-bind-entry') as HTMLSelectElement | null;
         bindEntrySelect?.addEventListener('change', (): void => {
             state.bindEntryId = String(bindEntrySelect.value ?? '').trim();
@@ -589,7 +616,7 @@ function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): 
                 target: relation.targetActorKey,
                 entryId: entry.entryId,
                 label: truncateText(relation.label || entry.summary || entry.title || '关系', 24),
-                summary: relation.label || entry.summary || entry.detail || '',
+                summary: relation.summary || entry.summary || entry.detail || '',
                 type: relation.type,
                 updatedAt: entry.updatedAt,
             });
@@ -611,6 +638,7 @@ function resolveRelationshipEdge(
     sourceActorKey: string;
     targetActorKey: string;
     label: string;
+    summary: string;
     type: WorkbenchGraphLinkType;
 } | null {
     const payload = toRecord(entry.detailPayload);
@@ -629,7 +657,8 @@ function resolveRelationshipEdge(
     return {
         sourceActorKey: resolvedSource,
         targetActorKey: resolvedTarget,
-        label: String(payload.state ?? fields.state ?? entry.summary ?? '').trim(),
+        label: String(fields.relationTag ?? payload.state ?? fields.state ?? entry.summary ?? '').trim(),
+        summary: String(payload.state ?? fields.state ?? entry.summary ?? '').trim(),
         type: resolveRelationshipTone(entry),
     };
 }
@@ -667,13 +696,27 @@ function parseActorKeysFromTitle(
  */
 function resolveRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkType {
     const payload = toRecord(entry.detailPayload);
+    const fields = toRecord(payload.fields);
+    const relationTag = String(fields.relationTag ?? '').trim();
+    if (relationTag === '亲人' || relationTag === '家人' || relationTag === '亲属') {
+        return 'family';
+    }
+    if (relationTag === '盟友' || relationTag === '朋友' || relationTag === '友好' || relationTag === '同伴') {
+        return 'ally';
+    }
+    if (relationTag === '宿敌' || relationTag === '敌人' || relationTag === '仇人' || relationTag === '敌对') {
+        return 'enemy';
+    }
+    if (relationTag === '陌生人' || relationTag === '路人' || relationTag === '未定' || relationTag === '中立') {
+        return 'neutral';
+    }
     const trust = Number(payload.trust ?? 0);
     const affection = Number(payload.affection ?? 0);
     const tension = Number(payload.tension ?? 0);
-    if (Number.isFinite(tension) && tension >= Math.max(trust, affection) && tension >= 60) {
+    if (Number.isFinite(tension) && tension >= Math.max(trust, affection) && tension >= 0.6) {
         return 'enemy';
     }
-    if ((Number.isFinite(trust) && trust >= 70) || (Number.isFinite(affection) && affection >= 70)) {
+    if ((Number.isFinite(trust) && trust >= 0.7) || (Number.isFinite(affection) && affection >= 0.7)) {
         return 'ally';
     }
     return 'neutral';

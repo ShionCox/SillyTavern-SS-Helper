@@ -55,4 +55,54 @@ describe('validateSummaryMutationDocument', () => {
         expect(payload.state).toBe(1000000);
         expect(payload.tags).toEqual(['a', 'b']);
     });
+
+    it('accepts preset relationTag on relationship payload', () => {
+        const editableMap: EditableFieldMap = new Map([
+            ['relationship', new Set(['summary', 'fields.relationTag'])],
+        ]);
+        const result = validateSummaryMutationDocument({
+            schemaVersion: '1.0.0',
+            window: { fromTurn: 1, toTurn: 2 },
+            actions: [
+                {
+                    action: 'UPDATE',
+                    targetKind: 'relationship',
+                    payload: {
+                        summary: '关系更新',
+                        fields: {
+                            relationTag: '宿敌',
+                        },
+                    },
+                },
+            ],
+        }, editableMap);
+
+        expect(result.valid).toBe(true);
+        expect((result.document?.actions[0]?.payload?.fields as Record<string, unknown> | undefined)?.relationTag).toBe('宿敌');
+    });
+
+    it('rejects non-preset relationTag on relationship payload', () => {
+        const editableMap: EditableFieldMap = new Map([
+            ['relationship', new Set(['summary', 'fields.relationTag'])],
+        ]);
+        const result = validateSummaryMutationDocument({
+            schemaVersion: '1.0.0',
+            window: { fromTurn: 1, toTurn: 2 },
+            actions: [
+                {
+                    action: 'UPDATE',
+                    targetKind: 'relationship',
+                    payload: {
+                        summary: '关系更新',
+                        fields: {
+                            relationTag: '死对头',
+                        },
+                    },
+                },
+            ],
+        }, editableMap);
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('payload_field_invalid_enum:relationship:fields.relationTag');
+    });
 });

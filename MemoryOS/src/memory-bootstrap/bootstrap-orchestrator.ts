@@ -186,6 +186,9 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
                 trust: normalizedRelation.trust,
                 affection: normalizedRelation.affection,
                 tension: normalizedRelation.tension,
+                fields: {
+                    relationTag: normalizedRelation.relationTag,
+                },
             },
             tags: ['cold_start', 'relationship'],
         });

@@ -50,12 +50,14 @@ function buildBundle(): ColdStartSourceBundle {
 describe('runBootstrapOrchestrator integration', () => {
     it('writes actor/world/relationship/memory and world profile binding', async () => {
         const savedEntries: Array<{ entryType: string; title: string }> = [];
+        const savedPayloads: Array<Record<string, unknown>> = [];
         const historyActions: string[] = [];
         const result = await runBootstrapOrchestrator({
             dependencies: {
                 ensureActorProfile: vi.fn(async () => ({})),
                 saveEntry: vi.fn(async (input) => {
                     savedEntries.push({ entryType: input.entryType, title: input.title });
+                    savedPayloads.push(input.detailPayload || {});
                     return {
                         ...input,
                         entryId: `entry_${savedEntries.length}`,
@@ -121,6 +123,7 @@ describe('runBootstrapOrchestrator integration', () => {
                                 sourceActorKey: 'char_erin',
                                 targetActorKey: 'char_mc',
                                 participants: ['char_erin', 'char_mc'],
+                                relationTag: '陌生人',
                                 state: '保持观察',
                                 summary: 'watching',
                                 trust: 0.2,
@@ -147,6 +150,8 @@ describe('runBootstrapOrchestrator integration', () => {
         expect(savedEntries.some((item) => item.entryType === 'actor_profile')).toBe(true);
         expect(savedEntries.some((item) => item.entryType === 'world_hard_rule')).toBe(true);
         expect(savedEntries.some((item) => item.entryType === 'relationship')).toBe(true);
+        const relationshipPayload = savedPayloads.find((item) => item.sourceActorKey === 'char_erin');
+        expect((relationshipPayload?.fields as Record<string, unknown> | undefined)?.relationTag).toBe('陌生人');
         expect(historyActions).toContain('cold_start_started');
         expect(historyActions).toContain('world_profile_bound');
         expect(historyActions).toContain('cold_start_succeeded');
@@ -196,6 +201,7 @@ describe('runBootstrapOrchestrator integration', () => {
                                 sourceActorKey: 'char_erin',
                                 targetActorKey: 'char_mc',
                                 participants: ['char_erin', 'char_mc'],
+                                relationTag: '陌生人',
                                 state: '保持观察',
                                 summary: 'watching',
                                 trust: 0.2,

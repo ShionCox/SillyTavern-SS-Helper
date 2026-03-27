@@ -34,13 +34,13 @@ const REQUIRED_SECTIONS: PromptPackSectionName[] = [
 
 const FALLBACK_PROMPT_PACK = `
 <!-- section: COLD_START_SYSTEM -->
-你正在执行结构化记忆冷启动任务。每条 relationships 都必须完整填写 sourceActorKey、targetActorKey、participants、state、summary、trust、affection、tension。只要某个非 user 角色出现在 relationships 中，就必须在 actorCards 中提供同 actorKey 的角色卡，且 displayName 不能为空。当前用户固定使用 actorKey user，不要发明 user_xxx 或 player_xxx 变体。只输出 JSON，不输出解释文本。
+你正在执行结构化记忆冷启动任务。系统已经预置固定的用户角色卡，actorKey 固定为 user；如果关系对象是当前用户，只需要在 relationships 中引用 user，不要在 actorCards 中重复输出 user。每条 relationships 都必须完整填写 sourceActorKey、targetActorKey、participants、relationTag、state、summary、trust、affection、tension。relationTag 只能从以下预设中单选其一：亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人。只要某个非 user 角色出现在 relationships 中，就必须在 actorCards 中提供同 actorKey 的角色卡，且 displayName 不能为空。当前用户固定使用 actorKey user，不要发明 user_xxx 或 player_xxx 变体。只输出 JSON，不输出解释文本。
 <!-- section: COLD_START_SCHEMA -->
 {"type":"object"}
 <!-- section: COLD_START_OUTPUT_SAMPLE -->
-{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"state":"示例角色对用户保持谨慎关注。","summary":"示例角色与用户之间形成了谨慎而持续的观察关系。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[]}
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"陌生人","state":"示例角色对用户保持谨慎关注。","summary":"示例角色与用户之间形成了谨慎而持续的观察关系。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[]}
 <!-- section: SUMMARY_SYSTEM -->
-你正在执行结构化记忆总结任务。只输出 JSON，不输出解释文本。
+你正在执行结构化记忆总结任务。若 action 需要新增或更新 relationship 的 fields.relationTag，则 relationTag 只能从以下预设中单选其一：亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人。只输出 JSON，不输出解释文本。
 <!-- section: SUMMARY_SCHEMA -->
 {"type":"object"}
 <!-- section: SUMMARY_OUTPUT_SAMPLE -->
@@ -138,4 +138,3 @@ function hasAllRequiredSections(sections: Partial<PromptPackSections>): sections
         return typeof sections[name] === 'string' && String(sections[name]).trim().length > 0;
     });
 }
-

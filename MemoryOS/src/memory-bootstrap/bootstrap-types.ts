@@ -103,6 +103,7 @@ export interface ColdStartRelationshipEntry {
     sourceActorKey: string;
     targetActorKey: string;
     participants: string[];
+    relationTag: string;
     state: string;
     summary: string;
     trust: number;

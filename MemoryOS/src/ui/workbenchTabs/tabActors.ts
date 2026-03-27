@@ -1,5 +1,5 @@
 import { escapeHtml } from '../editorShared';
-import { escapeAttr, formatTimestamp, summarizeDetailPayload, type WorkbenchSnapshot, type WorkbenchState } from './shared';
+import { escapeAttr, formatTimestamp, isUserActorKey, summarizeDetailPayload, type WorkbenchSnapshot, type WorkbenchState } from './shared';
 import type { ActorMemoryProfile, MemoryEntry, MemoryEntryType, RoleEntryMemory, SummarySnapshot } from '../../types';
 
 /**
@@ -38,6 +38,7 @@ function buildActorSubView(
  * @returns 页面 HTML。
  */
 function buildActorAttributesMarkup(selectedActor: ActorMemoryProfile | null): string {
+    const isUserActor = isUserActorKey(selectedActor?.actorKey);
     return `
         <div class="stx-memory-workbench__form-grid">
             <div class="stx-memory-workbench__field-stack">
@@ -48,16 +49,23 @@ function buildActorAttributesMarkup(selectedActor: ActorMemoryProfile | null): s
                 <label>显示名</label>
                 <input class="stx-memory-workbench__input" id="stx-memory-actor-label" value="${escapeAttr(selectedActor?.displayName ?? '')}" placeholder="例如：塞拉菲娜" />
             </div>
+            ${isUserActor ? `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">用户角色说明</div>
+                <div class="stx-memory-workbench__detail-block">用户角色名称会优先同步酒馆中的当前用户名，这个角色不需要单独设置记忆稳定度。</div>
+            </div>
+            ` : `
             <div class="stx-memory-workbench__field-stack">
                 <label>记忆稳定度（0-100）</label>
                 <input class="stx-memory-workbench__input" id="stx-memory-actor-stat" type="number" min="0" max="100" value="${escapeAttr(String(selectedActor?.memoryStat ?? 60))}" />
             </div>
+            `}
             <div class="stx-memory-workbench__card">
                 <div class="stx-memory-workbench__panel-title">当前档案</div>
                 <div class="stx-memory-workbench__info-list">
                     <div class="stx-memory-workbench__info-row"><span>角色键</span><strong>${escapeHtml(selectedActor?.actorKey ?? '未创建')}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>显示名</span><strong>${escapeHtml(selectedActor?.displayName ?? '未命名')}</strong></div>
-                    <div class="stx-memory-workbench__info-row"><span>记忆稳定度</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 60))}</strong></div>
+                    ${isUserActor ? '' : `<div class="stx-memory-workbench__info-row"><span>记忆稳定度</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 60))}</strong></div>`}
                     <div class="stx-memory-workbench__info-row"><span>创建时间</span><strong>${escapeHtml(formatTimestamp(selectedActor?.createdAt))}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>更新时间</span><strong>${escapeHtml(formatTimestamp(selectedActor?.updatedAt))}</strong></div>
                 </div>
@@ -162,27 +170,34 @@ function buildActorRelationshipsMarkup(
     selectedActorMemories: RoleEntryMemory[],
     typeMap: Map<string, MemoryEntryType>,
 ): string {
+    const isUserActor = isUserActorKey(selectedActor?.actorKey);
     const actorKey = selectedActor?.actorKey ?? '';
     const graphLinks = snapshot.actorGraph.links.filter((link): boolean => link.source === actorKey || link.target === actorKey);
     const graphNode = snapshot.actorGraph.nodes.find((node): boolean => node.id === actorKey) ?? null;
-    const relatedEntries = graphLinks.map((link): MemoryEntry | null => {
-        return snapshot.entries.find((entry: MemoryEntry): boolean => entry.entryId === link.entryId) ?? null;
-    }).filter(Boolean) as MemoryEntry[];
     const summaryRows = snapshot.summaries.filter((summary: SummarySnapshot): boolean => summary.actorKeys.includes(actorKey)).slice(0, 4);
     const memoryIndex = new Map(selectedActorMemories.map((item: RoleEntryMemory): [string, RoleEntryMemory] => [item.entryId, item]));
 
-    const relationList = relatedEntries.map((entry: MemoryEntry): string => {
-        const memoryRow = memoryIndex.get(entry.entryId);
-        const typeLabel = typeMap.get(entry.entryType)?.label || entry.entryType || '未分类';
+    const relatedRoles = graphLinks.map((link) => {
+        const otherKey = link.source === actorKey ? link.target : link.source;
+        const otherNode = snapshot.actorGraph.nodes.find(n => n.id === otherKey);
+        const entry = snapshot.entries.find(e => e.entryId === link.entryId);
+        return { otherNode, link, entry };
+    }).filter(r => r.otherNode && r.entry);
+
+    const relationList = relatedRoles.map((rel): string => {
+        const { otherNode, link, entry } = rel;
+        const memoryRow = memoryIndex.get(entry!.entryId);
+        const typeColor = link.type === 'ally' ? '#22c55e' : (link.type === 'enemy' ? '#ef4444' : '#94a3b8');
+        const roleName = otherNode?.label || otherNode?.id || '未知角色';
+        
         return `
-            <article class="stx-memory-workbench__card" style="padding: 12px;">
-                <div class="stx-memory-workbench__panel-title" style="margin-bottom: 4px;">${escapeHtml(entry.title)}</div>
-                <div class="stx-memory-workbench__meta" style="margin-bottom: 8px;">${escapeHtml(typeLabel)} · 信号 ${escapeHtml(memoryRow ? `${memoryRow.memoryPercent}%` : '未绑定')}</div>
-                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(entry.summary || entry.detail || '暂无内容')}</div>
-                <div style="font-size: 11px; display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px dashed var(--mw-line);">
-                    <span style="color: var(--mw-muted);">结构化事实：</span>
-                    <span style="color: var(--mw-accent-cyan); font-family: monospace; word-break: break-all; white-space: pre-wrap; line-height: 1.4;">${escapeHtml(summarizeDetailPayload(entry.detailPayload))}</span>
+            <article class="stx-memory-workbench__card" style="padding: 12px; border-left: 2px solid ${typeColor};">
+                <div class="stx-memory-workbench__split-head" style="margin-bottom: 4px;">
+                    <div class="stx-memory-workbench__panel-title">对 ${escapeHtml(roleName)} 的状况</div>
+                    <div class="stx-memory-workbench__meta" style="color: ${typeColor}; font-weight: bold;">${escapeHtml(link.label || '关系')}</div>
                 </div>
+                <div class="stx-memory-workbench__meta" style="margin-bottom: 8px;">信号 ${escapeHtml(memoryRow ? String(memoryRow.memoryPercent) + '%' : '未绑定')}</div>
+                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(link.summary || link.label || '暂无内容')}</div>
             </article>
         `;
     }).join('');
@@ -216,15 +231,15 @@ function buildActorRelationshipsMarkup(
                     <div class="stx-memory-workbench__info-list">
                         <div class="stx-memory-workbench__info-row"><span>角色键</span><strong>${escapeHtml(selectedActor?.actorKey ?? '未选择')}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>显示名</span><strong>${escapeHtml(selectedActor?.displayName ?? '未命名')}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>记忆稳定度</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 0))}</strong></div>
+                        ${isUserActor ? '' : `<div class="stx-memory-workbench__info-row"><span>记忆稳定度</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 0))}</strong></div>`}
                         <div class="stx-memory-workbench__info-row"><span>真实关系边数</span><strong>${escapeHtml(String(graphNode?.relationCount ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>记忆绑定数</span><strong>${escapeHtml(String(selectedActorMemories.length))}</strong></div>
                     </div>
                 </div>
                 <div class="stx-memory-workbench__card" style="border: none; border-bottom: 1px solid var(--mw-line); border-radius: 0;">
-                    <div class="stx-memory-workbench__panel-title">关联条目</div>
+                    <div class="stx-memory-workbench__panel-title">关系状况</div>
                     <div class="stx-memory-workbench__stack">
-                        ${relationList || '<div class="stx-memory-workbench__empty" style="font-size:11px;">无直接关联条目</div>'}
+                        ${relationList || '<div class="stx-memory-workbench__empty" style="font-size:11px;">无直接关系角色</div>'}
                     </div>
                 </div>
                 <div class="stx-memory-workbench__card" style="border: none; border-radius: 0;">
@@ -256,6 +271,71 @@ export function buildActorsViewMarkup(
     typeMap: Map<string, MemoryEntryType>,
     entryOptions: string,
 ): string {
+    // 收集所有演员绑定的标签
+    const allTags = new Set<string>();
+    const actorTagsMap = new Map<string, Set<string>>();
+    
+    snapshot.actors.forEach(actor => {
+        const actorTags = new Set<string>();
+        const boundEntryIds = snapshot.roleMemories
+            .filter(rm => rm.actorKey === actor.actorKey)
+            .map(rm => rm.entryId);
+            
+        snapshot.entries
+            .filter(e => boundEntryIds.includes(e.entryId))
+            .forEach(e => {
+                if (Array.isArray(e.tags)) {
+                    e.tags.forEach(tag => {
+                        if (tag) {
+                            actorTags.add(tag);
+                            allTags.add(tag);
+                        }
+                    });
+                }
+            });
+        actorTagsMap.set(actor.actorKey, actorTags);
+    });
+
+    const tagOptions = Array.from(allTags)
+        .sort()
+        .map(tag => `<option value="${escapeAttr(tag)}"${state.actorTagFilter === tag ? ' selected' : ''}>${escapeHtml(tag)}</option>`)
+        .join('');
+
+    let displayActors = [...snapshot.actors];
+    
+    // 搜索
+    if (state.actorQuery) {
+        const q = state.actorQuery.toLowerCase();
+        displayActors = displayActors.filter(actor => 
+            actor.displayName.toLowerCase().includes(q) || 
+            actor.actorKey.toLowerCase().includes(q)
+        );
+    }
+    
+    // 筛选标签
+    if (state.actorTagFilter) {
+        displayActors = displayActors.filter(actor => 
+            actorTagsMap.get(actor.actorKey)?.has(state.actorTagFilter)
+        );
+    }
+    
+    // 排序
+    displayActors.sort((a, b) => {
+        if (state.actorSortOrder === 'stat-asc') {
+            if (isUserActorKey(a.actorKey) && !isUserActorKey(b.actorKey)) return 1;
+            if (!isUserActorKey(a.actorKey) && isUserActorKey(b.actorKey)) return -1;
+            return a.memoryStat - b.memoryStat;
+        }
+        if (state.actorSortOrder === 'stat-desc') {
+            if (isUserActorKey(a.actorKey) && !isUserActorKey(b.actorKey)) return 1;
+            if (!isUserActorKey(a.actorKey) && isUserActorKey(b.actorKey)) return -1;
+            return b.memoryStat - a.memoryStat;
+        }
+        if (state.actorSortOrder === 'name-asc') return a.displayName.localeCompare(b.displayName);
+        if (state.actorSortOrder === 'name-desc') return b.displayName.localeCompare(a.displayName);
+        return 0; // 默认或者无效值时不排序
+    });
+
     return `
         <section class="stx-memory-workbench__view"${state.currentView !== 'actors' ? ' hidden' : ''}>
             <div class="stx-memory-workbench__view-head">
@@ -265,18 +345,37 @@ export function buildActorsViewMarkup(
                 </div>
             </div>
             <div class="stx-memory-workbench__grid">
-                <div class="stx-memory-workbench__stack">
+                <div class="stx-memory-workbench__stack" style="gap: 8px;">
+                    <div style="display: flex; gap: 4px; padding: 0 4px;">
+                        <input type="text" class="stx-memory-workbench__input" id="stx-memory-actor-query" placeholder="搜索角色..." value="${escapeAttr(state.actorQuery || '')}" style="flex: 1;" />
+                    </div>
+                    <div style="display: flex; gap: 4px; padding: 0 4px;">
+                        <select class="stx-memory-workbench__select" id="stx-memory-actor-tag-filter" style="flex: 1;">
+                            <option value="">所有标签</option>
+                            ${tagOptions}
+                        </select>
+                        <select class="stx-memory-workbench__select" id="stx-memory-actor-sort" style="flex: 1;">
+                            <option value="stat-desc"${state.actorSortOrder === 'stat-desc' || !state.actorSortOrder ? ' selected' : ''}>稳定度 ↓</option>
+                            <option value="stat-asc"${state.actorSortOrder === 'stat-asc' ? ' selected' : ''}>稳定度 ↑</option>
+                            <option value="name-asc"${state.actorSortOrder === 'name-asc' ? ' selected' : ''}>名称 A-Z</option>
+                            <option value="name-desc"${state.actorSortOrder === 'name-desc' ? ' selected' : ''}>名称 Z-A</option>
+                        </select>
+                    </div>
                     <div class="stx-memory-workbench__list">
-                        ${snapshot.actors.length > 0 ? snapshot.actors.map((item: ActorMemoryProfile): string => `
+                        ${displayActors.length > 0 ? displayActors.map((item: ActorMemoryProfile): string => `
                             <button class="stx-memory-workbench__list-item${item.actorKey === state.selectedActorKey ? ' is-active' : ''}" data-select-actor="${escapeAttr(item.actorKey)}">
                                 <h4>${escapeHtml(item.displayName || item.actorKey)}</h4>
                                 <div class="stx-memory-workbench__meta">${escapeHtml(item.actorKey)}</div>
-                                <div class="stx-memory-workbench__badge-row" style="margin-top:2px;">
-                                    <span class="stx-memory-workbench__badge">记忆稳定度 ${item.memoryStat}</span>
+                                <div style="font-size: 10px; color: var(--mw-muted); margin-top: 2px;">
+                                    ${Array.from(actorTagsMap.get(item.actorKey) || []).slice(0, 3).map(t => `<span style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 4px; margin-right: 4px;">${escapeHtml(t)}</span>`).join('')}
+                                    ${(actorTagsMap.get(item.actorKey)?.size || 0) > 3 ? '...' : ''}
+                                </div>
+                                <div class="stx-memory-workbench__badge-row" style="margin-top:4px;">
+                                    ${isUserActorKey(item.actorKey) ? '' : `<span class="stx-memory-workbench__badge">记忆稳定度 ${item.memoryStat}</span>`}
                                     <span class="stx-memory-workbench__badge">${snapshot.actorGraph.links.filter((link): boolean => link.source === item.actorKey || link.target === item.actorKey).length} 条真实关系</span>
                                 </div>
                             </button>
-                        `).join('') : '<div class="stx-memory-workbench__empty">当前聊天还没有任何角色档案。</div>'}
+                        `).join('') : '<div class="stx-memory-workbench__empty">没有匹配的角色。</div>'}
                     </div>
                 </div>
                 <div class="stx-memory-workbench__editor" style="padding:0; overflow:hidden; display:flex; flex-direction:column;">

@@ -6,6 +6,7 @@ import type {
     ColdStartRelationshipEntry,
     ColdStartWorldBaseEntry,
 } from './bootstrap-types';
+import { normalizeRelationTag } from '../constants/relationTags';
 
 /**
  * 功能：解析并清洗冷启动输出文档。
@@ -19,7 +20,11 @@ export function parseColdStartDocument(rawDocument: unknown): ColdStartDocument 
     const source = rawDocument as Record<string, unknown>;
     const schemaVersion = normalizeText(source.schemaVersion);
     const identity = normalizeIdentity(source.identity);
+    const relationshipResult = normalizeRelationships(source.relationships);
     if (!schemaVersion || !identity) {
+        return null;
+    }
+    if (!relationshipResult.valid) {
         return null;
     }
     return {
@@ -28,7 +33,7 @@ export function parseColdStartDocument(rawDocument: unknown): ColdStartDocument 
         actorCards: normalizeActorCards(source.actorCards),
         worldProfileDetection: normalizeWorldProfileDetection(source.worldProfileDetection),
         worldBase: normalizeWorldBase(source.worldBase),
-        relationships: normalizeRelationships(source.relationships),
+        relationships: relationshipResult.relationships,
         memoryRecords: normalizeMemoryRecords(source.memoryRecords),
     };
 }
@@ -109,37 +114,55 @@ function normalizeWorldBase(value: unknown): ColdStartWorldBaseEntry[] {
  * @param value 原始值。
  * @returns 归一化列表。
  */
-function normalizeRelationships(value: unknown): ColdStartRelationshipEntry[] {
+function normalizeRelationships(value: unknown): {
+    valid: boolean;
+    relationships: ColdStartRelationshipEntry[];
+} {
     if (!Array.isArray(value)) {
-        return [];
+        return { valid: true, relationships: [] };
     }
-    return value
-        .map((row: unknown): ColdStartRelationshipEntry | null => {
-            if (!row || typeof row !== 'object' || Array.isArray(row)) {
-                return null;
-            }
-            const record = row as Record<string, unknown>;
-            const sourceActorKey = normalizeText(record.sourceActorKey);
-            const targetActorKey = normalizeText(record.targetActorKey);
-            const participants = dedupeStrings(record.participants);
-            const state = normalizeText(record.state);
-            const summary = normalizeText(record.summary);
-            if (!sourceActorKey || !targetActorKey || !state || !summary) {
-                return null;
-            }
-            const normalizedParticipants = dedupeKnownParticipants(participants, sourceActorKey, targetActorKey);
-            return {
-                sourceActorKey,
-                targetActorKey,
-                participants: normalizedParticipants,
-                state,
-                summary,
-                trust: clamp01(Number(record.trust)),
-                affection: clamp01(Number(record.affection)),
-                tension: clamp01(Number(record.tension)),
-            };
-        })
-        .filter(Boolean) as ColdStartRelationshipEntry[];
+    const relationships: ColdStartRelationshipEntry[] = [];
+    for (const row of value) {
+        const normalized = normalizeRelationship(row);
+        if (!normalized) {
+            return { valid: false, relationships: [] };
+        }
+        relationships.push(normalized);
+    }
+    return { valid: true, relationships };
+}
+
+/**
+ * 功能：归一化单条关系记录。
+ * @param value 原始关系值。
+ * @returns 归一化后的关系记录；非法时返回 null。
+ */
+function normalizeRelationship(value: unknown): ColdStartRelationshipEntry | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    const sourceActorKey = normalizeText(record.sourceActorKey);
+    const targetActorKey = normalizeText(record.targetActorKey);
+    const participants = dedupeStrings(record.participants);
+    const relationTag = normalizeRelationTag(record.relationTag);
+    const state = normalizeText(record.state);
+    const summary = normalizeText(record.summary);
+    if (!sourceActorKey || !targetActorKey || !relationTag || !state || !summary) {
+        return null;
+    }
+    const normalizedParticipants = dedupeKnownParticipants(participants, sourceActorKey, targetActorKey);
+    return {
+        sourceActorKey,
+        targetActorKey,
+        participants: normalizedParticipants,
+        relationTag,
+        state,
+        summary,
+        trust: clamp01(Number(record.trust)),
+        affection: clamp01(Number(record.affection)),
+        tension: clamp01(Number(record.tension)),
+    };
 }
 
 /**
