@@ -12,7 +12,7 @@ import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { db } from '../db/db';
 import { PluginRegistry } from '../registry/registry';
 import { logger } from './runtime-services';
-import { runPromptReadyInjectionPipeline } from './prompt-injection-pipeline';
+import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } from './prompt-injection-pipeline';
 import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 
@@ -24,6 +24,86 @@ type HostContext = {
     eventSource?: HostEventSource;
     event_types?: Record<string, string>;
 };
+
+/**
+ * 功能：归一化字符串数组并去重。
+ * @param value 原始值。
+ * @returns 去重后的字符串数组。
+ */
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const item of value) {
+        const normalized = String(item ?? '').trim();
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+
+/**
+ * 功能：读取 Prompt 消息文本。
+ * @param message Prompt 消息对象。
+ * @returns 消息文本。
+ */
+function readPromptMessageText(message: unknown): string {
+    if (!message || typeof message !== 'object') {
+        return '';
+    }
+    const record = message as Record<string, unknown>;
+    return String(record.content ?? record.mes ?? record.text ?? '').trim();
+}
+
+/**
+ * 功能：构建 prompt-ready 运行结果快照，供测试包严格一致性回放使用。
+ * @param input 构建输入。
+ * @returns 运行结果快照。
+ */
+function buildPromptReadyRunResultSnapshot(input: {
+    result: PromptInjectionPipelineResult;
+    promptMessages: SdkTavernPromptMessageEvent[];
+    query: string;
+    sourceMessageId?: string;
+}): Record<string, unknown> {
+    const explanation = (input.result.latestExplanation ?? {}) as Record<string, unknown>;
+    const insertIndex = Number(input.result.injectionResult.insertIndex ?? -1);
+    const insertedMemoryBlock = (
+        insertIndex >= 0
+        && insertIndex < input.promptMessages.length
+    )
+        ? readPromptMessageText(input.promptMessages[insertIndex])
+        : '';
+    const parityBaseline = {
+        finalPromptText: String(input.result.finalPromptText ?? ''),
+        insertIndex: Number.isFinite(insertIndex) ? Math.trunc(insertIndex) : -1,
+        insertedMemoryBlock,
+        reasonCodes: normalizeStringArray(explanation.reasonCodes),
+        matchedActorKeys: normalizeStringArray(explanation.matchedActorKeys),
+        matchedEntryIds: normalizeStringArray(explanation.matchedEntryIds),
+    };
+    return {
+        query: input.query,
+        sourceMessageId: input.sourceMessageId,
+        capturedAt: Date.now(),
+        source: 'chat_completion_prompt_ready',
+        parityBaseline,
+        finalPromptText: parityBaseline.finalPromptText,
+        insertIndex: parityBaseline.insertIndex,
+        insertedMemoryBlock: parityBaseline.insertedMemoryBlock,
+        reasonCodes: parityBaseline.reasonCodes,
+        matchedActorKeys: parityBaseline.matchedActorKeys,
+        matchedEntryIds: parityBaseline.matchedEntryIds,
+        logs: input.result.logs,
+        baseDiagnostics: input.result.baseDiagnostics,
+        injectionResult: input.result.injectionResult,
+    };
+}
 
 const MEMORY_OS_MANIFEST: PluginManifest = {
     pluginId: 'stx_memory_os',
@@ -326,7 +406,7 @@ export class MemoryOS {
                 },
             });
 
-            await runPromptReadyInjectionPipeline({
+            const pipelineResult = await runPromptReadyInjectionPipeline({
                 memory,
                 promptMessages,
                 readSettings: (): MemoryOSSettings => this.readSettings(),
@@ -335,6 +415,14 @@ export class MemoryOS {
                 source: 'chat_completion_prompt_ready',
                 currentChatKey: currentChatKey || undefined,
             });
+            await memory.chatState.setPromptReadyRunResultForTest(
+                buildPromptReadyRunResultSnapshot({
+                    result: pipelineResult,
+                    promptMessages,
+                    query,
+                    sourceMessageId,
+                }),
+            );
         });
 
         subscribeBroadcast(

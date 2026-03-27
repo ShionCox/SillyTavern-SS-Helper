@@ -20,6 +20,7 @@ export type {
     DBActorMemoryProfile,
     DBRoleEntryMemory,
     DBSummarySnapshot,
+    DBWorldProfileBinding,
     DBLlmCredential,
     DBLlmRequestLog,
 } from './database';

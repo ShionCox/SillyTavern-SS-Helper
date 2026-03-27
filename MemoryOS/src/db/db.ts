@@ -20,6 +20,7 @@ import type {
     DBMemoryMutationHistory,
     DBMeta,
     DBSummarySnapshot,
+    DBWorldProfileBinding,
     DBTemplate,
     DBTemplateBinding,
 } from '../../../SDK/db';
@@ -40,6 +41,7 @@ export type {
     DBMemoryMutationHistory,
     DBMeta,
     DBSummarySnapshot,
+    DBWorldProfileBinding,
     DBTemplate,
     DBTemplateBinding,
 };
@@ -68,6 +70,7 @@ export interface MemoryChatDatabaseSnapshot {
     actorMemoryProfiles: DBActorMemoryProfile[];
     roleEntryMemory: DBRoleEntryMemory[];
     summarySnapshots: DBSummarySnapshot[];
+    worldProfileBindings: DBWorldProfileBinding[];
     pluginState: DBChatPluginState | null;
     pluginRecords: DBChatPluginRecord[];
 }
@@ -94,7 +97,20 @@ export interface MemoryPromptTestBundle {
         shouldInject?: boolean;
         requiredKeywords?: string[];
     };
+    parityBaseline?: MemoryPromptParityBaseline;
     runResult?: Record<string, unknown>;
+}
+
+/**
+ * 功能：定义严格一致性对比的基准数据结构。
+ */
+export interface MemoryPromptParityBaseline {
+    finalPromptText: string;
+    insertIndex: number;
+    insertedMemoryBlock: string;
+    reasonCodes: string[];
+    matchedActorKeys: string[];
+    matchedEntryIds: string[];
 }
 
 /**
@@ -127,6 +143,28 @@ function normalizeText(value: unknown): string {
 }
 
 /**
+ * 功能：将未知输入归一化为字符串数组并去重。
+ * @param value 原始值。
+ * @returns 字符串数组。
+ */
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const row of value) {
+        const normalized = normalizeText(row);
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+
+/**
  * 功能：安全归一化对象。
  * @param value 原始值。
  * @returns 对象结果。
@@ -136,6 +174,28 @@ function toRecord(value: unknown): Record<string, unknown> {
         return {};
     }
     return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：归一化严格一致性基准结构。
+ * @param value 原始基准值。
+ * @returns 归一化后的基准，无法识别时返回 undefined。
+ */
+function normalizeMemoryPromptParityBaseline(value: unknown): MemoryPromptParityBaseline | undefined {
+    const record = toRecord(value);
+    const finalPromptText = normalizeText(record.finalPromptText);
+    if (!finalPromptText) {
+        return undefined;
+    }
+    const insertIndex = Number(record.insertIndex);
+    return {
+        finalPromptText,
+        insertIndex: Number.isFinite(insertIndex) ? Math.trunc(insertIndex) : -1,
+        insertedMemoryBlock: normalizeText(record.insertedMemoryBlock),
+        reasonCodes: normalizeStringArray(record.reasonCodes),
+        matchedActorKeys: normalizeStringArray(record.matchedActorKeys),
+        matchedEntryIds: normalizeStringArray(record.matchedEntryIds),
+    };
 }
 
 /**
@@ -194,6 +254,7 @@ export async function clearMemoryChatData(
             db.actor_memory_profiles,
             db.role_entry_memory,
             db.summary_snapshots,
+            db.world_profile_bindings,
         ]
         : [
             db.events,
@@ -205,6 +266,7 @@ export async function clearMemoryChatData(
             db.actor_memory_profiles,
             db.role_entry_memory,
             db.summary_snapshots,
+            db.world_profile_bindings,
         ];
 
     await db.transaction('rw', txTables, async (): Promise<void> => {
@@ -218,6 +280,7 @@ export async function clearMemoryChatData(
             db.actor_memory_profiles.where('chatKey').equals(chatKey).delete(),
             db.role_entry_memory.where('chatKey').equals(chatKey).delete(),
             db.summary_snapshots.where('chatKey').equals(chatKey).delete(),
+            db.world_profile_bindings.where('chatKey').equals(chatKey).delete(),
         ];
         if (includeAudit) {
             tasks.push(db.audit.where('chatKey').equals(chatKey).delete());
@@ -259,6 +322,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         actorMemoryProfiles,
         roleEntryMemory,
         summarySnapshots,
+        worldProfileBindings,
         pluginState,
         pluginRecords,
     ] = await Promise.all([
@@ -272,6 +336,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         db.actor_memory_profiles.where('chatKey').equals(normalizedChatKey).toArray(),
         db.role_entry_memory.where('chatKey').equals(normalizedChatKey).toArray(),
         db.summary_snapshots.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.world_profile_bindings.where('chatKey').equals(normalizedChatKey).toArray(),
         db.chat_plugin_state.get([MEMORY_OS_PLUGIN_ID, normalizedChatKey]),
         db.chat_plugin_records
             .where('pluginId')
@@ -293,6 +358,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         actorMemoryProfiles,
         roleEntryMemory,
         summarySnapshots,
+        worldProfileBindings,
         pluginState: pluginState ?? null,
         pluginRecords,
     };
@@ -313,6 +379,7 @@ export async function exportMemoryPromptTestBundle(
         sourceMessageId?: string;
         settings?: Record<string, unknown>;
         expectation?: MemoryPromptTestBundle['expectation'];
+        parityBaseline?: MemoryPromptParityBaseline;
         runResult?: Record<string, unknown>;
     } = {},
 ): Promise<MemoryPromptTestBundle> {
@@ -338,6 +405,11 @@ export async function exportMemoryPromptTestBundle(
             mode: 'simulated_prompt',
             note: resolvedPromptFixture.length > 0 ? 'manual_prompt_fixture' : 'missing_prompt_fixture',
         };
+    const parityBaseline = normalizeMemoryPromptParityBaseline(
+        options.parityBaseline
+        ?? toRecord(options.runResult).parityBaseline
+        ?? options.runResult,
+    );
 
     return {
         version: '1.0.0',
@@ -350,6 +422,7 @@ export async function exportMemoryPromptTestBundle(
         settings: options.settings && typeof options.settings === 'object' ? options.settings : {},
         captureMeta,
         expectation: options.expectation,
+        parityBaseline,
         runResult: options.runResult,
     };
 }
@@ -393,6 +466,7 @@ export async function importMemoryPromptTestBundle(
         db.actor_memory_profiles,
         db.role_entry_memory,
         db.summary_snapshots,
+        db.world_profile_bindings,
     ], async (): Promise<void> => {
         await Promise.all([
             db.events.bulkPut((sourceDatabase.events ?? []).map((row: DBEvent): DBEvent => ({ ...row, chatKey: targetChatKey }))),
@@ -407,6 +481,7 @@ export async function importMemoryPromptTestBundle(
             db.actor_memory_profiles.bulkPut((sourceDatabase.actorMemoryProfiles ?? []).map((row) => mapChatKey(row) as unknown as DBActorMemoryProfile)),
             db.role_entry_memory.bulkPut((sourceDatabase.roleEntryMemory ?? []).map((row) => mapChatKey(row) as unknown as DBRoleEntryMemory)),
             db.summary_snapshots.bulkPut((sourceDatabase.summarySnapshots ?? []).map((row) => mapChatKey(row) as unknown as DBSummarySnapshot)),
+            db.world_profile_bindings.bulkPut((sourceDatabase.worldProfileBindings ?? []).map((row) => mapChatKey(row) as unknown as DBWorldProfileBinding)),
         ]);
     });
 
@@ -445,6 +520,7 @@ export async function importMemoryPromptTestBundle(
         importedAt: Date.now(),
         bundle: {
             ...bundle,
+            parityBaseline: normalizeMemoryPromptParityBaseline(bundle.parityBaseline),
             database: {
                 ...sourceDatabase,
                 chatKey: targetChatKey,
@@ -469,6 +545,7 @@ export async function clearAllMemoryData(): Promise<void> {
         db.actor_memory_profiles,
         db.role_entry_memory,
         db.summary_snapshots,
+        db.world_profile_bindings,
         db.chat_plugin_state,
         db.chat_plugin_records,
     ], async (): Promise<void> => {
@@ -483,6 +560,7 @@ export async function clearAllMemoryData(): Promise<void> {
             db.actor_memory_profiles.clear(),
             db.role_entry_memory.clear(),
             db.summary_snapshots.clear(),
+            db.world_profile_bindings.clear(),
             db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
             db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
         ]);

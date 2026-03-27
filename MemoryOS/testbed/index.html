@@ -11,18 +11,16 @@
 </head>
 <body>
   <div class="app-shell">
-    <!-- 左侧控制面板 -->
     <aside class="sidebar">
       <header class="sidebar-header">
         <div class="title-group">
           <h1>注入测试控制台</h1>
-          <span class="eyebrow">MemoryOS</span>
+          <span class="eyebrow">MemoryOS Testbed</span>
         </div>
         <span class="chip" id="active-chat-chip">chat: (none)</span>
       </header>
 
       <div class="scroll-area">
-        <!-- 基础输入 -->
         <section class="card">
           <div class="card-header">
             <h3>基础输入</h3>
@@ -38,17 +36,16 @@
               <input id="query-input" class="field" placeholder="厄尔多利亚是什么地方" spellcheck="false" />
             </div>
             <div class="form-group">
-              <label class="field-label">触发源 ID</label>
+              <label class="field-label">触发消息 ID</label>
               <input id="source-message-id-input" class="field" placeholder="u-last" spellcheck="false" />
             </div>
           </div>
         </section>
 
-        <!-- 测试包操作 -->
         <section class="card">
           <div class="card-header">
             <h3>环境与工具</h3>
-            <span class="badge">工具</span>
+            <span class="badge">导入导出</span>
           </div>
           <div class="btn-grid">
             <button id="import-file-btn" class="btn">文件导入</button>
@@ -61,152 +58,91 @@
           <input id="import-file-input" type="file" accept="application/json" hidden />
         </section>
 
-        <!-- 编辑输入 -->
         <section class="card">
           <div class="card-header">
             <h3>编辑器</h3>
-            <span class="badge">配置</span>
+            <span class="badge">输入</span>
           </div>
           <div class="form-group stack">
             <div class="label-row">
-              <label class="field-label">Prompt 消息列 (JSON)</label>
+              <label class="field-label">PromptFixture (JSON)</label>
               <button class="copy-btn" data-target="prompt-input">复制</button>
             </div>
-            <textarea id="prompt-input" class="field area code-font"></textarea>
+            <textarea id="prompt-input" class="field area"></textarea>
           </div>
           <div class="form-group stack">
             <div class="label-row">
-              <label class="field-label">全局设置 (JSON)</label>
+              <label class="field-label">设置 (JSON)</label>
               <button class="copy-btn" data-target="settings-input">复制</button>
             </div>
-            <textarea id="settings-input" class="field area code-font"></textarea>
+            <textarea id="settings-input" class="field area"></textarea>
           </div>
           <div class="form-group stack">
             <div class="label-row">
-              <label class="field-label">完整测试包数据 (JSON)</label>
+              <label class="field-label">测试包 (JSON)</label>
               <button class="copy-btn" data-target="bundle-input">复制</button>
             </div>
-            <textarea id="bundle-input" class="field area code-font large-area"></textarea>
+            <textarea id="bundle-input" class="field area large-area"></textarea>
           </div>
         </section>
       </div>
     </aside>
 
-    <!-- 右侧数据对比视图 -->
     <main class="main-view">
-      <!-- 顶部操作栏 -->
       <div class="topbar">
         <div class="topbar-actions">
-          <button id="run-btn" class="btn btn-success action-run">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-            运行完整注入验证
-          </button>
-          <button id="clear-result-btn" class="btn">清空对比数据</button>
+          <button id="run-btn" class="btn btn-success action-run">运行 exact replay</button>
+          <button id="clear-result-btn" class="btn">清空结果</button>
         </div>
       </div>
 
       <div class="view-content">
-        <!-- 核心比对区 (三列并排) -->
         <div class="comparison-grid">
           <div class="compare-col">
             <div class="col-header">
-              <div>原始输入 <span>Captured</span></div>
+              <div>酒馆基准 Prompt <span>Baseline</span></div>
               <button class="copy-btn" data-target="captured-prompt-output">复制</button>
             </div>
             <pre id="captured-prompt-output" class="output-box tall"></pre>
           </div>
           <div class="compare-col">
             <div class="col-header highlight-header">
-              <div>注入完成 <span>Final</span></div>
+              <div>回放 Prompt <span>Replay</span></div>
               <button class="copy-btn" data-target="final-prompt-output">复制</button>
             </div>
             <pre id="final-prompt-output" class="output-box tall primary-border"></pre>
           </div>
           <div class="compare-col">
             <div class="col-header diff-header">
-              <div>核心差异 <span>Diff</span></div>
+              <div>差异 <span>Diff</span></div>
               <button class="copy-btn" data-target="prompt-diff-output">复制</button>
             </div>
             <pre id="prompt-diff-output" class="output-box tall diff-border"></pre>
           </div>
         </div>
 
-        <!-- 详细诊断区 -->
         <div class="diagnostics-grid">
-          <!-- 角色切片输出 -->
           <div class="diag-group">
-            <div class="sec-title">按角色切片</div>
-            
+            <div class="sec-title">严格一致性结果</div>
             <div class="label-row">
-              <label class="info-label">核心注入片段</label>
-              <button class="copy-btn" data-target="system-inserted-output">复制</button>
+              <label class="info-label">严格一致性摘要</label>
+              <button class="copy-btn" data-target="strict-parity-output">复制</button>
             </div>
-            <pre id="system-inserted-output" class="output-box brief"></pre>
-
-            <div class="label-row">
-              <label class="info-label">系统层级总计</label>
-              <button class="copy-btn" data-target="system-prompt-output">复制</button>
-            </div>
-            <pre id="system-prompt-output" class="output-box brief"></pre>
-
-            <div class="label-row">
-              <label class="info-label">用户层级总计</label>
-              <button class="copy-btn" data-target="user-prompt-output">复制</button>
-            </div>
-            <pre id="user-prompt-output" class="output-box brief"></pre>
-          </div>
-
-          <!-- 诊断漏斗 & 日志 -->
-          <div class="diag-group">
-            <div class="sec-title">运行状态</div>
-            <label class="info-label mb-4" style="margin-bottom:4px;display:block;">系统诊断漏斗</label>
-            <div id="funnel-output" class="funnel-container"></div>
-            
+            <pre id="strict-parity-output" class="output-box standard"></pre>
             <div class="label-row mt-10">
-              <label class="info-label">执行日志</label>
-              <button class="copy-btn" data-target="pipeline-log-output">复制</button>
+              <label class="info-label">数据库快照摘要</label>
+              <button class="copy-btn" data-target="db-preview-output">复制</button>
             </div>
-            <pre id="pipeline-log-output" class="output-box standard"></pre>
+            <pre id="db-preview-output" class="output-box standard"></pre>
           </div>
 
-          <!-- 配置与候选追踪 -->
-          <div class="diag-group wide-span">
-            <div class="sec-title">深度召回分析</div>
-            <div class="split-col-2">
-              <div class="sub-col">
-                 <div class="label-row">
-                   <label class="info-label">召回解析说明</label>
-                   <button class="copy-btn" data-target="explanation-output">复制</button>
-                 </div>
-                 <pre id="explanation-output" class="output-box standard"></pre>
-
-                 <div class="label-row">
-                   <label class="info-label">运行设置概览</label>
-                   <button class="copy-btn" data-target="settings-preview-output">复制</button>
-                 </div>
-                 <pre id="settings-preview-output" class="output-box brief"></pre>
-              </div>
-              <div class="sub-col">
-                 <div class="label-row">
-                   <label class="info-label">初步命中候选组</label>
-                   <button class="copy-btn" data-target="selected-candidates-output">复制</button>
-                 </div>
-                 <pre id="selected-candidates-output" class="output-box standard"></pre>
-
-                 <div class="label-row">
-                   <label class="info-label">整体召回预览数据</label>
-                   <button class="copy-btn" data-target="recall-preview-output">复制</button>
-                 </div>
-                 <pre id="recall-preview-output" class="output-box brief"></pre>
-              </div>
+          <div class="diag-group">
+            <div class="sec-title">中文排障日志</div>
+            <div class="label-row">
+              <label class="info-label">单文本框日志输出</label>
+              <button class="copy-btn" data-target="run-log-output">复制</button>
             </div>
-            <div class="db-section mt-10">
-               <div class="label-row">
-                 <label class="info-label">当前数据库状态预览</label>
-                 <button class="copy-btn" data-target="db-preview-output">复制</button>
-               </div>
-               <pre id="db-preview-output" class="output-box standard"></pre>
-            </div>
+            <textarea id="run-log-output" class="field area" rows="26" readonly></textarea>
           </div>
         </div>
       </div>

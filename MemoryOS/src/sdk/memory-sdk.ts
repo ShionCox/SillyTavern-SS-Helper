@@ -1,13 +1,25 @@
-import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import {
+    getCurrentTavernCharacterEvent,
+    getCurrentTavernUserSnapshotEvent,
+    getTavernSemanticSnapshotEvent,
+    loadTavernWorldbookEntriesEvent,
+    resolveTavernCharacterWorldbookBindingEvent,
+    type SdkTavernPromptMessageEvent,
+} from '../../../SDK/tavern';
 import type { EventEnvelope } from '../../../SDK/stx';
 import { EventsManager } from '../core/events-manager';
 import { UnifiedMemoryManager } from '../core/unified-memory-manager';
+import { logger } from '../runtime/runtime-services';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
+import { runBootstrapOrchestrator, type ColdStartSourceBundle } from '../memory-bootstrap';
 import {
     exportMemoryChatDatabaseSnapshot,
     exportMemoryPromptTestBundle,
     importMemoryPromptTestBundle,
     type ImportMemoryPromptTestBundleResult,
     type MemoryChatDatabaseSnapshot,
+    type MemoryPromptParityBaseline,
     type MemoryPromptTestBundle,
     type PromptReadyCaptureSnapshot,
     restoreArchivedMemoryChat,
@@ -38,6 +50,18 @@ export interface UnifiedPromptInjectResult {
 }
 
 /**
+ * 功能：定义测试包导出参数。
+ */
+export interface ExportPromptTestBundleForTestOptions {
+    promptFixture?: Array<Record<string, unknown>>;
+    query?: string;
+    sourceMessageId?: string;
+    settings?: Record<string, unknown>;
+    runResult?: Record<string, unknown>;
+    parityBaseline?: MemoryPromptParityBaseline;
+}
+
+/**
  * 功能：MemoryOS 统一条目 SDK 门面。
  */
 export class MemorySDKImpl {
@@ -45,7 +69,9 @@ export class MemorySDKImpl {
     private readonly eventsManager: EventsManager;
     private readonly unifiedManager: UnifiedMemoryManager;
     private promptReadyCaptureSnapshot: PromptReadyCaptureSnapshot | null;
+    private promptReadyRunResultSnapshot: Record<string, unknown> | null;
     private latestRecallExplanation: Record<string, unknown> | null;
+    private llmTasksRegistered: boolean;
 
     public readonly template: { destroy: () => void };
     public readonly events: {
@@ -65,7 +91,11 @@ export class MemorySDKImpl {
         getLatestRecallExplanation: () => Promise<Record<string, unknown> | null>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
-        exportPromptTestBundleForTest: () => Promise<MemoryPromptTestBundle>;
+        setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
+        getPromptReadyRunResultForTest: () => Promise<Record<string, unknown> | null>;
+        getLatestPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
+        exportCurrentChatDatabaseSnapshotForTest: () => Promise<MemoryChatDatabaseSnapshot>;
+        exportPromptTestBundleForTest: (options?: ExportPromptTestBundleForTestOptions) => Promise<MemoryPromptTestBundle>;
         importPromptTestBundleForTest: (
             bundle: MemoryPromptTestBundle,
             options?: { targetChatKey?: string; skipClear?: boolean },
@@ -120,7 +150,9 @@ export class MemorySDKImpl {
         this.eventsManager = new EventsManager(this.chatKey_);
         this.unifiedManager = new UnifiedMemoryManager(this.chatKey_);
         this.promptReadyCaptureSnapshot = null;
+        this.promptReadyRunResultSnapshot = null;
         this.latestRecallExplanation = null;
+        this.llmTasksRegistered = false;
 
         this.template = {
             destroy: (): void => {
@@ -190,9 +222,60 @@ export class MemorySDKImpl {
                     promptFixture: this.promptReadyCaptureSnapshot.promptFixture.map((item: Record<string, unknown>): Record<string, unknown> => ({ ...item })),
                 };
             },
-            exportPromptTestBundleForTest: async (): Promise<MemoryPromptTestBundle> => {
+            /**
+             * 功能：缓存最近一次 prompt-ready 的运行结果。
+             * @param runResult 运行结果。
+             * @returns 异步完成。
+             */
+            setPromptReadyRunResultForTest: async (runResult: Record<string, unknown>): Promise<void> => {
+                this.promptReadyRunResultSnapshot = { ...runResult };
+            },
+            /**
+             * 功能：读取最近一次 prompt-ready 的运行结果。
+             * @returns 运行结果快照。
+             */
+            getPromptReadyRunResultForTest: async (): Promise<Record<string, unknown> | null> => {
+                if (!this.promptReadyRunResultSnapshot) {
+                    return null;
+                }
+                return { ...this.promptReadyRunResultSnapshot };
+            },
+            /**
+             * 功能：读取最近一次 prompt-ready 抓包快照。
+             * @returns 抓包快照。
+             */
+            getLatestPromptReadyCaptureSnapshotForTest: async (): Promise<PromptReadyCaptureSnapshot | null> => {
+                if (!this.promptReadyCaptureSnapshot) {
+                    return null;
+                }
+                return {
+                    ...this.promptReadyCaptureSnapshot,
+                    promptFixture: this.promptReadyCaptureSnapshot.promptFixture.map((item: Record<string, unknown>): Record<string, unknown> => ({ ...item })),
+                };
+            },
+            /**
+             * 功能：导出当前会话数据库快照。
+             * @returns 数据库快照。
+             */
+            exportCurrentChatDatabaseSnapshotForTest: async (): Promise<MemoryChatDatabaseSnapshot> => {
+                return exportMemoryChatDatabaseSnapshot(this.chatKey_);
+            },
+            /**
+             * 功能：导出 Prompt 测试包。
+             * @param options 导出参数。
+             * @returns 测试包结果。
+             */
+            exportPromptTestBundleForTest: async (options: ExportPromptTestBundleForTestOptions = {}): Promise<MemoryPromptTestBundle> => {
+                const resolvedRunResult = options.runResult ?? this.promptReadyRunResultSnapshot ?? undefined;
+                const resolvedParityBaseline = options.parityBaseline ?? this.resolveParityBaselineFromRunResult(resolvedRunResult);
                 return exportMemoryPromptTestBundle(this.chatKey_, {
+                    promptFixture: options.promptFixture,
                     captureSnapshot: this.promptReadyCaptureSnapshot ?? undefined,
+                    query: options.query,
+                    sourceMessageId: options.sourceMessageId,
+                    settings: options.settings,
+                    runResult: resolvedRunResult,
+                    parityBaseline: resolvedParityBaseline,
                 });
             },
             importPromptTestBundleForTest: async (
@@ -205,7 +288,26 @@ export class MemorySDKImpl {
                 return;
             },
             primeColdStartPrompt: async (_reason?: string): Promise<void> => {
-                return;
+                const llm = readMemoryLLMApi();
+                if (!llm) {
+                    return;
+                }
+                const sourceBundle = await this.collectColdStartSourceBundle(_reason);
+                const result = await runBootstrapOrchestrator({
+                    dependencies: {
+                        ensureActorProfile: async (input): Promise<unknown> => this.unifiedManager.ensureActorProfile(input),
+                        saveEntry: async (input): Promise<any> => this.unifiedManager.saveEntry(input),
+                        bindRoleToEntry: async (actorKey: string, entryId: string): Promise<unknown> => this.unifiedManager.bindRoleToEntry(actorKey, entryId),
+                        putWorldProfileBinding: async (binding): Promise<unknown> => this.unifiedManager.putWorldProfileBinding(binding),
+                        appendMutationHistory: async (history): Promise<unknown> => this.unifiedManager.appendMutationHistory(history),
+                    },
+                    llm,
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    sourceBundle,
+                });
+                if (!result.ok) {
+                    logger.warn(`[MemoryOS] 冷启动执行失败: ${result.reasonCode}`);
+                }
             },
             flush: async (): Promise<void> => {
                 return;
@@ -289,6 +391,7 @@ export class MemorySDKImpl {
      */
     public async init(): Promise<void> {
         await this.unifiedManager.init();
+        this.tryRegisterLLMTasks();
     }
 
     /**
@@ -309,11 +412,20 @@ export class MemorySDKImpl {
 
     /**
      * 功能：导出 Prompt 测试包。
+     * @param options 导出参数。
      * @returns 测试包。
      */
-    public async exportPromptTestBundleForTest(): Promise<MemoryPromptTestBundle> {
+    public async exportPromptTestBundleForTest(options: ExportPromptTestBundleForTestOptions = {}): Promise<MemoryPromptTestBundle> {
+        const resolvedRunResult = options.runResult ?? this.promptReadyRunResultSnapshot ?? undefined;
+        const resolvedParityBaseline = options.parityBaseline ?? this.resolveParityBaselineFromRunResult(resolvedRunResult);
         return exportMemoryPromptTestBundle(this.chatKey_, {
+            promptFixture: options.promptFixture,
             captureSnapshot: this.promptReadyCaptureSnapshot ?? undefined,
+            query: options.query,
+            sourceMessageId: options.sourceMessageId,
+            settings: options.settings,
+            runResult: resolvedRunResult,
+            parityBaseline: resolvedParityBaseline,
         });
     }
 
@@ -353,4 +465,212 @@ export class MemorySDKImpl {
         }
         return promptMessages.length;
     }
+
+    /**
+     * 功能：从运行结果提取严格一致性基准。
+     * @param runResult 运行结果对象。
+     * @returns 严格一致性基准。
+     */
+    private resolveParityBaselineFromRunResult(runResult?: Record<string, unknown>): MemoryPromptParityBaseline | undefined {
+        if (!runResult || typeof runResult !== 'object') {
+            return undefined;
+        }
+        const raw = (runResult.parityBaseline && typeof runResult.parityBaseline === 'object')
+            ? runResult.parityBaseline as Record<string, unknown>
+            : runResult;
+        const finalPromptText = String(raw.finalPromptText ?? '').trim();
+        if (!finalPromptText) {
+            return undefined;
+        }
+        const insertIndex = Number(raw.insertIndex);
+        return {
+            finalPromptText,
+            insertIndex: Number.isFinite(insertIndex) ? Math.trunc(insertIndex) : -1,
+            insertedMemoryBlock: String(raw.insertedMemoryBlock ?? '').trim(),
+            reasonCodes: this.normalizeStringArray(raw.reasonCodes),
+            matchedActorKeys: this.normalizeStringArray(raw.matchedActorKeys),
+            matchedEntryIds: this.normalizeStringArray(raw.matchedEntryIds),
+        };
+    }
+
+    /**
+     * 功能：将未知值归一化为字符串数组并去重。
+     * @param value 原始输入。
+     * @returns 归一化数组。
+     */
+    private normalizeStringArray(value: unknown): string[] {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+        const seen = new Set<string>();
+        const result: string[] = [];
+        for (const row of value) {
+            const normalized = String(row ?? '').trim();
+            if (!normalized || seen.has(normalized)) {
+                continue;
+            }
+            seen.add(normalized);
+            result.push(normalized);
+        }
+        return result;
+    }
+
+    /**
+     * 功能：注册 MemoryOS 的 LLMHub 任务。
+     */
+    private tryRegisterLLMTasks(): void {
+        if (this.llmTasksRegistered) {
+            return;
+        }
+        const llm = readMemoryLLMApi();
+        if (!llm) {
+            return;
+        }
+        try {
+            registerMemoryLLMTasks(llm, MEMORY_OS_PLUGIN_ID);
+            this.llmTasksRegistered = true;
+        } catch (error) {
+            logger.warn('[MemoryOS] LLM 任务注册失败', error);
+        }
+    }
+
+    /**
+     * 功能：收集冷启动输入文本。
+     * @param reason 触发原因。
+     * @returns 冷启动源文本列表。
+     */
+    private async collectColdStartSourceBundle(reason?: string): Promise<ColdStartSourceBundle> {
+        const events = await this.eventsManager.query({ limit: 40 });
+        const recentEvents = events
+            .map((event: EventEnvelope<unknown>): string => {
+                const payload = (event.payload ?? {}) as Record<string, unknown>;
+                return String(payload.text ?? '').trim();
+            })
+            .filter((text: string): boolean => text.length > 0);
+        const semanticSnapshot = getTavernSemanticSnapshotEvent();
+        const userSnapshot = getCurrentTavernUserSnapshotEvent();
+        const currentCharacter = getCurrentTavernCharacterEvent();
+        const worldbookBinding = resolveTavernCharacterWorldbookBindingEvent(32);
+        const worldbookEntries = await loadTavernWorldbookEntriesEvent(worldbookBinding.allBooks);
+        return buildColdStartSourceBundle({
+            reason,
+            currentCharacter,
+            semanticSnapshot,
+            userSnapshot,
+            worldbookBinding,
+            worldbookEntries: worldbookEntries.map((entry) => ({
+                book: String(entry.book ?? '').trim(),
+                entryId: String(entry.entryId ?? '').trim(),
+                entry: String(entry.entry ?? '').trim(),
+                keywords: dedupeStrings((entry.keywords ?? []).map((item): string => String(item))),
+                content: String(entry.content ?? '').trim(),
+            })),
+            recentEvents,
+        });
+    }
+}
+
+/**
+ * 功能：组装冷启动的结构化 sourceBundle 输入。
+ * @param input 冷启动原始输入。
+ * @returns 冷启动 sourceBundle。
+ */
+export function buildColdStartSourceBundle(input: {
+    reason?: string;
+    currentCharacter?: {
+        name?: string;
+        description?: string;
+        desc?: string;
+        personality?: string;
+        scenario?: string;
+        first_mes?: string;
+        mes_example?: string;
+        creator_notes?: string;
+        tags?: string[];
+    } | null;
+    semanticSnapshot?: {
+        systemPrompt?: string;
+        firstMessage?: string;
+        authorNote?: string;
+        jailbreak?: string;
+        instruct?: string;
+        activeLorebooks?: string[];
+    } | null;
+    userSnapshot?: {
+        userName?: string;
+        counterpartName?: string;
+        personaDescription?: string;
+        metadataPersona?: string;
+    } | null;
+    worldbookBinding?: {
+        mainBook?: string;
+        extraBooks?: string[];
+        allBooks?: string[];
+    } | null;
+    worldbookEntries?: Array<{
+        book: string;
+        entryId: string;
+        entry: string;
+        keywords: string[];
+        content: string;
+    }>;
+    recentEvents?: string[];
+}): ColdStartSourceBundle {
+    const characterTags = dedupeStrings((input.currentCharacter?.tags ?? []).map((tag): string => String(tag)));
+    return {
+        reason: String(input.reason ?? '').trim(),
+        characterCard: {
+            name: String(input.currentCharacter?.name ?? '').trim(),
+            description: String(input.currentCharacter?.description ?? input.currentCharacter?.desc ?? '').trim(),
+            personality: String(input.currentCharacter?.personality ?? '').trim(),
+            scenario: String(input.currentCharacter?.scenario ?? '').trim(),
+            firstMessage: String(input.currentCharacter?.first_mes ?? '').trim(),
+            messageExample: String(input.currentCharacter?.mes_example ?? '').trim(),
+            creatorNotes: String(input.currentCharacter?.creator_notes ?? '').trim(),
+            tags: characterTags,
+        },
+        semantic: {
+            systemPrompt: String(input.semanticSnapshot?.systemPrompt ?? '').trim(),
+            firstMessage: String(input.semanticSnapshot?.firstMessage ?? '').trim(),
+            authorNote: String(input.semanticSnapshot?.authorNote ?? '').trim(),
+            jailbreak: String(input.semanticSnapshot?.jailbreak ?? '').trim(),
+            instruct: String(input.semanticSnapshot?.instruct ?? '').trim(),
+            activeLorebooks: dedupeStrings((input.semanticSnapshot?.activeLorebooks ?? []).map((item): string => String(item))),
+        },
+        user: {
+            userName: String(input.userSnapshot?.userName ?? '').trim(),
+            counterpartName: String(input.userSnapshot?.counterpartName ?? '').trim(),
+            personaDescription: String(input.userSnapshot?.personaDescription ?? '').trim(),
+            metadataPersona: String(input.userSnapshot?.metadataPersona ?? '').trim(),
+        },
+        worldbooks: {
+            mainBook: String(input.worldbookBinding?.mainBook ?? '').trim(),
+            extraBooks: dedupeStrings((input.worldbookBinding?.extraBooks ?? []).map((item): string => String(item))),
+            activeBooks: dedupeStrings((input.worldbookBinding?.allBooks ?? []).map((item): string => String(item))),
+            entries: (input.worldbookEntries ?? []).map((entry) => ({
+                book: String(entry.book ?? '').trim(),
+                entryId: String(entry.entryId ?? '').trim(),
+                entry: String(entry.entry ?? '').trim(),
+                keywords: dedupeStrings((entry.keywords ?? []).map((item): string => String(item))),
+                content: String(entry.content ?? '').trim(),
+            })),
+        },
+        recentEvents: dedupeStrings((input.recentEvents ?? []).map((event): string => String(event))),
+    };
+}
+
+/**
+ * 功能：字符串数组去重并去空。
+ * @param values 输入字符串数组。
+ * @returns 去重结果。
+ */
+function dedupeStrings(values: string[]): string[] {
+    const result: string[] = [];
+    for (const value of values) {
+        const normalized = String(value ?? '').trim();
+        if (normalized && !result.includes(normalized)) {
+            result.push(normalized);
+        }
+    }
+    return result;
 }

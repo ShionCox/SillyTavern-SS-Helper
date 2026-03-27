@@ -1,6 +1,7 @@
 import { db } from '../db/db';
 import type {
     DBActorMemoryProfile,
+    DBMemoryMutationHistory,
     DBMemoryEntry,
     DBMemoryEntryType,
     DBRoleEntryMemory,
@@ -20,8 +21,14 @@ import {
     type SummaryRefreshBinding,
     type SummarySnapshot,
     type UnifiedMemoryFilters,
+    type WorldProfileBinding,
 } from '../types';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import { readMemoryOSSettings } from '../settings/store';
+import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { detectWorldProfile, resolveWorldProfile, getWorldProfileBinding, putWorldProfileBinding, deleteWorldProfileBinding } from '../memory-world-profile';
+import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
 
 /**
  * 功能：统一条目记忆系统主管理器。
@@ -412,6 +419,65 @@ export class UnifiedMemoryManager {
     }
 
     /**
+     * 功能：读取当前聊天的世界模板绑定。
+     * @returns 世界模板绑定；不存在时返回 null。
+     */
+    async getWorldProfileBinding(): Promise<WorldProfileBinding | null> {
+        return getWorldProfileBinding(this.chatKey);
+    }
+
+    /**
+     * 功能：写入当前聊天的世界模板绑定。
+     * @param input 绑定输入。
+     * @returns 保存后的绑定对象。
+     */
+    async putWorldProfileBinding(input: {
+        primaryProfile: string;
+        secondaryProfiles: string[];
+        confidence: number;
+        reasonCodes: string[];
+        detectedFrom: string[];
+    }): Promise<WorldProfileBinding> {
+        return putWorldProfileBinding({
+            chatKey: this.chatKey,
+            primaryProfile: input.primaryProfile,
+            secondaryProfiles: input.secondaryProfiles,
+            confidence: input.confidence,
+            reasonCodes: input.reasonCodes,
+            detectedFrom: input.detectedFrom,
+        });
+    }
+
+    /**
+     * 功能：追加 mutation 历史记录。
+     * @param input 历史输入。
+     */
+    /**
+     * 功能：删除当前聊天的世界模板绑定。
+     */
+    async deleteWorldProfileBinding(): Promise<void> {
+        await deleteWorldProfileBinding(this.chatKey);
+    }
+
+    /**
+     * 功能：追加一条 mutation 历史记录。
+     * @param input 历史记录输入。
+     */
+    async appendMutationHistory(input: {
+        action: string;
+        payload: Record<string, unknown>;
+    }): Promise<void> {
+        const row: DBMemoryMutationHistory = {
+            historyId: `memory-history:${this.chatKey}:${crypto.randomUUID()}`,
+            chatKey: this.chatKey,
+            action: this.normalizeText(input.action) || 'unknown',
+            payload: this.normalizeRecord(input.payload),
+            ts: Date.now(),
+        };
+        await db.memory_mutation_history.put(row);
+    }
+
+    /**
      * 功能：从当前聊天消息自动生成轻量总结。
      * @param input 消息输入。
      * @returns 总结快照。
@@ -421,6 +487,35 @@ export class UnifiedMemoryManager {
         actorHints?: Array<{ actorKey: string; displayName?: string }>;
         title?: string;
     }): Promise<SummarySnapshot | null> {
+        const normalizedMessages = Array.isArray(input.messages)
+            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-10)
+            : [];
+        if (normalizedMessages.length <= 0) {
+            return null;
+        }
+        for (const actorHint of Array.isArray(input.actorHints) ? input.actorHints : []) {
+            await this.ensureActorProfile(actorHint);
+        }
+        const settings = readMemoryOSSettings();
+        const llm = readMemoryLLMApi();
+        const summaryResult = await runSummaryOrchestrator({
+            dependencies: {
+                listEntries: async (): Promise<MemoryEntry[]> => this.listEntries(),
+                listRoleMemories: async (actorKey?: string): Promise<RoleEntryMemory[]> => this.listRoleMemories(actorKey),
+                getWorldProfileBinding: async (): Promise<WorldProfileBinding | null> => this.getWorldProfileBinding(),
+                appendMutationHistory: async (history): Promise<void> => this.appendMutationHistory(history),
+                getEntry: async (entryId: string): Promise<MemoryEntry | null> => this.getEntry(entryId),
+                applySummarySnapshot: async (summaryInput): Promise<SummarySnapshot> => this.applySummarySnapshot(summaryInput),
+                deleteEntry: async (entryId: string): Promise<void> => this.deleteEntry(entryId),
+            },
+            llm,
+            pluginId: MEMORY_OS_PLUGIN_ID,
+            messages: normalizedMessages,
+            enableEmbedding: settings.enableEmbedding === true,
+        });
+        return summaryResult.snapshot;
+
+        /* legacy fallback removed:
         const messages = Array.isArray(input.messages)
             ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-8)
             : [];
@@ -462,6 +557,7 @@ export class UnifiedMemoryManager {
             actorKeys,
             refreshBindings,
         });
+        */
     }
 
     /**
@@ -474,6 +570,124 @@ export class UnifiedMemoryManager {
         promptMessages?: SdkTavernPromptMessageEvent[];
         maxTokens?: number;
     }): Promise<PromptAssemblySnapshot> {
+        {
+        const query = this.normalizeText(input.query);
+        const promptText = (input.promptMessages ?? [])
+            .map((message: SdkTavernPromptMessageEvent): string => this.readPromptText(message))
+            .join('\n')
+            .toLowerCase();
+        const queryTerms = this.extractQueryTerms(query);
+        const typeMap = await this.getEntryTypeMap();
+        const entries = await this.listEntries();
+        const actorProfiles = await this.listActorProfiles();
+        const matchedActorKeys = actorProfiles
+            .filter((profile: ActorMemoryProfile): boolean => {
+                if (!query && !promptText) {
+                    return true;
+                }
+                return [profile.actorKey, profile.displayName]
+                    .map((text: string): string => text.toLowerCase())
+                    .some((text: string): boolean => Boolean(text) && (
+                        promptText.includes(text)
+                        || queryTerms.some((term: string): boolean => term.includes(text) || text.includes(term))
+                    ));
+            })
+            .map((profile: ActorMemoryProfile): string => profile.actorKey);
+        const effectiveActorKeys = matchedActorKeys.length > 0
+            ? matchedActorKeys
+            : actorProfiles.slice(0, 3).map((profile: ActorMemoryProfile): string => profile.actorKey);
+        const actorMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, ActorMemoryProfile] => [profile.actorKey, profile]));
+        const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
+        const roleRows = await db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray();
+        const roleEntries: PromptAssemblyRoleEntry[] = [];
+        const matchedEntryIds = new Set<string>();
+        for (const row of roleRows) {
+            if (!effectiveActorKeys.includes(row.actorKey)) {
+                continue;
+            }
+            const entry = entryMap.get(row.entryId);
+            if (!entry) {
+                continue;
+            }
+            if (query && !this.isEntryMatched(entry, queryTerms)) {
+                continue;
+            }
+            const forgotten = this.shouldForget(row, query || promptText);
+            roleEntries.push({
+                actorKey: row.actorKey,
+                actorLabel: actorMap.get(row.actorKey)?.displayName || row.actorKey,
+                entryId: entry.entryId,
+                title: entry.title,
+                entryType: entry.entryType,
+                memoryPercent: row.memoryPercent,
+                forgotten,
+                renderedText: forgotten
+                    ? `${entry.title}：内容已遗忘`
+                    : `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
+            });
+            matchedEntryIds.add(entry.entryId);
+        }
+
+        const worldBinding = await this.getWorldProfileBinding();
+        const worldDetection = worldBinding?.primaryProfile
+            ? {
+                primaryProfile: worldBinding.primaryProfile,
+                secondaryProfiles: worldBinding.secondaryProfiles,
+                confidence: worldBinding.confidence,
+                reasonCodes: worldBinding.reasonCodes,
+            }
+            : detectWorldProfile({
+                texts: [
+                    query,
+                    promptText,
+                    ...entries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
+                ],
+            });
+        const worldProfile = resolveWorldProfile(worldDetection);
+        const visibleContext = buildActorVisibleMemoryContext({
+            entries,
+            roleEntries,
+            activeActorKey: effectiveActorKeys[0],
+        });
+        const xmlNarrative = renderMemoryContextXmlMarkdown(visibleContext, worldProfile.primary.injectionStyle, {
+            worldBaseChars: 900,
+            sceneSharedChars: 700,
+            actorViewChars: 1400,
+            totalChars: 2600,
+        });
+        const systemText = this.trimTextToBudget(xmlNarrative, input.maxTokens ?? 1400);
+        const snapshot: PromptAssemblySnapshot = {
+            generatedAt: Date.now(),
+            query,
+            matchedActorKeys: effectiveActorKeys,
+            matchedEntryIds: Array.from(matchedEntryIds),
+            systemText,
+            roleText: '',
+            finalText: systemText,
+            systemEntryIds: entries
+                .filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true)
+                .map((entry: MemoryEntry): string => entry.entryId),
+            roleEntries,
+            reasonCodes: [
+                'prompt:unified_memory',
+                'prompt:xml_markdown_renderer',
+                `world_profile:${worldProfile.primary.worldProfileId}`,
+                systemText ? 'prompt:system_base_present' : 'prompt:system_base_empty',
+            ],
+        };
+        await this.appendMutationHistory({
+            action: 'injection_context_built',
+            payload: {
+                worldProfile: worldProfile.primary.worldProfileId,
+                actorKey: effectiveActorKeys[0] || 'actor',
+                matchedEntryCount: snapshot.matchedEntryIds.length,
+                reasonCodes: snapshot.reasonCodes,
+            },
+        });
+        return snapshot;
+        }
+
+        /* legacy prompt assembly branch removed:
         const query = this.normalizeText(input.query);
         const queryTerms = this.extractQueryTerms(query);
         const promptText = (input.promptMessages ?? [])
@@ -549,6 +763,7 @@ export class UnifiedMemoryManager {
                 roleText ? 'prompt:role_memory_present' : 'prompt:role_memory_empty',
             ],
         };
+        */
     }
 
     /**

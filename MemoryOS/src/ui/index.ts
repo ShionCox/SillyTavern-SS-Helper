@@ -24,6 +24,7 @@ const RESET_BTN_ID: string = 'stx-memoryos-reset-settings';
 const ENABLED_ID: string = 'stx-memoryos-enabled';
 const INJECTION_PROMPT_ID: string = 'stx-memoryos-injection-prompt-enabled';
 const INJECTION_PREVIEW_ID: string = 'stx-memoryos-injection-preview-enabled';
+const EMBEDDING_ENABLED_ID: string = 'stx-memoryos-embedding-enabled';
 const CONTEXT_TOKENS_ID: string = 'stx-memoryos-context-max-tokens';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
@@ -224,6 +225,13 @@ function buildSettingsContentHtml(): string {
         inputAttributes: { 'aria-label': '启用注入预览' },
     });
 
+    const embeddingCheckbox: string = buildSharedCheckboxCard({
+        id: EMBEDDING_ENABLED_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': 'Enable embedding retrieval' },
+    });
+
     const contextInput: string = buildSharedInputField({
         id: CONTEXT_TOKENS_ID,
         type: 'number',
@@ -289,6 +297,14 @@ function buildSettingsContentHtml(): string {
                     <div class="stx-ui-item-desc">控制是否计算并输出基础注入预览信息。</div>
                 </div>
                 <div class="stx-ui-inline">${injectionPreviewCheckbox}</div>
+            </div>
+
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">Embedding 检索开关</div>
+                    <div class="stx-ui-item-desc">默认关闭。关闭时使用 BM25 + n-gram + 编辑距离召回。</div>
+                </div>
+                <div class="stx-ui-inline">${embeddingCheckbox}</div>
             </div>
 
             <div class="stx-ui-item stx-ui-item-stack">
@@ -363,10 +379,12 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
+    const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
+    if (embeddingInput) embeddingInput.checked = settings.enableEmbedding;
     if (contextTokensInput) contextTokensInput.value = String(settings.contextMaxTokens);
 }
 
@@ -378,11 +396,13 @@ function readSettingsFromForm(): MemoryOSSettings {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
+    const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
         injectionPreviewEnabled: injectionPreviewInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled,
+        enableEmbedding: embeddingInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding,
         contextMaxTokens: Number(contextTokensInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
     };
 }

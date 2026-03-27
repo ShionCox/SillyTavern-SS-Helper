@@ -12,7 +12,19 @@ export type MemoryTraceStage =
     | 'memory_prompt_inserted'
     | 'memory_prompt_insert_success'
     | 'memory_ingest_started'
-    | 'memory_event_appended';
+    | 'memory_event_appended'
+    | 'cold_start_started'
+    | 'cold_start_succeeded'
+    | 'cold_start_failed'
+    | 'world_profile_bound'
+    | 'summary_started'
+    | 'candidate_types_resolved'
+    | 'type_schemas_resolved'
+    | 'candidate_records_resolved'
+    | 'mutation_validated'
+    | 'mutation_applied'
+    | 'summary_failed'
+    | 'injection_context_built';
 
 /**
  * 功能：定义追踪上下文。
@@ -195,8 +207,17 @@ export function normalizeMemoryMainlineTraceSnapshot(snapshot?: MemoryMainlineTr
         recentTraces: recentTraces.slice(-DEFAULT_MAINLINE_TRACE_LIMIT),
         lastIngestTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_ingest_started') ?? null,
         lastAppendTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_event_appended') ?? null,
-        lastRecallTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_recall_started' || item.stage === 'memory_context_built') ?? null,
-        lastPromptInjectionTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_prompt_insert_success' || item.stage === 'memory_prompt_inserted') ?? null,
+        lastRecallTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => {
+            return item.stage === 'memory_recall_started'
+                || item.stage === 'memory_context_built'
+                || item.stage === 'summary_started'
+                || item.stage === 'cold_start_started';
+        }) ?? null,
+        lastPromptInjectionTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => {
+            return item.stage === 'memory_prompt_insert_success'
+                || item.stage === 'memory_prompt_inserted'
+                || item.stage === 'injection_context_built';
+        }) ?? null,
         lastUpdatedAt: Math.max(0, Number(snapshot?.lastUpdatedAt ?? 0) || 0, lastTrace?.ts ?? 0, lastSuccessTrace?.ts ?? 0),
     };
 }
@@ -220,8 +241,17 @@ export function touchMemoryMainlineTraceSnapshot(
         lastSuccessTrace: entry.ok ? entry : base.lastSuccessTrace,
         lastIngestTrace: entry.stage === 'memory_ingest_started' ? entry : base.lastIngestTrace,
         lastAppendTrace: entry.stage === 'memory_event_appended' ? entry : base.lastAppendTrace,
-        lastRecallTrace: entry.stage === 'memory_recall_started' || entry.stage === 'memory_context_built' ? entry : base.lastRecallTrace,
-        lastPromptInjectionTrace: entry.stage === 'memory_prompt_insert_success' || entry.stage === 'memory_prompt_inserted' ? entry : base.lastPromptInjectionTrace,
+        lastRecallTrace: (
+            entry.stage === 'memory_recall_started'
+            || entry.stage === 'memory_context_built'
+            || entry.stage === 'summary_started'
+            || entry.stage === 'cold_start_started'
+        ) ? entry : base.lastRecallTrace,
+        lastPromptInjectionTrace: (
+            entry.stage === 'memory_prompt_insert_success'
+            || entry.stage === 'memory_prompt_inserted'
+            || entry.stage === 'injection_context_built'
+        ) ? entry : base.lastPromptInjectionTrace,
         lastUpdatedAt: Math.max(base.lastUpdatedAt, entry.ts),
     };
 }

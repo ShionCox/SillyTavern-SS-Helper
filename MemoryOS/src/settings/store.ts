@@ -5,6 +5,7 @@ export type MemoryOSSettings = {
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
+    enableEmbedding: boolean;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -14,6 +15,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
+    enableEmbedding: false,
 };
 
 /**
@@ -31,6 +33,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
+        enableEmbedding: candidate.enableEmbedding === true,
     };
 }
 

@@ -112,6 +112,18 @@ export interface SummarySnapshot {
     updatedAt: number;
 }
 
+export interface WorldProfileBinding {
+    chatKey: string;
+    primaryProfile: string;
+    secondaryProfiles: string[];
+    confidence: number;
+    reasonCodes: string[];
+    detectedFrom: string[];
+    sourceHash: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface PromptAssemblyRoleEntry {
     actorKey: string;
     actorLabel: string;
@@ -158,7 +170,111 @@ export const CORE_MEMORY_ENTRY_TYPES: Array<{
     accentColor: string;
 }> = [
     {
-        key: 'world_rule',
+        key: 'actor_profile',
+        label: '角色画像',
+        category: '角色关系',
+        description: '角色稳定身份信息、别名与长期特征。',
+        injectToSystem: false,
+        bindableToRole: true,
+        icon: 'fa-solid fa-id-card',
+        accentColor: '#4f6d7a',
+        fields: [
+            { key: 'aliases', label: '别名', kind: 'tags' },
+            { key: 'identityFacts', label: '身份事实', kind: 'textarea' },
+            { key: 'originFacts', label: '来源事实', kind: 'textarea' },
+            { key: 'traits', label: '长期特征', kind: 'tags' },
+        ],
+    },
+    {
+        key: 'world_core_setting',
+        label: '世界核心设定',
+        category: '世界基础',
+        description: '长期成立的世界设定与事实框架。',
+        injectToSystem: true,
+        bindableToRole: false,
+        icon: 'fa-solid fa-landmark-dome',
+        accentColor: '#b58a52',
+        fields: [
+            { key: 'scope', label: '作用域', kind: 'text' },
+            { key: 'impact', label: '影响范围', kind: 'textarea' },
+        ],
+    },
+    {
+        key: 'world_hard_rule',
+        label: '世界硬规则',
+        category: '世界基础',
+        description: '制度、禁令与法则等稳定硬约束。',
+        injectToSystem: true,
+        bindableToRole: false,
+        icon: 'fa-solid fa-gavel',
+        accentColor: '#9e6b3a',
+        fields: [
+            { key: 'scope', label: '作用域', kind: 'text' },
+            { key: 'enforcement', label: '执行方式', kind: 'textarea' },
+        ],
+    },
+    {
+        key: 'world_global_state',
+        label: '世界全局状态',
+        category: '世界基础',
+        description: '某一时期的世界现实状态，可被新状态替换。',
+        injectToSystem: true,
+        bindableToRole: false,
+        icon: 'fa-solid fa-earth-asia',
+        accentColor: '#8a7d4f',
+        fields: [
+            { key: 'scope', label: '作用域', kind: 'text' },
+            { key: 'state', label: '状态', kind: 'textarea' },
+            { key: 'supersededBy', label: '替代状态', kind: 'text' },
+        ],
+    },
+    {
+        key: 'scene_shared_state',
+        label: '场景共享状态',
+        category: '地点',
+        description: '当前场景中所有角色共享可见的信息。',
+        injectToSystem: true,
+        bindableToRole: false,
+        icon: 'fa-solid fa-map-location-dot',
+        accentColor: '#5e7b68',
+        fields: [
+            { key: 'location', label: '地点', kind: 'text' },
+            { key: 'visibilityScope', label: '可见范围', kind: 'text' },
+            { key: 'participants', label: '参与者', kind: 'tags' },
+        ],
+    },
+    {
+        key: 'actor_visible_event',
+        label: '角色可见事件',
+        category: '事件',
+        description: '角色视角下明确可见的事件。',
+        injectToSystem: false,
+        bindableToRole: true,
+        icon: 'fa-solid fa-eye',
+        accentColor: '#8e5741',
+        fields: [
+            { key: 'participants', label: '参与者', kind: 'tags' },
+            { key: 'location', label: '地点', kind: 'text' },
+            { key: 'outcome', label: '结果', kind: 'textarea' },
+        ],
+    },
+    {
+        key: 'actor_private_interpretation',
+        label: '角色主观理解',
+        category: '其他',
+        description: '角色的猜测、误解、偏见与主观解读。',
+        injectToSystem: false,
+        bindableToRole: true,
+        icon: 'fa-solid fa-brain',
+        accentColor: '#7b5f9e',
+        fields: [
+            { key: 'sourceEventId', label: '来源事件', kind: 'text' },
+            { key: 'bias', label: '偏向', kind: 'textarea' },
+            { key: 'certainty', label: '确信度', kind: 'number' },
+        ],
+    },
+    {
+        key: 'world_hard_rule_legacy',
         label: '世界规则',
         category: '世界基础',
         description: '长期稳定存在的世界规则、魔法法则与硬约束。',
