@@ -506,6 +506,13 @@ export class MemorySDKImpl {
                         matchedEntryIds: preview.matchedEntryIds,
                         reasonCodes: preview.reasonCodes,
                         source: 'unified_memory',
+                        retrievalProviderId: preview.diagnostics?.providerId,
+                        retrievalRulePack: preview.diagnostics?.rulePackMode,
+                        contextRoute: preview.diagnostics?.contextRoute ?? null,
+                        matchedRules: preview.diagnostics?.contextRoute?.matchedRules ?? [],
+                        subQueries: preview.diagnostics?.contextRoute?.subQueries ?? [],
+                        routeReasons: preview.diagnostics?.contextRoute?.reasons ?? [],
+                        traceRecords: preview.diagnostics?.traceRecords ?? [],
                     };
                     return {
                         shouldInject,

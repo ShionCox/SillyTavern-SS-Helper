@@ -27,6 +27,8 @@ export function matchKeywordSignals(
         const score = Number((matchedKeywords.length + keywordCoverage).toFixed(4));
         results.push({
             dictionaryId: dictionary.dictionaryId,
+            label: dictionary.label ?? dictionary.description ?? dictionary.dictionaryId,
+            pack: dictionary.pack ?? 'native',
             score,
             matchedKeywords,
             candidateTypes: dedupeStrings(dictionary.candidateTypes),

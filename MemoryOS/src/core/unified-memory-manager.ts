@@ -31,6 +31,10 @@ import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { detectWorldProfile, resolveWorldProfile, getWorldProfileBinding, putWorldProfileBinding, deleteWorldProfileBinding } from '../memory-world-profile';
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
+import { getMemoryTrace, recordMemoryDebug } from './debug/memory-retrieval-logger';
+import { RetrievalOrchestrator, type RetrievalCandidate } from '../memory-retrieval';
+
+const promptRetrievalOrchestrator = new RetrievalOrchestrator();
 
 /**
  * 功能：统一条目记忆系统主管理器。
@@ -545,6 +549,7 @@ export class UnifiedMemoryManager {
             pluginId: MEMORY_OS_PLUGIN_ID,
             messages: normalizedMessages,
             enableEmbedding: settings.enableEmbedding === true,
+            retrievalRulePack: settings.retrievalRulePack,
         });
         return summaryResult.snapshot;
 
@@ -603,49 +608,64 @@ export class UnifiedMemoryManager {
         promptMessages?: SdkTavernPromptMessageEvent[];
         maxTokens?: number;
     }): Promise<PromptAssemblySnapshot> {
-        {
+        const settings = readMemoryOSSettings();
         const query = this.normalizeText(input.query);
         const promptText = (input.promptMessages ?? [])
             .map((message: SdkTavernPromptMessageEvent): string => this.readPromptText(message))
             .join('\n')
             .toLowerCase();
-        const queryTerms = this.extractQueryTerms(query);
-        const typeMap = await this.getEntryTypeMap();
-        const entries = await this.listEntries();
-        const actorProfiles = await this.listActorProfiles();
-        const matchedActorKeys = actorProfiles
-            .filter((profile: ActorMemoryProfile): boolean => {
-                if (!query && !promptText) {
-                    return true;
-                }
-                return [profile.actorKey, profile.displayName]
-                    .map((text: string): string => text.toLowerCase())
-                    .some((text: string): boolean => Boolean(text) && (
-                        promptText.includes(text)
-                        || queryTerms.some((term: string): boolean => term.includes(text) || text.includes(term))
-                    ));
-            })
-            .map((profile: ActorMemoryProfile): string => profile.actorKey);
-        const effectiveActorKeys = matchedActorKeys.length > 0
-            ? matchedActorKeys
-            : actorProfiles.slice(0, 3).map((profile: ActorMemoryProfile): string => profile.actorKey);
+        const [typeMap, entries, actorProfiles, worldBinding, roleRows] = await Promise.all([
+            this.getEntryTypeMap(),
+            this.listEntries(),
+            this.listActorProfiles(),
+            this.getWorldProfileBinding(),
+            db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray(),
+        ]);
+        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleRows, actorProfiles);
+        const retrievalQueryText = query || promptText || '当前对话';
+        const retrievalResult = await promptRetrievalOrchestrator.retrieve(
+            {
+                query: retrievalQueryText,
+                enableEmbedding: settings.enableEmbedding === true,
+                chatKey: this.chatKey,
+                rulePackMode: settings.retrievalRulePack,
+                budget: {
+                    maxCandidates: 18,
+                    maxChars: Math.max(2600, Number(input.maxTokens ?? settings.contextMaxTokens) * 4),
+                },
+            },
+            retrievalCandidates,
+            {
+                actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
+                    actorKey: profile.actorKey,
+                    displayName: profile.displayName,
+                    aliases: this.collectActorProfileAliases(entries, profile.actorKey),
+                })),
+            },
+        );
+
+        const matchedEntryIdSet = new Set(retrievalResult.items.map((item) => item.candidate.entryId));
+        const selectedEntries = matchedEntryIdSet.size > 0
+            ? entries.filter((entry: MemoryEntry): boolean => matchedEntryIdSet.has(entry.entryId))
+            : entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true).slice(0, 8);
+        const matchedActorKeys = this.resolvePromptMatchedActorKeys(
+            retrievalResult.contextRoute?.entityAnchors.actorKeys ?? [],
+            retrievalResult.items.map((item) => item.candidate),
+            actorProfiles,
+        );
+        const effectiveActorKey = matchedActorKeys[0] || 'user';
         const actorMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, ActorMemoryProfile] => [profile.actorKey, profile]));
         const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
-        const roleRows = await db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray();
         const roleEntries: PromptAssemblyRoleEntry[] = [];
-        const matchedEntryIds = new Set<string>();
         for (const row of roleRows) {
-            if (!effectiveActorKeys.includes(row.actorKey)) {
+            if (!matchedActorKeys.includes(row.actorKey) || !matchedEntryIdSet.has(row.entryId)) {
                 continue;
             }
             const entry = entryMap.get(row.entryId);
             if (!entry) {
                 continue;
             }
-            if (query && !this.isEntryMatched(entry, queryTerms)) {
-                continue;
-            }
-            const forgotten = this.shouldForget(row, query || promptText);
+            const forgotten = this.shouldForget(row, retrievalQueryText);
             roleEntries.push({
                 actorKey: row.actorKey,
                 actorLabel: actorMap.get(row.actorKey)?.displayName || row.actorKey,
@@ -658,10 +678,8 @@ export class UnifiedMemoryManager {
                     ? `${entry.title}：内容已遗忘`
                     : `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
             });
-            matchedEntryIds.add(entry.entryId);
         }
 
-        const worldBinding = await this.getWorldProfileBinding();
         const worldDetection = worldBinding?.primaryProfile
             ? {
                 primaryProfile: worldBinding.primaryProfile,
@@ -671,17 +689,40 @@ export class UnifiedMemoryManager {
             }
             : detectWorldProfile({
                 texts: [
-                    query,
+                    retrievalQueryText,
                     promptText,
-                    ...entries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
+                    ...selectedEntries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
                 ],
             });
         const worldProfile = resolveWorldProfile(worldDetection);
         const visibleContext = buildActorVisibleMemoryContext({
-            entries,
+            entries: selectedEntries,
             roleEntries,
-            activeActorKey: effectiveActorKeys[0],
+            activeActorKey: effectiveActorKey,
         });
+
+        recordMemoryDebug(this.chatKey, {
+            ts: Date.now(),
+            level: 'info',
+            stage: 'injection',
+            title: '开始构建',
+            message: '开始构建注入上下文。',
+            payload: {
+                actorKey: effectiveActorKey,
+                matchedEntryCount: selectedEntries.length,
+            },
+        });
+        recordMemoryDebug(this.chatKey, {
+            ts: Date.now(),
+            level: 'info',
+            stage: 'injection',
+            title: '注入视角',
+            message: `当前注入视角角色：${effectiveActorKey}。`,
+            payload: {
+                actorKey: effectiveActorKey,
+            },
+        });
+
         const xmlNarrative = renderMemoryContextXmlMarkdown(visibleContext, worldProfile.primary.injectionStyle, {
             worldBaseChars: 900,
             sceneSharedChars: 700,
@@ -689,15 +730,39 @@ export class UnifiedMemoryManager {
             totalChars: 2600,
         });
         const systemText = this.trimTextToBudget(xmlNarrative, input.maxTokens ?? 1400);
+
+        recordMemoryDebug(this.chatKey, {
+            ts: Date.now(),
+            level: 'info',
+            stage: 'injection',
+            title: '注入统计',
+            message: `本轮共注入 ${visibleContext.diagnostics.totalInjectedCount} 条记忆，预计上下文占用约 ${visibleContext.diagnostics.estimatedChars} 字。`,
+            payload: {
+                injectedCount: visibleContext.diagnostics.totalInjectedCount,
+                estimatedChars: visibleContext.diagnostics.estimatedChars,
+                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
+            },
+        });
+        recordMemoryDebug(this.chatKey, {
+            ts: Date.now(),
+            level: 'info',
+            stage: 'injection',
+            title: '注入层级',
+            message: '注入内容包含 clear / blur / distorted 三种记忆呈现层级。',
+            payload: {
+                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
+            },
+        });
+
         const snapshot: PromptAssemblySnapshot = {
             generatedAt: Date.now(),
             query,
-            matchedActorKeys: effectiveActorKeys,
-            matchedEntryIds: Array.from(matchedEntryIds),
+            matchedActorKeys,
+            matchedEntryIds: selectedEntries.map((entry: MemoryEntry): string => entry.entryId),
             systemText,
             roleText: '',
             finalText: systemText,
-            systemEntryIds: entries
+            systemEntryIds: selectedEntries
                 .filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true)
                 .map((entry: MemoryEntry): string => entry.entryId),
             roleEntries,
@@ -705,98 +770,182 @@ export class UnifiedMemoryManager {
                 'prompt:unified_memory',
                 'prompt:xml_markdown_renderer',
                 `world_profile:${worldProfile.primary.worldProfileId}`,
+                `retrieval_provider:${retrievalResult.providerId || 'none'}`,
+                `retrieval_rule_pack:${settings.retrievalRulePack}`,
                 systemText ? 'prompt:system_base_present' : 'prompt:system_base_empty',
             ],
+            diagnostics: {
+                providerId: retrievalResult.providerId,
+                rulePackMode: settings.retrievalRulePack,
+                contextRoute: retrievalResult.contextRoute,
+                retrieval: retrievalResult.diagnostics ?? null,
+                traceRecords: getMemoryTrace(this.chatKey),
+                injectionActorKey: effectiveActorKey,
+                injectedCount: visibleContext.diagnostics.totalInjectedCount,
+                estimatedChars: visibleContext.diagnostics.estimatedChars,
+                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
+            },
         };
         await this.appendMutationHistory({
             action: 'injection_context_built',
             payload: {
                 worldProfile: worldProfile.primary.worldProfileId,
-                actorKey: effectiveActorKeys[0] || 'actor',
+                actorKey: effectiveActorKey,
                 matchedEntryCount: snapshot.matchedEntryIds.length,
+                retrievalProviderId: retrievalResult.providerId,
+                retrievalRulePack: settings.retrievalRulePack,
                 reasonCodes: snapshot.reasonCodes,
             },
         });
         return snapshot;
-        }
+    }
 
-        /* legacy prompt assembly branch removed:
-        const query = this.normalizeText(input.query);
-        const queryTerms = this.extractQueryTerms(query);
-        const promptText = (input.promptMessages ?? [])
-            .map((message: SdkTavernPromptMessageEvent): string => this.readPromptText(message))
-            .join('\n')
-            .toLowerCase();
-        const typeMap = await this.getEntryTypeMap();
-        const entries = await this.listEntries();
-        const systemEntries = entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true);
-        const actorProfiles = await this.listActorProfiles();
-        const matchedActorKeys = actorProfiles
-            .filter((profile: ActorMemoryProfile): boolean => {
-                if (!query && !promptText) {
-                    return true;
+    /**
+     * 功能：收集指定角色画像条目的别名列表。
+     * @param entries 全量条目。
+     * @param actorKey 角色键。
+     * @returns 别名列表。
+     */
+    private collectActorProfileAliases(entries: MemoryEntry[], actorKey: string): string[] {
+        const aliases = new Set<string>();
+        entries
+            .filter((entry: MemoryEntry): boolean => entry.entryType === 'actor_profile')
+            .forEach((entry: MemoryEntry): void => {
+                const payload = this.normalizeRecord(entry.detailPayload);
+                const fields = this.normalizeRecord(payload.fields);
+                const boundActorKey = this.normalizeActorKey(payload.actorKey ?? fields.actorKey ?? entry.title);
+                if (boundActorKey !== this.normalizeActorKey(actorKey)) {
+                    return;
                 }
-                return [profile.actorKey, profile.displayName]
-                    .map((text: string): string => text.toLowerCase())
-                    .some((text: string): boolean => Boolean(text) && (
-                        promptText.includes(text)
-                        || queryTerms.some((term: string): boolean => term.includes(text) || text.includes(term))
-                    ));
-            })
-            .map((profile: ActorMemoryProfile): string => profile.actorKey);
-        const effectiveActorKeys = matchedActorKeys.length > 0
-            ? matchedActorKeys
-            : actorProfiles.slice(0, 3).map((profile: ActorMemoryProfile): string => profile.actorKey);
-        const actorMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, ActorMemoryProfile] => [profile.actorKey, profile]));
-        const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
-        const roleRows = await db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray();
-        const roleEntries: PromptAssemblyRoleEntry[] = [];
-        const matchedEntryIds = new Set<string>();
-        for (const row of roleRows) {
-            if (!effectiveActorKeys.includes(row.actorKey)) {
-                continue;
-            }
-            const entry = entryMap.get(row.entryId);
-            if (!entry) {
-                continue;
-            }
-            if (query && !this.isEntryMatched(entry, queryTerms)) {
-                continue;
-            }
-            const forgotten = this.shouldForget(row, query || promptText);
-            roleEntries.push({
-                actorKey: row.actorKey,
-                actorLabel: actorMap.get(row.actorKey)?.displayName || row.actorKey,
-                entryId: entry.entryId,
-                title: entry.title,
-                entryType: typeMap.get(entry.entryType)?.label || entry.entryType,
-                memoryPercent: row.memoryPercent,
-                forgotten,
-                renderedText: forgotten
-                    ? `${entry.title}：内容已遗忘`
-                    : `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
+                aliases.add(entry.title);
+                this.normalizeLooseStringArray(fields.aliases ?? payload.aliases).forEach((alias: string): void => {
+                    aliases.add(alias);
+                });
             });
-            matchedEntryIds.add(entry.entryId);
+        return [...aliases].filter(Boolean);
+    }
+
+    /**
+     * 功能：把条目映射为检索候选，补充结构化锚点信息。
+     * @param entries 条目列表。
+     * @param roleRows 角色记忆绑定。
+     * @param actorProfiles 角色资料。
+     * @returns 检索候选列表。
+     */
+    private buildPromptRetrievalCandidates(
+        entries: MemoryEntry[],
+        roleRows: DBRoleEntryMemory[],
+        actorProfiles: ActorMemoryProfile[],
+    ): RetrievalCandidate[] {
+        const boundActorMap = new Map<string, string[]>();
+        const memoryPercentMap = new Map<string, number>();
+        roleRows.forEach((row: DBRoleEntryMemory): void => {
+            if (row.forgotten) {
+                return;
+            }
+            const list = boundActorMap.get(row.entryId) ?? [];
+            if (!list.includes(row.actorKey)) {
+                list.push(row.actorKey);
+            }
+            boundActorMap.set(row.entryId, list);
+            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, row.memoryPercent));
+        });
+        const actorDisplayNameMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.actorKey, profile.displayName]));
+        const actorKeyByDisplayName = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.displayName, profile.actorKey]));
+
+        return entries.map((entry: MemoryEntry): RetrievalCandidate => {
+            const payload = this.normalizeRecord(entry.detailPayload);
+            const fields = this.normalizeRecord(payload.fields);
+            const sourceActorKey = this.normalizeActorKey(payload.sourceActorKey ?? fields.sourceActorKey);
+            const targetActorKey = this.normalizeActorKey(payload.targetActorKey ?? fields.targetActorKey);
+            const participantNames = this.normalizeLooseStringArray(payload.participants ?? fields.participants);
+            const boundActorKeys = boundActorMap.get(entry.entryId) ?? [];
+            const actorKeys = Array.from(new Set([
+                ...boundActorKeys,
+                ...[sourceActorKey, targetActorKey].filter(Boolean),
+            ]));
+            const participantActorKeys = participantNames
+                .map((name: string): string => actorKeyByDisplayName.get(name) ?? '')
+                .filter(Boolean);
+            const relationKeys = Array.from(new Set([
+                ...this.normalizeLooseStringArray(payload.relationKeys ?? fields.relationKeys),
+                ...(sourceActorKey && targetActorKey ? [`relationship:${sourceActorKey}:${targetActorKey}`] : []),
+                ...this.normalizeLooseStringArray(fields.relationTag ?? payload.relationTag),
+            ]));
+            const locationKey = this.normalizeText(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location);
+            const worldKeys = Array.from(new Set([
+                ...this.normalizeLooseStringArray(payload.worldKeys ?? fields.worldKeys),
+                ...(entry.entryType.startsWith('world_') ? [entry.title] : []),
+            ]));
+            const aliasTexts = Array.from(new Set([
+                ...actorKeys.map((actorKey: string): string => actorDisplayNameMap.get(actorKey) ?? ''),
+                ...participantNames,
+                ...this.normalizeLooseStringArray(payload.aliases ?? fields.aliases),
+                ...entry.tags,
+            ])).filter(Boolean);
+            return {
+                candidateId: `prompt:${entry.entryId}`,
+                entryId: entry.entryId,
+                schemaId: entry.entryType,
+                title: entry.title,
+                summary: entry.summary || entry.detail,
+                updatedAt: entry.updatedAt,
+                memoryPercent: memoryPercentMap.get(entry.entryId) ?? (entry.entryType.startsWith('world_') ? 88 : 60),
+                category: String(entry.category ?? ''),
+                tags: entry.tags,
+                sourceSummaryIds: entry.sourceSummaryIds,
+                actorKeys,
+                relationKeys,
+                participantActorKeys: Array.from(new Set([...participantActorKeys, ...boundActorKeys])),
+                locationKey: locationKey || undefined,
+                worldKeys,
+                compareKey: `${entry.entryType}:${entry.title}`,
+                injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
+                aliasTexts,
+            };
+        });
+    }
+
+    /**
+     * 功能：解析本轮真正命中的角色键。
+     * @param anchorActorKeys 语境路由命中的角色。
+     * @param candidates 命中的候选列表。
+     * @param actorProfiles 全量角色资料。
+     * @returns 角色键列表。
+     */
+    private resolvePromptMatchedActorKeys(
+        anchorActorKeys: string[],
+        candidates: RetrievalCandidate[],
+        actorProfiles: ActorMemoryProfile[],
+    ): string[] {
+        const matchedActorKeys = Array.from(new Set([
+            ...anchorActorKeys,
+            ...candidates.flatMap((candidate: RetrievalCandidate): string[] => candidate.actorKeys ?? []),
+            ...candidates.flatMap((candidate: RetrievalCandidate): string[] => candidate.participantActorKeys ?? []),
+        ])).filter(Boolean);
+        if (matchedActorKeys.length > 0) {
+            return matchedActorKeys;
         }
-        const systemText = this.trimTextToBudget(this.renderSystemText(systemEntries, typeMap), input.maxTokens ?? 1400);
-        const roleText = this.trimTextToBudget(this.renderRoleText(roleEntries), input.maxTokens ?? 1400);
-        return {
-            generatedAt: Date.now(),
-            query,
-            matchedActorKeys: effectiveActorKeys,
-            matchedEntryIds: Array.from(matchedEntryIds),
-            systemText,
-            roleText,
-            finalText: [systemText, roleText].filter(Boolean).join('\n\n').trim(),
-            systemEntryIds: systemEntries.map((entry: MemoryEntry): string => entry.entryId),
-            roleEntries,
-            reasonCodes: [
-                'prompt:unified_memory',
-                systemText ? 'prompt:system_base_present' : 'prompt:system_base_empty',
-                roleText ? 'prompt:role_memory_present' : 'prompt:role_memory_empty',
-            ],
-        };
-        */
+        return actorProfiles.slice(0, 3).map((profile: ActorMemoryProfile): string => profile.actorKey);
+    }
+
+    /**
+     * 功能：把未知值解析为宽松字符串数组。
+     * @param value 原始值。
+     * @returns 字符串数组。
+     */
+    private normalizeLooseStringArray(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return value.map((item: unknown): string => this.normalizeText(item)).filter(Boolean);
+        }
+        const text = this.normalizeText(value);
+        if (!text) {
+            return [];
+        }
+        return text
+            .split(/[,，、\n]+/)
+            .map((item: string): string => this.normalizeText(item))
+            .filter(Boolean);
     }
 
     /**

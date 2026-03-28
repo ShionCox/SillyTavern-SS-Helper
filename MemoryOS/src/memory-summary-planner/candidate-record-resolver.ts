@@ -23,6 +23,7 @@ export interface ResolveCandidateRecordsInput {
     maxCandidatesHardCap?: number;
     candidateTextBudgetChars?: number;
     enableEmbedding?: boolean;
+    rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
 
 const defaultRetrievalOrchestrator = new RetrievalOrchestrator();
@@ -44,6 +45,7 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
         query: input.query,
         candidateTypes: input.candidateTypes,
         enableEmbedding: input.enableEmbedding,
+        rulePackMode: input.rulePackMode,
         budget: {
             maxCandidates: maxCandidatesHardCap,
         },
@@ -87,6 +89,32 @@ function mapToRetrievalCandidates(
     memoryPercentByEntryId?: Map<string, number>,
 ): RetrievalCandidate[] {
     return entries.map((entry: MemoryEntry, index: number): RetrievalCandidate => ({
+        ...buildSummaryRetrievalCandidate(entry, index, memoryPercentByEntryId),
+    }));
+}
+
+/**
+ * 功能：构建单条总结检索候选。
+ * @param entry 条目。
+ * @param index 序号。
+ * @param memoryPercentByEntryId 记忆度映射。
+ * @returns 检索候选。
+ */
+function buildSummaryRetrievalCandidate(
+    entry: MemoryEntry,
+    index: number,
+    memoryPercentByEntryId?: Map<string, number>,
+): RetrievalCandidate {
+    const payload = toRecord(entry.detailPayload);
+    const fields = toRecord(payload.fields);
+    const sourceActorKey = normalizeText(payload.sourceActorKey ?? fields.sourceActorKey).toLowerCase();
+    const targetActorKey = normalizeText(payload.targetActorKey ?? fields.targetActorKey).toLowerCase();
+    const relationTag = normalizeText(fields.relationTag ?? payload.relationTag);
+    const participants = normalizeLooseStringArray(payload.participants ?? fields.participants);
+    const locationKey = normalizeText(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location);
+    const worldKeys = normalizeLooseStringArray(payload.worldKeys ?? fields.worldKeys);
+    const aliases = normalizeLooseStringArray(payload.aliases ?? fields.aliases);
+    return {
         candidateId: `candidate_${index + 1}`,
         entryId: entry.entryId,
         schemaId: entry.entryType,
@@ -94,7 +122,19 @@ function mapToRetrievalCandidates(
         summary: entry.summary || entry.detail,
         updatedAt: entry.updatedAt,
         memoryPercent: clampPercent(memoryPercentByEntryId?.get(entry.entryId) ?? 60),
-    }));
+        category: String(entry.category ?? ''),
+        tags: entry.tags,
+        actorKeys: [sourceActorKey, targetActorKey].filter(Boolean),
+        relationKeys: Array.from(new Set([
+            ...normalizeLooseStringArray(payload.relationKeys ?? fields.relationKeys),
+            ...(sourceActorKey && targetActorKey ? [`relationship:${sourceActorKey}:${targetActorKey}`] : []),
+            ...(relationTag ? [relationTag] : []),
+        ])),
+        participantActorKeys: participants,
+        locationKey: locationKey || undefined,
+        worldKeys: entry.entryType.startsWith('world_') ? Array.from(new Set([...worldKeys, entry.title])) : worldKeys,
+        aliasTexts: aliases,
+    };
 }
 
 /**
@@ -117,4 +157,35 @@ function clampPercent(value: number): number {
  */
 function normalizeText(value: unknown): string {
     return String(value ?? '').trim();
+}
+
+/**
+ * 功能：把未知输入安全转成对象。
+ * @param value 原始值。
+ * @returns 记录对象。
+ */
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：把未知值解析为宽松字符串数组。
+ * @param value 原始值。
+ * @returns 字符串数组。
+ */
+function normalizeLooseStringArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return value.map((item: unknown): string => normalizeText(item)).filter(Boolean);
+    }
+    const text = normalizeText(value);
+    if (!text) {
+        return [];
+    }
+    return text
+        .split(/[,，、\n]+/)
+        .map((item: string): string => normalizeText(item))
+        .filter(Boolean);
 }

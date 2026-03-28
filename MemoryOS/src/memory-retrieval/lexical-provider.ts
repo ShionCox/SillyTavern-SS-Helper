@@ -106,6 +106,9 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
         if (candidate.actorKeys && candidate.actorKeys.length > 0) {
             parts.push(candidate.actorKeys.join(' '));
         }
+        if (candidate.aliasTexts && candidate.aliasTexts.length > 0) {
+            parts.push(candidate.aliasTexts.join(' '));
+        }
         return parts.join(' ').trim().toLowerCase();
     }
 

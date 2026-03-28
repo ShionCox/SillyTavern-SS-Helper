@@ -1,3 +1,4 @@
+import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalFacet, RetrievalResultItem } from './types';
 import { computeNGramSimilarity } from './scoring';
 
@@ -37,31 +38,69 @@ export interface DiversityPruneInput {
     maxChars?: number;
     maxCandidates?: number;
     similarityThreshold?: number;
+    onTrace?: (record: MemoryDebugLogRecord) => void;
+}
+
+/**
+ * 功能：多样性裁剪结果。
+ */
+export interface DiversityPruneResult {
+    items: RetrievalResultItem[];
+    droppedCount: number;
+    dominantFacet: RetrievalFacet | null;
+    deferredCount: number;
 }
 
 /**
  * 功能：执行去重 + 类别平衡 + 预算控制的多样性裁剪。
  * @param input 裁剪输入。
- * @returns 裁剪后的结果列表。
+ * @returns 裁剪后的结果和诊断。
  */
-export function pruneForDiversity(input: DiversityPruneInput): RetrievalResultItem[] {
-    const {
-        items,
-        maxChars = 8000,
-        maxCandidates = 40,
-        similarityThreshold = 0.85,
-    } = input;
+export function pruneForDiversity(input: DiversityPruneInput): DiversityPruneResult {
+    const { items, maxChars = 8000, maxCandidates = 40, similarityThreshold = 0.85, onTrace } = input;
+    if (items.length <= 0) {
+        return {
+            items: [],
+            droppedCount: 0,
+            dominantFacet: null,
+            deferredCount: 0,
+        };
+    }
 
-    if (items.length <= 0) return [];
+    emitDiversityTrace(onTrace, '开始裁剪', '开始执行多样性裁剪。', {
+        originalCount: items.length,
+        maxChars,
+        maxCandidates,
+    });
 
-    // 第一步：去重（entryId / compareKey / 高相似 summary）
     const deduped = deduplicateItems(items, similarityThreshold);
-
-    // 第二步：类别平衡选择
     const balanced = balanceByCategory(deduped, maxCandidates);
+    const truncated = truncateByBudget(balanced.items, maxChars);
+    const droppedCount = Math.max(0, items.length - truncated.length);
 
-    // 第三步：预算截断
-    return truncateByBudget(balanced, maxChars);
+    if (balanced.dominantFacet) {
+        emitDiversityTrace(
+            onTrace,
+            '轻量平衡',
+            `${balanced.dominantFacet} 类候选占比过高，已触发轻量平衡。`,
+            {
+                dominantFacet: balanced.dominantFacet,
+                deferredCount: balanced.deferredCount,
+            },
+        );
+    }
+    emitDiversityTrace(onTrace, '裁剪完成', `多样性裁剪完成，最终保留 ${truncated.length} 条结果。`, {
+        dedupedCount: deduped.length,
+        deferredCount: balanced.deferredCount,
+        finalCount: truncated.length,
+    });
+
+    return {
+        items: truncated,
+        droppedCount,
+        dominantFacet: balanced.dominantFacet,
+        deferredCount: balanced.deferredCount,
+    };
 }
 
 /**
@@ -78,45 +117,39 @@ function deduplicateItems(items: RetrievalResultItem[], threshold: number): Retr
 
     for (const item of items) {
         const { candidate } = item;
-
-        // entryId 去重
-        if (seenEntryIds.has(candidate.entryId)) continue;
-
-        // compareKey 去重
-        if (candidate.compareKey) {
-            if (seenCompareKeys.has(candidate.compareKey)) continue;
+        if (seenEntryIds.has(candidate.entryId)) {
+            continue;
         }
-
-        // schemaId + relationKey pair 去重
+        if (candidate.compareKey && seenCompareKeys.has(candidate.compareKey)) {
+            continue;
+        }
         if (candidate.relationKeys && candidate.relationKeys.length > 0) {
             const sortedKeys = [...candidate.relationKeys].sort();
             const schemaRelation = `${candidate.schemaId}:${sortedKeys.join(',')}`;
             if (seenSchemaRelationPairs.has(schemaRelation)) {
-                // 允许同一 schema+relation 最多 2 条
-                const sameCount = selected.filter(s =>
-                    s.candidate.schemaId === candidate.schemaId &&
-                    arraysEqual(s.candidate.relationKeys ?? [], candidate.relationKeys ?? []),
-                ).length;
-                if (sameCount >= 2) continue;
+                const sameCount = selected.filter((selectedItem: RetrievalResultItem): boolean => {
+                    return selectedItem.candidate.schemaId === candidate.schemaId
+                        && arraysEqual(selectedItem.candidate.relationKeys ?? [], candidate.relationKeys ?? []);
+                }).length;
+                if (sameCount >= 2) {
+                    continue;
+                }
             }
             seenSchemaRelationPairs.add(schemaRelation);
         }
-
-        // summary 高相似去重
         const summaryText = `${candidate.title} ${candidate.summary}`;
-        const isDuplicate = selected.some(existing => {
-            const existingText = `${existing.candidate.title} ${existing.candidate.summary}`;
-            return computeNGramSimilarity(summaryText, existingText) >= threshold;
+        const isDuplicate = selected.some((existing: RetrievalResultItem): boolean => {
+            return computeNGramSimilarity(summaryText, `${existing.candidate.title} ${existing.candidate.summary}`) >= threshold;
         });
-        if (isDuplicate) continue;
-
+        if (isDuplicate) {
+            continue;
+        }
         seenEntryIds.add(candidate.entryId);
         if (candidate.compareKey) {
             seenCompareKeys.add(candidate.compareKey);
         }
         selected.push(item);
     }
-
     return selected;
 }
 
@@ -124,38 +157,35 @@ function deduplicateItems(items: RetrievalResultItem[], threshold: number): Retr
  * 功能：按类别平衡选择，确保各 facet 有代表。
  * @param items 去重后的候选。
  * @param maxCandidates 最大总数。
- * @returns 平衡后的结果。
+ * @returns 平衡后的结果和诊断。
  */
-function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number): RetrievalResultItem[] {
-    if (items.length <= 0) return items;
-
-    // 按 facet 分类
+function balanceByCategory(
+    items: RetrievalResultItem[],
+    maxCandidates: number,
+): { items: RetrievalResultItem[]; dominantFacet: RetrievalFacet | null; deferredCount: number } {
+    if (items.length <= 0) {
+        return { items, dominantFacet: null, deferredCount: 0 };
+    }
     const buckets = new Map<RetrievalFacet, RetrievalResultItem[]>();
     const uncategorized: RetrievalResultItem[] = [];
     const allFacets: RetrievalFacet[] = ['world', 'scene', 'relationship', 'event', 'interpretation'];
-
     for (const facet of allFacets) {
         buckets.set(facet, []);
     }
-
     for (const item of items) {
         const facet = FACET_SCHEMA_MAP[item.candidate.schemaId];
         if (facet) {
-            buckets.get(facet)!.push(item);
+            buckets.get(facet)?.push(item);
         } else {
             uncategorized.push(item);
         }
     }
-
-    // 即使数量未超阈值，也做轻量平衡：防止全同类情况
     if (items.length <= maxCandidates) {
         return lightBalanceByCategory(items, buckets, allFacets, maxCandidates);
     }
 
     const selected: RetrievalResultItem[] = [];
     const selectedIds = new Set<string>();
-
-    // 第一轮：每个 facet 至少取 1 条最高分
     for (const facet of allFacets) {
         const bucket = buckets.get(facet) ?? [];
         if (bucket.length > 0 && selected.length < maxCandidates) {
@@ -163,50 +193,57 @@ function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number):
             selectedIds.add(bucket[0].candidate.candidateId);
         }
     }
-
-    // 第二轮：按比例分配剩余配额
-    const remaining = maxCandidates - selected.length;
-    if (remaining > 0) {
-        for (const facet of allFacets) {
-            const bucket = buckets.get(facet) ?? [];
-            const maxForFacet = Math.max(1, Math.floor(maxCandidates * FACET_MAX_RATIO[facet]));
-
-            for (const item of bucket) {
-                if (selected.length >= maxCandidates) break;
-                if (selectedIds.has(item.candidate.candidateId)) continue;
-                if (selected.filter(s => FACET_SCHEMA_MAP[s.candidate.schemaId] === facet).length >= maxForFacet) break;
-                selected.push(item);
-                selectedIds.add(item.candidate.candidateId);
+    for (const facet of allFacets) {
+        const bucket = buckets.get(facet) ?? [];
+        const maxForFacet = Math.max(1, Math.floor(maxCandidates * FACET_MAX_RATIO[facet]));
+        for (const item of bucket) {
+            if (selected.length >= maxCandidates) {
+                break;
             }
-        }
-
-        // 用 uncategorized 填充剩余
-        for (const item of uncategorized) {
-            if (selected.length >= maxCandidates) break;
-            if (selectedIds.has(item.candidate.candidateId)) continue;
+            if (selectedIds.has(item.candidate.candidateId)) {
+                continue;
+            }
+            if (selected.filter((selectedItem: RetrievalResultItem): boolean => FACET_SCHEMA_MAP[selectedItem.candidate.schemaId] === facet).length >= maxForFacet) {
+                break;
+            }
             selected.push(item);
             selectedIds.add(item.candidate.candidateId);
         }
     }
-
-    // 最终排序
-    return selected.sort((a, b) => b.score - a.score);
+    for (const item of uncategorized) {
+        if (selected.length >= maxCandidates) {
+            break;
+        }
+        if (selectedIds.has(item.candidate.candidateId)) {
+            continue;
+        }
+        selected.push(item);
+    }
+    return {
+        items: selected.sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score),
+        dominantFacet: null,
+        deferredCount: Math.max(0, items.length - selected.length),
+    };
 }
 
 /**
  * 功能：轻量平衡，在候选数量未超上限时也做结构平衡。
- * 如果单一 facet 占比超过 60%，把多余的低分条目延后排序。
+ * @param items 候选列表。
+ * @param buckets facet 分桶。
+ * @param allFacets facet 列表。
+ * @param maxCandidates 最大数量。
+ * @returns 平衡结果。
  */
 function lightBalanceByCategory(
     items: RetrievalResultItem[],
     buckets: Map<RetrievalFacet, RetrievalResultItem[]>,
     allFacets: RetrievalFacet[],
     maxCandidates: number,
-): RetrievalResultItem[] {
+): { items: RetrievalResultItem[]; dominantFacet: RetrievalFacet | null; deferredCount: number } {
     const total = items.length;
-    if (total <= 3) return items;
-
-    // 检查是否有单一 facet 占比过高
+    if (total <= 3) {
+        return { items, dominantFacet: null, deferredCount: 0 };
+    }
     let dominantFacet: RetrievalFacet | null = null;
     for (const facet of allFacets) {
         const bucket = buckets.get(facet) ?? [];
@@ -215,47 +252,48 @@ function lightBalanceByCategory(
             break;
         }
     }
+    if (!dominantFacet) {
+        return { items, dominantFacet: null, deferredCount: 0 };
+    }
 
-    if (!dominantFacet) return items;
-
-    // 主导 facet 的最高配额
     const maxForDominant = Math.max(2, Math.ceil(total * FACET_MAX_RATIO[dominantFacet]));
     const dominantBucket = buckets.get(dominantFacet) ?? [];
     const prioritized: RetrievalResultItem[] = [];
     const deferred: RetrievalResultItem[] = [];
-
-    // 其他 facet 的全部条目优先
     const selectedIds = new Set<string>();
+
     for (const facet of allFacets) {
-        if (facet === dominantFacet) continue;
+        if (facet === dominantFacet) {
+            continue;
+        }
         for (const item of buckets.get(facet) ?? []) {
             prioritized.push(item);
             selectedIds.add(item.candidate.candidateId);
         }
     }
-
-    // 主导 facet 取前 maxForDominant 条
     let dominantCount = 0;
     for (const item of dominantBucket) {
         if (dominantCount < maxForDominant) {
             prioritized.push(item);
             selectedIds.add(item.candidate.candidateId);
-            dominantCount++;
+            dominantCount += 1;
         } else {
             deferred.push(item);
         }
     }
-
-    // 未分类的
     for (const item of items) {
-        if (!selectedIds.has(item.candidate.candidateId) && !deferred.some(d => d.candidate.candidateId === item.candidate.candidateId)) {
+        if (!selectedIds.has(item.candidate.candidateId) && !deferred.some((deferredItem: RetrievalResultItem): boolean => deferredItem.candidate.candidateId === item.candidate.candidateId)) {
             prioritized.push(item);
         }
     }
 
-    return [...prioritized, ...deferred]
-        .slice(0, maxCandidates)
-        .sort((a, b) => b.score - a.score);
+    return {
+        items: [...prioritized, ...deferred]
+            .slice(0, maxCandidates)
+            .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score),
+        dominantFacet,
+        deferredCount: deferred.length,
+    };
 }
 
 /**
@@ -267,7 +305,6 @@ function lightBalanceByCategory(
 function truncateByBudget(items: RetrievalResultItem[], maxChars: number): RetrievalResultItem[] {
     let usedChars = 0;
     const result: RetrievalResultItem[] = [];
-
     for (const item of items) {
         const charCost = (item.candidate.title?.length ?? 0) + (item.candidate.summary?.length ?? 0);
         if (usedChars + charCost > maxChars && result.length > 0) {
@@ -276,19 +313,44 @@ function truncateByBudget(items: RetrievalResultItem[], maxChars: number): Retri
         usedChars += charCost;
         result.push(item);
     }
-
     return result;
 }
 
 /**
  * 功能：比较两个字符串数组是否相等。
- * @param a 数组一。
- * @param b 数组二。
+ * @param left 数组一。
+ * @param right 数组二。
  * @returns 是否相等。
  */
-function arraysEqual(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    const sortedA = [...a].sort();
-    const sortedB = [...b].sort();
-    return sortedA.every((val, idx) => val === sortedB[idx]);
+function arraysEqual(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+    const sortedLeft = [...left].sort();
+    const sortedRight = [...right].sort();
+    return sortedLeft.every((value: string, index: number): boolean => value === sortedRight[index]);
+}
+
+/**
+ * 功能：触发多样性日志。
+ * @param onTrace trace 回调。
+ * @param title 标题。
+ * @param message 消息。
+ * @param payload 负载。
+ * @returns 无返回值。
+ */
+function emitDiversityTrace(
+    onTrace: ((record: MemoryDebugLogRecord) => void) | undefined,
+    title: string,
+    message: string,
+    payload?: Record<string, unknown>,
+): void {
+    onTrace?.({
+        ts: Date.now(),
+        level: 'info',
+        stage: 'diversity',
+        title,
+        message,
+        payload,
+    });
 }

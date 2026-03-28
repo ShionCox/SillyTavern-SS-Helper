@@ -651,6 +651,46 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
         matchedEntryIds: toStringArray(value.matchedEntryIds),
         reasonCodes: toStringArray(value.reasonCodes),
         source: String(value.source ?? '').trim() || undefined,
+        retrievalProviderId: String(value.retrievalProviderId ?? '').trim() || undefined,
+        retrievalRulePack: String(value.retrievalRulePack ?? '').trim() || undefined,
+        subQueries: toStringArray(value.subQueries),
+        matchedRules: Array.isArray(value.matchedRules)
+            ? value.matchedRules
+                .filter((item: unknown): boolean => Boolean(item) && typeof item === 'object')
+                .map((item: unknown) => {
+                    const record = item as Record<string, unknown>;
+                    return {
+                        pack: String(record.pack ?? '').trim(),
+                        label: String(record.label ?? '').trim(),
+                        matchedText: toStringArray(record.matchedText),
+                    };
+                })
+            : [],
+        routeReasons: Array.isArray(value.routeReasons)
+            ? value.routeReasons.map((item: unknown): string => {
+                if (typeof item === 'string') {
+                    return String(item).trim();
+                }
+                if (item && typeof item === 'object') {
+                    return String((item as Record<string, unknown>).detail ?? '').trim();
+                }
+                return '';
+            }).filter(Boolean)
+            : [],
+        traceRecords: Array.isArray(value.traceRecords)
+            ? value.traceRecords
+                .filter((item: unknown): boolean => Boolean(item) && typeof item === 'object')
+                .map((item: unknown) => {
+                    const record = item as Record<string, unknown>;
+                    return {
+                        ts: Number(record.ts ?? 0) || 0,
+                        level: String(record.level ?? '').trim(),
+                        stage: String(record.stage ?? '').trim(),
+                        title: String(record.title ?? '').trim(),
+                        message: String(record.message ?? '').trim(),
+                    };
+                })
+            : [],
     };
 }
 

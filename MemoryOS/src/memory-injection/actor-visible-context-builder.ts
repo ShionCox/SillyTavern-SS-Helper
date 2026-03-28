@@ -10,6 +10,12 @@ import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
 export interface ActorVisibleMemoryContext {
     worldBaseLines: string[];
     sceneSharedLines: string[];
+    diagnostics: {
+        actorKey: string;
+        totalInjectedCount: number;
+        estimatedChars: number;
+        retentionStageCounts: Record<RetentionStage, number>;
+    };
     actorView: {
         actorKey: string;
         actorLabel: string;
@@ -77,9 +83,39 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => entry.renderedText);
 
+    const retentionStageCounts: Record<RetentionStage, number> = {
+        clear: 0,
+        blur: 0,
+        distorted: 0,
+    };
+    targetRoleEntries.forEach((entry: PromptAssemblyRoleEntry): void => {
+        const stage = resolveRetentionStageFromRoleEntry(entry);
+        retentionStageCounts[stage] += 1;
+    });
+    const totalInjectedCount = worldBaseLines.length
+        + sceneSharedLines.length
+        + identityLines.length
+        + relationshipLines.length
+        + eventLines.length
+        + interpretationLines.length;
+    const estimatedChars = [
+        ...worldBaseLines,
+        ...sceneSharedLines,
+        ...identityLines,
+        ...relationshipLines,
+        ...eventLines,
+        ...interpretationLines,
+    ].join('\n').length;
+
     return {
         worldBaseLines,
         sceneSharedLines,
+        diagnostics: {
+            actorKey: activeActorKey || 'actor',
+            totalInjectedCount,
+            estimatedChars,
+            retentionStageCounts,
+        },
         actorView: {
             actorKey: activeActorKey || 'actor',
             actorLabel,

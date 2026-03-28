@@ -23,6 +23,22 @@ export interface WorkbenchRecallExplanation {
     matchedEntryIds: string[];
     reasonCodes: string[];
     source?: string;
+    retrievalProviderId?: string;
+    retrievalRulePack?: string;
+    subQueries?: string[];
+    matchedRules?: Array<{
+        pack: string;
+        label: string;
+        matchedText: string[];
+    }>;
+    routeReasons?: string[];
+    traceRecords?: Array<{
+        ts: number;
+        level: string;
+        stage: string;
+        title: string;
+        message: string;
+    }>;
 }
 
 export interface WorkbenchActorGraphNode {

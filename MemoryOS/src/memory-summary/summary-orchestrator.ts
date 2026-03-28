@@ -33,6 +33,7 @@ export interface RunSummaryOrchestratorInput {
     pluginId: string;
     messages: SummaryWindowMessage[];
     enableEmbedding: boolean;
+    retrievalRulePack: 'native' | 'perocore' | 'hybrid';
 }
 
 /**
@@ -95,6 +96,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         worldProfileTexts,
         worldProfileBinding,
         enableEmbedding: input.enableEmbedding,
+        rulePackMode: input.retrievalRulePack,
     });
     await input.dependencies.appendMutationHistory({
         action: 'candidate_types_resolved',

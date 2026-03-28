@@ -1,3 +1,7 @@
+import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
+import type { RetrievalContextRoute, RetrievalDiagnostics, RetrievalRulePackMode } from '../memory-retrieval/types';
+import type { RetentionStage } from '../memory-retention/retention-types';
+
 export type MemoryEntryCategory =
     | '世界基础'
     | '国家'
@@ -143,6 +147,18 @@ export interface PromptAssemblyRoleEntry {
     renderedText: string;
 }
 
+export interface PromptAssemblyDiagnostics {
+    providerId: string;
+    rulePackMode: RetrievalRulePackMode;
+    contextRoute: RetrievalContextRoute | null;
+    retrieval: RetrievalDiagnostics | null;
+    traceRecords: MemoryDebugLogRecord[];
+    injectionActorKey: string;
+    injectedCount: number;
+    estimatedChars: number;
+    retentionStageCounts: Record<RetentionStage, number>;
+}
+
 export interface PromptAssemblySnapshot {
     generatedAt: number;
     query: string;
@@ -154,6 +170,7 @@ export interface PromptAssemblySnapshot {
     systemEntryIds: string[];
     roleEntries: PromptAssemblyRoleEntry[];
     reasonCodes: string[];
+    diagnostics?: PromptAssemblyDiagnostics;
 }
 
 export interface UnifiedMemoryFilters {

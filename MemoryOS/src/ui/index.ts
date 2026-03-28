@@ -27,6 +27,10 @@ const INJECTION_PREVIEW_ID: string = 'stx-memoryos-injection-preview-enabled';
 const EMBEDDING_ENABLED_ID: string = 'stx-memoryos-embedding-enabled';
 const CONTEXT_TOKENS_ID: string = 'stx-memoryos-context-max-tokens';
 const SUMMARY_INTERVAL_ID: string = 'stx-memoryos-summary-interval-floors';
+const RETRIEVAL_LOG_ENABLED_ID: string = 'stx-memoryos-retrieval-log-enabled';
+const RETRIEVAL_TRACE_PANEL_ID: string = 'stx-memoryos-retrieval-trace-panel-enabled';
+const RETRIEVAL_LOG_LEVEL_ID: string = 'stx-memoryos-retrieval-log-level';
+const RETRIEVAL_RULE_PACK_ID: string = 'stx-memoryos-retrieval-rule-pack';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
 const TAB_BASIC_ID: string = 'stx-memoryos-tab-basic';
@@ -237,7 +241,19 @@ function buildSettingsContentHtml(): string {
         id: EMBEDDING_ENABLED_ID,
         title: '',
         containerClassName: 'stx-ui-inline-checkbox is-control-only',
-        inputAttributes: { 'aria-label': 'Enable embedding retrieval' },
+        inputAttributes: { 'aria-label': '启用 Embedding 检索' },
+    });
+    const retrievalLogCheckbox: string = buildSharedCheckboxCard({
+        id: RETRIEVAL_LOG_ENABLED_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用检索日志' },
+    });
+    const retrievalTraceCheckbox: string = buildSharedCheckboxCard({
+        id: RETRIEVAL_TRACE_PANEL_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用诊断 Trace 面板' },
     });
 
     const contextInput: string = buildSharedInputField({
@@ -252,6 +268,19 @@ function buildSettingsContentHtml(): string {
         className: 'stx-ui-input',
         attributes: { min: 1, max: 200, step: 1 },
     });
+    const retrievalLogLevelSelect: string = `
+        <select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input">
+            <option value="info">信息级</option>
+            <option value="debug">调试级</option>
+        </select>
+    `;
+    const retrievalRulePackSelect: string = `
+        <select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input">
+            <option value="hybrid">混合规则包</option>
+            <option value="native">原生规则包</option>
+            <option value="perocore">PeroCore 兼容包</option>
+        </select>
+    `;
 
     const resetBtn: string = buildSharedButton({
         id: RESET_BTN_ID,
@@ -347,6 +376,40 @@ function buildSettingsContentHtml(): string {
                     </div>
                 </div>
             </div>
+
+            <div class="stx-ui-section-label">检索与诊断</div>
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用检索日志</div>
+                    <div class="stx-ui-item-desc">输出全中文检索链日志，并为工作台保留结构化 trace。</div>
+                </div>
+                <div class="stx-ui-inline">${retrievalLogCheckbox}</div>
+            </div>
+
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用诊断 Trace 面板</div>
+                    <div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定和召回流水。</div>
+                </div>
+                <div class="stx-ui-inline">${retrievalTraceCheckbox}</div>
+            </div>
+
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">检索调试配置</div>
+                    <div class="stx-ui-item-desc">控制日志级别和当前启用的规则包模式。</div>
+                </div>
+                <div class="stx-ui-form-grid">
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${RETRIEVAL_LOG_LEVEL_ID}">retrievalLogLevel</label>
+                        ${retrievalLogLevelSelect}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${RETRIEVAL_RULE_PACK_ID}">retrievalRulePack</label>
+                        ${retrievalRulePackSelect}
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="stx-ui-actions">
@@ -410,12 +473,20 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
+    const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
+    const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
+    const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
+    const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
     if (embeddingInput) embeddingInput.checked = settings.enableEmbedding;
     if (contextTokensInput) contextTokensInput.value = String(settings.contextMaxTokens);
     if (summaryIntervalInput) summaryIntervalInput.value = String(settings.summaryIntervalFloors);
+    if (retrievalLogInput) retrievalLogInput.checked = settings.retrievalLogEnabled;
+    if (retrievalTraceInput) retrievalTraceInput.checked = settings.retrievalTracePanelEnabled;
+    if (retrievalLogLevelInput) retrievalLogLevelInput.value = settings.retrievalLogLevel;
+    if (retrievalRulePackInput) retrievalRulePackInput.value = settings.retrievalRulePack;
 }
 
 /**
@@ -429,6 +500,10 @@ function readSettingsFromForm(): MemoryOSSettings {
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
+    const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
+    const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
+    const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
+    const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
@@ -436,6 +511,14 @@ function readSettingsFromForm(): MemoryOSSettings {
         enableEmbedding: embeddingInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding,
         contextMaxTokens: Number(contextTokensInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
         summaryIntervalFloors: Number(summaryIntervalInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors),
+        retrievalLogEnabled: retrievalLogInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.retrievalLogEnabled,
+        retrievalLogLevel: retrievalLogLevelInput?.value === 'debug' ? 'debug' : 'info',
+        retrievalRulePack: retrievalRulePackInput?.value === 'native'
+            ? 'native'
+            : retrievalRulePackInput?.value === 'perocore'
+                ? 'perocore'
+                : 'hybrid',
+        retrievalTracePanelEnabled: retrievalTraceInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.retrievalTracePanelEnabled,
     };
 }
 

@@ -1,17 +1,38 @@
 import type { KeywordDictionary } from './types';
-import { BUILTIN_KEYWORD_DICTIONARIES } from './dictionaries';
+import type { KeywordPackMode } from './types';
+import { NATIVE_KEYWORD_DICTIONARIES } from './native';
+import { PEROCORE_KEYWORD_DICTIONARIES } from './perocore';
+import { HYBRID_KEYWORD_DICTIONARIES } from './hybrid';
 
 /**
- * 功能：读取内置关键词词典。
+ * 功能：读取指定模式的关键词包。
+ * @param mode 关键词包模式。
  * @returns 词典列表。
  */
-export function loadKeywordDictionaries(): KeywordDictionary[] {
-    return BUILTIN_KEYWORD_DICTIONARIES.map((dictionary: KeywordDictionary): KeywordDictionary => ({
+export function loadKeywordDictionaries(mode: KeywordPackMode = 'hybrid'): KeywordDictionary[] {
+    return getActiveKeywordPack(mode).map((dictionary: KeywordDictionary): KeywordDictionary => ({
         ...dictionary,
+        pack: dictionary.pack ?? 'native',
+        label: dictionary.label ?? dictionary.description ?? dictionary.dictionaryId,
         keywords: dedupeStrings(dictionary.keywords),
         candidateTypes: dedupeStrings(dictionary.candidateTypes),
         intentHints: dedupeStrings(dictionary.intentHints),
     }));
+}
+
+/**
+ * 功能：返回当前启用的关键词包。
+ * @param mode 关键词包模式。
+ * @returns 原始词典列表。
+ */
+export function getActiveKeywordPack(mode: KeywordPackMode = 'hybrid'): KeywordDictionary[] {
+    if (mode === 'native') {
+        return NATIVE_KEYWORD_DICTIONARIES;
+    }
+    if (mode === 'perocore') {
+        return PEROCORE_KEYWORD_DICTIONARIES;
+    }
+    return HYBRID_KEYWORD_DICTIONARIES;
 }
 
 /**

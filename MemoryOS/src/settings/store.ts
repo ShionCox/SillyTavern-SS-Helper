@@ -7,6 +7,10 @@ export type MemoryOSSettings = {
     injectionPreviewEnabled: boolean;
     enableEmbedding: boolean;
     summaryIntervalFloors: number;
+    retrievalLogEnabled: boolean;
+    retrievalLogLevel: 'info' | 'debug';
+    retrievalRulePack: 'native' | 'perocore' | 'hybrid';
+    retrievalTracePanelEnabled: boolean;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -18,6 +22,10 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     injectionPreviewEnabled: true,
     enableEmbedding: false,
     summaryIntervalFloors: 1,
+    retrievalLogEnabled: true,
+    retrievalLogLevel: 'info',
+    retrievalRulePack: 'hybrid',
+    retrievalTracePanelEnabled: true,
 };
 
 /**
@@ -34,6 +42,12 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         1,
         Math.min(200, Math.trunc(Number(candidate.summaryIntervalFloors) || DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors)),
     );
+    const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
+    const retrievalRulePack = candidate.retrievalRulePack === 'native'
+        || candidate.retrievalRulePack === 'perocore'
+        || candidate.retrievalRulePack === 'hybrid'
+        ? candidate.retrievalRulePack
+        : DEFAULT_MEMORY_OS_SETTINGS.retrievalRulePack;
     return {
         enabled: candidate.enabled !== false,
         contextMaxTokens,
@@ -41,6 +55,10 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
         enableEmbedding: candidate.enableEmbedding === true,
         summaryIntervalFloors,
+        retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
+        retrievalLogLevel,
+        retrievalRulePack,
+        retrievalTracePanelEnabled: candidate.retrievalTracePanelEnabled !== false,
     };
 }
 

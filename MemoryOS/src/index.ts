@@ -32,6 +32,7 @@ export type {
     SummaryEntryUpsert,
     SummaryRefreshBinding,
     SummarySnapshot,
+    PromptAssemblyDiagnostics,
     PromptAssemblyRoleEntry,
     PromptAssemblySnapshot,
     UnifiedMemoryFilters,

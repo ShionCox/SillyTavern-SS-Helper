@@ -12,6 +12,7 @@ export type {
     MemoryMutationHistoryRecord,
     WorldProfileBinding,
     PromptAssemblyRoleEntry,
+    PromptAssemblyDiagnostics,
     PromptAssemblySnapshot,
     UnifiedMemoryFilters,
 } from './unified-memory';

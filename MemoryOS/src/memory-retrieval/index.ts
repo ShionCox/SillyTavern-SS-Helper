@@ -5,17 +5,26 @@ export type {
     RetrievalProvider,
     RetrievalScoreBreakdown,
     RetrievalFacet,
+    RetrievalMatchedRule,
+    RetrievalRulePackMode,
     RetrievalContextRoute,
     RetrievalOrchestratorResult,
 } from './types';
 export { RetrievalOrchestrator } from './retrieval-orchestrator';
 export { LexicalRetrievalProvider } from './lexical-provider';
 export { EmbeddingRetrievalProvider } from './embedding-provider';
-export { routeRetrievalContext, buildContextDictionaryFromCandidates, type ContextDictionaryRegistry } from './context-router';
+export {
+    routeRetrievalContext,
+    buildContextDictionaryFromCandidates,
+    type ActorProfileForDictionary,
+    type ContextDictionaryRegistry,
+    type RecentContextBias,
+    type RouteRetrievalContextOptions,
+} from './context-router';
 export { buildCandidateLinkIndex, type CandidateLinkIndex, type CandidateNeighborEdge } from './link-index';
-export { expandFromSeeds } from './graph-expander';
-export { applyCoverageSecondPass } from './coverage-checker';
-export { pruneForDiversity } from './diversity-pruner';
+export { expandFromSeeds, type GraphExpansionDiagnostics, type GraphExpansionInput, type GraphExpansionResult } from './graph-expander';
+export { applyCoverageSecondPass, type CoverageSecondPassResult } from './coverage-checker';
+export { pruneForDiversity, type DiversityPruneInput, type DiversityPruneResult } from './diversity-pruner';
 export {
     tokenizeText,
     computeEditDistance,

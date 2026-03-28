@@ -27,6 +27,7 @@ export interface BuildSummaryContextInput {
     worldProfileTexts: string[];
     worldProfileBinding?: WorldProfileBinding | null;
     enableEmbedding?: boolean;
+    rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
 
 /**
@@ -86,6 +87,7 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
         entries: input.entries,
         memoryPercentByEntryId: input.memoryPercentByEntryId,
         enableEmbedding: input.enableEmbedding,
+        rulePackMode: input.rulePackMode,
         maxCandidatesHardCap: 12,
         candidateTextBudgetChars: 1800,
     });

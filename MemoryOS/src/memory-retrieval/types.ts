@@ -1,3 +1,5 @@
+import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
+
 /**
  * 功能：定义可检索候选记录。
  */
@@ -22,6 +24,7 @@ export interface RetrievalCandidate {
 
     compareKey?: string;
     injectToSystem?: boolean;
+    aliasTexts?: string[];
 }
 
 /**
@@ -32,6 +35,8 @@ export interface RetrievalQuery {
     activeActorKey?: string;
     candidateTypes?: string[];
     enableEmbedding?: boolean;
+    chatKey?: string;
+    rulePackMode?: RetrievalRulePackMode;
 
     budget: {
         maxCandidates?: number;
@@ -45,6 +50,17 @@ export interface RetrievalQuery {
  * 功能：定义检索语境 facet 类型。
  */
 export type RetrievalFacet = 'world' | 'scene' | 'relationship' | 'event' | 'interpretation';
+export type RetrievalRulePackMode = 'native' | 'perocore' | 'hybrid';
+
+/**
+ * 功能：定义命中的可解释规则。
+ */
+export interface RetrievalMatchedRule {
+    pack: Exclude<RetrievalRulePackMode, 'hybrid'>;
+    ruleId: string;
+    label: string;
+    matchedText: string[];
+}
 
 /**
  * 功能：定义检索语境路由结果。
@@ -59,9 +75,13 @@ export interface RetrievalContextRoute {
     };
     topicHints: string[];
     confidence: number;
+    subQueries?: string[];
+    matchedRulePack?: RetrievalRulePackMode;
+    matchedRules?: RetrievalMatchedRule[];
+    systemEventPrefix?: string;
     /** 语境路由的来源解释，提升 diagnostics 可调试性 */
     reasons?: Array<{
-        source: 'keyword' | 'pattern' | 'entity' | 'recent-context';
+        source: 'keyword' | 'pattern' | 'entity' | 'recent-context' | 'perocore-rule';
         detail: string;
         weight: number;
     }>;
@@ -117,5 +137,10 @@ export interface RetrievalDiagnostics {
     expandedCount: number;
     coverageTriggeredFacets: RetrievalFacet[];
     diversityDroppedCount: number;
+    finalCount: number;
+    seedQueryText: string;
+    boostSchemaIds: string[];
+    coverageSubQueries: Partial<Record<RetrievalFacet, string>>;
+    traceRecords: MemoryDebugLogRecord[];
 }
 
