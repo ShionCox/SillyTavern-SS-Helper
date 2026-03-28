@@ -1,9 +1,17 @@
-import type { MemoryEntry, WorldProfileBinding } from '../types';
+import type { MemoryEntry, SummaryEntryUpsert, WorldProfileBinding } from '../types';
 import { detectWorldProfile, resolveWorldProfile, type WorldProfileDetectionResult } from '../memory-world-profile';
 import { detectSummarySignals } from './signal-detector';
 import { resolveCandidateTypes } from './candidate-type-resolver';
 import { resolveSummaryTypeSchemas, type SummaryTypeSchema } from './schema-resolver';
 import { resolveCandidateRecords, type SummaryCandidateRecord } from './candidate-record-resolver';
+import {
+    buildActiveKeywordSets as buildPlannerActiveKeywordSets,
+    getDefaultNarrativeStyle as getDefaultPlannerNarrativeStyle,
+    resolveNarrativeStyle as resolvePlannerNarrativeStyle,
+    type ActiveKeywordSets as PlannerActiveKeywordSets,
+    type NarrativeStyle,
+    type ResolvedNarrativeStyle,
+} from './planner-keywords';
 import type { SummaryPlannerOutput } from '../memory-summary/mutation-types';
 
 /**
@@ -13,6 +21,16 @@ export interface SummaryWindowInput {
     fromTurn: number;
     toTurn: number;
     summaryText: string;
+}
+
+/**
+ * 功能：净化后的历史摘要结构。
+ */
+export interface NormalizedSummaryDigest {
+    stableContext: string;
+    taskState: string[];
+    relationState: string[];
+    unresolvedQuestions: string[];
 }
 
 /**
@@ -27,7 +45,12 @@ export interface BuildSummaryContextInput {
     memoryPercentByEntryId?: Map<string, number>;
     worldProfileTexts: string[];
     worldProfileBinding?: WorldProfileBinding | null;
-    recentSummaries?: Array<{ title: string; content: string; updatedAt: number }>;
+    recentSummaries?: Array<{
+        title: string;
+        content: string;
+        updatedAt: number;
+        normalizedSummary?: NormalizedSummaryDigest;
+    }>;
     enableEmbedding?: boolean;
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
@@ -53,8 +76,10 @@ export interface SummaryMutationContext {
         title: string;
         content: string;
         updatedAt: number;
+        normalizedSummary: NormalizedSummaryDigest;
     }>;
     worldProfileBias: WorldProfileDetectionResult;
+    narrativeStyle: ResolvedNarrativeStyle;
     typeSchemas: SummaryTypeSchema[];
     candidateRecords: SummaryCandidateRecord[];
     rules: {
@@ -80,6 +105,18 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
 }> {
     const worldProfileDetection = resolveWorldProfileDetection(input);
     const resolvedWorldProfile = resolveWorldProfile(worldProfileDetection);
+    const currentWindowDetection = detectWorldProfile({
+        texts: dedupeStrings([
+            input.window.summaryText,
+            ...(input.recentSummaries ?? []).slice(0, 2).map((item) => String(item.content ?? '').trim()),
+        ]),
+    });
+    const narrativeStyle = resolvePlannerNarrativeStyle({
+        worldProfileBinding: input.worldProfileBinding,
+        worldProfileDetection: currentWindowDetection,
+        windowSummaryText: input.window.summaryText,
+        recentSummaryTexts: (input.recentSummaries ?? []).map((item) => String(item.content ?? '').trim()),
+    });
     const signalResult = detectSummarySignals({
         windowSummaryText: input.window.summaryText,
         actorHints: input.actorHints,
@@ -125,8 +162,14 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
                 title: String(item.title ?? '').trim(),
                 content: String(item.content ?? '').trim(),
                 updatedAt: Number(item.updatedAt ?? 0) || 0,
+                normalizedSummary: normalizeSummarySnapshot({
+                    title: item.title,
+                    content: item.content,
+                    normalizedSummary: item.normalizedSummary,
+                }),
             })),
             worldProfileBias: worldProfileDetection,
+            narrativeStyle,
             typeSchemas,
             candidateRecords: candidateResolveResult.candidates,
             rules: {
@@ -216,15 +259,13 @@ export interface LightweightPlannerInput {
         toTurn: number;
         turnCount: number;
         windowFacts: string[];
+        evidenceSnippets: string[];
     };
-    rollingDigest: {
-        summary: string;
-        openThreads: string[];
-        recentDecisions: string[];
-    };
+    rollingDigest: NormalizedSummaryDigest;
     signalPack: {
         candidateTypes: string[];
         focusPoints: string[];
+        evidenceSignals: string[];
         shouldUpdate: boolean;
     };
     candidateCards: Array<{
@@ -233,6 +274,7 @@ export interface LightweightPlannerInput {
         brief: string;
         entities: string[];
         state: string;
+        whyRelevant: string[];
     }>;
     allowedTypes: string[];
 }
@@ -240,16 +282,20 @@ export interface LightweightPlannerInput {
 /** Planner 输入各字段硬限制。 */
 const PLANNER_INPUT_LIMITS = {
     windowFactsMax: 12,
-    rollingDigestSummaryMaxChars: 220,
-    openThreadsMax: 5,
-    openThreadMaxChars: 40,
-    recentDecisionsMax: 3,
-    focusPointsMax: 5,
+    evidenceSnippetsMax: 3,
+    evidenceSnippetMaxChars: 35,
+    taskStateMax: 3,
+    relationStateMax: 2,
+    unresolvedQuestionsMax: 3,
+    focusPointsMax: 4,
+    evidenceSignalsMax: 6,
     candidateTypesMax: 5,
     candidateCardsMax: 8,
-    candidateCardBriefMaxChars: 60,
+    candidateCardBriefMaxChars: 72,
+    whyRelevantMax: 3,
+    allowedTypesMax: 5,
     /** 全量 JSON 序列化后的中文字符预算，超出后逐级裁剪。 */
-    totalBudgetChars: 4500,
+    totalBudgetChars: 8000,
 };
 
 /**
@@ -261,20 +307,35 @@ const PLANNER_INPUT_LIMITS = {
  * @returns 轻量 Planner 输入。
  */
 export function buildLightweightPlannerInput(context: SummaryMutationContext): LightweightPlannerInput {
-    const windowFacts = extractPlannerWindowFacts(context.window.summaryText);
-    const rollingDigest = buildRollingDigest(context.recentSummaryDigest);
-    const signalPack = buildSignalPack(context.detectedSignals, context.plannerHints);
-    const candidateCards = buildPlannerCandidateCards(context.candidateRecords);
-    const allowedTypes = context.typeSchemas
-        .map((schema) => String(schema.schemaId ?? '').trim())
-        .filter(Boolean);
+    const activeKeywords = buildPlannerActiveKeywordSets(context.narrativeStyle);
+    const windowSummary = analyzeWindowSummary(context.window.summaryText, context.detectedSignals.actors, activeKeywords);
+    const rollingDigest = buildRollingDigest(context.recentSummaryDigest, windowSummary.windowFacts, context.narrativeStyle);
+    const candidateCards = buildPlannerCandidateCards(
+        context.candidateRecords,
+        context.detectedSignals.actors,
+        windowSummary.windowFacts,
+    );
+    const signalPack = buildSignalPack(
+        context.detectedSignals,
+        context.plannerHints,
+        windowSummary.windowFacts,
+        rollingDigest,
+        candidateCards,
+        activeKeywords,
+    );
+    const allowedTypes = buildAllowedTypes(
+        context.detectedSignals.candidateTypes,
+        candidateCards.map((card) => card.type),
+        context.typeSchemas.map((schema) => String(schema.schemaId ?? '').trim()).filter(Boolean),
+    );
 
     const input: LightweightPlannerInput = {
         window: {
             fromTurn: context.window.fromTurn,
             toTurn: context.window.toTurn,
             turnCount: Math.max(0, context.window.toTurn - context.window.fromTurn + 1),
-            windowFacts,
+            windowFacts: windowSummary.windowFacts,
+            evidenceSnippets: windowSummary.evidenceSnippets,
         },
         rollingDigest,
         signalPack,
@@ -288,100 +349,203 @@ export function buildLightweightPlannerInput(context: SummaryMutationContext): L
 // ─── 轻量输入构建辅助函数 ────────────────────────────
 
 /**
- * 功能：从窗口长文本中提取事实帧。
- * @param summaryText 窗口叙事文本。
- * @returns 事实列表（最多 windowFactsMax 条）。
+ * 功能：归一化历史摘要，生成可复用状态块。
+ * @param input 摘要输入。
+ * @returns 净化结果。
  */
-function extractPlannerWindowFacts(summaryText: string): string[] {
-    const text = String(summaryText ?? '').trim();
-    if (!text) return [];
-    const sentences = text
-        .split(/[。！？\n]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 4 && s.length <= 80);
-    return sentences.slice(0, PLANNER_INPUT_LIMITS.windowFactsMax);
+export function normalizeSummarySnapshot(input: {
+    title?: string;
+    content?: string;
+    entryUpserts?: SummaryEntryUpsert[];
+    normalizedSummary?: NormalizedSummaryDigest;
+    narrativeStyle?: ResolvedNarrativeStyle;
+}): NormalizedSummaryDigest {
+    if (hasNormalizedSummaryContent(input.normalizedSummary)) {
+        return sanitizeNormalizedSummary(input.normalizedSummary as NormalizedSummaryDigest);
+    }
+    const sourceSentences = splitChineseSentences([input.title, input.content].filter(Boolean).join('。'));
+    const entrySentences = (input.entryUpserts ?? []).flatMap((item) => {
+        const payload = normalizeRecord(item.detailPayload);
+        const fields = normalizeRecord(payload.fields);
+        return [
+            item.summary,
+            String(fields.state ?? ''),
+            String(fields.status ?? ''),
+            String(fields.objective ?? ''),
+            String(fields.result ?? ''),
+            String(payload.state ?? ''),
+        ];
+    }).map((item) => normalizeChineseText(item)).filter(Boolean);
+    const sentences = dedupeStrings([...sourceSentences, ...entrySentences]);
+    const activeKeywords = buildPlannerActiveKeywordSets(input.narrativeStyle ?? getDefaultPlannerNarrativeStyle());
+    const taskState = collectDigestBucket(sentences, activeKeywords.taskStateKeywords, PLANNER_INPUT_LIMITS.taskStateMax, 'task');
+    const relationState = collectDigestBucket(sentences, activeKeywords.relationStateKeywords, PLANNER_INPUT_LIMITS.relationStateMax, 'relation');
+    const unresolvedQuestions = collectDigestBucket(sentences, activeKeywords.unresolvedKeywords, PLANNER_INPUT_LIMITS.unresolvedQuestionsMax, 'question');
+    return sanitizeNormalizedSummary({
+        stableContext: buildStableContext(sentences, taskState, relationState),
+        taskState,
+        relationState,
+        unresolvedQuestions,
+    });
 }
 
 /**
- * 功能：从历史摘要数组构建单条滚动摘要。
- * 只读取最近一条已固化摘要，从中提炼 summary / openThreads / recentDecisions。
+ * 功能：分析窗口文本，提取高信号事实与证据片段。
+ * @param summaryText 窗口叙事文本。
+ * @param actors 角色提示。
+ * @returns 提纯后的窗口结果。
+ */
+function analyzeWindowSummary(summaryText: string, actors: string[], activeKeywords: PlannerActiveKeywordSets): {
+    windowFacts: string[];
+    evidenceSnippets: string[];
+} {
+    const sentences = splitChineseSentences(summaryText);
+    const windowFacts = dedupeStrings(
+        sentences
+            .map((sentence) => ({ sentence, score: scoreFactSentence(sentence, activeKeywords.factPriorityRules) }))
+            .filter((item) => item.score > 0)
+            .sort((left, right) => right.score - left.score)
+            .map((item) => rewriteFactSentence(item.sentence, actors, activeKeywords.factPriorityRules))
+            .filter(Boolean),
+    ).slice(0, PLANNER_INPUT_LIMITS.windowFactsMax);
+    const evidenceSnippets = dedupeStrings(
+        sentences
+            .filter((sentence) => sentence.length >= 8 && sentence.length <= PLANNER_INPUT_LIMITS.evidenceSnippetMaxChars)
+            .filter((sentence) => containsAny(sentence, activeKeywords.evidenceSnippetKeywords)),
+    ).slice(0, PLANNER_INPUT_LIMITS.evidenceSnippetsMax);
+    return { windowFacts, evidenceSnippets };
+}
+
+/**
+ * 功能：从历史摘要数组构建滚动摘要状态块。
  * @param recentSummaryDigest 历史摘要数组。
+ * @param windowFacts 当前窗口事实。
  * @returns 滚动摘要。
  */
 function buildRollingDigest(
     recentSummaryDigest: SummaryMutationContext['recentSummaryDigest'],
+    windowFacts: string[],
+    narrativeStyle: ResolvedNarrativeStyle,
 ): LightweightPlannerInput['rollingDigest'] {
     if (recentSummaryDigest.length <= 0) {
-        return { summary: '', openThreads: [], recentDecisions: [] };
+        return normalizeSummarySnapshot({
+            content: windowFacts.join('。'),
+            narrativeStyle,
+        });
     }
-    const latest = recentSummaryDigest[0];
-    const content = String(latest.content ?? '').trim();
-    const maxChars = PLANNER_INPUT_LIMITS.rollingDigestSummaryMaxChars;
-    const summary = content.length > maxChars ? content.slice(0, maxChars) + '…' : content;
-
-    const sentences = content
-        .split(/[。！？\n]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 4);
-
-    const openThreadKeywords = ['未解决', '仍', '尚', '待', '还没', '悬而未决', '等待', '暂时', '不确定', '进行中'];
-    const decisionKeywords = ['决定', '确认', '同意', '拒绝', '接受', '作废', '取消', '达成', '约定', '承诺'];
-
-    const threadMaxChars = PLANNER_INPUT_LIMITS.openThreadMaxChars;
-    const openThreads = sentences
-        .filter((s) => openThreadKeywords.some((k) => s.includes(k)))
-        .map((s) => s.length > threadMaxChars ? s.slice(0, threadMaxChars) + '…' : s)
-        .slice(0, PLANNER_INPUT_LIMITS.openThreadsMax);
-
-    const recentDecisions = sentences
-        .filter((s) => decisionKeywords.some((k) => s.includes(k)))
-        .map((s) => s.length > threadMaxChars ? s.slice(0, threadMaxChars) + '…' : s)
-        .slice(0, PLANNER_INPUT_LIMITS.recentDecisionsMax);
-
-    return { summary, openThreads, recentDecisions };
+    return normalizeSummarySnapshot({
+        title: recentSummaryDigest[0].title,
+        content: recentSummaryDigest[0].content,
+        normalizedSummary: recentSummaryDigest[0].normalizedSummary,
+        narrativeStyle,
+    });
 }
 
 /**
- * 功能：合并 detectedSignals 与 plannerHints 为统一信号包。
+ * 功能：构建本地信号包。
  * @param detectedSignals 检测信号。
  * @param plannerHints 默认 planner 提示。
+ * @param windowFacts 当前窗口事实。
+ * @param rollingDigest 历史滚动摘要。
+ * @param candidateCards 候选卡片。
  * @returns 信号包。
  */
 function buildSignalPack(
     detectedSignals: SummaryMutationContext['detectedSignals'],
     plannerHints: SummaryPlannerOutput,
+    windowFacts: string[],
+    rollingDigest: LightweightPlannerInput['rollingDigest'],
+    candidateCards: LightweightPlannerInput['candidateCards'],
+    activeKeywords: PlannerActiveKeywordSets,
 ): LightweightPlannerInput['signalPack'] {
+    const evidenceSignals = dedupeStrings(
+        activeKeywords.evidenceSignalLabels
+            .filter((item) => windowFacts.some((fact) => item.keywords.some((keyword) => fact.includes(keyword))))
+            .map((item) => item.label),
+    ).slice(0, PLANNER_INPUT_LIMITS.evidenceSignalsMax);
+    const focusPoints = dedupeStrings([
+        evidenceSignals.includes('确认任务推进') || rollingDigest.taskState.length > 0 ? '任务是否进入新的正式推进阶段' : '',
+        evidenceSignals.includes('明确拒绝') ? '明确拒绝是否构成任务或关系状态变化' : '',
+        evidenceSignals.includes('提出条件') || evidenceSignals.includes('要求补充信息') ? '新条件是否改变当前交涉边界' : '',
+        rollingDigest.unresolvedQuestions.length > 0 ? '长期未决问题是否出现新的确认线索' : '',
+        plannerHints.topics.length > 0 ? `当前主题是否继续聚焦${plannerHints.topics.slice(0, 2).join('、')}` : '',
+    ]).slice(0, PLANNER_INPUT_LIMITS.focusPointsMax);
+    const candidateTypes = dedupeStrings([
+        ...candidateCards.map((card) => card.type),
+        ...detectedSignals.candidateTypes,
+        ...plannerHints.focus_types,
+    ]).slice(0, PLANNER_INPUT_LIMITS.candidateTypesMax);
     return {
-        candidateTypes: detectedSignals.candidateTypes.slice(0, PLANNER_INPUT_LIMITS.candidateTypesMax),
-        focusPoints: plannerHints.reasons.slice(0, PLANNER_INPUT_LIMITS.focusPointsMax),
-        shouldUpdate: plannerHints.should_update,
+        candidateTypes,
+        focusPoints,
+        evidenceSignals,
+        shouldUpdate: evidenceSignals.length > 0 || plannerHints.should_update,
     };
 }
 
 /**
- * 功能：将完整候选记录压缩为轻量候选卡片。
+ * 功能：将完整候选记录压缩为轻量候选卡片，并做代表性去重。
  * @param candidateRecords 完整候选记录。
- * @returns 候选卡片（最多 candidateCardsMax 条）。
+ * @param actors 角色提示。
+ * @param windowFacts 当前窗口事实。
+ * @returns 候选卡片。
  */
 function buildPlannerCandidateCards(
     candidateRecords: SummaryCandidateRecord[],
+    actors: string[],
+    windowFacts: string[],
 ): LightweightPlannerInput['candidateCards'] {
-    const maxBrief = PLANNER_INPUT_LIMITS.candidateCardBriefMaxChars;
-    return candidateRecords.slice(0, PLANNER_INPUT_LIMITS.candidateCardsMax).map((rec, idx) => {
-        const brief = String(rec.summary ?? '').trim();
-        return {
-            id: rec.candidateId || `cand_${idx + 1}`,
-            type: rec.targetKind,
-            brief: brief.length > maxBrief ? brief.slice(0, maxBrief) + '…' : brief,
+    const perTypeCount = new Map<string, number>();
+    const cards: LightweightPlannerInput['candidateCards'] = [];
+    for (const rec of candidateRecords) {
+        const type = String(rec.targetKind ?? '').trim() || 'other';
+        if ((perTypeCount.get(type) ?? 0) >= 2) {
+            continue;
+        }
+        const brief = truncateChineseText(renderCandidateBrief(type, rec.title, rec.summary, rec.entityKeys ?? [], actors), PLANNER_INPUT_LIMITS.candidateCardBriefMaxChars);
+        const whyRelevant = buildWhyRelevant(rec, windowFacts).slice(0, PLANNER_INPUT_LIMITS.whyRelevantMax);
+        if (!brief || cards.some((card) => card.type === type && card.brief === brief)) {
+            continue;
+        }
+        cards.push({
+            id: rec.candidateId || `cand_${cards.length + 1}`,
+            type,
+            brief,
             entities: rec.entityKeys ?? [],
             state: rec.status ?? 'active',
-        };
-    });
+            whyRelevant,
+        });
+        perTypeCount.set(type, (perTypeCount.get(type) ?? 0) + 1);
+        if (cards.length >= PLANNER_INPUT_LIMITS.candidateCardsMax) {
+            break;
+        }
+    }
+    return cards;
+}
+
+/**
+ * 功能：构建上下文裁剪后的 allowedTypes。
+ * @param signalTypes 信号类型。
+ * @param cardTypes 卡片类型。
+ * @param schemaTypes Schema 类型。
+ * @returns 裁剪结果。
+ */
+function buildAllowedTypes(signalTypes: string[], cardTypes: string[], schemaTypes: string[]): string[] {
+    const signalSet = new Set(signalTypes);
+    const cardSet = new Set(cardTypes);
+    const ordered = [
+        ...schemaTypes.filter((type) => signalSet.has(type) && cardSet.has(type)),
+        ...schemaTypes.filter((type) => !signalSet.has(type) && cardSet.has(type)),
+        ...schemaTypes.filter((type) => signalSet.has(type) && !cardSet.has(type)),
+    ];
+    if (ordered.length <= 0) {
+        return schemaTypes.slice(0, PLANNER_INPUT_LIMITS.allowedTypesMax);
+    }
+    return dedupeStrings(ordered).slice(0, PLANNER_INPUT_LIMITS.allowedTypesMax);
 }
 
 /**
  * 功能：施加 Planner 输入总体积预算。
- * 超限时按优先级逐级裁剪：candidateCards 尾部 → recentDecisions → openThreads 尾部 → windowFacts 尾部。
  * @param input 待检查的轻量输入。
  * @returns 裁剪后的输入。
  */
@@ -389,27 +553,330 @@ function enforcePlannerBudget(input: LightweightPlannerInput): LightweightPlanne
     const maxChars = PLANNER_INPUT_LIMITS.totalBudgetChars;
     let size = JSON.stringify(input).length;
     if (size <= maxChars) return input;
-
     while (input.candidateCards.length > 2 && size > maxChars) {
         input.candidateCards.pop();
         size = JSON.stringify(input).length;
     }
-    if (size <= maxChars) return input;
-
-    input.rollingDigest.recentDecisions = [];
-    size = JSON.stringify(input).length;
-    if (size <= maxChars) return input;
-
-    while (input.rollingDigest.openThreads.length > 1 && size > maxChars) {
-        input.rollingDigest.openThreads.pop();
+    while (input.window.evidenceSnippets.length > 1 && size > maxChars) {
+        input.window.evidenceSnippets.pop();
         size = JSON.stringify(input).length;
     }
-    if (size <= maxChars) return input;
-
+    while (input.rollingDigest.unresolvedQuestions.length > 1 && size > maxChars) {
+        input.rollingDigest.unresolvedQuestions.pop();
+        size = JSON.stringify(input).length;
+    }
     while (input.window.windowFacts.length > 3 && size > maxChars) {
         input.window.windowFacts.pop();
         size = JSON.stringify(input).length;
     }
-
     return input;
+}
+
+/**
+ * 功能：按句号等分隔中文句子。
+ * @param text 原始文本。
+ * @returns 句子列表。
+ */
+function splitChineseSentences(text: string): string[] {
+    return String(text ?? '')
+        .split(/[。！？\n]+/)
+        .map((sentence) => normalizeChineseText(sentence))
+        .filter((sentence) => sentence.length >= 4);
+}
+
+/**
+ * 功能：按规则给句子打分，筛掉低信息量描写。
+ * @param sentence 原句。
+ * @returns 分数。
+ */
+function scoreFactSentence(sentence: string, factPriorityRules: Record<string, string[]>): number {
+    const normalized = normalizeChineseText(sentence);
+    let score = 0;
+    for (const keywords of Object.values(factPriorityRules)) {
+        if (keywords.some((keyword) => normalized.includes(keyword))) {
+            score += 2;
+        }
+    }
+    if (/[“”"'‘’：:]/u.test(normalized)) {
+        score -= 1;
+    }
+    if (/低低笑|目光|空气|沉默|安静|危险的缝|异色瞳|残忍/u.test(normalized)) {
+        score -= 2;
+    }
+    if (normalized.length < 6 || normalized.length > 80) {
+        score -= 1;
+    }
+    return score;
+}
+
+/**
+ * 功能：把原句重写成短事实。
+ * @param sentence 原句。
+ * @param actors 角色提示。
+ * @returns 事实句。
+ */
+function rewriteFactSentence(sentence: string, actors: string[], factPriorityRules: Record<string, string[]>): string {
+    const normalized = normalizeChineseText(sentence);
+    const subject = resolveSentenceSubject(normalized, actors);
+    if (containsAny(normalized, factPriorityRules.reject)) {
+        return `${subject}拒绝${extractTailAfterKeyword(normalized, factPriorityRules.reject, '相关提议')}`;
+    }
+    if (containsAny(normalized, factPriorityRules.accept) && containsAny(normalized, factPriorityRules.transaction)) {
+        return `${subject}收下定金，但未确认正式委托`;
+    }
+    if (containsAny(normalized, factPriorityRules.demand)) {
+        return `${subject}要求${extractTailAfterKeyword(normalized, factPriorityRules.demand, '对方补充已知信息')}`;
+    }
+    if (containsAny(normalized, factPriorityRules.transaction)
+        || containsAny(normalized, factPriorityRules.movement)
+        || containsAny(normalized, factPriorityRules.relation)) {
+        return `${subject}${extractTailAfterKeyword(normalized, [
+            ...factPriorityRules.transaction,
+            ...factPriorityRules.movement,
+            ...factPriorityRules.relation,
+        ], '出现新的状态变化')}`;
+    }
+    return truncateChineseText(normalized, 36);
+}
+
+/**
+ * 功能：从句子中推断主语。
+ * @param sentence 原句。
+ * @param actors 角色提示。
+ * @returns 主语。
+ */
+function resolveSentenceSubject(sentence: string, actors: string[]): string {
+    const matchedActor = actors.find((actor) => actor && sentence.includes(actor));
+    if (matchedActor) {
+        return matchedActor;
+    }
+    const prefix = sentence.match(/^[^，,。；：:]{1,8}/u)?.[0] ?? '';
+    if (prefix && prefix.length <= 6 && !containsAny(prefix, ['如果', '因为', '但是', '而且'])) {
+        return prefix;
+    }
+    return '当前交涉';
+}
+
+/**
+ * 功能：判断文本是否包含任一关键词。
+ * @param text 文本。
+ * @param keywords 关键词。
+ * @returns 是否命中。
+ */
+function containsAny(text: string, keywords: string[]): boolean {
+    return keywords.some((keyword) => text.includes(keyword));
+}
+
+/**
+ * 功能：提取关键词后的尾部片段。
+ * @param sentence 原句。
+ * @param keywords 关键词。
+ * @param fallback 兜底文本。
+ * @returns 尾部片段。
+ */
+function extractTailAfterKeyword(sentence: string, keywords: string[], fallback: string): string {
+    for (const keyword of keywords) {
+        const index = sentence.indexOf(keyword);
+        if (index < 0) {
+            continue;
+        }
+        const tail = normalizeChineseText(sentence.slice(index));
+        return truncateChineseText(tail || fallback, 18);
+    }
+    return fallback;
+}
+
+/**
+ * 功能：收集摘要状态桶。
+ * @param sentences 原句列表。
+ * @param keywords 关键词。
+ * @param maxItems 最大条数。
+ * @param mode 输出模式。
+ * @returns 状态桶。
+ */
+function collectDigestBucket(
+    sentences: string[],
+    keywords: string[],
+    maxItems: number,
+    mode: 'task' | 'relation' | 'question',
+): string[] {
+    const results: string[] = [];
+    for (const sentence of sentences) {
+        if (!containsAny(sentence, keywords)) {
+            continue;
+        }
+        const compact = toDigestSentence(sentence, mode);
+        if (!compact || results.includes(compact)) {
+            continue;
+        }
+        results.push(compact);
+        if (results.length >= maxItems) {
+            break;
+        }
+    }
+    return results;
+}
+
+/**
+ * 功能：把原句压缩成滚动摘要短句。
+ * @param sentence 原句。
+ * @param mode 输出模式。
+ * @returns 压缩短句。
+ */
+function toDigestSentence(sentence: string, mode: 'task' | 'relation' | 'question'): string {
+    const normalized = normalizeChineseText(sentence);
+    if (mode === 'question') {
+        const base = normalized.replace(/^(但|且|而且|目前|现在|仍然|依旧)/u, '');
+        return truncateChineseText(base.endsWith('不明') || base.endsWith('不足') ? base : `${base}仍待确认`, 28);
+    }
+    return truncateChineseText(normalized, 28);
+}
+
+/**
+ * 功能：构建稳定上下文短句。
+ * @param sentences 原句列表。
+ * @param taskState 任务状态。
+ * @param relationState 关系状态。
+ * @returns 稳定上下文。
+ */
+function buildStableContext(sentences: string[], taskState: string[], relationState: string[]): string {
+    const strongSentence = sentences.find((sentence) => containsAny(sentence, ['委托', '任务', '交涉', '交易', '合作', '关系']));
+    if (strongSentence) {
+        return truncateChineseText(strongSentence, 40);
+    }
+    return truncateChineseText(`${taskState[0] || '当前主线仍在推进'}，${relationState[0] || '关系状态暂无明显变化'}。`, 42);
+}
+
+/**
+ * 功能：判断净化摘要是否有实际内容。
+ * @param summary 摘要。
+ * @returns 是否有内容。
+ */
+function hasNormalizedSummaryContent(summary: NormalizedSummaryDigest | undefined | null): boolean {
+    if (!summary) {
+        return false;
+    }
+    return Boolean(
+        String(summary.stableContext ?? '').trim()
+        || (summary.taskState ?? []).length
+        || (summary.relationState ?? []).length
+        || (summary.unresolvedQuestions ?? []).length,
+    );
+}
+
+/**
+ * 功能：清洗净化摘要字段。
+ * @param summary 原始摘要。
+ * @returns 清洗后的摘要。
+ */
+function sanitizeNormalizedSummary(summary: NormalizedSummaryDigest): NormalizedSummaryDigest {
+    return {
+        stableContext: truncateChineseText(normalizeChineseText(summary.stableContext), 48),
+        taskState: dedupeStrings((summary.taskState ?? []).map((item) => truncateChineseText(normalizeChineseText(item), 28))).slice(0, PLANNER_INPUT_LIMITS.taskStateMax),
+        relationState: dedupeStrings((summary.relationState ?? []).map((item) => truncateChineseText(normalizeChineseText(item), 28))).slice(0, PLANNER_INPUT_LIMITS.relationStateMax),
+        unresolvedQuestions: dedupeStrings((summary.unresolvedQuestions ?? []).map((item) => truncateChineseText(normalizeChineseText(item), 28))).slice(0, PLANNER_INPUT_LIMITS.unresolvedQuestionsMax),
+    };
+}
+
+/**
+ * 功能：渲染候选卡片摘要。
+ * @param type 类型。
+ * @param title 标题。
+ * @param summary 摘要。
+ * @param entities 实体。
+ * @param actors 角色提示。
+ * @returns 卡片摘要。
+ */
+function renderCandidateBrief(type: string, title: string, summary: string, entities: string[], actors: string[]): string {
+    const shortSummary = truncateChineseText(normalizeChineseText(summary || title), 40);
+    if (type === 'task') {
+        return `任务：${normalizeChineseText(title) || shortSummary}；状态：${shortSummary}`;
+    }
+    if (type === 'relationship') {
+        const source = entities[0] || actors[0] || normalizeChineseText(title) || '相关角色';
+        const target = entities[1] || actors[1] || '对方';
+        return `${source}对${target}：${shortSummary}`;
+    }
+    if (type === 'event' || type === 'actor_visible_event') {
+        return `事件：${normalizeChineseText(title) || shortSummary}；结果：${shortSummary}`;
+    }
+    if (type === 'location' || type === 'scene_shared_state') {
+        return `地点：${normalizeChineseText(title) || shortSummary}；作用：${shortSummary}`;
+    }
+    if (type === 'world_global_state') {
+        return `世界状态：${shortSummary}`;
+    }
+    return `${normalizeChineseText(title) || type}：${shortSummary}`;
+}
+
+/**
+ * 功能：构建候选卡片相关性说明。
+ * @param rec 候选记录。
+ * @param windowFacts 当前窗口事实。
+ * @returns 相关性说明。
+ */
+function buildWhyRelevant(rec: SummaryCandidateRecord, windowFacts: string[]): string[] {
+    const reasons: string[] = [];
+    if ((rec.entityKeys ?? []).length > 0) {
+        reasons.push('命中核心实体');
+    }
+    if (windowFacts.some((fact) => overlapsByKeyword(fact, rec.summary))) {
+        reasons.push('与当前窗口事实直接呼应');
+    }
+    if (containsAny(rec.summary, ['委托', '任务', '主线', '关系', '拒绝', '条件'])) {
+        reasons.push('命中当前主线或状态变化');
+    }
+    if (reasons.length <= 0) {
+        reasons.push('作为当前类型的代表候选');
+    }
+    return dedupeStrings(reasons);
+}
+
+/**
+ * 功能：按关键词粗略判断两段文本是否重叠。
+ * @param left 左文本。
+ * @param right 右文本。
+ * @returns 是否重叠。
+ */
+function overlapsByKeyword(left: string, right: string): boolean {
+    const keywords = ['委托', '定金', '拒绝', '条件', '关系', '戒备', '地点', '任务', '事件'];
+    return keywords.some((keyword) => left.includes(keyword) && String(right ?? '').includes(keyword));
+}
+
+/**
+ * 功能：归一化普通对象。
+ * @param value 原始值。
+ * @returns 对象结果。
+ */
+function normalizeRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：归一化中文文本。
+ * @param value 原始值。
+ * @returns 文本。
+ */
+function normalizeChineseText(value: unknown): string {
+    return String(value ?? '')
+        .replace(/\s+/g, ' ')
+        .replace(/^[，,；;：:]+|[，,；;：:]+$/g, '')
+        .trim();
+}
+
+/**
+ * 功能：按长度裁剪中文文本。
+ * @param text 原文。
+ * @param maxLength 最大长度。
+ * @returns 裁剪结果。
+ */
+function truncateChineseText(text: string, maxLength: number): string {
+    const normalized = normalizeChineseText(text);
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, maxLength)}…`;
 }

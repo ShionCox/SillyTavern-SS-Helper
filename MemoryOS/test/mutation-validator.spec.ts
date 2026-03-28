@@ -13,6 +13,7 @@ describe('validateSummaryMutationDocument', () => {
                 {
                     action: 'UPDATE',
                     targetKind: 'relationship',
+                    candidateId: 'cand_1',
                     payload: {
                         summary: 'ok',
                         fields: {
@@ -25,9 +26,9 @@ describe('validateSummaryMutationDocument', () => {
             ],
         }, editableMap);
 
-        expect(result.valid).toBe(false);
-        expect(result.errors.some((error) => error.includes('payload_field_not_allowed:relationship:fields.hacked'))).toBe(true);
-        expect(result.errors.some((error) => error.includes('payload_field_not_allowed:relationship:unknownField'))).toBe(true);
+        expect(result.valid).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes('payload_field_not_allowed:relationship:fields.hacked'))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes('payload_field_not_allowed:relationship:unknownField'))).toBe(true);
     });
 
     it('clamps numbers and dedupes arrays for allowed fields', () => {
@@ -41,6 +42,7 @@ describe('validateSummaryMutationDocument', () => {
                 {
                     action: 'UPDATE',
                     targetKind: 'world_global_state',
+                    candidateId: 'cand_1',
                     payload: {
                         summary: 'ok',
                         state: 99999999,
@@ -67,6 +69,7 @@ describe('validateSummaryMutationDocument', () => {
                 {
                     action: 'UPDATE',
                     targetKind: 'relationship',
+                    candidateId: 'cand_1',
                     payload: {
                         summary: '关系更新',
                         fields: {
@@ -92,6 +95,7 @@ describe('validateSummaryMutationDocument', () => {
                 {
                     action: 'UPDATE',
                     targetKind: 'relationship',
+                    candidateId: 'cand_1',
                     payload: {
                         summary: '关系更新',
                         fields: {

@@ -31,6 +31,7 @@ import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { getCurrentTavernUserNameEvent, getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
 import { readMemoryOSSettings } from '../settings/store';
 import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
+import { normalizeSummarySnapshot } from '../memory-summary-planner';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { detectWorldProfile, resolveWorldProfile, getWorldProfileBinding, putWorldProfileBinding, deleteWorldProfileBinding } from '../memory-world-profile';
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
@@ -394,6 +395,7 @@ export class UnifiedMemoryManager {
     async applySummarySnapshot(input: {
         title?: string;
         content: string;
+        normalizedSummary?: SummarySnapshot['normalizedSummary'];
         actorKeys: string[];
         entryUpserts?: SummaryEntryUpsert[];
         refreshBindings?: SummaryRefreshBinding[];
@@ -470,6 +472,12 @@ export class UnifiedMemoryManager {
             chatKey: this.chatKey,
             title: this.normalizeText(input.title) || `回合总结 ${new Date(now).toLocaleString('zh-CN')}`,
             content: this.normalizeText(input.content),
+            normalizedSummary: normalizeSummarySnapshot({
+                title: input.title,
+                content: input.content,
+                entryUpserts: input.entryUpserts,
+                normalizedSummary: input.normalizedSummary,
+            }),
             actorKeys,
             entryUpserts: (input.entryUpserts ?? []).map((item: SummaryEntryUpsert): Record<string, unknown> => ({ ...item })),
             refreshBindings: (input.refreshBindings ?? []).map((item: SummaryRefreshBinding): Record<string, unknown> => ({ ...item })),
@@ -1465,6 +1473,13 @@ export class UnifiedMemoryManager {
             chatKey: row.chatKey,
             title: this.normalizeText(row.title),
             content: this.normalizeText(row.content),
+            normalizedSummary: row.normalizedSummary
+                ? normalizeSummarySnapshot({
+                    title: row.title,
+                    content: row.content,
+                    normalizedSummary: row.normalizedSummary,
+                })
+                : undefined,
             actorKeys: this.normalizeTags(row.actorKeys),
             entryUpserts: Array.isArray(row.entryUpserts) ? row.entryUpserts as unknown as SummaryEntryUpsert[] : [],
             refreshBindings: Array.isArray(row.refreshBindings) ? row.refreshBindings as unknown as SummaryRefreshBinding[] : [],

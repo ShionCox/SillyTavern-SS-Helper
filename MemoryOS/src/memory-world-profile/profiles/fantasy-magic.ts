@@ -27,6 +27,7 @@ export const FANTASY_MAGIC_PROFILE: WorldProfileDefinition = {
         suppressedTypes: ['office_task', 'career'],
     },
     injectionStyle: 'fantasy_magic',
+    styleHintKeywords: ['奇幻', '冒险', '跑团', '任务板', '地下城'],
     detectionKeywords: [
         '魔法',
         '法术',

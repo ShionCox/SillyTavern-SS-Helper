@@ -27,6 +27,7 @@ export const SUPERNATURAL_HIDDEN_PROFILE: WorldProfileDefinition = {
         suppressedTypes: ['race_rule'],
     },
     injectionStyle: 'supernatural_hidden',
+    styleHintKeywords: ['都市', '奇幻', '秘异', '结界', '夜巡'],
     detectionKeywords: [
         '异常',
         '怪异',

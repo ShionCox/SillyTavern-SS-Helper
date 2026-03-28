@@ -27,6 +27,7 @@ export const URBAN_MODERN_PROFILE: WorldProfileDefinition = {
         suppressedTypes: ['artifact_rule', 'race_rule'],
     },
     injectionStyle: 'urban_modern',
+    styleHintKeywords: ['现代', '都市', '现实', '公司', '城市'],
     detectionKeywords: [
         '都市',
         '公司',

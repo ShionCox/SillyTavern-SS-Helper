@@ -27,6 +27,7 @@ export const ANCIENT_TRADITIONAL_PROFILE: WorldProfileDefinition = {
         suppressedTypes: ['technology_rule'],
     },
     injectionStyle: 'ancient_traditional',
+    styleHintKeywords: ['古风', '江湖', '朝堂', '门派', '赴约'],
     detectionKeywords: [
         '王朝',
         '江湖',

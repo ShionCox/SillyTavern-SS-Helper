@@ -33,6 +33,7 @@ export interface WorldProfileDefinition {
     summaryBias: WorldProfileSummaryBias;
     injectionStyle: string;
     detectionKeywords: string[];
+    styleHintKeywords?: string[];
 }
 
 /**

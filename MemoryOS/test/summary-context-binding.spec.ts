@@ -50,5 +50,8 @@ describe('buildSummaryMutationContext world profile binding', () => {
 
         expect(result.context.worldProfileBias.primaryProfile).toBe('supernatural_hidden');
         expect(result.context.worldProfileBias.reasonCodes).toContain('source:world_profile_binding');
+        expect(result.context.narrativeStyle.primaryStyle).toBe('modern');
+        expect(result.context.narrativeStyle.secondaryStyles).toContain('fantasy');
+        expect(result.context.narrativeStyle.isStable).toBe(true);
     });
 });

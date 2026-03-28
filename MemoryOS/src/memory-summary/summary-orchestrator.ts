@@ -99,6 +99,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             title: summary.title,
             content: summary.content,
             updatedAt: summary.updatedAt,
+            normalizedSummary: summary.normalizedSummary,
         })),
         worldProfileTexts,
         worldProfileBinding,
@@ -179,6 +180,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             entities: plannerDecision.entities,
             topics: plannerDecision.topics,
             reasons: plannerDecision.reasons,
+            narrativeStyle: plannerResult.context.narrativeStyle,
         },
     });
     const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];

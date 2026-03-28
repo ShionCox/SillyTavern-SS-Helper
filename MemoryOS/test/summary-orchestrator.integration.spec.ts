@@ -49,6 +49,7 @@ function buildBinding(): WorldProfileBinding {
 describe('runSummaryOrchestrator integration', () => {
     it('applies validated mutation and returns snapshot', async () => {
         const historyActions: string[] = [];
+        const historyPayloads: Array<{ action: string; payload: Record<string, unknown> }> = [];
         const applySnapshot = vi.fn(async (input): Promise<SummarySnapshot> => {
             return {
                 summaryId: 'summary-1',
@@ -67,9 +68,14 @@ describe('runSummaryOrchestrator integration', () => {
             dependencies: {
                 listEntries: async () => [buildEntry()],
                 listRoleMemories: async () => [buildRoleMemory()],
+                listSummarySnapshots: async () => [],
                 getWorldProfileBinding: async () => buildBinding(),
                 appendMutationHistory: async (input) => {
                     historyActions.push(input.action);
+                    historyPayloads.push({
+                        action: input.action,
+                        payload: input.payload,
+                    });
                 },
                 getEntry: async () => buildEntry(),
                 applySummarySnapshot: applySnapshot,
@@ -103,6 +109,7 @@ describe('runSummaryOrchestrator integration', () => {
                 { role: 'assistant', content: '她们的关系紧张了' },
             ],
             enableEmbedding: false,
+            retrievalRulePack: 'hybrid',
         });
 
         expect(result.snapshot?.summaryId).toBe('summary-1');
@@ -113,6 +120,10 @@ describe('runSummaryOrchestrator integration', () => {
         expect(historyActions).toContain('candidate_records_resolved');
         expect(historyActions).toContain('mutation_validated');
         expect(historyActions).toContain('mutation_applied');
+        const plannerPayload = historyPayloads.find((item) => item.action === 'summary_planner_resolved')?.payload ?? {};
+        const narrativeStyle = (plannerPayload.narrativeStyle ?? {}) as Record<string, unknown>;
+        expect(narrativeStyle.primaryStyle).toBe('modern');
+        expect(narrativeStyle.source).toBe('binding');
     });
 
     it('returns null snapshot on failure and writes diagnostics only', async () => {
@@ -123,6 +134,7 @@ describe('runSummaryOrchestrator integration', () => {
             dependencies: {
                 listEntries: async () => [buildEntry()],
                 listRoleMemories: async () => [buildRoleMemory()],
+                listSummarySnapshots: async () => [],
                 getWorldProfileBinding: async () => buildBinding(),
                 appendMutationHistory: async (input) => {
                     historyActions.push(input.action);
@@ -138,6 +150,7 @@ describe('runSummaryOrchestrator integration', () => {
                 { role: 'assistant', content: '继续' },
             ],
             enableEmbedding: false,
+            retrievalRulePack: 'hybrid',
         });
 
         expect(result.snapshot).toBeNull();

@@ -33,6 +33,7 @@ export function validateSummaryMutationDocument(
             valid: false,
             document: null,
             errors: ['invalid_document_type'],
+            warnings: [],
         };
     }
     const source = rawDocument as Record<string, unknown>;

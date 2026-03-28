@@ -192,6 +192,12 @@ export interface DBSummarySnapshot {
     chatKey: string;
     title: string;
     content: string;
+    normalizedSummary?: {
+        stableContext: string;
+        taskState: string[];
+        relationState: string[];
+        unresolvedQuestions: string[];
+    };
     actorKeys: string[];
     entryUpserts: Record<string, unknown>[];
     refreshBindings: Record<string, unknown>[];

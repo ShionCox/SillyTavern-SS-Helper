@@ -1,5 +1,6 @@
 import type { MemoryEntry, SummaryRefreshBinding, SummarySnapshot, SummaryEntryUpsert } from '../types';
 import type { SummaryCandidateRecord } from '../memory-summary-planner';
+import { normalizeSummarySnapshot, type NormalizedSummaryDigest } from '../memory-summary-planner';
 import type { SummaryMutationDocument, SummaryMutationAction } from './mutation-types';
 
 /**
@@ -10,6 +11,7 @@ export interface MutationApplyDependencies {
     applySummarySnapshot(input: {
         title?: string;
         content: string;
+        normalizedSummary?: NormalizedSummaryDigest;
         actorKeys: string[];
         entryUpserts?: SummaryEntryUpsert[];
         refreshBindings?: SummaryRefreshBinding[];
@@ -63,6 +65,11 @@ export async function applySummaryMutation(input: ApplySummaryMutationInput): Pr
     return input.dependencies.applySummarySnapshot({
         title: input.summaryTitle || '结构化总结',
         content: input.summaryContent,
+        normalizedSummary: normalizeSummarySnapshot({
+            title: input.summaryTitle || '结构化总结',
+            content: input.summaryContent,
+            entryUpserts,
+        }),
         actorKeys: input.actorKeys,
         entryUpserts,
         refreshBindings,

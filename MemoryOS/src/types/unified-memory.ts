@@ -135,6 +135,12 @@ export interface SummarySnapshot {
     chatKey: string;
     title: string;
     content: string;
+    normalizedSummary?: {
+        stableContext: string;
+        taskState: string[];
+        relationState: string[];
+        unresolvedQuestions: string[];
+    };
     actorKeys: string[];
     entryUpserts: SummaryEntryUpsert[];
     refreshBindings: SummaryRefreshBinding[];

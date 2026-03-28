@@ -1,4 +1,28 @@
 import { escapeHtml } from '../editorShared';
+import { getWorldProfileById } from '../../memory-world-profile';
+import {
+    resolveNarrativeStyleLabel,
+    resolveNarrativeStyleSourceLabel,
+    resolveMutationActionLabel,
+    resolveMutationSummaryFieldValue,
+    resolvePromptBlockTitle,
+    resolveRecallReasonCodeLabel,
+    resolveRecallSourceLabel,
+    resolveRetrievalProviderLabel,
+    resolveRetrievalRulePackLabel,
+    resolveSummaryFailureStageLabel,
+    resolveSummaryPlannerFieldLabel,
+    resolveSummaryStageLabel,
+    resolveTraceEmptyText,
+    resolveTraceLevelLabel,
+    resolveTracePanelTitle,
+    resolveTraceStageLabel,
+    resolveWorldIdentifierList,
+    resolveWorldProfileLabel,
+    resolveWorldReasonCodeLabel,
+    resolveWorldSubTypeLabel,
+    resolveWorldTypeLabel,
+} from '../workbenchLocale';
 import {
     escapeAttr,
     formatDisplayValue,
@@ -71,6 +95,10 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
             </div>
             <div class="stx-memory-workbench__diagnostics">
                 <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">基础信息</div>
+                    ${buildWorldProfilePanelMarkup(snapshot)}
+                </div>
+                <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">提示词注入总览</div>
                     <div class="stx-memory-workbench__info-list">
                         <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.preview?.query || '未提供')}</strong></div>
@@ -83,12 +111,12 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     </div>
                     <div class="stx-memory-workbench__stack" style="margin-top:12px;">
                         <div class="stx-memory-workbench__card">
-                            <div class="stx-memory-workbench__mini-title">systemText</div>
-                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.systemText || '暂无 systemText')}</pre>
+                            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('systemText'))}</div>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.systemText || '暂无系统注入文本')}</pre>
                         </div>
                         <div class="stx-memory-workbench__card">
-                            <div class="stx-memory-workbench__mini-title">finalText</div>
-                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.finalText || '暂无 finalText')}</pre>
+                            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('finalText'))}</div>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.finalText || '暂无最终注入文本')}</pre>
                         </div>
                     </div>
                 </div>
@@ -107,9 +135,9 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 </div>
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">当前召回 Trace</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTracePanelTitle('currentRecall'))}</div>
                     <div style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
-                        ${buildTraceMarkup(currentTraceRecords, '当前预览还没有 trace 记录。')}
+                        ${buildTraceMarkup(currentTraceRecords, resolveTraceEmptyText('currentRecall'))}
                     </div>
                 </div>
 
@@ -117,43 +145,23 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     <div class="stx-memory-workbench__panel-title">最近注入说明</div>
                     ${snapshot.recallExplanation ? `
                         <div class="stx-memory-workbench__info-list">
-                            <div class="stx-memory-workbench__info-row"><span>记录来源</span><strong>${escapeHtml(snapshot.recallExplanation.source || 'unified_memory')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>记录来源</span><strong>${escapeHtml(resolveRecallSourceLabel(snapshot.recallExplanation.source || 'unified_memory'))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.recallExplanation.generatedAt))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.recallExplanation.query || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>检索器</span><strong>${escapeHtml(snapshot.recallExplanation.retrievalProviderId || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(snapshot.recallExplanation.retrievalRulePack || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>检索器</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.retrievalProviderId || ''))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(resolveRetrievalRulePackLabel(snapshot.recallExplanation.retrievalRulePack || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>命中角色</span><strong>${escapeHtml(snapshot.recallExplanation.matchedActorKeys.join('、') || '暂无')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>命中词条</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>原因码</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.reasonCodes.join('、') || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>原因码</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
                         </div>
                     ` : '<div class="stx-memory-workbench__empty">当前聊天还没有最近一次注入说明。</div>'}
                 </div>
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">最近注入 Trace</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTracePanelTitle('latestInjection'))}</div>
                     <div style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
-                        ${buildTraceMarkup(latestTraceRecords, '当前还没有最近一次注入的 trace。')}
+                        ${buildTraceMarkup(latestTraceRecords, resolveTraceEmptyText('latestInjection'))}
                     </div>
-                </div>
-
-                <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">世界画像</div>
-                    ${snapshot.worldProfileBinding ? `
-                        <div class="stx-memory-workbench__info-list">
-                            <div class="stx-memory-workbench__info-row"><span>主画像</span><strong>${escapeHtml(snapshot.worldProfileBinding.primaryProfile)}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>次画像</span><strong>${escapeHtml(snapshot.worldProfileBinding.secondaryProfiles.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>置信度</span><strong>${escapeHtml(String(snapshot.worldProfileBinding.confidence))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>原因码</span><strong>${escapeHtml(snapshot.worldProfileBinding.reasonCodes.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>创建时间</span><strong>${escapeHtml(formatTimestamp(snapshot.worldProfileBinding.createdAt))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>更新时间</span><strong>${escapeHtml(formatTimestamp(snapshot.worldProfileBinding.updatedAt))}</strong></div>
-                        </div>
-                        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-                            <div class="stx-memory-workbench__mini-title">detectedFrom 样本</div>
-                            <div class="stx-memory-workbench__stack">
-                                ${(snapshot.worldProfileBinding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || '<div class="stx-memory-workbench__empty">暂无来源样本。</div>'}
-                            </div>
-                        </div>
-                    ` : '<div class="stx-memory-workbench__empty">当前聊天还没有世界画像绑定。</div>'}
                 </div>
 
                 <div class="stx-memory-workbench__card">
@@ -177,7 +185,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                         ${snapshot.mutationHistory.map((history): string => `
                             <article class="stx-memory-workbench__card">
                                 <div class="stx-memory-workbench__split-head">
-                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(history.action)}</div>
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveMutationActionLabel(history.action))}</div>
                                     <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(history.ts))}</span>
                                 </div>
                                 <div class="stx-memory-workbench__detail-block">${escapeHtml(buildHistorySummary(history.action, history.payload))}</div>
@@ -199,6 +207,45 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
  * @param snapshot 工作台快照。
  * @returns HTML 片段。
  */
+/**
+ * 功能：渲染当前聊天的基础画像信息。
+ * @param snapshot 工作台快照。
+ * @returns 基础信息模块 HTML。
+ */
+function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
+    const binding = snapshot.worldProfileBinding;
+    if (!binding) {
+        return '<div class="stx-memory-workbench__empty">当前聊天还没有识别出稳定的世界画像。</div>';
+    }
+    const primaryProfile = getWorldProfileById(binding.primaryProfile);
+    const primaryProfileLabel = resolveWorldProfileLabel(binding.primaryProfile);
+    const secondaryProfileText = resolveWorldIdentifierList(binding.secondaryProfiles, resolveWorldProfileLabel);
+    const worldType = resolveWorldTypeLabel(binding.primaryProfile);
+    const subTypeText = primaryProfile?.subGenres?.length
+        ? resolveWorldIdentifierList(primaryProfile.subGenres, resolveWorldSubTypeLabel)
+        : '暂无';
+    const reasonCodeText = resolveWorldIdentifierList(binding.reasonCodes, resolveWorldReasonCodeLabel);
+
+    return `
+        <div class="stx-memory-workbench__info-list">
+            <div class="stx-memory-workbench__info-row"><span>当前聊天画像</span><strong>${escapeHtml(primaryProfile?.displayName || primaryProfileLabel)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>当前世界类型</span><strong>${escapeHtml(worldType)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>细分类型</span><strong>${escapeHtml(subTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>辅助画像</span><strong>${escapeHtml(secondaryProfileText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>识别置信度</span><strong>${escapeHtml(String(binding.confidence))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>识别依据</span><strong>${escapeHtml(reasonCodeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>创建时间</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>更新时间</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">识别来源样本</div>
+            <div class="stx-memory-workbench__stack">
+                ${(binding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || '<div class="stx-memory-workbench__empty">暂无来源样本。</div>'}
+            </div>
+        </div>
+    `;
+}
+
 function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
     const systemTextLen = (snapshot.preview?.systemText || '').length;
     const roleTextLen = (snapshot.preview?.roleText || '').length;
@@ -217,12 +264,12 @@ function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
     }
 
     return `
-        <div class="stx-memory-workbench__card">
-            <div class="stx-memory-workbench__panel-title">提示词体积统计</div>
-            <div class="stx-memory-workbench__info-list">
-                <div class="stx-memory-workbench__info-row"><span>systemText 字符数</span><strong>${escapeHtml(String(systemTextLen))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>roleText 字符数</span><strong>${escapeHtml(String(roleTextLen))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>finalText 字符数</span><strong>${escapeHtml(String(finalTextLen))}</strong></div>
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">提示词体积统计</div>
+                    <div class="stx-memory-workbench__info-list">
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('systemText'))}字符数</span><strong>${escapeHtml(String(systemTextLen))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('roleText'))}字符数</span><strong>${escapeHtml(String(roleTextLen))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('finalText'))}字符数</span><strong>${escapeHtml(String(finalTextLen))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>Preview 总字符数</span><strong>${escapeHtml(String(totalPreviewLen))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>候选记录数</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>活跃 Schema 数</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
@@ -313,29 +360,30 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
 
     const plannerSection = plannerRecord ? `
         <div style="padding: 8px 10px; background: rgba(196,160,98,0.08); border-left: 3px solid #c4a062; border-radius: 0 4px 4px 0;">
-            <div style="font-size: 12px; font-weight: 600; color: #c4a062; margin-bottom: 4px;">Planner 阶段</div>
+            <div style="font-size: 12px; font-weight: 600; color: #c4a062; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('planner'))}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6; min-width: 0; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">
-                <div>should_update：<strong>${escapeHtml(String(plannerRecord.payload.shouldUpdate ?? '-'))}</strong></div>
-                <div>focus_types：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.focusTypes) ? (plannerRecord.payload.focusTypes as string[]).join('、') : '-')}</strong></div>
-                <div>entities：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.entities) ? (plannerRecord.payload.entities as string[]).join('、') : '-')}</strong></div>
-                <div>topics：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.topics) ? (plannerRecord.payload.topics as string[]).join('、') : '-')}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('shouldUpdate'))}：<strong>${escapeHtml(String(plannerRecord.payload.shouldUpdate ?? '-'))}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('focusTypes'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.focusTypes) ? (plannerRecord.payload.focusTypes as string[]).join('、') : '-')}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('entities'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.entities) ? (plannerRecord.payload.entities as string[]).join('、') : '-')}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('topics'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.topics) ? (plannerRecord.payload.topics as string[]).join('、') : '-')}</strong></div>
+                ${buildNarrativeStyleDebugMarkup(plannerRecord.payload.narrativeStyle)}
             </div>
         </div>
     ` : '';
 
     const validatedSection = validatedRecord ? `
         <div style="padding: 8px 10px; background: rgba(167,139,250,0.08); border-left: 3px solid #a78bfa; border-radius: 0 4px 4px 0;">
-            <div style="font-size: 12px; font-weight: 600; color: #a78bfa; margin-bottom: 4px;">Mutation 阶段</div>
+            <div style="font-size: 12px; font-weight: 600; color: #a78bfa; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('mutation'))}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
                 <div>动作数：<strong>${escapeHtml(String(validatedRecord.payload.actionCount ?? 0))}</strong></div>
-                ${validatedRecord.payload.plannerNoop ? '<div style="color: var(--mw-muted);">Planner 判定无需更新（NOOP）</div>' : ''}
+                ${validatedRecord.payload.plannerNoop ? '<div style="color: var(--mw-muted);">规划阶段判定无需更新</div>' : ''}
             </div>
         </div>
     ` : '';
 
     const appliedSection = appliedRecord ? `
         <div style="padding: 8px 10px; background: rgba(45,212,191,0.08); border-left: 3px solid #2dd4bf; border-radius: 0 4px 4px 0;">
-            <div style="font-size: 12px; font-weight: 600; color: #2dd4bf; margin-bottom: 4px;">Apply 阶段</div>
+            <div style="font-size: 12px; font-weight: 600; color: #2dd4bf; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('apply'))}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
                 <div>总结ID：<strong style="font-family:'Fira Code',monospace; font-size:11px;">${escapeHtml(String(appliedRecord.payload.summaryId ?? '-'))}</strong></div>
                 <div>动作数：<strong>${escapeHtml(String(appliedRecord.payload.actionCount ?? 0))}</strong></div>
@@ -356,7 +404,7 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
             <div style="font-size: 12px; font-weight: 600; color: var(--mw-warn); margin-bottom: 4px;">${escapeHtml(stageLabel)}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
                 <div>原因码：<strong>${escapeHtml(reasonCode || 'unknown')}</strong></div>
-                <div>失败阶段：<strong>${escapeHtml(isSchemaFail ? 'Validator' : reasonCode.includes('llm') ? 'LLM 请求' : '其他')}</strong></div>
+                <div>失败阶段：<strong>${escapeHtml(resolveSummaryFailureStageLabel(reasonCode))}</strong></div>
                 ${validationErrors.length > 0 ? `<div>校验错误：<strong>${escapeHtml(validationErrors.join('；'))}</strong></div>` : ''}
             </div>
         </div>
@@ -382,6 +430,32 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
  * @param snapshot 工作台快照。
  * @returns 卡片 HTML。
  */
+/**
+ * 功能：渲染当前轮次叙事风格调试信息。
+ * @param value 叙事风格 payload。
+ * @returns HTML 片段。
+ */
+function buildNarrativeStyleDebugMarkup(value: unknown): string {
+    const payload = normalizeRecord(value);
+    const primaryStyle = String(payload.primaryStyle ?? '').trim();
+    const secondaryStyles = Array.isArray(payload.secondaryStyles)
+        ? (payload.secondaryStyles as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    const source = String(payload.source ?? '').trim();
+    const isStable = payload.isStable === true;
+    if (!primaryStyle && secondaryStyles.length <= 0 && !source) {
+        return '';
+    }
+    return `
+        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.12);">
+            <div>当前风格：<strong>${escapeHtml(resolveNarrativeStyleLabel(primaryStyle || ''))}</strong></div>
+            <div>次风格：<strong>${escapeHtml(secondaryStyles.length > 0 ? secondaryStyles.map((item: string): string => resolveNarrativeStyleLabel(item)).join('、') : '暂无')}</strong></div>
+            <div>来源：<strong>${escapeHtml(resolveNarrativeStyleSourceLabel(source || ''))}</strong></div>
+            <div>稳定状态：<strong>${escapeHtml(isStable ? '已稳定' : '待观察')}</strong></div>
+        </div>
+    `;
+}
+
 function buildEntryUpdateCards(snapshot: WorkbenchSnapshot): string {
     const successRecords: EntryUpdateRecord[] = (snapshot.entryAuditRecords ?? []).map((audit): EntryUpdateRecord => ({
         key: `audit:${audit.auditId}`,
@@ -554,12 +628,15 @@ function buildTraceMarkup(records: PreviewTraceRecord[], emptyText: string): str
                 const isWarn = record.level === 'warn';
                 const color = isError ? 'var(--mw-warn)' : isWarn ? 'var(--mw-accent)' : 'var(--mw-accent-cyan)';
                 const bgColor = isError ? 'rgba(239,68,68,0.05)' : isWarn ? 'rgba(196,160,98,0.05)' : 'rgba(56,189,248,0.05)';
+                const stageLabel = resolveTraceStageLabel(record.stage || '');
+                const levelLabel = resolveTraceLevelLabel(record.level || '');
                 return `
                     <div style="border-left: 2px solid ${color}; padding: 6px 10px; background: ${bgColor}; border-radius: 0 4px 4px 0;">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
-                            <strong style="color: ${color}; font-size: 12px;">[${escapeHtml(record.stage || 'unknown')}] ${escapeHtml(record.title || '未命名日志')}</strong>
+                            <strong style="color: ${color}; font-size: 12px;">[${escapeHtml(stageLabel)}] ${escapeHtml(record.title || '未命名日志')}</strong>
                             <span style="color: var(--mw-muted); font-size: 10px; flex-shrink: 0;">${escapeHtml(formatTimestamp(record.ts))}</span>
                         </div>
+                        <div style="font-size: 10px; color: var(--mw-muted); margin-bottom: ${record.message ? '4px' : '0'};">级别：${escapeHtml(levelLabel)}</div>
                         ${record.message ? `<div style="color: var(--mw-text); white-space: pre-wrap; word-break: break-all; opacity: 0.9;">${escapeHtml(record.message)}</div>` : ''}
                     </div>
                 `;
@@ -588,12 +665,15 @@ function buildHistorySummary(action: string, payload: Record<string, unknown>): 
         { key: 'actionCount', label: '动作数' },
     ];
     fieldMap.forEach((field): void => {
-        const text = formatDisplayValue(payload[field.key]);
+        const rawText = formatDisplayValue(payload[field.key]);
+        const text = rawText !== '暂无'
+            ? resolveMutationSummaryFieldValue(field.key, payload[field.key]) || rawText
+            : rawText;
         if (text !== '暂无') {
             fields.push(`${field.label}：${text}`);
         }
     });
-    return fields.length > 0 ? fields.join('；') : `动作 ${action} 已记录，但没有额外可读摘要。`;
+    return fields.length > 0 ? fields.join('；') : `${resolveMutationActionLabel(action)}已记录，但没有额外可读摘要。`;
 }
 
 /**

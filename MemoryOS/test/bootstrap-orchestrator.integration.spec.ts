@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runBootstrapOrchestrator } from '../src/memory-bootstrap';
+import { applyBootstrapCandidates, runBootstrapOrchestrator } from '../src/memory-bootstrap';
 import type { ColdStartSourceBundle } from '../src/memory-bootstrap';
 
 function buildBundle(): ColdStartSourceBundle {
@@ -52,33 +52,34 @@ describe('runBootstrapOrchestrator integration', () => {
         const savedEntries: Array<{ entryType: string; title: string }> = [];
         const savedPayloads: Array<Record<string, unknown>> = [];
         const historyActions: string[] = [];
+        const dependencies = {
+            ensureActorProfile: vi.fn(async () => ({})),
+            saveEntry: vi.fn(async (input) => {
+                savedEntries.push({ entryType: input.entryType, title: input.title });
+                savedPayloads.push(input.detailPayload || {});
+                return {
+                    ...input,
+                    entryId: `entry_${savedEntries.length}`,
+                    chatKey: 'chat',
+                    category: input.category || 'other',
+                    tags: input.tags || [],
+                    summary: input.summary || '',
+                    detail: input.detail || '',
+                    detailSchemaVersion: 1,
+                    detailPayload: input.detailPayload || {},
+                    sourceSummaryIds: [],
+                    createdAt: 1,
+                    updatedAt: 1,
+                };
+            }),
+            bindRoleToEntry: vi.fn(async () => ({})),
+            putWorldProfileBinding: vi.fn(async () => ({})),
+            appendMutationHistory: vi.fn(async (input) => {
+                historyActions.push(String(input.action));
+            }),
+        };
         const result = await runBootstrapOrchestrator({
-            dependencies: {
-                ensureActorProfile: vi.fn(async () => ({})),
-                saveEntry: vi.fn(async (input) => {
-                    savedEntries.push({ entryType: input.entryType, title: input.title });
-                    savedPayloads.push(input.detailPayload || {});
-                    return {
-                        ...input,
-                        entryId: `entry_${savedEntries.length}`,
-                        chatKey: 'chat',
-                        category: input.category || 'other',
-                        tags: input.tags || [],
-                        summary: input.summary || '',
-                        detail: input.detail || '',
-                        detailSchemaVersion: 1,
-                        detailPayload: input.detailPayload || {},
-                        sourceSummaryIds: [],
-                        createdAt: 1,
-                        updatedAt: 1,
-                    };
-                }),
-                bindRoleToEntry: vi.fn(async () => ({})),
-                putWorldProfileBinding: vi.fn(async () => ({})),
-                appendMutationHistory: vi.fn(async (input) => {
-                    historyActions.push(String(input.action));
-                }),
-            },
+            dependencies,
             llm: {
                 registerConsumer: () => {},
                 unregisterConsumer: () => {},
@@ -145,6 +146,15 @@ describe('runBootstrapOrchestrator integration', () => {
             pluginId: 'MemoryOS',
             sourceBundle: buildBundle(),
         });
+
+        if (result.ok && result.document && result.candidates) {
+            await applyBootstrapCandidates({
+                dependencies,
+                document: result.document,
+                sourceBundle: buildBundle(),
+                selectedCandidates: result.candidates,
+            });
+        }
 
         expect(result.ok).toBe(true);
         expect(savedEntries.some((item) => item.entryType === 'actor_profile')).toBe(true);
