@@ -18,6 +18,8 @@ import type {
     DBActorMemoryProfile,
     DBRoleEntryMemory,
     DBMemoryMutationHistory,
+    DBMemoryEntryFieldDiff,
+    DBMemoryEntryAuditRecord,
     DBMeta,
     DBSummarySnapshot,
     DBWorldProfileBinding,
@@ -39,6 +41,8 @@ export type {
     DBActorMemoryProfile,
     DBRoleEntryMemory,
     DBMemoryMutationHistory,
+    DBMemoryEntryFieldDiff,
+    DBMemoryEntryAuditRecord,
     DBMeta,
     DBSummarySnapshot,
     DBWorldProfileBinding,
@@ -65,6 +69,7 @@ export interface MemoryChatDatabaseSnapshot {
     audit: DBAudit[];
     meta: DBMeta | null;
     memoryMutationHistory: DBMemoryMutationHistory[];
+    memoryEntryAuditRecords: DBMemoryEntryAuditRecord[];
     memoryEntries: DBMemoryEntry[];
     memoryEntryTypes: DBMemoryEntryType[];
     actorMemoryProfiles: DBActorMemoryProfile[];
@@ -268,6 +273,7 @@ export async function clearMemoryChatData(
             db.audit,
             db.meta,
             db.memory_mutation_history,
+            db.memory_entry_audit_records,
             db.memory_entries,
             db.memory_entry_types,
             db.actor_memory_profiles,
@@ -280,6 +286,7 @@ export async function clearMemoryChatData(
             db.templates,
             db.meta,
             db.memory_mutation_history,
+            db.memory_entry_audit_records,
             db.memory_entries,
             db.memory_entry_types,
             db.actor_memory_profiles,
@@ -294,6 +301,7 @@ export async function clearMemoryChatData(
             db.templates.where('[chatKey+createdAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
             db.meta.delete(chatKey),
             db.memory_mutation_history.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
+            db.memory_entry_audit_records.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
             db.memory_entries.where('chatKey').equals(chatKey).delete(),
             db.memory_entry_types.where('chatKey').equals(chatKey).delete(),
             db.actor_memory_profiles.where('chatKey').equals(chatKey).delete(),
@@ -336,6 +344,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         audit,
         meta,
         memoryMutationHistory,
+        memoryEntryAuditRecords,
         memoryEntries,
         memoryEntryTypes,
         actorMemoryProfiles,
@@ -350,6 +359,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         db.audit.where('chatKey').equals(normalizedChatKey).toArray(),
         db.meta.get(normalizedChatKey),
         db.memory_mutation_history.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_entry_audit_records.where('chatKey').equals(normalizedChatKey).toArray(),
         db.memory_entries.where('chatKey').equals(normalizedChatKey).toArray(),
         db.memory_entry_types.where('chatKey').equals(normalizedChatKey).toArray(),
         db.actor_memory_profiles.where('chatKey').equals(normalizedChatKey).toArray(),
@@ -372,6 +382,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         audit,
         meta: meta ?? null,
         memoryMutationHistory,
+        memoryEntryAuditRecords,
         memoryEntries,
         memoryEntryTypes,
         actorMemoryProfiles,
@@ -480,6 +491,7 @@ export async function importMemoryPromptTestBundle(
         db.audit,
         db.meta,
         db.memory_mutation_history,
+        db.memory_entry_audit_records,
         db.memory_entries,
         db.memory_entry_types,
         db.actor_memory_profiles,
@@ -495,6 +507,7 @@ export async function importMemoryPromptTestBundle(
                 ? db.meta.put({ ...toRecord(sourceDatabase.meta), chatKey: targetChatKey } as DBMeta)
                 : Promise.resolve(),
             db.memory_mutation_history.bulkPut((sourceDatabase.memoryMutationHistory ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryMutationHistory)),
+            db.memory_entry_audit_records.bulkPut((sourceDatabase.memoryEntryAuditRecords ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntryAuditRecord)),
             db.memory_entries.bulkPut((sourceDatabase.memoryEntries ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntry)),
             db.memory_entry_types.bulkPut((sourceDatabase.memoryEntryTypes ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntryType)),
             db.actor_memory_profiles.bulkPut((sourceDatabase.actorMemoryProfiles ?? []).map((row) => mapChatKey(row) as unknown as DBActorMemoryProfile)),
@@ -559,6 +572,7 @@ export async function clearAllMemoryData(): Promise<void> {
         db.audit,
         db.meta,
         db.memory_mutation_history,
+        db.memory_entry_audit_records,
         db.memory_entries,
         db.memory_entry_types,
         db.actor_memory_profiles,
@@ -574,6 +588,7 @@ export async function clearAllMemoryData(): Promise<void> {
             db.audit.clear(),
             db.meta.clear(),
             db.memory_mutation_history.clear(),
+            db.memory_entry_audit_records.clear(),
             db.memory_entries.clear(),
             db.memory_entry_types.clear(),
             db.actor_memory_profiles.clear(),

@@ -520,19 +520,29 @@
 }
 
 .stx-memory-workbench__diagnostics {
-  column-count: 2;
-  column-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  gap: 12px;
 }
 
 .stx-memory-workbench__diagnostics > .stx-memory-workbench__card {
-  break-inside: avoid;
-  margin-bottom: 12px;
-  display: inline-block;
-  width: 100%;
+  min-width: 0;
+  margin-bottom: 0;
+  width: auto;
+}
+
+.stx-memory-workbench__diagnostics .stx-memory-workbench__card div,
+.stx-memory-workbench__diagnostics .stx-memory-workbench__card span,
+.stx-memory-workbench__diagnostics .stx-memory-workbench__card strong {
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .stx-memory-workbench__details summary {

@@ -14,7 +14,12 @@ export interface MutationApplyDependencies {
         entryUpserts?: SummaryEntryUpsert[];
         refreshBindings?: SummaryRefreshBinding[];
     }): Promise<SummarySnapshot>;
-    deleteEntry?(entryId: string): Promise<void>;
+    deleteEntry?(entryId: string, options?: {
+        actionType?: 'DELETE';
+        summaryId?: string;
+        sourceLabel?: string;
+        reasonCodes?: string[];
+    }): Promise<void>;
 }
 
 /**
@@ -86,7 +91,11 @@ async function applySingleAction(input: {
     const resolvedRecordId = String(input.action.targetId ?? candidate?.recordId ?? '').trim();
     const payload = resolveActionPayload(input.action);
     if (actionType === 'DELETE' && resolvedRecordId && input.dependencies.deleteEntry) {
-        await input.dependencies.deleteEntry(resolvedRecordId);
+        await input.dependencies.deleteEntry(resolvedRecordId, {
+            actionType: 'DELETE',
+            sourceLabel: '结构化回合总结',
+            reasonCodes: Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
+        });
         return;
     }
     if (actionType === 'INVALIDATE' && resolvedRecordId) {
@@ -126,6 +135,12 @@ async function applySingleAction(input: {
                 summary: String(payload.summary ?? existing.summary ?? existing.detail ?? existing.title).trim(),
                 detail: existing.detail,
                 detailPayload: mergedDetailPayload,
+                actionType: 'INVALIDATE',
+                reasonCodes: dedupeStrings([
+                    ...(Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : []),
+                    ...toStringArray(payload.reasonCodes),
+                ]),
+                sourceLabel: '结构化回合总结',
             });
         }
         return;
@@ -143,7 +158,15 @@ async function applySingleAction(input: {
         return;
     }
     const targetSchemaId = normalizeTargetSchemaId(input.action.targetKind, candidate?.schemaId);
-    const upsert = await buildEntryUpsert(input.dependencies, targetSchemaId, payload, resolvedRecordId);
+    const upsert = await buildEntryUpsert(
+        input.dependencies,
+        targetSchemaId,
+        payload,
+        resolvedRecordId,
+        actionType === 'UPDATE' ? 'UPDATE' : 'ADD',
+        Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
+        '结构化回合总结',
+    );
     if (!upsert) {
         return;
     }
@@ -186,6 +209,9 @@ async function applyMergeAction(input: {
         input.action.targetKind,
         input.payload,
         primaryId,
+        'MERGE',
+        Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
+        '结构化回合总结',
     );
     if (primaryUpsert) {
         input.entryUpserts.push(primaryUpsert);
@@ -222,6 +248,9 @@ async function applyMergeAction(input: {
                     mergedAt,
                 },
             },
+            actionType: 'MERGE',
+            reasonCodes: Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
+            sourceLabel: '结构化回合总结',
         });
     }
 }
@@ -239,6 +268,9 @@ async function buildEntryUpsert(
     targetSchemaId: string,
     payload: Record<string, unknown>,
     recordId?: string,
+    actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE',
+    reasonCodes: string[] = [],
+    sourceLabel?: string,
 ): Promise<SummaryEntryUpsert | null> {
     const existing = recordId ? await dependencies.getEntry(recordId) : null;
     const summaryAppend = String(payload.summaryAppend ?? '').trim();
@@ -261,6 +293,12 @@ async function buildEntryUpsert(
         summary: payloadSummary || existing?.summary || existing?.detail || title,
         detail: String(payload.detail ?? existing?.detail ?? '').trim() || undefined,
         detailPayload,
+        actionType: actionType ?? (existing ? 'UPDATE' : 'ADD'),
+        reasonCodes: dedupeStrings([
+            ...reasonCodes,
+            ...toStringArray(payload.reasonCodes),
+        ]),
+        sourceLabel,
     };
 }
 

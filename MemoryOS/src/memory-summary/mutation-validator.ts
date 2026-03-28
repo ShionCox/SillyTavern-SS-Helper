@@ -8,6 +8,7 @@ export interface ValidateSummaryMutationResult {
     valid: boolean;
     document: SummaryMutationDocument | null;
     errors: string[];
+    warnings: string[];
 }
 
 /**
@@ -39,6 +40,7 @@ export function validateSummaryMutationDocument(
     const window = normalizeWindow(source.window);
     const actionNormalizeResult = normalizeActions(source.actions, editableFieldMap);
     const errors = [...actionNormalizeResult.errors, ...validateDocumentSafety(actionNormalizeResult.actions)];
+    const warnings = [...actionNormalizeResult.warnings];
     if (!schemaVersion) {
         errors.push('missing_schema_version');
     }
@@ -53,6 +55,7 @@ export function validateSummaryMutationDocument(
             valid: false,
             document: null,
             errors: dedupeStrings(errors),
+            warnings: dedupeStrings(warnings),
         };
     }
     const normalizedWindow = window as SummaryMutationDocument['window'];
@@ -64,6 +67,7 @@ export function validateSummaryMutationDocument(
             actions: actionNormalizeResult.actions,
         },
         errors: [],
+        warnings: dedupeStrings(warnings),
     };
 }
 
@@ -135,12 +139,13 @@ function normalizeWindow(value: unknown): SummaryMutationDocument['window'] | nu
 function normalizeActions(
     value: unknown,
     editableFieldMap: EditableFieldMap,
-): { actions: SummaryMutationAction[]; errors: string[] } {
+): { actions: SummaryMutationAction[]; errors: string[]; warnings: string[] } {
     if (!Array.isArray(value)) {
-        return { actions: [], errors: [] };
+        return { actions: [], errors: [], warnings: [] };
     }
     const actions: SummaryMutationAction[] = [];
     const errors: string[] = [];
+    const warnings: string[] = [];
     for (const row of value) {
         const normalized = normalizeAction(row, editableFieldMap);
         if (!normalized.action) {
@@ -151,10 +156,12 @@ function normalizeActions(
         }
         actions.push(normalized.action);
         errors.push(...normalized.errors);
+        warnings.push(...normalized.warnings);
     }
     return {
         actions,
         errors: dedupeStrings(errors),
+        warnings: dedupeStrings(warnings),
     };
 }
 
@@ -167,18 +174,18 @@ function normalizeActions(
 function normalizeAction(
     value: unknown,
     editableFieldMap: EditableFieldMap,
-): { action: SummaryMutationAction | null; error?: string; errors: string[] } {
+): { action: SummaryMutationAction | null; error?: string; errors: string[]; warnings: string[] } {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return { action: null, error: 'invalid_action_type', errors: [] };
+        return { action: null, error: 'invalid_action_type', errors: [], warnings: [] };
     }
     const row = value as Record<string, unknown>;
     const action = String(row.action ?? '').trim().toUpperCase();
     if (!ALLOWED_ACTIONS.has(action)) {
-        return { action: null, error: 'invalid_action_name', errors: [] };
+        return { action: null, error: 'invalid_action_name', errors: [], warnings: [] };
     }
     const targetKind = String(row.targetKind ?? row.type ?? '').trim();
     if (!targetKind) {
-        return { action: null, error: 'missing_target_kind', errors: [] };
+        return { action: null, error: 'missing_target_kind', errors: [], warnings: [] };
     }
     const allowedFields = editableFieldMap.get(targetKind) ?? new Set<string>();
     const rawPayload = resolveRawPayload(action, row);
@@ -203,10 +210,14 @@ function normalizeAction(
             reasonCodes: dedupeStrings(Array.isArray(row.reasonCodes) ? (row.reasonCodes as string[]) : []),
         },
         errors: [
-            ...payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
             ...enumErrors,
             ...semanticErrors,
         ],
+        // payload_field_not_allowed 降级为警告：因 strict JSON schema 不支持 anyOf/oneOf，
+        // 所有类型的可写字段被合并到统一 payload schema，AI 不可避免使用跨类型字段。
+        // sanitizePayloadByAllowedFields 已将不属于当前 targetKind 的字段从 payload 移除，
+        // 仅作为 warning 输出以便诊断与 prompt 调优。
+        warnings: payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
     };
 }
 

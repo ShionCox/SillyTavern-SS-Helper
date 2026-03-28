@@ -2,6 +2,7 @@ import { escapeHtml } from '../editorShared';
 import type {
     ActorMemoryProfile,
     MemoryEntry,
+    MemoryEntryAuditRecord,
     MemoryEntryType,
     MemoryEntryTypeField,
     MemoryMutationHistoryRecord,
@@ -93,6 +94,7 @@ export interface WorkbenchSnapshot {
     preview: PromptAssemblySnapshot | null;
     worldProfileBinding: WorldProfileBinding | null;
     mutationHistory: MemoryMutationHistoryRecord[];
+    entryAuditRecords: MemoryEntryAuditRecord[];
     recallExplanation: WorkbenchRecallExplanation | null;
     actorGraph: WorkbenchActorGraph;
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;

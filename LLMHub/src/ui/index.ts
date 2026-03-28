@@ -492,6 +492,20 @@ function formatTaskDisplayLabel(taskId?: string, taskDescription?: string): stri
     return String(taskId || '').trim();
 }
 
+/**
+ * 功能：根据 taskId 推断 MemoryOS 任务阶段颜色。
+ * @param taskId 任务 ID。
+ * @returns CSS 颜色值；非 MemoryOS 任务返回空串。
+ */
+function resolveTaskStageColor(taskId?: string): string {
+    const id = String(taskId || '').trim();
+    if (id.includes('cold_start') || id.includes('bootstrap')) return '#38bdf8';
+    if (id.includes('planner')) return '#c4a062';
+    if (id.includes('mutation') || id.includes('summary')) return '#a78bfa';
+    if (id.includes('preview') || id.includes('recall')) return '#2dd4bf';
+    return '';
+}
+
 function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
     return snapshot.available ? 'is-ok' : 'is-warning';
 }
@@ -2250,8 +2264,10 @@ function bindUiEvents(): void {
         const items: string[] = [];
         if (snapshot.active) {
             const active = snapshot.active;
+            const stageColor = resolveTaskStageColor(active.taskId);
+            const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
             items.push(`
-              <div class="stx-ui-list-item">
+              <div class="stx-ui-list-item"${stageStyle}>
                 <div>
                   <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(formatTaskDisplayLabel(active.taskId, active.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(active.requestId.slice(0, 8))}...</div>
@@ -2261,8 +2277,10 @@ function bindUiEvents(): void {
         }
 
         for (const pending of snapshot.pending) {
+            const stageColor = resolveTaskStageColor(pending.taskId);
+            const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
             items.push(`
-              <div class="stx-ui-list-item">
+              <div class="stx-ui-list-item"${stageStyle}>
                 <div>
                   <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(formatTaskDisplayLabel(pending.taskId, pending.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(pending.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(pending.queuedAt)}</div>
@@ -2321,22 +2339,53 @@ function bindUiEvents(): void {
     const buildRequestLogSummarySectionHtml = (entry: LLMRequestLogEntry): string => {
         const model = String(entry.response?.meta?.model || '-').trim() || '-';
         const resourceId = String(entry.response?.meta?.resourceId || '-').trim() || '-';
+        const strictCompatible = entry.request?.strictSchemaCompatible;
+        const responseFormat = String(entry.request?.responseFormatResolved || '').trim();
+        const schemaCharCount = entry.request?.metrics?.schemaCharCount;
+        const inputCharCount = entry.request?.metrics?.inputCharCount;
+        const outputCharCount = entry.request?.metrics?.outputCharCount;
+
+        const formatLabel = responseFormat === 'json_schema'
+            ? '严格 JSON Schema'
+            : responseFormat === 'json_object'
+                ? 'JSON Object 回退'
+                : responseFormat === 'system_json'
+                    ? 'System JSON 回退'
+                    : responseFormat || '-';
+
+        const lines = [
+            `请求ID：${entry.requestId}`,
+            `来源插件：${entry.sourcePluginId}`,
+            `任务：${formatTaskDisplayLabel(entry.taskId, entry.taskDescription)}`,
+            `状态：${STATE_LABELS[entry.state] || entry.state}`,
+            `资源：${resourceId}`,
+            `模型：${model}`,
+            `发出时间：${formatDateTime(entry.queuedAt)}`,
+            `返回时间：${formatDateTime(entry.finishedAt)}`,
+            `请求耗时：${formatLatency(entry.latencyMs)}`,
+        ];
+        if (strictCompatible !== undefined) {
+            lines.push(`Schema 严格兼容：${strictCompatible ? '是' : '否'}`);
+        }
+        if (responseFormat) {
+            lines.push(`响应格式：${formatLabel}`);
+        }
+        if (schemaCharCount !== undefined) {
+            lines.push(`Schema 字符数：${schemaCharCount}`);
+        }
+        if (inputCharCount !== undefined) {
+            lines.push(`输入字符数：${inputCharCount}`);
+        }
+        if (outputCharCount !== undefined) {
+            lines.push(`输出字符数：${outputCharCount}`);
+        }
+
         return `
         <section class="stx-ui-log-section">
           <div class="stx-ui-log-section-head">
             <div class="stx-ui-log-section-title">请求概览</div>
           </div>
-          <pre class="stx-ui-log-pre">${escapeHtml([
-                `请求ID：${entry.requestId}`,
-                `来源插件：${entry.sourcePluginId}`,
-                `任务：${formatTaskDisplayLabel(entry.taskId, entry.taskDescription)}`,
-                `状态：${STATE_LABELS[entry.state] || entry.state}`,
-                `资源：${resourceId}`,
-                `模型：${model}`,
-                `发出时间：${formatDateTime(entry.queuedAt)}`,
-                `返回时间：${formatDateTime(entry.finishedAt)}`,
-                `请求耗时：${formatLatency(entry.latencyMs)}`,
-            ].join('\n'))}</pre>
+          <pre class="stx-ui-log-pre">${escapeHtml(lines.join('\n'))}</pre>
         </section>
     `;
     };
@@ -2363,10 +2412,20 @@ function bindUiEvents(): void {
             return;
         }
 
-        requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => `
-          <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}">
+        requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => {
+            const stageColor = resolveTaskStageColor(entry.taskId);
+            const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
+            const formatLabel = entry.request?.responseFormatResolved === 'json_schema'
+                ? '<span style="color:#2dd4bf; font-size:10px; margin-left:4px;">[strict]</span>'
+                : entry.request?.responseFormatResolved === 'json_object'
+                    ? '<span style="color:#c4a062; font-size:10px; margin-left:4px;">[json_obj]</span>'
+                    : entry.request?.responseFormatResolved === 'system_json'
+                        ? '<span style="color:#64748b; font-size:10px; margin-left:4px;">[sys_json]</span>'
+                        : '';
+            return `
+          <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}"${stageStyle}>
             <div class="stx-ui-log-list-head">
-                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(formatTaskDisplayLabel(entry.taskId, entry.taskDescription))}</div>
+                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(formatTaskDisplayLabel(entry.taskId, entry.taskDescription))}${formatLabel}</div>
               <span class="stx-ui-state-badge ${getStateBadgeClass(entry.state)}">${STATE_LABELS[entry.state] || entry.state}</span>
             </div>
                         ${entry.taskDescription ? `<div class="stx-ui-log-list-subtitle">${escapeHtml(entry.taskDescription)}</div>` : ''}
@@ -2374,7 +2433,7 @@ function bindUiEvents(): void {
                                                         <span>${entry.finishedAt ? `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 返回 ${escapeHtml(formatTimestamp(entry.finishedAt))} · 耗时 ${escapeHtml(formatLatency(entry.latencyMs))}` : `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 等待返回`}</span>
             </div>
           </button>
-        `).join('');
+        `}).join('');
 
         const selected = requestLogFilteredEntries.find((entry) => entry.logId === requestLogSelectedId) || requestLogFilteredEntries[0];
         requestLogSelectedId = selected.logId;

@@ -158,7 +158,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
         consumer: input.pluginId,
         taskId: 'memory_summary_planner',
-        taskDescription: 'AI总结规划',
+        taskDescription: '记忆总结第一阶段：候选规划',
         taskKind: 'generation',
         input: {
             messages: [
@@ -234,16 +234,17 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         };
     }
     const promptPack = plannerPromptPack;
+    const focusTypeSchemas = plannerResult.context.typeSchemas.filter(
+        (schema) => plannerDecision.focus_types.length <= 0 || plannerDecision.focus_types.includes(schema.schemaId),
+    );
+    const activeFocusTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : plannerResult.context.typeSchemas;
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
-    const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, plannerResult.context.typeSchemas);
+    const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, activeFocusTypeSchemas);
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
     })}\n\n${summaryLanguageInstruction}`;
-    const mutationContext = {
-        ...plannerResult.context,
-        plannerDecision,
-    };
+    const mutationContext = buildSlimMutationContext(plannerResult.context, plannerDecision);
     const summaryUserPayload = buildStructuredTaskUserPayload(
         JSON.stringify(mutationContext, null, 2),
         JSON.stringify(strictSummarySchema ?? {}, null, 2),
@@ -252,7 +253,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const result = await input.llm.runTask<SummaryMutationDocument>({
         consumer: input.pluginId,
         taskId: 'memory_summary_mutation',
-        taskDescription: 'AI总结',
+        taskDescription: '结构化变更生成',
         taskKind: 'generation',
         input: {
             messages: [
@@ -314,6 +315,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             actionCount: validation.document.actions.length,
             plannerDecision,
             worldProfile: plannerResult.diagnostics.worldProfile,
+            ...(validation.warnings.length > 0 ? { fieldWarnings: validation.warnings } : {}),
         },
     });
     const snapshot = await applySummaryMutation({
@@ -341,6 +343,87 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             reasonCode: 'ok',
         },
     };
+}
+
+/**
+ * 功能：为 Mutation 阶段构建精简上下文，减少 token 消耗。
+ * 瘦身策略：
+ * 1. window.summaryText → windowFacts（提取事实帧）
+ * 2. recentSummaryDigest → 单条 rollingDigest
+ * 3. candidateRecords → 短卡片（裁掉冗余字段）
+ * 4. typeSchemas → 仅保留 focus types
+ * @param context 完整上下文。
+ * @param plannerDecision planner 阶段输出。
+ * @returns 精简后的 mutation 上下文。
+ */
+function buildSlimMutationContext(
+    context: import('../memory-summary-planner').SummaryMutationContext,
+    plannerDecision: SummaryPlannerOutput,
+): Record<string, unknown> {
+    const focusTypes = plannerDecision.focus_types;
+    const filteredTypeSchemas = focusTypes.length > 0
+        ? context.typeSchemas.filter((schema) => focusTypes.includes(schema.schemaId))
+        : context.typeSchemas;
+    const activeTypeSchemas = filteredTypeSchemas.length > 0 ? filteredTypeSchemas : context.typeSchemas;
+
+    const windowFacts = extractWindowFacts(context.window.summaryText);
+
+    const rollingDigest = context.recentSummaryDigest.length > 0
+        ? context.recentSummaryDigest
+            .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, 120)}`)
+            .join(' | ')
+        : '';
+
+    const slimCandidates = context.candidateRecords.map((candidate) => ({
+        candidateId: candidate.candidateId,
+        targetKind: candidate.targetKind,
+        title: candidate.title,
+        summary: truncateTextForContext(candidate.summary ?? '', 100),
+        status: candidate.status,
+    }));
+
+    return {
+        task: context.task,
+        schemaVersion: context.schemaVersion,
+        window: {
+            fromTurn: context.window.fromTurn,
+            toTurn: context.window.toTurn,
+            windowFacts,
+        },
+        detectedSignals: context.detectedSignals,
+        plannerDecision,
+        rollingDigest,
+        typeSchemas: activeTypeSchemas,
+        candidateRecords: slimCandidates,
+        rules: context.rules,
+    };
+}
+
+/**
+ * 功能：从长剧情文本中提取事实帧。
+ * @param summaryText 长文本。
+ * @returns 事实帧列表。
+ */
+function extractWindowFacts(summaryText: string): string[] {
+    const text = String(summaryText ?? '').trim();
+    if (!text) return [];
+    const sentences = text
+        .split(/[。！？\n]+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.length > 4);
+    return sentences.slice(0, 30);
+}
+
+/**
+ * 功能：截断文本。
+ * @param text 源文本。
+ * @param maxLength 最大长度。
+ * @returns 截断后的文本。
+ */
+function truncateTextForContext(text: string, maxLength: number): string {
+    const normalized = String(text ?? '').trim();
+    if (normalized.length <= maxLength) return normalized;
+    return normalized.slice(0, maxLength) + '…';
 }
 
 /**
@@ -454,33 +537,28 @@ function buildStrictSummaryMutationSchema(
 
 /**
  * 功能：根据 targetKind 构建联动的严格 action schema。
+ * 按 action 类型区分字段语义：
+ * - ADD: 不需要 candidateId/compareKey，payload 为完整创建字段
+ * - UPDATE: 必须有 candidateId 或 compareKey，payload 为 patch 语义
+ * - MERGE: 同 UPDATE
+ * - INVALIDATE/DELETE: 必须有目标定位字段，payload 需包含原因
+ * - NOOP: 仅需 reasonCodes，其余字段可为空串/空对象
  * @param typeSchemas 当前轮次的类型白名单。
  * @returns actions.items schema。
  */
 function buildStrictActionItemsSchema(
     typeSchemas: Array<{ schemaId: string; editableFields: string[] }>,
 ): Record<string, unknown> {
-    const branches: Record<string, unknown>[] = [];
     const targetKinds = Array.from(new Set(
         typeSchemas
             .map((typeSchema): string => String(typeSchema.schemaId ?? '').trim())
             .filter(Boolean),
-    ));
+    )).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
+    const mergedEditableFields = Array.from(new Set(
+        typeSchemas.flatMap((typeSchema): string[] => Array.isArray(typeSchema.editableFields) ? typeSchema.editableFields : []),
+    )).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
 
-    for (const typeSchema of typeSchemas) {
-        const targetKind = String(typeSchema.schemaId ?? '').trim();
-        if (!targetKind) {
-            continue;
-        }
-        const payloadSchema = buildStrictMutationPayloadSchema(typeSchema.editableFields);
-        for (const action of ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE']) {
-            branches.push(buildStrictActionBranch(action, targetKind, payloadSchema));
-        }
-        branches.push(buildStrictActionBranch('DELETE', targetKind, buildEmptyObjectSchema()));
-        branches.push(buildStrictActionBranch('NOOP', targetKind, buildEmptyObjectSchema()));
-    }
-
-    if (branches.length <= 0) {
+    if (targetKinds.length <= 0) {
         return {
             type: 'object',
             additionalProperties: false,
@@ -489,13 +567,35 @@ function buildStrictActionItemsSchema(
         };
     }
 
+    const createPayload = buildStrictCreatePayloadSchema(mergedEditableFields);
+    const patchPayload = buildStrictPatchPayloadSchema(mergedEditableFields);
+
     return {
-        oneOf: branches,
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+            action: {
+                type: 'string',
+                enum: ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE', 'NOOP'],
+            },
+            targetKind: {
+                type: 'string',
+                enum: targetKinds,
+            },
+            candidateId: { type: 'string' },
+            compareKey: { type: 'string' },
+            payload: buildStrictMutationPayloadSchema(mergedEditableFields),
+            reasonCodes: {
+                type: 'array',
+                items: { type: 'string' },
+            },
+        },
+        required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
     };
 }
 
 /**
- * 功能：根据单个类型的可写字段构建严格 payload schema。
+ * 功能：根据单个类型的可写字段构建严格 payload schema（完整版，用于 ADD）。
  * @param editableFields 当前类型允许写入的字段。
  * @returns payload schema。
  */
@@ -546,7 +646,30 @@ function buildStrictMutationPayloadSchema(editableFields: string[]): Record<stri
 }
 
 /**
- * 功能：构建单个 action 分支 schema。
+ * 功能：为 ADD 动作构建完整创建 payload schema，要求所有字段齐全。
+ * @param editableFields 可写字段列表。
+ * @returns 完整 payload schema。
+ */
+function buildStrictCreatePayloadSchema(editableFields: string[]): Record<string, unknown> {
+    return buildStrictMutationPayloadSchema(editableFields);
+}
+
+/**
+ * 功能：为 UPDATE / MERGE 动作构建 patch payload schema，
+ * 字段仍保持 required（strict json_schema 兼容），但语义上 AI 可用空串表示不修改。
+ * @param editableFields 可写字段列表。
+ * @returns patch payload schema。
+ */
+function buildStrictPatchPayloadSchema(editableFields: string[]): Record<string, unknown> {
+    return buildStrictMutationPayloadSchema(editableFields);
+}
+
+/**
+ * 功能：构建单个 action 分支 schema，按动作语义差异化必填字段。
+ * - ADD: 不要求 candidateId/compareKey（新建无需定位旧记录）
+ * - UPDATE/MERGE: 需要 candidateId 或 compareKey 定位旧记录
+ * - INVALIDATE/DELETE: 需要定位字段与原因
+ * - NOOP: 仅需 reasonCodes
  * @param action 动作名称。
  * @param targetKind 目标类型。
  * @param payloadSchema 该类型专属 payload schema。
@@ -557,28 +680,85 @@ function buildStrictActionBranch(
     targetKind: string,
     payloadSchema: Record<string, unknown>,
 ): Record<string, unknown> {
-    return {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-            action: {
-                type: 'string',
-                enum: [action],
-            },
-            targetKind: {
-                type: 'string',
-                enum: [targetKind],
-            },
-            candidateId: { type: 'string' },
-            compareKey: { type: 'string' },
-            payload: payloadSchema,
-            reasonCodes: {
-                type: 'array',
-                items: { type: 'string' },
-            },
+    const baseProperties: Record<string, unknown> = {
+        action: {
+            type: 'string',
+            enum: [action],
         },
-        required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+        targetKind: {
+            type: 'string',
+            enum: [targetKind],
+        },
+        reasonCodes: {
+            type: 'array',
+            items: { type: 'string' },
+        },
     };
+
+    switch (action) {
+        case 'ADD':
+            return {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    ...baseProperties,
+                    candidateId: { type: 'string' },
+                    compareKey: { type: 'string' },
+                    payload: payloadSchema,
+                },
+                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+            };
+        case 'UPDATE':
+        case 'MERGE':
+            return {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    ...baseProperties,
+                    candidateId: { type: 'string' },
+                    compareKey: { type: 'string' },
+                    payload: payloadSchema,
+                },
+                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+            };
+        case 'INVALIDATE':
+        case 'DELETE':
+            return {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    ...baseProperties,
+                    candidateId: { type: 'string' },
+                    compareKey: { type: 'string' },
+                    payload: buildEmptyObjectSchema(),
+                },
+                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+            };
+        case 'NOOP':
+            return {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    ...baseProperties,
+                    candidateId: { type: 'string' },
+                    compareKey: { type: 'string' },
+                    payload: buildEmptyObjectSchema(),
+                },
+                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+            };
+        default:
+            return {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    ...baseProperties,
+                    candidateId: { type: 'string' },
+                    compareKey: { type: 'string' },
+                    payload: payloadSchema,
+                },
+                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+            };
+    }
 }
 
 /**
@@ -596,6 +776,12 @@ function buildEmptyObjectSchema(): Record<string, unknown> {
 
 /**
  * 功能：按字段名生成宽松但严格封闭的字段 schema。
+ * 对特定字段使用更精确的类型约束：
+ * - relationTag: enum 关系标签
+ * - status / stage: enum 状态枚举
+ * - isActive / isResolved 等 boolean 型字段: string（严格 json_schema 不支持 union）
+ * - 数值字段: number
+ * - 数组字段: string[]
  * @param key 字段名。
  * @param isNested 是否为 fields 下的子字段。
  * @returns 单字段 schema。
@@ -607,6 +793,21 @@ function buildLooseFieldSchema(key: string, isNested: boolean): Record<string, u
             type: 'string',
             enum: ['亲人', '朋友', '盟友', '恋人', '暧昧', '师徒', '上下级', '竞争者', '情敌', '宿敌', '陌生人'],
         };
+    }
+    if (normalizedKey === 'status') {
+        return {
+            type: 'string',
+            enum: ['active', 'resolved', 'outdated', 'speculative', 'invalidated'],
+        };
+    }
+    if (normalizedKey === 'stage') {
+        return {
+            type: 'string',
+            enum: ['ongoing', 'completed', 'planned', 'abandoned', 'unknown'],
+        };
+    }
+    if (BOOLEAN_FIELD_KEYS.has(normalizedKey)) {
+        return { type: 'string', enum: ['true', 'false'] };
     }
     if (NUMBER_FIELD_KEYS.has(normalizedKey)) {
         return { type: 'number' };
@@ -705,4 +906,12 @@ const ARRAY_FIELD_KEYS: Set<string> = new Set([
     'identityFacts',
     'originFacts',
     'traits',
+]);
+
+const BOOLEAN_FIELD_KEYS: Set<string> = new Set([
+    'isActive',
+    'isResolved',
+    'isPublic',
+    'isSecret',
+    'confirmed',
 ]);

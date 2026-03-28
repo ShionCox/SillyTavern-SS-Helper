@@ -278,14 +278,13 @@ export class LLMSDKImpl {
         const compositeKeys: string[] = ['anyOf', 'oneOf', 'allOf', 'prefixItems'];
         for (const key of compositeKeys) {
             const value = record[key];
-            if (!Array.isArray(value)) {
+            if (value === undefined) {
                 continue;
             }
-            for (const child of value) {
-                if (!this.checkStrictJsonSchemaNode(child, depth + 1)) {
-                    return false;
-                }
+            if (!Array.isArray(value)) {
+                return false;
             }
+            return false;
         }
 
         if (record.additionalProperties && typeof record.additionalProperties === 'object' && !Array.isArray(record.additionalProperties)) {
@@ -835,14 +834,19 @@ export class LLMSDKImpl {
         };
 
         const schemaSummary = this.summarizeSchema(args.schema ?? runtimeSchema);
+        const schemaForLog = this.serializeSchemaForLog(providerSchema ?? args.schema ?? runtimeSchema);
+        const schemaCharCount = schemaForLog ? JSON.stringify(schemaForLog).length : 0;
+        const inputCharCount = llmReq.messages.reduce((sum, msg) => sum + String(msg.content || '').length, 0);
         record.requestLogSnapshot = {
             ...(record.requestLogSnapshot || {
                 taskKind: record.taskKind,
                 taskDescription: record.taskDescription,
             }),
             schemaSummary,
-            schema: this.serializeSchemaForLog(providerSchema ?? args.schema ?? runtimeSchema),
+            schema: schemaForLog,
             jsonMode: llmReq.jsonMode,
+            strictSchemaCompatible: canUseStrictJsonSchema,
+            responseFormatResolved: llmReq.preferredResponseFormat || 'none',
             resolvedMaxTokens: {
                 value: resolvedMaxTokens.value,
                 source: resolvedMaxTokens.source,
@@ -858,6 +862,11 @@ export class LLMSDKImpl {
                 schemaSummary,
                 resolvedMaxTokens.source,
             ),
+            metrics: {
+                ...(record.requestLogSnapshot?.metrics || {}),
+                schemaCharCount,
+                inputCharCount,
+            },
         };
 
         const maxLatencyMs = args.budget?.maxLatencyMs ?? consumerBudget?.maxLatencyMs;
@@ -1012,6 +1021,10 @@ export class LLMSDKImpl {
             finalError: result.error,
             reasonCode: result.reasonCode,
         };
+
+        if (record.requestLogSnapshot?.metrics && result.rawResponseText != null) {
+            record.requestLogSnapshot.metrics.outputCharCount = result.rawResponseText.length;
+        }
     }
 
     private attachProviderRequestSnapshot(record: RequestRecord, providerRequest?: unknown): void {

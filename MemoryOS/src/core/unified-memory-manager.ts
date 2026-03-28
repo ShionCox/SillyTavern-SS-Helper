@@ -2,6 +2,7 @@ import { db } from '../db/db';
 import type {
     DBActorMemoryProfile,
     DBMemoryMutationHistory,
+    DBMemoryEntryAuditRecord,
     DBMemoryEntry,
     DBMemoryEntryType,
     DBRoleEntryMemory,
@@ -12,6 +13,8 @@ import {
     DEFAULT_ACTOR_MEMORY_STAT,
     type ActorMemoryProfile,
     type MemoryEntry,
+    type MemoryEntryAuditRecord,
+    type MemoryEntryFieldDiff,
     type MemoryEntryType,
     type MemoryEntryTypeField,
     type MemoryMutationHistoryRecord,
@@ -35,6 +38,13 @@ import { getMemoryTrace, recordMemoryDebug } from './debug/memory-retrieval-logg
 import { RetrievalOrchestrator, type RetrievalCandidate } from '../memory-retrieval';
 
 const promptRetrievalOrchestrator = new RetrievalOrchestrator();
+
+interface EntryAuditWriteOptions {
+    actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
+    summaryId?: string;
+    sourceLabel?: string;
+    reasonCodes?: string[];
+}
 
 /**
  * 功能：统一条目记忆系统主管理器。
@@ -198,7 +208,10 @@ export class UnifiedMemoryManager {
      * @param input 条目输入。
      * @returns 保存后的条目。
      */
-    async saveEntry(input: Partial<MemoryEntry> & { title: string; entryType: string }): Promise<MemoryEntry> {
+    async saveEntry(
+        input: Partial<MemoryEntry> & { title: string; entryType: string },
+        options: EntryAuditWriteOptions = {},
+    ): Promise<MemoryEntry> {
         const existing = input.entryId ? await db.memory_entries.get(String(input.entryId ?? '').trim()) : null;
         const type = await this.getResolvedEntryType(input.entryType);
         const now = Date.now();
@@ -218,7 +231,17 @@ export class UnifiedMemoryManager {
             updatedAt: now,
         };
         await db.memory_entries.put(row);
-        return this.mapEntry(row);
+        const savedEntry = this.mapEntry(row);
+        await this.appendEntryAuditRecord({
+            actionType: options.actionType ?? (existing ? 'UPDATE' : 'ADD'),
+            summaryId: options.summaryId,
+            sourceLabel: options.sourceLabel,
+            reasonCodes: options.reasonCodes ?? [],
+            beforeEntry: existing ? this.mapEntry(existing) : null,
+            afterEntry: savedEntry,
+            ts: now,
+        });
+        return savedEntry;
     }
 
     /**
@@ -226,13 +249,25 @@ export class UnifiedMemoryManager {
      * @param entryId 条目 ID。
      * @returns 删除完成后的 Promise。
      */
-    async deleteEntry(entryId: string): Promise<void> {
+    async deleteEntry(entryId: string, options: EntryAuditWriteOptions = {}): Promise<void> {
         const normalizedEntryId = String(entryId ?? '').trim();
+        const existingEntry = await this.getEntry(normalizedEntryId);
         const memories = await db.role_entry_memory.where('[chatKey+entryId]').equals([this.chatKey, normalizedEntryId]).toArray();
         if (memories.length > 0) {
             await db.role_entry_memory.bulkDelete(memories.map((row: DBRoleEntryMemory): string => row.roleMemoryId));
         }
         await db.memory_entries.delete(normalizedEntryId);
+        if (existingEntry) {
+            await this.appendEntryAuditRecord({
+                actionType: options.actionType ?? 'DELETE',
+                summaryId: options.summaryId,
+                sourceLabel: options.sourceLabel,
+                reasonCodes: options.reasonCodes ?? [],
+                beforeEntry: existingEntry,
+                afterEntry: null,
+                ts: Date.now(),
+            });
+        }
     }
 
     /**
@@ -382,6 +417,11 @@ export class UnifiedMemoryManager {
                 detail: upsert.detail,
                 detailPayload: upsert.detailPayload,
                 sourceSummaryIds: [summaryId],
+            }, {
+                actionType: upsert.actionType,
+                summaryId,
+                sourceLabel: upsert.sourceLabel || (this.normalizeText(input.title) || '结构化回合总结'),
+                reasonCodes: upsert.reasonCodes ?? [],
             });
             savedEntries.push(savedEntry);
         }
@@ -515,6 +555,21 @@ export class UnifiedMemoryManager {
     }
 
     /**
+     * 功能：读取最近的词条更新审计记录。
+     * @param limit 返回数量。
+     * @returns 审计记录列表。
+     */
+    async listEntryAuditRecords(limit: number = 20): Promise<MemoryEntryAuditRecord[]> {
+        const rows = await db.memory_entry_audit_records
+            .where('[chatKey+ts]')
+            .between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER])
+            .reverse()
+            .limit(Math.max(1, limit))
+            .toArray();
+        return rows.map((row: DBMemoryEntryAuditRecord): MemoryEntryAuditRecord => this.mapEntryAuditRecord(row));
+    }
+
+    /**
      * 功能：从当前聊天消息自动生成轻量总结。
      * @param input 消息输入。
      * @returns 总结快照。
@@ -544,7 +599,15 @@ export class UnifiedMemoryManager {
                 appendMutationHistory: async (history): Promise<void> => this.appendMutationHistory(history),
                 getEntry: async (entryId: string): Promise<MemoryEntry | null> => this.getEntry(entryId),
                 applySummarySnapshot: async (summaryInput): Promise<SummarySnapshot> => this.applySummarySnapshot(summaryInput),
-                deleteEntry: async (entryId: string): Promise<void> => this.deleteEntry(entryId),
+                deleteEntry: async (
+                    entryId: string,
+                    options?: {
+                        actionType?: 'DELETE';
+                        summaryId?: string;
+                        sourceLabel?: string;
+                        reasonCodes?: string[];
+                    },
+                ): Promise<void> => this.deleteEntry(entryId, options),
             },
             llm,
             pluginId: MEMORY_OS_PLUGIN_ID,
@@ -1430,6 +1493,251 @@ export class UnifiedMemoryManager {
      * @param fields 原始字段。
      * @returns 字段数组。
      */
+    /**
+     * 功能：写入单条词条审计记录。
+     * @param input 审计输入。
+     * @returns 异步完成。
+     */
+    private async appendEntryAuditRecord(input: {
+        actionType: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
+        summaryId?: string;
+        sourceLabel?: string;
+        reasonCodes: string[];
+        beforeEntry: MemoryEntry | null;
+        afterEntry: MemoryEntry | null;
+        ts: number;
+    }): Promise<void> {
+        const anchorEntry = input.afterEntry ?? input.beforeEntry;
+        if (!anchorEntry) {
+            return;
+        }
+        const row: DBMemoryEntryAuditRecord = {
+            auditId: `memory-entry-audit:${this.chatKey}:${crypto.randomUUID()}`,
+            chatKey: this.chatKey,
+            summaryId: this.normalizeText(input.summaryId) || undefined,
+            entryId: anchorEntry.entryId,
+            entryTitle: anchorEntry.title,
+            entryType: anchorEntry.entryType,
+            actionType: input.actionType,
+            sourceLabel: this.normalizeText(input.sourceLabel) || undefined,
+            beforeEntry: input.beforeEntry ? this.toAuditEntrySnapshot(input.beforeEntry) : null,
+            afterEntry: input.afterEntry ? this.toAuditEntrySnapshot(input.afterEntry) : null,
+            changedFields: this.buildEntryFieldDiffs(input.beforeEntry, input.afterEntry).map((item): {
+                path: string;
+                label: string;
+                before: unknown;
+                after: unknown;
+            } => ({
+                path: item.path,
+                label: item.label,
+                before: this.deepCloneValue(item.before),
+                after: this.deepCloneValue(item.after),
+            })),
+            reasonCodes: this.normalizeTags(input.reasonCodes),
+            ts: input.ts,
+        };
+        await db.memory_entry_audit_records.put(row);
+    }
+
+    /**
+     * 功能：将词条快照转成审计可存储结构。
+     * @param entry 词条。
+     * @returns 可序列化快照。
+     */
+    private toAuditEntrySnapshot(entry: MemoryEntry): Record<string, unknown> {
+        return {
+            entryId: entry.entryId,
+            chatKey: entry.chatKey,
+            title: entry.title,
+            entryType: entry.entryType,
+            category: entry.category,
+            tags: [...entry.tags],
+            summary: entry.summary,
+            detail: entry.detail,
+            detailSchemaVersion: entry.detailSchemaVersion,
+            detailPayload: this.deepCloneValue(entry.detailPayload),
+            sourceSummaryIds: [...entry.sourceSummaryIds],
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+        };
+    }
+
+    /**
+     * 功能：计算词条更新前后的字段差异。
+     * @param beforeEntry 更新前词条。
+     * @param afterEntry 更新后词条。
+     * @returns 变化字段列表。
+     */
+    private buildEntryFieldDiffs(beforeEntry: MemoryEntry | null, afterEntry: MemoryEntry | null): MemoryEntryFieldDiff[] {
+        const beforeMap = this.flattenEntryForDiff(beforeEntry);
+        const afterMap = this.flattenEntryForDiff(afterEntry);
+        const paths = Array.from(new Set<string>([
+            ...beforeMap.keys(),
+            ...afterMap.keys(),
+        ])).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
+        return paths
+            .filter((path: string): boolean => !this.isAuditValueEqual(beforeMap.get(path), afterMap.get(path)))
+            .map((path: string): MemoryEntryFieldDiff => ({
+                path,
+                label: this.resolveDiffFieldLabel(path),
+                before: this.deepCloneValue(beforeMap.get(path)),
+                after: this.deepCloneValue(afterMap.get(path)),
+            }));
+    }
+
+    /**
+     * 功能：将词条拉平成路径映射，便于比较差异。
+     * @param entry 词条。
+     * @returns 扁平字段映射。
+     */
+    private flattenEntryForDiff(entry: MemoryEntry | null): Map<string, unknown> {
+        const out = new Map<string, unknown>();
+        if (!entry) {
+            return out;
+        }
+        out.set('title', entry.title);
+        out.set('entryType', entry.entryType);
+        out.set('category', entry.category);
+        out.set('tags', [...entry.tags]);
+        out.set('summary', entry.summary);
+        out.set('detail', entry.detail);
+        this.appendFlattenedDiffValue(out, 'detailPayload', entry.detailPayload);
+        return out;
+    }
+
+    /**
+     * 功能：递归展开对象字段用于差异比较。
+     * @param out 输出映射。
+     * @param path 当前字段路径。
+     * @param value 字段值。
+     */
+    private appendFlattenedDiffValue(out: Map<string, unknown>, path: string, value: unknown): void {
+        if (Array.isArray(value)) {
+            out.set(path, this.deepCloneValue(value));
+            return;
+        }
+        if (!value || typeof value !== 'object') {
+            out.set(path, value);
+            return;
+        }
+        const record = value as Record<string, unknown>;
+        const keys = Object.keys(record).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
+        if (keys.length <= 0) {
+            out.set(path, {});
+            return;
+        }
+        for (const key of keys) {
+            this.appendFlattenedDiffValue(out, `${path}.${key}`, record[key]);
+        }
+    }
+
+    /**
+     * 功能：比较两个审计值是否相同。
+     * @param left 左值。
+     * @param right 右值。
+     * @returns 是否相同。
+     */
+    private isAuditValueEqual(left: unknown, right: unknown): boolean {
+        return JSON.stringify(this.deepCloneValue(left)) === JSON.stringify(this.deepCloneValue(right));
+    }
+
+    /**
+     * 功能：深拷贝审计值，避免后续渲染误改引用。
+     * @param value 原始值。
+     * @returns 拷贝结果。
+     */
+    private deepCloneValue<T>(value: T): T {
+        if (value === undefined) {
+            return value;
+        }
+        return JSON.parse(JSON.stringify(value)) as T;
+    }
+
+    /**
+     * 功能：将字段路径转成便于阅读的中文标签。
+     * @param path 字段路径。
+     * @returns 展示标签。
+     */
+    private resolveDiffFieldLabel(path: string): string {
+        const preset: Record<string, string> = {
+            title: '标题',
+            entryType: '类型',
+            category: '分类',
+            tags: '标签',
+            summary: '摘要',
+            detail: '详情',
+        };
+        if (preset[path]) {
+            return preset[path];
+        }
+        if (path.startsWith('detailPayload.')) {
+            return `结构化字段：${path.slice('detailPayload.'.length)}`;
+        }
+        return path;
+    }
+
+    /**
+     * 功能：映射词条审计记录。
+     * @param row 数据库行。
+     * @returns 业务审计记录。
+     */
+    private mapEntryAuditRecord(row: DBMemoryEntryAuditRecord): MemoryEntryAuditRecord {
+        return {
+            auditId: row.auditId,
+            chatKey: row.chatKey,
+            summaryId: this.normalizeText(row.summaryId) || undefined,
+            entryId: row.entryId,
+            entryTitle: this.normalizeText(row.entryTitle),
+            entryType: this.normalizeText(row.entryType),
+            actionType: row.actionType,
+            sourceLabel: this.normalizeText(row.sourceLabel) || undefined,
+            beforeEntry: this.normalizeAuditEntrySnapshot(row.beforeEntry),
+            afterEntry: this.normalizeAuditEntrySnapshot(row.afterEntry),
+            changedFields: Array.isArray(row.changedFields)
+                ? row.changedFields
+                    .filter((item: unknown): boolean => Boolean(item) && typeof item === 'object')
+                    .map((item: unknown): MemoryEntryFieldDiff => {
+                        const record = item as Record<string, unknown>;
+                        return {
+                            path: this.normalizeText(record.path),
+                            label: this.normalizeText(record.label) || this.normalizeText(record.path),
+                            before: this.deepCloneValue(record.before),
+                            after: this.deepCloneValue(record.after),
+                        };
+                    })
+                    .filter((item: MemoryEntryFieldDiff): boolean => Boolean(item.path))
+                : [],
+            reasonCodes: this.normalizeTags(row.reasonCodes),
+            ts: row.ts,
+        };
+    }
+
+    /**
+     * 功能：将审计快照还原成词条对象。
+     * @param value 原始快照。
+     * @returns 词条对象。
+     */
+    private normalizeAuditEntrySnapshot(value: Record<string, unknown> | null): MemoryEntry | null {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return null;
+        }
+        return {
+            entryId: this.normalizeText(value.entryId),
+            chatKey: this.normalizeText(value.chatKey) || this.chatKey,
+            title: this.normalizeText(value.title),
+            entryType: this.normalizeText(value.entryType) || 'other',
+            category: this.normalizeText(value.category) || '其他',
+            tags: this.normalizeTags(value.tags),
+            summary: this.normalizeText(value.summary),
+            detail: this.normalizeText(value.detail),
+            detailSchemaVersion: Math.max(1, Number(value.detailSchemaVersion ?? 1) || 1),
+            detailPayload: this.normalizeRecord(value.detailPayload),
+            sourceSummaryIds: this.normalizeTags(value.sourceSummaryIds),
+            createdAt: Number(value.createdAt ?? 0) || 0,
+            updatedAt: Number(value.updatedAt ?? 0) || 0,
+        };
+    }
+
     private normalizeFields(fields: unknown): MemoryEntryTypeField[] {
         if (!Array.isArray(fields)) {
             return [];

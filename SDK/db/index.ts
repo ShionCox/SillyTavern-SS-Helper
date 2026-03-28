@@ -12,6 +12,8 @@ export type {
     DBTemplateBinding,
     DBAudit,
     DBMemoryMutationHistory,
+    DBMemoryEntryFieldDiff,
+    DBMemoryEntryAuditRecord,
     DBMeta,
     DBVectorChunkMetadata,
     DBMemoryEntryTypeField,

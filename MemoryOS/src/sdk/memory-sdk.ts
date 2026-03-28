@@ -239,10 +239,11 @@ export class MemorySDKImpl {
             apply: (input: Parameters<UnifiedMemoryManager['applySummarySnapshot']>[0]) => ReturnType<UnifiedMemoryManager['applySummarySnapshot']>;
             capture: (input: Parameters<UnifiedMemoryManager['captureSummaryFromChat']>[0]) => ReturnType<UnifiedMemoryManager['captureSummaryFromChat']>;
         };
-        diagnostics: {
-            getWorldProfileBinding: () => ReturnType<UnifiedMemoryManager['getWorldProfileBinding']>;
-            listMutationHistory: (limit?: number) => ReturnType<UnifiedMemoryManager['listMutationHistory']>;
-        };
+         diagnostics: {
+             getWorldProfileBinding: () => ReturnType<UnifiedMemoryManager['getWorldProfileBinding']>;
+             listMutationHistory: (limit?: number) => ReturnType<UnifiedMemoryManager['listMutationHistory']>;
+             listEntryAuditRecords: (limit?: number) => ReturnType<UnifiedMemoryManager['listEntryAuditRecords']>;
+         };
         prompts: {
             preview: (input?: Parameters<UnifiedMemoryManager['buildPromptAssembly']>[0]) => ReturnType<UnifiedMemoryManager['buildPromptAssembly']>;
             inject: (input: UnifiedPromptInjectInput) => Promise<UnifiedPromptInjectResult>;
@@ -621,10 +622,11 @@ export class MemorySDKImpl {
                 apply: async (input: Parameters<UnifiedMemoryManager['applySummarySnapshot']>[0]) => this.unifiedManager.applySummarySnapshot(input),
                 capture: async (input: Parameters<UnifiedMemoryManager['captureSummaryFromChat']>[0]) => this.unifiedManager.captureSummaryFromChat(input),
             },
-            diagnostics: {
-                getWorldProfileBinding: async () => this.unifiedManager.getWorldProfileBinding(),
-                listMutationHistory: async (limit?: number) => this.unifiedManager.listMutationHistory(limit),
-            },
+             diagnostics: {
+                 getWorldProfileBinding: async () => this.unifiedManager.getWorldProfileBinding(),
+                 listMutationHistory: async (limit?: number) => this.unifiedManager.listMutationHistory(limit),
+                 listEntryAuditRecords: async (limit?: number) => this.unifiedManager.listEntryAuditRecords(limit),
+              },
             prompts: {
                 preview: async (input?: Parameters<UnifiedMemoryManager['buildPromptAssembly']>[0]) => this.unifiedManager.buildPromptAssembly(input ?? {}),
                 inject: async (input: UnifiedPromptInjectInput): Promise<UnifiedPromptInjectResult> => {

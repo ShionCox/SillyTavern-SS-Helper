@@ -237,6 +237,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             preview,
             worldProfileBinding,
             mutationHistory,
+            entryAuditRecords,
             recallExplanation,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
@@ -247,6 +248,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
             memory.unifiedMemory.diagnostics.getWorldProfileBinding(),
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
+            memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             memory.chatState.getLatestRecallExplanation(),
         ]);
 
@@ -259,6 +261,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             preview,
             worldProfileBinding,
             mutationHistory,
+            entryAuditRecords,
             recallExplanation: normalizeRecallExplanation(recallExplanation),
             actorGraph: buildActorGraph(actors, entries),
             memoryGraph: buildMemoryGraph(entries, roleMemories, actors),
@@ -556,9 +559,15 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 无返回值。
      */
     const render = async (): Promise<void> => {
+        const entryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
+        const preservedEntryListScrollTop = entryList?.scrollTop ?? 0;
         const snapshot = await loadSnapshot();
         normalizeSelection(snapshot);
         root.innerHTML = buildWorkbenchMarkup(snapshot, state);
+        const nextEntryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
+        if (nextEntryList) {
+            nextEntryList.scrollTop = preservedEntryListScrollTop;
+        }
         bindEvents(snapshot);
 
         if (state.currentView === 'actors' && state.currentActorTab === 'relationships') {

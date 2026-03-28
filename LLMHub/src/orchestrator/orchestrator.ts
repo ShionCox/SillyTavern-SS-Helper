@@ -243,6 +243,8 @@ export class RequestOrchestrator {
             validationErrors?: string[];
             finalError?: string;
             reasonCode?: string;
+            inputCharCount?: number;
+            outputCharCount?: number;
         }>;
     } {
         return {
@@ -273,6 +275,8 @@ export class RequestOrchestrator {
                 validationErrors: r.debug?.validationErrors,
                 finalError: r.debug?.finalError,
                 reasonCode: r.debug?.reasonCode,
+                inputCharCount: r.requestLogSnapshot?.metrics?.inputCharCount,
+                outputCharCount: r.requestLogSnapshot?.metrics?.outputCharCount,
             })),
         };
     }

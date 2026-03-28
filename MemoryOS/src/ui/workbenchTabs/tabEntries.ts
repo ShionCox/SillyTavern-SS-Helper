@@ -56,7 +56,7 @@ export function buildEntriesViewMarkup(
             </div>
             <div class="stx-memory-workbench__grid">
                 <div class="stx-memory-workbench__stack">
-                    <div class="stx-memory-workbench__list">
+                    <div class="stx-memory-workbench__list" data-entry-list-scroll="true">
                         ${filteredEntries.length > 0 ? filteredEntries.map((entry: MemoryEntry): string => `
                             <button class="stx-memory-workbench__list-item${entry.entryId === state.selectedEntryId ? ' is-active' : ''}" data-select-entry="${escapeAttr(entry.entryId)}">
                                 <h4>${escapeHtml(entry.title)}</h4>
@@ -85,6 +85,24 @@ export function buildEntriesViewMarkup(
                                 <textarea class="stx-memory-workbench__textarea" id="stx-memory-entry-detail" style="min-height:120px;" placeholder="用于记录更完整、更可信的现实细节">${escapeHtml(entryDraft.detail ?? '')}</textarea>
                             </div>
                             ${dynamicFields ? `<div class="stx-memory-workbench__card" style="margin-top:0;"><div class="stx-memory-workbench__panel-title" style="margin-bottom:8px;">结构化事实编辑</div><div class="stx-memory-workbench__form-grid">${dynamicFields}</div></div>` : ''}
+                            <div class="stx-memory-workbench__card">
+                                <div class="stx-memory-workbench__panel-title">数据检视</div>
+                                ${selectedEntry ? `
+                                    <div class="stx-memory-workbench__info-list">
+                                        <div class="stx-memory-workbench__info-row"><span>条目 ID</span><strong style="font-family:monospace; font-size:11px;">${escapeHtml(selectedEntry.entryId)}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>最近更新</span><strong>${escapeHtml(formatTimestamp(selectedEntry.updatedAt))}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>来源总结</span><strong>${escapeHtml(selectedEntry.sourceSummaryIds.length > 0 ? selectedEntry.sourceSummaryIds.join('、') : '暂无')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>结构层事实</span><strong>${escapeHtml(summarizeDetailPayload(selectedEntry.detailPayload))}</strong></div>
+                                    </div>
+                                    <div class="stx-memory-workbench__stack" style="margin-top:12px; border-top:1px dashed var(--mw-line); padding-top:12px;">
+                                        ${inspectorMarkup}
+                                    </div>
+                                    <details style="margin-top:12px; cursor:pointer;" title="点击展开以查看底层对象">
+                                        <summary style="font-size:11px; color:var(--mw-muted); user-select:none;">查看原始 JSON</summary>
+                                        <pre style="margin-top:8px; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; overflow-x:auto;">${escapeHtml(stringifyData(selectedEntry))}</pre>
+                                    </details>
+                                ` : '<div class="stx-memory-workbench__empty">新建状态下在左侧填写完毕并保存后，此处将自动解析出实体的检视信息。</div>'}
+                            </div>
                         </div>
 
                         <!-- 元数据侧边栏（右侧） -->
@@ -118,24 +136,6 @@ export function buildEntriesViewMarkup(
                                     <div class="stx-memory-workbench__stack">
                                         ${bindingRows || '<div class="stx-memory-workbench__empty">此条目为孤立节点，尚未被任何真实角色绑定。</div>'}
                                     </div>
-                                </div>
-                                <div class="stx-memory-workbench__card">
-                                    <div class="stx-memory-workbench__panel-title">数据检视</div>
-                                    ${selectedEntry ? `
-                                        <div class="stx-memory-workbench__info-list">
-                                            <div class="stx-memory-workbench__info-row"><span>条目 ID</span><strong style="font-family:monospace; font-size:11px;">${escapeHtml(selectedEntry.entryId)}</strong></div>
-                                            <div class="stx-memory-workbench__info-row"><span>最近更新</span><strong>${escapeHtml(formatTimestamp(selectedEntry.updatedAt))}</strong></div>
-                                            <div class="stx-memory-workbench__info-row"><span>来源总结</span><strong>${escapeHtml(selectedEntry.sourceSummaryIds.length > 0 ? selectedEntry.sourceSummaryIds.join('、') : '暂无')}</strong></div>
-                                            <div class="stx-memory-workbench__info-row"><span>结构层事实</span><strong>${escapeHtml(summarizeDetailPayload(selectedEntry.detailPayload))}</strong></div>
-                                        </div>
-                                        <div class="stx-memory-workbench__stack" style="margin-top:12px; border-top:1px dashed var(--mw-line); padding-top:12px;">
-                                            ${inspectorMarkup}
-                                        </div>
-                                        <details style="margin-top:12px; cursor:pointer;" title="点击展开以查看底层对象">
-                                            <summary style="font-size:11px; color:var(--mw-muted); user-select:none;">查看原始 JSON</summary>
-                                            <pre style="margin-top:8px; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; overflow-x:auto;">${escapeHtml(stringifyData(selectedEntry))}</pre>
-                                        </details>
-                                    ` : '<div class="stx-memory-workbench__empty">新建状态下在左侧填写完毕并保存后，此处将自动解析出实体的检视信息。</div>'}
                                 </div>
                             </div>
                         </div>

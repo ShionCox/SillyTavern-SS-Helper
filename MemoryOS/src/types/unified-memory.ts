@@ -64,6 +64,29 @@ export interface MemoryEntry {
     updatedAt: number;
 }
 
+export interface MemoryEntryFieldDiff {
+    path: string;
+    label: string;
+    before: unknown;
+    after: unknown;
+}
+
+export interface MemoryEntryAuditRecord {
+    auditId: string;
+    chatKey: string;
+    summaryId?: string;
+    entryId: string;
+    entryTitle: string;
+    entryType: string;
+    actionType: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
+    sourceLabel?: string;
+    beforeEntry: MemoryEntry | null;
+    afterEntry: MemoryEntry | null;
+    changedFields: MemoryEntryFieldDiff[];
+    reasonCodes: string[];
+    ts: number;
+}
+
 export interface ActorMemoryProfile {
     actorKey: string;
     chatKey: string;
@@ -96,6 +119,9 @@ export interface SummaryEntryUpsert {
     summary: string;
     detail?: string;
     detailPayload?: Record<string, unknown>;
+    actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE';
+    reasonCodes?: string[];
+    sourceLabel?: string;
 }
 
 export interface SummaryRefreshBinding {

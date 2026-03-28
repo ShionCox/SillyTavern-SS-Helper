@@ -91,6 +91,29 @@ export interface DBMemoryMutationHistory {
     ts: number;
 }
 
+export interface DBMemoryEntryFieldDiff {
+    path: string;
+    label: string;
+    before: unknown;
+    after: unknown;
+}
+
+export interface DBMemoryEntryAuditRecord {
+    auditId: string;
+    chatKey: string;
+    summaryId?: string;
+    entryId: string;
+    entryTitle: string;
+    entryType: string;
+    actionType: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
+    sourceLabel?: string;
+    beforeEntry: Record<string, unknown> | null;
+    afterEntry: Record<string, unknown> | null;
+    changedFields: DBMemoryEntryFieldDiff[];
+    reasonCodes: string[];
+    ts: number;
+}
+
 export interface DBVectorChunkMetadata {
     chunkId: string;
     sourceType: string;
@@ -227,6 +250,7 @@ export class SSHelperDatabase extends Dexie {
     audit!: Table<DBAudit, string>;
     meta!: Table<DBMeta, string>;
     memory_mutation_history!: Table<DBMemoryMutationHistory, string>;
+    memory_entry_audit_records!: Table<DBMemoryEntryAuditRecord, string>;
 
     memory_entries!: Table<DBMemoryEntry, string>;
     memory_entry_types!: Table<DBMemoryEntryType, string>;
@@ -249,6 +273,7 @@ export class SSHelperDatabase extends Dexie {
             audit: '&auditId, chatKey, ts',
             meta: '&chatKey, updatedAt',
             memory_mutation_history: '&historyId, chatKey, [chatKey+ts], ts',
+            memory_entry_audit_records: '&auditId, chatKey, entryId, summaryId, actionType, [chatKey+ts], [chatKey+entryId], ts',
             memory_entries: '&entryId, chatKey, [chatKey+entryType], [chatKey+category], [chatKey+updatedAt], updatedAt',
             memory_entry_types: '&typeId, chatKey, [chatKey+key], [chatKey+updatedAt]',
             actor_memory_profiles: '&actorKey, chatKey, [chatKey+actorKey], [chatKey+updatedAt]',
@@ -266,6 +291,26 @@ export class SSHelperDatabase extends Dexie {
             audit: '&auditId, chatKey, ts',
             meta: '&chatKey, updatedAt',
             memory_mutation_history: '&historyId, chatKey, [chatKey+ts], ts',
+            memory_entry_audit_records: '&auditId, chatKey, entryId, summaryId, actionType, [chatKey+ts], [chatKey+entryId], ts',
+            memory_entries: '&entryId, chatKey, [chatKey+entryType], [chatKey+category], [chatKey+updatedAt], updatedAt',
+            memory_entry_types: '&typeId, chatKey, [chatKey+key], [chatKey+updatedAt]',
+            actor_memory_profiles: '&actorKey, chatKey, [chatKey+actorKey], [chatKey+updatedAt]',
+            role_entry_memory: '&roleMemoryId, chatKey, [chatKey+actorKey], [chatKey+entryId], [chatKey+actorKey+entryId], [chatKey+updatedAt]',
+            summary_snapshots: '&summaryId, chatKey, [chatKey+updatedAt]',
+            world_profile_bindings: '&chatKey, primaryProfile, updatedAt',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, sortTs, state, [sourcePluginId+sortTs], [state+sortTs], updatedAt',
+        });
+        this.version(3).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '&[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, pluginId, chatKey, collection, recordId, ts, updatedAt, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts]',
+            events: '&eventId, chatKey, ts, type, [chatKey+ts], [chatKey+type+ts]',
+            templates: '&templateId, chatKey, [chatKey+createdAt], updatedAt',
+            audit: '&auditId, chatKey, ts',
+            meta: '&chatKey, updatedAt',
+            memory_mutation_history: '&historyId, chatKey, [chatKey+ts], ts',
+            memory_entry_audit_records: '&auditId, chatKey, entryId, summaryId, actionType, [chatKey+ts], [chatKey+entryId], ts',
             memory_entries: '&entryId, chatKey, [chatKey+entryType], [chatKey+category], [chatKey+updatedAt], updatedAt',
             memory_entry_types: '&typeId, chatKey, [chatKey+key], [chatKey+updatedAt]',
             actor_memory_profiles: '&actorKey, chatKey, [chatKey+actorKey], [chatKey+updatedAt]',

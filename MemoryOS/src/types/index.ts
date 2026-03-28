@@ -4,6 +4,8 @@ export type {
     MemoryEntryTypeField,
     MemoryEntryType,
     MemoryEntry,
+    MemoryEntryFieldDiff,
+    MemoryEntryAuditRecord,
     ActorMemoryProfile,
     RoleEntryMemory,
     SummaryEntryUpsert,

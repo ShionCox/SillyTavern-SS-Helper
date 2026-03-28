@@ -221,6 +221,8 @@ export interface LLMRequestLogRequestSnapshot {
     schemaSummary?: string;
     schema?: unknown;
     jsonMode?: boolean;
+    strictSchemaCompatible?: boolean;
+    responseFormatResolved?: string;
     resolvedMaxTokens?: {
         value: number;
         source: string;
@@ -237,6 +239,9 @@ export interface LLMRequestLogRequestSnapshot {
         messageCount?: number;
         embeddingTextCount?: number;
         rerankDocCount?: number;
+        schemaCharCount?: number;
+        inputCharCount?: number;
+        outputCharCount?: number;
     };
 }
 
