@@ -18,8 +18,10 @@ export {
 } from './candidate-record-resolver';
 export {
     buildSummaryMutationContext,
+    buildLightweightPlannerInput,
     type BuildSummaryContextInput,
     type SummaryMutationContext,
     type SummaryWindowInput,
+    type LightweightPlannerInput,
 } from './context-builder';
 

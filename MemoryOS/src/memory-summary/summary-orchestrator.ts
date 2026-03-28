@@ -1,7 +1,7 @@
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../types';
 import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
-import { buildSummaryMutationContext } from '../memory-summary-planner';
+import { buildSummaryMutationContext, buildLightweightPlannerInput } from '../memory-summary-planner';
 import { applySummaryMutation, type MutationApplyDependencies } from './mutation-applier';
 import {
     validateSummaryMutationDocument,
@@ -150,8 +150,9 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const plannerSchema = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_SCHEMA);
     const plannerSample = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
     const plannerSystemPrompt = `${plannerPromptPack.SUMMARY_PLANNER_SYSTEM}\n\n${summaryLanguageInstruction}`;
+    const lightweightPlannerInput = buildLightweightPlannerInput(plannerResult.context);
     const plannerUserPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(plannerResult.context, null, 2),
+        JSON.stringify(lightweightPlannerInput, null, 2),
         JSON.stringify(plannerSchema ?? {}, null, 2),
         JSON.stringify(plannerSample ?? {}, null, 2),
     );

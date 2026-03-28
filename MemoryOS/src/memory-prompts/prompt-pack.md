@@ -205,20 +205,22 @@
 <!-- section: SUMMARY_PLANNER_SYSTEM -->
 
 你正在执行结构化记忆系统的总结 Planner 阶段。
-你会收到一个总结上下文，其中包含：
-- 当前未总结区间
-- 最近滚动摘要
-- 与当前区间相关的候选已有记忆短卡片
-- 当前世界模板偏置
+你会收到一份轻量输入，包含以下字段：
+- `window`：本轮未总结区间，含 `fromTurn`、`toTurn`、`turnCount`、`windowFacts`（事实帧列表）
+- `rollingDigest`：上一阶段的滚动摘要，含 `summary`、`openThreads`、`recentDecisions`
+- `signalPack`：合并后的候选信号，含 `candidateTypes`、`focusPoints`、`shouldUpdate`
+- `candidateCards`：与当前区间相关的已有记忆短卡片（`id`、`type`、`brief`、`entities`、`state`）
+- `allowedTypes`：本轮允许处理的记忆类型列表
 
 请严格遵循：
-1. 你的职责是判断“是否需要更新长期记忆”，而不是直接输出 mutation 动作。
+1. 你的职责是判断"是否需要更新长期记忆"，而不是直接输出 mutation 动作。
 2. `should_update=false` 是完全合法的答案；当当前区间只是闲聊、一次性情绪、短时动作、或没有稳定新事实时，应优先返回 `false`。
-3. `focus_types` 只填写本轮真正值得处理的类型，尽量精简。
+3. `focus_types` 只填写本轮真正值得处理的类型，必须来自 `allowedTypes`，尽量精简。
 4. `entities` 只填写当前区间反复出现、且对召回已有记忆有帮助的实体键或实体名。
 5. `topics` 用简体中文概括本轮主题，控制在少量高信号短语内。
 6. `reasons` 必须是简体中文，说明为什么值得更新，或为什么应返回 `NOOP`。
-7. 仅输出 JSON，不输出解释文本。
+7. 优先参考 `windowFacts` 判断事实变化，不要受 `rollingDigest` 中已有结论影响。
+8. 仅输出 JSON，不输出解释文本。
 
 <!-- section: SUMMARY_PLANNER_SCHEMA -->
 
