@@ -233,6 +233,68 @@ export class LLMSDKImpl {
         return normalized || 'structured_output';
     }
 
+    /**
+     * 功能：判断 schema 是否兼容严格 json_schema 响应格式。
+     * @param schema 待检查的 schema。
+     * @returns 兼容时返回 true，否则返回 false。
+     */
+    private isStrictJsonSchemaCompatible(schema: unknown): boolean {
+        return this.checkStrictJsonSchemaNode(schema, 0);
+    }
+
+    /**
+     * 功能：递归检查 schema 节点是否满足严格 json_schema 约束。
+     * @param node 当前 schema 节点。
+     * @param depth 当前递归深度。
+     * @returns 节点兼容时返回 true，否则返回 false。
+     */
+    private checkStrictJsonSchemaNode(node: unknown, depth: number): boolean {
+        if (!node || typeof node !== 'object' || Array.isArray(node)) {
+            return true;
+        }
+        if (depth >= 12) {
+            return true;
+        }
+        const record = node as Record<string, unknown>;
+        const nodeType = record.type;
+        if (nodeType === 'object') {
+            if (!('additionalProperties' in record) || record.additionalProperties !== false) {
+                return false;
+            }
+        }
+
+        if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
+            for (const child of Object.values(record.properties as Record<string, unknown>)) {
+                if (!this.checkStrictJsonSchemaNode(child, depth + 1)) {
+                    return false;
+                }
+            }
+        }
+
+        if (record.items !== undefined && !this.checkStrictJsonSchemaNode(record.items, depth + 1)) {
+            return false;
+        }
+
+        const compositeKeys: string[] = ['anyOf', 'oneOf', 'allOf', 'prefixItems'];
+        for (const key of compositeKeys) {
+            const value = record[key];
+            if (!Array.isArray(value)) {
+                continue;
+            }
+            for (const child of value) {
+                if (!this.checkStrictJsonSchemaNode(child, depth + 1)) {
+                    return false;
+                }
+            }
+        }
+
+        if (record.additionalProperties && typeof record.additionalProperties === 'object' && !Array.isArray(record.additionalProperties)) {
+            return this.checkStrictJsonSchemaNode(record.additionalProperties, depth + 1);
+        }
+
+        return true;
+    }
+
     private normalizeApiType(value: unknown): ApiType {
         switch (value) {
             case 'deepseek':
@@ -317,8 +379,8 @@ export class LLMSDKImpl {
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot(taskKind, taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -347,8 +409,8 @@ export class LLMSDKImpl {
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('embedding', taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -376,8 +438,8 @@ export class LLMSDKImpl {
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('rerank', taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -744,6 +806,9 @@ export class LLMSDKImpl {
             consumerBudgetMaxTokens: consumerBudget?.maxTokens,
             profileMaxTokens: profile?.maxTokens,
         });
+        const canUseStrictJsonSchema = providerSchema
+            ? this.isStrictJsonSchemaCompatible(providerSchema)
+            : false;
 
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
@@ -764,7 +829,7 @@ export class LLMSDKImpl {
             schema: promptSchema,
             schemaName: this.sanitizeSchemaName(this.summarizeSchema(args.schema ?? runtimeSchema)),
             preferredResponseFormat: resolvedApiType === 'openai' || resolvedApiType === 'gemini'
-                ? (providerSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
+                ? (canUseStrictJsonSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
                 : (runtimeSchema ? 'system_json' : undefined),
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
         };

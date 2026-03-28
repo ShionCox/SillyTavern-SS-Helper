@@ -235,6 +235,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     }
     const promptPack = plannerPromptPack;
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
+    const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, plannerResult.context.typeSchemas);
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
@@ -245,7 +246,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     };
     const summaryUserPayload = buildStructuredTaskUserPayload(
         JSON.stringify(mutationContext, null, 2),
-        JSON.stringify(summarySchema ?? {}, null, 2),
+        JSON.stringify(strictSummarySchema ?? {}, null, 2),
         JSON.stringify(summaryOutputSample ?? {}, null, 2),
     );
     const result = await input.llm.runTask<SummaryMutationDocument>({
@@ -259,7 +260,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 { role: 'user', content: summaryUserPayload },
             ],
         },
-        schema: summarySchema,
+        schema: strictSummarySchema,
         enqueue: { displayMode: 'compact' },
     });
 
@@ -428,3 +429,280 @@ function parseJsonSection(section: string): unknown {
         return null;
     }
 }
+
+/**
+ * 功能：为总结第二阶段构建兼容严格 json_schema 的 mutation schema。
+ * @param baseSchema Prompt 中的基础 schema。
+ * @param typeSchemas 当前轮次的可写字段白名单。
+ * @returns 严格化后的 schema。
+ */
+function buildStrictSummaryMutationSchema(
+    baseSchema: unknown,
+    typeSchemas: Array<{ schemaId: string; editableFields: string[] }>,
+): unknown {
+    if (!baseSchema || typeof baseSchema !== 'object' || Array.isArray(baseSchema)) {
+        return baseSchema;
+    }
+    const cloned = deepCloneRecord(baseSchema as Record<string, unknown>);
+    const actionsRecord = readNestedRecord(cloned, ['properties', 'actions']);
+    if (actionsRecord) {
+        actionsRecord.items = buildStrictActionItemsSchema(typeSchemas);
+    }
+    ensureStrictRequired(cloned);
+    return cloned;
+}
+
+/**
+ * 功能：根据 targetKind 构建联动的严格 action schema。
+ * @param typeSchemas 当前轮次的类型白名单。
+ * @returns actions.items schema。
+ */
+function buildStrictActionItemsSchema(
+    typeSchemas: Array<{ schemaId: string; editableFields: string[] }>,
+): Record<string, unknown> {
+    const branches: Record<string, unknown>[] = [];
+    const targetKinds = Array.from(new Set(
+        typeSchemas
+            .map((typeSchema): string => String(typeSchema.schemaId ?? '').trim())
+            .filter(Boolean),
+    ));
+
+    for (const typeSchema of typeSchemas) {
+        const targetKind = String(typeSchema.schemaId ?? '').trim();
+        if (!targetKind) {
+            continue;
+        }
+        const payloadSchema = buildStrictMutationPayloadSchema(typeSchema.editableFields);
+        for (const action of ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE']) {
+            branches.push(buildStrictActionBranch(action, targetKind, payloadSchema));
+        }
+        branches.push(buildStrictActionBranch('DELETE', targetKind, buildEmptyObjectSchema()));
+        branches.push(buildStrictActionBranch('NOOP', targetKind, buildEmptyObjectSchema()));
+    }
+
+    if (branches.length <= 0) {
+        return {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+            required: [],
+        };
+    }
+
+    return {
+        oneOf: branches,
+    };
+}
+
+/**
+ * 功能：根据单个类型的可写字段构建严格 payload schema。
+ * @param editableFields 当前类型允许写入的字段。
+ * @returns payload schema。
+ */
+function buildStrictMutationPayloadSchema(editableFields: string[]): Record<string, unknown> {
+    const rootFieldKeys = new Set<string>();
+    const nestedFieldKeys = new Set<string>();
+    for (const fieldPath of editableFields) {
+        const normalized = String(fieldPath ?? '').trim();
+        if (!normalized) {
+            continue;
+        }
+        if (normalized.startsWith('fields.')) {
+            const nestedKey = normalized.slice('fields.'.length).trim();
+            if (nestedKey) {
+                nestedFieldKeys.add(nestedKey);
+            }
+            continue;
+        }
+        rootFieldKeys.add(normalized);
+    }
+
+    const properties: Record<string, unknown> = {};
+    Array.from(rootFieldKeys).sort().forEach((key: string): void => {
+        properties[key] = buildLooseFieldSchema(key, false);
+    });
+
+    if (nestedFieldKeys.size > 0) {
+        const fieldProperties: Record<string, unknown> = {};
+        const fieldRequiredKeys: string[] = [];
+        Array.from(nestedFieldKeys).sort().forEach((key: string): void => {
+            fieldProperties[key] = buildLooseFieldSchema(key, true);
+            fieldRequiredKeys.push(key);
+        });
+        properties.fields = {
+            type: 'object',
+            additionalProperties: false,
+            properties: fieldProperties,
+            required: fieldRequiredKeys,
+        };
+    }
+
+    return {
+        type: 'object',
+        additionalProperties: false,
+        properties,
+        required: Object.keys(properties),
+    };
+}
+
+/**
+ * 功能：构建单个 action 分支 schema。
+ * @param action 动作名称。
+ * @param targetKind 目标类型。
+ * @param payloadSchema 该类型专属 payload schema。
+ * @returns 分支 schema。
+ */
+function buildStrictActionBranch(
+    action: string,
+    targetKind: string,
+    payloadSchema: Record<string, unknown>,
+): Record<string, unknown> {
+    return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+            action: {
+                type: 'string',
+                enum: [action],
+            },
+            targetKind: {
+                type: 'string',
+                enum: [targetKind],
+            },
+            candidateId: { type: 'string' },
+            compareKey: { type: 'string' },
+            payload: payloadSchema,
+            reasonCodes: {
+                type: 'array',
+                items: { type: 'string' },
+            },
+        },
+        required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+    };
+}
+
+/**
+ * 功能：构建空对象 schema。
+ * @returns 空对象 schema。
+ */
+function buildEmptyObjectSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+    };
+}
+
+/**
+ * 功能：按字段名生成宽松但严格封闭的字段 schema。
+ * @param key 字段名。
+ * @param isNested 是否为 fields 下的子字段。
+ * @returns 单字段 schema。
+ */
+function buildLooseFieldSchema(key: string, isNested: boolean): Record<string, unknown> {
+    const normalizedKey = String(key ?? '').trim();
+    if (normalizedKey === 'relationTag') {
+        return {
+            type: 'string',
+            enum: ['亲人', '朋友', '盟友', '恋人', '暧昧', '师徒', '上下级', '竞争者', '情敌', '宿敌', '陌生人'],
+        };
+    }
+    if (NUMBER_FIELD_KEYS.has(normalizedKey)) {
+        return { type: 'number' };
+    }
+    if (ARRAY_FIELD_KEYS.has(normalizedKey)) {
+        return {
+            type: 'array',
+            items: { type: 'string' },
+        };
+    }
+    if (!isNested && normalizedKey === 'fields') {
+        return {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+        };
+    }
+    return { type: 'string' };
+}
+
+/**
+ * 功能：深拷贝普通对象，避免修改原始 schema。
+ * @param value 原始对象。
+ * @returns 深拷贝结果。
+ */
+function deepCloneRecord<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * 功能：读取对象上的嵌套普通对象。
+ * @param source 源对象。
+ * @param path 嵌套路径。
+ * @returns 命中的对象；不存在时返回 null。
+ */
+function readNestedRecord(source: Record<string, unknown>, path: string[]): Record<string, unknown> | null {
+    let cursor: unknown = source;
+    for (const step of path) {
+        if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) {
+            return null;
+        }
+        cursor = (cursor as Record<string, unknown>)[step];
+    }
+    if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) {
+        return null;
+    }
+    return cursor as Record<string, unknown>;
+}
+
+/**
+ * 功能：递归确保所有带 properties 的 object schema 都有完整的 required 数组。
+ * @param node 当前 schema 节点。
+ */
+function ensureStrictRequired(node: unknown): void {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+        return;
+    }
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
+        const allKeys = Object.keys(properties as Record<string, unknown>);
+        record.required = allKeys;
+        record.additionalProperties = false;
+        for (const value of Object.values(properties as Record<string, unknown>)) {
+            ensureStrictRequired(value);
+        }
+    }
+    if (record.items && typeof record.items === 'object') {
+        ensureStrictRequired(record.items);
+    }
+    if (Array.isArray(record.oneOf)) {
+        record.oneOf.forEach((item: unknown): void => ensureStrictRequired(item));
+    }
+    if (Array.isArray(record.anyOf)) {
+        record.anyOf.forEach((item: unknown): void => ensureStrictRequired(item));
+    }
+    if (Array.isArray(record.allOf)) {
+        record.allOf.forEach((item: unknown): void => ensureStrictRequired(item));
+    }
+}
+
+const NUMBER_FIELD_KEYS: Set<string> = new Set([
+    'importance',
+    'trust',
+    'affection',
+    'tension',
+    'unresolvedConflict',
+    'certainty',
+]);
+
+const ARRAY_FIELD_KEYS: Set<string> = new Set([
+    'tags',
+    'participants',
+    'milestones',
+    'aliases',
+    'identityFacts',
+    'originFacts',
+    'traits',
+]);

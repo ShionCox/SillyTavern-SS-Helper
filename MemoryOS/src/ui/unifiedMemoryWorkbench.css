@@ -385,7 +385,6 @@
 }
 
 .stx-memory-workbench__list-item h4,
-.stx-memory-workbench__panel-title,
 .stx-memory-workbench__section-title {
   font-family: inherit;
   font-weight: 700;
@@ -394,6 +393,33 @@
   color: var(--mw-text);
   letter-spacing: 0.5px;
   z-index: 2;
+}
+
+.stx-memory-workbench__panel-title {
+  font-family: "Cinzel", "Fira Code", inherit;
+  font-weight: 800;
+  margin: 0 0 12px 0;
+  padding-bottom: 8px;
+  font-size: 15px;
+  color: var(--mw-accent-cyan);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.15);
+  position: relative;
+  display: flex;
+  align-items: center;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.stx-memory-workbench__panel-title::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  background: var(--mw-accent-cyan);
+  margin-right: 8px;
+  box-shadow: 0 0 8px var(--mw-accent-cyan);
+  border-radius: 1px;
 }
 
 .stx-memory-workbench__meta,
@@ -494,12 +520,19 @@
 }
 
 .stx-memory-workbench__diagnostics {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-count: 2;
+  column-gap: 12px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding-right: 4px;
+}
+
+.stx-memory-workbench__diagnostics > .stx-memory-workbench__card {
+  break-inside: avoid;
+  margin-bottom: 12px;
+  display: inline-block;
+  width: 100%;
 }
 
 .stx-memory-workbench__details summary {

@@ -95,6 +95,7 @@ export class RequestOrchestrator {
         taskKind: CapabilityKind,
         options: RequestEnqueueOptions = {},
         requestArgs?: unknown,
+        taskDescription?: string,
     ): RequestRecord<T> {
         const requestId = generateRequestId();
 
@@ -137,6 +138,7 @@ export class RequestOrchestrator {
             requestId,
             consumer,
             taskId,
+            taskDescription,
             taskKind,
             requestArgs,
             state: 'queued',
@@ -226,12 +228,13 @@ export class RequestOrchestrator {
 
     /** 获取当前队列状态（设置页展示用） */
     getQueueSnapshot(): {
-        pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
-        active: { requestId: string; consumer: string; taskId: string; state: RequestState } | null;
+        pending: Array<{ requestId: string; consumer: string; taskId: string; taskDescription?: string; queuedAt: number }>;
+        active: { requestId: string; consumer: string; taskId: string; taskDescription?: string; state: RequestState } | null;
         recentHistory: Array<{
             requestId: string;
             consumer: string;
             taskId: string;
+            taskDescription?: string;
             state: RequestState;
             finishedAt?: number;
             rawResponseText?: string;
@@ -247,18 +250,21 @@ export class RequestOrchestrator {
                 requestId: r.requestId,
                 consumer: r.consumer,
                 taskId: r.taskId,
+                taskDescription: r.taskDescription,
                 queuedAt: r.queuedAt,
             })),
             active: this.activeRequest ? {
                 requestId: this.activeRequest.requestId,
                 consumer: this.activeRequest.consumer,
                 taskId: this.activeRequest.taskId,
+                taskDescription: this.activeRequest.taskDescription,
                 state: this.activeRequest.state,
             } : null,
             recentHistory: this.history.slice(-20).map(r => ({
                 requestId: r.requestId,
                 consumer: r.consumer,
                 taskId: r.taskId,
+                taskDescription: r.taskDescription,
                 state: r.state,
                 finishedAt: r.finishedAt,
                 rawResponseText: r.debug?.rawResponseText,

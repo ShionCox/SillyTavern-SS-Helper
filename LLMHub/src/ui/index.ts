@@ -76,8 +76,8 @@ type LLMHubRuntime = {
     };
     orchestrator?: {
         getQueueSnapshot?: () => {
-            pending: Array<{ requestId: string; consumer: string; taskId: string; queuedAt: number }>;
-            active: { requestId: string; consumer: string; taskId: string; state: string } | null;
+            pending: Array<{ requestId: string; consumer: string; taskId: string; taskDescription?: string; queuedAt: number }>;
+            active: { requestId: string; consumer: string; taskId: string; taskDescription?: string; state: string } | null;
         };
     };
     displayController?: {
@@ -482,6 +482,14 @@ function formatRequestLogChatKey(chatKey?: string): string {
         return '未附带聊天上下文';
     }
     return normalized;
+}
+
+function formatTaskDisplayLabel(taskId?: string, taskDescription?: string): string {
+    const descriptionText = String(taskDescription || '').trim();
+    if (descriptionText) {
+        return descriptionText;
+    }
+    return String(taskId || '').trim();
 }
 
 function getTavernInfoStatusClass(snapshot: TavernConnectionSnapshot): string {
@@ -2033,7 +2041,7 @@ function bindUiEvents(): void {
                       <div class="stx-ui-consumer-map-head-main">
                         <div class="stx-ui-list-title">
                           <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                          ${escapeHtml(displayName)} / ${escapeHtml(task.taskId)}
+                          ${escapeHtml(displayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskId, task.description))}
                         </div>
                                                 ${task.description ? `<div class="stx-ui-list-meta">${escapeHtml(task.description)}</div>` : ''}
                         <div class="stx-ui-list-meta">
@@ -2245,7 +2253,7 @@ function bindUiEvents(): void {
             items.push(`
               <div class="stx-ui-list-item">
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(active.taskId)}</div>
+                  <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(formatTaskDisplayLabel(active.taskId, active.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(active.requestId.slice(0, 8))}...</div>
                 </div>
                 <span class="stx-ui-state-badge ${getStateBadgeClass(active.state)}">${STATE_LABELS[active.state] || active.state}</span>
@@ -2256,7 +2264,7 @@ function bindUiEvents(): void {
             items.push(`
               <div class="stx-ui-list-item">
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(pending.taskId)}</div>
+                  <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(formatTaskDisplayLabel(pending.taskId, pending.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(pending.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(pending.queuedAt)}</div>
                 </div>
                 <span class="stx-ui-state-badge is-queued">排队中</span>
@@ -2321,7 +2329,7 @@ function bindUiEvents(): void {
           <pre class="stx-ui-log-pre">${escapeHtml([
                 `请求ID：${entry.requestId}`,
                 `来源插件：${entry.sourcePluginId}`,
-                `任务：${entry.taskId}`,
+                `任务：${formatTaskDisplayLabel(entry.taskId, entry.taskDescription)}`,
                 `状态：${STATE_LABELS[entry.state] || entry.state}`,
                 `资源：${resourceId}`,
                 `模型：${model}`,
@@ -2358,7 +2366,7 @@ function bindUiEvents(): void {
         requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => `
           <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}">
             <div class="stx-ui-log-list-head">
-                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(entry.taskId)}</div>
+                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(formatTaskDisplayLabel(entry.taskId, entry.taskDescription))}</div>
               <span class="stx-ui-state-badge ${getStateBadgeClass(entry.state)}">${STATE_LABELS[entry.state] || entry.state}</span>
             </div>
                         ${entry.taskDescription ? `<div class="stx-ui-log-list-subtitle">${escapeHtml(entry.taskDescription)}</div>` : ''}
@@ -2517,7 +2525,7 @@ function bindUiEvents(): void {
         listEl.innerHTML = permissions.map((permission) => `
           <div class="stx-ui-list-item">
             <div>
-              <div class="stx-ui-list-title">${escapeHtml(permission.pluginId)} / ${escapeHtml(permission.taskId)}</div>
+              <div class="stx-ui-list-title">${escapeHtml(permission.pluginId)} / ${escapeHtml(formatTaskDisplayLabel(permission.taskId))}</div>
               <div class="stx-ui-list-meta">授权于 ${formatTimestamp(permission.grantedAt)}</div>
             </div>
             <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(permission.pluginId)}::${escapeHtml(permission.taskId)}">撤销</button>
