@@ -31,6 +31,10 @@ const RETRIEVAL_LOG_ENABLED_ID: string = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID: string = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID: string = 'stx-memoryos-retrieval-log-level';
 const RETRIEVAL_RULE_PACK_ID: string = 'stx-memoryos-retrieval-rule-pack';
+const COLD_START_ENABLED_ID: string = 'stx-memoryos-cold-start-enabled';
+const SUMMARY_AUTO_TRIGGER_ID: string = 'stx-memoryos-summary-auto-trigger';
+const SUMMARY_MIN_MESSAGES_ID: string = 'stx-memoryos-summary-min-messages';
+const SUMMARY_RECENT_WINDOW_ID: string = 'stx-memoryos-summary-recent-window';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
 const TAB_BASIC_ID: string = 'stx-memoryos-tab-basic';
@@ -268,6 +272,30 @@ function buildSettingsContentHtml(): string {
         className: 'stx-ui-input',
         attributes: { min: 1, max: 200, step: 1 },
     });
+    const summaryMinMessagesInput: string = buildSharedInputField({
+        id: SUMMARY_MIN_MESSAGES_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 2, max: 100, step: 1 },
+    });
+    const summaryRecentWindowInput: string = buildSharedInputField({
+        id: SUMMARY_RECENT_WINDOW_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 10, max: 100, step: 5 },
+    });
+    const coldStartEnabledCheckbox: string = buildSharedCheckboxCard({
+        id: COLD_START_ENABLED_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用冷启动' },
+    });
+    const summaryAutoTriggerCheckbox: string = buildSharedCheckboxCard({
+        id: SUMMARY_AUTO_TRIGGER_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用自动总结触发' },
+    });
     const retrievalLogLevelSelect: string = `
         <select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input">
             <option value="info">信息级</option>
@@ -324,7 +352,23 @@ function buildSettingsContentHtml(): string {
                 </div>
                 <div class="stx-ui-inline">${enabledCheckbox}</div>
             </div>
+
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用冷启动</div>
+                    <div class="stx-ui-item-desc">新会话时自动弹出冷启动候选确认，基于角色卡和世界书生成初始记忆。</div>
+                </div>
+                <div class="stx-ui-inline">${coldStartEnabledCheckbox}</div>
+            </div>
+
             <div class="stx-ui-section-label">AI 总结</div>
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用自动总结触发</div>
+                    <div class="stx-ui-item-desc">开启后对话楼层达到阈值时自动运行总结。关闭后仅支持手动调用。</div>
+                </div>
+                <div class="stx-ui-inline">${summaryAutoTriggerCheckbox}</div>
+            </div>
             <div class="stx-ui-item stx-ui-item-stack">
                 <div class="stx-ui-item-main">
                     <div class="stx-ui-item-title">自动总结触发间隔</div>
@@ -332,8 +376,16 @@ function buildSettingsContentHtml(): string {
                 </div>
                 <div class="stx-ui-form-grid">
                     <div class="stx-ui-field">
-                        <label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">summaryIntervalFloors</label>
+                        <label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">触发间隔楼层</label>
                         ${summaryIntervalInput}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${SUMMARY_MIN_MESSAGES_ID}">最少消息数</label>
+                        ${summaryMinMessagesInput}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${SUMMARY_RECENT_WINDOW_ID}">最近窗口大小</label>
+                        ${summaryRecentWindowInput}
                     </div>
                 </div>
             </div>
@@ -468,21 +520,30 @@ function bindTabEvents(): void {
  */
 function syncSettingsToForm(settings: MemoryOSSettings): void {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
+    const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
+    const summaryAutoTriggerInput: HTMLInputElement | null = document.getElementById(SUMMARY_AUTO_TRIGGER_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
+    const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
+    const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
     const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
+    if (coldStartEnabledInput) coldStartEnabledInput.checked = settings.coldStartEnabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
     if (embeddingInput) embeddingInput.checked = settings.enableEmbedding;
     if (contextTokensInput) contextTokensInput.value = String(settings.contextMaxTokens);
+    if (summaryAutoTriggerInput) summaryAutoTriggerInput.checked = settings.summaryAutoTriggerEnabled;
     if (summaryIntervalInput) summaryIntervalInput.value = String(settings.summaryIntervalFloors);
+    if (summaryMinMessagesInput) summaryMinMessagesInput.value = String(settings.summaryMinMessages);
+    if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
+    if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
     if (retrievalLogInput) retrievalLogInput.checked = settings.retrievalLogEnabled;
     if (retrievalTraceInput) retrievalTraceInput.checked = settings.retrievalTracePanelEnabled;
     if (retrievalLogLevelInput) retrievalLogLevelInput.value = settings.retrievalLogLevel;
@@ -495,22 +556,30 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
  */
 function readSettingsFromForm(): MemoryOSSettings {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
+    const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
+    const summaryAutoTriggerInput: HTMLInputElement | null = document.getElementById(SUMMARY_AUTO_TRIGGER_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
+    const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
+    const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
     const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
+        coldStartEnabled: coldStartEnabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.coldStartEnabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
         injectionPreviewEnabled: injectionPreviewInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled,
         enableEmbedding: embeddingInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding,
         contextMaxTokens: Number(contextTokensInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
+        summaryAutoTriggerEnabled: summaryAutoTriggerInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.summaryAutoTriggerEnabled,
         summaryIntervalFloors: Number(summaryIntervalInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors),
+        summaryMinMessages: Number(summaryMinMessagesInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages),
+        summaryRecentWindowSize: Number(summaryRecentWindowInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize),
         retrievalLogEnabled: retrievalLogInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.retrievalLogEnabled,
         retrievalLogLevel: retrievalLogLevelInput?.value === 'debug' ? 'debug' : 'info',
         retrievalRulePack: retrievalRulePackInput?.value === 'native'

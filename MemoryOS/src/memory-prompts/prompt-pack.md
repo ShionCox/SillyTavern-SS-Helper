@@ -202,6 +202,69 @@
 }
 ```
 
+<!-- section: SUMMARY_PLANNER_SYSTEM -->
+
+你正在执行结构化记忆系统的总结 Planner 阶段。
+你会收到一个总结上下文，其中包含：
+- 当前未总结区间
+- 最近滚动摘要
+- 与当前区间相关的候选已有记忆短卡片
+- 当前世界模板偏置
+
+请严格遵循：
+1. 你的职责是判断“是否需要更新长期记忆”，而不是直接输出 mutation 动作。
+2. `should_update=false` 是完全合法的答案；当当前区间只是闲聊、一次性情绪、短时动作、或没有稳定新事实时，应优先返回 `false`。
+3. `focus_types` 只填写本轮真正值得处理的类型，尽量精简。
+4. `entities` 只填写当前区间反复出现、且对召回已有记忆有帮助的实体键或实体名。
+5. `topics` 用简体中文概括本轮主题，控制在少量高信号短语内。
+6. `reasons` 必须是简体中文，说明为什么值得更新，或为什么应返回 `NOOP`。
+7. 仅输出 JSON，不输出解释文本。
+
+<!-- section: SUMMARY_PLANNER_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["should_update", "focus_types", "entities", "topics", "reasons"],
+  "additionalProperties": false,
+  "properties": {
+    "should_update": { "type": "boolean" },
+    "focus_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "entities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "topics": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
+```
+
+<!-- section: SUMMARY_PLANNER_OUTPUT_SAMPLE -->
+
+```json
+{
+  "should_update": true,
+  "focus_types": ["relationship", "initial_state", "persistent_goal"],
+  "entities": ["user", "char_erin", "王都北门"],
+  "topics": ["关系变化", "地点切换", "新目标形成"],
+  "reasons": [
+    "本区间出现持续性的信任变化",
+    "当前地点状态发生明确迁移",
+    "出现了具备持续性的长期目标"
+  ]
+}
+```
+
 <!-- section: SUMMARY_SYSTEM -->
 
 你正在执行结构化记忆总结任务。

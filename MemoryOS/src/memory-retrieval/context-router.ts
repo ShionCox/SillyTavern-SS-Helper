@@ -87,6 +87,14 @@ const DICTIONARY_FACET_MAP: Record<string, RetrievalFacet[]> = {
     perocore_relationship_conflict: ['relationship', 'event'],
     perocore_world_qa: ['world', 'interpretation'],
     perocore_scene: ['scene', 'event'],
+    perocore_system_event: ['event', 'scene'],
+    perocore_social: ['relationship', 'scene', 'event'],
+    perocore_environment: ['scene', 'event'],
+    perocore_coding: ['world', 'event', 'interpretation'],
+    perocore_file_analysis: ['world', 'event', 'interpretation'],
+    perocore_work_mode: ['event', 'scene', 'interpretation'],
+    perocore_planning: ['event', 'interpretation'],
+    perocore_reflection: ['interpretation', 'event'],
 };
 
 const ALL_FACETS: RetrievalFacet[] = ['world', 'scene', 'relationship', 'event', 'interpretation'];

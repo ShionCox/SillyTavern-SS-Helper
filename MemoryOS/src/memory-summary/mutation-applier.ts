@@ -83,13 +83,14 @@ async function applySingleAction(input: {
         return;
     }
     const candidate = input.action.candidateId ? input.candidateIdMap.get(input.action.candidateId) : null;
-    const payload = input.action.payload ?? {};
-    if (actionType === 'DELETE' && candidate?.recordId && input.dependencies.deleteEntry) {
-        await input.dependencies.deleteEntry(candidate.recordId);
+    const resolvedRecordId = String(input.action.targetId ?? candidate?.recordId ?? '').trim();
+    const payload = resolveActionPayload(input.action);
+    if (actionType === 'DELETE' && resolvedRecordId && input.dependencies.deleteEntry) {
+        await input.dependencies.deleteEntry(resolvedRecordId);
         return;
     }
-    if (actionType === 'INVALIDATE' && candidate?.recordId) {
-        const existing = await input.dependencies.getEntry(candidate.recordId);
+    if (actionType === 'INVALIDATE' && resolvedRecordId) {
+        const existing = await input.dependencies.getEntry(resolvedRecordId);
         if (existing) {
             const currentDetailPayload = normalizeRecord(existing.detailPayload);
             const currentLifecycle = normalizeRecord(currentDetailPayload.lifecycle);
@@ -129,8 +130,20 @@ async function applySingleAction(input: {
         }
         return;
     }
+    if (actionType === 'MERGE') {
+        await applyMergeAction({
+            dependencies: input.dependencies,
+            action: input.action,
+            candidateIdMap: input.candidateIdMap,
+            payload,
+            entryUpserts: input.entryUpserts,
+            refreshBindings: input.refreshBindings,
+            actorKeys: input.actorKeys,
+        });
+        return;
+    }
     const targetSchemaId = normalizeTargetSchemaId(input.action.targetKind, candidate?.schemaId);
-    const upsert = await buildEntryUpsert(input.dependencies, targetSchemaId, payload, candidate?.recordId);
+    const upsert = await buildEntryUpsert(input.dependencies, targetSchemaId, payload, resolvedRecordId);
     if (!upsert) {
         return;
     }
@@ -140,6 +153,75 @@ async function applySingleAction(input: {
             actorKey,
             entryId: upsert.entryId,
             entryTitle: upsert.title,
+        });
+    }
+}
+
+/**
+ * 功能：应用 MERGE 动作。
+ * @param input 合并输入。
+ */
+async function applyMergeAction(input: {
+    dependencies: MutationApplyDependencies;
+    action: SummaryMutationAction;
+    candidateIdMap: Map<string, SummaryCandidateRecord>;
+    payload: Record<string, unknown>;
+    entryUpserts: SummaryEntryUpsert[];
+    refreshBindings: SummaryRefreshBinding[];
+    actorKeys: string[];
+}): Promise<void> {
+    const candidateRecordId = input.action.candidateId
+        ? input.candidateIdMap.get(input.action.candidateId)?.recordId
+        : undefined;
+    const sourceIds = dedupeStrings([
+        String(candidateRecordId ?? '').trim(),
+        ...(input.action.sourceIds ?? []),
+    ]);
+    const primaryId = String(input.action.targetId ?? sourceIds[0] ?? '').trim();
+    if (!primaryId) {
+        return;
+    }
+    const primaryUpsert = await buildEntryUpsert(
+        input.dependencies,
+        input.action.targetKind,
+        input.payload,
+        primaryId,
+    );
+    if (primaryUpsert) {
+        input.entryUpserts.push(primaryUpsert);
+        for (const actorKey of input.actorKeys) {
+            input.refreshBindings.push({
+                actorKey,
+                entryId: primaryUpsert.entryId,
+                entryTitle: primaryUpsert.title,
+            });
+        }
+    }
+    const mergedAt = Date.now();
+    for (const sourceId of sourceIds.filter((item: string): boolean => Boolean(item) && item !== primaryId)) {
+        const existing = await input.dependencies.getEntry(sourceId);
+        if (!existing) {
+            continue;
+        }
+        const currentDetailPayload = normalizeRecord(existing.detailPayload);
+        const currentLifecycle = normalizeRecord(currentDetailPayload.lifecycle);
+        input.entryUpserts.push({
+            entryId: existing.entryId,
+            title: existing.title,
+            entryType: existing.entryType,
+            category: existing.category,
+            tags: dedupeStrings([...(existing.tags ?? []), 'merged']),
+            summary: existing.summary || existing.detail || existing.title,
+            detail: existing.detail,
+            detailPayload: {
+                ...currentDetailPayload,
+                mergedInto: primaryId,
+                lifecycle: {
+                    ...currentLifecycle,
+                    status: 'merged',
+                    mergedAt,
+                },
+            },
         });
     }
 }
@@ -180,6 +262,21 @@ async function buildEntryUpsert(
         detail: String(payload.detail ?? existing?.detail ?? '').trim() || undefined,
         detailPayload,
     };
+}
+
+/**
+ * 功能：解析 action 对应的 payload。
+ * @param action mutation action。
+ * @returns 归一化 payload。
+ */
+function resolveActionPayload(action: SummaryMutationAction): Record<string, unknown> {
+    if (action.action === 'ADD') {
+        return normalizeRecord(action.newRecord ?? action.payload);
+    }
+    if (action.action === 'UPDATE' || action.action === 'MERGE' || action.action === 'INVALIDATE') {
+        return normalizeRecord(action.patch ?? action.payload);
+    }
+    return normalizeRecord(action.payload);
 }
 
 /**
@@ -269,7 +366,7 @@ function resolveSupersededByHint(input: {
     allActions: SummaryMutationAction[];
     currentDetailPayload: Record<string, unknown>;
 }): string {
-    const payload = input.action.payload ?? {};
+    const payload = resolveActionPayload(input.action);
     const explicit = String(payload.supersededBy ?? input.currentDetailPayload.supersededBy ?? '').trim();
     if (explicit) {
         return explicit;
@@ -288,10 +385,12 @@ function resolveSupersededByHint(input: {
         return '';
     }
     const takeoverPayload = takeover.payload ?? {};
+    const normalizedTakeoverPayload = resolveActionPayload(takeover);
     return String(
-        takeoverPayload.supersededBy
-        ?? takeoverPayload.title
-        ?? takeoverPayload.state
+        normalizedTakeoverPayload.supersededBy
+        ?? normalizedTakeoverPayload.title
+        ?? normalizedTakeoverPayload.state
+        ?? takeoverPayload.supersededBy
         ?? '',
     ).trim();
 }

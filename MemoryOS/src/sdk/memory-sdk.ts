@@ -12,7 +12,13 @@ import { UnifiedMemoryManager } from '../core/unified-memory-manager';
 import { logger } from '../runtime/runtime-services';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
-import { runBootstrapOrchestrator, type ColdStartSourceBundle } from '../memory-bootstrap';
+import {
+    applyBootstrapCandidates,
+    runBootstrapOrchestrator,
+    type ColdStartCandidate,
+    type ColdStartDocument,
+    type ColdStartSourceBundle,
+} from '../memory-bootstrap';
 import {
     clearMemoryChatData,
     exportMemoryChatDatabaseSnapshot,
@@ -73,11 +79,25 @@ export interface ExportPromptTestBundleForTestOptions {
  * 功能：定义冷启动状态快照。
  */
 export interface MemoryColdStartStatus {
+    hasStarted?: boolean;
     completed: boolean;
     completedAt?: number;
+    dismissedAt?: number;
+    selectedLorebookEntryIds?: string[];
     lastTriggeredAt?: number;
     lastFailedAt?: number;
     lastReasonCode?: string;
+}
+
+/**
+ * 功能：定义总结进度快照。
+ */
+export interface MemorySummaryProgress {
+    lastSummarizedIndex: number;
+    lastSummarizedMessageId?: string;
+    pendingStartIndex: number;
+    pendingEndIndex: number;
+    lastSummarizedAt?: number;
 }
 
 /**
@@ -86,6 +106,7 @@ export interface MemoryColdStartStatus {
 export interface MemoryColdStartExecutionResult {
     ok: boolean;
     reasonCode: string;
+    candidates?: ColdStartCandidate[];
     worldProfile?: {
         primaryProfile: string;
         secondaryProfiles: string[];
@@ -116,6 +137,11 @@ export class MemorySDKImpl {
     private promptReadyRunResultSnapshot: Record<string, unknown> | null;
     private latestRecallExplanation: Record<string, unknown> | null;
     private llmTasksRegistered: boolean;
+    private pendingColdStartDraft: {
+        document: ColdStartDocument;
+        candidates: ColdStartCandidate[];
+        sourceBundle: ColdStartSourceBundle;
+    } | null;
 
     public readonly template: { destroy: () => void };
     public readonly events: {
@@ -134,6 +160,7 @@ export class MemorySDKImpl {
     public readonly chatState: {
         getLatestRecallExplanation: () => Promise<Record<string, unknown> | null>;
         getColdStartStatus: () => Promise<MemoryColdStartStatus>;
+        getSummaryProgress: () => Promise<MemorySummaryProgress>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -150,6 +177,8 @@ export class MemorySDKImpl {
             _reason?: string,
             selection?: MemoryColdStartWorldbookSelection,
         ) => Promise<MemoryColdStartExecutionResult>;
+        confirmColdStartCandidates: (selectedCandidateIds: string[]) => Promise<MemoryColdStartExecutionResult>;
+        markColdStartDismissed: () => Promise<void>;
         flush: () => Promise<void>;
         destroy: () => Promise<void>;
         restoreArchivedMemoryChat: () => Promise<void>;
@@ -206,6 +235,7 @@ export class MemorySDKImpl {
         this.promptReadyRunResultSnapshot = null;
         this.latestRecallExplanation = null;
         this.llmTasksRegistered = false;
+        this.pendingColdStartDraft = null;
 
         this.template = {
             destroy: (): void => {
@@ -237,9 +267,20 @@ export class MemorySDKImpl {
         this.postGeneration = {
             scheduleRoundProcessing: async (_source?: string, options?: { force?: boolean }): Promise<void> => {
                 const settings = readMemoryOSSettings();
+                if (!settings.summaryAutoTriggerEnabled && options?.force !== true) {
+                    return;
+                }
                 const summaryIntervalFloors: number = Math.max(
                     1,
                     Math.trunc(Number(settings.summaryIntervalFloors) || 1),
+                );
+                const summaryMinMessages: number = Math.max(
+                    2,
+                    Math.trunc(Number(settings.summaryMinMessages) || AUTO_SUMMARY_MIN_MESSAGE_WINDOW),
+                );
+                const summaryRecentWindowSize: number = Math.max(
+                    AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
+                    Math.min(AUTO_SUMMARY_MAX_MESSAGE_WINDOW, Math.trunc(Number(settings.summaryRecentWindowSize) || AUTO_SUMMARY_MAX_MESSAGE_WINDOW)),
                 );
                 const messageFloorCount: number = await this.eventsManager.countByTypes(AUTO_SUMMARY_MESSAGE_EVENT_TYPES);
                 if (messageFloorCount <= 0) {
@@ -251,16 +292,19 @@ export class MemorySDKImpl {
                     const state = this.toRecord(stateRow?.state);
                     const lastSummaryFloorCount: number = Math.max(
                         0,
-                        Math.trunc(Number(state.autoSummaryLastFloorCount) || 0),
+                        Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
                     );
                     if (messageFloorCount - lastSummaryFloorCount < summaryIntervalFloors) {
+                        return;
+                    }
+                    if (messageFloorCount < summaryMinMessages) {
                         return;
                     }
                 }
 
                 const messageWindowLimit: number = Math.max(
-                    AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
-                    Math.min(AUTO_SUMMARY_MAX_MESSAGE_WINDOW, summaryIntervalFloors),
+                    summaryMinMessages,
+                    Math.min(summaryRecentWindowSize, summaryIntervalFloors),
                 );
                 const [sentRows, receivedRows] = await Promise.all([
                     this.eventsManager.query({ type: 'chat.message.sent', limit: messageWindowLimit }),
@@ -269,8 +313,16 @@ export class MemorySDKImpl {
                 const rows = [...sentRows, ...receivedRows]
                     .sort((a: EventEnvelope<unknown>, b: EventEnvelope<unknown>): number => Number(a.ts ?? 0) - Number(b.ts ?? 0))
                     .slice(-messageWindowLimit);
+                const stateRow = await readMemoryOSChatState(this.chatKey_);
+                const state = this.toRecord(stateRow?.state);
+                const lastSummarizedIndex = Math.max(
+                    0,
+                    Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
+                );
+                const pendingStartIndex = lastSummarizedIndex + 1;
+                const pendingEndIndex = messageFloorCount;
                 const messages = rows
-                    .map((row: EventEnvelope<unknown>): { role?: string; content?: string; name?: string } => {
+                    .map((row: EventEnvelope<unknown>, index: number): { role?: string; content?: string; name?: string; turnIndex?: number } => {
                         const type = String(row.type ?? '').trim();
                         const payload = (row.payload ?? {}) as Record<string, unknown>;
                         const role = type === 'chat.message.sent' ? 'user' : 'assistant';
@@ -278,6 +330,7 @@ export class MemorySDKImpl {
                             role,
                             content: String(payload.text ?? '').trim(),
                             name: undefined,
+                            turnIndex: Math.max(1, pendingEndIndex - rows.length + index + 1),
                         };
                     })
                     .filter((item: { content?: string }): boolean => Boolean(String(item.content ?? '').trim()));
@@ -288,9 +341,18 @@ export class MemorySDKImpl {
                 if (!snapshot) {
                     return;
                 }
+                const lastMessageRow = rows.length > 0 ? rows[rows.length - 1] : null;
+                const lastSummarizedMessageId = lastMessageRow
+                    ? String((lastMessageRow as Record<string, unknown>).eventId ?? '').trim() || undefined
+                    : undefined;
                 await this.writeColdStartState({
                     autoSummaryLastFloorCount: messageFloorCount,
                     autoSummaryLastTriggeredAt: Date.now(),
+                    summaryLastSummarizedIndex: pendingEndIndex,
+                    summaryLastSummarizedMessageId: lastSummarizedMessageId,
+                    summaryPendingStartIndex: pendingEndIndex + 1,
+                    summaryPendingEndIndex: pendingEndIndex,
+                    summaryLastSummarizedAt: Date.now(),
                 });
             },
         };
@@ -301,6 +363,9 @@ export class MemorySDKImpl {
             },
             getColdStartStatus: async (): Promise<MemoryColdStartStatus> => {
                 return this.readColdStartStatus();
+            },
+            getSummaryProgress: async (): Promise<MemorySummaryProgress> => {
+                return this.readSummaryProgress();
             },
             setPromptReadyCaptureSnapshotForTest: async (snapshot: PromptReadyCaptureSnapshot): Promise<void> => {
                 this.promptReadyCaptureSnapshot = {
@@ -387,9 +452,12 @@ export class MemorySDKImpl {
                 selection?: MemoryColdStartWorldbookSelection,
             ): Promise<MemoryColdStartExecutionResult> => {
                 const triggerTs: number = Date.now();
+                const selectedLorebookEntryIds = (selection?.selectedEntries ?? []).map((item) => `${item.book}:${item.entryId}`);
                 await this.writeColdStartState({
+                    coldStartHasStarted: true,
                     coldStartLastTriggeredAt: triggerTs,
                     coldStartLastReason: String(_reason ?? '').trim() || undefined,
+                    coldStartSelectedLorebookEntryIds: selectedLorebookEntryIds,
                 });
                 const llm = readMemoryLLMApi();
                 if (!llm) {
@@ -416,6 +484,7 @@ export class MemorySDKImpl {
                     sourceBundle,
                 });
                 if (!result.ok) {
+                    this.pendingColdStartDraft = null;
                     await this.writeColdStartState({
                         coldStartLastFailedAt: Date.now(),
                         coldStartLastReasonCode: result.reasonCode,
@@ -426,16 +495,76 @@ export class MemorySDKImpl {
                         reasonCode: result.reasonCode,
                     };
                 }
+                this.pendingColdStartDraft = result.document && result.candidates
+                    ? {
+                        document: result.document,
+                        candidates: result.candidates,
+                        sourceBundle,
+                    }
+                    : null;
                 await this.writeColdStartState({
-                    coldStartCompletedAt: Date.now(),
+                    coldStartGeneratedAt: Date.now(),
                     coldStartLastFailedAt: undefined,
                     coldStartLastReasonCode: undefined,
                 });
                 return {
                     ok: true,
                     reasonCode: result.reasonCode,
+                    candidates: result.candidates,
                     worldProfile: result.worldProfile,
                 };
+            },
+            confirmColdStartCandidates: async (selectedCandidateIds: string[]): Promise<MemoryColdStartExecutionResult> => {
+                if (!this.pendingColdStartDraft) {
+                    return {
+                        ok: false,
+                        reasonCode: 'cold_start_draft_missing',
+                    };
+                }
+                const selectedIdSet = new Set(
+                    (Array.isArray(selectedCandidateIds) ? selectedCandidateIds : [])
+                        .map((item: unknown): string => String(item ?? '').trim())
+                        .filter(Boolean),
+                );
+                const selectedCandidates = this.pendingColdStartDraft.candidates.filter((candidate: ColdStartCandidate): boolean => {
+                    return selectedIdSet.size <= 0 || selectedIdSet.has(candidate.id);
+                });
+                if (selectedCandidates.length <= 0) {
+                    return {
+                        ok: false,
+                        reasonCode: 'no_cold_start_candidate_selected',
+                    };
+                }
+                const applied = await applyBootstrapCandidates({
+                    dependencies: {
+                        ensureActorProfile: async (input): Promise<unknown> => this.unifiedManager.ensureActorProfile(input),
+                        saveEntry: async (input): Promise<any> => this.unifiedManager.saveEntry(input),
+                        bindRoleToEntry: async (actorKey: string, entryId: string): Promise<unknown> => this.unifiedManager.bindRoleToEntry(actorKey, entryId),
+                        putWorldProfileBinding: async (binding): Promise<unknown> => this.unifiedManager.putWorldProfileBinding(binding),
+                        appendMutationHistory: async (history): Promise<unknown> => this.unifiedManager.appendMutationHistory(history),
+                    },
+                    document: this.pendingColdStartDraft.document,
+                    sourceBundle: this.pendingColdStartDraft.sourceBundle,
+                    selectedCandidates,
+                });
+                this.pendingColdStartDraft = null;
+                await this.writeColdStartState({
+                    coldStartCompletedAt: Date.now(),
+                    coldStartConfirmedAt: Date.now(),
+                    coldStartDismissedAt: undefined,
+                    coldStartSelectedCandidateIds: selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id),
+                });
+                return {
+                    ok: true,
+                    reasonCode: 'ok',
+                    worldProfile: applied.worldProfile,
+                };
+            },
+            markColdStartDismissed: async (): Promise<void> => {
+                this.pendingColdStartDraft = null;
+                await this.writeColdStartState({
+                    coldStartDismissedAt: Date.now(),
+                });
             },
             flush: async (): Promise<void> => {
                 return;
@@ -667,8 +796,11 @@ export class MemorySDKImpl {
         const persistedCompletedAt = this.toOptionalTimestamp(state.coldStartCompletedAt);
         if (persistedCompletedAt) {
             return {
+                hasStarted: this.toOptionalTimestamp(state.coldStartLastTriggeredAt) !== undefined,
                 completed: true,
                 completedAt: persistedCompletedAt,
+                dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+                selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
                 lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
                 lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
                 lastReasonCode: this.toOptionalText(state.coldStartLastReasonCode),
@@ -677,19 +809,53 @@ export class MemorySDKImpl {
         const worldProfileBinding = await this.unifiedManager.getWorldProfileBinding();
         if (worldProfileBinding) {
             return {
+                hasStarted: this.toOptionalTimestamp(state.coldStartLastTriggeredAt) !== undefined,
                 completed: true,
                 completedAt: Number(worldProfileBinding.updatedAt ?? worldProfileBinding.createdAt ?? Date.now()),
+                dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+                selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
                 lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
                 lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
                 lastReasonCode: this.toOptionalText(state.coldStartLastReasonCode),
             };
         }
         return {
+            hasStarted: this.toOptionalTimestamp(state.coldStartLastTriggeredAt) !== undefined,
             completed: false,
             completedAt: undefined,
+            dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+            selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
             lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
             lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
             lastReasonCode: this.toOptionalText(state.coldStartLastReasonCode),
+        };
+    }
+
+    /**
+     * 功能：读取当前聊天的总结进度。
+     * @returns 总结进度。
+     */
+    private async readSummaryProgress(): Promise<MemorySummaryProgress> {
+        const stateRow = await readMemoryOSChatState(this.chatKey_);
+        const state = this.toRecord(stateRow?.state);
+        const lastSummarizedIndex = Math.max(
+            0,
+            Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
+        );
+        const pendingStartIndex = Math.max(
+            1,
+            Math.trunc(Number(state.summaryPendingStartIndex) || (lastSummarizedIndex + 1)),
+        );
+        const pendingEndIndex = Math.max(
+            lastSummarizedIndex,
+            Math.trunc(Number(state.summaryPendingEndIndex) || lastSummarizedIndex),
+        );
+        return {
+            lastSummarizedIndex,
+            lastSummarizedMessageId: this.toOptionalText(state.summaryLastSummarizedMessageId),
+            pendingStartIndex,
+            pendingEndIndex,
+            lastSummarizedAt: this.toOptionalTimestamp(state.summaryLastSummarizedAt),
         };
     }
 
@@ -735,6 +901,21 @@ export class MemorySDKImpl {
             return undefined;
         }
         return Math.trunc(numericValue);
+    }
+
+    /**
+     * 功能：读取可选字符串数组。
+     * @param value 原始值。
+     * @returns 字符串数组；为空时返回 undefined。
+     */
+    private toOptionalStringArray(value: unknown): string[] | undefined {
+        if (!Array.isArray(value)) {
+            return undefined;
+        }
+        const result = value
+            .map((item: unknown): string => String(item ?? '').trim())
+            .filter(Boolean);
+        return result.length > 0 ? result : undefined;
     }
 
     /**

@@ -2,8 +2,9 @@ import type { MemoryEntry } from '../types';
 import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
 import { buildStructuredTaskUserPayload } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
-import type { ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
+import type { ColdStartCandidate, ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
 import { parseColdStartDocument } from './bootstrap-parser';
+import { buildColdStartCandidates } from './bootstrap-candidates';
 import { resolveBootstrapWorldProfile } from './bootstrap-world-profile';
 
 /**
@@ -46,6 +47,8 @@ export interface RunBootstrapOrchestratorInput {
 export interface RunBootstrapOrchestratorResult {
     ok: boolean;
     reasonCode: string;
+    candidates?: ColdStartCandidate[];
+    document?: ColdStartDocument;
     worldProfile?: {
         primaryProfile: string;
         secondaryProfiles: string[];
@@ -100,7 +103,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             ],
         },
         schema: coldStartSchema,
-        enqueue: { displayMode: 'fullscreen' },
+        enqueue: { displayMode: 'silent' },
     });
     if (!result.ok) {
         const reasonCode = result.reasonCode || 'cold_start_failed';
@@ -118,6 +121,14 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'invalid_cold_start_document' };
     }
+    const candidates = buildColdStartCandidates(parsed, input.sourceBundle);
+    if (candidates.length <= 0) {
+        await input.dependencies.appendMutationHistory({
+            action: 'cold_start_failed',
+            payload: { reasonCode: 'empty_cold_start_candidates' },
+        });
+        return { ok: false, reasonCode: 'empty_cold_start_candidates' };
+    }
     const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(parsed, input.sourceBundle);
     const actorCardValidation = validateRelationshipActorCards(parsed, input.sourceBundle);
     if (!actorCardValidation.ok) {
@@ -130,85 +141,59 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'relationship_actor_card_missing' };
     }
-    await input.dependencies.ensureActorProfile({
-        actorKey: parsed.identity.actorKey,
-        displayName: resolveBootstrapActorDisplayName(parsed.identity.actorKey, actorDisplayNameMap),
-    });
-    await saveColdStartActorProfile(input.dependencies, {
-        actorKey: parsed.identity.actorKey,
-        displayName: parsed.identity.displayName || parsed.identity.actorKey,
-        aliases: parsed.identity.aliases,
-        identityFacts: parsed.identity.identityFacts,
-        originFacts: parsed.identity.originFacts,
-        traits: parsed.identity.traits,
-    });
-    for (const actorCard of parsed.actorCards) {
-        const normalizedActorKey = normalizeActorKey(actorCard.actorKey);
-        if (!normalizedActorKey || normalizedActorKey === 'user' || normalizedActorKey === normalizeActorKey(parsed.identity.actorKey)) {
-            continue;
-        }
-        await input.dependencies.ensureActorProfile({
-            actorKey: actorCard.actorKey,
-            displayName: resolveBootstrapActorDisplayName(actorCard.actorKey, actorDisplayNameMap),
-        });
-        await saveColdStartActorProfile(input.dependencies, actorCard);
-    }
+    const worldProfile = resolveBootstrapWorldProfile(parsed, input.sourceBundle);
+    return {
+        ok: true,
+        reasonCode: 'ok',
+        candidates,
+        document: parsed,
+        worldProfile,
+    };
+}
 
-    for (const worldEntry of parsed.worldBase) {
-        await input.dependencies.saveEntry({
-            entryType: normalizeWorldBaseType(worldEntry.schemaId),
-            title: worldEntry.title,
-            summary: worldEntry.summary,
-            detailPayload: {
-                scope: worldEntry.scope,
-            },
-            tags: ['cold_start', 'world_base'],
-        });
-    }
-    for (const relation of parsed.relationships) {
-        const normalizedRelation = normalizeBootstrapRelationship(relation, parsed.identity.actorKey, input.sourceBundle);
-        const relationActorKeys = collectRelationshipActorKeys(normalizedRelation);
-        for (const actorKey of relationActorKeys) {
+/**
+ * 功能：确认并应用冷启动候选到记忆库。
+ * @param dependencies 编排依赖。
+ * @param document 冷启动原始文档。
+ * @param sourceBundle 冷启动源数据包。
+ * @param selectedCandidates 已选候选。
+ * @returns 世界模板结果。
+ */
+export async function applyBootstrapCandidates(input: {
+    dependencies: BootstrapOrchestratorDependencies;
+    document: ColdStartDocument;
+    sourceBundle: ColdStartSourceBundle;
+    selectedCandidates: ColdStartCandidate[];
+}): Promise<{
+    worldProfile: {
+        primaryProfile: string;
+        secondaryProfiles: string[];
+        confidence: number;
+        reasonCodes: string[];
+    };
+}> {
+    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(input.document, input.sourceBundle);
+    const selectedIds = new Set(input.selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id));
+    for (const candidate of input.selectedCandidates) {
+        for (const actorKey of candidate.actorBindings ?? []) {
             await input.dependencies.ensureActorProfile({
                 actorKey,
                 displayName: resolveBootstrapActorDisplayName(actorKey, actorDisplayNameMap),
             });
         }
-        const relationEntry = await input.dependencies.saveEntry({
-            entryType: 'relationship',
-            title: `${normalizedRelation.sourceActorKey} -> ${normalizedRelation.targetActorKey}`,
-            summary: normalizedRelation.summary,
-            detailPayload: {
-                sourceActorKey: normalizedRelation.sourceActorKey,
-                targetActorKey: normalizedRelation.targetActorKey,
-                participants: dedupeStrings(normalizedRelation.participants),
-                state: normalizedRelation.state,
-                trust: normalizedRelation.trust,
-                affection: normalizedRelation.affection,
-                tension: normalizedRelation.tension,
-                fields: {
-                    relationTag: normalizedRelation.relationTag,
-                },
-            },
-            tags: ['cold_start', 'relationship'],
+        const saved = await input.dependencies.saveEntry({
+            entryType: candidate.entryType,
+            title: candidate.title,
+            summary: candidate.summary,
+            detailPayload: candidate.detailPayload,
+            tags: candidate.tags,
         });
-        for (const actorKey of relationActorKeys) {
-            await input.dependencies.bindRoleToEntry(actorKey, relationEntry.entryId);
+        for (const actorKey of candidate.actorBindings ?? []) {
+            await input.dependencies.bindRoleToEntry(actorKey, saved.entryId);
         }
     }
-    for (const memoryRecord of parsed.memoryRecords) {
-        const saved = await input.dependencies.saveEntry({
-            entryType: memoryRecord.schemaId,
-            title: memoryRecord.title,
-            summary: memoryRecord.summary,
-            detailPayload: {
-                importance: memoryRecord.importance,
-            },
-            tags: ['cold_start'],
-        });
-        await input.dependencies.bindRoleToEntry(parsed.identity.actorKey, saved.entryId);
-    }
-    const worldProfile = resolveBootstrapWorldProfile(parsed, input.sourceBundle);
+    const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
+    const worldProfile = resolveBootstrapWorldProfile(input.document, input.sourceBundle);
     await input.dependencies.putWorldProfileBinding({
         primaryProfile: worldProfile.primaryProfile,
         secondaryProfiles: worldProfile.secondaryProfiles,
@@ -228,18 +213,16 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_succeeded',
         payload: {
-            actorKey: parsed.identity.actorKey,
+            actorKey: input.document.identity.actorKey,
             worldProfile,
-            worldBaseCount: parsed.worldBase.length,
-            relationshipCount: parsed.relationships.length,
-            memoryRecordCount: parsed.memoryRecords.length,
+            selectedCandidateCount: input.selectedCandidates.length,
+            selectedCandidateIds: [...selectedIds],
+            worldBaseCount: input.document.worldBase.length,
+            relationshipCount: input.document.relationships.length,
+            memoryRecordCount: input.document.memoryRecords.length,
         },
     });
-    return {
-        ok: true,
-        reasonCode: 'ok',
-        worldProfile,
-    };
+    return { worldProfile };
 }
 
 /**

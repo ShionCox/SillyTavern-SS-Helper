@@ -5,6 +5,7 @@ export interface SummaryWindowMessage {
     role?: string;
     content?: string;
     name?: string;
+    turnIndex?: number;
 }
 
 /**
@@ -25,9 +26,13 @@ export interface SummaryWindow {
 export function buildSummaryWindow(messages: SummaryWindowMessage[]): SummaryWindow {
     const sliced = (Array.isArray(messages) ? messages : [])
         .filter((message: SummaryWindowMessage): boolean => String(message.role ?? '').trim().toLowerCase() !== 'system')
-        .slice(-10);
-    const fromTurn = Math.max(1, sliced.length > 0 ? 1 : 0);
-    const toTurn = sliced.length;
+        .slice(-20);
+    const fromTurn = sliced.length > 0
+        ? Math.max(1, Math.trunc(Number(sliced[0].turnIndex) || 1))
+        : 0;
+    const toTurn = sliced.length > 0
+        ? Math.max(fromTurn, Math.trunc(Number(sliced[sliced.length - 1].turnIndex) || sliced.length))
+        : 0;
     const summaryText = sliced
         .map((message: SummaryWindowMessage, index: number): string => {
             const name = String(message.name ?? '').trim();

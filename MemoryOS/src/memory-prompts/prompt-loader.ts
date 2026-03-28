@@ -5,6 +5,9 @@ export type PromptPackSectionName =
     | 'COLD_START_SYSTEM'
     | 'COLD_START_SCHEMA'
     | 'COLD_START_OUTPUT_SAMPLE'
+    | 'SUMMARY_PLANNER_SYSTEM'
+    | 'SUMMARY_PLANNER_SCHEMA'
+    | 'SUMMARY_PLANNER_OUTPUT_SAMPLE'
     | 'SUMMARY_SYSTEM'
     | 'SUMMARY_SCHEMA'
     | 'SUMMARY_OUTPUT_SAMPLE';
@@ -16,6 +19,9 @@ export interface PromptPackSections {
     COLD_START_SYSTEM: string;
     COLD_START_SCHEMA: string;
     COLD_START_OUTPUT_SAMPLE: string;
+    SUMMARY_PLANNER_SYSTEM: string;
+    SUMMARY_PLANNER_SCHEMA: string;
+    SUMMARY_PLANNER_OUTPUT_SAMPLE: string;
     SUMMARY_SYSTEM: string;
     SUMMARY_SCHEMA: string;
     SUMMARY_OUTPUT_SAMPLE: string;
@@ -27,6 +33,9 @@ const REQUIRED_SECTIONS: PromptPackSectionName[] = [
     'COLD_START_SYSTEM',
     'COLD_START_SCHEMA',
     'COLD_START_OUTPUT_SAMPLE',
+    'SUMMARY_PLANNER_SYSTEM',
+    'SUMMARY_PLANNER_SCHEMA',
+    'SUMMARY_PLANNER_OUTPUT_SAMPLE',
     'SUMMARY_SYSTEM',
     'SUMMARY_SCHEMA',
     'SUMMARY_OUTPUT_SAMPLE',
@@ -39,6 +48,12 @@ const FALLBACK_PROMPT_PACK = `
 {"type":"object"}
 <!-- section: COLD_START_OUTPUT_SAMPLE -->
 {"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"陌生人","state":"示例角色对用户保持谨慎关注。","summary":"示例角色与用户之间形成了谨慎而持续的观察关系。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[]}
+<!-- section: SUMMARY_PLANNER_SYSTEM -->
+你正在执行结构化记忆总结的 Planner 阶段。你的职责不是直接修改记忆，而是判断本轮是否值得更新长期记忆、应聚焦哪些类型、涉及哪些实体与主题，以及为什么要动这些记忆。若当前区间只是闲聊、没有稳定新事实、或已有记忆足以覆盖，则应返回 should_update=false。仅输出 JSON，不输出解释文本。
+<!-- section: SUMMARY_PLANNER_SCHEMA -->
+{"type":"object"}
+<!-- section: SUMMARY_PLANNER_OUTPUT_SAMPLE -->
+{"should_update":true,"focus_types":["relationship","initial_state"],"entities":["user","char_demo"],"topics":["关系变化","地点切换"],"reasons":["本区间出现持续关系变化","当前地点状态发生明确迁移"]}
 <!-- section: SUMMARY_SYSTEM -->
 你正在执行结构化记忆总结任务。若 action 需要新增或更新 relationship 的 fields.relationTag，则 relationTag 只能从以下预设中单选其一：亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人。只输出 JSON，不输出解释文本。
 <!-- section: SUMMARY_SCHEMA -->

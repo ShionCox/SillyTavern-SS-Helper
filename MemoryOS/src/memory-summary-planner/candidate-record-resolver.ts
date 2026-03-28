@@ -9,7 +9,12 @@ export interface SummaryCandidateRecord {
     recordId: string;
     targetKind: string;
     schemaId: string;
+    title: string;
     summary: string;
+    entityKeys: string[];
+    status: 'active' | 'invalidated' | 'merged' | 'archived';
+    updatedAt: number;
+    sourceHint?: string;
 }
 
 /**
@@ -67,7 +72,12 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
             recordId: item.candidate.entryId,
             targetKind: item.candidate.schemaId,
             schemaId: item.candidate.schemaId,
+            title: normalizeText(item.candidate.title) || '未命名记忆',
             summary: candidateText || normalizeText(item.candidate.title),
+            entityKeys: buildEntityKeys(item),
+            status: resolveCandidateStatus(item.candidate),
+            updatedAt: Number(item.candidate.updatedAt ?? 0) || 0,
+            sourceHint: buildSourceHint(item.candidate),
         });
         consumedChars += nextCost;
     }
@@ -91,6 +101,57 @@ function mapToRetrievalCandidates(
     return entries.map((entry: MemoryEntry, index: number): RetrievalCandidate => ({
         ...buildSummaryRetrievalCandidate(entry, index, memoryPercentByEntryId),
     }));
+}
+
+/**
+ * 功能：构建候选记忆的实体键列表。
+ * @param item 检索结果项。
+ * @returns 实体键列表。
+ */
+function buildEntityKeys(item: RetrievalResultItem): string[] {
+    const candidate = item.candidate;
+    return Array.from(new Set([
+        ...(candidate.actorKeys ?? []),
+        ...(candidate.participantActorKeys ?? []),
+        ...(candidate.relationKeys ?? []),
+        ...(candidate.worldKeys ?? []),
+        String(candidate.locationKey ?? '').trim(),
+    ].filter(Boolean)));
+}
+
+/**
+ * 功能：根据条目 payload 解析候选状态。
+ * @param candidate 检索候选。
+ * @returns 生命周期状态。
+ */
+function resolveCandidateStatus(candidate: RetrievalCandidate): SummaryCandidateRecord['status'] {
+    const payload = toRecord((candidate as unknown as { detailPayload?: unknown }).detailPayload);
+    const lifecycle = toRecord(payload.lifecycle);
+    const normalized = normalizeText(lifecycle.status).toLowerCase();
+    if (normalized === 'invalidated') {
+        return 'invalidated';
+    }
+    if (normalized === 'merged') {
+        return 'merged';
+    }
+    if (normalized === 'archived') {
+        return 'archived';
+    }
+    return 'active';
+}
+
+/**
+ * 功能：构建候选记忆来源提示。
+ * @param candidate 检索候选。
+ * @returns 来源提示。
+ */
+function buildSourceHint(candidate: RetrievalCandidate): string | undefined {
+    const sourceSummaryIds = Array.isArray(candidate.sourceSummaryIds) ? candidate.sourceSummaryIds.filter(Boolean) : [];
+    if (sourceSummaryIds.length > 0) {
+        return `来自 ${sourceSummaryIds[0]}`;
+    }
+    const category = normalizeText(candidate.category);
+    return category || undefined;
 }
 
 /**

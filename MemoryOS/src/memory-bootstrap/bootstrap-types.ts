@@ -75,6 +75,29 @@ export interface ColdStartIdentity {
 }
 
 /**
+ * 功能：定义冷启动候选记忆类型。
+ */
+export type ColdStartMemoryType =
+    | 'character_profile'
+    | 'relationship'
+    | 'preference'
+    | 'world_rule'
+    | 'identity_constraint'
+    | 'persistent_goal'
+    | 'initial_state'
+    | 'location_fact'
+    | 'timeline_fact';
+
+/**
+ * 功能：定义冷启动来源引用。
+ */
+export interface ColdStartSourceRef {
+    sourceType: 'message' | 'character_card' | 'lorebook' | 'manual_input' | 'summary';
+    sourceId: string;
+    excerpt?: string;
+}
+
+/**
  * 功能：定义冷启动关系角色卡对象。
  */
 export interface ColdStartActorCard {
@@ -119,6 +142,25 @@ export interface ColdStartMemoryRecord {
     title: string;
     summary: string;
     importance?: number;
+}
+
+/**
+ * 功能：定义冷启动候选项。
+ */
+export interface ColdStartCandidate {
+    id: string;
+    type: ColdStartMemoryType;
+    entryType: string;
+    title: string;
+    summary: string;
+    entityKeys: string[];
+    confidence: number;
+    sourceRefs: ColdStartSourceRef[];
+    status: 'candidate';
+    reason: string;
+    detailPayload?: Record<string, unknown>;
+    tags?: string[];
+    actorBindings?: string[];
 }
 
 /**

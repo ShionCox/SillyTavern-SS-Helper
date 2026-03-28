@@ -2,11 +2,15 @@ import { createSdkPluginSettingsStore } from '../../../SDK/settings';
 
 export type MemoryOSSettings = {
     enabled: boolean;
+    coldStartEnabled: boolean;
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
     enableEmbedding: boolean;
+    summaryAutoTriggerEnabled: boolean;
     summaryIntervalFloors: number;
+    summaryMinMessages: number;
+    summaryRecentWindowSize: number;
     retrievalLogEnabled: boolean;
     retrievalLogLevel: 'info' | 'debug';
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
@@ -17,11 +21,15 @@ export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
 
 export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     enabled: true,
+    coldStartEnabled: true,
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
     enableEmbedding: false,
+    summaryAutoTriggerEnabled: true,
     summaryIntervalFloors: 1,
+    summaryMinMessages: 10,
+    summaryRecentWindowSize: 40,
     retrievalLogEnabled: true,
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
@@ -42,6 +50,14 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         1,
         Math.min(200, Math.trunc(Number(candidate.summaryIntervalFloors) || DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors)),
     );
+    const summaryMinMessages: number = Math.max(
+        2,
+        Math.min(100, Math.trunc(Number(candidate.summaryMinMessages) || DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages)),
+    );
+    const summaryRecentWindowSize: number = Math.max(
+        10,
+        Math.min(100, Math.trunc(Number(candidate.summaryRecentWindowSize) || DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize)),
+    );
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
     const retrievalRulePack = candidate.retrievalRulePack === 'native'
         || candidate.retrievalRulePack === 'perocore'
@@ -50,11 +66,15 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         : DEFAULT_MEMORY_OS_SETTINGS.retrievalRulePack;
     return {
         enabled: candidate.enabled !== false,
+        coldStartEnabled: candidate.coldStartEnabled !== false,
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
         enableEmbedding: candidate.enableEmbedding === true,
+        summaryAutoTriggerEnabled: candidate.summaryAutoTriggerEnabled !== false,
         summaryIntervalFloors,
+        summaryMinMessages,
+        summaryRecentWindowSize,
         retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
         retrievalLogLevel,
         retrievalRulePack,

@@ -539,6 +539,7 @@ export class UnifiedMemoryManager {
             dependencies: {
                 listEntries: async (): Promise<MemoryEntry[]> => this.listEntries(),
                 listRoleMemories: async (actorKey?: string): Promise<RoleEntryMemory[]> => this.listRoleMemories(actorKey),
+                listSummarySnapshots: async (limit?: number): Promise<SummarySnapshot[]> => this.listSummarySnapshots(limit),
                 getWorldProfileBinding: async (): Promise<WorldProfileBinding | null> => this.getWorldProfileBinding(),
                 appendMutationHistory: async (history): Promise<void> => this.appendMutationHistory(history),
                 getEntry: async (entryId: string): Promise<MemoryEntry | null> => this.getEntry(entryId),

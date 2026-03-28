@@ -4,6 +4,7 @@ import { detectSummarySignals } from './signal-detector';
 import { resolveCandidateTypes } from './candidate-type-resolver';
 import { resolveSummaryTypeSchemas, type SummaryTypeSchema } from './schema-resolver';
 import { resolveCandidateRecords, type SummaryCandidateRecord } from './candidate-record-resolver';
+import type { SummaryPlannerOutput } from '../memory-summary/mutation-types';
 
 /**
  * 功能：总结窗口信息。
@@ -26,6 +27,7 @@ export interface BuildSummaryContextInput {
     memoryPercentByEntryId?: Map<string, number>;
     worldProfileTexts: string[];
     worldProfileBinding?: WorldProfileBinding | null;
+    recentSummaries?: Array<{ title: string; content: string; updatedAt: number }>;
     enableEmbedding?: boolean;
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
@@ -46,6 +48,12 @@ export interface SummaryMutationContext {
         actors: string[];
         topics: string[];
     };
+    plannerHints: SummaryPlannerOutput;
+    recentSummaryDigest: Array<{
+        title: string;
+        content: string;
+        updatedAt: number;
+    }>;
     worldProfileBias: WorldProfileDetectionResult;
     typeSchemas: SummaryTypeSchema[];
     candidateRecords: SummaryCandidateRecord[];
@@ -106,6 +114,18 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
                 actors: signalResult.actors,
                 topics: signalResult.topics,
             },
+            plannerHints: {
+                should_update: candidateTypes.length > 0 || signalResult.topics.length > 0,
+                focus_types: candidateTypes,
+                entities: signalResult.actors,
+                topics: signalResult.topics,
+                reasons: buildPlannerHintReasons(candidateTypes, signalResult.topics),
+            },
+            recentSummaryDigest: (input.recentSummaries ?? []).slice(0, 4).map((item) => ({
+                title: String(item.title ?? '').trim(),
+                content: String(item.content ?? '').trim(),
+                updatedAt: Number(item.updatedAt ?? 0) || 0,
+            })),
             worldProfileBias: worldProfileDetection,
             typeSchemas,
             candidateRecords: candidateResolveResult.candidates,
@@ -122,6 +142,26 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
             worldProfile: resolvedWorldProfile.primary.worldProfileId,
         },
     };
+}
+
+/**
+ * 功能：构建 Planner 默认理由提示。
+ * @param candidateTypes 检测到的候选类型。
+ * @param topics 检测到的主题。
+ * @returns 理由列表。
+ */
+function buildPlannerHintReasons(candidateTypes: string[], topics: string[]): string[] {
+    const reasons: string[] = [];
+    if (candidateTypes.length > 0) {
+        reasons.push(`检测到可更新的记忆类型：${candidateTypes.join('、')}。`);
+    }
+    if (topics.length > 0) {
+        reasons.push(`当前区间主题集中在：${topics.join('、')}。`);
+    }
+    if (reasons.length <= 0) {
+        reasons.push('当前区间以低信息量交流为主，可能无需更新长期记忆。');
+    }
+    return reasons;
 }
 
 /**

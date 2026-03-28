@@ -19,6 +19,13 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
+                taskId: 'memory_summary_planner',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '增量总结规划并输出 planner decision',
+                backgroundEligible: false,
+            },
+            {
                 taskId: 'memory_summary_mutation',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],

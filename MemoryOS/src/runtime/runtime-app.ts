@@ -18,6 +18,7 @@ import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } f
 import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
+import { openMemoryBootstrapReviewDialog } from '../ui/memory-bootstrap-review-dialog';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -225,7 +226,7 @@ export class MemoryOS {
             return;
         }
         const settings = this.readSettings();
-        if (!settings.enabled) {
+        if (!settings.enabled || !settings.coldStartEnabled) {
             return;
         }
         if (this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
@@ -240,6 +241,7 @@ export class MemoryOS {
         this.coldStartPromptedChats.add(normalizedChatKey);
         const selection = await openMemoryBootstrapDialog();
         if (!selection.confirmed) {
+            await sdk.chatState.markColdStartDismissed();
             return;
         }
 
@@ -260,6 +262,19 @@ export class MemoryOS {
             if (!result.ok) {
                 this.coldStartPromptedChats.delete(normalizedChatKey);
                 toast.error(`冷启动执行失败：${result.reasonCode}`);
+                return;
+            }
+            const reviewResult = await openMemoryBootstrapReviewDialog(result.candidates ?? []);
+            if (!reviewResult.confirmed) {
+                await sdk.chatState.markColdStartDismissed();
+                this.coldStartPromptedChats.delete(normalizedChatKey);
+                toast.info('已取消冷启动候选写入。');
+                return;
+            }
+            const applyResult = await sdk.chatState.confirmColdStartCandidates(reviewResult.selectedCandidateIds);
+            if (!applyResult.ok) {
+                this.coldStartPromptedChats.delete(normalizedChatKey);
+                toast.error(`冷启动确认失败：${applyResult.reasonCode}`);
                 return;
             }
             toast.success('冷启动已完成，当前聊天已建立初始记忆。');
@@ -447,7 +462,7 @@ export class MemoryOS {
         });
         eventSource.on(types.GENERATION_ENDED || 'generation_ended', (): void => {
             const settings = this.readSettings();
-            if (!settings.enabled) {
+            if (!settings.enabled || !settings.summaryAutoTriggerEnabled) {
                 return;
             }
             const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;

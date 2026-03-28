@@ -38,7 +38,7 @@ export function validateSummaryMutationDocument(
     const schemaVersion = String(source.schemaVersion ?? '').trim();
     const window = normalizeWindow(source.window);
     const actionNormalizeResult = normalizeActions(source.actions, editableFieldMap);
-    const errors = [...actionNormalizeResult.errors];
+    const errors = [...actionNormalizeResult.errors, ...validateDocumentSafety(actionNormalizeResult.actions)];
     if (!schemaVersion) {
         errors.push('missing_schema_version');
     }
@@ -65,6 +65,47 @@ export function validateSummaryMutationDocument(
         },
         errors: [],
     };
+}
+
+/**
+ * 功能：执行文档级安全校验。
+ * @param actions 归一化后的动作列表。
+ * @returns 错误列表。
+ */
+function validateDocumentSafety(actions: SummaryMutationAction[]): string[] {
+    const errors: string[] = [];
+    const deleteActions = actions.filter((action: SummaryMutationAction): boolean => action.action === 'DELETE');
+    if (deleteActions.length >= 3) {
+        errors.push('too_many_delete_actions');
+    }
+    const targetActionMap = new Map<string, Set<string>>();
+    for (const action of actions) {
+        const targetKey = String(action.targetId ?? action.candidateId ?? '').trim();
+        if (!targetKey) {
+            continue;
+        }
+        const bucket = targetActionMap.get(targetKey) ?? new Set<string>();
+        bucket.add(action.action);
+        targetActionMap.set(targetKey, bucket);
+    }
+    for (const [targetKey, actionSet] of targetActionMap.entries()) {
+        if ((actionSet.has('DELETE') && actionSet.has('UPDATE')) || (actionSet.has('DELETE') && actionSet.has('INVALIDATE'))) {
+            errors.push(`conflicting_actions_on_target:${targetKey}`);
+        }
+    }
+    for (const action of actions) {
+        const confidence = Number(action.confidence ?? 1);
+        if (confidence >= 0.5) {
+            continue;
+        }
+        if (action.action !== 'UPDATE' && action.action !== 'DELETE' && action.action !== 'INVALIDATE') {
+            continue;
+        }
+        if (action.targetKind === 'world_core_setting' || action.targetKind === 'world_hard_rule' || action.targetKind === 'relationship') {
+            errors.push(`low_confidence_high_priority_mutation:${action.targetKind}`);
+        }
+    }
+    return dedupeStrings(errors);
 }
 
 /**
@@ -135,27 +176,90 @@ function normalizeAction(
     if (!ALLOWED_ACTIONS.has(action)) {
         return { action: null, error: 'invalid_action_name', errors: [] };
     }
-    const targetKind = String(row.targetKind ?? '').trim();
+    const targetKind = String(row.targetKind ?? row.type ?? '').trim();
     if (!targetKind) {
         return { action: null, error: 'missing_target_kind', errors: [] };
     }
     const allowedFields = editableFieldMap.get(targetKind) ?? new Set<string>();
-    const payloadResult = sanitizePayloadByAllowedFields(row.payload, allowedFields);
+    const rawPayload = resolveRawPayload(action, row);
+    const payloadResult = sanitizePayloadByAllowedFields(rawPayload, allowedFields);
     const enumErrors = validatePayloadEnums(targetKind, payloadResult.payload);
+    const semanticErrors = validateActionShape(action, row, payloadResult.payload);
     return {
         action: {
             action: action as SummaryMutationAction['action'],
             targetKind,
+            type: normalizeOptionalString(row.type),
+            title: normalizeOptionalString(row.title),
+            reason: normalizeOptionalString(row.reason),
+            confidence: normalizeOptionalNumber(row.confidence),
+            targetId: normalizeOptionalString(row.targetId),
+            sourceIds: dedupeStrings(Array.isArray(row.sourceIds) ? (row.sourceIds as string[]) : []),
             candidateId: normalizeOptionalString(row.candidateId),
             compareKey: normalizeOptionalString(row.compareKey),
+            patch: toPlainRecord(row.patch),
+            newRecord: toPlainRecord(row.newRecord),
             payload: payloadResult.payload,
             reasonCodes: dedupeStrings(Array.isArray(row.reasonCodes) ? (row.reasonCodes as string[]) : []),
         },
         errors: [
             ...payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
             ...enumErrors,
+            ...semanticErrors,
         ],
     };
+}
+
+/**
+ * 功能：解析 action 对应的原始 payload。
+ * @param action 动作名称。
+ * @param row 原始 action 记录。
+ * @returns 待校验的 payload。
+ */
+function resolveRawPayload(action: string, row: Record<string, unknown>): unknown {
+    if (row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)) {
+        return row.payload;
+    }
+    if (action === 'ADD') {
+        return row.newRecord;
+    }
+    if (action === 'UPDATE' || action === 'MERGE' || action === 'INVALIDATE') {
+        return row.patch;
+    }
+    return {};
+}
+
+/**
+ * 功能：校验动作与字段形态是否匹配。
+ * @param action 动作名称。
+ * @param row 原始 action。
+ * @param payload 已过滤 payload。
+ * @returns 错误列表。
+ */
+function validateActionShape(action: string, row: Record<string, unknown>, payload: Record<string, unknown>): string[] {
+    const errors: string[] = [];
+    if (action === 'ADD' && Object.keys(payload).length <= 0) {
+        errors.push('add_requires_new_record');
+    }
+    if (action === 'UPDATE' && !String(row.targetId ?? row.candidateId ?? '').trim()) {
+        errors.push('update_requires_target');
+    }
+    if (action === 'UPDATE' && Object.keys(payload).length <= 0) {
+        errors.push('update_requires_patch');
+    }
+    if (action === 'MERGE' && !Array.isArray(row.sourceIds)) {
+        errors.push('merge_requires_source_ids');
+    }
+    if (action === 'INVALIDATE' && !String(row.targetId ?? row.candidateId ?? '').trim()) {
+        errors.push('invalidate_requires_target');
+    }
+    if (action === 'DELETE' && !String(row.targetId ?? row.candidateId ?? '').trim()) {
+        errors.push('delete_requires_target');
+    }
+    if (action === 'NOOP' && Object.keys(payload).length > 0) {
+        errors.push('noop_payload_should_be_empty');
+    }
+    return errors;
 }
 
 /**
@@ -299,6 +403,31 @@ function clampNumber(value: number): number {
 function normalizeOptionalString(value: unknown): string | undefined {
     const normalized = String(value ?? '').trim();
     return normalized || undefined;
+}
+
+/**
+ * 功能：归一化可选数字。
+ * @param value 原始值。
+ * @returns 归一化结果。
+ */
+function normalizeOptionalNumber(value: unknown): number | undefined {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return undefined;
+    }
+    return clampNumber(numeric);
+}
+
+/**
+ * 功能：将未知值安全转为普通对象。
+ * @param value 原始值。
+ * @returns 普通对象。
+ */
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    return value as Record<string, unknown>;
 }
 
 /**

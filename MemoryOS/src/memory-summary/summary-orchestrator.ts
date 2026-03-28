@@ -8,7 +8,7 @@ import {
     type EditableFieldMap,
 } from './mutation-validator';
 import { buildSummaryWindow, type SummaryWindowMessage } from './summary-window';
-import type { SummaryMutationDocument } from './mutation-types';
+import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
 import type { MemoryLLMApi } from './llm-types';
 
 /**
@@ -17,6 +17,7 @@ import type { MemoryLLMApi } from './llm-types';
 export interface SummaryOrchestratorDependencies extends MutationApplyDependencies {
     listEntries(): Promise<MemoryEntry[]>;
     listRoleMemories(actorKey?: string): Promise<RoleEntryMemory[]>;
+    listSummarySnapshots(limit?: number): Promise<SummarySnapshot[]>;
     getWorldProfileBinding(): Promise<WorldProfileBinding | null>;
     appendMutationHistory(input: {
         action: string;
@@ -80,6 +81,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     }
     const entries = await input.dependencies.listEntries();
     const roleMemories = await input.dependencies.listRoleMemories();
+    const recentSummaries = await input.dependencies.listSummarySnapshots(4);
     const worldProfileBinding = await input.dependencies.getWorldProfileBinding();
     const memoryPercentByEntryId = buildEntryMemoryPercentMap(roleMemories);
     const worldProfileTexts = [
@@ -93,6 +95,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         actorHints: window.actorHints,
         entries,
         memoryPercentByEntryId,
+        recentSummaries: recentSummaries.map((summary: SummarySnapshot) => ({
+            title: summary.title,
+            content: summary.content,
+            updatedAt: summary.updatedAt,
+        })),
         worldProfileTexts,
         worldProfileBinding,
         enableEmbedding: input.enableEmbedding,
@@ -120,7 +127,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             candidateCount: plannerResult.context.candidateRecords.length,
         },
     });
-    const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];
     if (!input.llm) {
         await input.dependencies.appendMutationHistory({
             action: 'summary_failed',
@@ -140,14 +146,105 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             },
         };
     }
-    const promptPack = await loadPromptPackSections();
+    const plannerPromptPack = await loadPromptPackSections();
+    const plannerSchema = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_SCHEMA);
+    const plannerSample = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
+    const plannerSystemPrompt = `${plannerPromptPack.SUMMARY_PLANNER_SYSTEM}\n\n${summaryLanguageInstruction}`;
+    const plannerUserPayload = buildStructuredTaskUserPayload(
+        JSON.stringify(plannerResult.context, null, 2),
+        JSON.stringify(plannerSchema ?? {}, null, 2),
+        JSON.stringify(plannerSample ?? {}, null, 2),
+    );
+    const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
+        consumer: input.pluginId,
+        taskId: 'memory_summary_planner',
+        taskKind: 'generation',
+        input: {
+            messages: [
+                { role: 'system', content: plannerSystemPrompt },
+                { role: 'user', content: plannerUserPayload },
+            ],
+        },
+        schema: plannerSchema,
+        budget: { maxLatencyMs: 8_000 },
+        enqueue: { displayMode: 'compact' },
+    });
+    const plannerDecision = normalizePlannerOutput(plannerLLMResult.ok ? plannerLLMResult.data : plannerResult.context.plannerHints);
+    await input.dependencies.appendMutationHistory({
+        action: 'summary_planner_resolved',
+        payload: {
+            shouldUpdate: plannerDecision.should_update,
+            focusTypes: plannerDecision.focus_types,
+            entities: plannerDecision.entities,
+            topics: plannerDecision.topics,
+            reasons: plannerDecision.reasons,
+        },
+    });
+    const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];
+    if (!plannerDecision.should_update) {
+        const noopDocument: SummaryMutationDocument = {
+            schemaVersion: '1.0.0',
+            window: {
+                fromTurn: plannerResult.context.window.fromTurn,
+                toTurn: plannerResult.context.window.toTurn,
+            },
+            actions: [
+                {
+                    action: 'NOOP',
+                    targetKind: plannerDecision.focus_types[0] || 'other',
+                    reason: plannerDecision.reasons[0] || '当前区间没有稳定长期变更。',
+                    confidence: 0.9,
+                    reasonCodes: ['planner_noop'],
+                },
+            ],
+        };
+        await input.dependencies.appendMutationHistory({
+            action: 'mutation_validated',
+            payload: {
+                actionCount: 1,
+                plannerNoop: true,
+                worldProfile: plannerResult.diagnostics.worldProfile,
+            },
+        });
+        const snapshot = await applySummaryMutation({
+            dependencies: input.dependencies,
+            mutationDocument: noopDocument,
+            candidateRecords: plannerResult.context.candidateRecords,
+            actorKeys,
+            summaryTitle: '结构化回合总结',
+            summaryContent: plannerResult.context.window.summaryText,
+        });
+        await input.dependencies.appendMutationHistory({
+            action: 'mutation_applied',
+            payload: {
+                summaryId: snapshot.summaryId,
+                actionCount: 1,
+                plannerNoop: true,
+            },
+        });
+        return {
+            snapshot,
+            diagnostics: {
+                usedLLM: true,
+                retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
+                matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
+                worldProfile: plannerResult.diagnostics.worldProfile,
+                reasonCode: 'planner_noop',
+            },
+        };
+    }
+    const promptPack = plannerPromptPack;
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
     })}\n\n${summaryLanguageInstruction}`;
+    const mutationContext = {
+        ...plannerResult.context,
+        plannerDecision,
+    };
     const summaryUserPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(plannerResult.context, null, 2),
+        JSON.stringify(mutationContext, null, 2),
         JSON.stringify(summarySchema ?? {}, null, 2),
         JSON.stringify(summaryOutputSample ?? {}, null, 2),
     );
@@ -214,6 +311,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         action: 'mutation_validated',
         payload: {
             actionCount: validation.document.actions.length,
+            plannerDecision,
             worldProfile: plannerResult.diagnostics.worldProfile,
         },
     });
@@ -242,6 +340,43 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             reasonCode: 'ok',
         },
     };
+}
+
+/**
+ * 功能：归一化 Planner 输出。
+ * @param value 原始值。
+ * @returns 归一化结果。
+ */
+function normalizePlannerOutput(value: unknown): SummaryPlannerOutput {
+    const source = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    return {
+        should_update: source.should_update === true,
+        focus_types: normalizeStringArray(source.focus_types),
+        entities: normalizeStringArray(source.entities),
+        topics: normalizeStringArray(source.topics),
+        reasons: normalizeStringArray(source.reasons),
+    };
+}
+
+/**
+ * 功能：归一化字符串数组。
+ * @param value 原始值。
+ * @returns 字符串数组。
+ */
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const result: string[] = [];
+    for (const item of value) {
+        const normalized = String(item ?? '').trim();
+        if (normalized && !result.includes(normalized)) {
+            result.push(normalized);
+        }
+    }
+    return result;
 }
 
 /**

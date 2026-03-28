@@ -4,6 +4,9 @@ export type {
     ColdStartUserSource,
     ColdStartWorldbookEntrySource,
     ColdStartSourceBundle,
+    ColdStartMemoryType,
+    ColdStartSourceRef,
+    ColdStartCandidate,
     ColdStartDocument,
     ColdStartIdentity,
     ColdStartActorCard,
@@ -12,8 +15,10 @@ export type {
     ColdStartMemoryRecord,
 } from './bootstrap-types';
 export { parseColdStartDocument } from './bootstrap-parser';
+export { buildColdStartCandidates } from './bootstrap-candidates';
 export { resolveBootstrapWorldProfile } from './bootstrap-world-profile';
 export {
+    applyBootstrapCandidates,
     runBootstrapOrchestrator,
     type BootstrapOrchestratorDependencies,
     type RunBootstrapOrchestratorInput,
