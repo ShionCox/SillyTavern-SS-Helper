@@ -16,9 +16,16 @@ import { PluginRegistry } from '../registry/registry';
 import { logger, toast } from './runtime-services';
 import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } from './prompt-injection-pipeline';
 import manifestJson from '../../manifest.json';
-import { readMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
+import { readMemoryOSSettings, subscribeMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
 import { openMemoryBootstrapReviewDialog } from '../ui/memory-bootstrap-review-dialog';
+import { openUnifiedMemoryWorkbench } from '../ui/unifiedMemoryWorkbench';
+import {
+    setMemorySummaryProgressFloatEnabled,
+    toggleMemorySummaryProgressFloatVisible,
+    updateMemorySummaryProgressFloat,
+} from '../ui/summary-progress-float';
+import { ensureSdkFloatingToolbar, removeSdkFloatingToolbarGroup, SDK_FLOATING_TOOLBAR_ID } from '../../../SDK/toolbar';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -153,12 +160,20 @@ export class MemoryOS {
         this.registry = new PluginRegistry();
         this.coldStartPromptedChats = new Set<string>();
         this.coldStartRunningChats = new Set<string>();
+        window.setInterval((): void => {
+            void this.refreshSummaryProgressUi();
+        }, 2500);
         this.refreshChatBindingHandler = null;
         this.initGlobalSTX();
         this.bindRegistryEvents();
         this.registerSelfManifest();
         this.setupPluginBusEndpoints();
         this.bindHostEvents();
+        this.bindToolbarActions();
+        subscribeMemoryOSSettings((): void => {
+            this.syncAuxiliaryUi();
+        });
+        this.syncAuxiliaryUi();
     }
 
     /**
@@ -190,6 +205,118 @@ export class MemoryOS {
 
     private readSettings(): MemoryOSSettings {
         return readMemoryOSSettings();
+    }
+
+    /**
+     * 功能：统一刷新工具栏和总结进度悬浮框。
+     */
+    private syncAuxiliaryUi(): void {
+        this.refreshToolbarShortcuts();
+        void this.refreshSummaryProgressUi();
+    }
+
+    /**
+     * 功能：刷新 MemoryOS 工具栏快捷按钮。
+     */
+    private refreshToolbarShortcuts(): void {
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.toolbarQuickActionsEnabled) {
+            removeSdkFloatingToolbarGroup({
+                toolbarId: SDK_FLOATING_TOOLBAR_ID,
+                groupId: 'memoryos',
+            });
+            return;
+        }
+        ensureSdkFloatingToolbar({
+            toolbarId: SDK_FLOATING_TOOLBAR_ID,
+            groupId: 'memoryos',
+            groupClassName: 'stx-sdk-toolbar-group-memoryos',
+            actions: [
+                {
+                    key: 'summary-progress',
+                    iconClassName: 'fa-solid fa-bars-progress',
+                    tooltip: '切换 AI 总结进度悬浮框',
+                    ariaLabel: '切换 AI 总结进度悬浮框',
+                    buttonClassName: 'stx-sdk-toolbar-action-memoryos-summary-progress',
+                    attributes: {
+                        'data-memoryos-toolbar-action': 'summary-progress',
+                    },
+                    order: 10,
+                },
+                {
+                    key: 'workbench',
+                    iconClassName: 'fa-solid fa-table-cells-large',
+                    tooltip: '打开记忆工作台',
+                    ariaLabel: '打开记忆工作台',
+                    buttonClassName: 'stx-sdk-toolbar-action-memoryos-workbench',
+                    attributes: {
+                        'data-memoryos-toolbar-action': 'workbench',
+                    },
+                    order: 20,
+                },
+            ],
+        });
+    }
+
+    /**
+     * 功能：绑定 MemoryOS 工具栏按钮点击事件。
+     */
+    private bindToolbarActions(): void {
+        document.addEventListener('click', (event: Event): void => {
+            const target = event.target as HTMLElement | null;
+            const button = target?.closest<HTMLButtonElement>('button[data-memoryos-toolbar-action]');
+            if (!button) {
+                return;
+            }
+            const action = String(button.dataset.memoryosToolbarAction ?? '').trim();
+            if (!action) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (action === 'workbench') {
+                openUnifiedMemoryWorkbench();
+                return;
+            }
+            if (action === 'summary-progress') {
+                const settings = this.readSettings();
+                if (!settings.summaryProgressOverlayEnabled) {
+                    toast.info('请先在 MemoryOS 设置中启用总结进度悬浮框。');
+                    return;
+                }
+                const visible = toggleMemorySummaryProgressFloatVisible();
+                if (visible) {
+                    void this.refreshSummaryProgressUi();
+                }
+            }
+        });
+    }
+
+    /**
+     * 功能：刷新 AI 总结进度悬浮框。
+     */
+    private async refreshSummaryProgressUi(): Promise<void> {
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.summaryProgressOverlayEnabled) {
+            setMemorySummaryProgressFloatEnabled(false);
+            updateMemorySummaryProgressFloat(null);
+            return;
+        }
+        const currentChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
+        const hasActiveChat = currentChatKey
+            && !isFallbackTavernChatEvent(parseTavernChatScopedKeyEvent(currentChatKey).chatId);
+        const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+        if (!memory) {
+            setMemorySummaryProgressFloatEnabled(true);
+            updateMemorySummaryProgressFloat(
+                null,
+                hasActiveChat ? '正在读取当前聊天的 AI 总结进度。' : '当前未开始聊天，进入任意聊天后这里会显示 AI 总结触发进度。',
+            );
+            return;
+        }
+        const status = await memory.chatState.getSummaryTriggerStatus();
+        setMemorySummaryProgressFloatEnabled(true);
+        updateMemorySummaryProgressFloat(status);
     }
 
     /**
@@ -417,6 +544,7 @@ export class MemoryOS {
             };
             currentChatKey = chatKey;
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);
+            void this.refreshSummaryProgressUi();
             void this.maybePromptColdStart(chatKey, sdk).catch((error: unknown): void => {
                 logger.warn('冷启动确认流程失败', error);
             });
@@ -443,6 +571,7 @@ export class MemoryOS {
             }).catch((error: unknown): void => {
                 logger.warn('事件写入失败', error);
             });
+            void this.refreshSummaryProgressUi();
         };
 
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', (): void => {
@@ -472,6 +601,7 @@ export class MemoryOS {
             void memory.postGeneration.scheduleRoundProcessing('generation_ended').catch((error: unknown): void => {
                 logger.warn('轮次总结失败', error);
             });
+            void this.refreshSummaryProgressUi();
         });
 
         let lastPromptReadyTs = 0;

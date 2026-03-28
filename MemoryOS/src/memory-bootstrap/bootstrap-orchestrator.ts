@@ -95,6 +95,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     const result = await input.llm.runTask<ColdStartDocument>({
         consumer: input.pluginId,
         taskId: 'memory_cold_start',
+        taskDescription: '冷启动处理',
         taskKind: 'generation',
         input: {
             messages: [

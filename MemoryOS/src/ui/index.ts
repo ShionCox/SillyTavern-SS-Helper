@@ -27,12 +27,14 @@ const INJECTION_PREVIEW_ID: string = 'stx-memoryos-injection-preview-enabled';
 const EMBEDDING_ENABLED_ID: string = 'stx-memoryos-embedding-enabled';
 const CONTEXT_TOKENS_ID: string = 'stx-memoryos-context-max-tokens';
 const SUMMARY_INTERVAL_ID: string = 'stx-memoryos-summary-interval-floors';
+const TOOLBAR_QUICK_ACTIONS_ID: string = 'stx-memoryos-toolbar-quick-actions-enabled';
 const RETRIEVAL_LOG_ENABLED_ID: string = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID: string = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID: string = 'stx-memoryos-retrieval-log-level';
 const RETRIEVAL_RULE_PACK_ID: string = 'stx-memoryos-retrieval-rule-pack';
 const COLD_START_ENABLED_ID: string = 'stx-memoryos-cold-start-enabled';
 const SUMMARY_AUTO_TRIGGER_ID: string = 'stx-memoryos-summary-auto-trigger';
+const SUMMARY_PROGRESS_OVERLAY_ID: string = 'stx-memoryos-summary-progress-overlay-enabled';
 const SUMMARY_MIN_MESSAGES_ID: string = 'stx-memoryos-summary-min-messages';
 const SUMMARY_RECENT_WINDOW_ID: string = 'stx-memoryos-summary-recent-window';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
@@ -247,6 +249,12 @@ function buildSettingsContentHtml(): string {
         containerClassName: 'stx-ui-inline-checkbox is-control-only',
         inputAttributes: { 'aria-label': '启用 Embedding 检索' },
     });
+    const toolbarQuickActionsCheckbox: string = buildSharedCheckboxCard({
+        id: TOOLBAR_QUICK_ACTIONS_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用工具栏快捷按钮' },
+    });
     const retrievalLogCheckbox: string = buildSharedCheckboxCard({
         id: RETRIEVAL_LOG_ENABLED_ID,
         title: '',
@@ -295,6 +303,12 @@ function buildSettingsContentHtml(): string {
         title: '',
         containerClassName: 'stx-ui-inline-checkbox is-control-only',
         inputAttributes: { 'aria-label': '启用自动总结触发' },
+    });
+    const summaryProgressOverlayCheckbox: string = buildSharedCheckboxCard({
+        id: SUMMARY_PROGRESS_OVERLAY_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用总结进度悬浮框' },
     });
     const retrievalLogLevelSelect: string = `
         <select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input">
@@ -361,6 +375,14 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-inline">${coldStartEnabledCheckbox}</div>
             </div>
 
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用工具栏快捷按钮</div>
+                    <div class="stx-ui-item-desc">在发送区上方显示 MemoryOS 快捷按钮，可直接打开总结进度悬浮框和记忆工作台。</div>
+                </div>
+                <div class="stx-ui-inline">${toolbarQuickActionsCheckbox}</div>
+            </div>
+
             <div class="stx-ui-section-label">AI 总结</div>
             <div class="stx-ui-item">
                 <div class="stx-ui-item-main">
@@ -368,6 +390,13 @@ function buildSettingsContentHtml(): string {
                     <div class="stx-ui-item-desc">开启后对话楼层达到阈值时自动运行总结。关闭后仅支持手动调用。</div>
                 </div>
                 <div class="stx-ui-inline">${summaryAutoTriggerCheckbox}</div>
+            </div>
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用总结进度悬浮框</div>
+                    <div class="stx-ui-item-desc">显示当前离下次 AI 总结还差多少楼层，并在达到阈值时提示即将触发。</div>
+                </div>
+                <div class="stx-ui-inline">${summaryProgressOverlayCheckbox}</div>
             </div>
             <div class="stx-ui-item stx-ui-item-stack">
                 <div class="stx-ui-item-main">
@@ -521,11 +550,13 @@ function bindTabEvents(): void {
 function syncSettingsToForm(settings: MemoryOSSettings): void {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
+    const toolbarQuickActionsInput: HTMLInputElement | null = document.getElementById(TOOLBAR_QUICK_ACTIONS_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     const summaryAutoTriggerInput: HTMLInputElement | null = document.getElementById(SUMMARY_AUTO_TRIGGER_ID) as HTMLInputElement | null;
+    const summaryProgressOverlayInput: HTMLInputElement | null = document.getElementById(SUMMARY_PROGRESS_OVERLAY_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
@@ -535,11 +566,13 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
     if (coldStartEnabledInput) coldStartEnabledInput.checked = settings.coldStartEnabled;
+    if (toolbarQuickActionsInput) toolbarQuickActionsInput.checked = settings.toolbarQuickActionsEnabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
     if (embeddingInput) embeddingInput.checked = settings.enableEmbedding;
     if (contextTokensInput) contextTokensInput.value = String(settings.contextMaxTokens);
     if (summaryAutoTriggerInput) summaryAutoTriggerInput.checked = settings.summaryAutoTriggerEnabled;
+    if (summaryProgressOverlayInput) summaryProgressOverlayInput.checked = settings.summaryProgressOverlayEnabled;
     if (summaryIntervalInput) summaryIntervalInput.value = String(settings.summaryIntervalFloors);
     if (summaryMinMessagesInput) summaryMinMessagesInput.value = String(settings.summaryMinMessages);
     if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
@@ -557,11 +590,13 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
 function readSettingsFromForm(): MemoryOSSettings {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
+    const toolbarQuickActionsInput: HTMLInputElement | null = document.getElementById(TOOLBAR_QUICK_ACTIONS_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
     const summaryAutoTriggerInput: HTMLInputElement | null = document.getElementById(SUMMARY_AUTO_TRIGGER_ID) as HTMLInputElement | null;
+    const summaryProgressOverlayInput: HTMLInputElement | null = document.getElementById(SUMMARY_PROGRESS_OVERLAY_ID) as HTMLInputElement | null;
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
@@ -572,11 +607,13 @@ function readSettingsFromForm(): MemoryOSSettings {
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
         coldStartEnabled: coldStartEnabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.coldStartEnabled,
+        toolbarQuickActionsEnabled: toolbarQuickActionsInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
         injectionPreviewEnabled: injectionPreviewInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled,
         enableEmbedding: embeddingInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding,
         contextMaxTokens: Number(contextTokensInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
         summaryAutoTriggerEnabled: summaryAutoTriggerInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.summaryAutoTriggerEnabled,
+        summaryProgressOverlayEnabled: summaryProgressOverlayInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.summaryProgressOverlayEnabled,
         summaryIntervalFloors: Number(summaryIntervalInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors),
         summaryMinMessages: Number(summaryMinMessagesInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages),
         summaryRecentWindowSize: Number(summaryRecentWindowInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize),

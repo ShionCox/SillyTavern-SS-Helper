@@ -334,7 +334,7 @@ class LLMHub {
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact {
                     right: 20px;
                     bottom: 20px;
-                    width: min(420px, calc(100vw - 24px));
+                    width: min(360px, calc(100vw - 24px));
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-card {
@@ -351,8 +351,33 @@ class LLMHub {
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-card {
                     width: 100%;
-                    max-height: 50vh;
+                    max-height: 220px;
                     border-radius: 14px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-head {
+                    padding: 14px 16px 12px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-title {
+                    font-size: 15px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-body {
+                    padding: 0 16px 16px;
+                    overflow: hidden;
+                    gap: 10px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-note {
+                    margin: 0;
+                    padding: 10px 12px;
+                    border-radius: 12px;
+                    background: rgba(255, 255, 255, 0.05);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    font-size: 12px;
+                    line-height: 1.6;
+                    opacity: 0.88;
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-head {
@@ -499,6 +524,15 @@ class LLMHub {
             done: '已完成',
             error: '出错了',
         };
+        const buildCompactNote = (status: string): string => {
+            if (status === 'loading' || status === 'streaming') {
+                return '任务正在执行，请稍候。';
+            }
+            if (status === 'error') {
+                return '任务执行失败，提示将在 3 秒后自动关闭。';
+            }
+            return '任务已完成，提示将在 3 秒后自动关闭。';
+        };
 
         const renderAll = (): void => {
             ensureStyle();
@@ -512,6 +546,7 @@ class LLMHub {
             root.innerHTML = overlays.map((spec) => {
                 const modeClass = spec.displayMode === 'compact' ? 'stx-llmhub-overlay--compact' : 'stx-llmhub-overlay--fullscreen';
                 const status = spec.status || 'done';
+                const compactBody = `<p class="stx-llmhub-overlay-compact-note">${escapeHtml(buildCompactNote(status))}</p>`;
                 return `
                     <section class="stx-llmhub-overlay ${modeClass}" data-llmhub-overlay-id="${escapeHtml(spec.requestId)}">
                         <div class="stx-llmhub-overlay-card">
@@ -525,7 +560,7 @@ class LLMHub {
                             </header>
                             <div class="stx-llmhub-overlay-body">
                                 ${status === 'loading' || status === 'streaming' ? '<div class="stx-llmhub-overlay-loading-bar"></div>' : ''}
-                                ${renderContent(spec.content)}
+                                ${spec.displayMode === 'compact' ? compactBody : renderContent(spec.content)}
                             </div>
                         </div>
                     </section>

@@ -1,5 +1,8 @@
 import {
+    buildSdkChatKeyEvent,
     getCurrentTavernCharacterEvent,
+    getTavernMessageTextEvent,
+    getTavernRuntimeContextEvent,
     getCurrentTavernUserSnapshotEvent,
     getTavernSemanticSnapshotEvent,
     loadTavernWorldbookEntriesEvent,
@@ -101,6 +104,28 @@ export interface MemorySummaryProgress {
 }
 
 /**
+ * 功能：定义自动总结触发状态快照。
+ */
+export interface MemorySummaryTriggerStatus {
+    enabled: boolean;
+    currentFloorCount: number;
+    summaryIntervalFloors: number;
+    summaryMinMessages: number;
+    summaryRecentWindowSize: number;
+    lastSummarizedIndex: number;
+    lastSummarizedMessageId?: string;
+    pendingStartIndex: number;
+    pendingEndIndex: number;
+    nextTriggerFloor: number;
+    remainingFloors: number;
+    progressCurrent: number;
+    progressTarget: number;
+    progressRatio: number;
+    readyToSummarize: boolean;
+    lastSummarizedAt?: number;
+}
+
+/**
  * 功能：定义冷启动执行结果。
  */
 export interface MemoryColdStartExecutionResult {
@@ -161,6 +186,7 @@ export class MemorySDKImpl {
         getLatestRecallExplanation: () => Promise<Record<string, unknown> | null>;
         getColdStartStatus: () => Promise<MemoryColdStartStatus>;
         getSummaryProgress: () => Promise<MemorySummaryProgress>;
+        getSummaryTriggerStatus: () => Promise<MemorySummaryTriggerStatus>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -282,7 +308,10 @@ export class MemorySDKImpl {
                     AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
                     Math.min(AUTO_SUMMARY_MAX_MESSAGE_WINDOW, Math.trunc(Number(settings.summaryRecentWindowSize) || AUTO_SUMMARY_MAX_MESSAGE_WINDOW)),
                 );
-                const messageFloorCount: number = await this.eventsManager.countByTypes(AUTO_SUMMARY_MESSAGE_EVENT_TYPES);
+                const hostMessages = this.readActiveHostChatMessages();
+                const messageFloorCount: number = hostMessages.length > 0
+                    ? hostMessages.length
+                    : await this.eventsManager.countByTypes(AUTO_SUMMARY_MESSAGE_EVENT_TYPES);
                 if (messageFloorCount <= 0) {
                     return;
                 }
@@ -306,13 +335,6 @@ export class MemorySDKImpl {
                     summaryMinMessages,
                     Math.min(summaryRecentWindowSize, summaryIntervalFloors),
                 );
-                const [sentRows, receivedRows] = await Promise.all([
-                    this.eventsManager.query({ type: 'chat.message.sent', limit: messageWindowLimit }),
-                    this.eventsManager.query({ type: 'chat.message.received', limit: messageWindowLimit }),
-                ]);
-                const rows = [...sentRows, ...receivedRows]
-                    .sort((a: EventEnvelope<unknown>, b: EventEnvelope<unknown>): number => Number(a.ts ?? 0) - Number(b.ts ?? 0))
-                    .slice(-messageWindowLimit);
                 const stateRow = await readMemoryOSChatState(this.chatKey_);
                 const state = this.toRecord(stateRow?.state);
                 const lastSummarizedIndex = Math.max(
@@ -321,19 +343,9 @@ export class MemorySDKImpl {
                 );
                 const pendingStartIndex = lastSummarizedIndex + 1;
                 const pendingEndIndex = messageFloorCount;
-                const messages = rows
-                    .map((row: EventEnvelope<unknown>, index: number): { role?: string; content?: string; name?: string; turnIndex?: number } => {
-                        const type = String(row.type ?? '').trim();
-                        const payload = (row.payload ?? {}) as Record<string, unknown>;
-                        const role = type === 'chat.message.sent' ? 'user' : 'assistant';
-                        return {
-                            role,
-                            content: String(payload.text ?? '').trim(),
-                            name: undefined,
-                            turnIndex: Math.max(1, pendingEndIndex - rows.length + index + 1),
-                        };
-                    })
-                    .filter((item: { content?: string }): boolean => Boolean(String(item.content ?? '').trim()));
+                const messages = hostMessages.length > 0
+                    ? hostMessages.slice(-messageWindowLimit)
+                    : await this.readSummaryMessagesFromEvents(pendingEndIndex, messageWindowLimit);
                 if (messages.length <= 0) {
                     return;
                 }
@@ -341,10 +353,9 @@ export class MemorySDKImpl {
                 if (!snapshot) {
                     return;
                 }
-                const lastMessageRow = rows.length > 0 ? rows[rows.length - 1] : null;
-                const lastSummarizedMessageId = lastMessageRow
-                    ? String((lastMessageRow as Record<string, unknown>).eventId ?? '').trim() || undefined
-                    : undefined;
+                const lastSummarizedMessageId = hostMessages.length > 0
+                    ? undefined
+                    : await this.readLastSummarizedMessageIdFromEvents(messageWindowLimit);
                 await this.writeColdStartState({
                     autoSummaryLastFloorCount: messageFloorCount,
                     autoSummaryLastTriggeredAt: Date.now(),
@@ -366,6 +377,9 @@ export class MemorySDKImpl {
             },
             getSummaryProgress: async (): Promise<MemorySummaryProgress> => {
                 return this.readSummaryProgress();
+            },
+            getSummaryTriggerStatus: async (): Promise<MemorySummaryTriggerStatus> => {
+                return this.readSummaryTriggerStatus();
             },
             setPromptReadyCaptureSnapshotForTest: async (snapshot: PromptReadyCaptureSnapshot): Promise<void> => {
                 this.promptReadyCaptureSnapshot = {
@@ -857,6 +871,168 @@ export class MemorySDKImpl {
             pendingEndIndex,
             lastSummarizedAt: this.toOptionalTimestamp(state.summaryLastSummarizedAt),
         };
+    }
+
+    /**
+     * 功能：读取当前聊天的自动总结触发状态。
+     * @returns 触发状态快照。
+     */
+    private async readSummaryTriggerStatus(): Promise<MemorySummaryTriggerStatus> {
+        const settings = readMemoryOSSettings();
+        const summaryProgress = await this.readSummaryProgress();
+        const currentFloorCount = await this.readCurrentSummaryFloorCount();
+        const summaryIntervalFloors = Math.max(
+            1,
+            Math.trunc(Number(settings.summaryIntervalFloors) || 1),
+        );
+        const summaryMinMessages = Math.max(
+            2,
+            Math.trunc(Number(settings.summaryMinMessages) || AUTO_SUMMARY_MIN_MESSAGE_WINDOW),
+        );
+        const summaryRecentWindowSize = Math.max(
+            AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
+            Math.min(
+                AUTO_SUMMARY_MAX_MESSAGE_WINDOW,
+                Math.trunc(Number(settings.summaryRecentWindowSize) || AUTO_SUMMARY_MAX_MESSAGE_WINDOW),
+            ),
+        );
+        const nextTriggerFloor = Math.max(
+            summaryMinMessages,
+            summaryProgress.lastSummarizedIndex + summaryIntervalFloors,
+        );
+        const remainingFloors = Math.max(0, nextTriggerFloor - currentFloorCount);
+        const useMinMessageProgress = currentFloorCount < summaryMinMessages;
+        const progressCurrent = useMinMessageProgress
+            ? currentFloorCount
+            : Math.max(0, currentFloorCount - summaryProgress.lastSummarizedIndex);
+        const progressTarget = useMinMessageProgress ? summaryMinMessages : summaryIntervalFloors;
+        const progressRatio = progressTarget > 0
+            ? Math.max(0, Math.min(1, Number((progressCurrent / progressTarget).toFixed(4))))
+            : 0;
+        const readyToSummarize = settings.summaryAutoTriggerEnabled
+            && currentFloorCount >= summaryMinMessages
+            && currentFloorCount - summaryProgress.lastSummarizedIndex >= summaryIntervalFloors;
+        return {
+            enabled: settings.summaryAutoTriggerEnabled,
+            currentFloorCount,
+            summaryIntervalFloors,
+            summaryMinMessages,
+            summaryRecentWindowSize,
+            lastSummarizedIndex: summaryProgress.lastSummarizedIndex,
+            lastSummarizedMessageId: summaryProgress.lastSummarizedMessageId,
+            pendingStartIndex: summaryProgress.pendingStartIndex,
+            pendingEndIndex: summaryProgress.pendingEndIndex,
+            nextTriggerFloor,
+            remainingFloors,
+            progressCurrent,
+            progressTarget,
+            progressRatio,
+            readyToSummarize,
+            lastSummarizedAt: summaryProgress.lastSummarizedAt,
+        };
+    }
+
+    /**
+     * 功能：读取当前聊天实际可用于总结的楼层数，优先采用宿主当前聊天快照。
+     * @returns 当前楼层数
+     */
+    private async readCurrentSummaryFloorCount(): Promise<number> {
+        const hostMessages = this.readActiveHostChatMessages();
+        if (hostMessages.length > 0) {
+            return hostMessages.length;
+        }
+        return this.eventsManager.countByTypes(AUTO_SUMMARY_MESSAGE_EVENT_TYPES);
+    }
+
+    /**
+     * 功能：从事件流中读取用于总结的最近消息窗口。
+     * @param pendingEndIndex 当前待总结结束楼层
+     * @param messageWindowLimit 需要的窗口大小
+     * @returns 归一化后的消息列表
+     */
+    private async readSummaryMessagesFromEvents(
+        pendingEndIndex: number,
+        messageWindowLimit: number,
+    ): Promise<Array<{ role?: string; content?: string; name?: string; turnIndex?: number }>> {
+        const [sentRows, receivedRows] = await Promise.all([
+            this.eventsManager.query({ type: 'chat.message.sent', limit: messageWindowLimit }),
+            this.eventsManager.query({ type: 'chat.message.received', limit: messageWindowLimit }),
+        ]);
+        const rows = [...sentRows, ...receivedRows]
+            .sort((a: EventEnvelope<unknown>, b: EventEnvelope<unknown>): number => Number(a.ts ?? 0) - Number(b.ts ?? 0))
+            .slice(-messageWindowLimit);
+        return rows
+            .map((row: EventEnvelope<unknown>, index: number): { role?: string; content?: string; name?: string; turnIndex?: number } => {
+                const type = String(row.type ?? '').trim();
+                const payload = (row.payload ?? {}) as Record<string, unknown>;
+                const role = type === 'chat.message.sent' ? 'user' : 'assistant';
+                return {
+                    role,
+                    content: String(payload.text ?? '').trim(),
+                    name: undefined,
+                    turnIndex: Math.max(1, pendingEndIndex - rows.length + index + 1),
+                };
+            })
+            .filter((item: { content?: string }): boolean => Boolean(String(item.content ?? '').trim()));
+    }
+
+    /**
+     * 功能：从事件流中读取最近一条可作为总结进度锚点的消息 ID。
+     * @param messageWindowLimit 查询窗口大小
+     * @returns 最近消息 ID
+     */
+    private async readLastSummarizedMessageIdFromEvents(messageWindowLimit: number): Promise<string | undefined> {
+        const [sentRows, receivedRows] = await Promise.all([
+            this.eventsManager.query({ type: 'chat.message.sent', limit: messageWindowLimit }),
+            this.eventsManager.query({ type: 'chat.message.received', limit: messageWindowLimit }),
+        ]);
+        const rows = [...sentRows, ...receivedRows]
+            .sort((a: EventEnvelope<unknown>, b: EventEnvelope<unknown>): number => Number(a.ts ?? 0) - Number(b.ts ?? 0));
+        const lastMessageRow = rows.length > 0 ? rows[rows.length - 1] : null;
+        return lastMessageRow
+            ? String((lastMessageRow as unknown as Record<string, unknown>).eventId ?? lastMessageRow.id ?? '').trim() || undefined
+            : undefined;
+    }
+
+    /**
+     * 功能：读取当前激活聊天的宿主消息快照，并归一化为总结输入。
+     * @returns 当前聊天消息列表；当前 SDK 不是激活聊天时返回空数组
+     */
+    private readActiveHostChatMessages(): Array<{ role?: string; content?: string; name?: string; turnIndex?: number }> {
+        const currentChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
+        if (!currentChatKey || currentChatKey !== this.chatKey_) {
+            return [];
+        }
+        const runtimeContext = getTavernRuntimeContextEvent();
+        const hostMessages = Array.isArray(runtimeContext?.chat) ? runtimeContext.chat : [];
+        if (hostMessages.length <= 0) {
+            return [];
+        }
+        return hostMessages
+            .map((row: unknown, index: number): { role?: string; content?: string; name?: string; turnIndex?: number } | null => {
+                if (!row || typeof row !== 'object') {
+                    return null;
+                }
+                const record = row as Record<string, unknown>;
+                const content = String(getTavernMessageTextEvent(record) ?? '').trim();
+                if (!content) {
+                    return null;
+                }
+                const explicitRole = String(record.role ?? '').trim().toLowerCase();
+                const role = explicitRole === 'user' || explicitRole === 'assistant' || explicitRole === 'system'
+                    ? explicitRole
+                    : (record.is_user === true ? 'user' : (record.is_system === true ? 'system' : 'assistant'));
+                if (role === 'system') {
+                    return null;
+                }
+                return {
+                    role,
+                    content,
+                    name: String(record.name ?? record.display_name ?? '').trim() || undefined,
+                    turnIndex: index + 1,
+                };
+            })
+            .filter((item): item is { role?: string; content?: string; name?: string; turnIndex?: number } => item !== null);
     }
 
     /**

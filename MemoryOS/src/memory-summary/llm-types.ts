@@ -34,6 +34,7 @@ export interface MemoryLLMApi {
     runTask: <T>(args: {
         consumer: string;
         taskId: string;
+        taskDescription?: string;
         taskKind: 'generation';
         input: {
             messages: Array<{ role: 'system' | 'user'; content: string }>;

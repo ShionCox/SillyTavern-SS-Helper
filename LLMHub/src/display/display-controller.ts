@@ -32,6 +32,7 @@ const ALLOWED_TAGS = new Set([
 /** 平台内部插件 ID（默认具备 silent 权限） */
 const PLATFORM_INTERNAL_PLUGINS = new Set(['stx_llmhub', 'stx_memory_os']);
 const MEMORY_OS_AUTO_CLOSE_TASKS = new Set(['memory_cold_start']);
+const COMPACT_AUTO_CLOSE_MS: number = 3000;
 
 function formatTaskTitle(record: RequestRecord): string {
     const taskLabel = String(record.taskDescription || record.taskId || '').trim() || record.taskId;
@@ -145,7 +146,7 @@ export class DisplayController {
      */
     openPendingOverlay(record: RequestRecord): void {
         const displayMode = record.enqueueOptions.displayMode || 'fullscreen';
-        if (displayMode !== 'fullscreen') {
+        if (displayMode === 'silent') {
             return;
         }
 
@@ -163,13 +164,13 @@ export class DisplayController {
                     `请求：${record.requestId}`,
                 ].join('\n'),
             },
-            displayMode: 'fullscreen',
+            displayMode,
             autoClose: false,
         };
 
         spec.title = formatTaskTitle(record);
         spec.status = 'loading';
-        spec.displayMode = 'fullscreen';
+        spec.displayMode = displayMode;
         spec.autoClose = false;
         spec.autoCloseMs = undefined;
         spec.content = {
@@ -192,8 +193,8 @@ export class DisplayController {
     createOverlay(record: RequestRecord, result: LLMRunResult<any>): void {
         const displayMode = record.enqueueOptions.displayMode || 'fullscreen';
 
-        if (displayMode === 'silent' || displayMode === 'compact') {
-            // silent / compact 都不创建覆层，直接通知关闭
+        if (displayMode === 'silent') {
+            // silent 不创建覆层，直接通知关闭
             this.notifyOrchestratorClosed?.(record.requestId);
             return;
         }
@@ -212,8 +213,12 @@ export class DisplayController {
         spec.status = result.ok ? 'done' : 'error';
         spec.content = this.buildSafeContent(result);
         spec.displayMode = displayMode;
-        spec.autoClose = Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskId));
-        spec.autoCloseMs = spec.autoClose ? 300 : undefined;
+        spec.autoClose = displayMode === 'compact'
+            ? true
+            : Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskId));
+        spec.autoCloseMs = displayMode === 'compact'
+            ? COMPACT_AUTO_CLOSE_MS
+            : (spec.autoClose ? 300 : undefined);
 
         this.activeOverlays.set(record.requestId, spec);
 

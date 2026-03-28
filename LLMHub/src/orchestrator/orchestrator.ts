@@ -319,7 +319,7 @@ export class RequestOrchestrator {
             chatKey: record.chatKey,
         });
 
-        if ((record.enqueueOptions.displayMode || 'fullscreen') === 'fullscreen' && this.pendingDisplayCallback) {
+        if ((record.enqueueOptions.displayMode || 'fullscreen') !== 'silent' && this.pendingDisplayCallback) {
             this.pendingDisplayCallback(record);
         }
 

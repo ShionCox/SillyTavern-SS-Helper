@@ -158,6 +158,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
         consumer: input.pluginId,
         taskId: 'memory_summary_planner',
+        taskDescription: 'AI总结规划',
         taskKind: 'generation',
         input: {
             messages: [
@@ -166,7 +167,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             ],
         },
         schema: plannerSchema,
-        budget: { maxLatencyMs: 8_000 },
         enqueue: { displayMode: 'compact' },
     });
     const plannerDecision = normalizePlannerOutput(plannerLLMResult.ok ? plannerLLMResult.data : plannerResult.context.plannerHints);
@@ -251,6 +251,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const result = await input.llm.runTask<SummaryMutationDocument>({
         consumer: input.pluginId,
         taskId: 'memory_summary_mutation',
+        taskDescription: 'AI总结',
         taskKind: 'generation',
         input: {
             messages: [
@@ -259,7 +260,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             ],
         },
         schema: summarySchema,
-        budget: { maxLatencyMs: 10_000 },
         enqueue: { displayMode: 'compact' },
     });
 

@@ -3,11 +3,13 @@ import { createSdkPluginSettingsStore } from '../../../SDK/settings';
 export type MemoryOSSettings = {
     enabled: boolean;
     coldStartEnabled: boolean;
+    toolbarQuickActionsEnabled: boolean;
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
     enableEmbedding: boolean;
     summaryAutoTriggerEnabled: boolean;
+    summaryProgressOverlayEnabled: boolean;
     summaryIntervalFloors: number;
     summaryMinMessages: number;
     summaryRecentWindowSize: number;
@@ -22,11 +24,13 @@ export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
 export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     enabled: true,
     coldStartEnabled: true,
+    toolbarQuickActionsEnabled: true,
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
     enableEmbedding: false,
     summaryAutoTriggerEnabled: true,
+    summaryProgressOverlayEnabled: true,
     summaryIntervalFloors: 1,
     summaryMinMessages: 10,
     summaryRecentWindowSize: 40,
@@ -67,11 +71,13 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     return {
         enabled: candidate.enabled !== false,
         coldStartEnabled: candidate.coldStartEnabled !== false,
+        toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
         enableEmbedding: candidate.enableEmbedding === true,
         summaryAutoTriggerEnabled: candidate.summaryAutoTriggerEnabled !== false,
+        summaryProgressOverlayEnabled: candidate.summaryProgressOverlayEnabled !== false,
         summaryIntervalFloors,
         summaryMinMessages,
         summaryRecentWindowSize,
