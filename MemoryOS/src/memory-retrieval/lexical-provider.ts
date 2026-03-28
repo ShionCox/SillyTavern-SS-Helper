@@ -81,16 +81,32 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
     }
 
     /**
-     * 功能：把当前候选拼成检索文本。
+     * 功能：把当前候选拼成检索文本。扩展版：包含结构字段。
      * @param candidate 候选记录。
      * @returns 检索文本。
      */
     private buildCandidateText(candidate: RetrievalCandidate): string {
-        return [
+        const parts: string[] = [
             String(candidate.title ?? ''),
             String(candidate.summary ?? ''),
             String(candidate.schemaId ?? ''),
-        ].join(' ').trim().toLowerCase();
+        ];
+        if (candidate.category) {
+            parts.push(String(candidate.category));
+        }
+        if (candidate.tags && candidate.tags.length > 0) {
+            parts.push(candidate.tags.join(' '));
+        }
+        if (candidate.relationKeys && candidate.relationKeys.length > 0) {
+            parts.push(candidate.relationKeys.join(' '));
+        }
+        if (candidate.locationKey) {
+            parts.push(String(candidate.locationKey));
+        }
+        if (candidate.actorKeys && candidate.actorKeys.length > 0) {
+            parts.push(candidate.actorKeys.join(' '));
+        }
+        return parts.join(' ').trim().toLowerCase();
     }
 
     /**

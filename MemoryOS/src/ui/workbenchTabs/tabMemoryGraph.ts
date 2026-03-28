@@ -1,7 +1,7 @@
 import { escapeHtml } from '../editorShared';
 import type { WorkbenchSnapshot, WorkbenchState } from './shared';
 import { escapeAttr, truncateText, formatTimestamp, formatDisplayValue } from './shared';
-import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode } from './shared/memoryGraphTypes';
+import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from './shared/memoryGraphTypes';
 import { getMemoryGraphNodeColor, MEMORY_GRAPH_TYPE_LABELS } from './shared/memoryGraphTypes';
 
 /**
@@ -12,6 +12,8 @@ export interface MemoryGraphState {
     memoryGraphQuery?: string;
     memoryGraphFilterType?: string;
     memoryGraphOnlyRemembered?: boolean;
+    /** 图谱显示模式：简洁/语义/调试 */
+    graphMode?: MemoryGraphMode;
 }
 
 /**
@@ -71,7 +73,20 @@ export function buildMemoryGraphViewMarkup(
     ).join('');
 
     // 详情面板
-    const detailHtml = selectedNode ? buildNodeDetailPanel(selectedNode, snapshot, memoryGraph) : buildEmptyDetailPanel();
+    const detailHtml = selectedNode ? buildNodeDetailPanel(selectedNode, snapshot, memoryGraph, graphState.graphMode ?? 'compact') : buildEmptyDetailPanel();
+
+    const currentMode = graphState.graphMode ?? 'compact';
+    const modeButtons = [
+        { mode: 'compact' as MemoryGraphMode, label: '简洁' },
+        { mode: 'semantic' as MemoryGraphMode, label: '语义' },
+        { mode: 'debug' as MemoryGraphMode, label: '调试' },
+    ].map(({ mode, label }) => {
+        const isSelected = mode === currentMode;
+        const bg = isSelected ? 'rgba(96,165,250,0.25)' : 'rgba(255,255,255,0.06)';
+        const border = isSelected ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(255,255,255,0.1)';
+        const color = isSelected ? '#60a5fa' : 'rgba(255,255,255,0.6)';
+        return `<button data-action="graph-set-mode" data-mode="${mode}" style="font-size:11px;padding:2px 8px;border-radius:4px;background:${bg};border:${border};color:${color};cursor:pointer;font-family:inherit;">${label}</button>`;
+    }).join('');
 
     return `
         <section class="stx-memory-workbench__view${isActive ? ' is-active' : ''}" data-view="memory-graph">
@@ -85,6 +100,7 @@ export function buildMemoryGraphViewMarkup(
                         ${typeOptions}
                     </select>
                     <input id="stx-memory-graph-query" class="stx-memory-workbench__input" style="max-width:200px;font-size:12px;" type="text" placeholder="搜索记忆节点…" value="${escapeAttr(graphState.memoryGraphQuery ?? '')}">
+                    <div style="display:flex;gap:4px;align-items:center;">${modeButtons}</div>
                     <div style="margin-left:auto;">${legendHtml}</div>
                 </div>
 
@@ -125,6 +141,10 @@ const EDGE_TYPE_LABELS: Record<string, string> = {
     sourceSummary: '摘要来源',
     roleBinding: '角色绑定',
     actorRef: '角色引用',
+    ownerActorRef: '主角色引用',
+    mentionedActorRef: '提及角色',
+    worldKey: '世界设定',
+    tag: '共享标签',
 };
 
 /**
@@ -134,7 +154,7 @@ const EDGE_TYPE_LABELS: Record<string, string> = {
  * @param graph 记忆图数据。
  * @returns HTML 字符串。
  */
-function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, snapshot: WorkbenchSnapshot, graph: WorkbenchMemoryGraph): string {
+function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, snapshot: WorkbenchSnapshot, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode = 'compact'): string {
     const color = getMemoryGraphNodeColor(node.type);
     const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? node.type;
     const memPercent = Math.round(node.memoryPercent ?? 0);
@@ -218,8 +238,7 @@ function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, snapshot: Workbenc
  * @returns HTML 字符串。
  */
 function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: WorkbenchMemoryGraph): string {
-    // 找出所有与当前节点相连的边及对端节点
-    const connectedItems: { targetNode: WorkbenchMemoryGraphNode; edgeType: string; weight: number }[] = [];
+    const connectedItems: { targetNode: WorkbenchMemoryGraphNode; edgeType: string; weight: number; reasons?: string[] }[] = [];
     const nodeMap = new Map(graph.nodes.map(n => [n.id, n]));
 
     for (const edge of graph.edges) {
@@ -229,15 +248,15 @@ function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: Workb
         if (!peerId) continue;
         const peerNode = nodeMap.get(peerId);
         if (!peerNode) continue;
-        // 去重：同一个对端只保留权重最高的
         const existing = connectedItems.find(c => c.targetNode.id === peerId);
         if (existing) {
             if (edge.weight > existing.weight) {
                 existing.edgeType = edge.edgeType;
                 existing.weight = edge.weight;
+                existing.reasons = edge.reasons;
             }
         } else {
-            connectedItems.push({ targetNode: peerNode, edgeType: edge.edgeType, weight: edge.weight });
+            connectedItems.push({ targetNode: peerNode, edgeType: edge.edgeType, weight: edge.weight, reasons: edge.reasons });
         }
     }
 
@@ -252,11 +271,14 @@ function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: Workb
     // 按权重排序
     connectedItems.sort((a, b) => b.weight - a.weight);
 
-    const itemsHtml = connectedItems.map(({ targetNode, edgeType }) => {
+    const itemsHtml = connectedItems.map(({ targetNode, edgeType, reasons }) => {
         const peerColor = getMemoryGraphNodeColor(targetNode.type);
         const peerTypeLabel = MEMORY_GRAPH_TYPE_LABELS[targetNode.type] ?? targetNode.type;
         const edgeLabel = EDGE_TYPE_LABELS[edgeType] ?? edgeType;
         const peerSummary = targetNode.summary ? escapeHtml(truncateText(targetNode.summary, 60)) : '';
+        const reasonsHtml = reasons?.length
+            ? `<div style="font-size:10px;opacity:0.5;margin-top:2px;line-height:1.3;">${reasons.map(r => escapeHtml(r)).join(' · ')}</div>`
+            : '';
         return `
             <button type="button" class="stx-memory-graph-related-node" data-action="graph-select-node" data-node-id="${escapeAttr(targetNode.id)}" data-entry-id="${escapeAttr(targetNode.entryId)}" style="display:flex;align-items:flex-start;gap:8px;width:100%;padding:8px;margin-bottom:4px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.03);cursor:pointer;text-align:left;transition:all 0.2s;font-family:inherit;color:inherit;">
                 <span style="width:10px;height:10px;border-radius:50%;background:${peerColor};flex-shrink:0;margin-top:3px;box-shadow:0 0 6px ${peerColor};"></span>
@@ -267,6 +289,7 @@ function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: Workb
                         <span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.2);">${escapeHtml(edgeLabel)}</span>
                     </div>
                     ${peerSummary ? `<div style="font-size:11px;opacity:0.6;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${peerSummary}</div>` : ''}
+                    ${reasonsHtml}
                 </div>
             </button>`;
     }).join('');

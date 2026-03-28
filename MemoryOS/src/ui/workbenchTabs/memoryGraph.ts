@@ -1,6 +1,6 @@
 import { escapeHtml } from '../editorShared';
 import { escapeAttr } from './shared';
-import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode } from './shared/memoryGraphTypes';
+import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from './shared/memoryGraphTypes';
 import { getMemoryGraphNodeColor, computeMemoryGraphNodeSize, MEMORY_GRAPH_TYPE_LABELS } from './shared/memoryGraphTypes';
 
 /**
@@ -10,6 +10,7 @@ export interface MemoryGraphRenderOptions {
     selectedNodeId?: string;
     filterType?: string;
     searchQuery?: string;
+    graphMode?: MemoryGraphMode;
     onSelectNode?: (nodeId: string, entryId: string) => void;
 }
 
@@ -84,7 +85,12 @@ export function mountMemoryGraph(
     }
 
     const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
-    const visibleEdges = data.edges.filter(e => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target));
+    const currentMode = options.graphMode ?? 'compact';
+    const visibleEdges = data.edges.filter(e => {
+        if (!visibleNodeIds.has(e.source) || !visibleNodeIds.has(e.target)) return false;
+        if (e.visibleInModes && !e.visibleInModes.includes(currentMode)) return false;
+        return true;
+    });
 
     const canvas = document.createElement('div');
     canvas.className = 'stx-memory-graph-canvas';

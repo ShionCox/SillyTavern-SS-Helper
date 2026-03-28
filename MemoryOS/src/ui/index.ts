@@ -26,6 +26,7 @@ const INJECTION_PROMPT_ID: string = 'stx-memoryos-injection-prompt-enabled';
 const INJECTION_PREVIEW_ID: string = 'stx-memoryos-injection-preview-enabled';
 const EMBEDDING_ENABLED_ID: string = 'stx-memoryos-embedding-enabled';
 const CONTEXT_TOKENS_ID: string = 'stx-memoryos-context-max-tokens';
+const SUMMARY_INTERVAL_ID: string = 'stx-memoryos-summary-interval-floors';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
 const TAB_BASIC_ID: string = 'stx-memoryos-tab-basic';
@@ -100,6 +101,13 @@ function ensureSettingsStyles(): void {
             display: flex;
             flex-direction: column;
             gap: 10px;
+        }
+        #${CARD_ID} .stx-ui-section-label {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            opacity: 0.78;
+            padding: 0 2px;
         }
         #${CARD_ID} .stx-ui-panel[hidden] {
             display: none !important;
@@ -238,6 +246,12 @@ function buildSettingsContentHtml(): string {
         className: 'stx-ui-input',
         attributes: { min: 200, max: 10000, step: 50 },
     });
+    const summaryIntervalInput: string = buildSharedInputField({
+        id: SUMMARY_INTERVAL_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 1, max: 200, step: 1 },
+    });
 
     const resetBtn: string = buildSharedButton({
         id: RESET_BTN_ID,
@@ -265,6 +279,7 @@ function buildSettingsContentHtml(): string {
         </div>
 
         <div id="${PANEL_BASIC_ID}" class="stx-ui-panel">
+            <div class="stx-ui-section-label">通用</div>
             <div class="stx-ui-item">
                 <div class="stx-ui-item-main">
                     <div class="stx-ui-item-title">工作台</div>
@@ -279,6 +294,19 @@ function buildSettingsContentHtml(): string {
                     <div class="stx-ui-item-desc">关闭后将停止消息写入、总结与注入。</div>
                 </div>
                 <div class="stx-ui-inline">${enabledCheckbox}</div>
+            </div>
+            <div class="stx-ui-section-label">AI 总结</div>
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">自动总结触发间隔</div>
+                    <div class="stx-ui-item-desc">设置每累计多少楼层后触发一次 AI 总结。设为 1 表示每次新增回复后都会尝试执行总结。</div>
+                </div>
+                <div class="stx-ui-form-grid">
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">summaryIntervalFloors</label>
+                        ${summaryIntervalInput}
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -381,11 +409,13 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
+    const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
     if (embeddingInput) embeddingInput.checked = settings.enableEmbedding;
     if (contextTokensInput) contextTokensInput.value = String(settings.contextMaxTokens);
+    if (summaryIntervalInput) summaryIntervalInput.value = String(settings.summaryIntervalFloors);
 }
 
 /**
@@ -398,12 +428,14 @@ function readSettingsFromForm(): MemoryOSSettings {
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
     const embeddingInput: HTMLInputElement | null = document.getElementById(EMBEDDING_ENABLED_ID) as HTMLInputElement | null;
     const contextTokensInput: HTMLInputElement | null = document.getElementById(CONTEXT_TOKENS_ID) as HTMLInputElement | null;
+    const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
         injectionPreviewEnabled: injectionPreviewInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled,
         enableEmbedding: embeddingInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding,
         contextMaxTokens: Number(contextTokensInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
+        summaryIntervalFloors: Number(summaryIntervalInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors),
     };
 }
 

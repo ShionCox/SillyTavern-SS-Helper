@@ -65,6 +65,7 @@ export interface WorkbenchState {
     selectedGraphNodeId: string;
     memoryGraphQuery: string;
     memoryGraphFilterType: string;
+    memoryGraphMode: string;
 }
 
 export interface WorkbenchSnapshot {

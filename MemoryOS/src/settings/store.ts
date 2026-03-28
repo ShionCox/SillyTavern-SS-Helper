@@ -6,6 +6,7 @@ export type MemoryOSSettings = {
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
     enableEmbedding: boolean;
+    summaryIntervalFloors: number;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -16,6 +17,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
     enableEmbedding: false,
+    summaryIntervalFloors: 1,
 };
 
 /**
@@ -28,12 +30,17 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         200,
         Math.min(10000, Number(candidate.contextMaxTokens) || DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
     );
+    const summaryIntervalFloors: number = Math.max(
+        1,
+        Math.min(200, Math.trunc(Number(candidate.summaryIntervalFloors) || DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors)),
+    );
     return {
         enabled: candidate.enabled !== false,
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
         enableEmbedding: candidate.enableEmbedding === true,
+        summaryIntervalFloors,
     };
 }
 

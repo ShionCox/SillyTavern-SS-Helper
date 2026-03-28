@@ -521,7 +521,7 @@ export class UnifiedMemoryManager {
         title?: string;
     }): Promise<SummarySnapshot | null> {
         const normalizedMessages = Array.isArray(input.messages)
-            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-10)
+            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-40)
             : [];
         if (normalizedMessages.length <= 0) {
             return null;

@@ -59,6 +59,12 @@ export interface RetrievalContextRoute {
     };
     topicHints: string[];
     confidence: number;
+    /** 语境路由的来源解释，提升 diagnostics 可调试性 */
+    reasons?: Array<{
+        source: 'keyword' | 'pattern' | 'entity' | 'recent-context';
+        detail: string;
+        weight: number;
+    }>;
 }
 
 /**
@@ -98,5 +104,18 @@ export interface RetrievalOrchestratorResult {
     providerId: string;
     contextRoute: RetrievalContextRoute | null;
     items: RetrievalResultItem[];
+    diagnostics?: RetrievalDiagnostics;
+}
+
+/**
+ * 功能：定义检索全链路诊断信息。
+ */
+export interface RetrievalDiagnostics {
+    contextRoute: RetrievalContextRoute | null;
+    seedProviderId: string;
+    seedCount: number;
+    expandedCount: number;
+    coverageTriggeredFacets: RetrievalFacet[];
+    diversityDroppedCount: number;
 }
 

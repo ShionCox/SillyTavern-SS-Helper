@@ -158,6 +158,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     selectedGraphNodeId: state.selectedGraphNodeId,
                     memoryGraphQuery: state.memoryGraphQuery,
                     memoryGraphFilterType: state.memoryGraphFilterType,
+                    graphMode: (state.memoryGraphMode as any) || 'compact',
                 })}
             </main>
         </div>
@@ -219,6 +220,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         selectedGraphNodeId: '',
         memoryGraphQuery: '',
         memoryGraphFilterType: '',
+        memoryGraphMode: 'compact',
     };
 
     /**
@@ -427,7 +429,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'capture-summary') {
-                await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench');
+                await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
                 toast.success('已触发强制快照归档。');
                 await render();
             }
@@ -581,6 +583,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     selectedNodeId: state.selectedGraphNodeId,
                     filterType: state.memoryGraphFilterType || undefined,
                     searchQuery: state.memoryGraphQuery || undefined,
+                    graphMode: (state.memoryGraphMode as any) || 'compact',
                     onSelectNode: (nodeId: string, entryId: string): void => {
                         state.selectedGraphNodeId = nodeId;
                         state.selectedEntryId = entryId;
@@ -603,6 +606,15 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     state.memoryGraphQuery = String(graphQuery.value ?? '').trim();
                     void render();
                 }, 300);
+            });
+
+            // 图谱模式切换
+            root.querySelectorAll<HTMLElement>('[data-action="graph-set-mode"]').forEach(btn => {
+                btn.addEventListener('click', (): void => {
+                    const mode = btn.dataset.mode ?? 'compact';
+                    state.memoryGraphMode = mode;
+                    void render();
+                });
             });
 
             // 关联节点点击事件

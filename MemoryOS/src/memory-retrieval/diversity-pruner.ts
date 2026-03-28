@@ -89,7 +89,8 @@ function deduplicateItems(items: RetrievalResultItem[], threshold: number): Retr
 
         // schemaId + relationKey pair 去重
         if (candidate.relationKeys && candidate.relationKeys.length > 0) {
-            const schemaRelation = `${candidate.schemaId}:${candidate.relationKeys.sort().join(',')}`;
+            const sortedKeys = [...candidate.relationKeys].sort();
+            const schemaRelation = `${candidate.schemaId}:${sortedKeys.join(',')}`;
             if (seenSchemaRelationPairs.has(schemaRelation)) {
                 // 允许同一 schema+relation 最多 2 条
                 const sameCount = selected.filter(s =>
@@ -126,7 +127,7 @@ function deduplicateItems(items: RetrievalResultItem[], threshold: number): Retr
  * @returns 平衡后的结果。
  */
 function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number): RetrievalResultItem[] {
-    if (items.length <= maxCandidates) return items;
+    if (items.length <= 0) return items;
 
     // 按 facet 分类
     const buckets = new Map<RetrievalFacet, RetrievalResultItem[]>();
@@ -144,6 +145,11 @@ function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number):
         } else {
             uncategorized.push(item);
         }
+    }
+
+    // 即使数量未超阈值，也做轻量平衡：防止全同类情况
+    if (items.length <= maxCandidates) {
+        return lightBalanceByCategory(items, buckets, allFacets, maxCandidates);
     }
 
     const selected: RetrievalResultItem[] = [];
@@ -164,8 +170,6 @@ function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number):
         for (const facet of allFacets) {
             const bucket = buckets.get(facet) ?? [];
             const maxForFacet = Math.max(1, Math.floor(maxCandidates * FACET_MAX_RATIO[facet]));
-            const currentCount = selected.filter(s => FACET_SCHEMA_MAP[s.candidate.schemaId] === facet).length;
-            const allowMore = maxForFacet - currentCount;
 
             for (const item of bucket) {
                 if (selected.length >= maxCandidates) break;
@@ -187,6 +191,71 @@ function balanceByCategory(items: RetrievalResultItem[], maxCandidates: number):
 
     // 最终排序
     return selected.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * 功能：轻量平衡，在候选数量未超上限时也做结构平衡。
+ * 如果单一 facet 占比超过 60%，把多余的低分条目延后排序。
+ */
+function lightBalanceByCategory(
+    items: RetrievalResultItem[],
+    buckets: Map<RetrievalFacet, RetrievalResultItem[]>,
+    allFacets: RetrievalFacet[],
+    maxCandidates: number,
+): RetrievalResultItem[] {
+    const total = items.length;
+    if (total <= 3) return items;
+
+    // 检查是否有单一 facet 占比过高
+    let dominantFacet: RetrievalFacet | null = null;
+    for (const facet of allFacets) {
+        const bucket = buckets.get(facet) ?? [];
+        if (bucket.length / total > 0.6) {
+            dominantFacet = facet;
+            break;
+        }
+    }
+
+    if (!dominantFacet) return items;
+
+    // 主导 facet 的最高配额
+    const maxForDominant = Math.max(2, Math.ceil(total * FACET_MAX_RATIO[dominantFacet]));
+    const dominantBucket = buckets.get(dominantFacet) ?? [];
+    const prioritized: RetrievalResultItem[] = [];
+    const deferred: RetrievalResultItem[] = [];
+
+    // 其他 facet 的全部条目优先
+    const selectedIds = new Set<string>();
+    for (const facet of allFacets) {
+        if (facet === dominantFacet) continue;
+        for (const item of buckets.get(facet) ?? []) {
+            prioritized.push(item);
+            selectedIds.add(item.candidate.candidateId);
+        }
+    }
+
+    // 主导 facet 取前 maxForDominant 条
+    let dominantCount = 0;
+    for (const item of dominantBucket) {
+        if (dominantCount < maxForDominant) {
+            prioritized.push(item);
+            selectedIds.add(item.candidate.candidateId);
+            dominantCount++;
+        } else {
+            deferred.push(item);
+        }
+    }
+
+    // 未分类的
+    for (const item of items) {
+        if (!selectedIds.has(item.candidate.candidateId) && !deferred.some(d => d.candidate.candidateId === item.candidate.candidateId)) {
+            prioritized.push(item);
+        }
+    }
+
+    return [...prioritized, ...deferred]
+        .slice(0, maxCandidates)
+        .sort((a, b) => b.score - a.score);
 }
 
 /**

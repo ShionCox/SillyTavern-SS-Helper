@@ -1,12 +1,47 @@
 import type { MemoryEntry, RoleEntryMemory, ActorMemoryProfile } from '../../../types';
-import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, WorkbenchMemoryGraphEdge } from './memoryGraphTypes';
+import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, WorkbenchMemoryGraphEdge, MemoryGraphMode, EdgeStrengthLevel } from './memoryGraphTypes';
+
+/**
+ * 功能：建边上下文，在各 build*Edges 函数间共享。
+ */
+interface EdgeBuildContext {
+    entries: MemoryEntry[];
+    entryActorMap: Map<string, string[]>;
+    actorProfileMap: Map<string, string>;
+    edges: WorkbenchMemoryGraphEdge[];
+    edgeSet: Set<string>;
+}
+
+/**
+ * 功能：添加一条边（去重）。
+ */
+function addEdge(
+    ctx: EdgeBuildContext,
+    sourceEntryId: string,
+    targetEntryId: string,
+    edgeType: string,
+    weight: number,
+    reasons: string[],
+    strengthLevel: EdgeStrengthLevel,
+    visibleInModes: MemoryGraphMode[],
+): void {
+    const edgeKey = `${sourceEntryId}:${targetEntryId}:${edgeType}`;
+    if (ctx.edgeSet.has(edgeKey)) return;
+    ctx.edgeSet.add(edgeKey);
+    ctx.edges.push({
+        id: edgeKey,
+        source: `mg-${sourceEntryId}`,
+        target: `mg-${targetEntryId}`,
+        edgeType,
+        weight,
+        reasons,
+        strengthLevel,
+        visibleInModes,
+    });
+}
 
 /**
  * 功能：把 MemoryEntry[] 转换为记忆图谱数据。
- * @param entries 记忆条目列表。
- * @param roleMemories 角色记忆绑定列表。
- * @param actors 角色列表。
- * @returns 记忆图谱数据。
  */
 export function buildMemoryGraph(
     entries: MemoryEntry[],
@@ -49,34 +84,16 @@ export function buildMemoryGraph(
         };
     });
 
-    // 构建边
-    const edges: WorkbenchMemoryGraphEdge[] = [];
-    const edgeSet = new Set<string>();
-    const nodeById = new Map(nodes.map(n => [n.entryId, n]));
-
-    // 按结构关系建边 (精简连接，避免全连接网)
-    // participants: 共享参与者的条目互连
-    buildEdgesByField(entries, 'participants', 'participants', 0.7, edges, edgeSet);
-    buildEdgesByField(entries, 'locationKey', 'location', 0.5, edges, edgeSet);
-    buildEdgesByField(entries, 'sourceSummaryIds', 'sourceSummary', 0.4, edges, edgeSet);
-    // sourceActorKey/targetActorKey 不用 buildEdgesByField，因为它会把所有同值条目互连
-    // 条目→角色画像的连线由下面的 actorRef 机制处理
-    
-    // 移除按模糊标签(tags)和worldKeys大范围建边，避免视觉上每个点都连在一起
-    // 只有强关联才连线
-
     // 构建 actorKey → actor_profile entryId 映射
     const actorProfileMap = new Map<string, string>();
     for (const entry of entries) {
         if (entry.entryType === 'actor_profile') {
-            // 通过 roleMemories 找到该 entry 绑定的 actorKey
             const boundActors = entryActorMap.get(entry.entryId) ?? [];
             for (const ak of boundActors) {
                 actorProfileMap.set(ak, entry.entryId);
             }
         }
     }
-    // 补充：也可通过 actors 列表的 displayName 匹配 entry.title
     for (const actor of actors) {
         if (actorProfileMap.has(actor.actorKey)) continue;
         const matchEntry = entries.find(e => e.entryType === 'actor_profile' && e.title === actor.displayName);
@@ -85,142 +102,269 @@ export function buildMemoryGraph(
         }
     }
 
-    // 将引用了 actorKey 的条目直接连到对应的 actor_profile 条目
-    for (const entry of entries) {
-        if (entry.entryType === 'actor_profile') continue;
-        const payload = (entry.detailPayload && typeof entry.detailPayload === 'object') ? entry.detailPayload as Record<string, unknown> : {};
-        
-        // 收集该条目引用的所有 actorKey（从 detailPayload 字段）
-        const referencedActorKeys = new Set<string>();
-        for (const field of ['participants', 'sourceActorKey', 'targetActorKey'] as const) {
-            const raw = payload[field];
-            if (Array.isArray(raw)) {
-                for (const v of raw) {
-                    const key = String(v ?? '').trim().toLowerCase();
-                    if (key) referencedActorKeys.add(key);
-                }
-            } else if (typeof raw === 'string' && raw.trim()) {
-                referencedActorKeys.add(raw.trim().toLowerCase());
-            }
-        }
+    const ctx: EdgeBuildContext = {
+        entries,
+        entryActorMap,
+        actorProfileMap,
+        edges: [],
+        edgeSet: new Set(),
+    };
 
-        // 从 RoleEntryMemory 绑定中补充（角色引用）
-        const boundActors = entryActorMap.get(entry.entryId) ?? [];
-        for (const ak of boundActors) {
-            referencedActorKeys.add(ak.toLowerCase());
-        }
-
-        for (const ak of referencedActorKeys) {
-            const profileEntryId = actorProfileMap.get(ak);
-            if (!profileEntryId || profileEntryId === entry.entryId) continue;
-            const edgeKey = `${entry.entryId}:${profileEntryId}:actorRef`;
-            if (!edgeSet.has(edgeKey)) {
-                edgeSet.add(edgeKey);
-                edges.push({
-                    id: edgeKey,
-                    source: `mg-${entry.entryId}`,
-                    target: `mg-${profileEntryId}`,
-                    edgeType: 'actorRef',
-                    weight: 0.7,
-                });
-            }
-        }
-    }
+    // 分步建边
+    buildParticipantEdges(ctx);
+    buildLocationEdges(ctx);
+    buildSourceSummaryEdges(ctx);
+    buildActorRefEdges(ctx);
+    buildWorldEdges(ctx);
+    buildTagEdges(ctx);
 
     // 力导向布局
-    applyForceLayout(nodes, edges);
+    applyForceLayout(nodes, ctx.edges);
 
-    return { nodes, edges };
+    return { nodes, edges: ctx.edges };
 }
 
-/**
- * 功能：根据条目计算重要度。
- * @param entry 记忆条目。
- * @returns 0~1 重要度。
- */
-function computeEntryImportance(entry: MemoryEntry): number {
-    let score = 0.3;
-    // 有 summary 加分
-    if (entry.summary && entry.summary.length > 20) score += 0.15;
-    // 有 tags 加分
-    if (entry.tags && entry.tags.length > 0) score += 0.1;
-    // 有 detail 加分
-    if (entry.detail && entry.detail.length > 50) score += 0.15;
-    // 最近更新加分
-    const age = Date.now() - (entry.updatedAt || 0);
-    if (age < 7 * 24 * 3600 * 1000) score += 0.15;
-    else if (age < 30 * 24 * 3600 * 1000) score += 0.1;
-    // 关键类型加分
-    const type = (entry.entryType ?? '').toLowerCase();
-    if (type === 'relationship' || type === 'event' || type === 'actor_visible_event') score += 0.1;
-    return Math.min(1, score);
-}
+// ──────────────────── 分步建边函数 ────────────────────
 
 /**
- * 功能：按 detailPayload 中的数组字段或固定字段建边。
- * @param entries 条目列表。
- * @param fieldName 字段名。
- * @param edgeType 边类型。
- * @param weight 边权重。
- * @param edges 边列表。
- * @param edgeSet 边去重集合。
+ * 功能：participants 边 —— 使用重叠比率 |A∩B|/|A∪B| >= 0.34。
  */
-function buildEdgesByField(
-    entries: MemoryEntry[],
-    fieldName: string,
-    edgeType: string,
-    weight: number,
-    edges: WorkbenchMemoryGraphEdge[],
-    edgeSet: Set<string>,
-): void {
-    // 构建反向索引：字段值 → entryId[]
-    const reverseIndex = new Map<string, string[]>();
-
-    for (const entry of entries) {
+function buildParticipantEdges(ctx: EdgeBuildContext): void {
+    // 收集每个 entry 的 participants 集合
+    const entryParticipants = new Map<string, Set<string>>();
+    for (const entry of ctx.entries) {
         const payload = (entry.detailPayload && typeof entry.detailPayload === 'object') ? entry.detailPayload as Record<string, unknown> : {};
-        let values: string[] = [];
-
-        if (fieldName === 'tags') {
-            values = (entry.tags ?? []).map(t => String(t).toLowerCase()).filter(Boolean);
-        } else if (fieldName === 'sourceSummaryIds') {
-            values = (entry.sourceSummaryIds ?? []).filter(Boolean);
-        } else if (fieldName === 'locationKey') {
-            const loc = String(payload.locationKey ?? payload.location ?? '').trim().toLowerCase();
-            if (loc) values = [loc];
-        } else {
-            const raw = payload[fieldName];
-            if (Array.isArray(raw)) {
-                values = raw.map(v => String(v ?? '').trim().toLowerCase()).filter(Boolean);
-            } else if (typeof raw === 'string' && raw.trim()) {
-                values = [raw.trim().toLowerCase()];
-            }
-        }
-
-        for (const val of values) {
-            const list = reverseIndex.get(val);
-            if (list) list.push(entry.entryId);
-            else reverseIndex.set(val, [entry.entryId]);
+        const raw = payload.participants;
+        if (!Array.isArray(raw) || raw.length <= 0) continue;
+        const participants = new Set(raw.map(v => String(v ?? '').trim().toLowerCase()).filter(Boolean));
+        if (participants.size > 0) {
+            entryParticipants.set(entry.entryId, participants);
         }
     }
 
-    // 相同值的条目间建边
-    for (const [, group] of reverseIndex) {
+    const entryIds = [...entryParticipants.keys()];
+    for (let i = 0; i < entryIds.length && i < 200; i++) {
+        const setA = entryParticipants.get(entryIds[i])!;
+        for (let j = i + 1; j < entryIds.length && j < 200; j++) {
+            const setB = entryParticipants.get(entryIds[j])!;
+
+            // 计算 Jaccard overlap
+            let intersection = 0;
+            for (const p of setA) {
+                if (setB.has(p)) intersection++;
+            }
+            const union = setA.size + setB.size - intersection;
+            if (union <= 0) continue;
+            const overlapRatio = intersection / union;
+
+            if (overlapRatio < 0.34) continue;
+
+            const isStrong = overlapRatio >= 0.6 || intersection >= 2;
+            const weight = Math.min(0.9, 0.3 + overlapRatio * 0.6);
+            const sharedNames = [...setA].filter(p => setB.has(p)).slice(0, 3);
+            const strengthLevel: EdgeStrengthLevel = isStrong ? 'strong' : 'normal';
+
+            addEdge(ctx, entryIds[i], entryIds[j], 'participants', weight,
+                [`共享参与者(${(overlapRatio * 100).toFixed(0)}%): ${sharedNames.join(', ')}`],
+                strengthLevel,
+                ['compact', 'semantic', 'debug'],
+            );
+        }
+    }
+}
+
+/**
+ * 功能：location 边 —— 相同地点的条目互连。
+ */
+function buildLocationEdges(ctx: EdgeBuildContext): void {
+    const locationIndex = new Map<string, string[]>();
+    for (const entry of ctx.entries) {
+        const payload = (entry.detailPayload && typeof entry.detailPayload === 'object') ? entry.detailPayload as Record<string, unknown> : {};
+        const loc = String(payload.locationKey ?? payload.location ?? '').trim().toLowerCase();
+        if (!loc) continue;
+        const list = locationIndex.get(loc) ?? [];
+        list.push(entry.entryId);
+        locationIndex.set(loc, list);
+    }
+
+    for (const [loc, group] of locationIndex) {
         if (group.length <= 1) continue;
         for (let i = 0; i < group.length && i < 20; i++) {
             for (let j = i + 1; j < group.length && j < 20; j++) {
-                const edgeKey = `${group[i]}:${group[j]}:${edgeType}`;
-                if (edgeSet.has(edgeKey)) continue;
-                edgeSet.add(edgeKey);
-                edges.push({
-                    id: edgeKey,
-                    source: `mg-${group[i]}`,
-                    target: `mg-${group[j]}`,
-                    edgeType,
-                    weight,
-                });
+                addEdge(ctx, group[i], group[j], 'location', 0.5,
+                    [`同地点: ${loc}`],
+                    'normal',
+                    ['compact', 'semantic', 'debug'],
+                );
             }
         }
     }
+}
+
+/**
+ * 功能：sourceSummary 边 —— 同一 summary 批次来源。
+ */
+function buildSourceSummaryEdges(ctx: EdgeBuildContext): void {
+    const summaryIndex = new Map<string, string[]>();
+    for (const entry of ctx.entries) {
+        for (const sid of entry.sourceSummaryIds ?? []) {
+            if (!sid) continue;
+            const list = summaryIndex.get(sid) ?? [];
+            list.push(entry.entryId);
+            summaryIndex.set(sid, list);
+        }
+    }
+
+    for (const [sid, group] of summaryIndex) {
+        if (group.length <= 1) continue;
+        for (let i = 0; i < group.length && i < 20; i++) {
+            for (let j = i + 1; j < group.length && j < 20; j++) {
+                addEdge(ctx, group[i], group[j], 'sourceSummary', 0.4,
+                    [`来源同一批次: ${sid.slice(0, 12)}...`],
+                    'weak',
+                    ['compact', 'semantic', 'debug'],
+                );
+            }
+        }
+    }
+}
+
+/**
+ * 功能：actorRef 边 —— 分为 ownerActorRef（条目的 source/target 角色）和 mentionedActorRef（仅参与/绑定）。
+ */
+function buildActorRefEdges(ctx: EdgeBuildContext): void {
+    for (const entry of ctx.entries) {
+        if (entry.entryType === 'actor_profile') continue;
+        const payload = (entry.detailPayload && typeof entry.detailPayload === 'object') ? entry.detailPayload as Record<string, unknown> : {};
+
+        // owner 级：sourceActorKey / targetActorKey 直接指定的角色
+        const ownerKeys = new Set<string>();
+        for (const field of ['sourceActorKey', 'targetActorKey'] as const) {
+            const raw = payload[field];
+            if (typeof raw === 'string' && raw.trim()) {
+                ownerKeys.add(raw.trim().toLowerCase());
+            }
+        }
+
+        // mentioned 级：participants + RoleEntryMemory 绑定
+        const mentionedKeys = new Set<string>();
+        const rawParticipants = payload.participants;
+        if (Array.isArray(rawParticipants)) {
+            for (const v of rawParticipants) {
+                const key = String(v ?? '').trim().toLowerCase();
+                if (key && !ownerKeys.has(key)) mentionedKeys.add(key);
+            }
+        }
+        const boundActors = ctx.entryActorMap.get(entry.entryId) ?? [];
+        for (const ak of boundActors) {
+            const lk = ak.toLowerCase();
+            if (!ownerKeys.has(lk)) mentionedKeys.add(lk);
+        }
+
+        // owner 级建边：权重 0.55
+        for (const ak of ownerKeys) {
+            const profileEntryId = ctx.actorProfileMap.get(ak);
+            if (!profileEntryId || profileEntryId === entry.entryId) continue;
+            addEdge(ctx, entry.entryId, profileEntryId, 'ownerActorRef', 0.55,
+                [`主角色引用: ${ak}`],
+                'strong',
+                ['compact', 'semantic', 'debug'],
+            );
+        }
+
+        // mentioned 级建边：权重 0.28
+        for (const ak of mentionedKeys) {
+            const profileEntryId = ctx.actorProfileMap.get(ak);
+            if (!profileEntryId || profileEntryId === entry.entryId) continue;
+            // 如果已经有 owner 边到同一 profile，跳过
+            const ownerEdgeKey = `${entry.entryId}:${profileEntryId}:ownerActorRef`;
+            if (ctx.edgeSet.has(ownerEdgeKey)) continue;
+            addEdge(ctx, entry.entryId, profileEntryId, 'mentionedActorRef', 0.28,
+                [`提及角色: ${ak}`],
+                'weak',
+                ['semantic', 'debug'],
+            );
+        }
+    }
+}
+
+/**
+ * 功能：worldKeys 边 —— 共享世界设定。仅在语义/调试模式可见。
+ */
+function buildWorldEdges(ctx: EdgeBuildContext): void {
+    const worldIndex = new Map<string, string[]>();
+    for (const entry of ctx.entries) {
+        const payload = (entry.detailPayload && typeof entry.detailPayload === 'object') ? entry.detailPayload as Record<string, unknown> : {};
+        const raw = payload.worldKeys;
+        if (!Array.isArray(raw)) continue;
+        for (const v of raw) {
+            const key = String(v ?? '').trim().toLowerCase();
+            if (!key) continue;
+            const list = worldIndex.get(key) ?? [];
+            list.push(entry.entryId);
+            worldIndex.set(key, list);
+        }
+    }
+
+    for (const [key, group] of worldIndex) {
+        if (group.length <= 1) continue;
+        for (let i = 0; i < group.length && i < 15; i++) {
+            for (let j = i + 1; j < group.length && j < 15; j++) {
+                addEdge(ctx, group[i], group[j], 'worldKey', 0.3,
+                    [`共享世界设定: ${key}`],
+                    'weak',
+                    ['semantic', 'debug'],
+                );
+            }
+        }
+    }
+}
+
+/**
+ * 功能：tag 边 —— 共享高置信标签。仅在语义/调试模式可见。
+ */
+function buildTagEdges(ctx: EdgeBuildContext): void {
+    const tagIndex = new Map<string, string[]>();
+    for (const entry of ctx.entries) {
+        for (const tag of entry.tags ?? []) {
+            const t = String(tag).trim().toLowerCase();
+            if (!t) continue;
+            const list = tagIndex.get(t) ?? [];
+            list.push(entry.entryId);
+            tagIndex.set(t, list);
+        }
+    }
+
+    for (const [tag, group] of tagIndex) {
+        if (group.length <= 1 || group.length > 10) continue; // 太泛的 tag 不建边
+        for (let i = 0; i < group.length && i < 10; i++) {
+            for (let j = i + 1; j < group.length && j < 10; j++) {
+                addEdge(ctx, group[i], group[j], 'tag', 0.2,
+                    [`共享标签: ${tag}`],
+                    'weak',
+                    ['semantic', 'debug'],
+                );
+            }
+        }
+    }
+}
+
+// ──────────────────── 工具函数 ────────────────────
+
+/**
+ * 功能：根据条目计算重要度。
+ */
+function computeEntryImportance(entry: MemoryEntry): number {
+    let score = 0.3;
+    if (entry.summary && entry.summary.length > 20) score += 0.15;
+    if (entry.tags && entry.tags.length > 0) score += 0.1;
+    if (entry.detail && entry.detail.length > 50) score += 0.15;
+    const age = Date.now() - (entry.updatedAt || 0);
+    if (age < 7 * 24 * 3600 * 1000) score += 0.15;
+    else if (age < 30 * 24 * 3600 * 1000) score += 0.1;
+    const type = (entry.entryType ?? '').toLowerCase();
+    if (type === 'relationship' || type === 'event' || type === 'actor_visible_event') score += 0.1;
+    return Math.min(1, score);
 }
 
 /**

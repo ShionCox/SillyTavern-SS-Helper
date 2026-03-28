@@ -1,4 +1,14 @@
 /**
+ * 功能：图谱显示模式。
+ */
+export type MemoryGraphMode = 'compact' | 'semantic' | 'debug';
+
+/**
+ * 功能：边强度级别。
+ */
+export type EdgeStrengthLevel = 'strong' | 'normal' | 'weak';
+
+/**
  * 功能：记忆图谱节点。
  */
 export interface WorkbenchMemoryGraphNode {
@@ -26,6 +36,12 @@ export interface WorkbenchMemoryGraphEdge {
     target: string;
     edgeType: string;
     weight: number;
+    /** 边形成的原因说明 */
+    reasons?: string[];
+    /** 边强度级别 */
+    strengthLevel?: EdgeStrengthLevel;
+    /** 该边在哪些图谱模式下可见 */
+    visibleInModes?: MemoryGraphMode[];
 }
 
 /**

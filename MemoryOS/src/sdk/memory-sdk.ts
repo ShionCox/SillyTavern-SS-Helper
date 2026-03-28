@@ -27,6 +27,11 @@ import {
     restoreArchivedMemoryChat,
     writeMemoryOSChatState,
 } from '../db/db';
+import { readMemoryOSSettings } from '../settings/store';
+
+const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
+const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
+const AUTO_SUMMARY_MAX_MESSAGE_WINDOW: number = 40;
 
 /**
  * 功能：定义统一记忆提示词注入入参。
@@ -124,7 +129,7 @@ export class MemorySDKImpl {
         count: () => Promise<number>;
     };
     public readonly postGeneration: {
-        scheduleRoundProcessing: (source?: string) => Promise<void>;
+        scheduleRoundProcessing: (source?: string, options?: { force?: boolean }) => Promise<void>;
     };
     public readonly chatState: {
         getLatestRecallExplanation: () => Promise<Record<string, unknown> | null>;
@@ -230,8 +235,40 @@ export class MemorySDKImpl {
         };
 
         this.postGeneration = {
-            scheduleRoundProcessing: async (_source?: string): Promise<void> => {
-                const rows = await this.eventsManager.query({ limit: 12 });
+            scheduleRoundProcessing: async (_source?: string, options?: { force?: boolean }): Promise<void> => {
+                const settings = readMemoryOSSettings();
+                const summaryIntervalFloors: number = Math.max(
+                    1,
+                    Math.trunc(Number(settings.summaryIntervalFloors) || 1),
+                );
+                const messageFloorCount: number = await this.eventsManager.countByTypes(AUTO_SUMMARY_MESSAGE_EVENT_TYPES);
+                if (messageFloorCount <= 0) {
+                    return;
+                }
+
+                if (options?.force !== true) {
+                    const stateRow = await readMemoryOSChatState(this.chatKey_);
+                    const state = this.toRecord(stateRow?.state);
+                    const lastSummaryFloorCount: number = Math.max(
+                        0,
+                        Math.trunc(Number(state.autoSummaryLastFloorCount) || 0),
+                    );
+                    if (messageFloorCount - lastSummaryFloorCount < summaryIntervalFloors) {
+                        return;
+                    }
+                }
+
+                const messageWindowLimit: number = Math.max(
+                    AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
+                    Math.min(AUTO_SUMMARY_MAX_MESSAGE_WINDOW, summaryIntervalFloors),
+                );
+                const [sentRows, receivedRows] = await Promise.all([
+                    this.eventsManager.query({ type: 'chat.message.sent', limit: messageWindowLimit }),
+                    this.eventsManager.query({ type: 'chat.message.received', limit: messageWindowLimit }),
+                ]);
+                const rows = [...sentRows, ...receivedRows]
+                    .sort((a: EventEnvelope<unknown>, b: EventEnvelope<unknown>): number => Number(a.ts ?? 0) - Number(b.ts ?? 0))
+                    .slice(-messageWindowLimit);
                 const messages = rows
                     .map((row: EventEnvelope<unknown>): { role?: string; content?: string; name?: string } => {
                         const type = String(row.type ?? '').trim();
@@ -247,7 +284,14 @@ export class MemorySDKImpl {
                 if (messages.length <= 0) {
                     return;
                 }
-                await this.unifiedManager.captureSummaryFromChat({ messages });
+                const snapshot = await this.unifiedManager.captureSummaryFromChat({ messages });
+                if (!snapshot) {
+                    return;
+                }
+                await this.writeColdStartState({
+                    autoSummaryLastFloorCount: messageFloorCount,
+                    autoSummaryLastTriggeredAt: Date.now(),
+                });
             },
         };
 
