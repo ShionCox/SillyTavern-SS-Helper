@@ -1,10 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { stateStore, saveEntryMock, getWorldProfileBindingMock } = vi.hoisted(() => {
+const {
+    stateStore,
+    saveEntryMock,
+    getWorldProfileBindingMock,
+    ensureActorProfileMock,
+    bindRoleToEntryMock,
+    listActorProfilesMock,
+    listEntriesMock,
+} = vi.hoisted(() => {
     return {
         stateStore: new Map<string, Record<string, unknown>>(),
         saveEntryMock: vi.fn(async () => ({ entryId: 'entry-1' })),
         getWorldProfileBindingMock: vi.fn(async () => null),
+        ensureActorProfileMock: vi.fn(async () => undefined),
+        bindRoleToEntryMock: vi.fn(async () => undefined),
+        listActorProfilesMock: vi.fn(async () => [{ actorKey: 'user', displayName: '用户' }]),
+        listEntriesMock: vi.fn(async () => []),
     };
 });
 
@@ -89,7 +101,7 @@ vi.mock('../src/core/unified-memory-manager', () => {
          * @returns 异步完成。
          */
         public async ensureActorProfile(): Promise<void> {
-            return;
+            return ensureActorProfileMock();
         }
 
         /**
@@ -97,13 +109,21 @@ vi.mock('../src/core/unified-memory-manager', () => {
          * @returns 异步完成。
          */
         public async bindRoleToEntry(): Promise<void> {
-            return;
+            return bindRoleToEntryMock();
         }
 
         /**
          * 功能：写入总结快照。
          * @returns 异步完成。
          */
+        public async listActorProfiles(): Promise<Array<{ actorKey: string; displayName: string }>> {
+            return listActorProfilesMock();
+        }
+
+        public async listEntries(): Promise<unknown[]> {
+            return listEntriesMock();
+        }
+
         public async applySummarySnapshot(): Promise<void> {
             return;
         }
@@ -186,6 +206,12 @@ describe('memory sdk takeover cold start sync', () => {
         saveEntryMock.mockClear();
         getWorldProfileBindingMock.mockClear();
         getWorldProfileBindingMock.mockResolvedValue(null);
+        ensureActorProfileMock.mockClear();
+        bindRoleToEntryMock.mockClear();
+        listActorProfilesMock.mockClear();
+        listEntriesMock.mockClear();
+        listActorProfilesMock.mockResolvedValue([{ actorKey: 'user', displayName: '用户' }]);
+        listEntriesMock.mockResolvedValue([]);
     });
 
     it('marks cold start as completed after takeover consolidation is applied', async () => {
@@ -193,6 +219,7 @@ describe('memory sdk takeover cold start sync', () => {
         const result: MemoryTakeoverConsolidationResult = {
             takeoverId: 'takeover-1',
             chapterDigestIndex: [],
+            actorCards: [],
             longTermFacts: [],
             relationState: [],
             taskState: [],
@@ -228,5 +255,45 @@ describe('memory sdk takeover cold start sync', () => {
         expect(status.completed).toBe(true);
         expect(status.completedAt).toBeTypeOf('number');
         expect(stateStore.get('chat-1')?.coldStartLastReasonCode).toBe('old_chat_takeover_completed');
+    });
+
+    it('does not create actor profile for faction-like relation targets without actor card', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+        const result: MemoryTakeoverConsolidationResult = {
+            takeoverId: 'takeover-2',
+            chapterDigestIndex: [],
+            actorCards: [],
+            longTermFacts: [],
+            relationState: [
+                {
+                    target: '月语教派',
+                    state: '保持接触',
+                    reason: '来自旧聊天整理结果',
+                },
+            ],
+            taskState: [],
+            worldState: {},
+            activeSnapshot: null,
+            dedupeStats: {
+                longTermFacts: 0,
+                relationUpdates: 1,
+                taskUpdates: 0,
+                worldUpdates: 0,
+            },
+            conflictStats: {
+                unresolvedFacts: 0,
+                unresolvedRelations: 0,
+                unresolvedTasks: 0,
+                unresolvedWorldStates: 0,
+            },
+            generatedAt: Date.now(),
+        };
+
+        await (sdk as unknown as { applyTakeoverConsolidation: (value: MemoryTakeoverConsolidationResult) => Promise<void> })
+            .applyTakeoverConsolidation(result);
+
+        expect(ensureActorProfileMock).not.toHaveBeenCalledWith(expect.objectContaining({
+            displayName: '月语教派',
+        }));
     });
 });

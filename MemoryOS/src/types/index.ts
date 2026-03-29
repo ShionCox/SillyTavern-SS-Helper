@@ -29,6 +29,7 @@ export type {
     MemoryTakeoverRelationTransition,
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
+    MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBaseline,
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBatchResult,

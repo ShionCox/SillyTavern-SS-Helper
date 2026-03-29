@@ -106,6 +106,15 @@ export interface MemoryTakeoverWorldStateChange {
 /**
  * 功能：定义静态基线结果。
  */
+export interface MemoryTakeoverActorCardCandidate {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    traits: string[];
+}
+
 export interface MemoryTakeoverBaseline {
     staticBaseline: string;
     personaBaseline: string;
@@ -139,6 +148,7 @@ export interface MemoryTakeoverBatchResult {
     takeoverId: string;
     batchId: string;
     summary: string;
+    actorCards: MemoryTakeoverActorCardCandidate[];
     stableFacts: MemoryTakeoverStableFact[];
     relationTransitions: MemoryTakeoverRelationTransition[];
     taskTransitions: MemoryTakeoverTaskTransition[];
@@ -171,6 +181,7 @@ export interface MemoryTakeoverConsolidationResult {
         summary: string;
         tags: string[];
     }>;
+    actorCards: MemoryTakeoverActorCardCandidate[];
     longTermFacts: MemoryTakeoverStableFact[];
     relationState: Array<{
         target: string;

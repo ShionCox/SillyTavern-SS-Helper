@@ -488,6 +488,7 @@ export class MemorySDKImpl {
                         plan: existingPlan,
                         llm: readMemoryLLMApi(),
                         pluginId: MEMORY_OS_PLUGIN_ID,
+                        existingActorCards: await this.readTakeoverExistingActorCards(),
                         applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                             await this.applyTakeoverConsolidation(result);
                         },
@@ -501,6 +502,7 @@ export class MemorySDKImpl {
                             plan: snapshot.plan,
                             llm: readMemoryLLMApi(),
                             pluginId: MEMORY_OS_PLUGIN_ID,
+                            existingActorCards: await this.readTakeoverExistingActorCards(),
                             applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                                 await this.applyTakeoverConsolidation(result);
                             },
@@ -547,6 +549,7 @@ export class MemorySDKImpl {
                     plan: nextPlan,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
+                    existingActorCards: await this.readTakeoverExistingActorCards(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                         await this.applyTakeoverConsolidation(result);
                     },
@@ -612,6 +615,7 @@ export class MemorySDKImpl {
                     plan: snapshot.plan,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
+                    existingActorCards: await this.readTakeoverExistingActorCards(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                         await this.applyTakeoverConsolidation(result);
                     },
@@ -949,6 +953,10 @@ export class MemorySDKImpl {
      * @returns 异步完成。
      */
     private async applyTakeoverConsolidation(result: MemoryTakeoverConsolidationResult): Promise<void> {
+        for (const actorCard of result.actorCards ?? []) {
+            await this.persistTakeoverActorCard(actorCard, result.takeoverId);
+        }
+
         for (const fact of result.longTermFacts) {
             await this.unifiedManager.saveEntry({
                 title: `${fact.subject} · ${fact.predicate}`,
@@ -977,12 +985,23 @@ export class MemorySDKImpl {
             });
         }
 
+        const existingActorCards = await this.readTakeoverExistingActorCards();
         for (const relation of result.relationState) {
-            const targetActorKey = this.normalizeTakeoverActorKey(relation.target);
-            await this.unifiedManager.ensureActorProfile({
-                actorKey: targetActorKey,
-                displayName: relation.target,
-            });
+            const resolvedRelationActor = this.resolveTakeoverRelationActorTarget(
+                relation.target,
+                result.actorCards ?? [],
+                existingActorCards,
+            );
+            const targetActorKey = resolvedRelationActor?.actorKey || this.normalizeTakeoverActorKey(relation.target);
+            if (!targetActorKey) {
+                continue;
+            }
+            if (resolvedRelationActor) {
+                await this.unifiedManager.ensureActorProfile({
+                    actorKey: resolvedRelationActor.actorKey,
+                    displayName: resolvedRelationActor.displayName,
+                });
+            }
             const savedEntry = await this.unifiedManager.saveEntry({
                 title: `user -> ${targetActorKey}`,
                 entryType: 'relationship',
@@ -1010,7 +1029,9 @@ export class MemorySDKImpl {
                 reasonCodes: ['takeover_relation_state'],
             });
             await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
-            await this.unifiedManager.bindRoleToEntry(targetActorKey, savedEntry.entryId);
+            if (resolvedRelationActor) {
+                await this.unifiedManager.bindRoleToEntry(targetActorKey, savedEntry.entryId);
+            }
         }
 
         for (const task of result.taskState) {
@@ -1065,6 +1086,108 @@ export class MemorySDKImpl {
 
         await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
         await this.markColdStartCompletedFromTakeover();
+    }
+
+    /**
+     * 功能：读取当前聊天已存在的角色卡列表，供旧聊天批处理提示词复用。
+     * @returns 已存在角色卡的精简列表。
+     */
+    private async readTakeoverExistingActorCards(): Promise<Array<{ actorKey: string; displayName: string }>> {
+        const actorProfiles = await this.unifiedManager.listActorProfiles();
+        return actorProfiles
+            .map((profile: { actorKey: string; displayName: string }): { actorKey: string; displayName: string } => ({
+                actorKey: String(profile.actorKey ?? '').trim(),
+                displayName: String(profile.displayName ?? '').trim(),
+            }))
+            .filter((profile: { actorKey: string; displayName: string }): boolean => {
+                return Boolean(profile.actorKey) && Boolean(profile.displayName);
+            });
+    }
+
+    /**
+     * 功能：把旧聊天处理识别出的角色卡候选写入正式角色卡条目。
+     * @param actorCard 角色卡候选。
+     * @param takeoverId 接管任务 ID。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverActorCard(
+        actorCard: {
+            actorKey: string;
+            displayName: string;
+            aliases: string[];
+            identityFacts: string[];
+            originFacts: string[];
+            traits: string[];
+        },
+        takeoverId: string,
+    ): Promise<void> {
+        const actorKey = this.normalizeTakeoverActorKey(actorCard.actorKey);
+        const displayName = String(actorCard.displayName ?? '').trim();
+        if (!actorKey || actorKey === 'user' || !displayName) {
+            return;
+        }
+
+        await this.unifiedManager.ensureActorProfile({
+            actorKey,
+            displayName,
+        });
+
+        const existingActorEntries = await this.unifiedManager.listEntries({
+            entryType: 'actor_profile',
+            rememberedByActorKey: actorKey,
+        });
+        const existingEntry = existingActorEntries[0] ?? null;
+        const identityFacts = this.dedupeTakeoverStringList(actorCard.identityFacts ?? []);
+        const originFacts = this.dedupeTakeoverStringList(actorCard.originFacts ?? []);
+        const traits = this.dedupeTakeoverStringList(actorCard.traits ?? []);
+        const aliases = this.dedupeTakeoverStringList(actorCard.aliases ?? []);
+        const summary = identityFacts.join('；') || `${displayName}的角色卡`;
+
+        const savedEntry = await this.unifiedManager.saveEntry({
+            entryId: existingEntry?.entryId,
+            title: displayName,
+            entryType: 'actor_profile',
+            category: '角色关系',
+            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
+            summary,
+            detail: existingEntry?.detail ?? '',
+            detailPayload: {
+                ...(existingEntry?.detailPayload ?? {}),
+                fields: {
+                    aliases,
+                    identityFacts,
+                    originFacts,
+                    traits,
+                },
+                takeover: {
+                    source: 'old_chat_takeover',
+                    takeoverId,
+                },
+            },
+            sourceSummaryIds: existingEntry?.sourceSummaryIds ?? [],
+        }, {
+            actionType: existingEntry ? 'UPDATE' : 'ADD',
+            sourceLabel: '旧聊天接管整合',
+            reasonCodes: [existingEntry ? 'takeover_actor_card_update' : 'takeover_actor_card_add'],
+        });
+        await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
+    }
+
+    /**
+     * 功能：去重旧聊天处理里的字符串列表。
+     * @param values 原始列表。
+     * @returns 去重后的列表。
+     */
+    private dedupeTakeoverStringList(values: string[]): string[] {
+        const result: string[] = [];
+        for (const value of values) {
+            const normalized = String(value ?? '').trim();
+            if (!normalized || result.includes(normalized)) {
+                continue;
+            }
+            result.push(normalized);
+        }
+        return result;
     }
 
     /**
@@ -1189,13 +1312,60 @@ export class MemorySDKImpl {
      * @param value 原始角色标识。
      * @returns 角色键。
      */
+    /**
+     * 功能：解析旧聊天关系目标是否应视为真实角色。
+     * @param targetName 关系目标名称。
+     * @param actorCards 本次整合识别出的角色卡。
+     * @param existingActorCards 当前聊天已存在的角色卡。
+     * @returns 可用角色目标；无法确认时返回 null。
+     */
+    private resolveTakeoverRelationActorTarget(
+        targetName: string,
+        actorCards: Array<{
+            actorKey: string;
+            displayName: string;
+            aliases?: string[];
+        }>,
+        existingActorCards: Array<{ actorKey: string; displayName: string }>,
+    ): { actorKey: string; displayName: string } | null {
+        const normalizedTargetName = String(targetName ?? '').trim();
+        if (!normalizedTargetName) {
+            return null;
+        }
+
+        const matchedTakeoverActor = actorCards.find((actorCard): boolean => {
+            if (String(actorCard.displayName ?? '').trim() === normalizedTargetName) {
+                return true;
+            }
+            return (actorCard.aliases ?? []).some((alias: string): boolean => String(alias ?? '').trim() === normalizedTargetName);
+        });
+        if (matchedTakeoverActor) {
+            return {
+                actorKey: String(matchedTakeoverActor.actorKey ?? '').trim(),
+                displayName: String(matchedTakeoverActor.displayName ?? '').trim(),
+            };
+        }
+
+        const matchedExistingActor = existingActorCards.find((actorCard): boolean => {
+            return String(actorCard.displayName ?? '').trim() === normalizedTargetName;
+        });
+        if (matchedExistingActor) {
+            return {
+                actorKey: String(matchedExistingActor.actorKey ?? '').trim(),
+                displayName: String(matchedExistingActor.displayName ?? '').trim(),
+            };
+        }
+
+        return null;
+    }
+
     private normalizeTakeoverActorKey(value: string): string {
         const normalized = String(value ?? '')
             .trim()
             .toLowerCase()
             .replace(/[^a-z0-9_-]+/g, '_')
             .replace(/^_+|_+$/g, '');
-        return normalized || 'unknown_actor';
+        return normalized;
     }
 
     /**

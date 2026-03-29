@@ -1,5 +1,6 @@
 import type {
     MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBatchResult,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverRelationTransition,
@@ -23,6 +24,9 @@ export async function runTakeoverConsolidation(input: {
     batchResults: MemoryTakeoverBatchResult[];
 }): Promise<MemoryTakeoverConsolidationResult> {
     const dedupedFacts: MemoryTakeoverStableFact[] = dedupeFacts(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts));
+    const actorCards: MemoryTakeoverActorCardCandidate[] = mergeActorCards(
+        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverActorCardCandidate[] => item.actorCards ?? []),
+    );
     const relationState = collapseRelations(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationTransition[] => item.relationTransitions));
     const taskState = collapseTasks(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions));
     const worldState = collapseWorldState(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverWorldStateChange[] => item.worldStateChanges));
@@ -34,6 +38,7 @@ export async function runTakeoverConsolidation(input: {
             summary: item.summary,
             tags: item.chapterTags,
         })),
+        actorCards,
         longTermFacts: dedupedFacts,
         relationState,
         taskState,
@@ -72,11 +77,55 @@ export async function runTakeoverConsolidation(input: {
         ? {
             ...fallback,
             ...structured,
+            actorCards: mergeActorCards(structured.actorCards ?? fallback.actorCards),
             takeoverId: input.takeoverId,
             activeSnapshot: structured.activeSnapshot ?? input.activeSnapshot,
             generatedAt: Date.now(),
         }
         : fallback;
+}
+
+/**
+ * 功能：合并旧聊天批次识别出的角色卡候选。
+ * @param actorCards 原始角色卡候选。
+ * @returns 合并后的角色卡列表。
+ */
+function mergeActorCards(actorCards: MemoryTakeoverActorCardCandidate[]): MemoryTakeoverActorCardCandidate[] {
+    const map = new Map<string, MemoryTakeoverActorCardCandidate>();
+    for (const actorCard of actorCards) {
+        const actorKey = String(actorCard.actorKey ?? '').trim().toLowerCase();
+        const displayName = String(actorCard.displayName ?? '').trim();
+        if (!actorKey || actorKey === 'user' || !displayName) {
+            continue;
+        }
+        const existing = map.get(actorKey);
+        map.set(actorKey, {
+            actorKey,
+            displayName,
+            aliases: dedupeStringValues([...(existing?.aliases ?? []), ...(actorCard.aliases ?? [])]),
+            identityFacts: dedupeStringValues([...(existing?.identityFacts ?? []), ...(actorCard.identityFacts ?? [])]),
+            originFacts: dedupeStringValues([...(existing?.originFacts ?? []), ...(actorCard.originFacts ?? [])]),
+            traits: dedupeStringValues([...(existing?.traits ?? []), ...(actorCard.traits ?? [])]),
+        });
+    }
+    return Array.from(map.values());
+}
+
+/**
+ * 功能：去重字符串列表。
+ * @param values 原始列表。
+ * @returns 去重后的字符串列表。
+ */
+function dedupeStringValues(values: string[]): string[] {
+    const result: string[] = [];
+    for (const value of values) {
+        const normalized = String(value ?? '').trim();
+        if (!normalized || result.includes(normalized)) {
+            continue;
+        }
+        result.push(normalized);
+    }
+    return result;
 }
 
 /**

@@ -35,6 +35,7 @@ export async function runTakeoverScheduler(input: {
     plan: MemoryTakeoverPlan;
     llm: MemoryLLMApi | null;
     pluginId: string;
+    existingActorCards?: Array<{ actorKey: string; displayName: string }>;
     applyConsolidation: (result: MemoryTakeoverConsolidationResult) => Promise<void>;
 }): Promise<MemoryTakeoverProgressSnapshot> {
     const sourceBundle = collectTakeoverSourceBundle();
@@ -106,6 +107,9 @@ export async function runTakeoverScheduler(input: {
         await saveMemoryTakeoverBatchMeta(input.chatKey, runningBatch);
         try {
             const messages = sliceTakeoverMessages(sourceBundle, batch.range);
+            const previousBatchResults = Array.from(batchResultMap.values())
+                .filter((item) => item.sourceRange.endFloor < batch.range.startFloor)
+                .sort((left, right) => left.sourceRange.startFloor - right.sourceRange.startFloor);
 
             const sliceRoleStats: Record<string, number> = {};
             for (const msg of messages) {
@@ -131,6 +135,8 @@ export async function runTakeoverScheduler(input: {
                 batch: runningBatch,
                 totalBatches: batches.length,
                 messages,
+                previousBatchResults,
+                existingActorCards: input.existingActorCards ?? [],
             });
             batchResultMap.set(result.batchId, result);
             completedBatchIds.add(result.batchId);
