@@ -45,6 +45,11 @@ export function buildTakeoverPlan(input: {
     const mode: MemoryTakeoverMode = input.config?.mode ?? 'full';
     const requestedRecentFloors: number = Math.max(1, Math.trunc(Number(input.config?.recentFloors) || input.defaults.recentFloors));
     const requestedBatchSize: number = Math.max(1, Math.trunc(Number(input.config?.batchSize) || input.defaults.batchSize));
+    const requestedUseActiveSnapshot: boolean = input.config?.useActiveSnapshot !== false;
+    const requestedActiveSnapshotFloors: number = Math.max(
+        1,
+        Math.trunc(Number(input.config?.activeSnapshotFloors) || requestedRecentFloors),
+    );
 
     const rawRange: MemoryTakeoverRange = mode === 'recent'
         ? {
@@ -62,14 +67,15 @@ export function buildTakeoverPlan(input: {
             };
 
     const normalizedRange: MemoryTakeoverRange = normalizeTakeoverRange(rawRange, totalFloors);
-    const activeWindowStart: number = Math.max(
-        normalizedRange.startFloor,
-        normalizedRange.endFloor - Math.max(1, requestedRecentFloors) + 1,
-    );
-    const activeWindow: MemoryTakeoverRange = normalizeTakeoverRange({
-        startFloor: activeWindowStart,
-        endFloor: normalizedRange.endFloor,
-    }, totalFloors);
+    const activeWindow: MemoryTakeoverRange | null = requestedUseActiveSnapshot
+        ? normalizeTakeoverRange({
+            startFloor: Math.max(
+                normalizedRange.startFloor,
+                normalizedRange.endFloor - Math.max(1, requestedActiveSnapshotFloors) + 1,
+            ),
+            endFloor: normalizedRange.endFloor,
+        }, totalFloors)
+        : null;
     const totalBatches: number = buildTakeoverBatches({
         takeoverId: input.takeoverId,
         range: normalizedRange,
@@ -87,6 +93,8 @@ export function buildTakeoverPlan(input: {
         totalFloors,
         recentFloors: requestedRecentFloors,
         batchSize: requestedBatchSize,
+        useActiveSnapshot: requestedUseActiveSnapshot,
+        activeSnapshotFloors: requestedActiveSnapshotFloors,
         prioritizeRecent: input.config?.prioritizeRecent ?? input.defaults.prioritizeRecent,
         autoContinue: input.config?.autoContinue ?? input.defaults.autoContinue,
         autoConsolidate: input.config?.autoConsolidate ?? input.defaults.autoConsolidate,
@@ -109,31 +117,35 @@ export function buildTakeoverPlan(input: {
 export function buildTakeoverBatches(input: {
     takeoverId: string;
     range: MemoryTakeoverRange;
-    activeWindow: MemoryTakeoverRange;
+    activeWindow: MemoryTakeoverRange | null;
     batchSize: number;
 }): MemoryTakeoverBatch[] {
     const safeBatchSize: number = Math.max(1, Math.trunc(Number(input.batchSize) || 1));
     const batches: MemoryTakeoverBatch[] = [];
-    const activeWindow: MemoryTakeoverRange = {
-        startFloor: input.activeWindow.startFloor,
-        endFloor: input.activeWindow.endFloor,
-    };
+    const activeWindow: MemoryTakeoverRange | null = input.activeWindow
+        ? {
+            startFloor: input.activeWindow.startFloor,
+            endFloor: input.activeWindow.endFloor,
+        }
+        : null;
 
-    batches.push({
-        takeoverId: input.takeoverId,
-        batchId: `${input.takeoverId}:active`,
-        batchIndex: 0,
-        range: activeWindow,
-        category: 'active',
-        status: 'pending',
-        attemptCount: 0,
-        sourceMessageIds: [],
-    });
+    if (activeWindow) {
+        batches.push({
+            takeoverId: input.takeoverId,
+            batchId: `${input.takeoverId}:active`,
+            batchIndex: 0,
+            range: activeWindow,
+            category: 'active',
+            status: 'pending',
+            attemptCount: 0,
+            sourceMessageIds: [],
+        });
+    }
 
     let batchIndex: number = 1;
     for (let startFloor: number = input.range.startFloor; startFloor <= input.range.endFloor; startFloor += safeBatchSize) {
         const endFloor: number = Math.min(input.range.endFloor, startFloor + safeBatchSize - 1);
-        if (endFloor >= activeWindow.startFloor && startFloor <= activeWindow.endFloor) {
+        if (activeWindow && endFloor >= activeWindow.startFloor && startFloor <= activeWindow.endFloor) {
             continue;
         }
         batches.push({

@@ -3,9 +3,17 @@ import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-
 import type { MemoryLLMApi } from '../memory-summary';
 
 /**
+ * 功能：定义接管结构化任务的真实请求体。
+ */
+export interface TakeoverStructuredTaskRequest {
+    messages: Array<{ role: 'system' | 'user'; content: string }>;
+    schema: unknown;
+}
+
+/**
  * 功能：从 Prompt section 中解析 JSON。
- * @param section section 文本。
- * @returns JSON 数据。
+ * @param section section 文本
+ * @returns JSON 数据
  */
 export function parseTakeoverJsonSection(section: string): unknown {
     const source: string = String(section ?? '').trim();
@@ -24,23 +32,17 @@ export function parseTakeoverJsonSection(section: string): unknown {
 }
 
 /**
- * 功能：执行接管结构化任务。
- * @param input 调用输入。
- * @returns 结构化结果；失败时返回 null。
+ * 功能：构建接管结构化任务的真实消息体。
+ * @param input 调用输入
+ * @returns 结构化任务请求体
  */
-export async function runTakeoverStructuredTask<T>(input: {
-    llm: MemoryLLMApi | null;
-    pluginId: string;
-    taskId: string;
+export async function buildTakeoverStructuredTaskRequest(input: {
     systemSection: string;
     schemaSection: string;
     sampleSection: string;
     payload: Record<string, unknown>;
     renderData?: Record<string, string>;
-}): Promise<T | null> {
-    if (!input.llm) {
-        return null;
-    }
+}): Promise<TakeoverStructuredTaskRequest> {
     const promptPack = await loadPromptPackSections();
     const schema = parseTakeoverJsonSection(promptPack[input.schemaSection as keyof typeof promptPack] as string);
     const sample = parseTakeoverJsonSection(promptPack[input.sampleSection as keyof typeof promptPack] as string);
@@ -53,24 +55,56 @@ export async function runTakeoverStructuredTask<T>(input: {
         JSON.stringify(schema ?? {}, null, 2),
         JSON.stringify(sample ?? {}, null, 2),
     );
+    return {
+        messages: [
+            {
+                role: 'system',
+                content: `${systemPrompt}\n\n除标识字段、枚举字段与 schema 键名外，所有自然语言字段必须使用简体中文。`,
+            },
+            {
+                role: 'user',
+                content: userPayload,
+            },
+        ],
+        schema,
+    };
+}
+
+/**
+ * 功能：执行接管结构化任务。
+ * @param input 调用输入
+ * @returns 结构化结果；失败时返回 null
+ */
+export async function runTakeoverStructuredTask<T>(input: {
+    llm: MemoryLLMApi | null;
+    pluginId: string;
+    taskId: string;
+    taskDescription?: string;
+    systemSection: string;
+    schemaSection: string;
+    sampleSection: string;
+    payload: Record<string, unknown>;
+    renderData?: Record<string, string>;
+}): Promise<T | null> {
+    if (!input.llm) {
+        return null;
+    }
+    const request = await buildTakeoverStructuredTaskRequest({
+        systemSection: input.systemSection,
+        schemaSection: input.schemaSection,
+        sampleSection: input.sampleSection,
+        payload: input.payload,
+        renderData: input.renderData,
+    });
     const result = await input.llm.runTask<T>({
         consumer: input.pluginId,
         taskId: input.taskId,
-        taskDescription: `旧聊天接管：${input.taskId}`,
+        taskDescription: String(input.taskDescription ?? '').trim() || '旧聊天处理',
         taskKind: 'generation',
         input: {
-            messages: [
-                {
-                    role: 'system',
-                    content: `${systemPrompt}\n\n除标识字段、枚举字段与 schema 键名外，所有自然语言字段必须使用简体中文。`,
-                },
-                {
-                    role: 'user',
-                    content: userPayload,
-                },
-            ],
+            messages: request.messages,
         },
-        schema,
+        schema: request.schema,
         enqueue: {
             displayMode: 'compact',
         },

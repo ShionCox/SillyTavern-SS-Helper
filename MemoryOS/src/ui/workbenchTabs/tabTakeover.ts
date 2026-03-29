@@ -1,4 +1,6 @@
 import { escapeHtml } from '../editorShared';
+import { buildTakeoverPreviewMarkup } from '../takeoverPreviewMarkup';
+import { resolveTakeoverFieldVisibility } from '../takeoverFormShared';
 import {
     escapeAttr,
     formatTimestamp,
@@ -8,9 +10,9 @@ import {
 
 /**
  * 功能：渲染旧聊天接管视图。
- * @param snapshot 工作台快照。
- * @param state 当前状态。
- * @returns HTML 片段。
+ * @param snapshot 工作台快照
+ * @param state 当前状态
+ * @returns HTML 片段
  */
 export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const progress = snapshot.takeoverProgress;
@@ -23,6 +25,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
     const failedCount = plan?.failedBatchIds.length ?? 0;
     const totalCount = plan?.totalBatches ?? 0;
     const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+    const visibility = resolveTakeoverFieldVisibility(state.takeoverMode);
 
     return `
         <section class="stx-memory-workbench__view"${state.currentView !== 'takeover' ? ' hidden' : ''}>
@@ -31,13 +34,25 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                 <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
                     <select class="stx-memory-workbench__select" id="stx-memory-takeover-mode" style="width: 160px;">
                         <option value="full"${state.takeoverMode === 'full' ? ' selected' : ''}>全部楼层</option>
-                        <option value="recent"${state.takeoverMode === 'recent' ? ' selected' : ''}>最近楼层</option>
+                        <option value="recent"${state.takeoverMode === 'recent' ? ' selected' : ''}>最近 N 层</option>
                         <option value="custom_range"${state.takeoverMode === 'custom_range' ? ' selected' : ''}>自定义区间</option>
                     </select>
-                    <input class="stx-memory-workbench__input" id="stx-memory-takeover-range-start" type="number" min="1" placeholder="起始楼层" value="${escapeAttr(state.takeoverRangeStart)}" style="width: 110px;">
-                    <input class="stx-memory-workbench__input" id="stx-memory-takeover-range-end" type="number" min="1" placeholder="结束楼层" value="${escapeAttr(state.takeoverRangeEnd)}" style="width: 110px;">
+                    ${visibility.showRecentFloors ? `
+                        <input class="stx-memory-workbench__input" id="stx-memory-takeover-recent-floors" type="number" min="1" placeholder="最近层数" value="${escapeAttr(state.takeoverRecentFloors)}" style="width: 120px;">
+                    ` : ''}
+                    ${visibility.showCustomRange ? `
+                        <input class="stx-memory-workbench__input" id="stx-memory-takeover-range-start" type="number" min="1" placeholder="起始楼层" value="${escapeAttr(state.takeoverRangeStart)}" style="width: 110px;">
+                        <input class="stx-memory-workbench__input" id="stx-memory-takeover-range-end" type="number" min="1" placeholder="结束楼层" value="${escapeAttr(state.takeoverRangeEnd)}" style="width: 110px;">
+                    ` : ''}
                     <input class="stx-memory-workbench__input" id="stx-memory-takeover-batch-size" type="number" min="1" placeholder="每批楼层数" value="${escapeAttr(state.takeoverBatchSize)}" style="width: 120px;">
-                    <button class="stx-memory-workbench__button" data-action="takeover-start">
+                    <label class="stx-memory-workbench__checkbox" style="gap:8px;">
+                        <input id="stx-memory-takeover-use-active-snapshot" type="checkbox"${state.takeoverUseActiveSnapshot ? ' checked' : ''}>
+                        使用最近快照
+                    </label>
+                    ${state.takeoverUseActiveSnapshot ? `
+                        <input class="stx-memory-workbench__input" id="stx-memory-takeover-active-snapshot-floors" type="number" min="1" placeholder="快照层数" value="${escapeAttr(state.takeoverActiveSnapshotFloors)}" style="width: 120px;">
+                    ` : ''}
+                    <button id="stx-memory-takeover-start-button" class="stx-memory-workbench__button" data-action="takeover-start"${state.takeoverPreviewLoading ? ' disabled' : ''}>
                         <i class="fa-solid fa-play"></i> 开始接管
                     </button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="takeover-pause">
@@ -53,6 +68,14 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                         <i class="fa-solid fa-stop"></i> 终止
                     </button>
                 </div>
+            </div>
+
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">批次 Token 预估</div>
+                <div id="stx-memory-takeover-preview-panel">${buildTakeoverPreviewMarkup({
+                    estimate: state.takeoverPreview,
+                    loading: state.takeoverPreviewLoading,
+                })}</div>
             </div>
 
             <div class="stx-memory-workbench__diagnostics">

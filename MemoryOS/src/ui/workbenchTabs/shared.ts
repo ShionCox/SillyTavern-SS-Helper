@@ -10,6 +10,7 @@ import type {
     PromptAssemblySnapshot,
     RoleEntryMemory,
     SummarySnapshot,
+    MemoryTakeoverPreviewEstimate,
     WorldProfileBinding,
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
@@ -87,7 +88,12 @@ export interface WorkbenchState {
     takeoverMode: string;
     takeoverRangeStart: string;
     takeoverRangeEnd: string;
+    takeoverRecentFloors: string;
     takeoverBatchSize: string;
+    takeoverUseActiveSnapshot: boolean;
+    takeoverActiveSnapshotFloors: string;
+    takeoverPreview: MemoryTakeoverPreviewEstimate | null;
+    takeoverPreviewLoading: boolean;
 }
 
 export interface WorkbenchSnapshot {

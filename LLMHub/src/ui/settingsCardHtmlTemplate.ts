@@ -675,13 +675,15 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
 
           <div class="stx-ui-item stx-ui-item-stack stx-ui-search-item" data-stx-ui-search="queue pending active running">
             <div class="stx-ui-item-main">
-              <div class="stx-ui-item-title">当前请求队列</div>
-              <div class="stx-ui-item-desc">显示编排器中排队和正在执行的请求。</div>
-            </div>
-            <div class="stx-ui-actions">
-              <button id="${ids.queueRefreshBtnId}" type="button" class="stx-ui-btn secondary" data-tip="刷新队列状态">
-                <i class="fa-solid fa-rotate"></i> 刷新
-              </button>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div class="stx-ui-item-title">当前请求队列</div>
+                <div class="stx-ui-item-desc">显示编排器中排队和正在执行的请求。</div>
+              </div>
+              <div class="stx-ui-actions">
+                <button id="${ids.queueRefreshBtnId}" type="button" class="stx-ui-btn secondary" data-tip="刷新队列状态">
+                  <i class="fa-solid fa-rotate"></i> 刷新
+                </button>
+              </div>
             </div>
             <div id="${ids.queueSnapshotListId}" class="stx-ui-list"></div>
           </div>

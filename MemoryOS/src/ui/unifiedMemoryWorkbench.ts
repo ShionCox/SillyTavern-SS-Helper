@@ -1,7 +1,10 @@
 import { openSharedDialog, type SharedDialogInstance } from '../../../_Components/sharedDialog';
 import { logger, toast } from '../runtime/runtime-services';
 import type { MemorySDKImpl } from '../sdk/memory-sdk';
+import { readMemoryOSSettings } from '../settings/store';
 import { escapeHtml } from './editorShared';
+import { buildTakeoverPreviewMarkup } from './takeoverPreviewMarkup';
+import { waitForUiPaint } from './uiAsync';
 import type { UnifiedMemoryWorkbenchOpenOptions, UnifiedWorkbenchViewMode } from './unifiedMemoryWorkbenchTypes';
 import type {
     ActorMemoryProfile,
@@ -41,11 +44,13 @@ import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildMemoryGraphViewMarkup } from './workbenchTabs/tabMemoryGraph';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
+import { parseTakeoverFormDraft } from './takeoverFormShared';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import { mountMemoryGraph } from './workbenchTabs/memoryGraph';
 import { buildMemoryGraph } from './workbenchTabs/shared/buildMemoryGraph';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
+const TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
 
 /**
  * 功能：确保工作台样式只注入一次。
@@ -203,6 +208,7 @@ export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOp
  */
 async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMemoryWorkbenchOpenOptions): Promise<void> {
     const memory = getActiveMemorySdk();
+    const settings = readMemoryOSSettings();
     if (!memory) {
         instance.content.innerHTML = '<div class="stx-memory-workbench__empty">当前未连接到记忆主链，无法打开工作台。</div>';
         return;
@@ -232,8 +238,14 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         takeoverMode: 'full',
         takeoverRangeStart: '',
         takeoverRangeEnd: '',
-        takeoverBatchSize: '',
+        takeoverRecentFloors: String(settings.takeoverDefaultRecentFloors),
+        takeoverBatchSize: String(settings.takeoverDefaultBatchSize),
+        takeoverUseActiveSnapshot: true,
+        takeoverActiveSnapshotFloors: String(settings.takeoverDefaultRecentFloors),
+        takeoverPreview: null,
+        takeoverPreviewLoading: false,
     };
+    let takeoverPreviewSequence = 0;
 
     /**
      * 功能：读取工作台所需快照。
@@ -485,21 +497,32 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 const mode = readInputValue(root, '#stx-memory-takeover-mode') || 'full';
                 const rawStart = readInputValue(root, '#stx-memory-takeover-range-start');
                 const rawEnd = readInputValue(root, '#stx-memory-takeover-range-end');
+                const rawRecentFloors = readInputValue(root, '#stx-memory-takeover-recent-floors');
                 const rawBatchSize = readInputValue(root, '#stx-memory-takeover-batch-size');
-                const startFloor = Math.max(0, Number(rawStart) || 0);
-                const endFloor = Math.max(0, Number(rawEnd) || 0);
-                const batchSize = Math.max(0, Number(rawBatchSize) || 0);
+                const rawActiveSnapshotFloors = readInputValue(root, '#stx-memory-takeover-active-snapshot-floors');
+                const useActiveSnapshot = readCheckedValue(root, '#stx-memory-takeover-use-active-snapshot');
                 state.takeoverMode = mode;
                 state.takeoverRangeStart = rawStart;
                 state.takeoverRangeEnd = rawEnd;
+                state.takeoverRecentFloors = rawRecentFloors;
                 state.takeoverBatchSize = rawBatchSize;
-                await memory.chatState.createTakeoverPlan({
+                state.takeoverUseActiveSnapshot = useActiveSnapshot;
+                state.takeoverActiveSnapshotFloors = rawActiveSnapshotFloors;
+                const parsed = parseTakeoverFormDraft({
                     mode: mode as 'full' | 'recent' | 'custom_range',
-                    startFloor: startFloor > 0 ? startFloor : undefined,
-                    endFloor: endFloor > 0 ? endFloor : undefined,
-                    recentFloors: mode === 'recent' && endFloor > 0 ? endFloor : undefined,
-                    batchSize: batchSize > 0 ? batchSize : undefined,
+                    startFloor: rawStart,
+                    endFloor: rawEnd,
+                    recentFloors: rawRecentFloors,
+                    batchSize: rawBatchSize,
+                    useActiveSnapshot,
+                    activeSnapshotFloors: rawActiveSnapshotFloors,
                 });
+                if (parsed.validationError) {
+                    toast.error(parsed.validationError);
+                    await render();
+                    return;
+                }
+                await memory.chatState.createTakeoverPlan(parsed.config);
                 await memory.chatState.startTakeover();
                 toast.success('旧聊天接管任务已启动。');
                 await render();
@@ -610,24 +633,57 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             state.bindEntryId = String(bindEntrySelect.value ?? '').trim();
         });
 
+        let takeoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+        const scheduleTakeoverRender = (): void => {
+            if (takeoverPreviewTimer) {
+                clearTimeout(takeoverPreviewTimer);
+            }
+            takeoverPreviewTimer = setTimeout((): void => {
+                takeoverPreviewTimer = null;
+                void render();
+            }, TAKEOVER_PREVIEW_DEBOUNCE_MS);
+        };
+
         const takeoverModeSelect = root.querySelector('#stx-memory-takeover-mode') as HTMLSelectElement | null;
         takeoverModeSelect?.addEventListener('change', (): void => {
             state.takeoverMode = String(takeoverModeSelect.value ?? 'full').trim();
+            scheduleTakeoverRender();
         });
 
         const takeoverRangeStartInput = root.querySelector('#stx-memory-takeover-range-start') as HTMLInputElement | null;
         takeoverRangeStartInput?.addEventListener('input', (): void => {
             state.takeoverRangeStart = String(takeoverRangeStartInput.value ?? '').trim();
+            scheduleTakeoverRender();
         });
 
         const takeoverRangeEndInput = root.querySelector('#stx-memory-takeover-range-end') as HTMLInputElement | null;
         takeoverRangeEndInput?.addEventListener('input', (): void => {
             state.takeoverRangeEnd = String(takeoverRangeEndInput.value ?? '').trim();
+            scheduleTakeoverRender();
+        });
+
+        const takeoverRecentFloorsInput = root.querySelector('#stx-memory-takeover-recent-floors') as HTMLInputElement | null;
+        takeoverRecentFloorsInput?.addEventListener('input', (): void => {
+            state.takeoverRecentFloors = String(takeoverRecentFloorsInput.value ?? '').trim();
+            scheduleTakeoverRender();
         });
 
         const takeoverBatchSizeInput = root.querySelector('#stx-memory-takeover-batch-size') as HTMLInputElement | null;
         takeoverBatchSizeInput?.addEventListener('input', (): void => {
             state.takeoverBatchSize = String(takeoverBatchSizeInput.value ?? '').trim();
+            scheduleTakeoverRender();
+        });
+
+        const takeoverUseActiveSnapshotInput = root.querySelector('#stx-memory-takeover-use-active-snapshot') as HTMLInputElement | null;
+        takeoverUseActiveSnapshotInput?.addEventListener('change', (): void => {
+            state.takeoverUseActiveSnapshot = takeoverUseActiveSnapshotInput.checked === true;
+            scheduleTakeoverRender();
+        });
+
+        const takeoverActiveSnapshotFloorsInput = root.querySelector('#stx-memory-takeover-active-snapshot-floors') as HTMLInputElement | null;
+        takeoverActiveSnapshotFloorsInput?.addEventListener('input', (): void => {
+            state.takeoverActiveSnapshotFloors = String(takeoverActiveSnapshotFloorsInput.value ?? '').trim();
+            scheduleTakeoverRender();
         });
 
         root.querySelectorAll<HTMLElement>('[data-action]').forEach((button: HTMLElement): void => {
@@ -635,6 +691,99 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 void handleAction(String(button.dataset.action ?? '').trim(), snapshot, button);
             });
         });
+    };
+
+    /**
+     * 功能：同步工作台中的接管预估显示状态。
+     * @returns 无返回值
+     */
+    const syncTakeoverPreviewUi = (): void => {
+        const previewPanel = root.querySelector('#stx-memory-takeover-preview-panel') as HTMLElement | null;
+        if (previewPanel) {
+            previewPanel.innerHTML = buildTakeoverPreviewMarkup({
+                estimate: state.takeoverPreview,
+                loading: state.takeoverPreviewLoading,
+            });
+        }
+        const startButton = root.querySelector('#stx-memory-takeover-start-button') as HTMLButtonElement | null;
+        if (startButton) {
+            startButton.disabled = state.takeoverPreviewLoading;
+        }
+    };
+
+    /**
+     * 功能：异步刷新接管 token 预估，避免阻塞整个工作台渲染。
+     * @returns 无返回值
+     */
+    const refreshTakeoverPreview = async (): Promise<void> => {
+        if (state.currentView !== 'takeover') {
+            state.takeoverPreviewLoading = false;
+            return;
+        }
+        const currentSequence = ++takeoverPreviewSequence;
+        const parsed = parseTakeoverFormDraft({
+            mode: state.takeoverMode as 'full' | 'recent' | 'custom_range',
+            startFloor: state.takeoverRangeStart,
+            endFloor: state.takeoverRangeEnd,
+            recentFloors: state.takeoverRecentFloors,
+            batchSize: state.takeoverBatchSize,
+            useActiveSnapshot: state.takeoverUseActiveSnapshot,
+            activeSnapshotFloors: state.takeoverActiveSnapshotFloors,
+        });
+        if (parsed.validationError) {
+            state.takeoverPreviewLoading = false;
+            state.takeoverPreview = {
+                mode: parsed.config.mode ?? 'full',
+                totalFloors: state.takeoverPreview?.totalFloors ?? 0,
+                range: null,
+                activeWindow: null,
+                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
+                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
+                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
+                threshold: state.takeoverPreview?.threshold ?? 100000,
+                totalBatches: 0,
+                batches: [],
+                hasOverflow: false,
+                overflowWarnings: [],
+                validationError: parsed.validationError,
+            };
+            syncTakeoverPreviewUi();
+            return;
+        }
+        state.takeoverPreviewLoading = true;
+        syncTakeoverPreviewUi();
+        await waitForUiPaint();
+        try {
+            const preview = await memory.chatState.previewTakeoverEstimate(parsed.config);
+            if (currentSequence !== takeoverPreviewSequence) {
+                return;
+            }
+            state.takeoverPreview = preview;
+        } catch (error) {
+            if (currentSequence !== takeoverPreviewSequence) {
+                return;
+            }
+            state.takeoverPreview = {
+                mode: parsed.config.mode ?? 'full',
+                totalFloors: state.takeoverPreview?.totalFloors ?? 0,
+                range: null,
+                activeWindow: null,
+                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
+                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
+                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
+                threshold: state.takeoverPreview?.threshold ?? 100000,
+                totalBatches: 0,
+                batches: [],
+                hasOverflow: false,
+                overflowWarnings: [],
+                validationError: `Token 预估失败：${String((error as Error)?.message ?? error)}`,
+            };
+        } finally {
+            if (currentSequence === takeoverPreviewSequence) {
+                state.takeoverPreviewLoading = false;
+                syncTakeoverPreviewUi();
+            }
+        }
     };
 
     /**
@@ -652,6 +801,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             nextEntryList.scrollTop = preservedEntryListScrollTop;
         }
         bindEvents(snapshot);
+        if (state.currentView === 'takeover') {
+            void refreshTakeoverPreview();
+        }
 
         if (state.currentView === 'actors' && state.currentActorTab === 'relationships') {
             const container = root.querySelector('#stx-rpg-graph-container') as HTMLElement | null;

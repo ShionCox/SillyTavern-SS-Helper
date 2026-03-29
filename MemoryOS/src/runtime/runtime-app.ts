@@ -456,6 +456,9 @@ export class MemoryOS {
             defaultAutoContinue: settings.takeoverDefaultAutoContinue,
             defaultAutoConsolidate: settings.takeoverDefaultAutoConsolidate,
             defaultPauseOnError: settings.takeoverDefaultPauseOnError,
+            previewEstimate: (config?: Parameters<typeof sdk.chatState.previewTakeoverEstimate>[0]) => {
+                return sdk.chatState.previewTakeoverEstimate(config);
+            },
         });
         if (!selection.confirmed) {
             return true;

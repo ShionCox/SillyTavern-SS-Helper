@@ -7,3 +7,4 @@ export { runTakeoverConsolidation } from './takeover-consolidator';
 export { appendTakeoverDiagnostics } from './takeover-diagnostics';
 export { runTakeoverScheduler, buildProgressSnapshot } from './takeover-scheduler';
 export { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
+export { buildTakeoverPreviewEstimate, estimateChatMessageTokens, TAKEOVER_TOKEN_WARNING_THRESHOLD } from './takeover-preview';

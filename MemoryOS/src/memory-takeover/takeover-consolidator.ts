@@ -58,6 +58,7 @@ export async function runTakeoverConsolidation(input: {
         llm: input.llm,
         pluginId: input.pluginId,
         taskId: 'memory_takeover_consolidation',
+        taskDescription: `旧聊天处理：整理前面结果（${Math.max(0, input.batchResults.length)}批）`,
         systemSection: 'TAKEOVER_CONSOLIDATION_SYSTEM',
         schemaSection: 'TAKEOVER_CONSOLIDATION_SCHEMA',
         sampleSection: 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE',

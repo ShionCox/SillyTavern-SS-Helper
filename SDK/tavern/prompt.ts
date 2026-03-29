@@ -6,6 +6,16 @@ import type {
 import { stripRuntimePlaceholderArtifactsEvent } from "./artifacts";
 
 /**
+ * 功能：定义酒馆聊天消息正文兼容抽取结果。
+ */
+export interface SdkTavernMessageTextExtractionEvent {
+  text: string;
+  textSource: string;
+  isEmpty: boolean;
+  normalizedShapeHint?: string;
+}
+
+/**
  * 功能：把任意输入规范化为字符串文本。
  * @param raw 原始输入值
  * @returns 规范化后的字符串
@@ -49,34 +59,164 @@ function getPromptArrayTextEvent(contentArray: unknown[]): string {
 }
 
 /**
+ * 功能：从未知字段中抽取可见正文。
+ * @param value 待读取的值。
+ * @param sourcePrefix 当前来源标记。
+ * @returns 命中的抽取结果；未命中时返回 null。
+ */
+function extractTextFromUnknownRecordEvent(
+  value: unknown,
+  sourcePrefix: string
+): SdkTavernMessageTextExtractionEvent | null {
+  if (typeof value === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(value),
+      textSource: sourcePrefix,
+      isEmpty: value.trim().length === 0,
+      normalizedShapeHint: "string",
+    };
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const textValue = record.text;
+  if (typeof textValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(textValue),
+      textSource: `${sourcePrefix}.text`,
+      isEmpty: textValue.trim().length === 0,
+      normalizedShapeHint: "object.text",
+    };
+  }
+
+  const contentValue = record.content;
+  if (typeof contentValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(contentValue),
+      textSource: `${sourcePrefix}.content`,
+      isEmpty: contentValue.trim().length === 0,
+      normalizedShapeHint: "object.content",
+    };
+  }
+
+  const messageValue = record.message;
+  if (typeof messageValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(messageValue),
+      textSource: `${sourcePrefix}.message`,
+      isEmpty: messageValue.trim().length === 0,
+      normalizedShapeHint: "object.message",
+    };
+  }
+
+  const mesValue = record.mes;
+  if (typeof mesValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(mesValue),
+      textSource: `${sourcePrefix}.mes`,
+      isEmpty: mesValue.trim().length === 0,
+      normalizedShapeHint: "object.mes",
+    };
+  }
+
+  if (mesValue && typeof mesValue === "object") {
+    const nestedMesResult = extractTextFromUnknownRecordEvent(mesValue, `${sourcePrefix}.mes`);
+    if (nestedMesResult) {
+      return {
+        ...nestedMesResult,
+        normalizedShapeHint: nestedMesResult.normalizedShapeHint || "object.mes_object",
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 功能：构造统一的空抽取结果。
+ * @param textSource 正文来源标记。
+ * @param normalizedShapeHint 结构提示。
+ * @returns 空抽取结果。
+ */
+function buildEmptyExtractionEvent(
+  textSource: string,
+  normalizedShapeHint?: string
+): SdkTavernMessageTextExtractionEvent {
+  return {
+    text: "",
+    textSource,
+    isEmpty: true,
+    normalizedShapeHint,
+  };
+}
+
+/**
+ * 功能：统一抽取酒馆聊天消息正文，并返回来源诊断信息。
+ * @param message 任意聊天消息对象。
+ * @returns 正文抽取结果。
+ */
+export function extractTavernMessageTextEvent(message: unknown): SdkTavernMessageTextExtractionEvent {
+  if (!message || typeof message !== "object") {
+    return buildEmptyExtractionEvent("message.invalid", "non_object");
+  }
+
+  const messageRecord = message as Record<string, unknown>;
+  const swipeId = Number(messageRecord.swipe_id ?? messageRecord.swipeId);
+  const swipes = messageRecord.swipes;
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    const swipeResult = extractTextFromUnknownRecordEvent(swipes[swipeId], `swipes[${swipeId}]`);
+    if (swipeResult) {
+      return swipeResult;
+    }
+    return buildEmptyExtractionEvent(`swipes[${swipeId}]`, "unsupported_swipe_shape");
+  }
+
+  const mesResult = extractTextFromUnknownRecordEvent(messageRecord.mes, "mes");
+  if (mesResult) {
+    return mesResult;
+  }
+
+  const contentResult = extractTextFromUnknownRecordEvent(messageRecord.content, "content");
+  if (contentResult) {
+    return contentResult;
+  }
+
+  const textResult = extractTextFromUnknownRecordEvent(messageRecord.text, "text");
+  if (textResult) {
+    return textResult;
+  }
+
+  const messageResult = extractTextFromUnknownRecordEvent(messageRecord.message, "message");
+  if (messageResult) {
+    return messageResult;
+  }
+
+  const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
+  if (promptText.trim().length > 0) {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(promptText),
+      textSource: "prompt.content",
+      isEmpty: false,
+      normalizedShapeHint: Array.isArray(messageRecord.content)
+        ? "prompt.content_array"
+        : typeof messageRecord.content === "object" && messageRecord.content !== null
+          ? "prompt.content_object"
+          : "prompt.direct",
+    };
+  }
+
+  return buildEmptyExtractionEvent("message.unsupported", "unsupported_message_shape");
+}
+
+/**
  * 功能：统一读取普通聊天消息文本，优先读取当前激活 swipe。
  * @param message 任意消息对象（SillyTavern 原始消息或兼容结构）
  * @returns 归一化后的消息文本
  */
 export function getTavernMessageTextEvent(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const messageRecord = message as Record<string, unknown>;
-
-  const swipeId = Number(messageRecord.swipe_id ?? messageRecord.swipeId);
-  const swipes = messageRecord.swipes;
-  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
-    const activeSwipe = swipes[swipeId];
-    if (typeof activeSwipe === "string") {
-      return stripRuntimePlaceholderArtifactsEvent(activeSwipe);
-    }
-    if (activeSwipe && typeof activeSwipe === "object") {
-      const swipeText = getTavernPromptMessageTextEvent(activeSwipe as SdkTavernPromptMessageEvent);
-      if (swipeText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(swipeText);
-      const swipeRecord = activeSwipe as Record<string, unknown>;
-      const fallbackSwipeText = swipeRecord.mes ?? swipeRecord.content ?? swipeRecord.text ?? swipeRecord.message;
-      if (typeof fallbackSwipeText === "string") return stripRuntimePlaceholderArtifactsEvent(fallbackSwipeText);
-    }
-  }
-
-  const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
-  if (promptText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(promptText);
-  const raw = messageRecord.mes ?? messageRecord.content ?? messageRecord.text ?? messageRecord.message;
-  return typeof raw === "string" ? stripRuntimePlaceholderArtifactsEvent(raw) : "";
+  return extractTavernMessageTextEvent(message).text;
 }
 
 /**

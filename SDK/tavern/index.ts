@@ -128,6 +128,7 @@ export {
 } from "./artifacts";
 
 export {
+  extractTavernMessageTextEvent,
   extractTavernPromptMessagesEvent,
   findFirstTavernPromptSystemIndexEvent,
   findLastTavernPromptSystemIndexEvent,
@@ -141,6 +142,8 @@ export {
   listTavernPromptTargetsEvent,
   setTavernPromptMessageTextEvent,
 } from "./prompt";
+
+export type { SdkTavernMessageTextExtractionEvent } from "./prompt";
 
 export { ensureTavernInstanceIdEvent } from "./instance";
 

@@ -241,6 +241,20 @@
   box-shadow: 0 0 8px var(--mw-accent-glow);
 }
 
+.stx-memory-workbench__button:disabled,
+.stx-memory-workbench__ghost-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.stx-memory-workbench__button:disabled:hover,
+.stx-memory-workbench__ghost-btn:disabled:hover {
+  background: var(--mw-panel-strong);
+  color: var(--mw-text);
+  border-color: var(--mw-line-strong);
+}
+
 .stx-memory-workbench__ghost-btn:hover {
   background: rgba(255,255,255,0.1);
   border-color: var(--mw-text);
@@ -595,6 +609,86 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.stx-memory-takeover-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stx-memory-takeover-preview__summary,
+.stx-memory-takeover-preview__item-head,
+.stx-memory-takeover-preview__item-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.stx-memory-takeover-preview__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stx-memory-takeover-preview__item {
+  border: 1px solid var(--mw-line);
+  background: rgba(255,255,255,0.03);
+  padding: 10px;
+  border-radius: 10px;
+}
+
+.stx-memory-takeover-preview__item.is-overflow {
+  border-color: rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.08);
+}
+
+.stx-memory-takeover-preview__warning,
+.stx-memory-takeover-preview__empty,
+.stx-memory-takeover-preview__loading {
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.stx-memory-takeover-preview__warning {
+  border: 1px solid rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.08);
+  color: #fecaca;
+}
+
+.stx-memory-takeover-preview__empty {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  color: var(--mw-muted);
+}
+
+.stx-memory-takeover-preview__loading {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  color: var(--mw-text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stx-memory-takeover-preview__spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(255,255,255,0.18);
+  border-top-color: var(--mw-accent-cyan);
+  animation: stx-memory-takeover-preview-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes stx-memory-takeover-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .stx-memory-workbench__preview-box pre {

@@ -71,14 +71,17 @@ export async function runTakeoverScheduler(input: {
     });
     await saveMemoryTakeoverPreview(input.chatKey, 'baseline', baseline);
 
-    const activeMessages = sliceTakeoverMessages(sourceBundle, plan.activeWindow);
-    const activeSnapshot: MemoryTakeoverActiveSnapshot = await runTakeoverActiveSnapshot({
-        llm: input.llm,
-        pluginId: input.pluginId,
-        range: plan.activeWindow,
-        messages: activeMessages,
-    });
-    await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot);
+    let activeSnapshot: MemoryTakeoverActiveSnapshot | null = null;
+    if (plan.useActiveSnapshot && plan.activeWindow) {
+        const activeMessages = sliceTakeoverMessages(sourceBundle, plan.activeWindow);
+        activeSnapshot = await runTakeoverActiveSnapshot({
+            llm: input.llm,
+            pluginId: input.pluginId,
+            range: plan.activeWindow,
+            messages: activeMessages,
+        });
+        await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot);
+    }
 
     const completedBatchIds = new Set<string>();
     const failedBatchIds = new Set<string>();
@@ -103,10 +106,30 @@ export async function runTakeoverScheduler(input: {
         await saveMemoryTakeoverBatchMeta(input.chatKey, runningBatch);
         try {
             const messages = sliceTakeoverMessages(sourceBundle, batch.range);
+
+            const sliceRoleStats: Record<string, number> = {};
+            for (const msg of messages) {
+                sliceRoleStats[msg.role] = (sliceRoleStats[msg.role] || 0) + 1;
+            }
+            await appendTakeoverDiagnostics({
+                chatKey: input.chatKey,
+                takeoverId: plan.takeoverId,
+                level: (messages.length > 0 && (!sliceRoleStats['user'] || !sliceRoleStats['assistant'])) ? 'warn' : 'info',
+                stage: 'batch_slice',
+                message: `批次 ${batch.batchId} 消息切片完成。`,
+                detail: {
+                    batchId: batch.batchId,
+                    range: batch.range,
+                    messageCount: messages.length,
+                    roleStats: sliceRoleStats,
+                },
+            });
+
             const result = await runTakeoverBatch({
                 llm: input.llm,
                 pluginId: input.pluginId,
                 batch: runningBatch,
+                totalBatches: batches.length,
                 messages,
             });
             batchResultMap.set(result.batchId, result);

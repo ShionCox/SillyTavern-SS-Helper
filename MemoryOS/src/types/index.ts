@@ -35,6 +35,8 @@ export type {
     MemoryTakeoverConsolidationStats,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverProgressSnapshot,
+    MemoryTakeoverPreviewBatchEstimate,
+    MemoryTakeoverPreviewEstimate,
     MemoryTakeoverCreateInput,
     MemoryTakeoverDetectionResult,
 } from './memory-takeover';

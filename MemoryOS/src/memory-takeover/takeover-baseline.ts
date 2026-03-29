@@ -25,6 +25,7 @@ export async function runTakeoverBaseline(input: {
         llm: input.llm,
         pluginId: input.pluginId,
         taskId: 'memory_takeover_baseline',
+        taskDescription: '旧聊天处理：先看基础设定',
         systemSection: 'TAKEOVER_BASELINE_SYSTEM',
         schemaSection: 'TAKEOVER_BASELINE_SCHEMA',
         sampleSection: 'TAKEOVER_BASELINE_OUTPUT_SAMPLE',

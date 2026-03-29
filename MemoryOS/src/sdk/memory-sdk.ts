@@ -25,6 +25,8 @@ import {
 import {
     buildProgressSnapshot,
     buildTakeoverPlan,
+    buildTakeoverPreviewEstimate,
+    collectTakeoverSourceBundle,
     detectTakeoverNeeded,
     runTakeoverConsolidation,
     runTakeoverScheduler,
@@ -55,6 +57,7 @@ import type {
     MemoryTakeoverCreateInput,
     MemoryTakeoverDetectionResult,
     MemoryTakeoverPlan,
+    MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
 } from '../types';
 
@@ -218,6 +221,7 @@ export class MemorySDKImpl {
         getSummaryTriggerStatus: () => Promise<MemorySummaryTriggerStatus>;
         detectTakeoverNeeded: () => Promise<MemoryTakeoverDetectionResult>;
         getTakeoverStatus: () => Promise<MemoryTakeoverProgressSnapshot>;
+        previewTakeoverEstimate: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverPreviewEstimate>;
         createTakeoverPlan: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverProgressSnapshot>;
         startTakeover: (takeoverId?: string) => Promise<MemoryTakeoverExecutionResult>;
         pauseTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
@@ -432,6 +436,26 @@ export class MemorySDKImpl {
             },
             getTakeoverStatus: async (): Promise<MemoryTakeoverProgressSnapshot> => {
                 return buildProgressSnapshot(this.chatKey_);
+            },
+            previewTakeoverEstimate: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPreviewEstimate> => {
+                const settings = readMemoryOSSettings();
+                const sourceBundle = collectTakeoverSourceBundle();
+                return buildTakeoverPreviewEstimate({
+                    chatKey: this.chatKey_,
+                    chatId: this.chatKey_,
+                    totalFloors: Math.max(1, sourceBundle.totalFloors),
+                    defaults: {
+                        detectMinFloors: settings.takeoverDetectMinFloors,
+                        recentFloors: settings.takeoverDefaultRecentFloors,
+                        batchSize: settings.takeoverDefaultBatchSize,
+                        prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
+                        autoContinue: settings.takeoverDefaultAutoContinue,
+                        autoConsolidate: settings.takeoverDefaultAutoConsolidate,
+                        pauseOnError: settings.takeoverDefaultPauseOnError,
+                    },
+                    config,
+                    sourceBundle,
+                });
             },
             createTakeoverPlan: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> => {
                 const settings = readMemoryOSSettings();
@@ -930,7 +954,7 @@ export class MemorySDKImpl {
                 title: `${fact.subject} · ${fact.predicate}`,
                 entryType: 'other',
                 category: '其他',
-                tags: ['旧聊天接管', fact.type].filter(Boolean),
+                tags: [fact.type].filter(Boolean),
                 summary: fact.value,
                 detail: `${fact.subject}${fact.predicate}${fact.value}`,
                 detailPayload: {
@@ -963,7 +987,7 @@ export class MemorySDKImpl {
                 title: `user -> ${targetActorKey}`,
                 entryType: 'relationship',
                 category: '角色关系',
-                tags: ['旧聊天接管', '关系'],
+                tags: ['关系'],
                 summary: relation.state,
                 detail: relation.reason,
                 detailPayload: {
@@ -994,7 +1018,7 @@ export class MemorySDKImpl {
                 title: task.task,
                 entryType: 'task',
                 category: '任务',
-                tags: ['旧聊天接管', '任务'],
+                tags: ['任务'],
                 summary: task.state,
                 detail: `任务当前状态：${task.state}`,
                 detailPayload: {
@@ -1019,7 +1043,7 @@ export class MemorySDKImpl {
                 title: key,
                 entryType: 'world_global_state',
                 category: '世界观',
-                tags: ['旧聊天接管', '世界状态'],
+                tags: ['世界状态'],
                 summary: value,
                 detail: value,
                 detailPayload: {
@@ -1040,6 +1064,21 @@ export class MemorySDKImpl {
         }
 
         await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
+        await this.markColdStartCompletedFromTakeover();
+    }
+
+    /**
+     * 功能：在旧聊天处理完成后，同步标记当前聊天的冷启动已完成。
+     * @returns 异步完成。
+     */
+    private async markColdStartCompletedFromTakeover(): Promise<void> {
+        const now: number = Date.now();
+        await this.writeColdStartState({
+            coldStartCompletedAt: now,
+            coldStartConfirmedAt: now,
+            coldStartDismissedAt: undefined,
+            coldStartLastReasonCode: 'old_chat_takeover_completed',
+        });
     }
 
     /**

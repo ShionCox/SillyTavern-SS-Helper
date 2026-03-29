@@ -18,6 +18,8 @@ function createPlan(status: MemoryTakeoverPlan['status']): MemoryTakeoverPlan {
         totalFloors: 100,
         recentFloors: 60,
         batchSize: 30,
+        useActiveSnapshot: true,
+        activeSnapshotFloors: 60,
         prioritizeRecent: true,
         autoContinue: true,
         autoConsolidate: true,

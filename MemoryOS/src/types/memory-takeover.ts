@@ -29,11 +29,13 @@ export interface MemoryTakeoverPlan {
     totalFloors: number;
     recentFloors: number;
     batchSize: number;
+    useActiveSnapshot: boolean;
+    activeSnapshotFloors: number;
     prioritizeRecent: boolean;
     autoContinue: boolean;
     autoConsolidate: boolean;
     pauseOnError: boolean;
-    activeWindow: MemoryTakeoverRange;
+    activeWindow: MemoryTakeoverRange | null;
     currentBatchIndex: number;
     totalBatches: number;
     completedBatchIds: string[];
@@ -204,6 +206,39 @@ export interface MemoryTakeoverProgressSnapshot {
 }
 
 /**
+ * 功能：定义单个接管批次的 token 预估结果。
+ */
+export interface MemoryTakeoverPreviewBatchEstimate {
+    batchId: string;
+    batchIndex: number;
+    category: 'active' | 'history';
+    label: string;
+    range: MemoryTakeoverRange;
+    messageCount: number;
+    estimatedPromptTokens: number;
+    overWarningThreshold: boolean;
+}
+
+/**
+ * 功能：定义接管计划的 token 预估汇总。
+ */
+export interface MemoryTakeoverPreviewEstimate {
+    mode: MemoryTakeoverMode;
+    totalFloors: number;
+    range: MemoryTakeoverRange | null;
+    activeWindow: MemoryTakeoverRange | null;
+    batchSize: number;
+    useActiveSnapshot: boolean;
+    activeSnapshotFloors: number;
+    threshold: number;
+    totalBatches: number;
+    batches: MemoryTakeoverPreviewBatchEstimate[];
+    hasOverflow: boolean;
+    overflowWarnings: string[];
+    validationError?: string;
+}
+
+/**
  * 功能：定义接管创建配置。
  */
 export interface MemoryTakeoverCreateInput {
@@ -212,6 +247,8 @@ export interface MemoryTakeoverCreateInput {
     endFloor?: number;
     recentFloors?: number;
     batchSize?: number;
+    useActiveSnapshot?: boolean;
+    activeSnapshotFloors?: number;
     prioritizeRecent?: boolean;
     autoContinue?: boolean;
     autoConsolidate?: boolean;
