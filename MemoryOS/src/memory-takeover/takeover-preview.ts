@@ -52,6 +52,7 @@ export async function buildTakeoverPreviewEstimate(input: {
         activeWindow: plan.activeWindow,
         batchSize: plan.batchSize,
     });
+    const historyBatches = batches.filter((batch: MemoryTakeoverBatch): boolean => batch.category === 'history');
     const batchEstimates: MemoryTakeoverPreviewBatchEstimate[] = await Promise.all(
         batches.map(async (batch: MemoryTakeoverBatch): Promise<MemoryTakeoverPreviewBatchEstimate> => {
             const messages = sliceTakeoverMessages(input.sourceBundle, batch.range);
@@ -76,7 +77,11 @@ export async function buildTakeoverPreviewEstimate(input: {
                 batchId: batch.batchId,
                 batchIndex: batch.batchIndex,
                 category: batch.category,
-                label: resolvePreviewBatchLabel(batch),
+                label: resolvePreviewBatchLabel(
+                    batch,
+                    historyBatches.findIndex((item: MemoryTakeoverBatch): boolean => item.batchId === batch.batchId) + 1,
+                    historyBatches.length,
+                ),
                 range: batch.range,
                 messageCount: messages.length,
                 estimatedPromptTokens,
@@ -131,9 +136,13 @@ function getTakeoverTokenizer(): Tiktoken {
  * @param batch 接管批次。
  * @returns 展示名称。
  */
-function resolvePreviewBatchLabel(batch: MemoryTakeoverBatch): string {
+function resolvePreviewBatchLabel(
+    batch: MemoryTakeoverBatch,
+    historyBatchIndex: number,
+    historyBatchTotal: number,
+): string {
     if (batch.category === 'active') {
         return '最近快照';
     }
-    return `第 ${batch.batchIndex} 批`;
+    return `第 ${Math.max(1, historyBatchIndex)} / ${Math.max(1, historyBatchTotal)} 批`;
 }

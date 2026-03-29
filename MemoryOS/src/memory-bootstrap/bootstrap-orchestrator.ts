@@ -235,6 +235,7 @@ export async function applyBootstrapCandidates(input: {
             worldBaseCount: input.document.worldBase.length,
             relationshipCount: input.document.relationships.length,
             memoryRecordCount: input.document.memoryRecords.length,
+            entityCardCount: countEntityCards(input.document.entityCards),
         },
     });
     return { worldProfile };
@@ -330,6 +331,7 @@ function normalizeColdStartNarrativeDocument(document: ColdStartDocument, userDi
         ...document,
         identity: normalizeNarrativeValue(document.identity, userDisplayName),
         actorCards: document.actorCards.map((actorCard) => normalizeNarrativeValue(actorCard, userDisplayName)),
+        entityCards: document.entityCards ? normalizeEntityCardsNarrative(document.entityCards, userDisplayName) : undefined,
         worldBase: document.worldBase.map((entry) => ({
             ...entry,
             title: normalizeUserNarrativeText(entry.title, userDisplayName),
@@ -590,4 +592,44 @@ function parseJsonSection(section: string): unknown {
     } catch {
         return null;
     }
+}
+
+/**
+ * 功能：规范化冷启动实体卡集合中的自然语言用户称呼。
+ * @param entityCards 实体卡集合。
+ * @param userDisplayName 当前用户显示名。
+ * @returns 规范化后的实体卡集合。
+ */
+function normalizeEntityCardsNarrative(
+    entityCards: ColdStartDocument['entityCards'],
+    userDisplayName: string,
+): ColdStartDocument['entityCards'] {
+    if (!entityCards) return undefined;
+    const normalizeList = (list?: ColdStartDocument['entityCards'] extends infer T ? T extends { organizations?: infer U } ? U : never : never) => {
+        if (!Array.isArray(list)) return [];
+        return list.map((entry) => ({
+            ...entry,
+            title: normalizeUserNarrativeText(entry.title, userDisplayName),
+            summary: normalizeUserNarrativeText(entry.summary, userDisplayName),
+        }));
+    };
+    return {
+        organizations: normalizeList(entityCards.organizations),
+        cities: normalizeList(entityCards.cities),
+        nations: normalizeList(entityCards.nations),
+        locations: normalizeList(entityCards.locations),
+    };
+}
+
+/**
+ * 功能：统计实体卡总数。
+ * @param entityCards 实体卡集合。
+ * @returns 总数。
+ */
+function countEntityCards(entityCards?: ColdStartDocument['entityCards']): number {
+    if (!entityCards) return 0;
+    return (entityCards.organizations?.length ?? 0)
+        + (entityCards.cities?.length ?? 0)
+        + (entityCards.nations?.length ?? 0)
+        + (entityCards.locations?.length ?? 0);
 }

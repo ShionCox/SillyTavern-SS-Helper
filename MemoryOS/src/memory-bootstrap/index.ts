@@ -24,3 +24,9 @@ export {
     type RunBootstrapOrchestratorInput,
     type RunBootstrapOrchestratorResult,
 } from './bootstrap-orchestrator';
+export {
+    applyEntityCardCandidate,
+    applyEntityCardCandidates,
+    type EntityApplierDependencies,
+    type ApplyEntityCardResult,
+} from './bootstrap-entity-applier';

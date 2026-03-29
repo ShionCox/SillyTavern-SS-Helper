@@ -16,24 +16,74 @@ export interface SummaryWindow {
     toTurn: number;
     summaryText: string;
     actorHints: string[];
+    /** 近景窗口：最近 3~5 楼提纯的 facts，用于语境提示。 */
+    recentContextText: string;
+}
+
+/**
+ * 功能：双层窗口构建选项。
+ */
+export interface SummaryWindowOptions {
+    /** 严格未总结区间起始 turnIndex（含）。 */
+    pendingStartIndex?: number;
+    /** 严格未总结区间结束 turnIndex（含）。 */
+    pendingEndIndex?: number;
+    /** 近景窗口消息数量，默认 5。 */
+    recentContextSize?: number;
 }
 
 /**
  * 功能：从聊天消息构建总结窗口。
+ * 支持双层模式：主窗口为严格 pendingStartIndex~pendingEndIndex 区间，
+ * 近景窗口取最后 3~5 条消息提纯 facts，用于当前语境提示。
  * @param messages 消息列表。
+ * @param options 双层构建选项。
  * @returns 总结窗口。
  */
-export function buildSummaryWindow(messages: SummaryWindowMessage[]): SummaryWindow {
-    const sliced = (Array.isArray(messages) ? messages : [])
-        .filter((message: SummaryWindowMessage): boolean => String(message.role ?? '').trim().toLowerCase() !== 'system')
-        .slice(-20);
-    const fromTurn = sliced.length > 0
-        ? Math.max(1, Math.trunc(Number(sliced[0].turnIndex) || 1))
+export function buildSummaryWindow(messages: SummaryWindowMessage[], options?: SummaryWindowOptions): SummaryWindow {
+    const nonSystem = (Array.isArray(messages) ? messages : [])
+        .filter((message: SummaryWindowMessage): boolean => String(message.role ?? '').trim().toLowerCase() !== 'system');
+
+    const hasPendingRange = options
+        && typeof options.pendingStartIndex === 'number'
+        && typeof options.pendingEndIndex === 'number'
+        && options.pendingEndIndex >= options.pendingStartIndex;
+
+    const mainSlice = hasPendingRange
+        ? nonSystem.filter((m: SummaryWindowMessage): boolean => {
+            const turn = Math.trunc(Number(m.turnIndex) || 0);
+            return turn >= options!.pendingStartIndex! && turn <= options!.pendingEndIndex!;
+        })
+        : nonSystem.slice(-20);
+
+    const recentSize = Math.max(3, Math.min(options?.recentContextSize ?? 5, 8));
+    const recentSlice = nonSystem.slice(-recentSize);
+
+    const fromTurn = mainSlice.length > 0
+        ? Math.max(1, Math.trunc(Number(mainSlice[0].turnIndex) || 1))
         : 0;
-    const toTurn = sliced.length > 0
-        ? Math.max(fromTurn, Math.trunc(Number(sliced[sliced.length - 1].turnIndex) || sliced.length))
+    const toTurn = mainSlice.length > 0
+        ? Math.max(fromTurn, Math.trunc(Number(mainSlice[mainSlice.length - 1].turnIndex) || mainSlice.length))
         : 0;
-    const summaryText = sliced
+    const summaryText = formatMessages(mainSlice);
+    const recentContextText = formatMessages(recentSlice);
+    const actorHints = extractActorHintsFromSummary(summaryText + '\n' + recentContextText);
+    return {
+        fromTurn,
+        toTurn,
+        summaryText,
+        actorHints,
+        recentContextText,
+    };
+}
+
+/**
+ * 功能：将消息列表格式化为文本。
+ * @param sliced 消息列表。
+ * @returns 格式化文本。
+ */
+function formatMessages(sliced: SummaryWindowMessage[]): string {
+    return sliced
         .map((message: SummaryWindowMessage, index: number): string => {
             const name = String(message.name ?? '').trim();
             const role = String(message.role ?? '').trim() || `message_${index + 1}`;
@@ -42,13 +92,6 @@ export function buildSummaryWindow(messages: SummaryWindowMessage[]): SummaryWin
             return `${speaker}：${content}`;
         })
         .join('\n');
-    const actorHints = extractActorHintsFromSummary(summaryText);
-    return {
-        fromTurn,
-        toTurn,
-        summaryText,
-        actorHints,
-    };
 }
 
 /**

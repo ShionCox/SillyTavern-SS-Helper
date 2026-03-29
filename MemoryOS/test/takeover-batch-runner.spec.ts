@@ -29,6 +29,20 @@ function createBatchResult(): MemoryTakeoverBatchResult {
                 value: '银发精灵',
                 confidence: 0.9,
             },
+            {
+                type: 'organization',
+                subject: '月语教派',
+                predicate: '属于',
+                value: '森林中的教派势力',
+                confidence: 0.85,
+            },
+            {
+                type: 'location',
+                subject: '艾尔文森林',
+                predicate: '是',
+                value: '主要活动区域',
+                confidence: 0.88,
+            },
         ],
         relationTransitions: [
             {
@@ -62,19 +76,53 @@ function createBatchResult(): MemoryTakeoverBatchResult {
 }
 
 describe('旧聊天批次已知上下文', (): void => {
-    it('应从前面批次提取角色、关系、任务和世界状态提示', (): void => {
-        const context = buildTakeoverKnownContext([createBatchResult()], [
-            {
-                actorKey: 'char_main',
-                displayName: '主角色',
-            },
-        ]);
+    it('应从前面批次提取角色、组织、地点、任务和世界状态提示', (): void => {
+        const context = buildTakeoverKnownContext([createBatchResult()], {
+            actors: [
+                {
+                    actorKey: 'char_main',
+                    displayName: '主角龙',
+                },
+            ],
+            organizations: [{
+                entityKey: 'entry:organization:moon_voice',
+                displayName: '月语教派',
+            }],
+            locations: [{
+                entityKey: 'entry:location:elven_forest',
+                displayName: '艾尔文森林',
+            }],
+            tasks: [{
+                entityKey: 'entry:task:find_food',
+                displayName: '寻找食物',
+            }],
+            worldStates: [{
+                entityKey: 'entry:world_state:border',
+                displayName: '森林边界：局势紧张',
+            }],
+        });
 
         expect(context.actorHints).toContain('莉娜');
-        expect(context.actorHints).toContain('主角色');
-        expect(context.existingActorCards).toContainEqual({
+        expect(context.actorHints).toContain('主角龙');
+        expect(context.knownEntities.actors).toContainEqual({
             actorKey: 'char_main',
-            displayName: '主角色',
+            displayName: '主角龙',
+        });
+        expect(context.knownEntities.organizations).toContainEqual({
+            entityKey: 'entry:organization:moon_voice',
+            displayName: '月语教派',
+        });
+        expect(context.knownEntities.locations).toContainEqual({
+            entityKey: 'entry:location:elven_forest',
+            displayName: '艾尔文森林',
+        });
+        expect(context.knownEntities.tasks).toContainEqual({
+            entityKey: 'entry:task:find_food',
+            displayName: '寻找食物',
+        });
+        expect(context.knownEntities.worldStates).toContainEqual({
+            entityKey: 'entry:world_state:border',
+            displayName: '森林边界：局势紧张',
         });
         expect(context.stableFacts).toContain('莉娜身份是银发精灵');
         expect(context.relationState).toContain('莉娜：信任提升');

@@ -1,6 +1,8 @@
 import type {
     ColdStartActorCard,
     ColdStartDocument,
+    ColdStartEntityCardEntry,
+    ColdStartEntityCards,
     ColdStartIdentity,
     ColdStartMemoryRecord,
     ColdStartRelationshipEntry,
@@ -31,6 +33,7 @@ export function parseColdStartDocument(rawDocument: unknown): ColdStartDocument 
         schemaVersion,
         identity,
         actorCards: normalizeActorCards(source.actorCards),
+        entityCards: normalizeEntityCards(source.entityCards),
         worldProfileDetection: normalizeWorldProfileDetection(source.worldProfileDetection),
         worldBase: normalizeWorldBase(source.worldBase),
         relationships: relationshipResult.relationships,
@@ -318,3 +321,55 @@ function clamp01(value: number): number {
     return Math.max(0, Math.min(1, Number(numeric.toFixed(4))));
 }
 
+/**
+ * 功能：归一化实体卡片集合。
+ * @param value 原始值。
+ * @returns 归一化后的实体卡片集合。
+ */
+function normalizeEntityCards(value: unknown): ColdStartEntityCards | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    const organizations = normalizeEntityCardArray(record.organizations, 'organization');
+    const cities = normalizeEntityCardArray(record.cities, 'city');
+    const nations = normalizeEntityCardArray(record.nations, 'nation');
+    const locations = normalizeEntityCardArray(record.locations, 'location');
+    if (organizations.length === 0 && cities.length === 0 && nations.length === 0 && locations.length === 0) {
+        return undefined;
+    }
+    return { organizations, cities, nations, locations };
+}
+
+/**
+ * 功能：归一化单类实体卡片数组。
+ * @param value 原始数组值。
+ * @param defaultEntityType 默认实体类型。
+ * @returns 归一化后的实体卡列表。
+ */
+function normalizeEntityCardArray(value: unknown, defaultEntityType: string): ColdStartEntityCardEntry[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item: unknown): ColdStartEntityCardEntry | null => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+            const record = item as Record<string, unknown>;
+            const title = normalizeText(record.title);
+            const summary = normalizeText(record.summary);
+            if (!title || !summary) return null;
+            const entityType = normalizeText(record.entityType) || defaultEntityType;
+            const compareKey = normalizeText(record.compareKey);
+            const aliases = dedupeStrings(record.aliases);
+            const fields = (record.fields && typeof record.fields === 'object' && !Array.isArray(record.fields))
+                ? record.fields as Record<string, unknown>
+                : undefined;
+            return {
+                entityType,
+                compareKey: compareKey || undefined,
+                title,
+                aliases: aliases.length > 0 ? aliases : undefined,
+                summary,
+                fields,
+            };
+        })
+        .filter(Boolean) as ColdStartEntityCardEntry[];
+}

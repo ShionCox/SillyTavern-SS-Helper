@@ -1,5 +1,6 @@
 import type { MemoryEntry } from '../types';
 import { RetrievalOrchestrator, type RetrievalCandidate, type RetrievalResultItem } from '../memory-retrieval';
+import { buildCompareKey as buildUnifiedCompareKey } from '../core/compare-key';
 
 /**
  * 功能：总结候选旧记录对象。
@@ -12,9 +13,14 @@ export interface SummaryCandidateRecord {
     title: string;
     summary: string;
     entityKeys: string[];
+    compareKey: string;
+    aliases: string[];
+    lifecycleStatus: 'active' | 'invalidated' | 'merged' | 'archived';
     status: 'active' | 'invalidated' | 'merged' | 'archived';
     updatedAt: number;
     sourceHint?: string;
+    parentRefs?: string[];
+    hierarchyRefs?: string[];
 }
 
 /**
@@ -67,6 +73,7 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
         if (candidates.length > 0 && consumedChars + nextCost > candidateTextBudgetChars) {
             continue;
         }
+        const candidateStatus = resolveCandidateStatus(item.candidate);
         candidates.push({
             candidateId: `cand_${candidates.length + 1}`,
             recordId: item.candidate.entryId,
@@ -75,9 +82,18 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
             title: normalizeText(item.candidate.title) || '未命名记忆',
             summary: candidateText || normalizeText(item.candidate.title),
             entityKeys: buildEntityKeys(item),
-            status: resolveCandidateStatus(item.candidate),
+            compareKey: buildCompareKey(
+                item.candidate.schemaId,
+                normalizeText(item.candidate.title),
+                extractCandidateFields(item.candidate),
+            ),
+            aliases: buildAliases(item.candidate),
+            lifecycleStatus: candidateStatus,
+            status: candidateStatus,
             updatedAt: Number(item.candidate.updatedAt ?? 0) || 0,
             sourceHint: buildSourceHint(item.candidate),
+            parentRefs: buildParentRefs(item.candidate),
+            hierarchyRefs: buildHierarchyRefs(item.candidate),
         });
         consumedChars += nextCost;
     }
@@ -230,6 +246,100 @@ function toRecord(value: unknown): Record<string, unknown> {
         return {};
     }
     return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：构建候选记忆的统一比较键（委托给 core/compare-key）。
+ * @param schemaId 条目类型。
+ * @param title 条目标题。
+ * @param fields 可选字段用于限定 compareKey。
+ * @returns 统一比较键。
+ */
+function buildCompareKey(schemaId: string, title: string, fields?: Record<string, unknown>): string {
+    const normalizedTitle = normalizeText(title);
+    if (!normalizedTitle) {
+        return '';
+    }
+    return buildUnifiedCompareKey(schemaId, normalizedTitle, fields);
+}
+
+/**
+ * 功能：从候选记忆中提取别名列表。
+ * @param candidate 检索候选。
+ * @returns 别名列表。
+ */
+function buildAliases(candidate: RetrievalCandidate): string[] {
+    return normalizeLooseStringArray((candidate as unknown as { aliasTexts?: unknown }).aliasTexts);
+}
+
+/**
+ * 功能：从候选记忆中提取 detailPayload.fields，供统一 compareKey 生成使用。
+ * @param candidate 检索候选。
+ * @returns 字段映射。
+ */
+function extractCandidateFields(candidate: RetrievalCandidate): Record<string, unknown> {
+    const payload = toRecord((candidate as unknown as { detailPayload?: unknown }).detailPayload);
+    return toRecord(payload.fields);
+}
+
+/**
+ * 功能：从候选记忆中提取父级引用。
+ * @param candidate 检索候选。
+ * @returns 父级引用列表。
+ */
+function buildParentRefs(candidate: RetrievalCandidate): string[] {
+    const payload = toRecord((candidate as unknown as { detailPayload?: unknown }).detailPayload);
+    const fields = toRecord(payload.fields);
+    const refs: string[] = [];
+    const parentOrg = normalizeText(fields.parentOrganization);
+    if (parentOrg) {
+        refs.push(`organization:${parentOrg}`);
+    }
+    const parentLocation = normalizeText(fields.parentLocation);
+    if (parentLocation) {
+        refs.push(`location:${parentLocation}`);
+    }
+    const nation = normalizeText(fields.nation);
+    if (nation) {
+        refs.push(`nation:${nation}`);
+    }
+    const city = normalizeText(fields.city);
+    if (city) {
+        refs.push(`city:${city}`);
+    }
+    return refs;
+}
+
+/**
+ * 功能：从候选记忆中提取层级引用。
+ * @param candidate 检索候选。
+ * @returns 层级引用列表。
+ */
+function buildHierarchyRefs(candidate: RetrievalCandidate): string[] {
+    const payload = toRecord((candidate as unknown as { detailPayload?: unknown }).detailPayload);
+    const fields = toRecord(payload.fields);
+    const refs: string[] = [];
+    const headquartersCity = normalizeText(fields.headquartersCity);
+    if (headquartersCity) {
+        refs.push(`city:${headquartersCity}`);
+    }
+    const headquartersNation = normalizeText(fields.headquartersNation);
+    if (headquartersNation) {
+        refs.push(`nation:${headquartersNation}`);
+    }
+    const headquartersLocation = normalizeText(fields.headquartersLocation);
+    if (headquartersLocation) {
+        refs.push(`location:${headquartersLocation}`);
+    }
+    const controllingOrganization = normalizeText(fields.controllingOrganization);
+    if (controllingOrganization) {
+        refs.push(`organization:${controllingOrganization}`);
+    }
+    const capital = normalizeText(fields.capital);
+    if (capital) {
+        refs.push(`city:${capital}`);
+    }
+    return refs;
 }
 
 /**

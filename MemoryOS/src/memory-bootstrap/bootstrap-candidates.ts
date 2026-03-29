@@ -2,6 +2,7 @@ import type {
     ColdStartActorCard,
     ColdStartCandidate,
     ColdStartDocument,
+    ColdStartEntityCardEntry,
     ColdStartMemoryRecord,
     ColdStartMemoryType,
     ColdStartRelationshipEntry,
@@ -9,6 +10,7 @@ import type {
     ColdStartSourceRef,
     ColdStartWorldBaseEntry,
 } from './bootstrap-types';
+import { buildCompareKey } from '../core/compare-key';
 
 /**
  * 功能：从冷启动文档构建候选项列表，并执行基础校验与去重。
@@ -30,6 +32,20 @@ export function buildColdStartCandidates(
     }
     for (const relationship of document.relationships) {
         candidates.push(buildRelationshipCandidate(relationship, sourceBundle));
+    }
+    if (document.entityCards) {
+        for (const org of document.entityCards.organizations ?? []) {
+            candidates.push(buildEntityCardCandidate(org, 'organization', sourceBundle));
+        }
+        for (const city of document.entityCards.cities ?? []) {
+            candidates.push(buildEntityCardCandidate(city, 'city', sourceBundle));
+        }
+        for (const nation of document.entityCards.nations ?? []) {
+            candidates.push(buildEntityCardCandidate(nation, 'nation', sourceBundle));
+        }
+        for (const loc of document.entityCards.locations ?? []) {
+            candidates.push(buildEntityCardCandidate(loc, 'location', sourceBundle));
+        }
     }
     for (const memoryRecord of document.memoryRecords) {
         candidates.push(buildMemoryRecordCandidate(memoryRecord, sourceBundle));
@@ -149,6 +165,71 @@ function buildRelationshipCandidate(
         tags: ['cold_start', 'relationship'],
         actorBindings: dedupeStrings([relationship.sourceActorKey, relationship.targetActorKey, ...relationship.participants]),
     };
+}
+
+/**
+ * 功能：构建实体卡候选。
+ * @param entityCard 实体卡数据。
+ * @param defaultEntityType 默认实体类型。
+ * @param sourceBundle 冷启动源数据包。
+ * @returns 候选项。
+ */
+function buildEntityCardCandidate(
+    entityCard: ColdStartEntityCardEntry,
+    defaultEntityType: string,
+    sourceBundle: ColdStartSourceBundle,
+): ColdStartCandidate {
+    const entityType = String(entityCard.entityType ?? defaultEntityType).trim() || defaultEntityType;
+    const fields = entityCard.fields ?? {};
+    const compareKey = entityCard.compareKey || buildCompareKey(entityType, entityCard.title, fields);
+    const aliases = entityCard.aliases ?? [];
+    const memoryType = inferEntityMemoryType(entityType);
+    return {
+        id: `cold_start_candidate:${entityType}:${entityCard.title}`,
+        type: memoryType,
+        entryType: entityType,
+        title: entityCard.title,
+        summary: entityCard.summary,
+        entityKeys: dedupeStrings([entityCard.title, ...aliases]),
+        confidence: 0.88,
+        sourceRefs: buildSourceRefs(sourceBundle, 'lorebook', `${entityCard.title} ${entityCard.summary}`),
+        status: 'candidate',
+        reason: buildEntityCandidateReason(entityType),
+        detailPayload: {
+            compareKey,
+            fields: {
+                ...fields,
+                aliases: dedupeStrings([...aliases, ...(Array.isArray(fields.aliases) ? fields.aliases : [])]),
+            },
+            lifecycle: { status: 'active' },
+        },
+        tags: ['cold_start', entityType],
+    };
+}
+
+/**
+ * 功能：根据实体类型推断冷启动候选记忆类型。
+ * @param entityType 实体类型。
+ * @returns 记忆类型。
+ */
+function inferEntityMemoryType(entityType: string): ColdStartMemoryType {
+    if (entityType === 'location') return 'location_fact';
+    return 'initial_state';
+}
+
+/**
+ * 功能：构建实体候选理由。
+ * @param entityType 实体类型。
+ * @returns 理由。
+ */
+function buildEntityCandidateReason(entityType: string): string {
+    switch (entityType) {
+        case 'organization': return '稳定的组织/教派/势力适合作为正式实体建档。';
+        case 'city': return '城市信息适合作为地理实体正式建档。';
+        case 'nation': return '国家信息适合作为地理实体正式建档。';
+        case 'location': return '稳定地点适合作为场景实体正式建档。';
+        default: return '该实体信息适合作为冷启动候选实体记忆。';
+    }
 }
 
 /**

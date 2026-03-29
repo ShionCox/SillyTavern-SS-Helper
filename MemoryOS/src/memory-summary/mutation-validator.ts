@@ -1,5 +1,7 @@
 import type { SummaryMutationAction, SummaryMutationDocument } from './mutation-types';
 import { isRelationTag } from '../constants/relationTags';
+import { isHighValueEntityType } from '../core/entity-schema';
+import { compareKeysNearMatch } from '../core/compare-key';
 
 /**
  * 功能：定义总结 mutation 校验结果。
@@ -99,6 +101,24 @@ function validateDocumentSafety(actions: SummaryMutationAction[]): string[] {
         }
     }
     for (const action of actions) {
+        if (action.action === 'DELETE' && isHighValueEntityType(action.targetKind)) {
+            errors.push(`delete_blocked_high_value_entity:${action.targetKind}`);
+        }
+    }
+    const nonDeleteWithKey = actions.filter(
+        (a: SummaryMutationAction): boolean => a.action !== 'DELETE' && !!String(a.compareKey ?? '').trim(),
+    );
+    for (const del of deleteActions) {
+        const delKey = String(del.compareKey ?? '').trim();
+        if (!delKey) continue;
+        for (const other of nonDeleteWithKey) {
+            if (compareKeysNearMatch(delKey, String(other.compareKey ?? ''))) {
+                errors.push(`delete_comparekey_conflict:${delKey}`);
+                break;
+            }
+        }
+    }
+    for (const action of actions) {
         const confidence = Number(action.confidence ?? 1);
         if (confidence >= 0.5) {
             continue;
@@ -106,7 +126,15 @@ function validateDocumentSafety(actions: SummaryMutationAction[]): string[] {
         if (action.action !== 'UPDATE' && action.action !== 'DELETE' && action.action !== 'INVALIDATE') {
             continue;
         }
-        if (action.targetKind === 'world_core_setting' || action.targetKind === 'world_hard_rule' || action.targetKind === 'relationship') {
+        if (
+            action.targetKind === 'world_core_setting'
+            || action.targetKind === 'world_hard_rule'
+            || action.targetKind === 'relationship'
+            || action.targetKind === 'organization'
+            || action.targetKind === 'city'
+            || action.targetKind === 'nation'
+            || action.targetKind === 'location'
+        ) {
             errors.push(`low_confidence_high_priority_mutation:${action.targetKind}`);
         }
     }

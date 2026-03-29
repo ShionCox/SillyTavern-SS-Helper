@@ -73,7 +73,10 @@ describe('旧聊天接管 token 预估', (): void => {
         expect(estimate.totalBatches).toBe(3);
         expect(estimate.batches[0]?.category).toBe('active');
         expect(estimate.batches[0]?.range).toEqual({ startFloor: 81, endFloor: 100 });
+        expect(estimate.batches[0]?.label).toBe('最近快照');
         expect(estimate.batches.slice(1).every((item) => item.category === 'history')).toBe(true);
+        expect(estimate.batches[1]?.label).toBe('第 1 / 2 批');
+        expect(estimate.batches[2]?.label).toBe('第 2 / 2 批');
     });
 
     it('应在批次超过阈值时生成红色预警数据', async (): Promise<void> => {

@@ -26,6 +26,10 @@
 14. 严格参照输出示例的字段结构与完整度。
 15. 已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。
 16. 仅输出 JSON，不输出解释文本。
+17. 如果世界书、角色卡或最近事件中出现稳定存在的教派、组织、商会、学院、城市、国家、地点，必须优先放入 `entityCards` 对应分类，不要仅写成 `memoryRecords`。
+18. `entityCards` 中的每个实体必须带 `title`、`summary`，以及 `fields` 中与该类型相关的核心字段（如 `organization` 需带 `subtype`、`status` 等）。`compareKey` 可选，系统会自动补全。
+19. 对同一个对象，不要同时在 `entityCards` 和 `memoryRecords` 中重复表达同一事实。
+20. `entityCards.organizations` 中应包含教派、公会、学院、军团、秘密组织等统一作为组织实体，通过 `fields.subtype` 区分。
 
 <!-- section: COLD_START_SCHEMA -->
 
@@ -62,6 +66,68 @@
           "identityFacts": { "type": "array", "items": { "type": "string" } },
           "originFacts": { "type": "array", "items": { "type": "string" } },
           "traits": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "entityCards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "organizations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "summary"],
+            "properties": {
+              "compareKey": { "type": "string" },
+              "title": { "type": "string" },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "summary": { "type": "string" },
+              "fields": { "type": "object" }
+            }
+          }
+        },
+        "cities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "summary"],
+            "properties": {
+              "compareKey": { "type": "string" },
+              "title": { "type": "string" },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "summary": { "type": "string" },
+              "fields": { "type": "object" }
+            }
+          }
+        },
+        "nations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "summary"],
+            "properties": {
+              "compareKey": { "type": "string" },
+              "title": { "type": "string" },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "summary": { "type": "string" },
+              "fields": { "type": "object" }
+            }
+          }
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "summary"],
+            "properties": {
+              "compareKey": { "type": "string" },
+              "title": { "type": "string" },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "summary": { "type": "string" },
+              "fields": { "type": "object" }
+            }
+          }
         }
       }
     },
@@ -159,6 +225,42 @@
       "traits": ["强硬", "守规矩"]
     }
   ],
+  "entityCards": {
+    "organizations": [
+      {
+        "title": "宵禁卫队",
+        "summary": "王都负责夜间巡逻与城门管控的武装力量。",
+        "fields": {
+          "subtype": "military",
+          "leader": "罗恩队长",
+          "baseCity": "王都",
+          "status": "active"
+        }
+      }
+    ],
+    "cities": [
+      {
+        "title": "王都",
+        "summary": "北境王国的首都，战时进入物资管控状态。",
+        "fields": {
+          "nation": "北境王国",
+          "governance": "王都",
+          "status": "active"
+        }
+      }
+    ],
+    "nations": [
+      {
+        "title": "北境王国",
+        "summary": "统治北方大陆的古老王国，正面临边境战争。",
+        "fields": {
+          "regime": "君主制",
+          "status": "war"
+        }
+      }
+    ],
+    "locations": []
+  },
   "worldProfileDetection": {
     "primaryProfile": "fantasy_magic",
     "secondaryProfiles": ["ancient_traditional"],
@@ -279,17 +381,21 @@
 你正在执行结构化记忆总结任务。
 你会收到一个总结上下文，其中包含：
 - `typeSchemas`: 每个 schemaId 的可写字段白名单（`editableFields`）
-- `candidateRecords`: 本轮可引用的候选旧记录
+- `candidateRecords`: 本轮可引用的候选旧记录（带 `compareKey` 和 `aliases` 字段）
 - `worldProfileBias`: 世界模板偏置
 
 请严格遵循：
 1. `action` 仅可使用：`ADD | MERGE | UPDATE | INVALIDATE | DELETE | NOOP`。
 2. `targetKind` 必须是精确 schemaId，禁止使用泛化类型（例如 `memory_record`）。
 3. 只有出现在 `editableFields` 的字段可写，特别是 `fields.*` 也必须是显式路径。
-4. 本任务是 mutation-only 语义，`NOOP` 仅代表“无结构变化”。
-5. 若发生世界状态替换，请使用“旧状态 INVALIDATE + 新状态 ADD/UPDATE”的组合表达。
+4. 本任务是 mutation-only 语义，`NOOP` 仅代表"无结构变化"。
+5. 若发生世界状态替换，请使用"旧状态 INVALIDATE + 新状态 ADD/UPDATE"的组合表达。
 6. 当 `targetKind` 为 `relationship` 且需要新增或更新 `fields.relationTag` 时，`relationTag` 只能从以下预设中单选其一：`亲人 | 朋友 | 盟友 | 恋人 | 暧昧 | 师徒 | 上下级 | 竞争者 | 情敌 | 宿敌 | 陌生人`，禁止自由发明新标签。
 7. 仅输出 JSON，不输出解释文本。
+8. 世界实体（`organization`、`city`、`nation`、`location`）是和角色同等级的正式对象。当出现教派、组织、势力、城市、国家、地点等实体信息时，请使用对应的 `targetKind` 进行 CRUD 操作，而非笼统归为 `world_global_state` 或 `other`。
+9. 对世界实体执行 `UPDATE` / `INVALIDATE` / `DELETE` / `MERGE` 时，必须提供 `candidateId`（指向 `candidateRecords` 中的现有记录）或 `compareKey`（格式为 `entityType:标题`），以便系统精准定位目标实体。
+10. 教派、公会、学院、商会、军团等非人物组织统一归为 `targetKind: organization`，通过 `fields.orgType` 和 `fields.subtype` 区分细类。
+11. `ADD` 仅在当前候选记录中确实找不到对应 `compareKey` / 别名时使用。若已有同名或别名命中的候选，优先 `UPDATE` 或 `MERGE`。
 
 <!-- section: SUMMARY_SCHEMA -->
 
@@ -370,6 +476,60 @@
         "tags": ["war_mode", "global_state"]
       },
       "reasonCodes": ["new_state_takeover"]
+    },
+    {
+      "action": "ADD",
+      "targetKind": "organization",
+      "compareKey": "organization:赤月教派",
+      "payload": {
+        "title": "赤月教派",
+        "summary": "崇尚血月启示的宗教组织，在灰港下城区拥有广泛影响力。",
+        "tags": ["教派", "宗教"],
+        "fields": {
+          "orgType": "宗教组织",
+          "subtype": "教派",
+          "alignment": "激进",
+          "ideology": "崇尚血月启示",
+          "leader": "赫尔曼主教",
+          "headquartersCity": "灰港",
+          "headquartersLocation": "赤月圣堂",
+          "status": "active",
+          "influence": "在灰港下城区拥有很强影响力",
+          "aliases": ["赤月教团"]
+        }
+      },
+      "reasonCodes": ["new_organization"]
+    },
+    {
+      "action": "UPDATE",
+      "targetKind": "city",
+      "candidateId": "cand_5",
+      "compareKey": "city:灰港",
+      "payload": {
+        "summary": "灰港因战争全面进入戒严状态。",
+        "fields": {
+          "status": "戒严",
+          "controllingOrganization": "军务署"
+        }
+      },
+      "reasonCodes": ["city_status_change"]
+    },
+    {
+      "action": "ADD",
+      "targetKind": "nation",
+      "compareKey": "nation:北境王国",
+      "payload": {
+        "title": "北境王国",
+        "summary": "统治北方大陆的古老王国，目前正处于战争状态。",
+        "tags": ["国家"],
+        "fields": {
+          "capital": "王都",
+          "governance": "君主制",
+          "ruler": "亚瑟三世",
+          "status": "战争状态"
+        }
+      },
+      "reasonCodes": ["new_nation"]
     }
   ]
 }
@@ -483,6 +643,9 @@
 3. `relationTransitions`、`taskTransitions`、`worldStateChanges` 只记录该批次确实出现的变化。
 4. 所有自然语言字段必须使用简体中文。
 5. 仅输出 JSON，不输出解释文本。
+6. `entityCards` 用于输出本批次识别到的世界实体卡候选。`entityType` 可选 `organization`（教派/公会/商会/军团等所有非人物组织）、`city`（城市/都市）、`nation`（国家/王国/帝国）、`location`（地点/建筑/区域）。每张卡必须包含 `entityType`、`compareKey`（格式 `entityType:标题`）、`title`、`aliases`、`summary`、`fields`（结构化属性对象）和 `confidence`。
+7. `entityTransitions` 用于输出世界实体变更。`action` 可选 `ADD | UPDATE | MERGE | INVALIDATE | DELETE`。若 knownContext 中已存在同类实体，请优先使用 `UPDATE` 而非 `ADD`。仅在确实无法匹配现有记录时才新建。`DELETE` 仅用于明显垃圾/误建。
+8. 角色（人物）写入 `actorCards`；组织/城市/国家/地点等非人物实体写入 `entityCards`。不要把非人物实体混入 `actorCards`。
 
 <!-- section: TAKEOVER_BATCH_SCHEMA -->
 
@@ -494,6 +657,55 @@
   "properties": {
     "batchId": { "type": "string" },
     "summary": { "type": "string" },
+    "actorCards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["actorKey", "displayName", "aliases", "identityFacts", "originFacts", "traits"],
+        "additionalProperties": false,
+        "properties": {
+          "actorKey": { "type": "string" },
+          "displayName": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "identityFacts": { "type": "array", "items": { "type": "string" } },
+          "originFacts": { "type": "array", "items": { "type": "string" } },
+          "traits": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "entityCards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entityType", "compareKey", "title", "summary", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
+          "compareKey": { "type": "string" },
+          "title": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "fields": { "type": "object", "additionalProperties": true },
+          "confidence": { "type": "number" }
+        }
+      }
+    },
+    "entityTransitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entityType", "compareKey", "title", "action", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
+          "compareKey": { "type": "string" },
+          "title": { "type": "string" },
+          "action": { "type": "string", "enum": ["ADD", "UPDATE", "MERGE", "INVALIDATE", "DELETE"] },
+          "reason": { "type": "string" },
+          "payload": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
     "stableFacts": {
       "type": "array",
       "items": {
@@ -569,6 +781,57 @@
 {
   "batchId": "takeover:demo:history:0001",
   "summary": "这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。",
+  "actorCards": [
+    {
+      "actorKey": "captain_ron",
+      "displayName": "巡逻队长",
+      "aliases": ["老罗恩"],
+      "identityFacts": ["负责北门夜巡"],
+      "originFacts": ["长期驻守北城门"],
+      "traits": ["强硬", "守规矩"]
+    }
+  ],
+  "entityCards": [
+    {
+      "entityType": "organization",
+      "compareKey": "organization:赤月教派",
+      "title": "赤月教派",
+      "aliases": ["赤月教团"],
+      "summary": "崇尚血月启示的宗教组织，在灰港下城区拥有广泛影响力。",
+      "fields": {
+        "orgType": "宗教组织",
+        "subtype": "教派",
+        "alignment": "激进",
+        "leader": "赫尔曼主教",
+        "headquartersCity": "灰港",
+        "status": "active"
+      },
+      "confidence": 0.82
+    },
+    {
+      "entityType": "city",
+      "compareKey": "city:灰港",
+      "title": "灰港",
+      "aliases": [],
+      "summary": "北境王国南部港口城市，赤月教派的主要活动区域。",
+      "fields": {
+        "nation": "北境王国",
+        "status": "正常",
+        "traits": "港口贸易城市"
+      },
+      "confidence": 0.78
+    }
+  ],
+  "entityTransitions": [
+    {
+      "entityType": "organization",
+      "compareKey": "organization:赤月教派",
+      "title": "赤月教派",
+      "action": "ADD",
+      "reason": "本批次首次出现该教派的详细描述",
+      "payload": {}
+    }
+  ],
   "stableFacts": [
     {
       "type": "identity",
@@ -617,6 +880,8 @@
 2. 对无法明确消歧的冲突，不要虚构结论；只保留在章节索引或统计中。
 3. 所有自然语言字段必须使用简体中文。
 4. 仅输出 JSON，不输出解释文本。
+5. `entityCards` 为最终整合后的世界实体卡列表，需对所有批次的实体卡进行去重合并。相同 `compareKey` 的实体合并为一张卡，保留最新信息。
+6. `entityTransitions` 为最终整合后的世界实体变更列表。相同 `compareKey` 的变更只保留最终状态。优先对同名实体执行 `MERGE` 而非保留重复。
 
 <!-- section: TAKEOVER_CONSOLIDATION_SCHEMA -->
 
@@ -692,6 +957,39 @@
       "type": "object",
       "additionalProperties": { "type": "string" }
     },
+    "entityCards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entityType", "compareKey", "title", "summary", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
+          "compareKey": { "type": "string" },
+          "title": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "fields": { "type": "object", "additionalProperties": true },
+          "confidence": { "type": "number" }
+        }
+      }
+    },
+    "entityTransitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entityType", "compareKey", "title", "action", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
+          "compareKey": { "type": "string" },
+          "title": { "type": "string" },
+          "action": { "type": "string", "enum": ["ADD", "UPDATE", "MERGE", "INVALIDATE", "DELETE"] },
+          "reason": { "type": "string" },
+          "payload": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
     "activeSnapshot": {
       "type": ["object", "null"],
       "additionalProperties": true
@@ -710,13 +1008,14 @@
     },
     "conflictStats": {
       "type": "object",
-      "required": ["unresolvedFacts", "unresolvedRelations", "unresolvedTasks", "unresolvedWorldStates"],
+      "required": ["unresolvedFacts", "unresolvedRelations", "unresolvedTasks", "unresolvedWorldStates", "unresolvedEntities"],
       "additionalProperties": false,
       "properties": {
         "unresolvedFacts": { "type": "integer" },
         "unresolvedRelations": { "type": "integer" },
         "unresolvedTasks": { "type": "integer" },
-        "unresolvedWorldStates": { "type": "integer" }
+        "unresolvedWorldStates": { "type": "integer" },
+        "unresolvedEntities": { "type": "integer" }
       }
     }
   }
@@ -763,6 +1062,34 @@
   "worldState": {
     "北门戒严": "仍在执行"
   },
+  "entityCards": [
+    {
+      "entityType": "organization",
+      "compareKey": "organization:赤月教派",
+      "title": "赤月教派",
+      "aliases": ["赤月教团"],
+      "summary": "崇尚血月启示的宗教组织，最终确认在灰港下城区拥有广泛影响力。",
+      "fields": {
+        "orgType": "宗教组织",
+        "subtype": "教派",
+        "alignment": "激进",
+        "leader": "赫尔曼主教",
+        "headquartersCity": "灰港",
+        "status": "active"
+      },
+      "confidence": 0.85
+    }
+  ],
+  "entityTransitions": [
+    {
+      "entityType": "organization",
+      "compareKey": "organization:赤月教派",
+      "title": "赤月教派",
+      "action": "ADD",
+      "reason": "历史批次中反复出现的重要教派组织",
+      "payload": {}
+    }
+  ],
   "activeSnapshot": {
     "currentScene": "双方正在商量下一步行动。",
     "currentLocation": "北门驻点",
@@ -788,7 +1115,8 @@
     "unresolvedFacts": 0,
     "unresolvedRelations": 0,
     "unresolvedTasks": 0,
-    "unresolvedWorldStates": 0
+    "unresolvedWorldStates": 0,
+    "unresolvedEntities": 0
   }
 }
 ```

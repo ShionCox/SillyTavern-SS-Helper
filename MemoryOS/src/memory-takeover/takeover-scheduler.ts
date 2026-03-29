@@ -35,7 +35,13 @@ export async function runTakeoverScheduler(input: {
     plan: MemoryTakeoverPlan;
     llm: MemoryLLMApi | null;
     pluginId: string;
-    existingActorCards?: Array<{ actorKey: string; displayName: string }>;
+    existingKnownEntities?: {
+        actors: Array<{ actorKey: string; displayName: string }>;
+        organizations: Array<{ entityKey: string; displayName: string }>;
+        locations: Array<{ entityKey: string; displayName: string }>;
+        tasks: Array<{ entityKey: string; displayName: string }>;
+        worldStates: Array<{ entityKey: string; displayName: string }>;
+    };
     applyConsolidation: (result: MemoryTakeoverConsolidationResult) => Promise<void>;
 }): Promise<MemoryTakeoverProgressSnapshot> {
     const sourceBundle = collectTakeoverSourceBundle();
@@ -88,6 +94,7 @@ export async function runTakeoverScheduler(input: {
     const failedBatchIds = new Set<string>();
     const allBatchResults = await loadMemoryTakeoverBatchResults(input.chatKey);
     const batchResultMap = new Map(allBatchResults.map((item) => [item.batchId, item]));
+    const historyBatches = batches.filter((item: MemoryTakeoverBatch): boolean => item.category === 'history');
 
     for (const batch of batches) {
         const latestPlan = await readMemoryTakeoverPlan(input.chatKey);
@@ -134,9 +141,11 @@ export async function runTakeoverScheduler(input: {
                 pluginId: input.pluginId,
                 batch: runningBatch,
                 totalBatches: batches.length,
+                historyBatchIndex: historyBatches.findIndex((item: MemoryTakeoverBatch): boolean => item.batchId === batch.batchId) + 1,
+                historyBatchTotal: historyBatches.length,
                 messages,
                 previousBatchResults,
-                existingActorCards: input.existingActorCards ?? [],
+                existingKnownEntities: input.existingKnownEntities,
             });
             batchResultMap.set(result.batchId, result);
             completedBatchIds.add(result.batchId);

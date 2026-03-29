@@ -3,6 +3,8 @@ import type {
     MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBatchResult,
     MemoryTakeoverConsolidationResult,
+    MemoryTakeoverEntityCardCandidate,
+    MemoryTakeoverEntityTransition,
     MemoryTakeoverRelationTransition,
     MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
@@ -27,6 +29,12 @@ export async function runTakeoverConsolidation(input: {
     const actorCards: MemoryTakeoverActorCardCandidate[] = mergeActorCards(
         input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverActorCardCandidate[] => item.actorCards ?? []),
     );
+    const entityCards: MemoryTakeoverEntityCardCandidate[] = mergeEntityCards(
+        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityCardCandidate[] => item.entityCards ?? []),
+    );
+    const entityTransitions: MemoryTakeoverEntityTransition[] = collapseEntityTransitions(
+        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityTransition[] => item.entityTransitions ?? []),
+    );
     const relationState = collapseRelations(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationTransition[] => item.relationTransitions));
     const taskState = collapseTasks(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions));
     const worldState = collapseWorldState(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverWorldStateChange[] => item.worldStateChanges));
@@ -39,6 +47,8 @@ export async function runTakeoverConsolidation(input: {
             tags: item.chapterTags,
         })),
         actorCards,
+        entityCards,
+        entityTransitions,
         longTermFacts: dedupedFacts,
         relationState,
         taskState,
@@ -56,6 +66,7 @@ export async function runTakeoverConsolidation(input: {
             unresolvedRelations: 0,
             unresolvedTasks: 0,
             unresolvedWorldStates: 0,
+            unresolvedEntities: 0,
         },
         generatedAt: Date.now(),
     };
@@ -78,6 +89,8 @@ export async function runTakeoverConsolidation(input: {
             ...fallback,
             ...structured,
             actorCards: mergeActorCards(structured.actorCards ?? fallback.actorCards),
+            entityCards: mergeEntityCards(structured.entityCards ?? fallback.entityCards),
+            entityTransitions: collapseEntityTransitions(structured.entityTransitions ?? fallback.entityTransitions),
             takeoverId: input.takeoverId,
             activeSnapshot: structured.activeSnapshot ?? input.activeSnapshot,
             generatedAt: Date.now(),
@@ -189,4 +202,51 @@ function collapseWorldState(changes: MemoryTakeoverWorldStateChange[]): Record<s
         result[change.key] = change.value;
     }
     return result;
+}
+
+/**
+ * 功能：合并旧聊天批次识别出的世界实体卡候选。
+ * @param entityCards 原始实体卡候选。
+ * @returns 按 compareKey 去重合并后的实体卡列表。
+ */
+function mergeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]): MemoryTakeoverEntityCardCandidate[] {
+    const map = new Map<string, MemoryTakeoverEntityCardCandidate>();
+    for (const card of entityCards) {
+        const compareKey = String(card.compareKey ?? '').trim();
+        if (!compareKey) {
+            continue;
+        }
+        const existing = map.get(compareKey);
+        if (existing) {
+            map.set(compareKey, {
+                entityType: card.entityType,
+                compareKey,
+                title: card.title || existing.title,
+                aliases: dedupeStringValues([...(existing.aliases ?? []), ...(card.aliases ?? [])]),
+                summary: card.summary || existing.summary,
+                fields: { ...(existing.fields ?? {}), ...(card.fields ?? {}) },
+                confidence: Math.max(Number(existing.confidence) || 0, Number(card.confidence) || 0),
+            });
+        } else {
+            map.set(compareKey, { ...card });
+        }
+    }
+    return Array.from(map.values());
+}
+
+/**
+ * 功能：汇总世界实体变更，保留每个实体最新的变更动作。
+ * @param transitions 实体变更列表。
+ * @returns 汇总后的实体变更列表。
+ */
+function collapseEntityTransitions(transitions: MemoryTakeoverEntityTransition[]): MemoryTakeoverEntityTransition[] {
+    const map = new Map<string, MemoryTakeoverEntityTransition>();
+    for (const transition of transitions) {
+        const compareKey = String(transition.compareKey ?? '').trim();
+        if (!compareKey) {
+            continue;
+        }
+        map.set(compareKey, { ...transition });
+    }
+    return Array.from(map.values());
 }

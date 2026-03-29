@@ -58,3 +58,11 @@ export { downgradeToSignal } from './signal-downgrader';
 export { runFragmentRepairPipeline } from './planner-input-assembler';
 export { buildFragmentRepairAuditRecord, formatAuditLog, type FragmentRepairAuditRecord } from './memory-audit-logger';
 
+// ─── CompareKey 冲突检测 ──────────────────────────────
+export {
+    detectCompareKeyConflicts,
+    resolveCompareKeyMatch,
+    resolveSummaryCompareKey,
+    type CompareKeyConflict,
+} from './summary-compare-key-resolver';
+

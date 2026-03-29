@@ -21,6 +21,10 @@ export {
     type RecentContextBias,
     type RouteRetrievalContextOptions,
 } from './context-router';
+export {
+    applyEntityBoostSignals,
+    applyEntityPatternBoosts,
+} from './retrieval-entity-boost';
 export { buildCandidateLinkIndex, type CandidateLinkIndex, type CandidateNeighborEdge } from './link-index';
 export { expandFromSeeds, type GraphExpansionDiagnostics, type GraphExpansionInput, type GraphExpansionResult } from './graph-expander';
 export { applyCoverageSecondPass, type CoverageSecondPassResult } from './coverage-checker';

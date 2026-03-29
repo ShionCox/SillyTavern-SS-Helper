@@ -49,7 +49,7 @@ export interface RetrievalQuery {
 /**
  * 功能：定义检索语境 facet 类型。
  */
-export type RetrievalFacet = 'world' | 'scene' | 'relationship' | 'event' | 'interpretation';
+export type RetrievalFacet = 'world' | 'scene' | 'relationship' | 'event' | 'interpretation' | 'organization_politics';
 export type RetrievalRulePackMode = 'native' | 'perocore' | 'hybrid';
 
 /**

@@ -24,6 +24,8 @@ export interface SummaryWindowInput {
     fromTurn: number;
     toTurn: number;
     summaryText: string;
+    /** 近景窗口文本，用于语境提示。 */
+    recentContextText?: string;
 }
 
 /**
@@ -68,6 +70,7 @@ export interface SummaryMutationContext {
         fromTurn: number;
         toTurn: number;
         summaryText: string;
+        recentContextText?: string;
     };
     detectedSignals: {
         candidateTypes: string[];
@@ -148,6 +151,7 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
                 fromTurn: input.window.fromTurn,
                 toTurn: input.window.toTurn,
                 summaryText: input.window.summaryText,
+                ...(input.window.recentContextText ? { recentContextText: input.window.recentContextText } : {}),
             },
             detectedSignals: {
                 candidateTypes,

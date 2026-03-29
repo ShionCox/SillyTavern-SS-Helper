@@ -164,12 +164,35 @@ export interface ColdStartCandidate {
 }
 
 /**
+ * 功能：定义冷启动实体卡对象。
+ */
+export interface ColdStartEntityCardEntry {
+    entityType: string;
+    compareKey?: string;
+    title: string;
+    aliases?: string[];
+    summary: string;
+    fields?: Record<string, unknown>;
+}
+
+/**
+ * 功能：定义冷启动实体卡集合。
+ */
+export interface ColdStartEntityCards {
+    organizations?: ColdStartEntityCardEntry[];
+    cities?: ColdStartEntityCardEntry[];
+    nations?: ColdStartEntityCardEntry[];
+    locations?: ColdStartEntityCardEntry[];
+}
+
+/**
  * 功能：定义冷启动输出文档。
  */
 export interface ColdStartDocument {
     schemaVersion: string;
     identity: ColdStartIdentity;
     actorCards: ColdStartActorCard[];
+    entityCards?: ColdStartEntityCards;
     worldProfileDetection?: {
         primaryProfile: string;
         secondaryProfiles: string[];

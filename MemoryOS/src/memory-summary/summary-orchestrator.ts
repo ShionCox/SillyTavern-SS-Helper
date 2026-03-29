@@ -400,6 +400,7 @@ function buildSlimMutationContext(
     const slimCandidates = context.candidateRecords.map((candidate) => ({
         candidateId: candidate.candidateId,
         targetKind: candidate.targetKind,
+        compareKey: candidate.compareKey,
         title: candidate.title,
         summary: truncateTextForContext(candidate.summary ?? '', candidateSummaryMaxChars),
         status: candidate.status,
@@ -412,6 +413,7 @@ function buildSlimMutationContext(
             fromTurn: context.window.fromTurn,
             toTurn: context.window.toTurn,
             windowFacts,
+            ...(context.window.recentContextText ? { recentContext: extractWindowFacts(context.window.recentContextText).slice(0, 8) } : {}),
         },
         detectedSignals: context.detectedSignals,
         plannerDecision,

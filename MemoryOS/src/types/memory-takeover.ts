@@ -115,6 +115,36 @@ export interface MemoryTakeoverActorCardCandidate {
     traits: string[];
 }
 
+/**
+ * 功能：定义世界实体类型。
+ */
+export type MemoryTakeoverEntityType = 'organization' | 'city' | 'nation' | 'location';
+
+/**
+ * 功能：定义世界实体卡候选。
+ */
+export interface MemoryTakeoverEntityCardCandidate {
+    entityType: MemoryTakeoverEntityType;
+    compareKey: string;
+    title: string;
+    aliases: string[];
+    summary: string;
+    fields: Record<string, string | number | boolean | string[]>;
+    confidence: number;
+}
+
+/**
+ * 功能：定义世界实体变化。
+ */
+export interface MemoryTakeoverEntityTransition {
+    entityType: MemoryTakeoverEntityType;
+    compareKey: string;
+    title: string;
+    action: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
+    reason: string;
+    payload: Record<string, unknown>;
+}
+
 export interface MemoryTakeoverBaseline {
     staticBaseline: string;
     personaBaseline: string;
@@ -149,6 +179,8 @@ export interface MemoryTakeoverBatchResult {
     batchId: string;
     summary: string;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    entityCards: MemoryTakeoverEntityCardCandidate[];
+    entityTransitions: MemoryTakeoverEntityTransition[];
     stableFacts: MemoryTakeoverStableFact[];
     relationTransitions: MemoryTakeoverRelationTransition[];
     taskTransitions: MemoryTakeoverTaskTransition[];
@@ -182,6 +214,8 @@ export interface MemoryTakeoverConsolidationResult {
         tags: string[];
     }>;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    entityCards: MemoryTakeoverEntityCardCandidate[];
+    entityTransitions: MemoryTakeoverEntityTransition[];
     longTermFacts: MemoryTakeoverStableFact[];
     relationState: Array<{
         target: string;
@@ -200,6 +234,7 @@ export interface MemoryTakeoverConsolidationResult {
         unresolvedRelations: number;
         unresolvedTasks: number;
         unresolvedWorldStates: number;
+        unresolvedEntities: number;
     };
     generatedAt: number;
 }

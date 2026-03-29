@@ -10,6 +10,7 @@ import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
 export interface ActorVisibleMemoryContext {
     worldBaseLines: string[];
     sceneSharedLines: string[];
+    entityLines: string[];
     diagnostics: {
         actorKey: string;
         totalInjectedCount: number;
@@ -57,6 +58,11 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
         .map((entry: MemoryEntry): string => `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`);
 
+    const entityLines = input.entries
+        .filter((entry: MemoryEntry): boolean => isEntityType(entry.entryType))
+        .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
+        .map((entry: MemoryEntry): string => renderEntityLine(entry));
+
     const identityLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isIdentityType(entry.entryType))
         .slice(0, 30)
@@ -94,6 +100,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     });
     const totalInjectedCount = worldBaseLines.length
         + sceneSharedLines.length
+        + entityLines.length
         + identityLines.length
         + relationshipLines.length
         + eventLines.length
@@ -101,6 +108,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     const estimatedChars = [
         ...worldBaseLines,
         ...sceneSharedLines,
+        ...entityLines,
         ...identityLines,
         ...relationshipLines,
         ...eventLines,
@@ -110,6 +118,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     return {
         worldBaseLines,
         sceneSharedLines,
+        entityLines,
         diagnostics: {
             actorKey: activeActorKey || 'actor',
             totalInjectedCount,
@@ -147,6 +156,44 @@ function isWorldBaseType(entryType: string): boolean {
 function isSceneSharedType(entryType: string): boolean {
     const normalized = normalizeType(entryType);
     return normalized === 'scene_shared_state' || normalized === 'location';
+}
+
+/**
+ * 功能：判断是否为世界实体类型（组织/城市/国家/地点）。
+ * @param entryType 条目类型。
+ * @returns 是否属于实体层。
+ */
+function isEntityType(entryType: string): boolean {
+    const normalized = normalizeType(entryType);
+    return normalized === 'organization'
+        || normalized === 'city'
+        || normalized === 'nation';
+}
+
+/**
+ * 功能：渲染实体条目为注入行。
+ * @param entry 记忆条目。
+ * @returns 渲染后的文本行。
+ */
+function renderEntityLine(entry: MemoryEntry): string {
+    const typeLabel = resolveEntityTypeLabel(entry.entryType);
+    const summary = entry.summary || entry.detail || '暂无详情';
+    return `[${typeLabel}] ${entry.title}：${summary}`;
+}
+
+/**
+ * 功能：解析实体类型的中文标签。
+ * @param entryType 条目类型。
+ * @returns 中文标签。
+ */
+function resolveEntityTypeLabel(entryType: string): string {
+    const normalized = normalizeType(entryType);
+    switch (normalized) {
+        case 'organization': return '组织';
+        case 'city': return '城市';
+        case 'nation': return '国家';
+        default: return '实体';
+    }
 }
 
 /**

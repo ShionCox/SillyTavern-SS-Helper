@@ -16,7 +16,7 @@ const DEFAULT_BUDGET: XmlNarrativeBudgetOptions = {
     worldBaseChars: 900,
     sceneSharedChars: 700,
     actorViewChars: 1400,
-    totalChars: 2600,
+    totalChars: 3200,
 };
 
 /**
@@ -35,6 +35,7 @@ export function renderMemoryContextXmlMarkdown(
     const budget = normalizeBudget(budgetOptions);
     const worldBaseLines = trimLinesByBudget(context.worldBaseLines, budget.worldBaseChars);
     const sceneSharedLines = trimLinesByBudget(context.sceneSharedLines, budget.sceneSharedChars);
+    const entityLines = trimLinesByBudget(context.entityLines ?? [], Math.floor(budget.sceneSharedChars * 0.6));
     const actorViewLines = trimLinesByBudget([
         ...context.actorView.identityLines,
         ...context.actorView.relationshipLines,
@@ -65,6 +66,13 @@ export function renderMemoryContextXmlMarkdown(
         renderBulletLines(sceneSharedLines),
         '  </scene_shared>',
         '',
+        ...(entityLines.length > 0 ? [
+            '  <entity_ledger>',
+            '## 已知实体',
+            renderBulletLines(entityLines),
+            '  </entity_ledger>',
+            '',
+        ] : []),
         `  <actor_view actor="${escapeXmlAttribute(context.actorView.actorKey)}">`,
         `## ${style.actorViewTitle}`,
         renderBulletLines(identityLines),

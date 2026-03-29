@@ -488,7 +488,7 @@ export class MemorySDKImpl {
                         plan: existingPlan,
                         llm: readMemoryLLMApi(),
                         pluginId: MEMORY_OS_PLUGIN_ID,
-                        existingActorCards: await this.readTakeoverExistingActorCards(),
+                        existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                         applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                             await this.applyTakeoverConsolidation(result);
                         },
@@ -502,7 +502,7 @@ export class MemorySDKImpl {
                             plan: snapshot.plan,
                             llm: readMemoryLLMApi(),
                             pluginId: MEMORY_OS_PLUGIN_ID,
-                            existingActorCards: await this.readTakeoverExistingActorCards(),
+                            existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                             applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                                 await this.applyTakeoverConsolidation(result);
                             },
@@ -549,7 +549,7 @@ export class MemorySDKImpl {
                     plan: nextPlan,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
-                    existingActorCards: await this.readTakeoverExistingActorCards(),
+                    existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                         await this.applyTakeoverConsolidation(result);
                     },
@@ -615,7 +615,7 @@ export class MemorySDKImpl {
                     plan: snapshot.plan,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
-                    existingActorCards: await this.readTakeoverExistingActorCards(),
+                    existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                         await this.applyTakeoverConsolidation(result);
                     },
@@ -957,11 +957,19 @@ export class MemorySDKImpl {
             await this.persistTakeoverActorCard(actorCard, result.takeoverId);
         }
 
+        for (const entityCard of result.entityCards ?? []) {
+            await this.persistTakeoverEntityCard(entityCard, result.takeoverId);
+        }
+
+        for (const entityTransition of result.entityTransitions ?? []) {
+            await this.applyTakeoverEntityTransition(entityTransition, result.takeoverId);
+        }
+
         for (const fact of result.longTermFacts) {
             await this.unifiedManager.saveEntry({
                 title: `${fact.subject} · ${fact.predicate}`,
-                entryType: 'other',
-                category: '其他',
+                entryType: this.resolveTakeoverFactEntryType(fact.type),
+                category: this.resolveTakeoverFactCategory(fact.type),
                 tags: [fact.type].filter(Boolean),
                 summary: fact.value,
                 detail: `${fact.subject}${fact.predicate}${fact.value}`,
@@ -1105,6 +1113,57 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：读取当前聊天已存在的分类对象，供旧聊天批处理提示词复用。
+     * @returns 已存在分类对象。
+     */
+    private async readTakeoverExistingKnownEntities(): Promise<{
+        actors: Array<{ actorKey: string; displayName: string }>;
+        organizations: Array<{ entityKey: string; displayName: string }>;
+        cities: Array<{ entityKey: string; displayName: string }>;
+        nations: Array<{ entityKey: string; displayName: string }>;
+        locations: Array<{ entityKey: string; displayName: string }>;
+        tasks: Array<{ entityKey: string; displayName: string }>;
+        worldStates: Array<{ entityKey: string; displayName: string }>;
+    }> {
+        const actors = await this.readTakeoverExistingActorCards();
+        const organizationEntries = await this.unifiedManager.listEntries({ entryType: 'organization' });
+        const cityEntries = await this.unifiedManager.listEntries({ entryType: 'city' });
+        const nationEntries = await this.unifiedManager.listEntries({ entryType: 'nation' });
+        const locationEntries = await this.unifiedManager.listEntries({ entryType: 'location' });
+        const taskEntries = await this.unifiedManager.listEntries({ entryType: 'task' });
+        const worldEntries = await this.unifiedManager.listEntries();
+        return {
+            actors,
+            organizations: this.dedupeTakeoverEntityRefs(organizationEntries.map((entry) => ({
+                entityKey: String(entry.entryId ?? '').trim(),
+                displayName: String(entry.title ?? '').trim(),
+            }))),
+            cities: this.dedupeTakeoverEntityRefs(cityEntries.map((entry) => ({
+                entityKey: String(entry.entryId ?? '').trim(),
+                displayName: String(entry.title ?? '').trim(),
+            }))),
+            nations: this.dedupeTakeoverEntityRefs(nationEntries.map((entry) => ({
+                entityKey: String(entry.entryId ?? '').trim(),
+                displayName: String(entry.title ?? '').trim(),
+            }))),
+            locations: this.dedupeTakeoverEntityRefs(locationEntries.map((entry) => ({
+                entityKey: String(entry.entryId ?? '').trim(),
+                displayName: String(entry.title ?? '').trim(),
+            }))),
+            tasks: this.dedupeTakeoverEntityRefs(taskEntries.map((entry) => ({
+                entityKey: String(entry.entryId ?? '').trim(),
+                displayName: String(entry.title ?? '').trim(),
+            }))),
+            worldStates: this.dedupeTakeoverEntityRefs(worldEntries
+                .filter((entry): boolean => ['world_global_state', 'world_core_setting', 'world_hard_rule'].includes(String(entry.entryType ?? '').trim()))
+                .map((entry) => ({
+                    entityKey: String(entry.entryId ?? '').trim(),
+                    displayName: String(entry.title ?? '').trim(),
+                }))),
+        };
+    }
+
+    /**
      * 功能：把旧聊天处理识别出的角色卡候选写入正式角色卡条目。
      * @param actorCard 角色卡候选。
      * @param takeoverId 接管任务 ID。
@@ -1174,6 +1233,216 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：把旧聊天处理识别出的世界实体卡候选写入正式实体条目。
+     * @param entityCard 实体卡候选。
+     * @param takeoverId 接管任务 ID。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverEntityCard(
+        entityCard: {
+            entityType: string;
+            compareKey: string;
+            title: string;
+            aliases?: string[];
+            summary?: string;
+            fields?: Record<string, unknown>;
+            confidence?: number;
+        },
+        takeoverId: string,
+    ): Promise<void> {
+        const entityType = String(entityCard.entityType ?? '').trim().toLowerCase();
+        const validEntityTypes = new Set(['organization', 'city', 'nation', 'location']);
+        if (!validEntityTypes.has(entityType)) {
+            return;
+        }
+        const title = String(entityCard.title ?? '').trim();
+        if (!title) {
+            return;
+        }
+
+        const categoryMap: Record<string, string> = {
+            organization: '组织',
+            city: '城市',
+            nation: '国家',
+            location: '地点',
+        };
+
+        const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
+        const existingEntry = existingEntries.find((entry) => {
+            if (String(entry.title ?? '').trim() === title) {
+                return true;
+            }
+            const entryAliases = this.extractEntryAliases(entry);
+            return entryAliases.some((alias: string) => alias === title);
+        }) ?? null;
+
+        const aliases = this.dedupeTakeoverStringList(entityCard.aliases ?? []);
+        const summary = String(entityCard.summary ?? '').trim() || `${title}的${categoryMap[entityType] ?? '实体'}信息`;
+        const fields = entityCard.fields && typeof entityCard.fields === 'object' ? entityCard.fields : {};
+
+        await this.unifiedManager.saveEntry({
+            entryId: existingEntry?.entryId,
+            title,
+            entryType: entityType,
+            category: categoryMap[entityType] ?? '其他',
+            tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
+            summary,
+            detail: existingEntry?.detail ?? '',
+            detailPayload: {
+                ...(existingEntry?.detailPayload ?? {}),
+                fields: {
+                    ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
+                    ...fields,
+                    aliases,
+                },
+                takeover: {
+                    source: 'old_chat_takeover',
+                    takeoverId,
+                },
+            },
+        }, {
+            actionType: existingEntry ? 'UPDATE' : 'ADD',
+            sourceLabel: '旧聊天接管整合',
+            reasonCodes: [existingEntry ? 'takeover_entity_card_update' : 'takeover_entity_card_add'],
+        });
+    }
+
+    /**
+     * 功能：应用旧聊天处理识别出的世界实体变更。
+     * @param transition 实体变更。
+     * @param takeoverId 接管任务 ID。
+     * @returns 异步完成。
+     */
+    private async applyTakeoverEntityTransition(
+        transition: {
+            entityType: string;
+            compareKey: string;
+            title: string;
+            action: string;
+            reason: string;
+            payload: Record<string, unknown>;
+        },
+        takeoverId: string,
+    ): Promise<void> {
+        const entityType = String(transition.entityType ?? '').trim().toLowerCase();
+        const validEntityTypes = new Set(['organization', 'city', 'nation', 'location']);
+        if (!validEntityTypes.has(entityType)) {
+            return;
+        }
+        const title = String(transition.title ?? '').trim();
+        if (!title) {
+            return;
+        }
+        const action = String(transition.action ?? '').trim().toUpperCase();
+
+        const categoryMap: Record<string, string> = {
+            organization: '组织',
+            city: '城市',
+            nation: '国家',
+            location: '地点',
+        };
+
+        const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
+        const existingEntry = existingEntries.find((entry) => {
+            if (String(entry.title ?? '').trim() === title) {
+                return true;
+            }
+            const entryAliases = this.extractEntryAliases(entry);
+            return entryAliases.some((alias: string) => alias === title);
+        }) ?? null;
+
+        if (action === 'INVALIDATE' && existingEntry) {
+            await this.unifiedManager.saveEntry({
+                entryId: existingEntry.entryId,
+                title: existingEntry.title,
+                entryType: entityType,
+                category: categoryMap[entityType] ?? '其他',
+                tags: existingEntry.tags ?? [entityType],
+                summary: `[已失效] ${existingEntry.summary ?? ''}`,
+                detail: existingEntry.detail ?? '',
+                detailPayload: {
+                    ...(existingEntry.detailPayload ?? {}),
+                    lifecycle: { status: 'invalidated', reason: transition.reason },
+                    takeover: { source: 'old_chat_takeover', takeoverId },
+                },
+            }, {
+                actionType: 'UPDATE',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_entity_invalidate'],
+            });
+            return;
+        }
+
+        if (action === 'DELETE' && existingEntry) {
+            await this.unifiedManager.saveEntry({
+                entryId: existingEntry.entryId,
+                title: existingEntry.title,
+                entryType: entityType,
+                category: categoryMap[entityType] ?? '其他',
+                tags: existingEntry.tags ?? [entityType],
+                summary: `[已删除] ${existingEntry.summary ?? ''}`,
+                detail: existingEntry.detail ?? '',
+                detailPayload: {
+                    ...(existingEntry.detailPayload ?? {}),
+                    lifecycle: { status: 'archived', reason: transition.reason },
+                    takeover: { source: 'old_chat_takeover', takeoverId },
+                },
+            }, {
+                actionType: 'UPDATE',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_entity_delete'],
+            });
+            return;
+        }
+
+        if ((action === 'ADD' || action === 'UPDATE' || action === 'MERGE') && transition.payload) {
+            const summary = String(transition.payload.summary ?? transition.reason ?? '').trim();
+            await this.unifiedManager.saveEntry({
+                entryId: existingEntry?.entryId,
+                title,
+                entryType: entityType,
+                category: categoryMap[entityType] ?? '其他',
+                tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
+                summary: summary || `${title}的${categoryMap[entityType] ?? '实体'}信息`,
+                detail: existingEntry?.detail ?? '',
+                detailPayload: {
+                    ...(existingEntry?.detailPayload ?? {}),
+                    fields: {
+                        ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
+                        ...transition.payload,
+                    },
+                    takeover: { source: 'old_chat_takeover', takeoverId },
+                },
+            }, {
+                actionType: existingEntry ? 'UPDATE' : 'ADD',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: [`takeover_entity_${action.toLowerCase()}`],
+            });
+        }
+    }
+
+    /**
+     * 功能：从条目中提取别名列表。
+     * @param entry 条目。
+     * @returns 别名列表。
+     */
+    private extractEntryAliases(entry: { detailPayload?: unknown }): string[] {
+        const payload = entry.detailPayload;
+        if (!payload || typeof payload !== 'object') {
+            return [];
+        }
+        const fields = (payload as Record<string, unknown>).fields;
+        if (!fields || typeof fields !== 'object') {
+            return [];
+        }
+        const aliases = (fields as Record<string, unknown>).aliases;
+        if (!Array.isArray(aliases)) {
+            return [];
+        }
+        return aliases.map((alias: unknown) => String(alias ?? '').trim()).filter(Boolean);
+    }
+
+    /**
      * 功能：去重旧聊天处理里的字符串列表。
      * @param values 原始列表。
      * @returns 去重后的列表。
@@ -1186,6 +1455,26 @@ export class MemorySDKImpl {
                 continue;
             }
             result.push(normalized);
+        }
+        return result;
+    }
+
+    /**
+     * 功能：去重旧聊天处理里的带标识对象列表。
+     * @param values 原始对象列表。
+     * @returns 去重后的对象列表。
+     */
+    private dedupeTakeoverEntityRefs(values: Array<{ entityKey: string; displayName: string }>): Array<{ entityKey: string; displayName: string }> {
+        const result: Array<{ entityKey: string; displayName: string }> = [];
+        const seen = new Set<string>();
+        for (const value of values) {
+            const entityKey = String(value.entityKey ?? '').trim();
+            const displayName = String(value.displayName ?? '').trim();
+            if (!entityKey || !displayName || seen.has(entityKey)) {
+                continue;
+            }
+            seen.add(entityKey);
+            result.push({ entityKey, displayName });
         }
         return result;
     }
@@ -1366,6 +1655,68 @@ export class MemorySDKImpl {
             .replace(/[^a-z0-9_-]+/g, '_')
             .replace(/^_+|_+$/g, '');
         return normalized;
+    }
+
+    /**
+     * 功能：把旧聊天事实类型映射为正式记忆条目类型。
+     * @param factType 旧聊天事实类型。
+     * @returns 对应的正式条目类型。
+     */
+    private resolveTakeoverFactEntryType(factType: string): string {
+        const normalizedType = String(factType ?? '').trim().toLowerCase();
+        if (normalizedType === 'location') {
+            return 'location';
+        }
+        if (normalizedType === 'faction' || normalizedType === 'organization') {
+            return 'organization';
+        }
+        if (normalizedType === 'city') {
+            return 'city';
+        }
+        if (normalizedType === 'nation') {
+            return 'nation';
+        }
+        if (normalizedType === 'event') {
+            return 'event';
+        }
+        if (normalizedType === 'artifact' || normalizedType === 'item') {
+            return 'item';
+        }
+        if (normalizedType === 'world') {
+            return 'world_core_setting';
+        }
+        return 'other';
+    }
+
+    /**
+     * 功能：把旧聊天事实类型映射为正式记忆分类。
+     * @param factType 旧聊天事实类型。
+     * @returns 对应的分类名称。
+     */
+    private resolveTakeoverFactCategory(factType: string): string {
+        const normalizedType = String(factType ?? '').trim().toLowerCase();
+        if (normalizedType === 'location') {
+            return '地点';
+        }
+        if (normalizedType === 'faction' || normalizedType === 'organization') {
+            return '组织';
+        }
+        if (normalizedType === 'city') {
+            return '城市';
+        }
+        if (normalizedType === 'nation') {
+            return '国家';
+        }
+        if (normalizedType === 'event') {
+            return '事件';
+        }
+        if (normalizedType === 'artifact' || normalizedType === 'item') {
+            return '物品';
+        }
+        if (normalizedType === 'world') {
+            return '世界基础';
+        }
+        return '其他';
     }
 
     /**

@@ -73,6 +73,7 @@ const FACET_SCHEMA_MAP: Record<RetrievalFacet, string[]> = {
     relationship: ['relationship', 'actor_profile'],
     event: ['event', 'actor_visible_event'],
     interpretation: ['actor_private_interpretation'],
+    organization_politics: ['organization', 'city', 'nation', 'location'],
 };
 
 /**
@@ -95,9 +96,11 @@ const DICTIONARY_FACET_MAP: Record<string, RetrievalFacet[]> = {
     perocore_work_mode: ['event', 'scene', 'interpretation'],
     perocore_planning: ['event', 'interpretation'],
     perocore_reflection: ['interpretation', 'event'],
+    'organization-politics': ['organization_politics', 'world', 'event'],
+    perocore_organization: ['organization_politics', 'world', 'event'],
 };
 
-const ALL_FACETS: RetrievalFacet[] = ['world', 'scene', 'relationship', 'event', 'interpretation'];
+const ALL_FACETS: RetrievalFacet[] = ['world', 'scene', 'relationship', 'event', 'interpretation', 'organization_politics'];
 
 /**
  * 功能：从候选记忆列表中动态构建实体词典。
@@ -179,6 +182,19 @@ export function buildContextDictionaryFromCandidates(
             if (candidate.title) {
                 locationNameSet.add(candidate.title);
                 locationNameToKey.set(candidate.title.toLowerCase(), candidate.locationKey ?? candidate.title);
+            }
+        }
+        if (candidate.schemaId === 'organization' || candidate.schemaId === 'city' || candidate.schemaId === 'nation') {
+            if (candidate.title) {
+                worldAliasSet.add(candidate.title);
+            }
+            for (const alias of candidate.aliasTexts ?? []) {
+                if (alias) {
+                    worldAliasSet.add(alias);
+                }
+            }
+            if (candidate.compareKey) {
+                worldKeySet.add(candidate.compareKey);
             }
         }
     }
@@ -512,6 +528,20 @@ function applyPatternScores(
     if (/我(觉得|认为|感觉|猜|怀疑)|你(觉得|认为|怎么看)/u.test(query)) {
         scores.set('interpretation', (scores.get('interpretation') ?? 0) + 0.25);
         reasons.push({ source: 'pattern', detail: '句式更像主观理解表达，已提高理解情境权重。', weight: 0.25 });
+    }
+    if (/教派|教团|组织|势力|商会|学院|公会|骑士团|军团|教会|宗门|帮派|派系/u.test(query)) {
+        scores.set('organization_politics', (scores.get('organization_politics') ?? 0) + 0.35);
+        reasons.push({ source: 'pattern', detail: '句式涉及组织/势力/教派等实体，已提高组织政治情境权重。', weight: 0.35 });
+    }
+    if (/城市|城邦|王都|首都|港口|边境城/u.test(query)) {
+        scores.set('organization_politics', (scores.get('organization_politics') ?? 0) + 0.2);
+        scores.set('scene', (scores.get('scene') ?? 0) + 0.15);
+        reasons.push({ source: 'pattern', detail: '句式涉及城市级别实体，已提高组织与场景权重。', weight: 0.2 });
+    }
+    if (/国家|王国|帝国|联邦|政权|教权国|共和国/u.test(query)) {
+        scores.set('organization_politics', (scores.get('organization_politics') ?? 0) + 0.25);
+        scores.set('world', (scores.get('world') ?? 0) + 0.15);
+        reasons.push({ source: 'pattern', detail: '句式涉及国家级别实体，已提高组织与世界权重。', weight: 0.25 });
     }
 }
 
