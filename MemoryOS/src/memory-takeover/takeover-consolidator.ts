@@ -1,23 +1,45 @@
 import type {
     MemoryTakeoverActiveSnapshot,
-    MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBatchResult,
     MemoryTakeoverConsolidationResult,
-    MemoryTakeoverEntityCardCandidate,
-    MemoryTakeoverEntityTransition,
-    MemoryTakeoverRelationshipCard,
-    MemoryTakeoverRelationTransition,
-    MemoryTakeoverStableFact,
-    MemoryTakeoverTaskTransition,
-    MemoryTakeoverWorldStateChange,
 } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
-import { runTakeoverStructuredTask } from './takeover-llm';
+import { readMemoryOSSettings } from '../settings/store';
+import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
+import { createPipelineDiagnostics } from '../pipeline/pipeline-diagnostics';
+import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
+import {
+    appendPipelineBatchResultRecord,
+    clearPipelineLedgerState,
+    listPipelineSectionDigestRecords,
+    replacePipelineLedgerRecords,
+    upsertPipelineSectionDigestRecord,
+} from '../pipeline/pipeline-ledger-store';
+import {
+    clearPipelineConflictState,
+    listPipelineConflictBucketRecords,
+    resolvePipelineConflictBucket,
+    upsertPipelineConflictBucketRecord,
+} from '../pipeline/pipeline-conflict-store';
+import {
+    buildTakeoverSectionDigests,
+    mapTakeoverRecordsToLedger,
+    reduceTakeoverActors,
+    reduceTakeoverEntities,
+    reduceTakeoverRelationships,
+    reduceTakeoverTasks,
+    reduceTakeoverWorld,
+} from './takeover-domain-ledger';
+import { resolveTakeoverConflictBuckets } from './takeover-conflict-resolver';
+import { finalizeTakeoverConsolidation } from './takeover-finalizer';
 
 /**
- * 功能：执行最终整合。
- * @param input 整合输入。
- * @returns 整合结果。
+ * 功能：执行旧聊天接管最终整合。
+ * 参数：
+ * input：整合输入。
+ *
+ * 返回：
+ * MemoryTakeoverConsolidationResult：最终整合结果。
  */
 export async function runTakeoverConsolidation(input: {
     llm: MemoryLLMApi | null;
@@ -26,301 +48,135 @@ export async function runTakeoverConsolidation(input: {
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     batchResults: MemoryTakeoverBatchResult[];
 }): Promise<MemoryTakeoverConsolidationResult> {
-    const dedupedFacts: MemoryTakeoverStableFact[] = dedupeFacts(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts));
-    const actorCards: MemoryTakeoverActorCardCandidate[] = mergeActorCards(
-        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverActorCardCandidate[] => item.actorCards ?? []),
-    );
-    const relationships: MemoryTakeoverRelationshipCard[] = mergeRelationships(
-        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationshipCard[] => item.relationships ?? []),
-    );
-    const entityCards: MemoryTakeoverEntityCardCandidate[] = mergeEntityCards(
-        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityCardCandidate[] => item.entityCards ?? []),
-    );
-    const entityTransitions: MemoryTakeoverEntityTransition[] = collapseEntityTransitions(
-        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityTransition[] => item.entityTransitions ?? []),
-    );
-    const relationState = collapseRelations(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationTransition[] => item.relationTransitions));
-    const taskState = collapseTasks(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions));
-    const worldState = collapseWorldState(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverWorldStateChange[] => item.worldStateChanges));
-    const fallback: MemoryTakeoverConsolidationResult = {
-        takeoverId: input.takeoverId,
-        chapterDigestIndex: input.batchResults.map((item: MemoryTakeoverBatchResult) => ({
-            batchId: item.batchId,
-            range: item.sourceRange,
-            summary: item.summary,
-            tags: item.chapterTags,
-        })),
-        actorCards,
-        relationships,
-        entityCards,
-        entityTransitions,
-        longTermFacts: dedupedFacts,
-        relationState,
-        taskState,
-        worldState,
-        activeSnapshot: input.activeSnapshot,
-        dedupeStats: {
-            totalFacts: input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts).length,
-            dedupedFacts: dedupedFacts.length,
-            relationUpdates: Math.max(relationState.length, relationships.length),
-            taskUpdates: taskState.length,
-            worldUpdates: Object.keys(worldState).length,
+    const settings = readMemoryOSSettings();
+    const budget = resolvePipelineBudgetPolicy(settings);
+    const diagnostics = createPipelineDiagnostics(input.takeoverId, 'takeover');
+
+    upsertPipelineJobRecord({
+        jobId: input.takeoverId,
+        jobType: 'takeover',
+        status: 'running',
+        phase: 'extract',
+        sourceMeta: {
+            batchCount: input.batchResults.length,
+            hasActiveSnapshot: Boolean(input.activeSnapshot),
         },
-        conflictStats: {
-            unresolvedFacts: 0,
-            unresolvedRelations: 0,
-            unresolvedTasks: 0,
-            unresolvedWorldStates: 0,
-            unresolvedEntities: 0,
-        },
-        generatedAt: Date.now(),
-    };
-    const structured = await runTakeoverStructuredTask<MemoryTakeoverConsolidationResult>({
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+
+    clearPipelineLedgerState(input.takeoverId);
+    clearPipelineConflictState(input.takeoverId);
+
+    diagnostics.batchCount = input.batchResults.length;
+    for (const batch of input.batchResults) {
+        appendPipelineBatchResultRecord({
+            jobId: input.takeoverId,
+            batchId: batch.batchId,
+            domain: 'digest',
+            sourceRange: batch.sourceRange,
+            summary: batch.summary,
+            rawStructuredResult: batch,
+            normalizedStructuredResult: batch,
+            tokenEstimateIn: batch.summary.length,
+            tokenEstimateOut: JSON.stringify(batch).length,
+            status: 'completed',
+        });
+    }
+
+    updatePipelineJobPhase(input.takeoverId, 'reduce');
+    const sectionDigests = buildTakeoverSectionDigests(input.takeoverId, input.batchResults, budget);
+    for (const sectionDigest of sectionDigests) {
+        upsertPipelineSectionDigestRecord(sectionDigest);
+    }
+    diagnostics.sectionCount = sectionDigests.length;
+
+    const actorReduce = reduceTakeoverActors(input.batchResults);
+    const entityReduce = reduceTakeoverEntities(input.batchResults);
+    const relationshipReduce = reduceTakeoverRelationships(input.batchResults);
+    const taskReduce = reduceTakeoverTasks(input.batchResults);
+    const worldReduce = reduceTakeoverWorld(input.batchResults);
+
+    replacePipelineLedgerRecords([
+        ...mapTakeoverRecordsToLedger(input.takeoverId, 'actor', actorReduce.canonicalRecords, actorReduce.unresolvedConflicts),
+        ...mapTakeoverRecordsToLedger(input.takeoverId, 'entity', entityReduce.canonicalRecords, entityReduce.unresolvedConflicts),
+        ...mapTakeoverRecordsToLedger(input.takeoverId, 'relationship', relationshipReduce.canonicalRecords, relationshipReduce.unresolvedConflicts),
+        ...mapTakeoverRecordsToLedger(input.takeoverId, 'task', taskReduce.canonicalRecords, taskReduce.unresolvedConflicts),
+        ...mapTakeoverRecordsToLedger(input.takeoverId, 'world', worldReduce.canonicalRecords, worldReduce.unresolvedConflicts),
+    ]);
+
+    const conflictBuckets = [
+        ...actorReduce.unresolvedConflicts,
+        ...entityReduce.unresolvedConflicts,
+        ...relationshipReduce.unresolvedConflicts,
+        ...taskReduce.unresolvedConflicts,
+        ...worldReduce.unresolvedConflicts,
+    ].map((item) => ({
+        jobId: input.takeoverId,
+        bucketId: item.bucketId,
+        domain: item.domain,
+        conflictType: item.conflictType,
+        records: item.records.slice(0, budget.maxConflictBucketSize),
+        resolutionStatus: 'pending' as const,
+    }));
+
+    for (const bucket of conflictBuckets) {
+        upsertPipelineConflictBucketRecord(bucket);
+    }
+    diagnostics.conflictBucketCount = conflictBuckets.length;
+    diagnostics.unresolvedConflictCount = conflictBuckets.length;
+
+    updatePipelineJobPhase(input.takeoverId, 'resolve');
+    const patches = await resolveTakeoverConflictBuckets({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_consolidation',
-        taskDescription: `旧聊天处理：整理前面结果（${Math.max(0, input.batchResults.length)}批）`,
-        systemSection: 'TAKEOVER_CONSOLIDATION_SYSTEM',
-        schemaSection: 'TAKEOVER_CONSOLIDATION_SCHEMA',
-        sampleSection: 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE',
-        payload: {
-            takeoverId: input.takeoverId,
-            activeSnapshot: input.activeSnapshot,
-            batchResults: input.batchResults,
-        },
+        buckets: listPipelineConflictBucketRecords(input.takeoverId),
+        budget,
     });
-    return structured
-        ? {
-            ...fallback,
-            ...structured,
-            actorCards: mergeActorCards(structured.actorCards ?? fallback.actorCards),
-            relationships: mergeRelationships(structured.relationships ?? fallback.relationships),
-            entityCards: mergeEntityCards(structured.entityCards ?? fallback.entityCards),
-            entityTransitions: collapseEntityTransitions(structured.entityTransitions ?? fallback.entityTransitions),
-            takeoverId: input.takeoverId,
-            activeSnapshot: structured.activeSnapshot ?? input.activeSnapshot,
-            generatedAt: Date.now(),
-        }
-        : fallback;
-}
 
-/**
- * 功能：合并旧聊天批次识别出的角色卡候选。
- * @param actorCards 原始角色卡候选。
- * @returns 合并后的角色卡列表。
- */
-function mergeActorCards(actorCards: MemoryTakeoverActorCardCandidate[]): MemoryTakeoverActorCardCandidate[] {
-    const map = new Map<string, MemoryTakeoverActorCardCandidate>();
-    for (const actorCard of actorCards) {
-        const actorKey = String(actorCard.actorKey ?? '').trim().toLowerCase();
-        const displayName = String(actorCard.displayName ?? '').trim();
-        if (!actorKey || actorKey === 'user' || !displayName) {
-            continue;
-        }
-        const existing = map.get(actorKey);
-        map.set(actorKey, {
-            actorKey,
-            displayName,
-            aliases: dedupeStringValues([...(existing?.aliases ?? []), ...(actorCard.aliases ?? [])]),
-            identityFacts: dedupeStringValues([...(existing?.identityFacts ?? []), ...(actorCard.identityFacts ?? [])]),
-            originFacts: dedupeStringValues([...(existing?.originFacts ?? []), ...(actorCard.originFacts ?? [])]),
-            traits: dedupeStringValues([...(existing?.traits ?? []), ...(actorCard.traits ?? [])]),
-        });
+    for (const patch of patches) {
+        resolvePipelineConflictBucket(
+            input.takeoverId,
+            patch.bucketId,
+            patch,
+            patch.resolutions.some((item) => item.reasonCodes.includes('deterministic_fallback')),
+        );
     }
-    return Array.from(map.values());
-}
+    diagnostics.usedLLM = Boolean(input.llm) && patches.length > 0;
+    diagnostics.resolvedConflictCount = patches.length;
+    diagnostics.unresolvedConflictCount = Math.max(0, diagnostics.conflictBucketCount - diagnostics.resolvedConflictCount);
+    diagnostics.fallbackUsed = patches.some((item) => item.resolutions.some((resolution) => resolution.reasonCodes.includes('deterministic_fallback')));
 
-/**
- * 功能：合并旧聊天接管输出的结构化关系卡，保留每对角色最后一次有效结果。
- * @param relationships 原始关系卡列表。
- * @returns 合并后的关系卡列表。
- */
-function mergeRelationships(relationships: MemoryTakeoverRelationshipCard[]): MemoryTakeoverRelationshipCard[] {
-    const map = new Map<string, MemoryTakeoverRelationshipCard>();
-    for (const relationship of relationships) {
-        const sourceActorKey = String(relationship.sourceActorKey ?? '').trim().toLowerCase();
-        const targetActorKey = String(relationship.targetActorKey ?? '').trim().toLowerCase();
-        const relationTag = String(relationship.relationTag ?? '').trim();
-        const state = String(relationship.state ?? '').trim();
-        const summary = String(relationship.summary ?? '').trim();
-        if (!sourceActorKey || !targetActorKey || sourceActorKey === targetActorKey || !relationTag || !state || !summary) {
-            continue;
-        }
-        const compareKey = `${sourceActorKey}::${targetActorKey}`;
-        map.set(compareKey, {
-            sourceActorKey,
-            targetActorKey,
-            participants: dedupeStringValues([
-                sourceActorKey,
-                targetActorKey,
-                ...((relationship.participants ?? []).map((item: string): string => String(item ?? '').trim().toLowerCase())),
-            ]),
-            relationTag,
-            state,
-            summary,
-            trust: clamp01(Number(relationship.trust)),
-            affection: clamp01(Number(relationship.affection)),
-            tension: clamp01(Number(relationship.tension)),
-        });
-    }
-    return Array.from(map.values());
-}
+    updatePipelineJobPhase(input.takeoverId, 'apply');
+    const result = finalizeTakeoverConsolidation({
+        takeoverId: input.takeoverId,
+        activeSnapshot: input.activeSnapshot,
+        batchResults: input.batchResults,
+        sectionDigests: listPipelineSectionDigestRecords(input.takeoverId),
+        actorLedger: mapTakeoverRecordsToLedger(input.takeoverId, 'actor', actorReduce.canonicalRecords, actorReduce.unresolvedConflicts),
+        entityLedger: mapTakeoverRecordsToLedger(input.takeoverId, 'entity', entityReduce.canonicalRecords, entityReduce.unresolvedConflicts),
+        relationshipLedger: mapTakeoverRecordsToLedger(input.takeoverId, 'relationship', relationshipReduce.canonicalRecords, relationshipReduce.unresolvedConflicts),
+        taskLedger: mapTakeoverRecordsToLedger(input.takeoverId, 'task', taskReduce.canonicalRecords, taskReduce.unresolvedConflicts),
+        worldLedger: mapTakeoverRecordsToLedger(input.takeoverId, 'world', worldReduce.canonicalRecords, worldReduce.unresolvedConflicts),
+        conflictPatches: listPipelineConflictBucketRecords(input.takeoverId)
+            .map((item) => item.resolutionResult)
+            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+        diagnostics,
+    });
 
-/**
- * 功能：去重字符串列表。
- * @param values 原始列表。
- * @returns 去重后的字符串列表。
- */
-function dedupeStringValues(values: string[]): string[] {
-    const result: string[] = [];
-    for (const value of values) {
-        const normalized = String(value ?? '').trim();
-        if (!normalized || result.includes(normalized)) {
-            continue;
-        }
-        result.push(normalized);
-    }
+    upsertPipelineJobRecord({
+        jobId: input.takeoverId,
+        jobType: 'takeover',
+        status: 'completed',
+        phase: 'apply',
+        sourceMeta: {
+            batchCount: input.batchResults.length,
+            sectionCount: diagnostics.sectionCount,
+            conflictBucketCount: diagnostics.conflictBucketCount,
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+
     return result;
-}
-
-/**
- * 功能：把数值限制在 0 到 1 之间。
- * @param value 原始数值。
- * @returns 裁剪后的数值。
- */
-function clamp01(value: number): number {
-    if (!Number.isFinite(value)) {
-        return 0;
-    }
-    if (value <= 0) {
-        return 0;
-    }
-    if (value >= 1) {
-        return 1;
-    }
-    return Number(value.toFixed(4));
-}
-
-/**
- * 功能：去重稳定事实。
- * @param facts 事实列表。
- * @returns 去重后的事实。
- */
-function dedupeFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact[] {
-    const map = new Map<string, MemoryTakeoverStableFact>();
-    for (const fact of facts) {
-        const key = `${fact.type}::${fact.subject}::${fact.predicate}::${fact.value}`;
-        const existing = map.get(key);
-        if (!existing || Number(fact.confidence || 0) >= Number(existing.confidence || 0)) {
-            map.set(key, fact);
-        }
-    }
-    return Array.from(map.values());
-}
-
-/**
- * 功能：汇总关系状态。
- * @param transitions 关系变化列表。
- * @returns 汇总后的关系状态。
- */
-function collapseRelations(transitions: MemoryTakeoverRelationTransition[]): Array<{
-    target: string;
-    state: string;
-    reason: string;
-    relationTag?: string;
-    targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
-}> {
-    const map = new Map<string, {
-        target: string;
-        state: string;
-        reason: string;
-        relationTag?: string;
-        targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
-    }>();
-    for (const transition of transitions) {
-        map.set(transition.target, {
-            target: transition.target,
-            state: transition.to,
-            reason: transition.reason,
-            relationTag: String(transition.relationTag ?? '').trim() || undefined,
-            targetType: transition.targetType ?? undefined,
-        });
-    }
-    return Array.from(map.values());
-}
-
-/**
- * 功能：汇总任务状态。
- * @param transitions 任务变化列表。
- * @returns 汇总后的任务状态。
- */
-function collapseTasks(transitions: MemoryTakeoverTaskTransition[]): Array<{ task: string; state: string }> {
-    const map = new Map<string, { task: string; state: string }>();
-    for (const transition of transitions) {
-        map.set(transition.task, {
-            task: transition.task,
-            state: transition.to,
-        });
-    }
-    return Array.from(map.values());
-}
-
-/**
- * 功能：汇总世界状态。
- * @param changes 世界状态变化列表。
- * @returns 汇总后的世界状态。
- */
-function collapseWorldState(changes: MemoryTakeoverWorldStateChange[]): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const change of changes) {
-        result[change.key] = change.value;
-    }
-    return result;
-}
-
-/**
- * 功能：合并旧聊天批次识别出的世界实体卡候选。
- * @param entityCards 原始实体卡候选。
- * @returns 按 compareKey 去重合并后的实体卡列表。
- */
-function mergeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]): MemoryTakeoverEntityCardCandidate[] {
-    const map = new Map<string, MemoryTakeoverEntityCardCandidate>();
-    for (const card of entityCards) {
-        const compareKey = String(card.compareKey ?? '').trim();
-        if (!compareKey) {
-            continue;
-        }
-        const existing = map.get(compareKey);
-        if (existing) {
-            map.set(compareKey, {
-                entityType: card.entityType,
-                compareKey,
-                title: card.title || existing.title,
-                aliases: dedupeStringValues([...(existing.aliases ?? []), ...(card.aliases ?? [])]),
-                summary: card.summary || existing.summary,
-                fields: { ...(existing.fields ?? {}), ...(card.fields ?? {}) },
-                confidence: Math.max(Number(existing.confidence) || 0, Number(card.confidence) || 0),
-            });
-        } else {
-            map.set(compareKey, { ...card });
-        }
-    }
-    return Array.from(map.values());
-}
-
-/**
- * 功能：汇总世界实体变更，保留每个实体最新的变更动作。
- * @param transitions 实体变更列表。
- * @returns 汇总后的实体变更列表。
- */
-function collapseEntityTransitions(transitions: MemoryTakeoverEntityTransition[]): MemoryTakeoverEntityTransition[] {
-    const map = new Map<string, MemoryTakeoverEntityTransition>();
-    for (const transition of transitions) {
-        const compareKey = String(transition.compareKey ?? '').trim();
-        if (!compareKey) {
-            continue;
-        }
-        map.set(compareKey, { ...transition });
-    }
-    return Array.from(map.values());
 }

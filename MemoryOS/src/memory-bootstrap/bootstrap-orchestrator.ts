@@ -1,11 +1,13 @@
 import type { MemoryEntry } from '../types';
-import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
-import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
 import type { ColdStartCandidate, ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
 import { parseColdStartDocument } from './bootstrap-parser';
-import { buildColdStartCandidates } from './bootstrap-candidates';
 import { resolveBootstrapWorldProfile } from './bootstrap-world-profile';
+import { segmentColdStartSourceBundle } from './bootstrap-source-segmenter';
+import { runBootstrapPhase } from './bootstrap-phase-runner';
+import { reduceBootstrapDocuments } from './bootstrap-reducer';
+import { resolveBootstrapConflicts } from './bootstrap-conflict-resolver';
+import { finalizeBootstrapDocument } from './bootstrap-finalizer';
 import {
     normalizeNarrativeValue,
     normalizeUserNarrativeText,
@@ -13,7 +15,7 @@ import {
 } from '../utils/narrative-user-name';
 
 /**
- * 功能：冷启动编排依赖。
+ * 功能：定义冷启动编排依赖。
  */
 export interface BootstrapOrchestratorDependencies {
     ensureActorProfile(input: {
@@ -37,7 +39,7 @@ export interface BootstrapOrchestratorDependencies {
 }
 
 /**
- * 功能：冷启动编排输入。
+ * 功能：定义冷启动编排输入。
  */
 export interface RunBootstrapOrchestratorInput {
     dependencies: BootstrapOrchestratorDependencies;
@@ -47,7 +49,7 @@ export interface RunBootstrapOrchestratorInput {
 }
 
 /**
- * 功能：冷启动编排结果。
+ * 功能：定义冷启动编排结果。
  */
 export interface RunBootstrapOrchestratorResult {
     ok: boolean;
@@ -69,10 +71,8 @@ export interface RunBootstrapOrchestratorResult {
  * @returns 编排结果。
  */
 export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorInput): Promise<RunBootstrapOrchestratorResult> {
-    const coldStartLanguageInstruction = '除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。';
     const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
-    const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_started',
         payload: {
@@ -91,38 +91,33 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             errorMessage: '当前未连接可用的 LLMHub 服务。',
         };
     }
-    const promptPack = await loadPromptPackSections();
-    const coldStartSchema = parseJsonSection(promptPack.COLD_START_SCHEMA);
-    const coldStartOutputSample = parseJsonSection(promptPack.COLD_START_OUTPUT_SAMPLE);
-    const sourcePayload = {
-        sourceBundle: input.sourceBundle,
-        actorKeyHints,
+
+    const segments = segmentColdStartSourceBundle(input.sourceBundle);
+    const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
+    const phase1Result = await runBootstrapPhase({
+        llm: input.llm,
+        pluginId: input.pluginId,
         userDisplayName,
-    };
-    const userPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(sourcePayload, null, 2),
-        JSON.stringify(coldStartSchema ?? {}, null, 2),
-        JSON.stringify(coldStartOutputSample ?? {}, null, 2),
-    );
-    const result = await input.llm.runTask<ColdStartDocument>({
-        consumer: input.pluginId,
-        taskId: 'memory_cold_start',
-        taskDescription: '冷启动处理',
-        taskKind: 'generation',
-        input: {
-            messages: [
-                {
-                    role: 'system',
-                    content: `${renderPromptTemplate(promptPack.COLD_START_SYSTEM, { userDisplayName })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。请继续使用结构化锚点 \`user\`，但所有自然语言描述都必须优先写成该称呼；拿不到名字时使用“你”。\n\n${coldStartLanguageInstruction}`,
-                },
-                { role: 'user', content: userPayload },
-            ],
+        phaseName: 'phase1',
+        payload: {
+            sourceBundle: segments.phase1,
+            actorKeyHints,
+            userDisplayName,
         },
-        schema: coldStartSchema,
-        enqueue: { displayMode: 'fullscreen' },
     });
-    if (!result.ok) {
-        const reasonCode = result.reasonCode || 'cold_start_failed';
+    const phase2Result = await runBootstrapPhase({
+        llm: input.llm,
+        pluginId: input.pluginId,
+        userDisplayName,
+        phaseName: 'phase2',
+        payload: {
+            sourceBundle: segments.phase2,
+            actorKeyHints,
+            userDisplayName,
+        },
+    });
+    if (!phase1Result.ok || !phase2Result.ok) {
+        const reasonCode = phase1Result.reasonCode || phase2Result.reasonCode || 'cold_start_failed';
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode },
@@ -130,11 +125,15 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         return {
             ok: false,
             reasonCode,
-            errorMessage: String(result.error ?? '').trim() || undefined,
+            errorMessage: reasonCode,
         };
     }
-    const parsed = parseColdStartDocument(result.data);
-    if (!parsed) {
+
+    const reduced = reduceBootstrapDocuments([
+        parseColdStartDocument(phase1Result.data),
+        parseColdStartDocument(phase2Result.data),
+    ].filter(Boolean) as ColdStartDocument[]);
+    if (!reduced) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode: 'invalid_cold_start_document' },
@@ -145,9 +144,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             errorMessage: '冷启动返回内容无法通过结构校验。',
         };
     }
-    const normalizedDocument = normalizeColdStartNarrativeDocument(parsed, userDisplayName);
-    const candidates = buildColdStartCandidates(normalizedDocument, input.sourceBundle);
-    if (candidates.length <= 0) {
+
+    const normalizedDocument = normalizeColdStartNarrativeDocument(resolveBootstrapConflicts(reduced), userDisplayName);
+    const finalized = finalizeBootstrapDocument(normalizedDocument, input.sourceBundle);
+    if (finalized.candidates.length <= 0) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode: 'empty_cold_start_candidates' },
@@ -158,7 +158,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             errorMessage: '冷启动没有提取出可确认的候选记忆。',
         };
     }
-    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
+
     const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
     if (!actorCardValidation.ok) {
         await input.dependencies.appendMutationHistory({
@@ -174,23 +174,20 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             errorMessage: '冷启动关系中引用了未创建角色卡的对象。',
         };
     }
-    const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
+
     return {
         ok: true,
         reasonCode: 'ok',
-        candidates,
+        candidates: finalized.candidates,
         document: normalizedDocument,
-        worldProfile,
+        worldProfile: finalized.worldProfile,
     };
 }
 
 /**
  * 功能：确认并应用冷启动候选到记忆库。
- * @param dependencies 编排依赖。
- * @param document 冷启动原始文档。
- * @param sourceBundle 冷启动源数据包。
- * @param selectedCandidates 已选候选。
- * @returns 世界模板结果。
+ * @param input 应用输入。
+ * @returns 世界画像结果。
  */
 export async function applyBootstrapCandidates(input: {
     dependencies: BootstrapOrchestratorDependencies;
@@ -209,7 +206,8 @@ export async function applyBootstrapCandidates(input: {
     const normalizedDocument = normalizeColdStartNarrativeDocument(input.document, userDisplayName);
     const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
     const selectedIds = new Set(input.selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id));
-    for (const candidate of input.selectedCandidates.map((candidate: ColdStartCandidate): ColdStartCandidate => normalizeColdStartCandidate(candidate, userDisplayName))) {
+
+    for (const candidate of input.selectedCandidates.map((item: ColdStartCandidate): ColdStartCandidate => normalizeColdStartCandidate(item, userDisplayName))) {
         for (const actorKey of candidate.actorBindings ?? []) {
             await input.dependencies.ensureActorProfile({
                 actorKey,
@@ -227,6 +225,7 @@ export async function applyBootstrapCandidates(input: {
             await input.dependencies.bindRoleToEntry(actorKey, saved.entryId);
         }
     }
+
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
     const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
     await input.dependencies.putWorldProfileBinding({
@@ -248,53 +247,24 @@ export async function applyBootstrapCandidates(input: {
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_succeeded',
         payload: {
-            actorKey: input.document.identity.actorKey,
+            actorKey: normalizedDocument.identity.actorKey,
             userDisplayName,
             worldProfile,
             selectedCandidateCount: input.selectedCandidates.length,
             selectedCandidateIds: [...selectedIds],
-            worldBaseCount: input.document.worldBase.length,
-            relationshipCount: input.document.relationships.length,
-            memoryRecordCount: input.document.memoryRecords.length,
-            entityCardCount: countEntityCards(input.document.entityCards),
+            worldBaseCount: normalizedDocument.worldBase.length,
+            relationshipCount: normalizedDocument.relationships.length,
+            memoryRecordCount: normalizedDocument.memoryRecords.length,
+            entityCardCount: countEntityCards(normalizedDocument.entityCards),
         },
     });
     return { worldProfile };
 }
 
 /**
- * 功能：归一化世界基础条目类型。
- * @param schemaId 原始 schemaId。
- * @returns 可落库 entryType。
- */
-function normalizeWorldBaseType(schemaId: string): string {
-    const normalized = String(schemaId ?? '').trim().toLowerCase();
-    if (normalized === 'world_core_setting' || normalized === 'world_hard_rule' || normalized === 'world_global_state') {
-        return normalized;
-    }
-    return 'world_global_state';
-}
-
-/**
- * 功能：字符串数组去重并去空。
- * @param values 输入数组。
- * @returns 去重后的数组。
- */
-function dedupeStrings(values: string[]): string[] {
-    const result: string[] = [];
-    for (const value of values) {
-        const normalized = String(value ?? '').trim();
-        if (normalized && !result.includes(normalized)) {
-            result.push(normalized);
-        }
-    }
-    return result;
-}
-
-/**
- * 功能：构建冷启动可复用的角色键提示，约束模型不要发明用户侧键名。
- * @param sourceBundle 冷启动源数据包。
- * @returns 可注入到提示词上下文中的角色键提示。
+ * 功能：构建冷启动 actorKey 提示。
+ * @param sourceBundle 冷启动源数据。
+ * @returns actorKey 提示。
  */
 function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
     currentUser: {
@@ -308,16 +278,17 @@ function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
         currentUser: {
             actorKey: 'user',
             displayName: userDisplayName,
-            note: `当关系对象是当前用户时，必须固定使用 actorKey \`user\`；自然语言称呼优先使用“${userDisplayName}”，不要写成“用户”或“主角”。`,
+            note: `当关系对象是当前用户时，必须固定使用 actorKey \`user\`；自然语言称呼优先使用“${userDisplayName}”。`,
         },
     };
 }
 
 /**
- * 功能：构建冷启动阶段的角色显示名映射。
- * @param parsed 冷启动解析结果。
- * @param sourceBundle 冷启动源数据包。
- * @returns 角色键到显示名的映射表。
+ * 功能：构建角色显示名映射。
+ * @param parsed 冷启动文档。
+ * @param sourceBundle 冷启动源数据。
+ * @param userDisplayName 当前用户显示名。
+ * @returns 显示名映射。
  */
 function buildBootstrapActorDisplayNameMap(
     parsed: ColdStartDocument,
@@ -325,11 +296,7 @@ function buildBootstrapActorDisplayNameMap(
     userDisplayName?: string,
 ): Map<string, string> {
     const displayNameMap = new Map<string, string>();
-    const mainActorKey = normalizeActorKey(parsed.identity.actorKey);
-    const mainDisplayName = String(parsed.identity.displayName ?? '').trim();
-    if (mainActorKey && mainDisplayName) {
-        displayNameMap.set(mainActorKey, mainDisplayName);
-    }
+    displayNameMap.set(normalizeActorKey(parsed.identity.actorKey), String(parsed.identity.displayName ?? '').trim() || parsed.identity.actorKey);
     for (const actorCard of parsed.actorCards) {
         const actorKey = normalizeActorKey(actorCard.actorKey);
         const displayName = String(actorCard.displayName ?? '').trim();
@@ -344,29 +311,29 @@ function buildBootstrapActorDisplayNameMap(
 /**
  * 功能：规范化冷启动文档中的自然语言用户称呼。
  * @param document 冷启动文档。
- * @param userDisplayName 当前用户显示名。
+ * @param userDisplayName 用户显示名。
  * @returns 规范化后的文档。
  */
 function normalizeColdStartNarrativeDocument(document: ColdStartDocument, userDisplayName: string): ColdStartDocument {
     return {
         ...document,
         identity: normalizeNarrativeValue(document.identity, userDisplayName),
-        actorCards: document.actorCards.map((actorCard) => normalizeNarrativeValue(actorCard, userDisplayName)),
+        actorCards: document.actorCards.map((item) => normalizeNarrativeValue(item, userDisplayName)),
         entityCards: document.entityCards ? normalizeEntityCardsNarrative(document.entityCards, userDisplayName) : undefined,
         worldBase: document.worldBase.map((entry) => ({
             ...entry,
             title: normalizeUserNarrativeText(entry.title, userDisplayName),
             summary: normalizeUserNarrativeText(entry.summary, userDisplayName),
         })),
-        relationships: document.relationships.map((relationship) => ({
-            ...relationship,
-            state: normalizeUserNarrativeText(relationship.state, userDisplayName),
-            summary: normalizeUserNarrativeText(relationship.summary, userDisplayName),
+        relationships: document.relationships.map((entry) => ({
+            ...entry,
+            state: normalizeUserNarrativeText(entry.state, userDisplayName),
+            summary: normalizeUserNarrativeText(entry.summary, userDisplayName),
         })),
-        memoryRecords: document.memoryRecords.map((record) => ({
-            ...record,
-            title: normalizeUserNarrativeText(record.title, userDisplayName),
-            summary: normalizeUserNarrativeText(record.summary, userDisplayName),
+        memoryRecords: document.memoryRecords.map((entry) => ({
+            ...entry,
+            title: normalizeUserNarrativeText(entry.title, userDisplayName),
+            summary: normalizeUserNarrativeText(entry.summary, userDisplayName),
         })),
     };
 }
@@ -374,7 +341,7 @@ function normalizeColdStartNarrativeDocument(document: ColdStartDocument, userDi
 /**
  * 功能：规范化冷启动候选中的自然语言用户称呼。
  * @param candidate 冷启动候选。
- * @param userDisplayName 当前用户显示名。
+ * @param userDisplayName 用户显示名。
  * @returns 规范化后的候选。
  */
 function normalizeColdStartCandidate(candidate: ColdStartCandidate, userDisplayName: string): ColdStartCandidate {
@@ -384,17 +351,17 @@ function normalizeColdStartCandidate(candidate: ColdStartCandidate, userDisplayN
         summary: normalizeUserNarrativeText(candidate.summary, userDisplayName),
         reason: normalizeUserNarrativeText(candidate.reason, userDisplayName),
         detailPayload: candidate.detailPayload ? normalizeNarrativeValue(candidate.detailPayload, userDisplayName) : undefined,
-        sourceRefs: candidate.sourceRefs.map((sourceRef) => ({
-            ...sourceRef,
-            excerpt: sourceRef.excerpt ? normalizeUserNarrativeText(sourceRef.excerpt, userDisplayName) : sourceRef.excerpt,
+        sourceRefs: candidate.sourceRefs.map((item) => ({
+            ...item,
+            excerpt: item.excerpt ? normalizeUserNarrativeText(item.excerpt, userDisplayName) : item.excerpt,
         })),
     };
 }
 
 /**
- * 功能：校验关系网中的非用户角色是否都带有角色卡。
+ * 功能：校验关系引用的非用户角色是否都有角色卡。
  * @param parsed 冷启动文档。
- * @param sourceBundle 冷启动源数据包。
+ * @param sourceBundle 冷启动源数据。
  * @returns 校验结果。
  */
 function validateRelationshipActorCards(
@@ -404,7 +371,7 @@ function validateRelationshipActorCards(
     const mainActorKey = normalizeActorKey(parsed.identity.actorKey);
     const actorCardKeys = new Set(
         parsed.actorCards
-            .map((actorCard): string => normalizeActorKey(actorCard.actorKey))
+            .map((item): string => normalizeActorKey(item.actorKey))
             .filter(Boolean),
     );
     const requiredActorKeys = new Set<string>();
@@ -420,7 +387,7 @@ function validateRelationshipActorCards(
         }
     }
 
-    const missingActorKeys = Array.from(requiredActorKeys).filter((actorKey: string): boolean => !actorCardKeys.has(actorKey));
+    const missingActorKeys = [...requiredActorKeys].filter((actorKey: string): boolean => !actorCardKeys.has(actorKey));
     return {
         ok: missingActorKeys.length === 0,
         missingActorKeys,
@@ -428,51 +395,11 @@ function validateRelationshipActorCards(
 }
 
 /**
- * 功能：保存冷启动角色卡并绑定到对应角色。
- * @param dependencies 编排依赖。
- * @param actorCard 角色卡数据。
- * @returns 角色卡条目。
- */
-async function saveColdStartActorProfile(
-    dependencies: BootstrapOrchestratorDependencies,
-    actorCard: {
-        actorKey: string;
-        displayName: string;
-        aliases: string[];
-        identityFacts: string[];
-        originFacts: string[];
-        traits: string[];
-    },
-): Promise<MemoryEntry> {
-    const summaryParts = dedupeStrings([
-        ...actorCard.identityFacts,
-        ...actorCard.originFacts,
-        ...actorCard.traits,
-    ]);
-    const savedEntry = await dependencies.saveEntry({
-        entryType: 'actor_profile',
-        title: actorCard.displayName || actorCard.actorKey,
-        summary: summaryParts.length > 0 ? summaryParts.join('；') : `${actorCard.displayName}的角色卡信息。`,
-        detailPayload: {
-            fields: {
-                aliases: dedupeStrings(actorCard.aliases),
-                identityFacts: dedupeStrings(actorCard.identityFacts),
-                originFacts: dedupeStrings(actorCard.originFacts),
-                traits: dedupeStrings(actorCard.traits),
-            },
-        },
-        tags: ['cold_start', 'actor_profile'],
-    });
-    await dependencies.bindRoleToEntry(actorCard.actorKey, savedEntry.entryId);
-    return savedEntry;
-}
-
-/**
- * 功能：统一冷启动关系中的角色键，优先收敛到系统约定键名。
- * @param relation 原始关系条目。
+ * 功能：归一化冷启动关系中的角色键。
+ * @param relation 原始关系。
  * @param mainActorKey 主角色键。
- * @param sourceBundle 冷启动源数据包。
- * @returns 归一化后的关系条目。
+ * @param sourceBundle 冷启动源数据。
+ * @returns 归一化后的关系。
  */
 function normalizeBootstrapRelationship(
     relation: ColdStartDocument['relationships'][number],
@@ -494,9 +421,9 @@ function normalizeBootstrapRelationship(
 }
 
 /**
- * 功能：收集关系条目涉及的全部角色键。
- * @param relation 归一化后的关系条目。
- * @returns 去重后的角色键列表。
+ * 功能：收集关系中的角色键。
+ * @param relation 归一化后的关系。
+ * @returns 角色键列表。
  */
 function collectRelationshipActorKeys(relation: ColdStartDocument['relationships'][number]): string[] {
     return dedupeStrings([
@@ -507,10 +434,10 @@ function collectRelationshipActorKeys(relation: ColdStartDocument['relationships
 }
 
 /**
- * 功能：按角色键解析冷启动阶段应展示的角色名。
+ * 功能：解析角色显示名。
  * @param actorKey 角色键。
  * @param displayNameMap 显示名映射。
- * @returns 可用于建档的显示名。
+ * @returns 显示名。
  */
 function resolveBootstrapActorDisplayName(actorKey: string, displayNameMap: Map<string, string>): string {
     const normalizedActorKey = normalizeActorKey(actorKey);
@@ -518,10 +445,10 @@ function resolveBootstrapActorDisplayName(actorKey: string, displayNameMap: Map<
 }
 
 /**
- * 功能：归一化冷启动中的角色键，并把用户侧别名收敛到固定 `user`。
+ * 功能：归一化冷启动中的角色键。
  * @param actorKey 原始角色键。
  * @param mainActorKey 主角色键。
- * @param sourceBundle 冷启动源数据包。
+ * @param sourceBundle 冷启动源数据。
  * @returns 归一化后的角色键。
  */
 function normalizeBootstrapActorKey(actorKey: string, mainActorKey: string, sourceBundle: ColdStartSourceBundle): string {
@@ -548,9 +475,9 @@ function normalizeBootstrapActorKey(actorKey: string, mainActorKey: string, sour
 }
 
 /**
- * 功能：按统一规则归一化角色键文本。
+ * 功能：规范化角色键文本。
  * @param value 原始值。
- * @returns 归一化后的角色键。
+ * @returns 角色键。
  */
 function normalizeActorKey(value: unknown): string {
     return String(value ?? '')
@@ -561,9 +488,9 @@ function normalizeActorKey(value: unknown): string {
 }
 
 /**
- * 功能：从结构化冷启动输入中展开可用于追踪的文本切片。
- * @param sourceBundle 冷启动源数据包。
- * @returns 去重后的文本列表。
+ * 功能：收集冷启动来源文本。
+ * @param sourceBundle 冷启动源数据。
+ * @returns 来源文本列表。
  */
 function collectBundleSourceTexts(sourceBundle: ColdStartSourceBundle): string[] {
     return dedupeStrings([
@@ -595,39 +522,17 @@ function collectBundleSourceTexts(sourceBundle: ColdStartSourceBundle): string[]
 }
 
 /**
- * 功能：从 section 文本解析 JSON。
- * @param section section 文本。
- * @returns 解析结果。
- */
-function parseJsonSection(section: string): unknown {
-    const source = String(section ?? '').trim();
-    if (!source) {
-        return null;
-    }
-    const fenced = source.match(/```json[\s\S]*?```/i);
-    const jsonText = fenced
-        ? fenced[0].replace(/```json/i, '').replace(/```/g, '').trim()
-        : source;
-    try {
-        return JSON.parse(jsonText);
-    } catch {
-        return null;
-    }
-}
-
-/**
- * 功能：规范化冷启动实体卡集合中的自然语言用户称呼。
- * @param entityCards 实体卡集合。
- * @param userDisplayName 当前用户显示名。
- * @returns 规范化后的实体卡集合。
+ * 功能：规范化实体卡片中的自然语言用户称呼。
+ * @param entityCards 实体卡片集合。
+ * @param userDisplayName 用户显示名。
+ * @returns 规范化后的实体卡片集合。
  */
 function normalizeEntityCardsNarrative(
     entityCards: ColdStartDocument['entityCards'],
     userDisplayName: string,
 ): ColdStartDocument['entityCards'] {
     if (!entityCards) return undefined;
-    const normalizeList = (list?: ColdStartDocument['entityCards'] extends infer T ? T extends { organizations?: infer U } ? U : never : never) => {
-        if (!Array.isArray(list)) return [];
+    const normalizeList = (list: NonNullable<ColdStartDocument['entityCards']>[keyof NonNullable<ColdStartDocument['entityCards']>] = []) => {
         return list.map((entry) => ({
             ...entry,
             title: normalizeUserNarrativeText(entry.title, userDisplayName),
@@ -643,8 +548,8 @@ function normalizeEntityCardsNarrative(
 }
 
 /**
- * 功能：统计实体卡总数。
- * @param entityCards 实体卡集合。
+ * 功能：统计实体卡片总数。
+ * @param entityCards 实体卡片集合。
  * @returns 总数。
  */
 function countEntityCards(entityCards?: ColdStartDocument['entityCards']): number {
@@ -653,4 +558,20 @@ function countEntityCards(entityCards?: ColdStartDocument['entityCards']): numbe
         + (entityCards.cities?.length ?? 0)
         + (entityCards.nations?.length ?? 0)
         + (entityCards.locations?.length ?? 0);
+}
+
+/**
+ * 功能：去重字符串数组。
+ * @param values 原始数组。
+ * @returns 去重后的数组。
+ */
+function dedupeStrings(values: string[]): string[] {
+    const result: string[] = [];
+    for (const value of values) {
+        const normalized = String(value ?? '').trim();
+        if (normalized && !result.includes(normalized)) {
+            result.push(normalized);
+        }
+    }
+    return result;
 }

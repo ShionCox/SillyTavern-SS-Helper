@@ -17,6 +17,11 @@ export type {
 export { parseColdStartDocument } from './bootstrap-parser';
 export { buildColdStartCandidates } from './bootstrap-candidates';
 export { resolveBootstrapWorldProfile } from './bootstrap-world-profile';
+export { segmentColdStartSourceBundle } from './bootstrap-source-segmenter';
+export { runBootstrapPhase } from './bootstrap-phase-runner';
+export { reduceBootstrapDocuments } from './bootstrap-reducer';
+export { resolveBootstrapConflicts } from './bootstrap-conflict-resolver';
+export { finalizeBootstrapDocument } from './bootstrap-finalizer';
 export {
     applyBootstrapCandidates,
     runBootstrapOrchestrator,

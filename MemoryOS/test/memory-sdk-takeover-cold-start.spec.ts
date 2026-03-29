@@ -122,8 +122,11 @@ vi.mock('../src/core/unified-memory-manager', () => {
          * 功能：保存记忆条目。
          * @returns 保存结果。
          */
-        public async saveEntry(input?: Record<string, unknown>): Promise<{ entryId: string }> {
-            return saveEntryMock(input);
+        public async saveEntry(
+            input?: Record<string, unknown>,
+            meta?: Record<string, unknown>,
+        ): Promise<{ entryId: string }> {
+            return saveEntryMock(input, meta);
         }
 
         /**
@@ -474,7 +477,7 @@ describe('memory sdk takeover cold start sync', () => {
                     userRelationState: '保持接触与有限合作',
                 }),
             }),
-        }));
+        }), expect.anything());
     });
 
     it('writes structured takeover relationships and strips target view suffixes', async () => {

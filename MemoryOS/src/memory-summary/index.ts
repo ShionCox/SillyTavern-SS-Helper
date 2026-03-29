@@ -4,6 +4,9 @@ export {
     type RunSummaryOrchestratorInput,
     type RunSummaryOrchestratorResult,
 } from './summary-orchestrator';
+export { planSummaryMutationBatches, type SummaryMutationBatchPlan } from './mutation-batch-planner';
+export { runSummaryMutationBatch } from './mutation-batch-runner';
+export { finalizeSummaryMutationSnapshot } from './mutation-finalizer';
 export {
     validateSummaryMutationDocument,
     type ValidateSummaryMutationResult,

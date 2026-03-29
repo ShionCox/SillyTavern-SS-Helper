@@ -3,6 +3,10 @@ import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import { buildSummaryMutationContext, buildLightweightPlannerInput } from '../memory-summary-planner';
 import { applySummaryMutation, type MutationApplyDependencies } from './mutation-applier';
+import { planSummaryMutationBatches } from './mutation-batch-planner';
+import { appendSummaryMutationBatchResult, clearSummaryMutationStagingSnapshot, readSummaryMutationStagingSnapshot } from './mutation-staging-store';
+import { finalizeSummaryMutationSnapshot } from './mutation-finalizer';
+import { runSummaryMutationBatch } from './mutation-batch-runner';
 import {
     validateSummaryMutationDocument,
     type EditableFieldMap,
@@ -12,9 +16,10 @@ import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-t
 import type { MemoryLLMApi } from './llm-types';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { readMemoryOSSettings } from '../settings/store';
+import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
 
 /**
- * 功能：总结编排器依赖。
+ * 功能：定义总结编排器依赖。
  */
 export interface SummaryOrchestratorDependencies extends MutationApplyDependencies {
     listEntries(): Promise<MemoryEntry[]>;
@@ -28,7 +33,7 @@ export interface SummaryOrchestratorDependencies extends MutationApplyDependenci
 }
 
 /**
- * 功能：总结编排输入。
+ * 功能：定义总结编排输入。
  */
 export interface RunSummaryOrchestratorInput {
     dependencies: SummaryOrchestratorDependencies;
@@ -40,7 +45,7 @@ export interface RunSummaryOrchestratorInput {
 }
 
 /**
- * 功能：总结编排结果。
+ * 功能：定义总结编排结果。
  */
 export interface RunSummaryOrchestratorResult {
     snapshot: SummarySnapshot | null;
@@ -60,12 +65,15 @@ export interface RunSummaryOrchestratorResult {
  */
 export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput): Promise<RunSummaryOrchestratorResult> {
     const settings = readMemoryOSSettings();
+    const budget = resolvePipelineBudgetPolicy(settings);
     const userDisplayName = resolveCurrentNarrativeUserName();
     const summaryLanguageInstruction = '除 action、targetKind、candidateId、compareKey、reasonCodes 及各类键名外，所有自然语言内容必须使用简体中文。';
+
     await input.dependencies.appendMutationHistory({
         action: 'summary_started',
         payload: { messageCount: input.messages.length },
     });
+
     const window = buildSummaryWindow(input.messages);
     if (!window.summaryText.trim()) {
         await input.dependencies.appendMutationHistory({
@@ -83,6 +91,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             },
         };
     }
+
     const entries = await input.dependencies.listEntries();
     const roleMemories = await input.dependencies.listRoleMemories();
     const recentSummaries = await input.dependencies.listSummarySnapshots(4);
@@ -92,6 +101,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         window.summaryText,
         ...entries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
     ];
+
     const plannerResult = await buildSummaryMutationContext({
         task: 'memory_summary_mutation',
         schemaVersion: '1.0.0',
@@ -110,6 +120,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         enableEmbedding: input.enableEmbedding,
         rulePackMode: input.retrievalRulePack,
     });
+
     await input.dependencies.appendMutationHistory({
         action: 'candidate_types_resolved',
         payload: {
@@ -132,6 +143,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             candidateCount: plannerResult.context.candidateRecords.length,
         },
     });
+
     if (!input.llm) {
         await input.dependencies.appendMutationHistory({
             action: 'summary_failed',
@@ -140,21 +152,13 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 worldProfile: plannerResult.diagnostics.worldProfile,
             },
         });
-        return {
-            snapshot: null,
-            diagnostics: {
-                usedLLM: false,
-                retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
-                matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
-                worldProfile: plannerResult.diagnostics.worldProfile,
-                reasonCode: 'llm_unavailable',
-            },
-        };
+        return buildSummaryFailureResult(plannerResult, 'llm_unavailable');
     }
-    const plannerPromptPack = await loadPromptPackSections();
-    const plannerSchema = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_SCHEMA);
-    const plannerSample = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
-    const plannerSystemPrompt = `${renderPromptTemplate(plannerPromptPack.SUMMARY_PLANNER_SYSTEM, {
+
+    const promptPack = await loadPromptPackSections();
+    const plannerSchema = parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA);
+    const plannerSample = parseJsonSection(promptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
+    const plannerSystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_PLANNER_SYSTEM, {
         userDisplayName,
     })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 reasons、topics 以及其它自然语言字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
     const lightweightPlannerInput = {
@@ -193,6 +197,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             userDisplayName,
         },
     });
+
     const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];
     if (!plannerDecision.should_update) {
         const noopDocument: SummaryMutationDocument = {
@@ -247,100 +252,117 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             },
         };
     }
-    const promptPack = plannerPromptPack;
-    const focusTypeSchemas = plannerResult.context.typeSchemas.filter(
-        (schema) => plannerDecision.focus_types.length <= 0 || plannerDecision.focus_types.includes(schema.schemaId),
-    );
-    const activeFocusTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : plannerResult.context.typeSchemas;
+
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
-    const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, activeFocusTypeSchemas);
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
         userDisplayName,
     })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
-    const mutationContext = buildSlimMutationContext(
-        plannerResult.context,
+    const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
+    const summaryJobId = `summary:${plannerResult.context.window.fromTurn}:${plannerResult.context.window.toTurn}:${Date.now()}`;
+    clearSummaryMutationStagingSnapshot(summaryJobId);
+
+    const batchPlans = planSummaryMutationBatches({
         plannerDecision,
-        settings.summarySecondStageRollingDigestMaxChars,
-        settings.summarySecondStageCandidateSummaryMaxChars,
-    );
-    const summaryUserPayload = buildStructuredTaskUserPayload(
-        JSON.stringify({ ...mutationContext, userDisplayName }, null, 2),
-        JSON.stringify(strictSummarySchema ?? {}, null, 2),
-        JSON.stringify(summaryOutputSample ?? {}, null, 2),
-    );
-    const result = await input.llm.runTask<SummaryMutationDocument>({
-        consumer: input.pluginId,
-        taskId: 'memory_summary_mutation',
-        taskDescription: '结构化变更生成',
-        taskKind: 'generation',
-        input: {
-            messages: [
-                { role: 'system', content: summarySystemPrompt },
-                { role: 'user', content: summaryUserPayload },
-            ],
+        candidateRecords: plannerResult.context.candidateRecords.map((item) => ({
+            candidateId: item.candidateId,
+            targetKind: item.targetKind,
+        })),
+        budget,
+    });
+    await input.dependencies.appendMutationHistory({
+        action: 'summary_mutation_batches_planned',
+        payload: {
+            summaryJobId,
+            batchCount: batchPlans.length,
+            batches: batchPlans.map((item) => ({
+                batchId: item.batchId,
+                focusTypes: item.focusTypes,
+                candidateCount: item.candidateIds.length,
+                actionBudget: item.actionBudget,
+            })),
         },
-        schema: strictSummarySchema,
-        enqueue: { displayMode: 'compact' },
     });
 
-    if (!result.ok) {
-        const reasonCode = result.reasonCode || 'summary_llm_failed';
-        await input.dependencies.appendMutationHistory({
-            action: 'summary_failed',
-            payload: {
-                reasonCode,
-                worldProfile: plannerResult.diagnostics.worldProfile,
-            },
-        });
-        return {
-            snapshot: null,
-            diagnostics: {
-                usedLLM: false,
-                retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
-                matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
-                worldProfile: plannerResult.diagnostics.worldProfile,
-                reasonCode,
-            },
+    for (const batchPlan of batchPlans) {
+        const batchDecision: SummaryPlannerOutput = {
+            ...plannerDecision,
+            focus_types: batchPlan.focusTypes,
         };
+        const focusTypeSchemas = plannerResult.context.typeSchemas.filter(
+            (schema) => batchPlan.focusTypes.length <= 0 || batchPlan.focusTypes.includes(schema.schemaId),
+        );
+        const activeTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : plannerResult.context.typeSchemas;
+        const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, activeTypeSchemas);
+        const mutationContext = buildSlimMutationContext(
+            plannerResult.context,
+            batchDecision,
+            settings.summarySecondStageRollingDigestMaxChars || budget.maxRollingDigestChars,
+            settings.summarySecondStageCandidateSummaryMaxChars || budget.maxCandidateSummaryChars,
+            batchPlan.candidateIds,
+        );
+        const summaryUserPayload = buildStructuredTaskUserPayload(
+            JSON.stringify({ ...mutationContext, userDisplayName }, null, 2),
+            JSON.stringify(strictSummarySchema ?? {}, null, 2),
+            JSON.stringify(summaryOutputSample ?? {}, null, 2),
+        );
+        const batchResult = await runSummaryMutationBatch({
+            llm: input.llm,
+            pluginId: input.pluginId,
+            taskDescription: `结构化变更生成（${batchPlan.batchId}）`,
+            systemPrompt: summarySystemPrompt,
+            userPayload: summaryUserPayload,
+            schema: strictSummarySchema,
+        });
+        if (!batchResult.ok || !batchResult.data) {
+            clearSummaryMutationStagingSnapshot(summaryJobId);
+            return buildSummaryFailureResult(plannerResult, batchResult.reasonCode || 'summary_llm_failed');
+        }
+        const trimmedDocument = trimMutationDocumentActions(batchResult.data, batchPlan.actionBudget);
+        const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
+        if (!validation.valid || !validation.document) {
+            clearSummaryMutationStagingSnapshot(summaryJobId);
+            const reasonCode = `validation_failed:${validation.errors.join(',') || 'unknown'}`;
+            await input.dependencies.appendMutationHistory({
+                action: 'summary_failed',
+                payload: {
+                    reasonCode,
+                    batchId: batchPlan.batchId,
+                    validationErrors: validation.errors,
+                    worldProfile: plannerResult.diagnostics.worldProfile,
+                },
+            });
+            return buildSummaryFailureResult(plannerResult, reasonCode);
+        }
+        appendSummaryMutationBatchResult({
+            summaryJobId,
+            batchId: batchPlan.batchId,
+            focusTypes: batchPlan.focusTypes,
+            mutationDocument: validation.document,
+        });
     }
 
-    const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
-    const validation = validateSummaryMutationDocument(result.data, editableFieldMap);
-    if (!validation.valid || !validation.document) {
-        const reasonCode = `validation_failed:${validation.errors.join(',') || 'unknown'}`;
-        await input.dependencies.appendMutationHistory({
-            action: 'summary_failed',
-            payload: {
-                reasonCode,
-                validationErrors: validation.errors,
-                worldProfile: plannerResult.diagnostics.worldProfile,
-            },
-        });
-        return {
-            snapshot: null,
-            diagnostics: {
-                usedLLM: false,
-                retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
-                matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
-                worldProfile: plannerResult.diagnostics.worldProfile,
-                reasonCode,
-            },
-        };
+    const stagingSnapshot = readSummaryMutationStagingSnapshot(summaryJobId);
+    if (!stagingSnapshot || stagingSnapshot.batchResults.length <= 0) {
+        clearSummaryMutationStagingSnapshot(summaryJobId);
+        return buildSummaryFailureResult(plannerResult, 'empty_mutation_batches');
     }
+
+    const finalMutationDocument = finalizeSummaryMutationSnapshot(stagingSnapshot);
     await input.dependencies.appendMutationHistory({
         action: 'mutation_validated',
         payload: {
-            actionCount: validation.document.actions.length,
+            actionCount: finalMutationDocument.actions.length,
+            batchCount: stagingSnapshot.batchResults.length,
             plannerDecision,
             worldProfile: plannerResult.diagnostics.worldProfile,
-            ...(validation.warnings.length > 0 ? { fieldWarnings: validation.warnings } : {}),
         },
     });
+
     const snapshot = await applySummaryMutation({
         dependencies: input.dependencies,
-        mutationDocument: validation.document,
+        mutationDocument: finalMutationDocument,
         candidateRecords: plannerResult.context.candidateRecords,
         actorKeys,
         userDisplayName,
@@ -351,9 +373,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         action: 'mutation_applied',
         payload: {
             summaryId: snapshot.summaryId,
-            actionCount: validation.document.actions.length,
+            actionCount: finalMutationDocument.actions.length,
+            batchCount: stagingSnapshot.batchResults.length,
         },
     });
+    clearSummaryMutationStagingSnapshot(summaryJobId);
     return {
         snapshot,
         diagnostics: {
@@ -367,52 +391,72 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 }
 
 /**
- * 功能：为 Mutation 阶段构建精简上下文，减少 token 消耗。
- * 瘦身策略：
- * 1. window.summaryText → windowFacts（提取事实帧）
- * 2. recentSummaryDigest → 单条 rollingDigest
- * 3. candidateRecords → 短卡片（裁掉冗余字段）
- * 4. typeSchemas → 仅保留 focus types
+ * 功能：构建总结失败结果。
+ * @param plannerResult planner 结果。
+ * @param reasonCode 原因码。
+ * @returns 失败结果。
+ */
+function buildSummaryFailureResult(
+    plannerResult: Awaited<ReturnType<typeof buildSummaryMutationContext>>,
+    reasonCode: string,
+): RunSummaryOrchestratorResult {
+    return {
+        snapshot: null,
+        diagnostics: {
+            usedLLM: false,
+            retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
+            matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
+            worldProfile: plannerResult.diagnostics.worldProfile,
+            reasonCode,
+        },
+    };
+}
+
+/**
+ * 功能：构建精简的 mutation 上下文。
  * @param context 完整上下文。
- * @param plannerDecision planner 阶段输出。
- * @returns 精简后的 mutation 上下文。
+ * @param plannerDecision planner 输出。
+ * @param rollingDigestMaxChars 滚动摘要上限。
+ * @param candidateSummaryMaxChars 候选摘要上限。
+ * @param candidateIds 候选标识过滤列表。
+ * @returns 精简后的上下文。
  */
 function buildSlimMutationContext(
     context: import('../memory-summary-planner').SummaryMutationContext,
     plannerDecision: SummaryPlannerOutput,
     rollingDigestMaxChars: number,
     candidateSummaryMaxChars: number,
+    candidateIds?: string[],
 ): Record<string, unknown> {
     const focusTypes = plannerDecision.focus_types;
     const filteredTypeSchemas = focusTypes.length > 0
         ? context.typeSchemas.filter((schema) => focusTypes.includes(schema.schemaId))
         : context.typeSchemas;
     const activeTypeSchemas = filteredTypeSchemas.length > 0 ? filteredTypeSchemas : context.typeSchemas;
-
-    const windowFacts = extractWindowFacts(context.window.summaryText);
-
+    const candidateIdSet = new Set((candidateIds ?? []).filter(Boolean));
+    const slimCandidates = (candidateIdSet.size > 0
+        ? context.candidateRecords.filter((candidate) => candidateIdSet.has(candidate.candidateId))
+        : context.candidateRecords)
+        .map((candidate) => ({
+            candidateId: candidate.candidateId,
+            targetKind: candidate.targetKind,
+            compareKey: candidate.compareKey,
+            title: candidate.title,
+            summary: truncateTextForContext(candidate.summary ?? '', candidateSummaryMaxChars),
+            status: candidate.status,
+        }));
     const rollingDigest = context.recentSummaryDigest.length > 0
         ? context.recentSummaryDigest
             .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, rollingDigestMaxChars)}`)
             .join(' | ')
         : '';
-
-    const slimCandidates = context.candidateRecords.map((candidate) => ({
-        candidateId: candidate.candidateId,
-        targetKind: candidate.targetKind,
-        compareKey: candidate.compareKey,
-        title: candidate.title,
-        summary: truncateTextForContext(candidate.summary ?? '', candidateSummaryMaxChars),
-        status: candidate.status,
-    }));
-
     return {
         task: context.task,
         schemaVersion: context.schemaVersion,
         window: {
             fromTurn: context.window.fromTurn,
             toTurn: context.window.toTurn,
-            windowFacts,
+            windowFacts: extractWindowFacts(context.window.summaryText),
             ...(context.window.recentContextText ? { recentContext: extractWindowFacts(context.window.recentContextText).slice(0, 8) } : {}),
         },
         detectedSignals: context.detectedSignals,
@@ -425,37 +469,40 @@ function buildSlimMutationContext(
 }
 
 /**
- * 功能：从长剧情文本中提取事实帧。
- * @param summaryText 长文本。
- * @returns 事实帧列表。
+ * 功能：提取窗口事实句。
+ * @param summaryText 窗口总结文本。
+ * @returns 事实句列表。
  */
 function extractWindowFacts(summaryText: string): string[] {
     const text = String(summaryText ?? '').trim();
-    if (!text) return [];
-    const sentences = text
+    if (!text) {
+        return [];
+    }
+    return text
         .split(/[。！？\n]+/)
         .map((sentence) => sentence.trim())
-        .filter((sentence) => sentence.length > 4);
-    return sentences.slice(0, 30);
+        .filter((sentence) => sentence.length > 4)
+        .slice(0, 30);
 }
 
 /**
- * 功能：截断文本。
- * @param text 源文本。
+ * 功能：裁剪上下文文本。
+ * @param text 原始文本。
  * @param maxLength 最大长度。
- * @returns 截断后的文本。
+ * @returns 裁剪后的文本。
  */
 function truncateTextForContext(text: string, maxLength: number): string {
     const normalized = String(text ?? '').trim();
-    if (!Number.isFinite(maxLength) || maxLength <= 0) return normalized;
-    if (normalized.length <= maxLength) return normalized;
-    return normalized.slice(0, maxLength) + '…';
+    if (!Number.isFinite(maxLength) || maxLength <= 0 || normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, maxLength).trim()}…`;
 }
 
 /**
- * 功能：归一化 Planner 输出。
- * @param value 原始值。
- * @returns 归一化结果。
+ * 功能：规范化 planner 输出。
+ * @param value 原始输出。
+ * @returns 规范化后的 planner 输出。
  */
 function normalizePlannerOutput(value: unknown): SummaryPlannerOutput {
     const source = value && typeof value === 'object' && !Array.isArray(value)
@@ -471,7 +518,7 @@ function normalizePlannerOutput(value: unknown): SummaryPlannerOutput {
 }
 
 /**
- * 功能：归一化字符串数组。
+ * 功能：规范化字符串数组。
  * @param value 原始值。
  * @returns 字符串数组。
  */
@@ -490,7 +537,7 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 /**
- * 功能：构建 entryId -> memoryPercent 映射。
+ * 功能：构建 entryId 到 memoryPercent 的映射。
  * @param memories 角色记忆列表。
  * @returns 映射表。
  */
@@ -506,9 +553,9 @@ function buildEntryMemoryPercentMap(memories: RoleEntryMemory[]): Map<string, nu
 }
 
 /**
- * 功能：构建字段白名单映射。
- * @param typeSchemas 类型白名单列表。
- * @returns 白名单映射。
+ * 功能：构建可编辑字段映射。
+ * @param typeSchemas 类型 schema 列表。
+ * @returns 可编辑字段映射。
  */
 function buildEditableFieldMap(typeSchemas: Array<{ schemaId: string; editableFields: string[] }>): EditableFieldMap {
     const map: EditableFieldMap = new Map();
@@ -519,9 +566,9 @@ function buildEditableFieldMap(typeSchemas: Array<{ schemaId: string; editableFi
 }
 
 /**
- * 功能：从 prompt section 中提取 JSON 对象。
- * @param section section 原文。
- * @returns 解析后的 JSON。
+ * 功能：从 section 中解析 JSON。
+ * @param section 原始 section 文本。
+ * @returns JSON 对象。
  */
 function parseJsonSection(section: string): unknown {
     const source = String(section ?? '').trim();
@@ -540,10 +587,10 @@ function parseJsonSection(section: string): unknown {
 }
 
 /**
- * 功能：为总结第二阶段构建兼容严格 json_schema 的 mutation schema。
- * @param baseSchema Prompt 中的基础 schema。
- * @param typeSchemas 当前轮次的可写字段白名单。
- * @returns 严格化后的 schema。
+ * 功能：构建严格 mutation schema。
+ * @param baseSchema 基础 schema。
+ * @param typeSchemas 类型 schema 列表。
+ * @returns 严格 schema。
  */
 function buildStrictSummaryMutationSchema(
     baseSchema: unknown,
@@ -562,40 +609,15 @@ function buildStrictSummaryMutationSchema(
 }
 
 /**
- * 功能：根据 targetKind 构建联动的严格 action schema。
- * 按 action 类型区分字段语义：
- * - ADD: 不需要 candidateId/compareKey，payload 为完整创建字段
- * - UPDATE: 必须有 candidateId 或 compareKey，payload 为 patch 语义
- * - MERGE: 同 UPDATE
- * - INVALIDATE/DELETE: 必须有目标定位字段，payload 需包含原因
- * - NOOP: 仅需 reasonCodes，其余字段可为空串/空对象
- * @param typeSchemas 当前轮次的类型白名单。
- * @returns actions.items schema。
+ * 功能：构建 action items schema。
+ * @param typeSchemas 类型 schema 列表。
+ * @returns items schema。
  */
 function buildStrictActionItemsSchema(
     typeSchemas: Array<{ schemaId: string; editableFields: string[] }>,
 ): Record<string, unknown> {
-    const targetKinds = Array.from(new Set(
-        typeSchemas
-            .map((typeSchema): string => String(typeSchema.schemaId ?? '').trim())
-            .filter(Boolean),
-    )).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
-    const mergedEditableFields = Array.from(new Set(
-        typeSchemas.flatMap((typeSchema): string[] => Array.isArray(typeSchema.editableFields) ? typeSchema.editableFields : []),
-    )).sort((left: string, right: string): number => left.localeCompare(right, 'zh-CN'));
-
-    if (targetKinds.length <= 0) {
-        return {
-            type: 'object',
-            additionalProperties: false,
-            properties: {},
-            required: [],
-        };
-    }
-
-    const createPayload = buildStrictCreatePayloadSchema(mergedEditableFields);
-    const patchPayload = buildStrictPatchPayloadSchema(mergedEditableFields);
-
+    const targetKinds = Array.from(new Set(typeSchemas.map((item) => String(item.schemaId ?? '').trim()).filter(Boolean)));
+    const mergedEditableFields = Array.from(new Set(typeSchemas.flatMap((item) => item.editableFields ?? [])));
     return {
         type: 'object',
         additionalProperties: false,
@@ -606,11 +628,11 @@ function buildStrictActionItemsSchema(
             },
             targetKind: {
                 type: 'string',
-                enum: targetKinds,
+                enum: targetKinds.length > 0 ? targetKinds : ['other'],
             },
             candidateId: { type: 'string' },
             compareKey: { type: 'string' },
-            payload: buildStrictMutationPayloadSchema(mergedEditableFields),
+            payload: buildStrictMutationPayloadSchema(mergedEditableFields, false),
             reasonCodes: {
                 type: 'array',
                 items: { type: 'string' },
@@ -621,11 +643,12 @@ function buildStrictActionItemsSchema(
 }
 
 /**
- * 功能：根据单个类型的可写字段构建严格 payload schema（完整版，用于 ADD）。
- * @param editableFields 当前类型允许写入的字段。
+ * 功能：构建 payload schema。
+ * @param editableFields 可编辑字段列表。
+ * @param requireAll 是否要求所有字段必填。
  * @returns payload schema。
  */
-function buildStrictMutationPayloadSchema(editableFields: string[]): Record<string, unknown> {
+function buildStrictMutationPayloadSchema(editableFields: string[], requireAll: boolean): Record<string, unknown> {
     const rootFieldKeys = new Set<string>();
     const nestedFieldKeys = new Set<string>();
     for (const fieldPath of editableFields) {
@@ -650,16 +673,14 @@ function buildStrictMutationPayloadSchema(editableFields: string[]): Record<stri
 
     if (nestedFieldKeys.size > 0) {
         const fieldProperties: Record<string, unknown> = {};
-        const fieldRequiredKeys: string[] = [];
         Array.from(nestedFieldKeys).sort().forEach((key: string): void => {
             fieldProperties[key] = buildLooseFieldSchema(key, true);
-            fieldRequiredKeys.push(key);
         });
         properties.fields = {
             type: 'object',
             additionalProperties: false,
             properties: fieldProperties,
-            required: fieldRequiredKeys,
+            required: requireAll ? Object.keys(fieldProperties) : [],
         };
     }
 
@@ -667,150 +688,15 @@ function buildStrictMutationPayloadSchema(editableFields: string[]): Record<stri
         type: 'object',
         additionalProperties: false,
         properties,
-        required: Object.keys(properties),
+        required: requireAll ? Object.keys(properties) : [],
     };
 }
 
 /**
- * 功能：为 ADD 动作构建完整创建 payload schema，要求所有字段齐全。
- * @param editableFields 可写字段列表。
- * @returns 完整 payload schema。
- */
-function buildStrictCreatePayloadSchema(editableFields: string[]): Record<string, unknown> {
-    return buildStrictMutationPayloadSchema(editableFields);
-}
-
-/**
- * 功能：为 UPDATE / MERGE 动作构建 patch payload schema，
- * 字段仍保持 required（strict json_schema 兼容），但语义上 AI 可用空串表示不修改。
- * @param editableFields 可写字段列表。
- * @returns patch payload schema。
- */
-function buildStrictPatchPayloadSchema(editableFields: string[]): Record<string, unknown> {
-    return buildStrictMutationPayloadSchema(editableFields);
-}
-
-/**
- * 功能：构建单个 action 分支 schema，按动作语义差异化必填字段。
- * - ADD: 不要求 candidateId/compareKey（新建无需定位旧记录）
- * - UPDATE/MERGE: 需要 candidateId 或 compareKey 定位旧记录
- * - INVALIDATE/DELETE: 需要定位字段与原因
- * - NOOP: 仅需 reasonCodes
- * @param action 动作名称。
- * @param targetKind 目标类型。
- * @param payloadSchema 该类型专属 payload schema。
- * @returns 分支 schema。
- */
-function buildStrictActionBranch(
-    action: string,
-    targetKind: string,
-    payloadSchema: Record<string, unknown>,
-): Record<string, unknown> {
-    const baseProperties: Record<string, unknown> = {
-        action: {
-            type: 'string',
-            enum: [action],
-        },
-        targetKind: {
-            type: 'string',
-            enum: [targetKind],
-        },
-        reasonCodes: {
-            type: 'array',
-            items: { type: 'string' },
-        },
-    };
-
-    switch (action) {
-        case 'ADD':
-            return {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ...baseProperties,
-                    candidateId: { type: 'string' },
-                    compareKey: { type: 'string' },
-                    payload: payloadSchema,
-                },
-                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
-            };
-        case 'UPDATE':
-        case 'MERGE':
-            return {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ...baseProperties,
-                    candidateId: { type: 'string' },
-                    compareKey: { type: 'string' },
-                    payload: payloadSchema,
-                },
-                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
-            };
-        case 'INVALIDATE':
-        case 'DELETE':
-            return {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ...baseProperties,
-                    candidateId: { type: 'string' },
-                    compareKey: { type: 'string' },
-                    payload: buildEmptyObjectSchema(),
-                },
-                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
-            };
-        case 'NOOP':
-            return {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ...baseProperties,
-                    candidateId: { type: 'string' },
-                    compareKey: { type: 'string' },
-                    payload: buildEmptyObjectSchema(),
-                },
-                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
-            };
-        default:
-            return {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ...baseProperties,
-                    candidateId: { type: 'string' },
-                    compareKey: { type: 'string' },
-                    payload: payloadSchema,
-                },
-                required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
-            };
-    }
-}
-
-/**
- * 功能：构建空对象 schema。
- * @returns 空对象 schema。
- */
-function buildEmptyObjectSchema(): Record<string, unknown> {
-    return {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-        required: [],
-    };
-}
-
-/**
- * 功能：按字段名生成宽松但严格封闭的字段 schema。
- * 对特定字段使用更精确的类型约束：
- * - relationTag: enum 关系标签
- * - status / stage: enum 状态枚举
- * - isActive / isResolved 等 boolean 型字段: string（严格 json_schema 不支持 union）
- * - 数值字段: number
- * - 数组字段: string[]
+ * 功能：按字段生成宽松但封闭的字段 schema。
  * @param key 字段名。
- * @param isNested 是否为 fields 下的子字段。
- * @returns 单字段 schema。
+ * @param isNested 是否为嵌套字段。
+ * @returns 字段 schema。
  */
 function buildLooseFieldSchema(key: string, isNested: boolean): Record<string, unknown> {
     const normalizedKey = String(key ?? '').trim();
@@ -855,7 +741,7 @@ function buildLooseFieldSchema(key: string, isNested: boolean): Record<string, u
 }
 
 /**
- * 功能：深拷贝普通对象，避免修改原始 schema。
+ * 功能：深拷贝普通对象。
  * @param value 原始对象。
  * @returns 深拷贝结果。
  */
@@ -864,10 +750,10 @@ function deepCloneRecord<T>(value: T): T {
 }
 
 /**
- * 功能：读取对象上的嵌套普通对象。
+ * 功能：读取嵌套对象。
  * @param source 源对象。
- * @param path 嵌套路径。
- * @returns 命中的对象；不存在时返回 null。
+ * @param path 路径。
+ * @returns 命中的对象。
  */
 function readNestedRecord(source: Record<string, unknown>, path: string[]): Record<string, unknown> | null {
     let cursor: unknown = source;
@@ -884,7 +770,7 @@ function readNestedRecord(source: Record<string, unknown>, path: string[]): Reco
 }
 
 /**
- * 功能：递归确保所有带 properties 的 object schema 都有完整的 required 数组。
+ * 功能：递归补全 required。
  * @param node 当前 schema 节点。
  */
 function ensureStrictRequired(node: unknown): void {
@@ -892,27 +778,33 @@ function ensureStrictRequired(node: unknown): void {
         return;
     }
     const record = node as Record<string, unknown>;
-    const properties = record.properties;
-    if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
-        const allKeys = Object.keys(properties as Record<string, unknown>);
-        record.required = allKeys;
+    if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
+        const properties = record.properties as Record<string, unknown>;
+        record.required = Object.keys(properties);
         record.additionalProperties = false;
-        for (const value of Object.values(properties as Record<string, unknown>)) {
+        for (const value of Object.values(properties)) {
             ensureStrictRequired(value);
         }
     }
     if (record.items && typeof record.items === 'object') {
         ensureStrictRequired(record.items);
     }
-    if (Array.isArray(record.oneOf)) {
-        record.oneOf.forEach((item: unknown): void => ensureStrictRequired(item));
+}
+
+/**
+ * 功能：限制单批动作数量。
+ * @param document mutation 文档。
+ * @param maxActions 最大动作数。
+ * @returns 裁剪后的文档。
+ */
+function trimMutationDocumentActions(document: SummaryMutationDocument, maxActions: number): SummaryMutationDocument {
+    if (!Number.isFinite(maxActions) || maxActions <= 0 || document.actions.length <= maxActions) {
+        return document;
     }
-    if (Array.isArray(record.anyOf)) {
-        record.anyOf.forEach((item: unknown): void => ensureStrictRequired(item));
-    }
-    if (Array.isArray(record.allOf)) {
-        record.allOf.forEach((item: unknown): void => ensureStrictRequired(item));
-    }
+    return {
+        ...document,
+        actions: document.actions.slice(0, maxActions),
+    };
 }
 
 const NUMBER_FIELD_KEYS: Set<string> = new Set([

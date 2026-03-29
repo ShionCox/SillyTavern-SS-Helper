@@ -16,6 +16,16 @@ export type MemoryOSSettings = {
     summaryRecentWindowSize: number;
     summarySecondStageRollingDigestMaxChars: number;
     summarySecondStageCandidateSummaryMaxChars: number;
+    pipelineBudgetEnabled: boolean;
+    pipelineMaxInputCharsPerBatch: number;
+    pipelineMaxOutputItemsPerBatch: number;
+    pipelineMaxActionsPerMutation: number;
+    pipelineMaxSectionBatchCount: number;
+    pipelineMaxConflictBucketSize: number;
+    pipelineMaxSectionDigestChars: number;
+    pipelineMaxFinalizerItemsPerDomain: number;
+    pipelineStagingRetentionDays: number;
+    pipelineResolveOnlyUnresolvedConflicts: boolean;
     takeoverDetectMinFloors: number;
     takeoverDefaultRecentFloors: number;
     takeoverDefaultBatchSize: number;
@@ -47,6 +57,16 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     summaryRecentWindowSize: 40,
     summarySecondStageRollingDigestMaxChars: 0,
     summarySecondStageCandidateSummaryMaxChars: 0,
+    pipelineBudgetEnabled: true,
+    pipelineMaxInputCharsPerBatch: 16000,
+    pipelineMaxOutputItemsPerBatch: 20,
+    pipelineMaxActionsPerMutation: 10,
+    pipelineMaxSectionBatchCount: 5,
+    pipelineMaxConflictBucketSize: 10,
+    pipelineMaxSectionDigestChars: 2000,
+    pipelineMaxFinalizerItemsPerDomain: 50,
+    pipelineStagingRetentionDays: 7,
+    pipelineResolveOnlyUnresolvedConflicts: true,
     takeoverDetectMinFloors: 50,
     takeoverDefaultRecentFloors: 60,
     takeoverDefaultBatchSize: 30,
@@ -90,6 +110,38 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     const summarySecondStageCandidateSummaryMaxChars: number = summarySecondStageCandidateSummaryMaxCharsRaw <= 0
         ? 0
         : Math.max(40, Math.min(10000, Math.trunc(summarySecondStageCandidateSummaryMaxCharsRaw)));
+    const pipelineMaxInputCharsPerBatch: number = Math.max(
+        1000,
+        Math.min(50000, Math.trunc(Number(candidate.pipelineMaxInputCharsPerBatch) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxInputCharsPerBatch)),
+    );
+    const pipelineMaxOutputItemsPerBatch: number = Math.max(
+        1,
+        Math.min(200, Math.trunc(Number(candidate.pipelineMaxOutputItemsPerBatch) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxOutputItemsPerBatch)),
+    );
+    const pipelineMaxActionsPerMutation: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.pipelineMaxActionsPerMutation) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxActionsPerMutation)),
+    );
+    const pipelineMaxSectionBatchCount: number = Math.max(
+        1,
+        Math.min(50, Math.trunc(Number(candidate.pipelineMaxSectionBatchCount) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxSectionBatchCount)),
+    );
+    const pipelineMaxConflictBucketSize: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.pipelineMaxConflictBucketSize) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxConflictBucketSize)),
+    );
+    const pipelineMaxSectionDigestChars: number = Math.max(
+        100,
+        Math.min(10000, Math.trunc(Number(candidate.pipelineMaxSectionDigestChars) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxSectionDigestChars)),
+    );
+    const pipelineMaxFinalizerItemsPerDomain: number = Math.max(
+        1,
+        Math.min(500, Math.trunc(Number(candidate.pipelineMaxFinalizerItemsPerDomain) || DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxFinalizerItemsPerDomain)),
+    );
+    const pipelineStagingRetentionDays: number = Math.max(
+        1,
+        Math.min(365, Math.trunc(Number(candidate.pipelineStagingRetentionDays) || DEFAULT_MEMORY_OS_SETTINGS.pipelineStagingRetentionDays)),
+    );
     const takeoverDetectMinFloors: number = Math.max(
         10,
         Math.min(2000, Math.trunc(Number(candidate.takeoverDetectMinFloors) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors)),
@@ -124,6 +176,16 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         summaryRecentWindowSize,
         summarySecondStageRollingDigestMaxChars,
         summarySecondStageCandidateSummaryMaxChars,
+        pipelineBudgetEnabled: candidate.pipelineBudgetEnabled !== false,
+        pipelineMaxInputCharsPerBatch,
+        pipelineMaxOutputItemsPerBatch,
+        pipelineMaxActionsPerMutation,
+        pipelineMaxSectionBatchCount,
+        pipelineMaxConflictBucketSize,
+        pipelineMaxSectionDigestChars,
+        pipelineMaxFinalizerItemsPerDomain,
+        pipelineStagingRetentionDays,
+        pipelineResolveOnlyUnresolvedConflicts: candidate.pipelineResolveOnlyUnresolvedConflicts !== false,
         takeoverDetectMinFloors,
         takeoverDefaultRecentFloors,
         takeoverDefaultBatchSize,

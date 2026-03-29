@@ -627,8 +627,11 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     }
 
     #${cardId} .stx-ui-consumer-map-head-main {
+      display: flex;
+      flex-direction: column;
       flex: 1 1 260px;
       min-width: 0;
+      gap: 8px;
     }
 
     #${cardId} .stx-ui-consumer-map-badges {

@@ -1642,10 +1642,6 @@ export class MemorySDKImpl {
             reasonCodes: [existingEntry ? 'takeover_actor_card_update' : 'takeover_actor_card_add'],
         });
         await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
-        await this.unifiedManager.ensureActorProfile({
-            actorKey,
-            displayName,
-        });
     }
 
     /**
@@ -2362,11 +2358,20 @@ export class MemorySDKImpl {
         existingActorCards: Array<{ actorKey: string; displayName: string }>,
     ): { actorKey: string; displayName: string } | null {
         const resolvedActorKey = this.resolveTakeoverActorKey(actorKey, '');
-        if (!resolvedActorKey) {
-            return null;
-        }
+        const normalizedActorName = this.normalizeTakeoverRelationTargetName(this.extractTakeoverActorName(actorKey));
         const matchedTakeoverActor = actorCards.find((actorCard): boolean => {
-            return this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName) === resolvedActorKey;
+            if (resolvedActorKey && this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName) === resolvedActorKey) {
+                return true;
+            }
+            if (!normalizedActorName) {
+                return false;
+            }
+            if (this.normalizeTakeoverRelationTargetName(actorCard.displayName) === normalizedActorName) {
+                return true;
+            }
+            return (actorCard.aliases ?? []).some((alias: string): boolean => {
+                return this.normalizeTakeoverRelationTargetName(alias) === normalizedActorName;
+            });
         });
         if (matchedTakeoverActor) {
             return {
@@ -2414,6 +2419,39 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：从旧聊天角色键中提取更稳定的角色名称片段。
+     * @param value 原始角色键。
+     * @returns 提取后的角色名称；无法提取时返回空字符串。
+     */
+    private extractTakeoverActorName(value: string): string {
+        const rawValue = String(value ?? '').trim();
+        if (!rawValue) {
+            return '';
+        }
+        const segments = rawValue
+            .split(/[:：/|]/g)
+            .map((segment: string): string => String(segment ?? '').trim())
+            .filter((segment: string): boolean => Boolean(segment));
+        for (let index = segments.length - 1; index >= 0; index -= 1) {
+            const segment = segments[index];
+            const normalizedSegment = this.normalizeTakeoverActorKey(segment);
+            const loweredSegment = segment.toLowerCase();
+            if (
+                normalizedSegment === 'actor'
+                || normalizedSegment === 'character'
+                || normalizedSegment === 'role'
+                || loweredSegment === 'actor'
+                || loweredSegment === 'character'
+                || loweredSegment === 'role'
+            ) {
+                continue;
+            }
+            return segment;
+        }
+        return rawValue;
+    }
+
+    /**
      * 功能：为旧聊天识别出的角色生成稳定且不冲突的角色键。
      * @param rawActorKey 模型输出的原始角色键。
      * @param displayName 角色显示名。
@@ -2431,7 +2469,8 @@ export class MemorySDKImpl {
             return normalizedDisplayKey;
         }
 
-        const fallbackSource = String(displayName ?? '').trim() || String(rawActorKey ?? '').trim();
+        const extractedActorName = this.extractTakeoverActorName(rawActorKey);
+        const fallbackSource = String(displayName ?? '').trim() || extractedActorName || String(rawActorKey ?? '').trim();
         if (!fallbackSource) {
             return '';
         }

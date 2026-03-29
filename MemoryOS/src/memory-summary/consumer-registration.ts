@@ -10,7 +10,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 2,
+        registrationVersion: 3,
         tasks: [
             {
                 taskId: 'memory_cold_start',
@@ -61,11 +61,35 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_consolidation',
+                taskId: 'memory_takeover_actor_conflict_resolve',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
-                description: '旧聊天处理最终整合',
+                description: '旧聊天处理角色冲突裁决',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_entity_conflict_resolve',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '旧聊天处理实体冲突裁决',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_relation_conflict_resolve',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '旧聊天处理关系冲突裁决',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_world_conflict_resolve',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '旧聊天处理世界状态冲突裁决',
                 backgroundEligible: false,
             },
         ],
