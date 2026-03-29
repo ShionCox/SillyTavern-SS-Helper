@@ -57,23 +57,32 @@ export interface WorkbenchMemoryGraph {
  */
 export const MEMORY_GRAPH_TYPE_COLORS: Record<string, string> = {
     world_core_setting: '#d4a017',
-    world_hard_rule: '#d4a017',
-    world_global_state: '#d4a017',
-    world_hard_rule_legacy: '#d4a017',
+    world_hard_rule: '#c89211',
+    world_global_state: '#e3b341',
+    world_hard_rule_legacy: '#b68612',
     scene_shared_state: '#06b6d4',
-    location: '#06b6d4',
-    relationship: '#ec4899',
+    location: '#14b8a6',
+    relationship: '#f472b6',
     actor_profile: '#ec4899',
     event: '#f97316',
-    actor_visible_event: '#f97316',
+    actor_visible_event: '#fb923c',
     actor_private_interpretation: '#a855f7',
-    nation: '#d4a017',
-    city: '#06b6d4',
-    organization: '#d4a017',
+    nation: '#84cc16',
+    city: '#38bdf8',
+    organization: '#22c55e',
     item: '#94a3b8',
-    task: '#f97316',
-    other: '#94a3b8',
+    task: '#f59e0b',
+    other: '#64748b',
 };
+
+/**
+ * 功能：定义可视化记忆图例项。
+ */
+export interface MemoryGraphLegendItem {
+    type: string;
+    label: string;
+    color: string;
+}
 
 /**
  * 功能：获取记忆图节点颜色。
@@ -82,6 +91,23 @@ export const MEMORY_GRAPH_TYPE_COLORS: Record<string, string> = {
  */
 export function getMemoryGraphNodeColor(entryType: string): string {
     return MEMORY_GRAPH_TYPE_COLORS[entryType] ?? '#94a3b8';
+}
+
+/**
+ * 功能：构建可视化记忆图例配置。
+ * @returns 图例项列表。
+ */
+export function buildMemoryGraphLegendItems(): MemoryGraphLegendItem[] {
+    return [
+        { type: 'actor_profile', label: '角色', color: getMemoryGraphNodeColor('actor_profile') },
+        { type: 'relationship', label: '关系', color: getMemoryGraphNodeColor('relationship') },
+        { type: 'organization', label: '组织', color: getMemoryGraphNodeColor('organization') },
+        { type: 'location', label: '地点', color: getMemoryGraphNodeColor('location') },
+        { type: 'event', label: '事件', color: getMemoryGraphNodeColor('event') },
+        { type: 'task', label: '任务', color: getMemoryGraphNodeColor('task') },
+        { type: 'world_core_setting', label: '世界设定', color: getMemoryGraphNodeColor('world_core_setting') },
+        { type: 'other', label: '其他', color: getMemoryGraphNodeColor('other') },
+    ];
 }
 
 /**

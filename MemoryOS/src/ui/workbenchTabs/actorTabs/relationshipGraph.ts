@@ -165,9 +165,10 @@ export function mountRelationshipGraph(container: HTMLElement, data: WorkbenchAc
 
     data.nodes.forEach((node): void => {
         const activeClass = node.id === options.selectedNodeId ? ' is-focused' : '';
+        const iconClass = node.kind === 'entity' ? 'fa-solid fa-landmark' : 'fa-solid fa-user';
         canvas.innerHTML += '<button type="button" class="stx-rpg-graph-node' + activeClass + '" data-node-id="' + escapeAttr(node.id) + '" style="left:' + node.x + 'px; top:' + node.y + 'px; transform: translate(-50%, -24px);">' +
             '<div class="avatar" style="flex-shrink:0; min-width:48px; min-height:48px; width:48px; height:48px; box-sizing:border-box;">' +
-                '<i class="fa-solid fa-user"></i>' +
+                '<i class="' + iconClass + '"></i>' +
             '</div>' +
             '<div class="name">' + escapeHtml(node.label) + '</div>' +
         '</button>';

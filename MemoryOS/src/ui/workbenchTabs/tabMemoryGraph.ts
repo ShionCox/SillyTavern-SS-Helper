@@ -3,7 +3,7 @@ import { resolveEntryTypeLabel } from '../workbenchLocale';
 import type { WorkbenchSnapshot, WorkbenchState } from './shared';
 import { escapeAttr, truncateText, formatTimestamp, formatDisplayValue } from './shared';
 import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from './shared/memoryGraphTypes';
-import { getMemoryGraphNodeColor, MEMORY_GRAPH_TYPE_LABELS } from './shared/memoryGraphTypes';
+import { buildMemoryGraphLegendItems, getMemoryGraphNodeColor, MEMORY_GRAPH_TYPE_LABELS } from './shared/memoryGraphTypes';
 
 /**
  * 功能：扩展后的工作台状态字段（记忆图谱相关）。
@@ -67,7 +67,7 @@ export function buildMemoryGraphViewMarkup(
         { label: '其他', color: '#94a3b8' },
     ];
 
-    const legendHtml = legendItems.map(item =>
+    const legendHtml = buildMemoryGraphLegendItems().map(item =>
         `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;">` +
         `<span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span>` +
         `<span style="font-size:11px;opacity:0.7;">${item.label}</span></span>`,

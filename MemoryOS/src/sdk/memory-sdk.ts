@@ -11,7 +11,9 @@ import {
 } from '../../../SDK/tavern';
 import type { EventEnvelope } from '../../../SDK/stx';
 import { EventsManager } from '../core/events-manager';
+import { buildCompareKey, buildRelationshipCompareKey } from '../core/compare-key';
 import { UnifiedMemoryManager } from '../core/unified-memory-manager';
+import { normalizeRelationTag } from '../constants/relationTags';
 import { logger } from '../runtime/runtime-services';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
@@ -51,6 +53,7 @@ import {
     writeMemoryOSChatState,
 } from '../db/db';
 import { readMemoryOSSettings } from '../settings/store';
+import { detectWorldProfile } from '../memory-world-profile';
 import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverConsolidationResult,
@@ -59,6 +62,7 @@ import type {
     MemoryTakeoverPlan,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
+    MemoryTakeoverRelationshipCard,
 } from '../types';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
@@ -154,6 +158,7 @@ export interface MemorySummaryTriggerStatus {
 export interface MemoryColdStartExecutionResult {
     ok: boolean;
     reasonCode: string;
+    errorMessage?: string;
     candidates?: ColdStartCandidate[];
     worldProfile?: {
         primaryProfile: string;
@@ -180,6 +185,7 @@ export interface MemoryColdStartWorldbookSelection {
 export interface MemoryTakeoverExecutionResult {
     ok: boolean;
     reasonCode: string;
+    errorMessage?: string;
     progress: MemoryTakeoverProgressSnapshot | null;
 }
 
@@ -509,8 +515,11 @@ export class MemorySDKImpl {
                         });
                     });
                 return {
-                    ok: Boolean(progress.plan),
+                    ok: Boolean(progress.plan) && progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
                     reasonCode: progress.plan?.status === 'completed' ? 'completed' : (progress.plan?.status ?? 'missing_plan'),
+                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
+                        ? String(progress.plan?.lastError ?? '').trim() || undefined
+                        : undefined,
                     progress,
                 };
             },
@@ -534,6 +543,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'takeover_plan_missing',
+                        errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
                         progress: null,
                     };
                 }
@@ -555,8 +565,11 @@ export class MemorySDKImpl {
                     },
                 });
                 return {
-                    ok: true,
+                    ok: progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
                     reasonCode: progress.plan?.status ?? 'ok',
+                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
+                        ? String(progress.plan?.lastError ?? '').trim() || undefined
+                        : undefined,
                     progress,
                 };
             },
@@ -569,6 +582,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'takeover_plan_missing',
+                        errorMessage: '当前聊天还没有可整合的旧聊天处理计划。',
                         progress: null,
                     };
                 }
@@ -607,6 +621,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'takeover_plan_missing',
+                        errorMessage: '当前聊天还没有可重建区间的旧聊天处理计划。',
                         progress: snapshot,
                     };
                 }
@@ -621,8 +636,11 @@ export class MemorySDKImpl {
                     },
                 });
                 return {
-                    ok: true,
+                    ok: progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
                     reasonCode: progress.plan?.status ?? 'ok',
+                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
+                        ? String(progress.plan?.lastError ?? '').trim() || undefined
+                        : undefined,
                     progress,
                 };
             },
@@ -741,6 +759,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'llm_unavailable',
+                        errorMessage: '当前未连接可用的 LLMHub 服务。',
                     };
                 }
                 const sourceBundle = await this.collectColdStartSourceBundle(_reason, selection);
@@ -766,6 +785,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: result.reasonCode,
+                        errorMessage: result.errorMessage,
                     };
                 }
                 this.pendingColdStartDraft = result.document && result.candidates
@@ -792,6 +812,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'cold_start_draft_missing',
+                        errorMessage: '当前没有可确认的冷启动草稿，请先重新生成一次。',
                     };
                 }
                 const selectedIdSet = new Set(
@@ -806,6 +827,7 @@ export class MemorySDKImpl {
                     return {
                         ok: false,
                         reasonCode: 'no_cold_start_candidate_selected',
+                        errorMessage: '当前没有选中任何冷启动候选内容。',
                     };
                 }
                 const applied = await applyBootstrapCandidates({
@@ -948,6 +970,17 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：确保当前聊天对应的 LLMHub 任务已完成注册。
+     *
+     * 返回：
+     *   boolean：`true` 表示当前已注册或本次补注册成功；`false` 表示当前仍无法注册。
+     */
+    public ensureLLMTasksRegistered(): boolean {
+        this.tryRegisterLLMTasks();
+        return this.llmTasksRegistered;
+    }
+
+    /**
      * 功能：把旧聊天接管最终整合结果写入正式记忆层。
      * @param result 接管整合结果。
      * @returns 异步完成。
@@ -956,6 +989,9 @@ export class MemorySDKImpl {
         for (const actorCard of result.actorCards ?? []) {
             await this.persistTakeoverActorCard(actorCard, result.takeoverId);
         }
+
+        const existingActorCards = await this.readTakeoverExistingActorCards();
+        const existingKnownEntities = await this.readTakeoverExistingKnownEntities();
 
         for (const entityCard of result.entityCards ?? []) {
             await this.persistTakeoverEntityCard(entityCard, result.takeoverId);
@@ -966,7 +1002,7 @@ export class MemorySDKImpl {
         }
 
         for (const fact of result.longTermFacts) {
-            await this.unifiedManager.saveEntry({
+            const savedEntry = await this.unifiedManager.saveEntry({
                 title: `${fact.subject} · ${fact.predicate}`,
                 entryType: this.resolveTakeoverFactEntryType(fact.type),
                 category: this.resolveTakeoverFactCategory(fact.type),
@@ -991,55 +1027,71 @@ export class MemorySDKImpl {
                 sourceLabel: '旧聊天接管整合',
                 reasonCodes: ['takeover_long_term_fact'],
             });
+            await this.bindTakeoverFactActors(savedEntry.entryId, fact, result.actorCards ?? [], existingActorCards);
         }
-
-        const existingActorCards = await this.readTakeoverExistingActorCards();
+        for (const relationship of result.relationships ?? []) {
+            await this.persistTakeoverStructuredRelationship({
+                relationship,
+                actorCards: result.actorCards ?? [],
+                existingActorCards,
+                takeoverId: result.takeoverId,
+            });
+        }
         for (const relation of result.relationState) {
             const resolvedRelationActor = this.resolveTakeoverRelationActorTarget(
                 relation.target,
                 result.actorCards ?? [],
                 existingActorCards,
             );
-            const targetActorKey = resolvedRelationActor?.actorKey || this.normalizeTakeoverActorKey(relation.target);
-            if (!targetActorKey) {
+            const relationTag = this.resolveTakeoverRelationTag(
+                relation.state,
+                relation.reason,
+                relation.relationTag,
+            );
+            if (resolvedRelationActor && (result.relationships?.length ?? 0) > 0) {
                 continue;
             }
             if (resolvedRelationActor) {
-                await this.unifiedManager.ensureActorProfile({
+                await this.persistTakeoverActorRelation({
                     actorKey: resolvedRelationActor.actorKey,
                     displayName: resolvedRelationActor.displayName,
+                    relationState: relation.state,
+                    relationReason: relation.reason,
+                    relationTag,
+                    takeoverId: result.takeoverId,
                 });
+                continue;
             }
-            const savedEntry = await this.unifiedManager.saveEntry({
-                title: `user -> ${targetActorKey}`,
-                entryType: 'relationship',
-                category: '角色关系',
-                tags: ['关系'],
-                summary: relation.state,
-                detail: relation.reason,
-                detailPayload: {
-                    sourceActorKey: 'user',
-                    targetActorKey,
-                    fields: {
-                        relationTag: '朋友',
-                        state: relation.state,
-                        reason: relation.reason,
-                        participants: ['user', targetActorKey],
-                    },
-                    takeover: {
-                        source: 'old_chat_takeover',
-                        takeoverId: result.takeoverId,
-                    },
-                },
-            }, {
-                actionType: 'ADD',
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_relation_state'],
+            const resolvedEntity = this.resolveTakeoverRelationEntityTarget(
+                relation.target,
+                relation.targetType,
+                result.entityCards ?? [],
+                existingKnownEntities,
+            );
+            if (resolvedEntity) {
+                await this.persistTakeoverEntityRelation({
+                    entityKey: resolvedEntity.entityKey,
+                    displayName: resolvedEntity.displayName,
+                    entityType: resolvedEntity.entityType,
+                    relationState: relation.state,
+                    relationReason: relation.reason,
+                    relationTag,
+                    takeoverId: result.takeoverId,
+                });
+                continue;
+            }
+            const targetActorKey = this.normalizeTakeoverActorKey(relation.target);
+            if (!targetActorKey) {
+                continue;
+            }
+            await this.persistTakeoverActorRelation({
+                actorKey: targetActorKey,
+                displayName: relation.target,
+                relationState: relation.state,
+                relationReason: relation.reason,
+                relationTag,
+                takeoverId: result.takeoverId,
             });
-            await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
-            if (resolvedRelationActor) {
-                await this.unifiedManager.bindRoleToEntry(targetActorKey, savedEntry.entryId);
-            }
         }
 
         for (const task of result.taskState) {
@@ -1093,6 +1145,7 @@ export class MemorySDKImpl {
         }
 
         await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
+        await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
     }
 
@@ -1169,6 +1222,365 @@ export class MemorySDKImpl {
      * @param takeoverId 接管任务 ID。
      * @returns 异步完成。
      */
+    /**
+     * 功能：写入旧聊天接管识别出的角色关系。
+     * @param input 关系写入参数。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverActorRelation(input: {
+        actorKey: string;
+        displayName: string;
+        relationState: string;
+        relationReason: string;
+        relationTag: string;
+        takeoverId: string;
+    }): Promise<void> {
+        await this.unifiedManager.ensureActorProfile({
+            actorKey: input.actorKey,
+            displayName: input.displayName,
+        });
+        await this.persistTakeoverRelationshipEntry({
+            sourceActorKey: 'user',
+            sourceDisplayName: '用户',
+            targetActorKey: input.actorKey,
+            targetDisplayName: input.displayName,
+            relationTag: input.relationTag,
+            state: input.relationState,
+            summary: input.relationReason || input.relationState,
+            trust: 0,
+            affection: 0,
+            tension: 0,
+            participants: ['user', input.actorKey],
+            takeoverId: input.takeoverId,
+            reasonCode: 'takeover_relation_state',
+        });
+    }
+
+    /**
+     * 功能：把旧聊天接管输出的结构化关系卡写入正式关系条目。
+     * @param input 结构化关系写入参数。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverStructuredRelationship(input: {
+        relationship: MemoryTakeoverRelationshipCard;
+        actorCards: Array<{
+            actorKey: string;
+            displayName: string;
+            aliases?: string[];
+        }>;
+        existingActorCards: Array<{ actorKey: string; displayName: string }>;
+        takeoverId: string;
+    }): Promise<void> {
+        const sourceActor = this.resolveTakeoverActorByKey(
+            input.relationship.sourceActorKey,
+            input.actorCards,
+            input.existingActorCards,
+        );
+        const targetActor = this.resolveTakeoverActorByKey(
+            input.relationship.targetActorKey,
+            input.actorCards,
+            input.existingActorCards,
+        );
+        if (!sourceActor || !targetActor || sourceActor.actorKey === targetActor.actorKey) {
+            return;
+        }
+        await this.persistTakeoverRelationshipEntry({
+            sourceActorKey: sourceActor.actorKey,
+            sourceDisplayName: sourceActor.displayName,
+            targetActorKey: targetActor.actorKey,
+            targetDisplayName: targetActor.displayName,
+            relationTag: normalizeRelationTag(input.relationship.relationTag) || '朋友',
+            state: String(input.relationship.state ?? '').trim(),
+            summary: String(input.relationship.summary ?? '').trim() || String(input.relationship.state ?? '').trim(),
+            trust: Number(input.relationship.trust),
+            affection: Number(input.relationship.affection),
+            tension: Number(input.relationship.tension),
+            participants: [
+                sourceActor.actorKey,
+                targetActor.actorKey,
+                ...((input.relationship.participants ?? []).map((item: string): string => String(item ?? '').trim().toLowerCase())),
+            ],
+            takeoverId: input.takeoverId,
+            reasonCode: 'takeover_relationship_card',
+        });
+    }
+
+    /**
+     * 功能：统一写入旧聊天接管生成的 relationship 条目。
+     * @param input relationship 写入参数。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverRelationshipEntry(input: {
+        sourceActorKey: string;
+        sourceDisplayName: string;
+        targetActorKey: string;
+        targetDisplayName: string;
+        relationTag: string;
+        state: string;
+        summary: string;
+        trust: number;
+        affection: number;
+        tension: number;
+        participants: string[];
+        takeoverId: string;
+        reasonCode: string;
+    }): Promise<void> {
+        const compareKey = buildRelationshipCompareKey(input.sourceActorKey, input.targetActorKey);
+        const existingEntries = await this.unifiedManager.listEntries({ entryType: 'relationship' });
+        const existingEntry = existingEntries.find((entry) => {
+            const payload = this.toRecord(entry.detailPayload);
+            const fields = this.toRecord(payload.fields);
+            return String(payload.compareKey ?? fields.compareKey ?? '').trim() === compareKey;
+        }) ?? null;
+        const normalizedParticipants = this.dedupeTakeoverStringList([
+            input.sourceActorKey,
+            input.targetActorKey,
+            ...(input.participants ?? []),
+        ]);
+        const normalizedTrust = this.clampTakeover01(input.trust);
+        const normalizedAffection = this.clampTakeover01(input.affection);
+        const normalizedTension = this.clampTakeover01(input.tension);
+        const savedEntry = await this.unifiedManager.saveEntry({
+            entryId: existingEntry?.entryId,
+            title: `${input.sourceDisplayName} -> ${input.targetDisplayName}`,
+            entryType: 'relationship',
+            category: '角色关系',
+            tags: this.dedupeTakeoverStringList(['关系', input.relationTag]),
+            summary: input.summary,
+            detail: input.state,
+            detailPayload: {
+                ...(existingEntry?.detailPayload ?? {}),
+                compareKey,
+                sourceActorKey: input.sourceActorKey,
+                targetActorKey: input.targetActorKey,
+                trust: normalizedTrust,
+                affection: normalizedAffection,
+                tension: normalizedTension,
+                fields: {
+                    ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
+                    compareKey,
+                    relationTag: input.relationTag,
+                    state: input.state,
+                    summary: input.summary,
+                    participants: normalizedParticipants,
+                    trust: normalizedTrust,
+                    affection: normalizedAffection,
+                    tension: normalizedTension,
+                },
+                takeover: {
+                    source: 'old_chat_takeover',
+                    takeoverId: input.takeoverId,
+                },
+            },
+        }, {
+            actionType: existingEntry ? 'UPDATE' : 'ADD',
+            sourceLabel: '旧聊天接管整合',
+            reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
+        });
+        await this.unifiedManager.bindRoleToEntry(input.sourceActorKey, savedEntry.entryId);
+        await this.unifiedManager.bindRoleToEntry(input.targetActorKey, savedEntry.entryId);
+    }
+
+    /**
+     * 功能：把旧聊天事实条目绑定到命中的角色卡。
+     * @param entryId 事实条目 ID。
+     * @param fact 事实对象。
+     * @param actorCards 本次整合识别出的角色卡。
+     * @param existingActorCards 当前聊天已存在的角色卡。
+     * @returns 异步完成。
+     */
+    private async bindTakeoverFactActors(
+        entryId: string,
+        fact: {
+            type: string;
+            subject: string;
+            predicate: string;
+            value: string;
+        },
+        actorCards: Array<{
+            actorKey: string;
+            displayName: string;
+            aliases?: string[];
+        }>,
+        existingActorCards: Array<{ actorKey: string; displayName: string }>,
+    ): Promise<void> {
+        const entryType = this.resolveTakeoverFactEntryType(fact.type);
+        if (!['event', 'actor_profile', 'relationship', 'task'].includes(entryType)) {
+            return;
+        }
+        const actorKeys = this.resolveTakeoverMentionedActorKeys(
+            [fact.subject, fact.value, `${fact.subject}${fact.predicate}${fact.value}`],
+            actorCards,
+            existingActorCards,
+        );
+        for (const actorKey of actorKeys) {
+            await this.unifiedManager.bindRoleToEntry(actorKey, entryId);
+        }
+    }
+
+    /**
+     * 功能：把旧聊天接管识别出的实体关系补写到对应实体条目。
+     * @param input 实体关系写入参数。
+     * @returns 异步完成。
+     */
+    private async persistTakeoverEntityRelation(input: {
+        entityKey: string;
+        displayName: string;
+        entityType: 'organization' | 'city' | 'nation' | 'location';
+        relationState: string;
+        relationReason: string;
+        relationTag: string;
+        takeoverId: string;
+    }): Promise<void> {
+        const entry = await this.unifiedManager.getEntry(input.entityKey);
+        if (!entry) {
+            return;
+        }
+        const payload = this.toRecord(entry.detailPayload);
+        const fields = this.toRecord(payload.fields);
+        await this.unifiedManager.saveEntry({
+            entryId: entry.entryId,
+            title: entry.title,
+            entryType: entry.entryType,
+            category: entry.category,
+            tags: this.dedupeTakeoverStringList([...(entry.tags ?? []), '关系']),
+            summary: entry.summary,
+            detail: entry.detail,
+            detailPayload: {
+                ...payload,
+                fields: {
+                    ...fields,
+                    userRelationTag: input.relationTag,
+                    userRelationState: input.relationState,
+                    userRelationReason: input.relationReason,
+                },
+                takeover: {
+                    source: 'old_chat_takeover',
+                    takeoverId: input.takeoverId,
+                },
+            },
+        }, {
+            actionType: 'UPDATE',
+            sourceLabel: '旧聊天接管整合',
+            reasonCodes: ['takeover_entity_relation_update'],
+        });
+    }
+
+    /**
+     * 功能：解析旧聊天关系目标对应的实体条目。
+     * @param targetName 关系目标名称。
+     * @param targetType 目标类型。
+     * @param entityCards 本次识别出的实体卡。
+     * @param knownEntities 当前已存在的实体引用。
+     * @returns 实体匹配结果；未匹配时返回 null。
+     */
+    private resolveTakeoverRelationEntityTarget(
+        targetName: string,
+        targetType: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown' | undefined,
+        entityCards: Array<{
+            entityType: string;
+            compareKey: string;
+            title: string;
+            aliases?: string[];
+        }>,
+        knownEntities: {
+            organizations: Array<{ entityKey: string; displayName: string }>;
+            cities: Array<{ entityKey: string; displayName: string }>;
+            nations: Array<{ entityKey: string; displayName: string }>;
+            locations: Array<{ entityKey: string; displayName: string }>;
+        },
+    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+        const normalizedTargetName = this.normalizeTakeoverRelationTargetName(targetName);
+        if (!normalizedTargetName) {
+            return null;
+        }
+        const normalizedTargetType = String(targetType ?? '').trim().toLowerCase();
+        const entityType = normalizedTargetType === 'organization'
+            || normalizedTargetType === 'city'
+            || normalizedTargetType === 'nation'
+            || normalizedTargetType === 'location'
+            ? normalizedTargetType as 'organization' | 'city' | 'nation' | 'location'
+            : this.inferTakeoverEntityTypeFromName(normalizedTargetName);
+        if (!entityType) {
+            return null;
+        }
+
+        const matchedCard = entityCards.find((card): boolean => {
+            if (String(card.entityType ?? '').trim().toLowerCase() !== entityType) {
+                return false;
+            }
+            if (this.normalizeTakeoverRelationTargetName(String(card.title ?? '').trim()) === normalizedTargetName) {
+                return true;
+            }
+            return (card.aliases ?? []).some((alias): boolean => {
+                return this.normalizeTakeoverRelationTargetName(String(alias ?? '').trim()) === normalizedTargetName;
+            });
+        });
+        if (matchedCard) {
+            return this.resolveTakeoverExistingEntityByCompareKey(
+                matchedCard.compareKey,
+                entityType,
+                knownEntities,
+            ) ?? this.resolveTakeoverExistingEntityByName(
+                String(matchedCard.title ?? '').trim(),
+                entityType,
+                knownEntities,
+            );
+        }
+
+        return this.resolveTakeoverExistingEntityByName(normalizedTargetName, entityType, knownEntities);
+    }
+
+    /**
+     * 功能：根据关系文案推断关系标签。
+     * @param relationState 关系状态。
+     * @param relationReason 关系原因。
+     * @param explicitTag 模型显式输出的关系标签。
+     * @returns 规范化后的关系标签。
+     */
+    private resolveTakeoverRelationTag(
+        relationState: string,
+        relationReason: string,
+        explicitTag?: string,
+    ): string {
+        const normalizedExplicitTag = normalizeRelationTag(explicitTag);
+        if (normalizedExplicitTag) {
+            return normalizedExplicitTag;
+        }
+        const combinedText = `${String(relationState ?? '').trim()} ${String(relationReason ?? '').trim()}`;
+        if (/(亲人|家人|父|母|哥哥|姐姐|弟弟|妹妹|亲属)/.test(combinedText)) {
+            return '亲人';
+        }
+        if (/(恋人|爱慕|心动|喜欢|依恋|占有欲)/.test(combinedText)) {
+            return '恋人';
+        }
+        if (/暧昧/.test(combinedText)) {
+            return '暧昧';
+        }
+        if (/(盟友|合作|同伴|援助|并肩)/.test(combinedText)) {
+            return '盟友';
+        }
+        if (/(师徒|老师|弟子)/.test(combinedText)) {
+            return '师徒';
+        }
+        if (/(上级|下级|命令|服从)/.test(combinedText)) {
+            return '上下级';
+        }
+        if (/(竞争|争夺)/.test(combinedText)) {
+            return '竞争者';
+        }
+        if (/情敌/.test(combinedText)) {
+            return '情敌';
+        }
+        if (/(敌对|仇|加害|威胁|对立|冲突|迫害)/.test(combinedText)) {
+            return '宿敌';
+        }
+        if (/(陌生|未建立|初遇|警惕)/.test(combinedText)) {
+            return '陌生人';
+        }
+        return '朋友';
+    }
+
     private async persistTakeoverActorCard(
         actorCard: {
             actorKey: string;
@@ -1180,7 +1592,7 @@ export class MemorySDKImpl {
         },
         takeoverId: string,
     ): Promise<void> {
-        const actorKey = this.normalizeTakeoverActorKey(actorCard.actorKey);
+        const actorKey = this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName);
         const displayName = String(actorCard.displayName ?? '').trim();
         if (!actorKey || actorKey === 'user' || !displayName) {
             return;
@@ -1230,6 +1642,10 @@ export class MemorySDKImpl {
             reasonCodes: [existingEntry ? 'takeover_actor_card_update' : 'takeover_actor_card_add'],
         });
         await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
+        await this.unifiedManager.ensureActorProfile({
+            actorKey,
+            displayName,
+        });
     }
 
     /**
@@ -1267,14 +1683,9 @@ export class MemorySDKImpl {
             location: '地点',
         };
 
+        const compareKey = this.buildTakeoverEntityCompareKey(entityType, entityCard.compareKey, title);
         const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
-        const existingEntry = existingEntries.find((entry) => {
-            if (String(entry.title ?? '').trim() === title) {
-                return true;
-            }
-            const entryAliases = this.extractEntryAliases(entry);
-            return entryAliases.some((alias: string) => alias === title);
-        }) ?? null;
+        const existingEntry = existingEntries.find((entry) => this.matchTakeoverEntityEntry(entry, compareKey, title)) ?? null;
 
         const aliases = this.dedupeTakeoverStringList(entityCard.aliases ?? []);
         const summary = String(entityCard.summary ?? '').trim() || `${title}的${categoryMap[entityType] ?? '实体'}信息`;
@@ -1290,10 +1701,13 @@ export class MemorySDKImpl {
             detail: existingEntry?.detail ?? '',
             detailPayload: {
                 ...(existingEntry?.detailPayload ?? {}),
+                compareKey,
                 fields: {
                     ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
                     ...fields,
                     aliases,
+                    compareKey,
+                    confidence: Math.max(0, Math.min(1, Number(entityCard.confidence) || 0)),
                 },
                 takeover: {
                     source: 'old_chat_takeover',
@@ -1342,14 +1756,9 @@ export class MemorySDKImpl {
             location: '地点',
         };
 
+        const compareKey = this.buildTakeoverEntityCompareKey(entityType, transition.compareKey, title);
         const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
-        const existingEntry = existingEntries.find((entry) => {
-            if (String(entry.title ?? '').trim() === title) {
-                return true;
-            }
-            const entryAliases = this.extractEntryAliases(entry);
-            return entryAliases.some((alias: string) => alias === title);
-        }) ?? null;
+        const existingEntry = existingEntries.find((entry) => this.matchTakeoverEntityEntry(entry, compareKey, title)) ?? null;
 
         if (action === 'INVALIDATE' && existingEntry) {
             await this.unifiedManager.saveEntry({
@@ -1362,6 +1771,7 @@ export class MemorySDKImpl {
                 detail: existingEntry.detail ?? '',
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
+                    compareKey,
                     lifecycle: { status: 'invalidated', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
@@ -1384,6 +1794,7 @@ export class MemorySDKImpl {
                 detail: existingEntry.detail ?? '',
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
+                    compareKey,
                     lifecycle: { status: 'archived', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
@@ -1407,8 +1818,10 @@ export class MemorySDKImpl {
                 detail: existingEntry?.detail ?? '',
                 detailPayload: {
                     ...(existingEntry?.detailPayload ?? {}),
+                    compareKey,
                     fields: {
                         ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
+                        compareKey,
                         ...transition.payload,
                     },
                     takeover: { source: 'old_chat_takeover', takeoverId },
@@ -1457,6 +1870,220 @@ export class MemorySDKImpl {
             result.push(normalized);
         }
         return result;
+    }
+
+    /**
+     * 功能：把旧聊天接管关系分值限制在 0 到 1 之间。
+     * @param value 原始数值。
+     * @returns 裁剪后的数值。
+     */
+    private clampTakeover01(value: number): number {
+        if (!Number.isFinite(value)) {
+            return 0;
+        }
+        if (value <= 0) {
+            return 0;
+        }
+        if (value >= 1) {
+            return 1;
+        }
+        return Number(value.toFixed(4));
+    }
+
+    /**
+     * 功能：在旧聊天接管完成后，根据整合结果补写世界画像绑定。
+     * @param result 旧聊天接管整合结果。
+     * @returns 异步完成。
+     */
+    /**
+     * 功能：为旧聊天实体生成稳定 compareKey。
+     * @param entityType 实体类型。
+     * @param explicitCompareKey 模型显式给出的 compareKey。
+     * @param title 实体标题。
+     * @returns 稳定 compareKey。
+     */
+    private buildTakeoverEntityCompareKey(entityType: string, explicitCompareKey: string, title: string): string {
+        const normalizedExplicit = String(explicitCompareKey ?? '').trim();
+        if (normalizedExplicit) {
+            return normalizedExplicit;
+        }
+        return buildCompareKey(entityType, title);
+    }
+
+    /**
+     * 功能：判断实体条目是否匹配旧聊天接管中的实体标识。
+     * @param entry 正式记忆条目。
+     * @param compareKey 实体 compareKey。
+     * @param title 实体标题。
+     * @returns 是否匹配。
+     */
+    private matchTakeoverEntityEntry(
+        entry: { title?: string; detailPayload?: unknown },
+        compareKey: string,
+        title: string,
+    ): boolean {
+        const payload = this.toRecord(entry.detailPayload);
+        const fields = this.toRecord(payload.fields);
+        const existingCompareKey = String(payload.compareKey ?? fields.compareKey ?? '').trim();
+        if (existingCompareKey && existingCompareKey === compareKey) {
+            return true;
+        }
+        if (String(entry.title ?? '').trim() === title) {
+            return true;
+        }
+        const entryAliases = this.extractEntryAliases(entry);
+        return entryAliases.some((alias: string) => alias === title);
+    }
+
+    /**
+     * 功能：根据名称推断旧聊天关系目标的实体类型。
+     * @param targetName 目标名称。
+     * @returns 推断出的实体类型；无法推断时返回 null。
+     */
+    private inferTakeoverEntityTypeFromName(targetName: string): 'organization' | 'city' | 'nation' | 'location' | null {
+        const normalized = String(targetName ?? '').trim();
+        if (!normalized) {
+            return null;
+        }
+        if (/(教派|教廷|组织|公会|帮|团|盟|会|军|宗|门派|阵营)/.test(normalized)) {
+            return 'organization';
+        }
+        if (/(国|帝国|王国|联邦|邦|朝|州)/.test(normalized)) {
+            return 'nation';
+        }
+        if (/(城|都|镇|村|县|郡)/.test(normalized)) {
+            return 'city';
+        }
+        if (/(山|河|湖|海|森林|神殿|庙|谷|原|洞|穴|宫|殿|塔|桥|街|巷|港|湾)/.test(normalized)) {
+            return 'location';
+        }
+        return null;
+    }
+
+    /**
+     * 功能：按 compareKey 匹配现有实体引用。
+     * @param compareKey 实体 compareKey。
+     * @param entityType 实体类型。
+     * @param knownEntities 当前已知实体引用。
+     * @returns 匹配结果。
+     */
+    private resolveTakeoverExistingEntityByCompareKey(
+        compareKey: string,
+        entityType: 'organization' | 'city' | 'nation' | 'location',
+        knownEntities: {
+            organizations: Array<{ entityKey: string; displayName: string }>;
+            cities: Array<{ entityKey: string; displayName: string }>;
+            nations: Array<{ entityKey: string; displayName: string }>;
+            locations: Array<{ entityKey: string; displayName: string }>;
+        },
+    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+        const refs = this.resolveTakeoverEntityRefGroup(entityType, knownEntities);
+        return refs.find((item) => item.entityKey === compareKey) ?? null;
+    }
+
+    /**
+     * 功能：按名称匹配现有实体引用。
+     * @param displayName 实体显示名。
+     * @param entityType 实体类型。
+     * @param knownEntities 当前已知实体引用。
+     * @returns 匹配结果。
+     */
+    private resolveTakeoverExistingEntityByName(
+        displayName: string,
+        entityType: 'organization' | 'city' | 'nation' | 'location',
+        knownEntities: {
+            organizations: Array<{ entityKey: string; displayName: string }>;
+            cities: Array<{ entityKey: string; displayName: string }>;
+            nations: Array<{ entityKey: string; displayName: string }>;
+            locations: Array<{ entityKey: string; displayName: string }>;
+        },
+    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+        const refs = this.resolveTakeoverEntityRefGroup(entityType, knownEntities);
+        const normalizedDisplayName = this.normalizeTakeoverRelationTargetName(displayName);
+        return refs.find((item) => {
+            return this.normalizeTakeoverRelationTargetName(String(item.displayName ?? '').trim()) === normalizedDisplayName;
+        }) ?? null;
+    }
+
+    /**
+     * 功能：读取指定类型的实体引用集合。
+     * @param entityType 实体类型。
+     * @param knownEntities 当前已知实体引用。
+     * @returns 带类型的实体引用列表。
+     */
+    private resolveTakeoverEntityRefGroup(
+        entityType: 'organization' | 'city' | 'nation' | 'location',
+        knownEntities: {
+            organizations: Array<{ entityKey: string; displayName: string }>;
+            cities: Array<{ entityKey: string; displayName: string }>;
+            nations: Array<{ entityKey: string; displayName: string }>;
+            locations: Array<{ entityKey: string; displayName: string }>;
+        },
+    ): Array<{ entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' }> {
+        if (entityType === 'organization') {
+            return knownEntities.organizations.map((item) => ({ ...item, entityType }));
+        }
+        if (entityType === 'city') {
+            return knownEntities.cities.map((item) => ({ ...item, entityType }));
+        }
+        if (entityType === 'nation') {
+            return knownEntities.nations.map((item) => ({ ...item, entityType }));
+        }
+        return knownEntities.locations.map((item) => ({ ...item, entityType }));
+    }
+
+    private async bindWorldProfileFromTakeover(result: MemoryTakeoverConsolidationResult): Promise<void> {
+        const detectedFrom = this.collectTakeoverWorldProfileTexts(result).slice(0, 24);
+        const detection = detectWorldProfile({
+            texts: detectedFrom,
+        });
+        await this.unifiedManager.putWorldProfileBinding({
+            primaryProfile: detection.primaryProfile,
+            secondaryProfiles: detection.secondaryProfiles,
+            confidence: detection.confidence,
+            reasonCodes: detection.reasonCodes,
+            detectedFrom,
+        });
+        await this.unifiedManager.appendMutationHistory({
+            action: 'world_profile_bound',
+            payload: {
+                source: 'old_chat_takeover',
+                takeoverId: result.takeoverId,
+                primaryProfile: detection.primaryProfile,
+                secondaryProfiles: detection.secondaryProfiles,
+                confidence: detection.confidence,
+                reasonCodes: detection.reasonCodes,
+            },
+        });
+    }
+
+    /**
+     * 功能：收集旧聊天接管可用于识别世界画像的文本线索。
+     * @param result 旧聊天接管整合结果。
+     * @returns 去重后的文本线索列表。
+     */
+    private collectTakeoverWorldProfileTexts(result: MemoryTakeoverConsolidationResult): string[] {
+        return this.dedupeTakeoverStringList([
+            ...(result.chapterDigestIndex ?? []).map((item): string => String(item.summary ?? '').trim()),
+            ...(result.longTermFacts ?? []).map((fact): string => {
+                return `${String(fact.subject ?? '').trim()}${String(fact.predicate ?? '').trim()}${String(fact.value ?? '').trim()}`;
+            }),
+            ...(result.taskState ?? []).map((task): string => `${String(task.task ?? '').trim()}${String(task.state ?? '').trim()}`),
+            ...(result.relationState ?? []).map((relation): string => {
+                return `${String(relation.target ?? '').trim()}${String(relation.state ?? '').trim()}${String(relation.reason ?? '').trim()}`;
+            }),
+            ...Object.entries(result.worldState ?? {}).flatMap(([key, value]): string[] => {
+                return [`${String(key ?? '').trim()}${String(value ?? '').trim()}`];
+            }),
+            ...(result.activeSnapshot ? [
+                String(result.activeSnapshot.currentScene ?? '').trim(),
+                String(result.activeSnapshot.currentLocation ?? '').trim(),
+                String(result.activeSnapshot.currentTimeHint ?? '').trim(),
+                String(result.activeSnapshot.recentDigest ?? '').trim(),
+                ...(result.activeSnapshot.activeGoals ?? []).map((item): string => String(item ?? '').trim()),
+                ...(result.activeSnapshot.openThreads ?? []).map((item): string => String(item ?? '').trim()),
+            ] : []),
+        ]);
     }
 
     /**
@@ -1585,6 +2212,19 @@ export class MemorySDKImpl {
         }
         if (result.chapterDigestIndex.length > 0) {
             contentLines.push(`章节索引数量：${result.chapterDigestIndex.length}`);
+            contentLines.push(...result.chapterDigestIndex.slice(0, 6).map((item, index): string => {
+                return `第${index + 1}段（${item.range.startFloor}-${item.range.endFloor}层）：${String(item.summary ?? '').trim()}`;
+            }));
+        }
+        if (result.dedupeStats) {
+            contentLines.push(
+                `去重统计：原始事实 ${result.dedupeStats.totalFacts}，保留事实 ${result.dedupeStats.dedupedFacts}，关系 ${result.dedupeStats.relationUpdates}，任务 ${result.dedupeStats.taskUpdates}，世界状态 ${result.dedupeStats.worldUpdates}`,
+            );
+        }
+        if (result.conflictStats) {
+            contentLines.push(
+                `冲突统计：事实 ${result.conflictStats.unresolvedFacts}，关系 ${result.conflictStats.unresolvedRelations}，任务 ${result.conflictStats.unresolvedTasks}，世界状态 ${result.conflictStats.unresolvedWorldStates}，实体 ${result.conflictStats.unresolvedEntities}`,
+            );
         }
         if (contentLines.length <= 0) {
             return;
@@ -1617,26 +2257,31 @@ export class MemorySDKImpl {
         }>,
         existingActorCards: Array<{ actorKey: string; displayName: string }>,
     ): { actorKey: string; displayName: string } | null {
-        const normalizedTargetName = String(targetName ?? '').trim();
+        const normalizedTargetName = this.normalizeTakeoverRelationTargetName(targetName);
         if (!normalizedTargetName) {
             return null;
         }
 
         const matchedTakeoverActor = actorCards.find((actorCard): boolean => {
-            if (String(actorCard.displayName ?? '').trim() === normalizedTargetName) {
+            if (this.normalizeTakeoverRelationTargetName(actorCard.displayName) === normalizedTargetName) {
                 return true;
             }
-            return (actorCard.aliases ?? []).some((alias: string): boolean => String(alias ?? '').trim() === normalizedTargetName);
+            return (actorCard.aliases ?? []).some((alias: string): boolean => {
+                return this.normalizeTakeoverRelationTargetName(alias) === normalizedTargetName;
+            });
         });
         if (matchedTakeoverActor) {
             return {
-                actorKey: String(matchedTakeoverActor.actorKey ?? '').trim(),
+                actorKey: this.resolveTakeoverActorKey(
+                    String(matchedTakeoverActor.actorKey ?? '').trim(),
+                    String(matchedTakeoverActor.displayName ?? '').trim(),
+                ),
                 displayName: String(matchedTakeoverActor.displayName ?? '').trim(),
             };
         }
 
         const matchedExistingActor = existingActorCards.find((actorCard): boolean => {
-            return String(actorCard.displayName ?? '').trim() === normalizedTargetName;
+            return this.normalizeTakeoverRelationTargetName(actorCard.displayName) === normalizedTargetName;
         });
         if (matchedExistingActor) {
             return {
@@ -1648,6 +2293,117 @@ export class MemorySDKImpl {
         return null;
     }
 
+    /**
+     * 功能：根据一组文本内容解析命中的角色键。
+     * @param texts 待扫描文本列表。
+     * @param actorCards 本次整合识别出的角色卡。
+     * @param existingActorCards 当前聊天已存在的角色卡。
+     * @returns 命中的角色键列表。
+     */
+    private resolveTakeoverMentionedActorKeys(
+        texts: string[],
+        actorCards: Array<{
+            actorKey: string;
+            displayName: string;
+            aliases?: string[];
+        }>,
+        existingActorCards: Array<{ actorKey: string; displayName: string }>,
+    ): string[] {
+        const candidates: Array<{ actorKey: string; displayName: string; aliases?: string[] }> = [
+            ...actorCards.map((item) => ({
+                actorKey: this.resolveTakeoverActorKey(item.actorKey, item.displayName),
+                displayName: String(item.displayName ?? '').trim(),
+                aliases: item.aliases ?? [],
+            })),
+            ...existingActorCards.map((item) => ({
+                actorKey: String(item.actorKey ?? '').trim(),
+                displayName: String(item.displayName ?? '').trim(),
+                aliases: [] as string[],
+            })),
+        ];
+        const result: string[] = [];
+        for (const text of texts) {
+            const normalizedText = String(text ?? '').trim();
+            if (!normalizedText) {
+                continue;
+            }
+            for (const candidate of candidates) {
+                const actorKey = String(candidate.actorKey ?? '').trim();
+                const displayName = String(candidate.displayName ?? '').trim();
+                if (!actorKey || !displayName) {
+                    continue;
+                }
+                const names = this.dedupeTakeoverStringList([displayName, ...(candidate.aliases ?? [])]);
+                if (!names.some((name: string): boolean => normalizedText.includes(name))) {
+                    continue;
+                }
+                if (!result.includes(actorKey)) {
+                    result.push(actorKey);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 功能：按角色键解析旧聊天接管中的真实角色。
+     * @param actorKey 原始角色键。
+     * @param actorCards 本次整合识别出的角色卡。
+     * @param existingActorCards 当前聊天已存在的角色卡。
+     * @returns 匹配到的角色；无法确认时返回 null。
+     */
+    private resolveTakeoverActorByKey(
+        actorKey: string,
+        actorCards: Array<{
+            actorKey: string;
+            displayName: string;
+            aliases?: string[];
+        }>,
+        existingActorCards: Array<{ actorKey: string; displayName: string }>,
+    ): { actorKey: string; displayName: string } | null {
+        const resolvedActorKey = this.resolveTakeoverActorKey(actorKey, '');
+        if (!resolvedActorKey) {
+            return null;
+        }
+        const matchedTakeoverActor = actorCards.find((actorCard): boolean => {
+            return this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName) === resolvedActorKey;
+        });
+        if (matchedTakeoverActor) {
+            return {
+                actorKey: this.resolveTakeoverActorKey(
+                    String(matchedTakeoverActor.actorKey ?? '').trim(),
+                    String(matchedTakeoverActor.displayName ?? '').trim(),
+                ),
+                displayName: String(matchedTakeoverActor.displayName ?? '').trim(),
+            };
+        }
+        const matchedExistingActor = existingActorCards.find((actorCard): boolean => {
+            return String(actorCard.actorKey ?? '').trim() === resolvedActorKey;
+        });
+        if (matchedExistingActor) {
+            return {
+                actorKey: String(matchedExistingActor.actorKey ?? '').trim(),
+                displayName: String(matchedExistingActor.displayName ?? '').trim(),
+            };
+        }
+        return null;
+    }
+
+    /**
+     * 功能：归一化旧聊天关系目标名称，去掉“某某视角”等附加说明。
+     * @param value 原始目标名称。
+     * @returns 归一化后的名称。
+     */
+    private normalizeTakeoverRelationTargetName(value: string): string {
+        return String(value ?? '')
+            .trim()
+            .replace(/（[^）]*视角[^）]*）/g, '')
+            .replace(/\([^)]*视角[^)]*\)/g, '')
+            .replace(/（[^）]*角度[^）]*）/g, '')
+            .replace(/\([^)]*角度[^)]*\)/g, '')
+            .trim();
+    }
+
     private normalizeTakeoverActorKey(value: string): string {
         const normalized = String(value ?? '')
             .trim()
@@ -1655,6 +2411,46 @@ export class MemorySDKImpl {
             .replace(/[^a-z0-9_-]+/g, '_')
             .replace(/^_+|_+$/g, '');
         return normalized;
+    }
+
+    /**
+     * 功能：为旧聊天识别出的角色生成稳定且不冲突的角色键。
+     * @param rawActorKey 模型输出的原始角色键。
+     * @param displayName 角色显示名。
+     * @returns 可写入正式角色档案的稳定角色键。
+     */
+    private resolveTakeoverActorKey(rawActorKey: string, displayName?: string): string {
+        const genericActorKeys = new Set<string>(['actor', 'character', 'role', 'unknown_actor']);
+        const normalizedActorKey = this.normalizeTakeoverActorKey(rawActorKey);
+        if (normalizedActorKey && !genericActorKeys.has(normalizedActorKey)) {
+            return normalizedActorKey;
+        }
+
+        const normalizedDisplayKey = this.normalizeTakeoverActorKey(String(displayName ?? ''));
+        if (normalizedDisplayKey && !genericActorKeys.has(normalizedDisplayKey)) {
+            return normalizedDisplayKey;
+        }
+
+        const fallbackSource = String(displayName ?? '').trim() || String(rawActorKey ?? '').trim();
+        if (!fallbackSource) {
+            return '';
+        }
+        return `actor_${this.buildStableTakeoverActorHash(fallbackSource)}`;
+    }
+
+    /**
+     * 功能：为旧聊天角色生成稳定哈希，避免中文名被压成同一个键。
+     * @param value 原始文本。
+     * @returns 稳定哈希字符串。
+     */
+    private buildStableTakeoverActorHash(value: string): string {
+        const normalized = String(value ?? '').trim();
+        let hash = 2166136261;
+        for (let index = 0; index < normalized.length; index += 1) {
+            hash ^= normalized.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        return Math.abs(hash >>> 0).toString(36);
     }
 
     /**
@@ -2071,11 +2867,13 @@ export class MemorySDKImpl {
         }
         const llm = readMemoryLLMApi();
         if (!llm) {
+            logger.info('[MemoryOS] 当前尚未检测到 LLMHub SDK，跳过任务注册。');
             return;
         }
         try {
             registerMemoryLLMTasks(llm, MEMORY_OS_PLUGIN_ID);
             this.llmTasksRegistered = true;
+            logger.info('[MemoryOS] 已向 LLMHub 注册任务。');
         } catch (error) {
             logger.warn('[MemoryOS] LLM 任务注册失败', error);
         }

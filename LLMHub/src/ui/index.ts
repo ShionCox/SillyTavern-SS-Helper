@@ -8,7 +8,7 @@ import { buildSharedSelectField, hydrateSharedSelects, refreshSharedSelectOption
 import { buildSharedCheckboxCard } from '../../../_Components/sharedCheckbox';
 import { showSharedContextMenu } from '../../../_Components/sharedContextMenu';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
-import { logger } from '../index';
+import { logger, toast } from '../index';
 import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
 import { getTavernConnectionSnapshot } from '../../../SDK/tavern';
 import type { TavernConnectionInfoItem, TavernConnectionSnapshot } from '../../../SDK/tavern';
@@ -2011,6 +2011,20 @@ function bindUiEvents(): void {
 
     document.getElementById(IDS.pluginAssignRefreshBtnId)?.addEventListener('click', renderPluginAssignments);
 
+    /**
+     * 功能：规范化任务分配页里显示的插件名称。
+     * @param pluginId 插件 ID
+     * @param displayName 原始显示名
+     * @returns 适合展示的插件名称
+     */
+    const normalizeTaskAssignmentDisplayName = (pluginId: string, displayName: string): string => {
+        const normalizedDisplayName = String(displayName || '').trim();
+        if ((pluginId === 'stx_memory_os' || pluginId === 'memoryos') && /structured memory plugin/i.test(normalizedDisplayName)) {
+            return '记忆系统';
+        }
+        return normalizedDisplayName || pluginId;
+    };
+
     const renderTaskAssignments = (): void => {
         const listEl = document.getElementById(IDS.taskAssignListId);
         if (!listEl) return;
@@ -2040,6 +2054,14 @@ function bindUiEvents(): void {
             .map(({ pluginId, displayName, task, isOnline }) => {
                 const existing = existingAssignments.find((item: TaskAssignment) => item.pluginId === pluginId && item.taskId === task.taskId);
                 const isStale = existing?.isStale === true;
+                const registeredMaxTokens = Number(task.maxTokens || 0) > 0 ? Number(task.maxTokens) : null;
+                const resolvedRegisteredMaxTokens = registeredMaxTokens;
+                const currentOverrideValue = existing?.maxTokens
+                    ? String(existing.maxTokens)
+                    : (registeredMaxTokens ? String(registeredMaxTokens) : '');
+                const maxTokensPlaceholder = registeredMaxTokens
+                    ? `默认 ${registeredMaxTokens}，留空则不覆盖`
+                    : '留空则不覆盖';
                 const staleHtml = isStale
                     ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
                     : '';
@@ -2048,6 +2070,13 @@ function bindUiEvents(): void {
                 const selectHtml = buildResourceSharedSelectHtml(selectId, existing?.resourceId || '', getSavedResourceOptions(task.requiredCapabilities || []), {
                     'data-task-assign-resource': key,
                 });
+                const normalizedDisplayName = normalizeTaskAssignmentDisplayName(pluginId, displayName);
+                const capabilityText = task.requiredCapabilities?.length ? task.requiredCapabilities.join(', ') : '无';
+                const defaultMaxTokensText = resolvedRegisteredMaxTokens ? String(resolvedRegisteredMaxTokens) : '未设置';
+                const currentOverrideText = existing?.maxTokens ? String(existing.maxTokens) : '未覆盖';
+                const resolvedMaxTokensPlaceholder = resolvedRegisteredMaxTokens
+                    ? `默认 ${resolvedRegisteredMaxTokens}，留空则不覆盖`
+                    : '留空则不覆盖';
 
                 return `
                   <div class="stx-ui-list-item stx-ui-consumer-map-row" data-task-row="${escapeHtml(key)}">
@@ -2055,9 +2084,19 @@ function bindUiEvents(): void {
                       <div class="stx-ui-consumer-map-head-main">
                         <div class="stx-ui-list-title">
                           <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                          ${escapeHtml(displayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskId, task.description))}
+                          ${escapeHtml(normalizedDisplayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskId, task.description))}
                         </div>
                                                 ${task.description ? `<div class="stx-ui-list-meta">${escapeHtml(task.description)}</div>` : ''}
+                        <div class="stx-ui-consumer-map-badges">
+                          <span class="stx-ui-consumer-map-badge">类型：${escapeHtml(getKindLabel(task.taskKind))}</span>
+                          <span class="stx-ui-consumer-map-badge">能力：${escapeHtml(task.requiredCapabilities?.length ? task.requiredCapabilities.join(', ') : '无')}</span>
+                          ${registeredMaxTokens ? `<span class="stx-ui-consumer-map-badge is-accent">默认上限：${escapeHtml(String(registeredMaxTokens))}</span>` : ''}
+                          ${existing?.maxTokens ? `<span class="stx-ui-consumer-map-badge">当前覆盖：${escapeHtml(String(existing.maxTokens))}</span>` : ''}
+                        </div>
+                        <div class="stx-ui-list-meta stx-ui-consumer-map-summary">
+                          注册默认 max_tokens=${escapeHtml(defaultMaxTokensText)}，当前覆盖=${escapeHtml(currentOverrideText)}
+                        </div>
+                        ${task.maxTokens ? `<div class="stx-ui-list-meta">最大输出默认值 ${escapeHtml(String(task.maxTokens))}</div>` : ''}
                         <div class="stx-ui-list-meta">
                           类型=${getKindLabel(task.taskKind)}
                           ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
@@ -2079,14 +2118,15 @@ function bindUiEvents(): void {
                                                     min="1"
                                                     step="1"
                                                     placeholder="留空则不覆盖"
-                                                    value="${escapeHtml(String(existing?.maxTokens || ''))}"
+                                                    value="${escapeHtml(currentOverrideValue || defaultMaxTokensText)}"
                                                     data-task-assign-max-tokens="${escapeHtml(key)}"
                                                 />
+                                                ${registeredMaxTokens ? `<span class="stx-ui-field-hint">注册默认值：${escapeHtml(String(registeredMaxTokens))}</span>` : ''}
                                             </div>
                     </div>
                     <div class="stx-ui-consumer-map-actions">
                       <button class="stx-ui-btn" type="button" data-task-assign-save="${escapeHtml(key)}" data-task-kind="${task.taskKind}">保存</button>
-                      <button class="stx-ui-btn secondary" type="button" data-task-assign-delete="${escapeHtml(key)}">清除</button>
+                      <button class="stx-ui-btn secondary" type="button" data-task-assign-delete="${escapeHtml(key)}">重置</button>
                     </div>
                   </div>`;
             })
@@ -2108,26 +2148,30 @@ function bindUiEvents(): void {
 
         const settings = ensureSettings();
         let assignments = (settings.taskAssignments || []).filter((item: TaskAssignment) => !(item.pluginId === pluginId && item.taskId === taskId));
+        const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
+        let registeredTask: TaskDescriptor | undefined;
+        for (const snap of registrations) {
+            if (snap.pluginId !== pluginId) continue;
+            registeredTask = snap.tasks?.find((task: TaskDescriptor) => task.taskId === taskId);
+            if (registeredTask) break;
+        }
+        const registeredMaxTokens = Number(registeredTask?.maxTokens || 0) > 0 ? Number(registeredTask?.maxTokens) : undefined;
 
         if (saveBtn) {
             const resourceEl = document.querySelector<HTMLSelectElement>(`select[data-task-assign-resource="${key}"]`);
             const resourceId = resourceEl?.value.trim() || '';
             const maxTokensEl = document.querySelector<HTMLInputElement>(`input[data-task-assign-max-tokens="${key}"]`);
-            const maxTokens = sanitizePositiveInteger(maxTokensEl?.value);
+            const rawMaxTokens = sanitizePositiveInteger(maxTokensEl?.value);
+            const maxTokens = rawMaxTokens && registeredMaxTokens && rawMaxTokens === registeredMaxTokens
+                ? undefined
+                : rawMaxTokens;
             const taskKind = (saveBtn.dataset.taskKind || 'generation') as CapabilityKind;
 
             if (resourceId) {
-                const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
-                let taskDesc: TaskDescriptor | undefined;
-                for (const snap of registrations) {
-                    taskDesc = snap.tasks?.find((task: TaskDescriptor) => task.taskId === taskId);
-                    if (taskDesc) break;
-                }
-
-                if (taskDesc?.requiredCapabilities?.length) {
+                if (registeredTask?.requiredCapabilities?.length) {
                     const resource = getSavedResources().find((item: ResourceConfig) => item.id === resourceId);
                     const resourceCaps = resource ? normalizeResourceCapabilities(resource) : [];
-                    const missing = taskDesc.requiredCapabilities.filter((cap: LLMCapability) => !resourceCaps.includes(cap));
+                    const missing = registeredTask.requiredCapabilities.filter((cap: LLMCapability) => !resourceCaps.includes(cap));
                     if (missing.length > 0) {
                         alert(`资源 "${resourceId}" 缺少所需能力: ${missing.join(', ')}。无法保存。`);
                         return;
@@ -2150,6 +2194,12 @@ function bindUiEvents(): void {
         settings.taskAssignments = assignments;
         saveSettings();
         runtime?.router?.applyTaskAssignments?.(assignments);
+        renderTaskAssignments();
+        if (saveBtn) {
+            toast.success(`已保存任务分配：${taskId}`);
+        } else if (deleteBtn) {
+            toast.success(`已重置为注册默认值：${taskId}`);
+        }
     });
 
     document.getElementById(IDS.taskAssignRefreshBtnId)?.addEventListener('click', renderTaskAssignments);

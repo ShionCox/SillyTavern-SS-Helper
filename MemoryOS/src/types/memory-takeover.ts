@@ -84,6 +84,8 @@ export interface MemoryTakeoverRelationTransition {
     from: string;
     to: string;
     reason: string;
+    relationTag?: string;
+    targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
 }
 
 /**
@@ -145,6 +147,21 @@ export interface MemoryTakeoverEntityTransition {
     payload: Record<string, unknown>;
 }
 
+/**
+ * 功能：定义旧聊天接管使用的结构化关系卡。
+ */
+export interface MemoryTakeoverRelationshipCard {
+    sourceActorKey: string;
+    targetActorKey: string;
+    participants: string[];
+    relationTag: string;
+    state: string;
+    summary: string;
+    trust: number;
+    affection: number;
+    tension: number;
+}
+
 export interface MemoryTakeoverBaseline {
     staticBaseline: string;
     personaBaseline: string;
@@ -179,6 +196,7 @@ export interface MemoryTakeoverBatchResult {
     batchId: string;
     summary: string;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    relationships: MemoryTakeoverRelationshipCard[];
     entityCards: MemoryTakeoverEntityCardCandidate[];
     entityTransitions: MemoryTakeoverEntityTransition[];
     stableFacts: MemoryTakeoverStableFact[];
@@ -214,6 +232,7 @@ export interface MemoryTakeoverConsolidationResult {
         tags: string[];
     }>;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    relationships: MemoryTakeoverRelationshipCard[];
     entityCards: MemoryTakeoverEntityCardCandidate[];
     entityTransitions: MemoryTakeoverEntityTransition[];
     longTermFacts: MemoryTakeoverStableFact[];
@@ -221,6 +240,8 @@ export interface MemoryTakeoverConsolidationResult {
         target: string;
         state: string;
         reason: string;
+        relationTag?: string;
+        targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
     }>;
     taskState: Array<{
         task: string;

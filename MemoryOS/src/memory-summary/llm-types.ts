@@ -5,6 +5,7 @@ export interface MemoryLLMTaskDescriptor {
     taskId: string;
     taskKind: 'generation' | 'embedding' | 'rerank';
     requiredCapabilities: string[];
+    maxTokens?: number;
     description: string;
     backgroundEligible: boolean;
 }

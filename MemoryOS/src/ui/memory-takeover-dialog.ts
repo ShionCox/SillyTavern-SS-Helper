@@ -47,6 +47,23 @@ function ensureMemoryTakeoverDialogStyle(): void {
     const style = document.createElement('style');
     style.id = MEMORY_TAKEOVER_DIALOG_STYLE_ID;
     style.textContent = `
+        #${MEMORY_TAKEOVER_DIALOG_ID}.stx-memory-takeover-dialog-root .stx-shared-dialog-backdrop {
+            background:
+                radial-gradient(circle at top, rgba(255,255,255,0.04), transparent 38%),
+                linear-gradient(180deg, rgba(5, 8, 14, 0.78), rgba(5, 8, 14, 0.88)),
+                rgba(3, 5, 9, 0.84);
+            backdrop-filter: blur(22px) saturate(112%);
+            -webkit-backdrop-filter: blur(22px) saturate(112%);
+        }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-shared-dialog-surface.stx-memory-takeover-dialog-surface {
+            background:
+                radial-gradient(circle at top left, rgba(196,160,98,0.08), transparent 34%),
+                linear-gradient(180deg, rgba(14, 18, 28, 0.88), rgba(8, 12, 20, 0.82));
+            border-color: rgba(196,160,98,0.24);
+            box-shadow: 0 28px 80px rgba(0,0,0,0.58);
+            backdrop-filter: blur(18px) saturate(112%);
+            -webkit-backdrop-filter: blur(18px) saturate(112%);
+        }
         #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog {
             display: flex;
             flex-direction: column;
@@ -224,6 +241,8 @@ export async function openMemoryTakeoverDialog(input: {
         openSharedDialog({
             id: MEMORY_TAKEOVER_DIALOG_ID,
             size: 'lg',
+            rootClassName: 'stx-memory-takeover-dialog-root',
+            surfaceClassName: 'stx-memory-takeover-dialog-surface',
             chrome: {
                 title: '旧聊天接管',
                 description: '为已经有大量历史楼层的聊天创建接管任务。',

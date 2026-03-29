@@ -33,6 +33,7 @@ export type {
     MemoryTakeoverEntityType,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
+    MemoryTakeoverRelationshipCard,
     MemoryTakeoverBaseline,
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBatchResult,

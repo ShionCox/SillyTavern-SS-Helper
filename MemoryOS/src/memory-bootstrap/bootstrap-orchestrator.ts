@@ -52,6 +52,7 @@ export interface RunBootstrapOrchestratorInput {
 export interface RunBootstrapOrchestratorResult {
     ok: boolean;
     reasonCode: string;
+    errorMessage?: string;
     candidates?: ColdStartCandidate[];
     document?: ColdStartDocument;
     worldProfile?: {
@@ -84,7 +85,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             action: 'cold_start_failed',
             payload: { reasonCode: 'llm_unavailable' },
         });
-        return { ok: false, reasonCode: 'llm_unavailable' };
+        return {
+            ok: false,
+            reasonCode: 'llm_unavailable',
+            errorMessage: '当前未连接可用的 LLMHub 服务。',
+        };
     }
     const promptPack = await loadPromptPackSections();
     const coldStartSchema = parseJsonSection(promptPack.COLD_START_SCHEMA);
@@ -122,7 +127,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             action: 'cold_start_failed',
             payload: { reasonCode },
         });
-        return { ok: false, reasonCode };
+        return {
+            ok: false,
+            reasonCode,
+            errorMessage: String(result.error ?? '').trim() || undefined,
+        };
     }
     const parsed = parseColdStartDocument(result.data);
     if (!parsed) {
@@ -130,7 +139,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             action: 'cold_start_failed',
             payload: { reasonCode: 'invalid_cold_start_document' },
         });
-        return { ok: false, reasonCode: 'invalid_cold_start_document' };
+        return {
+            ok: false,
+            reasonCode: 'invalid_cold_start_document',
+            errorMessage: '冷启动返回内容无法通过结构校验。',
+        };
     }
     const normalizedDocument = normalizeColdStartNarrativeDocument(parsed, userDisplayName);
     const candidates = buildColdStartCandidates(normalizedDocument, input.sourceBundle);
@@ -139,7 +152,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             action: 'cold_start_failed',
             payload: { reasonCode: 'empty_cold_start_candidates' },
         });
-        return { ok: false, reasonCode: 'empty_cold_start_candidates' };
+        return {
+            ok: false,
+            reasonCode: 'empty_cold_start_candidates',
+            errorMessage: '冷启动没有提取出可确认的候选记忆。',
+        };
     }
     const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
     const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
@@ -151,7 +168,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
                 missingActorKeys: actorCardValidation.missingActorKeys,
             },
         });
-        return { ok: false, reasonCode: 'relationship_actor_card_missing' };
+        return {
+            ok: false,
+            reasonCode: 'relationship_actor_card_missing',
+            errorMessage: '冷启动关系中引用了未创建角色卡的对象。',
+        };
     }
     const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
     return {

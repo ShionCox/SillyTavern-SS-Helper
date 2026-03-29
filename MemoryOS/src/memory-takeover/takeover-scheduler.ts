@@ -38,6 +38,8 @@ export async function runTakeoverScheduler(input: {
     existingKnownEntities?: {
         actors: Array<{ actorKey: string; displayName: string }>;
         organizations: Array<{ entityKey: string; displayName: string }>;
+        cities: Array<{ entityKey: string; displayName: string }>;
+        nations: Array<{ entityKey: string; displayName: string }>;
         locations: Array<{ entityKey: string; displayName: string }>;
         tasks: Array<{ entityKey: string; displayName: string }>;
         worldStates: Array<{ entityKey: string; displayName: string }>;

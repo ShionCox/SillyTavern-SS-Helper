@@ -42,6 +42,7 @@ import { buildEntriesViewMarkup } from './workbenchTabs/tabEntries';
 import { buildTypesViewMarkup } from './workbenchTabs/tabTypes';
 import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
+import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildMemoryGraphViewMarkup } from './workbenchTabs/tabMemoryGraph';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
@@ -145,6 +146,9 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'actors' ? ' is-active' : ''}" data-workbench-view="actors">
                         角色档案
                     </button>
+                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'world-entities' ? ' is-active' : ''}" data-workbench-view="world-entities">
+                        世界实体
+                    </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'preview' ? ' is-active' : ''}" data-workbench-view="preview">
                         诊断中心
                     </button>
@@ -165,6 +169,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                 ${buildEntriesViewMarkup(filteredEntries, snapshot, state, typeMap, entryDraft, selectedEntry, selectedEntryType, dynamicFields)}
                 ${buildTypesViewMarkup(snapshot, state, selectedType)}
                 ${buildActorsViewMarkup(snapshot, state, selectedActor, selectedActorMemories, typeMap, entryOptions)}
+                ${buildWorldEntitiesViewMarkup(snapshot, state)}
                 ${buildPreviewViewMarkup(snapshot, state)}
                 ${buildMemoryGraphViewMarkup(snapshot, state, snapshot.memoryGraph, {
                     selectedGraphNodeId: state.selectedGraphNodeId,
@@ -244,8 +249,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         takeoverActiveSnapshotFloors: String(settings.takeoverDefaultRecentFloors),
         takeoverPreview: null,
         takeoverPreviewLoading: false,
+        takeoverProgressLoading: false,
     };
     let takeoverPreviewSequence = 0;
+    let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
+    let takeoverProgressSequence = 0;
 
     /**
      * 功能：读取工作台所需快照。
@@ -263,7 +271,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             mutationHistory,
             entryAuditRecords,
             recallExplanation,
-            takeoverProgress,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -275,7 +282,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             memory.chatState.getLatestRecallExplanation(),
-            memory.chatState.getTakeoverStatus(),
         ]);
 
         return {
@@ -291,7 +297,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             recallExplanation: normalizeRecallExplanation(recallExplanation),
             actorGraph: buildActorGraph(actors, entries),
             memoryGraph: buildMemoryGraph(entries, roleMemories, actors),
-            takeoverProgress,
+            takeoverProgress: takeoverProgressCache,
         };
     };
 
@@ -567,7 +573,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         root.querySelectorAll<HTMLElement>('[data-workbench-view]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
                 state.currentView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
-                void render();
+                void render().then((): void => {
+                    if (state.currentView === 'takeover') {
+                        void refreshTakeoverProgress();
+                    }
+                });
             });
         });
 
@@ -790,6 +800,38 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * 功能：重新渲染整个工作台。
      * @returns 无返回值。
      */
+    /**
+     * 功能：后台刷新旧聊天处理进度，避免切页时同步卡顿。
+     * @returns 异步完成。
+     */
+    const refreshTakeoverProgress = async (): Promise<void> => {
+        if (state.currentView !== 'takeover') {
+            state.takeoverProgressLoading = false;
+            return;
+        }
+        const currentSequence = ++takeoverProgressSequence;
+        state.takeoverProgressLoading = true;
+        await render();
+        await waitForUiPaint();
+        try {
+            const progress = await memory.chatState.getTakeoverStatus();
+            if (currentSequence !== takeoverProgressSequence) {
+                return;
+            }
+            takeoverProgressCache = progress;
+        } catch (error) {
+            if (currentSequence !== takeoverProgressSequence) {
+                return;
+            }
+            logger.warn('加载旧聊天处理进度失败', error);
+        } finally {
+            if (currentSequence === takeoverProgressSequence) {
+                state.takeoverProgressLoading = false;
+                await render();
+            }
+        }
+    };
+
     const render = async (): Promise<void> => {
         const entryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
         const preservedEntryListScrollTop = entryList?.scrollTop ?? 0;
@@ -877,6 +919,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     await render();
+    if (state.currentView === 'takeover') {
+        void refreshTakeoverProgress();
+    }
 }
 
 /**
@@ -955,6 +1000,7 @@ function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): 
             x: Math.round(Math.cos(angle) * radius),
             y: Math.round(Math.sin(angle) * radius),
             relationCount: 0,
+            kind: 'actor',
         };
     });
     const actorKeySet = new Set(nodes.map((node): string => node.id));
@@ -986,6 +1032,59 @@ function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): 
                 updatedAt: entry.updatedAt,
             });
         });
+
+    const userNode = nodeMap.get('user');
+    const externalRelations = entries
+        .filter((entry: MemoryEntry): boolean => {
+            if (!['organization', 'city', 'nation', 'location'].includes(String(entry.entryType ?? '').trim())) {
+                return false;
+            }
+            const payload = toRecord(entry.detailPayload);
+            const fields = toRecord(payload.fields);
+            return Boolean(String(fields.userRelationState ?? '').trim());
+        });
+    externalRelations.forEach((entry: MemoryEntry, index: number): void => {
+        if (!userNode) {
+            return;
+        }
+        const payload = toRecord(entry.detailPayload);
+        const fields = toRecord(payload.fields);
+        const externalNodeId = `entity:${entry.entryId}`;
+        if (!nodeMap.has(externalNodeId)) {
+            const angle = externalRelations.length <= 1 ? 0 : (index / externalRelations.length) * Math.PI * 2;
+            const radius = 360;
+            const externalNode: WorkbenchActorGraph['nodes'][number] = {
+                id: externalNodeId,
+                label: entry.title || entry.entryId,
+                memoryStat: 0,
+                x: Math.round(Math.cos(angle) * radius),
+                y: Math.round(Math.sin(angle) * radius),
+                relationCount: 0,
+                kind: 'entity',
+            };
+            nodes.push(externalNode);
+            nodeMap.set(externalNodeId, externalNode);
+        }
+        const targetNode = nodeMap.get(externalNodeId);
+        if (!targetNode) {
+            return;
+        }
+        userNode.relationCount += 1;
+        targetNode.relationCount += 1;
+        links.push({
+            id: `graph-link:entity:${entry.entryId}`,
+            source: 'user',
+            target: externalNodeId,
+            entryId: entry.entryId,
+            label: truncateText(
+                String(fields.userRelationTag ?? fields.userRelationState ?? entry.summary ?? entry.title ?? '关系').trim(),
+                24,
+            ),
+            summary: String(fields.userRelationState ?? entry.summary ?? '').trim(),
+            type: resolveEntityRelationshipTone(entry),
+            updatedAt: entry.updatedAt,
+        });
+    });
 
     return { nodes, links };
 }
@@ -1083,6 +1182,27 @@ function resolveRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkType {
     }
     if ((Number.isFinite(trust) && trust >= 0.7) || (Number.isFinite(affection) && affection >= 0.7)) {
         return 'ally';
+    }
+    return 'neutral';
+}
+
+/**
+ * 功能：根据实体条目中的用户关系字段估算图边颜色。
+ * @param entry 实体条目。
+ * @returns 图边类型。
+ */
+function resolveEntityRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkType {
+    const payload = toRecord(entry.detailPayload);
+    const fields = toRecord(payload.fields);
+    const relationTag = String(fields.userRelationTag ?? '').trim();
+    if (relationTag === '亲人' || relationTag === '家人' || relationTag === '亲属') {
+        return 'family';
+    }
+    if (relationTag === '盟友' || relationTag === '朋友' || relationTag === '友好' || relationTag === '同伴') {
+        return 'ally';
+    }
+    if (relationTag === '宿敌' || relationTag === '敌人' || relationTag === '仇人' || relationTag === '敌对') {
+        return 'enemy';
     }
     return 'neutral';
 }

@@ -265,15 +265,11 @@ class LLMHub {
 
         this.bindOverlayRenderer();
 
-        this.registry.setPersistCallback((snapshots) => {
-            const settings = this.readSettings();
-            this.writeSettings({ ...settings, consumerSnapshots: snapshots });
-        });
-
         this.registry.setResourceCapabilityQuery((resourceId) => {
             return this.router.getProviderCapabilities(resourceId);
         });
 
+        this.pruneLegacyConsumerSnapshots();
         this.restoreFromStorage();
         this.registerBuiltinTavernResource();
         this.registerToSTX();
@@ -600,9 +596,6 @@ class LLMHub {
     private restoreFromStorage(): void {
         const settings = this.readSettings();
 
-        if (settings.consumerSnapshots) {
-            this.registry.restoreFromStorage(settings.consumerSnapshots);
-        }
         if (settings.silentPermissions) {
             this.displayController.restoreSilentPermissions(settings.silentPermissions);
         }
@@ -615,6 +608,26 @@ class LLMHub {
         if (settings.taskAssignments) {
             this.router.applyTaskAssignments(settings.taskAssignments);
         }
+    }
+
+    /**
+     * 功能：清理历史遗留的消费者注册快照，避免旧注册值覆盖当前运行时注册。
+     *
+     * 参数：
+     *   无
+     *
+     * 返回：
+     *   void：无返回值
+     */
+    private pruneLegacyConsumerSnapshots(): void {
+        const settings = this.readSettings() as LLMHubSettings & { consumerSnapshots?: unknown };
+        if (!Object.prototype.hasOwnProperty.call(settings, 'consumerSnapshots')) {
+            return;
+        }
+        const nextSettings = { ...settings } as LLMHubSettings & { consumerSnapshots?: unknown };
+        delete nextSettings.consumerSnapshots;
+        this.writeSettings(nextSettings);
+        logger.info('[注册中心] 已移除历史 consumerSnapshots 持久化快照。');
     }
 
     public async applySettingsFromContext(): Promise<void> {

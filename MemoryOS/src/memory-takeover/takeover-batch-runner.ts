@@ -4,9 +4,11 @@ import type {
     MemoryTakeoverBatchResult,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
+    MemoryTakeoverRelationshipCard,
     MemoryTakeoverRange,
 } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
+import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
 import { logger } from '../runtime/runtime-services';
@@ -149,6 +151,67 @@ function normalizeActorCards(
 }
 
 /**
+ * 功能：归一化旧聊天接管输出的结构化关系卡。
+ * @param relationships 原始关系卡列表。
+ * @returns 去重并校验后的关系卡列表。
+ */
+function normalizeRelationshipCards(
+    relationships: MemoryTakeoverRelationshipCard[],
+): MemoryTakeoverRelationshipCard[] {
+    const result: MemoryTakeoverRelationshipCard[] = [];
+    const seen = new Set<string>();
+    for (const relationship of relationships) {
+        const sourceActorKey = String(relationship.sourceActorKey ?? '').trim().toLowerCase();
+        const targetActorKey = String(relationship.targetActorKey ?? '').trim().toLowerCase();
+        const relationTag = normalizeRelationTag(relationship.relationTag);
+        const state = String(relationship.state ?? '').trim();
+        const summary = String(relationship.summary ?? '').trim();
+        if (!sourceActorKey || !targetActorKey || sourceActorKey === targetActorKey || !relationTag || !state || !summary) {
+            continue;
+        }
+        const compareKey = `${sourceActorKey}::${targetActorKey}`;
+        if (seen.has(compareKey)) {
+            continue;
+        }
+        seen.add(compareKey);
+        result.push({
+            sourceActorKey,
+            targetActorKey,
+            participants: normalizeStringList([
+                sourceActorKey,
+                targetActorKey,
+                ...((relationship.participants ?? []).map((item: string): string => String(item ?? '').trim().toLowerCase())),
+            ], 8),
+            relationTag,
+            state,
+            summary,
+            trust: clamp01(Number(relationship.trust)),
+            affection: clamp01(Number(relationship.affection)),
+            tension: clamp01(Number(relationship.tension)),
+        });
+    }
+    return result;
+}
+
+/**
+ * 功能：把数值限制在 0 到 1 之间。
+ * @param value 原始数值。
+ * @returns 裁剪后的数值。
+ */
+function clamp01(value: number): number {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+    if (value <= 0) {
+        return 0;
+    }
+    if (value >= 1) {
+        return 1;
+    }
+    return Number(value.toFixed(4));
+}
+
+/**
  * 功能：根据已完成批次与现有记忆构建分类对象提示。
  * @param batchResults 已完成的批次结果。
  * @param existingKnownEntities 当前聊天已存在的分类对象。
@@ -193,7 +256,7 @@ function buildTakeoverKnownEntities(
             }),
         ], 16),
         cities: normalizeEntityRefs([
-            ...existingKnownEntities.cities,
+            ...(existingKnownEntities.cities ?? []),
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.stableFacts
                     .filter((fact) => String(fact.type ?? '').trim().toLowerCase() === 'city')
@@ -212,7 +275,7 @@ function buildTakeoverKnownEntities(
             }),
         ], 16),
         nations: normalizeEntityRefs([
-            ...existingKnownEntities.nations,
+            ...(existingKnownEntities.nations ?? []),
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.stableFacts
                     .filter((fact) => String(fact.type ?? '').trim().toLowerCase() === 'nation')
@@ -401,6 +464,7 @@ export async function runTakeoverBatch(input: {
         batchId: input.batch.batchId,
         summary: summary || `第${input.batch.range.startFloor} ~ ${input.batch.range.endFloor}层没有可提取摘要。`,
         actorCards: [],
+        relationships: [],
         entityCards: [],
         entityTransitions: [],
         stableFacts: [],
@@ -443,12 +507,18 @@ export async function runTakeoverBatch(input: {
             '其中 actors 使用 actorKey 作为稳定标识；organizations、cities、nations、locations、tasks、worldStates 使用 entityKey 作为稳定标识。判断是不是同一个对象时，优先参考这些 key，再参考显示名。',
             '处理本批消息时，请优先判断当前信息应该归到哪一类对象上，而不是把所有新名词都当作角色。',
             '只有稳定、反复出现、并且明显是人物的对象，才允许写进 actorCards。',
+            'relationships 字段用于输出角色与角色之间的结构化关系卡，必须完整填写 sourceActorKey、targetActorKey、participants、relationTag、state、summary、trust、affection、tension。',
+            '只要某个非 user 角色出现在 relationships 中，就必须在 actorCards 中提供同 actorKey 的角色卡；关系双方必须使用稳定 actorKey，不要只写显示名。',
+            '如果消息里出现“何盈（橙狗狗视角）”这类写法，relationships 里仍然要使用标准角色键，不要把视角说明塞进 actorKey。',
             '教派、组织、势力、国家、城市、地点、阵营、规则、物品这类非人物对象，不要写进 actorCards。',
+            '当 stableFacts.type 为 event，且事件主体、结果或描述里明确指向已有角色时，请优先沿用已有 actorCards 中的角色身份理解该事件，不要把同一个角色拆成新的对象。',
             '新增字段 entityCards 用于输出世界实体卡候选，entityType 可选 organization / city / nation / location。每张 entityCard 必须包含 entityType、compareKey（格式为 "entityType:标题"）、title、aliases、summary、fields（结构化属性）和 confidence。',
             '新增字段 entityTransitions 用于输出世界实体变更，action 可选 ADD / UPDATE / MERGE / INVALIDATE / DELETE。',
             '若已存在组织/城市/国家/地点（参考 knownEntities），请优先 UPDATE 而非 ADD。仅在无法匹配现有 entityKey / 别名时才 ADD。重名但属性一致时优先 MERGE。状态被新状态取代时优先 INVALIDATE + ADD/UPDATE。DELETE 仅用于明显垃圾或误建的记录。',
             '组织与势力优先写入 entityCards（entityType=organization）和 stableFacts（type=faction 或 type=organization）；地点请使用 entityCards（entityType=location）和 stableFacts（type=location）；城市请使用 entityCards（entityType=city）；国家请使用 entityCards（entityType=nation）；事件请使用 stableFacts（type=event）；物品或遗物请使用 stableFacts（type=artifact 或 type=item）；世界长期设定请使用 stableFacts（type=world）。',
-            'relationTransitions 的 target 可以是角色，也可以是组织、势力或地点；只有明确是人物时，才应该同时出现在 actorCards 里。',
+            'relationTransitions 的 target 可以是角色，也可以是组织、势力、城市、国家或地点；只有明确是人物时，才应该同时出现在 actorCards 里。',
+            '每条 relationTransitions 都要尽量填写 relationTag 和 targetType。relationTag 只能从 亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人 中选择；targetType 只能填写 actor、organization、city、nation、location、unknown。',
+            '如果关系对象不是人物，不要把它塞进 actorCards；请保留在 relationTransitions，并正确填写对应的 targetType。',
             '如果对象已经出现在 knownContext.knownEntities 对应分类中，请优先按“更新已有对象”处理，而不是重复新增。',
         ].join(''),
     });
@@ -457,6 +527,7 @@ export async function runTakeoverBatch(input: {
             ...fallback,
             ...structured,
             actorCards: normalizeActorCards(structured.actorCards ?? [], 12),
+            relationships: normalizeRelationshipCards(structured.relationships ?? []),
             entityCards: normalizeEntityCards(structured.entityCards ?? []),
             entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
             takeoverId: input.batch.takeoverId,

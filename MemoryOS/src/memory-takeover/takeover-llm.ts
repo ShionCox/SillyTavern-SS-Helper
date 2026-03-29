@@ -11,6 +11,29 @@ export interface TakeoverStructuredTaskRequest {
 }
 
 /**
+ * 功能：构建旧聊天处理失败提示。
+ * @param taskId 任务标识。
+ * @param reasonCode 原始原因码。
+ * @param errorMessage 原始错误信息。
+ * @returns 统一后的错误文本。
+ */
+function buildTakeoverTaskErrorMessage(taskId: string, reasonCode?: string, errorMessage?: string): string {
+    const normalizedTaskId = String(taskId ?? '').trim() || 'unknown_task';
+    const normalizedReasonCode = String(reasonCode ?? '').trim();
+    const normalizedErrorMessage = String(errorMessage ?? '').trim();
+    if (normalizedErrorMessage && normalizedReasonCode) {
+        return `旧聊天处理任务失败（${normalizedTaskId}）：${normalizedErrorMessage}（原因码：${normalizedReasonCode}）`;
+    }
+    if (normalizedErrorMessage) {
+        return `旧聊天处理任务失败（${normalizedTaskId}）：${normalizedErrorMessage}`;
+    }
+    if (normalizedReasonCode) {
+        return `旧聊天处理任务失败（${normalizedTaskId}）：原因码 ${normalizedReasonCode}`;
+    }
+    return `旧聊天处理任务失败（${normalizedTaskId}）。`;
+}
+
+/**
  * 功能：从 Prompt section 中解析 JSON。
  * @param section section 文本。
  * @returns JSON 数据。
@@ -67,6 +90,86 @@ function buildActorCardArraySchema(): Record<string, unknown> {
 }
 
 /**
+ * 功能：构建旧聊天接管关系卡的结构化 schema。
+ * @returns 关系卡数组 schema。
+ */
+function buildRelationshipArraySchema(): Record<string, unknown> {
+    return {
+        type: 'array',
+        items: {
+            type: 'object',
+            required: [
+                'sourceActorKey',
+                'targetActorKey',
+                'participants',
+                'relationTag',
+                'state',
+                'summary',
+                'trust',
+                'affection',
+                'tension',
+            ],
+            additionalProperties: false,
+            properties: {
+                sourceActorKey: { type: 'string' },
+                targetActorKey: { type: 'string' },
+                participants: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                relationTag: {
+                    type: 'string',
+                    enum: ['亲人', '朋友', '盟友', '恋人', '暧昧', '师徒', '上下级', '竞争者', '情敌', '宿敌', '陌生人'],
+                },
+                state: { type: 'string' },
+                summary: { type: 'string' },
+                trust: { type: 'number' },
+                affection: { type: 'number' },
+                tension: { type: 'number' },
+            },
+        },
+    };
+}
+
+/**
+ * 功能：为旧聊天关系结果补充关系标签与目标类型字段。
+ * @param sectionName 当前 schema 对应 section 名称。
+ * @param properties schema 属性集合。
+ * @returns 就地增强后的属性集合。
+ */
+function enrichTakeoverRelationSchemas(sectionName: string, properties: Record<string, unknown>): Record<string, unknown> {
+    const relationTagSchema: Record<string, unknown> = {
+        type: 'string',
+        enum: ['亲人', '朋友', '盟友', '恋人', '暧昧', '师徒', '上下级', '竞争者', '情敌', '宿敌', '陌生人'],
+    };
+    const targetTypeSchema: Record<string, unknown> = {
+        type: 'string',
+        enum: ['actor', 'organization', 'city', 'nation', 'location', 'unknown'],
+    };
+
+    if (sectionName === 'TAKEOVER_BATCH_SCHEMA') {
+        const relationTransitions = properties.relationTransitions as Record<string, unknown> | undefined;
+        const relationItems = relationTransitions?.items as Record<string, unknown> | undefined;
+        const relationProperties = relationItems?.properties as Record<string, unknown> | undefined;
+        if (relationProperties) {
+            relationProperties.relationTag = relationTagSchema;
+            relationProperties.targetType = targetTypeSchema;
+        }
+    }
+
+    if (sectionName === 'TAKEOVER_CONSOLIDATION_SCHEMA') {
+        const relationState = properties.relationState as Record<string, unknown> | undefined;
+        const relationItems = relationState?.items as Record<string, unknown> | undefined;
+        const relationProperties = relationItems?.properties as Record<string, unknown> | undefined;
+        if (relationProperties) {
+            relationProperties.relationTag = relationTagSchema;
+            relationProperties.targetType = targetTypeSchema;
+        }
+    }
+    return properties;
+}
+
+/**
  * 功能：为旧聊天批处理与整合任务补充角色卡字段。
  * @param sectionName schema 对应的 section 名称。
  * @param schema 原始 schema。
@@ -86,18 +189,27 @@ function enrichTakeoverSchema(sectionName: string, schema: unknown): unknown {
 
     if (sectionName === 'TAKEOVER_BATCH_SCHEMA') {
         properties.actorCards = buildActorCardArraySchema();
+        properties.relationships = buildRelationshipArraySchema();
         if (!required.includes('actorCards')) {
             required.splice(3, 0, 'actorCards');
+        }
+        if (!required.includes('relationships')) {
+            required.splice(4, 0, 'relationships');
         }
     }
 
     if (sectionName === 'TAKEOVER_CONSOLIDATION_SCHEMA') {
         properties.actorCards = buildActorCardArraySchema();
+        properties.relationships = buildRelationshipArraySchema();
         if (!required.includes('actorCards')) {
             required.splice(1, 0, 'actorCards');
         }
+        if (!required.includes('relationships')) {
+            required.splice(2, 0, 'relationships');
+        }
     }
 
+    enrichTakeoverRelationSchemas(sectionName, properties);
     nextSchema.properties = properties;
     nextSchema.required = required;
     return nextSchema;
@@ -126,6 +238,28 @@ function enrichTakeoverSample(sectionName: string, sample: unknown): unknown {
             },
         ];
     }
+    if (sectionName === 'TAKEOVER_BATCH_OUTPUT_SAMPLE' && !Array.isArray(nextSample.relationships)) {
+        nextSample.relationships = [
+            {
+                sourceActorKey: 'user',
+                targetActorKey: 'lina',
+                participants: ['user', 'lina'],
+                relationTag: '朋友',
+                state: '双方已经形成稳定同行与互相信任。',
+                summary: '主角与莉娜在同行中建立了明确的信任关系。',
+                trust: 0.72,
+                affection: 0.48,
+                tension: 0.12,
+            },
+        ];
+    }
+    if (sectionName === 'TAKEOVER_BATCH_OUTPUT_SAMPLE' && Array.isArray(nextSample.relationTransitions)) {
+        nextSample.relationTransitions = nextSample.relationTransitions.map((item: Record<string, unknown>) => ({
+            ...item,
+            relationTag: item.relationTag ?? '朋友',
+            targetType: item.targetType ?? 'actor',
+        }));
+    }
     if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && !Array.isArray(nextSample.actorCards)) {
         nextSample.actorCards = [
             {
@@ -137,6 +271,28 @@ function enrichTakeoverSample(sectionName: string, sample: unknown): unknown {
                 traits: ['谨慎', '会照顾人'],
             },
         ];
+    }
+    if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && !Array.isArray(nextSample.relationships)) {
+        nextSample.relationships = [
+            {
+                sourceActorKey: 'user',
+                targetActorKey: 'lina',
+                participants: ['user', 'lina'],
+                relationTag: '朋友',
+                state: '双方保持同行与互相信任。',
+                summary: '整合后确认主角与莉娜之间形成稳定朋友关系。',
+                trust: 0.72,
+                affection: 0.48,
+                tension: 0.12,
+            },
+        ];
+    }
+    if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && Array.isArray(nextSample.relationState)) {
+        nextSample.relationState = nextSample.relationState.map((item: Record<string, unknown>) => ({
+            ...item,
+            relationTag: item.relationTag ?? '朋友',
+            targetType: item.targetType ?? 'actor',
+        }));
     }
     return nextSample;
 }
@@ -210,7 +366,7 @@ export async function runTakeoverStructuredTask<T>(input: {
     extraSystemInstruction?: string;
 }): Promise<T | null> {
     if (!input.llm) {
-        return null;
+        throw new Error(buildTakeoverTaskErrorMessage(input.taskId, 'llm_unavailable', '当前未连接可用的 LLMHub 服务。'));
     }
     const request = await buildTakeoverStructuredTaskRequest({
         systemSection: input.systemSection,
@@ -234,7 +390,7 @@ export async function runTakeoverStructuredTask<T>(input: {
         },
     });
     if (!result.ok) {
-        return null;
+        throw new Error(buildTakeoverTaskErrorMessage(input.taskId, result.reasonCode, result.error));
     }
     return result.data;
 }

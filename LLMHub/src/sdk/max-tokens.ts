@@ -8,6 +8,7 @@ import type {
 export type MaxTokensSource =
     | 'global_manual'
     | 'task_manual'
+    | 'task_registered'
     | 'adaptive'
     | 'request_budget'
     | 'consumer_budget'
@@ -103,6 +104,7 @@ function estimateAdaptiveMaxTokens(args: RunTaskArgs, config?: AdaptiveMaxTokens
 export function resolveMaxTokens(args: RunTaskArgs, options: {
     globalControl?: GlobalMaxTokensControl;
     taskAssignment?: TaskAssignment;
+    taskRegisteredMaxTokens?: number;
     consumerBudgetMaxTokens?: number;
     profileMaxTokens?: number;
 }): ResolvedMaxTokensResult {
@@ -132,16 +134,16 @@ export function resolveMaxTokens(args: RunTaskArgs, options: {
         };
     }
 
-    if (globalControl?.mode === 'adaptive') {
-        return estimateAdaptiveMaxTokens(args, globalControl.adaptive);
+    const taskRegistered = toPositiveInt(options.taskRegisteredMaxTokens);
+    if (taskRegistered) {
+        return {
+            value: taskRegistered,
+            source: 'task_registered',
+        };
     }
 
-    const requestBudget = toPositiveInt(args.budget?.maxTokens);
-    if (requestBudget) {
-        return {
-            value: requestBudget,
-            source: 'request_budget',
-        };
+    if (globalControl?.mode === 'adaptive') {
+        return estimateAdaptiveMaxTokens(args, globalControl.adaptive);
     }
 
     const consumerBudget = toPositiveInt(options.consumerBudgetMaxTokens);

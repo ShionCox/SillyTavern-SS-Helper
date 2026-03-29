@@ -77,6 +77,7 @@ export interface TaskDescriptor {
     taskId: string;
     taskKind: CapabilityKind;
     requiredCapabilities: LLMCapability[];
+    maxTokens?: number;
     recommendedRoute?: { resourceId?: string; profileId?: string };
     recommendedDisplay?: DisplayMode;
     description?: string;
@@ -479,8 +480,6 @@ export interface LLMHubSettings {
     taskAssignments?: TaskAssignment[];
     /** 预算配置 */
     budgets?: Record<string, import('../budget/budget-manager').BudgetConfig>;
-    /** 消费方注册持久快照 */
-    consumerSnapshots?: Record<string, ConsumerPersistentSnapshot>;
     /** silent 权限授权 */
     silentPermissions?: SilentPermissionGrant[];
 }

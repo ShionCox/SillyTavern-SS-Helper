@@ -5,6 +5,7 @@ import type {
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
+    MemoryTakeoverRelationshipCard,
     MemoryTakeoverRelationTransition,
     MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
@@ -29,6 +30,9 @@ export async function runTakeoverConsolidation(input: {
     const actorCards: MemoryTakeoverActorCardCandidate[] = mergeActorCards(
         input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverActorCardCandidate[] => item.actorCards ?? []),
     );
+    const relationships: MemoryTakeoverRelationshipCard[] = mergeRelationships(
+        input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationshipCard[] => item.relationships ?? []),
+    );
     const entityCards: MemoryTakeoverEntityCardCandidate[] = mergeEntityCards(
         input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityCardCandidate[] => item.entityCards ?? []),
     );
@@ -47,6 +51,7 @@ export async function runTakeoverConsolidation(input: {
             tags: item.chapterTags,
         })),
         actorCards,
+        relationships,
         entityCards,
         entityTransitions,
         longTermFacts: dedupedFacts,
@@ -57,7 +62,7 @@ export async function runTakeoverConsolidation(input: {
         dedupeStats: {
             totalFacts: input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts).length,
             dedupedFacts: dedupedFacts.length,
-            relationUpdates: relationState.length,
+            relationUpdates: Math.max(relationState.length, relationships.length),
             taskUpdates: taskState.length,
             worldUpdates: Object.keys(worldState).length,
         },
@@ -89,6 +94,7 @@ export async function runTakeoverConsolidation(input: {
             ...fallback,
             ...structured,
             actorCards: mergeActorCards(structured.actorCards ?? fallback.actorCards),
+            relationships: mergeRelationships(structured.relationships ?? fallback.relationships),
             entityCards: mergeEntityCards(structured.entityCards ?? fallback.entityCards),
             entityTransitions: collapseEntityTransitions(structured.entityTransitions ?? fallback.entityTransitions),
             takeoverId: input.takeoverId,
@@ -125,6 +131,42 @@ function mergeActorCards(actorCards: MemoryTakeoverActorCardCandidate[]): Memory
 }
 
 /**
+ * 功能：合并旧聊天接管输出的结构化关系卡，保留每对角色最后一次有效结果。
+ * @param relationships 原始关系卡列表。
+ * @returns 合并后的关系卡列表。
+ */
+function mergeRelationships(relationships: MemoryTakeoverRelationshipCard[]): MemoryTakeoverRelationshipCard[] {
+    const map = new Map<string, MemoryTakeoverRelationshipCard>();
+    for (const relationship of relationships) {
+        const sourceActorKey = String(relationship.sourceActorKey ?? '').trim().toLowerCase();
+        const targetActorKey = String(relationship.targetActorKey ?? '').trim().toLowerCase();
+        const relationTag = String(relationship.relationTag ?? '').trim();
+        const state = String(relationship.state ?? '').trim();
+        const summary = String(relationship.summary ?? '').trim();
+        if (!sourceActorKey || !targetActorKey || sourceActorKey === targetActorKey || !relationTag || !state || !summary) {
+            continue;
+        }
+        const compareKey = `${sourceActorKey}::${targetActorKey}`;
+        map.set(compareKey, {
+            sourceActorKey,
+            targetActorKey,
+            participants: dedupeStringValues([
+                sourceActorKey,
+                targetActorKey,
+                ...((relationship.participants ?? []).map((item: string): string => String(item ?? '').trim().toLowerCase())),
+            ]),
+            relationTag,
+            state,
+            summary,
+            trust: clamp01(Number(relationship.trust)),
+            affection: clamp01(Number(relationship.affection)),
+            tension: clamp01(Number(relationship.tension)),
+        });
+    }
+    return Array.from(map.values());
+}
+
+/**
  * 功能：去重字符串列表。
  * @param values 原始列表。
  * @returns 去重后的字符串列表。
@@ -139,6 +181,24 @@ function dedupeStringValues(values: string[]): string[] {
         result.push(normalized);
     }
     return result;
+}
+
+/**
+ * 功能：把数值限制在 0 到 1 之间。
+ * @param value 原始数值。
+ * @returns 裁剪后的数值。
+ */
+function clamp01(value: number): number {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+    if (value <= 0) {
+        return 0;
+    }
+    if (value >= 1) {
+        return 1;
+    }
+    return Number(value.toFixed(4));
 }
 
 /**
@@ -163,13 +223,27 @@ function dedupeFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFac
  * @param transitions 关系变化列表。
  * @returns 汇总后的关系状态。
  */
-function collapseRelations(transitions: MemoryTakeoverRelationTransition[]): Array<{ target: string; state: string; reason: string }> {
-    const map = new Map<string, { target: string; state: string; reason: string }>();
+function collapseRelations(transitions: MemoryTakeoverRelationTransition[]): Array<{
+    target: string;
+    state: string;
+    reason: string;
+    relationTag?: string;
+    targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
+}> {
+    const map = new Map<string, {
+        target: string;
+        state: string;
+        reason: string;
+        relationTag?: string;
+        targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
+    }>();
     for (const transition of transitions) {
         map.set(transition.target, {
             target: transition.target,
             state: transition.to,
             reason: transition.reason,
+            relationTag: String(transition.relationTag ?? '').trim() || undefined,
+            targetType: transition.targetType ?? undefined,
         });
     }
     return Array.from(map.values());

@@ -286,8 +286,27 @@ export class UnifiedMemoryManager {
             });
             rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
         }
-        return rows
-            .map((row: DBActorMemoryProfile): ActorMemoryProfile => this.mapActorProfile(row))
+        const profiles = await Promise.all(rows.map(async (row: DBActorMemoryProfile): Promise<ActorMemoryProfile> => {
+            const profile = this.mapActorProfile(row);
+            if (profile.actorKey === 'user' || (profile.displayName && profile.displayName !== profile.actorKey)) {
+                return profile;
+            }
+            const boundEntry = await this.findBoundActorProfileEntry(profile.actorKey);
+            const fallbackDisplayName = this.normalizeText(boundEntry?.title);
+            if (!fallbackDisplayName || fallbackDisplayName === profile.actorKey) {
+                return profile;
+            }
+            await db.actor_memory_profiles.put({
+                ...row,
+                displayName: fallbackDisplayName,
+                updatedAt: Date.now(),
+            });
+            return {
+                ...profile,
+                displayName: fallbackDisplayName,
+            };
+        }));
+        return profiles
             .sort((left: ActorMemoryProfile, right: ActorMemoryProfile): number => left.displayName.localeCompare(right.displayName, 'zh-CN'));
     }
 

@@ -11,6 +11,7 @@ const FACET_RECALL_SCHEMAS: Record<RetrievalFacet, string[]> = {
     relationship: ['relationship', 'actor_profile', 'actor_private_interpretation'],
     event: ['event', 'actor_visible_event'],
     interpretation: ['actor_private_interpretation'],
+    organization_politics: ['organization', 'nation', 'city', 'location'],
 };
 
 /**

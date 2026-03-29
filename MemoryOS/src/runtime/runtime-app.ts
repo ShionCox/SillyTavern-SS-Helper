@@ -17,6 +17,8 @@ import { logger, toast } from './runtime-services';
 import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } from './prompt-injection-pipeline';
 import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, subscribeMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
+import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
 import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
 import { openMemoryBootstrapReviewDialog } from '../ui/memory-bootstrap-review-dialog';
 import { openMemoryTakeoverDialog } from '../ui/memory-takeover-dialog';
@@ -70,6 +72,39 @@ function readPromptMessageText(message: unknown): string {
     }
     const record = message as Record<string, unknown>;
     return String(record.content ?? record.mes ?? record.text ?? '').trim();
+}
+
+/**
+ * 功能：格式化 LLM 失败原因文本。
+ * @param errorMessage 原始错误信息。
+ * @param reasonCode 原始原因码。
+ * @returns 适合给用户展示的失败原因。
+ */
+function formatLLMFailureReason(errorMessage?: string, reasonCode?: string): string {
+    const normalizedErrorMessage = String(errorMessage ?? '').trim();
+    const normalizedReasonCode = String(reasonCode ?? '').trim();
+    if (normalizedErrorMessage && normalizedReasonCode) {
+        return `${normalizedErrorMessage}\n原因码：${normalizedReasonCode}`;
+    }
+    if (normalizedErrorMessage) {
+        return normalizedErrorMessage;
+    }
+    if (normalizedReasonCode) {
+        return `原因码：${normalizedReasonCode}`;
+    }
+    return '未获取到更详细的失败原因。';
+}
+
+/**
+ * 功能：在 LLM 失败时询问用户是否立即重试。
+ * @param title 失败标题。
+ * @param errorMessage 原始错误信息。
+ * @param reasonCode 原始原因码。
+ * @returns 用户是否确认重试。
+ */
+function confirmRetryWithReason(title: string, errorMessage?: string, reasonCode?: string): boolean {
+    const reasonText = formatLLMFailureReason(errorMessage, reasonCode);
+    return window.confirm(`${title}\n\n失败原因：\n${reasonText}\n\n是否立即重新尝试？`);
 }
 
 /**
@@ -149,6 +184,7 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
 export class MemoryOS {
     private readonly stxBus: EventBus;
     private readonly registry: PluginRegistry;
+    private llmTasksRegistered: boolean;
     private readonly coldStartPromptedChats: Set<string>;
     private readonly coldStartRunningChats: Set<string>;
     private readonly takeoverPromptedChats: Set<string>;
@@ -161,6 +197,7 @@ export class MemoryOS {
     constructor() {
         this.stxBus = new EventBus();
         this.registry = new PluginRegistry();
+        this.llmTasksRegistered = false;
         this.coldStartPromptedChats = new Set<string>();
         this.coldStartRunningChats = new Set<string>();
         this.takeoverPromptedChats = new Set<string>();
@@ -190,6 +227,26 @@ export class MemoryOS {
             return;
         }
         await this.refreshChatBindingHandler(true);
+    }
+
+    /**
+     * 功能：供 LLMHub 主动调用，重新尝试注册 MemoryOS 的任务。
+     *
+     * 参数：
+     *   reason (string | undefined)：触发补注册的原因说明。
+     *
+     * 返回：
+     *   string：当前补注册结果。
+     */
+    public refreshLlmBridgeRegistration(reason?: string): string {
+        const normalizedReason = String(reason ?? '').trim() || 'unknown';
+        const registered = this.tryRegisterLLMTasks();
+        if (registered) {
+            logger.info(`[MemoryLlmBridge] 已完成任务补注册。原因：${normalizedReason}`);
+            return 'registered';
+        }
+        logger.warn(`[MemoryLlmBridge] 补注册失败，当前仍未连接到可用的 LLMHub SDK。原因：${normalizedReason}`);
+        return 'llm_unavailable';
     }
 
     /**
@@ -393,6 +450,32 @@ export class MemoryOS {
             });
             if (!result.ok) {
                 this.coldStartPromptedChats.delete(normalizedChatKey);
+                const shouldRetry = confirmRetryWithReason('冷启动执行失败。', result.errorMessage, result.reasonCode);
+                if (shouldRetry) {
+                    const retryResult = await sdk.chatState.primeColdStartPrompt('chat_bind_confirm_retry', {
+                        selectedWorldbooks: selection.selectedWorldbooks,
+                        selectedEntries: selection.selectedEntries,
+                    });
+                    if (!retryResult.ok) {
+                        toast.error(`冷启动重试失败：${formatLLMFailureReason(retryResult.errorMessage, retryResult.reasonCode)}`);
+                        return;
+                    }
+                    const retryReviewResult = await openMemoryBootstrapReviewDialog(retryResult.candidates ?? []);
+                    if (!retryReviewResult.confirmed) {
+                        await sdk.chatState.markColdStartDismissed();
+                        this.coldStartPromptedChats.delete(normalizedChatKey);
+                        toast.info('已取消冷启动候选写入。');
+                        return;
+                    }
+                    const retryApplyResult = await sdk.chatState.confirmColdStartCandidates(retryReviewResult.selectedCandidateIds);
+                    if (!retryApplyResult.ok) {
+                        this.coldStartPromptedChats.delete(normalizedChatKey);
+                        toast.error(`冷启动确认失败：${formatLLMFailureReason(retryApplyResult.errorMessage, retryApplyResult.reasonCode)}`);
+                        return;
+                    }
+                    toast.success('冷启动已完成，当前聊天已建立初始记忆。');
+                    return;
+                }
                 toast.error(`冷启动执行失败：${result.reasonCode}`);
                 return;
             }
@@ -482,6 +565,18 @@ export class MemoryOS {
             );
             if (!result.ok) {
                 this.takeoverPromptedChats.delete(normalizedChatKey);
+                const shouldRetry = confirmRetryWithReason('旧聊天处理失败。', result.errorMessage, result.reasonCode);
+                if (shouldRetry) {
+                    const retryResult = await sdk.chatState.startTakeover(
+                        selection.resumeExisting ? detection.recoverableTakeoverId : undefined,
+                    );
+                    if (!retryResult.ok) {
+                        toast.error(`旧聊天处理重试失败：${formatLLMFailureReason(retryResult.errorMessage, retryResult.reasonCode)}`);
+                        return true;
+                    }
+                    toast.success('旧聊天处理任务已重新启动，可在统一工作台查看进度。');
+                    return true;
+                }
                 toast.error(`旧聊天接管失败：${result.reasonCode}`);
                 return true;
             }
@@ -522,6 +617,7 @@ export class MemoryOS {
      */
     private registerSelfManifest(): void {
         this.registry.register(MEMORY_OS_MANIFEST);
+        this.tryRegisterLLMTasks();
     }
 
     /**
@@ -578,6 +674,35 @@ export class MemoryOS {
             memory: null,
             llm: null,
         };
+    }
+
+    /**
+     * 功能：由 MemoryOS 运行时直接向 LLMHub 注册任务，不依赖当前聊天是否已绑定。
+     *
+     * 参数：
+     *   无
+     *
+     * 返回：
+     *   boolean：`true` 表示已注册或本次注册成功；`false` 表示当前仍无法注册。
+     */
+    private tryRegisterLLMTasks(): boolean {
+        if (this.llmTasksRegistered) {
+            return true;
+        }
+        const llm = readMemoryLLMApi();
+        if (!llm) {
+            logger.info('[MemoryLlmBridge] 当前尚未检测到 LLMHub SDK，暂不注册任务。');
+            return false;
+        }
+        try {
+            registerMemoryLLMTasks(llm, MEMORY_OS_PLUGIN_ID);
+            this.llmTasksRegistered = true;
+            logger.info('[MemoryLlmBridge] MemoryOS 任务已注册到 LLMHub。');
+            return true;
+        } catch (error) {
+            logger.warn('[MemoryLlmBridge] MemoryOS 任务注册失败。', error);
+            return false;
+        }
     }
 
     /**

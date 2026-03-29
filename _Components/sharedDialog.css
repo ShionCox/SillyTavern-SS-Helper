@@ -17,6 +17,9 @@
   opacity: 0;
   transition: opacity 0.18s ease;
   overscroll-behavior: contain;
+  isolation: isolate;
+  will-change: opacity;
+  transform: translateZ(0);
 }
 
 .stx-shared-dialog-root.is-open,
@@ -50,10 +53,13 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 42%),
-    color-mix(in srgb, var(--ss-theme-backdrop, rgba(10, 10, 12, 0.78)) 42%, transparent);
-  backdrop-filter: blur(14px) saturate(118%);
-  -webkit-backdrop-filter: blur(14px) saturate(118%);
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.05), transparent 40%),
+    linear-gradient(180deg, rgba(4, 6, 10, 0.74), rgba(4, 6, 10, 0.84)),
+    color-mix(in srgb, var(--ss-theme-backdrop, rgba(8, 10, 14, 0.88)) 84%, transparent);
+  backdrop-filter: blur(18px) saturate(118%);
+  -webkit-backdrop-filter: blur(18px) saturate(118%);
+  will-change: backdrop-filter, opacity;
+  transform: translateZ(0);
 }
 
 .stx-shared-dialog-surface {
@@ -70,11 +76,14 @@
   border: 1px solid color-mix(in srgb, var(--ss-theme-border, rgba(255, 255, 255, 0.16)) 92%, transparent);
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 10%, transparent) 0%, transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-panel-bg, rgba(18, 18, 22, 0.96)) 100%, black 0%), color-mix(in srgb, var(--ss-theme-surface-2, rgba(10, 10, 14, 0.96)) 100%, black 0%));
+    linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-panel-bg, rgba(12, 14, 20, 0.82)) 100%, black 0%), color-mix(in srgb, var(--ss-theme-surface-2, rgba(8, 10, 16, 0.78)) 100%, black 0%));
   box-shadow: var(--ss-theme-panel-shadow, 0 24px 70px rgba(0, 0, 0, 0.52));
   color: var(--ss-theme-text, #ececec);
   transform: translateY(10px) scale(0.985);
   transition: transform 0.18s ease;
+  backdrop-filter: blur(16px) saturate(112%);
+  -webkit-backdrop-filter: blur(16px) saturate(112%);
+  will-change: transform;
 }
 
 .stx-shared-dialog-root.is-open .stx-shared-dialog-surface,

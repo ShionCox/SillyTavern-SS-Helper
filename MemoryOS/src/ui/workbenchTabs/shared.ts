@@ -15,7 +15,7 @@ import type {
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview' | 'memory-graph' | 'takeover';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family';
 
@@ -51,6 +51,7 @@ export interface WorkbenchActorGraphNode {
     x: number;
     y: number;
     relationCount: number;
+    kind?: 'actor' | 'entity';
 }
 
 export interface WorkbenchActorGraphLink {
@@ -94,6 +95,7 @@ export interface WorkbenchState {
     takeoverActiveSnapshotFloors: string;
     takeoverPreview: MemoryTakeoverPreviewEstimate | null;
     takeoverPreviewLoading: boolean;
+    takeoverProgressLoading: boolean;
 }
 
 export interface WorkbenchSnapshot {

@@ -47,6 +47,7 @@ function buildSeedQueryFromRoute(
         relationship: ['relationship', 'actor_profile'],
         event: ['event', 'actor_visible_event'],
         interpretation: ['actor_private_interpretation'],
+        organization_politics: ['organization', 'nation', 'city', 'location'],
     };
 
     let candidateTypes: string[] | undefined;

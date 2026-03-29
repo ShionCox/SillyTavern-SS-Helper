@@ -27,8 +27,7 @@ const FACET_MAX_RATIO: Record<RetrievalFacet, number> = {
     scene: 0.25,
     relationship: 0.35,
     event: 0.35,
-    interpretation: 0.25,
-};
+    interpretation: 0.25,    organization_politics: 0.3,};
 
 /**
  * 功能：多样性裁剪输入参数。

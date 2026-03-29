@@ -81,7 +81,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
             <div class="stx-memory-workbench__diagnostics">
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">任务状态</div>
-                    ${plan ? `
+                    ${state.takeoverProgressLoading && !plan ? '<div class="stx-memory-workbench__empty">正在加载旧聊天处理进度...</div>' : plan ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>状态</span><strong>${escapeHtml(plan.status)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>模式</span><strong>${escapeHtml(plan.mode)}</strong></div>
@@ -98,7 +98,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
 
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">当前批次</div>
-                    ${currentBatch ? `
+                    ${state.takeoverProgressLoading && !currentBatch ? '<div class="stx-memory-workbench__empty">正在加载当前批次...</div>' : currentBatch ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>批次 ID</span><strong>${escapeHtml(currentBatch.batchId)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>类型</span><strong>${escapeHtml(currentBatch.category)}</strong></div>
@@ -113,7 +113,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
 
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">最近活跃快照</div>
-                    ${activeSnapshot ? `
+                    ${state.takeoverProgressLoading && !activeSnapshot ? '<div class="stx-memory-workbench__empty">正在加载最近快照...</div>' : activeSnapshot ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>当前场景</span><strong>${escapeHtml(activeSnapshot.currentScene || '暂无')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>当前位置</span><strong>${escapeHtml(activeSnapshot.currentLocation || '暂无')}</strong></div>
@@ -127,7 +127,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
 
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">最新批次摘要</div>
-                    ${latestBatch ? `
+                    ${state.takeoverProgressLoading && !latestBatch ? '<div class="stx-memory-workbench__empty">正在加载批次摘要...</div>' : latestBatch ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>批次</span><strong>${escapeHtml(latestBatch.batchId)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>章节标签</span><strong>${escapeHtml(latestBatch.chapterTags.join('、') || '暂无')}</strong></div>
@@ -139,7 +139,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
 
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">整合预览</div>
-                    ${consolidation ? `
+                    ${state.takeoverProgressLoading && !consolidation ? '<div class="stx-memory-workbench__empty">正在加载整合结果...</div>' : consolidation ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>长期事实</span><strong>${escapeHtml(String(consolidation.longTermFacts.length))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>关系状态</span><strong>${escapeHtml(String(consolidation.relationState.length))}</strong></div>

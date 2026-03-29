@@ -21,6 +21,7 @@ function createBatchResult(): MemoryTakeoverBatchResult {
                 traits: ['谨慎'],
             },
         ],
+        relationships: [],
         stableFacts: [
             {
                 type: 'identity',
@@ -88,6 +89,8 @@ describe('旧聊天批次已知上下文', (): void => {
                 entityKey: 'entry:organization:moon_voice',
                 displayName: '月语教派',
             }],
+            cities: [],
+            nations: [],
             locations: [{
                 entityKey: 'entry:location:elven_forest',
                 displayName: '艾尔文森林',

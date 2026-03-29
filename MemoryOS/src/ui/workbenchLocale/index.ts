@@ -32,3 +32,7 @@ export {
     resolveRetrievalProviderLabel,
     resolveRetrievalRulePackLabel,
 } from './recallLocale';
+export {
+    resolveWorldEntityFieldLabel,
+    resolveWorldEntityText,
+} from './worldEntitiesLocale';

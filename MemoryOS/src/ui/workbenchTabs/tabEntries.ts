@@ -220,6 +220,16 @@ function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
                 { label: '影响说明', value: payload.impact ?? fields.impact },
             ],
         });
+    } else if (entry.entryType === 'organization' || entry.entryType === 'city' || entry.entryType === 'nation' || entry.entryType === 'location') {
+        sections.push({
+            title: '实体关系',
+            rows: [
+                { label: '用户关系标签', value: fields.userRelationTag },
+                { label: '用户关系状态', value: fields.userRelationState },
+                { label: '用户关系原因', value: fields.userRelationReason },
+                { label: '别名', value: readRecordPath(fields, 'aliases') || payload.aliases },
+            ],
+        });
     } else if (entry.entryType === 'scene_shared_state') {
         sections.push({
             title: '场景共享状态',

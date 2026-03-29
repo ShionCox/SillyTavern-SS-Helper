@@ -775,6 +775,7 @@ export class LLMSDKImpl {
         const profile = this.profileManager.get(profileId);
         const consumerBudget = this.budgetManager.getConfig(args.consumer);
         const settings = this.readSettings();
+        const taskDescriptor = this.registry.getTaskDescriptor(args.consumer, args.taskId);
         const taskAssignment = this.router.getTaskAssignment(args.consumer, args.taskId);
         const resolvedProvider = this.router.getProvider(resolved.resourceId) as ({ apiType?: ApiType } | undefined);
         const resolvedApiType: ApiType = this.normalizeApiType(resolvedProvider?.apiType);
@@ -802,6 +803,7 @@ export class LLMSDKImpl {
         const resolvedMaxTokens = resolveMaxTokens(args, {
             globalControl: settings.maxTokensControl,
             taskAssignment: taskAssignment?.isStale ? undefined : taskAssignment,
+            taskRegisteredMaxTokens: taskDescriptor?.maxTokens,
             consumerBudgetMaxTokens: consumerBudget?.maxTokens,
             profileMaxTokens: profile?.maxTokens,
         });
@@ -1319,6 +1321,20 @@ export class LLMSDKImpl {
                 : await provider.request(req);
 
             const runtimeSchema = schema;
+            const finishReason = String((response as { finishReason?: unknown }).finishReason ?? '').trim().toLowerCase();
+
+            if (finishReason === 'length') {
+                this.budgetManager.recordFailure(consumer);
+                return {
+                    ok: false,
+                    error: `模型输出被截断：已触发 max_tokens=${Number(req.maxTokens ?? 0) || 0} 上限，返回的 JSON 未完整结束`,
+                    retryable: true,
+                    reasonCode: 'token_limit_exceeded',
+                    rawResponseText: response.content,
+                    providerResponse: response,
+                    providerRequest: response.debugRequest,
+                };
+            }
 
             if (runtimeSchema) {
                 const parsed = parseJsonOutput(response.content);
