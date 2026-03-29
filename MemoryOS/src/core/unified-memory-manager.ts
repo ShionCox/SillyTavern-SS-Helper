@@ -28,7 +28,7 @@ import {
     type WorldProfileBinding,
 } from '../types';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
-import { getCurrentTavernUserNameEvent, getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
+import { getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
 import { readMemoryOSSettings } from '../settings/store';
 import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
 import { normalizeSummarySnapshot } from '../memory-summary-planner';
@@ -37,6 +37,7 @@ import { detectWorldProfile, resolveWorldProfile, getWorldProfileBinding, putWor
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
 import { getMemoryTrace, recordMemoryDebug } from './debug/memory-retrieval-logger';
 import { RetrievalOrchestrator, type RetrievalCandidate } from '../memory-retrieval';
+import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 
 const promptRetrievalOrchestrator = new RetrievalOrchestrator();
 
@@ -1828,7 +1829,7 @@ export class UnifiedMemoryManager {
      * @returns 用户显示名称。
      */
     private resolveUserActorDisplayName(): string {
-        return this.normalizeText(getCurrentTavernUserNameEvent(undefined, '用户')) || '用户';
+        return this.normalizeText(resolveCurrentNarrativeUserName()) || '你';
     }
 
     /**

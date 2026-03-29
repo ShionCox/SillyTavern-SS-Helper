@@ -448,6 +448,8 @@ export function formatDisplayValue(value: unknown): string {
  * @param detailPayload 结构化 payload。
  * @returns 摘要文本。
  */
+import { resolveEntryIdentifierLabel } from '../workbenchLocale';
+
 const KEY_LOCALE_MAP: Record<string, string> = {
     sourceActorKey: '源属角色',
     targetActorKey: '目标角色',
@@ -478,7 +480,7 @@ export function summarizeDetailPayload(detailPayload: Record<string, unknown> | 
     }
     const summary = keys.slice(0, 4).map((key: string): string => {
         const value = payload[key];
-        const translatedKey = KEY_LOCALE_MAP[key] || key;
+        const translatedKey = KEY_LOCALE_MAP[key] || resolveEntryIdentifierLabel(key);
         if (value && typeof value === 'object' && !Array.isArray(value)) {
             const childKeys = Object.keys(toRecord(value));
             return `${translatedKey}: ${childKeys.length > 0 ? childKeys.slice(0, 3).join('、') : '对象'}`;

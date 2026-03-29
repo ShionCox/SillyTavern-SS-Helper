@@ -13,6 +13,9 @@ import {
     type ResolvedNarrativeStyle,
 } from './planner-keywords';
 import type { SummaryPlannerOutput } from '../memory-summary/mutation-types';
+import type { PlannerFact, PlannerSignal, FragmentRepairMetadata, FragmentRepairDebugRow } from './fragment-types';
+import { runFragmentRepairPipeline } from './planner-input-assembler';
+import { buildFragmentRepairAuditRecord, formatAuditLog } from './memory-audit-logger';
 
 /**
  * 功能：总结窗口信息。
@@ -277,6 +280,14 @@ export interface LightweightPlannerInput {
         whyRelevant: string[];
     }>;
     allowedTypes: string[];
+    /** 经残缺修复后的强事实列表（文本形式，供 Planner 消费）。 */
+    repairedFacts: string[];
+    /** 降级弱信号列表（文本形式）。 */
+    signals: string[];
+    /** Planner 端硬性约束提示。 */
+    constraints: string[];
+    /** 片段修复链路统计。 */
+    repairMetadata: FragmentRepairMetadata;
 }
 
 /** Planner 输入各字段硬限制。 */
@@ -329,18 +340,47 @@ export function buildLightweightPlannerInput(context: SummaryMutationContext): L
         context.typeSchemas.map((schema) => String(schema.schemaId ?? '').trim()).filter(Boolean),
     );
 
+    // ── 残缺片段修复链路 ──────────────────────────────
+    const turnRange: [number, number] = [context.window.fromTurn, context.window.toTurn];
+    const repairResult = runFragmentRepairPipeline(
+        context.window.summaryText,
+        context.detectedSignals.actors,
+        turnRange,
+    );
+    // 审计日志（仅输出到控制台供调试）
+    const auditRecord = buildFragmentRepairAuditRecord(repairResult.metadata, repairResult.debugRows);
+    if (typeof console !== 'undefined' && auditRecord.rows.length > 0) {
+        console.debug(formatAuditLog(auditRecord));
+    }
+    // 把修复后的 fact 文本合并进 windowFacts（去重）
+    const repairedFactTexts = repairResult.facts.map((f) => f.text);
+    const mergedWindowFacts = dedupeStrings([
+        ...windowSummary.windowFacts,
+        ...repairedFactTexts,
+    ]).slice(0, PLANNER_INPUT_LIMITS.windowFactsMax);
+    const signalTexts = repairResult.signals.map((s) => s.text);
+
     const input: LightweightPlannerInput = {
         window: {
             fromTurn: context.window.fromTurn,
             toTurn: context.window.toTurn,
             turnCount: Math.max(0, context.window.toTurn - context.window.fromTurn + 1),
-            windowFacts: windowSummary.windowFacts,
+            windowFacts: mergedWindowFacts,
             evidenceSnippets: windowSummary.evidenceSnippets,
         },
         rollingDigest,
         signalPack,
         candidateCards,
         allowedTypes,
+        repairedFacts: repairedFactTexts.slice(0, PLANNER_INPUT_LIMITS.windowFactsMax),
+        signals: signalTexts.slice(0, 6),
+        constraints: [
+            'signals 仅为弱提示，不可升级为确定事实。',
+            '不得根据残缺片段脑补原文未提供的结论。',
+            '信息不足时优先保守规划，而非大幅推进。',
+            '同一事项同时存在 fact 与 signal 时，以 fact 为准。',
+        ],
+        repairMetadata: repairResult.metadata,
     };
 
     return enforcePlannerBudget(input);

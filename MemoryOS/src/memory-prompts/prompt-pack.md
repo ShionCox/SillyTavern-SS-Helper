@@ -24,7 +24,8 @@
 12. 若可判断世界模板，则输出 `worldProfileDetection`；否则可留空。
 13. 当关系对象指向当前用户时，`targetActorKey` 或 `participants` 中必须固定使用 `user`，不要自行发明 `user_xxx`、`player_xxx`、用户名拼接键等变体。
 14. 严格参照输出示例的字段结构与完整度。
-15. 仅输出 JSON，不输出解释文本。
+15. 已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。
+16. 仅输出 JSON，不输出解释文本。
 
 <!-- section: COLD_START_SCHEMA -->
 
@@ -184,8 +185,8 @@
       "targetActorKey": "user",
       "participants": ["char_erin", "user"],
       "relationTag": "陌生人",
-      "state": "艾琳把对方视为需要持续观察的可疑对象，保持距离但暂未敌对。",
-      "summary": "艾琳刚与主角接触后，对其保持明显戒备与观察，尚未建立稳定信任。",
+      "state": "艾琳把{{userDisplayName}}视为需要持续观察的可疑对象，保持距离但暂未敌对。",
+      "summary": "艾琳刚与{{userDisplayName}}接触后，对其保持明显戒备与观察，尚未建立稳定信任。",
       "trust": 0.22,
       "affection": 0.08,
       "tension": 0.15
@@ -195,7 +196,7 @@
     {
       "schemaId": "actor_visible_event",
       "title": "首次接触",
-      "summary": "艾琳首次与主角接触，并将其视为潜在观察对象。",
+      "summary": "艾琳首次与{{userDisplayName}}接触，并将其视为潜在观察对象。",
       "importance": 0.68
     }
   ]
@@ -206,11 +207,14 @@
 
 你正在执行结构化记忆系统的总结 Planner 阶段。
 你会收到一份轻量输入，包含以下字段：
-- `window`：本轮未总结区间，含 `fromTurn`、`toTurn`、`turnCount`、`windowFacts`（事实帧列表）
-- `rollingDigest`：上一阶段的滚动摘要，含 `summary`、`openThreads`、`recentDecisions`
-- `signalPack`：合并后的候选信号，含 `candidateTypes`、`focusPoints`、`shouldUpdate`
+- `window`：本轮未总结区间，含 `fromTurn`、`toTurn`、`turnCount`、`windowFacts`（事实帧列表）、`evidenceSnippets`（证据片段）
+- `rollingDigest`：上一阶段的滚动摘要，含 `stableContext`、`taskState`、`relationState`、`unresolvedQuestions`
+- `signalPack`：合并后的候选信号，含 `candidateTypes`、`focusPoints`、`evidenceSignals`、`shouldUpdate`
 - `candidateCards`：与当前区间相关的已有记忆短卡片（`id`、`type`、`brief`、`entities`、`state`）
 - `allowedTypes`：本轮允许处理的记忆类型列表
+- `repairedFacts`：经残缺修复后的强事实列表（已通过本地验证，可信度高）
+- `signals`：降级弱信号列表（语义不完整但有参考价值，仅作弱提示）
+- `constraints`：硬性约束规则
 
 请严格遵循：
 1. 你的职责是判断"是否需要更新长期记忆"，而不是直接输出 mutation 动作。
@@ -219,8 +223,11 @@
 4. `entities` 只填写当前区间反复出现、且对召回已有记忆有帮助的实体键或实体名。
 5. `topics` 用简体中文概括本轮主题，控制在少量高信号短语内。
 6. `reasons` 必须是简体中文，说明为什么值得更新，或为什么应返回 `NOOP`。
-7. 优先参考 `windowFacts` 判断事实变化，不要受 `rollingDigest` 中已有结论影响。
-8. 仅输出 JSON，不输出解释文本。
+7. 优先参考 `windowFacts` 和 `repairedFacts` 判断事实变化，不要受 `rollingDigest` 中已有结论影响。
+8. `signals` 仅为弱提示，不可升级为确定结论。若同一事项同时有 fact 与 signal，以 fact 为准。
+9. 不得根据 signals 中的不完整信息脑补新事件或关系变化。
+10. 信息不足时，应保持保守判断，优先返回 `should_update=false`。
+11. 仅输出 JSON，不输出解释文本。
 
 <!-- section: SUMMARY_PLANNER_SCHEMA -->
 

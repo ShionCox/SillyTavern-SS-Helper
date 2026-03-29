@@ -24,7 +24,7 @@ function buildBundle(): ColdStartSourceBundle {
             activeLorebooks: ['kingdom_lore'],
         },
         user: {
-            userName: 'user',
+            userName: '林远',
             counterpartName: 'erin',
             personaDescription: 'traveler',
             metadataPersona: '',
@@ -48,14 +48,14 @@ function buildBundle(): ColdStartSourceBundle {
 }
 
 describe('runBootstrapOrchestrator integration', () => {
-    it('writes actor/world/relationship/memory and world profile binding', async () => {
-        const savedEntries: Array<{ entryType: string; title: string }> = [];
+    it('会在冷启动落库前把自然语言中的用户称呼替换成当前用户名', async () => {
+        const savedEntries: Array<{ entryType: string; title: string; summary?: string }> = [];
         const savedPayloads: Array<Record<string, unknown>> = [];
         const historyActions: string[] = [];
         const dependencies = {
             ensureActorProfile: vi.fn(async () => ({})),
             saveEntry: vi.fn(async (input) => {
-                savedEntries.push({ entryType: input.entryType, title: input.title });
+                savedEntries.push({ entryType: input.entryType, title: input.title, summary: input.summary });
                 savedPayloads.push(input.detailPayload || {});
                 return {
                     ...input,
@@ -95,16 +95,7 @@ describe('runBootstrapOrchestrator integration', () => {
                             originFacts: ['North'],
                             traits: ['Calm'],
                         },
-                        actorCards: [
-                            {
-                                actorKey: 'char_mc',
-                                displayName: '旅人',
-                                aliases: [],
-                                identityFacts: ['外来者'],
-                                originFacts: ['刚进入王都'],
-                                traits: ['谨慎'],
-                            },
-                        ],
+                        actorCards: [],
                         worldProfileDetection: {
                             primaryProfile: 'fantasy_magic',
                             secondaryProfiles: ['ancient_traditional'],
@@ -122,11 +113,11 @@ describe('runBootstrapOrchestrator integration', () => {
                         relationships: [
                             {
                                 sourceActorKey: 'char_erin',
-                                targetActorKey: 'char_mc',
-                                participants: ['char_erin', 'char_mc'],
+                                targetActorKey: 'user',
+                                participants: ['char_erin', 'user'],
                                 relationTag: '陌生人',
-                                state: '保持观察',
-                                summary: 'watching',
+                                state: '对用户保持观察',
+                                summary: '艾琳把主角视为需要持续观察的对象',
                                 trust: 0.2,
                                 affection: 0.1,
                                 tension: 0.3,
@@ -136,7 +127,7 @@ describe('runBootstrapOrchestrator integration', () => {
                             {
                                 schemaId: 'actor_visible_event',
                                 title: 'First Contact',
-                                summary: 'Saw the player in market',
+                                summary: '艾琳首次在市场看见主角',
                                 importance: 0.5,
                             },
                         ],
@@ -161,13 +152,23 @@ describe('runBootstrapOrchestrator integration', () => {
         expect(savedEntries.some((item) => item.entryType === 'world_hard_rule')).toBe(true);
         expect(savedEntries.some((item) => item.entryType === 'relationship')).toBe(true);
         const relationshipPayload = savedPayloads.find((item) => item.sourceActorKey === 'char_erin');
+        expect(relationshipPayload?.targetActorKey).toBe('user');
+        expect(relationshipPayload?.participants).toEqual(['char_erin', 'user']);
+        expect(relationshipPayload?.state).toBe('对林远保持观察');
         expect((relationshipPayload?.fields as Record<string, unknown> | undefined)?.relationTag).toBe('陌生人');
+        const relationshipEntry = dependencies.saveEntry.mock.calls.find((call) => call[0].entryType === 'relationship')?.[0];
+        expect(relationshipEntry?.summary).toContain('林远');
+        expect(relationshipEntry?.summary).not.toContain('主角');
+        expect(relationshipEntry?.summary).not.toContain('用户');
+        const memoryEntry = dependencies.saveEntry.mock.calls.find((call) => call[0].entryType === 'actor_visible_event')?.[0];
+        expect(memoryEntry?.summary).toContain('林远');
+        expect(memoryEntry?.summary).not.toContain('主角');
         expect(historyActions).toContain('cold_start_started');
         expect(historyActions).toContain('world_profile_bound');
         expect(historyActions).toContain('cold_start_succeeded');
     });
 
-    it('fails when relationship actors do not provide actor cards', async () => {
+    it('当关系引用到缺失角色卡时会报错，但 user 锚点不需要角色卡', async () => {
         const result = await runBootstrapOrchestrator({
             dependencies: {
                 ensureActorProfile: vi.fn(async () => ({})),

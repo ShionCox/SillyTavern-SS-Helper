@@ -1,11 +1,16 @@
 import type { MemoryEntry } from '../types';
 import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
-import { buildStructuredTaskUserPayload } from '../memory-prompts/prompt-renderer';
+import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
 import type { ColdStartCandidate, ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
 import { parseColdStartDocument } from './bootstrap-parser';
 import { buildColdStartCandidates } from './bootstrap-candidates';
 import { resolveBootstrapWorldProfile } from './bootstrap-world-profile';
+import {
+    normalizeNarrativeValue,
+    normalizeUserNarrativeText,
+    resolveCurrentNarrativeUserName,
+} from '../utils/narrative-user-name';
 
 /**
  * 功能：冷启动编排依赖。
@@ -64,6 +69,7 @@ export interface RunBootstrapOrchestratorResult {
  */
 export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorInput): Promise<RunBootstrapOrchestratorResult> {
     const coldStartLanguageInstruction = '除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。';
+    const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
     const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
     await input.dependencies.appendMutationHistory({
@@ -86,6 +92,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     const sourcePayload = {
         sourceBundle: input.sourceBundle,
         actorKeyHints,
+        userDisplayName,
     };
     const userPayload = buildStructuredTaskUserPayload(
         JSON.stringify(sourcePayload, null, 2),
@@ -99,12 +106,15 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         taskKind: 'generation',
         input: {
             messages: [
-                { role: 'system', content: `${promptPack.COLD_START_SYSTEM}\n\n${coldStartLanguageInstruction}` },
+                {
+                    role: 'system',
+                    content: `${renderPromptTemplate(promptPack.COLD_START_SYSTEM, { userDisplayName })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。请继续使用结构化锚点 \`user\`，但所有自然语言描述都必须优先写成该称呼；拿不到名字时使用“你”。\n\n${coldStartLanguageInstruction}`,
+                },
                 { role: 'user', content: userPayload },
             ],
         },
         schema: coldStartSchema,
-        enqueue: { displayMode: 'silent' },
+        enqueue: { displayMode: 'fullscreen' },
     });
     if (!result.ok) {
         const reasonCode = result.reasonCode || 'cold_start_failed';
@@ -122,7 +132,8 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'invalid_cold_start_document' };
     }
-    const candidates = buildColdStartCandidates(parsed, input.sourceBundle);
+    const normalizedDocument = normalizeColdStartNarrativeDocument(parsed, userDisplayName);
+    const candidates = buildColdStartCandidates(normalizedDocument, input.sourceBundle);
     if (candidates.length <= 0) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
@@ -130,8 +141,8 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'empty_cold_start_candidates' };
     }
-    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(parsed, input.sourceBundle);
-    const actorCardValidation = validateRelationshipActorCards(parsed, input.sourceBundle);
+    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
+    const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
     if (!actorCardValidation.ok) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
@@ -142,12 +153,12 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         });
         return { ok: false, reasonCode: 'relationship_actor_card_missing' };
     }
-    const worldProfile = resolveBootstrapWorldProfile(parsed, input.sourceBundle);
+    const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
     return {
         ok: true,
         reasonCode: 'ok',
         candidates,
-        document: parsed,
+        document: normalizedDocument,
         worldProfile,
     };
 }
@@ -173,9 +184,11 @@ export async function applyBootstrapCandidates(input: {
         reasonCodes: string[];
     };
 }> {
-    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(input.document, input.sourceBundle);
+    const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
+    const normalizedDocument = normalizeColdStartNarrativeDocument(input.document, userDisplayName);
+    const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
     const selectedIds = new Set(input.selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id));
-    for (const candidate of input.selectedCandidates) {
+    for (const candidate of input.selectedCandidates.map((candidate: ColdStartCandidate): ColdStartCandidate => normalizeColdStartCandidate(candidate, userDisplayName))) {
         for (const actorKey of candidate.actorBindings ?? []) {
             await input.dependencies.ensureActorProfile({
                 actorKey,
@@ -194,7 +207,7 @@ export async function applyBootstrapCandidates(input: {
         }
     }
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
-    const worldProfile = resolveBootstrapWorldProfile(input.document, input.sourceBundle);
+    const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
     await input.dependencies.putWorldProfileBinding({
         primaryProfile: worldProfile.primaryProfile,
         secondaryProfiles: worldProfile.secondaryProfiles,
@@ -215,6 +228,7 @@ export async function applyBootstrapCandidates(input: {
         action: 'cold_start_succeeded',
         payload: {
             actorKey: input.document.identity.actorKey,
+            userDisplayName,
             worldProfile,
             selectedCandidateCount: input.selectedCandidates.length,
             selectedCandidateIds: [...selectedIds],
@@ -267,11 +281,12 @@ function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
         note: string;
     };
 } {
+    const userDisplayName = resolveCurrentNarrativeUserName(sourceBundle.user.userName);
     return {
         currentUser: {
             actorKey: 'user',
-            displayName: String(sourceBundle.user.userName ?? '').trim() || '用户',
-            note: '当关系对象是当前用户时，必须固定使用 actorKey `user`，不要自行扩展成 user_xxx、player_xxx 或其它变体。',
+            displayName: userDisplayName,
+            note: `当关系对象是当前用户时，必须固定使用 actorKey \`user\`；自然语言称呼优先使用“${userDisplayName}”，不要写成“用户”或“主角”。`,
         },
     };
 }
@@ -282,7 +297,11 @@ function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
  * @param sourceBundle 冷启动源数据包。
  * @returns 角色键到显示名的映射表。
  */
-function buildBootstrapActorDisplayNameMap(parsed: ColdStartDocument, sourceBundle: ColdStartSourceBundle): Map<string, string> {
+function buildBootstrapActorDisplayNameMap(
+    parsed: ColdStartDocument,
+    sourceBundle: ColdStartSourceBundle,
+    userDisplayName?: string,
+): Map<string, string> {
     const displayNameMap = new Map<string, string>();
     const mainActorKey = normalizeActorKey(parsed.identity.actorKey);
     const mainDisplayName = String(parsed.identity.displayName ?? '').trim();
@@ -296,9 +315,57 @@ function buildBootstrapActorDisplayNameMap(parsed: ColdStartDocument, sourceBund
             displayNameMap.set(actorKey, displayName);
         }
     }
-    const userDisplayName = String(sourceBundle.user.userName ?? '').trim() || '用户';
-    displayNameMap.set('user', userDisplayName);
+    displayNameMap.set('user', resolveCurrentNarrativeUserName(userDisplayName || sourceBundle.user.userName));
     return displayNameMap;
+}
+
+/**
+ * 功能：规范化冷启动文档中的自然语言用户称呼。
+ * @param document 冷启动文档。
+ * @param userDisplayName 当前用户显示名。
+ * @returns 规范化后的文档。
+ */
+function normalizeColdStartNarrativeDocument(document: ColdStartDocument, userDisplayName: string): ColdStartDocument {
+    return {
+        ...document,
+        identity: normalizeNarrativeValue(document.identity, userDisplayName),
+        actorCards: document.actorCards.map((actorCard) => normalizeNarrativeValue(actorCard, userDisplayName)),
+        worldBase: document.worldBase.map((entry) => ({
+            ...entry,
+            title: normalizeUserNarrativeText(entry.title, userDisplayName),
+            summary: normalizeUserNarrativeText(entry.summary, userDisplayName),
+        })),
+        relationships: document.relationships.map((relationship) => ({
+            ...relationship,
+            state: normalizeUserNarrativeText(relationship.state, userDisplayName),
+            summary: normalizeUserNarrativeText(relationship.summary, userDisplayName),
+        })),
+        memoryRecords: document.memoryRecords.map((record) => ({
+            ...record,
+            title: normalizeUserNarrativeText(record.title, userDisplayName),
+            summary: normalizeUserNarrativeText(record.summary, userDisplayName),
+        })),
+    };
+}
+
+/**
+ * 功能：规范化冷启动候选中的自然语言用户称呼。
+ * @param candidate 冷启动候选。
+ * @param userDisplayName 当前用户显示名。
+ * @returns 规范化后的候选。
+ */
+function normalizeColdStartCandidate(candidate: ColdStartCandidate, userDisplayName: string): ColdStartCandidate {
+    return {
+        ...candidate,
+        title: normalizeUserNarrativeText(candidate.title, userDisplayName),
+        summary: normalizeUserNarrativeText(candidate.summary, userDisplayName),
+        reason: normalizeUserNarrativeText(candidate.reason, userDisplayName),
+        detailPayload: candidate.detailPayload ? normalizeNarrativeValue(candidate.detailPayload, userDisplayName) : undefined,
+        sourceRefs: candidate.sourceRefs.map((sourceRef) => ({
+            ...sourceRef,
+            excerpt: sourceRef.excerpt ? normalizeUserNarrativeText(sourceRef.excerpt, userDisplayName) : sourceRef.excerpt,
+        })),
+    };
 }
 
 /**

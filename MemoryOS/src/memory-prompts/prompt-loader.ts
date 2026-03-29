@@ -90,10 +90,10 @@ async function loadPromptPackSectionsInternal(): Promise<PromptPackSections> {
     const raw = await readPromptPackRaw();
     const parsed = parsePromptPackSections(raw);
     if (hasAllRequiredSections(parsed)) {
-        return parsed as PromptPackSections;
+        return enrichPromptPackSections(parsed as PromptPackSections);
     }
     const fallbackParsed = parsePromptPackSections(FALLBACK_PROMPT_PACK);
-    return fallbackParsed as PromptPackSections;
+    return enrichPromptPackSections(fallbackParsed as PromptPackSections);
 }
 
 /**
@@ -152,4 +152,58 @@ function hasAllRequiredSections(sections: Partial<PromptPackSections>): sections
     return REQUIRED_SECTIONS.every((name: PromptPackSectionName): boolean => {
         return typeof sections[name] === 'string' && String(sections[name]).trim().length > 0;
     });
+}
+
+/**
+ * 功能：统一增强 Prompt Pack 中与用户称呼相关的规则与示例。
+ * @param sections 原始分段。
+ * @returns 增强后的分段。
+ */
+function enrichPromptPackSections(sections: PromptPackSections): PromptPackSections {
+    return {
+        ...sections,
+        COLD_START_SYSTEM: appendPromptRule(
+            sections.COLD_START_SYSTEM,
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
+        ),
+        SUMMARY_PLANNER_SYSTEM: appendPromptRule(
+            sections.SUMMARY_PLANNER_SYSTEM,
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，reasons、topics 及其它自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
+        ),
+        SUMMARY_SYSTEM: appendPromptRule(
+            sections.SUMMARY_SYSTEM,
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，title、summary、detail、state 及其它自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
+        ),
+        COLD_START_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.COLD_START_OUTPUT_SAMPLE),
+        SUMMARY_PLANNER_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.SUMMARY_PLANNER_OUTPUT_SAMPLE),
+        SUMMARY_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.SUMMARY_OUTPUT_SAMPLE),
+    };
+}
+
+/**
+ * 功能：在提示词规则尾部追加新的约束说明。
+ * @param source 原始提示词。
+ * @param rule 追加规则。
+ * @returns 处理后的提示词。
+ */
+function appendPromptRule(source: string, rule: string): string {
+    const normalized = String(source ?? '').trim();
+    if (!normalized || normalized.includes(rule)) {
+        return normalized;
+    }
+    return `${normalized}\n${rule}`;
+}
+
+/**
+ * 功能：替换示例中的固定“用户/主角”称呼为模板变量。
+ * @param source 原始示例文本。
+ * @returns 处理后的示例文本。
+ */
+function replacePromptSampleUserNarrative(source: string): string {
+    return String(source ?? '')
+        .replace(/对用户/g, '对{{userDisplayName}}')
+        .replace(/与用户/g, '与{{userDisplayName}}')
+        .replace(/用户之间/g, '{{userDisplayName}}之间')
+        .replace(/主角/g, '{{userDisplayName}}')
+        .replace(/用户(?!名)/g, '{{userDisplayName}}');
 }

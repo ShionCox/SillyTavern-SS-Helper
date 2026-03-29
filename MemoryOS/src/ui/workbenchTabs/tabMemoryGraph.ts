@@ -1,4 +1,5 @@
 import { escapeHtml } from '../editorShared';
+import { resolveEntryTypeLabel } from '../workbenchLocale';
 import type { WorkbenchSnapshot, WorkbenchState } from './shared';
 import { escapeAttr, truncateText, formatTimestamp, formatDisplayValue } from './shared';
 import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from './shared/memoryGraphTypes';
@@ -51,7 +52,7 @@ export function buildMemoryGraphViewMarkup(
     const typeOptions = [...typeCounts.entries()]
         .sort((a, b) => b[1] - a[1])
         .map(([type, count]) => {
-            const label = MEMORY_GRAPH_TYPE_LABELS[type] ?? type;
+            const label = MEMORY_GRAPH_TYPE_LABELS[type] ?? resolveEntryTypeLabel(type);
             const selected = graphState.memoryGraphFilterType === type ? ' selected' : '';
             return `<option value="${escapeAttr(type)}"${selected}>${escapeHtml(label)} (${count})</option>`;
         }).join('');
@@ -156,7 +157,7 @@ const EDGE_TYPE_LABELS: Record<string, string> = {
  */
 function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, snapshot: WorkbenchSnapshot, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode = 'compact'): string {
     const color = getMemoryGraphNodeColor(node.type);
-    const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? node.type;
+    const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? resolveEntryTypeLabel(node.type);
     const memPercent = Math.round(node.memoryPercent ?? 0);
     const importancePercent = Math.round((node.importance ?? 0) * 100);
     const tagsList = (node.tags ?? []).map(t => `<span style="display:inline-block;padding:1px 6px;border-radius:4px;background:rgba(255,255,255,0.08);font-size:11px;margin:2px;">${escapeHtml(t)}</span>`).join('');
@@ -273,8 +274,8 @@ function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: Workb
 
     const itemsHtml = connectedItems.map(({ targetNode, edgeType, reasons }) => {
         const peerColor = getMemoryGraphNodeColor(targetNode.type);
-        const peerTypeLabel = MEMORY_GRAPH_TYPE_LABELS[targetNode.type] ?? targetNode.type;
-        const edgeLabel = EDGE_TYPE_LABELS[edgeType] ?? edgeType;
+        const peerTypeLabel = MEMORY_GRAPH_TYPE_LABELS[targetNode.type] ?? resolveEntryTypeLabel(targetNode.type);
+        const edgeLabel = EDGE_TYPE_LABELS[edgeType] ?? resolveEntryTypeLabel(edgeType);
         const peerSummary = targetNode.summary ? escapeHtml(truncateText(targetNode.summary, 60)) : '';
         const reasonsHtml = reasons?.length
             ? `<div style="font-size:10px;opacity:0.5;margin-top:2px;line-height:1.3;">${reasons.map(r => escapeHtml(r)).join(' · ')}</div>`

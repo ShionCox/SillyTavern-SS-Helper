@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
-import { runSummaryOrchestrator } from '../src/memory-summary';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../src/types';
+
+async function loadSummaryOrchestrator(mockedUserName: string) {
+    vi.resetModules();
+    vi.doMock('../../../SDK/tavern', () => {
+        return {
+            getCurrentTavernUserNameEvent: vi.fn(() => mockedUserName),
+        };
+    });
+    return import('../src/memory-summary');
+}
 
 function buildEntry(): MemoryEntry {
     return {
@@ -10,10 +19,18 @@ function buildEntry(): MemoryEntry {
         entryType: 'relationship',
         category: '角色关系',
         tags: ['old'],
-        summary: '原有关系',
+        summary: '原有关联',
         detail: '',
         detailSchemaVersion: 1,
-        detailPayload: {},
+        detailPayload: {
+            sourceActorKey: 'char_erin',
+            targetActorKey: 'user',
+            participants: ['char_erin', 'user'],
+            state: '旧状态',
+            fields: {
+                relationTag: '陌生人',
+            },
+        },
         sourceSummaryIds: [],
         createdAt: 1,
         updatedAt: 2,
@@ -47,7 +64,13 @@ function buildBinding(): WorldProfileBinding {
 }
 
 describe('runSummaryOrchestrator integration', () => {
-    it('applies validated mutation and returns snapshot', async () => {
+    beforeEach(() => {
+        vi.resetModules();
+        vi.clearAllMocks();
+    });
+
+    it('会在总结落库前把自然语言中的用户称呼替换成当前用户名', async () => {
+        const { runSummaryOrchestrator } = await loadSummaryOrchestrator('林远');
         const historyActions: string[] = [];
         const historyPayloads: Array<{ action: string; payload: Record<string, unknown> }> = [];
         const applySnapshot = vi.fn(async (input): Promise<SummarySnapshot> => {
@@ -63,6 +86,41 @@ describe('runSummaryOrchestrator integration', () => {
                 updatedAt: 1,
             };
         });
+        const llmRunTask = vi
+            .fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    should_update: true,
+                    focus_types: ['relationship'],
+                    entities: ['char_erin', 'user'],
+                    topics: ['关系变化'],
+                    reasons: ['当前窗口中出现了稳定的关系推进'],
+                },
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    schemaVersion: '1.0.0',
+                    window: { fromTurn: 1, toTurn: 2 },
+                    actions: [
+                        {
+                            action: 'UPDATE',
+                            targetKind: 'relationship',
+                            candidateId: 'cand_1',
+                            payload: {
+                                title: '主角与艾琳的关系',
+                                summary: '她对用户保持警惕',
+                                trust: 0.33,
+                                fields: {
+                                    relationTag: '陌生人',
+                                },
+                            },
+                            reasonCodes: ['conflict'],
+                        },
+                    ],
+                },
+            });
 
         const result = await runSummaryOrchestrator({
             dependencies: {
@@ -83,30 +141,12 @@ describe('runSummaryOrchestrator integration', () => {
             },
             llm: {
                 registerConsumer: () => {},
-                runTask: vi.fn(async () => ({
-                    ok: true,
-                    data: {
-                        schemaVersion: '1.0.0',
-                        window: { fromTurn: 1, toTurn: 2 },
-                        actions: [
-                            {
-                                action: 'UPDATE',
-                                targetKind: 'relationship',
-                                candidateId: 'cand_1',
-                                payload: {
-                                    summary: '关系更新',
-                                    trust: 0.33,
-                                },
-                                reasonCodes: ['conflict'],
-                            },
-                        ],
-                    },
-                })),
+                runTask: llmRunTask,
             },
             pluginId: 'MemoryOS',
             messages: [
-                { role: 'user', content: 'char_erin和char_mc发生争执' },
-                { role: 'assistant', content: '她们的关系紧张了' },
+                { role: 'user', content: '林远刚进城，艾琳对用户很警惕' },
+                { role: 'assistant', content: '她暂时没有放下戒心' },
             ],
             enableEmbedding: false,
             retrievalRulePack: 'hybrid',
@@ -114,19 +154,25 @@ describe('runSummaryOrchestrator integration', () => {
 
         expect(result.snapshot?.summaryId).toBe('summary-1');
         expect(applySnapshot).toHaveBeenCalledTimes(1);
-        expect(historyActions).toContain('summary_started');
-        expect(historyActions).toContain('candidate_types_resolved');
-        expect(historyActions).toContain('type_schemas_resolved');
-        expect(historyActions).toContain('candidate_records_resolved');
-        expect(historyActions).toContain('mutation_validated');
-        expect(historyActions).toContain('mutation_applied');
         const plannerPayload = historyPayloads.find((item) => item.action === 'summary_planner_resolved')?.payload ?? {};
         const narrativeStyle = (plannerPayload.narrativeStyle ?? {}) as Record<string, unknown>;
+        expect(plannerPayload.userDisplayName).toBe('你');
         expect(narrativeStyle.primaryStyle).toBe('modern');
         expect(narrativeStyle.source).toBe('binding');
+        const appliedUpsert = applySnapshot.mock.calls[0][0].entryUpserts[0];
+        expect(appliedUpsert.title).toBe('关系状态');
+        expect(appliedUpsert.summary).toBe('她对你保持警惕');
+        expect(appliedUpsert.detailPayload.targetActorKey).toBe('user');
+        expect(appliedUpsert.detailPayload.participants).toEqual(['char_erin', 'user']);
+        expect(appliedUpsert.detailPayload.trust).toBe(0.33);
+        expect(appliedUpsert.detailPayload.fields.relationTag).toBe('陌生人');
+        expect(historyActions).toContain('summary_started');
+        expect(historyActions).toContain('mutation_validated');
+        expect(historyActions).toContain('mutation_applied');
     });
 
-    it('returns null snapshot on failure and writes diagnostics only', async () => {
+    it('失败时只写诊断，不产生总结快照', async () => {
+        const { runSummaryOrchestrator } = await loadSummaryOrchestrator('林远');
         const applySnapshot = vi.fn();
         const historyActions: string[] = [];
 

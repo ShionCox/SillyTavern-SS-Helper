@@ -23,7 +23,7 @@ export function buildTypesViewMarkup(snapshot: WorkbenchSnapshot, state: Workben
                     ${snapshot.entryTypes.map((item: MemoryEntryType): string => `
                         <button class="stx-memory-workbench__list-item${item.key === state.selectedTypeKey ? ' is-active' : ''}" data-select-type="${escapeAttr(item.key)}">
                             <h4>${escapeHtml(item.label)}</h4>
-                            <div class="stx-memory-workbench__meta">${item.key} · ${item.builtIn ? '系统内置' : '用户自定义'}</div>
+                            <div class="stx-memory-workbench__meta">键名：${escapeHtml(item.key)} · ${item.builtIn ? '系统内置' : '用户自定义'}</div>
                             <div class="stx-memory-workbench__badge-row">
                                 <span class="stx-memory-workbench__badge">${item.injectToSystem ? '注入系统上下文' : '仅作条目记录'}</span>
                                 ${item.builtIn ? '<span class="stx-memory-workbench__badge" style="border-color:#38bdf8;color:#38bdf8">预置核心类型</span>' : '<span class="stx-memory-workbench__badge is-warn">自定义类型</span>'}
@@ -39,7 +39,7 @@ export function buildTypesViewMarkup(snapshot: WorkbenchSnapshot, state: Workben
                     <div class="stx-memory-workbench__form-grid">
                         <div class="stx-memory-workbench__field">
                             <label>类型键</label>
-                            <input class="stx-memory-workbench__input" id="stx-memory-type-key" value="${escapeAttr(selectedType?.key ?? '')}" ${selectedType?.builtIn ? 'readonly' : ''} placeholder="例如：faction">
+                            <input class="stx-memory-workbench__input" id="stx-memory-type-key" value="${escapeAttr(selectedType?.key ?? '')}" ${selectedType?.builtIn ? 'readonly' : ''} placeholder="请输入类型键名">
                         </div>
                         <div class="stx-memory-workbench__field">
                             <label>显示名称</label>
@@ -53,7 +53,7 @@ export function buildTypesViewMarkup(snapshot: WorkbenchSnapshot, state: Workben
                         </div>
                         <div class="stx-memory-workbench__field">
                             <label>图标</label>
-                            <input class="stx-memory-workbench__input" id="stx-memory-type-icon" value="${escapeAttr(selectedType?.icon ?? '')}" placeholder="FontAwesome">
+                            <input class="stx-memory-workbench__input" id="stx-memory-type-icon" value="${escapeAttr(selectedType?.icon ?? '')}" placeholder="请输入图标类名">
                         </div>
                     </div>
                     <div class="stx-memory-workbench__form-grid">
@@ -75,7 +75,7 @@ export function buildTypesViewMarkup(snapshot: WorkbenchSnapshot, state: Workben
                     </div>
                     <div class="stx-memory-workbench__field-stack" style="margin-top:8px;">
                         <label>动态字段定义</label>
-                        <textarea class="stx-memory-workbench__textarea" style="font-family:monospace" id="stx-memory-type-fields" placeholder='[{"key":"region","label":"所属区域","kind":"text"}]'>${escapeHtml(formatTypeFieldsJson(selectedType?.fields ?? []))}</textarea>
+                        <textarea class="stx-memory-workbench__textarea" style="font-family:monospace" id="stx-memory-type-fields" placeholder='[{"key":"区域","label":"所属区域","kind":"text"}]'>${escapeHtml(formatTypeFieldsJson(selectedType?.fields ?? []))}</textarea>
                     </div>
                 </div>
             </div>

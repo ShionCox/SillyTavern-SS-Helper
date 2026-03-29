@@ -2,6 +2,11 @@ import type { MemoryEntry, SummaryRefreshBinding, SummarySnapshot, SummaryEntryU
 import type { SummaryCandidateRecord } from '../memory-summary-planner';
 import { normalizeSummarySnapshot, type NormalizedSummaryDigest } from '../memory-summary-planner';
 import type { SummaryMutationDocument, SummaryMutationAction } from './mutation-types';
+import {
+    normalizeNarrativeValue,
+    normalizeUserNarrativeText,
+    resolveCurrentNarrativeUserName,
+} from '../utils/narrative-user-name';
 
 /**
  * 功能：定义 mutation 应用所需依赖。
@@ -32,6 +37,7 @@ export interface ApplySummaryMutationInput {
     mutationDocument: SummaryMutationDocument;
     candidateRecords: SummaryCandidateRecord[];
     actorKeys: string[];
+    userDisplayName?: string;
     summaryTitle?: string;
     summaryContent: string;
 }
@@ -42,6 +48,7 @@ export interface ApplySummaryMutationInput {
  * @returns 总结快照。
  */
 export async function applySummaryMutation(input: ApplySummaryMutationInput): Promise<SummarySnapshot> {
+    const userDisplayName = resolveCurrentNarrativeUserName(input.userDisplayName);
     const candidateIdMap = new Map<string, SummaryCandidateRecord>(
         input.candidateRecords.map((candidate: SummaryCandidateRecord): [string, SummaryCandidateRecord] => [candidate.candidateId, candidate]),
     );
@@ -59,6 +66,7 @@ export async function applySummaryMutation(input: ApplySummaryMutationInput): Pr
             entryUpserts,
             refreshBindings,
             actorKeys: input.actorKeys,
+            userDisplayName,
         });
     }
 
@@ -89,6 +97,7 @@ async function applySingleAction(input: {
     entryUpserts: SummaryEntryUpsert[];
     refreshBindings: SummaryRefreshBinding[];
     actorKeys: string[];
+    userDisplayName: string;
 }): Promise<void> {
     const actionType = input.action.action;
     if (actionType === 'NOOP') {
@@ -96,7 +105,7 @@ async function applySingleAction(input: {
     }
     const candidate = input.action.candidateId ? input.candidateIdMap.get(input.action.candidateId) : null;
     const resolvedRecordId = String(input.action.targetId ?? candidate?.recordId ?? '').trim();
-    const payload = resolveActionPayload(input.action);
+    const payload = resolveActionPayload(input.action, input.userDisplayName);
     if (actionType === 'DELETE' && resolvedRecordId && input.dependencies.deleteEntry) {
         await input.dependencies.deleteEntry(resolvedRecordId, {
             actionType: 'DELETE',
@@ -139,9 +148,12 @@ async function applySingleAction(input: {
                 entryType: existing.entryType,
                 category: existing.category,
                 tags: dedupeStrings([...(existing.tags ?? []), 'invalidated']),
-                summary: String(payload.summary ?? existing.summary ?? existing.detail ?? existing.title).trim(),
-                detail: existing.detail,
-                detailPayload: mergedDetailPayload,
+                summary: normalizeUserNarrativeText(
+                    String(payload.summary ?? existing.summary ?? existing.detail ?? existing.title).trim(),
+                    input.userDisplayName,
+                ),
+                detail: existing.detail ? normalizeUserNarrativeText(existing.detail, input.userDisplayName) : existing.detail,
+                detailPayload: normalizeNarrativeValue(mergedDetailPayload, input.userDisplayName),
                 actionType: 'INVALIDATE',
                 reasonCodes: dedupeStrings([
                     ...(Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : []),
@@ -161,6 +173,7 @@ async function applySingleAction(input: {
             entryUpserts: input.entryUpserts,
             refreshBindings: input.refreshBindings,
             actorKeys: input.actorKeys,
+            userDisplayName: input.userDisplayName,
         });
         return;
     }
@@ -173,6 +186,7 @@ async function applySingleAction(input: {
         actionType === 'UPDATE' ? 'UPDATE' : 'ADD',
         Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
         '结构化回合总结',
+        input.userDisplayName,
     );
     if (!upsert) {
         return;
@@ -199,6 +213,7 @@ async function applyMergeAction(input: {
     entryUpserts: SummaryEntryUpsert[];
     refreshBindings: SummaryRefreshBinding[];
     actorKeys: string[];
+    userDisplayName: string;
 }): Promise<void> {
     const candidateRecordId = input.action.candidateId
         ? input.candidateIdMap.get(input.action.candidateId)?.recordId
@@ -219,6 +234,7 @@ async function applyMergeAction(input: {
         'MERGE',
         Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
         '结构化回合总结',
+        input.userDisplayName,
     );
     if (primaryUpsert) {
         input.entryUpserts.push(primaryUpsert);
@@ -244,10 +260,10 @@ async function applyMergeAction(input: {
             entryType: existing.entryType,
             category: existing.category,
             tags: dedupeStrings([...(existing.tags ?? []), 'merged']),
-            summary: existing.summary || existing.detail || existing.title,
-            detail: existing.detail,
+            summary: normalizeUserNarrativeText(existing.summary || existing.detail || existing.title, input.userDisplayName),
+            detail: existing.detail ? normalizeUserNarrativeText(existing.detail, input.userDisplayName) : existing.detail,
             detailPayload: {
-                ...currentDetailPayload,
+                ...normalizeNarrativeValue(currentDetailPayload, input.userDisplayName),
                 mergedInto: primaryId,
                 lifecycle: {
                     ...currentLifecycle,
@@ -278,18 +294,19 @@ async function buildEntryUpsert(
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE',
     reasonCodes: string[] = [],
     sourceLabel?: string,
+    userDisplayName: string = '你',
 ): Promise<SummaryEntryUpsert | null> {
     const existing = recordId ? await dependencies.getEntry(recordId) : null;
     const summaryAppend = String(payload.summaryAppend ?? '').trim();
     const summary = String(payload.summary ?? '').trim();
     const payloadSummary = summary || summaryAppend;
-    const title = String(payload.title ?? existing?.title ?? '').trim() || '未命名条目';
+    const title = normalizeUserNarrativeText(String(payload.title ?? existing?.title ?? '').trim() || '未命名条目', userDisplayName);
     const entryType = String(payload.schemaId ?? targetSchemaId ?? existing?.entryType ?? 'other').trim() || 'other';
     const tags = dedupeStrings([
         ...(existing?.tags ?? []),
         ...(Array.isArray(payload.tags) ? (payload.tags as string[]) : []),
     ]);
-    const detailPayload = mergeDetailPayload(existing?.detailPayload ?? {}, payload);
+    const detailPayload = normalizeNarrativeValue(mergeDetailPayload(existing?.detailPayload ?? {}, payload), userDisplayName);
 
     return {
         entryId: existing?.entryId,
@@ -297,8 +314,11 @@ async function buildEntryUpsert(
         entryType,
         category: existing?.category,
         tags,
-        summary: payloadSummary || existing?.summary || existing?.detail || title,
-        detail: String(payload.detail ?? existing?.detail ?? '').trim() || undefined,
+        summary: normalizeUserNarrativeText(payloadSummary || existing?.summary || existing?.detail || title, userDisplayName),
+        detail: (() => {
+            const detail = String(payload.detail ?? existing?.detail ?? '').trim();
+            return detail ? normalizeUserNarrativeText(detail, userDisplayName) : undefined;
+        })(),
         detailPayload,
         actionType: actionType ?? (existing ? 'UPDATE' : 'ADD'),
         reasonCodes: dedupeStrings([
@@ -314,14 +334,14 @@ async function buildEntryUpsert(
  * @param action mutation action。
  * @returns 归一化 payload。
  */
-function resolveActionPayload(action: SummaryMutationAction): Record<string, unknown> {
+function resolveActionPayload(action: SummaryMutationAction, userDisplayName: string = '你'): Record<string, unknown> {
     if (action.action === 'ADD') {
-        return normalizeRecord(action.newRecord ?? action.payload);
+        return normalizeNarrativeValue(normalizeRecord(action.newRecord ?? action.payload), userDisplayName);
     }
     if (action.action === 'UPDATE' || action.action === 'MERGE' || action.action === 'INVALIDATE') {
-        return normalizeRecord(action.patch ?? action.payload);
+        return normalizeNarrativeValue(normalizeRecord(action.patch ?? action.payload), userDisplayName);
     }
-    return normalizeRecord(action.payload);
+    return normalizeNarrativeValue(normalizeRecord(action.payload), userDisplayName);
 }
 
 /**

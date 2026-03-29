@@ -67,6 +67,12 @@ const NARRATIVE_STYLE_SOURCE_LABEL_MAP: Record<string, string> = {
     mixed: '混合判断',
 };
 
+const PROMPT_STATS_LABEL_MAP: Record<string, string> = {
+    preview_total_chars: '预览总字符数',
+    active_schema_count: '活跃类型数',
+    schema_list: '类型列表',
+};
+
 /**
  * 功能：将原始变更动作标识转换为中文标题。
  * @param action 原始动作标识。
@@ -199,6 +205,15 @@ export function resolveSummaryFailureStageLabel(reasonCode: string): string {
         return '模型请求';
     }
     return '其他阶段';
+}
+
+/**
+ * 功能：返回提示词统计区块的中文标签。
+ * @param key 标签键名。
+ * @returns 中文标签。
+ */
+export function resolvePromptStatsLabel(key: 'preview_total_chars' | 'active_schema_count' | 'schema_list'): string {
+    return PROMPT_STATS_LABEL_MAP[key] ?? key;
 }
 
 /**

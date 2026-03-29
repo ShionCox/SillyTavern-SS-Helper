@@ -1,4 +1,5 @@
 import { escapeHtml } from '../editorShared';
+import { resolveEntryTypeLabel } from '../workbenchLocale';
 import { escapeAttr } from './shared';
 import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from './shared/memoryGraphTypes';
 import { getMemoryGraphNodeColor, computeMemoryGraphNodeSize, MEMORY_GRAPH_TYPE_LABELS } from './shared/memoryGraphTypes';
@@ -193,7 +194,7 @@ export function mountMemoryGraph(
         const glowOpacity = Math.max(0.4, glowIntensity);
         const floatDelay = Math.random() * 2;
         const isSelected = node.id === options.selectedNodeId;
-        const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? node.type;
+        const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? resolveEntryTypeLabel(node.type);
 
         const floatDuration = 3 + Math.random() * 3;
         

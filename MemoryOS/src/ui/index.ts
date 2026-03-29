@@ -37,6 +37,8 @@ const SUMMARY_AUTO_TRIGGER_ID: string = 'stx-memoryos-summary-auto-trigger';
 const SUMMARY_PROGRESS_OVERLAY_ID: string = 'stx-memoryos-summary-progress-overlay-enabled';
 const SUMMARY_MIN_MESSAGES_ID: string = 'stx-memoryos-summary-min-messages';
 const SUMMARY_RECENT_WINDOW_ID: string = 'stx-memoryos-summary-recent-window';
+const SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID: string = 'stx-memoryos-summary-second-stage-rolling-digest-max-chars';
+const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID: string = 'stx-memoryos-summary-second-stage-candidate-summary-max-chars';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
 const TAB_BASIC_ID: string = 'stx-memoryos-tab-basic';
@@ -292,6 +294,18 @@ function buildSettingsContentHtml(): string {
         className: 'stx-ui-input',
         attributes: { min: 10, max: 100, step: 5 },
     });
+    const summarySecondStageRollingDigestMaxCharsInput: string = buildSharedInputField({
+        id: SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 0, max: 10000, step: 20 },
+    });
+    const summarySecondStageCandidateSummaryMaxCharsInput: string = buildSharedInputField({
+        id: SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 0, max: 10000, step: 20 },
+    });
     const coldStartEnabledCheckbox: string = buildSharedCheckboxCard({
         id: COLD_START_ENABLED_ID,
         title: '',
@@ -416,7 +430,16 @@ function buildSettingsContentHtml(): string {
                         <label class="stx-ui-field-label" for="${SUMMARY_RECENT_WINDOW_ID}">最近窗口大小</label>
                         ${summaryRecentWindowInput}
                     </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID}">第二阶段 rollingDigest 截断长度</label>
+                        ${summarySecondStageRollingDigestMaxCharsInput}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID}">第二阶段候选摘要截断长度</label>
+                        ${summarySecondStageCandidateSummaryMaxCharsInput}
+                    </div>
                 </div>
+                <div class="stx-ui-item-desc">两项都支持填 0 表示不限长；填写正整数后，第二阶段会按对应长度截断历史总结片段和候选摘要。</div>
             </div>
         </div>
 
@@ -560,6 +583,8 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
+    const summarySecondStageRollingDigestMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID) as HTMLInputElement | null;
+    const summarySecondStageCandidateSummaryMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
@@ -577,6 +602,8 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     if (summaryMinMessagesInput) summaryMinMessagesInput.value = String(settings.summaryMinMessages);
     if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
     if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
+    if (summarySecondStageRollingDigestMaxCharsInput) summarySecondStageRollingDigestMaxCharsInput.value = String(settings.summarySecondStageRollingDigestMaxChars);
+    if (summarySecondStageCandidateSummaryMaxCharsInput) summarySecondStageCandidateSummaryMaxCharsInput.value = String(settings.summarySecondStageCandidateSummaryMaxChars);
     if (retrievalLogInput) retrievalLogInput.checked = settings.retrievalLogEnabled;
     if (retrievalTraceInput) retrievalTraceInput.checked = settings.retrievalTracePanelEnabled;
     if (retrievalLogLevelInput) retrievalLogLevelInput.value = settings.retrievalLogLevel;
@@ -600,6 +627,8 @@ function readSettingsFromForm(): MemoryOSSettings {
     const summaryIntervalInput: HTMLInputElement | null = document.getElementById(SUMMARY_INTERVAL_ID) as HTMLInputElement | null;
     const summaryMinMessagesInput: HTMLInputElement | null = document.getElementById(SUMMARY_MIN_MESSAGES_ID) as HTMLInputElement | null;
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
+    const summarySecondStageRollingDigestMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID) as HTMLInputElement | null;
+    const summarySecondStageCandidateSummaryMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
@@ -617,6 +646,8 @@ function readSettingsFromForm(): MemoryOSSettings {
         summaryIntervalFloors: Number(summaryIntervalInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors),
         summaryMinMessages: Number(summaryMinMessagesInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages),
         summaryRecentWindowSize: Number(summaryRecentWindowInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize),
+        summarySecondStageRollingDigestMaxChars: Number(summarySecondStageRollingDigestMaxCharsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageRollingDigestMaxChars),
+        summarySecondStageCandidateSummaryMaxChars: Number(summarySecondStageCandidateSummaryMaxCharsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageCandidateSummaryMaxChars),
         retrievalLogEnabled: retrievalLogInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.retrievalLogEnabled,
         retrievalLogLevel: retrievalLogLevelInput?.value === 'debug' ? 'debug' : 'info',
         retrievalRulePack: retrievalRulePackInput?.value === 'native'

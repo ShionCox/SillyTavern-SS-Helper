@@ -6,6 +6,7 @@ export {
     resolveWorldTypeLabel,
 } from './worldProfileLocale';
 export {
+    resolvePromptStatsLabel,
     resolveNarrativeStyleLabel,
     resolveNarrativeStyleSourceLabel,
     resolveMutationActionLabel,
@@ -18,6 +19,12 @@ export {
     resolveTracePanelTitle,
     resolveTraceStageLabel,
 } from './diagnosticsLocale';
+export {
+    resolveEntryActionTypeLabel,
+    resolveEntryIdentifierLabel,
+    resolveEntryTypeLabel,
+    resolveFailureReasonLabel,
+} from './entryLocale';
 export {
     resolvePromptBlockTitle,
     resolveRecallReasonCodeLabel,

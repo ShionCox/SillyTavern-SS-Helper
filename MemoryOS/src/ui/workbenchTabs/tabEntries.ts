@@ -1,4 +1,5 @@
 import { escapeHtml } from '../editorShared';
+import { resolveEntryTypeLabel } from '../workbenchLocale';
 import type { ActorMemoryProfile, MemoryEntry, MemoryEntryType, RoleEntryMemory } from '../../types';
 import {
     escapeAttr,
@@ -60,7 +61,7 @@ export function buildEntriesViewMarkup(
                         ${filteredEntries.length > 0 ? filteredEntries.map((entry: MemoryEntry): string => `
                             <button class="stx-memory-workbench__list-item${entry.entryId === state.selectedEntryId ? ' is-active' : ''}" data-select-entry="${escapeAttr(entry.entryId)}">
                                 <h4>${escapeHtml(entry.title)}</h4>
-                                <div class="stx-memory-workbench__meta">${escapeHtml(typeMap.get(entry.entryType)?.label || entry.entryType)} · ${escapeHtml(entry.category)}</div>
+                                <div class="stx-memory-workbench__meta">${escapeHtml(typeMap.get(entry.entryType)?.label || resolveEntryTypeLabel(entry.entryType))} · ${escapeHtml(entry.category)}</div>
                                 <div class="stx-memory-workbench__detail-clamp">${escapeHtml(entry.summary || entry.detail || '暂无内容')}</div>
                                 <div class="stx-memory-workbench__badge-row">
                                     ${(entry.tags ?? []).slice(0, 3).map((tag: string): string => `<span class="stx-memory-workbench__badge">${escapeHtml(tag)}</span>`).join('')}
@@ -98,7 +99,7 @@ export function buildEntriesViewMarkup(
                                         ${inspectorMarkup}
                                     </div>
                                     <details style="margin-top:12px; cursor:pointer;" title="点击展开以查看底层对象">
-                                        <summary style="font-size:11px; color:var(--mw-muted); user-select:none;">查看原始 JSON</summary>
+                                        <summary style="font-size:11px; color:var(--mw-muted); user-select:none;">查看原始数据</summary>
                                         <pre style="margin-top:8px; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; overflow-x:auto;">${escapeHtml(stringifyData(selectedEntry))}</pre>
                                     </details>
                                 ` : '<div class="stx-memory-workbench__empty">新建状态下在左侧填写完毕并保存后，此处将自动解析出实体的检视信息。</div>'}
@@ -116,17 +117,17 @@ export function buildEntriesViewMarkup(
                                     <div class="stx-memory-workbench__panel-title">系统属性</div>
                                     <div class="stx-memory-workbench__form-grid" style="grid-template-columns:1fr; gap:12px;">
                                         <div class="stx-memory-workbench__field-stack">
-                                            <label>类型 (Type)</label>
+                                            <label>类型</label>
                                             <select class="stx-memory-workbench__select" id="stx-memory-entry-type">
                                                 ${snapshot.entryTypes.map((item: MemoryEntryType): string => `<option value="${escapeAttr(item.key)}"${item.key === (entryDraft.entryType ?? selectedEntryType?.key ?? 'other') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
                                             </select>
                                         </div>
                                         <div class="stx-memory-workbench__field-stack">
-                                            <label>分类 (Category)</label>
+                                            <label>分类</label>
                                             <input class="stx-memory-workbench__input" id="stx-memory-entry-category" value="${escapeAttr(entryDraft.category ?? selectedEntryType?.category ?? '其他')}" placeholder="输入分类">
                                         </div>
                                         <div class="stx-memory-workbench__field-stack">
-                                            <label>标签 (Tags)</label>
+                                            <label>标签</label>
                                             <input class="stx-memory-workbench__input" id="stx-memory-entry-tags" value="${escapeAttr((entryDraft.tags ?? []).join(', '))}" placeholder="多个标签请用逗号分隔">
                                         </div>
                                     </div>
@@ -245,7 +246,7 @@ function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
             { label: '摘要', value: entry.summary },
             { label: '正文', value: entry.detail },
             { label: '标签', value: entry.tags },
-            { label: 'sourceSummaryIds', value: entry.sourceSummaryIds },
+            { label: '来源总结列表', value: entry.sourceSummaryIds },
         ],
     });
 

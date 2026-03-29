@@ -6,7 +6,7 @@ export function buildActorRelationshipsMarkup(snapshot: WorkbenchSnapshot, state
     const isHidden = state.currentActorTab !== 'relationships';
     return '<div class="stx-memory-workbench__actor-tab" ' + (isHidden ? 'style="display:none;"' : '') + ' style="padding:0; gap:0;">' +
         '<div class="stx-rpg-rel-header">' +
-            '<div class="stx-memory-workbench__panel-title">节点纠缠拓扑 / SOCIAL LINKS</div>' +
+            '<div class="stx-memory-workbench__panel-title">关系网 / SOCIAL LINKS</div>' +
             '<div class="stx-memory-workbench__toolbar">' +
                 '<button class="stx-memory-workbench__ghost-btn is-active"><i class="fa-solid fa-diagram-project"></i> 可视化拓扑图</button>' +
                 '<button class="stx-memory-workbench__ghost-btn"><i class="fa-solid fa-flag"></i> 势力阵营面板</button>' +

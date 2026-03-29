@@ -13,6 +13,8 @@ export type MemoryOSSettings = {
     summaryIntervalFloors: number;
     summaryMinMessages: number;
     summaryRecentWindowSize: number;
+    summarySecondStageRollingDigestMaxChars: number;
+    summarySecondStageCandidateSummaryMaxChars: number;
     retrievalLogEnabled: boolean;
     retrievalLogLevel: 'info' | 'debug';
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
@@ -34,6 +36,8 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     summaryIntervalFloors: 1,
     summaryMinMessages: 10,
     summaryRecentWindowSize: 40,
+    summarySecondStageRollingDigestMaxChars: 0,
+    summarySecondStageCandidateSummaryMaxChars: 0,
     retrievalLogEnabled: true,
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
@@ -62,6 +66,14 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         10,
         Math.min(100, Math.trunc(Number(candidate.summaryRecentWindowSize) || DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize)),
     );
+    const summarySecondStageRollingDigestMaxCharsRaw = Number(candidate.summarySecondStageRollingDigestMaxChars);
+    const summarySecondStageRollingDigestMaxChars: number = summarySecondStageRollingDigestMaxCharsRaw <= 0
+        ? 0
+        : Math.max(60, Math.min(10000, Math.trunc(summarySecondStageRollingDigestMaxCharsRaw)));
+    const summarySecondStageCandidateSummaryMaxCharsRaw = Number(candidate.summarySecondStageCandidateSummaryMaxChars);
+    const summarySecondStageCandidateSummaryMaxChars: number = summarySecondStageCandidateSummaryMaxCharsRaw <= 0
+        ? 0
+        : Math.max(40, Math.min(10000, Math.trunc(summarySecondStageCandidateSummaryMaxCharsRaw)));
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
     const retrievalRulePack = candidate.retrievalRulePack === 'native'
         || candidate.retrievalRulePack === 'perocore'
@@ -81,6 +93,8 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         summaryIntervalFloors,
         summaryMinMessages,
         summaryRecentWindowSize,
+        summarySecondStageRollingDigestMaxChars,
+        summarySecondStageCandidateSummaryMaxChars,
         retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
         retrievalLogLevel,
         retrievalRulePack,

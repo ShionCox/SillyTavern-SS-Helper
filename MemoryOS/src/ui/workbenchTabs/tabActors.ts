@@ -1,4 +1,5 @@
 import { escapeHtml } from '../editorShared';
+import { resolveEntryTypeLabel } from '../workbenchLocale';
 import { escapeAttr, formatTimestamp, isUserActorKey, summarizeDetailPayload, type WorkbenchSnapshot, type WorkbenchState } from './shared';
 import type { ActorMemoryProfile, MemoryEntry, MemoryEntryType, RoleEntryMemory, SummarySnapshot } from '../../types';
 
@@ -43,7 +44,7 @@ function buildActorAttributesMarkup(selectedActor: ActorMemoryProfile | null): s
         <div class="stx-memory-workbench__form-grid">
             <div class="stx-memory-workbench__field-stack">
                 <label>角色键</label>
-                <input class="stx-memory-workbench__input" id="stx-memory-actor-key" value="${escapeAttr(selectedActor?.actorKey ?? '')}" placeholder="例如：seraphina" />
+                <input class="stx-memory-workbench__input" id="stx-memory-actor-key" value="${escapeAttr(selectedActor?.actorKey ?? '')}" placeholder="请输入角色键名" />
             </div>
             <div class="stx-memory-workbench__field-stack">
                 <label>显示名</label>
@@ -95,7 +96,7 @@ function buildActorMemoryMarkup(
 ): string {
     const memoryRows = selectedActorMemories.map((item: RoleEntryMemory): string => {
         const entry = snapshot.entries.find((row: MemoryEntry): boolean => row.entryId === item.entryId);
-        const typeLabel = typeMap.get(entry?.entryType ?? '')?.label || entry?.entryType || '未分类';
+        const typeLabel = typeMap.get(entry?.entryType ?? '')?.label || resolveEntryTypeLabel(entry?.entryType ?? '') || '未分类';
         return `
             <article class="stx-memory-workbench__card" style="padding: 12px;">
                 <div class="stx-memory-workbench__split-head" style="margin-bottom: 8px;">
@@ -145,7 +146,7 @@ function buildActorItemsMarkup(): string {
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__panel-title">装备终端</div>
             <div class="stx-memory-workbench__detail-block">
-                当前聊天尚未接入真实的 item / equipment 主链，因此这里仅展示只读说明，不再渲染演示背包或伪装备栏。
+                当前聊天尚未接入真实的物品 / 装备主链，因此这里仅展示只读说明，不再渲染演示背包或伪装备栏。
             </div>
             <div class="stx-memory-workbench__info-list">
                 <div class="stx-memory-workbench__info-row"><span>接入状态</span><strong>未接入主链</strong></div>
@@ -194,7 +195,7 @@ function buildActorRelationshipsMarkup(
             <article class="stx-memory-workbench__card" style="padding: 12px; border-left: 2px solid ${typeColor};">
                 <div class="stx-memory-workbench__split-head" style="margin-bottom: 4px;">
                     <div class="stx-memory-workbench__panel-title">对 ${escapeHtml(roleName)} 的状况</div>
-                    <div class="stx-memory-workbench__meta" style="color: ${typeColor}; font-weight: bold;">${escapeHtml(link.label || '关系')}</div>
+                    <div class="stx-memory-workbench__meta" style="color: ${typeColor}; font-weight: bold; text-wrap-mode: nowrap;">${escapeHtml(link.label || '关系')}</div>
                 </div>
                 <div class="stx-memory-workbench__meta" style="margin-bottom: 8px;">信号 ${escapeHtml(memoryRow ? String(memoryRow.memoryPercent) + '%' : '未绑定')}</div>
                 <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(link.summary || link.label || '暂无内容')}</div>
@@ -221,11 +222,11 @@ function buildActorRelationshipsMarkup(
             </div>
 
             <div class="stx-rpg-rel-header" style="position: absolute; right: 16px; top: 16px; background: rgba(17, 19, 24, 0.7); backdrop-filter: blur(4px); border: 1px solid var(--mw-line); padding: 8px 16px; border-radius: 6px; z-index: 10; text-align: right; pointer-events: none;">
-                <div class="stx-memory-workbench__panel-title">节点纠缠拓扑</div>
+                <div class="stx-memory-workbench__panel-title">关系网</div>
                 <div class="stx-memory-workbench__meta">可拖拽与滚轮缩放</div>
             </div>
 
-            <aside class="stx-workbench-topology__panel" style="position: absolute; left: 16px; top: 16px; bottom: 16px; width: 280px; background: rgba(17, 19, 24, 0.9); backdrop-filter: blur(8px); border: 1px solid var(--mw-line-strong); box-shadow: 4px 0 24px rgba(0,0,0,0.5); z-index: 10; display: flex; flex-direction: column; overflow-y: auto;">
+            <aside class="stx-workbench-topology__panel" style="position: absolute; left: 16px; top: 16px; bottom: 16px; width: 350px; background: rgba(17, 19, 24, 0.9); backdrop-filter: blur(8px); border: 1px solid var(--mw-line-strong); box-shadow: 4px 0 24px rgba(0,0,0,0.5); z-index: 10; display: flex; flex-direction: column; overflow-y: auto;">
                 <div class="stx-memory-workbench__card" style="border: none; border-bottom: 1px solid var(--mw-line); border-radius: 0;">
                     <div class="stx-memory-workbench__panel-title">角色属性</div>
                     <div class="stx-memory-workbench__info-list">
@@ -357,8 +358,8 @@ export function buildActorsViewMarkup(
                         <select class="stx-memory-workbench__select" id="stx-memory-actor-sort" style="flex: 1;">
                             <option value="stat-desc"${state.actorSortOrder === 'stat-desc' || !state.actorSortOrder ? ' selected' : ''}>稳定度 ↓</option>
                             <option value="stat-asc"${state.actorSortOrder === 'stat-asc' ? ' selected' : ''}>稳定度 ↑</option>
-                            <option value="name-asc"${state.actorSortOrder === 'name-asc' ? ' selected' : ''}>名称 A-Z</option>
-                            <option value="name-desc"${state.actorSortOrder === 'name-desc' ? ' selected' : ''}>名称 Z-A</option>
+                            <option value="name-asc"${state.actorSortOrder === 'name-asc' ? ' selected' : ''}>名称正序</option>
+                            <option value="name-desc"${state.actorSortOrder === 'name-desc' ? ' selected' : ''}>名称倒序</option>
                         </select>
                     </div>
                     <div class="stx-memory-workbench__list">

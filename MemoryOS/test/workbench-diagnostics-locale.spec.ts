@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+    resolveEntryActionTypeLabel,
+    resolveEntryTypeLabel,
+    resolveFailureReasonLabel,
     resolveNarrativeStyleLabel,
     resolveNarrativeStyleSourceLabel,
     resolveMutationActionLabel,
     resolveMutationSummaryFieldValue,
+    resolvePromptStatsLabel,
     resolveSummaryFailureStageLabel,
     resolveSummaryPlannerFieldLabel,
     resolveSummaryStageLabel,
@@ -36,5 +40,12 @@ describe('workbench diagnostics locale', () => {
         expect(resolveNarrativeStyleLabel('gangster')).toBe('黑帮');
         expect(resolveNarrativeStyleSourceLabel('binding')).toBe('已绑定画像');
         expect(resolveSummaryFailureStageLabel('validation_failed_schema')).toBe('结构校验');
+    });
+
+    it('可以转译词条记录与统计区块的内部术语', () => {
+        expect(resolveEntryTypeLabel('other')).toBe('其他');
+        expect(resolveEntryActionTypeLabel('NOOP')).toBe('无需操作');
+        expect(resolveFailureReasonLabel('validation_failed_payload')).toBe('结构校验失败');
+        expect(resolvePromptStatsLabel('schema_list')).toBe('类型列表');
     });
 });

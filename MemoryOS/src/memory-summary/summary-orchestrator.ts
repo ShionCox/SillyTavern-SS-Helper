@@ -10,6 +10,8 @@ import {
 import { buildSummaryWindow, type SummaryWindowMessage } from './summary-window';
 import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
 import type { MemoryLLMApi } from './llm-types';
+import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import { readMemoryOSSettings } from '../settings/store';
 
 /**
  * 功能：总结编排器依赖。
@@ -57,6 +59,8 @@ export interface RunSummaryOrchestratorResult {
  * @returns 编排结果。
  */
 export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput): Promise<RunSummaryOrchestratorResult> {
+    const settings = readMemoryOSSettings();
+    const userDisplayName = resolveCurrentNarrativeUserName();
     const summaryLanguageInstruction = '除 action、targetKind、candidateId、compareKey、reasonCodes 及各类键名外，所有自然语言内容必须使用简体中文。';
     await input.dependencies.appendMutationHistory({
         action: 'summary_started',
@@ -150,8 +154,13 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const plannerPromptPack = await loadPromptPackSections();
     const plannerSchema = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_SCHEMA);
     const plannerSample = parseJsonSection(plannerPromptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
-    const plannerSystemPrompt = `${plannerPromptPack.SUMMARY_PLANNER_SYSTEM}\n\n${summaryLanguageInstruction}`;
-    const lightweightPlannerInput = buildLightweightPlannerInput(plannerResult.context);
+    const plannerSystemPrompt = `${renderPromptTemplate(plannerPromptPack.SUMMARY_PLANNER_SYSTEM, {
+        userDisplayName,
+    })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 reasons、topics 以及其它自然语言字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+    const lightweightPlannerInput = {
+        ...buildLightweightPlannerInput(plannerResult.context),
+        userDisplayName,
+    };
     const plannerUserPayload = buildStructuredTaskUserPayload(
         JSON.stringify(lightweightPlannerInput, null, 2),
         JSON.stringify(plannerSchema ?? {}, null, 2),
@@ -181,6 +190,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             topics: plannerDecision.topics,
             reasons: plannerDecision.reasons,
             narrativeStyle: plannerResult.context.narrativeStyle,
+            userDisplayName,
         },
     });
     const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];
@@ -214,6 +224,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             mutationDocument: noopDocument,
             candidateRecords: plannerResult.context.candidateRecords,
             actorKeys,
+            userDisplayName,
             summaryTitle: '结构化回合总结',
             summaryContent: plannerResult.context.window.summaryText,
         });
@@ -246,10 +257,16 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
-    })}\n\n${summaryLanguageInstruction}`;
-    const mutationContext = buildSlimMutationContext(plannerResult.context, plannerDecision);
+        userDisplayName,
+    })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+    const mutationContext = buildSlimMutationContext(
+        plannerResult.context,
+        plannerDecision,
+        settings.summarySecondStageRollingDigestMaxChars,
+        settings.summarySecondStageCandidateSummaryMaxChars,
+    );
     const summaryUserPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(mutationContext, null, 2),
+        JSON.stringify({ ...mutationContext, userDisplayName }, null, 2),
         JSON.stringify(strictSummarySchema ?? {}, null, 2),
         JSON.stringify(summaryOutputSample ?? {}, null, 2),
     );
@@ -326,6 +343,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         mutationDocument: validation.document,
         candidateRecords: plannerResult.context.candidateRecords,
         actorKeys,
+        userDisplayName,
         summaryTitle: '结构化回合总结',
         summaryContent: plannerResult.context.window.summaryText,
     });
@@ -362,6 +380,8 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 function buildSlimMutationContext(
     context: import('../memory-summary-planner').SummaryMutationContext,
     plannerDecision: SummaryPlannerOutput,
+    rollingDigestMaxChars: number,
+    candidateSummaryMaxChars: number,
 ): Record<string, unknown> {
     const focusTypes = plannerDecision.focus_types;
     const filteredTypeSchemas = focusTypes.length > 0
@@ -373,7 +393,7 @@ function buildSlimMutationContext(
 
     const rollingDigest = context.recentSummaryDigest.length > 0
         ? context.recentSummaryDigest
-            .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, 120)}`)
+            .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, rollingDigestMaxChars)}`)
             .join(' | ')
         : '';
 
@@ -381,7 +401,7 @@ function buildSlimMutationContext(
         candidateId: candidate.candidateId,
         targetKind: candidate.targetKind,
         title: candidate.title,
-        summary: truncateTextForContext(candidate.summary ?? '', 100),
+        summary: truncateTextForContext(candidate.summary ?? '', candidateSummaryMaxChars),
         status: candidate.status,
     }));
 
@@ -425,6 +445,7 @@ function extractWindowFacts(summaryText: string): string[] {
  */
 function truncateTextForContext(text: string, maxLength: number): string {
     const normalized = String(text ?? '').trim();
+    if (!Number.isFinite(maxLength) || maxLength <= 0) return normalized;
     if (normalized.length <= maxLength) return normalized;
     return normalized.slice(0, maxLength) + '…';
 }

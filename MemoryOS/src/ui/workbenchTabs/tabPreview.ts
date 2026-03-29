@@ -1,6 +1,10 @@
 import { escapeHtml } from '../editorShared';
 import { getWorldProfileById } from '../../memory-world-profile';
 import {
+    resolveEntryActionTypeLabel,
+    resolveEntryTypeLabel,
+    resolveFailureReasonLabel,
+    resolvePromptStatsLabel,
     resolveNarrativeStyleLabel,
     resolveNarrativeStyleSourceLabel,
     resolveMutationActionLabel,
@@ -175,7 +179,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                 </div>
                                 <div class="stx-memory-workbench__detail-block">${escapeHtml(summary.content || '暂无内容')}</div>
                             </article>
-                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有 summary snapshots 数据。</div>'}
+                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有总结快照数据。</div>'}
                     </div>
                 </div>
 
@@ -190,11 +194,11 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                 </div>
                                 <div class="stx-memory-workbench__detail-block">${escapeHtml(buildHistorySummary(history.action, history.payload))}</div>
                                 <details class="stx-memory-workbench__details">
-                                    <summary>查看原始 payload</summary>
+                                    <summary>查看原始数据</summary>
                                     <pre>${escapeHtml(stringifyData(history.payload))}</pre>
                                 </details>
                             </article>
-                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有 memory mutation history 数据。</div>'}
+                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有变更时间线数据。</div>'}
                     </div>
                 </div>
             </div>
@@ -270,10 +274,10 @@ function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('systemText'))}字符数</span><strong>${escapeHtml(String(systemTextLen))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('roleText'))}字符数</span><strong>${escapeHtml(String(roleTextLen))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('finalText'))}字符数</span><strong>${escapeHtml(String(finalTextLen))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>Preview 总字符数</span><strong>${escapeHtml(String(totalPreviewLen))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('preview_total_chars'))}</span><strong>${escapeHtml(String(totalPreviewLen))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>候选记录数</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>活跃 Schema 数</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
-                ${schemaCount.length > 0 ? `<div class="stx-memory-workbench__info-row"><span>Schema 列表</span><strong>${escapeHtml(schemaCount.join('、'))}</strong></div>` : ''}
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('active_schema_count'))}</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
+                ${schemaCount.length > 0 ? `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('schema_list'))}</span><strong>${escapeHtml(schemaCount.join('、'))}</strong></div>` : ''}
             </div>
         </div>
     `;
@@ -313,13 +317,14 @@ function buildActionDistributionMarkup(snapshot: WorkbenchSnapshot): string {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([action, count]) => {
             const color = actionColorMap[action] || '#94a3b8';
+            const actionLabel = resolveEntryActionTypeLabel(action);
             return `
                 <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0;">
-                    <span style="width: 80px; min-width: 0; color: ${color}; font-weight: 600; font-family: 'Fira Code', monospace; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(action)}</span>
+                    <span style="width: 80px; min-width: 0; color: ${color}; font-weight: 600; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(actionLabel)}</span>
                     <div style="flex: 1; min-width: 0; height: 16px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden;">
                         <div style="height: 100%; width: ${totalActions > 0 ? Math.round((count / totalActions) * 100) : 0}%; background: ${color}; border-radius: 4px; opacity: 0.7;"></div>
                     </div>
-                    <span style="color: var(--mw-text); font-family: 'Fira Code', monospace; min-width: 24px; text-align: right; white-space: normal; word-break: break-word;">${escapeHtml(String(count))}</span>
+                    <span style="color: var(--mw-text); min-width: 24px; text-align: right; white-space: normal; word-break: break-word;">${escapeHtml(String(count))}</span>
                 </div>`;
         }).join('');
 
@@ -397,13 +402,13 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
             ? (record.payload.validationErrors as string[]).map((e: string) => String(e ?? '').trim()).filter(Boolean)
             : [];
         const isSchemaFail = reasonCode.startsWith('validation_failed');
-        const stageLabel = isSchemaFail ? 'Schema 校验失败' : '总结链路失败';
+        const stageLabel = isSchemaFail ? '结构校验失败' : '总结链路失败';
 
         return `
         <div style="padding: 8px 10px; background: rgba(239,68,68,0.08); border-left: 3px solid var(--mw-warn); border-radius: 0 4px 4px 0;">
             <div style="font-size: 12px; font-weight: 600; color: var(--mw-warn); margin-bottom: 4px;">${escapeHtml(stageLabel)}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
-                <div>原因码：<strong>${escapeHtml(reasonCode || 'unknown')}</strong></div>
+                <div>原因：<strong>${escapeHtml(resolveFailureReasonLabel(reasonCode || 'unknown'))}</strong></div>
                 <div>失败阶段：<strong>${escapeHtml(resolveSummaryFailureStageLabel(reasonCode))}</strong></div>
                 ${validationErrors.length > 0 ? `<div>校验错误：<strong>${escapeHtml(validationErrors.join('；'))}</strong></div>` : ''}
             </div>
@@ -498,7 +503,7 @@ function buildEntryUpdateCards(snapshot: WorkbenchSnapshot): string {
             detailText: buildFailureDetail(history.payload),
             payload: normalizeRecord(history.payload),
             actionType: 'summary_failed',
-            failureReason: String(history.payload.reasonCode ?? '').trim() || 'unknown',
+            failureReason: resolveFailureReasonLabel(String(history.payload.reasonCode ?? '').trim() || 'unknown'),
         }));
 
     return [...failedRecords, ...successRecords]
@@ -560,18 +565,18 @@ function renderEntryUpdateCard(record: EntryUpdateRecord): string {
                 <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
                     <span style="background: ${typeBg}; color: ${typeColor}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid ${typeBg};">${escapeHtml(record.mode)}</span>
                     <span style="font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;" title="${escapeAttr(record.title)}">${escapeHtml(record.title)}</span>
-                    ${record.entryId ? `<span style="font-family: 'Fira Code', monospace; font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;" title="${escapeAttr(record.entryId)}">${escapeHtml(record.entryId)}</span>` : ''}
+                    ${record.entryId ? `<span style="font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;" title="${escapeAttr(record.entryId)}">${escapeHtml(record.entryId)}</span>` : ''}
                 </div>
-                <div style="font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; padding-left: 12px; flex-shrink: 0; font-family: 'Fira Code', monospace;">
+                <div style="font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; padding-left: 12px; flex-shrink: 0;">
                     ${escapeHtml(formatTimestamp(record.ts))}
                 </div>
             </div>
             
             <div style="padding: 10px 12px;">
                 <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: ${(record.detailText || changedFieldsMarkup) ? '10px' : '0'}; min-width: 0;">
-                    <div style="display: flex; gap: 4px; align-items: center;"><span>类型:</span><span style="color:#ddd;">${escapeHtml(record.entryType || 'unknown')}</span></div>
+                    <div style="display: flex; gap: 4px; align-items: center;"><span>类型：</span><span style="color:#ddd;">${escapeHtml(resolveEntryTypeLabel(record.entryType || 'unknown'))}</span></div>
                     <div style="display: flex; gap: 4px; align-items: center;"><span>来源:</span><span style="color:#ddd;">${escapeHtml(record.sourceLabel)}</span></div>
-                    <div style="display: flex; gap: 4px; align-items: center;"><span>动作:</span><strong style="color:#ddd;">${escapeHtml(record.actionType || '未记录')}</strong></div>
+                    <div style="display: flex; gap: 4px; align-items: center;"><span>动作：</span><strong style="color:#ddd;">${escapeHtml(resolveEntryActionTypeLabel(record.actionType || ''))}</strong></div>
                     ${record.failureReason ? `<div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start; color: var(--mw-warn); flex: 1 1 100%; min-width: 0;"><span>失败原因:</span><strong style="display:block; width:100%; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(record.failureReason)}</strong></div>` : ''}
                 </div>
 
@@ -695,7 +700,7 @@ function normalizeRecord(value: unknown): Record<string, unknown> {
  */
 function resolveFailureTitle(payload: Record<string, unknown>): string {
     const reasonCode = String(payload.reasonCode ?? '').trim();
-    return reasonCode ? `总结失败：${reasonCode}` : '结构化记忆更新失败';
+    return reasonCode ? `总结失败：${resolveFailureReasonLabel(reasonCode)}` : '结构化记忆更新失败';
 }
 
 /**
@@ -712,7 +717,7 @@ function buildFailureDetail(payload: Record<string, unknown>): string {
     }
     const reasonCode = String(payload.reasonCode ?? '').trim();
     if (reasonCode) {
-        return `原因码：${reasonCode}`;
+        return `原因：${resolveFailureReasonLabel(reasonCode)}`;
     }
     return '本次总结链路失败，详情请展开查看原始记录。';
 }
