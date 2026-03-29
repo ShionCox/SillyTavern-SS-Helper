@@ -19,6 +19,26 @@ export type {
     UnifiedMemoryFilters,
 } from './unified-memory';
 
+export type {
+    MemoryTakeoverMode,
+    MemoryTakeoverStatus,
+    MemoryTakeoverRange,
+    MemoryTakeoverPlan,
+    MemoryTakeoverBatch,
+    MemoryTakeoverStableFact,
+    MemoryTakeoverRelationTransition,
+    MemoryTakeoverTaskTransition,
+    MemoryTakeoverWorldStateChange,
+    MemoryTakeoverBaseline,
+    MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverBatchResult,
+    MemoryTakeoverConsolidationStats,
+    MemoryTakeoverConsolidationResult,
+    MemoryTakeoverProgressSnapshot,
+    MemoryTakeoverCreateInput,
+    MemoryTakeoverDetectionResult,
+} from './memory-takeover';
+
 export {
     DEFAULT_ACTOR_MEMORY_STAT,
     CORE_MEMORY_ENTRY_TYPES,

@@ -15,7 +15,7 @@ export type UnifiedWorkbenchRawTableName =
 /**
  * 功能：统一记忆工作台支持的页面视图类型。
  */
-export type UnifiedWorkbenchViewMode = 'world' | 'memory' | 'diagnostics' | 'raw';
+export type UnifiedWorkbenchViewMode = 'world' | 'memory' | 'diagnostics' | 'raw' | 'takeover';
 
 /**
  * 功能：统一记忆工作台中可见的原始数据表标签类型。

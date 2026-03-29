@@ -1,9 +1,11 @@
 import Dexie from 'dexie';
 import {
+    appendSdkPluginChatRecord,
     db,
     deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
+    querySdkPluginChatRecords,
     readSdkPluginChatState,
     writeSdkPluginChatState,
 } from '../../../SDK/db';
@@ -28,6 +30,14 @@ import type {
 } from '../../../SDK/db';
 import { SSHelperDatabase } from '../../../SDK/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import type {
+    MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverBaseline,
+    MemoryTakeoverBatch,
+    MemoryTakeoverBatchResult,
+    MemoryTakeoverConsolidationResult,
+    MemoryTakeoverPlan,
+} from '../types';
 
 export { db, patchSdkChatShared };
 export type {
@@ -139,6 +149,27 @@ export interface ImportMemoryPromptTestBundleResult {
 }
 
 /**
+ * 功能：定义接管记录集合名称。
+ */
+export type MemoryTakeoverRecordCollection =
+    | 'takeover_batch_meta'
+    | 'takeover_batch_result'
+    | 'takeover_logs'
+    | 'takeover_preview';
+
+/**
+ * 功能：定义接管日志记录。
+ */
+export interface MemoryTakeoverLogRecord {
+    takeoverId: string;
+    level: 'info' | 'warn' | 'error';
+    stage: string;
+    message: string;
+    detail?: Record<string, unknown>;
+    ts: number;
+}
+
+/**
  * 功能：读取 MemoryOS 当前聊天的插件状态。
  * @param chatKey 聊天键。
  * @returns 插件状态；不存在时返回 null。
@@ -155,6 +186,174 @@ export async function readMemoryOSChatState(chatKey: string): Promise<DBChatPlug
  */
 export async function writeMemoryOSChatState(chatKey: string, state: Record<string, unknown>): Promise<void> {
     await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), state);
+}
+
+/**
+ * 功能：读取旧聊天接管总状态。
+ * @param chatKey 聊天键。
+ * @returns 接管计划；不存在时返回 null。
+ */
+export async function readMemoryTakeoverPlan(chatKey: string): Promise<MemoryTakeoverPlan | null> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const takeover = toRecord(toRecord(stateRow?.state).takeover);
+    if (Object.keys(takeover).length <= 0) {
+        return null;
+    }
+    return takeover as unknown as MemoryTakeoverPlan;
+}
+
+/**
+ * 功能：写入旧聊天接管总状态。
+ * @param chatKey 聊天键。
+ * @param plan 接管计划。
+ * @returns 异步完成。
+ */
+export async function writeMemoryTakeoverPlan(chatKey: string, plan: MemoryTakeoverPlan): Promise<void> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    await writeMemoryOSChatState(chatKey, {
+        ...state,
+        takeover: plan,
+    });
+}
+
+/**
+ * 功能：写入接管批次元数据。
+ * @param chatKey 聊天键。
+ * @param batch 批次元数据。
+ * @returns 异步完成。
+ */
+export async function saveMemoryTakeoverBatchMeta(chatKey: string, batch: MemoryTakeoverBatch): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        recordId: String(batch.batchId ?? '').trim(),
+        payload: batch as unknown as Record<string, unknown>,
+        ts: batch.finishedAt ?? batch.startedAt ?? Date.now(),
+    });
+}
+
+/**
+ * 功能：读取接管批次元数据列表。
+ * @param chatKey 聊天键。
+ * @returns 批次元数据列表。
+ */
+export async function loadMemoryTakeoverBatchMetas(chatKey: string): Promise<MemoryTakeoverBatch[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        order: 'asc',
+        limit: 2000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatch => row.payload as unknown as MemoryTakeoverBatch);
+}
+
+/**
+ * 功能：写入接管批次分析结果。
+ * @param chatKey 聊天键。
+ * @param result 批次分析结果。
+ * @returns 异步完成。
+ */
+export async function saveMemoryTakeoverBatchResult(chatKey: string, result: MemoryTakeoverBatchResult): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
+        recordId: String(result.batchId ?? '').trim(),
+        payload: result as unknown as Record<string, unknown>,
+        ts: result.generatedAt || Date.now(),
+    });
+}
+
+/**
+ * 功能：读取接管批次分析结果列表。
+ * @param chatKey 聊天键。
+ * @returns 批次分析结果列表。
+ */
+export async function loadMemoryTakeoverBatchResults(chatKey: string): Promise<MemoryTakeoverBatchResult[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
+        order: 'asc',
+        limit: 2000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatchResult => row.payload as unknown as MemoryTakeoverBatchResult);
+}
+
+/**
+ * 功能：写入接管预览数据。
+ * @param chatKey 聊天键。
+ * @param recordId 记录标识。
+ * @param payload 预览数据。
+ * @returns 异步完成。
+ */
+export async function saveMemoryTakeoverPreview(
+    chatKey: string,
+    recordId: 'baseline' | 'active_snapshot' | 'latest_batch' | 'consolidation',
+    payload: MemoryTakeoverBaseline | MemoryTakeoverActiveSnapshot | MemoryTakeoverBatchResult | MemoryTakeoverConsolidationResult,
+): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_preview', {
+        recordId,
+        payload: payload as unknown as Record<string, unknown>,
+        ts: Date.now(),
+    });
+}
+
+/**
+ * 功能：读取最新接管预览数据。
+ * @param chatKey 聊天键。
+ * @returns 预览映射。
+ */
+export async function loadMemoryTakeoverPreview(chatKey: string): Promise<{
+    baseline: MemoryTakeoverBaseline | null;
+    activeSnapshot: MemoryTakeoverActiveSnapshot | null;
+    latestBatch: MemoryTakeoverBatchResult | null;
+    consolidation: MemoryTakeoverConsolidationResult | null;
+}> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_preview', {
+        order: 'desc',
+        limit: 20,
+    });
+    const result = {
+        baseline: null as MemoryTakeoverBaseline | null,
+        activeSnapshot: null as MemoryTakeoverActiveSnapshot | null,
+        latestBatch: null as MemoryTakeoverBatchResult | null,
+        consolidation: null as MemoryTakeoverConsolidationResult | null,
+    };
+    for (const row of rows) {
+        if (row.recordId === 'baseline' && !result.baseline) {
+            result.baseline = row.payload as unknown as MemoryTakeoverBaseline;
+        }
+        if (row.recordId === 'active_snapshot' && !result.activeSnapshot) {
+            result.activeSnapshot = row.payload as unknown as MemoryTakeoverActiveSnapshot;
+        }
+        if (row.recordId === 'latest_batch' && !result.latestBatch) {
+            result.latestBatch = row.payload as unknown as MemoryTakeoverBatchResult;
+        }
+        if (row.recordId === 'consolidation' && !result.consolidation) {
+            result.consolidation = row.payload as unknown as MemoryTakeoverConsolidationResult;
+        }
+    }
+    return result;
+}
+
+/**
+ * 功能：写入接管日志。
+ * @param chatKey 聊天键。
+ * @param record 日志记录。
+ * @returns 异步完成。
+ */
+export async function appendMemoryTakeoverLog(chatKey: string, record: MemoryTakeoverLogRecord): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_logs', {
+        recordId: `${record.takeoverId}:${record.stage}:${record.ts}`,
+        payload: record as unknown as Record<string, unknown>,
+        ts: record.ts,
+    });
+}
+
+/**
+ * 功能：读取接管日志。
+ * @param chatKey 聊天键。
+ * @param limit 限制数量。
+ * @returns 日志列表。
+ */
+export async function loadMemoryTakeoverLogs(chatKey: string, limit: number = 120): Promise<MemoryTakeoverLogRecord[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_logs', {
+        order: 'desc',
+        limit,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverLogRecord => row.payload as unknown as MemoryTakeoverLogRecord);
 }
 
 /**

@@ -19,6 +19,7 @@ import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, subscribeMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
 import { openMemoryBootstrapReviewDialog } from '../ui/memory-bootstrap-review-dialog';
+import { openMemoryTakeoverDialog } from '../ui/memory-takeover-dialog';
 import { openUnifiedMemoryWorkbench } from '../ui/unifiedMemoryWorkbench';
 import {
     setMemorySummaryProgressFloatEnabled,
@@ -150,6 +151,8 @@ export class MemoryOS {
     private readonly registry: PluginRegistry;
     private readonly coldStartPromptedChats: Set<string>;
     private readonly coldStartRunningChats: Set<string>;
+    private readonly takeoverPromptedChats: Set<string>;
+    private readonly takeoverRunningChats: Set<string>;
     private refreshChatBindingHandler: ((force?: boolean) => Promise<void>) | null;
 
     /**
@@ -160,6 +163,8 @@ export class MemoryOS {
         this.registry = new PluginRegistry();
         this.coldStartPromptedChats = new Set<string>();
         this.coldStartRunningChats = new Set<string>();
+        this.takeoverPromptedChats = new Set<string>();
+        this.takeoverRunningChats = new Set<string>();
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -414,6 +419,81 @@ export class MemoryOS {
     }
 
     /**
+     * 功能：在旧聊天绑定后按需弹出接管配置。
+     * @param chatKey 当前聊天键。
+     * @param sdk 当前聊天的 Memory SDK。
+     * @returns 是否已处理接管流程。
+     */
+    private async maybePromptTakeover(chatKey: string, sdk: MemorySDKImpl): Promise<boolean> {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        if (!normalizedChatKey) {
+            return false;
+        }
+        const parsedChatRef = parseTavernChatScopedKeyEvent(normalizedChatKey);
+        if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
+            return false;
+        }
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.takeoverEnabled) {
+            return false;
+        }
+        if (this.takeoverPromptedChats.has(normalizedChatKey) || this.takeoverRunningChats.has(normalizedChatKey)) {
+            return true;
+        }
+
+        const detection = await sdk.chatState.detectTakeoverNeeded();
+        if (!detection.needed) {
+            return false;
+        }
+
+        this.takeoverPromptedChats.add(normalizedChatKey);
+        const selection = await openMemoryTakeoverDialog({
+            totalFloorCount: detection.currentFloorCount,
+            recoverableTakeoverId: detection.recoverableTakeoverId,
+            defaultBatchSize: settings.takeoverDefaultBatchSize,
+            defaultRecentFloors: settings.takeoverDefaultRecentFloors,
+            defaultPrioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
+            defaultAutoContinue: settings.takeoverDefaultAutoContinue,
+            defaultAutoConsolidate: settings.takeoverDefaultAutoConsolidate,
+            defaultPauseOnError: settings.takeoverDefaultPauseOnError,
+        });
+        if (!selection.confirmed) {
+            return true;
+        }
+
+        const activeChatKey = String(
+            ((window as unknown as { STX?: { memory?: { getChatKey?: () => string } } })?.STX?.memory?.getChatKey?.())
+            ?? '',
+        ).trim();
+        if (activeChatKey !== normalizedChatKey) {
+            return true;
+        }
+
+        this.takeoverRunningChats.add(normalizedChatKey);
+        try {
+            if (!selection.resumeExisting) {
+                await sdk.chatState.createTakeoverPlan(selection.config);
+            }
+            const result = await sdk.chatState.startTakeover(
+                selection.resumeExisting ? detection.recoverableTakeoverId : undefined,
+            );
+            if (!result.ok) {
+                this.takeoverPromptedChats.delete(normalizedChatKey);
+                toast.error(`旧聊天接管失败：${result.reasonCode}`);
+                return true;
+            }
+            toast.success('旧聊天接管任务已启动，可在统一工作台查看进度。');
+            return true;
+        } catch (error) {
+            this.takeoverPromptedChats.delete(normalizedChatKey);
+            toast.error(`旧聊天接管失败：${String((error as Error)?.message ?? error)}`);
+            return true;
+        } finally {
+            this.takeoverRunningChats.delete(normalizedChatKey);
+        }
+    }
+
+    /**
      * 功能：绑定插件注册中心事件。
      */
     private bindRegistryEvents(): void {
@@ -545,7 +625,12 @@ export class MemoryOS {
             currentChatKey = chatKey;
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);
             void this.refreshSummaryProgressUi();
-            void this.maybePromptColdStart(chatKey, sdk).catch((error: unknown): void => {
+            void (async (): Promise<void> => {
+                const takeoverHandled = await this.maybePromptTakeover(chatKey, sdk);
+                if (!takeoverHandled) {
+                    await this.maybePromptColdStart(chatKey, sdk);
+                }
+            })().catch((error: unknown): void => {
                 logger.warn('冷启动确认流程失败', error);
             });
         };

@@ -40,6 +40,7 @@ import { buildTypesViewMarkup } from './workbenchTabs/tabTypes';
 import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildMemoryGraphViewMarkup } from './workbenchTabs/tabMemoryGraph';
+import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import { mountMemoryGraph } from './workbenchTabs/memoryGraph';
 import { buildMemoryGraph } from './workbenchTabs/shared/buildMemoryGraph';
@@ -70,6 +71,9 @@ function ensureWorkbenchStyle(): void {
  * @returns 工作台视图名。
  */
 function resolveInitialWorkbenchView(initialView?: UnifiedWorkbenchViewMode): WorkbenchView {
+    if (initialView === 'takeover') {
+        return 'takeover';
+    }
     if (initialView === 'memory') {
         return 'actors';
     }
@@ -142,6 +146,9 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'memory-graph' ? ' is-active' : ''}" data-workbench-view="memory-graph">
                         可视化记忆
                     </button>
+                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'takeover' ? ' is-active' : ''}" data-workbench-view="takeover">
+                        旧聊天接管
+                    </button>
                 </nav>
                 <div class="stx-memory-workbench__stats">
                     <span title="当前聊天中的记忆条目数量">条目 <strong>${snapshot.entries.length}</strong></span>
@@ -160,6 +167,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     memoryGraphFilterType: state.memoryGraphFilterType,
                     graphMode: (state.memoryGraphMode as any) || 'compact',
                 })}
+                ${buildTakeoverViewMarkup(snapshot, state)}
             </main>
         </div>
     `;
@@ -221,6 +229,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         memoryGraphQuery: '',
         memoryGraphFilterType: '',
         memoryGraphMode: 'compact',
+        takeoverMode: 'full',
+        takeoverRangeStart: '',
+        takeoverRangeEnd: '',
+        takeoverBatchSize: '',
     };
 
     /**
@@ -239,6 +251,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             mutationHistory,
             entryAuditRecords,
             recallExplanation,
+            takeoverProgress,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -250,6 +263,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             memory.chatState.getLatestRecallExplanation(),
+            memory.chatState.getTakeoverStatus(),
         ]);
 
         return {
@@ -265,6 +279,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             recallExplanation: normalizeRecallExplanation(recallExplanation),
             actorGraph: buildActorGraph(actors, entries),
             memoryGraph: buildMemoryGraph(entries, roleMemories, actors),
+            takeoverProgress,
         };
     };
 
@@ -466,6 +481,54 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 }
                 return;
             }
+            if (action === 'takeover-start') {
+                const mode = readInputValue(root, '#stx-memory-takeover-mode') || 'full';
+                const rawStart = readInputValue(root, '#stx-memory-takeover-range-start');
+                const rawEnd = readInputValue(root, '#stx-memory-takeover-range-end');
+                const rawBatchSize = readInputValue(root, '#stx-memory-takeover-batch-size');
+                const startFloor = Math.max(0, Number(rawStart) || 0);
+                const endFloor = Math.max(0, Number(rawEnd) || 0);
+                const batchSize = Math.max(0, Number(rawBatchSize) || 0);
+                state.takeoverMode = mode;
+                state.takeoverRangeStart = rawStart;
+                state.takeoverRangeEnd = rawEnd;
+                state.takeoverBatchSize = rawBatchSize;
+                await memory.chatState.createTakeoverPlan({
+                    mode: mode as 'full' | 'recent' | 'custom_range',
+                    startFloor: startFloor > 0 ? startFloor : undefined,
+                    endFloor: endFloor > 0 ? endFloor : undefined,
+                    recentFloors: mode === 'recent' && endFloor > 0 ? endFloor : undefined,
+                    batchSize: batchSize > 0 ? batchSize : undefined,
+                });
+                await memory.chatState.startTakeover();
+                toast.success('旧聊天接管任务已启动。');
+                await render();
+                return;
+            }
+            if (action === 'takeover-pause') {
+                await memory.chatState.pauseTakeover();
+                toast.success('接管任务已暂停。');
+                await render();
+                return;
+            }
+            if (action === 'takeover-resume') {
+                await memory.chatState.resumeTakeover();
+                toast.success('接管任务已继续。');
+                await render();
+                return;
+            }
+            if (action === 'takeover-consolidate') {
+                await memory.chatState.runTakeoverConsolidation();
+                toast.success('接管整合已完成。');
+                await render();
+                return;
+            }
+            if (action === 'takeover-abort') {
+                await memory.chatState.abortTakeover();
+                toast.success('接管任务已终止。');
+                await render();
+                return;
+            }
         } catch (error) {
             logger.error(`工作台动作执行失败: ${action}`, error);
             toast.error(`操作失败：${String((error as Error)?.message ?? error)}`);
@@ -545,6 +608,26 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const bindEntrySelect = root.querySelector('#stx-memory-bind-entry') as HTMLSelectElement | null;
         bindEntrySelect?.addEventListener('change', (): void => {
             state.bindEntryId = String(bindEntrySelect.value ?? '').trim();
+        });
+
+        const takeoverModeSelect = root.querySelector('#stx-memory-takeover-mode') as HTMLSelectElement | null;
+        takeoverModeSelect?.addEventListener('change', (): void => {
+            state.takeoverMode = String(takeoverModeSelect.value ?? 'full').trim();
+        });
+
+        const takeoverRangeStartInput = root.querySelector('#stx-memory-takeover-range-start') as HTMLInputElement | null;
+        takeoverRangeStartInput?.addEventListener('input', (): void => {
+            state.takeoverRangeStart = String(takeoverRangeStartInput.value ?? '').trim();
+        });
+
+        const takeoverRangeEndInput = root.querySelector('#stx-memory-takeover-range-end') as HTMLInputElement | null;
+        takeoverRangeEndInput?.addEventListener('input', (): void => {
+            state.takeoverRangeEnd = String(takeoverRangeEndInput.value ?? '').trim();
+        });
+
+        const takeoverBatchSizeInput = root.querySelector('#stx-memory-takeover-batch-size') as HTMLInputElement | null;
+        takeoverBatchSizeInput?.addEventListener('input', (): void => {
+            state.takeoverBatchSize = String(takeoverBatchSizeInput.value ?? '').trim();
         });
 
         root.querySelectorAll<HTMLElement>('[data-action]').forEach((button: HTMLElement): void => {

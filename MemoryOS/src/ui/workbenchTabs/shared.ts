@@ -4,6 +4,7 @@ import type {
     MemoryEntry,
     MemoryEntryAuditRecord,
     MemoryEntryType,
+    MemoryTakeoverProgressSnapshot,
     MemoryEntryTypeField,
     MemoryMutationHistoryRecord,
     PromptAssemblySnapshot,
@@ -13,7 +14,7 @@ import type {
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview' | 'memory-graph';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'preview' | 'memory-graph' | 'takeover';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family';
 
@@ -83,6 +84,10 @@ export interface WorkbenchState {
     memoryGraphQuery: string;
     memoryGraphFilterType: string;
     memoryGraphMode: string;
+    takeoverMode: string;
+    takeoverRangeStart: string;
+    takeoverRangeEnd: string;
+    takeoverBatchSize: string;
 }
 
 export interface WorkbenchSnapshot {
@@ -98,6 +103,7 @@ export interface WorkbenchSnapshot {
     recallExplanation: WorkbenchRecallExplanation | null;
     actorGraph: WorkbenchActorGraph;
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
+    takeoverProgress: MemoryTakeoverProgressSnapshot | null;
 }
 
 /**

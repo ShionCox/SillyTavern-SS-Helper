@@ -23,20 +23,40 @@ import {
     type ColdStartSourceBundle,
 } from '../memory-bootstrap';
 import {
+    buildProgressSnapshot,
+    buildTakeoverPlan,
+    detectTakeoverNeeded,
+    runTakeoverConsolidation,
+    runTakeoverScheduler,
+} from '../memory-takeover';
+import {
     clearMemoryChatData,
     exportMemoryChatDatabaseSnapshot,
     exportMemoryPromptTestBundle,
     importMemoryPromptTestBundle,
+    loadMemoryTakeoverBatchResults,
+    loadMemoryTakeoverPreview,
     readMemoryOSChatState,
+    readMemoryTakeoverPlan,
     type ImportMemoryPromptTestBundleResult,
     type MemoryChatDatabaseSnapshot,
     type MemoryPromptParityBaseline,
     type MemoryPromptTestBundle,
     type PromptReadyCaptureSnapshot,
     restoreArchivedMemoryChat,
+    saveMemoryTakeoverPreview,
+    writeMemoryTakeoverPlan,
     writeMemoryOSChatState,
 } from '../db/db';
 import { readMemoryOSSettings } from '../settings/store';
+import type {
+    MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverConsolidationResult,
+    MemoryTakeoverCreateInput,
+    MemoryTakeoverDetectionResult,
+    MemoryTakeoverPlan,
+    MemoryTakeoverProgressSnapshot,
+} from '../types';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
@@ -152,6 +172,15 @@ export interface MemoryColdStartWorldbookSelection {
 }
 
 /**
+ * 功能：定义接管执行结果。
+ */
+export interface MemoryTakeoverExecutionResult {
+    ok: boolean;
+    reasonCode: string;
+    progress: MemoryTakeoverProgressSnapshot | null;
+}
+
+/**
  * 功能：MemoryOS 统一条目 SDK 门面。
  */
 export class MemorySDKImpl {
@@ -187,6 +216,16 @@ export class MemorySDKImpl {
         getColdStartStatus: () => Promise<MemoryColdStartStatus>;
         getSummaryProgress: () => Promise<MemorySummaryProgress>;
         getSummaryTriggerStatus: () => Promise<MemorySummaryTriggerStatus>;
+        detectTakeoverNeeded: () => Promise<MemoryTakeoverDetectionResult>;
+        getTakeoverStatus: () => Promise<MemoryTakeoverProgressSnapshot>;
+        createTakeoverPlan: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverProgressSnapshot>;
+        startTakeover: (takeoverId?: string) => Promise<MemoryTakeoverExecutionResult>;
+        pauseTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
+        resumeTakeover: () => Promise<MemoryTakeoverExecutionResult>;
+        retryFailedBatch: (batchId?: string) => Promise<MemoryTakeoverExecutionResult>;
+        runTakeoverConsolidation: () => Promise<MemoryTakeoverExecutionResult>;
+        rebuildTakeoverRange: (startFloor: number, endFloor: number, batchSize?: number) => Promise<MemoryTakeoverExecutionResult>;
+        abortTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -381,6 +420,197 @@ export class MemorySDKImpl {
             },
             getSummaryTriggerStatus: async (): Promise<MemorySummaryTriggerStatus> => {
                 return this.readSummaryTriggerStatus();
+            },
+            detectTakeoverNeeded: async (): Promise<MemoryTakeoverDetectionResult> => {
+                const settings = readMemoryOSSettings();
+                const existingPlan = await readMemoryTakeoverPlan(this.chatKey_);
+                return detectTakeoverNeeded({
+                    currentFloorCount: await this.readCurrentSummaryFloorCount(),
+                    threshold: settings.takeoverDetectMinFloors,
+                    existingPlan,
+                });
+            },
+            getTakeoverStatus: async (): Promise<MemoryTakeoverProgressSnapshot> => {
+                return buildProgressSnapshot(this.chatKey_);
+            },
+            createTakeoverPlan: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> => {
+                const settings = readMemoryOSSettings();
+                const detection = await this.chatState.detectTakeoverNeeded();
+                const plan = buildTakeoverPlan({
+                    chatKey: this.chatKey_,
+                    chatId: this.chatKey_,
+                    takeoverId: `takeover:${this.chatKey_}:${crypto.randomUUID()}`,
+                    totalFloors: Math.max(detection.currentFloorCount, await this.readCurrentSummaryFloorCount()),
+                    defaults: {
+                        detectMinFloors: settings.takeoverDetectMinFloors,
+                        recentFloors: settings.takeoverDefaultRecentFloors,
+                        batchSize: settings.takeoverDefaultBatchSize,
+                        prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
+                        autoContinue: settings.takeoverDefaultAutoContinue,
+                        autoConsolidate: settings.takeoverDefaultAutoConsolidate,
+                        pauseOnError: settings.takeoverDefaultPauseOnError,
+                    },
+                    config,
+                });
+                await writeMemoryTakeoverPlan(this.chatKey_, plan);
+                return buildProgressSnapshot(this.chatKey_, plan);
+            },
+            startTakeover: async (takeoverId?: string): Promise<MemoryTakeoverExecutionResult> => {
+                this.tryRegisterLLMTasks();
+                const existingPlan = await readMemoryTakeoverPlan(this.chatKey_);
+                const progress = existingPlan && (!takeoverId || existingPlan.takeoverId === takeoverId)
+                    ? await runTakeoverScheduler({
+                        chatKey: this.chatKey_,
+                        plan: existingPlan,
+                        llm: readMemoryLLMApi(),
+                        pluginId: MEMORY_OS_PLUGIN_ID,
+                        applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                            await this.applyTakeoverConsolidation(result);
+                        },
+                    })
+                    : await this.chatState.createTakeoverPlan().then(async (snapshot: MemoryTakeoverProgressSnapshot): Promise<MemoryTakeoverProgressSnapshot> => {
+                        if (!snapshot.plan) {
+                            return snapshot;
+                        }
+                        return runTakeoverScheduler({
+                            chatKey: this.chatKey_,
+                            plan: snapshot.plan,
+                            llm: readMemoryLLMApi(),
+                            pluginId: MEMORY_OS_PLUGIN_ID,
+                            applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                                await this.applyTakeoverConsolidation(result);
+                            },
+                        });
+                    });
+                return {
+                    ok: Boolean(progress.plan),
+                    reasonCode: progress.plan?.status === 'completed' ? 'completed' : (progress.plan?.status ?? 'missing_plan'),
+                    progress,
+                };
+            },
+            pauseTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
+                const plan = await readMemoryTakeoverPlan(this.chatKey_);
+                if (!plan) {
+                    return buildProgressSnapshot(this.chatKey_, null);
+                }
+                const nextPlan = {
+                    ...plan,
+                    status: 'paused' as const,
+                    pausedAt: Date.now(),
+                    updatedAt: Date.now(),
+                };
+                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
+                return buildProgressSnapshot(this.chatKey_, nextPlan);
+            },
+            resumeTakeover: async (): Promise<MemoryTakeoverExecutionResult> => {
+                const plan = await readMemoryTakeoverPlan(this.chatKey_);
+                if (!plan) {
+                    return {
+                        ok: false,
+                        reasonCode: 'takeover_plan_missing',
+                        progress: null,
+                    };
+                }
+                const nextPlan = {
+                    ...plan,
+                    status: 'idle' as const,
+                    pausedAt: undefined,
+                    updatedAt: Date.now(),
+                };
+                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
+                const progress = await runTakeoverScheduler({
+                    chatKey: this.chatKey_,
+                    plan: nextPlan,
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                        await this.applyTakeoverConsolidation(result);
+                    },
+                });
+                return {
+                    ok: true,
+                    reasonCode: progress.plan?.status ?? 'ok',
+                    progress,
+                };
+            },
+            retryFailedBatch: async (_batchId?: string): Promise<MemoryTakeoverExecutionResult> => {
+                return this.chatState.resumeTakeover();
+            },
+            runTakeoverConsolidation: async (): Promise<MemoryTakeoverExecutionResult> => {
+                const plan = await readMemoryTakeoverPlan(this.chatKey_);
+                if (!plan) {
+                    return {
+                        ok: false,
+                        reasonCode: 'takeover_plan_missing',
+                        progress: null,
+                    };
+                }
+                const preview = await loadMemoryTakeoverPreview(this.chatKey_);
+                const batchResults = await loadMemoryTakeoverBatchResults(this.chatKey_);
+                const consolidation = await runTakeoverConsolidation({
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    takeoverId: plan.takeoverId,
+                    activeSnapshot: preview.activeSnapshot,
+                    batchResults,
+                });
+                await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', consolidation);
+                await this.applyTakeoverConsolidation(consolidation);
+                const nextPlan = {
+                    ...plan,
+                    status: 'completed' as const,
+                    completedAt: Date.now(),
+                    updatedAt: Date.now(),
+                };
+                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
+                return {
+                    ok: true,
+                    reasonCode: 'completed',
+                    progress: await buildProgressSnapshot(this.chatKey_, nextPlan),
+                };
+            },
+            rebuildTakeoverRange: async (startFloor: number, endFloor: number, batchSize?: number): Promise<MemoryTakeoverExecutionResult> => {
+                const snapshot = await this.chatState.createTakeoverPlan({
+                    mode: 'custom_range',
+                    startFloor,
+                    endFloor,
+                    batchSize,
+                });
+                if (!snapshot.plan) {
+                    return {
+                        ok: false,
+                        reasonCode: 'takeover_plan_missing',
+                        progress: snapshot,
+                    };
+                }
+                const progress = await runTakeoverScheduler({
+                    chatKey: this.chatKey_,
+                    plan: snapshot.plan,
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                        await this.applyTakeoverConsolidation(result);
+                    },
+                });
+                return {
+                    ok: true,
+                    reasonCode: progress.plan?.status ?? 'ok',
+                    progress,
+                };
+            },
+            abortTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
+                const plan = await readMemoryTakeoverPlan(this.chatKey_);
+                if (!plan) {
+                    return buildProgressSnapshot(this.chatKey_);
+                }
+                const nextPlan = {
+                    ...plan,
+                    status: 'failed' as const,
+                    lastError: 'manual_abort',
+                    updatedAt: Date.now(),
+                };
+                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
+                return buildProgressSnapshot(this.chatKey_, nextPlan);
             },
             setPromptReadyCaptureSnapshotForTest: async (snapshot: PromptReadyCaptureSnapshot): Promise<void> => {
                 this.promptReadyCaptureSnapshot = {
@@ -690,6 +920,129 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：把旧聊天接管最终整合结果写入正式记忆层。
+     * @param result 接管整合结果。
+     * @returns 异步完成。
+     */
+    private async applyTakeoverConsolidation(result: MemoryTakeoverConsolidationResult): Promise<void> {
+        for (const fact of result.longTermFacts) {
+            await this.unifiedManager.saveEntry({
+                title: `${fact.subject} · ${fact.predicate}`,
+                entryType: 'other',
+                category: '其他',
+                tags: ['旧聊天接管', fact.type].filter(Boolean),
+                summary: fact.value,
+                detail: `${fact.subject}${fact.predicate}${fact.value}`,
+                detailPayload: {
+                    fields: {
+                        type: fact.type,
+                        subject: fact.subject,
+                        predicate: fact.predicate,
+                        value: fact.value,
+                        confidence: fact.confidence,
+                    },
+                    takeover: {
+                        source: 'old_chat_takeover',
+                        takeoverId: result.takeoverId,
+                    },
+                },
+            }, {
+                actionType: 'ADD',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_long_term_fact'],
+            });
+        }
+
+        for (const relation of result.relationState) {
+            const targetActorKey = this.normalizeTakeoverActorKey(relation.target);
+            await this.unifiedManager.ensureActorProfile({
+                actorKey: targetActorKey,
+                displayName: relation.target,
+            });
+            const savedEntry = await this.unifiedManager.saveEntry({
+                title: `user -> ${targetActorKey}`,
+                entryType: 'relationship',
+                category: '角色关系',
+                tags: ['旧聊天接管', '关系'],
+                summary: relation.state,
+                detail: relation.reason,
+                detailPayload: {
+                    sourceActorKey: 'user',
+                    targetActorKey,
+                    fields: {
+                        relationTag: '朋友',
+                        state: relation.state,
+                        reason: relation.reason,
+                        participants: ['user', targetActorKey],
+                    },
+                    takeover: {
+                        source: 'old_chat_takeover',
+                        takeoverId: result.takeoverId,
+                    },
+                },
+            }, {
+                actionType: 'ADD',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_relation_state'],
+            });
+            await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
+            await this.unifiedManager.bindRoleToEntry(targetActorKey, savedEntry.entryId);
+        }
+
+        for (const task of result.taskState) {
+            const savedEntry = await this.unifiedManager.saveEntry({
+                title: task.task,
+                entryType: 'task',
+                category: '任务',
+                tags: ['旧聊天接管', '任务'],
+                summary: task.state,
+                detail: `任务当前状态：${task.state}`,
+                detailPayload: {
+                    fields: {
+                        state: task.state,
+                    },
+                    takeover: {
+                        source: 'old_chat_takeover',
+                        takeoverId: result.takeoverId,
+                    },
+                },
+            }, {
+                actionType: 'ADD',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_task_state'],
+            });
+            await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
+        }
+
+        for (const [key, value] of Object.entries(result.worldState ?? {})) {
+            await this.unifiedManager.saveEntry({
+                title: key,
+                entryType: 'world_global_state',
+                category: '世界观',
+                tags: ['旧聊天接管', '世界状态'],
+                summary: value,
+                detail: value,
+                detailPayload: {
+                    fields: {
+                        scope: 'global',
+                        state: 'active',
+                    },
+                    takeover: {
+                        source: 'old_chat_takeover',
+                        takeoverId: result.takeoverId,
+                    },
+                },
+            }, {
+                actionType: 'ADD',
+                sourceLabel: '旧聊天接管整合',
+                reasonCodes: ['takeover_world_state'],
+            });
+        }
+
+        await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
+    }
+
+    /**
      * 功能：导出聊天数据库快照。
      * @returns 快照。
      */
@@ -751,6 +1104,59 @@ export class MemorySDKImpl {
             }
         }
         return promptMessages.length;
+    }
+
+    /**
+     * 功能：写入接管后的活跃快照总结。
+     * @param activeSnapshot 当前活跃快照。
+     * @param result 接管整合结果。
+     * @returns 异步完成。
+     */
+    private async writeTakeoverSnapshotSummary(
+        activeSnapshot: MemoryTakeoverActiveSnapshot | null,
+        result: MemoryTakeoverConsolidationResult,
+    ): Promise<void> {
+        const contentLines: string[] = [];
+        if (activeSnapshot?.recentDigest) {
+            contentLines.push(`最近摘要：${activeSnapshot.recentDigest}`);
+        }
+        if (activeSnapshot?.currentScene) {
+            contentLines.push(`当前场景：${activeSnapshot.currentScene}`);
+        }
+        if (activeSnapshot?.currentLocation) {
+            contentLines.push(`当前位置：${activeSnapshot.currentLocation}`);
+        }
+        if (activeSnapshot?.activeGoals?.length) {
+            contentLines.push(`当前目标：${activeSnapshot.activeGoals.join('、')}`);
+        }
+        if (activeSnapshot?.openThreads?.length) {
+            contentLines.push(`待续线索：${activeSnapshot.openThreads.join('、')}`);
+        }
+        if (result.chapterDigestIndex.length > 0) {
+            contentLines.push(`章节索引数量：${result.chapterDigestIndex.length}`);
+        }
+        if (contentLines.length <= 0) {
+            return;
+        }
+        await this.unifiedManager.applySummarySnapshot({
+            title: '旧聊天接管整合快照',
+            content: contentLines.join('\n'),
+            actorKeys: ['user'],
+        });
+    }
+
+    /**
+     * 功能：归一化接管结果中的角色键。
+     * @param value 原始角色标识。
+     * @returns 角色键。
+     */
+    private normalizeTakeoverActorKey(value: string): string {
+        const normalized = String(value ?? '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return normalized || 'unknown_actor';
     }
 
     /**

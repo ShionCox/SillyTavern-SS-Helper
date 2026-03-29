@@ -22,17 +22,44 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 taskId: 'memory_summary_planner',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
-                description: '增量总结规划并输出 planner decision',
+                description: '增量总结规划输出',
                 backgroundEligible: false,
             },
             {
                 taskId: 'memory_summary_mutation',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
-                description: '增量总结并输出 mutation document',
+                description: '增量总结变更输出',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_baseline',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '旧聊天接管静态基线抽取',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_active_snapshot',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '旧聊天接管最近活跃快照',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_batch',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '旧聊天接管历史批次分析',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_consolidation',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                description: '旧聊天接管最终整合',
                 backgroundEligible: false,
             },
         ],
     });
 }
-

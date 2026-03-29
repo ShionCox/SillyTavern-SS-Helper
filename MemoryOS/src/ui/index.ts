@@ -33,12 +33,20 @@ const RETRIEVAL_TRACE_PANEL_ID: string = 'stx-memoryos-retrieval-trace-panel-ena
 const RETRIEVAL_LOG_LEVEL_ID: string = 'stx-memoryos-retrieval-log-level';
 const RETRIEVAL_RULE_PACK_ID: string = 'stx-memoryos-retrieval-rule-pack';
 const COLD_START_ENABLED_ID: string = 'stx-memoryos-cold-start-enabled';
+const TAKEOVER_ENABLED_ID: string = 'stx-memoryos-takeover-enabled';
 const SUMMARY_AUTO_TRIGGER_ID: string = 'stx-memoryos-summary-auto-trigger';
 const SUMMARY_PROGRESS_OVERLAY_ID: string = 'stx-memoryos-summary-progress-overlay-enabled';
 const SUMMARY_MIN_MESSAGES_ID: string = 'stx-memoryos-summary-min-messages';
 const SUMMARY_RECENT_WINDOW_ID: string = 'stx-memoryos-summary-recent-window';
 const SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID: string = 'stx-memoryos-summary-second-stage-rolling-digest-max-chars';
 const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID: string = 'stx-memoryos-summary-second-stage-candidate-summary-max-chars';
+const TAKEOVER_DETECT_MIN_FLOORS_ID: string = 'stx-memoryos-takeover-detect-min-floors';
+const TAKEOVER_DEFAULT_RECENT_FLOORS_ID: string = 'stx-memoryos-takeover-default-recent-floors';
+const TAKEOVER_DEFAULT_BATCH_SIZE_ID: string = 'stx-memoryos-takeover-default-batch-size';
+const TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID: string = 'stx-memoryos-takeover-default-prioritize-recent';
+const TAKEOVER_DEFAULT_AUTO_CONTINUE_ID: string = 'stx-memoryos-takeover-default-auto-continue';
+const TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID: string = 'stx-memoryos-takeover-default-auto-consolidate';
+const TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID: string = 'stx-memoryos-takeover-default-pause-on-error';
 const STATUS_ID: string = 'stx-memoryos-settings-status';
 
 const TAB_BASIC_ID: string = 'stx-memoryos-tab-basic';
@@ -312,6 +320,12 @@ function buildSettingsContentHtml(): string {
         containerClassName: 'stx-ui-inline-checkbox is-control-only',
         inputAttributes: { 'aria-label': '启用冷启动' },
     });
+    const takeoverEnabledCheckbox: string = buildSharedCheckboxCard({
+        id: TAKEOVER_ENABLED_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '启用旧聊天接管' },
+    });
     const summaryAutoTriggerCheckbox: string = buildSharedCheckboxCard({
         id: SUMMARY_AUTO_TRIGGER_ID,
         title: '',
@@ -323,6 +337,48 @@ function buildSettingsContentHtml(): string {
         title: '',
         containerClassName: 'stx-ui-inline-checkbox is-control-only',
         inputAttributes: { 'aria-label': '启用总结进度悬浮框' },
+    });
+    const takeoverDetectMinFloorsInput: string = buildSharedInputField({
+        id: TAKEOVER_DETECT_MIN_FLOORS_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 1, max: 2000, step: 1 },
+    });
+    const takeoverDefaultRecentFloorsInput: string = buildSharedInputField({
+        id: TAKEOVER_DEFAULT_RECENT_FLOORS_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 1, max: 2000, step: 1 },
+    });
+    const takeoverDefaultBatchSizeInput: string = buildSharedInputField({
+        id: TAKEOVER_DEFAULT_BATCH_SIZE_ID,
+        type: 'number',
+        className: 'stx-ui-input',
+        attributes: { min: 1, max: 500, step: 1 },
+    });
+    const takeoverDefaultPrioritizeRecentCheckbox: string = buildSharedCheckboxCard({
+        id: TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '默认优先处理最近区间' },
+    });
+    const takeoverDefaultAutoContinueCheckbox: string = buildSharedCheckboxCard({
+        id: TAKEOVER_DEFAULT_AUTO_CONTINUE_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '默认自动继续' },
+    });
+    const takeoverDefaultAutoConsolidateCheckbox: string = buildSharedCheckboxCard({
+        id: TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '默认完成后自动整合' },
+    });
+    const takeoverDefaultPauseOnErrorCheckbox: string = buildSharedCheckboxCard({
+        id: TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID,
+        title: '',
+        containerClassName: 'stx-ui-inline-checkbox is-control-only',
+        inputAttributes: { 'aria-label': '默认失败自动暂停' },
     });
     const retrievalLogLevelSelect: string = `
         <select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input">
@@ -387,6 +443,61 @@ function buildSettingsContentHtml(): string {
                     <div class="stx-ui-item-desc">新会话时自动弹出冷启动候选确认，基于角色卡和世界书生成初始记忆。</div>
                 </div>
                 <div class="stx-ui-inline">${coldStartEnabledCheckbox}</div>
+            </div>
+
+            <div class="stx-ui-item">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">启用旧聊天接管</div>
+                    <div class="stx-ui-item-desc">当聊天楼层数较多时，自动提示创建旧聊天接管任务，并在后台分批整理历史记忆。</div>
+                </div>
+                <div class="stx-ui-inline">${takeoverEnabledCheckbox}</div>
+            </div>
+
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">旧聊天接管默认配置</div>
+                    <div class="stx-ui-item-desc">用于控制何时识别旧聊天，以及默认的接管范围与批次策略。</div>
+                </div>
+                <div class="stx-ui-form-grid">
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${TAKEOVER_DETECT_MIN_FLOORS_ID}">识别阈值楼层</label>
+                        ${takeoverDetectMinFloorsInput}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_RECENT_FLOORS_ID}">默认最近楼层</label>
+                        ${takeoverDefaultRecentFloorsInput}
+                    </div>
+                    <div class="stx-ui-field">
+                        <label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_BATCH_SIZE_ID}">默认每批楼层数</label>
+                        ${takeoverDefaultBatchSizeInput}
+                    </div>
+                </div>
+                <div class="stx-ui-form-grid">
+                    <div class="stx-ui-item">
+                        <div class="stx-ui-item-main">
+                            <div class="stx-ui-item-title">优先处理最近区间</div>
+                        </div>
+                        <div class="stx-ui-inline">${takeoverDefaultPrioritizeRecentCheckbox}</div>
+                    </div>
+                    <div class="stx-ui-item">
+                        <div class="stx-ui-item-main">
+                            <div class="stx-ui-item-title">自动继续</div>
+                        </div>
+                        <div class="stx-ui-inline">${takeoverDefaultAutoContinueCheckbox}</div>
+                    </div>
+                    <div class="stx-ui-item">
+                        <div class="stx-ui-item-main">
+                            <div class="stx-ui-item-title">完成后自动整合</div>
+                        </div>
+                        <div class="stx-ui-inline">${takeoverDefaultAutoConsolidateCheckbox}</div>
+                    </div>
+                    <div class="stx-ui-item">
+                        <div class="stx-ui-item-main">
+                            <div class="stx-ui-item-title">失败自动暂停</div>
+                        </div>
+                        <div class="stx-ui-inline">${takeoverDefaultPauseOnErrorCheckbox}</div>
+                    </div>
+                </div>
             </div>
 
             <div class="stx-ui-item">
@@ -573,6 +684,7 @@ function bindTabEvents(): void {
 function syncSettingsToForm(settings: MemoryOSSettings): void {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
+    const takeoverEnabledInput: HTMLInputElement | null = document.getElementById(TAKEOVER_ENABLED_ID) as HTMLInputElement | null;
     const toolbarQuickActionsInput: HTMLInputElement | null = document.getElementById(TOOLBAR_QUICK_ACTIONS_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
@@ -585,12 +697,20 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
     const summarySecondStageRollingDigestMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID) as HTMLInputElement | null;
     const summarySecondStageCandidateSummaryMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID) as HTMLInputElement | null;
+    const takeoverDetectMinFloorsInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DETECT_MIN_FLOORS_ID) as HTMLInputElement | null;
+    const takeoverDefaultRecentFloorsInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_RECENT_FLOORS_ID) as HTMLInputElement | null;
+    const takeoverDefaultBatchSizeInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_BATCH_SIZE_ID) as HTMLInputElement | null;
+    const takeoverDefaultPrioritizeRecentInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID) as HTMLInputElement | null;
+    const takeoverDefaultAutoContinueInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID) as HTMLInputElement | null;
+    const takeoverDefaultAutoConsolidateInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID) as HTMLInputElement | null;
+    const takeoverDefaultPauseOnErrorInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
     const retrievalRulePackInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_RULE_PACK_ID) as HTMLSelectElement | null;
     if (enabledInput) enabledInput.checked = settings.enabled;
     if (coldStartEnabledInput) coldStartEnabledInput.checked = settings.coldStartEnabled;
+    if (takeoverEnabledInput) takeoverEnabledInput.checked = settings.takeoverEnabled;
     if (toolbarQuickActionsInput) toolbarQuickActionsInput.checked = settings.toolbarQuickActionsEnabled;
     if (injectionPromptInput) injectionPromptInput.checked = settings.injectionPromptEnabled;
     if (injectionPreviewInput) injectionPreviewInput.checked = settings.injectionPreviewEnabled;
@@ -604,6 +724,13 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     if (summaryRecentWindowInput) summaryRecentWindowInput.value = String(settings.summaryRecentWindowSize);
     if (summarySecondStageRollingDigestMaxCharsInput) summarySecondStageRollingDigestMaxCharsInput.value = String(settings.summarySecondStageRollingDigestMaxChars);
     if (summarySecondStageCandidateSummaryMaxCharsInput) summarySecondStageCandidateSummaryMaxCharsInput.value = String(settings.summarySecondStageCandidateSummaryMaxChars);
+    if (takeoverDetectMinFloorsInput) takeoverDetectMinFloorsInput.value = String(settings.takeoverDetectMinFloors);
+    if (takeoverDefaultRecentFloorsInput) takeoverDefaultRecentFloorsInput.value = String(settings.takeoverDefaultRecentFloors);
+    if (takeoverDefaultBatchSizeInput) takeoverDefaultBatchSizeInput.value = String(settings.takeoverDefaultBatchSize);
+    if (takeoverDefaultPrioritizeRecentInput) takeoverDefaultPrioritizeRecentInput.checked = settings.takeoverDefaultPrioritizeRecent;
+    if (takeoverDefaultAutoContinueInput) takeoverDefaultAutoContinueInput.checked = settings.takeoverDefaultAutoContinue;
+    if (takeoverDefaultAutoConsolidateInput) takeoverDefaultAutoConsolidateInput.checked = settings.takeoverDefaultAutoConsolidate;
+    if (takeoverDefaultPauseOnErrorInput) takeoverDefaultPauseOnErrorInput.checked = settings.takeoverDefaultPauseOnError;
     if (retrievalLogInput) retrievalLogInput.checked = settings.retrievalLogEnabled;
     if (retrievalTraceInput) retrievalTraceInput.checked = settings.retrievalTracePanelEnabled;
     if (retrievalLogLevelInput) retrievalLogLevelInput.value = settings.retrievalLogLevel;
@@ -617,6 +744,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
 function readSettingsFromForm(): MemoryOSSettings {
     const enabledInput: HTMLInputElement | null = document.getElementById(ENABLED_ID) as HTMLInputElement | null;
     const coldStartEnabledInput: HTMLInputElement | null = document.getElementById(COLD_START_ENABLED_ID) as HTMLInputElement | null;
+    const takeoverEnabledInput: HTMLInputElement | null = document.getElementById(TAKEOVER_ENABLED_ID) as HTMLInputElement | null;
     const toolbarQuickActionsInput: HTMLInputElement | null = document.getElementById(TOOLBAR_QUICK_ACTIONS_ID) as HTMLInputElement | null;
     const injectionPromptInput: HTMLInputElement | null = document.getElementById(INJECTION_PROMPT_ID) as HTMLInputElement | null;
     const injectionPreviewInput: HTMLInputElement | null = document.getElementById(INJECTION_PREVIEW_ID) as HTMLInputElement | null;
@@ -629,6 +757,13 @@ function readSettingsFromForm(): MemoryOSSettings {
     const summaryRecentWindowInput: HTMLInputElement | null = document.getElementById(SUMMARY_RECENT_WINDOW_ID) as HTMLInputElement | null;
     const summarySecondStageRollingDigestMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID) as HTMLInputElement | null;
     const summarySecondStageCandidateSummaryMaxCharsInput: HTMLInputElement | null = document.getElementById(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID) as HTMLInputElement | null;
+    const takeoverDetectMinFloorsInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DETECT_MIN_FLOORS_ID) as HTMLInputElement | null;
+    const takeoverDefaultRecentFloorsInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_RECENT_FLOORS_ID) as HTMLInputElement | null;
+    const takeoverDefaultBatchSizeInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_BATCH_SIZE_ID) as HTMLInputElement | null;
+    const takeoverDefaultPrioritizeRecentInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID) as HTMLInputElement | null;
+    const takeoverDefaultAutoContinueInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID) as HTMLInputElement | null;
+    const takeoverDefaultAutoConsolidateInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID) as HTMLInputElement | null;
+    const takeoverDefaultPauseOnErrorInput: HTMLInputElement | null = document.getElementById(TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID) as HTMLInputElement | null;
     const retrievalLogInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_LOG_ENABLED_ID) as HTMLInputElement | null;
     const retrievalTraceInput: HTMLInputElement | null = document.getElementById(RETRIEVAL_TRACE_PANEL_ID) as HTMLInputElement | null;
     const retrievalLogLevelInput: HTMLSelectElement | null = document.getElementById(RETRIEVAL_LOG_LEVEL_ID) as HTMLSelectElement | null;
@@ -636,6 +771,7 @@ function readSettingsFromForm(): MemoryOSSettings {
     return {
         enabled: enabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.enabled,
         coldStartEnabled: coldStartEnabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.coldStartEnabled,
+        takeoverEnabled: takeoverEnabledInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverEnabled,
         toolbarQuickActionsEnabled: toolbarQuickActionsInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled,
         injectionPromptEnabled: injectionPromptInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled,
         injectionPreviewEnabled: injectionPreviewInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled,
@@ -648,6 +784,13 @@ function readSettingsFromForm(): MemoryOSSettings {
         summaryRecentWindowSize: Number(summaryRecentWindowInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize),
         summarySecondStageRollingDigestMaxChars: Number(summarySecondStageRollingDigestMaxCharsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageRollingDigestMaxChars),
         summarySecondStageCandidateSummaryMaxChars: Number(summarySecondStageCandidateSummaryMaxCharsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageCandidateSummaryMaxChars),
+        takeoverDetectMinFloors: Number(takeoverDetectMinFloorsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors),
+        takeoverDefaultRecentFloors: Number(takeoverDefaultRecentFloorsInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors),
+        takeoverDefaultBatchSize: Number(takeoverDefaultBatchSizeInput?.value ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize),
+        takeoverDefaultPrioritizeRecent: takeoverDefaultPrioritizeRecentInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultPrioritizeRecent,
+        takeoverDefaultAutoContinue: takeoverDefaultAutoContinueInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoContinue,
+        takeoverDefaultAutoConsolidate: takeoverDefaultAutoConsolidateInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoConsolidate,
+        takeoverDefaultPauseOnError: takeoverDefaultPauseOnErrorInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultPauseOnError,
         retrievalLogEnabled: retrievalLogInput?.checked ?? DEFAULT_MEMORY_OS_SETTINGS.retrievalLogEnabled,
         retrievalLogLevel: retrievalLogLevelInput?.value === 'debug' ? 'debug' : 'info',
         retrievalRulePack: retrievalRulePackInput?.value === 'native'

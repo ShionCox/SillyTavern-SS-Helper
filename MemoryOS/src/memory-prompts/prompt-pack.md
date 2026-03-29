@@ -374,3 +374,421 @@
   ]
 }
 ```
+
+<!-- section: TAKEOVER_BASELINE_SYSTEM -->
+
+你正在执行旧聊天接管的静态基线抽取任务。你会收到角色卡、语义快照、用户资料与总楼层数。
+
+请严格遵守：
+1. 只提取长期稳定、适合作为接管起点的信息。
+2. 不要把近期临时情绪或单次对话误写成静态基线。
+3. 所有自然语言字段必须使用简体中文。
+4. 仅输出 JSON，不输出解释文本。
+
+<!-- section: TAKEOVER_BASELINE_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["staticBaseline", "personaBaseline", "worldBaseline", "ruleBaseline", "sourceSummary"],
+  "additionalProperties": false,
+  "properties": {
+    "staticBaseline": { "type": "string" },
+    "personaBaseline": { "type": "string" },
+    "worldBaseline": { "type": "string" },
+    "ruleBaseline": { "type": "string" },
+    "sourceSummary": { "type": "string" }
+  }
+}
+```
+
+<!-- section: TAKEOVER_BASELINE_OUTPUT_SAMPLE -->
+
+```json
+{
+  "staticBaseline": "当前角色是谨慎冷静的情报人员，习惯先观察再表态。",
+  "personaBaseline": "用户在互动中更倾向直接推进剧情和获取答案。",
+  "worldBaseline": "当前世界长期存在王都、边境和戒严体系，社会结构较稳定。",
+  "ruleBaseline": "夜间戒严、身份保密和通行审查是当前聊天中的稳定规则。",
+  "sourceSummary": "已根据角色卡、语义快照和用户资料完成静态基线抽取。"
+}
+```
+
+<!-- section: TAKEOVER_ACTIVE_SYSTEM -->
+
+你正在执行旧聊天接管的最近活跃快照任务。你会收到最近楼层范围与消息列表。
+
+请严格遵守：
+1. 目标是让系统快速理解“当前聊到哪里”。
+2. 提取当前场景、地点、时间线索、活跃目标、活跃关系、未结线索和最近摘要。
+3. 所有自然语言字段必须使用简体中文。
+4. 仅输出 JSON，不输出解释文本。
+
+<!-- section: TAKEOVER_ACTIVE_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["currentScene", "currentLocation", "currentTimeHint", "activeGoals", "activeRelations", "openThreads", "recentDigest"],
+  "additionalProperties": false,
+  "properties": {
+    "currentScene": { "type": "string" },
+    "currentLocation": { "type": "string" },
+    "currentTimeHint": { "type": "string" },
+    "activeGoals": { "type": "array", "items": { "type": "string" } },
+    "activeRelations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "target": { "type": "string" },
+          "state": { "type": "string" }
+        }
+      }
+    },
+    "openThreads": { "type": "array", "items": { "type": "string" } },
+    "recentDigest": { "type": "string" }
+  }
+}
+```
+
+<!-- section: TAKEOVER_ACTIVE_OUTPUT_SAMPLE -->
+
+```json
+{
+  "currentScene": "双方刚结束一轮关键信息交换，正在决定是否立刻行动。",
+  "currentLocation": "王都北门附近的临时驻点",
+  "currentTimeHint": "深夜",
+  "activeGoals": ["确认失踪信使位置", "判断下一步是否同行"],
+  "activeRelations": [
+    {
+      "target": "巡逻队长",
+      "state": "仍保持谨慎合作"
+    }
+  ],
+  "openThreads": ["巡逻队长是否愿意继续提供通行帮助"],
+  "recentDigest": "最近几层主要围绕通行条件、身份试探与下一步行动选择展开。"
+}
+```
+
+<!-- section: TAKEOVER_BATCH_SYSTEM -->
+
+你正在执行旧聊天接管的历史批次分析任务。你会收到批次编号、批次范围、批次分类和消息列表。
+
+请严格遵守：
+1. 每一批只输出章节摘要和候选变化，不要直接假设已经写入长期记忆。
+2. `stableFacts` 只保留高置信、可长期复用的信息。
+3. `relationTransitions`、`taskTransitions`、`worldStateChanges` 只记录该批次确实出现的变化。
+4. 所有自然语言字段必须使用简体中文。
+5. 仅输出 JSON，不输出解释文本。
+
+<!-- section: TAKEOVER_BATCH_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["batchId", "summary", "stableFacts", "relationTransitions", "taskTransitions", "worldStateChanges", "openThreads", "chapterTags", "sourceRange"],
+  "additionalProperties": false,
+  "properties": {
+    "batchId": { "type": "string" },
+    "summary": { "type": "string" },
+    "stableFacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "subject", "predicate", "value", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "subject": { "type": "string" },
+          "predicate": { "type": "string" },
+          "value": { "type": "string" },
+          "confidence": { "type": "number" }
+        }
+      }
+    },
+    "relationTransitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "from", "to", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "target": { "type": "string" },
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "taskTransitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task", "from", "to"],
+        "additionalProperties": false,
+        "properties": {
+          "task": { "type": "string" },
+          "from": { "type": "string" },
+          "to": { "type": "string" }
+        }
+      }
+    },
+    "worldStateChanges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "openThreads": { "type": "array", "items": { "type": "string" } },
+    "chapterTags": { "type": "array", "items": { "type": "string" } },
+    "sourceRange": {
+      "type": "object",
+      "required": ["startFloor", "endFloor"],
+      "additionalProperties": false,
+      "properties": {
+        "startFloor": { "type": "integer" },
+        "endFloor": { "type": "integer" }
+      }
+    }
+  }
+}
+```
+
+<!-- section: TAKEOVER_BATCH_OUTPUT_SAMPLE -->
+
+```json
+{
+  "batchId": "takeover:demo:history:0001",
+  "summary": "这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。",
+  "stableFacts": [
+    {
+      "type": "identity",
+      "subject": "巡逻队长",
+      "predicate": "身份",
+      "value": "负责北门夜巡",
+      "confidence": 0.86
+    }
+  ],
+  "relationTransitions": [
+    {
+      "target": "巡逻队长",
+      "from": "陌生试探",
+      "to": "有限合作",
+      "reason": "双方达成了短期协作共识"
+    }
+  ],
+  "taskTransitions": [
+    {
+      "task": "寻找失踪信使",
+      "from": "未开始",
+      "to": "进行中"
+    }
+  ],
+  "worldStateChanges": [
+    {
+      "key": "北门戒严",
+      "value": "持续执行夜间封锁"
+    }
+  ],
+  "openThreads": ["失踪信使的下落仍未确认"],
+  "chapterTags": ["关系推进", "任务开启"],
+  "sourceRange": {
+    "startFloor": 1,
+    "endFloor": 30
+  }
+}
+```
+
+<!-- section: TAKEOVER_CONSOLIDATION_SYSTEM -->
+
+你正在执行旧聊天接管的最终整合任务。你会收到最近活跃快照和全部批次结果。
+
+请严格遵守：
+1. 把批次结果整合为章节索引、长期事实、最终关系状态、最终任务状态、最终世界状态和统计信息。
+2. 对无法明确消歧的冲突，不要虚构结论；只保留在章节索引或统计中。
+3. 所有自然语言字段必须使用简体中文。
+4. 仅输出 JSON，不输出解释文本。
+
+<!-- section: TAKEOVER_CONSOLIDATION_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["chapterDigestIndex", "longTermFacts", "relationState", "taskState", "worldState", "activeSnapshot", "dedupeStats", "conflictStats"],
+  "additionalProperties": false,
+  "properties": {
+    "chapterDigestIndex": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["batchId", "range", "summary", "tags"],
+        "additionalProperties": false,
+        "properties": {
+          "batchId": { "type": "string" },
+          "range": {
+            "type": "object",
+            "required": ["startFloor", "endFloor"],
+            "additionalProperties": false,
+            "properties": {
+              "startFloor": { "type": "integer" },
+              "endFloor": { "type": "integer" }
+            }
+          },
+          "summary": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "longTermFacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "subject", "predicate", "value", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "subject": { "type": "string" },
+          "predicate": { "type": "string" },
+          "value": { "type": "string" },
+          "confidence": { "type": "number" }
+        }
+      }
+    },
+    "relationState": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target", "state", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "target": { "type": "string" },
+          "state": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "taskState": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "task": { "type": "string" },
+          "state": { "type": "string" }
+        }
+      }
+    },
+    "worldState": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "activeSnapshot": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "dedupeStats": {
+      "type": "object",
+      "required": ["totalFacts", "dedupedFacts", "relationUpdates", "taskUpdates", "worldUpdates"],
+      "additionalProperties": false,
+      "properties": {
+        "totalFacts": { "type": "integer" },
+        "dedupedFacts": { "type": "integer" },
+        "relationUpdates": { "type": "integer" },
+        "taskUpdates": { "type": "integer" },
+        "worldUpdates": { "type": "integer" }
+      }
+    },
+    "conflictStats": {
+      "type": "object",
+      "required": ["unresolvedFacts", "unresolvedRelations", "unresolvedTasks", "unresolvedWorldStates"],
+      "additionalProperties": false,
+      "properties": {
+        "unresolvedFacts": { "type": "integer" },
+        "unresolvedRelations": { "type": "integer" },
+        "unresolvedTasks": { "type": "integer" },
+        "unresolvedWorldStates": { "type": "integer" }
+      }
+    }
+  }
+}
+```
+
+<!-- section: TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE -->
+
+```json
+{
+  "chapterDigestIndex": [
+    {
+      "batchId": "takeover:demo:history:0001",
+      "range": {
+        "startFloor": 1,
+        "endFloor": 30
+      },
+      "summary": "建立了初始互信与调查目标。",
+      "tags": ["关系推进", "任务开启"]
+    }
+  ],
+  "longTermFacts": [
+    {
+      "type": "identity",
+      "subject": "巡逻队长",
+      "predicate": "身份",
+      "value": "负责北门夜巡",
+      "confidence": 0.86
+    }
+  ],
+  "relationState": [
+    {
+      "target": "巡逻队长",
+      "state": "与用户保持谨慎合作",
+      "reason": "多轮互动后形成稳定协作关系"
+    }
+  ],
+  "taskState": [
+    {
+      "task": "寻找失踪信使",
+      "state": "进行中"
+    }
+  ],
+  "worldState": {
+    "北门戒严": "仍在执行"
+  },
+  "activeSnapshot": {
+    "currentScene": "双方正在商量下一步行动。",
+    "currentLocation": "北门驻点",
+    "currentTimeHint": "深夜",
+    "activeGoals": ["确认信使位置"],
+    "activeRelations": [
+      {
+        "target": "巡逻队长",
+        "state": "谨慎合作"
+      }
+    ],
+    "openThreads": ["是否能安全离开北门"],
+    "recentDigest": "最近几层聚焦于信使调查和北门戒严。"
+  },
+  "dedupeStats": {
+    "totalFacts": 4,
+    "dedupedFacts": 3,
+    "relationUpdates": 1,
+    "taskUpdates": 1,
+    "worldUpdates": 1
+  },
+  "conflictStats": {
+    "unresolvedFacts": 0,
+    "unresolvedRelations": 0,
+    "unresolvedTasks": 0,
+    "unresolvedWorldStates": 0
+  }
+}
+```

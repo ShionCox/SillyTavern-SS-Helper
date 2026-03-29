@@ -3,6 +3,7 @@ import { createSdkPluginSettingsStore } from '../../../SDK/settings';
 export type MemoryOSSettings = {
     enabled: boolean;
     coldStartEnabled: boolean;
+    takeoverEnabled: boolean;
     toolbarQuickActionsEnabled: boolean;
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
@@ -15,6 +16,13 @@ export type MemoryOSSettings = {
     summaryRecentWindowSize: number;
     summarySecondStageRollingDigestMaxChars: number;
     summarySecondStageCandidateSummaryMaxChars: number;
+    takeoverDetectMinFloors: number;
+    takeoverDefaultRecentFloors: number;
+    takeoverDefaultBatchSize: number;
+    takeoverDefaultPrioritizeRecent: boolean;
+    takeoverDefaultAutoContinue: boolean;
+    takeoverDefaultAutoConsolidate: boolean;
+    takeoverDefaultPauseOnError: boolean;
     retrievalLogEnabled: boolean;
     retrievalLogLevel: 'info' | 'debug';
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
@@ -26,6 +34,7 @@ export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
 export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     enabled: true,
     coldStartEnabled: true,
+    takeoverEnabled: true,
     toolbarQuickActionsEnabled: true,
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
@@ -38,6 +47,13 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     summaryRecentWindowSize: 40,
     summarySecondStageRollingDigestMaxChars: 0,
     summarySecondStageCandidateSummaryMaxChars: 0,
+    takeoverDetectMinFloors: 50,
+    takeoverDefaultRecentFloors: 60,
+    takeoverDefaultBatchSize: 30,
+    takeoverDefaultPrioritizeRecent: true,
+    takeoverDefaultAutoContinue: true,
+    takeoverDefaultAutoConsolidate: true,
+    takeoverDefaultPauseOnError: true,
     retrievalLogEnabled: true,
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
@@ -74,6 +90,18 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     const summarySecondStageCandidateSummaryMaxChars: number = summarySecondStageCandidateSummaryMaxCharsRaw <= 0
         ? 0
         : Math.max(40, Math.min(10000, Math.trunc(summarySecondStageCandidateSummaryMaxCharsRaw)));
+    const takeoverDetectMinFloors: number = Math.max(
+        10,
+        Math.min(2000, Math.trunc(Number(candidate.takeoverDetectMinFloors) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors)),
+    );
+    const takeoverDefaultRecentFloors: number = Math.max(
+        10,
+        Math.min(2000, Math.trunc(Number(candidate.takeoverDefaultRecentFloors) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors)),
+    );
+    const takeoverDefaultBatchSize: number = Math.max(
+        1,
+        Math.min(500, Math.trunc(Number(candidate.takeoverDefaultBatchSize) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize)),
+    );
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
     const retrievalRulePack = candidate.retrievalRulePack === 'native'
         || candidate.retrievalRulePack === 'perocore'
@@ -83,6 +111,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     return {
         enabled: candidate.enabled !== false,
         coldStartEnabled: candidate.coldStartEnabled !== false,
+        takeoverEnabled: candidate.takeoverEnabled !== false,
         toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
@@ -95,6 +124,13 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         summaryRecentWindowSize,
         summarySecondStageRollingDigestMaxChars,
         summarySecondStageCandidateSummaryMaxChars,
+        takeoverDetectMinFloors,
+        takeoverDefaultRecentFloors,
+        takeoverDefaultBatchSize,
+        takeoverDefaultPrioritizeRecent: candidate.takeoverDefaultPrioritizeRecent !== false,
+        takeoverDefaultAutoContinue: candidate.takeoverDefaultAutoContinue !== false,
+        takeoverDefaultAutoConsolidate: candidate.takeoverDefaultAutoConsolidate !== false,
+        takeoverDefaultPauseOnError: candidate.takeoverDefaultPauseOnError !== false,
         retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
         retrievalLogLevel,
         retrievalRulePack,
