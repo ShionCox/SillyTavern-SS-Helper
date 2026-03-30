@@ -43,12 +43,15 @@ import { buildTypesViewMarkup } from './workbenchTabs/tabTypes';
 import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
-import { buildMemoryGraphViewMarkup } from './workbenchTabs/tabMemoryGraph';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
-import { mountMemoryGraph } from './workbenchTabs/memoryGraph';
 import { buildMemoryGraph } from './workbenchTabs/shared/buildMemoryGraph';
+import {
+    buildMemoryGraphPageMarkup,
+    destroyMemoryGraphPage,
+    mountMemoryGraphPage,
+} from './workbenchPages/memoryGraphPage';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
@@ -171,7 +174,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                 ${buildActorsViewMarkup(snapshot, state, selectedActor, selectedActorMemories, typeMap, entryOptions)}
                 ${buildWorldEntitiesViewMarkup(snapshot, state)}
                 ${buildPreviewViewMarkup(snapshot, state)}
-                ${buildMemoryGraphViewMarkup(snapshot, state, snapshot.memoryGraph, {
+                ${buildMemoryGraphPageMarkup(snapshot, state, {
                     selectedGraphNodeId: state.selectedGraphNodeId,
                     memoryGraphQuery: state.memoryGraphQuery,
                     memoryGraphFilterType: state.memoryGraphFilterType,
@@ -488,15 +491,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.bindEntryId = '';
                 toast.success('当前聊天数据库已删除。');
                 await render();
-                return;
-            }
-            if (action === 'graph-jump-entry') {
-                const entryId = String(button.dataset.entryId ?? '').trim();
-                if (entryId) {
-                    state.selectedEntryId = entryId;
-                    state.currentView = 'entries';
-                    await render();
-                }
                 return;
             }
             if (action === 'takeover-start') {
@@ -837,6 +831,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const preservedEntryListScrollTop = entryList?.scrollTop ?? 0;
         const snapshot = await loadSnapshot();
         normalizeSelection(snapshot);
+        destroyMemoryGraphPage();
         root.innerHTML = buildWorkbenchMarkup(snapshot, state);
         const nextEntryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
         if (nextEntryList) {
@@ -863,58 +858,18 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         }
 
         if (state.currentView === 'memory-graph') {
-            const graphContainer = root.querySelector('#stx-memory-graph-container') as HTMLElement | null;
-            if (graphContainer) {
-                mountMemoryGraph(graphContainer, snapshot.memoryGraph, {
-                    selectedNodeId: state.selectedGraphNodeId,
-                    filterType: state.memoryGraphFilterType || undefined,
-                    searchQuery: state.memoryGraphQuery || undefined,
-                    graphMode: (state.memoryGraphMode as any) || 'compact',
-                    onSelectNode: (nodeId: string, entryId: string): void => {
-                        state.selectedGraphNodeId = nodeId;
-                        state.selectedEntryId = entryId;
+            const graphPageHost = root.querySelector('[data-view="memory-graph"]') as HTMLElement | null;
+            if (graphPageHost) {
+                mountMemoryGraphPage({
+                    host: graphPageHost,
+                    snapshot,
+                    state,
+                    onRequestRender: (): void => {
                         void render();
                     },
                 });
             }
 
-            const graphFilterType = root.querySelector('#stx-memory-graph-filter-type') as HTMLSelectElement | null;
-            graphFilterType?.addEventListener('change', (): void => {
-                state.memoryGraphFilterType = String(graphFilterType.value ?? '').trim();
-                void render();
-            });
-
-            const graphQuery = root.querySelector('#stx-memory-graph-query') as HTMLInputElement | null;
-            let graphQueryTimer: ReturnType<typeof setTimeout> | null = null;
-            graphQuery?.addEventListener('input', (): void => {
-                if (graphQueryTimer) clearTimeout(graphQueryTimer);
-                graphQueryTimer = setTimeout((): void => {
-                    state.memoryGraphQuery = String(graphQuery.value ?? '').trim();
-                    void render();
-                }, 300);
-            });
-
-            // 图谱模式切换
-            root.querySelectorAll<HTMLElement>('[data-action="graph-set-mode"]').forEach(btn => {
-                btn.addEventListener('click', (): void => {
-                    const mode = btn.dataset.mode ?? 'compact';
-                    state.memoryGraphMode = mode;
-                    void render();
-                });
-            });
-
-            // 关联节点点击事件
-            root.querySelectorAll<HTMLElement>('[data-action="graph-select-node"]').forEach(btn => {
-                btn.addEventListener('click', (): void => {
-                    const nodeId = btn.dataset.nodeId ?? '';
-                    const entryId = btn.dataset.entryId ?? '';
-                    if (nodeId) {
-                        state.selectedGraphNodeId = nodeId;
-                        state.selectedEntryId = entryId;
-                        void render();
-                    }
-                });
-            });
         }
     };
 

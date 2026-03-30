@@ -47,7 +47,9 @@ export function buildTakeoverSectionDigests(
 }
 
 /**
- * 功能：归约角色卡片。
+ * 功能：归约角色卡片（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
+ * LLM 只处理本函数无法自动决议的部分。
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
@@ -80,7 +82,8 @@ export function reduceTakeoverActors(batchResults: MemoryTakeoverBatchResult[]):
 }
 
 /**
- * 功能：归约实体卡片。
+ * 功能：归约实体卡片（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
@@ -117,7 +120,8 @@ export function reduceTakeoverEntities(batchResults: MemoryTakeoverBatchResult[]
 }
 
 /**
- * 功能：归约关系卡片。
+ * 功能：归约关系卡片（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
@@ -150,7 +154,8 @@ export function reduceTakeoverRelationships(batchResults: MemoryTakeoverBatchRes
 }
 
 /**
- * 功能：归约任务状态。
+ * 功能：归约任务状态（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
@@ -186,7 +191,8 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
 }
 
 /**
- * 功能：归约世界状态。
+ * 功能：归约世界状态（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */

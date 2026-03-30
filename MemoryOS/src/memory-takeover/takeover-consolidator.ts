@@ -34,12 +34,18 @@ import { resolveTakeoverConflictBuckets } from './takeover-conflict-resolver';
 import { finalizeTakeoverConsolidation } from './takeover-finalizer';
 
 /**
- * 功能：执行旧聊天接管最终整合。
- * 参数：
- * input：整合输入。
+ * 功能：执行旧聊天接管最终整合（新主链：冲突裁决 + 代码 finalize）。
  *
- * 返回：
- * MemoryTakeoverConsolidationResult：最终整合结果。
+ * 新架构主链流程：
+ * 1. 提取阶段（extract）：将 batchResults 登记到 pipeline ledger
+ * 2. 归约阶段（reduce）：本地 dedupe / merge / collapse，输出 canonicalRecords + unresolvedConflicts
+ * 3. 裁决阶段（resolve）：仅将 unresolvedConflicts 发送给 LLM 做最小裁决
+ * 4. 应用阶段（apply）：代码 finalize，生成最终输出
+ *
+ * 默认主链不再执行 full consolidation，LLM 仅处理冲突桶。
+ *
+ * @param input 整合输入。
+ * @returns 最终整合结果。
  */
 export async function runTakeoverConsolidation(input: {
     llm: MemoryLLMApi | null;

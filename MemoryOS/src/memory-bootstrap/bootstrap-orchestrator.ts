@@ -66,7 +66,16 @@ export interface RunBootstrapOrchestratorResult {
 }
 
 /**
- * 功能：执行冷启动编排。
+ * 功能：执行冷启动编排（四阶段架构）。
+ *
+ * 新架构阶段：
+ * Phase 1（LLM）：核心实体与角色抽取 — identity, actorCards, entityCards, worldBase
+ * Phase 2（LLM）：关系与状态转移抽取 — relationships, memoryRecords
+ * Phase 3（代码）：bootstrap candidates 应用 — reduce, conflict resolve, finalize, validate
+ * Phase 4（代码）：一致性修正 — 空引用修复、重复合并、不合法状态归一
+ *
+ * 每阶段输出可观测、可追踪、可局部重试。
+ *
  * @param input 编排输入。
  * @returns 编排结果。
  */
@@ -78,6 +87,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         payload: {
             reason: input.sourceBundle.reason,
             sourceTextCount: sourceTexts.length,
+            architecture: 'phase_4',
         },
     });
     if (!input.llm) {
@@ -92,8 +102,13 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         };
     }
 
+    // ── Phase 1：核心实体与角色抽取 ──────────────────
     const segments = segmentColdStartSourceBundle(input.sourceBundle);
     const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_started',
+        payload: { phase: 'phase1', description: '核心实体与角色抽取' },
+    });
     const phase1Result = await runBootstrapPhase({
         llm: input.llm,
         pluginId: input.pluginId,
@@ -104,6 +119,16 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             actorKeyHints,
             userDisplayName,
         },
+    });
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_completed',
+        payload: { phase: 'phase1', ok: phase1Result.ok, reasonCode: phase1Result.reasonCode },
+    });
+
+    // ── Phase 2：关系与状态转移抽取 ──────────────────
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_started',
+        payload: { phase: 'phase2', description: '关系与状态转移抽取' },
     });
     const phase2Result = await runBootstrapPhase({
         llm: input.llm,
@@ -116,11 +141,16 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             userDisplayName,
         },
     });
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_completed',
+        payload: { phase: 'phase2', ok: phase2Result.ok, reasonCode: phase2Result.reasonCode },
+    });
+
     if (!phase1Result.ok || !phase2Result.ok) {
         const reasonCode = phase1Result.reasonCode || phase2Result.reasonCode || 'cold_start_failed';
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
-            payload: { reasonCode },
+            payload: { reasonCode, failedPhase: !phase1Result.ok ? 'phase1' : 'phase2' },
         });
         return {
             ok: false,
@@ -129,6 +159,11 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         };
     }
 
+    // ── Phase 3：bootstrap candidates 代码应用 ──────────────────
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_started',
+        payload: { phase: 'phase3', description: 'bootstrap candidates 去重、合并、校验' },
+    });
     const reduced = reduceBootstrapDocuments([
         parseColdStartDocument(phase1Result.data),
         parseColdStartDocument(phase2Result.data),
@@ -136,7 +171,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     if (!reduced) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
-            payload: { reasonCode: 'invalid_cold_start_document' },
+            payload: { reasonCode: 'invalid_cold_start_document', failedPhase: 'phase3' },
         });
         return {
             ok: false,
@@ -147,10 +182,21 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
 
     const normalizedDocument = normalizeColdStartNarrativeDocument(resolveBootstrapConflicts(reduced), userDisplayName);
     const finalized = finalizeBootstrapDocument(normalizedDocument, input.sourceBundle);
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_completed',
+        payload: {
+            phase: 'phase3',
+            ok: finalized.candidates.length > 0,
+            candidateCount: finalized.candidates.length,
+            actorCardCount: normalizedDocument.actorCards.length,
+            relationshipCount: normalizedDocument.relationships.length,
+        },
+    });
+
     if (finalized.candidates.length <= 0) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
-            payload: { reasonCode: 'empty_cold_start_candidates' },
+            payload: { reasonCode: 'empty_cold_start_candidates', failedPhase: 'phase3' },
         });
         return {
             ok: false,
@@ -159,13 +205,30 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         };
     }
 
+    // ── Phase 4：一致性修正 ──────────────────
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_started',
+        payload: { phase: 'phase4', description: '一致性修正与校验' },
+    });
     const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
+    const reconcileResult = reconcileBootstrapDocument(normalizedDocument);
+    await input.dependencies.appendMutationHistory({
+        action: 'cold_start_phase_completed',
+        payload: {
+            phase: 'phase4',
+            ok: actorCardValidation.ok,
+            missingActorKeys: actorCardValidation.missingActorKeys,
+            reconcileFixCount: reconcileResult.fixCount,
+        },
+    });
+
     if (!actorCardValidation.ok) {
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: {
                 reasonCode: 'relationship_actor_card_missing',
                 missingActorKeys: actorCardValidation.missingActorKeys,
+                failedPhase: 'phase4',
             },
         });
         return {
@@ -179,7 +242,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         ok: true,
         reasonCode: 'ok',
         candidates: finalized.candidates,
-        document: normalizedDocument,
+        document: reconcileResult.document,
         worldProfile: finalized.worldProfile,
     };
 }
@@ -558,6 +621,95 @@ function countEntityCards(entityCards?: ColdStartDocument['entityCards']): numbe
         + (entityCards.cities?.length ?? 0)
         + (entityCards.nations?.length ?? 0)
         + (entityCards.locations?.length ?? 0);
+}
+
+/**
+ * 功能：Phase 4 一致性修正 — 对冷启动文档做轻量一致性修复。
+ *
+ * 修复项：
+ * - 空引用修复：移除引用不存在角色的关系
+ * - 重复实体名合并：按 compareKey 去重
+ * - 不合法状态值归一：清理空字符串字段
+ * - 缺失依赖补齐：确保每条关系的 participants 完整
+ *
+ * @param document 冷启动文档。
+ * @returns 修复后的文档与修复计数。
+ */
+function reconcileBootstrapDocument(document: ColdStartDocument): {
+    document: ColdStartDocument;
+    fixCount: number;
+} {
+    let fixCount = 0;
+    const mainActorKey = normalizeActorKey(document.identity.actorKey);
+    const knownActorKeys = new Set<string>();
+    knownActorKeys.add(mainActorKey);
+    knownActorKeys.add('user');
+    for (const actorCard of document.actorCards) {
+        const actorKey = normalizeActorKey(actorCard.actorKey);
+        if (actorKey) {
+            knownActorKeys.add(actorKey);
+        }
+    }
+
+    // 修复 1：移除引用不存在角色的关系
+    const validRelationships = document.relationships.filter((relation) => {
+        const sourceKey = normalizeActorKey(relation.sourceActorKey);
+        const targetKey = normalizeActorKey(relation.targetActorKey);
+        if (!sourceKey || !targetKey) {
+            fixCount++;
+            return false;
+        }
+        if (!knownActorKeys.has(sourceKey) && !knownActorKeys.has(targetKey)) {
+            fixCount++;
+            return false;
+        }
+        return true;
+    });
+
+    // 修复 2：确保 participants 完整
+    const reconciledRelationships = validRelationships.map((relation) => {
+        const participants = dedupeStrings([
+            relation.sourceActorKey,
+            relation.targetActorKey,
+            ...relation.participants,
+        ]);
+        if (participants.length !== relation.participants.length) {
+            fixCount++;
+        }
+        return { ...relation, participants };
+    });
+
+    // 修复 3：清理空字符串字段
+    const reconciledActorCards = document.actorCards.map((card) => {
+        const displayName = String(card.displayName ?? '').trim();
+        if (!displayName && card.actorKey) {
+            fixCount++;
+            return { ...card, displayName: card.actorKey };
+        }
+        return card;
+    });
+
+    // 修复 4：去重 memoryRecords
+    const seenMemKeys = new Set<string>();
+    const reconciledMemoryRecords = document.memoryRecords.filter((record) => {
+        const key = `${record.schemaId}:${record.title}`;
+        if (seenMemKeys.has(key)) {
+            fixCount++;
+            return false;
+        }
+        seenMemKeys.add(key);
+        return true;
+    });
+
+    return {
+        document: {
+            ...document,
+            actorCards: reconciledActorCards,
+            relationships: reconciledRelationships,
+            memoryRecords: reconciledMemoryRecords,
+        },
+        fixCount,
+    };
 }
 
 /**

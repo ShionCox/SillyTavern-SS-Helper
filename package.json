@@ -24,7 +24,9 @@
         "@tailwindcss/postcss": "^4.2.1",
         "autoprefixer": "^10.4.27",
         "esbuild": "^0.23.0",
+        "gsap": "^3.14.2",
         "pinia": "^3.0.4",
+        "pixi.js": "^8.17.1",
         "postcss": "^8.5.8",
         "tailwindcss": "^4.2.1",
         "vite": "^8.0.0"

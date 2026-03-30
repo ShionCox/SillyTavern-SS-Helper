@@ -13,6 +13,12 @@ export {
     type EditableFieldMap,
 } from './mutation-validator';
 export { applySummaryMutation, type MutationApplyDependencies, type ApplySummaryMutationInput } from './mutation-applier';
+export {
+    validateSummaryPatch,
+    normalizeSummaryPatch,
+    applySummaryPatch,
+    type SummaryPatchValidationResult,
+} from './mutation-patch-utils';
 export { buildSummaryWindow, type SummaryWindow, type SummaryWindowMessage, type SummaryWindowOptions } from './summary-window';
 export type { SummaryMutationDocument, SummaryMutationAction, SummaryMutationActionType } from './mutation-types';
 export type { MemoryLLMApi, MemoryLLMConsumerRegistration, MemoryLLMTaskDescriptor, MemoryLLMRunResult } from './llm-types';

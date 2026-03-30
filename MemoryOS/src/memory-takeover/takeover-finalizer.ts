@@ -16,7 +16,16 @@ import type {
 } from '../pipeline/pipeline-types';
 
 /**
- * 功能：本地完成旧聊天接管最终整合。
+ * 功能：本地完成旧聊天接管最终整合（代码 finalize 主链核心）。
+ *
+ * 此函数是新架构的核心 finalize 层：
+ * - 应用冲突裁决补丁（applyPatches）
+ * - 归并实体变更（collapseEntityTransitions）
+ * - 去重稳定事实（dedupeFacts）
+ * - 补齐结构默认值与统计信息
+ *
+ * 最终输出主要由代码决定，而不是由 LLM 重新生成完整文档。
+ *
  * @param input Finalize 输入。
  * @returns 最终整合结果。
  */

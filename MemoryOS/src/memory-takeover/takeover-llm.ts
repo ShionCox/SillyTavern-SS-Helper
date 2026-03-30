@@ -133,6 +133,7 @@ function buildRelationshipArraySchema(): Record<string, unknown> {
 
 /**
  * 功能：为旧聊天关系结果补充关系标签与目标类型字段。
+ *
  * @param sectionName 当前 schema 对应 section 名称。
  * @param properties schema 属性集合。
  * @returns 就地增强后的属性集合。
@@ -157,20 +158,12 @@ function enrichTakeoverRelationSchemas(sectionName: string, properties: Record<s
         }
     }
 
-    if (sectionName === 'TAKEOVER_CONSOLIDATION_SCHEMA') {
-        const relationState = properties.relationState as Record<string, unknown> | undefined;
-        const relationItems = relationState?.items as Record<string, unknown> | undefined;
-        const relationProperties = relationItems?.properties as Record<string, unknown> | undefined;
-        if (relationProperties) {
-            relationProperties.relationTag = relationTagSchema;
-            relationProperties.targetType = targetTypeSchema;
-        }
-    }
     return properties;
 }
 
 /**
- * 功能：为旧聊天批处理与整合任务补充角色卡字段。
+ * 功能：为旧聊天批处理任务补充角色卡字段。
+ *
  * @param sectionName schema 对应的 section 名称。
  * @param schema 原始 schema。
  * @returns 增强后的 schema。
@@ -198,17 +191,6 @@ function enrichTakeoverSchema(sectionName: string, schema: unknown): unknown {
         }
     }
 
-    if (sectionName === 'TAKEOVER_CONSOLIDATION_SCHEMA') {
-        properties.actorCards = buildActorCardArraySchema();
-        properties.relationships = buildRelationshipArraySchema();
-        if (!required.includes('actorCards')) {
-            required.splice(1, 0, 'actorCards');
-        }
-        if (!required.includes('relationships')) {
-            required.splice(2, 0, 'relationships');
-        }
-    }
-
     enrichTakeoverRelationSchemas(sectionName, properties);
     nextSchema.properties = properties;
     nextSchema.required = required;
@@ -216,7 +198,8 @@ function enrichTakeoverSchema(sectionName: string, schema: unknown): unknown {
 }
 
 /**
- * 功能：为旧聊天批处理与整合任务补充角色卡示例。
+ * 功能：为旧聊天批处理任务补充角色卡示例。
+ *
  * @param sectionName sample 对应的 section 名称。
  * @param sample 原始示例。
  * @returns 增强后的示例。
@@ -255,40 +238,6 @@ function enrichTakeoverSample(sectionName: string, sample: unknown): unknown {
     }
     if (sectionName === 'TAKEOVER_BATCH_OUTPUT_SAMPLE' && Array.isArray(nextSample.relationTransitions)) {
         nextSample.relationTransitions = nextSample.relationTransitions.map((item: Record<string, unknown>) => ({
-            ...item,
-            relationTag: item.relationTag ?? '朋友',
-            targetType: item.targetType ?? 'actor',
-        }));
-    }
-    if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && !Array.isArray(nextSample.actorCards)) {
-        nextSample.actorCards = [
-            {
-                actorKey: 'lina',
-                displayName: '莉娜',
-                aliases: [],
-                identityFacts: ['与主角同行的银发精灵'],
-                originFacts: [],
-                traits: ['谨慎', '会照顾人'],
-            },
-        ];
-    }
-    if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && !Array.isArray(nextSample.relationships)) {
-        nextSample.relationships = [
-            {
-                sourceActorKey: 'user',
-                targetActorKey: 'lina',
-                participants: ['user', 'lina'],
-                relationTag: '朋友',
-                state: '双方保持同行与互相信任。',
-                summary: '整合后确认主角与莉娜之间形成稳定朋友关系。',
-                trust: 0.72,
-                affection: 0.48,
-                tension: 0.12,
-            },
-        ];
-    }
-    if (sectionName === 'TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE' && Array.isArray(nextSample.relationState)) {
-        nextSample.relationState = nextSample.relationState.map((item: Record<string, unknown>) => ({
             ...item,
             relationTag: item.relationTag ?? '朋友',
             targetType: item.targetType ?? 'actor',

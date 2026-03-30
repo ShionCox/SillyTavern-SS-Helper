@@ -7,6 +7,7 @@ import { planSummaryMutationBatches } from './mutation-batch-planner';
 import { appendSummaryMutationBatchResult, clearSummaryMutationStagingSnapshot, readSummaryMutationStagingSnapshot } from './mutation-staging-store';
 import { finalizeSummaryMutationSnapshot } from './mutation-finalizer';
 import { runSummaryMutationBatch } from './mutation-batch-runner';
+import { validateSummaryPatch, normalizeSummaryPatch } from './mutation-patch-utils';
 import {
     validateSummaryMutationDocument,
     type EditableFieldMap,
@@ -255,10 +256,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 
     const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
+    const patchModeInstruction = '本次输出为稀疏 patch 模式：payload 中只输出发生变化的字段，未变化字段不要出现。严禁在 payload 中重复旧 state 的完整内容。若某字段无变化，直接省略该字段。';
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
         userDisplayName,
-    })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+    })}\n\n当前用户自然语言称呼固定为"${userDisplayName}"。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成"用户"或"主角"。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
     const summaryJobId = `summary:${plannerResult.context.window.fromTurn}:${plannerResult.context.window.toTurn}:${Date.now()}`;
     clearSummaryMutationStagingSnapshot(summaryJobId);
@@ -320,6 +322,21 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             return buildSummaryFailureResult(plannerResult, batchResult.reasonCode || 'summary_llm_failed');
         }
         const trimmedDocument = trimMutationDocumentActions(batchResult.data, batchPlan.actionBudget);
+
+        // 稀疏 patch 校验：确保 LLM 输出为有效 patch，而非完整 state 副本
+        const patchValidation = validateSummaryPatch(trimmedDocument.actions);
+        if (patchValidation.warnings.length > 0) {
+            await input.dependencies.appendMutationHistory({
+                action: 'patch_validation_warnings',
+                payload: {
+                    batchId: batchPlan.batchId,
+                    warnings: patchValidation.warnings,
+                },
+            });
+        }
+        // 规范化 patch 动作（去除无效字段）
+        trimmedDocument.actions = normalizeSummaryPatch(trimmedDocument.actions);
+
         const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
         if (!validation.valid || !validation.document) {
             clearSummaryMutationStagingSnapshot(summaryJobId);
@@ -413,7 +430,14 @@ function buildSummaryFailureResult(
 }
 
 /**
- * 功能：构建精简的 mutation 上下文。
+ * 功能：构建精简的 mutation 上下文（稀疏 patch 模式）。
+ *
+ * 新架构要求：
+ * - 只提供与本次更新高度相关的上下文
+ * - 不携带完整旧状态副本
+ * - 标明 patch 语义，提供字段级约束
+ * - 不为模型制造"重写整个对象"的暗示
+ *
  * @param context 完整上下文。
  * @param plannerDecision planner 输出。
  * @param rollingDigestMaxChars 滚动摘要上限。
@@ -465,6 +489,17 @@ function buildSlimMutationContext(
         typeSchemas: activeTypeSchemas,
         candidateRecords: slimCandidates,
         rules: context.rules,
+        patchMode: {
+            enabled: true,
+            description: '本次输出为稀疏 patch 模式，仅输出变化字段。',
+            constraints: [
+                '只输出发生变化的字段，未变化字段不要出现在 payload 中。',
+                '严禁返回完整旧 state 副本。',
+                '数组字段如需变更请输出完整新数组。',
+                '嵌套 fields 对象中只输出变化的子字段。',
+                '若无实质变更，使用 action=NOOP。',
+            ],
+        },
     };
 }
 
@@ -587,7 +622,14 @@ function parseJsonSection(section: string): unknown {
 }
 
 /**
- * 功能：构建严格 mutation schema。
+ * 功能：构建严格 mutation schema（稀疏 patch 模式）。
+ *
+ * 新架构要求：
+ * - 顶层字段均可选（支持稀疏 patch）
+ * - 未变化字段不出现在输出中
+ * - 数组字段支持替换策略
+ * - 明确禁止模型返回完整旧状态拷贝
+ *
  * @param baseSchema 基础 schema。
  * @param typeSchemas 类型 schema 列表。
  * @returns 严格 schema。
@@ -643,9 +685,15 @@ function buildStrictActionItemsSchema(
 }
 
 /**
- * 功能：构建 payload schema。
+ * 功能：构建 payload schema（稀疏 patch 模式，所有字段均可选）。
+ *
+ * 新架构要求 payload 为真正的 sparse patch：
+ * - 所有字段默认可选
+ * - 未变化字段不需要出现
+ * - 嵌套对象支持递归 patch
+ *
  * @param editableFields 可编辑字段列表。
- * @param requireAll 是否要求所有字段必填。
+ * @param requireAll 是否要求所有字段必填（默认 false，仅兼容模式为 true）。
  * @returns payload schema。
  */
 function buildStrictMutationPayloadSchema(editableFields: string[], requireAll: boolean): Record<string, unknown> {

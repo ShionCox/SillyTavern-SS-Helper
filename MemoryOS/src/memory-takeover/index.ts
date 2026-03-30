@@ -4,7 +4,15 @@ export { runTakeoverBaseline } from './takeover-baseline';
 export { runTakeoverActiveSnapshot } from './takeover-active-snapshot';
 export { runTakeoverBatch } from './takeover-batch-runner';
 export { runTakeoverConsolidation } from './takeover-consolidator';
-export { buildTakeoverSectionDigests } from './takeover-section-reducer';
+export {
+    buildTakeoverSectionDigests,
+    reduceTakeoverActors,
+    reduceTakeoverEntities,
+    reduceTakeoverRelationships,
+    reduceTakeoverTasks,
+    reduceTakeoverWorld,
+    mapTakeoverRecordsToLedger,
+} from './takeover-section-reducer';
 export { resolveTakeoverConflictBuckets } from './takeover-conflict-resolver';
 export { finalizeTakeoverConsolidation } from './takeover-finalizer';
 export { appendTakeoverDiagnostics } from './takeover-diagnostics';

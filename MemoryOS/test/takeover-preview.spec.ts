@@ -20,9 +20,6 @@ vi.mock('../src/memory-prompts/prompt-loader', () => ({
         TAKEOVER_BATCH_SYSTEM: '历史批次分析',
         TAKEOVER_BATCH_SCHEMA: '{"type":"object"}',
         TAKEOVER_BATCH_OUTPUT_SAMPLE: '{"summary":""}',
-        TAKEOVER_CONSOLIDATION_SYSTEM: '整合任务',
-        TAKEOVER_CONSOLIDATION_SCHEMA: '{"type":"object"}',
-        TAKEOVER_CONSOLIDATION_OUTPUT_SAMPLE: '{"generatedAt":0}',
     }),
 }));
 
