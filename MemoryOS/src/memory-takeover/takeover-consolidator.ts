@@ -170,7 +170,7 @@ export async function runTakeoverConsolidation(input: {
     });
 
     updatePipelineJobPhase(input.takeoverId, 'resolve');
-    const patches = await resolveTakeoverConflictBuckets({
+    const conflictResolutionResult = await resolveTakeoverConflictBuckets({
         llm: input.llm,
         pluginId: input.pluginId,
         buckets: listPipelineConflictBucketRecords(input.takeoverId),
@@ -178,7 +178,7 @@ export async function runTakeoverConsolidation(input: {
         useConflictResolver: settings.takeoverUseConflictResolver,
     });
 
-    for (const patch of patches) {
+    for (const patch of conflictResolutionResult.patches) {
         resolvePipelineConflictBucket(
             input.takeoverId,
             patch.bucketId,
@@ -186,10 +186,17 @@ export async function runTakeoverConsolidation(input: {
             patch.resolutions.some((item) => item.reasonCodes.includes('deterministic_fallback')),
         );
     }
-    diagnostics.usedLLM = Boolean(input.llm) && patches.length > 0;
-    diagnostics.resolvedConflictCount = patches.length;
+    diagnostics.usedLLM = Boolean(input.llm) && conflictResolutionResult.llmResolvedCount > 0;
+    diagnostics.resolvedConflictCount = conflictResolutionResult.patches.length;
     diagnostics.unresolvedConflictCount = Math.max(0, diagnostics.conflictBucketCount - diagnostics.resolvedConflictCount);
-    diagnostics.fallbackUsed = patches.some((item) => item.resolutions.some((resolution) => resolution.reasonCodes.includes('deterministic_fallback')));
+    diagnostics.ruleResolvedConflictCount = conflictResolutionResult.ruleResolvedCount;
+    diagnostics.llmResolvedConflictCount = conflictResolutionResult.llmResolvedCount;
+    diagnostics.batchedRequestCount = conflictResolutionResult.batchedRequestCount;
+    diagnostics.avgBucketsPerRequest = conflictResolutionResult.batchedRequestCount > 0
+        ? Number((conflictResolutionResult.llmResolvedCount / conflictResolutionResult.batchedRequestCount).toFixed(2))
+        : 0;
+    diagnostics.skippedByRuleCount = conflictResolutionResult.skippedByRuleCount;
+    diagnostics.fallbackUsed = conflictResolutionResult.fallbackUsed;
 
     updatePipelineJobPhase(input.takeoverId, 'apply');
     const result = finalizeTakeoverConsolidation({

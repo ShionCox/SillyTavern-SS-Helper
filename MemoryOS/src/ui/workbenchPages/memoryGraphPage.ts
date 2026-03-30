@@ -1,4 +1,9 @@
 import { escapeHtml } from '../editorShared';
+import {
+    resolveMemoryGraphFieldLabel,
+    resolveMemoryGraphFieldValue,
+    resolveMemoryGraphText,
+} from '../workbenchLocale';
 import type { WorkbenchSnapshot, WorkbenchState } from '../workbenchTabs/shared';
 import { escapeAttr } from '../workbenchTabs/shared';
 import type {
@@ -78,45 +83,45 @@ export function buildMemoryGraphPageMarkup(
         graphMode: currentMode,
     });
     const detailHtml = selectedNode
-        ? buildNodeDetailPanel(selectedNode, currentMode)
+        ? buildNodeDetailPanel(selectedNode, snapshot.memoryGraph, currentMode)
         : selectedEdge
             ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, currentMode)
             : buildEmptyDetailPanel();
     const typeCounts = buildTypeCountMap(snapshot.memoryGraph, currentMode);
     const typeOptions = [...typeCounts.entries()]
-        .sort((left, right): number => right[1] - left[1])
-        .map(([type, count]): string => {
+        .sort((left: [string, number], right: [string, number]): number => right[1] - left[1])
+        .map(([type, count]: [string, number]): string => {
             return `<option value="${escapeAttr(type)}"${graphState.memoryGraphFilterType === type ? ' selected' : ''}>${escapeHtml(resolveTypeLabel(type))} (${count})</option>`;
         })
         .join('');
     const modeButtons = ([
-        { mode: 'semantic' as MemoryGraphMode, label: '语义' },
-        { mode: 'debug' as MemoryGraphMode, label: '调试' },
-    ]).map(({ mode, label }): string => {
+        { mode: 'semantic' as MemoryGraphMode, label: resolveMemoryGraphText('mode_semantic') },
+        { mode: 'debug' as MemoryGraphMode, label: resolveMemoryGraphText('mode_debug') },
+    ]).map(({ mode, label }: { mode: MemoryGraphMode; label: string }): string => {
         const active = currentMode === mode;
-        return `<button type="button" data-graph-mode="${mode}" style="font-size:11px;padding:2px 8px;border-radius:4px;background:${active ? 'rgba(96,165,250,0.22)' : 'rgba(255,255,255,0.06)'};border:${active ? '1px solid rgba(96,165,250,0.42)' : '1px solid rgba(255,255,255,0.1)'};color:${active ? '#93c5fd' : 'rgba(255,255,255,0.66)'};cursor:pointer;font-family:inherit;">${label}</button>`;
+        return `<button type="button" data-graph-mode="${mode}" style="font-size:11px;padding:2px 8px;border-radius:4px;background:${active ? 'rgba(96,165,250,0.22)' : 'rgba(255,255,255,0.06)'};border:${active ? '1px solid rgba(96,165,250,0.42)' : '1px solid rgba(255,255,255,0.1)'};color:${active ? '#93c5fd' : 'rgba(255,255,255,0.66)'};cursor:pointer;font-family:inherit;">${escapeHtml(label)}</button>`;
     }).join('');
     const legendHtml = buildMemoryGraphLegendItems()
-        .map((item) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;"><span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span><span style="font-size:11px;opacity:0.72;">${item.label}</span></span>`)
+        .map((item) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;"><span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span><span style="font-size:11px;opacity:0.72;">${escapeHtml(item.label)}</span></span>`)
         .join('');
 
     return `
         <section class="stx-memory-workbench__view is-active" data-view="memory-graph">
             <div style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
                 <div style="display:flex;align-items:center;gap:16px;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;flex-wrap:wrap;">
-                    <span style="font-size:12px;opacity:0.6;">节点 <strong>${visibleGraph.nodes.length}</strong></span>
-                    <span style="font-size:12px;opacity:0.6;">连接 <strong>${visibleGraph.edges.length}</strong></span>
+                    <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('node_count'))} <strong>${visibleGraph.nodes.length}</strong></span>
+                    <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('edge_count'))} <strong>${visibleGraph.edges.length}</strong></span>
                     <select id="${GRAPH_FILTER_ID}" class="stx-memory-workbench__select" style="max-width:170px;font-size:12px;">
-                        <option value="">全部类型</option>
+                        <option value="">${escapeHtml(resolveMemoryGraphText('all_types'))}</option>
                         ${typeOptions}
                     </select>
-                    <input id="${GRAPH_QUERY_ID}" class="stx-memory-workbench__input" style="max-width:220px;font-size:12px;" type="text" placeholder="搜索记忆节点" value="${escapeAttr(graphState.memoryGraphQuery ?? '')}">
+                    <input id="${GRAPH_QUERY_ID}" class="stx-memory-workbench__input" style="max-width:220px;font-size:12px;" type="text" placeholder="${escapeAttr(resolveMemoryGraphText('search_placeholder'))}" value="${escapeAttr(graphState.memoryGraphQuery ?? '')}">
                     <div style="display:flex;gap:4px;align-items:center;">${modeButtons}</div>
                     <div style="margin-left:auto;">${legendHtml}</div>
                 </div>
-                <div style="position:relative;flex:1;overflow:hidden;background:transparent;">
+                <div class="stx-memory-graph-stage" style="position:relative;flex:1;overflow:hidden;background:transparent;">
                     <div id="${GRAPH_CONTAINER_ID}" style="position:absolute;inset:0;cursor:grab;"></div>
-                    <div id="${GRAPH_DETAIL_ID}" style="position:absolute;top:16px;right:16px;width:340px;max-height:calc(100% - 32px);overflow-y:auto;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;">
+                    <div id="${GRAPH_DETAIL_ID}" class="stx-memory-graph-detail stx-memory-graph-detail-panel" style="position:absolute;top:16px;right:16px;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;">
                         ${detailHtml}
                     </div>
                 </div>
@@ -128,6 +133,7 @@ export function buildMemoryGraphPageMarkup(
 /**
  * 功能：挂载记忆图页面。
  * @param options 挂载参数。
+ * @returns 无返回值。
  */
 export function mountMemoryGraphPage(options: MountMemoryGraphPageOptions): void {
     destroyMemoryGraphPage();
@@ -136,6 +142,7 @@ export function mountMemoryGraphPage(options: MountMemoryGraphPageOptions): void
 
 /**
  * 功能：销毁记忆图页面控制器。
+ * @returns 无返回值。
  */
 export function destroyMemoryGraphPage(): void {
     activeController?.destroy();
@@ -161,18 +168,20 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
 
     /**
      * 功能：同步详情面板。
+     * @returns 无返回值。
      */
     function syncDetailPanel(): void {
         if (!detailContainer) {
             return;
         }
-        const selectedNode = snapshot.memoryGraph.nodes.find((node) => node.id === state.selectedGraphNodeId) ?? null;
-        const selectedEdge = snapshot.memoryGraph.edges.find((edge) => edge.id === state.selectedGraphEdgeId) ?? null;
+        const selectedNode = snapshot.memoryGraph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === state.selectedGraphNodeId) ?? null;
+        const selectedEdge = snapshot.memoryGraph.edges.find((edge: WorkbenchMemoryGraphEdge): boolean => edge.id === state.selectedGraphEdgeId) ?? null;
         detailContainer.innerHTML = selectedNode
-            ? buildNodeDetailPanel(selectedNode, state.memoryGraphMode)
+            ? buildNodeDetailPanel(selectedNode, snapshot.memoryGraph, state.memoryGraphMode)
             : selectedEdge
                 ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, state.memoryGraphMode)
                 : buildEmptyDetailPanel();
+        detailContainer.scrollTop = 0;
         detailContainer.querySelectorAll<HTMLElement>('[data-memory-graph-select-node]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
                 state.selectedGraphNodeId = String(button.dataset.nodeId ?? '').trim();
@@ -184,7 +193,8 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
     }
 
     /**
-     * 功能：重挂载 Pixi 渲染器。
+     * 功能：重新挂载 Pixi 渲染器。
+     * @returns 无返回值。
      */
     function remountRenderer(): void {
         if (!graphContainer) {
@@ -274,34 +284,41 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
  * @param graphMode 图谱模式。
  * @returns 详情 HTML。
  */
-function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graphMode: MemoryGraphMode): string {
+function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): string {
     const color = getMemoryGraphNodeColor(node.type);
     const summary = graphMode === 'debug'
         ? (node.debugSummary || node.summary || '暂无')
         : (node.semanticSummary || node.summary || '暂无');
-    const metaHtml = graphMode === 'debug'
-        ? renderMetaBlock([
-            ['compareKey', node.compareKey || '暂无'],
-            ['来源批次', node.sourceBatchIds.join('、') || '暂无'],
-            ['sourceKinds', node.sourceKinds.join('、') || '暂无'],
-            ['reasonCodes', node.reasonCodes.join('、') || '暂无'],
-        ])
+    const debugSections = graphMode === 'debug'
+        ? [
+            buildGraphMetricListMarkup(resolveMemoryGraphText('debug_meta_title'), 'fa-solid fa-microscope', [
+                ['compare_key', node.compareKey || '暂无'],
+            ]),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('source_batches'), 'fa-solid fa-layer-group', node.sourceBatchIds),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('source_kinds'), 'fa-solid fa-database', node.sourceKinds),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('reason_codes'), 'fa-solid fa-tags', node.reasonCodes),
+        ].filter(Boolean).join('')
         : '';
     return `
-        <div style="margin-bottom:12px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                <span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0;"></span>
-                <strong style="font-size:15px;">${escapeHtml(node.label)}</strong>
+        <div class="stx-memory-graph-detail__hero" style="--stx-memory-graph-accent:${color};">
+            <div class="stx-memory-graph-detail__hero-head">
+                <div class="stx-memory-graph-detail__icon">
+                    <i class="fa-solid fa-circle-nodes"></i>
+                </div>
+                <div class="stx-memory-graph-detail__hero-copy">
+                    <div class="stx-memory-graph-detail__eyebrow">${escapeHtml(resolveMemoryGraphText('node_detail'))}</div>
+                    <strong class="stx-memory-graph-detail__title">${escapeHtml(node.label)}</strong>
+                </div>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${color}22;color:${color};border:1px solid ${color}44;">${escapeHtml(resolveTypeLabel(node.type))}</span>
-                ${node.status ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.06);">${escapeHtml(node.status)}</span>` : ''}
-                ${node.placeholder ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(239,68,68,0.15);color:#fca5a5;border:1px solid rgba(239,68,68,0.2);">未解析</span>` : ''}
+            <div class="stx-memory-graph-detail__chip-row">
+                ${buildGraphChipMarkup(resolveTypeLabel(node.type), 'fa-solid fa-cubes', color)}
+                ${node.status ? buildGraphChipMarkup(node.status, 'fa-solid fa-signal', '#93c5fd') : ''}
+                ${node.placeholder ? buildGraphChipMarkup(resolveMemoryGraphText('unresolved'), 'fa-solid fa-triangle-exclamation', '#fca5a5') : ''}
             </div>
         </div>
-        <div style="margin-bottom:12px;font-size:12px;line-height:1.6;opacity:0.86;">${escapeHtml(summary)}</div>
-        ${metaHtml}
-        ${renderSections(node.sections, graphMode)}
+        ${buildGraphSummaryCardMarkup(summary, graphMode === 'debug' ? 'fa-solid fa-bug' : 'fa-solid fa-wand-magic-sparkles')}
+        ${debugSections}
+        ${renderSections(node.sections, graph, graphMode, node.id)}
     `;
 }
 
@@ -313,64 +330,244 @@ function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graphMode: MemoryG
  * @returns 详情 HTML。
  */
 function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): string {
-    const sourceNode = graph.nodes.find((node) => node.id === edge.source);
-    const targetNode = graph.nodes.find((node) => node.id === edge.target);
+    const sourceNode = graph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === edge.source);
+    const targetNode = graph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === edge.target);
     const label = graphMode === 'debug' ? edge.relationType : edge.semanticLabel;
-    const metaHtml = graphMode === 'debug'
-        ? renderMetaBlock([
-            ['relationType', edge.relationType],
-            ['confidence', String(edge.confidence)],
-            ['sourceBatchIds', edge.sourceBatchIds.join('、') || '暂无'],
-            ['sourceKinds', edge.sourceKinds.join('、') || '暂无'],
-            ['reasonCodes', edge.reasonCodes.join('、') || '暂无'],
-        ])
+    const confidenceText = Number.isFinite(edge.confidence) ? `${Math.round(edge.confidence * 100)}%` : '暂无';
+    const debugSections = graphMode === 'debug'
+        ? [
+            buildGraphMetricListMarkup(resolveMemoryGraphText('edge_debug_meta_title'), 'fa-solid fa-screwdriver-wrench', [
+                ['relation_type', edge.relationType || '暂无'],
+                ['confidence', confidenceText],
+            ]),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('source_batches'), 'fa-solid fa-layer-group', edge.sourceBatchIds),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('source_kinds'), 'fa-solid fa-database', edge.sourceKinds),
+            buildGraphTagSectionMarkup(resolveMemoryGraphText('reason_codes'), 'fa-solid fa-tags', edge.reasonCodes),
+        ].filter(Boolean).join('')
         : '';
     return `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">当前选中</div>
-            <strong style="font-size:15px;">${escapeHtml(label)}</strong>
-            <div style="font-size:12px;opacity:0.75;margin-top:6px;">${escapeHtml(sourceNode?.label ?? edge.source)} -> ${escapeHtml(targetNode?.label ?? edge.target)}</div>
+        <div class="stx-memory-graph-detail__hero stx-memory-graph-detail__hero--edge" style="--stx-memory-graph-accent:#fbbf24;">
+            <div class="stx-memory-graph-detail__hero-head">
+                <div class="stx-memory-graph-detail__icon">
+                    <i class="fa-solid fa-diagram-project"></i>
+                </div>
+                <div class="stx-memory-graph-detail__hero-copy">
+                    <div class="stx-memory-graph-detail__eyebrow">${escapeHtml(resolveMemoryGraphText('edge_detail'))}</div>
+                    <strong class="stx-memory-graph-detail__title">${escapeHtml(label || resolveMemoryGraphText('unnamed_relation'))}</strong>
+                </div>
+            </div>
+            <div class="stx-memory-graph-detail__chip-row">
+                ${buildGraphChipMarkup(label || resolveMemoryGraphText('unnamed_relation'), 'fa-solid fa-link', '#fbbf24')}
+                ${buildGraphChipMarkup(confidenceText, 'fa-solid fa-chart-line', '#93c5fd')}
+            </div>
+            <div class="stx-memory-graph-detail__route">
+                <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(sourceNode?.id ?? edge.source)}">
+                    <i class="fa-solid fa-circle-dot"></i>
+                    <span>${escapeHtml(sourceNode?.label ?? edge.source)}</span>
+                </button>
+                <i class="fa-solid fa-arrow-right-long stx-memory-graph-detail__route-arrow"></i>
+                <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(targetNode?.id ?? edge.target)}">
+                    <i class="fa-solid fa-circle-dot"></i>
+                    <span>${escapeHtml(targetNode?.label ?? edge.target)}</span>
+                </button>
+            </div>
         </div>
-        ${metaHtml}
-        ${renderSections(edge.sections, graphMode)}
+        ${debugSections}
+        ${renderSections(edge.sections, graph, graphMode)}
     `;
 }
 
 /**
- * 功能：渲染简单元信息块。
- * @param rows 行数据。
- * @returns HTML。
+ * 功能：构建图谱详情标签。
+ * @param text 标签文本。
+ * @param icon 图标类名。
+ * @param color 标签颜色。
+ * @returns 标签 HTML。
  */
-function renderMetaBlock(rows: Array<[string, string]>): string {
-    const html = rows
-        .filter(([, value]: [string, string]): boolean => Boolean(String(value ?? '').trim()))
-        .map(([label, value]: [string, string]) => `<div style="margin-bottom:8px;"><div style="font-size:11px;opacity:0.5;margin-bottom:4px;">${escapeHtml(label)}</div><div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(value)}</div></div>`)
-        .join('');
-    return html ? `<div style="margin-bottom:12px;">${html}</div>` : '';
+function buildGraphChipMarkup(text: string, icon: string, color: string): string {
+    const normalizedText = String(text ?? '').trim();
+    if (!normalizedText) {
+        return '';
+    }
+    return `
+        <span class="stx-memory-graph-detail__chip" style="--stx-memory-graph-chip-color:${color};">
+            <i class="${escapeAttr(icon)}"></i>
+            <span>${escapeHtml(normalizedText)}</span>
+        </span>
+    `;
+}
+
+/**
+ * 功能：构建图谱摘要卡片。
+ * @param text 摘要文本。
+ * @param icon 图标类名。
+ * @returns 卡片 HTML。
+ */
+function buildGraphSummaryCardMarkup(text: string, icon: string): string {
+    return `
+        <section class="stx-memory-graph-detail__section">
+            <div class="stx-memory-graph-detail__section-title">
+                <i class="${escapeAttr(icon)}"></i>
+                <span>${escapeHtml(resolveMemoryGraphText('summary_title'))}</span>
+            </div>
+            <div class="stx-memory-graph-detail__summary">${escapeHtml(text)}</div>
+        </section>
+    `;
+}
+
+/**
+ * 功能：构建标签区块。
+ * @param title 区块标题。
+ * @param icon 图标类名。
+ * @param values 标签值列表。
+ * @returns 区块 HTML。
+ */
+function buildGraphTagSectionMarkup(title: string, icon: string, values: string[]): string {
+    const normalizedValues = values
+        .map((value: string): string => String(value ?? '').trim())
+        .filter(Boolean);
+    if (normalizedValues.length <= 0) {
+        return '';
+    }
+    return `
+        <section class="stx-memory-graph-detail__section">
+            <div class="stx-memory-graph-detail__section-title">
+                <i class="${escapeAttr(icon)}"></i>
+                <span>${escapeHtml(title)}</span>
+            </div>
+            <div class="stx-memory-graph-detail__tag-grid">
+                ${normalizedValues.map((value: string): string => `
+                    <span class="stx-memory-graph-detail__tag">
+                        <i class="fa-solid fa-hashtag"></i>
+                        <span>${escapeHtml(value)}</span>
+                    </span>
+                `).join('')}
+            </div>
+        </section>
+    `;
+}
+
+/**
+ * 功能：构建指标列表区块。
+ * @param title 区块标题。
+ * @param icon 图标类名。
+ * @param rows 行数据。
+ * @returns 区块 HTML。
+ */
+function buildGraphMetricListMarkup(title: string, icon: string, rows: Array<[string, string]>): string {
+    const visibleRows = rows
+        .map(([label, value]: [string, string]): [string, string] => [label, String(value ?? '').trim()])
+        .filter(([, value]: [string, string]): boolean => Boolean(value));
+    if (visibleRows.length <= 0) {
+        return '';
+    }
+    return `
+        <section class="stx-memory-graph-detail__section">
+            <div class="stx-memory-graph-detail__section-title">
+                <i class="${escapeAttr(icon)}"></i>
+                <span>${escapeHtml(title)}</span>
+            </div>
+            <div class="stx-memory-graph-detail__metric-list">
+                ${visibleRows.map(([label, value]: [string, string]): string => `
+                    <div class="stx-memory-graph-detail__metric-row">
+                        <span>${escapeHtml(resolveMemoryGraphFieldLabel(label))}</span>
+                        <strong>${escapeHtml(resolveMemoryGraphFieldValue(value))}</strong>
+                    </div>
+                `).join('')}
+            </div>
+        </section>
+    `;
 }
 
 /**
  * 功能：渲染详情区块。
  * @param sections 详情区块。
+ * @param graphMode 图谱模式。
  * @returns HTML。
  */
-function renderSections(sections: WorkbenchMemoryGraphSection[], graphMode: MemoryGraphMode): string {
+function renderSections(
+    sections: WorkbenchMemoryGraphSection[],
+    graph: WorkbenchMemoryGraph,
+    graphMode: MemoryGraphMode,
+    currentNodeId?: string,
+): string {
+    const jumpButtonLabel = resolveMemoryGraphText('jump_to_node') === 'jump_to_node'
+        ? '跳转并聚焦节点'
+        : resolveMemoryGraphText('jump_to_node');
     return sections
         .filter((section: WorkbenchMemoryGraphSection): boolean => isVisibleInMode(section.visibleInModes, graphMode))
-        .map((section: WorkbenchMemoryGraphSection) => {
+        .map((section: WorkbenchMemoryGraphSection): string => {
             const visibleFields = section.fields.filter((field) => isVisibleInMode(field.visibleInModes, graphMode));
             if (visibleFields.length <= 0) {
                 return '';
             }
             return `
-            <div style="margin-bottom:12px;">
-                <div style="font-size:11px;opacity:0.5;margin-bottom:6px;">${escapeHtml(section.title)}</div>
-                ${visibleFields.map((field) => `<div style="margin-bottom:8px;"><div style="font-size:11px;opacity:0.58;margin-bottom:2px;">${escapeHtml(field.label)}</div><div style="font-size:12px;line-height:1.55;opacity:0.82;">${escapeHtml(field.value)}</div></div>`).join('')}
-            </div>
-        `;
+                <section class="stx-memory-graph-detail__section">
+                    <div class="stx-memory-graph-detail__section-title">
+                        <i class="fa-solid fa-folder-tree"></i>
+                        <span>${escapeHtml(section.title)}</span>
+                    </div>
+                    <div class="stx-memory-graph-detail__field-list">
+                        ${visibleFields.map((field) => {
+                            const relatedNodeId = resolveRelatedNodeId(field, graph, currentNodeId);
+                            return `
+                            <div class="stx-memory-graph-detail__field-card">
+                                <div class="stx-memory-graph-detail__field-head">
+                                    <div class="stx-memory-graph-detail__field-label">${escapeHtml(resolveMemoryGraphFieldLabel(field.label))}</div>
+                                    ${relatedNodeId ? `
+                                        <button
+                                            type="button"
+                                            class="stx-memory-graph-detail__jump-btn"
+                                            data-memory-graph-select-node="true"
+                                            data-node-id="${escapeAttr(relatedNodeId)}"
+                                            title="${escapeAttr(jumpButtonLabel)}"
+                                            aria-label="${escapeAttr(jumpButtonLabel)}"
+                                        >
+                                            <i class="fa-solid fa-location-crosshairs"></i>
+                                        </button>
+                                    ` : ''}
+                                </div>
+                                <div class="stx-memory-graph-detail__field-value">${escapeHtml(resolveMemoryGraphFieldValue(field.value))}</div>
+                            </div>
+                        `;
+                        }).join('')}
+                    </div>
+                </section>
+            `;
         })
         .filter(Boolean)
         .join('');
+}
+
+/**
+ * 功能：为详情字段解析可跳转的相关节点。
+ * @param field 当前字段
+ * @param graph 图谱数据
+ * @param currentNodeId 当前已选节点 ID
+ * @returns 可跳转节点 ID；不存在时返回空字符串
+ */
+function resolveRelatedNodeId(
+    field: WorkbenchMemoryGraphSection['fields'][number],
+    graph: WorkbenchMemoryGraph,
+    currentNodeId?: string,
+): string {
+    const explicitNodeId = String(field.targetNodeId ?? '').trim();
+    if (explicitNodeId && explicitNodeId !== currentNodeId) {
+        return explicitNodeId;
+    }
+    const normalizedValue = String(field.value ?? '').trim();
+    if (!normalizedValue || /[、,，;；]/.test(normalizedValue)) {
+        return '';
+    }
+    const matchedNode = graph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => {
+        if (node.id === currentNodeId) {
+            return false;
+        }
+        return node.label === normalizedValue
+            || node.id === normalizedValue
+            || node.compareKey === normalizedValue;
+    });
+    return matchedNode?.id ?? '';
 }
 
 /**
@@ -379,9 +576,12 @@ function renderSections(sections: WorkbenchMemoryGraphSection[], graphMode: Memo
  */
 function buildEmptyDetailPanel(): string {
     return `
-        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;opacity:0.42;">
-            <i class="fa-solid fa-circle-nodes" style="font-size:36px;margin-bottom:12px;"></i>
-            <div style="font-size:13px;">点击节点查看语义详情，点击连线查看关系来源</div>
+        <div class="stx-memory-graph-detail__empty">
+            <div class="stx-memory-graph-detail__empty-icon">
+                <i class="fa-solid fa-circle-nodes"></i>
+            </div>
+            <div class="stx-memory-graph-detail__empty-title">${escapeHtml(resolveMemoryGraphText('waiting_selection'))}</div>
+            <div class="stx-memory-graph-detail__empty-copy">${escapeHtml(resolveMemoryGraphText('waiting_selection_hint'))}</div>
         </div>
     `;
 }
@@ -389,6 +589,7 @@ function buildEmptyDetailPanel(): string {
 /**
  * 功能：构建类型统计映射。
  * @param memoryGraph 图谱数据。
+ * @param graphMode 图谱模式。
  * @returns 统计映射。
  */
 function buildTypeCountMap(memoryGraph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): Map<string, number> {

@@ -4,6 +4,7 @@ import {
     resolveEntryActionTypeLabel,
     resolveEntryTypeLabel,
     resolveFailureReasonLabel,
+    resolvePreviewWorkbenchText,
     resolvePromptStatsLabel,
     resolveNarrativeStyleLabel,
     resolveNarrativeStyleSourceLabel,
@@ -99,11 +100,11 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
             </div>
             <div class="stx-memory-workbench__diagnostics">
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">基础信息</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('basic_info'))}</div>
                     ${buildWorldProfilePanelMarkup(snapshot)}
                 </div>
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">提示词注入总览</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
                     <div class="stx-memory-workbench__info-list">
                         <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.preview?.query || '未提供')}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
@@ -112,6 +113,12 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                         <div class="stx-memory-workbench__info-row"><span>注入视角</span><strong>${escapeHtml(previewDiagnostics?.injectionActorKey || '暂无')}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>注入词条</span><strong>${escapeHtml(String(previewDiagnostics?.injectedCount ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>估算字符数</span><strong>${escapeHtml(String(previewDiagnostics?.estimatedChars ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>清晰记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.clear ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>模糊记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.blur ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>失真记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.distorted ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(String(previewDiagnostics?.compareKeySchemaVersion ?? 'v2'))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.indexed_match ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.fallback_match ?? 0))}</strong></div>
                     </div>
                     <div class="stx-memory-workbench__stack" style="margin-top:12px;">
                         <div class="stx-memory-workbench__card">
@@ -131,6 +138,8 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
 
                 ${summaryStageDetails}
 
+                ${buildMutationApplyDiagnosticsMarkup(snapshot)}
+
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">词条更新记录</div>
                     <div class="stx-memory-workbench__stack" style="max-height: 900px; overflow-y: auto; padding-right: 4px;">
@@ -146,7 +155,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 </div>
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">最近注入说明</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('latest_injection_reason'))}</div>
                     ${snapshot.recallExplanation ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>记录来源</span><strong>${escapeHtml(resolveRecallSourceLabel(snapshot.recallExplanation.source || 'unified_memory'))}</strong></div>
@@ -154,11 +163,14 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                             <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.recallExplanation.query || '暂无')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>检索器</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.retrievalProviderId || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(resolveRetrievalRulePackLabel(snapshot.recallExplanation.retrievalRulePack || ''))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(snapshot.recallExplanation.compareKeySchemaVersion || 'v2')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>命中角色</span><strong>${escapeHtml(snapshot.recallExplanation.matchedActorKeys.join('、') || '暂无')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>命中词条</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.indexed_match ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.fallback_match ?? 0))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>原因码</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
                         </div>
-                    ` : '<div class="stx-memory-workbench__empty">当前聊天还没有最近一次注入说明。</div>'}
+                    ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_latest_injection_reason'))}</div>`}
                 </div>
 
                 <div class="stx-memory-workbench__card">
@@ -278,6 +290,40 @@ function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
                 <div class="stx-memory-workbench__info-row"><span>候选记录数</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('active_schema_count'))}</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
                 ${schemaCount.length > 0 ? `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('schema_list'))}</span><strong>${escapeHtml(schemaCount.join('、'))}</strong></div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染最近一次摘要的统一落盘诊断摘要。
+ * @param snapshot 工作台快照
+ * @returns HTML 片段
+ */
+function buildMutationApplyDiagnosticsMarkup(snapshot: WorkbenchSnapshot): string {
+    const latestSummary = [...(snapshot.summaries ?? [])]
+        .sort((left, right): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0];
+    const diagnostics = latestSummary?.mutationApplyDiagnostics;
+    if (!diagnostics) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('apply_diagnostics'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_apply_diagnostics'))}</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('apply_diagnostics'))}</div>
+            <div class="stx-memory-workbench__info-list">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('mutation_source'))}</span><strong>${escapeHtml(latestSummary?.title || '结构化回合总结')}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('total_mutations'))}</span><strong>${escapeHtml(String(diagnostics.counts.input ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('noop_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.noop ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('add_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.add ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('update_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.update ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('merge_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.merge ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('invalidate_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.invalidate ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('delete_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.delete ?? 0))}</strong></div>
             </div>
         </div>
     `;

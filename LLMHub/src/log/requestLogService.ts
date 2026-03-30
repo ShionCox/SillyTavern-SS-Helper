@@ -6,6 +6,7 @@ import {
 } from '../../../SDK/db';
 import { logger } from '../index';
 import type {
+    CapabilityKind,
     LLMRequestLogEntry,
     LLMRequestLogQueryOptions,
     LLMRequestLogRequestSnapshot,
@@ -21,6 +22,19 @@ const FALLBACK_SOURCE_PLUGIN_ID = 'stx_llmhub';
 function normalizeOptionalText(value: unknown): string | undefined {
     const normalized = String(value || '').trim();
     return normalized || undefined;
+}
+
+/**
+ * 功能：将数据库中的任务类型值归一化为受控类型。
+ * @param value 原始任务类型
+ * @returns 归一化后的任务类型
+ */
+function normalizeTaskKind(value: unknown): CapabilityKind {
+    const normalized = String(value || '').trim();
+    if (normalized === 'embedding' || normalized === 'rerank') {
+        return normalized;
+    }
+    return 'generation';
 }
 
 export class RequestLogService {
@@ -39,7 +53,7 @@ export class RequestLogService {
                     sourcePluginId: payload.sourcePluginId || row.sourcePluginId || row.consumer || FALLBACK_SOURCE_PLUGIN_ID,
                     consumer: payload.consumer || row.consumer,
                     taskId: payload.taskId || row.taskId,
-                    taskKind: payload.taskKind || row.taskKind,
+                    taskKind: normalizeTaskKind(payload.taskKind || row.taskKind),
                     state: (payload.state || row.state) as RequestState,
                     chatKey: payload.chatKey || row.chatKey,
                     sessionId: payload.sessionId || row.sessionId,
@@ -47,7 +61,7 @@ export class RequestLogService {
                     startedAt: payload.startedAt || row.startedAt,
                     finishedAt: payload.finishedAt || row.finishedAt,
                     latencyMs: payload.latencyMs || row.latencyMs,
-                    request: (payload.request || { taskKind: row.taskKind }) as LLMRequestLogRequestSnapshot,
+                    request: (payload.request || { taskKind: normalizeTaskKind(row.taskKind) }) as LLMRequestLogRequestSnapshot,
                     response: (payload.response || {}) as LLMRequestLogResponseSnapshot,
                 };
             })

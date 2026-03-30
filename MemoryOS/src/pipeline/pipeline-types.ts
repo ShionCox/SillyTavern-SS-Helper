@@ -42,6 +42,9 @@ export interface PipelineBudgetPolicy {
     maxActionsPerMutation: number;
     maxSectionBatchCount: number;
     maxConflictBucketSize: number;
+    maxConflictBatchSize: number;
+    maxConflictResolverBucketsPerRequest: number;
+    maxRuleOnlyConflictRecords: number;
     maxSectionDigestChars: number;
     maxRollingDigestChars: number;
     maxCandidateSummaryChars: number;
@@ -158,6 +161,11 @@ export interface ConflictResolutionPatch {
         primaryKey?: string;
         secondaryKeys?: string[];
         fieldOverrides?: Record<string, unknown>;
+        selectedPrimaryKey?: string;
+        selectedSnapshot?: Record<string, unknown>;
+        selectionReason?: string;
+        appliedFieldNames?: string[];
+        resolverSource?: 'rule_resolver' | 'llm_batch_resolver' | 'deterministic_fallback';
         reasonCodes: string[];
     }>;
 }
@@ -200,6 +208,11 @@ export interface PipelineDiagnostics {
     conflictBucketCount: number;
     resolvedConflictCount: number;
     unresolvedConflictCount: number;
+    ruleResolvedConflictCount: number;
+    llmResolvedConflictCount: number;
+    batchedRequestCount: number;
+    avgBucketsPerRequest: number;
+    skippedByRuleCount: number;
     fallbackUsed: boolean;
     applyCount: number;
     reasonCode: string;

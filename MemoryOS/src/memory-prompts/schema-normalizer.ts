@@ -1,8 +1,8 @@
 /**
- * 功能：按 Prompt Pack section 名称将宽松 schema 规整为严格兼容的结构。
- * @param sectionName 当前 schema 对应的 section 名称。
+ * 功能：按 Prompt Pack 分段名称，把宽松 schema 归一化为当前 MemoryOS 使用的严格结构。
+ * @param sectionName 分段名称。
  * @param schema 原始 schema。
- * @returns 规整后的 schema；无法识别时返回原始 schema。
+ * @returns 归一化后的 schema。
  */
 export function normalizeMemoryPromptSchema(sectionName: string, schema: unknown): unknown {
     switch (String(sectionName ?? '').trim()) {
@@ -23,14 +23,16 @@ export function normalizeMemoryPromptSchema(sectionName: string, schema: unknown
             return buildTakeoverBatchSchema();
         case 'TAKEOVER_CONFLICT_RESOLUTION_SCHEMA':
             return buildTakeoverConflictResolutionSchema();
+        case 'TAKEOVER_CONFLICT_RESOLUTION_BATCH_SCHEMA':
+            return buildTakeoverConflictResolutionBatchSchema();
         default:
             return schema;
     }
 }
 
 /**
- * 功能：构建严格兼容的字符串数组 schema。
- * @returns 字符串数组 schema。
+ * 功能：构建字符串数组 schema。
+ * @returns schema。
  */
 function buildStringArraySchema(): Record<string, unknown> {
     return {
@@ -40,8 +42,36 @@ function buildStringArraySchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的绑定关系 schema。
- * @returns 绑定关系 schema。
+ * 功能：构建数字数组 schema。
+ * @returns schema。
+ */
+function buildNumberSchema(): Record<string, unknown> {
+    return { type: 'number' };
+}
+
+/**
+ * 功能：构建统一的 compareKey 协议字段 schema。
+ * @returns schema。
+ */
+function buildProtocolKeySchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        required: [],
+        additionalProperties: false,
+        properties: {
+            entityKey: { type: 'string' },
+            compareKey: { type: 'string' },
+            matchKeys: buildStringArraySchema(),
+            schemaVersion: { type: 'string' },
+            canonicalName: { type: 'string' },
+            legacyCompareKeys: buildStringArraySchema(),
+        },
+    };
+}
+
+/**
+ * 功能：构建完整绑定 schema。
+ * @returns schema。
  */
 function buildBindingsSchema(): Record<string, unknown> {
     return {
@@ -61,27 +91,34 @@ function buildBindingsSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的实体字段 schema。
- * @returns 实体字段 schema。
+ * 功能：构建稀疏 patch 用绑定 schema。
+ * @returns schema。
+ */
+function buildSparseBindingsSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        required: [],
+        additionalProperties: false,
+        properties: {
+            actors: buildStringArraySchema(),
+            organizations: buildStringArraySchema(),
+            cities: buildStringArraySchema(),
+            locations: buildStringArraySchema(),
+            nations: buildStringArraySchema(),
+            tasks: buildStringArraySchema(),
+            events: buildStringArraySchema(),
+        },
+    };
+}
+
+/**
+ * 功能：构建实体字段 schema。
+ * @returns schema。
  */
 function buildEntityFieldsSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: [
-            'subtype',
-            'leader',
-            'baseCity',
-            'nation',
-            'city',
-            'organization',
-            'status',
-            'orgType',
-            'locationType',
-            'parentLocation',
-            'parentOrganization',
-            'capital',
-            'headquarters',
-        ],
+        required: [],
         additionalProperties: false,
         properties: {
             subtype: { type: 'string' },
@@ -97,56 +134,16 @@ function buildEntityFieldsSchema(): Record<string, unknown> {
             parentOrganization: { type: 'string' },
             capital: { type: 'string' },
             headquarters: { type: 'string' },
+            scope: { type: 'string' },
+            state: { type: 'string' },
+            region: { type: 'string' },
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的实体变更 payload schema。
- * @returns 实体变更 payload schema。
- */
-function buildEntityPayloadSchema(): Record<string, unknown> {
-    return {
-        type: 'object',
-        required: [
-            'summary',
-            'subtype',
-            'leader',
-            'baseCity',
-            'nation',
-            'city',
-            'organization',
-            'status',
-            'orgType',
-            'locationType',
-            'parentLocation',
-            'parentOrganization',
-            'capital',
-            'headquarters',
-        ],
-        additionalProperties: false,
-        properties: {
-            summary: { type: 'string' },
-            subtype: { type: 'string' },
-            leader: { type: 'string' },
-            baseCity: { type: 'string' },
-            nation: { type: 'string' },
-            city: { type: 'string' },
-            organization: { type: 'string' },
-            status: { type: 'string' },
-            orgType: { type: 'string' },
-            locationType: { type: 'string' },
-            parentLocation: { type: 'string' },
-            parentOrganization: { type: 'string' },
-            capital: { type: 'string' },
-            headquarters: { type: 'string' },
-        },
-    };
-}
-
-/**
- * 功能：构建严格兼容的角色卡数组 schema。
- * @returns 角色卡数组 schema。
+ * 功能：构建角色卡数组 schema。
+ * @returns schema。
  */
 function buildActorCardArraySchema(): Record<string, unknown> {
     return {
@@ -168,8 +165,8 @@ function buildActorCardArraySchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的关系卡数组 schema。
- * @returns 关系卡数组 schema。
+ * 功能：构建关系卡数组 schema。
+ * @returns schema。
  */
 function buildRelationshipArraySchema(): Record<string, unknown> {
     return {
@@ -192,23 +189,20 @@ function buildRelationshipArraySchema(): Record<string, unknown> {
                 sourceActorKey: { type: 'string' },
                 targetActorKey: { type: 'string' },
                 participants: buildStringArraySchema(),
-                relationTag: {
-                    type: 'string',
-                    enum: ['亲人', '朋友', '盟友', '恋人', '暧昧', '师徒', '上下级', '竞争者', '情敌', '宿敌', '陌生人'],
-                },
+                relationTag: { type: 'string' },
                 state: { type: 'string' },
                 summary: { type: 'string' },
-                trust: { type: 'number' },
-                affection: { type: 'number' },
-                tension: { type: 'number' },
+                trust: buildNumberSchema(),
+                affection: buildNumberSchema(),
+                tension: buildNumberSchema(),
             },
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的记忆记录数组 schema。
- * @returns 记忆记录数组 schema。
+ * 功能：构建记忆记录数组 schema。
+ * @returns schema。
  */
 function buildMemoryRecordArraySchema(): Record<string, unknown> {
     return {
@@ -221,15 +215,15 @@ function buildMemoryRecordArraySchema(): Record<string, unknown> {
                 schemaId: { type: 'string' },
                 title: { type: 'string' },
                 summary: { type: 'string' },
-                importance: { type: 'number' },
+                importance: buildNumberSchema(),
             },
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的世界基础规则数组 schema。
- * @returns 世界基础规则数组 schema。
+ * 功能：构建世界基础规则数组 schema。
+ * @returns schema。
  */
 function buildWorldBaseArraySchema(): Record<string, unknown> {
     return {
@@ -249,37 +243,8 @@ function buildWorldBaseArraySchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的稳定事实数组 schema。
- * @returns 稳定事实数组 schema。
- */
-function buildStableFactArraySchema(): Record<string, unknown> {
-    return {
-        type: 'array',
-        items: {
-            type: 'object',
-            required: ['type', 'subject', 'predicate', 'value', 'confidence'],
-            additionalProperties: false,
-            properties: {
-                type: { type: 'string' },
-                subject: { type: 'string' },
-                predicate: { type: 'string' },
-                value: { type: 'string' },
-                confidence: { type: 'number' },
-                title: { type: 'string' },
-                summary: { type: 'string' },
-                compareKey: { type: 'string' },
-                bindings: buildBindingsSchema(),
-                status: { type: 'string' },
-                importance: { type: 'number' },
-                reasonCodes: buildStringArraySchema(),
-            },
-        },
-    };
-}
-
-/**
- * 功能：构建严格兼容的身份卡 schema。
- * @returns 身份卡 schema。
+ * 功能：构建身份 schema。
+ * @returns schema。
  */
 function buildIdentitySchema(): Record<string, unknown> {
     return {
@@ -298,8 +263,31 @@ function buildIdentitySchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的实体卡集合 schema。
- * @returns 实体卡集合 schema。
+ * 功能：构建实体卡 schema。
+ * @returns schema。
+ */
+function buildEntityCardSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        required: ['entityType', 'title', 'aliases', 'summary', 'fields'],
+        additionalProperties: false,
+        properties: {
+            entityType: { type: 'string' },
+            title: { type: 'string' },
+            aliases: buildStringArraySchema(),
+            summary: { type: 'string' },
+            fields: buildEntityFieldsSchema(),
+            confidence: buildNumberSchema(),
+            bindings: buildBindingsSchema(),
+            reasonCodes: buildStringArraySchema(),
+            ...buildProtocolKeySchema().properties as Record<string, unknown>,
+        },
+    };
+}
+
+/**
+ * 功能：构建实体卡集合 schema。
+ * @returns schema。
  */
 function buildEntityCardCollectionSchema(): Record<string, unknown> {
     return {
@@ -307,40 +295,17 @@ function buildEntityCardCollectionSchema(): Record<string, unknown> {
         required: ['organizations', 'cities', 'nations', 'locations'],
         additionalProperties: false,
         properties: {
-            organizations: buildEntityCardArraySchema(),
-            cities: buildEntityCardArraySchema(),
-            nations: buildEntityCardArraySchema(),
-            locations: buildEntityCardArraySchema(),
+            organizations: { type: 'array', items: buildEntityCardSchema() },
+            cities: { type: 'array', items: buildEntityCardSchema() },
+            nations: { type: 'array', items: buildEntityCardSchema() },
+            locations: { type: 'array', items: buildEntityCardSchema() },
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的实体卡数组 schema。
- * @returns 实体卡数组 schema。
- */
-function buildEntityCardArraySchema(): Record<string, unknown> {
-    return {
-        type: 'array',
-        items: {
-            type: 'object',
-            required: ['entityType', 'compareKey', 'title', 'aliases', 'summary', 'fields'],
-            additionalProperties: false,
-            properties: {
-                entityType: { type: 'string' },
-                compareKey: { type: 'string' },
-                title: { type: 'string' },
-                aliases: buildStringArraySchema(),
-                summary: { type: 'string' },
-                fields: buildEntityFieldsSchema(),
-            },
-        },
-    };
-}
-
-/**
- * 功能：构建严格兼容的冷启动完整 schema。
- * @returns 冷启动完整 schema。
+ * 功能：构建冷启动 schema。
+ * @returns schema。
  */
 function buildColdStartSchema(): Record<string, unknown> {
     return {
@@ -359,7 +324,7 @@ function buildColdStartSchema(): Record<string, unknown> {
                 properties: {
                     primaryProfile: { type: 'string' },
                     secondaryProfiles: buildStringArraySchema(),
-                    confidence: { type: 'number' },
+                    confidence: buildNumberSchema(),
                     reasonCodes: buildStringArraySchema(),
                 },
             },
@@ -371,8 +336,8 @@ function buildColdStartSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的冷启动状态阶段 schema。
- * @returns 冷启动状态阶段 schema。
+ * 功能：构建冷启动状态 schema。
+ * @returns schema。
  */
 function buildColdStartStateSchema(): Record<string, unknown> {
     return {
@@ -392,8 +357,8 @@ function buildColdStartStateSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的 summary planner schema。
- * @returns summary planner schema。
+ * 功能：构建 summary planner schema。
+ * @returns schema。
  */
 function buildSummaryPlannerSchema(): Record<string, unknown> {
     return {
@@ -411,72 +376,35 @@ function buildSummaryPlannerSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的 summary action fields schema。
- * @returns summary action fields schema。
+ * 功能：构建 summary fields schema。
+ * @returns schema。
  */
 function buildSummaryActionFieldsSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: [
-            'objective',
-            'status',
-            'goal',
-            'relationTag',
-            'city',
-            'organization',
-            'location',
-            'nation',
-            'leader',
-            'baseCity',
-            'subtype',
-            'orgType',
-            'locationType',
-            'parentLocation',
-            'parentOrganization',
-            'capital',
-            'headquarters',
-            'state',
-            'summary',
-            'trust',
-            'affection',
-            'tension',
-        ],
-        additionalProperties: false,
+        required: [],
+        additionalProperties: true,
         properties: {
             objective: { type: 'string' },
             status: { type: 'string' },
             goal: { type: 'string' },
             relationTag: { type: 'string' },
-            city: { type: 'string' },
-            organization: { type: 'string' },
-            location: { type: 'string' },
-            nation: { type: 'string' },
-            leader: { type: 'string' },
-            baseCity: { type: 'string' },
-            subtype: { type: 'string' },
-            orgType: { type: 'string' },
-            locationType: { type: 'string' },
-            parentLocation: { type: 'string' },
-            parentOrganization: { type: 'string' },
-            capital: { type: 'string' },
-            headquarters: { type: 'string' },
             state: { type: 'string' },
-            summary: { type: 'string' },
-            trust: { type: 'number' },
-            affection: { type: 'number' },
-            tension: { type: 'number' },
+            trust: buildNumberSchema(),
+            affection: buildNumberSchema(),
+            tension: buildNumberSchema(),
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的 summary action payload schema。
- * @returns summary action payload schema。
+ * 功能：构建 summary action payload schema。
+ * @returns schema。
  */
 function buildSummaryActionPayloadSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: ['title', 'summary', 'detail', 'state', 'goal', 'status', 'compareKey', 'bindings', 'fields'],
+        required: [],
         additionalProperties: false,
         properties: {
             title: { type: 'string' },
@@ -485,16 +413,16 @@ function buildSummaryActionPayloadSchema(): Record<string, unknown> {
             state: { type: 'string' },
             goal: { type: 'string' },
             status: { type: 'string' },
-            compareKey: { type: 'string' },
-            bindings: buildBindingsSchema(),
+            bindings: buildSparseBindingsSchema(),
             fields: buildSummaryActionFieldsSchema(),
+            ...buildProtocolKeySchema().properties as Record<string, unknown>,
         },
     };
 }
 
 /**
- * 功能：构建严格兼容的 summary mutation schema。
- * @returns summary mutation schema。
+ * 功能：构建 summary mutation schema。
+ * @returns schema。
  */
 function buildSummaryMutationSchema(): Record<string, unknown> {
     return {
@@ -516,15 +444,29 @@ function buildSummaryMutationSchema(): Record<string, unknown> {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+                    required: ['action', 'targetKind'],
                     additionalProperties: false,
                     properties: {
-                        action: { type: 'string' },
+                        action: { type: 'string', enum: ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE', 'NOOP'] },
                         targetKind: { type: 'string' },
+                        type: { type: 'string' },
+                        title: { type: 'string' },
+                        reason: { type: 'string' },
+                        confidence: buildNumberSchema(),
+                        targetId: { type: 'string' },
+                        sourceIds: buildStringArraySchema(),
                         candidateId: { type: 'string' },
-                        compareKey: { type: 'string' },
-                        payload: buildSummaryActionPayloadSchema(),
                         reasonCodes: buildStringArraySchema(),
+                        sourceContext: {
+                            type: 'object',
+                            required: [],
+                            additionalProperties: true,
+                            properties: {},
+                        },
+                        payload: buildSummaryActionPayloadSchema(),
+                        patch: buildSummaryActionPayloadSchema(),
+                        newRecord: buildSummaryActionPayloadSchema(),
+                        ...buildProtocolKeySchema().properties as Record<string, unknown>,
                     },
                 },
             },
@@ -533,8 +475,8 @@ function buildSummaryMutationSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的旧聊天基线 schema。
- * @returns 旧聊天基线 schema。
+ * 功能：构建 takeover baseline schema。
+ * @returns schema。
  */
 function buildTakeoverBaselineSchema(): Record<string, unknown> {
     return {
@@ -553,8 +495,8 @@ function buildTakeoverBaselineSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的旧聊天活跃快照 schema。
- * @returns 旧聊天活跃快照 schema。
+ * 功能：构建 takeover active schema。
+ * @returns schema。
  */
 function buildTakeoverActiveSchema(): Record<string, unknown> {
     return {
@@ -586,8 +528,34 @@ function buildTakeoverActiveSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的旧聊天批处理 schema。
- * @returns 旧聊天批处理 schema。
+ * 功能：构建 takeover 稳定事实 schema。
+ * @returns schema。
+ */
+function buildStableFactSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        required: ['type', 'subject', 'predicate', 'value', 'confidence'],
+        additionalProperties: false,
+        properties: {
+            type: { type: 'string' },
+            subject: { type: 'string' },
+            predicate: { type: 'string' },
+            value: { type: 'string' },
+            confidence: buildNumberSchema(),
+            title: { type: 'string' },
+            summary: { type: 'string' },
+            bindings: buildBindingsSchema(),
+            status: { type: 'string' },
+            importance: buildNumberSchema(),
+            reasonCodes: buildStringArraySchema(),
+            ...buildProtocolKeySchema().properties as Record<string, unknown>,
+        },
+    };
+}
+
+/**
+ * 功能：构建 takeover 批处理 schema。
+ * @returns schema。
  */
 function buildTakeoverBatchSchema(): Record<string, unknown> {
     return {
@@ -599,44 +567,31 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
             summary: { type: 'string' },
             actorCards: buildActorCardArraySchema(),
             relationships: buildRelationshipArraySchema(),
-            entityCards: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    required: ['entityType', 'compareKey', 'title', 'aliases', 'summary', 'fields', 'confidence', 'bindings', 'reasonCodes'],
-                    additionalProperties: false,
-                    properties: {
-                        entityType: { type: 'string', enum: ['organization', 'city', 'nation', 'location'] },
-                        compareKey: { type: 'string' },
-                        title: { type: 'string' },
-                        aliases: buildStringArraySchema(),
-                        summary: { type: 'string' },
-                        fields: buildEntityFieldsSchema(),
-                        confidence: { type: 'number' },
-                        bindings: buildBindingsSchema(),
-                        reasonCodes: buildStringArraySchema(),
-                    },
-                },
-            },
+            entityCards: { type: 'array', items: buildEntityCardSchema() },
             entityTransitions: {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['entityType', 'compareKey', 'title', 'action', 'reason', 'payload', 'bindings', 'reasonCodes'],
+                    required: ['entityType', 'title', 'action', 'reason'],
                     additionalProperties: false,
                     properties: {
                         entityType: { type: 'string', enum: ['organization', 'city', 'nation', 'location'] },
-                        compareKey: { type: 'string' },
                         title: { type: 'string' },
                         action: { type: 'string', enum: ['ADD', 'UPDATE', 'MERGE', 'INVALIDATE', 'DELETE'] },
                         reason: { type: 'string' },
-                        payload: buildEntityPayloadSchema(),
+                        payload: {
+                            type: 'object',
+                            required: [],
+                            additionalProperties: true,
+                            properties: {},
+                        },
                         bindings: buildBindingsSchema(),
                         reasonCodes: buildStringArraySchema(),
+                        ...buildProtocolKeySchema().properties as Record<string, unknown>,
                     },
                 },
             },
-            stableFacts: buildStableFactArraySchema(),
+            stableFacts: { type: 'array', items: buildStableFactSchema() },
             relationTransitions: {
                 type: 'array',
                 items: {
@@ -659,7 +614,7 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['task', 'from', 'to', 'title', 'summary', 'description', 'goal', 'status', 'compareKey', 'bindings', 'reasonCodes'],
+                    required: ['task', 'from', 'to', 'title', 'summary', 'description', 'goal', 'status'],
                     additionalProperties: false,
                     properties: {
                         task: { type: 'string' },
@@ -670,9 +625,9 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
                         description: { type: 'string' },
                         goal: { type: 'string' },
                         status: { type: 'string' },
-                        compareKey: { type: 'string' },
                         bindings: buildBindingsSchema(),
                         reasonCodes: buildStringArraySchema(),
+                        ...buildProtocolKeySchema().properties as Record<string, unknown>,
                     },
                 },
             },
@@ -680,14 +635,15 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['key', 'value', 'summary', 'compareKey', 'reasonCodes'],
+                    required: ['key', 'value', 'summary'],
                     additionalProperties: false,
                     properties: {
                         key: { type: 'string' },
                         value: { type: 'string' },
                         summary: { type: 'string' },
-                        compareKey: { type: 'string' },
+                        bindings: buildBindingsSchema(),
                         reasonCodes: buildStringArraySchema(),
+                        ...buildProtocolKeySchema().properties as Record<string, unknown>,
                     },
                 },
             },
@@ -707,8 +663,8 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
 }
 
 /**
- * 功能：构建严格兼容的旧聊天冲突裁决 schema。
- * @returns 旧聊天冲突裁决 schema。
+ * 功能：构建 takeover 冲突裁决 schema。
+ * @returns schema。
  */
 function buildTakeoverConflictResolutionSchema(): Record<string, unknown> {
     return {
@@ -730,13 +686,55 @@ function buildTakeoverConflictResolutionSchema(): Record<string, unknown> {
                         secondaryKeys: buildStringArraySchema(),
                         fieldOverrides: {
                             type: 'object',
-                            additionalProperties: false,
+                            additionalProperties: true,
                             required: [],
                             properties: {},
                         },
                         reasonCodes: buildStringArraySchema(),
                     },
                 },
+            },
+        },
+    };
+}
+
+/**
+ * 功能：构建批量冲突裁决 schema。
+ * @returns schema
+ */
+function buildTakeoverConflictResolutionBatchSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['domain', 'conflictType', 'buckets', 'patches'],
+        properties: {
+            domain: { type: 'string' },
+            conflictType: { type: 'string' },
+            buckets: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['bucketId', 'domain', 'conflictType', 'records'],
+                    properties: {
+                        bucketId: { type: 'string' },
+                        domain: { type: 'string' },
+                        conflictType: { type: 'string' },
+                        records: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                additionalProperties: true,
+                                required: [],
+                                properties: {},
+                            },
+                        },
+                    },
+                },
+            },
+            patches: {
+                type: 'array',
+                items: buildTakeoverConflictResolutionSchema(),
             },
         },
     };

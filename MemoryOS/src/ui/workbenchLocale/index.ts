@@ -36,3 +36,14 @@ export {
     resolveWorldEntityFieldLabel,
     resolveWorldEntityText,
 } from './worldEntitiesLocale';
+export { resolveTypesWorkbenchText } from './typesLocale';
+export {
+    resolveMemoryGraphFieldLabel,
+    resolveMemoryGraphFieldValue,
+    resolveMemoryGraphText,
+} from './memoryGraphLocale';
+export { resolveActorWorkbenchText } from './actorLocale';
+export { resolveEntriesWorkbenchText } from './entriesLocale';
+export { resolveActorsWorkbenchText } from './actorsWorkbenchLocale';
+export { resolvePreviewWorkbenchText } from './previewWorkbenchLocale';
+export { resolveTakeoverWorkbenchText } from './takeoverWorkbenchLocale';

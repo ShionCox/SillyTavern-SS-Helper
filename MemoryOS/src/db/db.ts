@@ -155,7 +155,25 @@ export type MemoryTakeoverRecordCollection =
     | 'takeover_batch_meta'
     | 'takeover_batch_result'
     | 'takeover_logs'
-    | 'takeover_preview';
+    | 'takeover_preview'
+    | 'comparekey_index';
+
+/**
+ * 功能：定义 compareKey 索引记录。
+ */
+export interface MemoryCompareKeyIndexRecord {
+    chatKey: string;
+    entryId: string;
+    entityKey: string;
+    entryType: string;
+    compareKey: string;
+    matchKeys: string[];
+    schemaVersion: string;
+    canonicalName: string;
+    legacyCompareKeys?: string[];
+    title: string;
+    updatedAt: number;
+}
 
 /**
  * 功能：定义接管日志记录。
@@ -326,6 +344,91 @@ export async function loadMemoryTakeoverPreview(chatKey: string): Promise<{
         }
     }
     return result;
+}
+
+/**
+ * 功能：写入 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @param record compareKey 索引记录。
+ * @returns 异步完成。
+ */
+export async function saveMemoryCompareKeyIndexRecord(chatKey: string, record: MemoryCompareKeyIndexRecord): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'comparekey_index', {
+        recordId: String(record.entryId ?? '').trim(),
+        payload: ({
+            ...record,
+            chatKey: normalizedChatKey,
+            entryId: String(record.entryId ?? '').trim(),
+            entityKey: String(record.entityKey ?? '').trim(),
+            entryType: String(record.entryType ?? '').trim(),
+            compareKey: String(record.compareKey ?? '').trim(),
+            matchKeys: Array.from(new Set((record.matchKeys ?? []).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean))),
+            schemaVersion: String(record.schemaVersion ?? '').trim(),
+            canonicalName: String(record.canonicalName ?? '').trim(),
+            legacyCompareKeys: Array.from(new Set((record.legacyCompareKeys ?? []).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean))),
+            title: String(record.title ?? '').trim(),
+            updatedAt: Number(record.updatedAt ?? Date.now()) || Date.now(),
+        }) as unknown as Record<string, unknown>,
+        ts: Number(record.updatedAt ?? Date.now()) || Date.now(),
+    });
+}
+
+/**
+ * 功能：读取当前聊天的 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @returns 索引记录列表。
+ */
+export async function loadMemoryCompareKeyIndexRecords(chatKey: string): Promise<MemoryCompareKeyIndexRecord[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'comparekey_index', {
+        order: 'asc',
+        limit: 5000,
+    });
+    return rows
+        .map((row: DBChatPluginRecord): MemoryCompareKeyIndexRecord | null => {
+            const payload = toRecord(row.payload);
+            const entryId = normalizeText(payload.entryId);
+            if (!entryId) {
+                return null;
+            }
+            return {
+                chatKey: normalizeText(payload.chatKey) || normalizeText(chatKey),
+                entryId,
+                entityKey: normalizeText(payload.entityKey),
+                entryType: normalizeText(payload.entryType),
+                compareKey: normalizeText(payload.compareKey),
+                matchKeys: normalizeStringArray(payload.matchKeys),
+                schemaVersion: normalizeText(payload.schemaVersion),
+                canonicalName: normalizeText(payload.canonicalName),
+                legacyCompareKeys: normalizeStringArray(payload.legacyCompareKeys),
+                title: normalizeText(payload.title),
+                updatedAt: Number(payload.updatedAt ?? row.ts ?? 0) || 0,
+            };
+        })
+        .filter((item: MemoryCompareKeyIndexRecord | null): item is MemoryCompareKeyIndexRecord => Boolean(item));
+}
+
+/**
+ * 功能：按 entryId 删除 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @param entryId 条目 ID。
+ * @returns 异步完成。
+ */
+export async function deleteMemoryCompareKeyIndexRecord(chatKey: string, entryId: string): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    const normalizedEntryId = String(entryId ?? '').trim();
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'comparekey_index', {
+        order: 'asc',
+        limit: 5000,
+    });
+    const targetIds = rows
+        .filter((row: DBChatPluginRecord): boolean => String(row.recordId ?? '').trim() === normalizedEntryId)
+        .map((row: DBChatPluginRecord): number => Number(row.id))
+        .filter((id: number): boolean => Number.isFinite(id));
+    if (targetIds.length <= 0) {
+        return;
+    }
+    await db.chat_plugin_records.bulkDelete(targetIds);
 }
 
 /**

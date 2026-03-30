@@ -1,3 +1,5 @@
+import { parseCompareKey } from '../core/compare-key';
+
 /**
  * 功能：定义叙事引用渲染上下文。
  */
@@ -36,7 +38,7 @@ export function resolveNarrativeReferenceLabel(
         return aliasLabel;
     }
     const stripped = stripNarrativeReferencePrefix(rawRef);
-    if (rawRef.startsWith('actor:') && stripped.startsWith('char_')) {
+    if ((rawRef.startsWith('actor:') || rawRef.startsWith('entity:actor:')) && stripped.startsWith('char_')) {
         return normalizedFallback || '未命名角色';
     }
     if (rawRef.startsWith('char_')) {
@@ -46,7 +48,7 @@ export function resolveNarrativeReferenceLabel(
 }
 
 /**
- * 功能：把自然语言文本中的占位引用和泄漏 key 渲染为可读文本。
+ * 功能：把自然语言文本中的占位引用和稳定键渲染为可读文本。
  * @param text 原始文本。
  * @param context 渲染上下文。
  * @returns 渲染后的文本。
@@ -60,6 +62,7 @@ export function renderNarrativeReferenceText(
         return source;
     }
     const userDisplayName = normalizeNarrativeReferenceUserName(context.userDisplayName);
+    const referencePattern = /\b(user|char_[a-z0-9_]+|ck:v2:[^\s，。；、.!?！？()]+|entity:[^\s，。；、.!?！？()]+|(?:organization|city|nation|location|task|event|world_global_state|world|actor):[^\s，。；、.!?！？()]+)/gi;
     return source
         .replace(/当前用户/g, userDisplayName)
         .replace(/该用户/g, userDisplayName)
@@ -71,7 +74,7 @@ export function renderNarrativeReferenceText(
             const stripped = stripNarrativeReferencePrefix(ref);
             return resolveNarrativeReferenceLabel(ref, context, stripped || ref);
         })
-        .replace(/\b(user|char_[a-z0-9_]+|(?:organization|city|nation|location|task|event|world_global_state|world):[^\s，。；、,.!?！？）)】]+)/gi, (matched: string): string => {
+        .replace(referencePattern, (matched: string): string => {
             return resolveNarrativeReferenceLabel(matched, context, stripNarrativeReferencePrefix(matched) || matched);
         });
 }
@@ -85,6 +88,15 @@ export function stripNarrativeReferencePrefix(value: string): string {
     const rawValue = String(value ?? '').trim();
     if (!rawValue) {
         return '';
+    }
+    if (rawValue.startsWith('ck:v2:')) {
+        const parsed = parseCompareKey(rawValue);
+        return parsed.canonicalName || rawValue;
+    }
+    if (rawValue.startsWith('entity:')) {
+        const strippedEntity = rawValue.slice('entity:'.length);
+        const segments = strippedEntity.split(':').map((item: string): string => item.trim()).filter(Boolean);
+        return segments.length > 0 ? segments[segments.length - 1] : rawValue;
     }
     const prefixes = ['actor:', 'organization:', 'city:', 'nation:', 'location:', 'task:', 'event:', 'world_global_state:', 'world:'];
     for (const prefix of prefixes) {

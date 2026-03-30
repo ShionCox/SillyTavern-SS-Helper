@@ -1,5 +1,6 @@
 import { escapeHtml } from '../editorShared';
 import {
+    resolveEntryIdentifierLabel,
     resolveEntryTypeLabel,
     resolveWorldEntityFieldLabel,
     resolveWorldEntityText,
@@ -91,6 +92,66 @@ function buildEntityListSummary(entry: MemoryEntry): string {
 }
 
 /**
+ * 功能：将世界实体标题中的内部 compareKey 前缀清理为更适合展示的文本。
+ * @param entry 世界实体条目
+ * @returns 清洗后的标题文本
+ */
+function resolveWorldEntityDisplayTitle(entry: MemoryEntry): string {
+    const rawTitle = String(entry.title ?? '').trim();
+    if (!rawTitle) {
+        return resolveWorldEntityText('unnamed_entity');
+    }
+    return rawTitle.replace(
+        /^(world_state|world_global_state|world_core_setting|world_hard_rule|nation|city|organization|location):/i,
+        '',
+    ).trim() || rawTitle;
+}
+
+function resolveWorldEntityDisplayText(value: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    const trimmedKey = normalized.replace(
+        /^(world_state|world_global_state|world_core_setting|world_hard_rule|nation|city|organization|location):/i,
+        '',
+    ).trim();
+    if (!trimmedKey) {
+        return normalized;
+    }
+    const typeLabel = resolveEntryTypeLabel(trimmedKey);
+    if (typeLabel && typeLabel !== trimmedKey) {
+        return typeLabel;
+    }
+    const identifierLabel = resolveEntryIdentifierLabel(trimmedKey);
+    if (identifierLabel && identifierLabel !== trimmedKey) {
+        return identifierLabel;
+    }
+    return trimmedKey;
+}
+
+function formatWorldEntityDisplayValue(value: unknown): string {
+    if (Array.isArray(value)) {
+        return value
+            .map((item: unknown): string => formatWorldEntityDisplayValue(item))
+            .filter((item: string): boolean => item.length > 0)
+            .join('、');
+    }
+    if (typeof value === 'string') {
+        return resolveWorldEntityDisplayText(value);
+    }
+    return formatDisplayValue(value);
+}
+
+function resolveWorldEntityCategoryLabel(category: string | undefined): string {
+    const normalized = String(category ?? '').trim();
+    if (!normalized) {
+        return resolveWorldEntityText('uncategorized');
+    }
+    return resolveWorldEntityDisplayText(normalized);
+}
+
+/**
  * 功能：构建世界实体左侧列表。
  * @param entities 世界实体列表。
  * @param selectedEntry 当前选中条目。
@@ -104,13 +165,14 @@ function buildEntityListMarkup(entities: MemoryEntry[], selectedEntry: MemoryEnt
         const isActive = selectedEntry?.entryId === entry.entryId;
         const summary = buildEntityListSummary(entry);
         const typeLabel = resolveEntryTypeLabel(entry.entryType) || entry.entryType || resolveWorldEntityText('uncategorized');
+        const displayTitle = resolveWorldEntityDisplayTitle(entry);
         return `
             <button class="stx-memory-workbench__list-item${isActive ? ' is-active' : ''}" data-select-entry="${escapeAttr(entry.entryId)}" style="gap:8px; padding:12px;">
                 <div class="stx-memory-workbench__split-head" style="align-items:center;">
-                    <h4 style="margin:0;">${escapeHtml(entry.title || resolveWorldEntityText('unnamed_entity'))}</h4>
+                    <h4 style="margin:0;">${escapeHtml(displayTitle)}</h4>
                     <span class="stx-memory-workbench__badge">${escapeHtml(typeLabel)}</span>
                 </div>
-                <div class="stx-memory-workbench__meta">${escapeHtml(entry.category || resolveWorldEntityText('uncategorized'))}</div>
+                <div class="stx-memory-workbench__meta">${escapeHtml(resolveWorldEntityCategoryLabel(entry.category))}</div>
                 <div class="stx-memory-workbench__detail-clamp">${escapeHtml(summary)}</div>
             </button>
         `;
@@ -124,15 +186,16 @@ function buildEntityListMarkup(entities: MemoryEntry[], selectedEntry: MemoryEnt
  */
 function buildEntityOverviewMarkup(entry: MemoryEntry): string {
     const typeLabel = resolveEntryTypeLabel(entry.entryType) || entry.entryType || resolveWorldEntityText('uncategorized');
+    const displayTitle = resolveWorldEntityDisplayTitle(entry);
     return `
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__split-head">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(entry.title || resolveWorldEntityText('unnamed_entity'))}</div>
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(displayTitle)}</div>
                 <span class="stx-memory-workbench__badge">${escapeHtml(typeLabel)}</span>
             </div>
             <div class="stx-memory-workbench__info-list">
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_id'))}</span><strong>${escapeHtml(entry.entryId)}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_category'))}</span><strong>${escapeHtml(entry.category || resolveWorldEntityText('uncategorized'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_category'))}</span><strong>${escapeHtml(resolveWorldEntityCategoryLabel(entry.category))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_created_at'))}</span><strong>${escapeHtml(formatTimestamp(entry.createdAt))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_updated_at'))}</span><strong>${escapeHtml(formatTimestamp(entry.updatedAt))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_tags'))}</span><strong>${escapeHtml((entry.tags ?? []).join('、') || resolveWorldEntityText('empty_tags'))}</strong></div>
@@ -173,7 +236,7 @@ function buildEntityFieldsMarkup(entry: MemoryEntry): string {
         return `
             <div class="stx-memory-workbench__info-row">
                 <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(formatDisplayValue(value))}</strong>
+                <strong>${escapeHtml(formatWorldEntityDisplayValue(value))}</strong>
             </div>
         `;
     }).join('');
@@ -202,7 +265,7 @@ function buildEntityBindingsMarkup(entry: MemoryEntry): string {
             return `
                 <div class="stx-memory-workbench__info-row">
                     <span>${escapeHtml(resolveBindingLabel(key))}</span>
-                    <strong>${escapeHtml(formatDisplayValue(value))}</strong>
+                    <strong>${escapeHtml(formatWorldEntityDisplayValue(value))}</strong>
                 </div>
             `;
         })
@@ -264,7 +327,7 @@ function buildStructuredSummaryMarkup(detailPayload: Record<string, unknown> | u
             .slice(0, 6)
             .map(([key, value]: [string, unknown]) => ({
                 label: resolveWorldEntityFieldLabel(key),
-                value: formatDisplayValue(value),
+                value: formatWorldEntityDisplayValue(value),
             }));
         if (rows.length > 0) {
             sections.push({ title, rows });
@@ -291,7 +354,7 @@ function buildStructuredSummaryMarkup(detailPayload: Record<string, unknown> | u
             .slice(0, 6)
             .map(([key, value]: [string, unknown]) => ({
                 label: resolveWorldEntityFieldLabel(key),
-                value: formatDisplayValue(value),
+                value: formatWorldEntityDisplayValue(value),
             }));
         if (flatRows.length > 0) {
             sections.push({
@@ -387,7 +450,7 @@ function buildEntitySidebarMarkup(entry: MemoryEntry | null): string {
                 <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveWorldEntityText('quick_info_title'))}</div>
                 <div class="stx-memory-workbench__info-list">
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('quick_info_type'))}</span><strong>${escapeHtml(typeLabel)}</strong></div>
-                    <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('quick_info_category'))}</span><strong>${escapeHtml(entry.category || resolveWorldEntityText('uncategorized'))}</strong></div>
+                    <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('quick_info_category'))}</span><strong>${escapeHtml(resolveWorldEntityCategoryLabel(entry.category))}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('quick_info_updated_at'))}</span><strong>${escapeHtml(formatTimestamp(entry.updatedAt))}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('quick_info_tag_count'))}</span><strong>${escapeHtml(String((entry.tags ?? []).length))}</strong></div>
                 </div>
@@ -440,7 +503,7 @@ export function buildWorldEntitiesViewMarkup(
                     <div class="stx-memory-workbench__card" style="padding: 12px; min-height: 0;">
                         <div class="stx-memory-workbench__panel-title" style="margin-bottom: 8px;">${escapeHtml(resolveWorldEntityText('list_title'))}</div>
                         <div class="stx-memory-workbench__meta">${escapeHtml(resolveWorldEntityText('list_desc'))}</div>
-                        <div class="stx-memory-workbench__list" data-entry-list-scroll="true" style="margin-top: 10px; min-height: 0;">
+                        <div class="stx-memory-workbench__list" data-world-entity-list-scroll="true" style="margin-top: 10px; min-height: 0;">
                             ${buildEntityListMarkup(entities, selectedEntry)}
                         </div>
                     </div>

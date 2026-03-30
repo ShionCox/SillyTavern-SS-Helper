@@ -29,7 +29,9 @@ export interface WorkbenchRecallExplanation {
     source?: string;
     retrievalProviderId?: string;
     retrievalRulePack?: string;
+    compareKeySchemaVersion?: string;
     subQueries?: string[];
+    matchModeCounts?: Record<string, number>;
     matchedRules?: Array<{
         pack: string;
         label: string;

@@ -160,7 +160,7 @@ describe('runSummaryOrchestrator integration', () => {
         expect(narrativeStyle.primaryStyle).toBe('modern');
         expect(narrativeStyle.source).toBe('binding');
         const appliedUpsert = applySnapshot.mock.calls[0][0].entryUpserts[0];
-        expect(appliedUpsert.title).toBe('关系状态');
+        expect(appliedUpsert.title).toBe('你与艾琳的关系');
         expect(appliedUpsert.summary).toBe('她对你保持警惕');
         expect(appliedUpsert.detailPayload.targetActorKey).toBe('user');
         expect(appliedUpsert.detailPayload.participants).toEqual(['char_erin', 'user']);

@@ -90,8 +90,8 @@ vi.mock('../src/core/events-manager', () => {
     return { EventsManager };
 });
 
-vi.mock('../src/core/unified-memory-manager', () => {
-    class UnifiedMemoryManager {
+vi.mock('../src/repository/entry-repository', () => {
+    class EntryRepository {
         constructor(_chatKey: string) {}
 
         /**
@@ -177,7 +177,7 @@ vi.mock('../src/core/unified-memory-manager', () => {
             return;
         }
     }
-    return { UnifiedMemoryManager };
+    return { EntryRepository };
 });
 
 vi.mock('../../../SDK/tavern', () => {

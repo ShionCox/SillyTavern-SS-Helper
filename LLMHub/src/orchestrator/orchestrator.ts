@@ -27,6 +27,18 @@ function generateRequestId(): string {
     return `req_${Date.now()}_${++globalRequestCounter}`;
 }
 
+/**
+ * 功能：读取统一执行结果中的原因码。
+ * @param result 执行结果
+ * @returns 原因码
+ */
+function getRunResultReasonCode<T>(result: LLMRunResult<T>): string | undefined {
+    if (!result.ok) {
+        return result.reasonCode;
+    }
+    return undefined;
+}
+
 export interface OrchestratorConfig {
     /** generation 默认 blockNextUntilOverlayClose=true */
     defaultBlockForGeneration: boolean;
@@ -46,9 +58,9 @@ export class RequestOrchestrator {
     private executeCallback: ((record: RequestRecord) => Promise<LLMRunResult<any>>) | null = null;
     /** 外部注入的展示回调 */
     private displayCallback: ((record: RequestRecord, result: LLMRunResult<any>) => void) | null = null;
-    /** 外部注入的运行中覆层回调 */
+    /** 外部注入的运行中遮罩回调 */
     private pendingDisplayCallback: ((record: RequestRecord) => void) | null = null;
-    /** 澶栭儴娉ㄥ叆鐨勫綊妗ｇ洃鍚洖璋?*/
+    /** 归档记录时触发的外部回调 */
     private archiveCallback: ((record: RequestRecord) => void) | null = null;
     /** 外部注入的 scope 变更监听注册 */
     private scopeChangeCallback: ((listener: (scope: RequestScope) => void) => () => void) | null = null;
@@ -361,7 +373,7 @@ export class RequestOrchestrator {
                 taskId: record.taskId,
                 ok: result.ok !== false,
                 hasMeta: Boolean(result.meta),
-                reasonCode: result.reasonCode,
+                reasonCode: getRunResultReasonCode(result),
                 latencyMs: record.finishedAt - (record.startedAt || record.queuedAt),
             });
             if (!result.ok) {
@@ -404,7 +416,7 @@ export class RequestOrchestrator {
                     requestId: record.requestId,
                     consumer: record.consumer,
                     taskId: record.taskId,
-                    reasonCode: result.reasonCode,
+                    reasonCode: getRunResultReasonCode(result),
                 });
                 record.resolveOverlay?.();
                 this.activeRequest = null;
@@ -564,7 +576,7 @@ export class RequestOrchestrator {
             try {
                 this.archiveCallback(record);
             } catch (error) {
-                logger.warn(`璇锋眰 ${record.requestId} 褰掓。鍥炶皟澶辫触`, error);
+                logger.warn(`请求 ${record.requestId} 归档回调失败`, error);
             }
         }
     }

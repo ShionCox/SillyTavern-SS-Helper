@@ -74,9 +74,14 @@ export interface MemoryTakeoverStableFact {
     predicate: string;
     value: string;
     confidence: number;
+    entityKey?: string;
     title?: string;
     summary?: string;
     compareKey?: string;
+    matchKeys?: string[];
+    schemaVersion?: string;
+    canonicalName?: string;
+    legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverBindings;
     status?: string;
     importance?: number;
@@ -117,12 +122,17 @@ export interface MemoryTakeoverTaskTransition {
     task: string;
     from: string;
     to: string;
+    entityKey?: string;
     title?: string;
     summary?: string;
     description?: string;
     goal?: string;
     status?: string;
     compareKey?: string;
+    matchKeys?: string[];
+    schemaVersion?: string;
+    canonicalName?: string;
+    legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
 }
@@ -133,8 +143,14 @@ export interface MemoryTakeoverTaskTransition {
 export interface MemoryTakeoverWorldStateChange {
     key: string;
     value: string;
+    entityKey?: string;
     summary?: string;
     compareKey?: string;
+    matchKeys?: string[];
+    schemaVersion?: string;
+    canonicalName?: string;
+    legacyCompareKeys?: string[];
+    bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
 }
 
@@ -160,7 +176,12 @@ export type MemoryTakeoverEntityType = 'organization' | 'city' | 'nation' | 'loc
  */
 export interface MemoryTakeoverEntityCardCandidate {
     entityType: MemoryTakeoverEntityType;
+    entityKey?: string;
     compareKey: string;
+    matchKeys?: string[];
+    schemaVersion?: string;
+    canonicalName?: string;
+    legacyCompareKeys?: string[];
     title: string;
     aliases: string[];
     summary: string;
@@ -175,7 +196,12 @@ export interface MemoryTakeoverEntityCardCandidate {
  */
 export interface MemoryTakeoverEntityTransition {
     entityType: MemoryTakeoverEntityType;
+    entityKey?: string;
     compareKey: string;
+    matchKeys?: string[];
+    schemaVersion?: string;
+    canonicalName?: string;
+    legacyCompareKeys?: string[];
     title: string;
     action: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
     reason: string;
@@ -301,6 +327,38 @@ export interface MemoryTakeoverConsolidationResult {
         unresolvedWorldStates: number;
         unresolvedEntities: number;
     };
+    conflictResolutions?: Array<{
+        bucketId: string;
+        domain: string;
+        resolutions: Array<{
+            action: 'merge' | 'keep_primary' | 'replace' | 'invalidate' | 'split';
+            primaryKey?: string;
+            secondaryKeys?: string[];
+            fieldOverrides?: Record<string, unknown>;
+            selectedPrimaryKey?: string;
+            selectedSnapshot?: Record<string, unknown>;
+            selectionReason?: string;
+            appliedFieldNames?: string[];
+            resolverSource?: 'rule_resolver' | 'llm_batch_resolver' | 'deterministic_fallback';
+            reasonCodes: string[];
+        }>;
+    }>;
+    pipelineDiagnostics?: {
+        batchCount: number;
+        sectionCount: number;
+        conflictBucketCount: number;
+        resolvedConflictCount: number;
+        unresolvedConflictCount: number;
+        ruleResolvedConflictCount: number;
+        llmResolvedConflictCount: number;
+        batchedRequestCount: number;
+        avgBucketsPerRequest: number;
+        skippedByRuleCount: number;
+        fallbackUsed: boolean;
+        usedLLM: boolean;
+        reasonCode: string;
+    };
+    applyDiagnostics?: ApplyLedgerMutationBatchResult;
     generatedAt: number;
 }
 
@@ -378,3 +436,4 @@ export interface MemoryTakeoverDetectionResult {
     hasCompletedTakeover: boolean;
     recoverableTakeoverId?: string;
 }
+import type { ApplyLedgerMutationBatchResult } from './unified-memory';

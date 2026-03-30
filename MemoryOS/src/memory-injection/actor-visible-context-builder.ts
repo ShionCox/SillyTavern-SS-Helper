@@ -1,5 +1,5 @@
 import type { MemoryEntry, PromptAssemblyRoleEntry } from '../types';
-import { computeRetentionState, type RetentionStage } from '../memory-retention';
+import { type RetentionStage } from '../memory-retention';
 import { renderEventMemoryNarrative } from './narrative-renderer/event-renderer';
 import { renderRelationshipNarrative } from './narrative-renderer/relationship-renderer';
 import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
@@ -241,7 +241,7 @@ function isInterpretationType(entryType: string): boolean {
  * @returns 遗忘阶段。
  */
 function resolveRetentionStageFromRoleEntry(entry: PromptAssemblyRoleEntry): RetentionStage {
-    return computeRetentionState({ memoryPercent: entry.memoryPercent }).stage;
+    return entry.retentionStage;
 }
 
 /**

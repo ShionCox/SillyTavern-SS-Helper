@@ -1,45 +1,43 @@
-import { db } from '../db/db';
-import type {
-    DBActorMemoryProfile,
-    DBMemoryMutationHistory,
-    DBMemoryEntryAuditRecord,
-    DBMemoryEntry,
-    DBMemoryEntryType,
-    DBRoleEntryMemory,
-    DBSummarySnapshot,
+import { getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
+import { CompareKeyService } from '../core/compare-key-service';
+import {
+    db,
+    deleteMemoryCompareKeyIndexRecord,
+    loadMemoryCompareKeyIndexRecords,
+    saveMemoryCompareKeyIndexRecord,
+    type DBActorMemoryProfile,
+    type DBMemoryEntry,
+    type DBMemoryEntryAuditRecord,
+    type DBMemoryEntryType,
+    type DBMemoryMutationHistory,
+    type DBRoleEntryMemory,
+    type DBSummarySnapshot,
 } from '../db/db';
+import { normalizeSummarySnapshot } from '../memory-summary-planner';
+import { deleteWorldProfileBinding, getWorldProfileBinding, putWorldProfileBinding } from '../memory-world-profile';
+import { BindingResolutionService } from '../services/binding-resolution-service';
 import {
     CORE_MEMORY_ENTRY_TYPES,
     DEFAULT_ACTOR_MEMORY_STAT,
     type ActorMemoryProfile,
+    type ApplyLedgerMutationBatchResult,
     type MemoryEntry,
     type MemoryEntryAuditRecord,
     type MemoryEntryFieldDiff,
     type MemoryEntryType,
     type MemoryEntryTypeField,
     type MemoryMutationHistoryRecord,
-    type PromptAssemblyRoleEntry,
-    type PromptAssemblySnapshot,
     type RoleEntryMemory,
+    type LedgerMutation,
+    type LedgerMutationBatchContext,
     type SummaryEntryUpsert,
     type SummaryRefreshBinding,
     type SummarySnapshot,
+    type StructuredBindings,
     type UnifiedMemoryFilters,
     type WorldProfileBinding,
 } from '../types';
-import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
-import { getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
-import { readMemoryOSSettings } from '../settings/store';
-import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
-import { normalizeSummarySnapshot } from '../memory-summary-planner';
-import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
-import { detectWorldProfile, resolveWorldProfile, getWorldProfileBinding, putWorldProfileBinding, deleteWorldProfileBinding } from '../memory-world-profile';
-import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
-import { getMemoryTrace, recordMemoryDebug } from './debug/memory-retrieval-logger';
-import { RetrievalOrchestrator, type RetrievalCandidate } from '../memory-retrieval';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
-
-const promptRetrievalOrchestrator = new RetrievalOrchestrator();
 
 interface EntryAuditWriteOptions {
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
@@ -49,55 +47,47 @@ interface EntryAuditWriteOptions {
 }
 
 /**
- * 功能：统一条目记忆系统主管理器。
+ * 功能：统一承接 MemoryOS 记忆数据读写与 compareKey 索引维护。
  */
-export class UnifiedMemoryManager {
-    private chatKey: string;
+export class EntryRepository {
+    private readonly chatKey: string;
+    private readonly compareKeyService: CompareKeyService;
+    private readonly bindingResolutionService: BindingResolutionService;
 
-    private static readonly QUERY_STOP_PHRASES: string[] = [
-        '是什么地方',
-        '是什么意思',
-        '请介绍一下',
-        '请告诉我',
-        '是什么',
-        '在哪里',
-        '是谁',
-        '有哪里',
-        '有哪些',
-        '为什么',
-        '怎么样',
-        '怎么',
-        '如何',
-        '介绍',
-        '说明',
-        '设定',
-        '定义',
-        '含义',
-        '背景',
-        '来历',
-        '作用',
-        '位置',
-        '地点',
-        '概况',
-        '信息',
-        '请问',
-        '一下',
-        '这个',
-        '那个',
-    ];
-
-    constructor(chatKey: string) {
+    constructor(chatKey: string, compareKeyService?: CompareKeyService) {
         this.chatKey = String(chatKey ?? '').trim();
+        this.compareKeyService = compareKeyService ?? new CompareKeyService();
+        this.bindingResolutionService = new BindingResolutionService(this.compareKeyService);
     }
 
     /**
-     * 功能：初始化核心类型与默认角色资料。
-     * @returns 初始化 Promise。
+     * 功能：初始化核心类型、默认用户画像与 compareKey 索引。
+     * @returns 异步完成。
      */
     async init(): Promise<void> {
         await this.ensureCoreEntryTypes();
         await this.ensureActorProfile({ actorKey: 'user', displayName: this.resolveUserActorDisplayName() });
         await this.ensureDefaultUserActorCard();
+        await this.rebuildCompareKeyIndex();
+    }
+
+    /**
+     * 功能：重建 compareKey 索引。
+     * @returns 异步完成。
+     */
+    async rebuildCompareKeyIndex(): Promise<void> {
+        const entries = await this.listEntries();
+        for (const entry of entries) {
+            await this.syncCompareKeyIndex(entry);
+        }
+    }
+
+    /**
+     * 功能：读取 compareKey 索引记录。
+     * @returns 索引记录列表。
+     */
+    async listCompareKeyIndexRecords() {
+        return loadMemoryCompareKeyIndexRecords(this.chatKey);
     }
 
     /**
@@ -142,7 +132,7 @@ export class UnifiedMemoryManager {
     /**
      * 功能：删除自定义条目类型。
      * @param key 类型键。
-     * @returns 删除完成后的 Promise。
+     * @returns 异步完成。
      */
     async deleteEntryType(key: string): Promise<void> {
         const existing = await this.findEntryTypeByKey(key);
@@ -163,7 +153,7 @@ export class UnifiedMemoryManager {
 
     /**
      * 功能：列出条目。
-     * @param filters 筛选条件。
+     * @param filters 过滤条件。
      * @returns 条目列表。
      */
     async listEntries(filters: UnifiedMemoryFilters = {}): Promise<MemoryEntry[]> {
@@ -195,7 +185,7 @@ export class UnifiedMemoryManager {
     /**
      * 功能：读取单个条目。
      * @param entryId 条目 ID。
-     * @returns 条目。
+     * @returns 条目对象。
      */
     async getEntry(entryId: string): Promise<MemoryEntry | null> {
         const row = await db.memory_entries.get(String(entryId ?? '').trim());
@@ -206,14 +196,12 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：保存条目。
+     * 功能：保存条目并同步审计与 compareKey 索引。
      * @param input 条目输入。
+     * @param options 审计选项。
      * @returns 保存后的条目。
      */
-    async saveEntry(
-        input: Partial<MemoryEntry> & { title: string; entryType: string },
-        options: EntryAuditWriteOptions = {},
-    ): Promise<MemoryEntry> {
+    async saveEntry(input: Partial<MemoryEntry> & { title: string; entryType: string }, options: EntryAuditWriteOptions = {}): Promise<MemoryEntry> {
         const existing = input.entryId ? await db.memory_entries.get(String(input.entryId ?? '').trim()) : null;
         const type = await this.getResolvedEntryType(input.entryType);
         const now = Date.now();
@@ -234,6 +222,7 @@ export class UnifiedMemoryManager {
         };
         await db.memory_entries.put(row);
         const savedEntry = this.mapEntry(row);
+        await this.syncCompareKeyIndex(savedEntry);
         await this.appendEntryAuditRecord({
             actionType: options.actionType ?? (existing ? 'UPDATE' : 'ADD'),
             summaryId: options.summaryId,
@@ -247,9 +236,10 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：删除条目及相关角色记忆。
+     * 功能：删除条目并清理绑定与索引。
      * @param entryId 条目 ID。
-     * @returns 删除完成后的 Promise。
+     * @param options 审计选项。
+     * @returns 异步完成。
      */
     async deleteEntry(entryId: string, options: EntryAuditWriteOptions = {}): Promise<void> {
         const normalizedEntryId = String(entryId ?? '').trim();
@@ -259,6 +249,7 @@ export class UnifiedMemoryManager {
             await db.role_entry_memory.bulkDelete(memories.map((row: DBRoleEntryMemory): string => row.roleMemoryId));
         }
         await db.memory_entries.delete(normalizedEntryId);
+        await deleteMemoryCompareKeyIndexRecord(this.chatKey, normalizedEntryId);
         if (existingEntry) {
             await this.appendEntryAuditRecord({
                 actionType: options.actionType ?? 'DELETE',
@@ -280,10 +271,7 @@ export class UnifiedMemoryManager {
         let rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
         const hasUserActor = rows.some((row: DBActorMemoryProfile): boolean => this.normalizeActorKey(row.actorKey) === 'user');
         if (!hasUserActor) {
-            await this.ensureActorProfile({
-                actorKey: 'user',
-                displayName: this.resolveUserActorDisplayName(),
-            });
+            await this.ensureActorProfile({ actorKey: 'user', displayName: this.resolveUserActorDisplayName() });
             rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
         }
         const profiles = await Promise.all(rows.map(async (row: DBActorMemoryProfile): Promise<ActorMemoryProfile> => {
@@ -306,8 +294,7 @@ export class UnifiedMemoryManager {
                 displayName: fallbackDisplayName,
             };
         }));
-        return profiles
-            .sort((left: ActorMemoryProfile, right: ActorMemoryProfile): number => left.displayName.localeCompare(right.displayName, 'zh-CN'));
+        return profiles.sort((left: ActorMemoryProfile, right: ActorMemoryProfile): number => left.displayName.localeCompare(right.displayName, 'zh-CN'));
     }
 
     /**
@@ -315,25 +302,16 @@ export class UnifiedMemoryManager {
      * @param input 角色输入。
      * @returns 角色资料。
      */
-    async ensureActorProfile(input: {
-        actorKey: string;
-        displayName?: string;
-        memoryStat?: number;
-    }): Promise<ActorMemoryProfile> {
+    async ensureActorProfile(input: { actorKey: string; displayName?: string; memoryStat?: number }): Promise<ActorMemoryProfile> {
         const actorKey = this.normalizeActorKey(input.actorKey);
         const existing = await db.actor_memory_profiles.get(actorKey);
         const now = Date.now();
-        const resolvedUserDisplayName = actorKey === 'user'
-            ? this.resolveUserActorDisplayName()
-            : '';
+        const resolvedUserDisplayName = actorKey === 'user' ? this.resolveUserActorDisplayName() : '';
         const fallbackDisplayName = resolvedUserDisplayName || actorKey;
         const row: DBActorMemoryProfile = {
             actorKey,
             chatKey: this.chatKey,
-            displayName: this.normalizeText(input.displayName)
-                || resolvedUserDisplayName
-                || existing?.displayName
-                || fallbackDisplayName,
+            displayName: this.normalizeText(input.displayName) || resolvedUserDisplayName || existing?.displayName || fallbackDisplayName,
             memoryStat: this.clampPercent(input.memoryStat ?? existing?.memoryStat ?? DEFAULT_ACTOR_MEMORY_STAT),
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
@@ -353,7 +331,7 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：列出角色记忆。
+     * 功能：列出角色记忆绑定。
      * @param actorKey 可选角色键。
      * @returns 角色记忆列表。
      */
@@ -370,7 +348,7 @@ export class UnifiedMemoryManager {
      * 功能：绑定角色与条目。
      * @param actorKey 角色键。
      * @param entryId 条目 ID。
-     * @returns 保存后的角色记忆。
+     * @returns 角色记忆绑定。
      */
     async bindRoleToEntry(actorKey: string, entryId: string): Promise<RoleEntryMemory> {
         const normalizedActorKey = this.normalizeActorKey(actorKey);
@@ -398,7 +376,7 @@ export class UnifiedMemoryManager {
      * 功能：解除角色与条目绑定。
      * @param actorKey 角色键。
      * @param entryId 条目 ID。
-     * @returns 删除完成后的 Promise。
+     * @returns 异步完成。
      */
     async unbindRoleFromEntry(actorKey: string, entryId: string): Promise<void> {
         const existing = await this.findRoleEntryMemory(this.normalizeActorKey(actorKey), String(entryId ?? '').trim());
@@ -412,6 +390,208 @@ export class UnifiedMemoryManager {
      * @param input 总结输入。
      * @returns 保存后的总结快照。
      */
+    async applyLedgerMutationBatch(
+        mutations: LedgerMutation[],
+        context: LedgerMutationBatchContext,
+    ): Promise<ApplyLedgerMutationBatchResult> {
+        const result: ApplyLedgerMutationBatchResult = {
+            createdEntryIds: [],
+            updatedEntryIds: [],
+            invalidatedEntryIds: [],
+            deletedEntryIds: [],
+            noopCount: 0,
+            counts: {
+                input: Array.isArray(mutations) ? mutations.length : 0,
+                add: 0,
+                update: 0,
+                merge: 0,
+                invalidate: 0,
+                delete: 0,
+                noop: 0,
+            },
+            decisions: [],
+            affectedRecords: [],
+            bindingResults: [],
+            resolvedBindingResults: [],
+            auditResults: [],
+            historyWritten: false,
+        };
+        const existingEntries = await this.listEntries();
+        const compareKeyRecords = await this.listCompareKeyIndexRecords();
+        const actorProfiles = await this.listActorProfiles();
+        const batchBindingCandidates = this.buildBindingBatchCandidates(mutations);
+        for (const mutation of mutations) {
+            const action = this.normalizeText(mutation.action).toUpperCase();
+            const targetResolution = await this.resolveLedgerTargetEntry(mutation, existingEntries, compareKeyRecords);
+            const targetEntry = targetResolution.entry;
+            const resolvedBindings = this.bindingResolutionService.resolveForMutation({
+                bindings: mutation.bindings
+                    ?? (this.normalizeRecord(mutation.detailPayload).bindings as Record<string, unknown> | undefined)
+                    ?? (this.normalizeRecord(targetEntry?.detailPayload).bindings as Record<string, unknown> | undefined),
+                actorBindings: mutation.actorBindings,
+                title: mutation.title,
+                summary: mutation.summary,
+                detail: mutation.detail,
+                detailPayload: mutation.detailPayload,
+                compareKey: mutation.compareKey,
+                entityKey: mutation.entityKey,
+                targetKind: mutation.targetKind,
+                actorProfiles,
+                existingEntries,
+                compareKeyRecords,
+                batchCandidates: batchBindingCandidates,
+            });
+            result.resolvedBindingResults.push({
+                title: this.normalizeText(mutation.title) || '未命名条目',
+                targetKind: this.normalizeText(mutation.targetKind) || 'other',
+                resolvedBindings: resolvedBindings.bindings,
+                decisions: resolvedBindings.decisions,
+                resolvedCount: resolvedBindings.resolvedCount,
+                unresolvedCount: resolvedBindings.unresolvedCount,
+                fallbackCount: resolvedBindings.fallbackCount,
+            });
+            if (!action || action === 'NOOP') {
+                result.noopCount += 1;
+                result.counts.noop += 1;
+                result.decisions.push({
+                    targetKind: this.normalizeText(mutation.targetKind) || 'other',
+                    action: 'NOOP',
+                    title: this.normalizeText(mutation.title) || '未命名条目',
+                    matchMode: 'skipped',
+                    entityKey: this.normalizeText(mutation.entityKey) || undefined,
+                    compareKey: this.normalizeText(mutation.compareKey) || undefined,
+                    reasonCodes: this.normalizeTags(mutation.reasonCodes),
+                    });
+                continue;
+            }
+            if (action === 'DELETE') {
+                if (!targetEntry) {
+                    result.noopCount += 1;
+                    result.counts.noop += 1;
+                    result.decisions.push({
+                        targetKind: this.normalizeText(mutation.targetKind) || 'other',
+                        action: 'DELETE',
+                        title: this.normalizeText(mutation.title) || '未命名条目',
+                        matchMode: 'skipped',
+                        entityKey: this.normalizeText(mutation.entityKey) || undefined,
+                        compareKey: this.normalizeText(mutation.compareKey) || undefined,
+                        reasonCodes: this.normalizeTags(mutation.reasonCodes),
+                    });
+                    continue;
+                }
+                await this.deleteEntry(targetEntry.entryId, {
+                    actionType: 'DELETE',
+                    summaryId: context.summaryId,
+                    sourceLabel: context.sourceLabel,
+                    reasonCodes: mutation.reasonCodes ?? [],
+                });
+                result.deletedEntryIds.push(targetEntry.entryId);
+                result.counts.delete += 1;
+                result.decisions.push({
+                    targetKind: this.normalizeText(mutation.targetKind) || targetEntry.entryType,
+                    action: 'DELETE',
+                    title: this.normalizeText(mutation.title) || targetEntry.title,
+                    matchMode: targetResolution.matchMode,
+                    entryId: targetEntry.entryId,
+                    entityKey: targetResolution.entityKey || undefined,
+                    compareKey: targetResolution.compareKey || undefined,
+                    reasonCodes: this.normalizeTags(mutation.reasonCodes),
+                });
+                result.affectedRecords.push({
+                    entryId: targetEntry.entryId,
+                    entityKey: targetResolution.entityKey || undefined,
+                    compareKey: targetResolution.compareKey || undefined,
+                    action: 'DELETE',
+                });
+                result.auditResults.push({
+                    entryId: targetEntry.entryId,
+                    action: 'DELETE',
+                    written: true,
+                });
+                continue;
+            }
+            const savedEntry = await this.saveEntry({
+                entryId: targetEntry?.entryId ?? mutation.entryId,
+                title: mutation.title,
+                entryType: mutation.targetKind,
+                summary: mutation.summary ?? '',
+                detail: mutation.detail,
+                detailPayload: this.buildLedgerDetailPayload(mutation, targetEntry, resolvedBindings.bindings),
+                tags: mutation.tags,
+                sourceSummaryIds: context.summaryId ? [context.summaryId] : [],
+            }, {
+                actionType: action as EntryAuditWriteOptions['actionType'],
+                summaryId: context.summaryId,
+                sourceLabel: context.sourceLabel,
+                reasonCodes: mutation.reasonCodes ?? [],
+            });
+            const normalizedAction = this.normalizeLedgerAction(action, targetEntry);
+            if (normalizedAction === 'ADD') {
+                result.createdEntryIds.push(savedEntry.entryId);
+                result.counts.add += 1;
+            } else if (normalizedAction === 'INVALIDATE') {
+                result.invalidatedEntryIds.push(savedEntry.entryId);
+                result.counts.invalidate += 1;
+            } else if (normalizedAction === 'MERGE') {
+                result.updatedEntryIds.push(savedEntry.entryId);
+                result.counts.merge += 1;
+            } else {
+                result.updatedEntryIds.push(savedEntry.entryId);
+                result.counts.update += 1;
+            }
+            result.decisions.push({
+                targetKind: this.normalizeText(mutation.targetKind) || savedEntry.entryType,
+                action: normalizedAction,
+                title: this.normalizeText(mutation.title) || savedEntry.title,
+                matchMode: targetResolution.matchMode,
+                entryId: savedEntry.entryId,
+                entityKey: this.readEntryEntityKey(savedEntry) || targetResolution.entityKey || undefined,
+                compareKey: this.readEntryCompareKey(savedEntry) || targetResolution.compareKey || undefined,
+                reasonCodes: this.normalizeTags(mutation.reasonCodes),
+            });
+            result.affectedRecords.push({
+                entryId: savedEntry.entryId,
+                entityKey: this.readEntryEntityKey(savedEntry) || targetResolution.entityKey || undefined,
+                compareKey: this.readEntryCompareKey(savedEntry) || targetResolution.compareKey || undefined,
+                action: normalizedAction,
+            });
+            result.auditResults.push({
+                entryId: savedEntry.entryId,
+                action: normalizedAction,
+                written: true,
+            });
+            const actorBindings = this.normalizeTags([
+                ...(mutation.actorBindings ?? []),
+                ...resolvedBindings.bindings.actors,
+            ]);
+            for (const actorKey of actorBindings) {
+                await this.bindRoleToEntry(actorKey, savedEntry.entryId);
+                result.bindingResults.push({
+                    actorKey: this.normalizeActorKey(actorKey),
+                    entryId: savedEntry.entryId,
+                    written: true,
+                });
+            }
+            existingEntries.push(savedEntry);
+            compareKeyRecords.push(this.compareKeyService.buildIndexRecord(savedEntry));
+        }
+        await this.appendMutationHistory({
+            action: 'ledger_mutation_batch_applied',
+            payload: {
+                source: context.source,
+                sourceLabel: context.sourceLabel,
+                mutationCount: mutations.length,
+                summaryId: context.summaryId,
+                takeoverId: context.takeoverId,
+                bootstrapRunId: context.bootstrapRunId,
+                manualEditorId: context.manualEditorId,
+                result,
+            },
+        });
+        result.historyWritten = true;
+        return result;
+    }
+
     async applySummarySnapshot(input: {
         title?: string;
         content: string;
@@ -427,26 +607,35 @@ export class UnifiedMemoryManager {
             await this.ensureActorProfile({ actorKey });
         }
 
-        const savedEntries: MemoryEntry[] = [];
-        for (const upsert of Array.isArray(input.entryUpserts) ? input.entryUpserts : []) {
-            const savedEntry = await this.saveEntry({
-                entryId: upsert.entryId,
-                title: upsert.title,
-                entryType: upsert.entryType,
-                category: upsert.category,
-                tags: upsert.tags,
-                summary: upsert.summary,
-                detail: upsert.detail,
-                detailPayload: upsert.detailPayload,
-                sourceSummaryIds: [summaryId],
-            }, {
-                actionType: upsert.actionType,
-                summaryId,
-                sourceLabel: upsert.sourceLabel || (this.normalizeText(input.title) || '结构化回合总结'),
-                reasonCodes: upsert.reasonCodes ?? [],
-            });
-            savedEntries.push(savedEntry);
-        }
+        const mutations = (Array.isArray(input.entryUpserts) ? input.entryUpserts : []).map((upsert: SummaryEntryUpsert): LedgerMutation => ({
+            targetKind: upsert.entryType,
+            action: (upsert.actionType ?? (upsert.entryId ? 'UPDATE' : 'ADD')) as LedgerMutation['action'],
+            title: upsert.title,
+            entryId: upsert.entryId,
+            summary: upsert.summary,
+            detail: upsert.detail,
+            detailPayload: upsert.detailPayload,
+            tags: upsert.tags,
+            reasonCodes: upsert.reasonCodes,
+        }));
+        const mutationApplyDiagnostics = await this.applyLedgerMutationBatch(mutations, {
+            chatKey: this.chatKey,
+            source: 'summary',
+            sourceLabel: this.normalizeText(input.title) || '结构化回合总结',
+            summaryId,
+            allowCreate: true,
+            allowInvalidate: true,
+        });
+
+        const allEntries = await this.listEntries();
+        const savedEntries: MemoryEntry[] = (Array.isArray(input.entryUpserts) ? input.entryUpserts : [])
+            .map((upsert: SummaryEntryUpsert): MemoryEntry | null => {
+                if (upsert.entryId) {
+                    return allEntries.find((entry: MemoryEntry): boolean => entry.entryId === upsert.entryId) ?? null;
+                }
+                return allEntries.find((entry: MemoryEntry): boolean => entry.title === upsert.title && entry.entryType === upsert.entryType) ?? null;
+            })
+            .filter((entry: MemoryEntry | null): entry is MemoryEntry => Boolean(entry));
 
         const refreshTargets = await this.resolveRefreshTargets(input.refreshBindings ?? [], savedEntries);
         const refreshedSet = new Set<string>();
@@ -487,10 +676,12 @@ export class UnifiedMemoryManager {
             await db.role_entry_memory.bulkPut(decayedRows);
         }
 
-        const row: DBSummarySnapshot = {
+        const row: DBSummarySnapshot & {
+            mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
+        } = {
             summaryId,
             chatKey: this.chatKey,
-            title: this.normalizeText(input.title) || `回合总结 ${new Date(now).toLocaleString('zh-CN')}`,
+            title: this.normalizeText(input.title) || `总结 ${new Date(now).toLocaleString('zh-CN')}`,
             content: this.normalizeText(input.content),
             normalizedSummary: normalizeSummarySnapshot({
                 title: input.title,
@@ -501,6 +692,7 @@ export class UnifiedMemoryManager {
             actorKeys,
             entryUpserts: (input.entryUpserts ?? []).map((item: SummaryEntryUpsert): Record<string, unknown> => ({ ...item })),
             refreshBindings: (input.refreshBindings ?? []).map((item: SummaryRefreshBinding): Record<string, unknown> => ({ ...item })),
+            mutationApplyDiagnostics,
             createdAt: now,
             updatedAt: now,
         };
@@ -508,16 +700,26 @@ export class UnifiedMemoryManager {
         return this.mapSummarySnapshot(row);
     }
 
+    async listSummarySnapshots(limit: number = 20): Promise<SummarySnapshot[]> {
+        const rows = await db.summary_snapshots
+            .where('[chatKey+updatedAt]')
+            .between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER])
+            .reverse()
+            .limit(Math.max(1, limit))
+            .toArray();
+        return rows.map((row: DBSummarySnapshot): SummarySnapshot => this.mapSummarySnapshot(row));
+    }
+
     /**
-     * 功能：读取当前聊天的世界模板绑定。
-     * @returns 世界模板绑定；不存在时返回 null。
+     * 功能：读取当前聊天的世界画像绑定。
+     * @returns 世界画像绑定。
      */
     async getWorldProfileBinding(): Promise<WorldProfileBinding | null> {
         return getWorldProfileBinding(this.chatKey);
     }
 
     /**
-     * 功能：写入当前聊天的世界模板绑定。
+     * 功能：写入当前聊天的世界画像绑定。
      * @param input 绑定输入。
      * @returns 保存后的绑定对象。
      */
@@ -539,24 +741,19 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：追加 mutation 历史记录。
-     * @param input 历史输入。
-     */
-    /**
-     * 功能：删除当前聊天的世界模板绑定。
+     * 功能：删除当前聊天的世界画像绑定。
+     * @returns 异步完成。
      */
     async deleteWorldProfileBinding(): Promise<void> {
         await deleteWorldProfileBinding(this.chatKey);
     }
 
     /**
-     * 功能：追加一条 mutation 历史记录。
+     * 功能：追加 mutation 历史记录。
      * @param input 历史记录输入。
+     * @returns 异步完成。
      */
-    async appendMutationHistory(input: {
-        action: string;
-        payload: Record<string, unknown>;
-    }): Promise<void> {
+    async appendMutationHistory(input: { action: string; payload: Record<string, unknown> }): Promise<void> {
         const row: DBMemoryMutationHistory = {
             historyId: `memory-history:${this.chatKey}:${crypto.randomUUID()}`,
             chatKey: this.chatKey,
@@ -568,9 +765,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：读取最近的记忆变更历史。
+     * 功能：列出 mutation 历史记录。
      * @param limit 返回数量。
-     * @returns 变更历史列表。
+     * @returns 历史记录列表。
      */
     async listMutationHistory(limit: number = 20): Promise<MemoryMutationHistoryRecord[]> {
         const rows = await db.memory_mutation_history
@@ -583,7 +780,7 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：读取最近的词条更新审计记录。
+     * 功能：列出条目审计记录。
      * @param limit 返回数量。
      * @returns 审计记录列表。
      */
@@ -598,466 +795,8 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：从当前聊天消息自动生成轻量总结。
-     * @param input 消息输入。
-     * @returns 总结快照。
-     */
-    async captureSummaryFromChat(input: {
-        messages: Array<{ role?: string; content?: string; name?: string }>;
-        actorHints?: Array<{ actorKey: string; displayName?: string }>;
-        title?: string;
-    }): Promise<SummarySnapshot | null> {
-        const normalizedMessages = Array.isArray(input.messages)
-            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-40)
-            : [];
-        if (normalizedMessages.length <= 0) {
-            return null;
-        }
-        for (const actorHint of Array.isArray(input.actorHints) ? input.actorHints : []) {
-            await this.ensureActorProfile(actorHint);
-        }
-        const settings = readMemoryOSSettings();
-        const llm = readMemoryLLMApi();
-        const summaryResult = await runSummaryOrchestrator({
-            dependencies: {
-                listEntries: async (): Promise<MemoryEntry[]> => this.listEntries(),
-                listRoleMemories: async (actorKey?: string): Promise<RoleEntryMemory[]> => this.listRoleMemories(actorKey),
-                listSummarySnapshots: async (limit?: number): Promise<SummarySnapshot[]> => this.listSummarySnapshots(limit),
-                getWorldProfileBinding: async (): Promise<WorldProfileBinding | null> => this.getWorldProfileBinding(),
-                appendMutationHistory: async (history): Promise<void> => this.appendMutationHistory(history),
-                getEntry: async (entryId: string): Promise<MemoryEntry | null> => this.getEntry(entryId),
-                applySummarySnapshot: async (summaryInput): Promise<SummarySnapshot> => this.applySummarySnapshot(summaryInput),
-                deleteEntry: async (
-                    entryId: string,
-                    options?: {
-                        actionType?: 'DELETE';
-                        summaryId?: string;
-                        sourceLabel?: string;
-                        reasonCodes?: string[];
-                    },
-                ): Promise<void> => this.deleteEntry(entryId, options),
-            },
-            llm,
-            pluginId: MEMORY_OS_PLUGIN_ID,
-            messages: normalizedMessages,
-            enableEmbedding: settings.enableEmbedding === true,
-            retrievalRulePack: settings.retrievalRulePack,
-        });
-        return summaryResult.snapshot;
-
-        /* legacy fallback removed:
-        const messages = Array.isArray(input.messages)
-            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-8)
-            : [];
-        if (messages.length <= 0) {
-            return null;
-        }
-        for (const actorHint of Array.isArray(input.actorHints) ? input.actorHints : []) {
-            await this.ensureActorProfile(actorHint);
-        }
-        const content = messages
-            .map((item: { role?: string; content?: string; name?: string }, index: number): string => {
-                const speaker = this.normalizeText(item.name) || this.normalizeText(item.role) || `消息${index + 1}`;
-                return `${speaker}：${this.normalizeText(item.content)}`;
-            })
-            .join('\n');
-        const actorProfiles = await this.listActorProfiles();
-        const normalizedContent = content.toLowerCase();
-        const actorKeys = actorProfiles
-            .filter((profile: ActorMemoryProfile): boolean => {
-                return [profile.actorKey, profile.displayName]
-                    .map((item: string): string => item.toLowerCase())
-                    .some((item: string): boolean => Boolean(item) && normalizedContent.includes(item));
-            })
-            .map((profile: ActorMemoryProfile): string => profile.actorKey);
-        const refreshBindings: SummaryRefreshBinding[] = [];
-        const entries = await this.listEntries();
-        entries.forEach((entry: MemoryEntry): void => {
-            const texts = this.collectEntryLookupTexts(entry);
-            if (!texts.some((text: string): boolean => normalizedContent.includes(text))) {
-                return;
-            }
-            actorKeys.forEach((actorKey: string): void => {
-                refreshBindings.push({ actorKey, entryId: entry.entryId });
-            });
-        });
-        return this.applySummarySnapshot({
-            title: input.title || '自动回合总结',
-            content,
-            actorKeys,
-            refreshBindings,
-        });
-        */
-    }
-
-    /**
-     * 功能：构建统一提示词快照。
-     * @param input 构建输入。
-     * @returns 提示词快照。
-     */
-    async buildPromptAssembly(input: {
-        query?: string;
-        promptMessages?: SdkTavernPromptMessageEvent[];
-        maxTokens?: number;
-    }): Promise<PromptAssemblySnapshot> {
-        const settings = readMemoryOSSettings();
-        const query = this.normalizeText(input.query);
-        const promptText = (input.promptMessages ?? [])
-            .map((message: SdkTavernPromptMessageEvent): string => this.readPromptText(message))
-            .join('\n')
-            .toLowerCase();
-        const [typeMap, entries, actorProfiles, worldBinding, roleRows] = await Promise.all([
-            this.getEntryTypeMap(),
-            this.listEntries(),
-            this.listActorProfiles(),
-            this.getWorldProfileBinding(),
-            db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray(),
-        ]);
-        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleRows, actorProfiles);
-        const retrievalQueryText = query || promptText || '当前对话';
-        const retrievalResult = await promptRetrievalOrchestrator.retrieve(
-            {
-                query: retrievalQueryText,
-                enableEmbedding: settings.enableEmbedding === true,
-                chatKey: this.chatKey,
-                rulePackMode: settings.retrievalRulePack,
-                budget: {
-                    maxCandidates: 18,
-                    maxChars: Math.max(2600, Number(input.maxTokens ?? settings.contextMaxTokens) * 4),
-                },
-            },
-            retrievalCandidates,
-            {
-                actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
-                    actorKey: profile.actorKey,
-                    displayName: profile.displayName,
-                    aliases: this.collectActorProfileAliases(entries, profile.actorKey),
-                })),
-            },
-        );
-
-        const matchedEntryIdSet = new Set(retrievalResult.items.map((item) => item.candidate.entryId));
-        const selectedEntries = matchedEntryIdSet.size > 0
-            ? entries.filter((entry: MemoryEntry): boolean => matchedEntryIdSet.has(entry.entryId))
-            : entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true).slice(0, 8);
-        const matchedActorKeys = this.resolvePromptMatchedActorKeys(
-            retrievalResult.contextRoute?.entityAnchors.actorKeys ?? [],
-            retrievalResult.items.map((item) => item.candidate),
-            actorProfiles,
-        );
-        const effectiveActorKey = matchedActorKeys[0] || 'user';
-        const actorMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, ActorMemoryProfile] => [profile.actorKey, profile]));
-        const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
-        const roleEntries: PromptAssemblyRoleEntry[] = [];
-        for (const row of roleRows) {
-            if (!matchedActorKeys.includes(row.actorKey) || !matchedEntryIdSet.has(row.entryId)) {
-                continue;
-            }
-            const entry = entryMap.get(row.entryId);
-            if (!entry) {
-                continue;
-            }
-            const forgotten = this.shouldForget(row, retrievalQueryText);
-            roleEntries.push({
-                actorKey: row.actorKey,
-                actorLabel: actorMap.get(row.actorKey)?.displayName || row.actorKey,
-                entryId: entry.entryId,
-                title: entry.title,
-                entryType: entry.entryType,
-                memoryPercent: row.memoryPercent,
-                forgotten,
-                renderedText: forgotten
-                    ? `${entry.title}：内容已遗忘`
-                    : `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
-            });
-        }
-
-        const worldDetection = worldBinding?.primaryProfile
-            ? {
-                primaryProfile: worldBinding.primaryProfile,
-                secondaryProfiles: worldBinding.secondaryProfiles,
-                confidence: worldBinding.confidence,
-                reasonCodes: worldBinding.reasonCodes,
-            }
-            : detectWorldProfile({
-                texts: [
-                    retrievalQueryText,
-                    promptText,
-                    ...selectedEntries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
-                ],
-            });
-        const worldProfile = resolveWorldProfile(worldDetection);
-        const visibleContext = buildActorVisibleMemoryContext({
-            entries: selectedEntries,
-            roleEntries,
-            activeActorKey: effectiveActorKey,
-        });
-
-        recordMemoryDebug(this.chatKey, {
-            ts: Date.now(),
-            level: 'info',
-            stage: 'injection',
-            title: '开始构建',
-            message: '开始构建注入上下文。',
-            payload: {
-                actorKey: effectiveActorKey,
-                matchedEntryCount: selectedEntries.length,
-            },
-        });
-        recordMemoryDebug(this.chatKey, {
-            ts: Date.now(),
-            level: 'info',
-            stage: 'injection',
-            title: '注入视角',
-            message: `当前注入视角角色：${effectiveActorKey}。`,
-            payload: {
-                actorKey: effectiveActorKey,
-            },
-        });
-
-        const xmlNarrative = renderMemoryContextXmlMarkdown(visibleContext, worldProfile.primary.injectionStyle, {
-            worldBaseChars: 900,
-            sceneSharedChars: 700,
-            actorViewChars: 1400,
-            totalChars: 2600,
-        });
-        const systemText = this.trimTextToBudget(xmlNarrative, input.maxTokens ?? 1400);
-
-        recordMemoryDebug(this.chatKey, {
-            ts: Date.now(),
-            level: 'info',
-            stage: 'injection',
-            title: '注入统计',
-            message: `本轮共注入 ${visibleContext.diagnostics.totalInjectedCount} 条记忆，预计上下文占用约 ${visibleContext.diagnostics.estimatedChars} 字。`,
-            payload: {
-                injectedCount: visibleContext.diagnostics.totalInjectedCount,
-                estimatedChars: visibleContext.diagnostics.estimatedChars,
-                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
-            },
-        });
-        recordMemoryDebug(this.chatKey, {
-            ts: Date.now(),
-            level: 'info',
-            stage: 'injection',
-            title: '注入层级',
-            message: '注入内容包含 clear / blur / distorted 三种记忆呈现层级。',
-            payload: {
-                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
-            },
-        });
-
-        const snapshot: PromptAssemblySnapshot = {
-            generatedAt: Date.now(),
-            query,
-            matchedActorKeys,
-            matchedEntryIds: selectedEntries.map((entry: MemoryEntry): string => entry.entryId),
-            systemText,
-            roleText: '',
-            finalText: systemText,
-            systemEntryIds: selectedEntries
-                .filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true)
-                .map((entry: MemoryEntry): string => entry.entryId),
-            roleEntries,
-            reasonCodes: [
-                'prompt:unified_memory',
-                'prompt:xml_markdown_renderer',
-                `world_profile:${worldProfile.primary.worldProfileId}`,
-                `retrieval_provider:${retrievalResult.providerId || 'none'}`,
-                `retrieval_rule_pack:${settings.retrievalRulePack}`,
-                systemText ? 'prompt:system_base_present' : 'prompt:system_base_empty',
-            ],
-            diagnostics: {
-                providerId: retrievalResult.providerId,
-                rulePackMode: settings.retrievalRulePack,
-                contextRoute: retrievalResult.contextRoute,
-                retrieval: retrievalResult.diagnostics ?? null,
-                traceRecords: getMemoryTrace(this.chatKey),
-                injectionActorKey: effectiveActorKey,
-                injectedCount: visibleContext.diagnostics.totalInjectedCount,
-                estimatedChars: visibleContext.diagnostics.estimatedChars,
-                retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
-            },
-        };
-        await this.appendMutationHistory({
-            action: 'injection_context_built',
-            payload: {
-                worldProfile: worldProfile.primary.worldProfileId,
-                actorKey: effectiveActorKey,
-                matchedEntryCount: snapshot.matchedEntryIds.length,
-                retrievalProviderId: retrievalResult.providerId,
-                retrievalRulePack: settings.retrievalRulePack,
-                reasonCodes: snapshot.reasonCodes,
-            },
-        });
-        return snapshot;
-    }
-
-    /**
-     * 功能：收集指定角色画像条目的别名列表。
-     * @param entries 全量条目。
-     * @param actorKey 角色键。
-     * @returns 别名列表。
-     */
-    private collectActorProfileAliases(entries: MemoryEntry[], actorKey: string): string[] {
-        const aliases = new Set<string>();
-        entries
-            .filter((entry: MemoryEntry): boolean => entry.entryType === 'actor_profile')
-            .forEach((entry: MemoryEntry): void => {
-                const payload = this.normalizeRecord(entry.detailPayload);
-                const fields = this.normalizeRecord(payload.fields);
-                const boundActorKey = this.normalizeActorKey(payload.actorKey ?? fields.actorKey ?? entry.title);
-                if (boundActorKey !== this.normalizeActorKey(actorKey)) {
-                    return;
-                }
-                aliases.add(entry.title);
-                this.normalizeLooseStringArray(fields.aliases ?? payload.aliases).forEach((alias: string): void => {
-                    aliases.add(alias);
-                });
-            });
-        return [...aliases].filter(Boolean);
-    }
-
-    /**
-     * 功能：把条目映射为检索候选，补充结构化锚点信息。
-     * @param entries 条目列表。
-     * @param roleRows 角色记忆绑定。
-     * @param actorProfiles 角色资料。
-     * @returns 检索候选列表。
-     */
-    private buildPromptRetrievalCandidates(
-        entries: MemoryEntry[],
-        roleRows: DBRoleEntryMemory[],
-        actorProfiles: ActorMemoryProfile[],
-    ): RetrievalCandidate[] {
-        const boundActorMap = new Map<string, string[]>();
-        const memoryPercentMap = new Map<string, number>();
-        roleRows.forEach((row: DBRoleEntryMemory): void => {
-            if (row.forgotten) {
-                return;
-            }
-            const list = boundActorMap.get(row.entryId) ?? [];
-            if (!list.includes(row.actorKey)) {
-                list.push(row.actorKey);
-            }
-            boundActorMap.set(row.entryId, list);
-            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, row.memoryPercent));
-        });
-        const actorDisplayNameMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.actorKey, profile.displayName]));
-        const actorKeyByDisplayName = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.displayName, profile.actorKey]));
-
-        return entries.map((entry: MemoryEntry): RetrievalCandidate => {
-            const payload = this.normalizeRecord(entry.detailPayload);
-            const fields = this.normalizeRecord(payload.fields);
-            const sourceActorKey = this.normalizeActorKey(payload.sourceActorKey ?? fields.sourceActorKey);
-            const targetActorKey = this.normalizeActorKey(payload.targetActorKey ?? fields.targetActorKey);
-            const participantNames = this.normalizeLooseStringArray(payload.participants ?? fields.participants);
-            const boundActorKeys = boundActorMap.get(entry.entryId) ?? [];
-            const actorKeys = Array.from(new Set([
-                ...boundActorKeys,
-                ...[sourceActorKey, targetActorKey].filter(Boolean),
-            ]));
-            const participantActorKeys = participantNames
-                .map((name: string): string => actorKeyByDisplayName.get(name) ?? '')
-                .filter(Boolean);
-            const relationKeys = Array.from(new Set([
-                ...this.normalizeLooseStringArray(payload.relationKeys ?? fields.relationKeys),
-                ...(sourceActorKey && targetActorKey ? [`relationship:${sourceActorKey}:${targetActorKey}`] : []),
-                ...this.normalizeLooseStringArray(fields.relationTag ?? payload.relationTag),
-            ]));
-            const locationKey = this.normalizeText(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location);
-            const worldKeys = Array.from(new Set([
-                ...this.normalizeLooseStringArray(payload.worldKeys ?? fields.worldKeys),
-                ...(entry.entryType.startsWith('world_') ? [entry.title] : []),
-            ]));
-            const aliasTexts = Array.from(new Set([
-                ...actorKeys.map((actorKey: string): string => actorDisplayNameMap.get(actorKey) ?? ''),
-                ...participantNames,
-                ...this.normalizeLooseStringArray(payload.aliases ?? fields.aliases),
-                ...entry.tags,
-            ])).filter(Boolean);
-            return {
-                candidateId: `prompt:${entry.entryId}`,
-                entryId: entry.entryId,
-                schemaId: entry.entryType,
-                title: entry.title,
-                summary: entry.summary || entry.detail,
-                updatedAt: entry.updatedAt,
-                memoryPercent: memoryPercentMap.get(entry.entryId) ?? (entry.entryType.startsWith('world_') ? 88 : 60),
-                category: String(entry.category ?? ''),
-                tags: entry.tags,
-                sourceSummaryIds: entry.sourceSummaryIds,
-                actorKeys,
-                relationKeys,
-                participantActorKeys: Array.from(new Set([...participantActorKeys, ...boundActorKeys])),
-                locationKey: locationKey || undefined,
-                worldKeys,
-                compareKey: `${entry.entryType}:${entry.title}`,
-                injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
-                aliasTexts,
-            };
-        });
-    }
-
-    /**
-     * 功能：解析本轮真正命中的角色键。
-     * @param anchorActorKeys 语境路由命中的角色。
-     * @param candidates 命中的候选列表。
-     * @param actorProfiles 全量角色资料。
-     * @returns 角色键列表。
-     */
-    private resolvePromptMatchedActorKeys(
-        anchorActorKeys: string[],
-        candidates: RetrievalCandidate[],
-        actorProfiles: ActorMemoryProfile[],
-    ): string[] {
-        const matchedActorKeys = Array.from(new Set([
-            ...anchorActorKeys,
-            ...candidates.flatMap((candidate: RetrievalCandidate): string[] => candidate.actorKeys ?? []),
-            ...candidates.flatMap((candidate: RetrievalCandidate): string[] => candidate.participantActorKeys ?? []),
-        ])).filter(Boolean);
-        if (matchedActorKeys.length > 0) {
-            return matchedActorKeys;
-        }
-        return actorProfiles.slice(0, 3).map((profile: ActorMemoryProfile): string => profile.actorKey);
-    }
-
-    /**
-     * 功能：把未知值解析为宽松字符串数组。
-     * @param value 原始值。
-     * @returns 字符串数组。
-     */
-    private normalizeLooseStringArray(value: unknown): string[] {
-        if (Array.isArray(value)) {
-            return value.map((item: unknown): string => this.normalizeText(item)).filter(Boolean);
-        }
-        const text = this.normalizeText(value);
-        if (!text) {
-            return [];
-        }
-        return text
-            .split(/[,，、\n]+/)
-            .map((item: string): string => this.normalizeText(item))
-            .filter(Boolean);
-    }
-
-    /**
-     * 功能：读取最近总结快照。
-     * @param limit 数量。
-     * @returns 总结快照列表。
-     */
-    async listSummarySnapshots(limit: number = 20): Promise<SummarySnapshot[]> {
-        const rows = await db.summary_snapshots
-            .where('[chatKey+updatedAt]')
-            .between([this.chatKey, 0], [this.chatKey, Number.MAX_SAFE_INTEGER])
-            .reverse()
-            .limit(Math.max(1, limit))
-            .toArray();
-        return rows.map((row: DBSummarySnapshot): SummarySnapshot => this.mapSummarySnapshot(row));
-    }
-
-    /**
-     * 功能：确保核心类型存在。
-     * @returns 初始化 Promise。
+     * 功能：确保核心条目类型存在。
+     * @returns 异步完成。
      */
     private async ensureCoreEntryTypes(): Promise<void> {
         const rows = await db.memory_entry_types.where('chatKey').equals(this.chatKey).toArray();
@@ -1082,8 +821,8 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：确保默认用户角色卡条目存在，并为后续 AI 复用提供稳定锚点。
-     * @returns 初始化结果。
+     * 功能：确保默认用户角色卡存在。
+     * @returns 异步完成。
      */
     private async ensureDefaultUserActorCard(): Promise<void> {
         const actorKey = 'user';
@@ -1107,16 +846,13 @@ export class UnifiedMemoryManager {
                 entryType: existingEntry.entryType,
                 category: existingEntry.category,
                 tags: existingEntry.tags,
-                summary: shouldRefreshSummary
-                    ? (identityFacts.join('；') || `${displayName}的默认用户角色卡`)
-                    : existingEntry.summary,
+                summary: shouldRefreshSummary ? (identityFacts.join('；') || `${displayName}的默认用户角色卡`) : existingEntry.summary,
                 detail: existingEntry.detail,
                 detailPayload: existingEntry.detailPayload,
                 sourceSummaryIds: existingEntry.sourceSummaryIds,
             });
             return;
         }
-
         const savedEntry = await this.saveEntry({
             title: displayName,
             entryType: 'actor_profile',
@@ -1136,7 +872,235 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：读取并回退条目类型。
+     * 功能：同步单条 entry 的 compareKey 索引。
+     * @param entry 条目。
+     * @returns 异步完成。
+     */
+    private async syncCompareKeyIndex(entry: MemoryEntry): Promise<void> {
+        await saveMemoryCompareKeyIndexRecord(this.chatKey, this.compareKeyService.buildIndexRecord(entry));
+    }
+
+    /**
+     * 功能：解析 ledger mutation 目标条目。
+     * @param mutation mutation
+     * @param existingEntries 已有条目
+     * @param compareKeyRecords compareKey 索引
+     * @returns 命中的条目
+     */
+    private async resolveLedgerTargetEntry(
+        mutation: LedgerMutation,
+        existingEntries: MemoryEntry[],
+        compareKeyRecords: Array<Awaited<ReturnType<EntryRepository['listCompareKeyIndexRecords']>>[number]>,
+    ): Promise<{
+        entry: MemoryEntry | null;
+        matchMode: 'exact_match' | 'near_match' | 'created' | 'skipped';
+        compareKey: string;
+        entityKey: string;
+    }> {
+        if (mutation.entryId) {
+            const matchedEntry = existingEntries.find((entry: MemoryEntry): boolean => entry.entryId === mutation.entryId) ?? null;
+            return {
+                entry: matchedEntry,
+                matchMode: matchedEntry ? 'exact_match' : 'skipped',
+                compareKey: this.readEntryCompareKey(matchedEntry) || this.normalizeText(mutation.compareKey),
+                entityKey: this.readEntryEntityKey(matchedEntry) || this.normalizeText(mutation.entityKey),
+            };
+        }
+        const compareKey = this.normalizeText(mutation.compareKey);
+        if (compareKey) {
+            const exact = compareKeyRecords.find((record): boolean => this.compareKeyService.isExactMatch(record.compareKey, compareKey));
+            if (exact) {
+                return {
+                    entry: existingEntries.find((entry: MemoryEntry): boolean => entry.entryId === exact.entryId) ?? null,
+                    matchMode: 'exact_match',
+                    compareKey: this.normalizeText(exact.compareKey) || compareKey,
+                    entityKey: this.normalizeText(exact.entityKey) || this.normalizeText(mutation.entityKey),
+                };
+            }
+            const near = compareKeyRecords.find((record): boolean => this.compareKeyService.isNearMatch(record.compareKey, compareKey));
+            if (near) {
+                return {
+                    entry: existingEntries.find((entry: MemoryEntry): boolean => entry.entryId === near.entryId) ?? null,
+                    matchMode: 'near_match',
+                    compareKey: this.normalizeText(near.compareKey) || compareKey,
+                    entityKey: this.normalizeText(near.entityKey) || this.normalizeText(mutation.entityKey),
+                };
+            }
+        }
+        const normalizedTitle = this.normalizeText(mutation.title);
+        const normalizedKind = this.normalizeText(mutation.targetKind);
+        const matchedEntry = existingEntries.find((entry: MemoryEntry): boolean => {
+            return entry.entryType === normalizedKind && this.normalizeText(entry.title) === normalizedTitle;
+        }) ?? null;
+        return {
+            entry: matchedEntry,
+            matchMode: matchedEntry ? 'exact_match' : 'created',
+            compareKey: this.readEntryCompareKey(matchedEntry) || compareKey,
+            entityKey: this.readEntryEntityKey(matchedEntry) || this.normalizeText(mutation.entityKey),
+        };
+    }
+
+    /**
+     * 功能：根据动作与是否命中旧记录，归一化统一落盘动作。
+     * @param action 原始动作
+     * @param targetEntry 命中的旧记录
+     * @returns 归一化后的动作
+     */
+    private normalizeLedgerAction(
+        action: string,
+        targetEntry: MemoryEntry | null,
+    ): 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE' {
+        const normalizedAction = this.normalizeText(action).toUpperCase();
+        if (normalizedAction === 'INVALIDATE') {
+            return 'INVALIDATE';
+        }
+        if (normalizedAction === 'DELETE') {
+            return 'DELETE';
+        }
+        if (normalizedAction === 'MERGE') {
+            return 'MERGE';
+        }
+        if (normalizedAction === 'ADD' && !targetEntry) {
+            return 'ADD';
+        }
+        return 'UPDATE';
+    }
+
+    /**
+     * 功能：从条目中读取协议化 compareKey。
+     * @param entry 条目
+     * @returns compareKey
+     */
+    private readEntryCompareKey(entry: MemoryEntry | null): string {
+        if (!entry) {
+            return '';
+        }
+        const payload = this.normalizeRecord(entry.detailPayload);
+        const fields = this.normalizeRecord(payload.fields);
+        return this.normalizeText(payload.compareKey ?? fields.compareKey);
+    }
+
+    /**
+     * 功能：从条目中读取协议化 entityKey。
+     * @param entry 条目
+     * @returns entityKey
+     */
+    private readEntryEntityKey(entry: MemoryEntry | null): string {
+        if (!entry) {
+            return '';
+        }
+        const payload = this.normalizeRecord(entry.detailPayload);
+        const fields = this.normalizeRecord(payload.fields);
+        return this.normalizeText(payload.entityKey ?? fields.entityKey);
+    }
+
+    /**
+     * 功能：构建 ledger mutation 对应的 detailPayload。
+     * @param mutation mutation
+     * @param targetEntry 已命中的条目
+     * @returns detailPayload
+     */
+    private buildLedgerDetailPayload(
+        mutation: LedgerMutation,
+        targetEntry: MemoryEntry | null,
+        resolvedBindings: StructuredBindings,
+    ): Record<string, unknown> {
+        const currentPayload = this.normalizeRecord(targetEntry?.detailPayload);
+        const nextPayload = this.normalizeRecord(mutation.detailPayload);
+        const nextFields = this.normalizeRecord(nextPayload.fields);
+        const mergedPayload: Record<string, unknown> = {
+            ...currentPayload,
+            ...nextPayload,
+            bindings: resolvedBindings,
+            fields: {
+                ...this.normalizeRecord(currentPayload.fields),
+                ...nextFields,
+            },
+        };
+        if (mutation.compareKey) {
+            mergedPayload.compareKey = mutation.compareKey;
+        }
+        if (Array.isArray(mutation.matchKeys) && mutation.matchKeys.length > 0) {
+            mergedPayload.matchKeys = this.normalizeTags(mutation.matchKeys);
+        }
+        if (mutation.entityKey) {
+            mergedPayload.entityKey = mutation.entityKey;
+        }
+        if (mutation.action === 'INVALIDATE') {
+            const lifecycle = this.normalizeRecord(mergedPayload.lifecycle);
+            mergedPayload.lifecycle = {
+                ...lifecycle,
+                status: 'invalidated',
+                invalidatedAt: Date.now(),
+                reasonCodes: this.normalizeTags([
+                    ...this.normalizeTags(lifecycle.reasonCodes),
+                    ...(mutation.reasonCodes ?? []),
+                ]),
+            };
+        }
+        return mergedPayload;
+    }
+
+    /**
+     * 功能：构建批次内可复用的绑定候选。
+     * @param mutations mutation 列表。
+     * @returns 批次候选列表。
+     */
+    private buildBindingBatchCandidates(mutations: LedgerMutation[]): Array<{
+        bindingKey: keyof StructuredBindings;
+        ref: string;
+        label: string;
+        aliases?: string[];
+    }> {
+        return mutations
+            .map((mutation: LedgerMutation): {
+                bindingKey: keyof StructuredBindings;
+                ref: string;
+                label: string;
+                aliases?: string[];
+            } | null => {
+                const bindingKey = this.resolveBindingKeyFromTargetKind(mutation.targetKind);
+                const label = this.normalizeText(mutation.title);
+                const ref = this.normalizeText(mutation.entityKey ?? mutation.compareKey);
+                if (!bindingKey || !label || !ref) {
+                    return null;
+                }
+                const payload = this.normalizeRecord(mutation.detailPayload);
+                const fields = this.normalizeRecord(payload.fields);
+                return {
+                    bindingKey,
+                    ref,
+                    label,
+                    aliases: this.normalizeTags(fields.aliases ?? payload.aliases),
+                };
+            })
+            .filter(Boolean) as Array<{
+            bindingKey: keyof StructuredBindings;
+            ref: string;
+            label: string;
+            aliases?: string[];
+        }>;
+    }
+
+    /**
+     * 功能：根据目标类型映射绑定分类。
+     * @param targetKind 目标类型。
+     * @returns 绑定分类。
+     */
+    private resolveBindingKeyFromTargetKind(targetKind: string): keyof StructuredBindings | null {
+        const normalizedKind = this.normalizeText(targetKind).toLowerCase();
+        if (normalizedKind === 'actor_profile') return 'actors';
+        if (normalizedKind === 'organization') return 'organizations';
+        if (normalizedKind === 'city') return 'cities';
+        if (normalizedKind === 'nation') return 'nations';
+        if (normalizedKind === 'location') return 'locations';
+        if (normalizedKind === 'task') return 'tasks';
+        if (normalizedKind === 'event') return 'events';
+        return null;
+    }
+
+    /**
+     * 功能：解析有效条目类型。
      * @param key 类型键。
      * @returns 条目类型。
      */
@@ -1158,7 +1122,7 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：构建类型映射。
+     * 功能：读取类型映射。
      * @returns 类型映射。
      */
     private async getEntryTypeMap(): Promise<Map<string, MemoryEntryType>> {
@@ -1167,9 +1131,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：按键查找类型。
+     * 功能：按键查找条目类型。
      * @param key 类型键。
-     * @returns 原始类型行。
+     * @returns 数据库类型行。
      */
     private async findEntryTypeByKey(key: string): Promise<DBMemoryEntryType | null> {
         const rows = await db.memory_entry_types.where('[chatKey+key]').equals([this.chatKey, this.normalizeKey(key)]).toArray();
@@ -1177,23 +1141,20 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：查找角色记忆绑定。
+     * 功能：读取角色与条目的绑定记录。
      * @param actorKey 角色键。
      * @param entryId 条目 ID。
-     * @returns 绑定行。
+     * @returns 绑定记录。
      */
     private async findRoleEntryMemory(actorKey: string, entryId: string): Promise<DBRoleEntryMemory | null> {
-        const rows = await db.role_entry_memory
-            .where('[chatKey+actorKey+entryId]')
-            .equals([this.chatKey, actorKey, entryId] as [string, string, string])
-            .toArray();
+        const rows = await db.role_entry_memory.where('[chatKey+actorKey+entryId]').equals([this.chatKey, actorKey, entryId] as [string, string, string]).toArray();
         return rows[0] ?? null;
     }
 
     /**
-     * 功能：查找指定角色当前已绑定的角色卡条目。
+     * 功能：查找角色当前绑定的角色画像条目。
      * @param actorKey 角色键。
-     * @returns 已绑定的角色卡条目；不存在时返回 null。
+     * @returns 角色画像条目。
      */
     private async findBoundActorProfileEntry(actorKey: string): Promise<MemoryEntry | null> {
         const normalizedActorKey = this.normalizeActorKey(actorKey);
@@ -1215,13 +1176,10 @@ export class UnifiedMemoryManager {
     /**
      * 功能：解析总结刷新目标。
      * @param bindings 刷新绑定。
-     * @param savedEntries 本次已保存条目。
+     * @param savedEntries 本次保存条目。
      * @returns 刷新目标列表。
      */
-    private async resolveRefreshTargets(
-        bindings: SummaryRefreshBinding[],
-        savedEntries: MemoryEntry[],
-    ): Promise<Array<{ actorKey: string; entryId: string }>> {
+    private async resolveRefreshTargets(bindings: SummaryRefreshBinding[], savedEntries: MemoryEntry[]): Promise<Array<{ actorKey: string; entryId: string }>> {
         const titleMap = new Map<string, string>();
         (await this.listEntries()).forEach((entry: MemoryEntry): void => {
             titleMap.set(entry.title, entry.entryId);
@@ -1242,9 +1200,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：计算条目搜索文本。
+     * 功能：计算条目检索文本。
      * @param entry 条目。
-     * @returns 搜索文本。
+     * @returns 检索文本。
      */
     private computeEntrySearchText(entry: DBMemoryEntry | MemoryEntry): string {
         const payloadTexts = Object.values(this.normalizeRecord(entry.detailPayload ?? {}))
@@ -1262,150 +1220,8 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：从自然语言问题中提取更适合条目检索的查询词。
-     * @param query 原始问题。
-     * @returns 适合匹配条目的查询词列表。
-     */
-    private extractQueryTerms(query: string): string[] {
-        const normalized = this.normalizeText(query).toLowerCase();
-        if (!normalized) {
-            return [];
-        }
-        let stripped = normalized;
-        UnifiedMemoryManager.QUERY_STOP_PHRASES.forEach((phrase: string): void => {
-            if (!phrase) {
-                return;
-            }
-            stripped = stripped.split(phrase).join(' ');
-        });
-        const terms = Array.from(new Set(
-            stripped
-                .split(/[\s,，。！？；：:、()（）【】\[\]{}"'`~!@#$%^&*+=<>/\\|-]+/)
-                .map((item: string): string => item.trim())
-                .filter((item: string): boolean => item.length >= 2),
-        ));
-        if (terms.length > 0) {
-            return terms.slice(0, 12);
-        }
-        const compact = stripped.replace(/\s+/g, '').trim();
-        return compact.length >= 2 ? [compact] : [];
-    }
-
-    /**
-     * 功能：收集条目关键词。
-     * @param entry 条目。
-     * @returns 关键词列表。
-     */
-    private collectEntryLookupTexts(entry: MemoryEntry): string[] {
-        return [entry.title, entry.summary, ...entry.tags]
-            .map((text: string): string => this.normalizeText(text).toLowerCase())
-            .filter((text: string): boolean => text.length > 1);
-    }
-
-    /**
-     * 功能：判断条目是否命中查询。
-     * @param entry 条目。
-     * @param queryTerms 查询词列表。
-     * @returns 是否命中。
-     */
-    private isEntryMatched(entry: MemoryEntry, queryTerms: string[]): boolean {
-        if (queryTerms.length <= 0) {
-            return true;
-        }
-        const searchText = this.computeEntrySearchText(entry);
-        return queryTerms.some((term: string): boolean => searchText.includes(term));
-    }
-
-    /**
-     * 功能：渲染 system 基础设定文本。
-     * @param entries 条目列表。
-     * @param typeMap 类型映射。
-     * @returns 渲染文本。
-     */
-    private renderSystemText(entries: MemoryEntry[], typeMap: Map<string, MemoryEntryType>): string {
-        if (entries.length <= 0) {
-            return '';
-        }
-        const grouped = new Map<string, MemoryEntry[]>();
-        entries.forEach((entry: MemoryEntry): void => {
-            const label = typeMap.get(entry.entryType)?.label || entry.entryType || '其他';
-            const bucket = grouped.get(label) ?? [];
-            bucket.push(entry);
-            grouped.set(label, bucket);
-        });
-        return ['[MemoryOS 基础设定]', ...Array.from(grouped.entries()).map(([label, items]: [string, MemoryEntry[]]): string => {
-            return `## ${label}\n${items
-                .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-                .map((item: MemoryEntry): string => `- ${item.title}：${item.summary || item.detail || '暂无详情'}`)
-                .join('\n')}`;
-        })].join('\n\n').trim();
-    }
-
-    /**
-     * 功能：渲染角色记忆文本。
-     * @param roleEntries 角色记忆。
-     * @returns 渲染文本。
-     */
-    private renderRoleText(roleEntries: PromptAssemblyRoleEntry[]): string {
-        if (roleEntries.length <= 0) {
-            return '';
-        }
-        const grouped = new Map<string, PromptAssemblyRoleEntry[]>();
-        roleEntries.forEach((entry: PromptAssemblyRoleEntry): void => {
-            const bucket = grouped.get(entry.actorLabel) ?? [];
-            bucket.push(entry);
-            grouped.set(entry.actorLabel, bucket);
-        });
-        return ['[MemoryOS 角色记忆]', ...Array.from(grouped.entries()).map(([actorLabel, items]: [string, PromptAssemblyRoleEntry[]]): string => {
-            return `## ${actorLabel}\n${items
-                .sort((left: PromptAssemblyRoleEntry, right: PromptAssemblyRoleEntry): number => right.memoryPercent - left.memoryPercent)
-                .map((item: PromptAssemblyRoleEntry): string => `- ${item.renderedText}（记忆度 ${item.memoryPercent}%）`)
-                .join('\n')}`;
-        })].join('\n\n').trim();
-    }
-
-    /**
-     * 功能：按预算裁剪文本。
-     * @param text 文本。
-     * @param maxTokens 最大预算。
-     * @returns 裁剪后的文本。
-     */
-    private trimTextToBudget(text: string, maxTokens: number): string {
-        const normalized = this.normalizeText(text);
-        if (!normalized) {
-            return '';
-        }
-        const maxChars = Math.max(240, (Number(maxTokens ?? 1200) || 1200) * 2);
-        if (text.length <= maxChars) {
-            return text;
-        }
-        const kept = text.slice(0, maxChars);
-        const trimmedIndex = kept.lastIndexOf('\n');
-        return `${trimmedIndex > 0 ? kept.slice(0, trimmedIndex) : kept}\n- 其余内容因预算已省略`;
-    }
-
-    /**
-     * 功能：根据记忆度执行确定性遗忘判定。
-     * @param row 角色记忆。
-     * @param salt 轮次盐值。
-     * @returns 是否遗忘。
-     */
-    private shouldForget(row: DBRoleEntryMemory, salt: string): boolean {
-        if (row.forgotten || row.memoryPercent <= 0) {
-            return true;
-        }
-        const seed = `${row.actorKey}|${row.entryId}|${this.normalizeText(salt)}`;
-        let hash = 0;
-        for (let index = 0; index < seed.length; index += 1) {
-            hash = ((hash << 5) - hash) + seed.charCodeAt(index);
-            hash |= 0;
-        }
-        return Math.abs(hash % 100) >= this.clampPercent(row.memoryPercent);
-    }
-
-    /**
-     * 功能：根据角色记性值计算衰减值。
-     * @param memoryStat 记性值。
+     * 功能：计算记忆衰减值。
+     * @param memoryStat 角色记性。
      * @returns 衰减值。
      */
     private resolveDecayValue(memoryStat: number): number {
@@ -1413,18 +1229,8 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：读取 prompt 消息文本。
-     * @param message prompt 消息。
-     * @returns 文本。
-     */
-    private readPromptText(message: SdkTavernPromptMessageEvent): string {
-        const record = message as Record<string, unknown>;
-        return this.normalizeText(record.content ?? record.mes ?? record.text ?? '');
-    }
-
-    /**
      * 功能：映射条目类型。
-     * @param row 原始行。
+     * @param row 数据库行。
      * @returns 条目类型。
      */
     private mapEntryType(row: DBMemoryEntryType): MemoryEntryType {
@@ -1436,7 +1242,7 @@ export class UnifiedMemoryManager {
 
     /**
      * 功能：映射条目。
-     * @param row 原始行。
+     * @param row 数据库行。
      * @returns 条目。
      */
     private mapEntry(row: DBMemoryEntry): MemoryEntry {
@@ -1452,7 +1258,7 @@ export class UnifiedMemoryManager {
 
     /**
      * 功能：映射角色资料。
-     * @param row 原始行。
+     * @param row 数据库行。
      * @returns 角色资料。
      */
     private mapActorProfile(row: DBActorMemoryProfile): ActorMemoryProfile {
@@ -1469,8 +1275,8 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：映射角色记忆。
-     * @param row 原始行。
+     * 功能：映射角色记忆绑定。
+     * @param row 数据库行。
      * @returns 角色记忆。
      */
     private mapRoleMemory(row: DBRoleEntryMemory): RoleEntryMemory {
@@ -1484,10 +1290,13 @@ export class UnifiedMemoryManager {
 
     /**
      * 功能：映射总结快照。
-     * @param row 原始行。
+     * @param row 数据库行。
      * @returns 总结快照。
      */
     private mapSummarySnapshot(row: DBSummarySnapshot): SummarySnapshot {
+        const extraRecord = row as DBSummarySnapshot & {
+            mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
+        };
         return {
             summaryId: row.summaryId,
             chatKey: row.chatKey,
@@ -1503,15 +1312,16 @@ export class UnifiedMemoryManager {
             actorKeys: this.normalizeTags(row.actorKeys),
             entryUpserts: Array.isArray(row.entryUpserts) ? row.entryUpserts as unknown as SummaryEntryUpsert[] : [],
             refreshBindings: Array.isArray(row.refreshBindings) ? row.refreshBindings as unknown as SummaryRefreshBinding[] : [],
+            mutationApplyDiagnostics: extraRecord.mutationApplyDiagnostics,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
         };
     }
 
     /**
-     * 功能：映射记忆变更历史记录。
-     * @param row 原始行。
-     * @returns 业务层记录。
+     * 功能：映射 mutation 历史记录。
+     * @param row 数据库行。
+     * @returns 历史记录。
      */
     private mapMutationHistory(row: DBMemoryMutationHistory): MemoryMutationHistoryRecord {
         return {
@@ -1524,12 +1334,7 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：归一化类型字段。
-     * @param fields 原始字段。
-     * @returns 字段数组。
-     */
-    /**
-     * 功能：写入单条词条审计记录。
+     * 功能：写入条目审计记录。
      * @param input 审计输入。
      * @returns 异步完成。
      */
@@ -1557,12 +1362,7 @@ export class UnifiedMemoryManager {
             sourceLabel: this.normalizeText(input.sourceLabel) || undefined,
             beforeEntry: input.beforeEntry ? this.toAuditEntrySnapshot(input.beforeEntry) : null,
             afterEntry: input.afterEntry ? this.toAuditEntrySnapshot(input.afterEntry) : null,
-            changedFields: this.buildEntryFieldDiffs(input.beforeEntry, input.afterEntry).map((item): {
-                path: string;
-                label: string;
-                before: unknown;
-                after: unknown;
-            } => ({
+            changedFields: this.buildEntryFieldDiffs(input.beforeEntry, input.afterEntry).map((item) => ({
                 path: item.path,
                 label: item.label,
                 before: this.deepCloneValue(item.before),
@@ -1575,9 +1375,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：将词条快照转成审计可存储结构。
-     * @param entry 词条。
-     * @returns 可序列化快照。
+     * 功能：将条目快照转成可存储的审计对象。
+     * @param entry 条目。
+     * @returns 审计快照。
      */
     private toAuditEntrySnapshot(entry: MemoryEntry): Record<string, unknown> {
         return {
@@ -1598,10 +1398,10 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：计算词条更新前后的字段差异。
-     * @param beforeEntry 更新前词条。
-     * @param afterEntry 更新后词条。
-     * @returns 变化字段列表。
+     * 功能：构建条目字段差异。
+     * @param beforeEntry 变更前条目。
+     * @param afterEntry 变更后条目。
+     * @returns 差异列表。
      */
     private buildEntryFieldDiffs(beforeEntry: MemoryEntry | null, afterEntry: MemoryEntry | null): MemoryEntryFieldDiff[] {
         const beforeMap = this.flattenEntryForDiff(beforeEntry);
@@ -1621,9 +1421,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：将词条拉平成路径映射，便于比较差异。
-     * @param entry 词条。
-     * @returns 扁平字段映射。
+     * 功能：拍平条目用于差异比对。
+     * @param entry 条目。
+     * @returns 路径映射。
      */
     private flattenEntryForDiff(entry: MemoryEntry | null): Map<string, unknown> {
         const out = new Map<string, unknown>();
@@ -1641,10 +1441,10 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：递归展开对象字段用于差异比较。
+     * 功能：递归展开对象字段。
      * @param out 输出映射。
-     * @param path 当前字段路径。
-     * @param value 字段值。
+     * @param path 当前路径。
+     * @param value 当前值。
      */
     private appendFlattenedDiffValue(out: Map<string, unknown>, path: string, value: unknown): void {
         if (Array.isArray(value)) {
@@ -1667,17 +1467,17 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：比较两个审计值是否相同。
+     * 功能：判断两个审计值是否相等。
      * @param left 左值。
      * @param right 右值。
-     * @returns 是否相同。
+     * @returns 是否相等。
      */
     private isAuditValueEqual(left: unknown, right: unknown): boolean {
         return JSON.stringify(this.deepCloneValue(left)) === JSON.stringify(this.deepCloneValue(right));
     }
 
     /**
-     * 功能：深拷贝审计值，避免后续渲染误改引用。
+     * 功能：深拷贝值。
      * @param value 原始值。
      * @returns 拷贝结果。
      */
@@ -1689,7 +1489,7 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：将字段路径转成便于阅读的中文标签。
+     * 功能：解析差异字段标签。
      * @param path 字段路径。
      * @returns 展示标签。
      */
@@ -1712,9 +1512,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：映射词条审计记录。
+     * 功能：映射条目审计记录。
      * @param row 数据库行。
-     * @returns 业务审计记录。
+     * @returns 审计记录。
      */
     private mapEntryAuditRecord(row: DBMemoryEntryAuditRecord): MemoryEntryAuditRecord {
         return {
@@ -1748,9 +1548,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：将审计快照还原成词条对象。
-     * @param value 原始快照。
-     * @returns 词条对象。
+     * 功能：还原审计快照为条目对象。
+     * @param value 审计快照。
+     * @returns 条目对象。
      */
     private normalizeAuditEntrySnapshot(value: Record<string, unknown> | null): MemoryEntry | null {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -1773,6 +1573,11 @@ export class UnifiedMemoryManager {
         };
     }
 
+    /**
+     * 功能：归一化类型字段配置。
+     * @param fields 原始字段。
+     * @returns 字段列表。
+     */
     private normalizeFields(fields: unknown): MemoryEntryTypeField[] {
         if (!Array.isArray(fields)) {
             return [];
@@ -1793,9 +1598,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：归一化记录对象。
+     * 功能：安全归一化对象。
      * @param value 原始值。
-     * @returns 记录对象。
+     * @returns 对象记录。
      */
     private normalizeRecord(value: unknown): Record<string, unknown> {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -1805,9 +1610,9 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：归一化标签数组。
+     * 功能：归一化字符串数组。
      * @param values 原始值。
-     * @returns 标签数组。
+     * @returns 字符串数组。
      */
     private normalizeTags(values: unknown): string[] {
         if (!Array.isArray(values)) {
@@ -1831,7 +1636,7 @@ export class UnifiedMemoryManager {
      * @returns 键名。
      */
     private normalizeKey(value: unknown): string {
-        return this.normalizeText(value).toLowerCase().replace(/[^a-z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '');
+        return this.normalizeText(value).toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     }
 
     /**
@@ -1844,17 +1649,17 @@ export class UnifiedMemoryManager {
     }
 
     /**
-     * 功能：解析当前酒馆用户在用户角色卡中应显示的名称。
-     * @returns 用户显示名称。
+     * 功能：解析当前用户在记忆中的显示名。
+     * @returns 用户显示名。
      */
     private resolveUserActorDisplayName(): string {
         return this.normalizeText(resolveCurrentNarrativeUserName()) || '你';
     }
 
     /**
-     * 功能：限制百分比取值。
+     * 功能：限制百分比范围。
      * @param value 原始值。
-     * @returns 百分比值。
+     * @returns 百分比。
      */
     private clampPercent(value: number): number {
         const numericValue = Number(value);

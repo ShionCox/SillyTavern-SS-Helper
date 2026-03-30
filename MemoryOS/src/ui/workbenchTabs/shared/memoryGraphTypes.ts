@@ -14,6 +14,7 @@ export type EdgeStrengthLevel = 'strong' | 'normal' | 'weak';
 export interface WorkbenchMemoryGraphField {
     label: string;
     value: string;
+    targetNodeId?: string;
     visibleInModes?: MemoryGraphMode[];
 }
 

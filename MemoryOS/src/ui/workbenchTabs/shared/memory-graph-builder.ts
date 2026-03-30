@@ -11,6 +11,7 @@ import type {
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
 } from '../../../types';
+import { buildRelationshipCompareKey, buildWorldStateCompareKey } from '../../../core/compare-key';
 import {
     type DisplayLabelResolverContext,
     normalizeLookupKey,
@@ -29,6 +30,55 @@ interface MemoryGraphSourceMaps {
     worldStates: Map<string, string[]>;
     relationships: Map<string, string[]>;
     relationTransitions: Map<string, string[]>;
+}
+
+/**
+ * 功能：清洗工作台图谱节点中的乱码文案。
+ * @param input 原始节点输入
+ * @returns 清洗后的节点输入
+ */
+function sanitizeWorkbenchNode(
+    input: Omit<WorkbenchMemoryGraphNode, 'x' | 'y'>,
+): Omit<WorkbenchMemoryGraphNode, 'x' | 'y'> {
+    return {
+        ...input,
+        label: sanitizeWorkbenchText(input.label),
+        summary: sanitizeWorkbenchText(input.summary),
+        semanticSummary: sanitizeWorkbenchText(input.semanticSummary),
+        debugSummary: sanitizeWorkbenchText(input.debugSummary),
+        sections: (input.sections ?? []).map((section: WorkbenchMemoryGraphSection): WorkbenchMemoryGraphSection => ({
+            ...section,
+            title: sanitizeWorkbenchText(section.title, '详情'),
+            fields: (section.fields ?? []).map((field) => ({
+                ...field,
+                label: sanitizeWorkbenchText(field.label, '字段'),
+                value: sanitizeWorkbenchText(field.value, '暂无'),
+            })),
+        })),
+    };
+}
+
+/**
+ * 功能：把已知乱码文案恢复成正常中文。
+ * @param value 原始文本
+ * @param fallback 兜底文本
+ * @returns 清洗后的文本
+ */
+function sanitizeWorkbenchText(value: unknown, fallback = ''): string {
+    const text = String(value ?? '').trim();
+    if (!text) {
+        return fallback;
+    }
+    if (text === '鏆傛棤' || text === '???') {
+        return '暂无';
+    }
+    if (text.includes('缂佹垵鐣鹃崗宕囬兇')) {
+        return '绑定关系';
+    }
+    if (text.includes('涓栫晫鐘舵')) {
+        return '世界状态';
+    }
+    return text;
 }
 
 /**
@@ -67,9 +117,11 @@ export function buildTakeoverMemoryGraph(progress: MemoryTakeoverProgressSnapsho
     const edgeLedger = createGraphEdgeLedger();
     appendRelationshipEdges(edgeLedger, collectRelationships(consolidation, batchResults), nodeMap, actorNodeKeyMap, labelContext, sourceMaps);
     appendRelationTransitionEdges(edgeLedger, collectRelationTransitions(batchResults), actorNodeKeyMap, compareNodeKeyMap, nodeMap, labelContext, sourceMaps);
+    appendEntityBindingEdges(edgeLedger, collectEntityCards(consolidation, batchResults), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
     appendTaskBindingEdges(edgeLedger, collectTaskStates(consolidation, batchResults), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+    appendWorldStateBindingEdges(edgeLedger, collectWorldStates(consolidation, batchResults), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
     appendEventBindingEdges(edgeLedger, collectPromotedEvents(nodeMap), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-    appendEntityFieldEdges(edgeLedger, collectEntityCards(consolidation, batchResults), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+    appendEntityFallbackFieldEdges(edgeLedger, collectEntityCards(consolidation, batchResults), compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
 
     const nodes = [...nodeMap.values()];
     const edges = edgeLedger.toEdges();
@@ -143,7 +195,7 @@ function buildDisplayLabelContext(
             aliasToLabelMap.set(normalizeLookupKey(rawTitle), rawTitle);
         });
     collectWorldStates(progress.consolidation, batchResults).forEach((state: MemoryTakeoverWorldStateChange): void => {
-        const compareKey = String(state.compareKey ?? '').trim() || `world_global_state:global:${state.key}`;
+        const compareKey = String(state.compareKey ?? '').trim() || buildWorldStateCompareKey(String(state.key ?? '').trim());
         const title = String(state.key ?? '').trim();
         compareKeyMap.set(compareKey, {
             compareKey,
@@ -179,7 +231,7 @@ function buildSourceMaps(batchResults: MemoryTakeoverBatchResult[]): MemoryGraph
             appendBatchSource(sourceMaps.actors, actor.actorKey, batch.batchId);
         }
         for (const entity of batch.entityCards ?? []) {
-            appendBatchSource(sourceMaps.entities, entity.compareKey, batch.batchId);
+            appendBatchSource(sourceMaps.entities, resolveEntityNodeKey(entity), batch.batchId);
         }
         for (const task of batch.taskTransitions ?? []) {
             const compareKey = String(task.compareKey ?? '').trim();
@@ -188,11 +240,18 @@ function buildSourceMaps(batchResults: MemoryTakeoverBatchResult[]): MemoryGraph
             }
         }
         for (const worldState of batch.worldStateChanges ?? []) {
-            const compareKey = String(worldState.compareKey ?? '').trim() || `world_global_state:global:${worldState.key}`;
-            appendBatchSource(sourceMaps.worldStates, compareKey, batch.batchId);
+            appendBatchSource(sourceMaps.worldStates, resolveWorldStateNodeKey(worldState), batch.batchId);
         }
         for (const relationship of batch.relationships ?? []) {
-            appendBatchSource(sourceMaps.relationships, `relationship:${relationship.sourceActorKey}:${relationship.targetActorKey}`, batch.batchId);
+            appendBatchSource(
+                sourceMaps.relationships,
+                buildRelationshipCompareKey(
+                    relationship.sourceActorKey,
+                    relationship.targetActorKey,
+                    relationship.relationTag ?? relationship.state,
+                ),
+                batch.batchId,
+            );
         }
         for (const transition of batch.relationTransitions ?? []) {
             appendBatchSource(sourceMaps.relationTransitions, `relation_transition:${transition.targetType ?? 'unknown'}:${transition.target}`, batch.batchId);
@@ -237,13 +296,12 @@ function collectEntityCards(
 ): MemoryTakeoverEntityCardCandidate[] {
     const entityMap = new Map<string, MemoryTakeoverEntityCardCandidate>();
     for (const entity of consolidation?.entityCards ?? []) {
-        entityMap.set(entity.compareKey, entity);
+        entityMap.set(resolveEntityNodeKey(entity), entity);
     }
     for (const batch of batchResults) {
         for (const entity of batch.entityCards ?? []) {
-            if (!entityMap.has(entity.compareKey)) {
-                entityMap.set(entity.compareKey, entity);
-            }
+            const nodeKey = resolveEntityNodeKey(entity);
+            entityMap.set(nodeKey, mergeEntityCards(entityMap.get(nodeKey), entity));
         }
     }
     return [...entityMap.values()];
@@ -345,20 +403,20 @@ function collectWorldStates(
     const stateMap = new Map<string, MemoryTakeoverWorldStateChange>();
     for (const batch of batchResults) {
         for (const item of batch.worldStateChanges ?? []) {
-            const compareKey = String(item.compareKey ?? '').trim() || `world_global_state:global:${item.key}`;
-            stateMap.set(compareKey, item);
+            const nodeKey = resolveWorldStateNodeKey(item);
+            stateMap.set(nodeKey, mergeWorldStates(stateMap.get(nodeKey), item));
         }
     }
     for (const [key, value] of Object.entries(consolidation?.worldState ?? {})) {
-        const compareKey = [...stateMap.values()].find((item: MemoryTakeoverWorldStateChange): boolean => item.key === key)?.compareKey
-            || `world_global_state:global:${key}`;
-        stateMap.set(compareKey, {
+        const existing = [...stateMap.values()].find((item: MemoryTakeoverWorldStateChange): boolean => item.key === key);
+        const mergedState = mergeWorldStates(existing, {
             key,
             value,
             summary: `${key}：${value}`,
-            compareKey,
+            compareKey: existing?.compareKey || buildWorldStateCompareKey(String(key ?? '').trim()),
             reasonCodes: [],
         });
+        stateMap.set(resolveWorldStateNodeKey(mergedState), mergedState);
     }
     return [...stateMap.values()];
 }
@@ -436,8 +494,8 @@ function upsertEntityNodes(
     sourceMaps: MemoryGraphSourceMaps,
 ): void {
     for (const entity of entityCards) {
-        const nodeKey = entity.compareKey;
-        compareNodeKeyMap.set(entity.compareKey, nodeKey);
+        const nodeKey = resolveEntityNodeKey(entity);
+        registerEntityNodeRefs(compareNodeKeyMap, entity, nodeKey);
         upsertNode(nodeMap, {
             id: nodeKey,
             key: nodeKey,
@@ -456,9 +514,14 @@ function upsertEntityNodes(
             importance: Math.max(Number(entity.confidence ?? 0), 0.62),
             memoryPercent: 100,
             aliases: entity.aliases ?? [],
-            sourceBatchIds: sourceMaps.entities.get(entity.compareKey) ?? [],
+            sourceBatchIds: sourceMaps.entities.get(nodeKey) ?? [],
             sourceKinds: ['entity_card'],
-            sourceRefs: [entity.compareKey],
+            sourceRefs: dedupeStrings([
+                String(entity.entityKey ?? '').trim(),
+                String(entity.compareKey ?? '').trim(),
+                ...(entity.matchKeys ?? []),
+                ...(entity.legacyCompareKeys ?? []),
+            ]),
             reasonCodes: entity.reasonCodes ?? [],
             bindings: normalizeBindings(entity.bindings),
             sections: [
@@ -468,7 +531,10 @@ function upsertEntityNodes(
                         { label: '类型', value: entity.entityType },
                         { label: '别名', value: (entity.aliases ?? []).join('、') || '暂无' },
                         { label: '摘要', value: entity.summary || '暂无' },
+                        { label: 'entityKey', value: String(entity.entityKey ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                         { label: 'compareKey', value: entity.compareKey, visibleInModes: ['debug'] },
+                        { label: 'schemaVersion', value: String(entity.schemaVersion ?? '').trim() || '暂无', visibleInModes: ['debug'] },
+                        { label: 'canonicalName', value: String(entity.canonicalName ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                     ],
                 },
                 buildRecordSection('结构化字段', entity.fields as Record<string, unknown>),
@@ -530,7 +596,10 @@ function upsertTaskNodes(
                         { label: '标题', value: String(task.title ?? task.task ?? '').trim() || '暂无' },
                         { label: '状态', value: String(task.status ?? task.to ?? '').trim() || '暂无' },
                         { label: '目标', value: String(task.goal ?? '').trim() || '暂无' },
+                        { label: 'entityKey', value: String(task.entityKey ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                         { label: 'compareKey', value: compareKey, visibleInModes: ['debug'] },
+                        { label: 'schemaVersion', value: String(task.schemaVersion ?? '').trim() || '暂无', visibleInModes: ['debug'] },
+                        { label: 'canonicalName', value: String(task.canonicalName ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                     ],
                 },
                 {
@@ -563,11 +632,12 @@ function upsertWorldStateNodes(
     sourceMaps: MemoryGraphSourceMaps,
 ): void {
     for (const worldState of worldStates) {
-        const compareKey = String(worldState.compareKey ?? '').trim() || `world_global_state:global:${worldState.key}`;
-        compareNodeKeyMap.set(compareKey, compareKey);
+        const compareKey = String(worldState.compareKey ?? '').trim() || buildWorldStateCompareKey(String(worldState.key ?? '').trim());
+        const nodeKey = resolveWorldStateNodeKey(worldState);
+        registerWorldStateNodeRefs(compareNodeKeyMap, worldState, nodeKey);
         upsertNode(nodeMap, {
-            id: compareKey,
-            key: compareKey,
+            id: nodeKey,
+            key: nodeKey,
             label: normalizeMemoryCardTitle(worldState.key, {
                 mode: 'semantic',
                 context: labelContext,
@@ -583,25 +653,141 @@ function upsertWorldStateNodes(
             importance: 0.72,
             memoryPercent: 100,
             aliases: [],
-            sourceBatchIds: sourceMaps.worldStates.get(compareKey) ?? [],
+            sourceBatchIds: sourceMaps.worldStates.get(nodeKey) ?? [],
             sourceKinds: ['world_state'],
-            sourceRefs: [compareKey],
+            sourceRefs: dedupeStrings([
+                String(worldState.entityKey ?? '').trim(),
+                compareKey,
+                ...(worldState.matchKeys ?? []),
+                ...(worldState.legacyCompareKeys ?? []),
+            ]),
             reasonCodes: worldState.reasonCodes ?? [],
-            bindings: emptyBindings(),
+            bindings: normalizeBindings(worldState.bindings),
             sections: [
                 {
                     title: '世界状态',
                     fields: [
                         { label: 'key', value: String(worldState.key ?? '').trim() || '暂无' },
                         { label: 'value', value: String(worldState.value ?? '').trim() || '暂无' },
+                        { label: 'entityKey', value: String(worldState.entityKey ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                         { label: 'compareKey', value: compareKey, visibleInModes: ['debug'] },
+                        { label: 'schemaVersion', value: String(worldState.schemaVersion ?? '').trim() || '暂无', visibleInModes: ['debug'] },
+                        { label: 'canonicalName', value: String(worldState.canonicalName ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                     ],
                 },
+                buildBindingsSection('缁戝畾鍏崇郴', worldState.bindings, labelContext),
             ],
             rawData: worldState as unknown as Record<string, unknown>,
             visibleInModes: ['semantic', 'debug'],
         });
     }
+}
+
+function resolveEntityNodeKey(entity: MemoryTakeoverEntityCardCandidate): string {
+    const entityKey = String(entity.entityKey ?? '').trim();
+    if (entityKey) {
+        return entityKey;
+    }
+    const canonicalName = String(entity.canonicalName ?? entity.title ?? '').trim();
+    return `entity:${String(entity.entityType ?? 'entity').trim().toLowerCase()}:${normalizeLookupKey(canonicalName || entity.compareKey)}`;
+}
+
+function resolveWorldStateNodeKey(worldState: MemoryTakeoverWorldStateChange): string {
+    const entityKey = String(worldState.entityKey ?? '').trim();
+    if (entityKey) {
+        return entityKey;
+    }
+    const canonicalName = String(worldState.canonicalName ?? worldState.key ?? '').trim();
+    return `worldstate:${normalizeLookupKey(canonicalName || worldState.compareKey || worldState.key)}`;
+}
+
+function registerEntityNodeRefs(
+    compareNodeKeyMap: Map<string, string>,
+    entity: MemoryTakeoverEntityCardCandidate,
+    nodeKey: string,
+): void {
+    const refs = [
+        String(entity.compareKey ?? '').trim(),
+        String(entity.entityKey ?? '').trim(),
+        ...dedupeStrings(entity.matchKeys ?? []),
+        ...dedupeStrings(entity.legacyCompareKeys ?? []),
+    ].filter(Boolean);
+    for (const ref of refs) {
+        compareNodeKeyMap.set(ref, nodeKey);
+    }
+}
+
+function registerWorldStateNodeRefs(
+    compareNodeKeyMap: Map<string, string>,
+    worldState: MemoryTakeoverWorldStateChange,
+    nodeKey: string,
+): void {
+    const refs = [
+        String(worldState.compareKey ?? '').trim(),
+        String(worldState.entityKey ?? '').trim(),
+        buildWorldStateCompareKey(String(worldState.key ?? '').trim()),
+        ...(worldState.matchKeys ?? []),
+        ...(worldState.legacyCompareKeys ?? []),
+    ].filter(Boolean);
+    for (const ref of refs) {
+        compareNodeKeyMap.set(ref, nodeKey);
+    }
+}
+
+function mergeEntityCards(
+    existing: MemoryTakeoverEntityCardCandidate | undefined,
+    incoming: MemoryTakeoverEntityCardCandidate,
+): MemoryTakeoverEntityCardCandidate {
+    if (!existing) {
+        return incoming;
+    }
+    return {
+        ...existing,
+        ...incoming,
+        title: String(existing.title ?? '').trim() || incoming.title,
+        summary: pickLongerText(existing.summary, incoming.summary),
+        aliases: dedupeStrings([...(existing.aliases ?? []), ...(incoming.aliases ?? [])]),
+        fields: {
+            ...((existing.fields as Record<string, unknown>) ?? {}),
+            ...((incoming.fields as Record<string, unknown>) ?? {}),
+        } as MemoryTakeoverEntityCardCandidate['fields'],
+        confidence: Math.max(Number(existing.confidence ?? 0) || 0, Number(incoming.confidence ?? 0) || 0),
+        bindings: mergeBindings(normalizeBindings(existing.bindings), normalizeBindings(incoming.bindings)) as unknown as MemoryTakeoverBindings,
+        reasonCodes: dedupeStrings([...(existing.reasonCodes ?? []), ...(incoming.reasonCodes ?? [])]),
+        matchKeys: dedupeStrings([...(existing.matchKeys ?? []), ...(incoming.matchKeys ?? [])]),
+        legacyCompareKeys: dedupeStrings([...(existing.legacyCompareKeys ?? []), ...(incoming.legacyCompareKeys ?? [])]),
+        canonicalName: String(existing.canonicalName ?? '').trim() || String(incoming.canonicalName ?? '').trim() || incoming.title,
+        entityKey: String(existing.entityKey ?? '').trim() || String(incoming.entityKey ?? '').trim() || undefined,
+        compareKey: String(existing.compareKey ?? '').trim() || String(incoming.compareKey ?? '').trim(),
+    };
+}
+
+function mergeWorldStates(
+    existing: MemoryTakeoverWorldStateChange | undefined,
+    incoming: MemoryTakeoverWorldStateChange,
+): MemoryTakeoverWorldStateChange {
+    if (!existing) {
+        return incoming;
+    }
+    return {
+        ...existing,
+        ...incoming,
+        key: String(existing.key ?? '').trim() || String(incoming.key ?? '').trim(),
+        value: pickLongerText(existing.value, incoming.value),
+        summary: pickLongerText(existing.summary, incoming.summary),
+        reasonCodes: dedupeStrings([...(existing.reasonCodes ?? []), ...(incoming.reasonCodes ?? [])]),
+        entityKey: String(existing.entityKey ?? '').trim() || String(incoming.entityKey ?? '').trim() || undefined,
+        compareKey: String(existing.compareKey ?? '').trim() || String(incoming.compareKey ?? '').trim() || buildWorldStateCompareKey(String(incoming.key ?? '').trim()),
+        canonicalName: String(existing.canonicalName ?? '').trim() || String(incoming.canonicalName ?? '').trim() || String(incoming.key ?? '').trim(),
+        matchKeys: dedupeStrings([...(existing.matchKeys ?? []), ...(incoming.matchKeys ?? [])]),
+        legacyCompareKeys: dedupeStrings([...(existing.legacyCompareKeys ?? []), ...(incoming.legacyCompareKeys ?? [])]),
+    };
+}
+
+function pickLongerText(currentValue: unknown, nextValue: unknown): string {
+    const currentText = String(currentValue ?? '').trim();
+    const nextText = String(nextValue ?? '').trim();
+    return nextText.length > currentText.length ? nextText : currentText;
 }
 
 /**
@@ -719,7 +905,11 @@ function appendRelationshipEdges(
     sourceMaps: MemoryGraphSourceMaps,
 ): void {
     for (const relationship of relationships) {
-        const edgeId = `relationship:${relationship.sourceActorKey}:${relationship.targetActorKey}`;
+        const edgeId = buildRelationshipCompareKey(
+            relationship.sourceActorKey,
+            relationship.targetActorKey,
+            relationship.relationTag ?? relationship.state,
+        );
         const source = ensureActorNodeFromRef(nodeMap, actorNodeKeyMap, relationship.sourceActorKey, labelContext);
         const target = ensureActorNodeFromRef(nodeMap, actorNodeKeyMap, relationship.targetActorKey, labelContext);
         if (!source || !target) {
@@ -734,10 +924,10 @@ function appendRelationshipEdges(
             semanticLabel: relationship.relationTag,
             debugSummary: relationship.summary,
             confidence: Math.max(Number(relationship.trust ?? 0), 0.78),
-            sourceKinds: ['relationship_card'],
+            sourceKinds: ['structured_relationship'],
             sourceRefs: [`${relationship.sourceActorKey}->${relationship.targetActorKey}`],
             sourceBatchIds: sourceMaps.relationships.get(edgeId) ?? [],
-            reasonCodes: [],
+            reasonCodes: ['structured_relationship'],
             visibleInModes: ['semantic', 'debug'],
             sections: [
                 {
@@ -754,6 +944,7 @@ function appendRelationshipEdges(
                                 fallbackLabel: relationship.sourceActorKey,
                                 typeHint: 'actor',
                             }),
+                            targetNodeId: source,
                             visibleInModes: ['semantic'],
                         },
                         {
@@ -764,6 +955,7 @@ function appendRelationshipEdges(
                                 fallbackLabel: relationship.targetActorKey,
                                 typeHint: 'actor',
                             }),
+                            targetNodeId: target,
                             visibleInModes: ['semantic'],
                         },
                         { label: 'sourceActorKey', value: relationship.sourceActorKey, visibleInModes: ['debug'] },
@@ -822,10 +1014,10 @@ function appendRelationTransitionEdges(
             semanticLabel: String(transition.relationTag ?? transition.to).trim() || '关系变化',
             debugSummary: transition.reason,
             confidence: 0.68,
-            sourceKinds: ['relation_transition'],
+            sourceKinds: ['structured_relation_transition'],
             sourceRefs: [String(transition.target ?? '').trim()],
             sourceBatchIds: sourceMaps.relationTransitions.get(edgeId) ?? [],
-            reasonCodes: transition.reasonCodes ?? [],
+            reasonCodes: dedupeStrings(['structured_relation_transition', ...(transition.reasonCodes ?? [])]),
             visibleInModes: ['semantic', 'debug'],
             sections: [
                 {
@@ -842,6 +1034,7 @@ function appendRelationTransitionEdges(
                                 fallbackLabel: stripComparePrefix(String(transition.target ?? '').trim()) || String(transition.target ?? '').trim() || '暂无',
                                 typeHint: String(transition.targetType ?? '').trim(),
                             }),
+                            targetNodeId: targetNodeKey,
                             visibleInModes: ['semantic'],
                         },
                         { label: 'target', value: String(transition.target ?? '').trim() || '暂无', visibleInModes: ['debug'] },
@@ -855,14 +1048,47 @@ function appendRelationTransitionEdges(
     }
 }
 
+
 /**
- * 功能：追加任务绑定边。
+ * 功能：追加实体显式绑定边，作为主图谱层的结构化来源。
+ * @param edgeLedger 图边账本。
+ * @param entities 实体卡列表。
+ * @param compareNodeKeyMap compareKey 映射。
+ * @param actorNodeKeyMap 角色键映射。
+ * @param nodeMap 节点映射。
+ * @param labelContext 显示名上下文。
+ * @returns 无返回值。
+ */
+function appendEntityBindingEdges(
+    edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
+    entities: MemoryTakeoverEntityCardCandidate[],
+    compareNodeKeyMap: Map<string, string>,
+    actorNodeKeyMap: Map<string, string>,
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    labelContext: DisplayLabelResolverContext,
+): void {
+    for (const entity of entities) {
+        const source = compareNodeKeyMap.get(String(entity.compareKey ?? '').trim());
+        if (!source) {
+            continue;
+        }
+        appendBindingsForNode(edgeLedger, source, normalizeBindings(entity.bindings), 'entity_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext, {
+            sourceKinds: ['structured_binding', 'entity_binding'],
+            reasonCodes: ['structured_binding_resolved', 'entity_binding_resolved'],
+            confidence: 0.76,
+        });
+    }
+}
+
+/**
+ * 功能：追加任务显式绑定边，作为主图谱层的结构化来源。
  * @param edgeLedger 图边账本。
  * @param tasks 任务状态列表。
  * @param compareNodeKeyMap compareKey 映射。
  * @param actorNodeKeyMap 角色键映射。
  * @param nodeMap 节点映射。
  * @param labelContext 显示名上下文。
+ * @returns 无返回值。
  */
 function appendTaskBindingEdges(
     edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
@@ -877,19 +1103,45 @@ function appendTaskBindingEdges(
         if (!source) {
             continue;
         }
-        appendBindingsForNode(edgeLedger, source, normalizeBindings(task.bindings), 'task_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+        appendBindingsForNode(edgeLedger, source, normalizeBindings(task.bindings), 'task_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext, {
+            sourceKinds: ['structured_binding', 'task_binding'],
+            reasonCodes: ['structured_binding_resolved', 'task_binding_resolved'],
+            confidence: 0.74,
+        });
     }
 }
 
 /**
- * 功能：追加事件绑定边。
- * @param edgeLedger 图边账本。
- * @param events 图中事件节点列表。
- * @param compareNodeKeyMap compareKey 映射。
- * @param actorNodeKeyMap 角色键映射。
- * @param nodeMap 节点映射。
- * @param labelContext 显示名上下文。
+ * 功能：追加世界状态的结构化绑定边。
+ * @param edgeLedger 图边账本
+ * @param worldStates 世界状态列表
+ * @param compareNodeKeyMap 稳定键到节点键的映射
+ * @param actorNodeKeyMap 角色键到节点键的映射
+ * @param nodeMap 图节点映射
+ * @param labelContext 显示标签上下文
+ * @returns 无返回值
  */
+function appendWorldStateBindingEdges(
+    edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
+    worldStates: MemoryTakeoverWorldStateChange[],
+    compareNodeKeyMap: Map<string, string>,
+    actorNodeKeyMap: Map<string, string>,
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    labelContext: DisplayLabelResolverContext,
+): void {
+    for (const worldState of worldStates) {
+        const source = compareNodeKeyMap.get(resolveWorldStateNodeKey(worldState));
+        if (!source) {
+            continue;
+        }
+        appendBindingsForNode(edgeLedger, source, normalizeBindings(worldState.bindings), 'world_state_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext, {
+            sourceKinds: ['structured_binding', 'world_state_binding'],
+            reasonCodes: ['structured_binding_resolved', 'world_state_binding_resolved'],
+            confidence: 0.74,
+        });
+    }
+}
+
 function appendEventBindingEdges(
     edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
     events: WorkbenchMemoryGraphNode[],
@@ -899,20 +1151,25 @@ function appendEventBindingEdges(
     labelContext: DisplayLabelResolverContext,
 ): void {
     for (const event of events) {
-        appendBindingsForNode(edgeLedger, event.id, event.bindings, 'event_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+        appendBindingsForNode(edgeLedger, event.id, event.bindings, 'event_binding', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext, {
+            sourceKinds: ['structured_binding', 'event_binding'],
+            reasonCodes: ['structured_binding_resolved', 'event_binding_resolved'],
+            confidence: 0.74,
+        });
     }
 }
 
 /**
- * 功能：追加实体字段推导边。
+ * 功能：追加实体字段推断的 fallback 边，仅在缺少显式结构化绑定时使用。
  * @param edgeLedger 图边账本。
  * @param entities 实体卡列表。
  * @param compareNodeKeyMap compareKey 映射。
  * @param actorNodeKeyMap 角色键映射。
  * @param nodeMap 节点映射。
  * @param labelContext 显示名上下文。
+ * @returns 无返回值。
  */
-function appendEntityFieldEdges(
+function appendEntityFallbackFieldEdges(
     edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
     entities: MemoryTakeoverEntityCardCandidate[],
     compareNodeKeyMap: Map<string, string>,
@@ -920,17 +1177,38 @@ function appendEntityFieldEdges(
     nodeMap: Map<string, WorkbenchMemoryGraphNode>,
     labelContext: DisplayLabelResolverContext,
 ): void {
+    const fallbackConfigs = [
+        { bindingKey: 'organizations', fieldKey: 'organization', relationType: 'belongs_to_organization', label: '隶属组织', targetType: 'organization' },
+        { bindingKey: 'cities', fieldKey: 'city', relationType: 'located_in_city', label: '位于城市', targetType: 'city' },
+        { bindingKey: 'cities', fieldKey: 'baseCity', relationType: 'located_in_city', label: '位于城市', targetType: 'city' },
+        { bindingKey: 'nations', fieldKey: 'nation', relationType: 'located_in_nation', label: '位于国家', targetType: 'nation' },
+        { bindingKey: 'locations', fieldKey: 'parentLocation', relationType: 'located_in_location', label: '从属地点', targetType: 'location' },
+        { bindingKey: 'organizations', fieldKey: 'parentOrganization', relationType: 'subordinate_to_organization', label: '上级组织', targetType: 'organization' },
+        { bindingKey: 'actors', fieldKey: 'leader', relationType: 'led_by_actor', label: '领导者', targetType: 'actor' },
+    ] as const;
     for (const entity of entities) {
-        const source = compareNodeKeyMap.get(entity.compareKey);
+        const source = compareNodeKeyMap.get(String(entity.compareKey ?? '').trim());
         if (!source) {
             continue;
         }
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).organization ?? '').trim(), 'belongs_to_organization', '隶属组织', 'organization', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).city ?? (entity.fields as Record<string, unknown>).baseCity ?? '').trim(), 'located_in_city', '位于城市', 'city', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).nation ?? '').trim(), 'located_in_nation', '位于国家', 'nation', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).parentLocation ?? '').trim(), 'located_in_location', '从属地点', 'location', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).parentOrganization ?? '').trim(), 'subordinate_to_organization', '上级组织', 'organization', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
-        appendFieldEdge(edgeLedger, source, String((entity.fields as Record<string, unknown>).leader ?? '').trim(), 'led_by_actor', '领导者', 'actor', compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+        const bindings = normalizeBindings(entity.bindings);
+        const fields = (entity.fields as Record<string, unknown>) ?? {};
+        for (const fallbackConfig of fallbackConfigs) {
+            appendEntityFieldFallbackEdge(
+                edgeLedger,
+                source,
+                bindings,
+                fallbackConfig.bindingKey,
+                String(fields[fallbackConfig.fieldKey] ?? '').trim(),
+                fallbackConfig.relationType,
+                fallbackConfig.label,
+                fallbackConfig.targetType,
+                compareNodeKeyMap,
+                actorNodeKeyMap,
+                nodeMap,
+                labelContext,
+            );
+        }
     }
 }
 
@@ -954,6 +1232,11 @@ function appendBindingsForNode(
     actorNodeKeyMap: Map<string, string>,
     nodeMap: Map<string, WorkbenchMemoryGraphNode>,
     labelContext: DisplayLabelResolverContext,
+    options?: {
+        sourceKinds?: string[];
+        reasonCodes?: string[];
+        confidence?: number;
+    },
 ): void {
     const sourceNode = nodeMap.get(sourceNodeKey);
     const relationMap: Record<string, { type: string; label: string; targetType: string }> = {
@@ -984,15 +1267,26 @@ function appendBindingsForNode(
                 label: config.label,
                 semanticLabel: config.label,
                 debugSummary: `${bindingKey} -> ${targetRef}`,
-                confidence: 0.72,
-                sourceKinds: ['bindings'],
+                confidence: Number(options?.confidence ?? 0.72),
+                sourceKinds: options?.sourceKinds?.length ? options.sourceKinds : ['structured_binding'],
                 sourceRefs: [targetRef],
                 sourceBatchIds: sourceNode?.sourceBatchIds ?? [],
-                reasonCodes: ['bindings_resolved'],
+                reasonCodes: options?.reasonCodes?.length ? options.reasonCodes : ['structured_binding_resolved'],
                 visibleInModes: ['semantic', 'debug'],
                 sections: [{
                     title: '绑定来源',
                     fields: [
+                        {
+                            label: 'target',
+                            value: resolveDisplayLabel(targetRef, {
+                                mode: 'semantic',
+                                context: labelContext,
+                                fallbackLabel: stripComparePrefix(targetRef) || targetRef,
+                                typeHint: config.targetType,
+                            }),
+                            targetNodeId: targetNodeKey,
+                            visibleInModes: ['semantic'],
+                        },
                         { label: 'bindingKey', value: bindingKey, visibleInModes: ['debug'] },
                         { label: 'targetRef', value: targetRef, visibleInModes: ['debug'] },
                     ],
@@ -1003,10 +1297,13 @@ function appendBindingsForNode(
     }
 }
 
+
 /**
- * 功能：追加单条字段推导边。
+ * 功能：仅在缺少显式结构化绑定时追加实体字段 fallback 边。
  * @param edgeLedger 图边账本。
  * @param source 源节点。
+ * @param bindings 已规范化的结构化绑定。
+ * @param bindingKey 对应的绑定键。
  * @param targetRef 目标引用。
  * @param relationType 关系类型。
  * @param label 显示标签。
@@ -1015,7 +1312,69 @@ function appendBindingsForNode(
  * @param actorNodeKeyMap 角色键映射。
  * @param nodeMap 节点映射。
  * @param labelContext 显示名上下文。
+ * @returns 无返回值。
  */
+function appendEntityFieldFallbackEdge(
+    edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
+    source: string,
+    bindings: Record<string, string[]>,
+    bindingKey: keyof ReturnType<typeof emptyBindings>,
+    targetRef: string,
+    relationType: string,
+    label: string,
+    targetType: string,
+    compareNodeKeyMap: Map<string, string>,
+    actorNodeKeyMap: Map<string, string>,
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    labelContext: DisplayLabelResolverContext,
+): void {
+    if (hasExplicitBindingTarget(bindings, bindingKey, targetRef, targetType, compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext)) {
+        return;
+    }
+    appendFieldEdge(edgeLedger, source, targetRef, relationType, label, targetType, compareNodeKeyMap, actorNodeKeyMap, nodeMap, labelContext);
+}
+
+/**
+ * 功能：判断字段引用是否已被显式结构化绑定覆盖。
+ * @param bindings 已规范化的结构化绑定。
+ * @param bindingKey 对应的绑定键。
+ * @param targetRef 目标引用。
+ * @param targetType 目标类型。
+ * @param compareNodeKeyMap compareKey 映射。
+ * @param actorNodeKeyMap 角色键映射。
+ * @param nodeMap 节点映射。
+ * @param labelContext 显示名上下文。
+ * @returns 是否已经存在显式绑定。
+ */
+function hasExplicitBindingTarget(
+    bindings: Record<string, string[]>,
+    bindingKey: keyof ReturnType<typeof emptyBindings>,
+    targetRef: string,
+    targetType: string,
+    compareNodeKeyMap: Map<string, string>,
+    actorNodeKeyMap: Map<string, string>,
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    labelContext: DisplayLabelResolverContext,
+): boolean {
+    const normalizedTargetRef = String(targetRef ?? '').trim();
+    if (!normalizedTargetRef) {
+        return true;
+    }
+    const fieldTargetNodeKey = resolveTargetNodeKey(normalizedTargetRef, targetType, actorNodeKeyMap, compareNodeKeyMap, nodeMap, labelContext);
+    return (bindings[bindingKey] ?? []).some((item: string): boolean => {
+        const normalizedItem = String(item ?? '').trim();
+        if (!normalizedItem) {
+            return false;
+        }
+        const bindingTargetNodeKey = resolveTargetNodeKey(normalizedItem, targetType, actorNodeKeyMap, compareNodeKeyMap, nodeMap, labelContext);
+        if (fieldTargetNodeKey && bindingTargetNodeKey) {
+            return fieldTargetNodeKey === bindingTargetNodeKey;
+        }
+        return normalizeLookupKey(stripComparePrefix(normalizedItem) || normalizedItem)
+            === normalizeLookupKey(stripComparePrefix(normalizedTargetRef) || normalizedTargetRef);
+    });
+}
+
 function appendFieldEdge(
     edgeLedger: ReturnType<typeof createGraphEdgeLedger>,
     source: string,
@@ -1045,15 +1404,26 @@ function appendFieldEdge(
         label,
         semanticLabel: label,
         debugSummary: `${relationType} -> ${targetRef}`,
-        confidence: 0.65,
-        sourceKinds: ['field_binding'],
+        confidence: 0.56,
+        sourceKinds: ['fallback_field_inference'],
         sourceRefs: [targetRef],
         sourceBatchIds: sourceNode?.sourceBatchIds ?? [],
-        reasonCodes: ['field_binding_resolved'],
+        reasonCodes: ['fallback_field_inference_resolved'],
         visibleInModes: ['semantic', 'debug'],
         sections: [{
             title: '字段推导',
             fields: [
+                {
+                    label: 'target',
+                    value: resolveDisplayLabel(targetRef, {
+                        mode: 'semantic',
+                        context: labelContext,
+                        fallbackLabel: stripComparePrefix(targetRef) || targetRef,
+                        typeHint: targetType,
+                    }),
+                    targetNodeId: target,
+                    visibleInModes: ['semantic'],
+                },
                 { label: 'relationType', value: relationType, visibleInModes: ['debug'] },
                 { label: 'targetRef', value: targetRef, visibleInModes: ['debug'] },
             ],
@@ -1154,7 +1524,7 @@ function createPlaceholderNode(
             memoryPercent: 40,
             aliases: [],
             sourceBatchIds: [],
-            sourceKinds: ['placeholder'],
+            sourceKinds: ['unresolved_placeholder'],
             sourceRefs: [normalizedRef],
             reasonCodes: ['unresolved_reference'],
             bindings: emptyBindings(),
@@ -1186,38 +1556,39 @@ function upsertNode(
     nodeMap: Map<string, WorkbenchMemoryGraphNode>,
     input: Omit<WorkbenchMemoryGraphNode, 'x' | 'y'>,
 ): void {
-    const existing = nodeMap.get(input.id);
+    const sanitizedInput = sanitizeWorkbenchNode(input);
+    const existing = nodeMap.get(sanitizedInput.id);
     if (!existing) {
-        nodeMap.set(input.id, {
-            ...input,
+        nodeMap.set(sanitizedInput.id, {
+            ...sanitizedInput,
             x: 0,
             y: 0,
         });
         return;
     }
-    nodeMap.set(input.id, {
+    nodeMap.set(sanitizedInput.id, {
         ...existing,
-        label: existing.label || input.label,
-        summary: existing.summary || input.summary,
-        semanticSummary: existing.semanticSummary || input.semanticSummary,
-        debugSummary: [existing.debugSummary, input.debugSummary].filter(Boolean).join(' | ') || undefined,
-        compareKey: existing.compareKey || input.compareKey,
-        status: existing.status || input.status,
-        importance: Math.max(existing.importance, input.importance),
-        memoryPercent: Math.max(existing.memoryPercent, input.memoryPercent),
-        aliases: dedupeStrings([...existing.aliases, ...input.aliases]),
-        sourceBatchIds: dedupeStrings([...existing.sourceBatchIds, ...input.sourceBatchIds]),
-        sourceKinds: dedupeStrings([...existing.sourceKinds, ...input.sourceKinds]),
-        sourceRefs: dedupeStrings([...existing.sourceRefs, ...input.sourceRefs]),
-          reasonCodes: dedupeStrings([...existing.reasonCodes, ...input.reasonCodes]),
-          bindings: mergeBindings(existing.bindings, input.bindings),
-          placeholder: existing.placeholder || input.placeholder,
-          hydrationState: existing.hydrationState === 'full' || input.hydrationState === 'full'
+        label: existing.label || sanitizedInput.label,
+        summary: existing.summary || sanitizedInput.summary,
+        semanticSummary: existing.semanticSummary || sanitizedInput.semanticSummary,
+        debugSummary: [existing.debugSummary, sanitizedInput.debugSummary].filter(Boolean).join(' | ') || undefined,
+        compareKey: existing.compareKey || sanitizedInput.compareKey,
+        status: existing.status || sanitizedInput.status,
+        importance: Math.max(existing.importance, sanitizedInput.importance),
+        memoryPercent: Math.max(existing.memoryPercent, sanitizedInput.memoryPercent),
+        aliases: dedupeStrings([...existing.aliases, ...sanitizedInput.aliases]),
+        sourceBatchIds: dedupeStrings([...existing.sourceBatchIds, ...sanitizedInput.sourceBatchIds]),
+        sourceKinds: dedupeStrings([...existing.sourceKinds, ...sanitizedInput.sourceKinds]),
+        sourceRefs: dedupeStrings([...existing.sourceRefs, ...sanitizedInput.sourceRefs]),
+          reasonCodes: dedupeStrings([...existing.reasonCodes, ...sanitizedInput.reasonCodes]),
+          bindings: mergeBindings(existing.bindings, sanitizedInput.bindings),
+          placeholder: existing.placeholder || sanitizedInput.placeholder,
+          hydrationState: existing.hydrationState === 'full' || sanitizedInput.hydrationState === 'full'
               ? 'full'
-              : (existing.hydrationState || input.hydrationState),
-          visibleInModes: dedupeModes([...(existing.visibleInModes ?? ['semantic', 'debug']), ...(input.visibleInModes ?? ['semantic', 'debug'])]),
-          sections: [...existing.sections, ...input.sections],
-          rawData: { ...existing.rawData, ...input.rawData },
+              : (existing.hydrationState || sanitizedInput.hydrationState),
+          visibleInModes: dedupeModes([...(existing.visibleInModes ?? ['semantic', 'debug']), ...(sanitizedInput.visibleInModes ?? ['semantic', 'debug'])]),
+          sections: [...existing.sections, ...sanitizedInput.sections],
+          rawData: { ...existing.rawData, ...sanitizedInput.rawData },
       });
 }
 
@@ -1429,7 +1800,7 @@ function buildBindingsSection(
     title: string,
     bindings: unknown,
     labelContext: DisplayLabelResolverContext,
-): WorkbenchMemoryGraphSection | null {
+): WorkbenchMemoryGraphSection {
     const normalized = normalizeBindings(bindings as MemoryTakeoverBindings | undefined);
     const fields = Object.entries(normalized)
         .filter(([, items]: [string, string[]]): boolean => items.length > 0)
@@ -1448,9 +1819,6 @@ function buildBindingsSection(
                 },
             ];
         });
-    if (fields.length <= 0) {
-        return null;
-    }
     return { title, fields };
 }
 

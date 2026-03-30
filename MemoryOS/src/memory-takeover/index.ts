@@ -14,6 +14,7 @@ export {
     mapTakeoverRecordsToLedger,
 } from './takeover-section-reducer';
 export { resolveTakeoverConflictBuckets } from './takeover-conflict-resolver';
+export { resolveTakeoverConflictBucketsByRules } from './takeover-conflict-rule-resolver';
 export { finalizeTakeoverConsolidation } from './takeover-finalizer';
 export { appendTakeoverDiagnostics } from './takeover-diagnostics';
 export { runTakeoverScheduler, buildProgressSnapshot } from './takeover-scheduler';

@@ -98,6 +98,24 @@ export function resolveEntryTypeLabel(entryType: string): string {
     if (!normalized) {
         return '未知';
     }
+    if (normalized === 'nation') {
+        return '国家';
+    }
+    if (normalized === 'city') {
+        return '城市';
+    }
+    if (normalized === 'organization') {
+        return '组织';
+    }
+    if (normalized === 'world_core_setting') {
+        return '世界核心设定';
+    }
+    if (normalized === 'world_hard_rule') {
+        return '世界硬规则';
+    }
+    if (normalized === 'world_global_state') {
+        return '世界全局状态';
+    }
     return ENTRY_TYPE_LABEL_MAP[normalized] ?? formatIdentifierLabel(normalized, entryType);
 }
 

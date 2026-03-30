@@ -1,3 +1,4 @@
+import { buildEventCompareKey } from '../../../core/compare-key';
 import type { MemoryTakeoverBatchResult, MemoryTakeoverStableFact } from '../../../types';
 import type { MemoryGraphMode, WorkbenchMemoryGraphField, WorkbenchMemoryGraphSection } from './memoryGraphTypes';
 import { resolveDisplayLabel, stripComparePrefix, type DisplayLabelResolverContext } from './display-label-resolver';
@@ -45,7 +46,13 @@ export function promoteFactsToEvents(
         if (signalCount < 2) {
             continue;
         }
-        const compareKey = String(fact.compareKey ?? '').trim() || `event:${String(fact.subject ?? '').trim()}${String(fact.predicate ?? '').trim()}`;
+        const compareKey = String(fact.compareKey ?? '').trim() || buildEventCompareKey(
+            String(fact.title ?? '').trim() || `${String(fact.subject ?? '').trim()} ${String(fact.predicate ?? '').trim()}`.trim(),
+            {
+                qualifier: String(fact.status ?? fact.value ?? '').trim(),
+                aliases: thisEventAliases(fact),
+            },
+        );
         if (seen.has(compareKey)) {
             continue;
         }
@@ -256,4 +263,18 @@ function normalizeStringArray(value: unknown): string[] {
     return value
         .map((item: unknown): string => String(item ?? '').trim())
         .filter(Boolean);
+}
+
+/**
+ * 功能：提取事件可用于构建 compareKey 的别名列表。
+ * @param fact 旧聊天接管稳定事实。
+ * @returns 去重后的别名列表。
+ */
+function thisEventAliases(fact: MemoryTakeoverStableFact): string[] {
+    return Array.from(new Set([
+        String(fact.title ?? '').trim(),
+        String(fact.subject ?? '').trim(),
+        `${String(fact.subject ?? '').trim()} ${String(fact.predicate ?? '').trim()}`.trim(),
+        `${String(fact.subject ?? '').trim()}${String(fact.predicate ?? '').trim()}`.trim(),
+    ].filter(Boolean)));
 }

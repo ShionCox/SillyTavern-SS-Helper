@@ -10,6 +10,9 @@ export const DEFAULT_PIPELINE_BUDGET_POLICY: PipelineBudgetPolicy = {
     maxActionsPerMutation: 10,
     maxSectionBatchCount: 5,
     maxConflictBucketSize: 10,
+    maxConflictBatchSize: 8,
+    maxConflictResolverBucketsPerRequest: 8,
+    maxRuleOnlyConflictRecords: 4,
     maxSectionDigestChars: 2000,
     maxRollingDigestChars: 1200,
     maxCandidateSummaryChars: 300,
@@ -44,6 +47,9 @@ export function resolvePipelineBudgetPolicy(settings: Pick<
             maxActionsPerMutation: Math.max(1, settings.summaryMaxActionsPerMutationBatch || DEFAULT_PIPELINE_BUDGET_POLICY.maxActionsPerMutation),
             maxSectionBatchCount: Math.max(1, settings.takeoverSectionDigestBatchCount || DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionBatchCount),
             maxConflictBucketSize: Math.max(1, settings.takeoverMaxConflictItemsPerRun || DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBucketSize),
+            maxConflictBatchSize: DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBatchSize,
+            maxConflictResolverBucketsPerRequest: DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictResolverBucketsPerRequest,
+            maxRuleOnlyConflictRecords: DEFAULT_PIPELINE_BUDGET_POLICY.maxRuleOnlyConflictRecords,
             maxRollingDigestChars: settings.summarySecondStageRollingDigestMaxChars > 0
                 ? settings.summarySecondStageRollingDigestMaxChars
                 : DEFAULT_PIPELINE_BUDGET_POLICY.maxRollingDigestChars,
@@ -73,6 +79,9 @@ export function resolvePipelineBudgetPolicy(settings: Pick<
             100,
             DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBucketSize,
         ),
+        maxConflictBatchSize: DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBatchSize,
+        maxConflictResolverBucketsPerRequest: DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictResolverBucketsPerRequest,
+        maxRuleOnlyConflictRecords: DEFAULT_PIPELINE_BUDGET_POLICY.maxRuleOnlyConflictRecords,
         maxSectionDigestChars: clampBudgetNumber(settings.pipelineMaxSectionDigestChars, 100, 10000, DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionDigestChars),
         maxRollingDigestChars: settings.summarySecondStageRollingDigestMaxChars > 0
             ? settings.summarySecondStageRollingDigestMaxChars

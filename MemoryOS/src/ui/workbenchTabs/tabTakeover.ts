@@ -1,12 +1,14 @@
 import { escapeHtml } from '../editorShared';
 import { buildTakeoverPreviewMarkup } from '../takeoverPreviewMarkup';
 import { resolveTakeoverFieldVisibility } from '../takeoverFormShared';
+import { resolveTakeoverWorkbenchText } from '../workbenchLocale';
 import {
     escapeAttr,
     formatTimestamp,
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import type { MemoryTakeoverConsolidationResult } from '../../types';
 
 /**
  * 功能：渲染旧聊天接管视图。
@@ -149,7 +151,125 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                         </div>
                     ` : '<div class="stx-memory-workbench__empty">最终整合结果尚未生成。</div>'}
                 </div>
+
+                ${buildTakeoverApplyDiagnosticsMarkup(consolidation)}
+
+                ${buildTakeoverPipelineDiagnosticsMarkup(consolidation)}
+
+                ${buildTakeoverConflictResolutionMarkup(consolidation)}
             </div>
         </section>
+    `;
+}
+
+/**
+ * 功能：渲染接管统一落盘诊断。
+ * @param consolidation 接管整合结果
+ * @returns HTML 片段
+ */
+function buildTakeoverApplyDiagnosticsMarkup(
+    consolidation: MemoryTakeoverConsolidationResult | null,
+): string {
+    const diagnostics = consolidation?.applyDiagnostics;
+    if (!diagnostics) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTakeoverWorkbenchText('apply_diagnostics'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolveTakeoverWorkbenchText('no_apply_diagnostics'))}</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTakeoverWorkbenchText('apply_diagnostics'))}</div>
+            <div class="stx-memory-workbench__info-list">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('mutation_source'))}</span><strong>${escapeHtml('旧聊天接管')}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('total_mutations'))}</span><strong>${escapeHtml(String(diagnostics.counts.input ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('noop_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.noop ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('add_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.add ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('update_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.update ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('merge_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.merge ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('invalidate_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.invalidate ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('delete_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.delete ?? 0))}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染接管冲突裁决统计摘要。
+ * @param consolidation 接管整合结果
+ * @returns HTML 片段
+ */
+function buildTakeoverPipelineDiagnosticsMarkup(
+    consolidation: MemoryTakeoverConsolidationResult | null,
+): string {
+    const diagnostics = consolidation?.pipelineDiagnostics;
+    if (!diagnostics) {
+        return '';
+    }
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTakeoverWorkbenchText('conflict_resolution'))}</div>
+            <div class="stx-memory-workbench__info-list">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('conflict_bucket_count'))}</span><strong>${escapeHtml(String(diagnostics.conflictBucketCount ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('rule_resolved_count'))}</span><strong>${escapeHtml(String(diagnostics.ruleResolvedConflictCount ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('llm_resolved_count'))}</span><strong>${escapeHtml(String(diagnostics.llmResolvedConflictCount ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('batched_request_count'))}</span><strong>${escapeHtml(String(diagnostics.batchedRequestCount ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('avg_buckets_per_request'))}</span><strong>${escapeHtml(String(diagnostics.avgBucketsPerRequest ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('skipped_by_rule_count'))}</span><strong>${escapeHtml(String(diagnostics.skippedByRuleCount ?? 0))}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染接管冲突裁决详情。
+ * @param consolidation 接管整合结果
+ * @returns HTML 片段
+ */
+function buildTakeoverConflictResolutionMarkup(
+    consolidation: MemoryTakeoverConsolidationResult | null,
+): string {
+    const conflictResolutions = consolidation?.conflictResolutions ?? [];
+    if (conflictResolutions.length <= 0) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTakeoverWorkbenchText('conflict_resolution'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolveTakeoverWorkbenchText('no_conflict_resolution'))}</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTakeoverWorkbenchText('conflict_resolution'))}</div>
+            <div class="stx-memory-workbench__stack" style="max-height: 460px; overflow-y: auto; padding-right: 4px;">
+                ${conflictResolutions.slice(0, 8).map((patch) => `
+                    <article class="stx-memory-workbench__card">
+                        <div class="stx-memory-workbench__split-head">
+                            <div class="stx-memory-workbench__panel-title">${escapeHtml(`${patch.domain} / ${patch.bucketId}`)}</div>
+                            <span class="stx-memory-workbench__badge">${escapeHtml(String(patch.resolutions.length))} 条</span>
+                        </div>
+                        <div class="stx-memory-workbench__stack">
+                            ${patch.resolutions.map((resolution) => `
+                                <div class="stx-memory-workbench__card">
+                                    <div class="stx-memory-workbench__info-list">
+                                        <div class="stx-memory-workbench__info-row"><span>动作</span><strong>${escapeHtml(String(resolution.action ?? '').trim() || 'unknown')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('selected_primary'))}</span><strong>${escapeHtml(String(resolution.selectedPrimaryKey ?? resolution.primaryKey ?? '').trim() || '暂无')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('selection_reason'))}</span><strong>${escapeHtml(String(resolution.selectionReason ?? '').trim() || '暂无')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('applied_fields'))}</span><strong>${escapeHtml((resolution.appliedFieldNames ?? []).join('、') || '无')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('resolver_source'))}</span><strong>${escapeHtml(resolveTakeoverWorkbenchText(String(resolution.resolverSource ?? 'deterministic_fallback').trim()))}</strong></div>
+                                    </div>
+                                    <details class="stx-memory-workbench__details">
+                                        <summary>${escapeHtml(resolveTakeoverWorkbenchText('selected_snapshot'))}</summary>
+                                        <pre>${escapeHtml(JSON.stringify(resolution.selectedSnapshot ?? {}, null, 2))}</pre>
+                                    </details>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </article>
+                `).join('')}
+            </div>
+        </div>
     `;
 }

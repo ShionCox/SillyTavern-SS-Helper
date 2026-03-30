@@ -11,11 +11,22 @@ import {
 } from '../../../SDK/tavern';
 import type { EventEnvelope } from '../../../SDK/stx';
 import { EventsManager } from '../core/events-manager';
-import { buildCompareKey, buildRelationshipCompareKey } from '../core/compare-key';
+import {
+    buildCityCompareKey,
+    buildCompareKey,
+    buildEventCompareKey,
+    buildLocationCompareKey,
+    buildNationCompareKey,
+    buildOrganizationCompareKey,
+    buildRelationshipCompareKey,
+    buildTaskCompareKey,
+    buildWorldStateCompareKey,
+} from '../core/compare-key';
+import { CompareKeyService } from '../core/compare-key-service';
 import { resolveLedgerUpdateDecision } from '../core/ledger-update-rules';
 import { normalizeTaskTitle } from '../core/task-title-normalizer';
 import { normalizeTaskDescription } from '../core/task-description-normalizer';
-import { UnifiedMemoryManager } from '../core/unified-memory-manager';
+import { EntryRepository } from '../repository/entry-repository';
 import { normalizeRelationTag } from '../constants/relationTags';
 import { logger } from '../runtime/runtime-services';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -28,23 +39,11 @@ import {
     type ColdStartSourceBundle,
 } from '../memory-bootstrap';
 import {
-    buildProgressSnapshot,
-    buildTakeoverPlan,
-    buildTakeoverPreviewEstimate,
-    collectTakeoverSourceBundle,
-    detectTakeoverNeeded,
-    runTakeoverConsolidation,
-    runTakeoverScheduler,
-} from '../memory-takeover';
-import {
     clearMemoryChatData,
     exportMemoryChatDatabaseSnapshot,
     exportMemoryPromptTestBundle,
     importMemoryPromptTestBundle,
-    loadMemoryTakeoverBatchResults,
-    loadMemoryTakeoverPreview,
     readMemoryOSChatState,
-    readMemoryTakeoverPlan,
     type ImportMemoryPromptTestBundleResult,
     type MemoryChatDatabaseSnapshot,
     type MemoryPromptParityBaseline,
@@ -52,12 +51,14 @@ import {
     type PromptReadyCaptureSnapshot,
     restoreArchivedMemoryChat,
     saveMemoryTakeoverPreview,
-    writeMemoryTakeoverPlan,
     writeMemoryOSChatState,
 } from '../db/db';
 import { readMemoryOSSettings } from '../settings/store';
 import { detectWorldProfile } from '../memory-world-profile';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import { PromptAssemblyService } from '../services/prompt-assembly-service';
+import { SummaryService } from '../services/summary-service';
+import { TakeoverService } from '../services/takeover-service';
 import {
     buildNarrativeReferenceLookupKey,
     renderNarrativeReferenceText,
@@ -65,6 +66,7 @@ import {
     type NarrativeReferenceRendererContext,
 } from '../utils/narrative-reference-renderer';
 import type {
+    LedgerMutation,
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBindings,
     MemoryTakeoverConsolidationResult,
@@ -72,6 +74,8 @@ import type {
     MemoryTakeoverDetectionResult,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
+    PromptAssemblySnapshot,
+    ApplyLedgerMutationBatchResult,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
@@ -86,8 +90,7 @@ const AUTO_SUMMARY_MAX_MESSAGE_WINDOW: number = 40;
  */
 export interface UnifiedPromptInjectInput {
     promptMessages: SdkTavernPromptMessageEvent[];
-    maxTokens?: number;
-    query?: string;
+    snapshot: PromptAssemblySnapshot;
     source?: string;
     sourceMessageId?: string;
     trace?: Record<string, unknown>;
@@ -207,7 +210,11 @@ export interface MemoryTakeoverExecutionResult {
 export class MemorySDKImpl {
     private readonly chatKey_: string;
     private readonly eventsManager: EventsManager;
-    private readonly unifiedManager: UnifiedMemoryManager;
+    private readonly entryRepository: EntryRepository;
+    private readonly compareKeyService: CompareKeyService;
+    private readonly promptAssemblyService: PromptAssemblyService;
+    private readonly summaryService: SummaryService;
+    private readonly takeoverService: TakeoverService;
     private promptReadyCaptureSnapshot: PromptReadyCaptureSnapshot | null;
     private promptReadyRunResultSnapshot: Record<string, unknown> | null;
     private latestRecallExplanation: Record<string, unknown> | null;
@@ -273,40 +280,39 @@ export class MemorySDKImpl {
     };
     public readonly unifiedMemory: {
         entryTypes: {
-            list: ReturnType<UnifiedMemoryManager['listEntryTypes']> extends Promise<infer R>
+            list: ReturnType<EntryRepository['listEntryTypes']> extends Promise<infer R>
                 ? () => Promise<R>
                 : never;
-            save: (input: Parameters<UnifiedMemoryManager['saveEntryType']>[0]) => ReturnType<UnifiedMemoryManager['saveEntryType']>;
+            save: (input: Parameters<EntryRepository['saveEntryType']>[0]) => ReturnType<EntryRepository['saveEntryType']>;
             remove: (key: string) => Promise<void>;
         };
         entries: {
-            list: (filters?: Parameters<UnifiedMemoryManager['listEntries']>[0]) => ReturnType<UnifiedMemoryManager['listEntries']>;
-            get: (entryId: string) => ReturnType<UnifiedMemoryManager['getEntry']>;
-            save: (input: Parameters<UnifiedMemoryManager['saveEntry']>[0]) => ReturnType<UnifiedMemoryManager['saveEntry']>;
+            list: (filters?: Parameters<EntryRepository['listEntries']>[0]) => ReturnType<EntryRepository['listEntries']>;
+            get: (entryId: string) => ReturnType<EntryRepository['getEntry']>;
+            save: (input: Parameters<EntryRepository['saveEntry']>[0]) => ReturnType<EntryRepository['saveEntry']>;
             remove: (entryId: string) => Promise<void>;
         };
         actors: {
-            list: () => ReturnType<UnifiedMemoryManager['listActorProfiles']>;
-            ensure: (input: Parameters<UnifiedMemoryManager['ensureActorProfile']>[0]) => ReturnType<UnifiedMemoryManager['ensureActorProfile']>;
-            setMemoryStat: (actorKey: string, memoryStat: number) => ReturnType<UnifiedMemoryManager['setActorMemoryStat']>;
+            list: () => ReturnType<EntryRepository['listActorProfiles']>;
+            ensure: (input: Parameters<EntryRepository['ensureActorProfile']>[0]) => ReturnType<EntryRepository['ensureActorProfile']>;
+            setMemoryStat: (actorKey: string, memoryStat: number) => ReturnType<EntryRepository['setActorMemoryStat']>;
         };
         roleMemory: {
-            list: (actorKey?: string) => ReturnType<UnifiedMemoryManager['listRoleMemories']>;
-            bind: (actorKey: string, entryId: string) => ReturnType<UnifiedMemoryManager['bindRoleToEntry']>;
+            list: (actorKey?: string) => ReturnType<EntryRepository['listRoleMemories']>;
+            bind: (actorKey: string, entryId: string) => ReturnType<EntryRepository['bindRoleToEntry']>;
             unbind: (actorKey: string, entryId: string) => Promise<void>;
         };
         summaries: {
-            list: (limit?: number) => ReturnType<UnifiedMemoryManager['listSummarySnapshots']>;
-            apply: (input: Parameters<UnifiedMemoryManager['applySummarySnapshot']>[0]) => ReturnType<UnifiedMemoryManager['applySummarySnapshot']>;
-            capture: (input: Parameters<UnifiedMemoryManager['captureSummaryFromChat']>[0]) => ReturnType<UnifiedMemoryManager['captureSummaryFromChat']>;
+            list: (limit?: number) => ReturnType<EntryRepository['listSummarySnapshots']>;
+            capture: (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => ReturnType<SummaryService['captureSummaryFromChat']>;
         };
          diagnostics: {
-             getWorldProfileBinding: () => ReturnType<UnifiedMemoryManager['getWorldProfileBinding']>;
-             listMutationHistory: (limit?: number) => ReturnType<UnifiedMemoryManager['listMutationHistory']>;
-             listEntryAuditRecords: (limit?: number) => ReturnType<UnifiedMemoryManager['listEntryAuditRecords']>;
+             getWorldProfileBinding: () => ReturnType<EntryRepository['getWorldProfileBinding']>;
+             listMutationHistory: (limit?: number) => ReturnType<EntryRepository['listMutationHistory']>;
+             listEntryAuditRecords: (limit?: number) => ReturnType<EntryRepository['listEntryAuditRecords']>;
          };
         prompts: {
-            preview: (input?: Parameters<UnifiedMemoryManager['buildPromptAssembly']>[0]) => ReturnType<UnifiedMemoryManager['buildPromptAssembly']>;
+            preview: (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => ReturnType<PromptAssemblyService['buildPromptAssembly']>;
             inject: (input: UnifiedPromptInjectInput) => Promise<UnifiedPromptInjectResult>;
         };
     };
@@ -318,7 +324,11 @@ export class MemorySDKImpl {
     constructor(chatKey: string) {
         this.chatKey_ = String(chatKey ?? '').trim();
         this.eventsManager = new EventsManager(this.chatKey_);
-        this.unifiedManager = new UnifiedMemoryManager(this.chatKey_);
+        this.compareKeyService = new CompareKeyService();
+        this.entryRepository = new EntryRepository(this.chatKey_, this.compareKeyService);
+        this.promptAssemblyService = new PromptAssemblyService(this.chatKey_, this.entryRepository, this.compareKeyService);
+        this.summaryService = new SummaryService(this.entryRepository);
+        this.takeoverService = new TakeoverService(this.chatKey_);
         this.promptReadyCaptureSnapshot = null;
         this.promptReadyRunResultSnapshot = null;
         this.latestRecallExplanation = null;
@@ -411,7 +421,7 @@ export class MemorySDKImpl {
                 if (messages.length <= 0) {
                     return;
                 }
-                const snapshot = await this.unifiedManager.captureSummaryFromChat({ messages });
+                const snapshot = await this.summaryService.captureSummaryFromChat({ messages });
                 if (!snapshot) {
                     return;
                 }
@@ -444,131 +454,23 @@ export class MemorySDKImpl {
                 return this.readSummaryTriggerStatus();
             },
             detectTakeoverNeeded: async (): Promise<MemoryTakeoverDetectionResult> => {
-                const settings = readMemoryOSSettings();
-                const existingPlan = await readMemoryTakeoverPlan(this.chatKey_);
-                return detectTakeoverNeeded({
-                    currentFloorCount: await this.readCurrentSummaryFloorCount(),
-                    threshold: settings.takeoverDetectMinFloors,
-                    existingPlan,
-                });
+                const currentFloorCount = await this.readCurrentSummaryFloorCount();
+                return this.takeoverService.detectNeeded(currentFloorCount, await this.takeoverService.readPlan());
             },
             getTakeoverStatus: async (): Promise<MemoryTakeoverProgressSnapshot> => {
-                return buildProgressSnapshot(this.chatKey_);
+                return this.takeoverService.buildProgress();
             },
             previewTakeoverEstimate: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPreviewEstimate> => {
-                const settings = readMemoryOSSettings();
-                const sourceBundle = collectTakeoverSourceBundle();
-                return buildTakeoverPreviewEstimate({
-                    chatKey: this.chatKey_,
-                    chatId: this.chatKey_,
-                    totalFloors: Math.max(1, sourceBundle.totalFloors),
-                    defaults: {
-                        detectMinFloors: settings.takeoverDetectMinFloors,
-                        recentFloors: settings.takeoverDefaultRecentFloors,
-                        batchSize: settings.takeoverDefaultBatchSize,
-                        prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
-                        autoContinue: settings.takeoverDefaultAutoContinue,
-                        autoConsolidate: settings.takeoverDefaultAutoConsolidate,
-                        pauseOnError: settings.takeoverDefaultPauseOnError,
-                    },
-                    config,
-                    sourceBundle,
-                });
+                return this.takeoverService.previewEstimate(config);
             },
             createTakeoverPlan: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> => {
-                const settings = readMemoryOSSettings();
-                const detection = await this.chatState.detectTakeoverNeeded();
-                const plan = buildTakeoverPlan({
-                    chatKey: this.chatKey_,
-                    chatId: this.chatKey_,
-                    takeoverId: `takeover:${this.chatKey_}:${crypto.randomUUID()}`,
-                    totalFloors: Math.max(detection.currentFloorCount, await this.readCurrentSummaryFloorCount()),
-                    defaults: {
-                        detectMinFloors: settings.takeoverDetectMinFloors,
-                        recentFloors: settings.takeoverDefaultRecentFloors,
-                        batchSize: settings.takeoverDefaultBatchSize,
-                        prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
-                        autoContinue: settings.takeoverDefaultAutoContinue,
-                        autoConsolidate: settings.takeoverDefaultAutoConsolidate,
-                        pauseOnError: settings.takeoverDefaultPauseOnError,
-                    },
-                    config,
-                });
-                await writeMemoryTakeoverPlan(this.chatKey_, plan);
-                return buildProgressSnapshot(this.chatKey_, plan);
+                return this.takeoverService.createPlanSnapshot(await this.readCurrentSummaryFloorCount(), config);
             },
             startTakeover: async (takeoverId?: string): Promise<MemoryTakeoverExecutionResult> => {
                 this.tryRegisterLLMTasks();
-                const existingPlan = await readMemoryTakeoverPlan(this.chatKey_);
-                const progress = existingPlan && (!takeoverId || existingPlan.takeoverId === takeoverId)
-                    ? await runTakeoverScheduler({
-                        chatKey: this.chatKey_,
-                        plan: existingPlan,
-                        llm: readMemoryLLMApi(),
-                        pluginId: MEMORY_OS_PLUGIN_ID,
-                        existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
-                        applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                            await this.applyTakeoverConsolidation(result);
-                        },
-                    })
-                    : await this.chatState.createTakeoverPlan().then(async (snapshot: MemoryTakeoverProgressSnapshot): Promise<MemoryTakeoverProgressSnapshot> => {
-                        if (!snapshot.plan) {
-                            return snapshot;
-                        }
-                        return runTakeoverScheduler({
-                            chatKey: this.chatKey_,
-                            plan: snapshot.plan,
-                            llm: readMemoryLLMApi(),
-                            pluginId: MEMORY_OS_PLUGIN_ID,
-                            existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
-                            applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                                await this.applyTakeoverConsolidation(result);
-                            },
-                        });
-                    });
-                return {
-                    ok: Boolean(progress.plan) && progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
-                    reasonCode: progress.plan?.status === 'completed' ? 'completed' : (progress.plan?.status ?? 'missing_plan'),
-                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
-                        ? String(progress.plan?.lastError ?? '').trim() || undefined
-                        : undefined,
-                    progress,
-                };
-            },
-            pauseTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
-                const plan = await readMemoryTakeoverPlan(this.chatKey_);
-                if (!plan) {
-                    return buildProgressSnapshot(this.chatKey_, null);
-                }
-                const nextPlan = {
-                    ...plan,
-                    status: 'paused' as const,
-                    pausedAt: Date.now(),
-                    updatedAt: Date.now(),
-                };
-                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
-                return buildProgressSnapshot(this.chatKey_, nextPlan);
-            },
-            resumeTakeover: async (): Promise<MemoryTakeoverExecutionResult> => {
-                const plan = await readMemoryTakeoverPlan(this.chatKey_);
-                if (!plan) {
-                    return {
-                        ok: false,
-                        reasonCode: 'takeover_plan_missing',
-                        errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
-                        progress: null,
-                    };
-                }
-                const nextPlan = {
-                    ...plan,
-                    status: 'idle' as const,
-                    pausedAt: undefined,
-                    updatedAt: Date.now(),
-                };
-                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
-                const progress = await runTakeoverScheduler({
-                    chatKey: this.chatKey_,
-                    plan: nextPlan,
+                const progress = await this.takeoverService.startTakeover({
+                    currentFloorCount: await this.readCurrentSummaryFloorCount(),
+                    takeoverId,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
@@ -576,21 +478,42 @@ export class MemorySDKImpl {
                         await this.applyTakeoverConsolidation(result);
                     },
                 });
-                return {
-                    ok: progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
-                    reasonCode: progress.plan?.status ?? 'ok',
-                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
-                        ? String(progress.plan?.lastError ?? '').trim() || undefined
-                        : undefined,
-                    progress,
-                };
+                return this.toTakeoverExecutionResult(progress, 'missing_plan');
+            },
+            pauseTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
+                return this.takeoverService.pauseTakeover();
+            },
+            resumeTakeover: async (): Promise<MemoryTakeoverExecutionResult> => {
+                const progress = await this.takeoverService.resumeTakeover({
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
+                    applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                        await this.applyTakeoverConsolidation(result);
+                    },
+                });
+                if (!progress) {
+                    return {
+                        ok: false,
+                        reasonCode: 'takeover_plan_missing',
+                        errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
+                        progress: null,
+                    };
+                }
+                return this.toTakeoverExecutionResult(progress, 'ok');
             },
             retryFailedBatch: async (_batchId?: string): Promise<MemoryTakeoverExecutionResult> => {
                 return this.chatState.resumeTakeover();
             },
             runTakeoverConsolidation: async (): Promise<MemoryTakeoverExecutionResult> => {
-                const plan = await readMemoryTakeoverPlan(this.chatKey_);
-                if (!plan) {
+                const progress = await this.takeoverService.runStoredConsolidation({
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                        await this.applyTakeoverConsolidation(result);
+                    },
+                });
+                if (!progress) {
                     return {
                         ok: false,
                         reasonCode: 'takeover_plan_missing',
@@ -598,32 +521,14 @@ export class MemorySDKImpl {
                         progress: null,
                     };
                 }
-                const preview = await loadMemoryTakeoverPreview(this.chatKey_);
-                const batchResults = await loadMemoryTakeoverBatchResults(this.chatKey_);
-                const consolidation = await runTakeoverConsolidation({
-                    llm: readMemoryLLMApi(),
-                    pluginId: MEMORY_OS_PLUGIN_ID,
-                    takeoverId: plan.takeoverId,
-                    activeSnapshot: preview.activeSnapshot,
-                    batchResults,
-                });
-                await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', consolidation);
-                await this.applyTakeoverConsolidation(consolidation);
-                const nextPlan = {
-                    ...plan,
-                    status: 'completed' as const,
-                    completedAt: Date.now(),
-                    updatedAt: Date.now(),
-                };
-                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
                 return {
                     ok: true,
                     reasonCode: 'completed',
-                    progress: await buildProgressSnapshot(this.chatKey_, nextPlan),
+                    progress,
                 };
             },
             rebuildTakeoverRange: async (startFloor: number, endFloor: number, batchSize?: number): Promise<MemoryTakeoverExecutionResult> => {
-                const snapshot = await this.chatState.createTakeoverPlan({
+                const snapshot = await this.takeoverService.createPlanSnapshot(await this.readCurrentSummaryFloorCount(), {
                     mode: 'custom_range',
                     startFloor,
                     endFloor,
@@ -637,9 +542,7 @@ export class MemorySDKImpl {
                         progress: snapshot,
                     };
                 }
-                const progress = await runTakeoverScheduler({
-                    chatKey: this.chatKey_,
-                    plan: snapshot.plan,
+                const progress = await this.takeoverService.runPlan(snapshot.plan, {
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
@@ -647,28 +550,10 @@ export class MemorySDKImpl {
                         await this.applyTakeoverConsolidation(result);
                     },
                 });
-                return {
-                    ok: progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
-                    reasonCode: progress.plan?.status ?? 'ok',
-                    errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
-                        ? String(progress.plan?.lastError ?? '').trim() || undefined
-                        : undefined,
-                    progress,
-                };
+                return this.toTakeoverExecutionResult(progress, 'ok');
             },
             abortTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
-                const plan = await readMemoryTakeoverPlan(this.chatKey_);
-                if (!plan) {
-                    return buildProgressSnapshot(this.chatKey_);
-                }
-                const nextPlan = {
-                    ...plan,
-                    status: 'failed' as const,
-                    lastError: 'manual_abort',
-                    updatedAt: Date.now(),
-                };
-                await writeMemoryTakeoverPlan(this.chatKey_, nextPlan);
-                return buildProgressSnapshot(this.chatKey_, nextPlan);
+                return this.takeoverService.abortTakeover();
             },
             setPromptReadyCaptureSnapshotForTest: async (snapshot: PromptReadyCaptureSnapshot): Promise<void> => {
                 this.promptReadyCaptureSnapshot = {
@@ -777,11 +662,13 @@ export class MemorySDKImpl {
                 const sourceBundle = await this.collectColdStartSourceBundle(_reason, selection);
                 const result = await runBootstrapOrchestrator({
                     dependencies: {
-                        ensureActorProfile: async (input): Promise<unknown> => this.unifiedManager.ensureActorProfile(input),
-                        saveEntry: async (input): Promise<any> => this.unifiedManager.saveEntry(input),
-                        bindRoleToEntry: async (actorKey: string, entryId: string): Promise<unknown> => this.unifiedManager.bindRoleToEntry(actorKey, entryId),
-                        putWorldProfileBinding: async (binding): Promise<unknown> => this.unifiedManager.putWorldProfileBinding(binding),
-                        appendMutationHistory: async (history): Promise<unknown> => this.unifiedManager.appendMutationHistory(history),
+                        ensureActorProfile: async (input): Promise<unknown> => this.entryRepository.ensureActorProfile(input),
+                        applyLedgerMutationBatch: async (mutations, context): Promise<any> => this.entryRepository.applyLedgerMutationBatch(mutations, {
+                            ...context,
+                            chatKey: this.chatKey_,
+                        }),
+                        putWorldProfileBinding: async (binding): Promise<unknown> => this.entryRepository.putWorldProfileBinding(binding),
+                        appendMutationHistory: async (history): Promise<unknown> => this.entryRepository.appendMutationHistory(history),
                     },
                     llm,
                     pluginId: MEMORY_OS_PLUGIN_ID,
@@ -844,11 +731,13 @@ export class MemorySDKImpl {
                 }
                 const applied = await applyBootstrapCandidates({
                     dependencies: {
-                        ensureActorProfile: async (input): Promise<unknown> => this.unifiedManager.ensureActorProfile(input),
-                        saveEntry: async (input): Promise<any> => this.unifiedManager.saveEntry(input),
-                        bindRoleToEntry: async (actorKey: string, entryId: string): Promise<unknown> => this.unifiedManager.bindRoleToEntry(actorKey, entryId),
-                        putWorldProfileBinding: async (binding): Promise<unknown> => this.unifiedManager.putWorldProfileBinding(binding),
-                        appendMutationHistory: async (history): Promise<unknown> => this.unifiedManager.appendMutationHistory(history),
+                        ensureActorProfile: async (input): Promise<unknown> => this.entryRepository.ensureActorProfile(input),
+                        applyLedgerMutationBatch: async (mutations, context): Promise<any> => this.entryRepository.applyLedgerMutationBatch(mutations, {
+                            ...context,
+                            chatKey: this.chatKey_,
+                        }),
+                        putWorldProfileBinding: async (binding): Promise<unknown> => this.entryRepository.putWorldProfileBinding(binding),
+                        appendMutationHistory: async (history): Promise<unknown> => this.entryRepository.appendMutationHistory(history),
                     },
                     document: this.pendingColdStartDraft.document,
                     sourceBundle: this.pendingColdStartDraft.sourceBundle,
@@ -889,45 +778,40 @@ export class MemorySDKImpl {
 
         this.unifiedMemory = {
             entryTypes: {
-                list: async () => this.unifiedManager.listEntryTypes(),
-                save: async (input: Parameters<UnifiedMemoryManager['saveEntryType']>[0]) => this.unifiedManager.saveEntryType(input),
-                remove: async (key: string) => this.unifiedManager.deleteEntryType(key),
+                list: async () => this.entryRepository.listEntryTypes(),
+                save: async (input: Parameters<EntryRepository['saveEntryType']>[0]) => this.entryRepository.saveEntryType(input),
+                remove: async (key: string) => this.entryRepository.deleteEntryType(key),
             },
             entries: {
-                list: async (filters?: Parameters<UnifiedMemoryManager['listEntries']>[0]) => this.unifiedManager.listEntries(filters),
-                get: async (entryId: string) => this.unifiedManager.getEntry(entryId),
-                save: async (input: Parameters<UnifiedMemoryManager['saveEntry']>[0]) => this.unifiedManager.saveEntry(input),
-                remove: async (entryId: string) => this.unifiedManager.deleteEntry(entryId),
+                list: async (filters?: Parameters<EntryRepository['listEntries']>[0]) => this.entryRepository.listEntries(filters),
+                get: async (entryId: string) => this.entryRepository.getEntry(entryId),
+                save: async (input: Parameters<EntryRepository['saveEntry']>[0]) => this.entryRepository.saveEntry(input),
+                remove: async (entryId: string) => this.entryRepository.deleteEntry(entryId),
             },
             actors: {
-                list: async () => this.unifiedManager.listActorProfiles(),
-                ensure: async (input: Parameters<UnifiedMemoryManager['ensureActorProfile']>[0]) => this.unifiedManager.ensureActorProfile(input),
-                setMemoryStat: async (actorKey: string, memoryStat: number) => this.unifiedManager.setActorMemoryStat(actorKey, memoryStat),
+                list: async () => this.entryRepository.listActorProfiles(),
+                ensure: async (input: Parameters<EntryRepository['ensureActorProfile']>[0]) => this.entryRepository.ensureActorProfile(input),
+                setMemoryStat: async (actorKey: string, memoryStat: number) => this.entryRepository.setActorMemoryStat(actorKey, memoryStat),
             },
             roleMemory: {
-                list: async (actorKey?: string) => this.unifiedManager.listRoleMemories(actorKey),
-                bind: async (actorKey: string, entryId: string) => this.unifiedManager.bindRoleToEntry(actorKey, entryId),
-                unbind: async (actorKey: string, entryId: string) => this.unifiedManager.unbindRoleFromEntry(actorKey, entryId),
+                list: async (actorKey?: string) => this.entryRepository.listRoleMemories(actorKey),
+                bind: async (actorKey: string, entryId: string) => this.entryRepository.bindRoleToEntry(actorKey, entryId),
+                unbind: async (actorKey: string, entryId: string) => this.entryRepository.unbindRoleFromEntry(actorKey, entryId),
             },
             summaries: {
-                list: async (limit?: number) => this.unifiedManager.listSummarySnapshots(limit),
-                apply: async (input: Parameters<UnifiedMemoryManager['applySummarySnapshot']>[0]) => this.unifiedManager.applySummarySnapshot(input),
-                capture: async (input: Parameters<UnifiedMemoryManager['captureSummaryFromChat']>[0]) => this.unifiedManager.captureSummaryFromChat(input),
+                list: async (limit?: number) => this.entryRepository.listSummarySnapshots(limit),
+                capture: async (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => this.summaryService.captureSummaryFromChat(input),
             },
              diagnostics: {
-                 getWorldProfileBinding: async () => this.unifiedManager.getWorldProfileBinding(),
-                 listMutationHistory: async (limit?: number) => this.unifiedManager.listMutationHistory(limit),
-                 listEntryAuditRecords: async (limit?: number) => this.unifiedManager.listEntryAuditRecords(limit),
+                 getWorldProfileBinding: async () => this.entryRepository.getWorldProfileBinding(),
+                 listMutationHistory: async (limit?: number) => this.entryRepository.listMutationHistory(limit),
+                 listEntryAuditRecords: async (limit?: number) => this.entryRepository.listEntryAuditRecords(limit),
               },
             prompts: {
-                preview: async (input?: Parameters<UnifiedMemoryManager['buildPromptAssembly']>[0]) => this.unifiedManager.buildPromptAssembly(input ?? {}),
+                preview: async (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => this.promptAssemblyService.buildPromptAssembly(input ?? {}),
                 inject: async (input: UnifiedPromptInjectInput): Promise<UnifiedPromptInjectResult> => {
-                    const preview = await this.unifiedManager.buildPromptAssembly({
-                        query: input.query,
-                        promptMessages: input.promptMessages,
-                        maxTokens: input.maxTokens,
-                    });
-                    const content = String(preview.finalText ?? '').trim();
+                    const snapshot = input.snapshot;
+                    const content = String(snapshot.finalText ?? '').trim();
                     const shouldInject = content.length > 0;
                     const insertIndex = this.resolveInsertIndex(input.promptMessages);
                     if (shouldInject && insertIndex >= 0) {
@@ -936,21 +820,7 @@ export class MemorySDKImpl {
                             content: `[Memory Context]\n<memoryos_context>\n${content}\n</memoryos_context>`,
                         } as unknown as SdkTavernPromptMessageEvent);
                     }
-                    this.latestRecallExplanation = {
-                        generatedAt: Date.now(),
-                        query: String(preview.query ?? ''),
-                        matchedActorKeys: preview.matchedActorKeys,
-                        matchedEntryIds: preview.matchedEntryIds,
-                        reasonCodes: preview.reasonCodes,
-                        source: 'unified_memory',
-                        retrievalProviderId: preview.diagnostics?.providerId,
-                        retrievalRulePack: preview.diagnostics?.rulePackMode,
-                        contextRoute: preview.diagnostics?.contextRoute ?? null,
-                        matchedRules: preview.diagnostics?.contextRoute?.matchedRules ?? [],
-                        subQueries: preview.diagnostics?.contextRoute?.subQueries ?? [],
-                        routeReasons: preview.diagnostics?.contextRoute?.reasons ?? [],
-                        traceRecords: preview.diagnostics?.traceRecords ?? [],
-                    };
+                    this.latestRecallExplanation = this.buildRecallExplanationFromSnapshot(snapshot);
                     return {
                         shouldInject,
                         inserted: shouldInject && insertIndex >= 0,
@@ -969,8 +839,53 @@ export class MemorySDKImpl {
      * @returns 初始化结果。
      */
     public async init(): Promise<void> {
-        await this.unifiedManager.init();
+        await this.entryRepository.init();
         this.tryRegisterLLMTasks();
+    }
+
+    /**
+     * 功能：基于 Prompt 组装快照生成最近一次召回说明。
+     * @param snapshot Prompt 组装快照。
+     * @returns 召回说明对象。
+     */
+    private buildRecallExplanationFromSnapshot(snapshot: PromptAssemblySnapshot): Record<string, unknown> {
+        return {
+            generatedAt: Date.now(),
+            query: String(snapshot.query ?? ''),
+            matchedActorKeys: snapshot.matchedActorKeys,
+            matchedEntryIds: snapshot.matchedEntryIds,
+            reasonCodes: snapshot.reasonCodes,
+            source: 'unified_memory',
+            retrievalProviderId: snapshot.diagnostics?.providerId,
+            retrievalRulePack: snapshot.diagnostics?.rulePackMode,
+            compareKeySchemaVersion: snapshot.diagnostics?.compareKeySchemaVersion ?? 'v2',
+            matchModeCounts: snapshot.diagnostics?.matchModeCounts ?? {},
+            contextRoute: snapshot.diagnostics?.contextRoute ?? null,
+            matchedRules: snapshot.diagnostics?.contextRoute?.matchedRules ?? [],
+            subQueries: snapshot.diagnostics?.contextRoute?.subQueries ?? [],
+            routeReasons: snapshot.diagnostics?.contextRoute?.reasons ?? [],
+            traceRecords: snapshot.diagnostics?.traceRecords ?? [],
+        };
+    }
+
+    /**
+     * 功能：把接管进度快照转换为门面对外执行结果。
+     * @param progress 接管进度快照。
+     * @param fallbackReasonCode 缺省原因码。
+     * @returns 接管执行结果。
+     */
+    private toTakeoverExecutionResult(
+        progress: MemoryTakeoverProgressSnapshot,
+        fallbackReasonCode: string,
+    ): MemoryTakeoverExecutionResult {
+        return {
+            ok: Boolean(progress.plan) && progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
+            reasonCode: progress.plan?.status === 'completed' ? 'completed' : (progress.plan?.status ?? fallbackReasonCode),
+            errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
+                ? String(progress.plan?.lastError ?? '').trim() || undefined
+                : undefined,
+            progress,
+        };
     }
 
     /**
@@ -998,6 +913,7 @@ export class MemorySDKImpl {
      * @returns 异步完成。
      */
     private async applyTakeoverConsolidation(result: MemoryTakeoverConsolidationResult): Promise<void> {
+        const applyResults: ApplyLedgerMutationBatchResult[] = [];
         for (const actorCard of result.actorCards ?? []) {
             await this.persistTakeoverActorCard(actorCard, result.takeoverId);
         }
@@ -1021,9 +937,10 @@ export class MemorySDKImpl {
             await this.applyTakeoverEntityTransition(entityTransition, result.takeoverId);
         }
 
+        const factMutations: LedgerMutation[] = [];
         for (const fact of result.longTermFacts) {
             const factTitle = this.renderTakeoverNarrativeText(
-                String(fact.title ?? '').trim() || `${fact.subject} · ${fact.predicate}`,
+                String(fact.title ?? '').trim() || `${fact.subject} ? ${fact.predicate}`,
                 narrativeContext,
             );
             const factSummary = this.renderTakeoverNarrativeText(
@@ -1034,13 +951,21 @@ export class MemorySDKImpl {
                 `${fact.subject}${fact.predicate}${fact.value}`,
                 narrativeContext,
             );
-            const savedEntry = await this.unifiedManager.saveEntry({
+            const actorBindings = this.resolveTakeoverMentionedActorKeys(
+                [fact.subject, fact.value, `${fact.subject}${fact.predicate}${fact.value}`],
+                result.actorCards ?? [],
+                existingActorCards,
+            );
+            factMutations.push({
+                targetKind: this.resolveTakeoverFactEntryType(fact.type),
+                action: 'ADD',
                 title: factTitle,
-                entryType: this.resolveTakeoverFactEntryType(fact.type),
-                category: this.resolveTakeoverFactCategory(fact.type),
-                tags: [fact.type].filter(Boolean),
                 summary: factSummary,
                 detail: factDetail,
+                compareKey: String(fact.compareKey ?? '').trim() || undefined,
+                tags: [fact.type].filter(Boolean),
+                actorBindings,
+                reasonCodes: ['takeover_long_term_fact', ...(fact.reasonCodes ?? [])],
                 detailPayload: {
                     compareKey: String(fact.compareKey ?? '').trim() || undefined,
                     reasonCodes: this.normalizeStringArray(fact.reasonCodes ?? []),
@@ -1065,14 +990,20 @@ export class MemorySDKImpl {
                         takeoverId: result.takeoverId,
                     },
                 },
-            }, {
-                actionType: 'ADD',
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_long_term_fact'],
             });
-            await this.bindTakeoverFactActors(savedEntry.entryId, fact, result.actorCards ?? [], existingActorCards);
         }
-        for (const relationship of result.relationships ?? []) {
+        if (factMutations.length > 0) {
+            applyResults.push(await this.entryRepository.applyLedgerMutationBatch(factMutations, {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId: result.takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
+            }));
+        }
+
+                for (const relationship of result.relationships ?? []) {
             await this.persistTakeoverStructuredRelationship({
                 relationship,
                 actorCards: result.actorCards ?? [],
@@ -1137,6 +1068,7 @@ export class MemorySDKImpl {
                 });
             }
 
+        const taskMutations: LedgerMutation[] = [];
         for (const task of result.taskState) {
             const normalizedObjective = this.renderTakeoverNarrativeText(task.goal || task.task, narrativeContext);
             const normalizedStatus = this.renderTakeoverNarrativeText(task.state, narrativeContext);
@@ -1161,13 +1093,16 @@ export class MemorySDKImpl {
                 status: normalizedStatus,
                 lastChange: this.renderTakeoverNarrativeText(String(task.description ?? ''), narrativeContext),
             });
-            const savedEntry = await this.unifiedManager.saveEntry({
+            taskMutations.push({
+                targetKind: 'task',
+                action: (taskDecision.action === 'NOOP' ? 'ADD' : taskDecision.action),
                 title: normalizedTitle,
-                entryType: 'task',
-                category: '任务',
-                tags: ['任务', '旧聊天接管'],
                 summary: taskSummary,
-                detail: this.renderTakeoverNarrativeText(`任务当前状态：${task.state}`, narrativeContext),
+                detail: this.renderTakeoverNarrativeText(`任务状态：${task.state}`, narrativeContext),
+                compareKey: taskDecision.compareKey,
+                tags: ['任务', '旧聊天接管'],
+                actorBindings: this.normalizeStringArray([...(task.bindings?.actors ?? []), 'user']),
+                reasonCodes: ['takeover_task_state', ...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
                 detailPayload: {
                     compareKey: taskDecision.compareKey,
                     reasonCodes: [...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
@@ -1199,14 +1134,20 @@ export class MemorySDKImpl {
                         sourceBatchId: result.takeoverId,
                     },
                 },
-            }, {
-                actionType: taskDecision.action === 'NOOP' ? 'ADD' : taskDecision.action,
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_task_state', ...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
             });
-            await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
+        }
+        if (taskMutations.length > 0) {
+            applyResults.push(await this.entryRepository.applyLedgerMutationBatch(taskMutations, {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId: result.takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
+            }));
         }
 
+                const worldStateMutations: LedgerMutation[] = [];
         for (const [key, value] of Object.entries(result.worldState ?? {})) {
             const normalizedKey = this.renderTakeoverNarrativeText(key, narrativeContext);
             const normalizedValue = this.renderTakeoverNarrativeText(value, narrativeContext);
@@ -1214,40 +1155,54 @@ export class MemorySDKImpl {
                 entryType: 'world_global_state',
                 title: normalizedKey,
                 fields: {
-                      scope: 'global',
-                      state: normalizedValue,
-                  },
-                  sourceBatchId: result.takeoverId,
-              });
-              await this.unifiedManager.saveEntry({
-                 title: normalizedKey,
-                  entryType: 'world_global_state',
-                  category: '世界观',
-                  tags: ['世界状态', '旧聊天接管'],
-                  summary: normalizedValue,
-                  detail: normalizedValue,
-                  detailPayload: {
-                      compareKey: worldDecision.compareKey,
-                      reasonCodes: worldDecision.reasonCodes,
-                      sourceBatchIds: [result.takeoverId],
-                      fields: {
-                          compareKey: worldDecision.compareKey,
-                          scope: 'global',
-                          state: normalizedValue,
-                      },
-                      takeover: {
-                          source: 'old_chat_takeover',
+                    scope: 'global',
+                    state: normalizedValue,
+                },
+                sourceBatchId: result.takeoverId,
+            });
+            worldStateMutations.push({
+                targetKind: 'world_global_state',
+                action: (worldDecision.action === 'NOOP' ? 'ADD' : worldDecision.action),
+                title: normalizedKey,
+                summary: normalizedValue,
+                detail: normalizedValue,
+                compareKey: worldDecision.compareKey,
+                tags: ['世界状态', '旧聊天接管'],
+                reasonCodes: ['takeover_world_state', ...worldDecision.reasonCodes],
+                detailPayload: {
+                    compareKey: worldDecision.compareKey,
+                    reasonCodes: worldDecision.reasonCodes,
+                    sourceBatchIds: [result.takeoverId],
+                    fields: {
+                        compareKey: worldDecision.compareKey,
+                        scope: 'global',
+                        state: normalizedValue,
+                    },
+                    takeover: {
+                        source: 'old_chat_takeover',
                         takeoverId: result.takeoverId,
                         sourceBatchId: result.takeoverId,
                     },
                 },
-            }, {
-                actionType: worldDecision.action === 'NOOP' ? 'ADD' : worldDecision.action,
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_world_state', ...worldDecision.reasonCodes],
             });
         }
-        await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
+        if (worldStateMutations.length > 0) {
+            applyResults.push(await this.entryRepository.applyLedgerMutationBatch(worldStateMutations, {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId: result.takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
+            }));
+        }
+
+        const snapshotSummary = await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
+        if (snapshotSummary?.mutationApplyDiagnostics) {
+            applyResults.push(snapshotSummary.mutationApplyDiagnostics);
+        }
+        result.applyDiagnostics = this.mergeLedgerMutationBatchResults(applyResults);
+        await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', result);
         await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
     }
@@ -1257,7 +1212,7 @@ export class MemorySDKImpl {
      * @returns 已存在角色卡的精简列表。
      */
     private async readTakeoverExistingActorCards(): Promise<Array<{ actorKey: string; displayName: string }>> {
-        const actorProfiles = await this.unifiedManager.listActorProfiles();
+        const actorProfiles = await this.entryRepository.listActorProfiles();
         return actorProfiles
             .map((profile: { actorKey: string; displayName: string }): { actorKey: string; displayName: string } => ({
                 actorKey: String(profile.actorKey ?? '').trim(),
@@ -1274,46 +1229,52 @@ export class MemorySDKImpl {
      */
     private async readTakeoverExistingKnownEntities(): Promise<{
         actors: Array<{ actorKey: string; displayName: string }>;
-        organizations: Array<{ entityKey: string; displayName: string }>;
-        cities: Array<{ entityKey: string; displayName: string }>;
-        nations: Array<{ entityKey: string; displayName: string }>;
-        locations: Array<{ entityKey: string; displayName: string }>;
-        tasks: Array<{ entityKey: string; displayName: string }>;
-        worldStates: Array<{ entityKey: string; displayName: string }>;
+        organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+        cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+        nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+        locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+        tasks: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+        worldStates: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
     }> {
         const actors = await this.readTakeoverExistingActorCards();
-        const organizationEntries = await this.unifiedManager.listEntries({ entryType: 'organization' });
-        const cityEntries = await this.unifiedManager.listEntries({ entryType: 'city' });
-        const nationEntries = await this.unifiedManager.listEntries({ entryType: 'nation' });
-        const locationEntries = await this.unifiedManager.listEntries({ entryType: 'location' });
-        const taskEntries = await this.unifiedManager.listEntries({ entryType: 'task' });
-        const worldEntries = await this.unifiedManager.listEntries();
+        const organizationEntries = await this.entryRepository.listEntries({ entryType: 'organization' });
+        const cityEntries = await this.entryRepository.listEntries({ entryType: 'city' });
+        const nationEntries = await this.entryRepository.listEntries({ entryType: 'nation' });
+        const locationEntries = await this.entryRepository.listEntries({ entryType: 'location' });
+        const taskEntries = await this.entryRepository.listEntries({ entryType: 'task' });
+        const worldEntries = await this.entryRepository.listEntries();
         return {
             actors,
             organizations: this.dedupeTakeoverEntityRefs(organizationEntries.map((entry) => ({
-                entityKey: String(entry.entryId ?? '').trim(),
+                entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                compareKey: this.resolveTakeoverStoredCompareKey(entry),
                 displayName: String(entry.title ?? '').trim(),
             }))),
             cities: this.dedupeTakeoverEntityRefs(cityEntries.map((entry) => ({
-                entityKey: String(entry.entryId ?? '').trim(),
+                entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                compareKey: this.resolveTakeoverStoredCompareKey(entry),
                 displayName: String(entry.title ?? '').trim(),
             }))),
             nations: this.dedupeTakeoverEntityRefs(nationEntries.map((entry) => ({
-                entityKey: String(entry.entryId ?? '').trim(),
+                entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                compareKey: this.resolveTakeoverStoredCompareKey(entry),
                 displayName: String(entry.title ?? '').trim(),
             }))),
             locations: this.dedupeTakeoverEntityRefs(locationEntries.map((entry) => ({
-                entityKey: String(entry.entryId ?? '').trim(),
+                entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                compareKey: this.resolveTakeoverStoredCompareKey(entry),
                 displayName: String(entry.title ?? '').trim(),
             }))),
             tasks: this.dedupeTakeoverEntityRefs(taskEntries.map((entry) => ({
-                entityKey: String(entry.entryId ?? '').trim(),
+                entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                compareKey: this.resolveTakeoverStoredCompareKey(entry),
                 displayName: String(entry.title ?? '').trim(),
             }))),
             worldStates: this.dedupeTakeoverEntityRefs(worldEntries
                 .filter((entry): boolean => ['world_global_state', 'world_core_setting', 'world_hard_rule'].includes(String(entry.entryType ?? '').trim()))
                 .map((entry) => ({
-                    entityKey: String(entry.entryId ?? '').trim(),
+                    entityKey: this.resolveTakeoverStoredEntityKey(entry),
+                    compareKey: this.resolveTakeoverStoredCompareKey(entry),
                     displayName: String(entry.title ?? '').trim(),
                   }))),
           };
@@ -1328,12 +1289,12 @@ export class MemorySDKImpl {
         actorCards: Array<{ actorKey: string; displayName: string; aliases?: string[] }>;
         existingActorCards: Array<{ actorKey: string; displayName: string }>;
         knownEntities: {
-            organizations: Array<{ entityKey: string; displayName: string }>;
-            cities: Array<{ entityKey: string; displayName: string }>;
-            nations: Array<{ entityKey: string; displayName: string }>;
-            locations: Array<{ entityKey: string; displayName: string }>;
-            tasks: Array<{ entityKey: string; displayName: string }>;
-            worldStates: Array<{ entityKey: string; displayName: string }>;
+            organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            tasks: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            worldStates: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
         };
         longTermFacts: Array<{ compareKey?: string; title?: string }>;
         taskState: Array<{ compareKey?: string; task: string; title?: string }>;
@@ -1373,12 +1334,23 @@ export class MemorySDKImpl {
             appendReference(actorKey, displayName);
             appendReference(`actor:${actorKey}`, displayName);
         });
-        input.knownEntities.organizations.forEach((item) => appendReference(`organization:${item.displayName}`, item.displayName));
-        input.knownEntities.cities.forEach((item) => appendReference(`city:${item.displayName}`, item.displayName));
-        input.knownEntities.nations.forEach((item) => appendReference(`nation:${item.displayName}`, item.displayName));
-        input.knownEntities.locations.forEach((item) => appendReference(`location:${item.displayName}`, item.displayName));
-        input.knownEntities.tasks.forEach((item) => appendReference(`task:${item.displayName}`, item.displayName));
-        input.knownEntities.worldStates.forEach((item) => appendReference(`world:${item.displayName}`, item.displayName));
+        const appendKnownEntityReference = (
+            item: { compareKey?: string; displayName: string },
+            fallbackBuilder: (displayName: string) => string,
+        ): void => {
+            const displayName = String(item.displayName ?? '').trim();
+            if (!displayName) {
+                return;
+            }
+            const compareKey = String(item.compareKey ?? '').trim();
+            appendReference(compareKey || fallbackBuilder(displayName), displayName);
+        };
+        input.knownEntities.organizations.forEach((item) => appendKnownEntityReference(item, buildOrganizationCompareKey));
+        input.knownEntities.cities.forEach((item) => appendKnownEntityReference(item, buildCityCompareKey));
+        input.knownEntities.nations.forEach((item) => appendKnownEntityReference(item, buildNationCompareKey));
+        input.knownEntities.locations.forEach((item) => appendKnownEntityReference(item, buildLocationCompareKey));
+        input.knownEntities.tasks.forEach((item) => appendKnownEntityReference(item, buildTaskCompareKey));
+        input.knownEntities.worldStates.forEach((item) => appendKnownEntityReference(item, buildWorldStateCompareKey));
         input.longTermFacts.forEach((fact) => {
             const compareKey = String(fact.compareKey ?? '').trim();
             const title = String(fact.title ?? '').trim();
@@ -1388,7 +1360,7 @@ export class MemorySDKImpl {
             if (compareKey) {
                 appendReference(compareKey, title);
             }
-            appendReference(`event:${title}`, title);
+            appendReference(buildEventCompareKey(title), title);
         });
         input.taskState.forEach((task) => {
             const title = String(task.title ?? task.task ?? '').trim();
@@ -1399,15 +1371,14 @@ export class MemorySDKImpl {
             if (compareKey) {
                 appendReference(compareKey, title);
             }
-            appendReference(`task:${title}`, title);
+            appendReference(buildTaskCompareKey(title), title);
         });
         Object.keys(input.worldState ?? {}).forEach((key: string): void => {
             const normalizedKey = String(key ?? '').trim();
             if (!normalizedKey) {
                 return;
             }
-            appendReference(`world:${normalizedKey}`, normalizedKey);
-            appendReference(`world_global_state:${normalizedKey}`, normalizedKey);
+            appendReference(buildWorldStateCompareKey(normalizedKey), normalizedKey);
         });
         return {
             userDisplayName,
@@ -1485,11 +1456,11 @@ export class MemorySDKImpl {
         if (!actorKey || actorKey === 'user') {
             return { actorKey: 'user', displayName: resolveCurrentNarrativeUserName() };
         }
-        await this.unifiedManager.ensureActorProfile({
+        await this.entryRepository.ensureActorProfile({
             actorKey,
             displayName,
         });
-        const existingActorEntries = await this.unifiedManager.listEntries({
+        const existingActorEntries = await this.entryRepository.listEntries({
             entryType: 'actor_profile',
             rememberedByActorKey: actorKey,
         });
@@ -1517,19 +1488,24 @@ export class MemorySDKImpl {
         const summary = identityFacts.join('；')
             || existingEntry?.summary
             || (nextHydrationState === 'full' ? `${displayName}的角色卡` : `${displayName}的轻量角色卡`);
-        const savedEntry = await this.unifiedManager.saveEntry({
-            entryId: existingEntry?.entryId,
+        await this.entryRepository.applyLedgerMutationBatch([{
+            targetKind: 'actor_profile',
+            action: existingEntry ? 'UPDATE' : 'ADD',
             title: displayName,
-            entryType: 'actor_profile',
-            category: '角色关系',
-            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
+            entryId: existingEntry?.entryId,
+            compareKey: buildCompareKey('actor_profile', displayName, { actorKey }),
             summary,
             detail: existingEntry?.detail ?? '',
+            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
+            actorBindings: [actorKey],
+            reasonCodes: [existingEntry ? `takeover_actor_${nextHydrationState}_update` : `takeover_actor_${nextHydrationState}_add`],
             detailPayload: {
                 ...existingPayload,
+                actorKey,
                 hydrationState: nextHydrationState,
                 fields: {
                     ...existingFields,
+                    actorKey,
                     aliases,
                     identityFacts,
                     originFacts,
@@ -1543,21 +1519,18 @@ export class MemorySDKImpl {
                     },
                 } : {}),
             },
-            sourceSummaryIds: existingEntry?.sourceSummaryIds ?? [],
-        }, {
-            actionType: existingEntry ? 'UPDATE' : 'ADD',
+        }], {
+            chatKey: this.chatKey_,
+            source: 'takeover',
             sourceLabel: '旧聊天接管整合',
-            reasonCodes: [existingEntry ? `takeover_actor_${nextHydrationState}_update` : `takeover_actor_${nextHydrationState}_add`],
+            takeoverId: input.takeoverId,
+            allowCreate: true,
+            allowInvalidate: true,
         });
-        await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
         return { actorKey, displayName };
     }
 
-    /**
-     * 功能：写入旧聊天接管识别出的角色关系。
-     * @param input 关系写入参数。
-     * @returns 异步完成。
-     */
+    
     private async persistTakeoverActorRelation(input: {
         actorKey: string;
         displayName: string;
@@ -1694,8 +1667,8 @@ export class MemorySDKImpl {
         takeoverId: string;
         reasonCode: string;
     }): Promise<void> {
-        const compareKey = buildRelationshipCompareKey(input.sourceActorKey, input.targetActorKey);
-        const existingEntries = await this.unifiedManager.listEntries({ entryType: 'relationship' });
+        const compareKey = buildRelationshipCompareKey(input.sourceActorKey, input.targetActorKey, input.relationTag);
+        const existingEntries = await this.entryRepository.listEntries({ entryType: 'relationship' });
         const existingEntry = existingEntries.find((entry) => {
             const payload = this.toRecord(entry.detailPayload);
             const fields = this.toRecord(payload.fields);
@@ -1714,102 +1687,58 @@ export class MemorySDKImpl {
         const normalizedTrust = this.clampTakeover01(input.trust);
         const normalizedAffection = this.clampTakeover01(input.affection);
         const normalizedTension = this.clampTakeover01(input.tension);
-        const savedEntry = await this.unifiedManager.saveEntry({
-            entryId: existingEntry?.entryId,
+        await this.entryRepository.applyLedgerMutationBatch([{
+            targetKind: 'relationship',
+            action: existingEntry ? 'UPDATE' : 'ADD',
             title,
-            entryType: 'relationship',
-            category: '角色关系',
-            tags: this.dedupeTakeoverStringList(['关系', input.relationTag]),
+            entryId: existingEntry?.entryId,
+            compareKey,
             summary: input.summary,
             detail: input.state,
-              detailPayload: {
-                  ...(existingEntry?.detailPayload ?? {}),
-                  compareKey,
-                  sourceActorKey: input.sourceActorKey,
-                  targetActorKey: input.targetActorKey,
-                  sourceDisplayName,
-                  targetDisplayName,
-                  trust: normalizedTrust,
-                  affection: normalizedAffection,
-                  tension: normalizedTension,
-                  fields: {
-                      ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
+            tags: this.dedupeTakeoverStringList(['关系', input.relationTag]),
+            actorBindings: [input.sourceActorKey, input.targetActorKey],
+            reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
+            detailPayload: {
+                ...(existingEntry?.detailPayload ?? {}),
+                compareKey,
+                sourceActorKey: input.sourceActorKey,
+                targetActorKey: input.targetActorKey,
+                sourceDisplayName,
+                targetDisplayName,
+                trust: normalizedTrust,
+                affection: normalizedAffection,
+                tension: normalizedTension,
+                fields: {
+                    ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
                     compareKey,
                     relationTag: input.relationTag,
                     state: input.state,
-                      summary: input.summary,
-                      participants: normalizedParticipants,
-                      trust: normalizedTrust,
-                      affection: normalizedAffection,
-                      tension: normalizedTension,
-                      sourceDisplayName,
-                      targetDisplayName,
-                  },
-                  takeover: {
-                      source: 'old_chat_takeover',
-                      takeoverId: input.takeoverId,
-                  },
+                    summary: input.summary,
+                    participants: normalizedParticipants,
+                    trust: normalizedTrust,
+                    affection: normalizedAffection,
+                    tension: normalizedTension,
+                    sourceDisplayName,
+                    targetDisplayName,
+                    sourceActorKey: input.sourceActorKey,
+                    targetActorKey: input.targetActorKey,
+                },
+                takeover: {
+                    source: 'old_chat_takeover',
+                    takeoverId: input.takeoverId,
+                },
             },
-        }, {
-            actionType: existingEntry ? 'UPDATE' : 'ADD',
-              sourceLabel: '旧聊天接管整合',
-              reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
-          });
-          await this.unifiedManager.bindRoleToEntry(input.sourceActorKey, savedEntry.entryId);
-          await this.unifiedManager.bindRoleToEntry(input.targetActorKey, savedEntry.entryId);
-      }
-
-    /**
-     * 功能：把旧聊天事实条目绑定到命中的角色卡。
-     * @param entryId 事实条目 ID。
-     * @param fact 事实对象。
-     * @param actorCards 本次整合识别出的角色卡。
-     * @param existingActorCards 当前聊天已存在的角色卡。
-     * @returns 异步完成。
-     */
-    private async bindTakeoverFactActors(
-        entryId: string,
-        fact: {
-            type: string;
-            subject: string;
-            predicate: string;
-            value: string;
-        },
-        actorCards: Array<{
-            actorKey: string;
-            displayName: string;
-            aliases?: string[];
-        }>,
-        existingActorCards: Array<{ actorKey: string; displayName: string }>,
-    ): Promise<void> {
-        const entryType = this.resolveTakeoverFactEntryType(fact.type);
-        if (!['event', 'actor_profile', 'relationship', 'task'].includes(entryType)) {
-            return;
-        }
-        const actorKeys = this.resolveTakeoverMentionedActorKeys(
-            [fact.subject, fact.value, `${fact.subject}${fact.predicate}${fact.value}`],
-            actorCards,
-            existingActorCards,
-        );
-        for (const actorKey of actorKeys) {
-            const resolvedActor = this.resolveTakeoverActorByKey(actorKey, actorCards, existingActorCards);
-            if (resolvedActor) {
-                await this.ensureTakeoverActorReference({
-                    actorKey: resolvedActor.actorKey,
-                    displayName: resolvedActor.displayName,
-                    takeoverId: '',
-                    hydrationState: 'partial',
-                });
-            }
-            await this.unifiedManager.bindRoleToEntry(resolvedActor?.actorKey ?? actorKey, entryId);
-        }
+        }], {
+            chatKey: this.chatKey_,
+            source: 'takeover',
+            sourceLabel: '旧聊天接管整合',
+            takeoverId: input.takeoverId,
+            allowCreate: true,
+            allowInvalidate: true,
+        });
     }
 
-    /**
-     * 功能：把旧聊天接管识别出的实体关系补写到对应实体条目。
-     * @param input 实体关系写入参数。
-     * @returns 异步完成。
-     */
+    
     private async persistTakeoverEntityRelation(input: {
         entityKey: string;
         displayName: string;
@@ -1819,20 +1748,21 @@ export class MemorySDKImpl {
         relationTag: string;
         takeoverId: string;
     }): Promise<void> {
-        const entry = await this.unifiedManager.getEntry(input.entityKey);
+        const entry = await this.entryRepository.getEntry(input.entityKey);
         if (!entry) {
             return;
         }
         const payload = this.toRecord(entry.detailPayload);
         const fields = this.toRecord(payload.fields);
-        await this.unifiedManager.saveEntry({
-            entryId: entry.entryId,
+        await this.entryRepository.applyLedgerMutationBatch([{
+            targetKind: entry.entryType,
+            action: 'UPDATE',
             title: entry.title,
-            entryType: entry.entryType,
-            category: entry.category,
+            entryId: entry.entryId,
             tags: this.dedupeTakeoverStringList([...(entry.tags ?? []), '关系']),
             summary: entry.summary,
             detail: entry.detail,
+            reasonCodes: ['takeover_entity_relation_update'],
             detailPayload: {
                 ...payload,
                 fields: {
@@ -1846,22 +1776,17 @@ export class MemorySDKImpl {
                     takeoverId: input.takeoverId,
                 },
             },
-        }, {
-            actionType: 'UPDATE',
-            sourceLabel: '旧聊天接管整合',
-            reasonCodes: ['takeover_entity_relation_update'],
+        }], {
+            chatKey: this.chatKey_,
+            source: 'takeover',
+            sourceLabel: '旧聊天接管',
+            takeoverId: input.takeoverId,
+            allowCreate: true,
+            allowInvalidate: true,
         });
     }
 
-    /**
-     * 功能：解析旧聊天关系目标对应的实体条目。
-     * @param targetName 关系目标名称。
-     * @param targetType 目标类型。
-     * @param entityCards 本次识别出的实体卡。
-     * @param knownEntities 当前已存在的实体引用。
-     * @returns 实体匹配结果；未匹配时返回 null。
-     */
-    private resolveTakeoverRelationEntityTarget(
+        private resolveTakeoverRelationEntityTarget(
         targetName: string,
         targetType: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown' | undefined,
         entityCards: Array<{
@@ -1871,12 +1796,12 @@ export class MemorySDKImpl {
             aliases?: string[];
         }>,
         knownEntities: {
-            organizations: Array<{ entityKey: string; displayName: string }>;
-            cities: Array<{ entityKey: string; displayName: string }>;
-            nations: Array<{ entityKey: string; displayName: string }>;
-            locations: Array<{ entityKey: string; displayName: string }>;
+            organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
         },
-    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+    ): { entityKey: string; compareKey?: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
         const normalizedTargetName = this.normalizeTakeoverRelationTargetName(targetName);
         if (!normalizedTargetName) {
             return null;
@@ -2019,24 +1944,33 @@ export class MemorySDKImpl {
         };
 
         const compareKey = this.buildTakeoverEntityCompareKey(entityType, entityCard.compareKey, title);
-        const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
+        const existingEntries = await this.entryRepository.listEntries({ entryType: entityType });
         const existingEntry = existingEntries.find((entry) => this.matchTakeoverEntityEntry(entry, compareKey, title)) ?? null;
 
         const aliases = this.dedupeTakeoverStringList(entityCard.aliases ?? []);
         const summary = String(entityCard.summary ?? '').trim() || `${title}的${categoryMap[entityType] ?? '实体'}信息`;
         const fields = entityCard.fields && typeof entityCard.fields === 'object' ? entityCard.fields : {};
 
-        await this.unifiedManager.saveEntry({
-            entryId: existingEntry?.entryId,
+        await this.entryRepository.applyLedgerMutationBatch([{
+            targetKind: entityType,
+            action: existingEntry ? 'UPDATE' : 'ADD',
             title,
-            entryType: entityType,
-            category: categoryMap[entityType] ?? '其他',
-            tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
+            entryId: existingEntry?.entryId,
+            entityKey: String(entityCard.entityKey ?? '').trim() || undefined,
+            compareKey,
+            matchKeys: entityCard.matchKeys ?? [],
             summary,
             detail: existingEntry?.detail ?? '',
+            tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
+            reasonCodes: [existingEntry ? 'takeover_entity_card_update' : 'takeover_entity_card_add'],
             detailPayload: {
                 ...(existingEntry?.detailPayload ?? {}),
+                entityKey: String(entityCard.entityKey ?? '').trim() || undefined,
                 compareKey,
+                matchKeys: entityCard.matchKeys ?? [],
+                schemaVersion: entityCard.schemaVersion,
+                canonicalName: entityCard.canonicalName,
+                legacyCompareKeys: entityCard.legacyCompareKeys ?? [],
                 reasonCodes: this.normalizeStringArray([
                     ...this.normalizeStringArray(((existingEntry?.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
                     ...(entityCard.reasonCodes ?? []),
@@ -2047,6 +1981,7 @@ export class MemorySDKImpl {
                     ...fields,
                     aliases,
                     compareKey,
+                    entityKey: String(entityCard.entityKey ?? '').trim() || undefined,
                     confidence: Math.max(0, Math.min(1, Number(entityCard.confidence) || 0)),
                 },
                 takeover: {
@@ -2054,19 +1989,17 @@ export class MemorySDKImpl {
                     takeoverId,
                 },
             },
-        }, {
-            actionType: existingEntry ? 'UPDATE' : 'ADD',
+        }], {
+            chatKey: this.chatKey_,
+            source: 'takeover',
             sourceLabel: '旧聊天接管整合',
-            reasonCodes: [existingEntry ? 'takeover_entity_card_update' : 'takeover_entity_card_add'],
+            takeoverId,
+            allowCreate: true,
+            allowInvalidate: true,
         });
     }
 
-    /**
-     * 功能：应用旧聊天处理识别出的世界实体变更。
-     * @param transition 实体变更。
-     * @param takeoverId 接管任务 ID。
-     * @returns 异步完成。
-     */
+    
     private async applyTakeoverEntityTransition(
         transition: MemoryTakeoverEntityTransition,
         takeoverId: string,
@@ -2081,27 +2014,27 @@ export class MemorySDKImpl {
             return;
         }
         const action = String(transition.action ?? '').trim().toUpperCase();
-
         const categoryMap: Record<string, string> = {
             organization: '组织',
             city: '城市',
             nation: '国家',
             location: '地点',
         };
-
         const compareKey = this.buildTakeoverEntityCompareKey(entityType, transition.compareKey, title);
-        const existingEntries = await this.unifiedManager.listEntries({ entryType: entityType });
+        const existingEntries = await this.entryRepository.listEntries({ entryType: entityType });
         const existingEntry = existingEntries.find((entry) => this.matchTakeoverEntityEntry(entry, compareKey, title)) ?? null;
 
         if (action === 'INVALIDATE' && existingEntry) {
-            await this.unifiedManager.saveEntry({
-                entryId: existingEntry.entryId,
+            await this.entryRepository.applyLedgerMutationBatch([{
+                targetKind: entityType,
+                action: 'INVALIDATE',
                 title: existingEntry.title,
-                entryType: entityType,
-                category: categoryMap[entityType] ?? '其他',
+                entryId: existingEntry.entryId,
+                compareKey,
                 tags: existingEntry.tags ?? [entityType],
-                summary: `[已失效] ${existingEntry.summary ?? ''}`,
+                summary: '[已失效] ' + (existingEntry.summary ?? ''),
                 detail: existingEntry.detail ?? '',
+                reasonCodes: ['takeover_entity_invalidate'],
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
                     compareKey,
@@ -2112,51 +2045,54 @@ export class MemorySDKImpl {
                     lifecycle: { status: 'invalidated', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
-            }, {
-                actionType: 'UPDATE',
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_entity_invalidate'],
+            }], {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
             });
             return;
         }
 
         if (action === 'DELETE' && existingEntry) {
-            await this.unifiedManager.saveEntry({
-                entryId: existingEntry.entryId,
+            await this.entryRepository.applyLedgerMutationBatch([{
+                targetKind: entityType,
+                action: 'DELETE',
                 title: existingEntry.title,
-                entryType: entityType,
-                category: categoryMap[entityType] ?? '其他',
-                tags: existingEntry.tags ?? [entityType],
-                summary: `[已删除] ${existingEntry.summary ?? ''}`,
-                detail: existingEntry.detail ?? '',
+                entryId: existingEntry.entryId,
+                compareKey,
+                reasonCodes: ['takeover_entity_delete'],
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
                     compareKey,
-                    reasonCodes: this.normalizeStringArray([
-                        ...this.normalizeStringArray(((existingEntry.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
-                        ...(transition.reasonCodes ?? []),
-                    ]),
                     lifecycle: { status: 'archived', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
-            }, {
-                actionType: 'UPDATE',
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_entity_delete'],
+            }], {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
             });
             return;
         }
 
         if ((action === 'ADD' || action === 'UPDATE' || action === 'MERGE') && transition.payload) {
             const summary = String(transition.payload.summary ?? transition.reason ?? '').trim();
-            await this.unifiedManager.saveEntry({
-                entryId: existingEntry?.entryId,
+            await this.entryRepository.applyLedgerMutationBatch([{
+                targetKind: entityType,
+                action: (existingEntry ? 'UPDATE' : 'ADD'),
                 title,
-                entryType: entityType,
-                category: categoryMap[entityType] ?? '其他',
+                entryId: existingEntry?.entryId,
+                compareKey,
                 tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
-                summary: summary || `${title}的${categoryMap[entityType] ?? '实体'}信息`,
+                summary: summary || `${title}的${categoryMap[entityType] ?? '实体'}变更`,
                 detail: existingEntry?.detail ?? '',
+                reasonCodes: ['takeover_entity_' + action.toLowerCase()],
                 detailPayload: {
                     ...(existingEntry?.detailPayload ?? {}),
                     compareKey,
@@ -2172,20 +2108,18 @@ export class MemorySDKImpl {
                     },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
-            }, {
-                actionType: existingEntry ? 'UPDATE' : 'ADD',
-                sourceLabel: '旧聊天接管整合',
-                reasonCodes: [`takeover_entity_${action.toLowerCase()}`],
+            }], {
+                chatKey: this.chatKey_,
+                source: 'takeover',
+                sourceLabel: '旧聊天接管',
+                takeoverId,
+                allowCreate: true,
+                allowInvalidate: true,
             });
         }
     }
 
-    /**
-     * 功能：从条目中提取别名列表。
-     * @param entry 条目。
-     * @returns 别名列表。
-     */
-    private extractEntryAliases(entry: { detailPayload?: unknown }): string[] {
+        private extractEntryAliases(entry: { detailPayload?: unknown }): string[] {
         const payload = entry.detailPayload;
         if (!payload || typeof payload !== 'object') {
             return [];
@@ -2252,6 +2186,24 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：从已存条目中解析可复用的稳定实体键。
+     * @param entry 已存条目。
+     * @returns 稳定实体键。
+     */
+    private resolveTakeoverStoredEntityKey(entry: { entryId?: string; detailPayload?: unknown }): string {
+        const payload = this.toRecord(entry.detailPayload);
+        const fields = this.toRecord(payload.fields);
+        return String(
+            payload.entityKey
+            ?? fields.entityKey
+            ?? payload.compareKey
+            ?? fields.compareKey
+            ?? entry.entryId
+            ?? '',
+        ).trim();
+    }
+
+    /**
      * 功能：判断实体条目是否匹配旧聊天接管中的实体标识。
      * @param entry 正式记忆条目。
      * @param compareKey 实体 compareKey。
@@ -2312,14 +2264,17 @@ export class MemorySDKImpl {
         compareKey: string,
         entityType: 'organization' | 'city' | 'nation' | 'location',
         knownEntities: {
-            organizations: Array<{ entityKey: string; displayName: string }>;
-            cities: Array<{ entityKey: string; displayName: string }>;
-            nations: Array<{ entityKey: string; displayName: string }>;
-            locations: Array<{ entityKey: string; displayName: string }>;
+            organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
         },
-    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+    ): { entityKey: string; compareKey?: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
         const refs = this.resolveTakeoverEntityRefGroup(entityType, knownEntities);
-        return refs.find((item) => item.entityKey === compareKey) ?? null;
+        const normalizedCompareKey = String(compareKey ?? '').trim();
+        return refs.find((item) => {
+            return String(item.compareKey ?? '').trim() === normalizedCompareKey;
+        }) ?? null;
     }
 
     /**
@@ -2333,12 +2288,12 @@ export class MemorySDKImpl {
         displayName: string,
         entityType: 'organization' | 'city' | 'nation' | 'location',
         knownEntities: {
-            organizations: Array<{ entityKey: string; displayName: string }>;
-            cities: Array<{ entityKey: string; displayName: string }>;
-            nations: Array<{ entityKey: string; displayName: string }>;
-            locations: Array<{ entityKey: string; displayName: string }>;
+            organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
         },
-    ): { entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
+    ): { entityKey: string; compareKey?: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' } | null {
         const refs = this.resolveTakeoverEntityRefGroup(entityType, knownEntities);
         const normalizedDisplayName = this.normalizeTakeoverRelationTargetName(displayName);
         return refs.find((item) => {
@@ -2355,12 +2310,12 @@ export class MemorySDKImpl {
     private resolveTakeoverEntityRefGroup(
         entityType: 'organization' | 'city' | 'nation' | 'location',
         knownEntities: {
-            organizations: Array<{ entityKey: string; displayName: string }>;
-            cities: Array<{ entityKey: string; displayName: string }>;
-            nations: Array<{ entityKey: string; displayName: string }>;
-            locations: Array<{ entityKey: string; displayName: string }>;
+            organizations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            cities: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            nations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
+            locations: Array<{ entityKey: string; compareKey?: string; displayName: string }>;
         },
-    ): Array<{ entityKey: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' }> {
+    ): Array<{ entityKey: string; compareKey?: string; displayName: string; entityType: 'organization' | 'city' | 'nation' | 'location' }> {
         if (entityType === 'organization') {
             return knownEntities.organizations.map((item) => ({ ...item, entityType }));
         }
@@ -2378,14 +2333,14 @@ export class MemorySDKImpl {
         const detection = detectWorldProfile({
             texts: detectedFrom,
         });
-        await this.unifiedManager.putWorldProfileBinding({
+        await this.entryRepository.putWorldProfileBinding({
             primaryProfile: detection.primaryProfile,
             secondaryProfiles: detection.secondaryProfiles,
             confidence: detection.confidence,
             reasonCodes: detection.reasonCodes,
             detectedFrom,
         });
-        await this.unifiedManager.appendMutationHistory({
+        await this.entryRepository.appendMutationHistory({
             action: 'world_profile_bound',
             payload: {
                 source: 'old_chat_takeover',
@@ -2432,8 +2387,8 @@ export class MemorySDKImpl {
      * @param values 原始对象列表。
      * @returns 去重后的对象列表。
      */
-    private dedupeTakeoverEntityRefs(values: Array<{ entityKey: string; displayName: string }>): Array<{ entityKey: string; displayName: string }> {
-        const result: Array<{ entityKey: string; displayName: string }> = [];
+    private dedupeTakeoverEntityRefs(values: Array<{ entityKey: string; compareKey?: string; displayName: string }>): Array<{ entityKey: string; compareKey?: string; displayName: string }> {
+        const result: Array<{ entityKey: string; compareKey?: string; displayName: string }> = [];
         const seen = new Set<string>();
         for (const value of values) {
             const entityKey = String(value.entityKey ?? '').trim();
@@ -2442,9 +2397,28 @@ export class MemorySDKImpl {
                 continue;
             }
             seen.add(entityKey);
-            result.push({ entityKey, displayName });
+            result.push({
+                entityKey,
+                compareKey: String(value.compareKey ?? '').trim() || undefined,
+                displayName,
+            });
         }
         return result;
+    }
+
+    /**
+     * 功能：读取接管阶段条目中存储的 compareKey。
+     * @param entry 条目对象。
+     * @returns 已存储的 compareKey。
+     */
+    private resolveTakeoverStoredCompareKey(entry: { detailPayload?: unknown }): string {
+        const payload = this.toRecord(entry.detailPayload);
+        const fields = this.toRecord(payload.fields);
+        return String(
+            payload.compareKey
+            ?? fields.compareKey
+            ?? '',
+        ).trim();
     }
 
     /**
@@ -2534,7 +2508,7 @@ export class MemorySDKImpl {
     private async writeTakeoverSnapshotSummary(
         activeSnapshot: MemoryTakeoverActiveSnapshot | null,
         result: MemoryTakeoverConsolidationResult,
-    ): Promise<void> {
+    ): Promise<import('../types').SummarySnapshot | null> {
         const contentLines: string[] = [];
         if (activeSnapshot?.recentDigest) {
             contentLines.push(`最近摘要：${activeSnapshot.recentDigest}`);
@@ -2568,9 +2542,9 @@ export class MemorySDKImpl {
             );
         }
         if (contentLines.length <= 0) {
-            return;
+            return null;
         }
-        await this.unifiedManager.applySummarySnapshot({
+        return this.entryRepository.applySummarySnapshot({
             title: '旧聊天接管整合快照',
             content: contentLines.join('\n'),
             actorKeys: ['user'],
@@ -2584,6 +2558,60 @@ export class MemorySDKImpl {
      * @param existingActorCards 当前聊天已存在的角色卡。
      * @returns 可用角色目标；无法确认时返回 null。
      */
+    /**
+     * 功能：合并多次统一落盘结果，供接管链路输出统一诊断。
+     * @param results 多次落盘结果
+     * @returns 合并后的统一落盘诊断
+     */
+    private mergeLedgerMutationBatchResults(results: ApplyLedgerMutationBatchResult[]): ApplyLedgerMutationBatchResult {
+        const merged: ApplyLedgerMutationBatchResult = {
+            createdEntryIds: [],
+            updatedEntryIds: [],
+            invalidatedEntryIds: [],
+            deletedEntryIds: [],
+            noopCount: 0,
+            resolvedBindingResults: [],
+            counts: {
+                input: 0,
+                add: 0,
+                update: 0,
+                merge: 0,
+                invalidate: 0,
+                delete: 0,
+                noop: 0,
+            },
+            decisions: [],
+            affectedRecords: [],
+            bindingResults: [],
+            auditResults: [],
+            historyWritten: false,
+        };
+        for (const result of results) {
+            if (!result) {
+                continue;
+            }
+            merged.createdEntryIds.push(...(result.createdEntryIds ?? []));
+            merged.updatedEntryIds.push(...(result.updatedEntryIds ?? []));
+            merged.invalidatedEntryIds.push(...(result.invalidatedEntryIds ?? []));
+            merged.deletedEntryIds.push(...(result.deletedEntryIds ?? []));
+            merged.noopCount += Number(result.noopCount ?? 0);
+            merged.counts.input += Number(result.counts?.input ?? 0);
+            merged.counts.add += Number(result.counts?.add ?? 0);
+            merged.counts.update += Number(result.counts?.update ?? 0);
+            merged.counts.merge += Number(result.counts?.merge ?? 0);
+            merged.counts.invalidate += Number(result.counts?.invalidate ?? 0);
+            merged.counts.delete += Number(result.counts?.delete ?? 0);
+            merged.counts.noop += Number(result.counts?.noop ?? 0);
+            merged.decisions.push(...(result.decisions ?? []));
+            merged.affectedRecords.push(...(result.affectedRecords ?? []));
+            merged.resolvedBindingResults.push(...(result.resolvedBindingResults ?? []));
+            merged.bindingResults.push(...(result.bindingResults ?? []));
+            merged.auditResults.push(...(result.auditResults ?? []));
+            merged.historyWritten = merged.historyWritten || result.historyWritten === true;
+        }
+        return merged;
+    }
+
     private resolveTakeoverRelationActorTarget(
         targetName: string,
         actorCards: Array<{
@@ -2891,37 +2919,6 @@ export class MemorySDKImpl {
     }
 
     /**
-     * 功能：把旧聊天事实类型映射为正式记忆分类。
-     * @param factType 旧聊天事实类型。
-     * @returns 对应的分类名称。
-     */
-    private resolveTakeoverFactCategory(factType: string): string {
-        const normalizedType = String(factType ?? '').trim().toLowerCase();
-        if (normalizedType === 'location') {
-            return '地点';
-        }
-        if (normalizedType === 'faction' || normalizedType === 'organization') {
-            return '组织';
-        }
-        if (normalizedType === 'city') {
-            return '城市';
-        }
-        if (normalizedType === 'nation') {
-            return '国家';
-        }
-        if (normalizedType === 'event') {
-            return '事件';
-        }
-        if (normalizedType === 'artifact' || normalizedType === 'item') {
-            return '物品';
-        }
-        if (normalizedType === 'world') {
-            return '世界基础';
-        }
-        return '其他';
-    }
-
-    /**
      * 功能：从运行结果提取严格一致性基准。
      * @param runResult 运行结果对象。
      * @returns 严格一致性基准。
@@ -2949,9 +2946,9 @@ export class MemorySDKImpl {
     }
 
     /**
-     * 功能：将未知值归一化为字符串数组并去重。
-     * @param value 原始输入。
-     * @returns 归一化数组。
+     * 功能：归一化字符串数组并去重、去空。
+     * @param value 原始值
+     * @returns 归一化后的字符串数组
      */
     private normalizeStringArray(value: unknown): string[] {
         if (!Array.isArray(value)) {
@@ -2990,7 +2987,7 @@ export class MemorySDKImpl {
                 lastReasonCode: this.toOptionalText(state.coldStartLastReasonCode),
             };
         }
-        const worldProfileBinding = await this.unifiedManager.getWorldProfileBinding();
+        const worldProfileBinding = await this.entryRepository.getWorldProfileBinding();
         if (worldProfileBinding) {
             return {
                 hasStarted: this.toOptionalTimestamp(state.coldStartLastTriggeredAt) !== undefined,

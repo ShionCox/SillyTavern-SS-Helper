@@ -118,9 +118,10 @@ export function normalizeSummaryPatch(
             const normalizedPayload = patchPayload && typeof patchPayload === 'object' && !Array.isArray(patchPayload)
                 ? filterPatchFields(patchPayload as Record<string, unknown>, allowedFields)
                 : undefined;
+            const normalizedAction = String(action.action ?? '').trim().toUpperCase();
 
-            return {
-                action: action.action,
+            const baseAction: SummaryMutationAction = {
+                action: normalizedAction as SummaryMutationAction['action'],
                 targetKind: String(action.targetKind ?? '').trim(),
                 ...(action.type ? { type: String(action.type).trim() } : {}),
                 ...(action.title ? { title: String(action.title).trim() } : {}),
@@ -130,9 +131,25 @@ export function normalizeSummaryPatch(
                 ...(action.sourceIds ? { sourceIds: action.sourceIds } : {}),
                 ...(action.candidateId ? { candidateId: String(action.candidateId).trim() } : {}),
                 ...(action.compareKey ? { compareKey: String(action.compareKey).trim() } : {}),
-                ...(normalizedPayload && Object.keys(normalizedPayload).length > 0 ? { patch: normalizedPayload } : {}),
                 ...(action.reasonCodes ? { reasonCodes: dedupeStrings(action.reasonCodes) } : {}),
             };
+
+            if (!normalizedPayload || Object.keys(normalizedPayload).length <= 0) {
+                return baseAction;
+            }
+            if (normalizedAction === 'ADD') {
+                return {
+                    ...baseAction,
+                    newRecord: normalizedPayload,
+                };
+            }
+            if (normalizedAction === 'UPDATE' || normalizedAction === 'MERGE' || normalizedAction === 'INVALIDATE') {
+                return {
+                    ...baseAction,
+                    patch: normalizedPayload,
+                };
+            }
+            return baseAction;
         });
 }
 

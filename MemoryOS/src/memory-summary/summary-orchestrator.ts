@@ -9,6 +9,7 @@ import { appendSummaryMutationBatchResult, clearSummaryMutationStagingSnapshot, 
 import { finalizeSummaryMutationSnapshot } from './mutation-finalizer';
 import { runSummaryMutationBatch } from './mutation-batch-runner';
 import { validateSummaryPatch, normalizeSummaryPatch } from './mutation-patch-utils';
+import { applyPatchDiffGuard } from './patch-diff-guard';
 import {
     validateSummaryMutationDocument,
     type EditableFieldMap,
@@ -353,6 +354,21 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         }
         // 规范化 patch 动作（去除无效字段）
         trimmedDocument.actions = normalizeSummaryPatch(trimmedDocument.actions);
+        const diffGuardResult = await applyPatchDiffGuard(
+            trimmedDocument,
+            plannerResult.context.candidateRecords,
+            input.dependencies.getEntry,
+        );
+        trimmedDocument.actions = diffGuardResult.document.actions;
+        if (diffGuardResult.diagnostics.some((item) => item.removedPaths.length > 0 || item.downgradedToNoop)) {
+            await input.dependencies.appendMutationHistory({
+                action: 'patch_diff_guard_applied',
+                payload: {
+                    batchId: batchPlan.batchId,
+                    diagnostics: diffGuardResult.diagnostics,
+                },
+            });
+        }
 
         const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
         if (!validation.valid || !validation.document) {
@@ -676,7 +692,8 @@ function buildStrictSummaryMutationSchema(
     if (actionsRecord) {
         actionsRecord.items = buildStrictActionItemsSchema(typeSchemas);
     }
-    ensureStrictRequired(cloned);
+    cloned.required = ['schemaVersion', 'window', 'actions'];
+    cloned.additionalProperties = false;
     return cloned;
 }
 
@@ -710,7 +727,7 @@ function buildStrictActionItemsSchema(
                 items: { type: 'string' },
             },
         },
-        required: ['action', 'targetKind', 'candidateId', 'compareKey', 'payload', 'reasonCodes'],
+        required: ['action', 'targetKind'],
     };
 }
 
@@ -845,28 +862,6 @@ function readNestedRecord(source: Record<string, unknown>, path: string[]): Reco
         return null;
     }
     return cursor as Record<string, unknown>;
-}
-
-/**
- * 功能：递归补全 required。
- * @param node 当前 schema 节点。
- */
-function ensureStrictRequired(node: unknown): void {
-    if (!node || typeof node !== 'object' || Array.isArray(node)) {
-        return;
-    }
-    const record = node as Record<string, unknown>;
-    if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
-        const properties = record.properties as Record<string, unknown>;
-        record.required = Object.keys(properties);
-        record.additionalProperties = false;
-        for (const value of Object.values(properties)) {
-            ensureStrictRequired(value);
-        }
-    }
-    if (record.items && typeof record.items === 'object') {
-        ensureStrictRequired(record.items);
-    }
 }
 
 /**

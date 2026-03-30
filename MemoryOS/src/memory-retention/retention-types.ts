@@ -7,8 +7,11 @@ export type RetentionStage = 'clear' | 'blur' | 'distorted';
  * 功能：定义记忆保留状态。
  */
 export interface RetentionState {
-    forgetProbability: number;
     stage: RetentionStage;
+    score: number;
+    forgetProbability: number;
     rehearsalCount: number;
+    reasonCodes: string[];
+    distortionTemplateId?: string;
 }
 

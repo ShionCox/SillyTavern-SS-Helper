@@ -18,7 +18,12 @@ export type {
 
 export { EventBus } from '../../SDK/bus/bus';
 export { EventsManager } from './core/events-manager';
-export { UnifiedMemoryManager } from './core/unified-memory-manager';
+export { CompareKeyService } from './core/compare-key-service';
+export { EntryRepository } from './repository/entry-repository';
+export { GraphService } from './services/graph-service';
+export { PromptAssemblyService } from './services/prompt-assembly-service';
+export { SummaryService } from './services/summary-service';
+export { TakeoverService } from './services/takeover-service';
 export { MemorySDKImpl } from './sdk/memory-sdk';
 
 export type {

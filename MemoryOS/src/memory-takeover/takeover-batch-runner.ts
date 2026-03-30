@@ -17,6 +17,14 @@ import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
 import { logger } from '../runtime/runtime-services';
+import {
+    COMPARE_KEY_SCHEMA_VERSION,
+    buildCompareKey,
+    buildEventCompareKey,
+    buildMatchKeys,
+    buildTaskCompareKey,
+    buildWorldStateCompareKey,
+} from '../core/compare-key';
 
 /**
  * 功能：定义旧聊天批处理可复用的分类对象提示。
@@ -116,26 +124,6 @@ function normalizeBindings(value: unknown): MemoryTakeoverBindings {
 }
 
 /**
- * 功能：基于标题生成稳定的任务 compareKey。
- * @param title 任务标题。
- * @returns compareKey。
- */
-function buildTaskCompareKey(title: string): string {
-    const normalized = String(title ?? '').trim().replace(/\s+/g, '');
-    return `task:${normalized || 'unknown'}`;
-}
-
-/**
- * 功能：基于键名生成稳定的世界状态 compareKey。
- * @param key 世界状态键名。
- * @returns compareKey。
- */
-function buildWorldStateCompareKey(key: string): string {
-    const normalized = String(key ?? '').trim().replace(/\s+/g, '');
-    return `world_global_state:global:${normalized || 'unknown'}`;
-}
-
-/**
  * 功能：归一化任务状态变更列表，补齐稳定标题、摘要和绑定信息。
  * @param transitions 原始任务变更列表。
  * @returns 归一化后的任务变更列表。
@@ -164,7 +152,11 @@ function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): 
             description: String(transition.description ?? '').trim(),
             goal: String(transition.goal ?? '').trim(),
             status,
+            entityKey: String(transition.entityKey ?? '').trim() || `entity:task:${normalizeId(title)}`,
             compareKey,
+            matchKeys: normalizeStringList(transition.matchKeys ?? buildMatchKeys('task', title, undefined, [task]), 12),
+            schemaVersion: String(transition.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
+            canonicalName: String(transition.canonicalName ?? '').trim() || title,
             bindings: normalizeBindings(transition.bindings),
             reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
         });
@@ -194,8 +186,13 @@ function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): 
         result.push({
             key,
             value,
+            entityKey: String(change.entityKey ?? '').trim() || `entity:world_state:${normalizeId(key)}`,
             summary: String(change.summary ?? '').trim() || `${key}：${value}`,
             compareKey,
+            matchKeys: normalizeStringList(change.matchKeys ?? buildMatchKeys('world_global_state', key, undefined, ['global']), 12),
+            schemaVersion: String(change.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
+            canonicalName: String(change.canonicalName ?? '').trim() || key,
+            bindings: normalizeBindings(change.bindings),
             reasonCodes: normalizeStringList(change.reasonCodes ?? [], 12),
         });
     }
@@ -218,7 +215,7 @@ function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeover
         if (!type || !subject || !predicate || !value) {
             continue;
         }
-        const compareKey = String(fact.compareKey ?? '').trim() || `${type}:${subject}`.replace(/\s+/g, '');
+        const compareKey = String(fact.compareKey ?? '').trim() || resolveStableFactCompareKey(type, fact);
         const factKey = `${type}::${subject}::${predicate}::${value}`;
         if (seen.has(factKey)) {
             continue;
@@ -230,9 +227,14 @@ function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeover
             predicate,
             value,
             confidence: clamp01(Number(fact.confidence)),
+            entityKey: String(fact.entityKey ?? '').trim() || `entity:${type}:${normalizeId(fact.title ?? subject)}`,
             title: String(fact.title ?? '').trim() || undefined,
             summary: String(fact.summary ?? '').trim() || undefined,
             compareKey,
+            matchKeys: normalizeStringList(fact.matchKeys ?? buildMatchKeys(type === 'world' ? 'world_global_state' : type, String(fact.title ?? subject ?? ''), undefined, [subject]), 12),
+            schemaVersion: String(fact.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
+            canonicalName: String(fact.canonicalName ?? '').trim() || String(fact.title ?? subject ?? '').trim() || undefined,
+            legacyCompareKeys: normalizeStringList(fact.legacyCompareKeys ?? [], 8),
             bindings: normalizeBindings(fact.bindings),
             status: String(fact.status ?? '').trim() || undefined,
             importance: Number.isFinite(Number(fact.importance)) ? clamp01(Number(fact.importance)) : undefined,
@@ -469,7 +471,7 @@ function buildTakeoverKnownEntities(
                 return (item.entityCards ?? [])
                     .filter((entity: MemoryTakeoverEntityCardCandidate) => entity.entityType === 'organization')
                     .map((entity: MemoryTakeoverEntityCardCandidate) => ({
-                        entityKey: entity.compareKey || buildBatchEntityKey('organization', entity.title),
+                        entityKey: String(entity.entityKey ?? '').trim() || entity.compareKey || buildBatchEntityKey('organization', entity.title),
                         displayName: entity.title,
                     }));
             }),
@@ -488,7 +490,7 @@ function buildTakeoverKnownEntities(
                 return (item.entityCards ?? [])
                     .filter((entity: MemoryTakeoverEntityCardCandidate) => entity.entityType === 'city')
                     .map((entity: MemoryTakeoverEntityCardCandidate) => ({
-                        entityKey: entity.compareKey || buildBatchEntityKey('city', entity.title),
+                        entityKey: String(entity.entityKey ?? '').trim() || entity.compareKey || buildBatchEntityKey('city', entity.title),
                         displayName: entity.title,
                     }));
             }),
@@ -507,7 +509,7 @@ function buildTakeoverKnownEntities(
                 return (item.entityCards ?? [])
                     .filter((entity: MemoryTakeoverEntityCardCandidate) => entity.entityType === 'nation')
                     .map((entity: MemoryTakeoverEntityCardCandidate) => ({
-                        entityKey: entity.compareKey || buildBatchEntityKey('nation', entity.title),
+                        entityKey: String(entity.entityKey ?? '').trim() || entity.compareKey || buildBatchEntityKey('nation', entity.title),
                         displayName: entity.title,
                     }));
             }),
@@ -526,7 +528,7 @@ function buildTakeoverKnownEntities(
                 return (item.entityCards ?? [])
                     .filter((entity: MemoryTakeoverEntityCardCandidate) => entity.entityType === 'location')
                     .map((entity: MemoryTakeoverEntityCardCandidate) => ({
-                        entityKey: entity.compareKey || buildBatchEntityKey('location', entity.title),
+                        entityKey: String(entity.entityKey ?? '').trim() || entity.compareKey || buildBatchEntityKey('location', entity.title),
                         displayName: entity.title,
                     }));
             }),
@@ -535,7 +537,7 @@ function buildTakeoverKnownEntities(
             ...existingKnownEntities.tasks,
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.taskTransitions.map((transition) => ({
-                    entityKey: String(transition.compareKey ?? '').trim() || buildBatchEntityKey('task', transition.task),
+                    entityKey: String(transition.entityKey ?? '').trim() || String(transition.compareKey ?? '').trim() || buildBatchEntityKey('task', transition.task),
                     displayName: String(transition.title ?? transition.task ?? '').trim(),
                 }));
             }),
@@ -544,7 +546,7 @@ function buildTakeoverKnownEntities(
             ...existingKnownEntities.worldStates,
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.worldStateChanges.map((change) => ({
-                    entityKey: String(change.compareKey ?? '').trim() || buildBatchEntityKey('world_state', change.key),
+                    entityKey: String(change.entityKey ?? '').trim() || String(change.compareKey ?? '').trim() || buildBatchEntityKey('world_state', change.key),
                     displayName: `${change.key}：${change.value}`,
                 }));
             }),
@@ -731,7 +733,7 @@ export async function runTakeoverBatch(input: {
             '如果消息里出现“何盈（橙狗狗视角）”这类写法，relationships 里仍然要使用标准角色键，不要把视角说明塞进 actorKey。',
             '教派、组织、势力、国家、城市、地点、阵营、规则、物品这类非人物对象，不要写进 actorCards。',
             '当 stableFacts.type 为 event，且事件主体、结果或描述里明确指向已有角色时，请优先沿用已有 actorCards 中的角色身份理解该事件，不要把同一个角色拆成新的对象。',
-            '新增字段 entityCards 用于输出世界实体卡候选，entityType 可选 organization / city / nation / location。每张 entityCard 必须包含 entityType、compareKey（格式为 "entityType:标题"）、title、aliases、summary、fields（结构化属性）和 confidence。',
+            '新增字段 entityCards 用于输出世界实体卡候选，entityType 可选 organization / city / nation / location。每张 entityCard 必须包含 entityType、entityKey、compareKey（格式为 ck:v2 协议）、title、aliases、summary、fields、confidence，并在能确认时补 matchKeys、schemaVersion、canonicalName。',
             '新增字段 entityTransitions 用于输出世界实体变更，action 可选 ADD / UPDATE / MERGE / INVALIDATE / DELETE。',
             '若已存在组织/城市/国家/地点（参考 knownEntities），请优先 UPDATE 而非 ADD。仅在无法匹配现有 entityKey / 别名时才 ADD。重名但属性一致时优先 MERGE。状态被新状态取代时优先 INVALIDATE + ADD/UPDATE。DELETE 仅用于明显垃圾或误建的记录。',
             '组织与势力优先写入 entityCards（entityType=organization）和 stableFacts（type=faction 或 type=organization）；地点请使用 entityCards（entityType=location）和 stableFacts（type=location）；城市请使用 entityCards（entityType=city）；国家请使用 entityCards（entityType=nation）；事件请使用 stableFacts（type=event）；物品或遗物请使用 stableFacts（type=artifact 或 type=item）；世界长期设定请使用 stableFacts（type=world）。',
@@ -800,14 +802,19 @@ function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]):
         if (!title) {
             continue;
         }
-        const compareKey = String(card.compareKey ?? '').trim() || `${entityType}:${title}`;
+        const compareKey = String(card.compareKey ?? '').trim() || buildCompareKey(entityType, title, card.fields as Record<string, unknown>);
         if (seen.has(compareKey)) {
             continue;
         }
         seen.add(compareKey);
         result.push({
             entityType: entityType as MemoryTakeoverEntityCardCandidate['entityType'],
+            entityKey: String(card.entityKey ?? '').trim() || `entity:${entityType}:${normalizeId(title)}`,
             compareKey,
+            matchKeys: normalizeStringList(card.matchKeys ?? buildMatchKeys(entityType, title, card.aliases, Object.values(card.fields ?? {})), 12),
+            schemaVersion: String(card.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
+            canonicalName: String(card.canonicalName ?? '').trim() || title,
+            legacyCompareKeys: normalizeStringList(card.legacyCompareKeys ?? [], 8),
             title,
             aliases: normalizeStringList(card.aliases ?? [], 8),
             summary: String(card.summary ?? '').trim(),
@@ -842,7 +849,12 @@ function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[
         }
         result.push({
             entityType: entityType as MemoryTakeoverEntityTransition['entityType'],
-            compareKey: String(transition.compareKey ?? '').trim() || `${entityType}:${title}`,
+            entityKey: String(transition.entityKey ?? '').trim() || `entity:${entityType}:${normalizeId(title)}`,
+            compareKey: String(transition.compareKey ?? '').trim() || buildCompareKey(entityType, title, transition.payload as Record<string, unknown>),
+            matchKeys: normalizeStringList(transition.matchKeys ?? buildMatchKeys(entityType, title, undefined, Object.values((transition.payload as Record<string, unknown>) ?? {})), 12),
+            schemaVersion: String(transition.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
+            canonicalName: String(transition.canonicalName ?? '').trim() || title,
+            legacyCompareKeys: normalizeStringList(transition.legacyCompareKeys ?? [], 8),
             title,
             action: action as MemoryTakeoverEntityTransition['action'],
             reason: String(transition.reason ?? '').trim(),
@@ -852,4 +864,47 @@ function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[
         });
     }
     return result;
+}
+
+/**
+ * 功能：为稳定事实推导 compareKey。
+ * @param type 事实类型。
+ * @param fact 稳定事实。
+ * @returns compareKey。
+ */
+function resolveStableFactCompareKey(type: string, fact: MemoryTakeoverStableFact): string {
+    const title = String(fact.title ?? fact.subject ?? '').trim();
+    if (type === 'event') {
+        return buildEventCompareKey(title || fact.subject, {
+            qualifier: String((fact.bindings?.locations ?? [])[0] ?? '').trim(),
+        });
+    }
+    if (type === 'task') {
+        return buildTaskCompareKey(title || fact.subject, {
+            qualifier: String((fact.bindings?.locations ?? [])[0] ?? '').trim(),
+        });
+    }
+    if (type === 'world' || type === 'world_global_state') {
+        return buildWorldStateCompareKey(title || fact.subject, {
+            qualifier: 'global',
+        });
+    }
+    return buildCompareKey(type, title || fact.subject, {
+        aliases: [],
+        qualifier: String((fact.bindings?.locations ?? [])[0] ?? '').trim(),
+    } as Record<string, unknown>);
+}
+
+/**
+ * 功能：把标题压缩为稳定片段。
+ * @param value 原始文本。
+ * @returns 归一化结果。
+ */
+function normalizeId(value: string): string {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, '_')
+        .replace(/^_+|_+$/g, '')
+        || 'unknown';
 }

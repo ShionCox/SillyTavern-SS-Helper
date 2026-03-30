@@ -1,6 +1,13 @@
 import type { MemoryEntry } from '../types';
 import { RetrievalOrchestrator, type RetrievalCandidate, type RetrievalResultItem } from '../memory-retrieval';
-import { buildCompareKey as buildUnifiedCompareKey } from '../core/compare-key';
+import {
+    buildCityCompareKey,
+    buildCompareKey as buildUnifiedCompareKey,
+    buildLocationCompareKey,
+    buildNationCompareKey,
+    buildOrganizationCompareKey,
+    buildRelationshipCompareKey,
+} from '../core/compare-key';
 
 /**
  * 功能：总结候选旧记录对象。
@@ -204,7 +211,7 @@ function buildSummaryRetrievalCandidate(
         actorKeys: [sourceActorKey, targetActorKey].filter(Boolean),
         relationKeys: Array.from(new Set([
             ...normalizeLooseStringArray(payload.relationKeys ?? fields.relationKeys),
-            ...(sourceActorKey && targetActorKey ? [`relationship:${sourceActorKey}:${targetActorKey}`] : []),
+            ...(sourceActorKey && targetActorKey ? [buildRelationshipCompareKey(sourceActorKey, targetActorKey, relationTag)] : []),
             ...(relationTag ? [relationTag] : []),
         ])),
         participantActorKeys: participants,
@@ -293,19 +300,30 @@ function buildParentRefs(candidate: RetrievalCandidate): string[] {
     const refs: string[] = [];
     const parentOrg = normalizeText(fields.parentOrganization);
     if (parentOrg) {
-        refs.push(`organization:${parentOrg}`);
+        refs.push(buildOrganizationCompareKey(parentOrg, {
+            qualifier: normalizeText(fields.city ?? fields.nation),
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const parentLocation = normalizeText(fields.parentLocation);
     if (parentLocation) {
-        refs.push(`location:${parentLocation}`);
+        refs.push(buildLocationCompareKey(parentLocation, {
+            qualifier: normalizeText(fields.city ?? fields.nation),
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const nation = normalizeText(fields.nation);
     if (nation) {
-        refs.push(`nation:${nation}`);
+        refs.push(buildNationCompareKey(nation, {
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const city = normalizeText(fields.city);
     if (city) {
-        refs.push(`city:${city}`);
+        refs.push(buildCityCompareKey(city, {
+            qualifier: nation,
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     return refs;
 }
@@ -321,23 +339,37 @@ function buildHierarchyRefs(candidate: RetrievalCandidate): string[] {
     const refs: string[] = [];
     const headquartersCity = normalizeText(fields.headquartersCity);
     if (headquartersCity) {
-        refs.push(`city:${headquartersCity}`);
+        refs.push(buildCityCompareKey(headquartersCity, {
+            qualifier: normalizeText(fields.headquartersNation),
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const headquartersNation = normalizeText(fields.headquartersNation);
     if (headquartersNation) {
-        refs.push(`nation:${headquartersNation}`);
+        refs.push(buildNationCompareKey(headquartersNation, {
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const headquartersLocation = normalizeText(fields.headquartersLocation);
     if (headquartersLocation) {
-        refs.push(`location:${headquartersLocation}`);
+        refs.push(buildLocationCompareKey(headquartersLocation, {
+            qualifier: normalizeText(fields.headquartersCity ?? fields.headquartersNation),
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const controllingOrganization = normalizeText(fields.controllingOrganization);
     if (controllingOrganization) {
-        refs.push(`organization:${controllingOrganization}`);
+        refs.push(buildOrganizationCompareKey(controllingOrganization, {
+            qualifier: normalizeText(fields.headquartersCity ?? fields.headquartersNation),
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     const capital = normalizeText(fields.capital);
     if (capital) {
-        refs.push(`city:${capital}`);
+        refs.push(buildCityCompareKey(capital, {
+            qualifier: headquartersNation,
+            aliases: normalizeLooseStringArray(fields.aliases),
+        }));
     }
     return refs;
 }

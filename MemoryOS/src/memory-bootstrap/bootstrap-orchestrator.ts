@@ -1,4 +1,4 @@
-import type { MemoryEntry } from '../types';
+import type { ApplyLedgerMutationBatchResult, LedgerMutation, LedgerMutationBatchContext, MemoryEntry } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
 import type { ColdStartCandidate, ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
 import { parseColdStartDocument } from './bootstrap-parser';
@@ -30,8 +30,7 @@ export interface BootstrapOrchestratorDependencies {
         displayName?: string;
         memoryStat?: number;
     }): Promise<unknown>;
-    saveEntry(input: Partial<MemoryEntry> & { title: string; entryType: string }): Promise<MemoryEntry>;
-    bindRoleToEntry(actorKey: string, entryId: string): Promise<unknown>;
+    applyLedgerMutationBatch(mutations: LedgerMutation[], context: LedgerMutationBatchContext): Promise<ApplyLedgerMutationBatchResult>;
     putWorldProfileBinding(input: {
         primaryProfile: string;
         secondaryProfiles: string[];
@@ -326,17 +325,32 @@ export async function applyBootstrapCandidates(input: {
                 displayName: resolveBootstrapActorDisplayName(actorKey, actorDisplayNameMap),
             });
         }
-        const saved = await input.dependencies.saveEntry({
-            entryType: candidate.entryType,
+    }
+    await input.dependencies.applyLedgerMutationBatch(
+        input.selectedCandidates.map((candidate: ColdStartCandidate): LedgerMutation => ({
+            targetKind: candidate.entryType,
+            action: 'ADD',
             title: candidate.title,
             summary: candidate.summary,
             detailPayload: candidate.detailPayload,
             tags: candidate.tags,
-        });
-        for (const actorKey of candidate.actorBindings ?? []) {
-            await input.dependencies.bindRoleToEntry(actorKey, saved.entryId);
-        }
-    }
+            actorBindings: candidate.actorBindings,
+            reasonCodes: ['cold_start_candidate_confirmed', candidate.type],
+            sourceContext: {
+                candidateId: candidate.id,
+                confidence: candidate.confidence,
+                entityKeys: candidate.entityKeys,
+            },
+        })),
+        {
+            chatKey: 'bootstrap',
+            source: 'cold_start',
+            sourceLabel: '冷启动候选确认',
+            bootstrapRunId: `bootstrap:${Date.now()}`,
+            allowCreate: true,
+            allowInvalidate: false,
+        },
+    );
 
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
     const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);

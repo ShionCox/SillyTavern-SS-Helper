@@ -11,6 +11,12 @@ import { logger } from '../index';
 
 const MIGRATION_FLAG_KEY = 'stx_llm_vault_migrated_to_ss_helper_db';
 
+interface StoredCredentialPayload {
+    apiKey?: string;
+    key?: string;
+    createdAt?: number;
+}
+
 export class VaultManager {
     private static readonly OBFUSCATION_PREFIX = 'stx_v1_';
 
@@ -44,9 +50,12 @@ export class VaultManager {
             if (rows.length > 0) {
                 const entries: DBLlmCredential[] = rows.map((row: any) => ({
                     providerId: row.resourceId ?? row.providerId,
-                    key: row.key,
-                    createdAt: row.createdAt ?? Date.now(),
                     updatedAt: row.updatedAt ?? Date.now(),
+                    apiKeyMasked: this.maskApiKey(String(row.key ?? '')),
+                    payload: {
+                        apiKey: String(row.key ?? ''),
+                        createdAt: Number(row.createdAt ?? Date.now()),
+                    },
                 }));
                 await db.llm_credentials.bulkPut(entries);
                 logger.success(`迁移了 ${entries.length} 条凭据记录`);
@@ -68,9 +77,12 @@ export class VaultManager {
         const existing = await db.llm_credentials.get(resourceId);
         const entry: DBLlmCredential = {
             providerId: resourceId,
-            key: obfuscated,
-            createdAt: existing?.createdAt ?? now,
             updatedAt: now,
+            apiKeyMasked: this.maskApiKey(apiKey),
+            payload: {
+                apiKey: obfuscated,
+                createdAt: this.readCreatedAt(existing) ?? now,
+            },
         };
 
         await db.llm_credentials.put(entry);
@@ -85,7 +97,10 @@ export class VaultManager {
 
         const entry = await db.llm_credentials.get(resourceId);
         if (entry) {
-            const apiKey = this.deobfuscate(entry.key);
+            const apiKey = this.readStoredApiKey(entry);
+            if (!apiKey) {
+                return null;
+            }
             this.cache.set(resourceId, apiKey);
             return apiKey;
         }
@@ -118,7 +133,50 @@ export class VaultManager {
         return VaultManager.OBFUSCATION_PREFIX + btoa(encodeURIComponent(plain));
     }
 
+    /**
+     * 功能：读取当前凭据记录中的创建时间。
+     * @param entry 凭据记录
+     * @returns 创建时间
+     */
+    private readCreatedAt(entry: DBLlmCredential | undefined): number | undefined {
+        const payload = (entry?.payload ?? {}) as StoredCredentialPayload;
+        return typeof payload.createdAt === 'number' ? payload.createdAt : undefined;
+    }
+
+    /**
+     * 功能：读取并解码存储的密钥。
+     * @param entry 凭据记录
+     * @returns 解码后的密钥
+     */
+    private readStoredApiKey(entry: DBLlmCredential): string | null {
+        const payload = (entry.payload ?? {}) as StoredCredentialPayload;
+        const storedValue = String(payload.apiKey ?? payload.key ?? '').trim();
+        if (!storedValue) {
+            return null;
+        }
+        return this.deobfuscate(storedValue);
+    }
+
+    /**
+     * 功能：生成用于展示的掩码密钥。
+     * @param apiKey 原始密钥
+     * @returns 掩码后的密钥
+     */
+    private maskApiKey(apiKey: string): string {
+        const normalized = String(apiKey ?? '').trim();
+        if (!normalized) {
+            return '';
+        }
+        if (normalized.length <= 8) {
+            return `${normalized.slice(0, 2)}***${normalized.slice(-2)}`;
+        }
+        return `${normalized.slice(0, 4)}***${normalized.slice(-4)}`;
+    }
+
     private deobfuscate(obfuscated: string): string {
+        if (!obfuscated.startsWith(VaultManager.OBFUSCATION_PREFIX)) {
+            return obfuscated;
+        }
         const encoded = obfuscated.slice(VaultManager.OBFUSCATION_PREFIX.length);
         return decodeURIComponent(atob(encoded));
     }

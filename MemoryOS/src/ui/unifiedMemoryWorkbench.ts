@@ -6,6 +6,7 @@ import { escapeHtml } from './editorShared';
 import { buildTakeoverPreviewMarkup } from './takeoverPreviewMarkup';
 import { waitForUiPaint } from './uiAsync';
 import type { UnifiedMemoryWorkbenchOpenOptions, UnifiedWorkbenchViewMode } from './unifiedMemoryWorkbenchTypes';
+import { GraphService } from '../services/graph-service';
 import type {
     ActorMemoryProfile,
     MemoryEntry,
@@ -46,7 +47,6 @@ import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
-import { buildTakeoverMemoryGraph } from './workbenchTabs/shared/memory-graph-builder';
 import {
     buildMemoryGraphPageMarkup,
     destroyMemoryGraphPage,
@@ -55,6 +55,7 @@ import {
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
+const graphService = new GraphService();
 
 /**
  * 功能：确保工作台样式只注入一次。
@@ -305,7 +306,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryAuditRecords,
             recallExplanation: normalizeRecallExplanation(recallExplanation),
             actorGraph: buildActorGraph(actors, entries),
-            memoryGraph: buildTakeoverMemoryGraph(takeoverProgress),
+            memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
             takeoverProgress,
         };
     };
@@ -835,6 +836,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     const render = async (): Promise<void> => {
         const entryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
         const preservedEntryListScrollTop = entryList?.scrollTop ?? 0;
+        const typeList = root.querySelector('[data-type-list-scroll="true"]') as HTMLElement | null;
+        const preservedTypeListScrollTop = typeList?.scrollTop ?? 0;
+        const worldEntityList = root.querySelector('[data-world-entity-list-scroll="true"]') as HTMLElement | null;
+        const preservedWorldEntityListScrollTop = worldEntityList?.scrollTop ?? 0;
         const snapshot = await loadSnapshot();
         normalizeSelection(snapshot);
         destroyMemoryGraphPage();
@@ -842,6 +847,14 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const nextEntryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
         if (nextEntryList) {
             nextEntryList.scrollTop = preservedEntryListScrollTop;
+        }
+        const nextTypeList = root.querySelector('[data-type-list-scroll="true"]') as HTMLElement | null;
+        if (nextTypeList) {
+            nextTypeList.scrollTop = preservedTypeListScrollTop;
+        }
+        const nextWorldEntityList = root.querySelector('[data-world-entity-list-scroll="true"]') as HTMLElement | null;
+        if (nextWorldEntityList) {
+            nextWorldEntityList.scrollTop = preservedWorldEntityListScrollTop;
         }
         bindEvents(snapshot);
         if (state.currentView === 'takeover') {
@@ -903,6 +916,19 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
         source: String(value.source ?? '').trim() || undefined,
         retrievalProviderId: String(value.retrievalProviderId ?? '').trim() || undefined,
         retrievalRulePack: String(value.retrievalRulePack ?? '').trim() || undefined,
+        compareKeySchemaVersion: String(value.compareKeySchemaVersion ?? '').trim() || undefined,
+        matchModeCounts: (() => {
+            const record = toRecord(value.matchModeCounts);
+            const result: Record<string, number> = {};
+            Object.entries(record).forEach(([key, rawValue]: [string, unknown]): void => {
+                const numericValue = Number(rawValue);
+                if (!Number.isFinite(numericValue)) {
+                    return;
+                }
+                result[String(key ?? '').trim()] = Math.max(0, Math.trunc(numericValue));
+            });
+            return result;
+        })(),
         subQueries: toStringArray(value.subQueries),
         matchedRules: Array.isArray(value.matchedRules)
             ? value.matchedRules

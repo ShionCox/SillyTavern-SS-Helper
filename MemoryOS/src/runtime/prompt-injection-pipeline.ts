@@ -1,5 +1,6 @@
 import { createMemoryTraceContext } from '../core/memory-trace';
 import { getTavernPromptMessageTextEvent, type SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import type { PromptAssemblySnapshot } from '../types';
 
 export interface BaseInjectionDiagnosticsSnapshot {
     enabled: boolean;
@@ -48,13 +49,6 @@ export interface PromptInjectionPipelineResult {
     logs: PromptInjectionPipelineLogEntry[];
 }
 
-type PromptPreviewResult = {
-    systemText?: string;
-    systemEntryIds?: string[];
-    matchedActorKeys?: string[];
-    matchedEntryIds?: string[];
-};
-
 type PromptInjectResult = {
     shouldInject: boolean;
     inserted: boolean;
@@ -74,23 +68,43 @@ type PipelineMemoryLike = {
     getChatKey?: () => string;
     unifiedMemory?: {
         prompts?: {
-            preview?: (args: { query: string; promptMessages: SdkTavernPromptMessageEvent[]; maxTokens: number }) => Promise<PromptPreviewResult>;
+            preview?: (args: { query: string; promptMessages: SdkTavernPromptMessageEvent[]; maxTokens: number }) => Promise<PromptAssemblySnapshot>;
             inject?: (args: {
                 promptMessages: SdkTavernPromptMessageEvent[];
-                maxTokens: number;
-                query: string;
-                preferSummary: boolean;
-                intentHint: string;
                 source?: string;
                 sourceMessageId?: string;
+                snapshot: PromptAssemblySnapshot;
                 trace: Record<string, unknown>;
             }) => Promise<PromptInjectResult>;
         };
     };
-    chatState?: {
-        getLatestRecallExplanation?: () => Promise<Record<string, unknown> | null>;
-    };
 };
+
+/**
+ * 功能：基于本次 Prompt 组装快照生成召回说明。
+ * @param snapshot Prompt 组装快照
+ * @returns 召回说明对象
+ */
+function buildLatestExplanationFromSnapshot(snapshot: PromptAssemblySnapshot | null): Record<string, unknown> | null {
+    if (!snapshot) {
+        return null;
+    }
+    return {
+        generatedAt: Date.now(),
+        query: String(snapshot.query ?? ''),
+        matchedActorKeys: snapshot.matchedActorKeys ?? [],
+        matchedEntryIds: snapshot.matchedEntryIds ?? [],
+        reasonCodes: snapshot.reasonCodes ?? [],
+        source: 'unified_memory',
+        retrievalProviderId: snapshot.diagnostics?.providerId,
+        retrievalRulePack: snapshot.diagnostics?.rulePackMode,
+        contextRoute: snapshot.diagnostics?.contextRoute ?? null,
+        matchedRules: snapshot.diagnostics?.contextRoute?.matchedRules ?? [],
+        subQueries: snapshot.diagnostics?.contextRoute?.subQueries ?? [],
+        routeReasons: snapshot.diagnostics?.contextRoute?.reasons ?? [],
+        traceRecords: snapshot.diagnostics?.traceRecords ?? [],
+    };
+}
 
 /**
  * 功能：从 prompt 中提取最后一条用户消息。
@@ -178,7 +192,7 @@ export async function runPromptReadyInjectionPipeline(input: {
         requestId: query || undefined,
     });
 
-    const preview = injectionPreviewEnabled && input.memory?.unifiedMemory?.prompts?.preview
+    const snapshot = injectionPreviewEnabled && input.memory?.unifiedMemory?.prompts?.preview
         ? await input.memory.unifiedMemory.prompts.preview({
             query,
             promptMessages,
@@ -188,19 +202,19 @@ export async function runPromptReadyInjectionPipeline(input: {
 
     const baseDiagnostics: BaseInjectionDiagnosticsSnapshot = {
         enabled: injectionPreviewEnabled,
-        inserted: Boolean(preview?.systemText),
-        skippedReason: injectionPreviewEnabled ? (preview?.systemText ? null : 'empty_content') : 'preview_disabled',
+        inserted: Boolean(snapshot?.systemText),
+        skippedReason: injectionPreviewEnabled ? (snapshot?.systemText ? null : 'empty_content') : 'preview_disabled',
         preset: 'balanced_enhanced',
         aggressiveness: 'balanced',
         forceDynamicFloor: true,
         selectedOptions: ['world_setting', 'character_setting', 'relationship_state', 'current_scene', 'recent_plot'],
         candidateCounts: {
-            total: Number(preview?.systemEntryIds?.length ?? 0),
+            total: Number(snapshot?.systemEntryIds?.length ?? 0),
             pretrimDropped: 0,
             budgetDropped: 0,
         },
         layerBudgets: [],
-        finalTextLength: String(preview?.systemText ?? '').length,
+        finalTextLength: String(snapshot?.systemText ?? '').length,
         finalTokenRatio: 0,
         insertedIndex: -1,
         generatedAt: Date.now(),
@@ -208,33 +222,28 @@ export async function runPromptReadyInjectionPipeline(input: {
 
     logs.push({
         stage: 'system_base',
-        status: preview?.systemText ? 'ok' : 'failed',
-        reasonCodes: preview?.systemText ? ['system_base_present'] : [injectionPreviewEnabled ? 'empty_content' : 'preview_disabled'],
-        summary: preview?.systemText
+        status: snapshot?.systemText ? 'ok' : 'failed',
+        reasonCodes: snapshot?.systemText ? ['system_base_present'] : [injectionPreviewEnabled ? 'empty_content' : 'preview_disabled'],
+        summary: snapshot?.systemText
             ? '世界基础设定已进入 system 预览'
             : (injectionPreviewEnabled ? '世界基础设定为空' : '注入预览已禁用'),
         details: {
-            entryCount: Number(preview?.systemEntryIds?.length ?? 0),
-            matchedEntryIds: preview?.systemEntryIds ?? [],
+            entryCount: Number(snapshot?.systemEntryIds?.length ?? 0),
+            matchedEntryIds: snapshot?.systemEntryIds ?? [],
         },
     });
 
-    const injectionResult = injectionPromptEnabled && input.memory?.unifiedMemory?.prompts?.inject
+    const injectionResult = injectionPromptEnabled && snapshot && input.memory?.unifiedMemory?.prompts?.inject
         ? await input.memory.unifiedMemory.prompts.inject({
             promptMessages,
-            maxTokens: settingsMaxTokens,
-            query,
-            preferSummary: true,
-            intentHint: 'setting_qa',
             source: input.source,
             sourceMessageId,
+            snapshot: snapshot,
             trace: promptTrace as unknown as Record<string, unknown>,
         })
         : buildSkippedInjectionResult();
 
-    const latestExplanation = input.memory?.chatState?.getLatestRecallExplanation
-        ? await input.memory.chatState.getLatestRecallExplanation()
-        : null;
+    const latestExplanation = buildLatestExplanationFromSnapshot(snapshot);
 
     logs.push({
         stage: 'role_memory',
@@ -250,8 +259,8 @@ export async function runPromptReadyInjectionPipeline(input: {
             insertIndex: Number(injectionResult.insertIndex ?? -1),
             insertedLength: Number(injectionResult.insertedLength ?? 0),
             trace: injectionResult.trace ?? null,
-            matchedActorKeys: preview?.matchedActorKeys ?? [],
-            matchedEntryIds: preview?.matchedEntryIds ?? [],
+            matchedActorKeys: snapshot?.matchedActorKeys ?? [],
+            matchedEntryIds: snapshot?.matchedEntryIds ?? [],
         },
     });
 

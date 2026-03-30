@@ -108,6 +108,7 @@ export type {
 // UI 层
 export { renderSettingsUi as renderLLMHubSettings } from './ui/index';
 import { renderSettingsUi } from './ui/index';
+import { startLLMHubRuntime } from './runtime-entry';
 
 import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
@@ -1080,12 +1081,10 @@ class LLMHub {
     }
 }
 
-// 挂载运行时
-(window as any).LLMHubPlugin = new LLMHub();
-
-// 自动初始化 UI
-if (typeof document !== 'undefined') {
-    renderSettingsUi().catch((error: unknown) => {
+startLLMHubRuntime({
+    runtimeFactory: (): LLMHub => new LLMHub(),
+    renderUi: (): Promise<void> => renderSettingsUi(),
+    onRenderUiError: (error: unknown): void => {
         logger.error('UI 渲染失败', error);
-    });
-}
+    },
+});

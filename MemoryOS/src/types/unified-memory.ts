@@ -130,6 +130,159 @@ export interface SummaryRefreshBinding {
     entryTitle?: string;
 }
 
+/**
+ * 功能：定义统一结构化绑定载荷。
+ */
+export interface StructuredBindings {
+    actors: string[];
+    organizations: string[];
+    cities: string[];
+    locations: string[];
+    nations: string[];
+    tasks: string[];
+    events: string[];
+}
+
+/**
+ * 功能：定义绑定解析命中模式。
+ */
+export type BindingMatchMode =
+    | 'entity_key'
+    | 'compare_key'
+    | 'match_key'
+    | 'alias_exact'
+    | 'batch_reuse'
+    | 'rule_inferred'
+    | 'unresolved';
+
+/**
+ * 功能：定义单条绑定解析决策。
+ */
+export interface BindingResolutionDecision {
+    bindingKey: keyof StructuredBindings;
+    rawValue: string;
+    resolvedRef?: string;
+    resolvedLabel?: string;
+    matchMode: BindingMatchMode;
+    sourceKind: 'explicit' | 'fallback' | 'rule';
+}
+
+/**
+ * 功能：定义绑定解析结果。
+ */
+export interface ResolvedBindings {
+    bindings: StructuredBindings;
+    decisions: BindingResolutionDecision[];
+    resolvedCount: number;
+    unresolvedCount: number;
+    fallbackCount: number;
+}
+
+export type LedgerMutationAction = 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE' | 'NOOP';
+
+export type LedgerMutationSource = 'summary' | 'cold_start' | 'takeover' | 'manual_edit';
+
+export interface LedgerMutation {
+    targetKind: string;
+    action: LedgerMutationAction;
+    title: string;
+    entryId?: string;
+    entityKey?: string;
+    compareKey?: string;
+    matchKeys?: string[];
+    summary?: string;
+    detail?: string;
+    detailPayload?: Record<string, unknown>;
+    tags?: string[];
+    actorBindings?: string[];
+    bindings?: Partial<StructuredBindings>;
+    reasonCodes?: string[];
+    sourceContext?: Record<string, unknown>;
+}
+
+export interface LedgerMutationBatchContext {
+    chatKey: string;
+    source: LedgerMutationSource;
+    sourceLabel: string;
+    summaryId?: string;
+    takeoverId?: string;
+    bootstrapRunId?: string;
+    manualEditorId?: string;
+    userDisplayName?: string;
+    allowCreate?: boolean;
+    allowInvalidate?: boolean;
+}
+
+export type LedgerMutationMatchMode = 'exact_match' | 'near_match' | 'created' | 'skipped';
+
+export interface LedgerMutationBatchCounts {
+    input: number;
+    add: number;
+    update: number;
+    merge: number;
+    invalidate: number;
+    delete: number;
+    noop: number;
+}
+
+export interface LedgerMutationBatchDecision {
+    targetKind: string;
+    action: LedgerMutationAction;
+    title: string;
+    matchMode: LedgerMutationMatchMode;
+    entryId?: string;
+    entityKey?: string;
+    compareKey?: string;
+    reasonCodes: string[];
+}
+
+export interface LedgerMutationAffectedRecord {
+    entryId: string;
+    entityKey?: string;
+    compareKey?: string;
+    action: Exclude<LedgerMutationAction, 'NOOP'>;
+}
+
+export interface LedgerMutationBindingResult {
+    actorKey: string;
+    entryId: string;
+    written: boolean;
+}
+
+/**
+ * 功能：定义结构化绑定解析结果。
+ */
+export interface LedgerMutationResolvedBindingResult {
+    title: string;
+    targetKind: string;
+    resolvedBindings: StructuredBindings;
+    decisions: BindingResolutionDecision[];
+    resolvedCount: number;
+    unresolvedCount: number;
+    fallbackCount: number;
+}
+
+export interface LedgerMutationAuditResult {
+    entryId: string;
+    action: Exclude<LedgerMutationAction, 'NOOP'>;
+    written: boolean;
+}
+
+export interface ApplyLedgerMutationBatchResult {
+    createdEntryIds: string[];
+    updatedEntryIds: string[];
+    invalidatedEntryIds: string[];
+    deletedEntryIds: string[];
+    noopCount: number;
+    counts: LedgerMutationBatchCounts;
+    decisions: LedgerMutationBatchDecision[];
+    affectedRecords: LedgerMutationAffectedRecord[];
+    bindingResults: LedgerMutationBindingResult[];
+    resolvedBindingResults: LedgerMutationResolvedBindingResult[];
+    auditResults: LedgerMutationAuditResult[];
+    historyWritten: boolean;
+}
+
 export interface SummarySnapshot {
     summaryId: string;
     chatKey: string;
@@ -144,6 +297,7 @@ export interface SummarySnapshot {
     actorKeys: string[];
     entryUpserts: SummaryEntryUpsert[];
     refreshBindings: SummaryRefreshBinding[];
+    mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
     createdAt: number;
     updatedAt: number;
 }
@@ -177,6 +331,16 @@ export interface PromptAssemblyRoleEntry {
     memoryPercent: number;
     forgotten: boolean;
     renderedText: string;
+    retentionStage: RetentionStage;
+    retentionReasonCodes: string[];
+    renderMode: 'clear' | 'blur' | 'distorted' | 'hidden';
+    distortionTemplateId?: string;
+    bindings?: StructuredBindings;
+    bindingDiagnostics?: {
+        resolvedCount: number;
+        unresolvedCount: number;
+        fallbackCount: number;
+    };
 }
 
 export interface PromptAssemblyDiagnostics {
@@ -189,6 +353,9 @@ export interface PromptAssemblyDiagnostics {
     injectedCount: number;
     estimatedChars: number;
     retentionStageCounts: Record<RetentionStage, number>;
+    matchModeCounts?: Record<string, number>;
+    compareKeySchemaVersion?: string;
+    bindingMatchModeCounts?: Record<string, number>;
 }
 
 export interface PromptAssemblySnapshot {

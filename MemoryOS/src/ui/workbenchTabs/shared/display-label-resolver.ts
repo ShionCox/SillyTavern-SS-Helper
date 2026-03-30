@@ -1,3 +1,4 @@
+import { parseCompareKey } from '../../../core/compare-key';
 import type { MemoryGraphMode } from './memoryGraphTypes';
 
 /**
@@ -91,6 +92,15 @@ export function stripComparePrefix(value: string): string {
     const rawValue = String(value ?? '').trim();
     if (!rawValue) {
         return '';
+    }
+    if (rawValue.startsWith('ck:v2:')) {
+        const parsed = parseCompareKey(rawValue);
+        return parsed.canonicalName || rawValue;
+    }
+    if (rawValue.startsWith('entity:')) {
+        const strippedEntity = rawValue.slice('entity:'.length);
+        const segments = strippedEntity.split(':').map((item: string): string => item.trim()).filter(Boolean);
+        return segments.length > 0 ? segments[segments.length - 1] : rawValue;
     }
     const prefixes = ['organization:', 'city:', 'nation:', 'location:', 'task:', 'event:', 'world_global_state:', 'world:'];
     for (const prefix of prefixes) {
