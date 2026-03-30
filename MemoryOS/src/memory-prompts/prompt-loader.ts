@@ -5,6 +5,12 @@ export type PromptPackSectionName =
     | 'COLD_START_SYSTEM'
     | 'COLD_START_SCHEMA'
     | 'COLD_START_OUTPUT_SAMPLE'
+    | 'COLD_START_CORE_SYSTEM'
+    | 'COLD_START_CORE_SCHEMA'
+    | 'COLD_START_CORE_OUTPUT_SAMPLE'
+    | 'COLD_START_STATE_SYSTEM'
+    | 'COLD_START_STATE_SCHEMA'
+    | 'COLD_START_STATE_OUTPUT_SAMPLE'
     | 'SUMMARY_PLANNER_SYSTEM'
     | 'SUMMARY_PLANNER_SCHEMA'
     | 'SUMMARY_PLANNER_OUTPUT_SAMPLE'
@@ -19,7 +25,9 @@ export type PromptPackSectionName =
     | 'TAKEOVER_ACTIVE_OUTPUT_SAMPLE'
     | 'TAKEOVER_BATCH_SYSTEM'
     | 'TAKEOVER_BATCH_SCHEMA'
-    | 'TAKEOVER_BATCH_OUTPUT_SAMPLE';
+    | 'TAKEOVER_BATCH_OUTPUT_SAMPLE'
+    | 'TAKEOVER_CONFLICT_RESOLUTION_SCHEMA'
+    | 'TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE';
 
 /**
  * 功能：Prompt Pack 解析后的结构。
@@ -28,6 +36,12 @@ export interface PromptPackSections {
     COLD_START_SYSTEM: string;
     COLD_START_SCHEMA: string;
     COLD_START_OUTPUT_SAMPLE: string;
+    COLD_START_CORE_SYSTEM: string;
+    COLD_START_CORE_SCHEMA: string;
+    COLD_START_CORE_OUTPUT_SAMPLE: string;
+    COLD_START_STATE_SYSTEM: string;
+    COLD_START_STATE_SCHEMA: string;
+    COLD_START_STATE_OUTPUT_SAMPLE: string;
     SUMMARY_PLANNER_SYSTEM: string;
     SUMMARY_PLANNER_SCHEMA: string;
     SUMMARY_PLANNER_OUTPUT_SAMPLE: string;
@@ -43,6 +57,8 @@ export interface PromptPackSections {
     TAKEOVER_BATCH_SYSTEM: string;
     TAKEOVER_BATCH_SCHEMA: string;
     TAKEOVER_BATCH_OUTPUT_SAMPLE: string;
+    TAKEOVER_CONFLICT_RESOLUTION_SCHEMA: string;
+    TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE: string;
 }
 
 const PROMPT_PACK_URL = new URL('./prompt-pack.md', import.meta.url).toString();
@@ -105,6 +121,22 @@ const FALLBACK_PROMPT_PACK = `
 {"type":"object"}
 <!-- section: TAKEOVER_BATCH_OUTPUT_SAMPLE -->
 {"batchId":"takeover:demo:history:0001","summary":"这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。","stableFacts":[{"type":"identity","subject":"巡逻队长","predicate":"身份","value":"负责北门夜巡","confidence":0.86}],"relationTransitions":[{"target":"巡逻队长","from":"陌生试探","to":"有限合作","reason":"双方达成了短期协作共识"}],"taskTransitions":[{"task":"寻找失踪信使","from":"未开始","to":"进行中"}],"worldStateChanges":[{"key":"北门戒严","value":"持续执行夜间封锁"}],"openThreads":["失踪信使的下落仍未确认"],"chapterTags":["关系推进","任务开启"],"sourceRange":{"startFloor":1,"endFloor":30}}
+<!-- section: COLD_START_CORE_SYSTEM -->
+浣犳鍦ㄦ墽琛岀粨鏋勫寲璁板繂鍐峰惎鍔ㄧ殑 Core Extract 闃舵銆傚彧鎻愬彇 identity銆乤ctorCards銆乪ntityCards銆亀orldProfileDetection 鍜?worldBase銆俽elationships 鍜?memoryRecords 蹇呴』杩斿洖绌洪泦銆傚彧杈撳嚭 JSON銆?
+<!-- section: COLD_START_CORE_SCHEMA -->
+{"type":"object"}
+<!-- section: COLD_START_CORE_OUTPUT_SAMPLE -->
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"绀轰緥瑙掕壊","aliases":[],"identityFacts":["绀轰緥韬唤"],"originFacts":["绀轰緥鏉ユ簮"],"traits":["绀轰緥鐗瑰緛"]},"actorCards":[{"actorKey":"guard_captain","displayName":"瀹堝崼闃熼暱","aliases":[],"identityFacts":["璐熻矗澶滈棿宸￠€?],"originFacts":["闀挎湡椹诲畧鍩庨棬"],"traits":["璀﹁","寮虹‖"]}],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldProfileDetection":{"primaryProfile":"fantasy","secondaryProfiles":["political_intrigue"],"confidence":0.8,"reasonCodes":["core_extract"]},"worldBase":[],"relationships":[],"memoryRecords":[]}
+<!-- section: COLD_START_STATE_SYSTEM -->
+浣犳鍦ㄦ墽琛岀粨鏋勫寲璁板繂鍐峰惎鍔ㄧ殑 State Extract 闃舵銆傚彧鎻愬彇 relationships銆乵emoryRecords 鍜岃繎鏈熺姸鎬佺嚎绱紝identity銆乤ctorCards銆乪ntityCards銆亀orldBase 濡傛灉娌℃湁鏂板鍐呭鍙互杩斿洖绌洪泦銆傚彧杈撳嚭 JSON銆?
+<!-- section: COLD_START_STATE_SCHEMA -->
+{"type":"object"}
+<!-- section: COLD_START_STATE_OUTPUT_SAMPLE -->
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"绀轰緥瑙掕壊","aliases":[],"identityFacts":[],"originFacts":[],"traits":[]},"actorCards":[],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"闄岀敓浜?,"state":"褰撳墠淇濇寔璋ㄦ厧鎺㈡祴銆?,"summary":"鍙屾柟宸插缓绔嬪垵姝ユ帴瑙︺€?,"trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[{"schemaId":"initial_state","title":"鍖楅棬澶滈棿鎴掍弗","summary":"鐜嬮兘鍖楅棬澶滈棿姝ｅ湪鎵ц鎴掍弗鎺掓煡銆?,"importance":0.66}]}
+<!-- section: TAKEOVER_CONFLICT_RESOLUTION_SCHEMA -->
+{"type":"object","additionalProperties":false,"properties":{"bucketId":{"type":"string"},"domain":{"type":"string"},"resolutions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["merge","keep_primary","replace","invalidate","split"]},"primaryKey":{"type":"string"},"secondaryKeys":{"type":"array","items":{"type":"string"}},"fieldOverrides":{"type":"object","additionalProperties":true},"reasonCodes":{"type":"array","items":{"type":"string"}}},"required":["action","primaryKey","secondaryKeys","fieldOverrides","reasonCodes"]}}},"required":["bucketId","domain","resolutions"]}
+<!-- section: TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE -->
+{"bucketId":"takeover:entity:0001","domain":"entity","resolutions":[{"action":"merge","primaryKey":"organization:绀轰緥鏁欐淳","secondaryKeys":["organization:绀轰緥鏁欏洟"],"fieldOverrides":{},"reasonCodes":["llm_conflict_merge"]}]}
 `.trim();
 
 let promptPackCache: Promise<PromptPackSections> | null = null;
@@ -205,8 +237,30 @@ function hasAllRequiredSections(sections: Partial<PromptPackSections>): sections
  * @returns 增强后的分段。
  */
 function enrichPromptPackSections(sections: PromptPackSections): PromptPackSections {
+    const coldStartCoreSystem = sections.COLD_START_CORE_SYSTEM || appendPromptRule(
+        sections.COLD_START_SYSTEM,
+        '这是冷启动 Core Extract 阶段，只输出 identity、actorCards、entityCards、worldProfileDetection、worldBase，relationships 与 memoryRecords 返回空集合。',
+    );
+    const coldStartStateSystem = sections.COLD_START_STATE_SYSTEM || appendPromptRule(
+        sections.COLD_START_SYSTEM,
+        '这是冷启动 State Extract 阶段，只输出 relationships、memoryRecords 与近期状态线索，其余字段如无新增可返回空集合。',
+    );
+    const coldStartCoreSchema = sections.COLD_START_CORE_SCHEMA || sections.COLD_START_SCHEMA;
+    const coldStartStateSchema = sections.COLD_START_STATE_SCHEMA || sections.COLD_START_SCHEMA;
+    const coldStartCoreSample = sections.COLD_START_CORE_OUTPUT_SAMPLE || sections.COLD_START_OUTPUT_SAMPLE;
+    const coldStartStateSample = sections.COLD_START_STATE_OUTPUT_SAMPLE || sections.COLD_START_OUTPUT_SAMPLE;
+    const takeoverConflictSchema = sections.TAKEOVER_CONFLICT_RESOLUTION_SCHEMA || JSON.stringify(buildTakeoverConflictResolutionSchema());
+    const takeoverConflictSample = sections.TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE || JSON.stringify(buildTakeoverConflictResolutionSample());
     return {
         ...sections,
+        COLD_START_CORE_SYSTEM: coldStartCoreSystem,
+        COLD_START_CORE_SCHEMA: coldStartCoreSchema,
+        COLD_START_CORE_OUTPUT_SAMPLE: coldStartCoreSample,
+        COLD_START_STATE_SYSTEM: coldStartStateSystem,
+        COLD_START_STATE_SCHEMA: coldStartStateSchema,
+        COLD_START_STATE_OUTPUT_SAMPLE: coldStartStateSample,
+        TAKEOVER_CONFLICT_RESOLUTION_SCHEMA: takeoverConflictSchema,
+        TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE: takeoverConflictSample,
         COLD_START_SYSTEM: appendPromptRule(
             sections.COLD_START_SYSTEM,
             '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
@@ -231,6 +285,57 @@ function enrichPromptPackSections(sections: PromptPackSections): PromptPackSecti
  * @param rule 追加规则。
  * @returns 处理后的提示词。
  */
+/**
+ * 功能：构建旧聊天接管冲突裁决 schema。
+ * @returns schema 对象。
+ */
+function buildTakeoverConflictResolutionSchema(): Record<string, unknown> {
+    return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+            bucketId: { type: 'string' },
+            domain: { type: 'string' },
+            resolutions: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        action: { type: 'string', enum: ['merge', 'keep_primary', 'replace', 'invalidate', 'split'] },
+                        primaryKey: { type: 'string' },
+                        secondaryKeys: { type: 'array', items: { type: 'string' } },
+                        fieldOverrides: { type: 'object', additionalProperties: true },
+                        reasonCodes: { type: 'array', items: { type: 'string' } },
+                    },
+                    required: ['action', 'primaryKey', 'secondaryKeys', 'fieldOverrides', 'reasonCodes'],
+                },
+            },
+        },
+        required: ['bucketId', 'domain', 'resolutions'],
+    };
+}
+
+/**
+ * 功能：构建旧聊天接管冲突裁决示例。
+ * @returns 示例对象。
+ */
+function buildTakeoverConflictResolutionSample(): Record<string, unknown> {
+    return {
+        bucketId: 'takeover:entity:0001',
+        domain: 'entity',
+        resolutions: [
+            {
+                action: 'merge',
+                primaryKey: 'organization:示例教派',
+                secondaryKeys: ['organization:示例教团'],
+                fieldOverrides: {},
+                reasonCodes: ['llm_conflict_merge'],
+            },
+        ],
+    };
+}
+
 function appendPromptRule(source: string, rule: string): string {
     const normalized = String(source ?? '').trim();
     if (!normalized || normalized.includes(rule)) {

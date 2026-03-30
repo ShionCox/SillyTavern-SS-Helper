@@ -12,6 +12,11 @@ import {
 import { normalizeStructuredCategoryBuckets } from '../schema/structured-output-classifier';
 import { ProfileManager } from '../profile/profile-manager';
 import { inferReasonCode } from '../schema/error-codes';
+import {
+    isStrictJsonSchemaCompatible,
+    processProviderStrictJsonSchema,
+    type SchemaCompatOptions,
+} from '../schema/strict-json-schema';
 import { resolveMaxTokens } from './max-tokens';
 import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
@@ -231,67 +236,6 @@ export class LLMSDKImpl {
             .replace(/[^a-zA-Z0-9_-]+/g, '_')
             .replace(/^_+|_+$/g, '');
         return normalized || 'structured_output';
-    }
-
-    /**
-     * 功能：判断 schema 是否兼容严格 json_schema 响应格式。
-     * @param schema 待检查的 schema。
-     * @returns 兼容时返回 true，否则返回 false。
-     */
-    private isStrictJsonSchemaCompatible(schema: unknown): boolean {
-        return this.checkStrictJsonSchemaNode(schema, 0);
-    }
-
-    /**
-     * 功能：递归检查 schema 节点是否满足严格 json_schema 约束。
-     * @param node 当前 schema 节点。
-     * @param depth 当前递归深度。
-     * @returns 节点兼容时返回 true，否则返回 false。
-     */
-    private checkStrictJsonSchemaNode(node: unknown, depth: number): boolean {
-        if (!node || typeof node !== 'object' || Array.isArray(node)) {
-            return true;
-        }
-        if (depth >= 12) {
-            return true;
-        }
-        const record = node as Record<string, unknown>;
-        const nodeType = record.type;
-        if (nodeType === 'object') {
-            if (!('additionalProperties' in record) || record.additionalProperties !== false) {
-                return false;
-            }
-        }
-
-        if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
-            for (const child of Object.values(record.properties as Record<string, unknown>)) {
-                if (!this.checkStrictJsonSchemaNode(child, depth + 1)) {
-                    return false;
-                }
-            }
-        }
-
-        if (record.items !== undefined && !this.checkStrictJsonSchemaNode(record.items, depth + 1)) {
-            return false;
-        }
-
-        const compositeKeys: string[] = ['anyOf', 'oneOf', 'allOf', 'prefixItems'];
-        for (const key of compositeKeys) {
-            const value = record[key];
-            if (value === undefined) {
-                continue;
-            }
-            if (!Array.isArray(value)) {
-                return false;
-            }
-            return false;
-        }
-
-        if (record.additionalProperties && typeof record.additionalProperties === 'object' && !Array.isArray(record.additionalProperties)) {
-            return this.checkStrictJsonSchemaNode(record.additionalProperties, depth + 1);
-        }
-
-        return true;
     }
 
     private normalizeApiType(value: unknown): ApiType {
@@ -648,6 +592,18 @@ export class LLMSDKImpl {
         args: RunTaskArgs,
         schemaSummary?: string,
         maxTokensSource?: string,
+        requestMeta?: {
+            originalStrictSchemaCompatible?: boolean;
+            providerSchemaCompatible?: boolean;
+            schemaAutofillApplied?: boolean;
+            schemaCompatMode?: string;
+            originalStrictIncompatibilityPath?: string;
+            originalStrictIncompatibilityReason?: string;
+            providerStrictIncompatibilityPath?: string;
+            providerStrictIncompatibilityReason?: string;
+            responseFormatBeforeCompat?: string;
+            responseFormatAfterCompat?: string;
+        },
     ): Record<string, unknown> {
         const provider = this.router.getProvider(resourceId) as ({ kind?: string; apiType?: ApiType } | undefined);
         const providerKind = provider?.kind || 'unknown';
@@ -661,10 +617,21 @@ export class LLMSDKImpl {
             jsonMode: Boolean(llmReq.jsonMode),
             apiType: providerApiType,
             preferredResponseFormat: llmReq.preferredResponseFormat,
+            schemaCompat: llmReq.schemaCompat,
             normalizeMode,
             schemaSummary,
             routeHint: args.routeHint,
             budget: args.budget,
+            originalStrictSchemaCompatible: requestMeta?.originalStrictSchemaCompatible,
+            providerSchemaCompatible: requestMeta?.providerSchemaCompatible,
+            schemaAutofillApplied: requestMeta?.schemaAutofillApplied,
+            schemaCompatMode: requestMeta?.schemaCompatMode,
+            originalStrictIncompatibilityPath: requestMeta?.originalStrictIncompatibilityPath,
+            originalStrictIncompatibilityReason: requestMeta?.originalStrictIncompatibilityReason,
+            providerStrictIncompatibilityPath: requestMeta?.providerStrictIncompatibilityPath,
+            providerStrictIncompatibilityReason: requestMeta?.providerStrictIncompatibilityReason,
+            responseFormatBeforeCompat: requestMeta?.responseFormatBeforeCompat,
+            responseFormatAfterCompat: requestMeta?.responseFormatAfterCompat,
         };
         const genericPayload: Record<string, unknown> = {
             messages: llmReq.messages,
@@ -788,10 +755,10 @@ export class LLMSDKImpl {
                 : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
                     ? ProposalEnvelopeSchema
                     : undefined;
-        const providerSchema = hasCustomSchema && !this.isZodSchema(args.schema)
+        const originalProviderSchema = hasCustomSchema && !this.isZodSchema(args.schema)
             ? args.schema
             : undefined;
-        const promptSchema = (providerSchema ?? this.serializeSchemaForLog(args.schema ?? runtimeSchema)) as object | undefined;
+        const promptSchema = (originalProviderSchema ?? this.serializeSchemaForLog(args.schema ?? runtimeSchema)) as object | undefined;
         const normalizeMode = hasCustomSchema
             ? 'none'
             : args.taskId === 'world.template.build'
@@ -807,9 +774,66 @@ export class LLMSDKImpl {
             consumerBudgetMaxTokens: consumerBudget?.maxTokens,
             profileMaxTokens: profile?.maxTokens,
         });
+        const schemaCompat: SchemaCompatOptions = {
+            strictAutofill: args.schemaCompat?.strictAutofill ?? 'default',
+            onIncompatible: args.schemaCompat?.onIncompatible ?? 'downgrade',
+        };
+        const responseFormatBeforeCompat = (resolvedApiType === 'openai' || resolvedApiType === 'gemini')
+            ? (runtimeSchema ? 'json_schema' : 'none')
+            : (runtimeSchema ? 'system_json' : 'none');
+        const strictSchemaProcessing = (resolvedApiType === 'openai' || resolvedApiType === 'gemini') && originalProviderSchema
+            ? processProviderStrictJsonSchema(originalProviderSchema as object, schemaCompat)
+            : {
+                schema: originalProviderSchema as object | undefined,
+                originalCompatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                autofillApplied: false,
+                providerCompatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                originalDiagnostic: {
+                    compatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                },
+                providerDiagnostic: {
+                    compatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                },
+            };
+        const providerSchema = strictSchemaProcessing.schema;
         const canUseStrictJsonSchema = providerSchema
-            ? this.isStrictJsonSchemaCompatible(providerSchema)
+            ? strictSchemaProcessing.providerCompatible
             : false;
+        const responseFormatAfterCompat = resolvedApiType === 'openai' || resolvedApiType === 'gemini'
+            ? (canUseStrictJsonSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : 'none'))
+            : (runtimeSchema ? 'system_json' : 'none');
+
+        if (
+            (resolvedApiType === 'openai' || resolvedApiType === 'gemini')
+            && originalProviderSchema
+            && !canUseStrictJsonSchema
+            && schemaCompat.onIncompatible === 'error'
+        ) {
+            const diagnostic = strictSchemaProcessing.providerDiagnostic.compatible
+                ? strictSchemaProcessing.originalDiagnostic
+                : strictSchemaProcessing.providerDiagnostic;
+            const diagnosticSuffix = diagnostic.reason
+                ? ` (${diagnostic.path || '$'} -> ${diagnostic.reason})`
+                : '';
+            const reasonCode = strictSchemaProcessing.autofillApplied
+                ? 'schema_strict_autofill_incompatible'
+                : 'schema_strict_incompatible';
+            const error = strictSchemaProcessing.autofillApplied
+                ? 'Schema 自动填充后仍不兼容严格 json_schema，已按请求配置阻止降级'
+                : 'Schema 不兼容严格 json_schema，已按请求配置阻止降级';
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: error,
+                error,
+                reasonCode,
+            });
+            return {
+                ok: false,
+                error,
+                retryable: false,
+                reasonCode,
+            };
+        }
 
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
@@ -827,16 +851,17 @@ export class LLMSDKImpl {
             model: resolved.model,
             maxTokens: resolvedMaxTokens.value,
             jsonMode: !!runtimeSchema || profile?.jsonMode === true,
-            schema: promptSchema,
+            schema: providerSchema ?? promptSchema,
             schemaName: this.sanitizeSchemaName(this.summarizeSchema(args.schema ?? runtimeSchema)),
             preferredResponseFormat: resolvedApiType === 'openai' || resolvedApiType === 'gemini'
                 ? (canUseStrictJsonSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
                 : (runtimeSchema ? 'system_json' : undefined),
+            schemaCompat,
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
         };
 
         const schemaSummary = this.summarizeSchema(args.schema ?? runtimeSchema);
-        const schemaForLog = this.serializeSchemaForLog(providerSchema ?? args.schema ?? runtimeSchema);
+        const schemaForLog = this.serializeSchemaForLog(originalProviderSchema ?? args.schema ?? runtimeSchema);
         const schemaCharCount = schemaForLog ? JSON.stringify(schemaForLog).length : 0;
         const inputCharCount = llmReq.messages.reduce((sum, msg) => sum + String(msg.content || '').length, 0);
         record.requestLogSnapshot = {
@@ -848,7 +873,17 @@ export class LLMSDKImpl {
             schema: schemaForLog,
             jsonMode: llmReq.jsonMode,
             strictSchemaCompatible: canUseStrictJsonSchema,
+            originalStrictSchemaCompatible: strictSchemaProcessing.originalCompatible,
+            providerSchemaCompatible: strictSchemaProcessing.providerCompatible,
+            schemaAutofillApplied: strictSchemaProcessing.autofillApplied,
+            schemaCompatMode: `${schemaCompat.strictAutofill}:${schemaCompat.onIncompatible}`,
+            originalStrictIncompatibilityPath: strictSchemaProcessing.originalDiagnostic.path,
+            originalStrictIncompatibilityReason: strictSchemaProcessing.originalDiagnostic.reason,
+            providerStrictIncompatibilityPath: strictSchemaProcessing.providerDiagnostic.path,
+            providerStrictIncompatibilityReason: strictSchemaProcessing.providerDiagnostic.reason,
             responseFormatResolved: llmReq.preferredResponseFormat || 'none',
+            responseFormatBeforeCompat,
+            responseFormatAfterCompat,
             resolvedMaxTokens: {
                 value: resolvedMaxTokens.value,
                 source: resolvedMaxTokens.source,
@@ -863,6 +898,18 @@ export class LLMSDKImpl {
                 args,
                 schemaSummary,
                 resolvedMaxTokens.source,
+                {
+                    originalStrictSchemaCompatible: strictSchemaProcessing.originalCompatible,
+                    providerSchemaCompatible: strictSchemaProcessing.providerCompatible,
+                    schemaAutofillApplied: strictSchemaProcessing.autofillApplied,
+                    schemaCompatMode: `${schemaCompat.strictAutofill}:${schemaCompat.onIncompatible}`,
+                    originalStrictIncompatibilityPath: strictSchemaProcessing.originalDiagnostic.path,
+                    originalStrictIncompatibilityReason: strictSchemaProcessing.originalDiagnostic.reason,
+                    providerStrictIncompatibilityPath: strictSchemaProcessing.providerDiagnostic.path,
+                    providerStrictIncompatibilityReason: strictSchemaProcessing.providerDiagnostic.reason,
+                    responseFormatBeforeCompat,
+                    responseFormatAfterCompat,
+                },
             ),
             metrics: {
                 ...(record.requestLogSnapshot?.metrics || {}),

@@ -32,6 +32,11 @@ import {
 } from './takeover-domain-ledger';
 import { resolveTakeoverConflictBuckets } from './takeover-conflict-resolver';
 import { finalizeTakeoverConsolidation } from './takeover-finalizer';
+import {
+    appendTakeoverStagingSnapshot,
+    clearTakeoverStagingSnapshot,
+    saveTakeoverStagingSnapshot,
+} from './takeover-staging-store';
 
 /**
  * 功能：执行旧聊天接管最终整合（新主链：冲突裁决 + 代码 finalize）。
@@ -73,6 +78,17 @@ export async function runTakeoverConsolidation(input: {
 
     clearPipelineLedgerState(input.takeoverId);
     clearPipelineConflictState(input.takeoverId);
+    await clearTakeoverStagingSnapshot(input.takeoverId);
+    await saveTakeoverStagingSnapshot(input.takeoverId, {
+        takeoverId: input.takeoverId,
+        status: 'running',
+        activeSnapshot: input.activeSnapshot,
+        batchResults: [],
+        sectionDigests: [],
+        reducedLedger: null,
+        unresolvedConflicts: [],
+        finalResult: null,
+    });
 
     diagnostics.batchCount = input.batchResults.length;
     for (const batch of input.batchResults) {
@@ -89,6 +105,9 @@ export async function runTakeoverConsolidation(input: {
             status: 'completed',
         });
     }
+    await appendTakeoverStagingSnapshot(input.takeoverId, {
+        batchResults: input.batchResults,
+    });
 
     updatePipelineJobPhase(input.takeoverId, 'reduce');
     const sectionDigests = buildTakeoverSectionDigests(input.takeoverId, input.batchResults, budget);
@@ -110,6 +129,16 @@ export async function runTakeoverConsolidation(input: {
         ...mapTakeoverRecordsToLedger(input.takeoverId, 'task', taskReduce.canonicalRecords, taskReduce.unresolvedConflicts),
         ...mapTakeoverRecordsToLedger(input.takeoverId, 'world', worldReduce.canonicalRecords, worldReduce.unresolvedConflicts),
     ]);
+    await appendTakeoverStagingSnapshot(input.takeoverId, {
+        sectionDigests,
+        reducedLedger: {
+            actors: actorReduce.canonicalRecords,
+            entities: entityReduce.canonicalRecords,
+            relationships: relationshipReduce.canonicalRecords,
+            tasks: taskReduce.canonicalRecords,
+            world: worldReduce.canonicalRecords,
+        },
+    });
 
     const conflictBuckets = [
         ...actorReduce.unresolvedConflicts,
@@ -131,6 +160,14 @@ export async function runTakeoverConsolidation(input: {
     }
     diagnostics.conflictBucketCount = conflictBuckets.length;
     diagnostics.unresolvedConflictCount = conflictBuckets.length;
+    await appendTakeoverStagingSnapshot(input.takeoverId, {
+        unresolvedConflicts: conflictBuckets.map((item) => ({
+            bucketId: item.bucketId,
+            domain: item.domain,
+            conflictType: item.conflictType,
+            records: item.records,
+        })),
+    });
 
     updatePipelineJobPhase(input.takeoverId, 'resolve');
     const patches = await resolveTakeoverConflictBuckets({
@@ -138,6 +175,7 @@ export async function runTakeoverConsolidation(input: {
         pluginId: input.pluginId,
         buckets: listPipelineConflictBucketRecords(input.takeoverId),
         budget,
+        useConflictResolver: settings.takeoverUseConflictResolver,
     });
 
     for (const patch of patches) {
@@ -168,6 +206,10 @@ export async function runTakeoverConsolidation(input: {
             .map((item) => item.resolutionResult)
             .filter((item): item is NonNullable<typeof item> => Boolean(item)),
         diagnostics,
+    });
+    await appendTakeoverStagingSnapshot(input.takeoverId, {
+        status: 'completed',
+        finalResult: result,
     });
 
     upsertPipelineJobRecord({

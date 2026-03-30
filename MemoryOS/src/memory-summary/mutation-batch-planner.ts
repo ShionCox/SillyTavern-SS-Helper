@@ -20,6 +20,7 @@ export function planSummaryMutationBatches(input: {
     plannerDecision: SummaryPlannerOutput;
     candidateRecords: Array<{ candidateId: string; targetKind: string }>;
     budget: PipelineBudgetPolicy;
+    splitByActionType?: boolean;
 }): SummaryMutationBatchPlan[] {
     const focusTypes = input.plannerDecision.focus_types.length > 0
         ? [...input.plannerDecision.focus_types]
@@ -31,6 +32,17 @@ export function planSummaryMutationBatches(input: {
             candidateIds: input.candidateRecords.map((item) => item.candidateId),
             actionBudget: input.budget.maxActionsPerMutation,
         }];
+    }
+
+    if (input.splitByActionType) {
+        return focusTypes.map((focusType: string, index: number): SummaryMutationBatchPlan => ({
+            batchId: `summary:batch:${String(index + 1).padStart(4, '0')}`,
+            focusTypes: [focusType],
+            candidateIds: input.candidateRecords
+                .filter((item) => item.targetKind === focusType)
+                .map((item) => item.candidateId),
+            actionBudget: input.budget.maxActionsPerMutation,
+        })).filter((item) => item.focusTypes.length > 0);
     }
 
     const plans: SummaryMutationBatchPlan[] = [];

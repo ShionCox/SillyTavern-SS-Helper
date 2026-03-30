@@ -34,11 +34,16 @@ export function resolvePipelineBudgetPolicy(settings: Pick<
     | 'summarySecondStageRollingDigestMaxChars'
     | 'summarySecondStageCandidateSummaryMaxChars'
     | 'takeoverDefaultBatchSize'
+    | 'takeoverSectionDigestBatchCount'
+    | 'takeoverMaxConflictItemsPerRun'
+    | 'summaryMaxActionsPerMutationBatch'
 >): PipelineBudgetPolicy {
     if (settings.pipelineBudgetEnabled === false) {
         return {
             ...DEFAULT_PIPELINE_BUDGET_POLICY,
-            maxSectionBatchCount: Math.max(1, settings.takeoverDefaultBatchSize || DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionBatchCount),
+            maxActionsPerMutation: Math.max(1, settings.summaryMaxActionsPerMutationBatch || DEFAULT_PIPELINE_BUDGET_POLICY.maxActionsPerMutation),
+            maxSectionBatchCount: Math.max(1, settings.takeoverSectionDigestBatchCount || DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionBatchCount),
+            maxConflictBucketSize: Math.max(1, settings.takeoverMaxConflictItemsPerRun || DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBucketSize),
             maxRollingDigestChars: settings.summarySecondStageRollingDigestMaxChars > 0
                 ? settings.summarySecondStageRollingDigestMaxChars
                 : DEFAULT_PIPELINE_BUDGET_POLICY.maxRollingDigestChars,
@@ -50,9 +55,24 @@ export function resolvePipelineBudgetPolicy(settings: Pick<
     return {
         maxInputCharsPerBatch: clampBudgetNumber(settings.pipelineMaxInputCharsPerBatch, 1000, 50000, DEFAULT_PIPELINE_BUDGET_POLICY.maxInputCharsPerBatch),
         maxOutputItemsPerBatch: clampBudgetNumber(settings.pipelineMaxOutputItemsPerBatch, 1, 200, DEFAULT_PIPELINE_BUDGET_POLICY.maxOutputItemsPerBatch),
-        maxActionsPerMutation: clampBudgetNumber(settings.pipelineMaxActionsPerMutation, 1, 100, DEFAULT_PIPELINE_BUDGET_POLICY.maxActionsPerMutation),
-        maxSectionBatchCount: clampBudgetNumber(settings.pipelineMaxSectionBatchCount, 1, 50, DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionBatchCount),
-        maxConflictBucketSize: clampBudgetNumber(settings.pipelineMaxConflictBucketSize, 1, 100, DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBucketSize),
+        maxActionsPerMutation: clampBudgetNumber(
+            settings.summaryMaxActionsPerMutationBatch || settings.pipelineMaxActionsPerMutation,
+            1,
+            100,
+            DEFAULT_PIPELINE_BUDGET_POLICY.maxActionsPerMutation,
+        ),
+        maxSectionBatchCount: clampBudgetNumber(
+            settings.takeoverSectionDigestBatchCount || settings.pipelineMaxSectionBatchCount,
+            1,
+            50,
+            DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionBatchCount,
+        ),
+        maxConflictBucketSize: clampBudgetNumber(
+            settings.takeoverMaxConflictItemsPerRun || settings.pipelineMaxConflictBucketSize,
+            1,
+            100,
+            DEFAULT_PIPELINE_BUDGET_POLICY.maxConflictBucketSize,
+        ),
         maxSectionDigestChars: clampBudgetNumber(settings.pipelineMaxSectionDigestChars, 100, 10000, DEFAULT_PIPELINE_BUDGET_POLICY.maxSectionDigestChars),
         maxRollingDigestChars: settings.summarySecondStageRollingDigestMaxChars > 0
             ? settings.summarySecondStageRollingDigestMaxChars

@@ -18,6 +18,7 @@ import type { MemoryLLMApi } from './llm-types';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { readMemoryOSSettings } from '../settings/store';
 import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
+import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
 
 /**
  * 功能：定义总结编排器依赖。
@@ -264,6 +265,19 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
     const summaryJobId = `summary:${plannerResult.context.window.fromTurn}:${plannerResult.context.window.toTurn}:${Date.now()}`;
     clearSummaryMutationStagingSnapshot(summaryJobId);
+    upsertPipelineJobRecord({
+        jobId: summaryJobId,
+        jobType: 'summary',
+        status: 'running',
+        phase: 'extract',
+        sourceMeta: {
+            fromTurn: plannerResult.context.window.fromTurn,
+            toTurn: plannerResult.context.window.toTurn,
+            candidateCount: plannerResult.context.candidateRecords.length,
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
 
     const batchPlans = planSummaryMutationBatches({
         plannerDecision,
@@ -272,6 +286,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             targetKind: item.targetKind,
         })),
         budget,
+        splitByActionType: settings.summarySplitByActionType,
     });
     await input.dependencies.appendMutationHistory({
         action: 'summary_mutation_batches_planned',
@@ -288,6 +303,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     });
 
     for (const batchPlan of batchPlans) {
+        updatePipelineJobPhase(summaryJobId, 'reduce');
         const batchDecision: SummaryPlannerOutput = {
             ...plannerDecision,
             focus_types: batchPlan.focusTypes,
@@ -366,6 +382,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         return buildSummaryFailureResult(plannerResult, 'empty_mutation_batches');
     }
 
+    updatePipelineJobPhase(summaryJobId, 'apply');
     const finalMutationDocument = finalizeSummaryMutationSnapshot(stagingSnapshot);
     await input.dependencies.appendMutationHistory({
         action: 'mutation_validated',
@@ -393,6 +410,18 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             actionCount: finalMutationDocument.actions.length,
             batchCount: stagingSnapshot.batchResults.length,
         },
+    });
+    upsertPipelineJobRecord({
+        jobId: summaryJobId,
+        jobType: 'summary',
+        status: 'completed',
+        phase: 'apply',
+        sourceMeta: {
+            actionCount: finalMutationDocument.actions.length,
+            batchCount: stagingSnapshot.batchResults.length,
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
     });
     clearSummaryMutationStagingSnapshot(summaryJobId);
     return {

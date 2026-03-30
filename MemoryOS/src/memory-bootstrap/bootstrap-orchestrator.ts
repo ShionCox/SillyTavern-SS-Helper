@@ -13,6 +13,13 @@ import {
     normalizeUserNarrativeText,
     resolveCurrentNarrativeUserName,
 } from '../utils/narrative-user-name';
+import { readMemoryOSSettings } from '../settings/store';
+import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
+import {
+    appendBootstrapStagingSnapshot,
+    clearBootstrapStagingSnapshot,
+    saveBootstrapStagingSnapshot,
+} from './bootstrap-staging-store';
 
 /**
  * 功能：定义冷启动编排依赖。
@@ -80,8 +87,10 @@ export interface RunBootstrapOrchestratorResult {
  * @returns 编排结果。
  */
 export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorInput): Promise<RunBootstrapOrchestratorResult> {
+    const settings = readMemoryOSSettings();
     const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
+    const runId = `bootstrap:${Date.now()}`;
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_started',
         payload: {
@@ -89,6 +98,27 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             sourceTextCount: sourceTexts.length,
             architecture: 'phase_4',
         },
+    });
+    upsertPipelineJobRecord({
+        jobId: runId,
+        jobType: 'cold_start',
+        status: 'running',
+        phase: 'extract',
+        sourceMeta: {
+            sourceTextCount: sourceTexts.length,
+            reason: input.sourceBundle.reason,
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+    await clearBootstrapStagingSnapshot(runId);
+    await saveBootstrapStagingSnapshot(runId, {
+        runId,
+        status: 'running',
+        coreDocument: null,
+        stateDocument: null,
+        reducedDocument: null,
+        finalizedDocument: null,
     });
     if (!input.llm) {
         await input.dependencies.appendMutationHistory({
@@ -104,18 +134,21 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
 
     // ── Phase 1：核心实体与角色抽取 ──────────────────
     const segments = segmentColdStartSourceBundle(input.sourceBundle);
+    const limitedPhase1Payload = limitBootstrapPhasePayload(segments.phase1, settings.bootstrapCorePhaseMaxItems);
+    const limitedPhase2Payload = limitBootstrapPhasePayload(segments.phase2, settings.bootstrapStatePhaseMaxItems);
     const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_started',
         payload: { phase: 'phase1', description: '核心实体与角色抽取' },
     });
+    updatePipelineJobPhase(runId, 'extract');
     const phase1Result = await runBootstrapPhase({
         llm: input.llm,
         pluginId: input.pluginId,
         userDisplayName,
         phaseName: 'phase1',
         payload: {
-            sourceBundle: segments.phase1,
+            sourceBundle: limitedPhase1Payload,
             actorKeyHints,
             userDisplayName,
         },
@@ -123,6 +156,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: { phase: 'phase1', ok: phase1Result.ok, reasonCode: phase1Result.reasonCode },
+    });
+    const phase1Document = parseColdStartDocument(phase1Result.data);
+    await appendBootstrapStagingSnapshot(runId, {
+        coreDocument: phase1Document,
     });
 
     // ── Phase 2：关系与状态转移抽取 ──────────────────
@@ -136,7 +173,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         userDisplayName,
         phaseName: 'phase2',
         payload: {
-            sourceBundle: segments.phase2,
+            sourceBundle: limitedPhase2Payload,
             actorKeyHints,
             userDisplayName,
         },
@@ -144,6 +181,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: { phase: 'phase2', ok: phase2Result.ok, reasonCode: phase2Result.reasonCode },
+    });
+    const phase2Document = parseColdStartDocument(phase2Result.data);
+    await appendBootstrapStagingSnapshot(runId, {
+        stateDocument: phase2Document,
     });
 
     if (!phase1Result.ok || !phase2Result.ok) {
@@ -164,9 +205,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         action: 'cold_start_phase_started',
         payload: { phase: 'phase3', description: 'bootstrap candidates 去重、合并、校验' },
     });
+    updatePipelineJobPhase(runId, 'reduce');
     const reduced = reduceBootstrapDocuments([
-        parseColdStartDocument(phase1Result.data),
-        parseColdStartDocument(phase2Result.data),
+        phase1Document,
+        phase2Document,
     ].filter(Boolean) as ColdStartDocument[]);
     if (!reduced) {
         await input.dependencies.appendMutationHistory({
@@ -181,6 +223,9 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     }
 
     const normalizedDocument = normalizeColdStartNarrativeDocument(resolveBootstrapConflicts(reduced), userDisplayName);
+    await appendBootstrapStagingSnapshot(runId, {
+        reducedDocument: normalizedDocument,
+    });
     const finalized = finalizeBootstrapDocument(normalizedDocument, input.sourceBundle);
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
@@ -210,8 +255,12 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         action: 'cold_start_phase_started',
         payload: { phase: 'phase4', description: '一致性修正与校验' },
     });
+    updatePipelineJobPhase(runId, 'apply');
     const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
     const reconcileResult = reconcileBootstrapDocument(normalizedDocument);
+    await appendBootstrapStagingSnapshot(runId, {
+        finalizedDocument: reconcileResult.document,
+    });
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: {
@@ -322,6 +371,36 @@ export async function applyBootstrapCandidates(input: {
         },
     });
     return { worldProfile };
+}
+
+/**
+ * 功能：限制冷启动阶段输入中的数组规模，避免单轮抽取过大。
+ * @param payload 原始阶段输入。
+ * @param maxItems 最大保留项数。
+ * @returns 裁剪后的阶段输入。
+ */
+function limitBootstrapPhasePayload(payload: Record<string, unknown>, maxItems: number): Record<string, unknown> {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return {};
+    }
+    const limit = Math.max(1, Math.trunc(Number(maxItems) || 24));
+    const nextPayload = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+    const sourceBundle = nextPayload.sourceBundle;
+    if (!sourceBundle || typeof sourceBundle !== 'object' || Array.isArray(sourceBundle)) {
+        return nextPayload;
+    }
+    const sourceBundleRecord = sourceBundle as Record<string, unknown>;
+    const worldbooks = sourceBundleRecord.worldbooks;
+    if (worldbooks && typeof worldbooks === 'object' && !Array.isArray(worldbooks)) {
+        const worldbooksRecord = worldbooks as Record<string, unknown>;
+        if (Array.isArray(worldbooksRecord.entries)) {
+            worldbooksRecord.entries = worldbooksRecord.entries.slice(0, limit);
+        }
+    }
+    if (Array.isArray(sourceBundleRecord.recentEvents)) {
+        sourceBundleRecord.recentEvents = sourceBundleRecord.recentEvents.slice(0, limit);
+    }
+    return nextPayload;
 }
 
 /**

@@ -2390,7 +2390,17 @@ function bindUiEvents(): void {
         const model = String(entry.response?.meta?.model || '-').trim() || '-';
         const resourceId = String(entry.response?.meta?.resourceId || '-').trim() || '-';
         const strictCompatible = entry.request?.strictSchemaCompatible;
+        const originalStrictCompatible = entry.request?.originalStrictSchemaCompatible;
+        const providerStrictCompatible = entry.request?.providerSchemaCompatible;
+        const schemaAutofillApplied = entry.request?.schemaAutofillApplied;
+        const schemaCompatMode = String(entry.request?.schemaCompatMode || '').trim();
+        const originalStrictIncompatibilityPath = String(entry.request?.originalStrictIncompatibilityPath || '').trim();
+        const originalStrictIncompatibilityReason = String(entry.request?.originalStrictIncompatibilityReason || '').trim();
+        const providerStrictIncompatibilityPath = String(entry.request?.providerStrictIncompatibilityPath || '').trim();
+        const providerStrictIncompatibilityReason = String(entry.request?.providerStrictIncompatibilityReason || '').trim();
         const responseFormat = String(entry.request?.responseFormatResolved || '').trim();
+        const responseFormatBeforeCompat = String(entry.request?.responseFormatBeforeCompat || '').trim();
+        const responseFormatAfterCompat = String(entry.request?.responseFormatAfterCompat || '').trim();
         const schemaCharCount = entry.request?.metrics?.schemaCharCount;
         const inputCharCount = entry.request?.metrics?.inputCharCount;
         const outputCharCount = entry.request?.metrics?.outputCharCount;
@@ -2417,8 +2427,32 @@ function bindUiEvents(): void {
         if (strictCompatible !== undefined) {
             lines.push(`Schema 严格兼容：${strictCompatible ? '是' : '否'}`);
         }
+        if (originalStrictCompatible !== undefined) {
+            lines.push(`原始 Schema 兼容：${originalStrictCompatible ? '是' : '否'}`);
+        }
+        if (providerStrictCompatible !== undefined) {
+            lines.push(`发送 Schema 兼容：${providerStrictCompatible ? '是' : '否'}`);
+        }
+        if (schemaAutofillApplied !== undefined) {
+            lines.push(`Schema 自动填充：${schemaAutofillApplied ? '已启用' : '未启用'}`);
+        }
+        if (schemaCompatMode) {
+            lines.push(`Schema 兼容模式：${schemaCompatMode}`);
+        }
+        if (originalStrictIncompatibilityPath || originalStrictIncompatibilityReason) {
+            lines.push(`原始 Schema 不兼容点：${originalStrictIncompatibilityPath || '$'} | ${originalStrictIncompatibilityReason || '-'}`);
+        }
+        if (providerStrictIncompatibilityPath || providerStrictIncompatibilityReason) {
+            lines.push(`发送 Schema 不兼容点：${providerStrictIncompatibilityPath || '$'} | ${providerStrictIncompatibilityReason || '-'}`);
+        }
         if (responseFormat) {
             lines.push(`响应格式：${formatLabel}`);
+        }
+        if (responseFormatBeforeCompat) {
+            lines.push(`兼容前格式：${responseFormatBeforeCompat}`);
+        }
+        if (responseFormatAfterCompat) {
+            lines.push(`兼容后格式：${responseFormatAfterCompat}`);
         }
         if (schemaCharCount !== undefined) {
             lines.push(`Schema 字符数：${schemaCharCount}`);

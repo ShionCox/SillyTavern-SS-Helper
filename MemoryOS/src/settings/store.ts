@@ -29,10 +29,19 @@ export type MemoryOSSettings = {
     takeoverDetectMinFloors: number;
     takeoverDefaultRecentFloors: number;
     takeoverDefaultBatchSize: number;
+    takeoverSectionDigestBatchCount: number;
+    takeoverUseConflictResolver: boolean;
+    takeoverMaxConflictItemsPerRun: number;
     takeoverDefaultPrioritizeRecent: boolean;
     takeoverDefaultAutoContinue: boolean;
     takeoverDefaultAutoConsolidate: boolean;
     takeoverDefaultPauseOnError: boolean;
+    bootstrapUsePhasedExtraction: boolean;
+    bootstrapCorePhaseMaxItems: number;
+    bootstrapStatePhaseMaxItems: number;
+    summaryMaxActionsPerMutationBatch: number;
+    summaryEnableSparsePatch: boolean;
+    summarySplitByActionType: boolean;
     retrievalLogEnabled: boolean;
     retrievalLogLevel: 'info' | 'debug';
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
@@ -70,10 +79,19 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     takeoverDetectMinFloors: 50,
     takeoverDefaultRecentFloors: 60,
     takeoverDefaultBatchSize: 30,
+    takeoverSectionDigestBatchCount: 5,
+    takeoverUseConflictResolver: true,
+    takeoverMaxConflictItemsPerRun: 10,
     takeoverDefaultPrioritizeRecent: true,
     takeoverDefaultAutoContinue: true,
     takeoverDefaultAutoConsolidate: true,
     takeoverDefaultPauseOnError: true,
+    bootstrapUsePhasedExtraction: true,
+    bootstrapCorePhaseMaxItems: 24,
+    bootstrapStatePhaseMaxItems: 24,
+    summaryMaxActionsPerMutationBatch: 10,
+    summaryEnableSparsePatch: true,
+    summarySplitByActionType: true,
     retrievalLogEnabled: true,
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
@@ -154,6 +172,26 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         1,
         Math.min(500, Math.trunc(Number(candidate.takeoverDefaultBatchSize) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize)),
     );
+    const takeoverSectionDigestBatchCount: number = Math.max(
+        1,
+        Math.min(50, Math.trunc(Number(candidate.takeoverSectionDigestBatchCount) || DEFAULT_MEMORY_OS_SETTINGS.takeoverSectionDigestBatchCount)),
+    );
+    const takeoverMaxConflictItemsPerRun: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.takeoverMaxConflictItemsPerRun) || DEFAULT_MEMORY_OS_SETTINGS.takeoverMaxConflictItemsPerRun)),
+    );
+    const bootstrapCorePhaseMaxItems: number = Math.max(
+        1,
+        Math.min(200, Math.trunc(Number(candidate.bootstrapCorePhaseMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.bootstrapCorePhaseMaxItems)),
+    );
+    const bootstrapStatePhaseMaxItems: number = Math.max(
+        1,
+        Math.min(200, Math.trunc(Number(candidate.bootstrapStatePhaseMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.bootstrapStatePhaseMaxItems)),
+    );
+    const summaryMaxActionsPerMutationBatch: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.summaryMaxActionsPerMutationBatch) || DEFAULT_MEMORY_OS_SETTINGS.summaryMaxActionsPerMutationBatch)),
+    );
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
     const retrievalRulePack = candidate.retrievalRulePack === 'native'
         || candidate.retrievalRulePack === 'perocore'
@@ -189,10 +227,19 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         takeoverDetectMinFloors,
         takeoverDefaultRecentFloors,
         takeoverDefaultBatchSize,
+        takeoverSectionDigestBatchCount,
+        takeoverUseConflictResolver: candidate.takeoverUseConflictResolver !== false,
+        takeoverMaxConflictItemsPerRun,
         takeoverDefaultPrioritizeRecent: candidate.takeoverDefaultPrioritizeRecent !== false,
         takeoverDefaultAutoContinue: candidate.takeoverDefaultAutoContinue !== false,
         takeoverDefaultAutoConsolidate: candidate.takeoverDefaultAutoConsolidate !== false,
         takeoverDefaultPauseOnError: candidate.takeoverDefaultPauseOnError !== false,
+        bootstrapUsePhasedExtraction: candidate.bootstrapUsePhasedExtraction !== false,
+        bootstrapCorePhaseMaxItems,
+        bootstrapStatePhaseMaxItems,
+        summaryMaxActionsPerMutationBatch,
+        summaryEnableSparsePatch: candidate.summaryEnableSparsePatch !== false,
+        summarySplitByActionType: candidate.summarySplitByActionType !== false,
         retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
         retrievalLogLevel,
         retrievalRulePack,

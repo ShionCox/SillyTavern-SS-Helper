@@ -29,6 +29,11 @@ export type PipelineConflictState = 'none' | 'suspected' | 'unresolved' | 'resol
 export type PipelineResolutionStatus = 'pending' | 'resolved' | 'failed' | 'fallback';
 
 /**
+ * 功能：定义统一主链运行类型。
+ */
+export type PipelineRunKind = 'takeover' | 'bootstrap' | 'summary';
+
+/**
  * 功能：定义统一预算策略。
  */
 export interface PipelineBudgetPolicy {
@@ -41,6 +46,18 @@ export interface PipelineBudgetPolicy {
     maxRollingDigestChars: number;
     maxCandidateSummaryChars: number;
     maxFinalizerItemsPerDomain: number;
+}
+
+/**
+ * 功能：定义统一运行态快照。
+ */
+export interface PipelineRunState {
+    runId: string;
+    pipelineKind: PipelineRunKind;
+    phase: string;
+    status: PipelineJobStatus;
+    createdAt: number;
+    updatedAt: number;
 }
 
 /**

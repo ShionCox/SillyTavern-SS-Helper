@@ -223,7 +223,17 @@ export interface LLMRequestLogRequestSnapshot {
     schema?: unknown;
     jsonMode?: boolean;
     strictSchemaCompatible?: boolean;
+    originalStrictSchemaCompatible?: boolean;
+    providerSchemaCompatible?: boolean;
+    schemaAutofillApplied?: boolean;
+    schemaCompatMode?: string;
+    originalStrictIncompatibilityPath?: string;
+    originalStrictIncompatibilityReason?: string;
+    providerStrictIncompatibilityPath?: string;
+    providerStrictIncompatibilityReason?: string;
     responseFormatResolved?: string;
+    responseFormatBeforeCompat?: string;
+    responseFormatAfterCompat?: string;
     resolvedMaxTokens?: {
         value: number;
         source: string;
@@ -544,6 +554,7 @@ export interface RunTaskArgs<T = unknown> {
     taskKind: CapabilityKind;
     input: any;
     schema?: any;
+    schemaCompat?: import('./strict-json-schema').SchemaCompatOptions;
     routeHint?: { resource?: string; profile?: string; model?: string };
     budget?: { maxTokens?: number; maxLatencyMs?: number; maxCost?: number };
     enqueue?: RequestEnqueueOptions;

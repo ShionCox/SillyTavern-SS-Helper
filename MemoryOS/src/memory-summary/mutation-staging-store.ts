@@ -17,7 +17,6 @@ export interface SummaryMutationStagingSnapshot {
     summaryJobId: string;
     batchResults: SummaryMutationBatchResultRecord[];
 }
-
 const mutationStagingStore: Map<string, SummaryMutationStagingSnapshot> = new Map();
 
 /**

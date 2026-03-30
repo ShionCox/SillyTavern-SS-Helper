@@ -870,6 +870,8 @@
   }
 }
 ```
+
+<!-- section: TAKEOVER_BATCH_OUTPUT_SAMPLE_TAIL_IGNORED -->
       "target": "巡逻队长",
       "state": "与用户保持谨慎合作",
       "reason": "多轮互动后形成稳定协作关系"

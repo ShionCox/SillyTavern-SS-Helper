@@ -7,19 +7,19 @@ const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_TARGETS = {
   MemoryOS: {
     entry: "MemoryOS/src/index.ts",
-    outDir: "MemoryOS/dist",
+    outDir: "dist/MemoryOS",
     manifest: "MemoryOS/manifest.json",
     format: "es",
   },
   LLMHub: {
     entry: "LLMHub/src/index.ts",
-    outDir: "LLMHub/dist",
+    outDir: "dist/LLMHub",
     manifest: "LLMHub/manifest.json",
     format: "es",
   },
   RollHelper: {
     entry: "RollHelper/index.ts",
-    outDir: "RollHelper/dist",
+    outDir: "dist/RollHelper",
     manifest: "RollHelper/manifest.json",
     format: "es",
   },
@@ -64,9 +64,11 @@ function copyStaticAssetsPlugin(targetName) {
     name: `copy-static-assets:${targetName}`,
     closeBundle() {
       if (targetName !== "RollHelper") return;
+      const target = PROJECT_TARGETS[targetName];
+      if (!target) return;
 
       const source = path.resolve(ROOT_DIR, "assets/font/思源宋体.otf");
-      const destination = path.resolve(ROOT_DIR, "RollHelper/dist/assets/font/思源宋体.otf");
+      const destination = path.resolve(ROOT_DIR, target.outDir, "assets/font/思源宋体.otf");
       if (!fs.existsSync(source)) return;
 
       fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -80,8 +82,10 @@ function copyRollHelperLogoPlugin(targetName) {
     name: `copy-rollhelper-logo:${targetName}`,
     closeBundle() {
       if (targetName !== "RollHelper") return;
+      const target = PROJECT_TARGETS[targetName];
+      if (!target) return;
       const source = path.resolve(ROOT_DIR, "assets/images/ROLL-LOGO.png");
-      const destination = path.resolve(ROOT_DIR, "RollHelper/dist/assets/images/ROLL-LOGO.png");
+      const destination = path.resolve(ROOT_DIR, target.outDir, "assets/images/ROLL-LOGO.png");
       if (!fs.existsSync(source)) return;
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.copyFileSync(source, destination);

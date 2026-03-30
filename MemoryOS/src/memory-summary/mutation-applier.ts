@@ -2,6 +2,7 @@ import type { MemoryEntry, SummaryRefreshBinding, SummarySnapshot, SummaryEntryU
 import type { SummaryCandidateRecord } from '../memory-summary-planner';
 import { normalizeSummarySnapshot, type NormalizedSummaryDigest } from '../memory-summary-planner';
 import type { SummaryMutationDocument, SummaryMutationAction } from './mutation-types';
+import { applySummaryPatch } from './mutation-patch-utils';
 import {
     normalizeNarrativeValue,
     normalizeUserNarrativeText,
@@ -351,21 +352,7 @@ function resolveActionPayload(action: SummaryMutationAction, userDisplayName: st
  * @returns 合并结果。
  */
 function mergeDetailPayload(base: Record<string, unknown>, payload: Record<string, unknown>): Record<string, unknown> {
-    const out: Record<string, unknown> = { ...normalizeRecord(base) };
-    const fields = payload.fields;
-    if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
-        out.fields = {
-            ...normalizeRecord(out.fields),
-            ...(fields as Record<string, unknown>),
-        };
-    }
-    const scalarKeys = ['importance', 'memorySubtype', 'trust', 'affection', 'tension', 'scope', 'state', 'supersededBy'];
-    for (const key of scalarKeys) {
-        if (payload[key] !== undefined) {
-            out[key] = payload[key];
-        }
-    }
-    return out;
+    return applySummaryPatch(normalizeRecord(base), normalizeRecord(payload));
 }
 
 /**
