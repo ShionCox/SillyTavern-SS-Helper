@@ -2,10 +2,13 @@ import type {
     MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBatch,
     MemoryTakeoverBatchResult,
+    MemoryTakeoverBindings,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
     MemoryTakeoverRelationshipCard,
     MemoryTakeoverRange,
+    MemoryTakeoverTaskTransition,
+    MemoryTakeoverWorldStateChange,
 } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
 import { normalizeRelationTag } from '../constants/relationTags';
@@ -69,6 +72,130 @@ function normalizeStringList(values: string[], limit: number): string[] {
         if (result.length >= limit) {
             break;
         }
+    }
+    return result;
+}
+
+/**
+ * 功能：构建空的绑定关系载荷。
+ * @returns 空绑定对象。
+ */
+function createEmptyBindings(): MemoryTakeoverBindings {
+    return {
+        actors: [],
+        organizations: [],
+        cities: [],
+        locations: [],
+        nations: [],
+        tasks: [],
+        events: [],
+    };
+}
+
+/**
+ * 功能：归一化旧聊天结构化输出中的绑定关系。
+ * @param value 原始绑定值。
+ * @returns 归一化后的绑定对象。
+ */
+function normalizeBindings(value: unknown): MemoryTakeoverBindings {
+    const source = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    const empty = createEmptyBindings();
+    return {
+        actors: normalizeStringList(Array.isArray(source.actors) ? source.actors.map((item) => String(item ?? '')) : empty.actors, 12),
+        organizations: normalizeStringList(Array.isArray(source.organizations) ? source.organizations.map((item) => String(item ?? '')) : empty.organizations, 12),
+        cities: normalizeStringList(Array.isArray(source.cities) ? source.cities.map((item) => String(item ?? '')) : empty.cities, 12),
+        locations: normalizeStringList(Array.isArray(source.locations) ? source.locations.map((item) => String(item ?? '')) : empty.locations, 12),
+        nations: normalizeStringList(Array.isArray(source.nations) ? source.nations.map((item) => String(item ?? '')) : empty.nations, 12),
+        tasks: normalizeStringList(Array.isArray(source.tasks) ? source.tasks.map((item) => String(item ?? '')) : empty.tasks, 12),
+        events: normalizeStringList(Array.isArray(source.events) ? source.events.map((item) => String(item ?? '')) : empty.events, 12),
+    };
+}
+
+/**
+ * 功能：基于标题生成稳定的任务 compareKey。
+ * @param title 任务标题。
+ * @returns compareKey。
+ */
+function buildTaskCompareKey(title: string): string {
+    const normalized = String(title ?? '').trim().replace(/\s+/g, '');
+    return `task:${normalized || 'unknown'}`;
+}
+
+/**
+ * 功能：基于键名生成稳定的世界状态 compareKey。
+ * @param key 世界状态键名。
+ * @returns compareKey。
+ */
+function buildWorldStateCompareKey(key: string): string {
+    const normalized = String(key ?? '').trim().replace(/\s+/g, '');
+    return `world_global_state:global:${normalized || 'unknown'}`;
+}
+
+/**
+ * 功能：归一化任务状态变更列表，补齐稳定标题、摘要和绑定信息。
+ * @param transitions 原始任务变更列表。
+ * @returns 归一化后的任务变更列表。
+ */
+function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): MemoryTakeoverTaskTransition[] {
+    const result: MemoryTakeoverTaskTransition[] = [];
+    const seen = new Set<string>();
+    for (const transition of transitions) {
+        const task = String(transition.task ?? '').trim();
+        if (!task) {
+            continue;
+        }
+        const title = String(transition.title ?? '').trim() || task;
+        const compareKey = String(transition.compareKey ?? '').trim() || buildTaskCompareKey(title);
+        if (seen.has(compareKey)) {
+            continue;
+        }
+        seen.add(compareKey);
+        const status = String(transition.status ?? transition.to ?? '').trim();
+        result.push({
+            task,
+            from: String(transition.from ?? '').trim(),
+            to: String(transition.to ?? '').trim(),
+            title,
+            summary: String(transition.summary ?? '').trim(),
+            description: String(transition.description ?? '').trim(),
+            goal: String(transition.goal ?? '').trim(),
+            status,
+            compareKey,
+            bindings: normalizeBindings(transition.bindings),
+            reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
+        });
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化世界状态变更列表，补齐摘要和 compareKey。
+ * @param changes 原始世界状态变更列表。
+ * @returns 归一化后的世界状态变更列表。
+ */
+function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): MemoryTakeoverWorldStateChange[] {
+    const result: MemoryTakeoverWorldStateChange[] = [];
+    const seen = new Set<string>();
+    for (const change of changes) {
+        const key = String(change.key ?? '').trim();
+        if (!key) {
+            continue;
+        }
+        const compareKey = String(change.compareKey ?? '').trim() || buildWorldStateCompareKey(key);
+        if (seen.has(compareKey)) {
+            continue;
+        }
+        seen.add(compareKey);
+        const value = String(change.value ?? '').trim();
+        result.push({
+            key,
+            value,
+            summary: String(change.summary ?? '').trim() || `${key}：${value}`,
+            compareKey,
+            reasonCodes: normalizeStringList(change.reasonCodes ?? [], 12),
+        });
     }
     return result;
 }
@@ -316,8 +443,8 @@ function buildTakeoverKnownEntities(
             ...existingKnownEntities.tasks,
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.taskTransitions.map((transition) => ({
-                    entityKey: buildBatchEntityKey('task', transition.task),
-                    displayName: transition.task,
+                    entityKey: String(transition.compareKey ?? '').trim() || buildBatchEntityKey('task', transition.task),
+                    displayName: String(transition.title ?? transition.task ?? '').trim(),
                 }));
             }),
         ], 16),
@@ -325,7 +452,7 @@ function buildTakeoverKnownEntities(
             ...existingKnownEntities.worldStates,
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
                 return item.worldStateChanges.map((change) => ({
-                    entityKey: buildBatchEntityKey('world_state', change.key),
+                    entityKey: String(change.compareKey ?? '').trim() || buildBatchEntityKey('world_state', change.key),
                     displayName: `${change.key}：${change.value}`,
                 }));
             }),
@@ -530,6 +657,8 @@ export async function runTakeoverBatch(input: {
             relationships: normalizeRelationshipCards(structured.relationships ?? []),
             entityCards: normalizeEntityCards(structured.entityCards ?? []),
             entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
+            taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? []),
+            worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? []),
             takeoverId: input.batch.takeoverId,
             batchId: input.batch.batchId,
             sourceRange: ensureRange(structured.sourceRange, input.batch.range),
@@ -590,6 +719,8 @@ function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]):
             summary: String(card.summary ?? '').trim(),
             fields: card.fields && typeof card.fields === 'object' ? card.fields : {},
             confidence: Math.max(0, Math.min(1, Number(card.confidence) || 0.5)),
+            bindings: normalizeBindings(card.bindings),
+            reasonCodes: normalizeStringList(card.reasonCodes ?? [], 12),
         });
     }
     return result;
@@ -622,6 +753,8 @@ function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[
             action: action as MemoryTakeoverEntityTransition['action'],
             reason: String(transition.reason ?? '').trim(),
             payload: transition.payload && typeof transition.payload === 'object' ? transition.payload : {},
+            bindings: normalizeBindings(transition.bindings),
+            reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
         });
     }
     return result;

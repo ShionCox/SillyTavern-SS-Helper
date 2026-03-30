@@ -4,12 +4,12 @@
 export type MemoryGraphMode = 'compact' | 'semantic' | 'debug';
 
 /**
- * 功能：边强度级别。
+ * 功能：边强度等级。
  */
 export type EdgeStrengthLevel = 'strong' | 'normal' | 'weak';
 
 /**
- * 功能：记忆图谱节点。
+ * 功能：工作台记忆图节点。
  */
 export interface WorkbenchMemoryGraphNode {
     id: string;
@@ -25,10 +25,16 @@ export interface WorkbenchMemoryGraphNode {
     updatedAt?: number;
     x: number;
     y: number;
+    semanticSummary?: string;
+    debugSummary?: string;
+    compareKey?: string;
+    sourceBatchIds?: string[];
+    reasonCodes?: string[];
+    bindings?: Record<string, unknown>;
 }
 
 /**
- * 功能：记忆图谱边。
+ * 功能：工作台记忆图边。
  */
 export interface WorkbenchMemoryGraphEdge {
     id: string;
@@ -36,16 +42,20 @@ export interface WorkbenchMemoryGraphEdge {
     target: string;
     edgeType: string;
     weight: number;
-    /** 边形成的原因说明 */
     reasons?: string[];
-    /** 边强度级别 */
     strengthLevel?: EdgeStrengthLevel;
-    /** 该边在哪些图谱模式下可见 */
     visibleInModes?: MemoryGraphMode[];
+    semanticLabel?: string;
+    debugSummary?: string;
+    sourceKinds?: string[];
+    sourceBatchIds?: string[];
+    reasonCodes?: string[];
+    confidence?: number;
+    status?: 'active' | 'inactive';
 }
 
 /**
- * 功能：记忆图谱数据。
+ * 功能：工作台记忆图数据。
  */
 export interface WorkbenchMemoryGraph {
     nodes: WorkbenchMemoryGraphNode[];
@@ -53,7 +63,7 @@ export interface WorkbenchMemoryGraph {
 }
 
 /**
- * 功能：记忆图类型 → 颜色映射。
+ * 功能：记忆图节点颜色映射。
  */
 export const MEMORY_GRAPH_TYPE_COLORS: Record<string, string> = {
     world_core_setting: '#d4a017',
@@ -112,14 +122,14 @@ export function buildMemoryGraphLegendItems(): MemoryGraphLegendItem[] {
 
 /**
  * 功能：计算记忆图节点大小。
- * @param importance 重要度 (0~1)。
- * @param memoryPercent 记忆度 (0~100)。
+ * @param importance 重要度。
+ * @param memoryPercent 记忆度。
  * @returns 节点尺寸。
  */
 export function computeMemoryGraphNodeSize(importance: number, memoryPercent: number): number {
     const imp = Math.max(0, Math.min(1, Number(importance) || 0));
     const mp = Math.max(0, Math.min(1, (Number(memoryPercent) || 0) / 100));
-    return 12 + 20 * (0.6 * imp + 0.4 * mp);
+    return 12 + 20 * ((0.6 * imp) + (0.4 * mp));
 }
 
 /**

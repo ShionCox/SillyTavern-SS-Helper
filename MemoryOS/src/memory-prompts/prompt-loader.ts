@@ -84,59 +84,95 @@ const REQUIRED_SECTIONS: PromptPackSectionName[] = [
     'TAKEOVER_BATCH_OUTPUT_SAMPLE',
 ];
 
+const ALL_SECTION_NAMES: PromptPackSectionName[] = [
+    ...REQUIRED_SECTIONS,
+    'COLD_START_CORE_SYSTEM',
+    'COLD_START_CORE_SCHEMA',
+    'COLD_START_CORE_OUTPUT_SAMPLE',
+    'COLD_START_STATE_SYSTEM',
+    'COLD_START_STATE_SCHEMA',
+    'COLD_START_STATE_OUTPUT_SAMPLE',
+    'TAKEOVER_CONFLICT_RESOLUTION_SCHEMA',
+    'TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE',
+];
+
+const COLD_START_COMMON_RULES: string[] = [
+    '这不是自由创作任务，而是结构化抽取任务。只保留长期稳定、可复用、适合进入记忆系统的内容。',
+    '语义输出字段面向用户可读；结构化字段面向稳定归并和调试，请优先保持稳定可复用。',
+    '如果角色属于组织、组织位于城市、地点从属于城市或国家，请在 entityCards.fields 中显式写出稳定绑定线索。',
+    '不要为了补满字段编造人物、组织、地点或关系；不确定时保持保守，不要写假设。',
+];
+
+const SUMMARY_COMMON_RULES: string[] = [
+    '这是 summary mutation 任务，只输出真正需要变更的 sparse patch，不要重写整份旧状态。',
+    '任务对象要尽量补齐稳定标题、摘要、goal、status 与 bindings，不要只给模糊标签。',
+    '如果对象之间存在稳定关系，请在 payload.bindings 中输出 actors、organizations、cities、locations、nations、tasks、events。',
+    '不确定是否同一对象时，优先 NOOP、UPDATE 或 MERGE，不要为了看起来完整而重复 ADD。',
+];
+
+const TAKEOVER_BATCH_COMMON_RULES: string[] = [
+    '当前批次不是从零抽取，必须优先参考 knownContext、knownEntities、已有 compareKey 与稳定对象键。',
+    '命中同一对象时优先 UPDATE；只有明确出现全新对象时才 ADD；无法确认是否同一对象时，不要盲目新建，优先输出保守更新或待确认线索。',
+    'compareKey、stable key、canonical target 的稳定性高于表面名称；不要因为别名、视角说明或措辞变化而拆出新对象。',
+    '任务对象必须尽量补齐 title、summary、description、goal、status、compareKey 与 bindings。标题优先级是：明确任务名 > 稳定动作模板 > 兜底标题。',
+    '如果角色属于组织、组织位于城市、任务发生在地点、事件影响角色、组织、城市或地点，请在 bindings 中显式输出，不要只抽对象不抽边。',
+    '语义字段面向用户可读，调试字段 compareKey、reasonCodes、bindings、targetType 面向稳定归并与排查。',
+    '不要为了补满字段编造关系、组织从属、地点归属或长期属性；临时状态不要误写成长期实体属性。',
+];
+
 const FALLBACK_PROMPT_PACK = `
 <!-- section: COLD_START_SYSTEM -->
-你正在执行结构化记忆冷启动任务。系统已经预置固定的用户角色卡，actorKey 固定为 user；如果关系对象是当前用户，只需要在 relationships 中引用 user，不要在 actorCards 中重复输出 user。每条 relationships 都必须完整填写 sourceActorKey、targetActorKey、participants、relationTag、state、summary、trust、affection、tension。relationTag 只能从以下预设中单选其一：亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人。只要某个非 user 角色出现在 relationships 中，就必须在 actorCards 中提供同 actorKey 的角色卡，且 displayName 不能为空。当前用户固定使用 actorKey user，不要发明 user_xxx 或 player_xxx 变体。只输出 JSON，不输出解释文本。
+你正在执行结构化记忆冷启动抽取任务。系统已经预置固定的用户角色卡，\`actorKey\` 固定为 \`user\`；如果关系对象是当前用户，只需要在 \`relationships\` 中引用 \`user\`，不要在 \`actorCards\` 中重复输出用户角色卡。所有自然语言字段必须使用简体中文。只输出 JSON。
 <!-- section: COLD_START_SCHEMA -->
 {"type":"object"}
 <!-- section: COLD_START_OUTPUT_SAMPLE -->
-{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"陌生人","state":"示例角色对用户保持谨慎关注。","summary":"示例角色与用户之间形成了谨慎而持续的观察关系。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[]}
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"陌生人","state":"示例角色对{{userDisplayName}}保持谨慎关注。","summary":"示例角色与{{userDisplayName}}之间形成了谨慎而持续的观察关系。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[]}
+<!-- section: COLD_START_CORE_SYSTEM -->
+你正在执行结构化记忆冷启动的 Core Extract 阶段。只提取 identity、actorCards、entityCards、worldProfileDetection 和 worldBase。relationships 和 memoryRecords 必须返回空集合。只输出 JSON。
+<!-- section: COLD_START_CORE_SCHEMA -->
+{"type":"object"}
+<!-- section: COLD_START_CORE_OUTPUT_SAMPLE -->
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":["示例身份"],"originFacts":["示例来源"],"traits":["示例特征"]},"actorCards":[{"actorKey":"guard_captain","displayName":"守卫队长","aliases":[],"identityFacts":["负责夜间巡逻"],"originFacts":["长期驻守城门"],"traits":["警觉","强硬"]}],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldProfileDetection":{"primaryProfile":"fantasy","secondaryProfiles":["political_intrigue"],"confidence":0.8,"reasonCodes":["core_extract"]},"worldBase":[],"relationships":[],"memoryRecords":[]}
+<!-- section: COLD_START_STATE_SYSTEM -->
+你正在执行结构化记忆冷启动的 State Extract 阶段。只提取 relationships、memoryRecords 和近期状态线索；identity、actorCards、entityCards、worldBase 如果没有新增内容，可以返回空集合。只输出 JSON。
+<!-- section: COLD_START_STATE_SCHEMA -->
+{"type":"object"}
+<!-- section: COLD_START_STATE_OUTPUT_SAMPLE -->
+{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"示例角色","aliases":[],"identityFacts":[],"originFacts":[],"traits":[]},"actorCards":[],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"陌生人","state":"当前保持谨慎接触与试探。","summary":"双方已经建立初步接触。","trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[{"schemaId":"initial_state","title":"北门夜间戒严","summary":"王都北门夜间正在执行戒严排查。","importance":0.66}]}
 <!-- section: SUMMARY_PLANNER_SYSTEM -->
-你正在执行结构化记忆总结的 Planner 阶段。你的职责不是直接修改记忆，而是判断本轮是否值得更新长期记忆、应聚焦哪些类型、涉及哪些实体与主题，以及为什么要动这些记忆。若当前区间只是闲聊、没有稳定新事实、或已有记忆足以覆盖，则应返回 should_update=false。仅输出 JSON，不输出解释文本。
+你正在执行结构化记忆 summary planner 阶段。你的职责不是直接修改记忆，而是判断当前窗口是否值得更新长期记忆，并给出后续 mutation 的聚焦方向。若当前窗口只是闲聊、没有稳定新事实，或已有记忆足以覆盖，则应返回 should_update=false。只输出 JSON。
 <!-- section: SUMMARY_PLANNER_SCHEMA -->
 {"type":"object"}
 <!-- section: SUMMARY_PLANNER_OUTPUT_SAMPLE -->
-{"should_update":true,"focus_types":["relationship","initial_state"],"entities":["user","char_demo"],"topics":["关系变化","地点切换"],"reasons":["本区间出现持续关系变化","当前地点状态发生明确迁移"]}
+{"should_update":true,"focus_types":["relationship","initial_state"],"entities":["user","char_demo"],"topics":["关系变化","地点切换"],"reasons":["本区间出现了持续关系变化","当前地点状态发生明确变化"]}
 <!-- section: SUMMARY_SYSTEM -->
-你正在执行结构化记忆总结任务。若 action 需要新增或更新 relationship 的 fields.relationTag，则 relationTag 只能从以下预设中单选其一：亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人。只输出 JSON，不输出解释文本。
+你正在执行结构化记忆 summary mutation 任务。只输出真正需要写入的增量结构；如果 action 需要新增或更新 relationship 的 fields.relationTag，则 relationTag 只能从预设关系标签中选择。只输出 JSON。
 <!-- section: SUMMARY_SCHEMA -->
 {"type":"object"}
 <!-- section: SUMMARY_OUTPUT_SAMPLE -->
 {"schemaVersion":"1.0.0","actions":[]}
 <!-- section: TAKEOVER_BASELINE_SYSTEM -->
-你正在执行旧聊天接管的静态基线抽取任务。你会收到角色卡、语义快照、用户资料与总楼层数。请只提取长期稳定、适合作为接管起点的信息。所有自然语言字段必须是简体中文。只输出 JSON。
+你正在执行旧聊天接管的静态基线抽取任务。你会收到角色卡、语义设定、用户资料与总楼层数。请只提取长期稳定、适合作为接管起点的信息。所有自然语言字段必须使用简体中文。只输出 JSON。
 <!-- section: TAKEOVER_BASELINE_SCHEMA -->
 {"type":"object"}
 <!-- section: TAKEOVER_BASELINE_OUTPUT_SAMPLE -->
-{"staticBaseline":"当前角色是谨慎冷静的情报人员。","personaBaseline":"用户倾向直接推进剧情。","worldBaseline":"当前世界存在稳定的王都与边境对立格局。","ruleBaseline":"角色行为受夜间戒严与身份保密规则约束。","sourceSummary":"已完成角色卡、语义设定与用户资料的静态抽取。","generatedAt":0}
+{"staticBaseline":"当前角色是谨慎冷静的情报人员。","personaBaseline":"用户倾向直接推进剧情。","worldBaseline":"当前世界存在稳定的王都与边境对立格局。","ruleBaseline":"角色行为受到夜间戒严与身份保密规则约束。","sourceSummary":"已完成角色卡、语义设定与用户资料的静态抽取。","generatedAt":0}
 <!-- section: TAKEOVER_ACTIVE_SYSTEM -->
-你正在执行旧聊天接管的最近活跃快照任务。你会收到最近楼层范围与消息列表。请输出当前场景、地点、时间线索、活跃目标、活跃关系、未结线索与最近摘要。所有自然语言字段必须是简体中文。只输出 JSON。
+你正在执行旧聊天接管的最近活跃快照任务。你会收到最近楼层范围与消息列表。请输出当前场景、地点、时间线索、活跃目标、活跃关系、未结线索与最近摘要。所有自然语言字段必须使用简体中文。只输出 JSON。
 <!-- section: TAKEOVER_ACTIVE_SCHEMA -->
 {"type":"object"}
 <!-- section: TAKEOVER_ACTIVE_OUTPUT_SAMPLE -->
-{"generatedAt":0,"currentScene":"双方刚完成一轮关键对话，局势仍在推进。","currentLocation":"王都北门附近的临时驻点","currentTimeHint":"深夜","activeGoals":["确认情报来源","判断下一步是否同行"],"activeRelations":[{"target":"巡逻队长","state":"仍保持谨慎合作"}],"openThreads":["巡逻队长是否愿意继续提供通行帮助"],"recentDigest":"最近几层主要围绕通行条件、身份试探与下一步行动选择展开。"}
+{"generatedAt":0,"currentScene":"双方刚完成一轮关键信息交换，局势仍在推进。","currentLocation":"王都北门附近的临时驻点","currentTimeHint":"深夜","activeGoals":["确认情报来源","判断下一步是否同行"],"activeRelations":[{"target":"巡逻队长","state":"仍保持谨慎合作"}],"openThreads":["巡逻队长是否愿意继续提供通行帮助"],"recentDigest":"最近几层主要围绕通行条件、身份试探与下一步行动选择展开。"}
 <!-- section: TAKEOVER_BATCH_SYSTEM -->
-你正在执行旧聊天接管的历史批次分析任务。你会收到批次编号、批次范围、批次分类和对应消息。请输出章节摘要、稳定事实、关系变化、任务变化、世界状态变化、未结线索、章节标签和来源范围。所有自然语言字段必须是简体中文。只输出 JSON。
+你正在执行旧聊天接管的历史批次分析任务。你会收到批次编号、批次范围、批次分类、消息列表、knownContext 与 knownEntities。请输出章节摘要、稳定事实、关系变化、任务变化、世界状态变化、未结线索、章节标签和来源范围。所有自然语言字段必须使用简体中文。只输出 JSON。
 <!-- section: TAKEOVER_BATCH_SCHEMA -->
 {"type":"object"}
 <!-- section: TAKEOVER_BATCH_OUTPUT_SAMPLE -->
-{"batchId":"takeover:demo:history:0001","summary":"这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。","stableFacts":[{"type":"identity","subject":"巡逻队长","predicate":"身份","value":"负责北门夜巡","confidence":0.86}],"relationTransitions":[{"target":"巡逻队长","from":"陌生试探","to":"有限合作","reason":"双方达成了短期协作共识"}],"taskTransitions":[{"task":"寻找失踪信使","from":"未开始","to":"进行中"}],"worldStateChanges":[{"key":"北门戒严","value":"持续执行夜间封锁"}],"openThreads":["失踪信使的下落仍未确认"],"chapterTags":["关系推进","任务开启"],"sourceRange":{"startFloor":1,"endFloor":30}}
-<!-- section: COLD_START_CORE_SYSTEM -->
-浣犳鍦ㄦ墽琛岀粨鏋勫寲璁板繂鍐峰惎鍔ㄧ殑 Core Extract 闃舵銆傚彧鎻愬彇 identity銆乤ctorCards銆乪ntityCards銆亀orldProfileDetection 鍜?worldBase銆俽elationships 鍜?memoryRecords 蹇呴』杩斿洖绌洪泦銆傚彧杈撳嚭 JSON銆?
-<!-- section: COLD_START_CORE_SCHEMA -->
-{"type":"object"}
-<!-- section: COLD_START_CORE_OUTPUT_SAMPLE -->
-{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"绀轰緥瑙掕壊","aliases":[],"identityFacts":["绀轰緥韬唤"],"originFacts":["绀轰緥鏉ユ簮"],"traits":["绀轰緥鐗瑰緛"]},"actorCards":[{"actorKey":"guard_captain","displayName":"瀹堝崼闃熼暱","aliases":[],"identityFacts":["璐熻矗澶滈棿宸￠€?],"originFacts":["闀挎湡椹诲畧鍩庨棬"],"traits":["璀﹁","寮虹‖"]}],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldProfileDetection":{"primaryProfile":"fantasy","secondaryProfiles":["political_intrigue"],"confidence":0.8,"reasonCodes":["core_extract"]},"worldBase":[],"relationships":[],"memoryRecords":[]}
-<!-- section: COLD_START_STATE_SYSTEM -->
-浣犳鍦ㄦ墽琛岀粨鏋勫寲璁板繂鍐峰惎鍔ㄧ殑 State Extract 闃舵銆傚彧鎻愬彇 relationships銆乵emoryRecords 鍜岃繎鏈熺姸鎬佺嚎绱紝identity銆乤ctorCards銆乪ntityCards銆亀orldBase 濡傛灉娌℃湁鏂板鍐呭鍙互杩斿洖绌洪泦銆傚彧杈撳嚭 JSON銆?
-<!-- section: COLD_START_STATE_SCHEMA -->
-{"type":"object"}
-<!-- section: COLD_START_STATE_OUTPUT_SAMPLE -->
-{"schemaVersion":"1.0.0","identity":{"actorKey":"char_demo","displayName":"绀轰緥瑙掕壊","aliases":[],"identityFacts":[],"originFacts":[],"traits":[]},"actorCards":[],"entityCards":{"organizations":[],"cities":[],"nations":[],"locations":[]},"worldBase":[],"relationships":[{"sourceActorKey":"char_demo","targetActorKey":"user","participants":["char_demo","user"],"relationTag":"闄岀敓浜?,"state":"褰撳墠淇濇寔璋ㄦ厧鎺㈡祴銆?,"summary":"鍙屾柟宸插缓绔嬪垵姝ユ帴瑙︺€?,"trust":0.35,"affection":0.2,"tension":0.15}],"memoryRecords":[{"schemaId":"initial_state","title":"鍖楅棬澶滈棿鎴掍弗","summary":"鐜嬮兘鍖楅棬澶滈棿姝ｅ湪鎵ц鎴掍弗鎺掓煡銆?,"importance":0.66}]}
+{"batchId":"takeover:demo:history:0001","summary":"这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。","stableFacts":[{"type":"identity","subject":"巡逻队长","predicate":"身份","value":"负责北门夜巡","confidence":0.86}],"relationTransitions":[{"target":"巡逻队长","from":"陌生试探","to":"有限合作","reason":"双方达成了短期协作共识"}],"taskTransitions":[{"task":"寻找失踪信使","title":"寻找失踪信使","summary":"确认失踪信使的下落并决定是否追查。","description":"角色开始围绕失踪信使展开调查。","goal":"确认信使状态并找到线索来源","status":"in_progress","compareKey":"task:寻找失踪信使","bindings":{"actors":["巡逻队长"],"organizations":[],"cities":["王都"],"locations":["北门"],"nations":[],"tasks":[],"events":[]},"reasonCodes":["task_started"],"from":"未开始","to":"进行中"}],"worldStateChanges":[{"key":"北门戒严","value":"持续执行夜间封锁","summary":"北门仍处于严格夜间戒严中。","compareKey":"world:北门戒严","reasonCodes":["state_persisted"]}],"openThreads":["失踪信使的下落仍未确认"],"chapterTags":["关系推进","任务开启"],"sourceRange":{"startFloor":1,"endFloor":30}}
 <!-- section: TAKEOVER_CONFLICT_RESOLUTION_SCHEMA -->
 {"type":"object","additionalProperties":false,"properties":{"bucketId":{"type":"string"},"domain":{"type":"string"},"resolutions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["merge","keep_primary","replace","invalidate","split"]},"primaryKey":{"type":"string"},"secondaryKeys":{"type":"array","items":{"type":"string"}},"fieldOverrides":{"type":"object","additionalProperties":true},"reasonCodes":{"type":"array","items":{"type":"string"}}},"required":["action","primaryKey","secondaryKeys","fieldOverrides","reasonCodes"]}}},"required":["bucketId","domain","resolutions"]}
 <!-- section: TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE -->
-{"bucketId":"takeover:entity:0001","domain":"entity","resolutions":[{"action":"merge","primaryKey":"organization:绀轰緥鏁欐淳","secondaryKeys":["organization:绀轰緥鏁欏洟"],"fieldOverrides":{},"reasonCodes":["llm_conflict_merge"]}]}
+{"bucketId":"takeover:entity:0001","domain":"entity","resolutions":[{"action":"merge","primaryKey":"organization:示例教派","secondaryKeys":["organization:示例教团"],"fieldOverrides":{},"reasonCodes":["llm_conflict_merge"]}]}
 `.trim();
 
 let promptPackCache: Promise<PromptPackSections> | null = null;
@@ -207,7 +243,7 @@ function parsePromptPackSections(raw: string): Partial<PromptPackSections> {
         const current = matches[index];
         const next = matches[index + 1];
         const sectionName = String(current[1] ?? '').trim() as PromptPackSectionName;
-        if (!REQUIRED_SECTIONS.includes(sectionName)) {
+        if (!ALL_SECTION_NAMES.includes(sectionName)) {
             continue;
         }
         const start = (current.index ?? 0) + current[0].length;
@@ -232,7 +268,7 @@ function hasAllRequiredSections(sections: Partial<PromptPackSections>): sections
 }
 
 /**
- * 功能：统一增强 Prompt Pack 中与用户称呼相关的规则与示例。
+ * 功能：统一增强 Prompt Pack 中与批次继承、调试字段和用户称呼相关的规则。
  * @param sections 原始分段。
  * @returns 增强后的分段。
  */
@@ -251,40 +287,42 @@ function enrichPromptPackSections(sections: PromptPackSections): PromptPackSecti
     const coldStartStateSample = sections.COLD_START_STATE_OUTPUT_SAMPLE || sections.COLD_START_OUTPUT_SAMPLE;
     const takeoverConflictSchema = sections.TAKEOVER_CONFLICT_RESOLUTION_SCHEMA || JSON.stringify(buildTakeoverConflictResolutionSchema());
     const takeoverConflictSample = sections.TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE || JSON.stringify(buildTakeoverConflictResolutionSample());
+
     return {
         ...sections,
-        COLD_START_CORE_SYSTEM: coldStartCoreSystem,
+        COLD_START_CORE_SYSTEM: appendPromptRules(coldStartCoreSystem, COLD_START_COMMON_RULES),
         COLD_START_CORE_SCHEMA: coldStartCoreSchema,
         COLD_START_CORE_OUTPUT_SAMPLE: coldStartCoreSample,
-        COLD_START_STATE_SYSTEM: coldStartStateSystem,
+        COLD_START_STATE_SYSTEM: appendPromptRules(coldStartStateSystem, COLD_START_COMMON_RULES),
         COLD_START_STATE_SCHEMA: coldStartStateSchema,
         COLD_START_STATE_OUTPUT_SAMPLE: coldStartStateSample,
         TAKEOVER_CONFLICT_RESOLUTION_SCHEMA: takeoverConflictSchema,
         TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE: takeoverConflictSample,
-        COLD_START_SYSTEM: appendPromptRule(
+        COLD_START_SYSTEM: appendPromptRules(appendPromptRule(
             sections.COLD_START_SYSTEM,
-            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
-        ),
-        SUMMARY_PLANNER_SYSTEM: appendPromptRule(
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+        ), COLD_START_COMMON_RULES),
+        SUMMARY_PLANNER_SYSTEM: appendPromptRules(appendPromptRule(
             sections.SUMMARY_PLANNER_SYSTEM,
-            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，reasons、topics 及其它自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
-        ),
-        SUMMARY_SYSTEM: appendPromptRule(
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，reasons、topics 及其他自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+        ), SUMMARY_COMMON_RULES),
+        SUMMARY_SYSTEM: appendPromptRules(appendPromptRule(
             sections.SUMMARY_SYSTEM,
-            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，title、summary、detail、state 及其它自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。',
-        ),
+            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，title、summary、detail、state 及其他自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+        ), SUMMARY_COMMON_RULES),
+        TAKEOVER_BATCH_SYSTEM: appendPromptRules(appendPromptRule(
+            sections.TAKEOVER_BATCH_SYSTEM,
+            '如果已知当前用户自然语言称呼为 `{{userDisplayName}}`，自然语言描述请优先使用该称呼；结构化 target、actorKey、participants 仍继续使用 `user` 作为稳定锚点。',
+        ), TAKEOVER_BATCH_COMMON_RULES),
         COLD_START_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.COLD_START_OUTPUT_SAMPLE),
         SUMMARY_PLANNER_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.SUMMARY_PLANNER_OUTPUT_SAMPLE),
         SUMMARY_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.SUMMARY_OUTPUT_SAMPLE),
+        TAKEOVER_BASELINE_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.TAKEOVER_BASELINE_OUTPUT_SAMPLE),
+        TAKEOVER_ACTIVE_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.TAKEOVER_ACTIVE_OUTPUT_SAMPLE),
+        TAKEOVER_BATCH_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.TAKEOVER_BATCH_OUTPUT_SAMPLE),
     };
 }
 
-/**
- * 功能：在提示词规则尾部追加新的约束说明。
- * @param source 原始提示词。
- * @param rule 追加规则。
- * @returns 处理后的提示词。
- */
 /**
  * 功能：构建旧聊天接管冲突裁决 schema。
  * @returns schema 对象。
@@ -336,6 +374,12 @@ function buildTakeoverConflictResolutionSample(): Record<string, unknown> {
     };
 }
 
+/**
+ * 功能：在提示词尾部追加单条规则说明。
+ * @param source 原始提示词。
+ * @param rule 追加规则。
+ * @returns 处理后的提示词。
+ */
 function appendPromptRule(source: string, rule: string): string {
     const normalized = String(source ?? '').trim();
     if (!normalized || normalized.includes(rule)) {
@@ -345,7 +389,17 @@ function appendPromptRule(source: string, rule: string): string {
 }
 
 /**
- * 功能：替换示例中的固定“用户/主角”称呼为模板变量。
+ * 功能：批量向提示词追加规则说明。
+ * @param source 原始提示词。
+ * @param rules 规则列表。
+ * @returns 处理后的提示词。
+ */
+function appendPromptRules(source: string, rules: string[]): string {
+    return rules.reduce((current: string, rule: string): string => appendPromptRule(current, rule), String(source ?? '').trim());
+}
+
+/**
+ * 功能：替换示例中的固定“用户”“主角”称呼为模板变量。
  * @param source 原始示例文本。
  * @returns 处理后的示例文本。
  */
@@ -355,5 +409,5 @@ function replacePromptSampleUserNarrative(source: string): string {
         .replace(/与用户/g, '与{{userDisplayName}}')
         .replace(/用户之间/g, '{{userDisplayName}}之间')
         .replace(/主角/g, '{{userDisplayName}}')
-        .replace(/用户(?!名)/g, '{{userDisplayName}}');
+        .replace(/用户/g, '{{userDisplayName}}');
 }

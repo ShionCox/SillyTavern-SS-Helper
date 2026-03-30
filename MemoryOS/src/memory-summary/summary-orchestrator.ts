@@ -1,5 +1,6 @@
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../types';
 import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
+import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import { buildSummaryMutationContext, buildLightweightPlannerInput } from '../memory-summary-planner';
 import { applySummaryMutation, type MutationApplyDependencies } from './mutation-applier';
@@ -158,7 +159,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     }
 
     const promptPack = await loadPromptPackSections();
-    const plannerSchema = parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA);
+    const plannerSchema = normalizeMemoryPromptSchema('SUMMARY_PLANNER_SCHEMA', parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA));
     const plannerSample = parseJsonSection(promptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
     const plannerSystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_PLANNER_SYSTEM, {
         userDisplayName,
@@ -255,7 +256,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         };
     }
 
-    const summarySchema = parseJsonSection(promptPack.SUMMARY_SCHEMA);
+    const summarySchema = normalizeMemoryPromptSchema('SUMMARY_SCHEMA', parseJsonSection(promptPack.SUMMARY_SCHEMA));
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
     const patchModeInstruction = '本次输出为稀疏 patch 模式：payload 中只输出发生变化的字段，未变化字段不要出现。严禁在 payload 中重复旧 state 的完整内容。若某字段无变化，直接省略该字段。';
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {

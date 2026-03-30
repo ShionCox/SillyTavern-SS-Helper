@@ -12,6 +12,9 @@ import {
 import type { EventEnvelope } from '../../../SDK/stx';
 import { EventsManager } from '../core/events-manager';
 import { buildCompareKey, buildRelationshipCompareKey } from '../core/compare-key';
+import { resolveLedgerUpdateDecision } from '../core/ledger-update-rules';
+import { normalizeTaskTitle } from '../core/task-title-normalizer';
+import { normalizeTaskDescription } from '../core/task-description-normalizer';
 import { UnifiedMemoryManager } from '../core/unified-memory-manager';
 import { normalizeRelationTag } from '../constants/relationTags';
 import { logger } from '../runtime/runtime-services';
@@ -59,7 +62,6 @@ import type {
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverCreateInput,
     MemoryTakeoverDetectionResult,
-    MemoryTakeoverPlan,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
@@ -1095,55 +1097,111 @@ export class MemorySDKImpl {
         }
 
         for (const task of result.taskState) {
+            const normalizedTitle = normalizeTaskTitle({
+                title: task.title || task.task,
+                objective: task.goal || task.task,
+                compareKey: task.compareKey || buildCompareKey('task', task.task, {}),
+            });
+            const taskDecision = resolveLedgerUpdateDecision({
+                entryType: 'task',
+                title: normalizedTitle,
+                fields: {
+                    objective: task.goal || task.task,
+                    status: task.state,
+                },
+                sourceBatchId: result.takeoverId,
+            });
+            const taskSummary = normalizeTaskDescription({
+                title: normalizedTitle,
+                summary: task.summary,
+                objective: task.goal || task.task,
+                status: task.state,
+                lastChange: task.description,
+            });
             const savedEntry = await this.unifiedManager.saveEntry({
-                title: task.task,
+                title: normalizedTitle,
                 entryType: 'task',
                 category: '任务',
-                tags: ['任务'],
-                summary: task.state,
+                tags: ['任务', '旧聊天接管'],
+                summary: taskSummary,
                 detail: `任务当前状态：${task.state}`,
                 detailPayload: {
+                    compareKey: taskDecision.compareKey,
+                    reasonCodes: [...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
+                    sourceBatchIds: [result.takeoverId],
+                    bindings: {
+                        actors: this.normalizeStringArray([...(task.bindings?.actors ?? []), 'user']),
+                        organizations: this.normalizeStringArray(task.bindings?.organizations ?? []),
+                        cities: this.normalizeStringArray(task.bindings?.cities ?? []),
+                        locations: this.normalizeStringArray(task.bindings?.locations ?? []),
+                        nations: this.normalizeStringArray(task.bindings?.nations ?? []),
+                        tasks: this.normalizeStringArray(task.bindings?.tasks ?? []),
+                        events: this.normalizeStringArray(task.bindings?.events ?? []),
+                    },
+                    card: {
+                        title: normalizedTitle,
+                        summary: taskSummary,
+                        objective: task.goal || task.task,
+                        status: task.state,
+                    },
                     fields: {
-                        state: task.state,
+                        compareKey: taskDecision.compareKey,
+                        objective: task.goal || task.task,
+                        status: task.state,
+                        goal: task.goal || task.task,
                     },
                     takeover: {
                         source: 'old_chat_takeover',
                         takeoverId: result.takeoverId,
+                        sourceBatchId: result.takeoverId,
                     },
                 },
             }, {
-                actionType: 'ADD',
+                actionType: taskDecision.action === 'NOOP' ? 'ADD' : taskDecision.action,
                 sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_task_state'],
+                reasonCodes: ['takeover_task_state', ...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
             });
             await this.unifiedManager.bindRoleToEntry('user', savedEntry.entryId);
         }
 
         for (const [key, value] of Object.entries(result.worldState ?? {})) {
+            const worldDecision = resolveLedgerUpdateDecision({
+                entryType: 'world_global_state',
+                title: key,
+                fields: {
+                    scope: 'global',
+                    state: value,
+                },
+                sourceBatchId: result.takeoverId,
+            });
             await this.unifiedManager.saveEntry({
                 title: key,
                 entryType: 'world_global_state',
                 category: '世界观',
-                tags: ['世界状态'],
+                tags: ['世界状态', '旧聊天接管'],
                 summary: value,
                 detail: value,
                 detailPayload: {
+                    compareKey: worldDecision.compareKey,
+                    reasonCodes: worldDecision.reasonCodes,
+                    sourceBatchIds: [result.takeoverId],
                     fields: {
+                        compareKey: worldDecision.compareKey,
                         scope: 'global',
-                        state: 'active',
+                        state: value,
                     },
                     takeover: {
                         source: 'old_chat_takeover',
                         takeoverId: result.takeoverId,
+                        sourceBatchId: result.takeoverId,
                     },
                 },
             }, {
-                actionType: 'ADD',
+                actionType: worldDecision.action === 'NOOP' ? 'ADD' : worldDecision.action,
                 sourceLabel: '旧聊天接管整合',
-                reasonCodes: ['takeover_world_state'],
+                reasonCodes: ['takeover_world_state', ...worldDecision.reasonCodes],
             });
         }
-
         await this.writeTakeoverSnapshotSummary(result.activeSnapshot, result);
         await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
@@ -1216,12 +1274,6 @@ export class MemorySDKImpl {
         };
     }
 
-    /**
-     * 功能：把旧聊天处理识别出的角色卡候选写入正式角色卡条目。
-     * @param actorCard 角色卡候选。
-     * @param takeoverId 接管任务 ID。
-     * @returns 异步完成。
-     */
     /**
      * 功能：写入旧聊天接管识别出的角色关系。
      * @param input 关系写入参数。
@@ -1378,7 +1430,6 @@ export class MemorySDKImpl {
             reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
         });
         await this.unifiedManager.bindRoleToEntry(input.sourceActorKey, savedEntry.entryId);
-        await this.unifiedManager.bindRoleToEntry(input.targetActorKey, savedEntry.entryId);
     }
 
     /**
@@ -1659,6 +1710,8 @@ export class MemorySDKImpl {
             summary?: string;
             fields?: Record<string, unknown>;
             confidence?: number;
+            bindings?: Record<string, unknown>;
+            reasonCodes?: string[];
         },
         takeoverId: string,
     ): Promise<void> {
@@ -1698,6 +1751,19 @@ export class MemorySDKImpl {
             detailPayload: {
                 ...(existingEntry?.detailPayload ?? {}),
                 compareKey,
+                reasonCodes: this.normalizeStringArray([
+                    ...this.normalizeStringArray(((existingEntry?.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
+                    ...(entityCard.reasonCodes ?? []),
+                ]),
+                bindings: {
+                    actors: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.actors as string[] ?? []),
+                    organizations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.organizations as string[] ?? []),
+                    cities: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.cities as string[] ?? []),
+                    locations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.locations as string[] ?? []),
+                    nations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.nations as string[] ?? []),
+                    tasks: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.tasks as string[] ?? []),
+                    events: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.events as string[] ?? []),
+                },
                 fields: {
                     ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
                     ...fields,
@@ -1731,6 +1797,8 @@ export class MemorySDKImpl {
             action: string;
             reason: string;
             payload: Record<string, unknown>;
+            bindings?: Record<string, unknown>;
+            reasonCodes?: string[];
         },
         takeoverId: string,
     ): Promise<void> {
@@ -1768,6 +1836,10 @@ export class MemorySDKImpl {
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
                     compareKey,
+                    reasonCodes: this.normalizeStringArray([
+                        ...this.normalizeStringArray(((existingEntry.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
+                        ...(transition.reasonCodes ?? []),
+                    ]),
                     lifecycle: { status: 'invalidated', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
@@ -1791,6 +1863,10 @@ export class MemorySDKImpl {
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
                     compareKey,
+                    reasonCodes: this.normalizeStringArray([
+                        ...this.normalizeStringArray(((existingEntry.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
+                        ...(transition.reasonCodes ?? []),
+                    ]),
                     lifecycle: { status: 'archived', reason: transition.reason },
                     takeover: { source: 'old_chat_takeover', takeoverId },
                 },
@@ -1815,6 +1891,19 @@ export class MemorySDKImpl {
                 detailPayload: {
                     ...(existingEntry?.detailPayload ?? {}),
                     compareKey,
+                    reasonCodes: this.normalizeStringArray([
+                        ...this.normalizeStringArray(((existingEntry?.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
+                        ...(transition.reasonCodes ?? []),
+                    ]),
+                    bindings: {
+                        actors: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.actors as string[] ?? []),
+                        organizations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.organizations as string[] ?? []),
+                        cities: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.cities as string[] ?? []),
+                        locations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.locations as string[] ?? []),
+                        nations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.nations as string[] ?? []),
+                        tasks: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.tasks as string[] ?? []),
+                        events: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.events as string[] ?? []),
+                    },
                     fields: {
                         ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
                         compareKey,
@@ -1886,11 +1975,6 @@ export class MemorySDKImpl {
         return Number(value.toFixed(4));
     }
 
-    /**
-     * 功能：在旧聊天接管完成后，根据整合结果补写世界画像绑定。
-     * @param result 旧聊天接管整合结果。
-     * @returns 异步完成。
-     */
     /**
      * 功能：为旧聊天实体生成稳定 compareKey。
      * @param entityType 实体类型。
@@ -2232,11 +2316,6 @@ export class MemorySDKImpl {
         });
     }
 
-    /**
-     * 功能：归一化接管结果中的角色键。
-     * @param value 原始角色标识。
-     * @returns 角色键。
-     */
     /**
      * 功能：解析旧聊天关系目标是否应视为真实角色。
      * @param targetName 关系目标名称。

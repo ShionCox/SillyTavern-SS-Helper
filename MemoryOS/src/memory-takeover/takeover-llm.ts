@@ -1,4 +1,5 @@
 import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
+import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
 
@@ -262,7 +263,10 @@ export async function buildTakeoverStructuredTaskRequest(input: {
     const promptPack = await loadPromptPackSections();
     const schema = enrichTakeoverSchema(
         input.schemaSection,
-        parseTakeoverJsonSection(promptPack[input.schemaSection as keyof typeof promptPack] as string),
+        normalizeMemoryPromptSchema(
+            input.schemaSection,
+            parseTakeoverJsonSection(promptPack[input.schemaSection as keyof typeof promptPack] as string),
+        ),
     );
     const sample = enrichTakeoverSample(
         input.sampleSection,

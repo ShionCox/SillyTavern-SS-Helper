@@ -159,7 +159,17 @@ export function reduceTakeoverRelationships(batchResults: MemoryTakeoverBatchRes
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
-export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): DomainReduceResult<{ task: string; state: string }> {
+export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): DomainReduceResult<{
+    task: string;
+    state: string;
+    title?: string;
+    summary?: string;
+    description?: string;
+    goal?: string;
+    compareKey?: string;
+    bindings?: MemoryTakeoverTaskTransition['bindings'];
+    reasonCodes?: string[];
+}> {
     const taskMap = new Map<string, MemoryTakeoverTaskTransition[]>();
     for (const record of batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions ?? [])) {
         const task = String(record.task ?? '').trim();
@@ -170,12 +180,30 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
         current.push(record);
         taskMap.set(task, current);
     }
-    const canonicalRecords: Array<{ task: string; state: string }> = [];
+    const canonicalRecords: Array<{
+        task: string;
+        state: string;
+        title?: string;
+        summary?: string;
+        description?: string;
+        goal?: string;
+        compareKey?: string;
+        bindings?: MemoryTakeoverTaskTransition['bindings'];
+        reasonCodes?: string[];
+    }> = [];
     const unresolvedConflicts: PipelineConflictRecord[] = [];
     for (const [taskKey, records] of taskMap) {
+        const latest = records[records.length - 1];
         canonicalRecords.push({
             task: taskKey,
-            state: String(records[records.length - 1]?.to ?? '').trim(),
+            state: String(latest?.status ?? latest?.to ?? '').trim(),
+            title: String(latest?.title ?? taskKey).trim(),
+            summary: String(latest?.summary ?? '').trim(),
+            description: String(latest?.description ?? '').trim(),
+            goal: String(latest?.goal ?? '').trim(),
+            compareKey: String(latest?.compareKey ?? '').trim(),
+            bindings: latest?.bindings,
+            reasonCodes: Array.isArray(latest?.reasonCodes) ? latest.reasonCodes : [],
         });
         const states = new Set(records.map((item: MemoryTakeoverTaskTransition): string => String(item.to ?? '').trim()).filter(Boolean));
         if (states.size > 1) {

@@ -1,42 +1,27 @@
 <!-- section: COLD_START_SYSTEM -->
 
-你正在执行结构化记忆系统的冷启动初始化任务。
-你会收到一个 `sourceBundle`，其中固定包含：
-- 当前角色卡：`name / description / personality / scenario / firstMessage / messageExample / creatorNotes / tags`
-- Tavern 语义快照：`systemPrompt / firstMessage / authorNote / jailbreak / instruct / activeLorebooks`
-- 用户 persona 快照
-- 角色绑定世界书与已解析条目
-- 最近事件文本窗口
-- 触发原因
+你正在执行结构化记忆冷启动抽取任务。系统已经预置固定的用户角色卡，`actorKey` 固定为 `user`；如果关系对象是当前用户，只需要在 `relationships` 中引用 `user`，不要在 `actorCards` 中重复输出用户角色卡。
 
-请严格遵循：
-1. 仅提取有依据的结构化信息，禁止编造。
-2. `worldBase.schemaId` 只能使用：`world_core_setting | world_hard_rule | world_global_state`。
-3. `memoryRecords.schemaId` 与 `relationships` 必须可落库。
-4. 每条 `relationships` 都必须完整填写：`sourceActorKey / targetActorKey / participants / relationTag / state / summary / trust / affection / tension`，不能省略字段，不能只写部分字段。
-5. 系统已经预置固定的用户角色卡，`actorKey` 固定为 `user`；不要在 `actorCards` 中重复输出 `user`，只需在关系里直接引用它。
-6. 只要某个非 `user` 角色出现在 `relationships` 中，就必须在 `actorCards` 中提供同 `actorKey` 的角色卡。
-7. 每条 `actorCards` 都必须完整填写：`actorKey / displayName / aliases / identityFacts / originFacts / traits`，其中 `displayName` 必须是可直接展示的人名或称呼，不能为空，不能直接照抄下划线风格的 `actorKey`。
-8. `participants` 必须是字符串数组，且至少包含 `sourceActorKey` 与 `targetActorKey`。
-9. `relationTag` 必须从以下预设中单选其一：`亲人 | 朋友 | 盟友 | 恋人 | 暧昧 | 师徒 | 上下级 | 竞争者 | 情敌 | 宿敌 | 陌生人`，禁止自由发明新标签。
-10. `state` 必须是一句简体中文的关系现状描述，表达当前关系状态，不要留空，不要只重复键名。
-11. 数值字段 `trust / affection / tension` 必须填写 `0~1` 之间的小数。
-12. 若可判断世界模板，则输出 `worldProfileDetection`；否则可留空。
-13. 当关系对象指向当前用户时，`targetActorKey` 或 `participants` 中必须固定使用 `user`，不要自行发明 `user_xxx`、`player_xxx`、用户名拼接键等变体。
-14. 严格参照输出示例的字段结构与完整度。
-15. 已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都必须优先使用这个称呼，不要写成“用户”或“主角”；仅结构化锚点继续使用 `user`。
-16. 仅输出 JSON，不输出解释文本。
-17. 如果世界书、角色卡或最近事件中出现稳定存在的教派、组织、商会、学院、城市、国家、地点，必须优先放入 `entityCards` 对应分类，不要仅写成 `memoryRecords`。
-18. `entityCards` 中的每个实体必须带 `title`、`summary`，以及 `fields` 中与该类型相关的核心字段（如 `organization` 需带 `subtype`、`status` 等）。`compareKey` 可选，系统会自动补全。
-19. 对同一个对象，不要同时在 `entityCards` 和 `memoryRecords` 中重复表达同一事实。
-20. `entityCards.organizations` 中应包含教派、公会、学院、军团、秘密组织等统一作为组织实体，通过 `fields.subtype` 区分。
+请严格遵循以下规则：
+- 这不是自由创作任务，而是结构化抽取任务。只保留长期稳定、可复用、适合进入记忆系统的内容。
+- `identity` 只描述当前主角色自身。
+- `actorCards` 只收录稳定、反复出现、明确是人物的对象。
+- `entityCards` 用于组织、城市、国家、地点等非人物实体；`entityCards.fields` 中要尽量写出 `leader`、`baseCity`、`nation`、`city`、`organization`、`status` 等稳定绑定线索。
+- `relationships` 只用于“角色与角色之间”的结构化关系卡，必须完整填写 `sourceActorKey`、`targetActorKey`、`participants`、`relationTag`、`state`、`summary`、`trust`、`affection`、`tension`。
+- `relationTag` 只能从以下值中选择：`亲人`、`朋友`、`盟友`、`恋人`、`暧昧`、`师徒`、`上下级`、`竞争者`、`情敌`、`宿敌`、`陌生人`。
+- 只要某个非 `user` 角色出现在 `relationships` 中，就必须在 `actorCards` 中提供同 `actorKey` 的角色卡，且 `displayName` 不能为空。
+- 语义输出字段面向用户可读；结构化字段面向稳定归并和调试，请优先保持稳定可复用。
+- 如果角色属于组织、组织位于城市、地点从属于城市或国家，请在 `entityCards.fields` 中显式写出稳定绑定线索。
+- 不要为了补满字段编造人物、组织、地点或关系；不确定时保持保守，不要写假设。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: COLD_START_SCHEMA -->
 
 ```json
 {
   "type": "object",
-  "required": ["schemaVersion", "identity", "actorCards", "worldBase", "relationships", "memoryRecords"],
+  "required": ["schemaVersion", "identity", "actorCards", "entityCards", "worldProfileDetection", "worldBase", "relationships", "memoryRecords"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "type": "string" },
@@ -71,68 +56,18 @@
     },
     "entityCards": {
       "type": "object",
+      "required": ["organizations", "cities", "nations", "locations"],
       "additionalProperties": false,
       "properties": {
-        "organizations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["title", "summary"],
-            "properties": {
-              "compareKey": { "type": "string" },
-              "title": { "type": "string" },
-              "aliases": { "type": "array", "items": { "type": "string" } },
-              "summary": { "type": "string" },
-              "fields": { "type": "object" }
-            }
-          }
-        },
-        "cities": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["title", "summary"],
-            "properties": {
-              "compareKey": { "type": "string" },
-              "title": { "type": "string" },
-              "aliases": { "type": "array", "items": { "type": "string" } },
-              "summary": { "type": "string" },
-              "fields": { "type": "object" }
-            }
-          }
-        },
-        "nations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["title", "summary"],
-            "properties": {
-              "compareKey": { "type": "string" },
-              "title": { "type": "string" },
-              "aliases": { "type": "array", "items": { "type": "string" } },
-              "summary": { "type": "string" },
-              "fields": { "type": "object" }
-            }
-          }
-        },
-        "locations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["title", "summary"],
-            "properties": {
-              "compareKey": { "type": "string" },
-              "title": { "type": "string" },
-              "aliases": { "type": "array", "items": { "type": "string" } },
-              "summary": { "type": "string" },
-              "fields": { "type": "object" }
-            }
-          }
-        }
+        "organizations": { "$ref": "#/$defs/entityCardList" },
+        "cities": { "$ref": "#/$defs/entityCardList" },
+        "nations": { "$ref": "#/$defs/entityCardList" },
+        "locations": { "$ref": "#/$defs/entityCardList" }
       }
     },
     "worldProfileDetection": {
       "type": "object",
+      "required": ["primaryProfile", "secondaryProfiles", "confidence", "reasonCodes"],
       "additionalProperties": false,
       "properties": {
         "primaryProfile": { "type": "string" },
@@ -148,10 +83,7 @@
         "required": ["schemaId", "title", "summary", "scope"],
         "additionalProperties": false,
         "properties": {
-          "schemaId": {
-            "type": "string",
-            "enum": ["world_core_setting", "world_hard_rule", "world_global_state"]
-          },
+          "schemaId": { "type": "string" },
           "title": { "type": "string" },
           "summary": { "type": "string" },
           "scope": { "type": "string" }
@@ -167,11 +99,7 @@
         "properties": {
           "sourceActorKey": { "type": "string" },
           "targetActorKey": { "type": "string" },
-          "participants": {
-            "type": "array",
-            "minItems": 2,
-            "items": { "type": "string" }
-          },
+          "participants": { "type": "array", "items": { "type": "string" } },
           "relationTag": {
             "type": "string",
             "enum": ["亲人", "朋友", "盟友", "恋人", "暧昧", "师徒", "上下级", "竞争者", "情敌", "宿敌", "陌生人"]
@@ -198,6 +126,24 @@
         }
       }
     }
+  },
+  "$defs": {
+    "entityCardList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entityType", "compareKey", "title", "aliases", "summary", "fields"],
+        "additionalProperties": false,
+        "properties": {
+          "entityType": { "type": "string" },
+          "compareKey": { "type": "string" },
+          "title": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "fields": { "type": "object", "additionalProperties": true }
+        }
+      }
+    }
   }
 }
 ```
@@ -211,7 +157,7 @@
     "actorKey": "char_erin",
     "displayName": "艾琳",
     "aliases": ["小艾"],
-    "identityFacts": ["王都情报官"],
+    "identityFacts": ["王都情报员"],
     "originFacts": ["来自北境边区"],
     "traits": ["冷静", "多疑"]
   },
@@ -220,7 +166,7 @@
       "actorKey": "captain_ron",
       "displayName": "罗恩队长",
       "aliases": ["老罗恩"],
-      "identityFacts": ["王都宵禁卫队队长"],
+      "identityFacts": ["王都守备队夜巡队长"],
       "originFacts": ["长期驻守北城门"],
       "traits": ["强硬", "守规矩"]
     }
@@ -228,8 +174,11 @@
   "entityCards": {
     "organizations": [
       {
-        "title": "宵禁卫队",
-        "summary": "王都负责夜间巡逻与城门管控的武装力量。",
+        "entityType": "organization",
+        "compareKey": "organization:military:守备队",
+        "title": "王都守备队",
+        "aliases": ["守备队"],
+        "summary": "负责夜间巡逻、城门管制和战时秩序维护的常设武装力量。",
         "fields": {
           "subtype": "military",
           "leader": "罗恩队长",
@@ -240,26 +189,32 @@
     ],
     "cities": [
       {
+        "entityType": "city",
+        "compareKey": "city:北境王国:王都",
         "title": "王都",
-        "summary": "北境王国的首都，战时进入物资管控状态。",
+        "aliases": [],
+        "summary": "北境王国的首都，当前处于战时管制状态。",
         "fields": {
           "nation": "北境王国",
-          "governance": "王都",
-          "status": "active"
+          "status": "controlled"
         }
       }
     ],
-    "nations": [
+    "nations": [],
+    "locations": [
       {
-        "title": "北境王国",
-        "summary": "统治北方大陆的古老王国，正面临边境战争。",
+        "entityType": "location",
+        "compareKey": "location:王都:北城门",
+        "title": "北城门",
+        "aliases": ["北门"],
+        "summary": "王都北侧主要出入口，夜间管制严格。",
         "fields": {
-          "regime": "君主制",
-          "status": "war"
+          "city": "王都",
+          "organization": "王都守备队",
+          "status": "guarded"
         }
       }
-    ],
-    "locations": []
+    ]
   },
   "worldProfileDetection": {
     "primaryProfile": "fantasy_magic",
@@ -270,14 +225,8 @@
   "worldBase": [
     {
       "schemaId": "world_hard_rule",
-      "title": "王都宵禁",
-      "summary": "王都夜间禁止普通平民擅自出城。",
-      "scope": "global"
-    },
-    {
-      "schemaId": "world_global_state",
-      "title": "前线补给紧张",
-      "summary": "边境战线导致王都粮草与军械都在收紧配给。",
+      "title": "王都夜禁",
+      "summary": "夜间普通人未经许可不得擅自出城。",
       "scope": "global"
     }
   ],
@@ -287,8 +236,8 @@
       "targetActorKey": "user",
       "participants": ["char_erin", "user"],
       "relationTag": "陌生人",
-      "state": "艾琳把{{userDisplayName}}视为需要持续观察的可疑对象，保持距离但暂未敌对。",
-      "summary": "艾琳刚与{{userDisplayName}}接触后，对其保持明显戒备与观察，尚未建立稳定信任。",
+      "state": "艾琳把{{userDisplayName}}视为需要继续观察的可疑对象，保持距离但暂未敌对。",
+      "summary": "艾琳与{{userDisplayName}}刚建立接触，关系仍停留在谨慎观察阶段。",
       "trust": 0.22,
       "affection": 0.08,
       "tension": 0.15
@@ -296,9 +245,9 @@
   ],
   "memoryRecords": [
     {
-      "schemaId": "actor_visible_event",
-      "title": "首次接触",
-      "summary": "艾琳首次与{{userDisplayName}}接触，并将其视为潜在观察对象。",
+      "schemaId": "initial_state",
+      "title": "初次接触",
+      "summary": "艾琳首次与{{userDisplayName}}建立接触，并将其纳入观察对象。",
       "importance": 0.68
     }
   ]
@@ -307,29 +256,18 @@
 
 <!-- section: SUMMARY_PLANNER_SYSTEM -->
 
-你正在执行结构化记忆系统的总结 Planner 阶段。
-你会收到一份轻量输入，包含以下字段：
-- `window`：本轮未总结区间，含 `fromTurn`、`toTurn`、`turnCount`、`windowFacts`（事实帧列表）、`evidenceSnippets`（证据片段）
-- `rollingDigest`：上一阶段的滚动摘要，含 `stableContext`、`taskState`、`relationState`、`unresolvedQuestions`
-- `signalPack`：合并后的候选信号，含 `candidateTypes`、`focusPoints`、`evidenceSignals`、`shouldUpdate`
-- `candidateCards`：与当前区间相关的已有记忆短卡片（`id`、`type`、`brief`、`entities`、`state`）
-- `allowedTypes`：本轮允许处理的记忆类型列表
-- `repairedFacts`：经残缺修复后的强事实列表（已通过本地验证，可信度高）
-- `signals`：降级弱信号列表（语义不完整但有参考价值，仅作弱提示）
-- `constraints`：硬性约束规则
+你正在执行结构化记忆 `summary planner` 阶段。你的职责不是直接修改记忆，而是判断当前窗口是否值得更新长期记忆，并给出后续 mutation 的聚焦方向。
 
-请严格遵循：
-1. 你的职责是判断"是否需要更新长期记忆"，而不是直接输出 mutation 动作。
-2. `should_update=false` 是完全合法的答案；当当前区间只是闲聊、一次性情绪、短时动作、或没有稳定新事实时，应优先返回 `false`。
-3. `focus_types` 只填写本轮真正值得处理的类型，必须来自 `allowedTypes`，尽量精简。
-4. `entities` 只填写当前区间反复出现、且对召回已有记忆有帮助的实体键或实体名。
-5. `topics` 用简体中文概括本轮主题，控制在少量高信号短语内。
-6. `reasons` 必须是简体中文，说明为什么值得更新，或为什么应返回 `NOOP`。
-7. 优先参考 `windowFacts` 和 `repairedFacts` 判断事实变化，不要受 `rollingDigest` 中已有结论影响。
-8. `signals` 仅为弱提示，不可升级为确定结论。若同一事项同时有 fact 与 signal，以 fact 为准。
-9. 不得根据 signals 中的不完整信息脑补新事件或关系变化。
-10. 信息不足时，应保持保守判断，优先返回 `should_update=false`。
-11. 仅输出 JSON，不输出解释文本。
+请严格遵循以下规则：
+- `should_update=false` 是完全合法且优先保守的答案。
+- `focus_types` 只能从 `allowedTypes` 中选择，数量尽量少，只保留真正值得处理的类型。
+- `entities` 只填写本轮反复出现、且对召回和归并有帮助的稳定实体键或名称。
+- `topics` 与 `reasons` 必须是简体中文，用于说明本轮为什么要更新，或为什么应该 `NOOP`。
+- 优先依赖 `repairedFacts` 与 `windowFacts` 判断事实变化；`signals` 只能作为弱提示，不能升级成确定事实。
+- 不要基于不完整信号脑补新关系、新任务、新实体或世界状态。
+- 这是 `summary mutation` 的上游规划，不要把整份 mutation 提前写出来。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: SUMMARY_PLANNER_SCHEMA -->
 
@@ -340,22 +278,10 @@
   "additionalProperties": false,
   "properties": {
     "should_update": { "type": "boolean" },
-    "focus_types": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "entities": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "topics": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "reasons": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
+    "focus_types": { "type": "array", "items": { "type": "string" } },
+    "entities": { "type": "array", "items": { "type": "string" } },
+    "topics": { "type": "array", "items": { "type": "string" } },
+    "reasons": { "type": "array", "items": { "type": "string" } }
   }
 }
 ```
@@ -365,37 +291,30 @@
 ```json
 {
   "should_update": true,
-  "focus_types": ["relationship", "initial_state", "persistent_goal"],
-  "entities": ["user", "char_erin", "王都北门"],
-  "topics": ["关系变化", "地点切换", "新目标形成"],
+  "focus_types": ["relationship", "initial_state", "persistent_goal", "task"],
+  "entities": ["user", "char_erin", "王都守备队", "北城门"],
+  "topics": ["关系推进", "地点状态变化", "任务持续推进"],
   "reasons": [
-    "本区间出现持续性的信任变化",
-    "当前地点状态发生明确迁移",
-    "出现了具备持续性的长期目标"
+    "本轮出现了可持续的关系变化",
+    "当前地点与组织绑定信息更加稳定",
+    "任务目标和状态已形成可复用卡片"
   ]
 }
 ```
 
 <!-- section: SUMMARY_SYSTEM -->
 
-你正在执行结构化记忆总结任务。
-你会收到一个总结上下文，其中包含：
-- `typeSchemas`: 每个 schemaId 的可写字段白名单（`editableFields`）
-- `candidateRecords`: 本轮可引用的候选旧记录（带 `compareKey` 和 `aliases` 字段）
-- `worldProfileBias`: 世界模板偏置
+你正在执行结构化记忆 `summary mutation` 任务。请只输出真正需要落库的 sparse patch，不要重写整份旧状态。
 
-请严格遵循：
-1. `action` 仅可使用：`ADD | MERGE | UPDATE | INVALIDATE | DELETE | NOOP`。
-2. `targetKind` 必须是精确 schemaId，禁止使用泛化类型（例如 `memory_record`）。
-3. 只有出现在 `editableFields` 的字段可写，特别是 `fields.*` 也必须是显式路径。
-4. 本任务是 mutation-only 语义，`NOOP` 仅代表"无结构变化"。
-5. 若发生世界状态替换，请使用"旧状态 INVALIDATE + 新状态 ADD/UPDATE"的组合表达。
-6. 当 `targetKind` 为 `relationship` 且需要新增或更新 `fields.relationTag` 时，`relationTag` 只能从以下预设中单选其一：`亲人 | 朋友 | 盟友 | 恋人 | 暧昧 | 师徒 | 上下级 | 竞争者 | 情敌 | 宿敌 | 陌生人`，禁止自由发明新标签。
-7. 仅输出 JSON，不输出解释文本。
-8. 世界实体（`organization`、`city`、`nation`、`location`）是和角色同等级的正式对象。当出现教派、组织、势力、城市、国家、地点等实体信息时，请使用对应的 `targetKind` 进行 CRUD 操作，而非笼统归为 `world_global_state` 或 `other`。
-9. 对世界实体执行 `UPDATE` / `INVALIDATE` / `DELETE` / `MERGE` 时，必须提供 `candidateId`（指向 `candidateRecords` 中的现有记录）或 `compareKey`（格式为 `entityType:标题`），以便系统精准定位目标实体。
-10. 教派、公会、学院、商会、军团等非人物组织统一归为 `targetKind: organization`，通过 `fields.orgType` 和 `fields.subtype` 区分细类。
-11. `ADD` 仅在当前候选记录中确实找不到对应 `compareKey` / 别名时使用。若已有同名或别名命中的候选，优先 `UPDATE` 或 `MERGE`。
+请严格遵循以下规则：
+- `action`、`targetKind`、`candidateId`、`compareKey`、`reasonCodes` 是调试和归并字段；`title`、`summary`、`payload.fields.state` 等是语义字段。
+- `payload` 只写变更部分；未变化字段不要重复回写。
+- 任务对象要尽量补齐稳定 `title`、`summary`、`goal`、`status` 与 `bindings`；没有明确任务名时，按稳定动作模板生成标题。
+- 如果对象之间存在稳定关系，请在 `payload.bindings` 中输出 `actors`、`organizations`、`cities`、`locations`、`nations`、`tasks`、`events`。
+- 不确定是否同一对象时，优先 `NOOP`、`UPDATE` 或 `MERGE`，不要为了看起来完整而重复 `ADD`。
+- 不要编造关系、任务、组织从属或长期世界状态；临时状态不要误写成长期属性。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: SUMMARY_SCHEMA -->
 
@@ -419,24 +338,15 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["action", "targetKind"],
+        "required": ["action", "targetKind", "candidateId", "compareKey", "payload", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
-          "action": {
-            "type": "string",
-            "enum": ["ADD", "MERGE", "UPDATE", "INVALIDATE", "DELETE", "NOOP"]
-          },
+          "action": { "type": "string" },
           "targetKind": { "type": "string" },
           "candidateId": { "type": "string" },
           "compareKey": { "type": "string" },
-          "payload": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "reasonCodes": {
-            "type": "array",
-            "items": { "type": "string" }
-          }
+          "payload": { "type": "object", "additionalProperties": true },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     }
@@ -450,86 +360,34 @@
 {
   "schemaVersion": "1.0.0",
   "window": {
-    "fromTurn": 20,
-    "toTurn": 28
+    "fromTurn": 101,
+    "toTurn": 120
   },
   "actions": [
     {
-      "action": "INVALIDATE",
-      "targetKind": "world_global_state",
-      "candidateId": "cand_2",
-      "payload": {
-        "summary": "旧状态已被新法令取代。",
-        "reasonCodes": ["policy_shift"],
-        "supersededBy": "战时特别征召令"
-      },
-      "reasonCodes": ["state_replaced", "policy_shift"]
-    },
-    {
-      "action": "ADD",
-      "targetKind": "world_global_state",
-      "payload": {
-        "title": "战时特别征召令",
-        "summary": "王都全面进入战时征召状态，兵员与后勤由军务署统一调配。",
-        "scope": "global",
-        "state": "active",
-        "tags": ["war_mode", "global_state"]
-      },
-      "reasonCodes": ["new_state_takeover"]
-    },
-    {
-      "action": "ADD",
-      "targetKind": "organization",
-      "compareKey": "organization:赤月教派",
-      "payload": {
-        "title": "赤月教派",
-        "summary": "崇尚血月启示的宗教组织，在灰港下城区拥有广泛影响力。",
-        "tags": ["教派", "宗教"],
-        "fields": {
-          "orgType": "宗教组织",
-          "subtype": "教派",
-          "alignment": "激进",
-          "ideology": "崇尚血月启示",
-          "leader": "赫尔曼主教",
-          "headquartersCity": "灰港",
-          "headquartersLocation": "赤月圣堂",
-          "status": "active",
-          "influence": "在灰港下城区拥有很强影响力",
-          "aliases": ["赤月教团"]
-        }
-      },
-      "reasonCodes": ["new_organization"]
-    },
-    {
       "action": "UPDATE",
-      "targetKind": "city",
-      "candidateId": "cand_5",
-      "compareKey": "city:灰港",
+      "targetKind": "task",
+      "candidateId": "candidate:task:escort",
+      "compareKey": "task:护送密使离开王都",
       "payload": {
-        "summary": "灰港因战争全面进入戒严状态。",
+        "title": "护送密使离开王都",
+        "summary": "任务已从确认情报升级为执行撤离。",
+        "bindings": {
+          "actors": ["user", "char_erin"],
+          "organizations": ["王都守备队"],
+          "cities": ["王都"],
+          "locations": ["北城门"],
+          "nations": [],
+          "tasks": [],
+          "events": []
+        },
         "fields": {
-          "status": "戒严",
-          "controllingOrganization": "军务署"
+          "objective": "护送密使离开王都",
+          "status": "进行中",
+          "goal": "确保密使安全离开王都"
         }
       },
-      "reasonCodes": ["city_status_change"]
-    },
-    {
-      "action": "ADD",
-      "targetKind": "nation",
-      "compareKey": "nation:北境王国",
-      "payload": {
-        "title": "北境王国",
-        "summary": "统治北方大陆的古老王国，目前正处于战争状态。",
-        "tags": ["国家"],
-        "fields": {
-          "capital": "王都",
-          "governance": "君主制",
-          "ruler": "亚瑟三世",
-          "status": "战争状态"
-        }
-      },
-      "reasonCodes": ["new_nation"]
+      "reasonCodes": ["task_progressed", "bindings_refreshed"]
     }
   ]
 }
@@ -537,27 +395,28 @@
 
 <!-- section: TAKEOVER_BASELINE_SYSTEM -->
 
-你正在执行旧聊天接管的静态基线抽取任务。你会收到角色卡、语义快照、用户资料与总楼层数。
+你正在执行旧聊天接管的静态基线抽取任务。你会收到角色卡、世界书、语义设定、用户资料等静态资料。请只提取长期稳定、适合作为接管起点的信息。
 
-请严格遵守：
-1. 只提取长期稳定、适合作为接管起点的信息。
-2. 不要把近期临时情绪或单次对话误写成静态基线。
-3. 所有自然语言字段必须使用简体中文。
-4. 仅输出 JSON，不输出解释文本。
+请严格遵循以下规则：
+- 只保留长期设定，不要混入短期对话状态。
+- 自然语言字段必须简洁、稳定、可复用。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: TAKEOVER_BASELINE_SCHEMA -->
 
 ```json
 {
   "type": "object",
-  "required": ["staticBaseline", "personaBaseline", "worldBaseline", "ruleBaseline", "sourceSummary"],
+  "required": ["staticBaseline", "personaBaseline", "worldBaseline", "ruleBaseline", "sourceSummary", "generatedAt"],
   "additionalProperties": false,
   "properties": {
     "staticBaseline": { "type": "string" },
     "personaBaseline": { "type": "string" },
     "worldBaseline": { "type": "string" },
     "ruleBaseline": { "type": "string" },
-    "sourceSummary": { "type": "string" }
+    "sourceSummary": { "type": "string" },
+    "generatedAt": { "type": "number" }
   }
 }
 ```
@@ -566,32 +425,34 @@
 
 ```json
 {
-  "staticBaseline": "当前角色是谨慎冷静的情报人员，习惯先观察再表态。",
-  "personaBaseline": "用户在互动中更倾向直接推进剧情和获取答案。",
-  "worldBaseline": "当前世界长期存在王都、边境和戒严体系，社会结构较稳定。",
-  "ruleBaseline": "夜间戒严、身份保密和通行审查是当前聊天中的稳定规则。",
-  "sourceSummary": "已根据角色卡、语义快照和用户资料完成静态基线抽取。"
+  "staticBaseline": "当前主角色是谨慎冷静的情报员，长期以隐蔽调查为主要行动方式。",
+  "personaBaseline": "{{userDisplayName}}倾向直接推进剧情，但会优先保护同伴。",
+  "worldBaseline": "当前世界存在稳定的王都、边境战线与严密的夜间管制。",
+  "ruleBaseline": "角色行动受到夜禁、通关凭证与身份保密规则约束。",
+  "sourceSummary": "已完成角色卡、世界书与用户资料的静态抽取。",
+  "generatedAt": 0
 }
 ```
 
 <!-- section: TAKEOVER_ACTIVE_SYSTEM -->
 
-你正在执行旧聊天接管的最近活跃快照任务。你会收到最近楼层范围与消息列表。
+你正在执行旧聊天接管的最近活跃快照任务。你会收到最近楼层范围与消息列表。请提炼当前场景、地点、时间线索、活跃目标、活跃关系、未结线索与近期摘要。
 
-请严格遵守：
-1. 目标是让系统快速理解“当前聊到哪里”。
-2. 提取当前场景、地点、时间线索、活跃目标、活跃关系、未结线索和最近摘要。
-3. 所有自然语言字段必须使用简体中文。
-4. 仅输出 JSON，不输出解释文本。
+请严格遵循以下规则：
+- 只保留当前仍然有效的活跃状态，不要把远期历史写进 active snapshot。
+- 自然语言字段必须稳定、简洁、面向用户可读。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: TAKEOVER_ACTIVE_SCHEMA -->
 
 ```json
 {
   "type": "object",
-  "required": ["currentScene", "currentLocation", "currentTimeHint", "activeGoals", "activeRelations", "openThreads", "recentDigest"],
+  "required": ["generatedAt", "currentScene", "currentLocation", "currentTimeHint", "activeGoals", "activeRelations", "openThreads", "recentDigest"],
   "additionalProperties": false,
   "properties": {
+    "generatedAt": { "type": "number" },
     "currentScene": { "type": "string" },
     "currentLocation": { "type": "string" },
     "currentTimeHint": { "type": "string" },
@@ -618,66 +479,56 @@
 
 ```json
 {
-  "currentScene": "双方刚结束一轮关键信息交换，正在决定是否立刻行动。",
-  "currentLocation": "王都北门附近的临时驻点",
+  "generatedAt": 0,
+  "currentScene": "{{userDisplayName}}与艾琳刚完成一轮关键对话，局势仍在推进。",
+  "currentLocation": "王都北城门附近的临时驻点",
   "currentTimeHint": "深夜",
-  "activeGoals": ["确认失踪信使位置", "判断下一步是否同行"],
+  "activeGoals": ["确认情报来源", "判断下一步是否同行"],
   "activeRelations": [
     {
-      "target": "巡逻队长",
-      "state": "仍保持谨慎合作"
+      "target": "艾琳",
+      "state": "双方维持谨慎合作，但仍在试探彼此底线。"
     }
   ],
-  "openThreads": ["巡逻队长是否愿意继续提供通行帮助"],
+  "openThreads": ["是否能安全通过北城门仍未确认"],
   "recentDigest": "最近几层主要围绕通行条件、身份试探与下一步行动选择展开。"
 }
 ```
 
 <!-- section: TAKEOVER_BATCH_SYSTEM -->
 
-你正在执行旧聊天接管的历史批次分析任务。你会收到批次编号、批次范围、批次分类和消息列表。
+你正在执行旧聊天接管的历史批次分析任务。你会收到批次编号、楼层范围、消息列表，以及 `knownContext`（来自之前批次和现有 ledger 的已知上下文）。你的目标不是从零抽取，而是基于已有上下文做稳定归并。
 
-请严格遵守：
-1. 每一批只输出章节摘要和候选变化，不要直接假设已经写入长期记忆。
-2. `stableFacts` 只保留高置信、可长期复用的信息。
-3. `relationTransitions`、`taskTransitions`、`worldStateChanges` 只记录该批次确实出现的变化。
-4. 所有自然语言字段必须使用简体中文。
-5. 仅输出 JSON，不输出解释文本。
-6. `entityCards` 用于输出本批次识别到的世界实体卡候选。`entityType` 可选 `organization`（教派/公会/商会/军团等所有非人物组织）、`city`（城市/都市）、`nation`（国家/王国/帝国）、`location`（地点/建筑/区域）。每张卡必须包含 `entityType`、`compareKey`（格式 `entityType:标题`）、`title`、`aliases`、`summary`、`fields`（结构化属性对象）和 `confidence`。
-7. `entityTransitions` 用于输出世界实体变更。`action` 可选 `ADD | UPDATE | MERGE | INVALIDATE | DELETE`。若 knownContext 中已存在同类实体，请优先使用 `UPDATE` 而非 `ADD`。仅在确实无法匹配现有记录时才新建。`DELETE` 仅用于明显垃圾/误建。
-8. 角色（人物）写入 `actorCards`；组织/城市/国家/地点等非人物实体写入 `entityCards`。不要把非人物实体混入 `actorCards`。
+请严格遵循以下规则：
+- 当前批次不是从零抽取，必须优先参考 `knownContext`、`knownEntities`、已有 `compareKey` 与稳定对象键。
+- 命中同一对象时优先 `UPDATE`；只有明确出现全新对象时才 `ADD`；不确定是否同一对象时，不要盲目新建，优先输出保守更新、`MERGE` 倾向、`openThreads` 或待确认线索。
+- `compareKey`、稳定 `actorKey`、已有 `entityKey` 的优先级高于表面称呼；不要因为别名、视角说明、语气变化而拆出新对象。
+- 只有稳定、反复出现、明确是人物的对象，才允许写入 `actorCards`。组织、势力、国家、城市、地点、规则、物品等非人物对象必须写入 `entityCards`、`entityTransitions` 或 `stableFacts`。
+- `relationships` 只用于角色与角色之间的结构化关系卡；如果关系对象不是人物，请不要塞进 `relationships` 或 `actorCards`，而应通过 `relationTransitions`、`entityCards` 或 `entityTransitions` 表达。
+- `relationTransitions.target` 可以是角色、组织、城市、国家或地点；请尽量填写 `relationTag` 与 `targetType`。
+- 任务对象必须尽量补齐 `title`、`summary`、`description`、`goal`、`status`、`compareKey` 与 `bindings`。标题优先级是：明确任务名 > 稳定动作模板 > 兜底标题。
+- 如果角色属于组织、组织位于城市、任务发生在地点、事件影响角色/组织/城市/地点，请在 `bindings` 中显式输出；不要只抽对象不抽边。
+- 语义字段（`summary`、`title`、`description`、`goal`、`state`）面向用户可读；调试字段（`compareKey`、`reasonCodes`、`bindings`、`targetType`）面向归并、去重与问题排查。
+- 不要为了补满字段编造关系、组织从属、地点归属或长期属性；临时状态不要误写成长期实体属性。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: TAKEOVER_BATCH_SCHEMA -->
 
 ```json
 {
   "type": "object",
-  "required": ["batchId", "summary", "stableFacts", "relationTransitions", "taskTransitions", "worldStateChanges", "openThreads", "chapterTags", "sourceRange"],
+  "required": ["batchId", "summary", "actorCards", "relationships", "entityCards", "entityTransitions", "stableFacts", "relationTransitions", "taskTransitions", "worldStateChanges", "openThreads", "chapterTags", "sourceRange"],
   "additionalProperties": false,
   "properties": {
     "batchId": { "type": "string" },
     "summary": { "type": "string" },
-    "actorCards": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["actorKey", "displayName", "aliases", "identityFacts", "originFacts", "traits"],
-        "additionalProperties": false,
-        "properties": {
-          "actorKey": { "type": "string" },
-          "displayName": { "type": "string" },
-          "aliases": { "type": "array", "items": { "type": "string" } },
-          "identityFacts": { "type": "array", "items": { "type": "string" } },
-          "originFacts": { "type": "array", "items": { "type": "string" } },
-          "traits": { "type": "array", "items": { "type": "string" } }
-        }
-      }
-    },
+    "actorCards": { "type": "array", "items": { "type": "object" } },
+    "relationships": { "type": "array", "items": { "type": "object" } },
     "entityCards": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["entityType", "compareKey", "title", "summary", "confidence"],
+        "required": ["entityType", "compareKey", "title", "aliases", "summary", "fields", "confidence", "bindings", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
@@ -686,7 +537,9 @@
           "aliases": { "type": "array", "items": { "type": "string" } },
           "summary": { "type": "string" },
           "fields": { "type": "object", "additionalProperties": true },
-          "confidence": { "type": "number" }
+          "confidence": { "type": "number" },
+          "bindings": { "$ref": "#/$defs/bindings" },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
@@ -694,7 +547,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["entityType", "compareKey", "title", "action", "reason"],
+        "required": ["entityType", "compareKey", "title", "action", "reason", "payload", "bindings", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "entityType": { "type": "string", "enum": ["organization", "city", "nation", "location"] },
@@ -702,36 +555,27 @@
           "title": { "type": "string" },
           "action": { "type": "string", "enum": ["ADD", "UPDATE", "MERGE", "INVALIDATE", "DELETE"] },
           "reason": { "type": "string" },
-          "payload": { "type": "object", "additionalProperties": true }
+          "payload": { "type": "object", "additionalProperties": true },
+          "bindings": { "$ref": "#/$defs/bindings" },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
-    "stableFacts": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["type", "subject", "predicate", "value", "confidence"],
-        "additionalProperties": false,
-        "properties": {
-          "type": { "type": "string" },
-          "subject": { "type": "string" },
-          "predicate": { "type": "string" },
-          "value": { "type": "string" },
-          "confidence": { "type": "number" }
-        }
-      }
-    },
+    "stableFacts": { "type": "array", "items": { "type": "object" } },
     "relationTransitions": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["target", "from", "to", "reason"],
+        "required": ["target", "from", "to", "reason", "relationTag", "targetType", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "target": { "type": "string" },
           "from": { "type": "string" },
           "to": { "type": "string" },
-          "reason": { "type": "string" }
+          "reason": { "type": "string" },
+          "relationTag": { "type": "string" },
+          "targetType": { "type": "string", "enum": ["actor", "organization", "city", "nation", "location", "unknown"] },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
@@ -739,12 +583,20 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["task", "from", "to"],
+        "required": ["task", "from", "to", "title", "summary", "description", "goal", "status", "compareKey", "bindings", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "task": { "type": "string" },
           "from": { "type": "string" },
-          "to": { "type": "string" }
+          "to": { "type": "string" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "description": { "type": "string" },
+          "goal": { "type": "string" },
+          "status": { "type": "string" },
+          "compareKey": { "type": "string" },
+          "bindings": { "$ref": "#/$defs/bindings" },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
@@ -752,11 +604,14 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "value"],
+        "required": ["key", "value", "summary", "compareKey", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "key": { "type": "string" },
-          "value": { "type": "string" }
+          "value": { "type": "string" },
+          "summary": { "type": "string" },
+          "compareKey": { "type": "string" },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
@@ -771,6 +626,22 @@
         "endFloor": { "type": "integer" }
       }
     }
+  },
+  "$defs": {
+    "bindings": {
+      "type": "object",
+      "required": ["actors", "organizations", "cities", "locations", "nations", "tasks", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "actors": { "type": "array", "items": { "type": "string" } },
+        "organizations": { "type": "array", "items": { "type": "string" } },
+        "cities": { "type": "array", "items": { "type": "string" } },
+        "locations": { "type": "array", "items": { "type": "string" } },
+        "nations": { "type": "array", "items": { "type": "string" } },
+        "tasks": { "type": "array", "items": { "type": "string" } },
+        "events": { "type": "array", "items": { "type": "string" } }
+      }
+    }
   }
 }
 ```
@@ -780,90 +651,135 @@
 ```json
 {
   "batchId": "takeover:demo:history:0001",
-  "summary": "这一段历史主要建立了角色互信的初始框架，并首次明确了共同目标。",
+  "summary": "这一段历史主要建立了{{userDisplayName}}与艾琳之间的初步信任，并明确了“护送密使离开王都”的共同任务。",
   "actorCards": [
     {
-      "actorKey": "captain_ron",
-      "displayName": "巡逻队长",
-      "aliases": ["老罗恩"],
-      "identityFacts": ["负责北门夜巡"],
-      "originFacts": ["长期驻守北城门"],
-      "traits": ["强硬", "守规矩"]
+      "actorKey": "char_erin",
+      "displayName": "艾琳",
+      "aliases": ["小艾"],
+      "identityFacts": ["王都情报员"],
+      "originFacts": ["来自北境边区"],
+      "traits": ["冷静", "多疑"]
+    }
+  ],
+  "relationships": [
+    {
+      "sourceActorKey": "user",
+      "targetActorKey": "char_erin",
+      "participants": ["user", "char_erin"],
+      "relationTag": "朋友",
+      "state": "{{userDisplayName}}与艾琳已经形成谨慎但有效的合作关系。",
+      "summary": "双方在共同处理危机时建立了可持续推进的合作信任。",
+      "trust": 0.72,
+      "affection": 0.38,
+      "tension": 0.17
     }
   ],
   "entityCards": [
     {
       "entityType": "organization",
-      "compareKey": "organization:赤月教派",
-      "title": "赤月教派",
-      "aliases": ["赤月教团"],
-      "summary": "崇尚血月启示的宗教组织，在灰港下城区拥有广泛影响力。",
+      "compareKey": "organization:intelligence:夜鸦组",
+      "title": "夜鸦组",
+      "aliases": [],
+      "summary": "艾琳所属的情报组织，负责王都与边境之间的秘密联络。",
       "fields": {
-        "orgType": "宗教组织",
-        "subtype": "教派",
-        "alignment": "激进",
-        "leader": "赫尔曼主教",
-        "headquartersCity": "灰港",
+        "subtype": "intelligence",
+        "leader": "灰羽",
+        "baseCity": "王都",
         "status": "active"
       },
-      "confidence": 0.82
-    },
-    {
-      "entityType": "city",
-      "compareKey": "city:灰港",
-      "title": "灰港",
-      "aliases": [],
-      "summary": "北境王国南部港口城市，赤月教派的主要活动区域。",
-      "fields": {
-        "nation": "北境王国",
-        "status": "正常",
-        "traits": "港口贸易城市"
+      "confidence": 0.88,
+      "bindings": {
+        "actors": ["char_erin"],
+        "organizations": [],
+        "cities": ["王都"],
+        "locations": [],
+        "nations": [],
+        "tasks": ["task:护送密使离开王都"],
+        "events": []
       },
-      "confidence": 0.78
+      "reasonCodes": ["organization_referenced_repeatedly", "entity_update_preferred"]
     }
   ],
   "entityTransitions": [
     {
-      "entityType": "organization",
-      "compareKey": "organization:赤月教派",
-      "title": "赤月教派",
-      "action": "ADD",
-      "reason": "本批次首次出现该教派的详细描述",
-      "payload": {}
+      "entityType": "location",
+      "compareKey": "location:王都:北城门",
+      "title": "北城门",
+      "action": "UPDATE",
+      "reason": "本批次明确了北城门与守备队、夜禁和撤离路线的稳定关联。",
+      "payload": {
+        "summary": "北城门仍由守备力量严密把守，是离开王都的关键通路。",
+        "city": "王都",
+        "organization": "王都守备队",
+        "status": "guarded"
+      },
+      "bindings": {
+        "actors": [],
+        "organizations": ["王都守备队"],
+        "cities": ["王都"],
+        "locations": [],
+        "nations": [],
+        "tasks": ["task:护送密使离开王都"],
+        "events": []
+      },
+      "reasonCodes": ["entity_update_preferred", "location_binding_confirmed"]
     }
   ],
   "stableFacts": [
     {
-      "type": "identity",
-      "subject": "巡逻队长",
-      "predicate": "身份",
-      "value": "负责北门夜巡",
+      "type": "event",
+      "subject": "艾琳",
+      "predicate": "确认",
+      "value": "北城门是当前最可行的撤离路线",
       "confidence": 0.86
     }
   ],
   "relationTransitions": [
     {
-      "target": "巡逻队长",
+      "target": "char_erin",
       "from": "陌生试探",
-      "to": "有限合作",
-      "reason": "双方达成了短期协作共识"
+      "to": "谨慎合作",
+      "reason": "双方明确共享短期目标，并愿意共同承担风险。",
+      "relationTag": "朋友",
+      "targetType": "actor",
+      "reasonCodes": ["relationship_progressed", "shared_goal_confirmed"]
     }
   ],
   "taskTransitions": [
     {
-      "task": "寻找失踪信使",
+      "task": "护送密使离开王都",
       "from": "未开始",
-      "to": "进行中"
+      "to": "进行中",
+      "title": "护送密使离开王都",
+      "summary": "双方已从确认情报升级为执行撤离任务。",
+      "description": "当前重点是确保密使安全通过北城门并离开王都。",
+      "goal": "确保密使安全离开王都",
+      "status": "进行中",
+      "compareKey": "task:护送密使离开王都",
+      "bindings": {
+        "actors": ["user", "char_erin"],
+        "organizations": ["夜鸦组", "王都守备队"],
+        "cities": ["王都"],
+        "locations": ["北城门"],
+        "nations": [],
+        "tasks": [],
+        "events": []
+      },
+      "reasonCodes": ["task_update_preferred", "task_title_stabilized", "task_bindings_confirmed"]
     }
   ],
   "worldStateChanges": [
     {
-      "key": "北门戒严",
-      "value": "持续执行夜间封锁"
+      "key": "王都夜禁",
+      "value": "持续执行中",
+      "summary": "夜禁仍然有效，直接影响撤离任务的路径选择。",
+      "compareKey": "world_global_state:global:王都夜禁",
+      "reasonCodes": ["world_state_confirmed"]
     }
   ],
-  "openThreads": ["失踪信使的下落仍未确认"],
-  "chapterTags": ["关系推进", "任务开启"],
+  "openThreads": ["密使是否持有可通行的凭证仍未确认"],
+  "chapterTags": ["关系推进", "任务开启", "地点绑定强化"],
   "sourceRange": {
     "startFloor": 1,
     "endFloor": 30
@@ -871,76 +787,191 @@
 }
 ```
 
-<!-- section: TAKEOVER_BATCH_OUTPUT_SAMPLE_TAIL_IGNORED -->
-      "target": "巡逻队长",
-      "state": "与用户保持谨慎合作",
-      "reason": "多轮互动后形成稳定协作关系"
-    }
-  ],
-  "taskState": [
-    {
-      "task": "寻找失踪信使",
-      "state": "进行中"
-    }
-  ],
-  "worldState": {
-    "北门戒严": "仍在执行"
-  },
-  "entityCards": [
-    {
-      "entityType": "organization",
-      "compareKey": "organization:赤月教派",
-      "title": "赤月教派",
-      "aliases": ["赤月教团"],
-      "summary": "崇尚血月启示的宗教组织，最终确认在灰港下城区拥有广泛影响力。",
-      "fields": {
-        "orgType": "宗教组织",
-        "subtype": "教派",
-        "alignment": "激进",
-        "leader": "赫尔曼主教",
-        "headquartersCity": "灰港",
-        "status": "active"
-      },
-      "confidence": 0.85
-    }
-  ],
-  "entityTransitions": [
-    {
-      "entityType": "organization",
-      "compareKey": "organization:赤月教派",
-      "title": "赤月教派",
-      "action": "ADD",
-      "reason": "历史批次中反复出现的重要教派组织",
-      "payload": {}
-    }
-  ],
-  "activeSnapshot": {
-    "currentScene": "双方正在商量下一步行动。",
-    "currentLocation": "北门驻点",
-    "currentTimeHint": "深夜",
-    "activeGoals": ["确认信使位置"],
-    "activeRelations": [
-      {
-        "target": "巡逻队长",
-        "state": "谨慎合作"
-      }
-    ],
-    "openThreads": ["是否能安全离开北门"],
-    "recentDigest": "最近几层聚焦于信使调查和北门戒严。"
-  },
-  "dedupeStats": {
-    "totalFacts": 4,
-    "dedupedFacts": 3,
-    "relationUpdates": 1,
-    "taskUpdates": 1,
-    "worldUpdates": 1
-  },
-  "conflictStats": {
-    "unresolvedFacts": 0,
-    "unresolvedRelations": 0,
-    "unresolvedTasks": 0,
-    "unresolvedWorldStates": 0,
-    "unresolvedEntities": 0
+<!-- section: COLD_START_CORE_SYSTEM -->
+
+你正在执行冷启动 `Core Extract` 阶段。本阶段只关注 `identity`、`actorCards`、`entityCards`、`worldProfileDetection`、`worldBase`。
+
+请严格遵循以下规则：
+- `relationships` 与 `memoryRecords` 必须返回空数组。
+- `identity`、`actorCards`、`entityCards` 的输出必须尽量稳定，优先保留长期设定而不是短期情绪。
+- `entityCards.fields` 中尽量写出稳定绑定线索，例如 `leader`、`organization`、`city`、`nation`、`baseCity`、`status`。
+- 不要把暂时状态误写成长期属性；不确定时宁可留空也不要猜测。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
+
+<!-- section: COLD_START_CORE_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["schemaVersion", "identity", "actorCards", "entityCards", "worldProfileDetection", "worldBase", "relationships", "memoryRecords"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "identity": { "type": "object" },
+    "actorCards": { "type": "array", "items": { "type": "object" } },
+    "entityCards": { "type": "object" },
+    "worldProfileDetection": { "type": "object" },
+    "worldBase": { "type": "array", "items": { "type": "object" } },
+    "relationships": { "type": "array", "items": { "type": "object" } },
+    "memoryRecords": { "type": "array", "items": { "type": "object" } }
   }
+}
+```
+
+<!-- section: COLD_START_CORE_OUTPUT_SAMPLE -->
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "identity": {
+    "actorKey": "char_erin",
+    "displayName": "艾琳",
+    "aliases": ["小艾"],
+    "identityFacts": ["王都情报员"],
+    "originFacts": ["来自北境边区"],
+    "traits": ["冷静", "多疑"]
+  },
+  "actorCards": [],
+  "entityCards": {
+    "organizations": [],
+    "cities": [],
+    "nations": [],
+    "locations": []
+  },
+  "worldProfileDetection": {
+    "primaryProfile": "fantasy_magic",
+    "secondaryProfiles": ["political_intrigue"],
+    "confidence": 0.81,
+    "reasonCodes": ["core_extract"]
+  },
+  "worldBase": [],
+  "relationships": [],
+  "memoryRecords": []
+}
+```
+
+<!-- section: COLD_START_STATE_SYSTEM -->
+
+你正在执行冷启动 `State Extract` 阶段。本阶段只关注 `relationships`、`memoryRecords` 与近期状态线索。
+
+请严格遵循以下规则：
+- `identity`、`actorCards`、`entityCards`、`worldBase` 如无新增可返回空集合。
+- 关系与状态描述要面向用户可读，但 `relationTag`、`actorKey` 等结构化字段必须稳定。
+- 不要把短期情绪夸大为长期关系；只有稳定、持续、有明确依据的变化才写入 `memoryRecords`。
+- 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
+
+<!-- section: COLD_START_STATE_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "required": ["schemaVersion", "identity", "actorCards", "entityCards", "worldBase", "relationships", "memoryRecords"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "identity": { "type": "object" },
+    "actorCards": { "type": "array", "items": { "type": "object" } },
+    "entityCards": { "type": "object" },
+    "worldBase": { "type": "array", "items": { "type": "object" } },
+    "relationships": { "type": "array", "items": { "type": "object" } },
+    "memoryRecords": { "type": "array", "items": { "type": "object" } }
+  }
+}
+```
+
+<!-- section: COLD_START_STATE_OUTPUT_SAMPLE -->
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "identity": {
+    "actorKey": "char_erin",
+    "displayName": "艾琳",
+    "aliases": [],
+    "identityFacts": [],
+    "originFacts": [],
+    "traits": []
+  },
+  "actorCards": [],
+  "entityCards": {
+    "organizations": [],
+    "cities": [],
+    "nations": [],
+    "locations": []
+  },
+  "worldBase": [],
+  "relationships": [
+    {
+      "sourceActorKey": "char_erin",
+      "targetActorKey": "user",
+      "participants": ["char_erin", "user"],
+      "relationTag": "陌生人",
+      "state": "艾琳对{{userDisplayName}}保持明显戒备，但愿意继续接触观察。",
+      "summary": "双方建立了谨慎但可持续推进的初始接触关系。",
+      "trust": 0.31,
+      "affection": 0.12,
+      "tension": 0.21
+    }
+  ],
+  "memoryRecords": [
+    {
+      "schemaId": "initial_state",
+      "title": "建立初始接触",
+      "summary": "艾琳与{{userDisplayName}}形成了可继续推进的初始接触关系。",
+      "importance": 0.66
+    }
+  ]
+}
+```
+
+<!-- section: TAKEOVER_CONFLICT_RESOLUTION_SCHEMA -->
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "bucketId": { "type": "string" },
+    "domain": { "type": "string" },
+    "resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["merge", "keep_primary", "replace", "invalidate", "split"]
+          },
+          "primaryKey": { "type": "string" },
+          "secondaryKeys": { "type": "array", "items": { "type": "string" } },
+          "fieldOverrides": { "type": "object", "additionalProperties": true },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["action", "primaryKey", "secondaryKeys", "fieldOverrides", "reasonCodes"]
+      }
+    }
+  },
+  "required": ["bucketId", "domain", "resolutions"]
+}
+```
+
+<!-- section: TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE -->
+
+```json
+{
+  "bucketId": "takeover:entity:0001",
+  "domain": "entity",
+  "resolutions": [
+    {
+      "action": "merge",
+      "primaryKey": "organization:intelligence:夜鸦组",
+      "secondaryKeys": ["organization:intelligence:夜鸦情报组"],
+      "fieldOverrides": {},
+      "reasonCodes": ["llm_conflict_merge"]
+    }
+  ]
 }
 ```

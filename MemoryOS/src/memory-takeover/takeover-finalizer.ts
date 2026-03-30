@@ -37,7 +37,17 @@ export function finalizeTakeoverConsolidation(input: {
     actorLedger: PipelineDomainLedgerRecord<MemoryTakeoverActorCardCandidate>[];
     entityLedger: PipelineDomainLedgerRecord<MemoryTakeoverEntityCardCandidate>[];
     relationshipLedger: PipelineDomainLedgerRecord<MemoryTakeoverRelationshipCard>[];
-    taskLedger: PipelineDomainLedgerRecord<{ task: string; state: string }>[];
+    taskLedger: PipelineDomainLedgerRecord<{
+        task: string;
+        state: string;
+        title?: string;
+        summary?: string;
+        description?: string;
+        goal?: string;
+        compareKey?: string;
+        bindings?: MemoryTakeoverConsolidationResult['taskState'][number]['bindings'];
+        reasonCodes?: string[];
+    }>[];
     worldLedger: PipelineDomainLedgerRecord<{ key: string; value: string }>[];
     conflictPatches: ConflictResolutionPatch[];
     diagnostics: PipelineDiagnostics;

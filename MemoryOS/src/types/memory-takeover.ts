@@ -77,6 +77,19 @@ export interface MemoryTakeoverStableFact {
 }
 
 /**
+ * 功能：定义旧聊天接管中可复用的绑定关系载荷。
+ */
+export interface MemoryTakeoverBindings {
+    actors: string[];
+    organizations: string[];
+    cities: string[];
+    locations: string[];
+    nations: string[];
+    tasks: string[];
+    events: string[];
+}
+
+/**
  * 功能：定义关系变化。
  */
 export interface MemoryTakeoverRelationTransition {
@@ -95,6 +108,14 @@ export interface MemoryTakeoverTaskTransition {
     task: string;
     from: string;
     to: string;
+    title?: string;
+    summary?: string;
+    description?: string;
+    goal?: string;
+    status?: string;
+    compareKey?: string;
+    bindings?: MemoryTakeoverBindings;
+    reasonCodes?: string[];
 }
 
 /**
@@ -103,6 +124,9 @@ export interface MemoryTakeoverTaskTransition {
 export interface MemoryTakeoverWorldStateChange {
     key: string;
     value: string;
+    summary?: string;
+    compareKey?: string;
+    reasonCodes?: string[];
 }
 
 /**
@@ -133,6 +157,8 @@ export interface MemoryTakeoverEntityCardCandidate {
     summary: string;
     fields: Record<string, string | number | boolean | string[]>;
     confidence: number;
+    bindings?: MemoryTakeoverBindings;
+    reasonCodes?: string[];
 }
 
 /**
@@ -145,6 +171,8 @@ export interface MemoryTakeoverEntityTransition {
     action: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
     reason: string;
     payload: Record<string, unknown>;
+    bindings?: MemoryTakeoverBindings;
+    reasonCodes?: string[];
 }
 
 /**
@@ -246,6 +274,13 @@ export interface MemoryTakeoverConsolidationResult {
     taskState: Array<{
         task: string;
         state: string;
+        title?: string;
+        summary?: string;
+        description?: string;
+        goal?: string;
+        compareKey?: string;
+        bindings?: MemoryTakeoverBindings;
+        reasonCodes?: string[];
     }>;
     worldState: Record<string, string>;
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;

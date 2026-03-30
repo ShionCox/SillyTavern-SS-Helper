@@ -189,6 +189,35 @@ function buildEntityFieldsMarkup(entry: MemoryEntry): string {
 }
 
 /**
+ * 功能：构建实体绑定关系卡片，让详情页与图谱关系保持一致。
+ * @param entry 当前条目。
+ * @returns 绑定关系 HTML。
+ */
+function buildEntityBindingsMarkup(entry: MemoryEntry): string {
+    const payload = toRecord(entry.detailPayload);
+    const bindings = toRecord(payload.bindings);
+    const rows = Object.entries(bindings)
+        .filter(([, value]: [string, unknown]): boolean => Array.isArray(value) && value.length > 0)
+        .map(([key, value]: [string, unknown]): string => {
+            return `
+                <div class="stx-memory-workbench__info-row">
+                    <span>${escapeHtml(resolveBindingLabel(key))}</span>
+                    <strong>${escapeHtml(formatDisplayValue(value))}</strong>
+                </div>
+            `;
+        })
+        .join('');
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">绑定关系</div>
+            ${rows
+                ? `<div class="stx-memory-workbench__info-list">${rows}</div>`
+                : `<div class="stx-memory-workbench__empty">当前实体还没有稳定绑定关系。</div>`}
+        </div>
+    `;
+}
+
+/**
  * 功能：构建世界实体概览统计。
  * @param entities 世界实体列表。
  * @returns 统计区域 HTML。
@@ -337,6 +366,7 @@ function buildEntityDetailMarkup(entry: MemoryEntry | null): string {
             ${buildEntityOverviewMarkup(entry)}
             ${buildEntityContentMarkup(entry)}
             ${buildEntityFieldsMarkup(entry)}
+            ${buildEntityBindingsMarkup(entry)}
         </div>
     `;
 }
@@ -365,6 +395,24 @@ function buildEntitySidebarMarkup(entry: MemoryEntry | null): string {
             ${buildEntityNotesMarkup(entry)}
         </div>
     `;
+}
+
+/**
+ * 功能：解析绑定字段的展示标签。
+ * @param key 绑定字段键名。
+ * @returns 展示标签。
+ */
+function resolveBindingLabel(key: string): string {
+    const labels: Record<string, string> = {
+        actors: '关联角色',
+        organizations: '关联组织',
+        cities: '关联城市',
+        locations: '关联地点',
+        nations: '关联国家',
+        tasks: '关联任务',
+        events: '关联事件',
+    };
+    return labels[key] ?? key;
 }
 
 /**

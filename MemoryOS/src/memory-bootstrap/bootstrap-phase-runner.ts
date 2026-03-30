@@ -1,4 +1,5 @@
 import { loadPromptPackSections, type PromptPackSections } from '../memory-prompts/prompt-loader';
+import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
 
@@ -16,7 +17,7 @@ export async function runBootstrapPhase(input: {
 }): Promise<{ ok: boolean; reasonCode?: string; data?: unknown }> {
     const promptPack = await loadPromptPackSections();
     const promptSections = resolveBootstrapPromptSections(promptPack, input.phaseName);
-    const coldStartSchema = parseJsonSection(promptSections.schema);
+    const coldStartSchema = normalizeMemoryPromptSchema(promptSections.schemaSectionName, parseJsonSection(promptSections.schema));
     const coldStartOutputSample = parseJsonSection(promptSections.sample);
     const userPayload = buildStructuredTaskUserPayload(
         JSON.stringify(input.payload, null, 2),
@@ -57,18 +58,20 @@ export async function runBootstrapPhase(input: {
 function resolveBootstrapPromptSections(
     promptPack: PromptPackSections,
     phaseName: 'phase1' | 'phase2',
-): { system: string; schema: string; sample: string } {
+): { system: string; schema: string; sample: string; schemaSectionName: 'COLD_START_CORE_SCHEMA' | 'COLD_START_STATE_SCHEMA' } {
     if (phaseName === 'phase1') {
         return {
             system: promptPack.COLD_START_CORE_SYSTEM,
             schema: promptPack.COLD_START_CORE_SCHEMA,
             sample: promptPack.COLD_START_CORE_OUTPUT_SAMPLE,
+            schemaSectionName: 'COLD_START_CORE_SCHEMA',
         };
     }
     return {
         system: promptPack.COLD_START_STATE_SYSTEM,
         schema: promptPack.COLD_START_STATE_SCHEMA,
         sample: promptPack.COLD_START_STATE_OUTPUT_SAMPLE,
+        schemaSectionName: 'COLD_START_STATE_SCHEMA',
     };
 }
 

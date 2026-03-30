@@ -3,6 +3,10 @@ import type { SummaryCandidateRecord } from '../memory-summary-planner';
 import { normalizeSummarySnapshot, type NormalizedSummaryDigest } from '../memory-summary-planner';
 import type { SummaryMutationDocument, SummaryMutationAction } from './mutation-types';
 import { applySummaryPatch } from './mutation-patch-utils';
+import { buildCompareKey, supportsCompareKey } from '../core/compare-key';
+import { resolveLedgerUpdateDecision } from '../core/ledger-update-rules';
+import { normalizeTaskTitle } from '../core/task-title-normalizer';
+import { normalizeTaskDescription } from '../core/task-description-normalizer';
 import {
     normalizeNarrativeValue,
     normalizeUserNarrativeText,
@@ -297,37 +301,51 @@ async function buildEntryUpsert(
     sourceLabel?: string,
     userDisplayName: string = '你',
 ): Promise<SummaryEntryUpsert | null> {
-    const existing = recordId ? await dependencies.getEntry(recordId) : null;
-    const summaryAppend = String(payload.summaryAppend ?? '').trim();
-    const summary = String(payload.summary ?? '').trim();
-    const payloadSummary = summary || summaryAppend;
-    const title = normalizeUserNarrativeText(String(payload.title ?? existing?.title ?? '').trim() || '未命名条目', userDisplayName);
-    const entryType = String(payload.schemaId ?? targetSchemaId ?? existing?.entryType ?? 'other').trim() || 'other';
-    const tags = dedupeStrings([
-        ...(existing?.tags ?? []),
-        ...(Array.isArray(payload.tags) ? (payload.tags as string[]) : []),
-    ]);
-    const detailPayload = normalizeNarrativeValue(mergeDetailPayload(existing?.detailPayload ?? {}, payload), userDisplayName);
-
-    return {
-        entryId: existing?.entryId,
-        title,
-        entryType,
-        category: existing?.category,
-        tags,
-        summary: normalizeUserNarrativeText(payloadSummary || existing?.summary || existing?.detail || title, userDisplayName),
-        detail: (() => {
-            const detail = String(payload.detail ?? existing?.detail ?? '').trim();
-            return detail ? normalizeUserNarrativeText(detail, userDisplayName) : undefined;
-        })(),
-        detailPayload,
-        actionType: actionType ?? (existing ? 'UPDATE' : 'ADD'),
-        reasonCodes: dedupeStrings([
-            ...reasonCodes,
-            ...toStringArray(payload.reasonCodes),
-        ]),
-        sourceLabel,
-    };
+    {
+        const existing = recordId ? await dependencies.getEntry(recordId) : null;
+        const entryType = String(payload.schemaId ?? targetSchemaId ?? existing?.entryType ?? 'other').trim() || 'other';
+        const mergedPayload = mergeDetailPayload(existing?.detailPayload ?? {}, payload);
+        const detailPayload = buildNormalizedEntryDetailPayload(entryType, mergedPayload, existing, userDisplayName);
+        const title = buildNormalizedEntryTitle(entryType, payload, existing, detailPayload, userDisplayName);
+        const summary = buildNormalizedEntrySummary(entryType, payload, existing, detailPayload, title, userDisplayName);
+        const detail = (() => {
+            const value = String(payload.detail ?? existing?.detail ?? '').trim();
+            return value ? normalizeUserNarrativeText(value, userDisplayName) : undefined;
+        })();
+        const ledgerDecision = resolveLedgerUpdateDecision({
+            entryType,
+            title,
+            fields: normalizeRecord(detailPayload.fields),
+            existing: existing ? {
+                entryId: existing.entryId,
+                title: existing.title,
+                compareKey: String(normalizeRecord(existing.detailPayload).compareKey ?? '').trim(),
+                aliases: toStringArray(normalizeRecord(existing.detailPayload).aliases),
+            } : null,
+            sourceBatchId: String(normalizeRecord(detailPayload.takeover).sourceBatchId ?? '').trim() || undefined,
+        });
+        return {
+            entryId: existing?.entryId,
+            title,
+            entryType,
+            category: existing?.category,
+            tags: dedupeStrings([
+                ...(existing?.tags ?? []),
+                ...(Array.isArray(payload.tags) ? (payload.tags as string[]) : []),
+                ...(entryType === 'task' ? ['任务'] : []),
+            ]),
+            summary,
+            detail,
+            detailPayload,
+            actionType: actionType ?? (ledgerDecision.action === 'NOOP' ? (existing ? 'UPDATE' : 'ADD') : ledgerDecision.action),
+            reasonCodes: dedupeStrings([
+                ...reasonCodes,
+                ...toStringArray(payload.reasonCodes),
+                ...ledgerDecision.reasonCodes,
+            ]),
+            sourceLabel,
+        };
+    }
 }
 
 /**
@@ -445,4 +463,129 @@ function resolveSupersededByHint(input: {
         ?? takeoverPayload.supersededBy
         ?? '',
     ).trim();
+}
+
+/**
+ * 功能：构建归一化标题，任务会自动补齐稳定标题。
+ * @param entryType 条目类型。
+ * @param payload 当前补丁。
+ * @param existing 已有条目。
+ * @param detailPayload 合并后的结构化载荷。
+ * @param userDisplayName 当前叙事用户名。
+ * @returns 最终标题。
+ */
+function buildNormalizedEntryTitle(
+    entryType: string,
+    payload: Record<string, unknown>,
+    existing: MemoryEntry | null,
+    detailPayload: Record<string, unknown>,
+    userDisplayName: string,
+): string {
+    if (entryType === 'task') {
+        const fields = normalizeRecord(detailPayload.fields);
+        return normalizeUserNarrativeText(normalizeTaskTitle({
+            title: String(payload.title ?? existing?.title ?? '').trim(),
+            objective: String(fields.objective ?? detailPayload.objective ?? '').trim(),
+            action: String(fields.action ?? detailPayload.action ?? '').trim(),
+            target: String(fields.target ?? detailPayload.target ?? '').trim(),
+            location: String(fields.location ?? detailPayload.location ?? '').trim(),
+            compareKey: String(detailPayload.compareKey ?? fields.compareKey ?? '').trim(),
+        }), userDisplayName);
+    }
+    return normalizeUserNarrativeText(
+        String(payload.title ?? existing?.title ?? '').trim() || '未命名条目',
+        userDisplayName,
+    );
+}
+
+/**
+ * 功能：构建归一化摘要，任务会生成一句话描述。
+ * @param entryType 条目类型。
+ * @param payload 当前补丁。
+ * @param existing 已有条目。
+ * @param detailPayload 合并后的结构化载荷。
+ * @param title 最终标题。
+ * @param userDisplayName 当前叙事用户名。
+ * @returns 最终摘要。
+ */
+function buildNormalizedEntrySummary(
+    entryType: string,
+    payload: Record<string, unknown>,
+    existing: MemoryEntry | null,
+    detailPayload: Record<string, unknown>,
+    title: string,
+    userDisplayName: string,
+): string {
+    const summaryAppend = String(payload.summaryAppend ?? '').trim();
+    const explicitSummary = String(payload.summary ?? '').trim();
+    if (entryType === 'task') {
+        const fields = normalizeRecord(detailPayload.fields);
+        return normalizeUserNarrativeText(normalizeTaskDescription({
+            title,
+            summary: explicitSummary || summaryAppend || existing?.summary,
+            objective: String(fields.objective ?? detailPayload.objective ?? '').trim(),
+            status: String(fields.status ?? detailPayload.status ?? '').trim(),
+            stage: String(fields.stage ?? detailPayload.stage ?? '').trim(),
+            blocker: String(fields.blocker ?? detailPayload.blocker ?? '').trim(),
+            location: String(fields.location ?? detailPayload.location ?? '').trim(),
+            lastChange: String(fields.lastChange ?? detailPayload.lastChange ?? '').trim(),
+        }), userDisplayName);
+    }
+    return normalizeUserNarrativeText(
+        explicitSummary || summaryAppend || existing?.summary || existing?.detail || title,
+        userDisplayName,
+    );
+}
+
+/**
+ * 功能：补齐结构化载荷中的 compareKey、卡片信息和绑定信息。
+ * @param entryType 条目类型。
+ * @param payload 合并后的载荷。
+ * @param existing 已有条目。
+ * @param userDisplayName 当前叙事用户名。
+ * @returns 归一化后的结构化载荷。
+ */
+function buildNormalizedEntryDetailPayload(
+    entryType: string,
+    payload: Record<string, unknown>,
+    existing: MemoryEntry | null,
+    userDisplayName: string,
+): Record<string, unknown> {
+    const fields = normalizeRecord(payload.fields);
+    const titleSeed = String(payload.title ?? existing?.title ?? '').trim();
+    const compareKey = supportsCompareKey(entryType)
+        ? buildCompareKey(entryType, titleSeed, fields)
+        : String(payload.compareKey ?? normalizeRecord(existing?.detailPayload).compareKey ?? '').trim();
+    return normalizeNarrativeValue({
+        ...payload,
+        compareKey,
+        fields: {
+            ...fields,
+            ...(compareKey ? { compareKey } : {}),
+        },
+        card: {
+            title: String(payload.title ?? existing?.title ?? '').trim(),
+            summary: String(payload.summary ?? existing?.summary ?? '').trim(),
+            entryType,
+        },
+        bindings: normalizeBindingsPayload(payload.bindings),
+    }, userDisplayName);
+}
+
+/**
+ * 功能：归一化绑定信息，避免不同链路写入不同结构。
+ * @param value 原始绑定数据。
+ * @returns 归一化后的绑定信息。
+ */
+function normalizeBindingsPayload(value: unknown): Record<string, unknown> {
+    const payload = normalizeRecord(value);
+    return {
+        actors: dedupeStrings(toStringArray(payload.actors)),
+        organizations: dedupeStrings(toStringArray(payload.organizations)),
+        cities: dedupeStrings(toStringArray(payload.cities)),
+        locations: dedupeStrings(toStringArray(payload.locations)),
+        nations: dedupeStrings(toStringArray(payload.nations)),
+        tasks: dedupeStrings(toStringArray(payload.tasks)),
+        events: dedupeStrings(toStringArray(payload.events)),
+    };
 }
