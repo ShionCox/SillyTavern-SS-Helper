@@ -1,4 +1,8 @@
 import { getCurrentTavernUserNameEvent } from '../../../SDK/tavern';
+import {
+    renderNarrativeReferenceText,
+    type NarrativeReferenceRendererContext,
+} from './narrative-reference-renderer';
 
 const STRUCTURED_SKIP_KEYS = new Set<string>([
     'actorKey',
@@ -44,11 +48,12 @@ export function normalizeUserNarrativeText(text: string, userDisplayName: string
         return source;
     }
     const displayName = resolveCurrentNarrativeUserName(userDisplayName);
-    return source
+    const normalized = source
         .replace(/当前用户/g, displayName)
         .replace(/该用户/g, displayName)
         .replace(/主角/g, displayName)
         .replace(/用户(?!名)/g, displayName);
+    return renderNarrativeReferenceText(normalized, buildNarrativeReferenceRendererContext(displayName));
 }
 
 /**
@@ -111,4 +116,17 @@ function normalizeNarrativeUserName(value: unknown): string {
         return '';
     }
     return normalized;
+}
+
+/**
+ * 功能：构建仅包含用户名的叙事引用渲染上下文。
+ * @param userDisplayName 当前用户名。
+ * @returns 引用渲染上下文。
+ */
+function buildNarrativeReferenceRendererContext(userDisplayName: string): NarrativeReferenceRendererContext {
+    return {
+        userDisplayName,
+        labelMap: new Map<string, string>([['user', userDisplayName]]),
+        aliasToLabelMap: new Map<string, string>(),
+    };
 }

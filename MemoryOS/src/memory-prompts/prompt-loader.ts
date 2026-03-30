@@ -299,20 +299,29 @@ function enrichPromptPackSections(sections: PromptPackSections): PromptPackSecti
         TAKEOVER_CONFLICT_RESOLUTION_SCHEMA: takeoverConflictSchema,
         TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE: takeoverConflictSample,
         COLD_START_SYSTEM: appendPromptRules(appendPromptRule(
-            sections.COLD_START_SYSTEM,
-            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+            appendPromptRule(
+                sections.COLD_START_SYSTEM,
+                '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，所有自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+            ),
+            '自然语言字段如需引用角色、地点、任务、事件，请优先使用 `{{actor:char_xxx}}`、`{{location:xxx}}`、`{{task:xxx}}`、`{{event:xxx}}` 这类 typed placeholder；结构化锚点字段继续保留原始 key。',
         ), COLD_START_COMMON_RULES),
         SUMMARY_PLANNER_SYSTEM: appendPromptRules(appendPromptRule(
             sections.SUMMARY_PLANNER_SYSTEM,
             '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，reasons、topics 及其他自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
         ), SUMMARY_COMMON_RULES),
         SUMMARY_SYSTEM: appendPromptRules(appendPromptRule(
-            sections.SUMMARY_SYSTEM,
-            '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，title、summary、detail、state 及其他自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+            appendPromptRule(
+                sections.SUMMARY_SYSTEM,
+                '已知当前用户自然语言称呼为 `{{userDisplayName}}` 时，title、summary、detail、state 及其他自然语言字段都应优先使用该称呼，不要写成“用户”或“主角”；结构化锚点继续使用 `user`。',
+            ),
+            '自然语言字段如需引用角色、地点、任务、事件，请优先使用 `{{actor:char_xxx}}`、`{{location:xxx}}`、`{{task:xxx}}`、`{{event:xxx}}` 这类 typed placeholder；结构化锚点字段继续保留原始 key。',
         ), SUMMARY_COMMON_RULES),
         TAKEOVER_BATCH_SYSTEM: appendPromptRules(appendPromptRule(
-            sections.TAKEOVER_BATCH_SYSTEM,
-            '如果已知当前用户自然语言称呼为 `{{userDisplayName}}`，自然语言描述请优先使用该称呼；结构化 target、actorKey、participants 仍继续使用 `user` 作为稳定锚点。',
+            appendPromptRule(
+                sections.TAKEOVER_BATCH_SYSTEM,
+                '如果已知当前用户自然语言称呼为 `{{userDisplayName}}`，自然语言描述请优先使用该称呼；结构化 target、actorKey、participants 仍继续使用 `user` 作为稳定锚点。',
+            ),
+            '自然语言字段中不要直接写 `char_xxx`、`location:xxx`、`task:xxx`、`event:xxx` 这类内部 key；如需稳定引用，请使用 `{{actor:char_xxx}}`、`{{location:xxx}}`、`{{task:xxx}}`、`{{event:xxx}}`。',
         ), TAKEOVER_BATCH_COMMON_RULES),
         COLD_START_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.COLD_START_OUTPUT_SAMPLE),
         SUMMARY_PLANNER_OUTPUT_SAMPLE: replacePromptSampleUserNarrative(sections.SUMMARY_PLANNER_OUTPUT_SAMPLE),

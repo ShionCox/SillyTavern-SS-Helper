@@ -41,7 +41,7 @@ export function buildEntriesViewMarkup(
     dynamicFields: string,
 ): string {
     const bindingRows = buildEntryBindingRows(snapshot, selectedEntry);
-    const inspectorSections = selectedEntry ? buildInspectorSections(selectedEntry) : [];
+    const inspectorSections = selectedEntry ? buildInspectorSections(selectedEntry, snapshot) : [];
     const inspectorMarkup = selectedEntry
         ? inspectorSections.map((section: InspectorSection): string => renderInspectorSection(section)).join('')
         : '<div class="stx-memory-workbench__empty">保存条目后，这里会显示结构化事实、绑定关系和调试信息。</div>';
@@ -176,11 +176,12 @@ function buildEntryBindingRows(snapshot: WorkbenchSnapshot, selectedEntry: Memor
  * @param entry 当前条目。
  * @returns 分组列表。
  */
-function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
+function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot): InspectorSection[] {
     const payload = toRecord(entry.detailPayload);
     const fields = toRecord(payload.fields);
     const bindings = toRecord(payload.bindings);
     const sections: InspectorSection[] = [];
+    const actorMap = new Map(snapshot.actors.map((actor: ActorMemoryProfile): [string, string] => [actor.actorKey, actor.displayName]));
 
     if (entry.entryType === 'task') {
         sections.push({
@@ -216,15 +217,19 @@ function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
     }
 
     if (entry.entryType === 'relationship') {
+        const sourceActorKey = String(payload.sourceActorKey ?? fields.sourceActorKey ?? '').trim();
+        const targetActorKey = String(payload.targetActorKey ?? fields.targetActorKey ?? '').trim();
         sections.push({
             title: '关系事实',
             rows: [
-                { label: '源角色', value: payload.sourceActorKey ?? fields.sourceActorKey },
-                { label: '目标角色', value: payload.targetActorKey ?? fields.targetActorKey },
+                { label: '源角色', value: resolveRelationshipActorLabel(sourceActorKey, actorMap, payload, fields, 'source') },
+                { label: '目标角色', value: resolveRelationshipActorLabel(targetActorKey, actorMap, payload, fields, 'target') },
                 { label: '关系标签', value: fields.relationTag },
                 { label: '关系现状', value: payload.state ?? fields.state },
                 { label: '未解冲突', value: payload.unresolvedConflict ?? fields.unresolvedConflict },
                 { label: '关键节点', value: payload.milestones ?? fields.milestones },
+                { label: '源角色键', value: sourceActorKey || '暂无' },
+                { label: '目标角色键', value: targetActorKey || '暂无' },
             ],
         });
     }
@@ -264,6 +269,40 @@ function buildInspectorSections(entry: MemoryEntry): InspectorSection[] {
     });
 
     return sections;
+}
+
+/**
+ * 功能：解析关系条目里的角色显示名，避免在检视面板直接暴露内部 key。
+ * @param actorKey 角色键。
+ * @param actorMap 当前角色显示名映射。
+ * @param payload 条目 payload。
+ * @param fields 条目 fields。
+ * @param side 关系端点方向。
+ * @returns 可展示的角色名。
+ */
+function resolveRelationshipActorLabel(
+    actorKey: string,
+    actorMap: Map<string, string>,
+    payload: Record<string, unknown>,
+    fields: Record<string, unknown>,
+    side: 'source' | 'target',
+): string {
+    const explicitDisplayName = String(payload[`${side}DisplayName`] ?? fields[`${side}DisplayName`] ?? '').trim();
+    if (explicitDisplayName) {
+        return explicitDisplayName;
+    }
+    if (actorKey === 'user') {
+        return actorMap.get('user') || '你';
+    }
+    if (!actorKey) {
+        return '未命名角色';
+    }
+    const fallbackLabel = actorKey
+        .replace(/^char_+/i, '')
+        .replace(/^actor_+/i, '')
+        .replace(/_/g, ' ')
+        .trim();
+    return actorMap.get(actorKey) || fallbackLabel || '未命名角色';
 }
 
 /**

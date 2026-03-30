@@ -7,6 +7,8 @@ import type {
     MemoryTakeoverEntityTransition,
     MemoryTakeoverRelationshipCard,
     MemoryTakeoverRange,
+    MemoryTakeoverRelationTransition,
+    MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
 } from '../types';
@@ -198,6 +200,96 @@ function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): 
         });
     }
     return result;
+}
+
+/**
+ * 功能：归一化稳定事实列表，补齐 compareKey、标题与绑定信息。
+ * @param facts 原始稳定事实列表。
+ * @returns 归一化后的稳定事实列表。
+ */
+function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact[] {
+    const result: MemoryTakeoverStableFact[] = [];
+    const seen = new Set<string>();
+    for (const fact of facts) {
+        const type = String(fact.type ?? '').trim().toLowerCase();
+        const subject = String(fact.subject ?? '').trim();
+        const predicate = String(fact.predicate ?? '').trim();
+        const value = String(fact.value ?? '').trim();
+        if (!type || !subject || !predicate || !value) {
+            continue;
+        }
+        const compareKey = String(fact.compareKey ?? '').trim() || `${type}:${subject}`.replace(/\s+/g, '');
+        const factKey = `${type}::${subject}::${predicate}::${value}`;
+        if (seen.has(factKey)) {
+            continue;
+        }
+        seen.add(factKey);
+        result.push({
+            type,
+            subject,
+            predicate,
+            value,
+            confidence: clamp01(Number(fact.confidence)),
+            title: String(fact.title ?? '').trim() || undefined,
+            summary: String(fact.summary ?? '').trim() || undefined,
+            compareKey,
+            bindings: normalizeBindings(fact.bindings),
+            status: String(fact.status ?? '').trim() || undefined,
+            importance: Number.isFinite(Number(fact.importance)) ? clamp01(Number(fact.importance)) : undefined,
+            reasonCodes: normalizeStringList(fact.reasonCodes ?? [], 12),
+        });
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化关系变化列表，补齐绑定与原因码。
+ * @param transitions 原始关系变化列表。
+ * @returns 归一化后的关系变化列表。
+ */
+function normalizeRelationTransitions(transitions: MemoryTakeoverRelationTransition[]): MemoryTakeoverRelationTransition[] {
+    const result: MemoryTakeoverRelationTransition[] = [];
+    const seen = new Set<string>();
+    for (const transition of transitions) {
+        const target = String(transition.target ?? '').trim();
+        const from = String(transition.from ?? '').trim();
+        const to = String(transition.to ?? '').trim();
+        const reason = String(transition.reason ?? '').trim();
+        if (!target || !to || !reason) {
+            continue;
+        }
+        const uniqueKey = `${String(transition.targetType ?? 'unknown').trim()}::${target}::${from}::${to}`;
+        if (seen.has(uniqueKey)) {
+            continue;
+        }
+        seen.add(uniqueKey);
+        result.push({
+            target,
+            from,
+            to,
+            reason,
+            relationTag: normalizeRelationTag(transition.relationTag),
+            targetType: normalizeRelationTargetType(transition.targetType),
+            bindings: normalizeBindings(transition.bindings),
+            reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
+        });
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化关系目标类型。
+ * @param value 原始目标类型。
+ * @returns 合法目标类型。
+ */
+function normalizeRelationTargetType(
+    value: MemoryTakeoverRelationTransition['targetType'],
+): MemoryTakeoverRelationTransition['targetType'] {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'actor' || normalized === 'organization' || normalized === 'city' || normalized === 'nation' || normalized === 'location') {
+        return normalized;
+    }
+    return 'unknown';
 }
 
 /**
@@ -657,6 +749,8 @@ export async function runTakeoverBatch(input: {
             relationships: normalizeRelationshipCards(structured.relationships ?? []),
             entityCards: normalizeEntityCards(structured.entityCards ?? []),
             entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
+            stableFacts: normalizeStableFacts(structured.stableFacts ?? []),
+            relationTransitions: normalizeRelationTransitions(structured.relationTransitions ?? []),
             taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? []),
             worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? []),
             takeoverId: input.batch.takeoverId,

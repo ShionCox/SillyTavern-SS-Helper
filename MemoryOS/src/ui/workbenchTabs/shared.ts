@@ -14,6 +14,7 @@ import type {
     WorldProfileBinding,
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
+import type { MemoryGraphMode } from './shared/memoryGraphTypes';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
@@ -83,9 +84,10 @@ export interface WorkbenchState {
     actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
     actorTagFilter: string;
     selectedGraphNodeId: string;
+    selectedGraphEdgeId: string;
     memoryGraphQuery: string;
     memoryGraphFilterType: string;
-    memoryGraphMode: string;
+    memoryGraphMode: MemoryGraphMode;
     takeoverMode: string;
     takeoverRangeStart: string;
     takeoverRangeEnd: string;

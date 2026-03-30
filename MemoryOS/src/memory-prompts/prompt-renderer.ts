@@ -11,7 +11,7 @@ export type PromptRenderVariables = Record<string, unknown>;
  */
 export function renderPromptTemplate(template: string, variables: PromptRenderVariables = {}): string {
     const source = String(template ?? '');
-    return source.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_matched: string, key: string): string => {
+    return source.replace(/\{\{\s*([a-zA-Z0-9_.:-]+)\s*\}\}/g, (_matched: string, key: string): string => {
         return stringifyPromptVariable(resolvePromptVariable(variables, key));
     });
 }

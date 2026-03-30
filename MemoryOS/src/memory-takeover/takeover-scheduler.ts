@@ -237,6 +237,7 @@ export async function buildProgressSnapshot(chatKey: string, plan?: MemoryTakeov
     const currentPlan = plan ?? await readMemoryTakeoverPlan(chatKey);
     const batchMetas = await loadMemoryTakeoverBatchMetas(chatKey);
     const preview = await loadMemoryTakeoverPreview(chatKey);
+    const batchResults = await loadMemoryTakeoverBatchResults(chatKey);
     const currentBatch = batchMetas
         .slice()
         .sort((left, right) => (right.finishedAt ?? right.startedAt ?? 0) - (left.finishedAt ?? left.startedAt ?? 0))
@@ -249,5 +250,6 @@ export async function buildProgressSnapshot(chatKey: string, plan?: MemoryTakeov
         activeSnapshot: preview.activeSnapshot,
         latestBatchResult: preview.latestBatch,
         consolidation: preview.consolidation,
+        batchResults,
     };
 }

@@ -1,7 +1,7 @@
 /**
  * 功能：图谱显示模式。
  */
-export type MemoryGraphMode = 'compact' | 'semantic' | 'debug';
+export type MemoryGraphMode = 'semantic' | 'debug';
 
 /**
  * 功能：边强度等级。
@@ -9,28 +9,51 @@ export type MemoryGraphMode = 'compact' | 'semantic' | 'debug';
 export type EdgeStrengthLevel = 'strong' | 'normal' | 'weak';
 
 /**
+ * 功能：图谱详情字段。
+ */
+export interface WorkbenchMemoryGraphField {
+    label: string;
+    value: string;
+    visibleInModes?: MemoryGraphMode[];
+}
+
+/**
+ * 功能：图谱节点详情区块。
+ */
+export interface WorkbenchMemoryGraphSection {
+    title: string;
+    fields: WorkbenchMemoryGraphField[];
+    visibleInModes?: MemoryGraphMode[];
+}
+
+/**
  * 功能：工作台记忆图节点。
  */
 export interface WorkbenchMemoryGraphNode {
     id: string;
-    entryId: string;
+    key: string;
     label: string;
     type: string;
-    category?: string;
-    memoryPercent: number;
-    importance?: number;
-    tags?: string[];
     summary?: string;
-    detail?: string;
-    updatedAt?: number;
-    x: number;
-    y: number;
     semanticSummary?: string;
     debugSummary?: string;
     compareKey?: string;
-    sourceBatchIds?: string[];
-    reasonCodes?: string[];
-    bindings?: Record<string, unknown>;
+    status?: string;
+    importance: number;
+    memoryPercent: number;
+    aliases: string[];
+    sourceBatchIds: string[];
+    sourceKinds: string[];
+    sourceRefs: string[];
+    reasonCodes: string[];
+    bindings: Record<string, string[]>;
+    placeholder?: boolean;
+    hydrationState?: 'partial' | 'full';
+    visibleInModes?: MemoryGraphMode[];
+    sections: WorkbenchMemoryGraphSection[];
+    rawData: Record<string, unknown>;
+    x: number;
+    y: number;
 }
 
 /**
@@ -40,18 +63,21 @@ export interface WorkbenchMemoryGraphEdge {
     id: string;
     source: string;
     target: string;
-    edgeType: string;
-    weight: number;
-    reasons?: string[];
-    strengthLevel?: EdgeStrengthLevel;
-    visibleInModes?: MemoryGraphMode[];
-    semanticLabel?: string;
+    relationType: string;
+    label: string;
+    semanticLabel: string;
     debugSummary?: string;
-    sourceKinds?: string[];
-    sourceBatchIds?: string[];
-    reasonCodes?: string[];
-    confidence?: number;
-    status?: 'active' | 'inactive';
+    confidence: number;
+    weight: number;
+    strengthLevel: EdgeStrengthLevel;
+    status: 'active' | 'inactive';
+    visibleInModes: MemoryGraphMode[];
+    sourceKinds: string[];
+    sourceRefs: string[];
+    sourceBatchIds: string[];
+    reasonCodes: string[];
+    sections: WorkbenchMemoryGraphSection[];
+    rawData: Record<string, unknown>;
 }
 
 /**
@@ -66,23 +92,16 @@ export interface WorkbenchMemoryGraph {
  * 功能：记忆图节点颜色映射。
  */
 export const MEMORY_GRAPH_TYPE_COLORS: Record<string, string> = {
-    world_core_setting: '#d4a017',
-    world_hard_rule: '#c89211',
-    world_global_state: '#e3b341',
-    world_hard_rule_legacy: '#b68612',
-    scene_shared_state: '#06b6d4',
-    location: '#14b8a6',
-    relationship: '#f472b6',
-    actor_profile: '#ec4899',
-    event: '#f97316',
-    actor_visible_event: '#fb923c',
-    actor_private_interpretation: '#a855f7',
-    nation: '#84cc16',
-    city: '#38bdf8',
+    actor: '#f97316',
     organization: '#22c55e',
-    item: '#94a3b8',
+    city: '#38bdf8',
+    nation: '#84cc16',
+    location: '#14b8a6',
     task: '#f59e0b',
-    other: '#64748b',
+    event: '#fb7185',
+    world_state: '#eab308',
+    placeholder: '#64748b',
+    other: '#94a3b8',
 };
 
 /**
@@ -100,7 +119,7 @@ export interface MemoryGraphLegendItem {
  * @returns 颜色值。
  */
 export function getMemoryGraphNodeColor(entryType: string): string {
-    return MEMORY_GRAPH_TYPE_COLORS[entryType] ?? '#94a3b8';
+    return MEMORY_GRAPH_TYPE_COLORS[entryType] ?? MEMORY_GRAPH_TYPE_COLORS.other;
 }
 
 /**
@@ -109,14 +128,15 @@ export function getMemoryGraphNodeColor(entryType: string): string {
  */
 export function buildMemoryGraphLegendItems(): MemoryGraphLegendItem[] {
     return [
-        { type: 'actor_profile', label: '角色', color: getMemoryGraphNodeColor('actor_profile') },
-        { type: 'relationship', label: '关系', color: getMemoryGraphNodeColor('relationship') },
+        { type: 'actor', label: '角色', color: getMemoryGraphNodeColor('actor') },
         { type: 'organization', label: '组织', color: getMemoryGraphNodeColor('organization') },
+        { type: 'city', label: '城市', color: getMemoryGraphNodeColor('city') },
+        { type: 'nation', label: '国家', color: getMemoryGraphNodeColor('nation') },
         { type: 'location', label: '地点', color: getMemoryGraphNodeColor('location') },
-        { type: 'event', label: '事件', color: getMemoryGraphNodeColor('event') },
         { type: 'task', label: '任务', color: getMemoryGraphNodeColor('task') },
-        { type: 'world_core_setting', label: '世界设定', color: getMemoryGraphNodeColor('world_core_setting') },
-        { type: 'other', label: '其他', color: getMemoryGraphNodeColor('other') },
+        { type: 'event', label: '事件', color: getMemoryGraphNodeColor('event') },
+        { type: 'world_state', label: '世界状态', color: getMemoryGraphNodeColor('world_state') },
+        { type: 'placeholder', label: '占位节点', color: getMemoryGraphNodeColor('placeholder') },
     ];
 }
 
@@ -129,28 +149,21 @@ export function buildMemoryGraphLegendItems(): MemoryGraphLegendItem[] {
 export function computeMemoryGraphNodeSize(importance: number, memoryPercent: number): number {
     const imp = Math.max(0, Math.min(1, Number(importance) || 0));
     const mp = Math.max(0, Math.min(1, (Number(memoryPercent) || 0) / 100));
-    return 12 + 20 * ((0.6 * imp) + (0.4 * mp));
+    return 14 + (22 * ((0.65 * imp) + (0.35 * mp)));
 }
 
 /**
  * 功能：记忆图类型中文标签。
  */
 export const MEMORY_GRAPH_TYPE_LABELS: Record<string, string> = {
-    world_core_setting: '世界设定',
-    world_hard_rule: '世界规则',
-    world_global_state: '世界状态',
-    world_hard_rule_legacy: '旧版规则',
-    scene_shared_state: '场景共享',
-    location: '地点',
-    relationship: '关系',
-    actor_profile: '角色画像',
-    event: '事件',
-    actor_visible_event: '可见事件',
-    actor_private_interpretation: '主观理解',
-    nation: '国家',
-    city: '城市',
+    actor: '角色',
     organization: '组织',
-    item: '物品',
+    city: '城市',
+    nation: '国家',
+    location: '地点',
     task: '任务',
+    event: '事件',
+    world_state: '世界状态',
+    placeholder: '占位节点',
     other: '其他',
 };

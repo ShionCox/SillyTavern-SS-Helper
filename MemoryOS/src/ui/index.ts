@@ -337,7 +337,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
  * 功能：读取表单中的设置。
  * @returns 设置对象。
  */
-function readSettingsFromForm(): MemoryOSSettings {
+function readSettingsFromForm(): Partial<MemoryOSSettings> {
     const checked = (id: string, fallback: boolean): boolean => (document.getElementById(id) as HTMLInputElement | null)?.checked ?? fallback;
     const text = (id: string, fallback: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value ?? fallback;
     return {

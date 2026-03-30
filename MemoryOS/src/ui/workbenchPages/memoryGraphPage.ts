@@ -1,9 +1,18 @@
 import { escapeHtml } from '../editorShared';
-import { resolveEntryTypeLabel } from '../workbenchLocale';
 import type { WorkbenchSnapshot, WorkbenchState } from '../workbenchTabs/shared';
-import { escapeAttr, truncateText, formatTimestamp, formatDisplayValue } from '../workbenchTabs/shared';
-import type { WorkbenchMemoryGraph, WorkbenchMemoryGraphNode, MemoryGraphMode } from '../workbenchTabs/shared/memoryGraphTypes';
-import { buildMemoryGraphLegendItems, getMemoryGraphNodeColor, MEMORY_GRAPH_TYPE_LABELS } from '../workbenchTabs/shared/memoryGraphTypes';
+import { escapeAttr } from '../workbenchTabs/shared';
+import type {
+    MemoryGraphMode,
+    WorkbenchMemoryGraph,
+    WorkbenchMemoryGraphEdge,
+    WorkbenchMemoryGraphNode,
+    WorkbenchMemoryGraphSection,
+} from '../workbenchTabs/shared/memoryGraphTypes';
+import {
+    buildMemoryGraphLegendItems,
+    getMemoryGraphNodeColor,
+    MEMORY_GRAPH_TYPE_LABELS,
+} from '../workbenchTabs/shared/memoryGraphTypes';
 import {
     createMemoryGraphPixiRenderer,
     filterMemoryGraphData,
@@ -15,6 +24,7 @@ import {
  */
 export interface MemoryGraphPageState {
     selectedGraphNodeId?: string;
+    selectedGraphEdgeId?: string;
     memoryGraphQuery?: string;
     memoryGraphFilterType?: string;
     graphMode?: MemoryGraphMode;
@@ -38,7 +48,6 @@ const GRAPH_CONTAINER_ID = 'stx-memory-graph-container';
 const GRAPH_DETAIL_ID = 'stx-memory-graph-detail';
 const GRAPH_FILTER_ID = 'stx-memory-graph-filter-type';
 const GRAPH_QUERY_ID = 'stx-memory-graph-query';
-
 let activeController: MemoryGraphPageController | null = null;
 
 /**
@@ -60,42 +69,43 @@ export function buildMemoryGraphPageMarkup(
     const selectedNode = graphState.selectedGraphNodeId
         ? snapshot.memoryGraph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === graphState.selectedGraphNodeId) ?? null
         : null;
-    const nodeCount = snapshot.memoryGraph.nodes.length;
-    const edgeCount = snapshot.memoryGraph.edges.length;
+    const selectedEdge = graphState.selectedGraphEdgeId
+        ? snapshot.memoryGraph.edges.find((edge: WorkbenchMemoryGraphEdge): boolean => edge.id === graphState.selectedGraphEdgeId) ?? null
+        : null;
+    const visibleGraph = filterMemoryGraphData(snapshot.memoryGraph, {
+        filterType: graphState.memoryGraphFilterType || undefined,
+        searchQuery: graphState.memoryGraphQuery || undefined,
+        graphMode: currentMode,
+    });
     const detailHtml = selectedNode
-        ? buildNodeDetailPanel(selectedNode, snapshot, snapshot.memoryGraph, currentMode)
-        : buildEmptyDetailPanel();
-    const typeCounts = buildTypeCountMap(snapshot.memoryGraph);
+        ? buildNodeDetailPanel(selectedNode, currentMode)
+        : selectedEdge
+            ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, currentMode)
+            : buildEmptyDetailPanel();
+    const typeCounts = buildTypeCountMap(snapshot.memoryGraph, currentMode);
     const typeOptions = [...typeCounts.entries()]
         .sort((left, right): number => right[1] - left[1])
         .map(([type, count]): string => {
-            const label = MEMORY_GRAPH_TYPE_LABELS[type] ?? resolveEntryTypeLabel(type);
-            return `<option value="${escapeAttr(type)}"${graphState.memoryGraphFilterType === type ? ' selected' : ''}>${escapeHtml(label)} (${count})</option>`;
-        })
-        .join('');
-    const legendHtml = buildMemoryGraphLegendItems()
-        .map((item) => {
-            return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;">`
-                + `<span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span>`
-                + `<span style="font-size:11px;opacity:0.72;">${item.label}</span>`
-                + '</span>';
+            return `<option value="${escapeAttr(type)}"${graphState.memoryGraphFilterType === type ? ' selected' : ''}>${escapeHtml(resolveTypeLabel(type))} (${count})</option>`;
         })
         .join('');
     const modeButtons = ([
-        { mode: 'compact' as MemoryGraphMode, label: '简洁' },
         { mode: 'semantic' as MemoryGraphMode, label: '语义' },
         { mode: 'debug' as MemoryGraphMode, label: '调试' },
     ]).map(({ mode, label }): string => {
         const active = currentMode === mode;
         return `<button type="button" data-graph-mode="${mode}" style="font-size:11px;padding:2px 8px;border-radius:4px;background:${active ? 'rgba(96,165,250,0.22)' : 'rgba(255,255,255,0.06)'};border:${active ? '1px solid rgba(96,165,250,0.42)' : '1px solid rgba(255,255,255,0.1)'};color:${active ? '#93c5fd' : 'rgba(255,255,255,0.66)'};cursor:pointer;font-family:inherit;">${label}</button>`;
     }).join('');
+    const legendHtml = buildMemoryGraphLegendItems()
+        .map((item) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;"><span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span><span style="font-size:11px;opacity:0.72;">${item.label}</span></span>`)
+        .join('');
 
     return `
         <section class="stx-memory-workbench__view is-active" data-view="memory-graph">
             <div style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
                 <div style="display:flex;align-items:center;gap:16px;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;flex-wrap:wrap;">
-                    <span style="font-size:12px;opacity:0.6;">节点 <strong>${nodeCount}</strong></span>
-                    <span style="font-size:12px;opacity:0.6;">连接 <strong>${edgeCount}</strong></span>
+                    <span style="font-size:12px;opacity:0.6;">节点 <strong>${visibleGraph.nodes.length}</strong></span>
+                    <span style="font-size:12px;opacity:0.6;">连接 <strong>${visibleGraph.edges.length}</strong></span>
                     <select id="${GRAPH_FILTER_ID}" class="stx-memory-workbench__select" style="max-width:170px;font-size:12px;">
                         <option value="">全部类型</option>
                         ${typeOptions}
@@ -106,7 +116,7 @@ export function buildMemoryGraphPageMarkup(
                 </div>
                 <div style="position:relative;flex:1;overflow:hidden;background:transparent;">
                     <div id="${GRAPH_CONTAINER_ID}" style="position:absolute;inset:0;cursor:grab;"></div>
-                    <div id="${GRAPH_DETAIL_ID}" style="position:absolute;top:16px;right:16px;width:320px;max-height:calc(100% - 32px);overflow-y:auto;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;">
+                    <div id="${GRAPH_DETAIL_ID}" style="position:absolute;top:16px;right:16px;width:340px;max-height:calc(100% - 32px);overflow-y:auto;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;">
                         ${detailHtml}
                     </div>
                 </div>
@@ -150,92 +160,27 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
     let queryTimer: number | null = null;
 
     /**
-     * 功能：获取当前图谱模式。
-     * @returns 图谱模式。
-     */
-    function getGraphMode(): MemoryGraphMode {
-        return resolveGraphMode(state.memoryGraphMode);
-    }
-
-    /**
-     * 功能：获取当前选中节点。
-     * @returns 节点或空值。
-     */
-    function getSelectedNode(): WorkbenchMemoryGraphNode | null {
-        if (!state.selectedGraphNodeId) {
-            return null;
-        }
-        return snapshot.memoryGraph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === state.selectedGraphNodeId) ?? null;
-    }
-
-    /**
-     * 功能：同步模式按钮状态。
-     */
-    function syncModeButtons(): void {
-        const currentMode = getGraphMode();
-        modeButtons.forEach((button: HTMLElement): void => {
-            const active = currentMode === resolveGraphMode(button.dataset.graphMode);
-            button.style.background = active ? 'rgba(96,165,250,0.22)' : 'rgba(255,255,255,0.06)';
-            button.style.border = active ? '1px solid rgba(96,165,250,0.42)' : '1px solid rgba(255,255,255,0.1)';
-            button.style.color = active ? '#93c5fd' : 'rgba(255,255,255,0.66)';
-        });
-    }
-
-    /**
      * 功能：同步详情面板。
      */
     function syncDetailPanel(): void {
         if (!detailContainer) {
             return;
         }
-        const selectedNode = getSelectedNode();
+        const selectedNode = snapshot.memoryGraph.nodes.find((node) => node.id === state.selectedGraphNodeId) ?? null;
+        const selectedEdge = snapshot.memoryGraph.edges.find((edge) => edge.id === state.selectedGraphEdgeId) ?? null;
         detailContainer.innerHTML = selectedNode
-            ? buildNodeDetailPanel(selectedNode, snapshot, snapshot.memoryGraph, getGraphMode())
-            : buildEmptyDetailPanel();
+            ? buildNodeDetailPanel(selectedNode, state.memoryGraphMode)
+            : selectedEdge
+                ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, state.memoryGraphMode)
+                : buildEmptyDetailPanel();
         detailContainer.querySelectorAll<HTMLElement>('[data-memory-graph-select-node]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
-                selectNode(String(button.dataset.nodeId ?? '').trim(), String(button.dataset.entryId ?? '').trim(), true);
+                state.selectedGraphNodeId = String(button.dataset.nodeId ?? '').trim();
+                state.selectedGraphEdgeId = '';
+                syncDetailPanel();
+                renderer?.setSelectedNode(state.selectedGraphNodeId, { focus: true });
             });
         });
-        detailContainer.querySelectorAll<HTMLElement>('[data-memory-graph-jump-entry]').forEach((button: HTMLElement): void => {
-            button.addEventListener('click', (): void => {
-                const entryId = String(button.dataset.entryId ?? '').trim();
-                if (!entryId) {
-                    return;
-                }
-                state.selectedEntryId = entryId;
-                state.currentView = 'entries';
-                onRequestRender();
-            });
-        });
-    }
-
-    /**
-     * 功能：确保选中节点在可见结果中。
-     */
-    function normalizeSelectedNode(): void {
-        const filtered = filterMemoryGraphData(snapshot.memoryGraph, {
-            filterType: state.memoryGraphFilterType || undefined,
-            searchQuery: state.memoryGraphQuery || undefined,
-            graphMode: getGraphMode(),
-        });
-        const visibleIds = new Set(filtered.nodes.map((node: WorkbenchMemoryGraphNode): string => node.id));
-        if (state.selectedGraphNodeId && !visibleIds.has(state.selectedGraphNodeId)) {
-            state.selectedGraphNodeId = '';
-        }
-    }
-
-    /**
-     * 功能：设置当前选中节点。
-     * @param nodeId 节点 ID。
-     * @param entryId 条目 ID。
-     * @param focus 是否聚焦。
-     */
-    function selectNode(nodeId: string, entryId: string, focus: boolean): void {
-        state.selectedGraphNodeId = nodeId;
-        state.selectedEntryId = entryId;
-        syncDetailPanel();
-        renderer?.setSelectedNode(nodeId, { focus });
     }
 
     /**
@@ -245,21 +190,30 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
         if (!graphContainer) {
             return;
         }
-        normalizeSelectedNode();
-        syncModeButtons();
-        syncDetailPanel();
         const token = ++rendererToken;
         renderer?.destroy();
         renderer = null;
         void createMemoryGraphPixiRenderer(graphContainer, snapshot.memoryGraph, {
             selectedNodeId: state.selectedGraphNodeId || undefined,
+            selectedEdgeId: state.selectedGraphEdgeId || undefined,
             filterType: state.memoryGraphFilterType || undefined,
             searchQuery: state.memoryGraphQuery || undefined,
-            graphMode: getGraphMode(),
-            onSelectNode: (nodeId: string, entryId: string): void => {
-                if (!destroyed) {
-                    selectNode(nodeId, entryId, false);
+            graphMode: state.memoryGraphMode,
+            onSelectNode: (nodeId: string): void => {
+                if (destroyed) {
+                    return;
                 }
+                state.selectedGraphNodeId = nodeId;
+                state.selectedGraphEdgeId = '';
+                syncDetailPanel();
+            },
+            onSelectEdge: (edgeId: string): void => {
+                if (destroyed) {
+                    return;
+                }
+                state.selectedGraphNodeId = '';
+                state.selectedGraphEdgeId = edgeId;
+                syncDetailPanel();
             },
         }).then((controller: MemoryGraphPixiController): void => {
             if (destroyed || token !== rendererToken) {
@@ -272,7 +226,10 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
 
     filterElement?.addEventListener('change', (): void => {
         state.memoryGraphFilterType = String(filterElement.value ?? '').trim();
+        state.selectedGraphNodeId = '';
+        state.selectedGraphEdgeId = '';
         remountRenderer();
+        syncDetailPanel();
     });
     queryElement?.addEventListener('input', (): void => {
         if (queryTimer !== null) {
@@ -280,26 +237,22 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
         }
         queryTimer = window.setTimeout((): void => {
             state.memoryGraphQuery = String(queryElement.value ?? '').trim();
+            state.selectedGraphNodeId = '';
+            state.selectedGraphEdgeId = '';
             queryTimer = null;
             remountRenderer();
+            syncDetailPanel();
         }, 220);
-    });
-    queryElement?.addEventListener('blur', (): void => {
-        if (queryTimer !== null) {
-            window.clearTimeout(queryTimer);
-            queryTimer = null;
-        }
-        state.memoryGraphQuery = String(queryElement.value ?? '').trim();
-        remountRenderer();
     });
     modeButtons.forEach((button: HTMLElement): void => {
         button.addEventListener('click', (): void => {
             state.memoryGraphMode = resolveGraphMode(button.dataset.graphMode);
-            remountRenderer();
+            state.selectedGraphNodeId = '';
+            state.selectedGraphEdgeId = '';
+            onRequestRender();
         });
     });
 
-    syncModeButtons();
     syncDetailPanel();
     remountRenderer();
 
@@ -316,269 +269,108 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
 }
 
 /**
- * 功能：构建类型统计映射。
- * @param memoryGraph 图谱数据。
- * @returns 统计映射。
- */
-function buildTypeCountMap(memoryGraph: WorkbenchMemoryGraph): Map<string, number> {
-    const typeCounts = new Map<string, number>();
-    memoryGraph.nodes.forEach((node: WorkbenchMemoryGraphNode): void => {
-        typeCounts.set(node.type, (typeCounts.get(node.type) ?? 0) + 1);
-    });
-    return typeCounts;
-}
-
-const EDGE_TYPE_LABELS: Record<string, string> = {
-    role_binding: '角色绑定',
-    participant: '参与',
-    belongs_to_organization: '隶属组织',
-    located_in_city: '位于城市',
-    located_in_nation: '位于国家',
-    occurs_at_location: '发生地点',
-    relates_to_task: '关联任务',
-    relates_to_event: '关联事件',
-};
-
-/**
  * 功能：构建节点详情面板。
  * @param node 当前节点。
- * @param snapshot 工作台快照。
- * @param graph 图谱数据。
  * @param graphMode 图谱模式。
  * @returns 详情 HTML。
  */
-function buildNodeDetailPanel(
-    node: WorkbenchMemoryGraphNode,
-    snapshot: WorkbenchSnapshot,
-    graph: WorkbenchMemoryGraph,
-    graphMode: MemoryGraphMode,
-): string {
+function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graphMode: MemoryGraphMode): string {
     const color = getMemoryGraphNodeColor(node.type);
-    const typeLabel = MEMORY_GRAPH_TYPE_LABELS[node.type] ?? resolveEntryTypeLabel(node.type);
-    const memoryPercent = Math.round(node.memoryPercent ?? 0);
-    const importancePercent = Math.round((node.importance ?? 0) * 100);
-    const entry = snapshot.entries.find((item) => item.entryId === node.entryId);
-    const payloadSummary = entry?.detailPayload ? formatDisplayValue(entry.detailPayload) : '暂无';
     const summary = graphMode === 'debug'
-        ? (node.debugSummary || payloadSummary)
-        : (node.semanticSummary || node.summary || node.detail || '暂无');
-    const tagsMarkup = (node.tags ?? [])
-        .map((tag: string): string => `<span style="display:inline-block;padding:1px 6px;border-radius:4px;background:rgba(255,255,255,0.08);font-size:11px;margin:2px;">${escapeHtml(tag)}</span>`)
-        .join('');
-
+        ? (node.debugSummary || node.summary || '暂无')
+        : (node.semanticSummary || node.summary || '暂无');
+    const metaHtml = graphMode === 'debug'
+        ? renderMetaBlock([
+            ['compareKey', node.compareKey || '暂无'],
+            ['来源批次', node.sourceBatchIds.join('、') || '暂无'],
+            ['sourceKinds', node.sourceKinds.join('、') || '暂无'],
+            ['reasonCodes', node.reasonCodes.join('、') || '暂无'],
+        ])
+        : '';
     return `
         <div style="margin-bottom:12px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                 <span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0;"></span>
                 <strong style="font-size:15px;">${escapeHtml(node.label)}</strong>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                <span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${color}22;color:${color};border:1px solid ${color}44;">${escapeHtml(typeLabel)}</span>
-                ${node.category ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.06);">${escapeHtml(node.category)}</span>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${color}22;color:${color};border:1px solid ${color}44;">${escapeHtml(resolveTypeLabel(node.type))}</span>
+                ${node.status ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.06);">${escapeHtml(node.status)}</span>` : ''}
+                ${node.placeholder ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(239,68,68,0.15);color:#fca5a5;border:1px solid rgba(239,68,68,0.2);">未解析</span>` : ''}
             </div>
         </div>
-        ${buildProgressBlock('记忆度', memoryPercent, color)}
-        ${buildProgressBlock('重要度', importancePercent, '#60a5fa')}
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">${graphMode === 'debug' ? '调试摘要' : '语义摘要'}</div>
-            <div style="font-size:12px;line-height:1.6;opacity:0.86;">${escapeHtml(summary)}</div>
-        </div>
-        ${node.detail ? `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">详情</div>
-            <div style="font-size:12px;line-height:1.6;opacity:0.76;max-height:120px;overflow-y:auto;">${escapeHtml(truncateText(node.detail, 320))}</div>
-        </div>` : ''}
-        ${tagsMarkup ? `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">标签</div>
-            <div>${tagsMarkup}</div>
-        </div>` : ''}
-        ${buildNodeBindingsSection(node.bindings, graphMode)}
-        ${graphMode === 'debug' ? buildNodeDebugSection(node, payloadSummary) : ''}
-        ${graphMode !== 'debug' ? `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">结构化摘要</div>
-            <div style="font-size:12px;line-height:1.55;opacity:0.68;">${escapeHtml(truncateText(payloadSummary, 220))}</div>
-        </div>` : ''}
-        ${node.updatedAt ? `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">更新时间</div>
-            <div style="font-size:12px;opacity:0.72;">${formatTimestamp(node.updatedAt)}</div>
-        </div>` : ''}
-        <div style="margin-top:16px;">
-            <button class="stx-memory-workbench__btn stx-memory-workbench__btn--primary" data-memory-graph-jump-entry="true" data-entry-id="${escapeAttr(node.entryId)}" style="width:100%;font-size:12px;color:#fff;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.2);padding:8px;border-radius:4px;cursor:pointer;">
-                <i class="fa-solid fa-arrow-right"></i> 跳转到条目中心
-            </button>
-        </div>
-        ${buildConnectedNodesSection(node, graph, graphMode)}
+        <div style="margin-bottom:12px;font-size:12px;line-height:1.6;opacity:0.86;">${escapeHtml(summary)}</div>
+        ${metaHtml}
+        ${renderSections(node.sections, graphMode)}
     `;
 }
 
 /**
- * 功能：渲染进度块。
- * @param label 标签。
- * @param percent 百分比。
- * @param color 颜色。
- * @returns HTML。
- */
-function buildProgressBlock(label: string, percent: number, color: string): string {
-    return `
-        <div style="margin-bottom:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">${escapeHtml(label)}</div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <div style="flex:1;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
-                    <div style="width:${percent}%;height:100%;background:${color};border-radius:3px;"></div>
-                </div>
-                <span style="font-size:12px;font-weight:600;">${percent}%</span>
-            </div>
-        </div>
-    `;
-}
-
-/**
- * 功能：渲染节点绑定关系区块。
- * @param bindings 绑定信息。
- * @param graphMode 图谱模式。
- * @returns HTML。
- */
-function buildNodeBindingsSection(bindings: Record<string, unknown> | undefined, graphMode: MemoryGraphMode): string {
-    if (!bindings) {
-        return '';
-    }
-    const rows = Object.entries(bindings)
-        .filter(([, value]: [string, unknown]): boolean => Array.isArray(value) && value.length > 0)
-        .map(([key, value]: [string, unknown]): string => {
-            return `
-                <div style="margin-bottom:8px;">
-                    <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">${escapeHtml(graphMode === 'debug' ? key : resolveBindingLabel(key))}</div>
-                    <div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(formatDisplayValue(value))}</div>
-                </div>
-            `;
-        })
-        .join('');
-    if (!rows) {
-        return '';
-    }
-    return `<div style="margin-bottom:12px;">${rows}</div>`;
-}
-
-/**
- * 功能：渲染节点调试信息区块。
- * @param node 节点。
- * @param payloadSummary 原始结构化摘要。
- * @returns HTML。
- */
-function buildNodeDebugSection(node: WorkbenchMemoryGraphNode, payloadSummary: string): string {
-    const parts: string[] = [];
-    if (node.compareKey) {
-        parts.push(`
-            <div style="margin-bottom:8px;">
-                <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">compareKey</div>
-                <div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(node.compareKey)}</div>
-            </div>
-        `);
-    }
-    if (node.reasonCodes?.length) {
-        parts.push(`
-            <div style="margin-bottom:8px;">
-                <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">原因码</div>
-                <div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(node.reasonCodes.join(' | '))}</div>
-            </div>
-        `);
-    }
-    if (node.sourceBatchIds?.length) {
-        parts.push(`
-            <div style="margin-bottom:8px;">
-                <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">来源批次</div>
-                <div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(node.sourceBatchIds.join(' | '))}</div>
-            </div>
-        `);
-    }
-    parts.push(`
-        <div style="margin-bottom:8px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">原始结构化数据</div>
-            <div style="font-size:12px;line-height:1.55;opacity:0.68;">${escapeHtml(truncateText(payloadSummary, 420))}</div>
-        </div>
-    `);
-    return `<div style="margin-bottom:12px;">${parts.join('')}</div>`;
-}
-
-/**
- * 功能：构建节点连接区块。
- * @param node 当前节点。
+ * 功能：构建边详情面板。
+ * @param edge 当前边。
  * @param graph 图谱数据。
  * @param graphMode 图谱模式。
+ * @returns 详情 HTML。
+ */
+function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): string {
+    const sourceNode = graph.nodes.find((node) => node.id === edge.source);
+    const targetNode = graph.nodes.find((node) => node.id === edge.target);
+    const label = graphMode === 'debug' ? edge.relationType : edge.semanticLabel;
+    const metaHtml = graphMode === 'debug'
+        ? renderMetaBlock([
+            ['relationType', edge.relationType],
+            ['confidence', String(edge.confidence)],
+            ['sourceBatchIds', edge.sourceBatchIds.join('、') || '暂无'],
+            ['sourceKinds', edge.sourceKinds.join('、') || '暂无'],
+            ['reasonCodes', edge.reasonCodes.join('、') || '暂无'],
+        ])
+        : '';
+    return `
+        <div style="margin-bottom:12px;">
+            <div style="font-size:11px;opacity:0.5;margin-bottom:4px;">当前选中</div>
+            <strong style="font-size:15px;">${escapeHtml(label)}</strong>
+            <div style="font-size:12px;opacity:0.75;margin-top:6px;">${escapeHtml(sourceNode?.label ?? edge.source)} -> ${escapeHtml(targetNode?.label ?? edge.target)}</div>
+        </div>
+        ${metaHtml}
+        ${renderSections(edge.sections, graphMode)}
+    `;
+}
+
+/**
+ * 功能：渲染简单元信息块。
+ * @param rows 行数据。
  * @returns HTML。
  */
-function buildConnectedNodesSection(node: WorkbenchMemoryGraphNode, graph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): string {
-    const nodeMap = new Map(graph.nodes.map((item: WorkbenchMemoryGraphNode): [string, WorkbenchMemoryGraphNode] => [item.id, item]));
-    const connectedItems = graph.edges
-        .map((edge) => {
-            const peerId = edge.source === node.id
-                ? edge.target
-                : edge.target === node.id
-                    ? edge.source
-                    : '';
-            if (!peerId) {
-                return null;
-            }
-            const peerNode = nodeMap.get(peerId);
-            if (!peerNode) {
-                return null;
-            }
-            return {
-                edge,
-                targetNode: peerNode,
-            };
-        })
-        .filter((item): item is { edge: WorkbenchMemoryGraph['edges'][number]; targetNode: WorkbenchMemoryGraphNode } => item !== null)
-        .sort((left, right): number => (right.edge.weight ?? 0) - (left.edge.weight ?? 0));
+function renderMetaBlock(rows: Array<[string, string]>): string {
+    const html = rows
+        .filter(([, value]: [string, string]): boolean => Boolean(String(value ?? '').trim()))
+        .map(([label, value]: [string, string]) => `<div style="margin-bottom:8px;"><div style="font-size:11px;opacity:0.5;margin-bottom:4px;">${escapeHtml(label)}</div><div style="font-size:12px;line-height:1.55;opacity:0.78;">${escapeHtml(value)}</div></div>`)
+        .join('');
+    return html ? `<div style="margin-bottom:12px;">${html}</div>` : '';
+}
 
-    if (connectedItems.length <= 0) {
-        return `
-            <div style="margin-top:16px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <div style="font-size:11px;opacity:0.5;margin-bottom:6px;">关联节点</div>
-                <div style="font-size:12px;opacity:0.4;">暂无关联节点</div>
+/**
+ * 功能：渲染详情区块。
+ * @param sections 详情区块。
+ * @returns HTML。
+ */
+function renderSections(sections: WorkbenchMemoryGraphSection[], graphMode: MemoryGraphMode): string {
+    return sections
+        .filter((section: WorkbenchMemoryGraphSection): boolean => isVisibleInMode(section.visibleInModes, graphMode))
+        .map((section: WorkbenchMemoryGraphSection) => {
+            const visibleFields = section.fields.filter((field) => isVisibleInMode(field.visibleInModes, graphMode));
+            if (visibleFields.length <= 0) {
+                return '';
+            }
+            return `
+            <div style="margin-bottom:12px;">
+                <div style="font-size:11px;opacity:0.5;margin-bottom:6px;">${escapeHtml(section.title)}</div>
+                ${visibleFields.map((field) => `<div style="margin-bottom:8px;"><div style="font-size:11px;opacity:0.58;margin-bottom:2px;">${escapeHtml(field.label)}</div><div style="font-size:12px;line-height:1.55;opacity:0.82;">${escapeHtml(field.value)}</div></div>`).join('')}
             </div>
         `;
-    }
-
-    const itemsHtml = connectedItems.map(({ edge, targetNode }) => {
-        const peerColor = getMemoryGraphNodeColor(targetNode.type);
-        const peerTypeLabel = MEMORY_GRAPH_TYPE_LABELS[targetNode.type] ?? resolveEntryTypeLabel(targetNode.type);
-        const edgeLabel = graphMode === 'debug'
-            ? (edge.edgeType || 'unknown')
-            : (edge.semanticLabel || EDGE_TYPE_LABELS[edge.edgeType] || resolveEntryTypeLabel(edge.edgeType));
-        const summary = targetNode.summary ? escapeHtml(truncateText(targetNode.summary, 64)) : '';
-        const reasons = graphMode === 'debug'
-            ? [
-                edge.debugSummary,
-                ...(edge.reasonCodes ?? []),
-                ...((edge.sourceKinds ?? []).map((item: string): string => `source:${item}`)),
-            ].filter(Boolean)
-            : (edge.reasons ?? []);
-        return `
-            <button type="button" data-memory-graph-select-node="true" data-node-id="${escapeAttr(targetNode.id)}" data-entry-id="${escapeAttr(targetNode.entryId)}" style="display:flex;align-items:flex-start;gap:8px;width:100%;padding:8px;margin-bottom:4px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.03);cursor:pointer;text-align:left;transition:all 0.2s;font-family:inherit;color:inherit;">
-                <span style="width:10px;height:10px;border-radius:50%;background:${peerColor};flex-shrink:0;margin-top:3px;box-shadow:0 0 6px ${peerColor};"></span>
-                <div style="flex:1;min-width:0;">
-                    <div style="font-size:12px;font-weight:500;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(targetNode.label)}</div>
-                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:2px;">
-                        <span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${peerColor}22;color:${peerColor};border:1px solid ${peerColor}33;">${escapeHtml(peerTypeLabel)}</span>
-                        <span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.2);">${escapeHtml(edgeLabel)}</span>
-                    </div>
-                    ${summary ? `<div style="font-size:11px;opacity:0.6;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${summary}</div>` : ''}
-                    ${reasons.length > 0 ? `<div style="font-size:10px;opacity:0.5;margin-top:2px;line-height:1.3;">${reasons.map((item: string): string => escapeHtml(item)).join(graphMode === 'debug' ? ' | ' : ' / ')}</div>` : ''}
-                </div>
-            </button>
-        `;
-    }).join('');
-
-    return `
-        <div style="margin-top:16px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-            <div style="font-size:11px;opacity:0.5;margin-bottom:8px;">关联节点 <span style="opacity:0.8;">(${connectedItems.length})</span></div>
-            <div style="max-height:240px;overflow-y:auto;">${itemsHtml}</div>
-        </div>
-    `;
+        })
+        .filter(Boolean)
+        .join('');
 }
 
 /**
@@ -589,9 +381,25 @@ function buildEmptyDetailPanel(): string {
     return `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;opacity:0.42;">
             <i class="fa-solid fa-circle-nodes" style="font-size:36px;margin-bottom:12px;"></i>
-            <div style="font-size:13px;">点击图中的节点查看记忆详情</div>
+            <div style="font-size:13px;">点击节点查看语义详情，点击连线查看关系来源</div>
         </div>
     `;
+}
+
+/**
+ * 功能：构建类型统计映射。
+ * @param memoryGraph 图谱数据。
+ * @returns 统计映射。
+ */
+function buildTypeCountMap(memoryGraph: WorkbenchMemoryGraph, graphMode: MemoryGraphMode): Map<string, number> {
+    const result = new Map<string, number>();
+    memoryGraph.nodes.forEach((node: WorkbenchMemoryGraphNode): void => {
+        if (Array.isArray(node.visibleInModes) && node.visibleInModes.length > 0 && !node.visibleInModes.includes(graphMode)) {
+            return;
+        }
+        result.set(node.type, (result.get(node.type) ?? 0) + 1);
+    });
+    return result;
 }
 
 /**
@@ -600,27 +408,24 @@ function buildEmptyDetailPanel(): string {
  * @returns 合法模式。
  */
 function resolveGraphMode(value: unknown): MemoryGraphMode {
-    const normalized = String(value ?? '').trim();
-    if (normalized === 'semantic' || normalized === 'debug') {
-        return normalized;
-    }
-    return 'compact';
+    return String(value ?? '').trim() === 'debug' ? 'debug' : 'semantic';
 }
 
 /**
- * 功能：解析绑定字段标签。
- * @param key 字段名。
- * @returns 展示标签。
+ * 功能：解析图节点类型标签。
+ * @param type 类型键。
+ * @returns 中文标签。
  */
-function resolveBindingLabel(key: string): string {
-    const labels: Record<string, string> = {
-        actors: '关联角色',
-        organizations: '关联组织',
-        cities: '关联城市',
-        locations: '关联地点',
-        nations: '关联国家',
-        tasks: '关联任务',
-        events: '关联事件',
-    };
-    return labels[key] ?? key;
+function resolveTypeLabel(type: string): string {
+    return MEMORY_GRAPH_TYPE_LABELS[type] ?? type;
+}
+
+/**
+ * 功能：判断详情区块或字段是否应在当前模式显示。
+ * @param visibleInModes 可见模式列表。
+ * @param graphMode 当前图谱模式。
+ * @returns 是否可见。
+ */
+function isVisibleInMode(visibleInModes: MemoryGraphMode[] | undefined, graphMode: MemoryGraphMode): boolean {
+    return !Array.isArray(visibleInModes) || visibleInModes.length <= 0 || visibleInModes.includes(graphMode);
 }

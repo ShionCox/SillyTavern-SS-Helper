@@ -25,6 +25,7 @@ export type {
     MemoryTakeoverRange,
     MemoryTakeoverPlan,
     MemoryTakeoverBatch,
+    MemoryTakeoverBindings,
     MemoryTakeoverStableFact,
     MemoryTakeoverRelationTransition,
     MemoryTakeoverTaskTransition,

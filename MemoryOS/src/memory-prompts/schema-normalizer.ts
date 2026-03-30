@@ -265,6 +265,13 @@ function buildStableFactArraySchema(): Record<string, unknown> {
                 predicate: { type: 'string' },
                 value: { type: 'string' },
                 confidence: { type: 'number' },
+                title: { type: 'string' },
+                summary: { type: 'string' },
+                compareKey: { type: 'string' },
+                bindings: buildBindingsSchema(),
+                status: { type: 'string' },
+                importance: { type: 'number' },
+                reasonCodes: buildStringArraySchema(),
             },
         },
     };
@@ -634,7 +641,7 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['target', 'from', 'to', 'reason', 'relationTag', 'targetType', 'reasonCodes'],
+                    required: ['target', 'from', 'to', 'reason', 'relationTag', 'targetType', 'bindings', 'reasonCodes'],
                     additionalProperties: false,
                     properties: {
                         target: { type: 'string' },
@@ -643,6 +650,7 @@ function buildTakeoverBatchSchema(): Record<string, unknown> {
                         reason: { type: 'string' },
                         relationTag: { type: 'string' },
                         targetType: { type: 'string', enum: ['actor', 'organization', 'city', 'nation', 'location', 'unknown'] },
+                        bindings: buildBindingsSchema(),
                         reasonCodes: buildStringArraySchema(),
                     },
                 },

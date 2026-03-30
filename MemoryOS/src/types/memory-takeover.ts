@@ -74,6 +74,13 @@ export interface MemoryTakeoverStableFact {
     predicate: string;
     value: string;
     confidence: number;
+    title?: string;
+    summary?: string;
+    compareKey?: string;
+    bindings?: MemoryTakeoverBindings;
+    status?: string;
+    importance?: number;
+    reasonCodes?: string[];
 }
 
 /**
@@ -99,6 +106,8 @@ export interface MemoryTakeoverRelationTransition {
     reason: string;
     relationTag?: string;
     targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
+    bindings?: MemoryTakeoverBindings;
+    reasonCodes?: string[];
 }
 
 /**
@@ -305,6 +314,7 @@ export interface MemoryTakeoverProgressSnapshot {
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     latestBatchResult: MemoryTakeoverBatchResult | null;
     consolidation: MemoryTakeoverConsolidationResult | null;
+    batchResults: MemoryTakeoverBatchResult[];
 }
 
 /**

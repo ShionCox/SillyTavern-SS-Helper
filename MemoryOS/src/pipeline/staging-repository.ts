@@ -14,7 +14,7 @@ export interface StagingRepository<T> {
  * @template T staging 快照类型。
  * @returns repository 实例。
  */
-export function createInMemoryStagingRepository<T extends Record<string, unknown>>(): StagingRepository<T> {
+export function createInMemoryStagingRepository<T extends object>(): StagingRepository<T> {
     const store = new Map<string, T>();
     return {
         async save(runId: string, payload: T): Promise<void> {
@@ -51,9 +51,6 @@ function deepClone<T>(value: T): T {
  * @param patch 增量补丁。
  * @returns 合并后的快照。
  */
-function mergeRecord<T extends Record<string, unknown>>(current: T, patch: Partial<T>): T {
-    return {
-        ...deepClone(current),
-        ...deepClone(patch),
-    };
+function mergeRecord<T extends object>(current: T, patch: Partial<T>): T {
+    return Object.assign({}, deepClone(current), deepClone(patch)) as T;
 }

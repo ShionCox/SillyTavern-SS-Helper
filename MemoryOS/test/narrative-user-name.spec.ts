@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderNarrativeReferenceText } from '../src/utils/narrative-reference-renderer';
 
 async function loadNarrativeUserNameModule(mockedUserName: string) {
     vi.resetModules();
@@ -51,5 +52,35 @@ describe('narrative user name helpers', () => {
     it('会把主角和用户统一替换成当前显示名', async () => {
         const { normalizeUserNarrativeText } = await loadNarrativeUserNameModule('林远');
         expect(normalizeUserNarrativeText('主角提醒她不要再怀疑用户', '林远')).toBe('林远提醒她不要再怀疑林远');
+    });
+
+    it('会把 typed placeholder 渲染为自然语言引用', () => {
+        const rendered = renderNarrativeReferenceText(
+            '{{actor:char_heying}}在{{location:半山腰旧庙}}等待{{userDisplayName}}',
+            {
+                userDisplayName: '林远',
+                labelMap: new Map<string, string>([
+                    ['actor:char_heying', '何盈'],
+                    ['location:半山腰旧庙', '半山腰旧庙'],
+                ]),
+                aliasToLabelMap: new Map<string, string>(),
+            },
+        );
+        expect(rendered).toBe('何盈在半山腰旧庙等待林远');
+    });
+
+    it('会把泄漏到自然语言字段中的内部 key 渲染掉', () => {
+        const rendered = renderNarrativeReferenceText(
+            'char_heying仍在location:半山腰旧庙等用户',
+            {
+                userDisplayName: '林远',
+                labelMap: new Map<string, string>([
+                    ['char_heying', '何盈'],
+                    ['location:半山腰旧庙', '半山腰旧庙'],
+                ]),
+                aliasToLabelMap: new Map<string, string>(),
+            },
+        );
+        expect(rendered).toBe('何盈仍在半山腰旧庙等林远');
     });
 });

@@ -36,7 +36,9 @@ export interface MemoryGraphFilterOptions {
  */
 export interface MemoryGraphPixiRenderOptions extends MemoryGraphFilterOptions {
     selectedNodeId?: string;
-    onSelectNode?: (nodeId: string, entryId: string) => void;
+    selectedEdgeId?: string;
+    onSelectNode?: (nodeId: string) => void;
+    onSelectEdge?: (edgeId: string) => void;
 }
 
 /**
@@ -112,7 +114,13 @@ export function filterMemoryGraphData(
     data: WorkbenchMemoryGraph,
     options: MemoryGraphFilterOptions = {},
 ): FilteredMemoryGraphResult {
-    let nodes: WorkbenchMemoryGraphNode[] = data.nodes;
+    const graphMode = options.graphMode ?? 'semantic';
+    let nodes: WorkbenchMemoryGraphNode[] = data.nodes.filter((node: WorkbenchMemoryGraphNode): boolean => {
+        if (!node.visibleInModes || node.visibleInModes.length <= 0) {
+            return true;
+        }
+        return node.visibleInModes.includes(graphMode);
+    });
     if (options.filterType) {
         nodes = nodes.filter((node: WorkbenchMemoryGraphNode): boolean => node.type === options.filterType);
     }
@@ -121,11 +129,11 @@ export function filterMemoryGraphData(
         nodes = nodes.filter((node: WorkbenchMemoryGraphNode): boolean => {
             return node.label.toLowerCase().includes(query)
                 || String(node.summary ?? '').toLowerCase().includes(query)
-                || (node.tags ?? []).some((tag: string): boolean => tag.toLowerCase().includes(query));
+                || String(node.compareKey ?? '').toLowerCase().includes(query)
+                || (node.aliases ?? []).some((tag: string): boolean => tag.toLowerCase().includes(query));
         });
     }
     const visibleNodeIds = new Set(nodes.map((node: WorkbenchMemoryGraphNode): string => node.id));
-    const graphMode = options.graphMode ?? 'compact';
     const edges = data.edges.filter((edge: WorkbenchMemoryGraphEdge): boolean => {
         if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) {
             return false;
@@ -189,6 +197,7 @@ export async function createMemoryGraphPixiRenderer(
     const nodeMap = new Map(filtered.nodes.map((node: WorkbenchMemoryGraphNode): [string, WorkbenchMemoryGraphNode] => [node.id, node]));
     const flowState = { progress: 0, intensity: 0 };
     let selectedNodeId = options.selectedNodeId ?? '';
+    let selectedEdgeId = options.selectedEdgeId ?? '';
     let dragState: DragState | null = null;
     let suppressTapUntil = 0;
     let destroyed = false;
@@ -267,6 +276,7 @@ export async function createMemoryGraphPixiRenderer(
                 return;
             }
             selectedNodeId = node.id;
+            selectedEdgeId = '';
             focusNode(node.id, true);
             syncSelectionVisuals(
                 nodeSprites,
@@ -275,13 +285,14 @@ export async function createMemoryGraphPixiRenderer(
                 flowGraphics,
                 connectedNodeIds,
                 selectedNodeId,
+                selectedEdgeId,
                 camera.scale,
                 false,
                 flowState.progress,
                 flowState.intensity,
             );
             syncSelectionAnimation();
-            options.onSelectNode?.(node.id, node.entryId);
+            options.onSelectNode?.(node.id);
         });
         nodeLayer.addChild(root);
         nodeSprites.set(node.id, { node, root, pulseRing, glow, body, label });
@@ -356,11 +367,34 @@ export async function createMemoryGraphPixiRenderer(
      * 功能：处理背景点击取消选中。
      * @returns 无返回值。
      */
-    function handleBackgroundTap(): void {
+    function handleBackgroundTap(event: FederatedPointerEvent): void {
         if (performance.now() < suppressTapUntil) {
             return;
         }
+        const worldPoint = world.toLocal(event.global);
+        const edgeHit = findClosestEdge(edgeSprites, worldPoint.x, worldPoint.y, camera.scale);
+        if (edgeHit) {
+            selectedNodeId = '';
+            selectedEdgeId = edgeHit.edge.id;
+            syncSelectionVisuals(
+                nodeSprites,
+                edgeSprites,
+                edgeGraphics,
+                flowGraphics,
+                connectedNodeIds,
+                selectedNodeId,
+                selectedEdgeId,
+                camera.scale,
+                false,
+                flowState.progress,
+                flowState.intensity,
+            );
+            syncSelectionAnimation();
+            options.onSelectEdge?.(edgeHit.edge.id);
+            return;
+        }
         selectedNodeId = '';
+        selectedEdgeId = '';
         syncSelectionVisuals(
             nodeSprites,
             edgeSprites,
@@ -368,13 +402,15 @@ export async function createMemoryGraphPixiRenderer(
             flowGraphics,
             connectedNodeIds,
             selectedNodeId,
+            selectedEdgeId,
             camera.scale,
             false,
             flowState.progress,
             flowState.intensity,
         );
         syncSelectionAnimation();
-        options.onSelectNode?.('', '');
+        options.onSelectNode?.('');
+        options.onSelectEdge?.('');
     }
 
     /**
@@ -462,6 +498,7 @@ export async function createMemoryGraphPixiRenderer(
         flowGraphics,
         connectedNodeIds,
         selectedNodeId,
+        selectedEdgeId,
         camera.scale,
         false,
         flowState.progress,
@@ -602,6 +639,7 @@ export async function createMemoryGraphPixiRenderer(
         destroy,
         setSelectedNode(nodeId?: string, setOptions?: { focus?: boolean }): void {
             selectedNodeId = nodeId ?? '';
+            selectedEdgeId = '';
             if (setOptions?.focus && selectedNodeId) {
                 focusNode(selectedNodeId, true);
             }
@@ -612,6 +650,7 @@ export async function createMemoryGraphPixiRenderer(
                 flowGraphics,
                 connectedNodeIds,
                 selectedNodeId,
+                selectedEdgeId,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -707,6 +746,7 @@ function syncSelectionVisuals(
     flowGraphics: Graphics,
     connectedNodeIds: Set<string>,
     selectedNodeId: string,
+    selectedEdgeId: string,
     scale: number,
     isDragging: boolean,
     flowProgress: number,
@@ -720,17 +760,23 @@ function syncSelectionVisuals(
                 connectedNodeIds.add(sprite.targetId);
             }
         });
+    } else if (selectedEdgeId) {
+        const matchedEdge = edgeSprites.find((sprite: GraphEdgeSprite): boolean => sprite.edge.id === selectedEdgeId);
+        if (matchedEdge) {
+            connectedNodeIds.add(matchedEdge.sourceId);
+            connectedNodeIds.add(matchedEdge.targetId);
+        }
     }
 
     nodeSprites.forEach((sprite: GraphNodeSprite): void => {
         const isSelected = sprite.node.id === selectedNodeId;
         const isConnected = connectedNodeIds.has(sprite.node.id);
-        const dimmed = Boolean(selectedNodeId) && !isSelected && !isConnected;
+        const dimmed = (Boolean(selectedNodeId) || Boolean(selectedEdgeId)) && !isSelected && !isConnected;
         const showLabel = !isDragging && (scale >= 0.62 || isSelected || isConnected);
         drawNodeSprite(sprite, isSelected, dimmed, showLabel);
     });
 
-    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId);
+    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId);
     redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowProgress, flowIntensity);
 }
 
@@ -768,16 +814,17 @@ function redrawEdgeLayer(
     edgeGraphics: Graphics,
     edgeSprites: GraphEdgeSprite[],
     selectedNodeId: string,
+    selectedEdgeId: string,
 ): void {
     edgeGraphics.clear();
     edgeSprites.forEach((sprite: GraphEdgeSprite): void => {
-        const active = sprite.sourceId === selectedNodeId || sprite.targetId === selectedNodeId;
-        const alpha = !selectedNodeId
+        const active = sprite.edge.id === selectedEdgeId || sprite.sourceId === selectedNodeId || sprite.targetId === selectedNodeId;
+        const alpha = !selectedNodeId && !selectedEdgeId
             ? sprite.baseAlpha
             : active
                 ? Math.max(0.7, sprite.baseAlpha)
                 : 0.06;
-        const width = active ? 2.8 : 2.2;
+        const width = sprite.edge.id === selectedEdgeId ? 3.4 : active ? 2.8 : 2.2;
         drawGradientEdge(
             edgeGraphics,
             sprite.sourceNode,
@@ -848,7 +895,7 @@ function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: bo
     const borderWidth = isSelected ? 3.6 : 1.4;
     const labelColor = isSelected
         ? 0xffffff
-        : sprite.node.type === 'actor_profile'
+        : sprite.node.type === 'actor'
             ? 0xfcd34d
             : 0xdbe7ff;
 
@@ -860,7 +907,7 @@ function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: bo
     sprite.body.clear();
     if (isSelected) {
         sprite.pulseRing.alpha = 0.72;
-        if (sprite.node.type === 'actor_profile') {
+        if (sprite.node.type === 'actor') {
             sprite.pulseRing.poly([0, -radius - 12, radius + 12, 0, 0, radius + 12, -radius - 12, 0], true)
                 .stroke({ color: 0xffffff, alpha: 0.56, width: 2.2 });
         } else {
@@ -873,7 +920,7 @@ function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: bo
         sprite.root.scale.set(1, 1);
     }
 
-    if (sprite.node.type === 'actor_profile') {
+    if (sprite.node.type === 'actor') {
         if (isSelected) {
             sprite.glow.poly([0, -radius - 16, radius + 16, 0, 0, radius + 16, -radius - 16, 0], true)
                 .fill({ color: 0xffffff, alpha: 0.18 });
@@ -995,6 +1042,34 @@ function drawFlowFiber(
 }
 
 /**
+ * 功能：查找点击位置附近最接近的边。
+ * @param edgeSprites 边精灵列表。
+ * @param x 世界坐标横轴。
+ * @param y 世界坐标纵轴。
+ * @param scale 当前缩放。
+ * @returns 命中的边；未命中时返回空值。
+ */
+function findClosestEdge(
+    edgeSprites: GraphEdgeSprite[],
+    x: number,
+    y: number,
+    scale: number,
+): GraphEdgeSprite | null {
+    const threshold = Math.max(10, 18 / Math.max(scale, 0.25));
+    let best: GraphEdgeSprite | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const sprite of edgeSprites) {
+        const endpoints = resolveEdgeEndpoints(sprite.sourceNode, sprite.targetNode);
+        const distance = distanceToSegment(x, y, endpoints.x1, endpoints.y1, endpoints.x2, endpoints.y2);
+        if (distance <= threshold && distance < bestDistance) {
+            best = sprite;
+            bestDistance = distance;
+        }
+    }
+    return best;
+}
+
+/**
  * 功能：把颜色文本转换为 Pixi 可识别的数值颜色。
  * @param color 颜色字符串。
  * @returns 数值颜色。
@@ -1072,6 +1147,35 @@ function interpolatePoint(
         x: x1 + ((x2 - x1) * ratio),
         y: y1 + ((y2 - y1) * ratio),
     };
+}
+
+/**
+ * 功能：计算点到线段的最短距离。
+ * @param px 点横坐标。
+ * @param py 点纵坐标。
+ * @param x1 线段起点横坐标。
+ * @param y1 线段起点纵坐标。
+ * @param x2 线段终点横坐标。
+ * @param y2 线段终点纵坐标。
+ * @returns 最短距离。
+ */
+function distanceToSegment(
+    px: number,
+    py: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+): number {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    if (dx === 0 && dy === 0) {
+        return Math.hypot(px - x1, py - y1);
+    }
+    const t = clamp((((px - x1) * dx) + ((py - y1) * dy)) / ((dx * dx) + (dy * dy)), 0, 1);
+    const projectionX = x1 + (t * dx);
+    const projectionY = y1 + (t * dy);
+    return Math.hypot(px - projectionX, py - projectionY);
 }
 
 /**

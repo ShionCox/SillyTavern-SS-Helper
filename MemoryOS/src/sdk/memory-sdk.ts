@@ -57,11 +57,21 @@ import {
 } from '../db/db';
 import { readMemoryOSSettings } from '../settings/store';
 import { detectWorldProfile } from '../memory-world-profile';
+import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import {
+    buildNarrativeReferenceLookupKey,
+    renderNarrativeReferenceText,
+    stripNarrativeReferencePrefix,
+    type NarrativeReferenceRendererContext,
+} from '../utils/narrative-reference-renderer';
 import type {
     MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverBindings,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverCreateInput,
     MemoryTakeoverDetectionResult,
+    MemoryTakeoverEntityCardCandidate,
+    MemoryTakeoverEntityTransition,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
@@ -994,6 +1004,14 @@ export class MemorySDKImpl {
 
         const existingActorCards = await this.readTakeoverExistingActorCards();
         const existingKnownEntities = await this.readTakeoverExistingKnownEntities();
+        const narrativeContext = this.buildTakeoverNarrativeRendererContext({
+            actorCards: result.actorCards ?? [],
+            existingActorCards,
+            knownEntities: existingKnownEntities,
+            longTermFacts: result.longTermFacts ?? [],
+            taskState: result.taskState ?? [],
+            worldState: result.worldState ?? {},
+        });
 
         for (const entityCard of result.entityCards ?? []) {
             await this.persistTakeoverEntityCard(entityCard, result.takeoverId);
@@ -1004,20 +1022,43 @@ export class MemorySDKImpl {
         }
 
         for (const fact of result.longTermFacts) {
+            const factTitle = this.renderTakeoverNarrativeText(
+                String(fact.title ?? '').trim() || `${fact.subject} · ${fact.predicate}`,
+                narrativeContext,
+            );
+            const factSummary = this.renderTakeoverNarrativeText(
+                String(fact.summary ?? '').trim() || fact.value,
+                narrativeContext,
+            );
+            const factDetail = this.renderTakeoverNarrativeText(
+                `${fact.subject}${fact.predicate}${fact.value}`,
+                narrativeContext,
+            );
             const savedEntry = await this.unifiedManager.saveEntry({
-                title: `${fact.subject} · ${fact.predicate}`,
+                title: factTitle,
                 entryType: this.resolveTakeoverFactEntryType(fact.type),
                 category: this.resolveTakeoverFactCategory(fact.type),
                 tags: [fact.type].filter(Boolean),
-                summary: fact.value,
-                detail: `${fact.subject}${fact.predicate}${fact.value}`,
+                summary: factSummary,
+                detail: factDetail,
                 detailPayload: {
+                    compareKey: String(fact.compareKey ?? '').trim() || undefined,
+                    reasonCodes: this.normalizeStringArray(fact.reasonCodes ?? []),
+                    bindings: this.normalizeTakeoverBindingsPayload(fact.bindings),
+                    card: {
+                        title: factTitle,
+                        summary: factSummary,
+                        status: String(fact.status ?? '').trim() || undefined,
+                        importance: Number(fact.importance),
+                    },
                     fields: {
                         type: fact.type,
                         subject: fact.subject,
                         predicate: fact.predicate,
                         value: fact.value,
                         confidence: fact.confidence,
+                        status: String(fact.status ?? '').trim() || undefined,
+                        importance: Number(fact.importance),
                     },
                     takeover: {
                         source: 'old_chat_takeover',
@@ -1057,8 +1098,8 @@ export class MemorySDKImpl {
                 await this.persistTakeoverActorRelation({
                     actorKey: resolvedRelationActor.actorKey,
                     displayName: resolvedRelationActor.displayName,
-                    relationState: relation.state,
-                    relationReason: relation.reason,
+                    relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
+                    relationReason: this.renderTakeoverNarrativeText(relation.reason, narrativeContext),
                     relationTag,
                     takeoverId: result.takeoverId,
                 });
@@ -1075,8 +1116,8 @@ export class MemorySDKImpl {
                     entityKey: resolvedEntity.entityKey,
                     displayName: resolvedEntity.displayName,
                     entityType: resolvedEntity.entityType,
-                    relationState: relation.state,
-                    relationReason: relation.reason,
+                    relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
+                    relationReason: this.renderTakeoverNarrativeText(relation.reason, narrativeContext),
                     relationTag,
                     takeoverId: result.takeoverId,
                 });
@@ -1086,37 +1127,39 @@ export class MemorySDKImpl {
             if (!targetActorKey) {
                 continue;
             }
-            await this.persistTakeoverActorRelation({
-                actorKey: targetActorKey,
-                displayName: relation.target,
-                relationState: relation.state,
-                relationReason: relation.reason,
-                relationTag,
-                takeoverId: result.takeoverId,
-            });
-        }
+                await this.persistTakeoverActorRelation({
+                    actorKey: targetActorKey,
+                    displayName: this.resolveTakeoverActorDisplayName(targetActorKey, relation.target),
+                    relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
+                    relationReason: this.renderTakeoverNarrativeText(relation.reason, narrativeContext),
+                    relationTag,
+                    takeoverId: result.takeoverId,
+                });
+            }
 
         for (const task of result.taskState) {
+            const normalizedObjective = this.renderTakeoverNarrativeText(task.goal || task.task, narrativeContext);
+            const normalizedStatus = this.renderTakeoverNarrativeText(task.state, narrativeContext);
             const normalizedTitle = normalizeTaskTitle({
-                title: task.title || task.task,
-                objective: task.goal || task.task,
+                title: this.renderTakeoverNarrativeText(task.title || task.task, narrativeContext),
+                objective: normalizedObjective,
                 compareKey: task.compareKey || buildCompareKey('task', task.task, {}),
             });
             const taskDecision = resolveLedgerUpdateDecision({
                 entryType: 'task',
                 title: normalizedTitle,
                 fields: {
-                    objective: task.goal || task.task,
-                    status: task.state,
+                    objective: normalizedObjective,
+                    status: normalizedStatus,
                 },
                 sourceBatchId: result.takeoverId,
             });
             const taskSummary = normalizeTaskDescription({
                 title: normalizedTitle,
-                summary: task.summary,
-                objective: task.goal || task.task,
-                status: task.state,
-                lastChange: task.description,
+                summary: this.renderTakeoverNarrativeText(String(task.summary ?? ''), narrativeContext),
+                objective: normalizedObjective,
+                status: normalizedStatus,
+                lastChange: this.renderTakeoverNarrativeText(String(task.description ?? ''), narrativeContext),
             });
             const savedEntry = await this.unifiedManager.saveEntry({
                 title: normalizedTitle,
@@ -1124,7 +1167,7 @@ export class MemorySDKImpl {
                 category: '任务',
                 tags: ['任务', '旧聊天接管'],
                 summary: taskSummary,
-                detail: `任务当前状态：${task.state}`,
+                detail: this.renderTakeoverNarrativeText(`任务当前状态：${task.state}`, narrativeContext),
                 detailPayload: {
                     compareKey: taskDecision.compareKey,
                     reasonCodes: [...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
@@ -1141,14 +1184,14 @@ export class MemorySDKImpl {
                     card: {
                         title: normalizedTitle,
                         summary: taskSummary,
-                        objective: task.goal || task.task,
-                        status: task.state,
+                        objective: normalizedObjective,
+                        status: normalizedStatus,
                     },
                     fields: {
                         compareKey: taskDecision.compareKey,
-                        objective: task.goal || task.task,
-                        status: task.state,
-                        goal: task.goal || task.task,
+                        objective: normalizedObjective,
+                        status: normalizedStatus,
+                        goal: normalizedObjective,
                     },
                     takeover: {
                         source: 'old_chat_takeover',
@@ -1165,33 +1208,35 @@ export class MemorySDKImpl {
         }
 
         for (const [key, value] of Object.entries(result.worldState ?? {})) {
+            const normalizedKey = this.renderTakeoverNarrativeText(key, narrativeContext);
+            const normalizedValue = this.renderTakeoverNarrativeText(value, narrativeContext);
             const worldDecision = resolveLedgerUpdateDecision({
                 entryType: 'world_global_state',
-                title: key,
+                title: normalizedKey,
                 fields: {
-                    scope: 'global',
-                    state: value,
-                },
-                sourceBatchId: result.takeoverId,
-            });
-            await this.unifiedManager.saveEntry({
-                title: key,
-                entryType: 'world_global_state',
-                category: '世界观',
-                tags: ['世界状态', '旧聊天接管'],
-                summary: value,
-                detail: value,
-                detailPayload: {
-                    compareKey: worldDecision.compareKey,
-                    reasonCodes: worldDecision.reasonCodes,
-                    sourceBatchIds: [result.takeoverId],
-                    fields: {
-                        compareKey: worldDecision.compareKey,
-                        scope: 'global',
-                        state: value,
-                    },
-                    takeover: {
-                        source: 'old_chat_takeover',
+                      scope: 'global',
+                      state: normalizedValue,
+                  },
+                  sourceBatchId: result.takeoverId,
+              });
+              await this.unifiedManager.saveEntry({
+                 title: normalizedKey,
+                  entryType: 'world_global_state',
+                  category: '世界观',
+                  tags: ['世界状态', '旧聊天接管'],
+                  summary: normalizedValue,
+                  detail: normalizedValue,
+                  detailPayload: {
+                      compareKey: worldDecision.compareKey,
+                      reasonCodes: worldDecision.reasonCodes,
+                      sourceBatchIds: [result.takeoverId],
+                      fields: {
+                          compareKey: worldDecision.compareKey,
+                          scope: 'global',
+                          state: normalizedValue,
+                      },
+                      takeover: {
+                          source: 'old_chat_takeover',
                         takeoverId: result.takeoverId,
                         sourceBatchId: result.takeoverId,
                     },
@@ -1270,8 +1315,242 @@ export class MemorySDKImpl {
                 .map((entry) => ({
                     entityKey: String(entry.entryId ?? '').trim(),
                     displayName: String(entry.title ?? '').trim(),
-                }))),
+                  }))),
+          };
+      }
+
+    /**
+     * 功能：构建旧聊天接管自然语言字段的统一引用渲染上下文。
+     * @param input 上下文构建输入。
+     * @returns 可复用的引用渲染上下文。
+     */
+    private buildTakeoverNarrativeRendererContext(input: {
+        actorCards: Array<{ actorKey: string; displayName: string; aliases?: string[] }>;
+        existingActorCards: Array<{ actorKey: string; displayName: string }>;
+        knownEntities: {
+            organizations: Array<{ entityKey: string; displayName: string }>;
+            cities: Array<{ entityKey: string; displayName: string }>;
+            nations: Array<{ entityKey: string; displayName: string }>;
+            locations: Array<{ entityKey: string; displayName: string }>;
+            tasks: Array<{ entityKey: string; displayName: string }>;
+            worldStates: Array<{ entityKey: string; displayName: string }>;
         };
+        longTermFacts: Array<{ compareKey?: string; title?: string }>;
+        taskState: Array<{ compareKey?: string; task: string; title?: string }>;
+        worldState: Record<string, string>;
+    }): NarrativeReferenceRendererContext {
+        const userDisplayName = resolveCurrentNarrativeUserName();
+        const labelMap = new Map<string, string>([['user', userDisplayName]]);
+        const aliasToLabelMap = new Map<string, string>();
+        const appendReference = (ref: string, label: string, aliases: string[] = []): void => {
+            const normalizedRef = String(ref ?? '').trim();
+            const normalizedLabel = String(label ?? '').trim();
+            if (!normalizedRef || !normalizedLabel) {
+                return;
+            }
+            labelMap.set(normalizedRef, normalizedLabel);
+            aliasToLabelMap.set(buildNarrativeReferenceLookupKey(normalizedRef), normalizedLabel);
+            aliasToLabelMap.set(buildNarrativeReferenceLookupKey(normalizedLabel), normalizedLabel);
+            aliases.forEach((alias: string): void => {
+                const normalizedAlias = String(alias ?? '').trim();
+                if (!normalizedAlias) {
+                    return;
+                }
+                aliasToLabelMap.set(buildNarrativeReferenceLookupKey(normalizedAlias), normalizedLabel);
+            });
+        };
+
+        input.actorCards.forEach((actorCard): void => {
+            const actorKey = this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName);
+            const displayName = this.resolveTakeoverActorDisplayName(actorKey, actorCard.displayName);
+            appendReference(actorKey, displayName, actorCard.aliases ?? []);
+            appendReference(`actor:${actorKey}`, displayName, actorCard.aliases ?? []);
+            appendReference(String(actorCard.actorKey ?? '').trim(), displayName, actorCard.aliases ?? []);
+        });
+        input.existingActorCards.forEach((actorCard): void => {
+            const actorKey = String(actorCard.actorKey ?? '').trim();
+            const displayName = this.resolveTakeoverActorDisplayName(actorKey, actorCard.displayName);
+            appendReference(actorKey, displayName);
+            appendReference(`actor:${actorKey}`, displayName);
+        });
+        input.knownEntities.organizations.forEach((item) => appendReference(`organization:${item.displayName}`, item.displayName));
+        input.knownEntities.cities.forEach((item) => appendReference(`city:${item.displayName}`, item.displayName));
+        input.knownEntities.nations.forEach((item) => appendReference(`nation:${item.displayName}`, item.displayName));
+        input.knownEntities.locations.forEach((item) => appendReference(`location:${item.displayName}`, item.displayName));
+        input.knownEntities.tasks.forEach((item) => appendReference(`task:${item.displayName}`, item.displayName));
+        input.knownEntities.worldStates.forEach((item) => appendReference(`world:${item.displayName}`, item.displayName));
+        input.longTermFacts.forEach((fact) => {
+            const compareKey = String(fact.compareKey ?? '').trim();
+            const title = String(fact.title ?? '').trim();
+            if (!title) {
+                return;
+            }
+            if (compareKey) {
+                appendReference(compareKey, title);
+            }
+            appendReference(`event:${title}`, title);
+        });
+        input.taskState.forEach((task) => {
+            const title = String(task.title ?? task.task ?? '').trim();
+            const compareKey = String(task.compareKey ?? '').trim();
+            if (!title) {
+                return;
+            }
+            if (compareKey) {
+                appendReference(compareKey, title);
+            }
+            appendReference(`task:${title}`, title);
+        });
+        Object.keys(input.worldState ?? {}).forEach((key: string): void => {
+            const normalizedKey = String(key ?? '').trim();
+            if (!normalizedKey) {
+                return;
+            }
+            appendReference(`world:${normalizedKey}`, normalizedKey);
+            appendReference(`world_global_state:${normalizedKey}`, normalizedKey);
+        });
+        return {
+            userDisplayName,
+            labelMap,
+            aliasToLabelMap,
+        };
+    }
+
+    /**
+     * 功能：渲染旧聊天接管中的自然语言字段，统一替换占位符与泄漏引用。
+     * @param text 原始文本。
+     * @param context 引用渲染上下文。
+     * @returns 渲染后的文本。
+     */
+    private renderTakeoverNarrativeText(text: string, context: NarrativeReferenceRendererContext): string {
+        return renderNarrativeReferenceText(String(text ?? '').trim(), context);
+    }
+
+    /**
+     * 功能：归一化旧聊天接管里的绑定载荷结构。
+     * @param bindings 原始绑定载荷。
+     * @returns 统一后的绑定对象。
+     */
+    private normalizeTakeoverBindingsPayload(bindings: MemoryTakeoverBindings | undefined): MemoryTakeoverBindings {
+        return {
+            actors: this.normalizeStringArray(bindings?.actors ?? []),
+            organizations: this.normalizeStringArray(bindings?.organizations ?? []),
+            cities: this.normalizeStringArray(bindings?.cities ?? []),
+            locations: this.normalizeStringArray(bindings?.locations ?? []),
+            nations: this.normalizeStringArray(bindings?.nations ?? []),
+            tasks: this.normalizeStringArray(bindings?.tasks ?? []),
+            events: this.normalizeStringArray(bindings?.events ?? []),
+        };
+    }
+
+    /**
+     * 功能：根据角色锚点推导更适合展示的角色名。
+     * @param actorKey 角色键。
+     * @param explicitDisplayName 外部显式给出的角色名。
+     * @returns 适合展示的角色名。
+     */
+    private resolveTakeoverActorDisplayName(actorKey: string, explicitDisplayName?: string): string {
+        const normalizedDisplayName = this.normalizeTakeoverRelationTargetName(explicitDisplayName ?? '');
+        if (normalizedDisplayName && normalizedDisplayName !== actorKey) {
+            return normalizedDisplayName;
+        }
+        const extractedName = this.normalizeTakeoverRelationTargetName(this.extractTakeoverActorName(actorKey));
+        if (extractedName && extractedName !== actorKey) {
+            return extractedName;
+        }
+        const stripped = stripNarrativeReferencePrefix(actorKey)
+            .replace(/^(char|actor)_+/i, '')
+            .replace(/_/g, ' ')
+            .trim();
+        return stripped || '未命名角色';
+    }
+
+    /**
+     * 功能：确保旧聊天接管引用到的角色至少拥有最小可用的角色档案。
+     * @param input 角色档案写入参数。
+     * @returns 归一化后的角色键和显示名。
+     */
+    private async ensureTakeoverActorReference(input: {
+        actorKey: string;
+        displayName?: string;
+        aliases?: string[];
+        identityFacts?: string[];
+        originFacts?: string[];
+        traits?: string[];
+        takeoverId: string;
+        hydrationState: 'partial' | 'full';
+    }): Promise<{ actorKey: string; displayName: string }> {
+        const actorKey = this.resolveTakeoverActorKey(input.actorKey, input.displayName);
+        const displayName = this.resolveTakeoverActorDisplayName(actorKey, input.displayName);
+        if (!actorKey || actorKey === 'user') {
+            return { actorKey: 'user', displayName: resolveCurrentNarrativeUserName() };
+        }
+        await this.unifiedManager.ensureActorProfile({
+            actorKey,
+            displayName,
+        });
+        const existingActorEntries = await this.unifiedManager.listEntries({
+            entryType: 'actor_profile',
+            rememberedByActorKey: actorKey,
+        });
+        const existingEntry = existingActorEntries[0] ?? null;
+        const existingPayload = this.toRecord(existingEntry?.detailPayload);
+        const existingFields = this.toRecord(existingPayload.fields);
+        const currentHydrationState = String(existingFields.hydrationState ?? existingPayload.hydrationState ?? '').trim();
+        const nextHydrationState = currentHydrationState === 'full' || input.hydrationState === 'full' ? 'full' : 'partial';
+        const identityFacts = this.dedupeTakeoverStringList([
+            ...this.normalizeStringArray(existingFields.identityFacts),
+            ...(input.identityFacts ?? []),
+        ]);
+        const originFacts = this.dedupeTakeoverStringList([
+            ...this.normalizeStringArray(existingFields.originFacts),
+            ...(input.originFacts ?? []),
+        ]);
+        const traits = this.dedupeTakeoverStringList([
+            ...this.normalizeStringArray(existingFields.traits),
+            ...(input.traits ?? []),
+        ]);
+        const aliases = this.dedupeTakeoverStringList([
+            ...this.normalizeStringArray(existingFields.aliases),
+            ...(input.aliases ?? []),
+        ]);
+        const summary = identityFacts.join('；')
+            || existingEntry?.summary
+            || (nextHydrationState === 'full' ? `${displayName}的角色卡` : `${displayName}的轻量角色卡`);
+        const savedEntry = await this.unifiedManager.saveEntry({
+            entryId: existingEntry?.entryId,
+            title: displayName,
+            entryType: 'actor_profile',
+            category: '角色关系',
+            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
+            summary,
+            detail: existingEntry?.detail ?? '',
+            detailPayload: {
+                ...existingPayload,
+                hydrationState: nextHydrationState,
+                fields: {
+                    ...existingFields,
+                    aliases,
+                    identityFacts,
+                    originFacts,
+                    traits,
+                    hydrationState: nextHydrationState,
+                },
+                ...(input.takeoverId ? {
+                    takeover: {
+                        source: 'old_chat_takeover',
+                        takeoverId: input.takeoverId,
+                    },
+                } : {}),
+            },
+            sourceSummaryIds: existingEntry?.sourceSummaryIds ?? [],
+        }, {
+            actionType: existingEntry ? 'UPDATE' : 'ADD',
+            sourceLabel: '旧聊天接管整合',
+            reasonCodes: [existingEntry ? `takeover_actor_${nextHydrationState}_update` : `takeover_actor_${nextHydrationState}_add`],
+        });
+        await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
+        return { actorKey, displayName };
     }
 
     /**
@@ -1287,22 +1566,24 @@ export class MemorySDKImpl {
         relationTag: string;
         takeoverId: string;
     }): Promise<void> {
-        await this.unifiedManager.ensureActorProfile({
+        const actor = await this.ensureTakeoverActorReference({
             actorKey: input.actorKey,
             displayName: input.displayName,
+            takeoverId: input.takeoverId,
+            hydrationState: 'partial',
         });
         await this.persistTakeoverRelationshipEntry({
             sourceActorKey: 'user',
-            sourceDisplayName: '用户',
-            targetActorKey: input.actorKey,
-            targetDisplayName: input.displayName,
+            sourceDisplayName: resolveCurrentNarrativeUserName(),
+            targetActorKey: actor.actorKey,
+            targetDisplayName: actor.displayName,
             relationTag: input.relationTag,
             state: input.relationState,
             summary: input.relationReason || input.relationState,
             trust: 0,
             affection: 0,
             tension: 0,
-            participants: ['user', input.actorKey],
+            participants: ['user', actor.actorKey],
             takeoverId: input.takeoverId,
             reasonCode: 'takeover_relation_state',
         });
@@ -1323,27 +1604,63 @@ export class MemorySDKImpl {
         existingActorCards: Array<{ actorKey: string; displayName: string }>;
         takeoverId: string;
     }): Promise<void> {
-        const sourceActor = this.resolveTakeoverActorByKey(
-            input.relationship.sourceActorKey,
-            input.actorCards,
-            input.existingActorCards,
-        );
-        const targetActor = this.resolveTakeoverActorByKey(
-            input.relationship.targetActorKey,
-            input.actorCards,
-            input.existingActorCards,
-        );
+        const narrativeContext = this.buildTakeoverNarrativeRendererContext({
+            actorCards: input.actorCards,
+            existingActorCards: input.existingActorCards,
+            knownEntities: {
+                organizations: [],
+                cities: [],
+                nations: [],
+                locations: [],
+                tasks: [],
+                worldStates: [],
+            },
+            longTermFacts: [],
+            taskState: [],
+            worldState: {},
+        });
+        const sourceActor = await this.ensureTakeoverActorReference({
+            ...(this.resolveTakeoverActorByKey(
+                input.relationship.sourceActorKey,
+                input.actorCards,
+                input.existingActorCards,
+            ) ?? {
+                actorKey: input.relationship.sourceActorKey,
+                displayName: this.resolveTakeoverActorDisplayName(input.relationship.sourceActorKey),
+            }),
+            takeoverId: input.takeoverId,
+            hydrationState: 'partial',
+        });
+        const targetActor = await this.ensureTakeoverActorReference({
+            ...(this.resolveTakeoverActorByKey(
+                input.relationship.targetActorKey,
+                input.actorCards,
+                input.existingActorCards,
+            ) ?? {
+                actorKey: input.relationship.targetActorKey,
+                displayName: this.resolveTakeoverActorDisplayName(input.relationship.targetActorKey),
+            }),
+            takeoverId: input.takeoverId,
+            hydrationState: 'partial',
+        });
         if (!sourceActor || !targetActor || sourceActor.actorKey === targetActor.actorKey) {
             return;
         }
+        narrativeContext.labelMap?.set(sourceActor.actorKey, sourceActor.displayName);
+        narrativeContext.labelMap?.set(`actor:${sourceActor.actorKey}`, sourceActor.displayName);
+        narrativeContext.labelMap?.set(targetActor.actorKey, targetActor.displayName);
+        narrativeContext.labelMap?.set(`actor:${targetActor.actorKey}`, targetActor.displayName);
         await this.persistTakeoverRelationshipEntry({
             sourceActorKey: sourceActor.actorKey,
             sourceDisplayName: sourceActor.displayName,
             targetActorKey: targetActor.actorKey,
             targetDisplayName: targetActor.displayName,
             relationTag: normalizeRelationTag(input.relationship.relationTag) || '朋友',
-            state: String(input.relationship.state ?? '').trim(),
-            summary: String(input.relationship.summary ?? '').trim() || String(input.relationship.state ?? '').trim(),
+            state: this.renderTakeoverNarrativeText(String(input.relationship.state ?? '').trim(), narrativeContext),
+            summary: this.renderTakeoverNarrativeText(
+                String(input.relationship.summary ?? '').trim() || String(input.relationship.state ?? '').trim(),
+                narrativeContext,
+            ),
             trust: Number(input.relationship.trust),
             affection: Number(input.relationship.affection),
             tension: Number(input.relationship.tension),
@@ -1364,9 +1681,9 @@ export class MemorySDKImpl {
      */
     private async persistTakeoverRelationshipEntry(input: {
         sourceActorKey: string;
-        sourceDisplayName: string;
+        sourceDisplayName?: string;
         targetActorKey: string;
-        targetDisplayName: string;
+        targetDisplayName?: string;
         relationTag: string;
         state: string;
         summary: string;
@@ -1389,48 +1706,58 @@ export class MemorySDKImpl {
             input.targetActorKey,
             ...(input.participants ?? []),
         ]);
+        const sourceDisplayName = String(input.sourceDisplayName ?? '').trim()
+            || (input.sourceActorKey === 'user' ? resolveCurrentNarrativeUserName() : this.resolveTakeoverActorDisplayName(input.sourceActorKey));
+        const targetDisplayName = String(input.targetDisplayName ?? '').trim()
+            || this.resolveTakeoverActorDisplayName(input.targetActorKey);
+        const title = `${sourceDisplayName}与${targetDisplayName}的关系`;
         const normalizedTrust = this.clampTakeover01(input.trust);
         const normalizedAffection = this.clampTakeover01(input.affection);
         const normalizedTension = this.clampTakeover01(input.tension);
         const savedEntry = await this.unifiedManager.saveEntry({
             entryId: existingEntry?.entryId,
-            title: `${input.sourceDisplayName} -> ${input.targetDisplayName}`,
+            title,
             entryType: 'relationship',
             category: '角色关系',
             tags: this.dedupeTakeoverStringList(['关系', input.relationTag]),
             summary: input.summary,
             detail: input.state,
-            detailPayload: {
-                ...(existingEntry?.detailPayload ?? {}),
-                compareKey,
-                sourceActorKey: input.sourceActorKey,
-                targetActorKey: input.targetActorKey,
-                trust: normalizedTrust,
-                affection: normalizedAffection,
-                tension: normalizedTension,
-                fields: {
-                    ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
+              detailPayload: {
+                  ...(existingEntry?.detailPayload ?? {}),
+                  compareKey,
+                  sourceActorKey: input.sourceActorKey,
+                  targetActorKey: input.targetActorKey,
+                  sourceDisplayName,
+                  targetDisplayName,
+                  trust: normalizedTrust,
+                  affection: normalizedAffection,
+                  tension: normalizedTension,
+                  fields: {
+                      ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
                     compareKey,
                     relationTag: input.relationTag,
                     state: input.state,
-                    summary: input.summary,
-                    participants: normalizedParticipants,
-                    trust: normalizedTrust,
-                    affection: normalizedAffection,
-                    tension: normalizedTension,
-                },
-                takeover: {
-                    source: 'old_chat_takeover',
-                    takeoverId: input.takeoverId,
-                },
+                      summary: input.summary,
+                      participants: normalizedParticipants,
+                      trust: normalizedTrust,
+                      affection: normalizedAffection,
+                      tension: normalizedTension,
+                      sourceDisplayName,
+                      targetDisplayName,
+                  },
+                  takeover: {
+                      source: 'old_chat_takeover',
+                      takeoverId: input.takeoverId,
+                  },
             },
         }, {
             actionType: existingEntry ? 'UPDATE' : 'ADD',
-            sourceLabel: '旧聊天接管整合',
-            reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
-        });
-        await this.unifiedManager.bindRoleToEntry(input.sourceActorKey, savedEntry.entryId);
-    }
+              sourceLabel: '旧聊天接管整合',
+              reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
+          });
+          await this.unifiedManager.bindRoleToEntry(input.sourceActorKey, savedEntry.entryId);
+          await this.unifiedManager.bindRoleToEntry(input.targetActorKey, savedEntry.entryId);
+      }
 
     /**
      * 功能：把旧聊天事实条目绑定到命中的角色卡。
@@ -1465,7 +1792,16 @@ export class MemorySDKImpl {
             existingActorCards,
         );
         for (const actorKey of actorKeys) {
-            await this.unifiedManager.bindRoleToEntry(actorKey, entryId);
+            const resolvedActor = this.resolveTakeoverActorByKey(actorKey, actorCards, existingActorCards);
+            if (resolvedActor) {
+                await this.ensureTakeoverActorReference({
+                    actorKey: resolvedActor.actorKey,
+                    displayName: resolvedActor.displayName,
+                    takeoverId: '',
+                    hydrationState: 'partial',
+                });
+            }
+            await this.unifiedManager.bindRoleToEntry(resolvedActor?.actorKey ?? actorKey, entryId);
         }
     }
 
@@ -1643,56 +1979,16 @@ export class MemorySDKImpl {
         },
         takeoverId: string,
     ): Promise<void> {
-        const actorKey = this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName);
-        const displayName = String(actorCard.displayName ?? '').trim();
-        if (!actorKey || actorKey === 'user' || !displayName) {
-            return;
-        }
-
-        await this.unifiedManager.ensureActorProfile({
-            actorKey,
-            displayName,
+        await this.ensureTakeoverActorReference({
+            actorKey: actorCard.actorKey,
+            displayName: actorCard.displayName,
+            aliases: actorCard.aliases,
+            identityFacts: actorCard.identityFacts,
+            originFacts: actorCard.originFacts,
+            traits: actorCard.traits,
+            takeoverId,
+            hydrationState: 'full',
         });
-
-        const existingActorEntries = await this.unifiedManager.listEntries({
-            entryType: 'actor_profile',
-            rememberedByActorKey: actorKey,
-        });
-        const existingEntry = existingActorEntries[0] ?? null;
-        const identityFacts = this.dedupeTakeoverStringList(actorCard.identityFacts ?? []);
-        const originFacts = this.dedupeTakeoverStringList(actorCard.originFacts ?? []);
-        const traits = this.dedupeTakeoverStringList(actorCard.traits ?? []);
-        const aliases = this.dedupeTakeoverStringList(actorCard.aliases ?? []);
-        const summary = identityFacts.join('；') || `${displayName}的角色卡`;
-
-        const savedEntry = await this.unifiedManager.saveEntry({
-            entryId: existingEntry?.entryId,
-            title: displayName,
-            entryType: 'actor_profile',
-            category: '角色关系',
-            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
-            summary,
-            detail: existingEntry?.detail ?? '',
-            detailPayload: {
-                ...(existingEntry?.detailPayload ?? {}),
-                fields: {
-                    aliases,
-                    identityFacts,
-                    originFacts,
-                    traits,
-                },
-                takeover: {
-                    source: 'old_chat_takeover',
-                    takeoverId,
-                },
-            },
-            sourceSummaryIds: existingEntry?.sourceSummaryIds ?? [],
-        }, {
-            actionType: existingEntry ? 'UPDATE' : 'ADD',
-            sourceLabel: '旧聊天接管整合',
-            reasonCodes: [existingEntry ? 'takeover_actor_card_update' : 'takeover_actor_card_add'],
-        });
-        await this.unifiedManager.bindRoleToEntry(actorKey, savedEntry.entryId);
     }
 
     /**
@@ -1702,17 +1998,7 @@ export class MemorySDKImpl {
      * @returns 异步完成。
      */
     private async persistTakeoverEntityCard(
-        entityCard: {
-            entityType: string;
-            compareKey: string;
-            title: string;
-            aliases?: string[];
-            summary?: string;
-            fields?: Record<string, unknown>;
-            confidence?: number;
-            bindings?: Record<string, unknown>;
-            reasonCodes?: string[];
-        },
+        entityCard: MemoryTakeoverEntityCardCandidate,
         takeoverId: string,
     ): Promise<void> {
         const entityType = String(entityCard.entityType ?? '').trim().toLowerCase();
@@ -1755,15 +2041,7 @@ export class MemorySDKImpl {
                     ...this.normalizeStringArray(((existingEntry?.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
                     ...(entityCard.reasonCodes ?? []),
                 ]),
-                bindings: {
-                    actors: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.actors as string[] ?? []),
-                    organizations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.organizations as string[] ?? []),
-                    cities: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.cities as string[] ?? []),
-                    locations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.locations as string[] ?? []),
-                    nations: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.nations as string[] ?? []),
-                    tasks: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.tasks as string[] ?? []),
-                    events: this.normalizeStringArray((entityCard.bindings as Record<string, unknown> | undefined)?.events as string[] ?? []),
-                },
+                bindings: this.normalizeTakeoverBindings(entityCard.bindings),
                 fields: {
                     ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
                     ...fields,
@@ -1790,16 +2068,7 @@ export class MemorySDKImpl {
      * @returns 异步完成。
      */
     private async applyTakeoverEntityTransition(
-        transition: {
-            entityType: string;
-            compareKey: string;
-            title: string;
-            action: string;
-            reason: string;
-            payload: Record<string, unknown>;
-            bindings?: Record<string, unknown>;
-            reasonCodes?: string[];
-        },
+        transition: MemoryTakeoverEntityTransition,
         takeoverId: string,
     ): Promise<void> {
         const entityType = String(transition.entityType ?? '').trim().toLowerCase();
@@ -1895,15 +2164,7 @@ export class MemorySDKImpl {
                         ...this.normalizeStringArray(((existingEntry?.detailPayload as Record<string, unknown>)?.reasonCodes as string[]) ?? []),
                         ...(transition.reasonCodes ?? []),
                     ]),
-                    bindings: {
-                        actors: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.actors as string[] ?? []),
-                        organizations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.organizations as string[] ?? []),
-                        cities: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.cities as string[] ?? []),
-                        locations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.locations as string[] ?? []),
-                        nations: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.nations as string[] ?? []),
-                        tasks: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.tasks as string[] ?? []),
-                        events: this.normalizeStringArray((transition.bindings as Record<string, unknown> | undefined)?.events as string[] ?? []),
-                    },
+                    bindings: this.normalizeTakeoverBindings(transition.bindings),
                     fields: {
                         ...(existingEntry?.detailPayload as Record<string, unknown>)?.fields as Record<string, unknown> ?? {},
                         compareKey,
@@ -2364,8 +2625,18 @@ export class MemorySDKImpl {
                 displayName: String(matchedExistingActor.displayName ?? '').trim(),
             };
         }
-
-        return null;
+        const normalizedRawTarget = String(targetName ?? '').trim();
+        if (!/^char[_:]/i.test(normalizedRawTarget) && !/^actor[_:]/i.test(normalizedRawTarget)) {
+            return null;
+        }
+        const fallbackActorKey = this.resolveTakeoverActorKey(targetName, targetName);
+        if (!fallbackActorKey || fallbackActorKey === 'user') {
+            return null;
+        }
+        return {
+            actorKey: fallbackActorKey,
+            displayName: this.resolveTakeoverActorDisplayName(fallbackActorKey, targetName),
+        };
     }
 
     /**
@@ -2402,6 +2673,13 @@ export class MemorySDKImpl {
             if (!normalizedText) {
                 continue;
             }
+            const directActorKeyMatches = normalizedText.match(/\bchar_[a-z0-9_]+\b/gi) ?? [];
+            directActorKeyMatches.forEach((matchedActorKey: string): void => {
+                const resolvedActorKey = this.resolveTakeoverActorKey(matchedActorKey, '');
+                if (resolvedActorKey && !result.includes(resolvedActorKey)) {
+                    result.push(resolvedActorKey);
+                }
+            });
             for (const candidate of candidates) {
                 const actorKey = String(candidate.actorKey ?? '').trim();
                 const displayName = String(candidate.displayName ?? '').trim();
@@ -2470,7 +2748,13 @@ export class MemorySDKImpl {
                 displayName: String(matchedExistingActor.displayName ?? '').trim(),
             };
         }
-        return null;
+        if (!resolvedActorKey || resolvedActorKey === 'user') {
+            return null;
+        }
+        return {
+            actorKey: resolvedActorKey,
+            displayName: this.resolveTakeoverActorDisplayName(resolvedActorKey, normalizedActorName || actorKey),
+        };
     }
 
     /**
@@ -2506,6 +2790,10 @@ export class MemorySDKImpl {
         const rawValue = String(value ?? '').trim();
         if (!rawValue) {
             return '';
+        }
+        const prefixedValue = rawValue.replace(/^(char|actor)_+/i, '').replace(/_/g, ' ').trim();
+        if (prefixedValue && prefixedValue !== rawValue) {
+            return prefixedValue;
         }
         const segments = rawValue
             .split(/[:：/|]/g)
@@ -2974,6 +3262,23 @@ export class MemorySDKImpl {
             .map((item: unknown): string => String(item ?? '').trim())
             .filter(Boolean);
         return result.length > 0 ? result : undefined;
+    }
+
+    /**
+     * 功能：归一化旧聊天接管输出的 bindings 对象。
+     * @param bindings 原始绑定信息。
+     * @returns 归一化后的绑定对象。
+     */
+    private normalizeTakeoverBindings(bindings?: MemoryTakeoverBindings): MemoryTakeoverBindings {
+        return {
+            actors: this.normalizeStringArray(bindings?.actors ?? []),
+            organizations: this.normalizeStringArray(bindings?.organizations ?? []),
+            cities: this.normalizeStringArray(bindings?.cities ?? []),
+            locations: this.normalizeStringArray(bindings?.locations ?? []),
+            nations: this.normalizeStringArray(bindings?.nations ?? []),
+            tasks: this.normalizeStringArray(bindings?.tasks ?? []),
+            events: this.normalizeStringArray(bindings?.events ?? []),
+        };
     }
 
     /**

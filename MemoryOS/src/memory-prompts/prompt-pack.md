@@ -14,6 +14,7 @@
 - 如果角色属于组织、组织位于城市、地点从属于城市或国家，请在 `entityCards.fields` 中显式写出稳定绑定线索。
 - 不要为了补满字段编造人物、组织、地点或关系；不确定时保持保守，不要写假设。
 - 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 自然语言字段允许并优先使用 typed placeholder，例如 `{{actor:char_erin}}`、`{{location:北城门}}`、`{{task:护送密使离开王都}}`、`{{event:王都夜巡冲突}}`；结构化字段仍必须保留稳定锚点原值。
 - 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: COLD_START_SCHEMA -->
@@ -267,6 +268,7 @@
 - 不要基于不完整信号脑补新关系、新任务、新实体或世界状态。
 - 这是 `summary mutation` 的上游规划，不要把整份 mutation 提前写出来。
 - 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 自然语言字段允许并优先使用 typed placeholder，例如 `{{actor:char_erin}}`、`{{location:北城门}}`、`{{task:护送密使离开王都}}`、`{{event:王都夜巡冲突}}`；结构化字段仍必须保留稳定锚点原值。
 - 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: SUMMARY_PLANNER_SCHEMA -->
@@ -314,6 +316,7 @@
 - 不确定是否同一对象时，优先 `NOOP`、`UPDATE` 或 `MERGE`，不要为了看起来完整而重复 `ADD`。
 - 不要编造关系、任务、组织从属或长期世界状态；临时状态不要误写成长期属性。
 - 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 自然语言字段允许并优先使用 typed placeholder，例如 `{{actor:char_erin}}`、`{{location:北城门}}`、`{{task:护送密使离开王都}}`、`{{event:王都夜巡冲突}}`；结构化字段仍必须保留稳定锚点原值。
 - 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: SUMMARY_SCHEMA -->
@@ -401,6 +404,7 @@
 - 只保留长期设定，不要混入短期对话状态。
 - 自然语言字段必须简洁、稳定、可复用。
 - 当前用户自然语言名称优先使用 `{{userDisplayName}}`；结构化锚点继续使用 `user`。
+- 自然语言字段允许并优先使用 typed placeholder，例如 `{{actor:char_erin}}`、`{{location:北城门}}`、`{{task:护送密使离开王都}}`、`{{event:王都夜巡冲突}}`；结构化字段仍必须保留稳定锚点原值。
 - 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
 
 <!-- section: TAKEOVER_BASELINE_SCHEMA -->
@@ -508,6 +512,8 @@
 - `relationTransitions.target` 可以是角色、组织、城市、国家或地点；请尽量填写 `relationTag` 与 `targetType`。
 - 任务对象必须尽量补齐 `title`、`summary`、`description`、`goal`、`status`、`compareKey` 与 `bindings`。标题优先级是：明确任务名 > 稳定动作模板 > 兜底标题。
 - 如果角色属于组织、组织位于城市、任务发生在地点、事件影响角色/组织/城市/地点，请在 `bindings` 中显式输出；不要只抽对象不抽边。
+- 不要把 `char_xxx`、`user`、`location:xxx`、`task:xxx`、`event:xxx` 或 `X · Y` 直接写进 `title`、`summary`、`description`、`goal`、`state`；需要稳定引用时，请改写为 `{{actor:char_xxx}}`、`{{location:xxx}}`、`{{task:xxx}}`、`{{event:xxx}}` 或 `{{userDisplayName}}`。
+- `stableFacts` 如果是事件候选，请尽量补齐 `title`、`summary`、`compareKey`、`bindings`、`status`、`importance` 与 `reasonCodes`，避免只留下调试式片段。
 - 语义字段（`summary`、`title`、`description`、`goal`、`state`）面向用户可读；调试字段（`compareKey`、`reasonCodes`、`bindings`、`targetType`）面向归并、去重与问题排查。
 - 不要为了补满字段编造关系、组织从属、地点归属或长期属性；临时状态不要误写成长期实体属性。
 - 除键名、schema 字段名、枚举值外，所有自然语言内容必须使用简体中文；只输出 JSON。
@@ -561,12 +567,33 @@
         }
       }
     },
-    "stableFacts": { "type": "array", "items": { "type": "object" } },
+    "stableFacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "subject", "predicate", "value", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "subject": { "type": "string" },
+          "predicate": { "type": "string" },
+          "value": { "type": "string" },
+          "confidence": { "type": "number" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "compareKey": { "type": "string" },
+          "bindings": { "$ref": "#/$defs/bindings" },
+          "status": { "type": "string" },
+          "importance": { "type": "number" },
+          "reasonCodes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
     "relationTransitions": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["target", "from", "to", "reason", "relationTag", "targetType", "reasonCodes"],
+        "required": ["target", "from", "to", "reason", "relationTag", "targetType", "bindings", "reasonCodes"],
         "additionalProperties": false,
         "properties": {
           "target": { "type": "string" },
@@ -575,6 +602,7 @@
           "reason": { "type": "string" },
           "relationTag": { "type": "string" },
           "targetType": { "type": "string", "enum": ["actor", "organization", "city", "nation", "location", "unknown"] },
+          "bindings": { "$ref": "#/$defs/bindings" },
           "reasonCodes": { "type": "array", "items": { "type": "string" } }
         }
       }
@@ -732,7 +760,22 @@
       "subject": "艾琳",
       "predicate": "确认",
       "value": "北城门是当前最可行的撤离路线",
-      "confidence": 0.86
+      "confidence": 0.86,
+      "title": "确认北城门撤离路线",
+      "summary": "艾琳确认北城门是当前阶段最可行的撤离路线。",
+      "compareKey": "event:确认北城门撤离路线",
+      "bindings": {
+        "actors": ["char_erin", "user"],
+        "organizations": ["夜鸦组", "王都守备队"],
+        "cities": ["王都"],
+        "locations": ["北城门"],
+        "nations": [],
+        "tasks": ["task:护送密使离开王都"],
+        "events": []
+      },
+      "status": "active",
+      "importance": 0.82,
+      "reasonCodes": ["event_title_stabilized", "event_bindings_confirmed"]
     }
   ],
   "relationTransitions": [
@@ -743,6 +786,15 @@
       "reason": "双方明确共享短期目标，并愿意共同承担风险。",
       "relationTag": "朋友",
       "targetType": "actor",
+      "bindings": {
+        "actors": ["user", "char_erin"],
+        "organizations": [],
+        "cities": ["王都"],
+        "locations": ["北城门"],
+        "nations": [],
+        "tasks": ["task:护送密使离开王都"],
+        "events": ["event:确认北城门撤离路线"]
+      },
       "reasonCodes": ["relationship_progressed", "shared_goal_confirmed"]
     }
   ],

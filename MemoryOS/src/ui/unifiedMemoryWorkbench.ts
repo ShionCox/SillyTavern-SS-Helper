@@ -46,7 +46,7 @@ import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
-import { buildMemoryGraph } from './workbenchTabs/shared/buildMemoryGraph';
+import { buildTakeoverMemoryGraph } from './workbenchTabs/shared/memory-graph-builder';
 import {
     buildMemoryGraphPageMarkup,
     destroyMemoryGraphPage,
@@ -176,9 +176,10 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                 ${buildPreviewViewMarkup(snapshot, state)}
                 ${buildMemoryGraphPageMarkup(snapshot, state, {
                     selectedGraphNodeId: state.selectedGraphNodeId,
+                    selectedGraphEdgeId: state.selectedGraphEdgeId,
                     memoryGraphQuery: state.memoryGraphQuery,
                     memoryGraphFilterType: state.memoryGraphFilterType,
-                    graphMode: (state.memoryGraphMode as any) || 'compact',
+                    graphMode: state.memoryGraphMode || 'semantic',
                 })}
                 ${buildTakeoverViewMarkup(snapshot, state)}
             </main>
@@ -240,9 +241,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         actorSortOrder: 'stat-desc',
         actorTagFilter: '',
         selectedGraphNodeId: '',
+        selectedGraphEdgeId: '',
         memoryGraphQuery: '',
         memoryGraphFilterType: '',
-        memoryGraphMode: 'compact',
+        memoryGraphMode: 'semantic',
         takeoverMode: 'full',
         takeoverRangeStart: '',
         takeoverRangeEnd: '',
@@ -274,6 +276,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             mutationHistory,
             entryAuditRecords,
             recallExplanation,
+            takeoverProgress,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -285,7 +288,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             memory.chatState.getLatestRecallExplanation(),
+            takeoverProgressCache ? Promise.resolve(takeoverProgressCache) : memory.chatState.getTakeoverStatus(),
         ]);
+
+        takeoverProgressCache = takeoverProgress;
 
         return {
             entryTypes,
@@ -299,8 +305,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryAuditRecords,
             recallExplanation: normalizeRecallExplanation(recallExplanation),
             actorGraph: buildActorGraph(actors, entries),
-            memoryGraph: buildMemoryGraph(entries, roleMemories, actors),
-            takeoverProgress: takeoverProgressCache,
+            memoryGraph: buildTakeoverMemoryGraph(takeoverProgress),
+            takeoverProgress,
         };
     };
 

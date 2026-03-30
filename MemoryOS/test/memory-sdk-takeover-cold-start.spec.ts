@@ -184,6 +184,7 @@ vi.mock('../../../SDK/tavern', () => {
     return {
         buildSdkChatKeyEvent: vi.fn(() => 'chat-1'),
         getCurrentTavernCharacterEvent: vi.fn(() => null),
+        getCurrentTavernUserNameEvent: vi.fn(() => '林远'),
         getTavernMessageTextEvent: vi.fn(() => ''),
         getTavernRuntimeContextEvent: vi.fn(() => ({ chat: [] })),
         getCurrentTavernUserSnapshotEvent: vi.fn(() => null),
@@ -554,10 +555,13 @@ describe('memory sdk takeover cold start sync', () => {
             .applyTakeoverConsolidation(result);
 
         expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
+            title: '橙狗狗与何盈的关系',
             entryType: 'relationship',
             detailPayload: expect.objectContaining({
                 sourceActorKey: expect.stringMatching(/^actor_/),
                 targetActorKey: expect.stringMatching(/^actor_/),
+                sourceDisplayName: '橙狗狗',
+                targetDisplayName: '何盈',
                 fields: expect.objectContaining({
                     relationTag: '暧昧',
                     participants: expect.arrayContaining([
@@ -566,6 +570,76 @@ describe('memory sdk takeover cold start sync', () => {
                     ]),
                 }),
             }),
+        }), expect.anything());
+    });
+
+    it('creates partial actor profiles for relationship endpoints that only exist as actor keys', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+        listActorProfilesMock.mockResolvedValue([{ actorKey: 'user', displayName: '林远' }]);
+
+        const result: MemoryTakeoverConsolidationResult = {
+            takeoverId: 'takeover-6',
+            chapterDigestIndex: [],
+            actorCards: [],
+            relationships: [
+                {
+                    sourceActorKey: 'user',
+                    targetActorKey: 'char_heying',
+                    participants: ['user', 'char_heying'],
+                    relationTag: '暧昧',
+                    state: '{{actor:char_heying}}仍在等待{{userDisplayName}}。',
+                    summary: '{{actor:char_heying}}与{{userDisplayName}}的关系进一步升温。',
+                    trust: 0.82,
+                    affection: 0.91,
+                    tension: 0.35,
+                },
+            ],
+            entityCards: [],
+            entityTransitions: [],
+            longTermFacts: [],
+            relationState: [],
+            taskState: [],
+            worldState: {},
+            activeSnapshot: null,
+            dedupeStats: {
+                totalFacts: 0,
+                dedupedFacts: 0,
+                relationUpdates: 1,
+                taskUpdates: 0,
+                worldUpdates: 0,
+            },
+            conflictStats: {
+                unresolvedFacts: 0,
+                unresolvedRelations: 0,
+                unresolvedTasks: 0,
+                unresolvedWorldStates: 0,
+                unresolvedEntities: 0,
+            },
+            generatedAt: Date.now(),
+        };
+
+        await (sdk as unknown as { applyTakeoverConsolidation: (value: MemoryTakeoverConsolidationResult) => Promise<void> })
+            .applyTakeoverConsolidation(result);
+
+        expect(ensureActorProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+            actorKey: 'char_heying',
+            displayName: 'heying',
+        }));
+        expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
+            entryType: 'actor_profile',
+            title: 'heying',
+            detailPayload: expect.objectContaining({
+                hydrationState: 'partial',
+                fields: expect.objectContaining({
+                    hydrationState: 'partial',
+                }),
+            }),
+        }), expect.anything());
+        expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
+            entryType: 'relationship',
+            title: '你与heying的关系',
+            summary: 'heying与你的关系进一步升温。',
+            detail: 'heying仍在等待你。',
         }), expect.anything());
     });
 
