@@ -28,10 +28,23 @@ export interface WorkbenchRecallExplanation {
     reasonCodes: string[];
     source?: string;
     retrievalProviderId?: string;
+    finalProviderId?: string;
+    seedProviderId?: string;
     retrievalRulePack?: string;
     compareKeySchemaVersion?: string;
     subQueries?: string[];
     matchModeCounts?: Record<string, number>;
+    vectorHitCount?: number;
+    mergeUsed?: boolean;
+    rerankUsed?: boolean;
+    rerankSource?: string;
+    strategyDecision?: {
+        route?: string;
+        candidateWindow?: number;
+        finalTopK?: number;
+        rerankEnabled?: boolean;
+        reasonCodes?: string[];
+    } | null;
     matchedRules?: Array<{
         pack: string;
         label: string;

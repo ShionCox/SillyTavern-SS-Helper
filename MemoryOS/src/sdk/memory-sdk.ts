@@ -855,6 +855,7 @@ export class MemorySDKImpl {
      * @returns 召回说明对象。
      */
     private buildRecallExplanationFromSnapshot(snapshot: PromptAssemblySnapshot): Record<string, unknown> {
+        const retrievalDiagnostics = (snapshot.diagnostics?.retrieval ?? null) as Record<string, unknown> | null;
         return {
             generatedAt: Date.now(),
             query: String(snapshot.query ?? ''),
@@ -863,9 +864,16 @@ export class MemorySDKImpl {
             reasonCodes: snapshot.reasonCodes,
             source: 'unified_memory',
             retrievalProviderId: snapshot.diagnostics?.providerId,
+            finalProviderId: String(retrievalDiagnostics?.finalProviderId ?? snapshot.diagnostics?.providerId ?? '').trim(),
+            seedProviderId: String(retrievalDiagnostics?.seedProviderId ?? '').trim(),
             retrievalRulePack: snapshot.diagnostics?.rulePackMode,
             compareKeySchemaVersion: snapshot.diagnostics?.compareKeySchemaVersion ?? 'v2',
             matchModeCounts: snapshot.diagnostics?.matchModeCounts ?? {},
+            vectorHitCount: Number(retrievalDiagnostics?.vectorHitCount ?? 0) || 0,
+            mergeUsed: retrievalDiagnostics?.mergeUsed === true,
+            rerankUsed: retrievalDiagnostics?.rerankUsed === true,
+            rerankSource: String(retrievalDiagnostics?.rerankSource ?? '').trim() || undefined,
+            strategyDecision: retrievalDiagnostics?.strategyDecision ?? null,
             contextRoute: snapshot.diagnostics?.contextRoute ?? null,
             matchedRules: snapshot.diagnostics?.contextRoute?.matchedRules ?? [],
             subQueries: snapshot.diagnostics?.contextRoute?.subQueries ?? [],

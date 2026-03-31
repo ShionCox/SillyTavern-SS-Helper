@@ -29,7 +29,7 @@ export {
 export { GraphService } from './graph-service';
 export { BindingResolutionService } from './binding-resolution-service';
 
-// ─── 第二阶段向量系统 ───
+// ─── 向量系统 ───
 export { EmbeddingService } from './embedding-service';
 export type { EmbeddingEncodeOptions, EmbeddingEncodeResult, EmbeddingModelInfo } from './embedding-service';
 export { VectorDocumentBuilder } from './vector-document-builder';
@@ -37,6 +37,7 @@ export { VectorStoreAdapterService } from './vector-store-adapter';
 export { VectorStrategyRouter } from './vector-strategy-router';
 export type { VectorStrategyRouterConfig } from './vector-strategy-router';
 export { VectorRerankService } from './vector-rerank-service';
+export { LLMHubRerankService } from './llmhub-rerank-service';
 export { HybridRetrievalService } from './hybrid-retrieval-service';
 export type { HybridRetrievalInput, HybridRetrievalOutput } from './hybrid-retrieval-service';
 export { LocalVectorStore } from './vector-stores/local-vector-store';

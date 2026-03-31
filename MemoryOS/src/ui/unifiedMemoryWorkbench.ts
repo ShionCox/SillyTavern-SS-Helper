@@ -939,6 +939,8 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
         reasonCodes: toStringArray(value.reasonCodes),
         source: String(value.source ?? '').trim() || undefined,
         retrievalProviderId: String(value.retrievalProviderId ?? '').trim() || undefined,
+        finalProviderId: String(value.finalProviderId ?? '').trim() || undefined,
+        seedProviderId: String(value.seedProviderId ?? '').trim() || undefined,
         retrievalRulePack: String(value.retrievalRulePack ?? '').trim() || undefined,
         compareKeySchemaVersion: String(value.compareKeySchemaVersion ?? '').trim() || undefined,
         matchModeCounts: (() => {
@@ -952,6 +954,23 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
                 result[String(key ?? '').trim()] = Math.max(0, Math.trunc(numericValue));
             });
             return result;
+        })(),
+        vectorHitCount: Number(value.vectorHitCount ?? 0) || 0,
+        mergeUsed: value.mergeUsed === true,
+        rerankUsed: value.rerankUsed === true,
+        rerankSource: String(value.rerankSource ?? '').trim() || undefined,
+        strategyDecision: (() => {
+            const record = toRecord(value.strategyDecision);
+            if (Object.keys(record).length <= 0) {
+                return null;
+            }
+            return {
+                route: String(record.route ?? '').trim() || undefined,
+                candidateWindow: Number(record.candidateWindow ?? 0) || undefined,
+                finalTopK: Number(record.finalTopK ?? 0) || undefined,
+                rerankEnabled: record.rerankEnabled === true,
+                reasonCodes: toStringArray(record.reasonCodes),
+            };
         })(),
         subQueries: toStringArray(value.subQueries),
         matchedRules: Array.isArray(value.matchedRules)

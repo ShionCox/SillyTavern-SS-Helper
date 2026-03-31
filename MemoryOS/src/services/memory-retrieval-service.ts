@@ -92,6 +92,10 @@ export class MemoryRetrievalService {
         let vectorProviderAvailable = this.orchestrator.isVectorProviderAvailable();
         let vectorUnavailableReason = this.orchestrator.getVectorUnavailableReason();
         let resultSourceLabels: ResultSourceLabel[];
+        let finalProviderId = result.providerId;
+        let strategyDecision = null as RetrievalOutputDiagnostics['strategyDecision'];
+        let vectorHitCount = 0;
+        let mergeUsed = false;
         let hybridRerankUsed = false;
         let hybridRerankReasonCodes: string[] = [];
         let hybridRerankSource: 'none' | 'rule' | 'llmhub' = 'none';
@@ -118,6 +122,10 @@ export class MemoryRetrievalService {
             });
 
             finalItems = hybridResult.items;
+            finalProviderId = hybridResult.finalProviderId;
+            strategyDecision = hybridResult.strategyDecision;
+            vectorHitCount = hybridResult.vectorHits.length;
+            mergeUsed = hybridResult.mergeUsed;
             vectorProviderAvailable = hybridResult.vectorAvailable;
             vectorUnavailableReason = hybridResult.vectorUnavailableReason;
             hybridRerankUsed = hybridResult.rerankUsed;
@@ -162,13 +170,17 @@ export class MemoryRetrievalService {
             expandedCount: result.diagnostics?.expandedCount ?? 0,
             coverageTriggeredFacets: (result.diagnostics?.coverageTriggeredFacets ?? []) as RetrievalFacet[],
             diversityDroppedCount: result.diagnostics?.diversityDroppedCount ?? 0,
-            finalCount: result.diagnostics?.finalCount ?? finalItems.length,
+            finalCount: finalItems.length,
             seedQueryText: result.diagnostics?.seedQueryText ?? input.query,
             boostSchemaIds: result.diagnostics?.boostSchemaIds ?? [],
             coverageSubQueries: result.diagnostics?.coverageSubQueries ?? {},
             traceRecords: result.diagnostics?.traceRecords ?? [],
+            finalProviderId,
             vectorProviderStatus,
             resultSourceLabels,
+            strategyDecision,
+            vectorHitCount,
+            mergeUsed,
             rerankUsed: hybridRerankUsed,
             rerankReasonCodes: hybridRerankReasonCodes,
             rerankSource: hybridRerankSource,
@@ -177,7 +189,7 @@ export class MemoryRetrievalService {
         return {
             items: finalItems,
             retrievalMode: config.retrievalMode,
-            providerId: result.providerId,
+            providerId: finalProviderId,
             contextRoute: result.contextRoute,
             diagnostics,
         };

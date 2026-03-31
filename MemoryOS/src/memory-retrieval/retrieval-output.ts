@@ -1,6 +1,7 @@
 import type { RetrievalMode } from './retrieval-mode';
 import type { RetrievalContextRoute, RetrievalResultItem, RetrievalFacet } from './types';
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
+import type { VectorStrategyDecision } from '../types/vector-strategy';
 
 /**
  * 功能：统一检索输出。
@@ -46,10 +47,18 @@ export interface RetrievalOutputDiagnostics {
     coverageSubQueries: Partial<Record<RetrievalFacet, string>>;
     /** trace 日志 */
     traceRecords: MemoryDebugLogRecord[];
+    /** 最终链路 provider 标识 */
+    finalProviderId: string;
     /** 向量 provider 状态 */
     vectorProviderStatus: VectorProviderStatus;
     /** 各结果项的来源标注 */
     resultSourceLabels: ResultSourceLabel[];
+    /** 向量策略决策 */
+    strategyDecision?: VectorStrategyDecision | null;
+    /** 向量命中数量 */
+    vectorHitCount?: number;
+    /** 是否执行了 lexical/vector 融合 */
+    mergeUsed?: boolean;
     /** 是否执行了重排 */
     rerankUsed?: boolean;
     /** 重排原因码 */

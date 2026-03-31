@@ -5,6 +5,16 @@ const RECALL_SOURCE_LABEL_MAP: Record<string, string> = {
 
 const RETRIEVAL_PROVIDER_LABEL_MAP: Record<string, string> = {
     lexical_bm25: '词法检索',
+    hybrid_vector_direct: '混合检索（向量直出）',
+    hybrid_vector_rule_rerank: '混合检索（规则重排）',
+    hybrid_vector_llmhub_rerank: '混合检索（LLMHub 重排）',
+    hybrid_vector_unavailable_fallback_lexical: '混合检索（向量不可用，回退词法）',
+    hybrid_encode_failed_fallback_lexical: '混合检索（向量编码失败，回退词法）',
+    vector_only_direct: '仅向量检索（直出）',
+    vector_only_rule_rerank: '仅向量检索（规则重排）',
+    vector_only_llmhub_rerank: '仅向量检索（LLMHub 重排）',
+    vector_only_unavailable: '仅向量检索（向量不可用）',
+    vector_only_encode_failed: '仅向量检索（编码失败）',
 };
 
 const RETRIEVAL_RULE_PACK_LABEL_MAP: Record<string, string> = {

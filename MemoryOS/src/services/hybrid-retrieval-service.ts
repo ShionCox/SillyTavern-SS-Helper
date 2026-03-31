@@ -46,8 +46,12 @@ export interface HybridRetrievalOutput {
     items: RetrievalResultItem[];
     /** 使用的策略决策 */
     strategyDecision: VectorStrategyDecision | null;
+    /** 最终链路 provider 标识 */
+    finalProviderId: string;
     /** 向量搜索原始命中 */
     vectorHits: VectorSearchHit[];
+    /** 是否执行了 lexical/vector 融合 */
+    mergeUsed: boolean;
     /** 是否执行了 rerank */
     rerankUsed: boolean;
     /** rerank 原因码 */
@@ -146,7 +150,9 @@ export class HybridRetrievalService {
             return {
                 items: input.lexicalResults,
                 strategyDecision: null,
+                finalProviderId: 'lexical_bm25',
                 vectorHits: [],
+                mergeUsed: false,
                 rerankUsed: false,
                 rerankReasonCodes: ['lexical_only'],
                 rerankSource: 'none',
@@ -165,7 +171,9 @@ export class HybridRetrievalService {
                 return {
                     items: [],
                     strategyDecision: decision,
+                    finalProviderId: 'vector_only_unavailable',
                     vectorHits: [],
+                    mergeUsed: false,
                     rerankUsed: false,
                     rerankReasonCodes: ['vector_unavailable'],
                     rerankSource: 'none',
@@ -177,7 +185,9 @@ export class HybridRetrievalService {
             return {
                 items: input.lexicalResults,
                 strategyDecision: decision,
+                finalProviderId: 'hybrid_vector_unavailable_fallback_lexical',
                 vectorHits: [],
+                mergeUsed: false,
                 rerankUsed: false,
                 rerankReasonCodes: ['vector_unavailable_fallback_lexical'],
                 rerankSource: 'none',
@@ -195,7 +205,9 @@ export class HybridRetrievalService {
                 return {
                     items: [],
                     strategyDecision: decision,
+                    finalProviderId: 'vector_only_encode_failed',
                     vectorHits: [],
+                    mergeUsed: false,
                     rerankUsed: false,
                     rerankReasonCodes: ['encode_failed'],
                     rerankSource: 'none',
@@ -206,7 +218,9 @@ export class HybridRetrievalService {
             return {
                 items: input.lexicalResults,
                 strategyDecision: decision,
+                finalProviderId: 'hybrid_encode_failed_fallback_lexical',
                 vectorHits: [],
+                mergeUsed: false,
                 rerankUsed: false,
                 rerankReasonCodes: ['encode_failed_fallback_lexical'],
                 rerankSource: 'none',
@@ -238,6 +252,15 @@ export class HybridRetrievalService {
      * @returns 策略决策。
      */
     private buildDecision(input: HybridRetrievalInput, settings: MemoryOSSettings): VectorStrategyDecision {
+        if (!settings.vectorEnableStrategyRouting) {
+            return {
+                route: 'fast_vector',
+                candidateWindow: settings.vectorTopK,
+                finalTopK: Math.min(settings.vectorTopK, settings.vectorFinalTopK),
+                rerankEnabled: false,
+                reasonCodes: ['strategy_routing_disabled_runtime'],
+            };
+        }
         const baseDecision = this.strategyRouter.route({
             query: input.query,
             mergedContextText: input.queryContext?.mergedContextText,
@@ -319,7 +342,9 @@ export class HybridRetrievalService {
             return {
                 items: directItems,
                 strategyDecision: decision,
+                finalProviderId: 'vector_only_direct',
                 vectorHits,
+                mergeUsed: false,
                 rerankUsed: false,
                 rerankReasonCodes: ['fast_vector_no_rerank'],
                 rerankSource: 'none',
@@ -340,7 +365,9 @@ export class HybridRetrievalService {
         return {
             items: rerankResult.items,
             strategyDecision: decision,
+            finalProviderId: rerankResult.source === 'llmhub' ? 'vector_only_llmhub_rerank' : 'vector_only_rule_rerank',
             vectorHits,
+            mergeUsed: false,
             rerankUsed: rerankResult.used,
             rerankReasonCodes: rerankResult.reasonCodes,
             rerankSource: rerankResult.source,
@@ -377,7 +404,9 @@ export class HybridRetrievalService {
             return {
                 items: merged.slice(0, finalTopK),
                 strategyDecision: decision,
+                finalProviderId: 'hybrid_vector_direct',
                 vectorHits,
+                mergeUsed: true,
                 rerankUsed: false,
                 rerankReasonCodes: ['fast_hybrid_no_rerank'],
                 rerankSource: 'none',
@@ -398,7 +427,9 @@ export class HybridRetrievalService {
         return {
             items: rerankResult.items,
             strategyDecision: decision,
+            finalProviderId: rerankResult.source === 'llmhub' ? 'hybrid_vector_llmhub_rerank' : 'hybrid_vector_rule_rerank',
             vectorHits,
+            mergeUsed: true,
             rerankUsed: rerankResult.used,
             rerankReasonCodes: rerankResult.reasonCodes,
             rerankSource: rerankResult.source,
