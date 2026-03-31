@@ -11,6 +11,7 @@ const LINK_COLORS: Record<WorkbenchGraphLinkType, string> = {
     enemy: '#ef4444',
     neutral: '#94a3b8',
     family: '#c4a062',
+    romance: '#ec4899',
 };
 
 /**

@@ -16,14 +16,14 @@ export const ANCIENT_TRADITIONAL_PROFILE: WorldProfileDefinition = {
         hasFormalPoliticalOrder: true,
         hasSupernatural: true,
     },
-    preferredSchemas: ['actor_profile', 'relationship', 'event', 'location', 'organization', 'task', 'world_hard_rule'],
+    preferredSchemas: ['event', 'location', 'organization', 'task', 'world_hard_rule'],
     preferredFacets: ['court_order', 'sect_rules', 'honor', 'fate', 'lineage'],
     schemaFieldExtensions: {
         location: ['region', 'sectControl', 'forbiddenZone'],
         organization: ['lineage', 'sects', 'allegiance'],
     },
     summaryBias: {
-        boostedTypes: ['relationship', 'event', 'world_hard_rule', 'task'],
+        boostedTypes: ['event', 'world_hard_rule', 'task'],
         suppressedTypes: ['technology_rule'],
     },
     injectionStyle: 'ancient_traditional',

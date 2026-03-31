@@ -21,6 +21,7 @@ export type {
     DBMemoryEntry,
     DBActorMemoryProfile,
     DBRoleEntryMemory,
+    DBMemoryRelationship,
     DBSummarySnapshot,
     DBWorldProfileBinding,
     DBLlmCredential,

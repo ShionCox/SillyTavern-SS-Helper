@@ -12,8 +12,6 @@ const FACET_SCHEMA_MAP: Record<string, RetrievalFacet> = {
     world_hard_rule_legacy: 'world',
     scene_shared_state: 'scene',
     location: 'scene',
-    relationship: 'relationship',
-    actor_profile: 'relationship',
     event: 'event',
     actor_visible_event: 'event',
     actor_private_interpretation: 'interpretation',

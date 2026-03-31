@@ -219,7 +219,7 @@ function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot)
         });
     }
 
-    if (entry.entryType === 'relationship') {
+    if (false && entry.entryType === 'relationship') {
         const sourceActorKey = String(payload.sourceActorKey ?? fields.sourceActorKey ?? '').trim();
         const targetActorKey = String(payload.targetActorKey ?? fields.targetActorKey ?? '').trim();
         sections.push({

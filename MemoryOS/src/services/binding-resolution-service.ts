@@ -1,4 +1,5 @@
 import type { MemoryCompareKeyIndexRecord } from '../db/db';
+import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../core/actor-key';
 import { CompareKeyService } from '../core/compare-key-service';
 import type {
     ActorMemoryProfile,
@@ -167,22 +168,12 @@ export class BindingResolutionService {
             });
         };
 
-        const actorEntryAliasMap = new Map<string, string[]>();
-        existingEntries
-            .filter((entry: MemoryEntry): boolean => entry.entryType === 'actor_profile')
-            .forEach((entry: MemoryEntry): void => {
-                const payload = this.toRecord(entry.detailPayload);
-                const fields = this.toRecord(payload.fields);
-                const actorKey = this.normalizeText(payload.actorKey ?? fields.actorKey) || this.normalizeActorKey(entry.title);
-                actorEntryAliasMap.set(actorKey, this.toStringArray(fields.aliases ?? payload.aliases));
-            });
-
         actorProfiles.forEach((profile: ActorMemoryProfile): void => {
             appendCandidate({
                 bindingKey: 'actors',
                 ref: profile.actorKey,
                 label: profile.displayName,
-                aliases: actorEntryAliasMap.get(profile.actorKey) ?? [],
+                aliases: [],
                 sourceKind: 'actor',
             });
         });
@@ -365,7 +356,6 @@ export class BindingResolutionService {
      */
     private resolveBindingKeyFromEntryType(entryType: string): BindingKey | null {
         const normalizedType = this.normalizeText(entryType).toLowerCase();
-        if (normalizedType === 'actor_profile') return 'actors';
         if (normalizedType === 'organization') return 'organizations';
         if (normalizedType === 'city') return 'cities';
         if (normalizedType === 'nation') return 'nations';
@@ -495,7 +485,8 @@ export class BindingResolutionService {
      * @returns 角色键。
      */
     private normalizeActorKey(value: unknown): string {
-        return this.normalizeText(value).toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'actor';
+        const normalizedValue = normalizeStrictActorKeySyntax(value);
+        return isStrictActorKey(normalizedValue) ? normalizedValue : '';
     }
 
     /**

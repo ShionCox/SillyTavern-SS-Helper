@@ -8,6 +8,7 @@ export type {
     MemoryEntryAuditRecord,
     ActorMemoryProfile,
     RoleEntryMemory,
+    MemoryRelationshipRecord,
     SummaryEntryUpsert,
     SummaryRefreshBinding,
     SummarySnapshot,

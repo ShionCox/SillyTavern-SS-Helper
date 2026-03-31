@@ -70,7 +70,7 @@ export interface RouteRetrievalContextOptions {
 const FACET_SCHEMA_MAP: Record<RetrievalFacet, string[]> = {
     world: ['world_core_setting', 'world_hard_rule', 'world_global_state', 'world_hard_rule_legacy'],
     scene: ['scene_shared_state', 'location'],
-    relationship: ['relationship', 'actor_profile'],
+    relationship: ['actor_private_interpretation'],
     event: ['event', 'actor_visible_event'],
     interpretation: ['actor_private_interpretation'],
     organization_politics: ['organization', 'city', 'nation', 'location'],

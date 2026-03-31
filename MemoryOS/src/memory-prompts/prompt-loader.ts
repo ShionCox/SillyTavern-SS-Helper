@@ -100,16 +100,20 @@ const REQUIRED_SECTIONS: string[] = [
 
 const SUMMARY_COMMON_RULES: string[] = [
     '这是 summary mutation 任务，只输出真正需要落库的稀疏 mutation。',
-    'ADD 使用 newRecord；UPDATE、MERGE、INVALIDATE 使用 patch；DELETE 和 NOOP 不要输出 payload、patch、newRecord。',
+    'ADD 使用 newRecord，UPDATE、MERGE、INVALIDATE 使用 patch，DELETE 和 NOOP 不要输出 payload、patch、newRecord。',
     'compareKey 采用 ck:v2 协议；entityKey 是内部稳定键，compareKey 是跨流程比对键，matchKeys 仅用于模糊候选。',
-    '无法确认同一对象时优先 NOOP、UPDATE 或 MERGE，不要因为名字变化盲目 ADD。',
+    'actorKey 只能使用 user 或 actor_*，禁止输出 char_*、ck:*、ek:* 或任何临时引用。',
+    '不要输出 targetKind=actor_profile 或 targetKind=relationship 这类旧 entry 主链动作。',
+    '无法确认同一对象时优先 NOOP、UPDATE 或 MERGE，不要因名字变化盲目 ADD。',
     'reasonCodes、candidateId、compareKey、matchKeys 不是每个动作都必须出现，只有确认时才填写。',
 ];
 
 const TAKEOVER_COMMON_RULES: string[] = [
-    '优先复用 knownContext、knownEntities、已有 entityKey 与 compareKey，不要因为别名或描述变化创建重复对象。',
-    'compareKey 采用 ck:v2 协议；relationship 必须保留 sourceActorKey、targetActorKey、relationTag 的结构语义。',
+    '优先复用 knownContext、knownEntities、已有 entityKey 与 compareKey，不要因别名或描述变化创建重复对象。',
+    'compareKey 采用 ck:v2 协议；relationships 必须保留 sourceActorKey、targetActorKey、relationTag 的结构语义。',
     'entityKey 是内部稳定主键；compareKey 用于跨流程归并；matchKeys 只做候选召回，不参与唯一判定。',
+    '所有 actorKey 只能使用 user 或 actor_*，禁止输出 char_*、ck:*、ek:* 或其他协议式引用。',
+    'actorCards 对应 actor_memory_profiles 主表，relationships 对应 memory_relationships 主表，不会写入 memory_entries。',
     '实体、任务、世界状态、事件如存在显式 bindings，请优先补 bindings，不要只补文本摘要。',
     '输出必须偏向结构化主源；字段猜测、模糊关系和不确定线索宁可保守，也不要伪造稳定事实。',
 ];
@@ -422,7 +426,7 @@ function coldStartSample(): Record<string, unknown> {
     return {
         schemaVersion: '1.0.0',
         identity: {
-            actorKey: 'char_erin',
+            actorKey: 'actor_erin',
             displayName: '艾琳',
             aliases: ['小艾'],
             identityFacts: ['王都情报员'],
@@ -469,7 +473,7 @@ function coldStartCoreSample(): Record<string, unknown> {
     return {
         schemaVersion: '1.0.0',
         identity: {
-            actorKey: 'char_erin',
+            actorKey: 'actor_erin',
             displayName: '艾琳',
             aliases: ['小艾'],
             identityFacts: ['王都情报员'],
@@ -494,7 +498,7 @@ function coldStartStateSample(): Record<string, unknown> {
     return {
         schemaVersion: '1.0.0',
         identity: {
-            actorKey: 'char_erin',
+            actorKey: 'actor_erin',
             displayName: '艾琳',
             aliases: [],
             identityFacts: [],
@@ -506,9 +510,9 @@ function coldStartStateSample(): Record<string, unknown> {
         worldBase: [],
         relationships: [
             {
-                sourceActorKey: 'char_erin',
+                sourceActorKey: 'actor_erin',
                 targetActorKey: 'user',
-                participants: ['char_erin', 'user'],
+                participants: ['actor_erin', 'user'],
                 relationTag: '陌生人',
                 state: '艾琳对{{userDisplayName}}保持警惕，但愿意继续接触。',
                 summary: '双方建立了可继续推进的初始接触。',
@@ -532,7 +536,7 @@ function summaryPlannerSample(): Record<string, unknown> {
     return {
         should_update: true,
         focus_types: ['relationship', 'task', 'world_global_state'],
-        entities: ['user', 'char_erin', 'ck:v2:task:护送密使离开王都:王都'],
+        entities: ['user', 'actor_erin', 'ck:v2:task:护送密使离开王都:王都'],
         topics: ['关系推进', '任务进展', '夜禁状态变化'],
         reasons: ['当前窗口形成了稳定任务推进与关系变化。'],
     };
@@ -553,7 +557,7 @@ function summaryMutationSample(): Record<string, unknown> {
                 patch: {
                     summary: '任务已从确认情报升级为正式撤离执行。',
                     bindings: {
-                        actors: ['user', 'char_erin'],
+                        actors: ['user', 'actor_erin'],
                         organizations: ['entity:organization:night_raven'],
                         cities: ['entity:city:royal_capital'],
                     },
@@ -568,11 +572,6 @@ function summaryMutationSample(): Record<string, unknown> {
                     source: 'summary',
                     sourceLabel: '结构化回合总结',
                 },
-            },
-            {
-                action: 'NOOP',
-                targetKind: 'relationship',
-                reasonCodes: ['state_already_covered'],
             },
         ],
     };
@@ -608,7 +607,7 @@ function takeoverBatchSample(): Record<string, unknown> {
         summary: '本批次主要确认了撤离路线、任务推进和关系升温。',
         actorCards: [
             {
-                actorKey: 'char_erin',
+                actorKey: 'actor_erin',
                 displayName: '艾琳',
                 aliases: ['小艾'],
                 identityFacts: ['王都情报员'],
@@ -619,8 +618,8 @@ function takeoverBatchSample(): Record<string, unknown> {
         relationships: [
             {
                 sourceActorKey: 'user',
-                targetActorKey: 'char_erin',
-                participants: ['user', 'char_erin'],
+                targetActorKey: 'actor_erin',
+                participants: ['user', 'actor_erin'],
                 relationTag: '朋友',
                 state: '{{userDisplayName}}与艾琳已经形成谨慎但有效的合作关系。',
                 summary: '双方建立了可持续推进的合作信任。',
@@ -647,7 +646,7 @@ function takeoverBatchSample(): Record<string, unknown> {
                 },
                 confidence: 0.88,
                 bindings: {
-                    actors: ['char_erin'],
+                    actors: ['actor_erin'],
                     organizations: [],
                     cities: ['entity:city:royal_capital'],
                     locations: [],
@@ -674,7 +673,7 @@ function takeoverBatchSample(): Record<string, unknown> {
                 schemaVersion: 'v2',
                 canonicalName: '确认北城门撤离路线',
                 bindings: {
-                    actors: ['char_erin', 'user'],
+                    actors: ['actor_erin', 'user'],
                     organizations: ['entity:organization:night_raven'],
                     cities: ['entity:city:royal_capital'],
                     locations: ['entity:location:north_gate'],
@@ -689,14 +688,14 @@ function takeoverBatchSample(): Record<string, unknown> {
         ],
         relationTransitions: [
             {
-                target: 'char_erin',
+                target: 'actor_erin',
                 from: '陌生试探',
                 to: '谨慎合作',
                 reason: '双方确认共同目标并共同承担风险。',
                 relationTag: '朋友',
                 targetType: 'actor',
                 bindings: {
-                    actors: ['user', 'char_erin'],
+                    actors: ['user', 'actor_erin'],
                     organizations: [],
                     cities: ['entity:city:royal_capital'],
                     locations: ['entity:location:north_gate'],
@@ -723,7 +722,7 @@ function takeoverBatchSample(): Record<string, unknown> {
                 schemaVersion: 'v2',
                 canonicalName: '护送密使离开王都',
                 bindings: {
-                    actors: ['user', 'char_erin'],
+                    actors: ['user', 'actor_erin'],
                     organizations: ['entity:organization:night_raven'],
                     cities: ['entity:city:royal_capital'],
                     locations: ['entity:location:north_gate'],
@@ -740,7 +739,7 @@ function takeoverBatchSample(): Record<string, unknown> {
                 value: '持续执行中',
                 summary: '夜禁仍然有效，直接影响撤离路径选择。',
                 bindings: {
-                    actors: ['user', 'char_erin'],
+                    actors: ['user', 'actor_erin'],
                     organizations: ['entity:organization:night_raven'],
                     cities: ['entity:city:royal_capital'],
                     locations: ['entity:location:north_gate'],
@@ -812,14 +811,14 @@ function takeoverConflictBatchSample(): Record<string, unknown> {
         conflictType: 'state_divergence',
         buckets: [
             {
-                bucketId: 'relationship/state_divergence/user_char_erin',
+                bucketId: 'relationship/state_divergence/user_actor_erin',
                 domain: 'relationship',
                 conflictType: 'state_divergence',
                 records: [
                     {
                         sourceActorKey: 'user',
-                        targetActorKey: 'char_erin',
-                        participants: ['user', 'char_erin'],
+                        targetActorKey: 'actor_erin',
+                        participants: ['user', 'actor_erin'],
                         relationTag: '朋友',
                         state: '双方已建立谨慎合作。',
                         summary: '形成了可继续推进的合作关系。',
@@ -829,12 +828,12 @@ function takeoverConflictBatchSample(): Record<string, unknown> {
         ],
         patches: [
             {
-                bucketId: 'relationship/state_divergence/user_char_erin',
+                bucketId: 'relationship/state_divergence/user_actor_erin',
                 domain: 'relationship',
                 resolutions: [
                     {
                         action: 'merge',
-                        primaryKey: 'relationship:user:char_erin:朋友',
+                        primaryKey: 'relationship:user:actor_erin:朋友',
                         secondaryKeys: [],
                         fieldOverrides: {},
                         reasonCodes: ['llm_conflict_merge'],

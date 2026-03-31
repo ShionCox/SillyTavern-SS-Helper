@@ -18,7 +18,6 @@ import {
     buildLocationCompareKey,
     buildNationCompareKey,
     buildOrganizationCompareKey,
-    buildRelationshipCompareKey,
     buildTaskCompareKey,
     buildWorldStateCompareKey,
 } from '../core/compare-key';
@@ -79,6 +78,7 @@ import type {
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
+    MemoryRelationshipRecord,
 } from '../types';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
@@ -302,6 +302,9 @@ export class MemorySDKImpl {
             bind: (actorKey: string, entryId: string) => ReturnType<EntryRepository['bindRoleToEntry']>;
             unbind: (actorKey: string, entryId: string) => Promise<void>;
         };
+        relationships: {
+            list: () => ReturnType<EntryRepository['listRelationships']>;
+        };
         summaries: {
             list: (limit?: number) => ReturnType<EntryRepository['listSummarySnapshots']>;
             capture: (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => ReturnType<SummaryService['captureSummaryFromChat']>;
@@ -413,7 +416,6 @@ export class MemorySDKImpl {
                     0,
                     Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
                 );
-                const pendingStartIndex = lastSummarizedIndex + 1;
                 const pendingEndIndex = messageFloorCount;
                 const messages = hostMessages.length > 0
                     ? hostMessages.slice(-messageWindowLimit)
@@ -798,6 +800,9 @@ export class MemorySDKImpl {
                 bind: async (actorKey: string, entryId: string) => this.entryRepository.bindRoleToEntry(actorKey, entryId),
                 unbind: async (actorKey: string, entryId: string) => this.entryRepository.unbindRoleFromEntry(actorKey, entryId),
             },
+            relationships: {
+                list: async () => this.entryRepository.listRelationships(),
+            },
             summaries: {
                 list: async (limit?: number) => this.entryRepository.listSummarySnapshots(limit),
                 capture: async (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => this.summaryService.captureSummaryFromChat(input),
@@ -914,6 +919,7 @@ export class MemorySDKImpl {
      */
     private async applyTakeoverConsolidation(result: MemoryTakeoverConsolidationResult): Promise<void> {
         const applyResults: ApplyLedgerMutationBatchResult[] = [];
+        const relationshipRecords: MemoryRelationshipRecord[] = [];
         for (const actorCard of result.actorCards ?? []) {
             await this.persistTakeoverActorCard(actorCard, result.takeoverId);
         }
@@ -1003,13 +1009,16 @@ export class MemorySDKImpl {
             }));
         }
 
-                for (const relationship of result.relationships ?? []) {
-            await this.persistTakeoverStructuredRelationship({
+        for (const relationship of result.relationships ?? []) {
+            const record = await this.persistTakeoverStructuredRelationship({
                 relationship,
                 actorCards: result.actorCards ?? [],
                 existingActorCards,
                 takeoverId: result.takeoverId,
             });
+            if (record) {
+                relationshipRecords.push(record);
+            }
         }
         for (const relation of result.relationState) {
             const resolvedRelationActor = this.resolveTakeoverRelationActorTarget(
@@ -1026,7 +1035,7 @@ export class MemorySDKImpl {
                 continue;
             }
             if (resolvedRelationActor) {
-                await this.persistTakeoverActorRelation({
+                const record = await this.persistTakeoverActorRelation({
                     actorKey: resolvedRelationActor.actorKey,
                     displayName: resolvedRelationActor.displayName,
                     relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
@@ -1034,6 +1043,9 @@ export class MemorySDKImpl {
                     relationTag,
                     takeoverId: result.takeoverId,
                 });
+                if (record) {
+                    relationshipRecords.push(record);
+                }
                 continue;
             }
             const resolvedEntity = this.resolveTakeoverRelationEntityTarget(
@@ -1058,7 +1070,7 @@ export class MemorySDKImpl {
             if (!targetActorKey) {
                 continue;
             }
-                await this.persistTakeoverActorRelation({
+                const record = await this.persistTakeoverActorRelation({
                     actorKey: targetActorKey,
                     displayName: this.resolveTakeoverActorDisplayName(targetActorKey, relation.target),
                     relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
@@ -1066,7 +1078,11 @@ export class MemorySDKImpl {
                     relationTag,
                     takeoverId: result.takeoverId,
                 });
+                if (record) {
+                    relationshipRecords.push(record);
+                }
             }
+        await this.entryRepository.replaceRelationshipsForTakeover(this.dedupeRelationshipRecords(relationshipRecords));
 
         const taskMutations: LedgerMutation[] = [];
         for (const task of result.taskState) {
@@ -1460,73 +1476,6 @@ export class MemorySDKImpl {
             actorKey,
             displayName,
         });
-        const existingActorEntries = await this.entryRepository.listEntries({
-            entryType: 'actor_profile',
-            rememberedByActorKey: actorKey,
-        });
-        const existingEntry = existingActorEntries[0] ?? null;
-        const existingPayload = this.toRecord(existingEntry?.detailPayload);
-        const existingFields = this.toRecord(existingPayload.fields);
-        const currentHydrationState = String(existingFields.hydrationState ?? existingPayload.hydrationState ?? '').trim();
-        const nextHydrationState = currentHydrationState === 'full' || input.hydrationState === 'full' ? 'full' : 'partial';
-        const identityFacts = this.dedupeTakeoverStringList([
-            ...this.normalizeStringArray(existingFields.identityFacts),
-            ...(input.identityFacts ?? []),
-        ]);
-        const originFacts = this.dedupeTakeoverStringList([
-            ...this.normalizeStringArray(existingFields.originFacts),
-            ...(input.originFacts ?? []),
-        ]);
-        const traits = this.dedupeTakeoverStringList([
-            ...this.normalizeStringArray(existingFields.traits),
-            ...(input.traits ?? []),
-        ]);
-        const aliases = this.dedupeTakeoverStringList([
-            ...this.normalizeStringArray(existingFields.aliases),
-            ...(input.aliases ?? []),
-        ]);
-        const summary = identityFacts.join('；')
-            || existingEntry?.summary
-            || (nextHydrationState === 'full' ? `${displayName}的角色卡` : `${displayName}的轻量角色卡`);
-        await this.entryRepository.applyLedgerMutationBatch([{
-            targetKind: 'actor_profile',
-            action: existingEntry ? 'UPDATE' : 'ADD',
-            title: displayName,
-            entryId: existingEntry?.entryId,
-            compareKey: buildCompareKey('actor_profile', displayName, { actorKey }),
-            summary,
-            detail: existingEntry?.detail ?? '',
-            tags: existingEntry?.tags?.length ? existingEntry.tags : ['actor_profile'],
-            actorBindings: [actorKey],
-            reasonCodes: [existingEntry ? `takeover_actor_${nextHydrationState}_update` : `takeover_actor_${nextHydrationState}_add`],
-            detailPayload: {
-                ...existingPayload,
-                actorKey,
-                hydrationState: nextHydrationState,
-                fields: {
-                    ...existingFields,
-                    actorKey,
-                    aliases,
-                    identityFacts,
-                    originFacts,
-                    traits,
-                    hydrationState: nextHydrationState,
-                },
-                ...(input.takeoverId ? {
-                    takeover: {
-                        source: 'old_chat_takeover',
-                        takeoverId: input.takeoverId,
-                    },
-                } : {}),
-            },
-        }], {
-            chatKey: this.chatKey_,
-            source: 'takeover',
-            sourceLabel: '旧聊天接管整合',
-            takeoverId: input.takeoverId,
-            allowCreate: true,
-            allowInvalidate: true,
-        });
         return { actorKey, displayName };
     }
 
@@ -1538,14 +1487,14 @@ export class MemorySDKImpl {
         relationReason: string;
         relationTag: string;
         takeoverId: string;
-    }): Promise<void> {
+    }): Promise<MemoryRelationshipRecord> {
         const actor = await this.ensureTakeoverActorReference({
             actorKey: input.actorKey,
             displayName: input.displayName,
             takeoverId: input.takeoverId,
             hydrationState: 'partial',
         });
-        await this.persistTakeoverRelationshipEntry({
+        return this.persistTakeoverRelationshipEntry({
             sourceActorKey: 'user',
             sourceDisplayName: resolveCurrentNarrativeUserName(),
             targetActorKey: actor.actorKey,
@@ -1576,7 +1525,7 @@ export class MemorySDKImpl {
         }>;
         existingActorCards: Array<{ actorKey: string; displayName: string }>;
         takeoverId: string;
-    }): Promise<void> {
+    }): Promise<MemoryRelationshipRecord | null> {
         const narrativeContext = this.buildTakeoverNarrativeRendererContext({
             actorCards: input.actorCards,
             existingActorCards: input.existingActorCards,
@@ -1617,13 +1566,13 @@ export class MemorySDKImpl {
             hydrationState: 'partial',
         });
         if (!sourceActor || !targetActor || sourceActor.actorKey === targetActor.actorKey) {
-            return;
+            return null;
         }
         narrativeContext.labelMap?.set(sourceActor.actorKey, sourceActor.displayName);
         narrativeContext.labelMap?.set(`actor:${sourceActor.actorKey}`, sourceActor.displayName);
         narrativeContext.labelMap?.set(targetActor.actorKey, targetActor.displayName);
         narrativeContext.labelMap?.set(`actor:${targetActor.actorKey}`, targetActor.displayName);
-        await this.persistTakeoverRelationshipEntry({
+        return this.persistTakeoverRelationshipEntry({
             sourceActorKey: sourceActor.actorKey,
             sourceDisplayName: sourceActor.displayName,
             targetActorKey: targetActor.actorKey,
@@ -1666,14 +1615,7 @@ export class MemorySDKImpl {
         participants: string[];
         takeoverId: string;
         reasonCode: string;
-    }): Promise<void> {
-        const compareKey = buildRelationshipCompareKey(input.sourceActorKey, input.targetActorKey, input.relationTag);
-        const existingEntries = await this.entryRepository.listEntries({ entryType: 'relationship' });
-        const existingEntry = existingEntries.find((entry) => {
-            const payload = this.toRecord(entry.detailPayload);
-            const fields = this.toRecord(payload.fields);
-            return String(payload.compareKey ?? fields.compareKey ?? '').trim() === compareKey;
-        }) ?? null;
+    }): Promise<MemoryRelationshipRecord> {
         const normalizedParticipants = this.dedupeTakeoverStringList([
             input.sourceActorKey,
             input.targetActorKey,
@@ -1687,54 +1629,16 @@ export class MemorySDKImpl {
         const normalizedTrust = this.clampTakeover01(input.trust);
         const normalizedAffection = this.clampTakeover01(input.affection);
         const normalizedTension = this.clampTakeover01(input.tension);
-        await this.entryRepository.applyLedgerMutationBatch([{
-            targetKind: 'relationship',
-            action: existingEntry ? 'UPDATE' : 'ADD',
-            title,
-            entryId: existingEntry?.entryId,
-            compareKey,
+        return this.entryRepository.saveRelationship({
+            sourceActorKey: input.sourceActorKey,
+            targetActorKey: input.targetActorKey,
+            relationTag: input.relationTag,
+            state: input.state,
             summary: input.summary,
-            detail: input.state,
-            tags: this.dedupeTakeoverStringList(['关系', input.relationTag]),
-            actorBindings: [input.sourceActorKey, input.targetActorKey],
-            reasonCodes: [existingEntry ? `${input.reasonCode}_update` : `${input.reasonCode}_add`],
-            detailPayload: {
-                ...(existingEntry?.detailPayload ?? {}),
-                compareKey,
-                sourceActorKey: input.sourceActorKey,
-                targetActorKey: input.targetActorKey,
-                sourceDisplayName,
-                targetDisplayName,
-                trust: normalizedTrust,
-                affection: normalizedAffection,
-                tension: normalizedTension,
-                fields: {
-                    ...this.toRecord(this.toRecord(existingEntry?.detailPayload).fields),
-                    compareKey,
-                    relationTag: input.relationTag,
-                    state: input.state,
-                    summary: input.summary,
-                    participants: normalizedParticipants,
-                    trust: normalizedTrust,
-                    affection: normalizedAffection,
-                    tension: normalizedTension,
-                    sourceDisplayName,
-                    targetDisplayName,
-                    sourceActorKey: input.sourceActorKey,
-                    targetActorKey: input.targetActorKey,
-                },
-                takeover: {
-                    source: 'old_chat_takeover',
-                    takeoverId: input.takeoverId,
-                },
-            },
-        }], {
-            chatKey: this.chatKey_,
-            source: 'takeover',
-            sourceLabel: '旧聊天接管整合',
-            takeoverId: input.takeoverId,
-            allowCreate: true,
-            allowInvalidate: true,
+            trust: normalizedTrust,
+            affection: normalizedAffection,
+            tension: normalizedTension,
+            participants: normalizedParticipants,
         });
     }
 
@@ -2171,6 +2075,25 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：按关系主键对接管结果里的关系记录去重，保留最后一次写入值。
+     * @param records 关系记录列表。
+     * @returns 去重后的关系列表。
+     */
+    private dedupeRelationshipRecords(records: MemoryRelationshipRecord[]): MemoryRelationshipRecord[] {
+        const recordMap = new Map<string, MemoryRelationshipRecord>();
+        records.forEach((record: MemoryRelationshipRecord): void => {
+            const relationTag = String(record.relationTag ?? '').trim() || 'relationship';
+            const relationshipId = String(record.relationshipId ?? '').trim()
+                || `${record.sourceActorKey}:${record.targetActorKey}:${relationTag}`;
+            recordMap.set(relationshipId, {
+                ...record,
+                relationshipId,
+            });
+        });
+        return [...recordMap.values()];
+    }
+
+    /**
      * 功能：为旧聊天实体生成稳定 compareKey。
      * @param entityType 实体类型。
      * @param explicitCompareKey 模型显式给出的 compareKey。
@@ -2551,13 +2474,6 @@ export class MemorySDKImpl {
         });
     }
 
-    /**
-     * 功能：解析旧聊天关系目标是否应视为真实角色。
-     * @param targetName 关系目标名称。
-     * @param actorCards 本次整合识别出的角色卡。
-     * @param existingActorCards 当前聊天已存在的角色卡。
-     * @returns 可用角色目标；无法确认时返回 null。
-     */
     /**
      * 功能：合并多次统一落盘结果，供接管链路输出统一诊断。
      * @param results 多次落盘结果

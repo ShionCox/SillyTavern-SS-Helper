@@ -19,6 +19,7 @@ import type {
     DBMemoryEntryType,
     DBActorMemoryProfile,
     DBRoleEntryMemory,
+    DBMemoryRelationship,
     DBMemoryMutationHistory,
     DBMemoryEntryFieldDiff,
     DBMemoryEntryAuditRecord,
@@ -50,6 +51,7 @@ export type {
     DBMemoryEntryType,
     DBActorMemoryProfile,
     DBRoleEntryMemory,
+    DBMemoryRelationship,
     DBMemoryMutationHistory,
     DBMemoryEntryFieldDiff,
     DBMemoryEntryAuditRecord,
@@ -84,6 +86,7 @@ export interface MemoryChatDatabaseSnapshot {
     memoryEntryTypes: DBMemoryEntryType[];
     actorMemoryProfiles: DBActorMemoryProfile[];
     roleEntryMemory: DBRoleEntryMemory[];
+    memoryRelationships: DBMemoryRelationship[];
     summarySnapshots: DBSummarySnapshot[];
     worldProfileBindings: DBWorldProfileBinding[];
     pluginState: DBChatPluginState | null;
@@ -580,6 +583,7 @@ export async function clearMemoryChatData(
             db.memory_entry_types,
             db.actor_memory_profiles,
             db.role_entry_memory,
+            db.memory_relationships,
             db.summary_snapshots,
             db.world_profile_bindings,
         ]
@@ -593,6 +597,7 @@ export async function clearMemoryChatData(
             db.memory_entry_types,
             db.actor_memory_profiles,
             db.role_entry_memory,
+            db.memory_relationships,
             db.summary_snapshots,
             db.world_profile_bindings,
         ];
@@ -608,6 +613,7 @@ export async function clearMemoryChatData(
             db.memory_entry_types.where('chatKey').equals(chatKey).delete(),
             db.actor_memory_profiles.where('chatKey').equals(chatKey).delete(),
             db.role_entry_memory.where('chatKey').equals(chatKey).delete(),
+            db.memory_relationships.where('chatKey').equals(chatKey).delete(),
             db.summary_snapshots.where('chatKey').equals(chatKey).delete(),
             db.world_profile_bindings.where('chatKey').equals(chatKey).delete(),
         ];
@@ -651,6 +657,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         memoryEntryTypes,
         actorMemoryProfiles,
         roleEntryMemory,
+        memoryRelationships,
         summarySnapshots,
         worldProfileBindings,
         pluginState,
@@ -666,6 +673,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         db.memory_entry_types.where('chatKey').equals(normalizedChatKey).toArray(),
         db.actor_memory_profiles.where('chatKey').equals(normalizedChatKey).toArray(),
         db.role_entry_memory.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_relationships.where('chatKey').equals(normalizedChatKey).toArray(),
         db.summary_snapshots.where('chatKey').equals(normalizedChatKey).toArray(),
         db.world_profile_bindings.where('chatKey').equals(normalizedChatKey).toArray(),
         db.chat_plugin_state.get([MEMORY_OS_PLUGIN_ID, normalizedChatKey]),
@@ -689,6 +697,7 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         memoryEntryTypes,
         actorMemoryProfiles,
         roleEntryMemory,
+        memoryRelationships,
         summarySnapshots,
         worldProfileBindings,
         pluginState: pluginState ?? null,
@@ -798,6 +807,7 @@ export async function importMemoryPromptTestBundle(
         db.memory_entry_types,
         db.actor_memory_profiles,
         db.role_entry_memory,
+        db.memory_relationships,
         db.summary_snapshots,
         db.world_profile_bindings,
     ], async (): Promise<void> => {
@@ -814,6 +824,7 @@ export async function importMemoryPromptTestBundle(
             db.memory_entry_types.bulkPut((sourceDatabase.memoryEntryTypes ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntryType)),
             db.actor_memory_profiles.bulkPut((sourceDatabase.actorMemoryProfiles ?? []).map((row) => mapChatKey(row) as unknown as DBActorMemoryProfile)),
             db.role_entry_memory.bulkPut((sourceDatabase.roleEntryMemory ?? []).map((row) => mapChatKey(row) as unknown as DBRoleEntryMemory)),
+            db.memory_relationships.bulkPut((sourceDatabase.memoryRelationships ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryRelationship)),
             db.summary_snapshots.bulkPut((sourceDatabase.summarySnapshots ?? []).map((row) => mapChatKey(row) as unknown as DBSummarySnapshot)),
             db.world_profile_bindings.bulkPut((sourceDatabase.worldProfileBindings ?? []).map((row) => mapChatKey(row) as unknown as DBWorldProfileBinding)),
         ]);
@@ -879,6 +890,7 @@ export async function clearAllMemoryData(): Promise<void> {
         db.memory_entry_types,
         db.actor_memory_profiles,
         db.role_entry_memory,
+        db.memory_relationships,
         db.summary_snapshots,
         db.world_profile_bindings,
         db.chat_plugin_state,
@@ -895,6 +907,7 @@ export async function clearAllMemoryData(): Promise<void> {
             db.memory_entry_types.clear(),
             db.actor_memory_profiles.clear(),
             db.role_entry_memory.clear(),
+            db.memory_relationships.clear(),
             db.summary_snapshots.clear(),
             db.world_profile_bindings.clear(),
             db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),

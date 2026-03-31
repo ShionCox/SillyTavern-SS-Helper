@@ -78,8 +78,6 @@ export interface ColdStartIdentity {
  * 功能：定义冷启动候选记忆类型。
  */
 export type ColdStartMemoryType =
-    | 'character_profile'
-    | 'relationship'
     | 'preference'
     | 'world_rule'
     | 'identity_constraint'

@@ -7,8 +7,6 @@ export interface SummaryTypeSchema {
 }
 
 const BUILTIN_SCHEMA_FIELDS: Record<string, string[]> = {
-    actor_profile: ['title', 'summary', 'tags', 'fields.aliases', 'fields.identityFacts', 'fields.originFacts', 'fields.traits'],
-    relationship: ['summary', 'trust', 'affection', 'tension', 'unresolvedConflict', 'milestones', 'fields.relationTag'],
     event: ['title', 'summary', 'importance', 'memorySubtype', 'participants', 'tags', 'fields.location', 'fields.outcome'],
     actor_visible_event: ['title', 'summary', 'importance', 'memorySubtype', 'participants', 'tags', 'fields.location', 'fields.outcome'],
     actor_private_interpretation: ['title', 'summary', 'importance', 'tags', 'fields.sourceEventId', 'fields.bias', 'fields.certainty'],

@@ -1,5 +1,4 @@
 import type { SummaryMutationAction, SummaryMutationDocument } from './mutation-types';
-import { isRelationTag } from '../constants/relationTags';
 import { isHighValueEntityType } from '../core/entity-schema';
 import { compareKeysNearMatch } from '../core/compare-key';
 
@@ -129,7 +128,6 @@ function validateDocumentSafety(actions: SummaryMutationAction[]): string[] {
         if (
             action.targetKind === 'world_core_setting'
             || action.targetKind === 'world_hard_rule'
-            || action.targetKind === 'relationship'
             || action.targetKind === 'organization'
             || action.targetKind === 'city'
             || action.targetKind === 'nation'
@@ -309,15 +307,9 @@ function validateActionShape(action: string, row: Record<string, unknown>, paylo
  * @returns 错误列表。
  */
 function validatePayloadEnums(targetKind: string, payload: Record<string, unknown>): string[] {
-    const errors: string[] = [];
-    if (String(targetKind ?? '').trim() !== 'relationship') {
-        return errors;
-    }
-    const relationTag = flattenRecord(payload)['fields.relationTag'];
-    if (relationTag !== undefined && !isRelationTag(relationTag)) {
-        errors.push(`payload_field_invalid_enum:${targetKind}:fields.relationTag`);
-    }
-    return errors;
+    void targetKind;
+    void payload;
+    return [];
 }
 
 /**

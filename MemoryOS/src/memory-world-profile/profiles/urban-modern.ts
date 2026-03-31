@@ -16,14 +16,14 @@ export const URBAN_MODERN_PROFILE: WorldProfileDefinition = {
         hasFormalPoliticalOrder: true,
         hasSupernatural: false,
     },
-    preferredSchemas: ['actor_profile', 'relationship', 'event', 'location', 'organization', 'task', 'world_global_state'],
+    preferredSchemas: ['event', 'location', 'organization', 'task', 'world_global_state'],
     preferredFacets: ['social_order', 'city_life', 'public_rules', 'career', 'daily_relationship'],
     schemaFieldExtensions: {
         location: ['district', 'businessType', 'publicAccess'],
         organization: ['industry', 'legalStatus'],
     },
     summaryBias: {
-        boostedTypes: ['relationship', 'event', 'task', 'organization'],
+        boostedTypes: ['event', 'task', 'organization'],
         suppressedTypes: ['artifact_rule', 'race_rule'],
     },
     injectionStyle: 'urban_modern',

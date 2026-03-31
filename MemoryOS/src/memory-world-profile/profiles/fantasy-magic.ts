@@ -16,14 +16,14 @@ export const FANTASY_MAGIC_PROFILE: WorldProfileDefinition = {
         hasFormalPoliticalOrder: true,
         hasSupernatural: true,
     },
-    preferredSchemas: ['actor_profile', 'relationship', 'event', 'location', 'organization', 'item', 'world_core_setting', 'world_hard_rule'],
+    preferredSchemas: ['event', 'location', 'organization', 'item', 'world_core_setting', 'world_hard_rule'],
     preferredFacets: ['magic_system', 'race_order', 'kingdom', 'prophecy', 'epic_conflict'],
     schemaFieldExtensions: {
         event: ['magicCost', 'artifactImpact', 'prophecyTag'],
         location: ['manaDensity', 'factionControl', 'dangerRank'],
     },
     summaryBias: {
-        boostedTypes: ['event', 'relationship', 'world_core_setting', 'world_hard_rule', 'item'],
+        boostedTypes: ['event', 'world_core_setting', 'world_hard_rule', 'item'],
         suppressedTypes: ['office_task', 'career'],
     },
     injectionStyle: 'fantasy_magic',

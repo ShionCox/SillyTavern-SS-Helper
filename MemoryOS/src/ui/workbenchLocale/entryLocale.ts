@@ -4,8 +4,6 @@ const ENTRY_TYPE_LABEL_MAP: Record<string, string> = {
     event: '事件',
     location: '地点',
     item: '物品',
-    actor_profile: '角色画像',
-    character_profile: '角色档案',
     world_rule: '世界规则',
     identity_constraint: '身份约束',
     persistent_goal: '长期目标',

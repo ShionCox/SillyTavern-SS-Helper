@@ -1,5 +1,6 @@
 import { getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
 import { CompareKeyService } from '../core/compare-key-service';
+import { assertStrictActorKey, isStrictActorKey } from '../core/actor-key';
 import {
     db,
     deleteMemoryCompareKeyIndexRecord,
@@ -10,6 +11,7 @@ import {
     type DBMemoryEntryAuditRecord,
     type DBMemoryEntryType,
     type DBMemoryMutationHistory,
+    type DBMemoryRelationship,
     type DBRoleEntryMemory,
     type DBSummarySnapshot,
 } from '../db/db';
@@ -26,6 +28,7 @@ import {
     type MemoryEntryFieldDiff,
     type MemoryEntryType,
     type MemoryEntryTypeField,
+    type MemoryRelationshipRecord,
     type MemoryMutationHistoryRecord,
     type RoleEntryMemory,
     type LedgerMutation,
@@ -67,7 +70,6 @@ export class EntryRepository {
     async init(): Promise<void> {
         await this.ensureCoreEntryTypes();
         await this.ensureActorProfile({ actorKey: 'user', displayName: this.resolveUserActorDisplayName() });
-        await this.ensureDefaultUserActorCard();
         await this.rebuildCompareKeyIndex();
     }
 
@@ -169,7 +171,8 @@ export class EntryRepository {
             rows = rows.filter((row: DBMemoryEntry): boolean => typeMap.get(row.entryType)?.injectToSystem === true);
         }
         if (filters.rememberedByActorKey) {
-            const memories = await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, this.normalizeActorKey(filters.rememberedByActorKey)]).toArray();
+            const actorKey = this.assertActorKey(filters.rememberedByActorKey, 'listEntries.rememberedByActorKey');
+            const memories = await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, actorKey]).toArray();
             const entrySet = new Set(memories.map((row: DBRoleEntryMemory): string => row.entryId));
             rows = rows.filter((row: DBMemoryEntry): boolean => entrySet.has(row.entryId));
         }
@@ -274,26 +277,7 @@ export class EntryRepository {
             await this.ensureActorProfile({ actorKey: 'user', displayName: this.resolveUserActorDisplayName() });
             rows = await db.actor_memory_profiles.where('chatKey').equals(this.chatKey).toArray();
         }
-        const profiles = await Promise.all(rows.map(async (row: DBActorMemoryProfile): Promise<ActorMemoryProfile> => {
-            const profile = this.mapActorProfile(row);
-            if (profile.actorKey === 'user' || (profile.displayName && profile.displayName !== profile.actorKey)) {
-                return profile;
-            }
-            const boundEntry = await this.findBoundActorProfileEntry(profile.actorKey);
-            const fallbackDisplayName = this.normalizeText(boundEntry?.title);
-            if (!fallbackDisplayName || fallbackDisplayName === profile.actorKey) {
-                return profile;
-            }
-            await db.actor_memory_profiles.put({
-                ...row,
-                displayName: fallbackDisplayName,
-                updatedAt: Date.now(),
-            });
-            return {
-                ...profile,
-                displayName: fallbackDisplayName,
-            };
-        }));
+        const profiles = rows.map((row: DBActorMemoryProfile): ActorMemoryProfile => this.mapActorProfile(row));
         return profiles.sort((left: ActorMemoryProfile, right: ActorMemoryProfile): number => left.displayName.localeCompare(right.displayName, 'zh-CN'));
     }
 
@@ -303,8 +287,8 @@ export class EntryRepository {
      * @returns 角色资料。
      */
     async ensureActorProfile(input: { actorKey: string; displayName?: string; memoryStat?: number }): Promise<ActorMemoryProfile> {
-        const actorKey = this.normalizeActorKey(input.actorKey);
-        const existing = await db.actor_memory_profiles.get(actorKey);
+        const actorKey = this.assertActorKey(input.actorKey, 'ensureActorProfile.actorKey');
+        const existing = await db.actor_memory_profiles.get([this.chatKey, actorKey]);
         const now = Date.now();
         const resolvedUserDisplayName = actorKey === 'user' ? this.resolveUserActorDisplayName() : '';
         const fallbackDisplayName = resolvedUserDisplayName || actorKey;
@@ -337,7 +321,7 @@ export class EntryRepository {
      */
     async listRoleMemories(actorKey?: string): Promise<RoleEntryMemory[]> {
         const rows = actorKey
-            ? await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, this.normalizeActorKey(actorKey)]).toArray()
+            ? await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, this.assertActorKey(actorKey, 'listRoleMemories.actorKey')]).toArray()
             : await db.role_entry_memory.where('chatKey').equals(this.chatKey).toArray();
         return rows
             .map((row: DBRoleEntryMemory): RoleEntryMemory => this.mapRoleMemory(row))
@@ -351,7 +335,7 @@ export class EntryRepository {
      * @returns 角色记忆绑定。
      */
     async bindRoleToEntry(actorKey: string, entryId: string): Promise<RoleEntryMemory> {
-        const normalizedActorKey = this.normalizeActorKey(actorKey);
+        const normalizedActorKey = this.assertActorKey(actorKey, 'bindRoleToEntry.actorKey');
         const normalizedEntryId = String(entryId ?? '').trim();
         await this.ensureActorProfile({ actorKey: normalizedActorKey });
         const existing = await this.findRoleEntryMemory(normalizedActorKey, normalizedEntryId);
@@ -379,10 +363,85 @@ export class EntryRepository {
      * @returns 异步完成。
      */
     async unbindRoleFromEntry(actorKey: string, entryId: string): Promise<void> {
-        const existing = await this.findRoleEntryMemory(this.normalizeActorKey(actorKey), String(entryId ?? '').trim());
+        const existing = await this.findRoleEntryMemory(this.assertActorKey(actorKey, 'unbindRoleFromEntry.actorKey'), String(entryId ?? '').trim());
         if (existing) {
             await db.role_entry_memory.delete(existing.roleMemoryId);
         }
+    }
+
+    /**
+     * 功能：列出当前聊天的角色关系主表记录。
+     * @returns 关系主表记录列表。
+     */
+    async listRelationships(): Promise<MemoryRelationshipRecord[]> {
+        const rows = await db.memory_relationships.where('chatKey').equals(this.chatKey).toArray();
+        return rows
+            .map((row: DBMemoryRelationship): MemoryRelationshipRecord => this.mapRelationship(row))
+            .sort((left: MemoryRelationshipRecord, right: MemoryRelationshipRecord): number => right.updatedAt - left.updatedAt);
+    }
+
+    /**
+     * 功能：保存单条角色关系到关系主表。
+     * @param input 关系记录输入。
+     * @returns 保存后的关系记录。
+     */
+    async saveRelationship(input: Omit<MemoryRelationshipRecord, 'chatKey' | 'createdAt' | 'updatedAt' | 'relationshipId'> & {
+        relationshipId?: string;
+        createdAt?: number;
+        updatedAt?: number;
+    }): Promise<MemoryRelationshipRecord> {
+        const relationshipId = this.normalizeText(input.relationshipId) || `relationship:${this.chatKey}:${crypto.randomUUID()}`;
+        const existing = await db.memory_relationships.get(relationshipId);
+        const now = Date.now();
+        const row: DBMemoryRelationship = {
+            relationshipId,
+            chatKey: this.chatKey,
+            sourceActorKey: this.assertActorKey(input.sourceActorKey, 'saveRelationship.sourceActorKey'),
+            targetActorKey: this.assertActorKey(input.targetActorKey, 'saveRelationship.targetActorKey'),
+            relationTag: this.normalizeText(input.relationTag),
+            state: this.normalizeText(input.state),
+            summary: this.normalizeText(input.summary),
+            trust: this.clampPercent(input.trust),
+            affection: this.clampPercent(input.affection),
+            tension: this.clampPercent(input.tension),
+            participants: this.normalizeActorKeyList(input.participants),
+            createdAt: existing?.createdAt ?? (Number(input.createdAt ?? now) || now),
+            updatedAt: Number(input.updatedAt ?? now) || now,
+        };
+        await db.memory_relationships.put(row);
+        return this.mapRelationship(row);
+    }
+
+    /**
+     * 功能：用 takeover 最终结果整批替换当前聊天的角色关系主表。
+     * @param relationships 最终关系列表。
+     * @returns 异步完成。
+     */
+    async replaceRelationshipsForTakeover(relationships: MemoryRelationshipRecord[]): Promise<void> {
+        const currentRows = await db.memory_relationships.where('chatKey').equals(this.chatKey).toArray();
+        const nextRows = relationships.map((item: MemoryRelationshipRecord): DBMemoryRelationship => ({
+            relationshipId: this.normalizeText(item.relationshipId) || `relationship:${this.chatKey}:${crypto.randomUUID()}`,
+            chatKey: this.chatKey,
+            sourceActorKey: this.assertActorKey(item.sourceActorKey, 'replaceRelationshipsForTakeover.sourceActorKey'),
+            targetActorKey: this.assertActorKey(item.targetActorKey, 'replaceRelationshipsForTakeover.targetActorKey'),
+            relationTag: this.normalizeText(item.relationTag),
+            state: this.normalizeText(item.state),
+            summary: this.normalizeText(item.summary),
+            trust: this.clampPercent(item.trust),
+            affection: this.clampPercent(item.affection),
+            tension: this.clampPercent(item.tension),
+            participants: this.normalizeActorKeyList(item.participants),
+            createdAt: Number(item.createdAt ?? Date.now()) || Date.now(),
+            updatedAt: Number(item.updatedAt ?? Date.now()) || Date.now(),
+        }));
+        await db.transaction('rw', [db.memory_relationships], async (): Promise<void> => {
+            if (currentRows.length > 0) {
+                await db.memory_relationships.bulkDelete(currentRows.map((row: DBMemoryRelationship): string => row.relationshipId));
+            }
+            if (nextRows.length > 0) {
+                await db.memory_relationships.bulkPut(nextRows);
+            }
+        });
     }
 
     /**
@@ -421,6 +480,13 @@ export class EntryRepository {
         const actorProfiles = await this.listActorProfiles();
         const batchBindingCandidates = this.buildBindingBatchCandidates(mutations);
         for (const mutation of mutations) {
+            const normalizedTargetKind = this.normalizeText(mutation.targetKind);
+            if (normalizedTargetKind === 'actor_profile') {
+                throw new Error('actor_profile mutation 已停用，请改用 actor_memory_profiles 主表写入角色。');
+            }
+            if (normalizedTargetKind === 'relationship') {
+                throw new Error('relationship mutation 已停用，请改用 memory_relationships 主表写入关系。');
+            }
             const action = this.normalizeText(mutation.action).toUpperCase();
             const targetResolution = await this.resolveLedgerTargetEntry(mutation, existingEntries, compareKeyRecords);
             const targetEntry = targetResolution.entry;
@@ -567,7 +633,7 @@ export class EntryRepository {
             for (const actorKey of actorBindings) {
                 await this.bindRoleToEntry(actorKey, savedEntry.entryId);
                 result.bindingResults.push({
-                    actorKey: this.normalizeActorKey(actorKey),
+                    actorKey: this.assertActorKey(actorKey, 'applyLedgerMutationBatch.actorBindings'),
                     entryId: savedEntry.entryId,
                     written: true,
                 });
@@ -602,7 +668,7 @@ export class EntryRepository {
     }): Promise<SummarySnapshot> {
         const summaryId = `summary-snapshot:${this.chatKey}:${crypto.randomUUID()}`;
         const now = Date.now();
-        const actorKeys = this.normalizeTags(input.actorKeys).map((item: string): string => this.normalizeActorKey(item));
+        const actorKeys = this.normalizeTags(input.actorKeys).map((item: string): string => this.assertActorKey(item, 'applySummarySnapshot.actorKeys'));
         for (const actorKey of actorKeys) {
             await this.ensureActorProfile({ actorKey });
         }
@@ -818,57 +884,6 @@ export class EntryRepository {
             createdAt: existingMap.get(item.key)?.createdAt ?? now,
             updatedAt: now,
         })));
-    }
-
-    /**
-     * 功能：确保默认用户角色卡存在。
-     * @returns 异步完成。
-     */
-    private async ensureDefaultUserActorCard(): Promise<void> {
-        const actorKey = 'user';
-        const displayName = this.resolveUserActorDisplayName();
-        const userSnapshot = getCurrentTavernUserSnapshotEvent();
-        const identityFacts = this.normalizeTags([
-            userSnapshot?.personaDescription,
-            userSnapshot?.metadataPersona,
-        ]);
-        const existingEntry = await this.findBoundActorProfileEntry(actorKey);
-        if (existingEntry) {
-            const normalizedExistingTitle = this.normalizeText(existingEntry.title);
-            const shouldRefreshTitle = !normalizedExistingTitle || normalizedExistingTitle === '用户' || normalizedExistingTitle !== displayName;
-            const shouldRefreshSummary = !this.normalizeText(existingEntry.summary);
-            if (!shouldRefreshTitle && !shouldRefreshSummary) {
-                return;
-            }
-            await this.saveEntry({
-                entryId: existingEntry.entryId,
-                title: shouldRefreshTitle ? displayName : existingEntry.title,
-                entryType: existingEntry.entryType,
-                category: existingEntry.category,
-                tags: existingEntry.tags,
-                summary: shouldRefreshSummary ? (identityFacts.join('；') || `${displayName}的默认用户角色卡`) : existingEntry.summary,
-                detail: existingEntry.detail,
-                detailPayload: existingEntry.detailPayload,
-                sourceSummaryIds: existingEntry.sourceSummaryIds,
-            });
-            return;
-        }
-        const savedEntry = await this.saveEntry({
-            title: displayName,
-            entryType: 'actor_profile',
-            category: '角色关系',
-            tags: ['system', 'user_profile'],
-            summary: identityFacts.join('；') || `${displayName}的默认用户角色卡`,
-            detailPayload: {
-                fields: {
-                    aliases: [],
-                    identityFacts,
-                    originFacts: [],
-                    traits: [],
-                },
-            },
-        });
-        await this.bindRoleToEntry(actorKey, savedEntry.entryId);
     }
 
     /**
@@ -1089,7 +1104,6 @@ export class EntryRepository {
      */
     private resolveBindingKeyFromTargetKind(targetKind: string): keyof StructuredBindings | null {
         const normalizedKind = this.normalizeText(targetKind).toLowerCase();
-        if (normalizedKind === 'actor_profile') return 'actors';
         if (normalizedKind === 'organization') return 'organizations';
         if (normalizedKind === 'city') return 'cities';
         if (normalizedKind === 'nation') return 'nations';
@@ -1152,28 +1166,6 @@ export class EntryRepository {
     }
 
     /**
-     * 功能：查找角色当前绑定的角色画像条目。
-     * @param actorKey 角色键。
-     * @returns 角色画像条目。
-     */
-    private async findBoundActorProfileEntry(actorKey: string): Promise<MemoryEntry | null> {
-        const normalizedActorKey = this.normalizeActorKey(actorKey);
-        const memories = await db.role_entry_memory.where('[chatKey+actorKey]').equals([this.chatKey, normalizedActorKey]).toArray();
-        if (memories.length <= 0) {
-            return null;
-        }
-        const entryIds = memories.map((row: DBRoleEntryMemory): string => row.entryId);
-        const rows = await db.memory_entries.bulkGet(entryIds);
-        for (const row of rows) {
-            if (!row || row.chatKey !== this.chatKey || row.entryType !== 'actor_profile') {
-                continue;
-            }
-            return this.mapEntry(row);
-        }
-        return null;
-    }
-
-    /**
      * 功能：解析总结刷新目标。
      * @param bindings 刷新绑定。
      * @param savedEntries 本次保存条目。
@@ -1189,7 +1181,9 @@ export class EntryRepository {
         });
         return bindings
             .map((binding: SummaryRefreshBinding): { actorKey: string; entryId: string } | null => {
-                const actorKey = this.normalizeActorKey(binding.actorKey);
+                const actorKey = isStrictActorKey(binding.actorKey)
+                    ? this.assertActorKey(binding.actorKey, 'resolveRefreshTargets.actorKey')
+                    : '';
                 const entryId = String(binding.entryId ?? '').trim() || String(titleMap.get(this.normalizeText(binding.entryTitle)) ?? '').trim();
                 if (!actorKey || !entryId) {
                     return null;
@@ -1262,7 +1256,7 @@ export class EntryRepository {
      * @returns 角色资料。
      */
     private mapActorProfile(row: DBActorMemoryProfile): ActorMemoryProfile {
-        const actorKey = this.normalizeActorKey(row.actorKey);
+        const actorKey = this.assertActorKey(row.actorKey, 'mapActorProfile.actorKey');
         const displayName = actorKey === 'user'
             ? (this.resolveUserActorDisplayName() || this.normalizeText(row.displayName) || actorKey)
             : (this.normalizeText(row.displayName) || actorKey);
@@ -1282,9 +1276,26 @@ export class EntryRepository {
     private mapRoleMemory(row: DBRoleEntryMemory): RoleEntryMemory {
         return {
             ...row,
-            actorKey: this.normalizeActorKey(row.actorKey),
+            actorKey: this.assertActorKey(row.actorKey, 'mapRoleMemory.actorKey'),
             memoryPercent: this.clampPercent(row.memoryPercent),
             forgotten: Boolean(row.forgotten),
+        };
+    }
+
+    /**
+     * 功能：将关系主表数据库行映射为运行时关系记录。
+     * @param row 数据库关系行。
+     * @returns 运行时关系记录。
+     */
+    private mapRelationship(row: DBMemoryRelationship): MemoryRelationshipRecord {
+        return {
+            ...row,
+            sourceActorKey: this.assertActorKey(row.sourceActorKey, 'mapRelationship.sourceActorKey'),
+            targetActorKey: this.assertActorKey(row.targetActorKey, 'mapRelationship.targetActorKey'),
+            participants: this.normalizeActorKeyList(row.participants),
+            trust: this.clampPercent(row.trust),
+            affection: this.clampPercent(row.affection),
+            tension: this.clampPercent(row.tension),
         };
     }
 
@@ -1645,7 +1656,33 @@ export class EntryRepository {
      * @returns 角色键。
      */
     private normalizeActorKey(value: unknown): string {
-        return this.normalizeKey(value) || 'actor';
+        return this.normalizeText(value).toLowerCase();
+    }
+
+    /**
+     * 功能：断言角色键满足当前严格协议。
+     * @param value 原始角色键。
+     * @param context 错误上下文。
+     * @returns 校验通过后的角色键。
+     */
+    private assertActorKey(value: unknown, context: string): string {
+        return assertStrictActorKey(value, context);
+    }
+
+    /**
+     * 功能：把候选角色键列表过滤并归一化为严格角色键数组。
+     * @param values 原始角色键列表。
+     * @returns 通过校验后的角色键数组。
+     */
+    private normalizeActorKeyList(values: unknown): string[] {
+        if (!Array.isArray(values)) {
+            return [];
+        }
+        return Array.from(new Set(
+            values
+                .filter((item: unknown): boolean => isStrictActorKey(item))
+                .map((item: unknown): string => this.assertActorKey(item, 'normalizeActorKeyList.item')),
+        ));
     }
 
     /**

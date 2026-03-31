@@ -7,7 +7,6 @@ export const COMPARE_KEY_SCHEMA_VERSION = 'v2';
  * 功能：定义支持 compareKey 协议的实体类型。
  */
 const COMPARE_KEY_ENTITY_TYPES = new Set([
-    'actor_profile',
     'organization',
     'city',
     'nation',
@@ -22,7 +21,6 @@ const COMPARE_KEY_ENTITY_TYPES = new Set([
  * 功能：定义 compareKey 协议实体类型。
  */
 export type CompareKeyEntityType =
-    | 'actor_profile'
     | 'organization'
     | 'city'
     | 'nation'
@@ -80,8 +78,6 @@ export function buildCompareKey(entityType: string, title: string, fields?: Reco
     const normalizedType = normalizeText(entityType) as CompareKeyEntityType;
     const safeFields = toRecord(fields);
     switch (normalizedType) {
-        case 'actor_profile':
-            return buildActorCompareKey(String(safeFields.actorKey ?? title ?? ''));
         case 'organization':
             return buildOrganizationCompareKey(title, {
                 qualifier: firstNonEmptyText([
@@ -136,16 +132,6 @@ export function buildCompareKey(entityType: string, title: string, fields?: Reco
         default:
             return buildFallbackCompareKey(entityType, title, safeFields);
     }
-}
-
-/**
- * 功能：构建 actor compareKey。
- * @param actorKey 角色键
- * @returns compareKey
- */
-export function buildActorCompareKey(actorKey: string): string {
-    const canonicalName = normalizeIdentifier(actorKey);
-    return packCompareKey('actor_profile', canonicalName, []);
 }
 
 /**

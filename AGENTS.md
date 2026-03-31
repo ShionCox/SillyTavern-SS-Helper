@@ -30,5 +30,6 @@
 - 每个 PR 保持单一主题，避免把共享 SDK 重构、界面调整和测试补丁混在同一次提交中。
 
 ## 注意
-- 请不要使用powershell修改代码文件，避免编码问题把中文变成乱码!
-- 如需logger打印，请引入各自插件里的index.ts文件的logger实例打印
+- 必须使用utf-8编码，否则会乱码！
+- Your code must use the UTF-8 encoding format.
+- 如需logger打印，请引入各自插件里的index.ts文件的logger和toast实例

@@ -6,13 +6,12 @@
 /**
  * 功能：实体类型枚举。
  */
-export type EntityLedgerType = 'actor_profile' | 'organization' | 'city' | 'nation' | 'location';
+export type EntityLedgerType = 'organization' | 'city' | 'nation' | 'location';
 
 /**
  * 功能：状态账本类型枚举。
  */
 export type StateLedgerType =
-    | 'relationship'
     | 'task'
     | 'world_core_setting'
     | 'world_hard_rule'
@@ -29,7 +28,6 @@ export type DigestLedgerType = 'chapterDigest' | 'rollingDigest' | 'activeSnapsh
  * 功能：所有实体账本类型集合。
  */
 export const ENTITY_LEDGER_TYPES: ReadonlySet<string> = new Set<EntityLedgerType>([
-    'actor_profile',
     'organization',
     'city',
     'nation',
@@ -40,7 +38,6 @@ export const ENTITY_LEDGER_TYPES: ReadonlySet<string> = new Set<EntityLedgerType
  * 功能：所有状态账本类型集合。
  */
 export const STATE_LEDGER_TYPES: ReadonlySet<string> = new Set<StateLedgerType>([
-    'relationship',
     'task',
     'world_core_setting',
     'world_hard_rule',
@@ -53,12 +50,10 @@ export const STATE_LEDGER_TYPES: ReadonlySet<string> = new Set<StateLedgerType>(
  * 功能：高价值实体类型集合，不允许轻易删除。
  */
 export const HIGH_VALUE_ENTITY_TYPES: ReadonlySet<string> = new Set([
-    'actor_profile',
     'organization',
     'city',
     'nation',
     'location',
-    'relationship',
     'world_core_setting',
     'world_hard_rule',
 ]);

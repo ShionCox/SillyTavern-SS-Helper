@@ -174,9 +174,6 @@ export class CompareKeyService {
      * @returns entityKey
      */
     private buildEntityKey(entry: MemoryEntry, parsed: ReturnType<typeof parseCompareKey>): string {
-        if (entry.entryType === 'relationship') {
-            return `ek:${parsed.entityType}:${parsed.sourceActorKey || 'unknown'}:${parsed.targetActorKey || 'unknown'}:${parsed.relationTag || 'related'}`;
-        }
         return `ek:${parsed.entityType || this.normalizeText(entry.entryType) || 'other'}:${parsed.canonicalName || normalizeCompareTitle(entry.title) || entry.entryId}`;
     }
 

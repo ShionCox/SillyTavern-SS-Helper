@@ -11,6 +11,7 @@ import type {
     ActorMemoryProfile,
     MemoryEntry,
     MemoryEntryType,
+    MemoryRelationshipRecord,
     RoleEntryMemory,
 } from '../types';
 import unifiedMemoryWorkbenchCssText from './unifiedMemoryWorkbench.css?inline';
@@ -270,6 +271,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryTypes,
             entries,
             actors,
+            relationships,
             roleMemories,
             summaries,
             preview,
@@ -282,6 +284,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
             memory.unifiedMemory.actors.list(),
+            memory.unifiedMemory.relationships.list(),
             memory.unifiedMemory.roleMemory.list(),
             memory.unifiedMemory.summaries.list(8),
             memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
@@ -305,7 +308,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             mutationHistory,
             entryAuditRecords,
             recallExplanation: normalizeRecallExplanation(recallExplanation),
-            actorGraph: buildActorGraph(actors, entries),
+            actorGraph: buildActorGraph(actors, relationships, entries),
             memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
             takeoverProgress,
         };
@@ -976,7 +979,11 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
  * @param entries 条目列表。
  * @returns 真实图数据。
  */
-function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): WorkbenchActorGraph {
+function buildActorGraph(
+    actors: ActorMemoryProfile[],
+    relationships: MemoryRelationshipRecord[],
+    entries: MemoryEntry[],
+): WorkbenchActorGraph {
     const nodes = actors.map((actor: ActorMemoryProfile, index: number): WorkbenchActorGraph['nodes'][number] => {
         const angle = actors.length <= 1 ? 0 : (index / actors.length) * Math.PI * 2;
         const radius = actors.length <= 1 ? 0 : 220;
@@ -990,35 +997,28 @@ function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): 
             kind: 'actor',
         };
     });
-    const actorKeySet = new Set(nodes.map((node): string => node.id));
     const nodeMap = new Map(nodes.map((node): [string, WorkbenchActorGraph['nodes'][number]] => [node.id, node]));
     const links: WorkbenchActorGraphLink[] = [];
 
-    entries
-        .filter((entry: MemoryEntry): boolean => entry.entryType === 'relationship')
-        .forEach((entry: MemoryEntry): void => {
-            const relation = resolveRelationshipEdge(entry, actorKeySet);
-            if (!relation) {
-                return;
-            }
-            const sourceNode = nodeMap.get(relation.sourceActorKey);
-            const targetNode = nodeMap.get(relation.targetActorKey);
-            if (!sourceNode || !targetNode) {
-                return;
-            }
-            sourceNode.relationCount += 1;
-            targetNode.relationCount += 1;
-            links.push({
-                id: `graph-link:${entry.entryId}`,
-                source: relation.sourceActorKey,
-                target: relation.targetActorKey,
-                entryId: entry.entryId,
-                label: truncateText(relation.label || entry.summary || entry.title || '关系', 24),
-                summary: relation.summary || entry.summary || entry.detail || '',
-                type: relation.type,
-                updatedAt: entry.updatedAt,
-            });
+    relationships.forEach((relationship: MemoryRelationshipRecord): void => {
+        const sourceNode = nodeMap.get(relationship.sourceActorKey);
+        const targetNode = nodeMap.get(relationship.targetActorKey);
+        if (!sourceNode || !targetNode) {
+            return;
+        }
+        sourceNode.relationCount += 1;
+        targetNode.relationCount += 1;
+        links.push({
+            id: `graph-link:${relationship.relationshipId}`,
+            source: relationship.sourceActorKey,
+            target: relationship.targetActorKey,
+            entryId: relationship.relationshipId,
+            label: truncateText(relationship.relationTag || relationship.summary || '鍏崇郴', 24),
+            summary: relationship.summary || relationship.state || '',
+            type: resolveGraphLinkType(relationship.relationTag),
+            updatedAt: relationship.updatedAt,
         });
+    });
 
     const userNode = nodeMap.get('user');
     const externalRelations = entries
@@ -1077,98 +1077,23 @@ function buildActorGraph(actors: ActorMemoryProfile[], entries: MemoryEntry[]): 
 }
 
 /**
- * 功能：从 relationship 条目中解析真实边。
- * @param entry 关系条目。
- * @param actorKeySet 真实角色键集合。
- * @returns 边信息或空值。
+ * 功能：根据关系标签推断图谱边的语义类型。
+ * @param relationTag 关系标签。
+ * @returns 图谱边类型。
  */
-function resolveRelationshipEdge(
-    entry: MemoryEntry,
-    actorKeySet: Set<string>,
-): {
-    sourceActorKey: string;
-    targetActorKey: string;
-    label: string;
-    summary: string;
-    type: WorkbenchGraphLinkType;
-} | null {
-    const payload = toRecord(entry.detailPayload);
-    const fields = toRecord(payload.fields);
-    const sourceActorKey = normalizeActorKeyCandidate(payload.sourceActorKey ?? fields.sourceActorKey);
-    const targetActorKey = normalizeActorKeyCandidate(payload.targetActorKey ?? fields.targetActorKey);
-    const titlePair = parseActorKeysFromTitle(entry.title, actorKeySet);
-    const resolvedSource = sourceActorKey || titlePair?.sourceActorKey || '';
-    const resolvedTarget = targetActorKey || titlePair?.targetActorKey || '';
-    if (!resolvedSource || !resolvedTarget || resolvedSource === resolvedTarget) {
-        return null;
-    }
-    if (!actorKeySet.has(resolvedSource) || !actorKeySet.has(resolvedTarget)) {
-        return null;
-    }
-    return {
-        sourceActorKey: resolvedSource,
-        targetActorKey: resolvedTarget,
-        label: String(fields.relationTag ?? payload.state ?? fields.state ?? entry.summary ?? '').trim(),
-        summary: String(payload.state ?? fields.state ?? entry.summary ?? '').trim(),
-        type: resolveRelationshipTone(entry),
-    };
-}
-
-/**
- * 功能：从标题里提取冷启动写入的角色键。
- * @param title 条目标题。
- * @param actorKeySet 角色键集合。
- * @returns 解析结果或空值。
- */
-function parseActorKeysFromTitle(
-    title: string,
-    actorKeySet: Set<string>,
-): { sourceActorKey: string; targetActorKey: string } | null {
-    const normalized = String(title ?? '').trim();
-    const match = normalized.match(/^([a-z0-9_-]+)\s*(?:->|=>|→)\s*([a-z0-9_-]+)$/i);
-    if (!match) {
-        return null;
-    }
-    const sourceActorKey = normalizeActorKeyCandidate(match[1]);
-    const targetActorKey = normalizeActorKeyCandidate(match[2]);
-    if (!sourceActorKey || !targetActorKey) {
-        return null;
-    }
-    if (!actorKeySet.has(sourceActorKey) || !actorKeySet.has(targetActorKey)) {
-        return null;
-    }
-    return { sourceActorKey, targetActorKey };
-}
-
-/**
- * 功能：根据关系信号估算图边颜色。
- * @param entry 关系条目。
- * @returns 图边类型。
- */
-function resolveRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkType {
-    const payload = toRecord(entry.detailPayload);
-    const fields = toRecord(payload.fields);
-    const relationTag = String(fields.relationTag ?? '').trim();
-    if (relationTag === '亲人' || relationTag === '家人' || relationTag === '亲属') {
+function resolveGraphLinkType(relationTag: string): WorkbenchGraphLinkType {
+    const normalizedRelationTag = String(relationTag ?? '').trim();
+    if (normalizedRelationTag === '亲人' || normalizedRelationTag === '家人' || normalizedRelationTag === '亲属') {
         return 'family';
     }
-    if (relationTag === '盟友' || relationTag === '朋友' || relationTag === '友好' || relationTag === '同伴') {
+    if (normalizedRelationTag === '盟友' || normalizedRelationTag === '朋友' || normalizedRelationTag === '友好' || normalizedRelationTag === '同伴') {
         return 'ally';
     }
-    if (relationTag === '宿敌' || relationTag === '敌人' || relationTag === '仇人' || relationTag === '敌对') {
+    if (normalizedRelationTag === '宿敌' || normalizedRelationTag === '敌人' || normalizedRelationTag === '仇人' || normalizedRelationTag === '敌对') {
         return 'enemy';
     }
-    if (relationTag === '陌生人' || relationTag === '路人' || relationTag === '未定' || relationTag === '中立') {
-        return 'neutral';
-    }
-    const trust = Number(payload.trust ?? 0);
-    const affection = Number(payload.affection ?? 0);
-    const tension = Number(payload.tension ?? 0);
-    if (Number.isFinite(tension) && tension >= Math.max(trust, affection) && tension >= 0.6) {
-        return 'enemy';
-    }
-    if ((Number.isFinite(trust) && trust >= 0.7) || (Number.isFinite(affection) && affection >= 0.7)) {
-        return 'ally';
+    if (normalizedRelationTag === '恋人' || normalizedRelationTag === '爱人' || normalizedRelationTag === '暧昧') {
+        return 'romance';
     }
     return 'neutral';
 }
@@ -1192,19 +1117,6 @@ function resolveEntityRelationshipTone(entry: MemoryEntry): WorkbenchGraphLinkTy
         return 'enemy';
     }
     return 'neutral';
-}
-
-/**
- * 功能：归一化候选角色键。
- * @param value 原始值。
- * @returns 角色键。
- */
-function normalizeActorKeyCandidate(value: unknown): string {
-    return String(value ?? '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, '_')
-        .replace(/^_+|_+$/g, '');
 }
 
 /**

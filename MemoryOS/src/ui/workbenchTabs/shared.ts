@@ -18,7 +18,7 @@ import type { MemoryGraphMode } from './shared/memoryGraphTypes';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
-export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family';
+export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family' | 'romance';
 
 export interface WorkbenchRecallExplanation {
     generatedAt?: number;

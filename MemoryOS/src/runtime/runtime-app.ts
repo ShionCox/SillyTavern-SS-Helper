@@ -169,6 +169,7 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
             'memory_entry_types',
             'actor_memory_profiles',
             'role_entry_memory',
+            'memory_relationships',
             'summary_snapshots',
         ],
         llm: [],

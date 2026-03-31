@@ -1,4 +1,5 @@
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../core/actor-key';
 import { buildRelationshipCompareKey } from '../core/compare-key';
 import { CompareKeyService } from '../core/compare-key-service';
 import { getMemoryTrace, recordMemoryDebug } from '../core/debug/memory-retrieval-logger';
@@ -68,7 +69,7 @@ export class PromptAssemblyService {
             actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
                 actorKey: profile.actorKey,
                 displayName: profile.displayName,
-                aliases: this.collectActorProfileAliases(entries, profile.actorKey),
+                aliases: [],
             })),
         });
 
@@ -277,23 +278,8 @@ export class PromptAssemblyService {
      * @param actorKey 角色键
      * @returns 别名列表
      */
-    private collectActorProfileAliases(entries: MemoryEntry[], actorKey: string): string[] {
-        const aliases = new Set<string>();
-        entries
-            .filter((entry: MemoryEntry): boolean => entry.entryType === 'actor_profile')
-            .forEach((entry: MemoryEntry): void => {
-                const payload = this.toRecord(entry.detailPayload);
-                const fields = this.toRecord(payload.fields);
-                const boundActorKey = this.normalizeActorKey(payload.actorKey ?? fields.actorKey ?? entry.title);
-                if (boundActorKey !== this.normalizeActorKey(actorKey)) {
-                    return;
-                }
-                aliases.add(entry.title);
-                this.normalizeLooseStringArray(fields.aliases ?? payload.aliases).forEach((alias: string): void => {
-                    aliases.add(alias);
-                });
-            });
-        return [...aliases].filter(Boolean);
+    private collectActorProfileAliases(): string[] {
+        return [];
     }
 
     /**
@@ -425,10 +411,10 @@ export class PromptAssemblyService {
         if (entry.entryType.startsWith('world_')) {
             return 88;
         }
-        if (entry.entryType === 'relationship' || entry.entryType === 'task') {
+        if (entry.entryType === 'task') {
             return 82;
         }
-        if (entry.entryType === 'actor_profile' || entry.entryType === 'event') {
+        if (entry.entryType === 'event') {
             return 74;
         }
         return 60;
@@ -462,10 +448,7 @@ export class PromptAssemblyService {
      * @returns 敏感度
      */
     private resolveRelationSensitivity(entry: MemoryEntry): number {
-        if (entry.entryType === 'relationship') {
-            return 90;
-        }
-        if (entry.entryType === 'actor_profile' || entry.entryType === 'event') {
+        if (entry.entryType === 'event') {
             return 72;
         }
         return 48;
@@ -621,6 +604,7 @@ export class PromptAssemblyService {
      * @returns 角色键
      */
     private normalizeActorKey(value: unknown): string {
-        return this.normalizeText(value).toLowerCase().replace(/[^a-z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '') || 'actor';
+        const normalizedValue = normalizeStrictActorKeySyntax(value);
+        return isStrictActorKey(normalizedValue) ? normalizedValue : '';
     }
 }

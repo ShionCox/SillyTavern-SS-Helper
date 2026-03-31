@@ -110,6 +110,22 @@ export interface RoleEntryMemory {
     updatedAt: number;
 }
 
+export interface MemoryRelationshipRecord {
+    relationshipId: string;
+    chatKey: string;
+    sourceActorKey: string;
+    targetActorKey: string;
+    relationTag: string;
+    state: string;
+    summary: string;
+    trust: number;
+    affection: number;
+    tension: number;
+    participants: string[];
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface SummaryEntryUpsert {
     entryId?: string;
     title: string;
@@ -394,22 +410,6 @@ export const CORE_MEMORY_ENTRY_TYPES: Array<{
     accentColor: string;
 }> = [
     {
-        key: 'actor_profile',
-        label: '角色画像',
-        category: '角色关系',
-        description: '角色稳定身份信息、别名与长期特征。',
-        injectToSystem: false,
-        bindableToRole: true,
-        icon: 'fa-solid fa-id-card',
-        accentColor: '#4f6d7a',
-        fields: [
-            { key: 'aliases', label: '别名', kind: 'tags' },
-            { key: 'identityFacts', label: '身份事实', kind: 'textarea' },
-            { key: 'originFacts', label: '来源事实', kind: 'textarea' },
-            { key: 'traits', label: '长期特征', kind: 'tags' },
-        ],
-    },
-    {
         key: 'world_core_setting',
         label: '世界核心设定',
         category: '世界基础',
@@ -613,21 +613,6 @@ export const CORE_MEMORY_ENTRY_TYPES: Array<{
         fields: [
             { key: 'objective', label: '目标', kind: 'textarea' },
             { key: 'status', label: '当前状态', kind: 'text' },
-        ],
-    },
-    {
-        key: 'relationship',
-        label: '关系',
-        category: '角色关系',
-        description: '角色之间的关系、立场与情感走向。',
-        injectToSystem: false,
-        bindableToRole: true,
-        icon: 'fa-solid fa-link',
-        accentColor: '#c04b7f',
-        fields: [
-            { key: 'relationTag', label: '关系标签', kind: 'text' },
-            { key: 'participants', label: '参与角色', kind: 'tags' },
-            { key: 'state', label: '关系现状', kind: 'textarea' },
         ],
     },
     {

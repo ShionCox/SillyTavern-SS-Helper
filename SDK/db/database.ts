@@ -187,6 +187,22 @@ export interface DBRoleEntryMemory {
     updatedAt: number;
 }
 
+export interface DBMemoryRelationship {
+    relationshipId: string;
+    chatKey: string;
+    sourceActorKey: string;
+    targetActorKey: string;
+    relationTag: string;
+    state: string;
+    summary: string;
+    trust: number;
+    affection: number;
+    tension: number;
+    participants: string[];
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface DBSummarySnapshot {
     summaryId: string;
     chatKey: string;
@@ -260,8 +276,9 @@ export class SSHelperDatabase extends Dexie {
 
     memory_entries!: Table<DBMemoryEntry, string>;
     memory_entry_types!: Table<DBMemoryEntryType, string>;
-    actor_memory_profiles!: Table<DBActorMemoryProfile, string>;
+    actor_memory_profiles!: Table<DBActorMemoryProfile, [string, string]>;
     role_entry_memory!: Table<DBRoleEntryMemory, string>;
+    memory_relationships!: Table<DBMemoryRelationship, string>;
     summary_snapshots!: Table<DBSummarySnapshot, string>;
     world_profile_bindings!: Table<DBWorldProfileBinding, string>;
 
@@ -321,6 +338,26 @@ export class SSHelperDatabase extends Dexie {
             memory_entry_types: '&typeId, chatKey, [chatKey+key], [chatKey+updatedAt]',
             actor_memory_profiles: '&actorKey, chatKey, [chatKey+actorKey], [chatKey+updatedAt]',
             role_entry_memory: '&roleMemoryId, chatKey, [chatKey+actorKey], [chatKey+entryId], [chatKey+actorKey+entryId], [chatKey+updatedAt]',
+            summary_snapshots: '&summaryId, chatKey, [chatKey+updatedAt]',
+            world_profile_bindings: '&chatKey, primaryProfile, updatedAt',
+            llm_credentials: '&providerId, updatedAt',
+            llm_request_logs: '&logId, requestId, sourcePluginId, sortTs, state, [sourcePluginId+sortTs], [state+sortTs], updatedAt',
+        });
+        this.version(4).stores({
+            chat_documents: '&chatKey, entityKey, updatedAt',
+            chat_plugin_state: '&[pluginId+chatKey], pluginId, chatKey, updatedAt',
+            chat_plugin_records: '++id, pluginId, chatKey, collection, recordId, ts, updatedAt, [pluginId+chatKey+collection], [pluginId+chatKey+collection+ts]',
+            events: '&eventId, chatKey, ts, type, [chatKey+ts], [chatKey+type+ts]',
+            templates: '&templateId, chatKey, [chatKey+createdAt], updatedAt',
+            audit: '&auditId, chatKey, ts',
+            meta: '&chatKey, updatedAt',
+            memory_mutation_history: '&historyId, chatKey, [chatKey+ts], ts',
+            memory_entry_audit_records: '&auditId, chatKey, entryId, summaryId, actionType, [chatKey+ts], [chatKey+entryId], ts',
+            memory_entries: '&entryId, chatKey, [chatKey+entryType], [chatKey+category], [chatKey+updatedAt], updatedAt',
+            memory_entry_types: '&typeId, chatKey, [chatKey+key], [chatKey+updatedAt]',
+            actor_memory_profiles: '&[chatKey+actorKey], chatKey, actorKey, [chatKey+updatedAt]',
+            role_entry_memory: '&roleMemoryId, chatKey, [chatKey+actorKey], [chatKey+entryId], [chatKey+actorKey+entryId], [chatKey+updatedAt]',
+            memory_relationships: '&relationshipId, chatKey, [chatKey+sourceActorKey], [chatKey+targetActorKey], [chatKey+sourceActorKey+targetActorKey], [chatKey+updatedAt], updatedAt',
             summary_snapshots: '&summaryId, chatKey, [chatKey+updatedAt]',
             world_profile_bindings: '&chatKey, primaryProfile, updatedAt',
             llm_credentials: '&providerId, updatedAt',

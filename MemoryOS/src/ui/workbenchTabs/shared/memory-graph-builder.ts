@@ -11,6 +11,7 @@ import type {
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
 } from '../../../types';
+import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../../../core/actor-key';
 import { buildRelationshipCompareKey, buildWorldStateCompareKey } from '../../../core/compare-key';
 import {
     type DisplayLabelResolverContext,
@@ -1606,8 +1607,11 @@ function ensureActorNodeFromRef(
     actorRef: string,
     labelContext: DisplayLabelResolverContext,
 ): string | undefined {
-    const normalizedRef = String(actorRef ?? '').trim();
+    const normalizedRef = normalizeStrictActorKeySyntax(actorRef);
     if (!normalizedRef) {
+        return undefined;
+    }
+    if (!isStrictActorKey(normalizedRef)) {
         return undefined;
     }
     const existingNodeKey = actorNodeKeyMap.get(normalizedRef);

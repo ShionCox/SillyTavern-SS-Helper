@@ -77,6 +77,50 @@ function copyStaticAssetsPlugin(targetName) {
   };
 }
 
+/**
+ * 功能：递归复制指定目录到构建产物目录，保留原有层级结构。
+ * @param sourceDir 源目录绝对路径
+ * @param destinationDir 目标目录绝对路径
+ * @returns void
+ */
+function copyDirectoryRecursive(sourceDir, destinationDir) {
+  if (!fs.existsSync(sourceDir)) return;
+
+  fs.mkdirSync(destinationDir, { recursive: true });
+  const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+
+  entries.forEach((entry) => {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destinationPath);
+      return;
+    }
+
+    fs.copyFileSync(sourcePath, destinationPath);
+  });
+}
+
+/**
+ * 功能：将 Font Awesome 运行时所需的 CSS 与字体资源复制到目标产物目录。
+ * @param targetName 当前构建目标名称
+ * @returns Vite closeBundle 插件对象
+ */
+function copyFontAwesomeAssetsPlugin(targetName) {
+  return {
+    name: `copy-fontawesome-assets:${targetName}`,
+    closeBundle() {
+      const target = PROJECT_TARGETS[targetName];
+      if (!target) return;
+
+      const source = path.resolve(ROOT_DIR, "assets/fontawesome");
+      const destination = path.resolve(ROOT_DIR, target.outDir, "assets/fontawesome");
+      copyDirectoryRecursive(source, destination);
+    },
+  };
+}
+
 function copyRollHelperLogoPlugin(targetName) {
   return {
     name: `copy-rollhelper-logo:${targetName}`,
@@ -158,6 +202,7 @@ export function createProjectConfig(targetName, options = {}) {
       imageFileLoaderPlugin(),
       copyManifestPlugin(targetName),
       copyStaticAssetsPlugin(targetName),
+      copyFontAwesomeAssetsPlugin(targetName),
       copyRollHelperLogoPlugin(targetName),
     ],
   };

@@ -202,8 +202,7 @@ function resolveEntityTypeLabel(entryType: string): string {
  * @returns 是否属于身份层。
  */
 function isIdentityType(entryType: string): boolean {
-    const normalized = normalizeType(entryType);
-    return normalized === 'actor_profile';
+    return false;
 }
 
 /**
@@ -212,7 +211,7 @@ function isIdentityType(entryType: string): boolean {
  * @returns 是否属于关系层。
  */
 function isRelationshipType(entryType: string): boolean {
-    return normalizeType(entryType) === 'relationship';
+    return false;
 }
 
 /**

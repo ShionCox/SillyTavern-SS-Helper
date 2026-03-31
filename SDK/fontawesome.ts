@@ -1,125 +1,93 @@
-import fontAwesomeCssText from "../assets/fontawesome/fontawesome.css?raw";
-import brandsCssText from "../assets/fontawesome/brands.css?raw";
-import regularCssText from "../assets/fontawesome/regular.css?raw";
-import solidCssText from "../assets/fontawesome/solid.css?raw";
-import lightCssText from "../assets/fontawesome/light.css?raw";
-import sharpSolidCssText from "../assets/fontawesome/sharp-solid.css?raw";
-import sharpRegularCssText from "../assets/fontawesome/sharp-regular.css?raw";
-import sharpLightCssText from "../assets/fontawesome/sharp-light.css?raw";
-import duotoneCssText from "../assets/fontawesome/duotone.css?raw";
-import sharpDuotoneSolidCssText from "../assets/fontawesome/sharp-duotone-solid.css?raw";
-import chiselRegularCssText from "../assets/fontawesome/chisel-regular.css?raw";
-import etchSolidCssText from "../assets/fontawesome/etch-solid.css?raw";
-import graphiteThinCssText from "../assets/fontawesome/graphite-thin.css?raw";
-import jellyRegularCssText from "../assets/fontawesome/jelly-regular.css?raw";
-import notdogSolidCssText from "../assets/fontawesome/notdog-solid.css?raw";
-import slabRegularCssText from "../assets/fontawesome/slab-regular.css?raw";
-import thumbprintLightCssText from "../assets/fontawesome/thumbprint-light.css?raw";
-import utilitySemiboldCssText from "../assets/fontawesome/utility-semibold.css?raw";
-import whiteboardSemiboldCssText from "../assets/fontawesome/whiteboard-semibold.css?raw";
+const FONT_AWESOME_LINK_ATTRIBUTE = "data-stx-fontawesome-runtime";
 
-const FONT_AWESOME_STYLE_ID = "stx-fontawesome-runtime-style";
-
-const fontAwesomeCssTexts: string[] = [
-  fontAwesomeCssText,
-  brandsCssText,
-  regularCssText,
-  solidCssText,
-  lightCssText,
-  sharpSolidCssText,
-  sharpRegularCssText,
-  sharpLightCssText,
-  duotoneCssText,
-  sharpDuotoneSolidCssText,
-  chiselRegularCssText,
-  etchSolidCssText,
-  graphiteThinCssText,
-  jellyRegularCssText,
-  notdogSolidCssText,
-  slabRegularCssText,
-  thumbprintLightCssText,
-  utilitySemiboldCssText,
-  whiteboardSemiboldCssText,
+const FONT_AWESOME_CSS_FILES: string[] = [
+  "fontawesome.css",
+  "brands.css",
+  "regular.css",
+  "solid.css",
+  "light.css",
+  "sharp-solid.css",
+  "sharp-regular.css",
+  "sharp-light.css",
+  "duotone.css",
+  "sharp-duotone-solid.css",
+  "chisel-regular.css",
+  "etch-solid.css",
+  "graphite-thin.css",
+  "jelly-regular.css",
+  "notdog-solid.css",
+  "slab-regular.css",
+  "thumbprint-light.css",
+  "utility-semibold.css",
+  "whiteboard-semibold.css",
 ];
 
-const fontAwesomeFontUrlModules = import.meta.glob<string>("../assets/fontawesome/webfonts/*.woff2", {
-  eager: true,
-  query: "?url",
-  import: "default",
-});
-
 /**
- * 功能：将字体资源模块映射为文件名到最终 URL 的字典。
- * @returns 字体文件名到运行时 URL 的映射
+ * 功能：根据当前运行模块地址，解析 Font Awesome 资源目录的基础地址。
+ * @returns 指向 `assets/fontawesome` 的基础 URL
  */
-function buildFontUrlMap(): Record<string, string> {
-  const result: Record<string, string> = {};
-  Object.entries(fontAwesomeFontUrlModules).forEach(([modulePath, assetUrl]): void => {
-    const normalizedPath = String(modulePath ?? "").replace(/\\/g, "/");
-    const fileName = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
-    if (fileName) {
-      result[fileName] = String(assetUrl ?? "");
-    }
-  });
-  return result;
-}
-
-const fontAwesomeFontUrlMap: Record<string, string> = buildFontUrlMap();
-
-/**
- * 功能：将原始 Font Awesome 样式中的相对字体路径改写为打包后的真实资源地址。
- * @param cssText 原始样式文本
- * @returns 已重写资源路径的样式文本
- */
-function rewriteFontAwesomeCss(cssText: string): string {
-  return String(cssText ?? "").replace(/\.\.\/webfonts\/([^)"'\s]+\.woff2)/g, (_match: string, fileName: string): string => {
-    return fontAwesomeFontUrlMap[fileName] || `../webfonts/${fileName}`;
-  });
+function resolveFontAwesomeBaseUrl(): URL {
+  return new URL(/* @vite-ignore */ "../assets/fontawesome/", import.meta.url);
 }
 
 /**
- * 功能：构建最终注入页面的 Font Awesome 全量样式文本。
- * @returns 已重写字体路径的样式文本
+ * 功能：构建某个 Font Awesome CSS 文件在运行时的绝对资源地址。
+ * @param fileName Font Awesome CSS 文件名
+ * @returns 可直接挂载到 link 标签的样式地址
  */
-function buildFontAwesomeRuntimeCss(): string {
-  return fontAwesomeCssTexts
-    .map((cssText: string): string => rewriteFontAwesomeCss(cssText))
-    .join("\n");
+function resolveFontAwesomeCssHref(fileName: string): string {
+  return new URL(fileName, resolveFontAwesomeBaseUrl()).href;
 }
 
 /**
- * 功能：确保页面中存在用于挂载 Font Awesome 的单例样式节点。
+ * 功能：查找页面中已存在的 Font Awesome 运行时样式链接。
  * @param doc 目标文档对象
- * @returns 单例样式节点
+ * @returns 已存在的链接元素列表
  */
-function ensureFontAwesomeStyleElement(doc: Document): HTMLStyleElement {
-  const existing = doc.getElementById(FONT_AWESOME_STYLE_ID);
-  if (existing instanceof HTMLStyleElement) {
-    return existing;
-  }
-
-  const style = doc.createElement("style");
-  style.id = FONT_AWESOME_STYLE_ID;
-  style.setAttribute("data-stx-runtime-style", "fontawesome");
-  doc.head.appendChild(style);
-  return style;
+function findExistingFontAwesomeLinks(doc: Document): HTMLLinkElement[] {
+  return Array.from(
+    doc.head.querySelectorAll(`link[rel="stylesheet"][${FONT_AWESOME_LINK_ATTRIBUTE}="true"]`)
+  ).filter((node): node is HTMLLinkElement => node instanceof HTMLLinkElement);
 }
 
 /**
- * 功能：确保全局只挂载一份已重写字体路径的 Font Awesome 样式。
- * @param doc 目标文档对象，默认使用当前页面文档
- * @returns 样式节点；无文档环境时返回 null
+ * 功能：创建单个 Font Awesome 样式链接节点。
+ * @param doc 目标文档对象
+ * @param fileName Font Awesome CSS 文件名
+ * @returns 已配置完成的链接元素
  */
-export function ensureFontAwesomeRuntimeStyles(doc?: Document): HTMLStyleElement | null {
+function createFontAwesomeLinkElement(doc: Document, fileName: string): HTMLLinkElement {
+  const link = doc.createElement("link");
+  link.rel = "stylesheet";
+  link.href = resolveFontAwesomeCssHref(fileName);
+  link.setAttribute(FONT_AWESOME_LINK_ATTRIBUTE, "true");
+  link.setAttribute("data-stx-fontawesome-file", fileName);
+  return link;
+}
+
+/**
+ * 功能：确保页面中按顺序挂载完整的 Font Awesome 外链样式文件。
+ * @param doc 目标文档对象，默认使用当前页面文档
+ * @returns 当前页面中的 Font Awesome 样式链接列表；无文档环境时返回 null
+ */
+export function ensureFontAwesomeRuntimeStyles(doc?: Document): HTMLLinkElement[] | null {
   const targetDocument = doc ?? (typeof document !== "undefined" ? document : undefined);
   if (!targetDocument?.head) {
     return null;
   }
 
-  const style = ensureFontAwesomeStyleElement(targetDocument);
-  const nextCssText = buildFontAwesomeRuntimeCss();
-  if (style.textContent !== nextCssText) {
-    style.textContent = nextCssText;
-  }
-  return style;
+  const existingLinks = findExistingFontAwesomeLinks(targetDocument);
+  const existingFileNames = new Set(
+    existingLinks.map((link) => String(link.getAttribute("data-stx-fontawesome-file") ?? ""))
+  );
+
+  FONT_AWESOME_CSS_FILES.forEach((fileName: string): void => {
+    if (existingFileNames.has(fileName)) {
+      return;
+    }
+
+    targetDocument.head.appendChild(createFontAwesomeLinkElement(targetDocument, fileName));
+  });
+
+  return findExistingFontAwesomeLinks(targetDocument);
 }
