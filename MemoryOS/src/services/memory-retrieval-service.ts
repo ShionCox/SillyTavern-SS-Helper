@@ -7,17 +7,43 @@ import { buildDefaultRecallConfig, mergeRecallConfig } from '../memory-retrieval
 import { applyPayloadFilter } from '../memory-retrieval/payload-filter';
 import { RetrievalOrchestrator } from '../memory-retrieval/retrieval-orchestrator';
 import { readMemoryOSSettings } from '../settings/store';
+import { HybridRetrievalService } from './hybrid-retrieval-service';
+import { buildQueryContextBundle } from './query-context-builder';
 
 /**
  * 功能：全系统统一检索入口服务。
  * 说明：所有模块（Prompt、Takeover、Workbench 等）均通过此服务发起检索，
  *       不再各自拼装检索逻辑。
+ *       第二阶段集成 HybridRetrievalService，在 vector_only / hybrid 模式下
+ *       接入向量策略路由与重排序。
  */
 export class MemoryRetrievalService {
     private readonly orchestrator: RetrievalOrchestrator;
+    private hybridService: HybridRetrievalService | null = null;
 
     constructor(orchestrator?: RetrievalOrchestrator) {
         this.orchestrator = orchestrator ?? new RetrievalOrchestrator();
+    }
+
+    /**
+     * 功能：注入混合检索服务。
+     * @param service HybridRetrievalService。
+     */
+    setHybridService(service: HybridRetrievalService): void {
+        this.hybridService = service;
+        // 同时注入到 embeddingProvider
+        const provider = this.orchestrator.getEmbeddingProvider();
+        provider.setServices(
+            service.getEmbeddingService(),
+            service.getVectorStore(),
+        );
+    }
+
+    /**
+     * 功能：获取 HybridRetrievalService 实例。
+     */
+    getHybridService(): HybridRetrievalService | null {
+        return this.hybridService;
     }
 
     /**
@@ -41,6 +67,7 @@ export class MemoryRetrievalService {
 
         const filteredCandidates = applyPayloadFilter(input.candidates, config.payloadFilter);
 
+        // 先通过 orchestrator 跑基础管线（种子 -> 图扩展 -> 补召回 -> 多样性裁剪）
         const result = await this.orchestrator.retrieve(
             {
                 query: input.query,
@@ -59,18 +86,74 @@ export class MemoryRetrievalService {
             },
         );
 
+        // 如果是 vector_only 或 hybrid 且混合检索服务存在，走向量增强链路
+        const needsVectorChain = (config.retrievalMode === 'vector_only' || config.retrievalMode === 'hybrid')
+            && this.hybridService !== null;
+
+        let finalItems = result.items;
+        let vectorProviderAvailable = this.orchestrator.isVectorProviderAvailable();
+        let vectorUnavailableReason = this.orchestrator.getVectorUnavailableReason();
+        let resultSourceLabels: ResultSourceLabel[];
+        let hybridRerankUsed = false;
+        let hybridRerankReasonCodes: string[] = [];
+
+        if (needsVectorChain && this.hybridService) {
+            const queryContext = settings.retrievalEnableQueryContextBuilder
+                ? buildQueryContextBundle({
+                    query: input.query,
+                    recentMessages: input.recentContext?.recentMessages as Array<{ role?: string; content?: string }>,
+                    knownActorKeys: result.contextRoute?.entityAnchors?.actorKeys,
+                    knownRelationKeys: result.contextRoute?.entityAnchors?.relationKeys,
+                    knownWorldKeys: result.contextRoute?.entityAnchors?.worldKeys,
+                })
+                : undefined;
+
+            const hybridResult = await this.hybridService.search({
+                retrievalMode: config.retrievalMode,
+                query: input.query,
+                chatKey: input.chatKey ?? '',
+                candidates: filteredCandidates,
+                lexicalResults: result.items,
+                queryContext,
+                contextRoute: result.contextRoute,
+                overrideFinalTopK: settings.vectorFinalTopK,
+            });
+
+            finalItems = hybridResult.items;
+            vectorProviderAvailable = hybridResult.vectorAvailable;
+            vectorUnavailableReason = hybridResult.vectorUnavailableReason;
+            hybridRerankUsed = hybridResult.rerankUsed;
+            hybridRerankReasonCodes = hybridResult.rerankReasonCodes;
+
+            // 标注来源
+            const vectorHitIds = new Set(hybridResult.vectorHits.map((h) => h.sourceId));
+            resultSourceLabels = finalItems.map((item) => {
+                const cid = item.candidate.candidateId || item.candidate.entryId;
+                if (vectorHitIds.has(item.candidate.entryId) || vectorHitIds.has(cid)) {
+                    if ((item.breakdown.bm25 ?? 0) > 0) {
+                        return { candidateId: cid, source: 'lexical' as const };
+                    }
+                    return { candidateId: cid, source: 'vector' as const };
+                }
+                if ((item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0) {
+                    return { candidateId: cid, source: 'graph_expansion' as const };
+                }
+                return { candidateId: cid, source: 'lexical' as const };
+            });
+        } else {
+            resultSourceLabels = result.items.map((item) => ({
+                candidateId: item.candidate.candidateId,
+                source: (item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0
+                    ? 'graph_expansion' as const
+                    : 'lexical' as const,
+            }));
+        }
+
         const vectorProviderStatus: VectorProviderStatus = {
-            available: this.orchestrator.isVectorProviderAvailable(),
-            unavailableReason: this.orchestrator.getVectorUnavailableReason(),
+            available: vectorProviderAvailable,
+            unavailableReason: vectorUnavailableReason,
             requestedByMode: config.retrievalMode === 'vector_only' || config.retrievalMode === 'hybrid',
         };
-
-        const resultSourceLabels: ResultSourceLabel[] = result.items.map((item) => ({
-            candidateId: item.candidate.candidateId,
-            source: (item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0
-                ? 'graph_expansion' as const
-                : 'lexical' as const,
-        }));
 
         const diagnostics: RetrievalOutputDiagnostics = {
             contextRoute: result.contextRoute,
@@ -80,7 +163,7 @@ export class MemoryRetrievalService {
             expandedCount: result.diagnostics?.expandedCount ?? 0,
             coverageTriggeredFacets: (result.diagnostics?.coverageTriggeredFacets ?? []) as RetrievalFacet[],
             diversityDroppedCount: result.diagnostics?.diversityDroppedCount ?? 0,
-            finalCount: result.diagnostics?.finalCount ?? result.items.length,
+            finalCount: result.diagnostics?.finalCount ?? finalItems.length,
             seedQueryText: result.diagnostics?.seedQueryText ?? input.query,
             boostSchemaIds: result.diagnostics?.boostSchemaIds ?? [],
             coverageSubQueries: result.diagnostics?.coverageSubQueries ?? {},
@@ -90,7 +173,7 @@ export class MemoryRetrievalService {
         };
 
         return {
-            items: result.items,
+            items: finalItems,
             retrievalMode: config.retrievalMode,
             providerId: result.providerId,
             contextRoute: result.contextRoute,

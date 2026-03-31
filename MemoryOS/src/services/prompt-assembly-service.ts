@@ -11,9 +11,7 @@ import { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
 import type { ActorMemoryProfile, MemoryEntry, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
 import type { MemoryCompareKeyIndexRecord } from '../db/db';
-import { MemoryRetrievalService } from './memory-retrieval-service';
-
-const promptRetrievalService = new MemoryRetrievalService();
+import { getSharedRetrievalService } from '../runtime/vector-runtime';
 
 /**
  * 功能：统一承接 Prompt 检索、记忆保留阶段计算与注入文本组装。
@@ -57,7 +55,7 @@ export class PromptAssemblyService {
 
         const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex);
         const retrievalQueryText = query || promptText || '当前对话';
-        const retrievalResult = await promptRetrievalService.searchForPrompt({
+        const retrievalResult = await getSharedRetrievalService().searchForPrompt({
             query: retrievalQueryText,
             chatKey: this.chatKey,
             candidates: retrievalCandidates,

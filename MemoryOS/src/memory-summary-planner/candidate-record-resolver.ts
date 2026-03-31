@@ -1,7 +1,6 @@
 import type { MemoryEntry } from '../types';
 import type { RetrievalCandidate, RetrievalResultItem } from '../memory-retrieval';
-import { MemoryRetrievalService } from '../services/memory-retrieval-service';
-import {
+import { getSharedRetrievalService } from '../runtime/vector-runtime';import {
     buildCityCompareKey,
     buildCompareKey as buildUnifiedCompareKey,
     buildLocationCompareKey,
@@ -44,8 +43,6 @@ export interface ResolveCandidateRecordsInput {
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
 
-const defaultRetrievalService = new MemoryRetrievalService();
-
 /**
  * 功能：解析总结阶段候选旧记录。
  * @param input 解析输入。
@@ -59,7 +56,7 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
     const maxCandidatesHardCap = Math.max(3, Number(input.maxCandidatesHardCap ?? 12) || 12);
     const candidateTextBudgetChars = Math.max(300, Number(input.candidateTextBudgetChars ?? 1800) || 1800);
     const retrievalCandidates = mapToRetrievalCandidates(input.entries, input.memoryPercentByEntryId);
-    const retrieveResult = await defaultRetrievalService.searchHybrid({
+    const retrieveResult = await getSharedRetrievalService().searchHybrid({
         query: input.query,
         candidates: retrievalCandidates,
         rulePackMode: input.rulePackMode,

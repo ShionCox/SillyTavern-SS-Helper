@@ -16,6 +16,23 @@ import {
     type DBRoleEntryMemory,
     type DBSummarySnapshot,
 } from '../db/db';
+import {
+    saveVectorDocument,
+    saveVectorDocuments,
+    loadVectorDocuments,
+    loadVectorDocumentsBySource,
+    deleteVectorDocumentById,
+    deleteVectorDocumentsBySource,
+    clearVectorDocumentsForChat,
+    saveVectorIndex,
+    saveVectorIndexBatch,
+    loadVectorIndexRecords,
+    deleteVectorIndexBySource,
+    clearVectorIndexForChat,
+    saveVectorRecallStat,
+    clearVectorRecallStatsForChat,
+    clearAllVectorDataForChat,
+} from '../db/vector-db';
 import { normalizeSummarySnapshot } from '../memory-summary-planner';
 import { deleteWorldProfileBinding, getWorldProfileBinding, putWorldProfileBinding } from '../memory-world-profile';
 import { BindingResolutionService } from '../services/binding-resolution-service';
@@ -42,6 +59,9 @@ import {
     type WorldProfileBinding,
 } from '../types';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import type { VectorDocument, DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
+import type { IndexedVectorDocument } from '../types/vector-search';
+import { onEntrySaved, onEntryDeleted, onRelationshipSaved, onActorSaved, onSummarySaved } from '../services/vector-index-service';
 
 interface EntryAuditWriteOptions {
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
@@ -236,6 +256,7 @@ export class EntryRepository {
             afterEntry: savedEntry,
             ts: now,
         });
+        void onEntrySaved(this.chatKey, savedEntry).catch(() => {});
         return savedEntry;
     }
 
@@ -265,6 +286,7 @@ export class EntryRepository {
                 ts: Date.now(),
             });
         }
+        void onEntryDeleted(this.chatKey, normalizedEntryId).catch(() => {});
     }
 
     /**
@@ -302,7 +324,9 @@ export class EntryRepository {
             updatedAt: now,
         };
         await db.actor_memory_profiles.put(row);
-        return this.mapActorProfile(row);
+        const savedProfile = this.mapActorProfile(row);
+        void onActorSaved(this.chatKey, savedProfile).catch(() => {});
+        return savedProfile;
     }
 
     /**
@@ -415,7 +439,9 @@ export class EntryRepository {
             updatedAt: Number(input.updatedAt ?? now) || now,
         };
         await db.memory_relationships.put(row);
-        return this.mapRelationship(row);
+        const savedRelationship = this.mapRelationship(row);
+        void onRelationshipSaved(this.chatKey, savedRelationship).catch(() => {});
+        return savedRelationship;
     }
 
     /**
@@ -774,7 +800,9 @@ export class EntryRepository {
             updatedAt: now,
         };
         await db.summary_snapshots.put(row);
-        return this.mapSummarySnapshot(row);
+        const savedSnapshot = this.mapSummarySnapshot(row);
+        void onSummarySaved(this.chatKey, savedSnapshot).catch(() => {});
+        return savedSnapshot;
     }
 
     async listSummarySnapshots(limit: number = 20): Promise<SummarySnapshot[]> {
@@ -1715,5 +1743,105 @@ export class EntryRepository {
             return 0;
         }
         return Math.max(0, Math.min(100, Math.round(numericValue)));
+    }
+
+    // ─── 向量系统 CRUD ──────────────────────────────
+
+    /**
+     * 功能：列出当前聊天的向量文档。
+     * @param sourceKind 可选来源类型筛选。
+     * @param sourceId 可选来源 ID 筛选。
+     */
+    async listVectorDocuments(sourceKind?: string, sourceId?: string): Promise<DBMemoryVectorDocument[]> {
+        if (sourceKind) {
+            const ids = sourceId ? [sourceId] : [];
+            return loadVectorDocumentsBySource(this.chatKey, sourceKind, ids);
+        }
+        return loadVectorDocuments(this.chatKey);
+    }
+
+    /**
+     * 功能：保存单个向量文档。
+     * @param doc 向量文档。
+     */
+    async saveVectorDocument(doc: DBMemoryVectorDocument): Promise<void> {
+        await saveVectorDocument(this.chatKey, doc);
+    }
+
+    /**
+     * 功能：批量保存向量文档。
+     * @param docs 向量文档列表。
+     */
+    async saveVectorDocumentsBatch(docs: DBMemoryVectorDocument[]): Promise<void> {
+        await saveVectorDocuments(this.chatKey, docs);
+    }
+
+    /**
+     * 功能：按来源删除向量文档。
+     * @param sourceKind 来源类型。
+     * @param sourceId 来源 ID。
+     */
+    async deleteVectorDocumentsBySource(sourceKind: string, sourceId?: string): Promise<void> {
+        const ids = sourceId ? [sourceId] : [];
+        await deleteVectorDocumentsBySource(this.chatKey, sourceKind, ids);
+    }
+
+    /**
+     * 功能：保存向量索引记录。
+     * @param record 索引记录。
+     */
+    async saveVectorIndex(record: DBMemoryVectorIndex): Promise<void> {
+        await saveVectorIndex(this.chatKey, record);
+    }
+
+    /**
+     * 功能：批量保存向量索引记录。
+     * @param records 索引记录列表。
+     */
+    async saveVectorIndexBatch(records: DBMemoryVectorIndex[]): Promise<void> {
+        await saveVectorIndexBatch(this.chatKey, records);
+    }
+
+    /**
+     * 功能：读取当前聊天的向量索引记录。
+     */
+    async listVectorIndexRecords(): Promise<DBMemoryVectorIndex[]> {
+        return loadVectorIndexRecords(this.chatKey);
+    }
+
+    /**
+     * 功能：按来源删除向量索引。
+     * @param sourceKind 来源类型。
+     * @param sourceId 来源 ID。
+     */
+    async deleteVectorIndexBySource(sourceKind: string, sourceId?: string): Promise<void> {
+        const ids = sourceId ? [sourceId] : [];
+        await deleteVectorIndexBySource(this.chatKey, sourceKind, ids);
+    }
+
+    /**
+     * 功能：批量替换当前聊天的全部向量文档（全量重建用）。
+     * @param docs 新的向量文档列表。
+     */
+    async replaceVectorDocumentsForChat(docs: DBMemoryVectorDocument[]): Promise<void> {
+        await clearVectorDocumentsForChat(this.chatKey);
+        if (docs.length > 0) {
+            await saveVectorDocuments(this.chatKey, docs);
+        }
+    }
+
+    /**
+     * 功能：清空当前聊天的全部向量数据。
+     */
+    async clearVectorDataForChat(): Promise<void> {
+        await clearAllVectorDataForChat(this.chatKey);
+    }
+
+    /**
+     * 功能：保存向量召回统计记录。
+     * @param stat 召回统计。
+     */
+    async saveVectorRecallStat(stat: DBMemoryVectorRecallStat): Promise<void> {
+        await saveVectorRecallStat(this.chatKey, stat);
     }
 }

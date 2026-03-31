@@ -66,6 +66,26 @@ export type MemoryOSSettings = {
     maintenanceDuplicateCheckEnabled: boolean;
     /** 是否启用秘书层/蒸馏服务 */
     scoringServiceEnabled: boolean;
+    /** 向量检索 topK */
+    vectorTopK: number;
+    /** 向量深路径候选窗口 */
+    vectorDeepWindow: number;
+    /** 向量最终 topK */
+    vectorFinalTopK: number;
+    /** 是否启用向量策略路由 */
+    vectorEnableStrategyRouting: boolean;
+    /** 是否启用向量重排序 */
+    vectorEnableRerank: boolean;
+    /** 重排序候选窗口 */
+    vectorRerankWindow: number;
+    /** 是否在写入时自动索引向量 */
+    vectorAutoIndexOnWrite: boolean;
+    /** 是否启用向量召回统计 */
+    vectorEnableRecallStats: boolean;
+    /** embedding 模型提示（可选） */
+    vectorEmbeddingModel: string;
+    /** embedding 版本标识 */
+    vectorEmbeddingVersion: string;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -125,6 +145,16 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     maintenanceAutoCompressEnabled: false,
     maintenanceDuplicateCheckEnabled: false,
     scoringServiceEnabled: false,
+    vectorTopK: 5,
+    vectorDeepWindow: 25,
+    vectorFinalTopK: 5,
+    vectorEnableStrategyRouting: true,
+    vectorEnableRerank: true,
+    vectorRerankWindow: 25,
+    vectorAutoIndexOnWrite: true,
+    vectorEnableRecallStats: true,
+    vectorEmbeddingModel: '',
+    vectorEmbeddingVersion: '1',
 };
 
 /**
@@ -241,6 +271,23 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         Math.min(3, Math.trunc(Number(candidate.retrievalDefaultExpandDepth) || DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth)),
     );
 
+    const vectorTopK: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.vectorTopK) || DEFAULT_MEMORY_OS_SETTINGS.vectorTopK)),
+    );
+    const vectorDeepWindow: number = Math.max(
+        5,
+        Math.min(100, Math.trunc(Number(candidate.vectorDeepWindow) || DEFAULT_MEMORY_OS_SETTINGS.vectorDeepWindow)),
+    );
+    const vectorFinalTopK: number = Math.max(
+        1,
+        Math.min(50, Math.trunc(Number(candidate.vectorFinalTopK) || DEFAULT_MEMORY_OS_SETTINGS.vectorFinalTopK)),
+    );
+    const vectorRerankWindow: number = Math.max(
+        5,
+        Math.min(100, Math.trunc(Number(candidate.vectorRerankWindow) || DEFAULT_MEMORY_OS_SETTINGS.vectorRerankWindow)),
+    );
+
     return {
         enabled: candidate.enabled !== false,
         coldStartEnabled: candidate.coldStartEnabled !== false,
@@ -296,6 +343,16 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         maintenanceAutoCompressEnabled: candidate.maintenanceAutoCompressEnabled === true,
         maintenanceDuplicateCheckEnabled: candidate.maintenanceDuplicateCheckEnabled === true,
         scoringServiceEnabled: candidate.scoringServiceEnabled === true,
+        vectorTopK,
+        vectorDeepWindow,
+        vectorFinalTopK,
+        vectorEnableStrategyRouting: candidate.vectorEnableStrategyRouting !== false,
+        vectorEnableRerank: candidate.vectorEnableRerank !== false,
+        vectorRerankWindow,
+        vectorAutoIndexOnWrite: candidate.vectorAutoIndexOnWrite !== false,
+        vectorEnableRecallStats: candidate.vectorEnableRecallStats !== false,
+        vectorEmbeddingModel: String(candidate.vectorEmbeddingModel ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingModel),
+        vectorEmbeddingVersion: String(candidate.vectorEmbeddingVersion ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingVersion) || '1',
     };
 }
 

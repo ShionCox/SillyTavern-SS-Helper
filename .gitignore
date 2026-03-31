@@ -10,6 +10,7 @@ lerna-debug.log*
 # Node modules
 node_modules/
 .pnpm-store/
+.tmp/
 dist/
 /MemoryOS/node_modules/
 /LLMHub/node_modules/

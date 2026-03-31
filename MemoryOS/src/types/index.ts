@@ -59,3 +59,30 @@ export {
     DEFAULT_ACTOR_MEMORY_STAT,
     CORE_MEMORY_ENTRY_TYPES,
 } from './unified-memory';
+
+export type {
+    VectorDocSourceKind,
+    EmbeddingStatus,
+    VectorDocument,
+    DBMemoryVectorDocument,
+    DBMemoryVectorIndex,
+    DBMemoryVectorRecallStat,
+} from './vector-document';
+
+export type {
+    IndexedVectorDocument,
+    VectorSearchQuery,
+    VectorSearchHit,
+    VectorStoreAdapter,
+} from './vector-search';
+
+export type {
+    VectorRouteKind,
+    VectorStrategyDecision,
+    VectorStrategyInput,
+} from './vector-strategy';
+
+export type {
+    VectorRerankInput,
+    VectorRerankResult,
+} from './vector-rerank';

@@ -29,6 +29,7 @@ import {
     updateMemorySummaryProgressFloat,
 } from '../ui/summary-progress-float';
 import { ensureSdkFloatingToolbar, removeSdkFloatingToolbarGroup, SDK_FLOATING_TOOLBAR_ID } from '../../../SDK/toolbar';
+import { initVectorRuntime } from './vector-runtime';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -229,6 +230,7 @@ export class MemoryOS {
         }, 2500);
         this.refreshChatBindingHandler = null;
         this.initGlobalSTX();
+        initVectorRuntime();
         this.bindRegistryEvents();
         this.registerSelfManifest();
         this.setupPluginBusEndpoints();

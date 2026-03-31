@@ -101,6 +101,13 @@ export class RetrievalOrchestrator {
     }
 
     /**
+     * 功能：获取 embedding provider 实例（用于外部注入服务依赖）。
+     */
+    public getEmbeddingProvider(): EmbeddingRetrievalProvider {
+        return this.embeddingProvider;
+    }
+
+    /**
      * 功能：检查向量 provider 是否可用。
      * @returns 是否可用。
      */
