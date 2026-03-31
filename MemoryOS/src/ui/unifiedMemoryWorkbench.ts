@@ -56,7 +56,6 @@ import {
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
-const WORKBENCH_BACKDROP_CANVAS_ID = 'stx-memory-workbench-backdrop-canvas';
 const graphService = new GraphService();
 
 /**
@@ -209,31 +208,17 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
  */
 export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOptions = {}): void {
     ensureWorkbenchStyle();
-    let destroyBackdropCanvas: (() => void) | null = null;
     openSharedDialog({
         id: 'stx-memory-unified-workbench',
         size: 'fullscreen',
         layout: 'bare',
         chrome: false,
-        bodyHtml: `
-            <div class="stx-memory-workbench-shell">
-                <canvas id="${WORKBENCH_BACKDROP_CANVAS_ID}" class="stx-memory-workbench__backdrop" aria-hidden="true"></canvas>
-                <div id="stx-memory-workbench-root" class="stx-memory-workbench-shell__content"></div>
-            </div>
-        `,
+        bodyHtml: '<div id="stx-memory-workbench-root"></div>',
         onMount: (instance: SharedDialogInstance): void => {
-            const backdropCanvas = instance.content.querySelector(`#${WORKBENCH_BACKDROP_CANVAS_ID}`) as HTMLCanvasElement | null;
-            if (backdropCanvas) {
-                destroyBackdropCanvas = mountWorkbenchBackdropCanvas(backdropCanvas);
-            }
             void mountWorkbench(instance, options).catch((error: unknown): void => {
                 logger.error('挂载 MemoryOS 工作台失败', error);
                 toast.error(`工作台加载失败：${String((error as Error)?.message ?? error)}`);
             });
-        },
-        onClose: (): void => {
-            destroyBackdropCanvas?.();
-            destroyBackdropCanvas = null;
         },
     });
 }
@@ -1132,182 +1117,6 @@ function resolveGraphLinkType(relationTag: string): WorkbenchGraphLinkType {
         return 'romance';
     }
     return 'neutral';
-}
-
-/**
- * 功能：挂载工作台背景画布动画，减少 CSS/SVG 背景持续重绘。
- * @param canvas 背景画布。
- * @returns 销毁函数。
- */
-function mountWorkbenchBackdropCanvas(canvas: HTMLCanvasElement): () => void {
-    const context = canvas.getContext('2d', { alpha: true });
-    if (!context) {
-        return (): void => {};
-    }
-
-    type CircuitPath = {
-        points: Array<{ x: number; y: number }>;
-        speed: number;
-        phase: number;
-        width: number;
-    };
-
-    const paths: CircuitPath[] = [
-        { points: [{ x: 0.04, y: 0.16 }, { x: 0.18, y: 0.16 }, { x: 0.32, y: 0.34 }, { x: 0.32, y: 0.78 }, { x: 0.58, y: 0.78 }, { x: 0.72, y: 0.62 }, { x: 0.94, y: 0.62 }], speed: 0.09, phase: 0.08, width: 1.2 },
-        { points: [{ x: 0.12, y: 0.84 }, { x: 0.26, y: 0.68 }, { x: 0.46, y: 0.68 }, { x: 0.58, y: 0.52 }, { x: 0.78, y: 0.52 }, { x: 0.9, y: 0.28 }], speed: 0.11, phase: 0.42, width: 1.1 },
-        { points: [{ x: 0.14, y: 0.42 }, { x: 0.24, y: 0.42 }, { x: 0.24, y: 0.24 }, { x: 0.46, y: 0.24 }, { x: 0.62, y: 0.4 }, { x: 0.84, y: 0.4 }], speed: 0.07, phase: 0.73, width: 1.05 },
-        { points: [{ x: 0.52, y: 0.08 }, { x: 0.52, y: 0.2 }, { x: 0.66, y: 0.2 }, { x: 0.66, y: 0.34 }, { x: 0.82, y: 0.34 }], speed: 0.12, phase: 0.19, width: 0.95 },
-    ];
-
-    let disposed = false;
-    let rafId = 0;
-    let lastFrameAt = 0;
-    let paused = document.hidden;
-
-    const resizeCanvas = (): void => {
-        const parent = canvas.parentElement;
-        if (!parent) {
-            return;
-        }
-        const bounds = parent.getBoundingClientRect();
-        const pixelRatio = 1;
-        canvas.width = Math.max(1, Math.round(bounds.width * pixelRatio));
-        canvas.height = Math.max(1, Math.round(bounds.height * pixelRatio));
-        canvas.style.width = `${Math.round(bounds.width)}px`;
-        canvas.style.height = `${Math.round(bounds.height)}px`;
-        context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    };
-
-    const resizeObserver = typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver((): void => {
-            resizeCanvas();
-        })
-        : null;
-
-    const drawGrid = (width: number, height: number): void => {
-        context.save();
-        context.strokeStyle = 'rgba(56, 189, 248, 0.07)';
-        context.lineWidth = 1;
-        const step = 54;
-        for (let x = 0; x <= width; x += step) {
-            context.beginPath();
-            context.moveTo(x + 0.5, 0);
-            context.lineTo(x + 0.5, height);
-            context.stroke();
-        }
-        for (let y = 0; y <= height; y += step) {
-            context.beginPath();
-            context.moveTo(0, y + 0.5);
-            context.lineTo(width, y + 0.5);
-            context.stroke();
-        }
-        context.restore();
-    };
-
-    const drawFrame = (timestamp: number): void => {
-        const width = canvas.clientWidth;
-        const height = canvas.clientHeight;
-        if (width <= 0 || height <= 0) {
-            return;
-        }
-        context.clearRect(0, 0, width, height);
-        drawGrid(width, height);
-
-        const t = timestamp * 0.001;
-        for (const path of paths) {
-            const pixelPoints = path.points.map((point) => ({
-                x: point.x * width,
-                y: point.y * height,
-            }));
-
-            context.beginPath();
-            context.moveTo(pixelPoints[0]!.x, pixelPoints[0]!.y);
-            for (let index = 1; index < pixelPoints.length; index += 1) {
-                context.lineTo(pixelPoints[index]!.x, pixelPoints[index]!.y);
-            }
-            context.strokeStyle = 'rgba(56, 189, 248, 0.24)';
-            context.lineWidth = path.width;
-            context.stroke();
-
-            let totalLength = 0;
-            const segmentLengths: number[] = [];
-            for (let index = 1; index < pixelPoints.length; index += 1) {
-                const dx = pixelPoints[index]!.x - pixelPoints[index - 1]!.x;
-                const dy = pixelPoints[index]!.y - pixelPoints[index - 1]!.y;
-                const length = Math.hypot(dx, dy);
-                segmentLengths.push(length);
-                totalLength += length;
-            }
-
-            let travel = ((t * path.speed) + path.phase) % 1;
-            travel *= totalLength;
-            let segmentIndex = 0;
-            while (segmentIndex < segmentLengths.length - 1 && travel > segmentLengths[segmentIndex]!) {
-                travel -= segmentLengths[segmentIndex]!;
-                segmentIndex += 1;
-            }
-
-            const start = pixelPoints[segmentIndex]!;
-            const end = pixelPoints[segmentIndex + 1]!;
-            const segmentLength = Math.max(1, segmentLengths[segmentIndex] || 1);
-            const ratio = travel / segmentLength;
-            const pulseX = start.x + ((end.x - start.x) * ratio);
-            const pulseY = start.y + ((end.y - start.y) * ratio);
-
-            context.beginPath();
-            context.arc(pulseX, pulseY, 2.2, 0, Math.PI * 2);
-            context.fillStyle = 'rgba(56, 189, 248, 0.98)';
-            context.shadowColor = 'rgba(56, 189, 248, 0.65)';
-            context.shadowBlur = 14;
-            context.fill();
-            context.shadowBlur = 0;
-
-            for (const point of pixelPoints) {
-                const pulse = 0.32 + (0.28 * (0.5 + 0.5 * Math.sin((t * 1.3) + point.x * 0.01 + point.y * 0.01)));
-                context.beginPath();
-                context.arc(point.x, point.y, 1.4, 0, Math.PI * 2);
-                context.fillStyle = `rgba(196, 160, 98, ${pulse.toFixed(3)})`;
-                context.fill();
-            }
-        }
-    };
-
-    const animate = (timestamp: number): void => {
-        if (disposed) {
-            return;
-        }
-        if (paused) {
-            rafId = window.requestAnimationFrame(animate);
-            return;
-        }
-        if (!lastFrameAt || timestamp - lastFrameAt >= 66) {
-            lastFrameAt = timestamp;
-            drawFrame(timestamp);
-        }
-        rafId = window.requestAnimationFrame(animate);
-    };
-
-    const handleVisibilityChange = (): void => {
-        paused = document.hidden;
-        if (!paused) {
-            lastFrameAt = 0;
-        }
-    };
-
-    resizeCanvas();
-    resizeObserver?.observe(canvas.parentElement ?? canvas);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    rafId = window.requestAnimationFrame(animate);
-
-    return (): void => {
-        disposed = true;
-        if (rafId) {
-            window.cancelAnimationFrame(rafId);
-        }
-        resizeObserver?.disconnect();
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-        context.clearRect(0, 0, canvas.width, canvas.height);
-    };
 }
 
 /**
