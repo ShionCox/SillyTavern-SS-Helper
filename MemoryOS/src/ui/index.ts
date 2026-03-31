@@ -55,6 +55,21 @@ const RETRIEVAL_LOG_ENABLED_ID = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID = 'stx-memoryos-retrieval-log-level';
 const RETRIEVAL_RULE_PACK_ID = 'stx-memoryos-retrieval-rule-pack';
+const VECTOR_TOPK_ID = 'stx-memoryos-vector-topk';
+const VECTOR_DEEP_WINDOW_ID = 'stx-memoryos-vector-deep-window';
+const VECTOR_FINAL_TOPK_ID = 'stx-memoryos-vector-final-topk';
+const VECTOR_ENABLE_STRATEGY_ROUTING_ID = 'stx-memoryos-vector-enable-strategy-routing';
+const VECTOR_ENABLE_RERANK_ID = 'stx-memoryos-vector-enable-rerank';
+const VECTOR_RERANK_WINDOW_ID = 'stx-memoryos-vector-rerank-window';
+const VECTOR_EMBEDDING_MODEL_ID = 'stx-memoryos-vector-embedding-model';
+const VECTOR_EMBEDDING_VERSION_ID = 'stx-memoryos-vector-embedding-version';
+const VECTOR_AUTO_INDEX_ON_WRITE_ID = 'stx-memoryos-vector-auto-index-on-write';
+const VECTOR_ENABLE_LLMHUB_RERANK_ID = 'stx-memoryos-vector-enable-llmhub-rerank';
+const VECTOR_LLMHUB_RERANK_RESOURCE_ID = 'stx-memoryos-vector-llmhub-rerank-resource';
+const VECTOR_LLMHUB_RERANK_MODEL_ID = 'stx-memoryos-vector-llmhub-rerank-model';
+const VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-min-candidates';
+const VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-max-candidates';
+const VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID = 'stx-memoryos-vector-llmhub-rerank-fallback-to-rule';
 const MAINTENANCE_AUTO_COMPRESS_ID = 'stx-memoryos-maintenance-auto-compress';
 const MAINTENANCE_DUPLICATE_CHECK_ID = 'stx-memoryos-maintenance-duplicate-check';
 const SCORING_SERVICE_ENABLED_ID = 'stx-memoryos-scoring-service-enabled';
@@ -224,6 +239,30 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 QueryContextBuilder</div><div class="stx-ui-item-desc">预留：为后续 embedding 查询构造统一上下文输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, '启用 QueryContextBuilder')}</div></div>
+            ${divider('向量检索')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用写入自动建索引</div><div class="stx-ui-item-desc">写入条目、关系、角色和总结后立即刷新向量文档，不再依赖当前检索模式。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_AUTO_INDEX_ON_WRITE_ID, '启用写入自动建索引')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量策略路由</div><div class="stx-ui-item-desc">根据查询复杂度决定走快路径还是深路径，并使用不同候选窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_STRATEGY_ROUTING_ID, '启用向量策略路由')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">向量窗口参数</div><div class="stx-ui-item-desc">控制快路径窗口、深路径窗口和最终裁切数量。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_TOPK_ID}">快路径候选数</label>${numberField(VECTOR_TOPK_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_DEEP_WINDOW_ID}">深路径候选窗口</label>${numberField(VECTOR_DEEP_WINDOW_ID,5,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_FINAL_TOPK_ID}">最终 TopK</label>${numberField(VECTOR_FINAL_TOPK_ID,1,50,1)}</div>
+            </div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Embedding 配置</div><div class="stx-ui-item-desc">控制 MemoryOS 向量编码的模型提示和版本标识。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_MODEL_ID}">Embedding 模型提示</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给 LLMHub 自动路由。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_VERSION_ID}">Embedding 版本标识</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_VERSION_ID, type: 'text', className: 'stx-ui-input' })}</div>
+            </div></div>
+            ${divider('向量重排序')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量重排序</div><div class="stx-ui-item-desc">仅在向量深路径中生效，关闭后直接使用融合结果裁切。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_RERANK_ID, '启用向量重排序')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 LLMHub 模型重排序</div><div class="stx-ui-item-desc">开启后仅深路径优先尝试模型重排，失败时可按设置回退规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_LLMHUB_RERANK_ID, '启用 LLMHub 模型重排序')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">重排序参数</div><div class="stx-ui-item-desc">规则重排窗口与 LLMHub 模型重排的候选数量配置。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_RERANK_WINDOW_ID}">规则重排窗口</label>${numberField(VECTOR_RERANK_WINDOW_ID,5,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID}">模型重排最小候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID}">模型重排最大候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,1,100,1)}</div>
+            </div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_RESOURCE_ID}">LLMHub 重排资源</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_RESOURCE_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则使用默认路由。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MODEL_ID}">LLMHub 重排模型</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给资源默认模型。</span></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">模型重排失败时回退规则重排</div><div class="stx-ui-item-desc">关闭后若模型重排失败，将直接返回当前融合结果裁切，不再继续规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, '模型重排失败时回退规则重排')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用检索日志</div><div class="stx-ui-item-desc">输出中文检索链日志，并为工作台保留结构化 trace。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_LOG_ENABLED_ID, '启用检索日志')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用诊断 Trace 面板</div><div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定与召回流水。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_TRACE_PANEL_ID, '启用诊断 Trace 面板')}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索调试配置</div><div class="stx-ui-item-desc">控制日志级别与当前启用的规则包模式。</div></div><div class="stx-ui-form-grid">
@@ -330,6 +369,21 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, settings.retrievalEnablePayloadFilter],
         [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, settings.retrievalEnableGraphPenalty],
         [RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, settings.retrievalEnableQueryContextBuilder],
+        [VECTOR_TOPK_ID, String(settings.vectorTopK)],
+        [VECTOR_DEEP_WINDOW_ID, String(settings.vectorDeepWindow)],
+        [VECTOR_FINAL_TOPK_ID, String(settings.vectorFinalTopK)],
+        [VECTOR_ENABLE_STRATEGY_ROUTING_ID, settings.vectorEnableStrategyRouting],
+        [VECTOR_ENABLE_RERANK_ID, settings.vectorEnableRerank],
+        [VECTOR_RERANK_WINDOW_ID, String(settings.vectorRerankWindow)],
+        [VECTOR_EMBEDDING_MODEL_ID, settings.vectorEmbeddingModel],
+        [VECTOR_EMBEDDING_VERSION_ID, settings.vectorEmbeddingVersion],
+        [VECTOR_AUTO_INDEX_ON_WRITE_ID, settings.vectorAutoIndexOnWrite],
+        [VECTOR_ENABLE_LLMHUB_RERANK_ID, settings.vectorEnableLLMHubRerank],
+        [VECTOR_LLMHUB_RERANK_RESOURCE_ID, settings.vectorLLMHubRerankResource],
+        [VECTOR_LLMHUB_RERANK_MODEL_ID, settings.vectorLLMHubRerankModel],
+        [VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID, String(settings.vectorLLMHubRerankMinCandidates)],
+        [VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID, String(settings.vectorLLMHubRerankMaxCandidates)],
+        [VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, settings.vectorLLMHubRerankFallbackToRule],
         [RETRIEVAL_LOG_ENABLED_ID, settings.retrievalLogEnabled],
         [RETRIEVAL_TRACE_PANEL_ID, settings.retrievalTracePanelEnabled],
         [RETRIEVAL_LOG_LEVEL_ID, settings.retrievalLogLevel],
@@ -362,6 +416,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     } finally {
         isSyncingForm = false;
     }
+    syncVectorSettingsUiState();
 }
 
 /**
@@ -388,6 +443,21 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         retrievalEnablePayloadFilter: checked(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnablePayloadFilter),
         retrievalEnableGraphPenalty: checked(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphPenalty),
         retrievalEnableQueryContextBuilder: checked(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableQueryContextBuilder),
+        vectorTopK: Number(text(VECTOR_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorTopK))),
+        vectorDeepWindow: Number(text(VECTOR_DEEP_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorDeepWindow))),
+        vectorFinalTopK: Number(text(VECTOR_FINAL_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorFinalTopK))),
+        vectorEnableStrategyRouting: checked(VECTOR_ENABLE_STRATEGY_ROUTING_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableStrategyRouting),
+        vectorEnableRerank: checked(VECTOR_ENABLE_RERANK_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableRerank),
+        vectorRerankWindow: Number(text(VECTOR_RERANK_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorRerankWindow))),
+        vectorEmbeddingModel: text(VECTOR_EMBEDDING_MODEL_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingModel),
+        vectorEmbeddingVersion: text(VECTOR_EMBEDDING_VERSION_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingVersion),
+        vectorAutoIndexOnWrite: checked(VECTOR_AUTO_INDEX_ON_WRITE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorAutoIndexOnWrite),
+        vectorEnableLLMHubRerank: checked(VECTOR_ENABLE_LLMHUB_RERANK_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableLLMHubRerank),
+        vectorLLMHubRerankResource: text(VECTOR_LLMHUB_RERANK_RESOURCE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankResource),
+        vectorLLMHubRerankModel: text(VECTOR_LLMHUB_RERANK_MODEL_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankModel),
+        vectorLLMHubRerankMinCandidates: Number(text(VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMinCandidates))),
+        vectorLLMHubRerankMaxCandidates: Number(text(VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMaxCandidates))),
+        vectorLLMHubRerankFallbackToRule: checked(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankFallbackToRule),
         summaryAutoTriggerEnabled: checked(SUMMARY_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryAutoTriggerEnabled),
         summaryProgressOverlayEnabled: checked(SUMMARY_PROGRESS_OVERLAY_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryProgressOverlayEnabled),
         summaryIntervalFloors: Number(text(SUMMARY_INTERVAL_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors))),
@@ -425,6 +495,46 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         maintenanceDuplicateCheckEnabled: checked(MAINTENANCE_DUPLICATE_CHECK_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceDuplicateCheckEnabled),
         maintenanceAutoCompressEnabled: checked(MAINTENANCE_AUTO_COMPRESS_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceAutoCompressEnabled),
     };
+}
+
+/**
+ * 功能：同步向量设置区的可编辑状态。
+ */
+function syncVectorSettingsUiState(): void {
+    const rerankEnabled = (document.getElementById(VECTOR_ENABLE_RERANK_ID) as HTMLInputElement | null)?.checked ?? false;
+    const llmhubEnabled = (document.getElementById(VECTOR_ENABLE_LLMHUB_RERANK_ID) as HTMLInputElement | null)?.checked ?? false;
+    const rerankFieldIds = [
+        VECTOR_ENABLE_LLMHUB_RERANK_ID,
+        VECTOR_RERANK_WINDOW_ID,
+        VECTOR_LLMHUB_RERANK_RESOURCE_ID,
+        VECTOR_LLMHUB_RERANK_MODEL_ID,
+        VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID,
+    ];
+    const llmhubFieldIds = [
+        VECTOR_LLMHUB_RERANK_RESOURCE_ID,
+        VECTOR_LLMHUB_RERANK_MODEL_ID,
+        VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID,
+    ];
+
+    rerankFieldIds.forEach((id: string): void => {
+        const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+        if (!element) {
+            return;
+        }
+        if (id === VECTOR_ENABLE_LLMHUB_RERANK_ID) {
+            element.disabled = !rerankEnabled;
+            return;
+        }
+        if (llmhubFieldIds.includes(id)) {
+            element.disabled = !rerankEnabled || !llmhubEnabled;
+            return;
+        }
+        element.disabled = !rerankEnabled;
+    });
 }
 
 /**
@@ -479,11 +589,20 @@ function bindActionEvents(): void {
     elements.forEach((element: HTMLInputElement | HTMLSelectElement): void => {
         if (element.id === BTN_ID || element.id === RESET_BTN_ID) return;
         if (element instanceof HTMLInputElement && element.type === 'checkbox') {
-            element.addEventListener('change', (): void => scheduleAutoSave());
+            element.addEventListener('change', (): void => {
+                syncVectorSettingsUiState();
+                scheduleAutoSave();
+            });
             return;
         }
-        element.addEventListener('input', (): void => scheduleAutoSave());
-        element.addEventListener('change', (): void => scheduleAutoSave());
+        element.addEventListener('input', (): void => {
+            syncVectorSettingsUiState();
+            scheduleAutoSave();
+        });
+        element.addEventListener('change', (): void => {
+            syncVectorSettingsUiState();
+            scheduleAutoSave();
+        });
         element.addEventListener('blur', (): void => flushAutoSave());
     });
 }

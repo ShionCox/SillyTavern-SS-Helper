@@ -3,23 +3,24 @@
  * 说明：负责 vector_only / hybrid 模式下的完整查询链路，包括：
  *       - 向量编码
  *       - 向量搜索
- *       - 策略路由（fast / deep）
- *       - 重排序（仅向量链启用时）
- *       - 融合 lexical + vector 结果（hybrid 模式）
+ *       - 策略路由
+ *       - 规则重排 / LLMHub 重排
+ *       - 词法与向量融合
  */
 
 import type { RetrievalResultItem, RetrievalCandidate, RetrievalContextRoute } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
-import type { VectorStrategyDecision, VectorStrategyInput } from '../types/vector-strategy';
+import type { VectorStrategyDecision } from '../types/vector-strategy';
 import type { VectorSearchHit } from '../types/vector-search';
 import type { QueryContextBundle } from './query-context-builder';
+import type { MemoryOSSettings } from '../settings/store';
 import { EmbeddingService } from './embedding-service';
 import { VectorStoreAdapterService } from './vector-store-adapter';
 import { VectorStrategyRouter, type VectorStrategyRouterConfig } from './vector-strategy-router';
 import { VectorRerankService } from './vector-rerank-service';
+import { LLMHubRerankService } from './llmhub-rerank-service';
 import { logger } from '../runtime/runtime-services';
-
-// ─── 类型 ──────────────────────────────
+import { readMemoryOSSettings } from '../settings/store';
 
 export interface HybridRetrievalInput {
     /** 检索模式 */
@@ -36,7 +37,7 @@ export interface HybridRetrievalInput {
     queryContext?: QueryContextBundle;
     /** 语境路由结果 */
     contextRoute?: RetrievalContextRoute | null;
-    /** 最终 topK（覆盖策略路由） */
+    /** 最终 topK */
     overrideFinalTopK?: number;
 }
 
@@ -51,13 +52,24 @@ export interface HybridRetrievalOutput {
     rerankUsed: boolean;
     /** rerank 原因码 */
     rerankReasonCodes: string[];
+    /** rerank 来源 */
+    rerankSource: 'none' | 'rule' | 'llmhub';
     /** 向量 provider 是否可用 */
     vectorAvailable: boolean;
     /** 向量不可用原因 */
     vectorUnavailableReason: string | null;
 }
 
-// ─── 服务 ──────────────────────────────
+interface InternalRerankResult {
+    /** 结果列表 */
+    items: RetrievalResultItem[];
+    /** 是否执行 */
+    used: boolean;
+    /** 原因码 */
+    reasonCodes: string[];
+    /** 来源 */
+    source: 'none' | 'rule' | 'llmhub';
+}
 
 /**
  * 功能：混合检索服务。
@@ -67,21 +79,25 @@ export class HybridRetrievalService {
     private readonly vectorStore: VectorStoreAdapterService;
     private readonly strategyRouter: VectorStrategyRouter;
     private readonly rerankService: VectorRerankService;
+    private readonly llmhubRerankService: LLMHubRerankService;
 
     constructor(options?: {
         embeddingService?: EmbeddingService;
         vectorStore?: VectorStoreAdapterService;
         strategyRouterConfig?: VectorStrategyRouterConfig;
         rerankService?: VectorRerankService;
+        llmhubRerankService?: LLMHubRerankService;
     }) {
         this.embeddingService = options?.embeddingService ?? new EmbeddingService();
         this.vectorStore = options?.vectorStore ?? new VectorStoreAdapterService();
         this.strategyRouter = new VectorStrategyRouter(options?.strategyRouterConfig);
         this.rerankService = options?.rerankService ?? new VectorRerankService();
+        this.llmhubRerankService = options?.llmhubRerankService ?? new LLMHubRerankService();
     }
 
     /**
      * 功能：获取 EmbeddingService 实例。
+     * @returns EmbeddingService。
      */
     getEmbeddingService(): EmbeddingService {
         return this.embeddingService;
@@ -89,6 +105,7 @@ export class HybridRetrievalService {
 
     /**
      * 功能：获取 VectorStoreAdapterService 实例。
+     * @returns VectorStoreAdapterService。
      */
     getVectorStore(): VectorStoreAdapterService {
         return this.vectorStore;
@@ -96,6 +113,7 @@ export class HybridRetrievalService {
 
     /**
      * 功能：检查向量能力是否可用。
+     * @returns 是否可用。
      */
     isVectorAvailable(): boolean {
         return this.embeddingService.isAvailable() && this.vectorStore.isAvailable();
@@ -103,6 +121,7 @@ export class HybridRetrievalService {
 
     /**
      * 功能：获取向量不可用原因。
+     * @returns 不可用原因。
      */
     getVectorUnavailableReason(): string | null {
         if (!this.embeddingService.isAvailable()) {
@@ -120,9 +139,9 @@ export class HybridRetrievalService {
      * @returns 混合检索输出。
      */
     async search(input: HybridRetrievalInput): Promise<HybridRetrievalOutput> {
+        const settings = readMemoryOSSettings();
         const { retrievalMode, query, chatKey } = input;
 
-        // lexical_only 直接返回词法结果
         if (retrievalMode === 'lexical_only') {
             return {
                 items: input.lexicalResults,
@@ -130,6 +149,7 @@ export class HybridRetrievalService {
                 vectorHits: [],
                 rerankUsed: false,
                 rerankReasonCodes: ['lexical_only'],
+                rerankSource: 'none',
                 vectorAvailable: this.isVectorAvailable(),
                 vectorUnavailableReason: this.getVectorUnavailableReason(),
             };
@@ -137,50 +157,35 @@ export class HybridRetrievalService {
 
         const vectorAvailable = this.isVectorAvailable();
         const vectorUnavailableReason = this.getVectorUnavailableReason();
+        const decision = this.buildDecision(input, settings);
 
-        // 向量不可用
         if (!vectorAvailable) {
             if (retrievalMode === 'vector_only') {
                 logger.warn(`[HybridRetrieval] vector_only 模式下向量不可用: ${vectorUnavailableReason}`);
                 return {
                     items: [],
-                    strategyDecision: null,
+                    strategyDecision: decision,
                     vectorHits: [],
                     rerankUsed: false,
                     rerankReasonCodes: ['vector_unavailable'],
+                    rerankSource: 'none',
                     vectorAvailable: false,
                     vectorUnavailableReason,
                 };
             }
-            // hybrid 模式下回退到词法
-            logger.info(`[HybridRetrieval] hybrid 模式下向量不可用，使用词法结果`);
+            logger.info('[HybridRetrieval] hybrid 模式下向量不可用，使用词法结果');
             return {
                 items: input.lexicalResults,
-                strategyDecision: null,
+                strategyDecision: decision,
                 vectorHits: [],
                 rerankUsed: false,
                 rerankReasonCodes: ['vector_unavailable_fallback_lexical'],
+                rerankSource: 'none',
                 vectorAvailable: false,
                 vectorUnavailableReason,
             };
         }
 
-        // — 策略路由 —
-        const contextRoute = input.contextRoute;
-        const strategyInput: VectorStrategyInput = {
-            query,
-            mergedContextText: input.queryContext?.mergedContextText,
-            retrievalMode: retrievalMode as 'vector_only' | 'hybrid',
-            actorAnchorKeys: contextRoute?.entityAnchors?.actorKeys,
-            relationAnchorKeys: contextRoute?.entityAnchors?.relationKeys,
-            worldAnchorKeys: contextRoute?.entityAnchors?.worldKeys,
-            expectedFacets: contextRoute?.facets,
-            routeConfidence: contextRoute?.confidence,
-        };
-
-        const decision = this.strategyRouter.route(strategyInput);
-
-        // — 向量编码 —
         const textToEncode = input.queryContext?.mergedContextText || query;
         const encodeResult = await this.embeddingService.encodeOne(textToEncode);
 
@@ -193,6 +198,7 @@ export class HybridRetrievalService {
                     vectorHits: [],
                     rerankUsed: false,
                     rerankReasonCodes: ['encode_failed'],
+                    rerankSource: 'none',
                     vectorAvailable: true,
                     vectorUnavailableReason: null,
                 };
@@ -203,12 +209,12 @@ export class HybridRetrievalService {
                 vectorHits: [],
                 rerankUsed: false,
                 rerankReasonCodes: ['encode_failed_fallback_lexical'],
+                rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
             };
         }
 
-        // — 向量搜索 —
         await this.vectorStore.ensureLoaded(chatKey);
         const vectorHits = await this.vectorStore.search(chatKey, {
             vector: encodeResult.vector,
@@ -217,11 +223,53 @@ export class HybridRetrievalService {
             minScore: 0.1,
         });
 
-        // — 构建向量检索结果项 —
+        const vectorResults = this.mapVectorHits(vectorHits, input.candidates);
+
+        if (retrievalMode === 'vector_only') {
+            return this.handleVectorOnly(vectorResults, decision, vectorHits, query, input, settings);
+        }
+        return this.handleHybrid(input.lexicalResults, vectorResults, decision, vectorHits, query, input, settings);
+    }
+
+    /**
+     * 功能：构造运行时策略决策。
+     * @param input 检索输入。
+     * @param settings 当前设置。
+     * @returns 策略决策。
+     */
+    private buildDecision(input: HybridRetrievalInput, settings: MemoryOSSettings): VectorStrategyDecision {
+        const baseDecision = this.strategyRouter.route({
+            query: input.query,
+            mergedContextText: input.queryContext?.mergedContextText,
+            retrievalMode: input.retrievalMode as 'vector_only' | 'hybrid',
+            actorAnchorKeys: input.contextRoute?.entityAnchors?.actorKeys,
+            relationAnchorKeys: input.contextRoute?.entityAnchors?.relationKeys,
+            worldAnchorKeys: input.contextRoute?.entityAnchors?.worldKeys,
+            expectedFacets: input.contextRoute?.facets,
+            routeConfidence: input.contextRoute?.confidence,
+        });
+        const isDeep = baseDecision.route === 'deep_vector';
+        return {
+            ...baseDecision,
+            candidateWindow: isDeep ? settings.vectorDeepWindow : settings.vectorTopK,
+            finalTopK: isDeep
+                ? settings.vectorFinalTopK
+                : Math.min(settings.vectorTopK, settings.vectorFinalTopK),
+            rerankEnabled: isDeep ? settings.vectorEnableRerank : false,
+        };
+    }
+
+    /**
+     * 功能：把向量命中映射为统一检索结果。
+     * @param vectorHits 向量命中。
+     * @param candidates 候选记录。
+     * @returns 检索结果项。
+     */
+    private mapVectorHits(vectorHits: VectorSearchHit[], candidates: RetrievalCandidate[]): RetrievalResultItem[] {
         const candidateMap = new Map<string, RetrievalCandidate>();
-        for (const c of input.candidates) {
-            candidateMap.set(c.candidateId, c);
-            candidateMap.set(c.entryId, c);
+        for (const candidate of candidates) {
+            candidateMap.set(candidate.candidateId, candidate);
+            candidateMap.set(candidate.entryId, candidate);
         }
 
         const vectorResults: RetrievalResultItem[] = [];
@@ -243,47 +291,51 @@ export class HybridRetrievalService {
                 },
             });
         }
-
-        // — 模式分支 —
-        if (retrievalMode === 'vector_only') {
-            return this.handleVectorOnly(vectorResults, decision, vectorHits, query, input);
-        }
-
-        // hybrid: 融合
-        return this.handleHybrid(input.lexicalResults, vectorResults, decision, vectorHits, query, input);
+        return vectorResults;
     }
 
     /**
      * 功能：处理 vector_only 模式。
+     * @param vectorResults 向量结果。
+     * @param decision 策略决策。
+     * @param vectorHits 原始命中。
+     * @param query 查询文本。
+     * @param input 原始输入。
+     * @param settings 当前设置。
+     * @returns 检索输出。
      */
-    private handleVectorOnly(
+    private async handleVectorOnly(
         vectorResults: RetrievalResultItem[],
         decision: VectorStrategyDecision,
         vectorHits: VectorSearchHit[],
         query: string,
         input: HybridRetrievalInput,
-    ): HybridRetrievalOutput {
+        settings: MemoryOSSettings,
+    ): Promise<HybridRetrievalOutput> {
         const finalTopK = input.overrideFinalTopK ?? decision.finalTopK;
+        const directItems = vectorResults.slice(0, finalTopK);
 
         if (!decision.rerankEnabled) {
             return {
-                items: vectorResults.slice(0, finalTopK),
+                items: directItems,
                 strategyDecision: decision,
                 vectorHits,
                 rerankUsed: false,
                 rerankReasonCodes: ['fast_vector_no_rerank'],
+                rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
             };
         }
 
-        const rerankResult = this.rerankService.rerank({
+        const rerankResult = await this.resolveRerank(
+            vectorResults,
             query,
-            queryContextText: input.queryContext?.mergedContextText || '',
-            mode: 'vector_only',
-            candidates: vectorResults,
+            'vector_only',
+            input.queryContext?.mergedContextText || '',
             finalTopK,
-        });
+            settings,
+        );
 
         return {
             items: rerankResult.items,
@@ -291,6 +343,7 @@ export class HybridRetrievalService {
             vectorHits,
             rerankUsed: rerankResult.used,
             rerankReasonCodes: rerankResult.reasonCodes,
+            rerankSource: rerankResult.source,
             vectorAvailable: true,
             vectorUnavailableReason: null,
         };
@@ -298,42 +351,49 @@ export class HybridRetrievalService {
 
     /**
      * 功能：处理 hybrid 模式。
+     * @param lexicalResults 词法结果。
+     * @param vectorResults 向量结果。
+     * @param decision 策略决策。
+     * @param vectorHits 原始命中。
+     * @param query 查询文本。
+     * @param input 原始输入。
+     * @param settings 当前设置。
+     * @returns 检索输出。
      */
-    private handleHybrid(
+    private async handleHybrid(
         lexicalResults: RetrievalResultItem[],
         vectorResults: RetrievalResultItem[],
         decision: VectorStrategyDecision,
         vectorHits: VectorSearchHit[],
         query: string,
         input: HybridRetrievalInput,
-    ): HybridRetrievalOutput {
+        settings: MemoryOSSettings,
+    ): Promise<HybridRetrievalOutput> {
         const finalTopK = input.overrideFinalTopK ?? decision.finalTopK;
-
-        // 融合 lexical + vector
         const merged = this.mergeResults(lexicalResults, vectorResults);
+        merged.sort((a, b) => b.score - a.score);
 
         if (!decision.rerankEnabled) {
-            // fast 路径：直接取 topK
-            merged.sort((a, b) => b.score - a.score);
             return {
                 items: merged.slice(0, finalTopK),
                 strategyDecision: decision,
                 vectorHits,
                 rerankUsed: false,
                 rerankReasonCodes: ['fast_hybrid_no_rerank'],
+                rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
             };
         }
 
-        // deep 路径：rerank
-        const rerankResult = this.rerankService.rerank({
+        const rerankResult = await this.resolveRerank(
+            merged,
             query,
-            queryContextText: input.queryContext?.mergedContextText || '',
-            mode: 'hybrid',
-            candidates: merged,
+            'hybrid',
+            input.queryContext?.mergedContextText || '',
             finalTopK,
-        });
+            settings,
+        );
 
         return {
             items: rerankResult.items,
@@ -341,13 +401,114 @@ export class HybridRetrievalService {
             vectorHits,
             rerankUsed: rerankResult.used,
             rerankReasonCodes: rerankResult.reasonCodes,
+            rerankSource: rerankResult.source,
             vectorAvailable: true,
             vectorUnavailableReason: null,
         };
     }
 
     /**
+     * 功能：统一处理 LLMHub 重排与规则重排。
+     * @param candidates 候选列表。
+     * @param query 查询文本。
+     * @param mode 检索模式。
+     * @param queryContextText 查询上下文文本。
+     * @param finalTopK 最终数量。
+     * @param settings 当前设置。
+     * @returns 重排结果。
+     */
+    private async resolveRerank(
+        candidates: RetrievalResultItem[],
+        query: string,
+        mode: 'vector_only' | 'hybrid',
+        queryContextText: string,
+        finalTopK: number,
+        settings: MemoryOSSettings,
+    ): Promise<InternalRerankResult> {
+        const llmhubResult = await this.tryLLMHubRerank(candidates, query, mode, finalTopK, settings);
+        if (llmhubResult) {
+            return llmhubResult;
+        }
+
+        const rerankResult = this.rerankService.rerank({
+            query,
+            queryContextText,
+            mode,
+            candidates,
+            candidateWindow: settings.vectorRerankWindow,
+            finalTopK,
+        });
+        return {
+            items: rerankResult.items,
+            used: rerankResult.used,
+            reasonCodes: rerankResult.reasonCodes,
+            source: 'rule',
+        };
+    }
+
+    /**
+     * 功能：尝试执行 LLMHub 重排序。
+     * @param candidates 候选列表。
+     * @param query 查询文本。
+     * @param mode 检索模式。
+     * @param finalTopK 最终数量。
+     * @param settings 当前设置。
+     * @returns 命中时返回结果，未命中时返回 null。
+     */
+    private async tryLLMHubRerank(
+        candidates: RetrievalResultItem[],
+        query: string,
+        mode: 'vector_only' | 'hybrid',
+        finalTopK: number,
+        settings: MemoryOSSettings,
+    ): Promise<InternalRerankResult | null> {
+        if (!settings.vectorEnableLLMHubRerank) {
+            return null;
+        }
+        if (candidates.length < settings.vectorLLMHubRerankMinCandidates) {
+            if (settings.vectorLLMHubRerankFallbackToRule) {
+                return null;
+            }
+            return {
+                items: candidates.slice(0, finalTopK),
+                used: false,
+                reasonCodes: ['llmhub_skipped_min_candidates'],
+                source: 'none',
+            };
+        }
+
+        const llmhubResult = await this.llmhubRerankService.rerank({
+            query,
+            mode,
+            candidates: candidates.slice(0, settings.vectorLLMHubRerankMaxCandidates),
+            finalTopK,
+            resource: settings.vectorLLMHubRerankResource || undefined,
+            model: settings.vectorLLMHubRerankModel || undefined,
+        });
+        if (llmhubResult.ok) {
+            return {
+                items: llmhubResult.items,
+                used: true,
+                reasonCodes: llmhubResult.reasonCodes,
+                source: 'llmhub',
+            };
+        }
+        if (settings.vectorLLMHubRerankFallbackToRule) {
+            return null;
+        }
+        return {
+            items: candidates.slice(0, finalTopK),
+            used: false,
+            reasonCodes: llmhubResult.reasonCodes.length > 0 ? llmhubResult.reasonCodes : ['llmhub_failed_direct_slice'],
+            source: 'none',
+        };
+    }
+
+    /**
      * 功能：融合 lexical 和 vector 结果，按 candidateId 去重。
+     * @param lexical 词法结果。
+     * @param vector 向量结果。
+     * @returns 合并结果。
      */
     private mergeResults(
         lexical: RetrievalResultItem[],
@@ -355,20 +516,19 @@ export class HybridRetrievalService {
     ): RetrievalResultItem[] {
         const seen = new Map<string, RetrievalResultItem>();
 
-        // 先放 lexical
         for (const item of lexical) {
             const key = item.candidate.candidateId || item.candidate.entryId;
             seen.set(key, item);
         }
 
-        // 再放 vector，如果已存在则取较高分
         for (const item of vector) {
             const key = item.candidate.candidateId || item.candidate.entryId;
             const existing = seen.get(key);
             if (!existing) {
                 seen.set(key, item);
-            } else if (item.score > existing.score) {
-                // 保留较高分并融合 breakdown
+                continue;
+            }
+            if (item.score > existing.score) {
                 seen.set(key, {
                     ...item,
                     score: Math.max(item.score, existing.score),

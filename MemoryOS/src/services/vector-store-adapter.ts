@@ -4,14 +4,14 @@
  */
 
 import type { IndexedVectorDocument, VectorSearchQuery, VectorSearchHit } from '../types/vector-search';
-import type { DBMemoryVectorIndex } from '../types/vector-document';
+import type { DBMemoryVectorDocument, DBMemoryVectorIndex } from '../types/vector-document';
 import { LocalVectorStore } from './vector-stores/local-vector-store';
 import {
-    saveVectorIndex,
     saveVectorIndexBatch,
     loadVectorIndexRecords,
     deleteVectorIndexById,
     clearVectorIndexForChat,
+    loadVectorDocuments,
 } from '../db/vector-db';
 import { logger } from '../runtime/runtime-services';
 
@@ -52,14 +52,19 @@ export class VectorStoreAdapterService {
         try {
             const records = await loadVectorIndexRecords(chatKey);
             if (records.length > 0) {
+                const vectorDocs = await loadVectorDocuments(chatKey);
+                const metadataMap = new Map<string, DBMemoryVectorDocument>();
+                for (const vectorDoc of vectorDocs) {
+                    metadataMap.set(vectorDoc.vectorDocId, vectorDoc);
+                }
                 const docs: IndexedVectorDocument[] = records.map((r) => ({
                     vectorDocId: r.vectorDocId,
                     chatKey: r.chatKey,
-                    sourceKind: '',
-                    sourceId: '',
+                    sourceKind: r.sourceKind || metadataMap.get(r.vectorDocId)?.sourceKind || '',
+                    sourceId: r.sourceId || metadataMap.get(r.vectorDocId)?.sourceId || '',
                     vector: r.vector,
                     dim: r.dim,
-                }));
+                })).filter((record: IndexedVectorDocument) => Boolean(record.sourceKind) && Boolean(record.sourceId));
                 await this.localStore.upsertDocuments(docs);
                 logger.info(`[VectorStore] 已从持久化加载 ${records.length} 条向量索引 (chat=${chatKey})`);
             }
@@ -85,6 +90,8 @@ export class VectorStoreAdapterService {
         const dbRecords: DBMemoryVectorIndex[] = docs.map((doc) => ({
             vectorDocId: doc.vectorDocId,
             chatKey: doc.chatKey || chatKey,
+            sourceKind: doc.sourceKind,
+            sourceId: doc.sourceId,
             dim: doc.dim || doc.vector.length,
             model: modelInfo.model,
             version: modelInfo.version,

@@ -86,6 +86,9 @@ export async function loadVectorDocumentsBySource(
     sourceIds: string[],
 ): Promise<DBMemoryVectorDocument[]> {
     const all = await loadVectorDocuments(chatKey);
+    if (sourceIds.length <= 0) {
+        return all.filter((doc) => doc.sourceKind === sourceKind);
+    }
     const idSet = new Set(sourceIds);
     return all.filter(
         (doc) => doc.sourceKind === sourceKind && idSet.has(doc.sourceId),
@@ -126,11 +129,16 @@ export async function deleteVectorDocumentsBySource(
         order: 'asc',
         limit: 10000,
     });
-    const idSet = new Set(sourceIds);
     const targetIds = rows
         .filter((row: DBChatPluginRecord) => {
             const payload = row.payload as unknown as DBMemoryVectorDocument;
-            return payload && payload.sourceKind === sourceKind && idSet.has(payload.sourceId);
+            if (!payload || payload.sourceKind !== sourceKind) {
+                return false;
+            }
+            if (sourceIds.length <= 0) {
+                return true;
+            }
+            return sourceIds.includes(payload.sourceId);
         })
         .map((row: DBChatPluginRecord) => Number(row.id))
         .filter((id: number) => Number.isFinite(id));
@@ -225,8 +233,18 @@ export async function deleteVectorIndexBySource(
     sourceKind: string,
     sourceIds: string[],
 ): Promise<void> {
-    const docs = await loadVectorDocumentsBySource(chatKey, sourceKind, sourceIds);
-    const docIds = docs.map((d) => d.vectorDocId);
+    const rows = await loadVectorIndexRecords(chatKey);
+    const docIds = rows
+        .filter((row: DBMemoryVectorIndex) => {
+            if (row.sourceKind !== sourceKind) {
+                return false;
+            }
+            if (sourceIds.length <= 0) {
+                return true;
+            }
+            return sourceIds.includes(row.sourceId);
+        })
+        .map((row: DBMemoryVectorIndex) => row.vectorDocId);
     for (const docId of docIds) {
         await deleteVectorIndexById(chatKey, docId);
     }

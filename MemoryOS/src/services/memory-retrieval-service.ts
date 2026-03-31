@@ -31,12 +31,6 @@ export class MemoryRetrievalService {
      */
     setHybridService(service: HybridRetrievalService): void {
         this.hybridService = service;
-        // 同时注入到 embeddingProvider
-        const provider = this.orchestrator.getEmbeddingProvider();
-        provider.setServices(
-            service.getEmbeddingService(),
-            service.getVectorStore(),
-        );
     }
 
     /**
@@ -68,6 +62,7 @@ export class MemoryRetrievalService {
         const filteredCandidates = applyPayloadFilter(input.candidates, config.payloadFilter);
 
         // 先通过 orchestrator 跑基础管线（种子 -> 图扩展 -> 补召回 -> 多样性裁剪）
+        const lexicalMode: RetrievalMode = config.retrievalMode === 'lexical_only' ? 'lexical_only' : 'hybrid';
         const result = await this.orchestrator.retrieve(
             {
                 query: input.query,
@@ -79,7 +74,10 @@ export class MemoryRetrievalService {
                 },
             },
             filteredCandidates,
-            config,
+            {
+                ...config,
+                retrievalMode: lexicalMode,
+            },
             {
                 actorProfiles: input.actorProfiles,
                 recentContext: input.recentContext,
@@ -96,12 +94,12 @@ export class MemoryRetrievalService {
         let resultSourceLabels: ResultSourceLabel[];
         let hybridRerankUsed = false;
         let hybridRerankReasonCodes: string[] = [];
+        let hybridRerankSource: 'none' | 'rule' | 'llmhub' = 'none';
 
         if (needsVectorChain && this.hybridService) {
             const queryContext = settings.retrievalEnableQueryContextBuilder
                 ? buildQueryContextBundle({
                     query: input.query,
-                    recentMessages: input.recentContext?.recentMessages as Array<{ role?: string; content?: string }>,
                     knownActorKeys: result.contextRoute?.entityAnchors?.actorKeys,
                     knownRelationKeys: result.contextRoute?.entityAnchors?.relationKeys,
                     knownWorldKeys: result.contextRoute?.entityAnchors?.worldKeys,
@@ -124,6 +122,7 @@ export class MemoryRetrievalService {
             vectorUnavailableReason = hybridResult.vectorUnavailableReason;
             hybridRerankUsed = hybridResult.rerankUsed;
             hybridRerankReasonCodes = hybridResult.rerankReasonCodes;
+            hybridRerankSource = hybridResult.rerankSource;
 
             // 标注来源
             const vectorHitIds = new Set(hybridResult.vectorHits.map((h) => h.sourceId));
@@ -170,6 +169,9 @@ export class MemoryRetrievalService {
             traceRecords: result.diagnostics?.traceRecords ?? [],
             vectorProviderStatus,
             resultSourceLabels,
+            rerankUsed: hybridRerankUsed,
+            rerankReasonCodes: hybridRerankReasonCodes,
+            rerankSource: hybridRerankSource,
         };
 
         return {

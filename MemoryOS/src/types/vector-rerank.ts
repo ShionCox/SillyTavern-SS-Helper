@@ -16,6 +16,8 @@ export interface VectorRerankInput {
     mode: 'vector_only' | 'hybrid';
     /** 候选列表 */
     candidates: RetrievalResultItem[];
+    /** 参与重排的候选窗口 */
+    candidateWindow?: number;
     /** 最终返回数量 */
     finalTopK: number;
 }

@@ -7,6 +7,16 @@
 import type { RetrievalResultItem } from '../memory-retrieval/types';
 import type { VectorRerankInput, VectorRerankResult } from '../types/vector-rerank';
 
+/**
+ * 功能：向量规则重排序配置。
+ */
+export interface VectorRerankServiceConfig {
+    /** 默认参与重排的窗口大小 */
+    defaultWindow?: number;
+    /** 是否启用 LLMHub 重排标志位，仅用于配置透传 */
+    useLLMHubRerank?: boolean;
+}
+
 // ─── 权重配置 ──────────────────────────────
 
 /** vector_only 模式下的权重 */
@@ -83,19 +93,42 @@ function computeAnchorConsistency(
  * 功能：向量链重排序服务。
  */
 export class VectorRerankService {
+    private config: Required<VectorRerankServiceConfig>;
+
+    constructor(config?: VectorRerankServiceConfig) {
+        this.config = {
+            defaultWindow: Math.max(1, config?.defaultWindow ?? 25),
+            useLLMHubRerank: config?.useLLMHubRerank === true,
+        };
+    }
+
+    /**
+     * 功能：更新运行时配置。
+     * @param config 新配置。
+     */
+    setConfig(config: VectorRerankServiceConfig): void {
+        this.config = {
+            defaultWindow: Math.max(1, config.defaultWindow ?? this.config.defaultWindow),
+            useLLMHubRerank: config.useLLMHubRerank ?? this.config.useLLMHubRerank,
+        };
+    }
+
     /**
      * 功能：对候选列表执行重排序。
      * @param input 重排序输入。
      * @returns 重排序结果。
      */
     rerank(input: VectorRerankInput): VectorRerankResult {
-        if (!input.candidates || input.candidates.length === 0) {
+        const candidateWindow = Math.max(1, input.candidateWindow ?? this.config.defaultWindow);
+        const candidates = input.candidates.slice(0, candidateWindow);
+
+        if (candidates.length === 0) {
             return { items: [], used: false, reasonCodes: ['no_candidates'] };
         }
 
         if (input.mode !== 'vector_only' && input.mode !== 'hybrid') {
             return {
-                items: input.candidates.slice(0, input.finalTopK),
+                items: candidates.slice(0, input.finalTopK),
                 used: false,
                 reasonCodes: ['lexical_only_bypass'],
             };
@@ -104,7 +137,7 @@ export class VectorRerankService {
         const weights = input.mode === 'vector_only' ? VECTOR_ONLY_WEIGHTS : HYBRID_WEIGHTS;
         const queryContext = `${input.query} ${input.queryContextText}`;
 
-        const scoredItems = input.candidates.map((item) => {
+        const scoredItems = candidates.map((item) => {
             const breakdown = item.breakdown;
 
             // vectorScore: 用原始综合分作为向量分代理
@@ -157,7 +190,7 @@ export class VectorRerankService {
         return {
             items: finalItems,
             used: true,
-            reasonCodes: [`rerank_${input.mode}`, `from_${input.candidates.length}_to_${finalItems.length}`],
+            reasonCodes: [`rerank_${input.mode}`, `from_${candidates.length}_to_${finalItems.length}`],
         };
     }
 }

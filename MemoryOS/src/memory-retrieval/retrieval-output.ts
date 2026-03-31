@@ -50,6 +50,12 @@ export interface RetrievalOutputDiagnostics {
     vectorProviderStatus: VectorProviderStatus;
     /** 各结果项的来源标注 */
     resultSourceLabels: ResultSourceLabel[];
+    /** 是否执行了重排 */
+    rerankUsed?: boolean;
+    /** 重排原因码 */
+    rerankReasonCodes?: string[];
+    /** 重排来源 */
+    rerankSource?: 'none' | 'rule' | 'llmhub';
 }
 
 /**

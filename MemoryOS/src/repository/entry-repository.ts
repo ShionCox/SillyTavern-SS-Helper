@@ -1754,8 +1754,7 @@ export class EntryRepository {
      */
     async listVectorDocuments(sourceKind?: string, sourceId?: string): Promise<DBMemoryVectorDocument[]> {
         if (sourceKind) {
-            const ids = sourceId ? [sourceId] : [];
-            return loadVectorDocumentsBySource(this.chatKey, sourceKind, ids);
+            return loadVectorDocumentsBySource(this.chatKey, sourceKind, sourceId ? [sourceId] : []);
         }
         return loadVectorDocuments(this.chatKey);
     }
@@ -1782,8 +1781,7 @@ export class EntryRepository {
      * @param sourceId 来源 ID。
      */
     async deleteVectorDocumentsBySource(sourceKind: string, sourceId?: string): Promise<void> {
-        const ids = sourceId ? [sourceId] : [];
-        await deleteVectorDocumentsBySource(this.chatKey, sourceKind, ids);
+        await deleteVectorDocumentsBySource(this.chatKey, sourceKind, sourceId ? [sourceId] : []);
     }
 
     /**
@@ -1815,8 +1813,7 @@ export class EntryRepository {
      * @param sourceId 来源 ID。
      */
     async deleteVectorIndexBySource(sourceKind: string, sourceId?: string): Promise<void> {
-        const ids = sourceId ? [sourceId] : [];
-        await deleteVectorIndexBySource(this.chatKey, sourceKind, ids);
+        await deleteVectorIndexBySource(this.chatKey, sourceKind, sourceId ? [sourceId] : []);
     }
 
     /**

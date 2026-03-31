@@ -64,6 +64,10 @@ export interface DBMemoryVectorIndex {
     vectorDocId: string;
     /** 聊天键 */
     chatKey: string;
+    /** 来源种类 */
+    sourceKind: string;
+    /** 来源业务 ID */
+    sourceId: string;
     /** 维度 */
     dim: number;
     /** 模型标识 */

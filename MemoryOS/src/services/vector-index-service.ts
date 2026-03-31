@@ -38,8 +38,7 @@ function shouldAutoIndex(): boolean {
     if (!settings.vectorAutoIndexOnWrite) {
         return false;
     }
-    const mode = settings.retrievalMode;
-    return mode === 'vector_only' || mode === 'hybrid';
+    return true;
 }
 
 /**
@@ -61,6 +60,9 @@ function toDBDocument(doc: VectorDocument, embeddingStatus: EmbeddingStatus, emb
         locationKey: doc.locationKey,
         embeddingStatus,
         embeddingVersion,
+        embeddingModel: undefined,
+        embeddingDim: undefined,
+        lastError: undefined,
         updatedAt: doc.updatedAt,
     };
 }
@@ -78,22 +80,24 @@ async function encodeAndIndex(chatKey: string, doc: VectorDocument): Promise<voi
     const settings = readMemoryOSSettings();
     const embeddingVersion = settings.vectorEmbeddingVersion || '1';
 
-    // 保存向量文档（pending 状态）
     const dbDoc = toDBDocument(doc, 'pending', embeddingVersion);
     await saveVectorDocuments(chatKey, [dbDoc]);
 
-    // 编码
     const encodeResult = await embeddingService.encodeOne(doc.text);
     if (!encodeResult.ok) {
-        // 标记为失败
         dbDoc.embeddingStatus = 'failed';
+        dbDoc.embeddingModel = encodeResult.model || embeddingService.getModelInfo().model;
+        dbDoc.embeddingDim = 0;
+        dbDoc.lastError = encodeResult.error;
         await saveVectorDocuments(chatKey, [dbDoc]);
         logger.warn(`[VectorIndex] embedding 编码失败 (${doc.vectorDocId}): ${encodeResult.error}`);
         return;
     }
 
-    // 更新文档状态
     dbDoc.embeddingStatus = 'ready';
+    dbDoc.embeddingModel = encodeResult.model;
+    dbDoc.embeddingDim = encodeResult.dim;
+    dbDoc.lastError = undefined;
     await saveVectorDocuments(chatKey, [dbDoc]);
 
     // 写入向量索引
@@ -124,11 +128,9 @@ async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Pro
     const settings = readMemoryOSSettings();
     const embeddingVersion = settings.vectorEmbeddingVersion || '1';
 
-    // 保存全部向量文档（pending 状态）
     const dbDocs = docs.map((d) => toDBDocument(d, 'pending', embeddingVersion));
     await saveVectorDocuments(chatKey, dbDocs);
 
-    // 批量编码
     const texts = docs.map((d) => d.text);
     const batchResult = await embeddingService.encodeBatch(texts);
 
@@ -139,6 +141,9 @@ async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Pro
         const result = batchResult[i];
         if (result && result.ok) {
             dbDocs[i].embeddingStatus = 'ready';
+            dbDocs[i].embeddingModel = result.model;
+            dbDocs[i].embeddingDim = result.dim;
+            dbDocs[i].lastError = undefined;
             indexDocs.push({
                 vectorDocId: docs[i].vectorDocId,
                 chatKey,
@@ -149,6 +154,9 @@ async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Pro
             });
         } else {
             dbDocs[i].embeddingStatus = 'failed';
+            dbDocs[i].embeddingModel = result?.model || embeddingService.getModelInfo().model;
+            dbDocs[i].embeddingDim = 0;
+            dbDocs[i].lastError = result?.error ?? 'unknown';
             logger.warn(`[VectorIndex] 批量 embedding 编码失败 (${docs[i].vectorDocId}): ${result?.error ?? 'unknown'}`);
         }
     }

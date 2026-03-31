@@ -4,7 +4,6 @@ import type {
     RetrievalDiagnostics,
     RetrievalFacet,
     RetrievalOrchestratorResult,
-    RetrievalProvider,
     RetrievalQuery,
     RetrievalResultItem,
 } from './types';
@@ -12,7 +11,6 @@ import type { RecallConfig } from './recall-config';
 import type { ActorProfileForDictionary, RecentContextBias } from './context-router';
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import { LexicalRetrievalProvider } from './lexical-provider';
-import { EmbeddingRetrievalProvider } from './embedding-provider';
 import { routeRetrievalContext, buildContextDictionaryFromCandidates } from './context-router';
 import { expandFromSeeds } from './graph-expander';
 import { applyCoverageSecondPass } from './coverage-checker';
@@ -43,7 +41,7 @@ function buildSeedQueryFromRoute(
     boostSchemaIds?: string[];
 } {
     const topFacet = route.facets[0] as RetrievalFacet | undefined;
-    const FACET_PRIORITY_SCHEMAS: Record<RetrievalFacet, string[]> = {
+    const facetPrioritySchemas: Record<RetrievalFacet, string[]> = {
         world: ['world_core_setting', 'world_hard_rule', 'world_global_state', 'world_hard_rule_legacy'],
         scene: ['scene_shared_state', 'location'],
         relationship: ['actor_private_interpretation'],
@@ -57,7 +55,7 @@ function buildSeedQueryFromRoute(
     if (topFacet && route.confidence >= 0.4 && route.facets.length <= 2) {
         boostSchemaIds = [];
         for (const facet of route.facets) {
-            boostSchemaIds.push(...(FACET_PRIORITY_SCHEMAS[facet] ?? []));
+            boostSchemaIds.push(...(facetPrioritySchemas[facet] ?? []));
         }
     }
 
@@ -80,51 +78,34 @@ function buildSeedQueryFromRoute(
 }
 
 /**
- * 功能：检索编排器，负责完整的多阶段混合召回管线。
- * 说明：支持 lexical_only / vector_only / hybrid 三态模式。
+ * 功能：检索编排器。
+ * 说明：当前仅负责基础 lexical 编排、图扩展、覆盖补召回和多样性裁剪。
  */
 export class RetrievalOrchestrator {
     private readonly lexicalProvider: LexicalRetrievalProvider;
-    private readonly embeddingProvider: EmbeddingRetrievalProvider;
 
-    /**
-     * 功能：初始化检索编排器。
-     * @param lexicalProvider 可选词法 provider。
-     * @param embeddingProvider 可选 embedding provider。
-     */
-    constructor(
-        lexicalProvider?: LexicalRetrievalProvider,
-        embeddingProvider?: EmbeddingRetrievalProvider,
-    ) {
+    constructor(lexicalProvider?: LexicalRetrievalProvider) {
         this.lexicalProvider = lexicalProvider ?? new LexicalRetrievalProvider();
-        this.embeddingProvider = embeddingProvider ?? new EmbeddingRetrievalProvider();
-    }
-
-    /**
-     * 功能：获取 embedding provider 实例（用于外部注入服务依赖）。
-     */
-    public getEmbeddingProvider(): EmbeddingRetrievalProvider {
-        return this.embeddingProvider;
     }
 
     /**
      * 功能：检查向量 provider 是否可用。
-     * @returns 是否可用。
+     * @returns 始终返回 false，向量链已迁移至 HybridRetrievalService。
      */
     public isVectorProviderAvailable(): boolean {
-        return this.embeddingProvider.isAvailable();
+        return false;
     }
 
     /**
      * 功能：获取向量 provider 不可用原因。
-     * @returns 不可用原因。
+     * @returns 说明文案。
      */
     public getVectorUnavailableReason(): string | null {
-        return this.embeddingProvider.getUnavailableReason();
+        return '向量链已迁移至 HybridRetrievalService';
     }
 
     /**
-     * 功能：执行完整多阶段混合召回。
+     * 功能：执行基础检索编排。
      * @param query 检索请求。
      * @param candidates 候选记录。
      * @param config 召回配置。
@@ -199,72 +180,28 @@ export class RetrievalOrchestrator {
             });
         }
 
-        let seeds: RetrievalResultItem[] = [];
-        let actualProviderId = 'none';
-
-        switch (effectiveConfig.retrievalMode) {
-            case 'vector_only': {
-                if (this.embeddingProvider.isAvailable()) {
-                    seeds = await this.embeddingProvider.search(seedQuery, candidates);
-                    if (seeds.length > 0) {
-                        actualProviderId = this.embeddingProvider.providerId;
-                    }
-                } else {
-                    writeTrace({
-                        ts: Date.now(),
-                        level: 'warn',
-                        stage: 'seed',
-                        title: '向量不可用',
-                        message: `vector_only 模式下向量 provider 不可用：${this.embeddingProvider.getUnavailableReason() ?? '未知原因'}。不会 fallback 至词法检索。`,
-                        payload: {
-                            unavailableReason: this.embeddingProvider.getUnavailableReason(),
-                        },
-                    });
-                }
-                break;
-            }
-            case 'hybrid': {
-                if (this.embeddingProvider.isAvailable()) {
-                    seeds = await this.embeddingProvider.search(seedQuery, candidates);
-                    if (seeds.length > 0) {
-                        actualProviderId = this.embeddingProvider.providerId;
-                    }
-                } else {
-                    writeTrace({
-                        ts: Date.now(),
-                        level: 'info',
-                        stage: 'seed',
-                        title: '向量未就绪',
-                        message: `hybrid 模式下向量 provider 不可用，仅使用词法链路：${this.embeddingProvider.getUnavailableReason() ?? '未知原因'}。`,
-                        payload: {
-                            unavailableReason: this.embeddingProvider.getUnavailableReason(),
-                        },
-                    });
-                }
-                if (seeds.length <= 0) {
-                    seeds = await this.lexicalProvider.search(seedQuery, candidates, effectiveConfig.payloadFilter);
-                    if (seeds.length > 0) {
-                        actualProviderId = this.lexicalProvider.providerId;
-                    }
-                }
-                break;
-            }
-            case 'lexical_only':
-            default: {
-                seeds = await this.lexicalProvider.search(seedQuery, candidates, effectiveConfig.payloadFilter);
-                if (seeds.length > 0) {
-                    actualProviderId = this.lexicalProvider.providerId;
-                }
-                break;
-            }
+        if (effectiveConfig.retrievalMode === 'vector_only') {
+            writeTrace({
+                ts: Date.now(),
+                level: 'info',
+                stage: 'seed',
+                title: '向量主链外移',
+                message: 'vector_only 模式下编排器仅负责语境路由与词法基线，不再执行向量检索。',
+                payload: {
+                    retrievalMode: effectiveConfig.retrievalMode,
+                },
+            });
         }
+
+        const seeds = await this.lexicalProvider.search(seedQuery, candidates, effectiveConfig.payloadFilter);
+        const actualProviderId = seeds.length > 0 ? this.lexicalProvider.providerId : 'none';
 
         writeTrace({
             ts: Date.now(),
             level: 'info',
             stage: 'seed',
             title: '实际检索器',
-            message: `实际使用检索器：${resolveProviderLabel(actualProviderId)}（模式：${effectiveConfig.retrievalMode}）。`,
+            message: `实际使用检索器：词法检索（模式：${effectiveConfig.retrievalMode}）。`,
             payload: {
                 providerId: actualProviderId,
                 retrievalMode: effectiveConfig.retrievalMode,
@@ -289,7 +226,7 @@ export class RetrievalOrchestrator {
                 level: 'warn',
                 stage: 'seed',
                 title: '未命中种子',
-                message: '第一轮种子召回未命中任何候选。', 
+                message: '第一轮种子召回未命中任何候选。',
                 payload: {
                     queryText: seedQuery.query,
                 },
@@ -406,6 +343,10 @@ export class RetrievalOrchestrator {
 
     /**
      * 功能：构建空结果。
+     * @param query 查询文本。
+     * @param config 配置。
+     * @param traceRecords Trace 记录。
+     * @returns 空结果。
      */
     private buildEmptyResult(
         query: string,
@@ -434,31 +375,15 @@ export class RetrievalOrchestrator {
     }
 
     /**
-     * 功能：构建诊断信息，附带向量 provider 状态。
+     * 功能：构建诊断信息。
+     * @param base 基础诊断。
+     * @returns 完整诊断。
      */
     private buildDiagnostics(base: Omit<RetrievalDiagnostics, 'vectorProviderAvailable' | 'vectorUnavailableReason'>): RetrievalDiagnostics {
         return {
             ...base,
-            vectorProviderAvailable: this.embeddingProvider.isAvailable(),
-            vectorUnavailableReason: this.embeddingProvider.getUnavailableReason(),
+            vectorProviderAvailable: false,
+            vectorUnavailableReason: '向量链已迁移至 HybridRetrievalService',
         };
     }
-}
-
-/**
- * 功能：把 provider 标识转换为中文名称。
- * @param providerId provider 标识。
- * @returns 中文名称。
- */
-function resolveProviderLabel(providerId: string): string {
-    if (providerId === 'lexical_bm25') {
-        return '词法检索';
-    }
-    if (providerId === 'embedding_vector') {
-        return '向量检索';
-    }
-    if (providerId === 'none') {
-        return '未命中';
-    }
-    return providerId || '未知检索器';
 }

@@ -2085,7 +2085,7 @@ export class MemorySDKImpl {
         records.forEach((record: MemoryRelationshipRecord): void => {
             const relationTag = String(record.relationTag ?? '').trim() || 'relationship';
             const relationshipId = String(record.relationshipId ?? '').trim()
-                || buildRelationshipRecordId(this.chatKey, record.sourceActorKey, record.targetActorKey, relationTag);
+                || buildRelationshipRecordId(this.chatKey_, record.sourceActorKey, record.targetActorKey, relationTag);
             recordMap.set(relationshipId, {
                 ...record,
                 relationshipId,

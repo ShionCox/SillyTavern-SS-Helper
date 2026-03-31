@@ -4,6 +4,7 @@
  */
 
 import { logger } from '../runtime/runtime-services';
+import { readMemoryOSSettings } from '../settings/store';
 
 // ─── 类型 ──────────────────────────────
 
@@ -118,6 +119,14 @@ export class EmbeddingService {
     }
 
     /**
+     * 功能：根据当前设置刷新 embedding 运行时配置。
+     */
+    refreshFromSettings(): void {
+        const settings = readMemoryOSSettings();
+        this.setVersion(settings.vectorEmbeddingVersion || '1');
+    }
+
+    /**
      * 功能：编码单条文本。
      * @param text 要编码的文本。
      * @param options 编码选项。
@@ -147,6 +156,10 @@ export class EmbeddingService {
         }
 
         const validTexts = texts.map((t) => String(t ?? '').trim() || ' ');
+        const settings = readMemoryOSSettings();
+        const routeModel = options?.model || settings.vectorEmbeddingModel || undefined;
+        const routeResource = options?.resource;
+        this.setVersion(settings.vectorEmbeddingVersion || '1');
 
         try {
             const response = await api.embed({
@@ -154,8 +167,8 @@ export class EmbeddingService {
                 taskId: TASK_ID,
                 taskDescription: '记忆向量编码',
                 texts: validTexts,
-                routeHint: options?.resource || options?.model
-                    ? { resource: options.resource, model: options.model }
+                routeHint: routeResource || routeModel
+                    ? { resource: routeResource, model: routeModel }
                     : undefined,
                 enqueue: { displayMode: 'silent' },
             });

@@ -86,6 +86,18 @@ export type MemoryOSSettings = {
     vectorEmbeddingModel: string;
     /** embedding 版本标识 */
     vectorEmbeddingVersion: string;
+    /** 是否启用 LLMHub 模型重排序 */
+    vectorEnableLLMHubRerank: boolean;
+    /** LLMHub 重排序资源提示 */
+    vectorLLMHubRerankResource: string;
+    /** LLMHub 重排序模型提示 */
+    vectorLLMHubRerankModel: string;
+    /** LLMHub 重排序触发最小候选数 */
+    vectorLLMHubRerankMinCandidates: number;
+    /** LLMHub 重排序最大候选数 */
+    vectorLLMHubRerankMaxCandidates: number;
+    /** LLMHub 重排序失败时是否回退规则重排 */
+    vectorLLMHubRerankFallbackToRule: boolean;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -155,6 +167,12 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     vectorEnableRecallStats: true,
     vectorEmbeddingModel: '',
     vectorEmbeddingVersion: '1',
+    vectorEnableLLMHubRerank: false,
+    vectorLLMHubRerankResource: '',
+    vectorLLMHubRerankModel: '',
+    vectorLLMHubRerankMinCandidates: 8,
+    vectorLLMHubRerankMaxCandidates: 12,
+    vectorLLMHubRerankFallbackToRule: true,
 };
 
 /**
@@ -287,6 +305,14 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         5,
         Math.min(100, Math.trunc(Number(candidate.vectorRerankWindow) || DEFAULT_MEMORY_OS_SETTINGS.vectorRerankWindow)),
     );
+    const vectorLLMHubRerankMinCandidates: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.vectorLLMHubRerankMinCandidates) || DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMinCandidates)),
+    );
+    const vectorLLMHubRerankMaxCandidates: number = Math.max(
+        vectorLLMHubRerankMinCandidates,
+        Math.min(100, Math.trunc(Number(candidate.vectorLLMHubRerankMaxCandidates) || DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMaxCandidates)),
+    );
 
     return {
         enabled: candidate.enabled !== false,
@@ -353,6 +379,12 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         vectorEnableRecallStats: candidate.vectorEnableRecallStats !== false,
         vectorEmbeddingModel: String(candidate.vectorEmbeddingModel ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingModel),
         vectorEmbeddingVersion: String(candidate.vectorEmbeddingVersion ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingVersion) || '1',
+        vectorEnableLLMHubRerank: candidate.vectorEnableLLMHubRerank === true,
+        vectorLLMHubRerankResource: String(candidate.vectorLLMHubRerankResource ?? DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankResource),
+        vectorLLMHubRerankModel: String(candidate.vectorLLMHubRerankModel ?? DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankModel),
+        vectorLLMHubRerankMinCandidates,
+        vectorLLMHubRerankMaxCandidates,
+        vectorLLMHubRerankFallbackToRule: candidate.vectorLLMHubRerankFallbackToRule !== false,
     };
 }
 
