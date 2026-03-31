@@ -367,3 +367,12 @@ export class SSHelperDatabase extends Dexie {
 }
 
 export const db = new SSHelperDatabase();
+
+/**
+ * 功能：删除并重建 SS-Helper 本地数据库。
+ * @returns 异步完成。
+ */
+export async function rebuildSSHelperDatabase(): Promise<void> {
+    db.close();
+    await Dexie.delete(db.name);
+}

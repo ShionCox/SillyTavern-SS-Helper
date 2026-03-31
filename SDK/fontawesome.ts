@@ -27,7 +27,7 @@ const FONT_AWESOME_CSS_FILES: string[] = [
  * @returns 指向 `assets/fontawesome` 的基础 URL
  */
 function resolveFontAwesomeBaseUrl(): URL {
-  return new URL(/* @vite-ignore */ "../assets/fontawesome/", import.meta.url);
+  return new URL(/* @vite-ignore */ "./assets/fontawesome/", import.meta.url);
 }
 
 /**

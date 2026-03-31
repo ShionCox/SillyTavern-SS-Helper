@@ -40,6 +40,7 @@ export interface MemoryTakeoverPlan {
     totalBatches: number;
     completedBatchIds: string[];
     failedBatchIds: string[];
+    isolatedBatchIds: string[];
     lastError?: string;
     lastCheckpointAt?: number;
     completedAt?: number;
@@ -57,9 +58,12 @@ export interface MemoryTakeoverBatch {
     batchIndex: number;
     range: MemoryTakeoverRange;
     category: 'active' | 'history';
-    status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'isolated';
     attemptCount: number;
     sourceMessageIds: string[];
+    admissionState?: 'pending' | 'validated' | 'repaired' | 'isolated';
+    repairedOnce?: boolean;
+    validationErrors?: string[];
     startedAt?: number;
     finishedAt?: number;
     error?: string;
@@ -269,6 +273,11 @@ export interface MemoryTakeoverBatchResult {
     openThreads: string[];
     chapterTags: string[];
     sourceRange: MemoryTakeoverRange;
+    validated?: boolean;
+    repairedOnce?: boolean;
+    isolated?: boolean;
+    validationErrors?: string[];
+    repairActions?: string[];
     generatedAt: number;
 }
 

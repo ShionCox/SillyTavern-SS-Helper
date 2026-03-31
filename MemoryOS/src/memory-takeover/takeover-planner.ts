@@ -104,6 +104,7 @@ export function buildTakeoverPlan(input: {
         totalBatches,
         completedBatchIds: [],
         failedBatchIds: [],
+        isolatedBatchIds: [],
         createdAt: now,
         updatedAt: now,
     };

@@ -18,6 +18,7 @@ import {
     buildLocationCompareKey,
     buildNationCompareKey,
     buildOrganizationCompareKey,
+    buildRelationshipRecordId,
     buildTaskCompareKey,
     buildWorldStateCompareKey,
 } from '../core/compare-key';
@@ -2084,7 +2085,7 @@ export class MemorySDKImpl {
         records.forEach((record: MemoryRelationshipRecord): void => {
             const relationTag = String(record.relationTag ?? '').trim() || 'relationship';
             const relationshipId = String(record.relationshipId ?? '').trim()
-                || `${record.sourceActorKey}:${record.targetActorKey}:${relationTag}`;
+                || buildRelationshipRecordId(this.chatKey, record.sourceActorKey, record.targetActorKey, relationTag);
             recordMap.set(relationshipId, {
                 ...record,
                 relationshipId,
@@ -2617,13 +2618,6 @@ export class MemorySDKImpl {
             if (!normalizedText) {
                 continue;
             }
-            const directActorKeyMatches = normalizedText.match(/\bchar_[a-z0-9_]+\b/gi) ?? [];
-            directActorKeyMatches.forEach((matchedActorKey: string): void => {
-                const resolvedActorKey = this.resolveTakeoverActorKey(matchedActorKey, '');
-                if (resolvedActorKey && !result.includes(resolvedActorKey)) {
-                    result.push(resolvedActorKey);
-                }
-            });
             for (const candidate of candidates) {
                 const actorKey = String(candidate.actorKey ?? '').trim();
                 const displayName = String(candidate.displayName ?? '').trim();

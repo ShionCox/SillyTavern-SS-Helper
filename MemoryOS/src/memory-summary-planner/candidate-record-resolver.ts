@@ -1,5 +1,6 @@
 import type { MemoryEntry } from '../types';
-import { RetrievalOrchestrator, type RetrievalCandidate, type RetrievalResultItem } from '../memory-retrieval';
+import type { RetrievalCandidate, RetrievalResultItem } from '../memory-retrieval';
+import { MemoryRetrievalService } from '../services/memory-retrieval-service';
 import {
     buildCityCompareKey,
     buildCompareKey as buildUnifiedCompareKey,
@@ -40,11 +41,10 @@ export interface ResolveCandidateRecordsInput {
     memoryPercentByEntryId?: Map<string, number>;
     maxCandidatesHardCap?: number;
     candidateTextBudgetChars?: number;
-    enableEmbedding?: boolean;
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
 
-const defaultRetrievalOrchestrator = new RetrievalOrchestrator();
+const defaultRetrievalService = new MemoryRetrievalService();
 
 /**
  * 功能：解析总结阶段候选旧记录。
@@ -59,15 +59,14 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
     const maxCandidatesHardCap = Math.max(3, Number(input.maxCandidatesHardCap ?? 12) || 12);
     const candidateTextBudgetChars = Math.max(300, Number(input.candidateTextBudgetChars ?? 1800) || 1800);
     const retrievalCandidates = mapToRetrievalCandidates(input.entries, input.memoryPercentByEntryId);
-    const retrieveResult = await defaultRetrievalOrchestrator.retrieve({
+    const retrieveResult = await defaultRetrievalService.searchHybrid({
         query: input.query,
-        candidateTypes: input.candidateTypes,
-        enableEmbedding: input.enableEmbedding,
+        candidates: retrievalCandidates,
         rulePackMode: input.rulePackMode,
-        budget: {
-            maxCandidates: maxCandidatesHardCap,
+        recallConfig: {
+            topK: maxCandidatesHardCap,
         },
-    }, retrievalCandidates);
+    });
 
     const candidates: SummaryCandidateRecord[] = [];
     let consumedChars = 0;

@@ -1,6 +1,7 @@
 import { getCurrentTavernUserSnapshotEvent } from '../../../SDK/tavern';
 import { CompareKeyService } from '../core/compare-key-service';
 import { assertStrictActorKey, isStrictActorKey } from '../core/actor-key';
+import { buildRelationshipRecordId } from '../core/compare-key';
 import {
     db,
     deleteMemoryCompareKeyIndexRecord,
@@ -390,7 +391,12 @@ export class EntryRepository {
         createdAt?: number;
         updatedAt?: number;
     }): Promise<MemoryRelationshipRecord> {
-        const relationshipId = this.normalizeText(input.relationshipId) || `relationship:${this.chatKey}:${crypto.randomUUID()}`;
+        const relationshipId = this.normalizeText(input.relationshipId) || buildRelationshipRecordId(
+            this.chatKey,
+            this.assertActorKey(input.sourceActorKey, 'saveRelationship.sourceActorKey'),
+            this.assertActorKey(input.targetActorKey, 'saveRelationship.targetActorKey'),
+            this.normalizeText(input.relationTag),
+        );
         const existing = await db.memory_relationships.get(relationshipId);
         const now = Date.now();
         const row: DBMemoryRelationship = {
@@ -420,7 +426,12 @@ export class EntryRepository {
     async replaceRelationshipsForTakeover(relationships: MemoryRelationshipRecord[]): Promise<void> {
         const currentRows = await db.memory_relationships.where('chatKey').equals(this.chatKey).toArray();
         const nextRows = relationships.map((item: MemoryRelationshipRecord): DBMemoryRelationship => ({
-            relationshipId: this.normalizeText(item.relationshipId) || `relationship:${this.chatKey}:${crypto.randomUUID()}`,
+            relationshipId: this.normalizeText(item.relationshipId) || buildRelationshipRecordId(
+                this.chatKey,
+                this.assertActorKey(item.sourceActorKey, 'replaceRelationshipsForTakeover.sourceActorKey'),
+                this.assertActorKey(item.targetActorKey, 'replaceRelationshipsForTakeover.targetActorKey'),
+                this.normalizeText(item.relationTag),
+            ),
             chatKey: this.chatKey,
             sourceActorKey: this.assertActorKey(item.sourceActorKey, 'replaceRelationshipsForTakeover.sourceActorKey'),
             targetActorKey: this.assertActorKey(item.targetActorKey, 'replaceRelationshipsForTakeover.targetActorKey'),
@@ -1181,7 +1192,8 @@ export class EntryRepository {
         });
         return bindings
             .map((binding: SummaryRefreshBinding): { actorKey: string; entryId: string } | null => {
-                const actorKey = isStrictActorKey(binding.actorKey)
+                const rawActorKey = String(binding.actorKey ?? '').trim();
+                const actorKey = rawActorKey
                     ? this.assertActorKey(binding.actorKey, 'resolveRefreshTargets.actorKey')
                     : '';
                 const entryId = String(binding.entryId ?? '').trim() || String(titleMap.get(this.normalizeText(binding.entryTitle)) ?? '').trim();
@@ -1680,7 +1692,6 @@ export class EntryRepository {
         }
         return Array.from(new Set(
             values
-                .filter((item: unknown): boolean => isStrictActorKey(item))
                 .map((item: unknown): string => this.assertActorKey(item, 'normalizeActorKeyList.item')),
         ));
     }

@@ -676,7 +676,7 @@ function upsertWorldStateNodes(
                         { label: 'canonicalName', value: String(worldState.canonicalName ?? '').trim() || '暂无', visibleInModes: ['debug'] },
                     ],
                 },
-                buildBindingsSection('缁戝畾鍏崇郴', worldState.bindings, labelContext),
+                buildBindingsSection('绑定关系', worldState.bindings, labelContext),
             ],
             rawData: worldState as unknown as Record<string, unknown>,
             visibleInModes: ['semantic', 'debug'],
@@ -1455,7 +1455,7 @@ function resolveTargetNodeKey(
     if (!rawRef) {
         return undefined;
     }
-    if (targetType === 'actor' || rawRef === 'user' || rawRef.startsWith('char_')) {
+    if (targetType === 'actor' || rawRef === 'user') {
         return ensureActorNodeFromRef(nodeMap, actorNodeKeyMap, rawRef, labelContext);
     }
     if (compareNodeKeyMap.has(rawRef)) {
@@ -1502,7 +1502,7 @@ function createPlaceholderNode(
     if (!normalizedRef) {
         return undefined;
     }
-    if (targetType === 'actor' || normalizedRef === 'user' || normalizedRef.startsWith('char_')) {
+    if (targetType === 'actor' || normalizedRef === 'user') {
         return undefined;
     }
     const nodeKey = `placeholder:${targetType}:${normalizedRef}`;

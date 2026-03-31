@@ -189,6 +189,23 @@ export function buildRelationshipCompareKey(sourceActorKey: string, targetActorK
 }
 
 /**
+ * 功能：构建关系主表稳定记录 ID。
+ * @param chatKey 聊天键
+ * @param sourceActorKey 源角色键
+ * @param targetActorKey 目标角色键
+ * @param relationTag 关系标签
+ * @returns 稳定 relationshipId
+ */
+export function buildRelationshipRecordId(
+    chatKey: string,
+    sourceActorKey: string,
+    targetActorKey: string,
+    relationTag?: string,
+): string {
+    return `relationship:${normalizeIdentifier(chatKey)}:${buildRelationshipCompareKey(sourceActorKey, targetActorKey, relationTag)}`;
+}
+
+/**
  * 功能：构建 world_global_state compareKey。
  * @param title 标题
  * @param options 构建选项

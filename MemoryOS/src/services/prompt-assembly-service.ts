@@ -5,14 +5,15 @@ import { CompareKeyService } from '../core/compare-key-service';
 import { getMemoryTrace, recordMemoryDebug } from '../core/debug/memory-retrieval-logger';
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
 import { computeRetentionState } from '../memory-retention';
-import { RetrievalOrchestrator, type RetrievalCandidate } from '../memory-retrieval';
+import type { RetrievalCandidate } from '../memory-retrieval';
 import { detectWorldProfile, resolveWorldProfile } from '../memory-world-profile';
 import { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
 import type { ActorMemoryProfile, MemoryEntry, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
 import type { MemoryCompareKeyIndexRecord } from '../db/db';
+import { MemoryRetrievalService } from './memory-retrieval-service';
 
-const promptRetrievalOrchestrator = new RetrievalOrchestrator();
+const promptRetrievalService = new MemoryRetrievalService();
 
 /**
  * 功能：统一承接 Prompt 检索、记忆保留阶段计算与注入文本组装。
@@ -56,16 +57,13 @@ export class PromptAssemblyService {
 
         const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex);
         const retrievalQueryText = query || promptText || '当前对话';
-        const retrievalResult = await promptRetrievalOrchestrator.retrieve({
+        const retrievalResult = await promptRetrievalService.searchForPrompt({
             query: retrievalQueryText,
-            enableEmbedding: settings.enableEmbedding === true,
             chatKey: this.chatKey,
+            candidates: retrievalCandidates,
             rulePackMode: settings.retrievalRulePack,
-            budget: {
-                maxCandidates: 18,
-                maxChars: Math.max(2600, Number(input.maxTokens ?? settings.contextMaxTokens) * 4),
-            },
-        }, retrievalCandidates, {
+            maxChars: Math.max(2600, Number(input.maxTokens ?? settings.contextMaxTokens) * 4),
+            maxCandidates: 18,
             actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
                 actorKey: profile.actorKey,
                 displayName: profile.displayName,
@@ -145,14 +143,16 @@ export class PromptAssemblyService {
                 'prompt:xml_markdown_renderer',
                 `world_profile:${worldProfile.primary.worldProfileId}`,
                 `retrieval_provider:${retrievalResult.providerId || 'none'}`,
+                `retrieval_mode:${retrievalResult.retrievalMode}`,
                 `retrieval_rule_pack:${settings.retrievalRulePack}`,
                 systemText ? 'prompt:system_base_present' : 'prompt:system_base_empty',
             ],
             diagnostics: {
                 providerId: retrievalResult.providerId,
+                retrievalMode: retrievalResult.retrievalMode,
                 rulePackMode: settings.retrievalRulePack,
                 contextRoute: retrievalResult.contextRoute,
-                retrieval: retrievalResult.diagnostics ?? null,
+                retrieval: (retrievalResult.diagnostics ?? null) as unknown as Record<string, unknown> | null,
                 traceRecords: getMemoryTrace(this.chatKey),
                 injectionActorKey: effectiveActorKey,
                 injectedCount: visibleContext.diagnostics.totalInjectedCount,

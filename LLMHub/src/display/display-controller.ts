@@ -173,6 +173,7 @@ export class DisplayController {
         spec.displayMode = displayMode;
         spec.autoClose = false;
         spec.autoCloseMs = undefined;
+        spec.autoCloseAt = undefined;
         spec.content = {
             type: 'text',
             body: [
@@ -217,8 +218,11 @@ export class DisplayController {
             ? true
             : Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskId));
         spec.autoCloseMs = displayMode === 'compact'
-            ? COMPACT_AUTO_CLOSE_MS
+            ? Math.max(0, Math.trunc(Number(record.enqueueOptions.autoCloseMs) || COMPACT_AUTO_CLOSE_MS))
             : (spec.autoClose ? 300 : undefined);
+        spec.autoCloseAt = spec.autoClose && typeof spec.autoCloseMs === 'number' && spec.autoCloseMs > 0
+            ? Date.now() + spec.autoCloseMs
+            : undefined;
 
         this.activeOverlays.set(record.requestId, spec);
 

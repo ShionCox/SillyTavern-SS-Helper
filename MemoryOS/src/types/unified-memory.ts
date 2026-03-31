@@ -1,5 +1,6 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalContextRoute, RetrievalDiagnostics, RetrievalRulePackMode } from '../memory-retrieval/types';
+import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetentionStage } from '../memory-retention/retention-types';
 
 export type MemoryEntryCategory =
@@ -361,9 +362,10 @@ export interface PromptAssemblyRoleEntry {
 
 export interface PromptAssemblyDiagnostics {
     providerId: string;
+    retrievalMode?: RetrievalMode;
     rulePackMode: RetrievalRulePackMode;
     contextRoute: RetrievalContextRoute | null;
-    retrieval: RetrievalDiagnostics | null;
+    retrieval: RetrievalDiagnostics | Record<string, unknown> | null;
     traceRecords: MemoryDebugLogRecord[];
     injectionActorKey: string;
     injectedCount: number;

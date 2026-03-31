@@ -8,6 +8,7 @@ import type {
     RetrievalQuery,
     RetrievalResultItem,
 } from './types';
+import type { RecallConfig } from './recall-config';
 import type { ActorProfileForDictionary, RecentContextBias } from './context-router';
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import { LexicalRetrievalProvider } from './lexical-provider';
@@ -17,6 +18,7 @@ import { expandFromSeeds } from './graph-expander';
 import { applyCoverageSecondPass } from './coverage-checker';
 import { pruneForDiversity } from './diversity-pruner';
 import { clearMemoryTrace, recordMemoryDebug } from '../core/debug/memory-retrieval-logger';
+import { buildDefaultRecallConfig } from './recall-config';
 
 /**
  * 功能：检索编排附加上下文。
@@ -79,10 +81,11 @@ function buildSeedQueryFromRoute(
 
 /**
  * 功能：检索编排器，负责完整的多阶段混合召回管线。
+ * 说明：支持 lexical_only / vector_only / hybrid 三态模式。
  */
 export class RetrievalOrchestrator {
-    private readonly lexicalProvider: RetrievalProvider;
-    private readonly embeddingProvider: RetrievalProvider;
+    private readonly lexicalProvider: LexicalRetrievalProvider;
+    private readonly embeddingProvider: EmbeddingRetrievalProvider;
 
     /**
      * 功能：初始化检索编排器。
@@ -90,25 +93,44 @@ export class RetrievalOrchestrator {
      * @param embeddingProvider 可选 embedding provider。
      */
     constructor(
-        lexicalProvider: RetrievalProvider = new LexicalRetrievalProvider(),
-        embeddingProvider: RetrievalProvider = new EmbeddingRetrievalProvider(),
+        lexicalProvider?: LexicalRetrievalProvider,
+        embeddingProvider?: EmbeddingRetrievalProvider,
     ) {
-        this.lexicalProvider = lexicalProvider;
-        this.embeddingProvider = embeddingProvider;
+        this.lexicalProvider = lexicalProvider ?? new LexicalRetrievalProvider();
+        this.embeddingProvider = embeddingProvider ?? new EmbeddingRetrievalProvider();
+    }
+
+    /**
+     * 功能：检查向量 provider 是否可用。
+     * @returns 是否可用。
+     */
+    public isVectorProviderAvailable(): boolean {
+        return this.embeddingProvider.isAvailable();
+    }
+
+    /**
+     * 功能：获取向量 provider 不可用原因。
+     * @returns 不可用原因。
+     */
+    public getVectorUnavailableReason(): string | null {
+        return this.embeddingProvider.getUnavailableReason();
     }
 
     /**
      * 功能：执行完整多阶段混合召回。
      * @param query 检索请求。
      * @param candidates 候选记录。
+     * @param config 召回配置。
      * @param options 附加上下文。
      * @returns 检索结果与诊断。
      */
     public async retrieve(
         query: RetrievalQuery,
         candidates: RetrievalCandidate[],
+        config?: RecallConfig,
         options: RetrievalOrchestratorOptions = {},
     ): Promise<RetrievalOrchestratorResult> {
+        const effectiveConfig = config ?? buildDefaultRecallConfig();
         const normalizedQuery = String(query.query ?? '').trim();
         const chatKey = String(query.chatKey ?? '').trim() || undefined;
         const traceRecords: MemoryDebugLogRecord[] = [];
@@ -121,24 +143,7 @@ export class RetrievalOrchestrator {
             clearMemoryTrace(chatKey);
         }
         if (!normalizedQuery || candidates.length <= 0) {
-            return {
-                providerId: 'none',
-                contextRoute: null,
-                items: [],
-                diagnostics: {
-                    contextRoute: null,
-                    seedProviderId: 'none',
-                    seedCount: 0,
-                    expandedCount: 0,
-                    coverageTriggeredFacets: [],
-                    diversityDroppedCount: 0,
-                    finalCount: 0,
-                    seedQueryText: normalizedQuery,
-                    boostSchemaIds: [],
-                    coverageSubQueries: {},
-                    traceRecords,
-                },
-            };
+            return this.buildEmptyResult(normalizedQuery, effectiveConfig, traceRecords);
         }
 
         const dictionaries = buildContextDictionaryFromCandidates(candidates, options.actorProfiles);
@@ -189,16 +194,61 @@ export class RetrievalOrchestrator {
 
         let seeds: RetrievalResultItem[] = [];
         let actualProviderId = 'none';
-        if (query.enableEmbedding) {
-            seeds = await this.embeddingProvider.search(seedQuery, candidates);
-            if (seeds.length > 0) {
-                actualProviderId = this.embeddingProvider.providerId;
+
+        switch (effectiveConfig.retrievalMode) {
+            case 'vector_only': {
+                if (this.embeddingProvider.isAvailable()) {
+                    seeds = await this.embeddingProvider.search(seedQuery, candidates);
+                    if (seeds.length > 0) {
+                        actualProviderId = this.embeddingProvider.providerId;
+                    }
+                } else {
+                    writeTrace({
+                        ts: Date.now(),
+                        level: 'warn',
+                        stage: 'seed',
+                        title: '向量不可用',
+                        message: `vector_only 模式下向量 provider 不可用：${this.embeddingProvider.getUnavailableReason() ?? '未知原因'}。不会 fallback 至词法检索。`,
+                        payload: {
+                            unavailableReason: this.embeddingProvider.getUnavailableReason(),
+                        },
+                    });
+                }
+                break;
             }
-        }
-        if (seeds.length <= 0) {
-            seeds = await this.lexicalProvider.search(seedQuery, candidates);
-            if (seeds.length > 0) {
-                actualProviderId = this.lexicalProvider.providerId;
+            case 'hybrid': {
+                if (this.embeddingProvider.isAvailable()) {
+                    seeds = await this.embeddingProvider.search(seedQuery, candidates);
+                    if (seeds.length > 0) {
+                        actualProviderId = this.embeddingProvider.providerId;
+                    }
+                } else {
+                    writeTrace({
+                        ts: Date.now(),
+                        level: 'info',
+                        stage: 'seed',
+                        title: '向量未就绪',
+                        message: `hybrid 模式下向量 provider 不可用，仅使用词法链路：${this.embeddingProvider.getUnavailableReason() ?? '未知原因'}。`,
+                        payload: {
+                            unavailableReason: this.embeddingProvider.getUnavailableReason(),
+                        },
+                    });
+                }
+                if (seeds.length <= 0) {
+                    seeds = await this.lexicalProvider.search(seedQuery, candidates, effectiveConfig.payloadFilter);
+                    if (seeds.length > 0) {
+                        actualProviderId = this.lexicalProvider.providerId;
+                    }
+                }
+                break;
+            }
+            case 'lexical_only':
+            default: {
+                seeds = await this.lexicalProvider.search(seedQuery, candidates, effectiveConfig.payloadFilter);
+                if (seeds.length > 0) {
+                    actualProviderId = this.lexicalProvider.providerId;
+                }
+                break;
             }
         }
 
@@ -207,9 +257,10 @@ export class RetrievalOrchestrator {
             level: 'info',
             stage: 'seed',
             title: '实际检索器',
-            message: `实际使用检索器：${resolveProviderLabel(actualProviderId)}。`,
+            message: `实际使用检索器：${resolveProviderLabel(actualProviderId)}（模式：${effectiveConfig.retrievalMode}）。`,
             payload: {
                 providerId: actualProviderId,
+                retrievalMode: effectiveConfig.retrievalMode,
                 seedQueryText: seedQuery.query,
             },
         });
@@ -240,8 +291,9 @@ export class RetrievalOrchestrator {
                 providerId: actualProviderId,
                 contextRoute,
                 items: [],
-                diagnostics: {
+                diagnostics: this.buildDiagnostics({
                     contextRoute,
+                    retrievalMode: effectiveConfig.retrievalMode,
                     seedProviderId: actualProviderId,
                     seedCount,
                     expandedCount: 0,
@@ -252,7 +304,7 @@ export class RetrievalOrchestrator {
                     boostSchemaIds: routeHints.boostSchemaIds ?? [],
                     coverageSubQueries: {},
                     traceRecords,
-                },
+                }),
             };
         }
 
@@ -267,17 +319,36 @@ export class RetrievalOrchestrator {
             },
         });
 
-        const expandedResult = expandFromSeeds({
-            seeds,
-            allCandidates: candidates,
-            maxDepth: 1,
-            decay: 0.65,
-            contextRoute,
-            onTrace: writeTrace,
-        });
+        let expandedItems = seeds;
+        let expandedCount = seeds.length;
+
+        if (effectiveConfig.enableGraphExpansion && effectiveConfig.expandDepth > 0) {
+            const expandedResult = expandFromSeeds({
+                seeds,
+                allCandidates: candidates,
+                maxDepth: effectiveConfig.expandDepth,
+                decay: 0.65,
+                contextRoute,
+                onTrace: writeTrace,
+            });
+            expandedItems = expandedResult.items;
+            expandedCount = expandedResult.items.length;
+        } else {
+            writeTrace({
+                ts: Date.now(),
+                level: 'info',
+                stage: 'graph',
+                title: '跳过扩散',
+                message: '图扩展已禁用或深度为 0，跳过图扩散阶段。',
+                payload: {
+                    enableGraphExpansion: effectiveConfig.enableGraphExpansion,
+                    expandDepth: effectiveConfig.expandDepth,
+                },
+            });
+        }
 
         const coverageResult = applyCoverageSecondPass({
-            currentResults: expandedResult.items,
+            currentResults: expandedItems,
             allCandidates: candidates,
             contextRoute,
             query: normalizedQuery,
@@ -285,32 +356,84 @@ export class RetrievalOrchestrator {
             onTrace: writeTrace,
         });
 
-        const diversityResult = pruneForDiversity({
-            items: coverageResult.items,
-            maxChars: query.budget.maxChars ?? 8000,
-            maxCandidates: query.budget.maxCandidates ?? 40,
-            onTrace: writeTrace,
-        });
+        let finalItems = coverageResult.items;
+        let diversityDroppedCount = 0;
 
-        const diagnostics: RetrievalDiagnostics = {
+        if (effectiveConfig.enableDiversity) {
+            const diversityResult = pruneForDiversity({
+                items: coverageResult.items,
+                maxChars: query.budget.maxChars ?? 8000,
+                maxCandidates: query.budget.maxCandidates ?? 40,
+                onTrace: writeTrace,
+            });
+            finalItems = diversityResult.items;
+            diversityDroppedCount = coverageResult.items.length - diversityResult.items.length;
+        }
+
+        if (effectiveConfig.minScore > 0) {
+            finalItems = finalItems.filter((item: RetrievalResultItem): boolean => item.score >= effectiveConfig.minScore);
+        }
+
+        const diagnostics = this.buildDiagnostics({
             contextRoute,
+            retrievalMode: effectiveConfig.retrievalMode,
             seedProviderId: actualProviderId,
             seedCount,
-            expandedCount: expandedResult.items.length,
+            expandedCount,
             coverageTriggeredFacets: coverageResult.triggeredFacets,
-            diversityDroppedCount: coverageResult.items.length - diversityResult.items.length,
-            finalCount: diversityResult.items.length,
+            diversityDroppedCount,
+            finalCount: finalItems.length,
             seedQueryText: seedQuery.query,
             boostSchemaIds: routeHints.boostSchemaIds ?? [],
             coverageSubQueries: coverageResult.subQueries,
             traceRecords,
-        };
+        });
 
         return {
             providerId: actualProviderId,
             contextRoute,
-            items: diversityResult.items,
+            items: finalItems,
             diagnostics,
+        };
+    }
+
+    /**
+     * 功能：构建空结果。
+     */
+    private buildEmptyResult(
+        query: string,
+        config: RecallConfig,
+        traceRecords: MemoryDebugLogRecord[],
+    ): RetrievalOrchestratorResult {
+        return {
+            providerId: 'none',
+            contextRoute: null,
+            items: [],
+            diagnostics: this.buildDiagnostics({
+                contextRoute: null,
+                retrievalMode: config.retrievalMode,
+                seedProviderId: 'none',
+                seedCount: 0,
+                expandedCount: 0,
+                coverageTriggeredFacets: [],
+                diversityDroppedCount: 0,
+                finalCount: 0,
+                seedQueryText: query,
+                boostSchemaIds: [],
+                coverageSubQueries: {},
+                traceRecords,
+            }),
+        };
+    }
+
+    /**
+     * 功能：构建诊断信息，附带向量 provider 状态。
+     */
+    private buildDiagnostics(base: Omit<RetrievalDiagnostics, 'vectorProviderAvailable' | 'vectorUnavailableReason'>): RetrievalDiagnostics {
+        return {
+            ...base,
+            vectorProviderAvailable: this.embeddingProvider.isAvailable(),
+            vectorUnavailableReason: this.embeddingProvider.getUnavailableReason(),
         };
     }
 }

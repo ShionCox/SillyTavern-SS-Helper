@@ -44,7 +44,6 @@ export interface RunSummaryOrchestratorInput {
     llm: MemoryLLMApi | null;
     pluginId: string;
     messages: SummaryWindowMessage[];
-    enableEmbedding: boolean;
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
 }
 
@@ -121,7 +120,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         })),
         worldProfileTexts,
         worldProfileBinding,
-        enableEmbedding: input.enableEmbedding,
         rulePackMode: input.retrievalRulePack,
     });
 

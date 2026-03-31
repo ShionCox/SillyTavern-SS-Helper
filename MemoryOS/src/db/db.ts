@@ -6,6 +6,7 @@ import {
     deleteSdkPluginChatState,
     patchSdkChatShared,
     querySdkPluginChatRecords,
+    rebuildSSHelperDatabase,
     readSdkPluginChatState,
     writeSdkPluginChatState,
 } from '../../../SDK/db';
@@ -40,7 +41,7 @@ import type {
     MemoryTakeoverPlan,
 } from '../types';
 
-export { db, patchSdkChatShared };
+export { db, patchSdkChatShared, rebuildSSHelperDatabase };
 export type {
     ChatSharedPatch,
     DBAudit,

@@ -57,7 +57,7 @@ function tryResolveDirectRef(
     if (!rawValue) {
         return '';
     }
-    if (rawValue === 'user' || rawValue.startsWith('char_') || rawValue.includes(':')) {
+    if (rawValue === 'user' || rawValue.includes(':')) {
         return resolveDisplayLabel(rawValue, { mode, context, typeHint });
     }
     return '';
@@ -71,7 +71,7 @@ function tryResolveDirectRef(
  * @returns 重写后的标题。
  */
 function rewriteEmbeddedKeys(value: string, mode: MemoryGraphMode, context: DisplayLabelResolverContext): string {
-    return String(value ?? '').replace(/\b(user|char_[a-z0-9_]+|(?:organization|city|nation|location|task|event|world_global_state):[^\s，。；、]+)/gi, (matched: string): string => {
+    return String(value ?? '').replace(/\b(user|(?:organization|city|nation|location|task|event|world_global_state):[^\s，。；、]+)/gi, (matched: string): string => {
         return resolveDisplayLabel(matched, { mode, context, fallbackLabel: stripComparePrefix(matched) || matched });
     });
 }

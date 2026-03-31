@@ -56,7 +56,6 @@ export interface BuildSummaryContextInput {
         updatedAt: number;
         normalizedSummary?: NormalizedSummaryDigest;
     }>;
-    enableEmbedding?: boolean;
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
 }
 
@@ -137,7 +136,6 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
         candidateTypes,
         entries: input.entries,
         memoryPercentByEntryId: input.memoryPercentByEntryId,
-        enableEmbedding: input.enableEmbedding,
         rulePackMode: input.rulePackMode,
         maxCandidatesHardCap: 12,
         candidateTextBudgetChars: 1800,

@@ -42,7 +42,7 @@ export interface MemoryLLMApi {
         };
         schema?: unknown;
         budget?: { maxLatencyMs?: number; maxTokens?: number; maxCost?: number };
-        enqueue?: { displayMode?: 'fullscreen' | 'compact' | 'silent' };
+        enqueue?: { displayMode?: 'fullscreen' | 'compact' | 'silent'; autoCloseMs?: number };
     }) => Promise<MemoryLLMRunResult<T>>;
 }
 

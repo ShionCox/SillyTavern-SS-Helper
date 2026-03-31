@@ -301,7 +301,6 @@ function resolveRelationshipActorLabel(
         return resolveEntriesWorkbenchText('unnamed_actor');
     }
     const fallbackLabel = actorKey
-        .replace(/^char_+/i, '')
         .replace(/^actor_+/i, '')
         .replace(/_/g, ' ')
         .trim();

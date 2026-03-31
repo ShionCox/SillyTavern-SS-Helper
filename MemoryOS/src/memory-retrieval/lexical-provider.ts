@@ -5,6 +5,9 @@ import type {
     RetrievalResultItem,
     RetrievalScoreBreakdown,
 } from './types';
+import type { RetrievalMode } from './retrieval-mode';
+import type { PayloadFilter } from './payload-filter';
+import { applyPayloadFilter } from './payload-filter';
 import { clamp01, computeEditSimilarity, computeMemoryWeight, computeNGramSimilarity, computeRecencyWeight, mergeSeedScoreBreakdown, tokenizeText } from './scoring';
 
 /**
@@ -14,17 +17,44 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
     public readonly providerId: string = 'lexical_bm25';
 
     /**
+     * 功能：检查词法 provider 是否可用。
+     * @returns 始终为 true。
+     */
+    public isAvailable(): boolean {
+        return true;
+    }
+
+    /**
+     * 功能：获取不可用原因。
+     * @returns 词法 provider 始终可用，返回 null。
+     */
+    public getUnavailableReason(): string | null {
+        return null;
+    }
+
+    /**
+     * 功能：检查是否支持指定检索模式。
+     * @param mode 检索模式。
+     * @returns 是否支持。
+     */
+    public supportsMode(mode: RetrievalMode): boolean {
+        return mode === 'lexical_only' || mode === 'hybrid';
+    }
+
+    /**
      * 功能：执行词法检索。
      * @param query 检索请求。
      * @param candidates 候选记录。
+     * @param payloadFilter 可选的预过滤条件。
      * @returns 检索结果。
      */
-    public async search(query: RetrievalQuery, candidates: RetrievalCandidate[]): Promise<RetrievalResultItem[]> {
+    public async search(query: RetrievalQuery, candidates: RetrievalCandidate[], payloadFilter?: PayloadFilter): Promise<RetrievalResultItem[]> {
         const normalizedQuery = String(query.query ?? '').trim();
         if (!normalizedQuery) {
             return [];
         }
-        const effectiveCandidates = this.filterCandidatesByTypes(candidates, query.candidateTypes);
+        let effectiveCandidates = this.filterCandidatesByTypes(candidates, query.candidateTypes);
+        effectiveCandidates = applyPayloadFilter(effectiveCandidates, payloadFilter);
         if (effectiveCandidates.length <= 0) {
             return [];
         }
@@ -33,7 +63,7 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             return [];
         }
         const documents = effectiveCandidates.map((candidate: RetrievalCandidate): string[] => {
-            return tokenizeText(this.buildCandidateText(candidate));
+            return tokenizeText(LexicalRetrievalProvider.buildCandidateText(candidate));
         });
         const averageLength = documents.reduce((sum: number, doc: string[]): number => sum + doc.length, 0) / documents.length;
         const idfMap = this.buildInverseDocumentFrequencyMap(documents);
@@ -43,7 +73,7 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
         const maxBm25 = Math.max(...bm25RawScores, 0.0001);
 
         const scored = effectiveCandidates.map((candidate: RetrievalCandidate, index: number): RetrievalResultItem => {
-            const candidateText = this.buildCandidateText(candidate);
+            const candidateText = LexicalRetrievalProvider.buildCandidateText(candidate);
             const bm25 = clamp01(bm25RawScores[index] / maxBm25);
             const ngram = computeNGramSimilarity(normalizedQuery, candidateText);
             const editDistance = computeEditSimilarity(normalizedQuery, candidateText);
@@ -82,10 +112,11 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
 
     /**
      * 功能：把当前候选拼成检索文本。扩展版：包含结构字段。
+     * 说明：已提炼为静态方法，供外部模块复用。
      * @param candidate 候选记录。
      * @returns 检索文本。
      */
-    private buildCandidateText(candidate: RetrievalCandidate): string {
+    public static buildCandidateText(candidate: RetrievalCandidate): string {
         const parts: string[] = [
             String(candidate.title ?? ''),
             String(candidate.summary ?? ''),

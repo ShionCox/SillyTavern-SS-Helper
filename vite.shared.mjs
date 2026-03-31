@@ -103,6 +103,36 @@ function copyDirectoryRecursive(sourceDir, destinationDir) {
 }
 
 /**
+ * 功能：仅复制目录中的文件，不递归复制被排除的子目录。
+ * @param sourceDir 源目录绝对路径
+ * @param destinationDir 目标目录绝对路径
+ * @param excludedDirectoryNames 需要跳过的子目录名集合
+ * @returns void
+ */
+function copyDirectoryRecursiveExcept(sourceDir, destinationDir, excludedDirectoryNames = new Set()) {
+  if (!fs.existsSync(sourceDir)) return;
+
+  fs.mkdirSync(destinationDir, { recursive: true });
+  const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+
+  entries.forEach((entry) => {
+    if (entry.isDirectory() && excludedDirectoryNames.has(entry.name)) {
+      return;
+    }
+
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirectoryRecursiveExcept(sourcePath, destinationPath, excludedDirectoryNames);
+      return;
+    }
+
+    fs.copyFileSync(sourcePath, destinationPath);
+  });
+}
+
+/**
  * 功能：将 Font Awesome 运行时所需的 CSS 与字体资源复制到目标产物目录。
  * @param targetName 当前构建目标名称
  * @returns Vite closeBundle 插件对象
@@ -116,7 +146,14 @@ function copyFontAwesomeAssetsPlugin(targetName) {
 
       const source = path.resolve(ROOT_DIR, "assets/fontawesome");
       const destination = path.resolve(ROOT_DIR, target.outDir, "assets/fontawesome");
-      copyDirectoryRecursive(source, destination);
+      const webfontsSource = path.resolve(source, "webfonts");
+      const webfontsDestination = path.resolve(ROOT_DIR, target.outDir, "assets/webfonts");
+      const staleNestedWebfonts = path.resolve(destination, "webfonts");
+      if (fs.existsSync(staleNestedWebfonts)) {
+        fs.rmSync(staleNestedWebfonts, { recursive: true, force: true });
+      }
+      copyDirectoryRecursiveExcept(source, destination, new Set(["webfonts"]));
+      copyDirectoryRecursive(webfontsSource, webfontsDestination);
     },
   };
 }

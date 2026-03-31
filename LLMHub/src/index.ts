@@ -377,6 +377,28 @@ class LLMHub {
                     opacity: 0.88;
                 }
 
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-countdown {
+                    position: relative;
+                    width: 100%;
+                    height: 6px;
+                    overflow: hidden;
+                    border-radius: 999px;
+                    background: rgba(255, 255, 255, 0.08);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-countdown-fill {
+                    position: absolute;
+                    inset: 0;
+                    border-radius: inherit;
+                    background: linear-gradient(90deg, rgba(88, 211, 106, 0.96), rgba(125, 230, 141, 0.96));
+                    transform-origin: left center;
+                    transition: width 180ms linear, opacity 180ms linear;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status--error ~ .stx-llmhub-overlay-body .stx-llmhub-overlay-compact-countdown-fill {
+                    background: linear-gradient(90deg, rgba(255, 120, 120, 0.96), rgba(255, 154, 154, 0.96));
+                }
+
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-head {
                     display: flex;
                     align-items: center;
@@ -521,14 +543,61 @@ class LLMHub {
             done: '已完成',
             error: '出错了',
         };
-        const buildCompactNote = (status: string): string => {
+        let compactCountdownRenderTimer: ReturnType<typeof setInterval> | null = null;
+
+        const resolveAutoCloseSeconds = (spec: { autoCloseMs?: number; autoCloseAt?: number }): number => {
+            const autoCloseAt = Number(spec.autoCloseAt ?? 0);
+            if (autoCloseAt > 0) {
+                return Math.max(1, Math.ceil((autoCloseAt - Date.now()) / 1000));
+            }
+            return Math.max(1, Math.ceil((Number(spec.autoCloseMs ?? 0) || 0) / 1000));
+        };
+
+        const resolveAutoCloseProgressPercent = (spec: { autoCloseMs?: number; autoCloseAt?: number }): number => {
+            const totalMs = Math.max(0, Math.trunc(Number(spec.autoCloseMs ?? 0) || 0));
+            if (totalMs <= 0) {
+                return 0;
+            }
+            const autoCloseAt = Number(spec.autoCloseAt ?? 0);
+            if (autoCloseAt <= 0) {
+                return 100;
+            }
+            const remainingMs = Math.max(0, autoCloseAt - Date.now());
+            return Math.max(0, Math.min(100, (remainingMs / totalMs) * 100));
+        };
+
+        const buildCompactNote = (spec: { status?: string; autoClose?: boolean; autoCloseMs?: number; autoCloseAt?: number }): string => {
+            const status = spec.status || 'done';
             if (status === 'loading' || status === 'streaming') {
                 return '任务正在执行，请稍候。';
             }
+            const autoCloseSeconds = resolveAutoCloseSeconds(spec);
             if (status === 'error') {
-                return '任务执行失败，提示将在 3 秒后自动关闭。';
+                return `任务执行失败，提示将在 ${autoCloseSeconds} 秒后自动关闭。`;
             }
-            return '任务已完成，提示将在 3 秒后自动关闭。';
+            return `任务已完成，提示将在 ${autoCloseSeconds} 秒后自动关闭。`;
+        };
+
+        const syncCompactCountdownTimer = (): void => {
+            const overlays = this.displayController.listActiveOverlays();
+            const shouldTick = overlays.some((spec) => {
+                return spec.displayMode === 'compact'
+                    && spec.autoClose === true
+                    && typeof spec.autoCloseAt === 'number'
+                    && spec.autoCloseAt > Date.now();
+            });
+            if (shouldTick) {
+                if (!compactCountdownRenderTimer) {
+                    compactCountdownRenderTimer = setInterval((): void => {
+                        renderAll();
+                    }, 250);
+                }
+                return;
+            }
+            if (compactCountdownRenderTimer) {
+                clearInterval(compactCountdownRenderTimer);
+                compactCountdownRenderTimer = null;
+            }
         };
 
         const renderAll = (): void => {
@@ -537,13 +606,21 @@ class LLMHub {
             const overlays = this.displayController.listActiveOverlays();
             if (overlays.length === 0) {
                 root.innerHTML = '';
+                syncCompactCountdownTimer();
                 return;
             }
 
             root.innerHTML = overlays.map((spec) => {
                 const modeClass = spec.displayMode === 'compact' ? 'stx-llmhub-overlay--compact' : 'stx-llmhub-overlay--fullscreen';
                 const status = spec.status || 'done';
-                const compactBody = `<p class="stx-llmhub-overlay-compact-note">${escapeHtml(buildCompactNote(status))}</p>`;
+                const progressPercent = resolveAutoCloseProgressPercent(spec);
+                const countdownBar = spec.displayMode === 'compact' && spec.autoClose && typeof spec.autoCloseMs === 'number' && spec.autoCloseMs > 0
+                    ? `<div class="stx-llmhub-overlay-compact-countdown"><div class="stx-llmhub-overlay-compact-countdown-fill" style="width:${progressPercent.toFixed(2)}%; opacity:${progressPercent > 0 ? '1' : '0.72'};"></div></div>`
+                    : '';
+                const compactBody = `
+                    <p class="stx-llmhub-overlay-compact-note">${escapeHtml(buildCompactNote(spec))}</p>
+                    ${countdownBar}
+                `;
                 return `
                     <section class="stx-llmhub-overlay ${modeClass}" data-llmhub-overlay-id="${escapeHtml(spec.requestId)}">
                         <div class="stx-llmhub-overlay-card">
@@ -563,6 +640,7 @@ class LLMHub {
                     </section>
                 `;
             }).join('');
+            syncCompactCountdownTimer();
         };
 
         this.displayController.setRenderCallback(() => {

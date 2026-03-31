@@ -37,18 +37,27 @@ const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID = 'stx-memoryos-summar
 const TAKEOVER_DETECT_MIN_FLOORS_ID = 'stx-memoryos-takeover-detect-min-floors';
 const TAKEOVER_DEFAULT_RECENT_FLOORS_ID = 'stx-memoryos-takeover-default-recent-floors';
 const TAKEOVER_DEFAULT_BATCH_SIZE_ID = 'stx-memoryos-takeover-default-batch-size';
+const TAKEOVER_REQUEST_INTERVAL_SECONDS_ID = 'stx-memoryos-takeover-request-interval-seconds';
 const TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID = 'stx-memoryos-takeover-default-prioritize-recent';
 const TAKEOVER_DEFAULT_AUTO_CONTINUE_ID = 'stx-memoryos-takeover-default-auto-continue';
 const TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID = 'stx-memoryos-takeover-default-auto-consolidate';
 const TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID = 'stx-memoryos-takeover-default-pause-on-error';
 const INJECTION_PROMPT_ID = 'stx-memoryos-injection-prompt-enabled';
 const INJECTION_PREVIEW_ID = 'stx-memoryos-injection-preview-enabled';
-const EMBEDDING_ENABLED_ID = 'stx-memoryos-embedding-enabled';
 const CONTEXT_TOKENS_ID = 'stx-memoryos-context-max-tokens';
+const RETRIEVAL_MODE_ID = 'stx-memoryos-retrieval-mode';
+const RETRIEVAL_DEFAULT_TOPK_ID = 'stx-memoryos-retrieval-default-topk';
+const RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID = 'stx-memoryos-retrieval-default-expand-depth';
+const RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID = 'stx-memoryos-retrieval-enable-payload-filter';
+const RETRIEVAL_ENABLE_GRAPH_PENALTY_ID = 'stx-memoryos-retrieval-enable-graph-penalty';
+const RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID = 'stx-memoryos-retrieval-enable-query-context-builder';
 const RETRIEVAL_LOG_ENABLED_ID = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID = 'stx-memoryos-retrieval-log-level';
 const RETRIEVAL_RULE_PACK_ID = 'stx-memoryos-retrieval-rule-pack';
+const MAINTENANCE_AUTO_COMPRESS_ID = 'stx-memoryos-maintenance-auto-compress';
+const MAINTENANCE_DUPLICATE_CHECK_ID = 'stx-memoryos-maintenance-duplicate-check';
+const SCORING_SERVICE_ENABLED_ID = 'stx-memoryos-scoring-service-enabled';
 const PIPELINE_BUDGET_ENABLED_ID = 'stx-memoryos-pipeline-budget-enabled';
 const PIPELINE_MAX_INPUT_CHARS_ID = 'stx-memoryos-pipeline-max-input-chars';
 const PIPELINE_MAX_OUTPUT_ITEMS_ID = 'stx-memoryos-pipeline-max-output-items';
@@ -160,6 +169,7 @@ function buildSettingsContentHtml(): string {
     const resetBtn = buildSharedButton({ id: RESET_BTN_ID, label: '恢复默认', variant: 'secondary', iconClassName: 'fa-solid fa-rotate-left' });
     const retrievalLogLevelSelect = `<select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input"><option value="info">信息级</option><option value="debug">调试级</option></select>`;
     const retrievalRulePackSelect = `<select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input"><option value="hybrid">混合规则包</option><option value="native">原生规则包</option><option value="perocore">PeroCore 兼容包</option></select>`;
+    const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
     return `
         <div class="stx-ui-tabs">
             <button id="${TAB_GENERAL_ID}" type="button" class="stx-ui-tab is-active"><i class="fa-solid fa-sliders"></i><span>通用</span></button>
@@ -192,6 +202,7 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DETECT_MIN_FLOORS_ID}">识别阈值楼层</label>${numberField(TAKEOVER_DETECT_MIN_FLOORS_ID,1,2000,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_RECENT_FLOORS_ID}">默认最近楼层</label>${numberField(TAKEOVER_DEFAULT_RECENT_FLOORS_ID,1,2000,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_BATCH_SIZE_ID}">默认每批楼层数</label>${numberField(TAKEOVER_DEFAULT_BATCH_SIZE_ID,1,500,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_REQUEST_INTERVAL_SECONDS_ID}">每轮请求间隔秒数</label>${numberField(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID,0,600,1)}<span class="stx-ui-field-hint">控制旧聊天接管每一轮 LLM 请求之间的等待时间，并同步驱动 LLMHub 右下角紧凑提示的自动关闭时间，默认 3 秒。</span></div>
             </div><div class="stx-ui-form-grid">
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">优先处理最近区间</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, '优先处理最近区间')}</div></div>
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动继续</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, '自动继续')}</div></div>
@@ -205,13 +216,24 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用注入预览</div><div class="stx-ui-item-desc">在正式注入前额外计算并显示预览信息，便于调试。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PREVIEW_ID, '启用注入预览')}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入上下文预算</div><div class="stx-ui-item-desc">限制注入阶段可使用的最大 token 预算。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${CONTEXT_TOKENS_ID}">contextMaxTokens</label>${numberField(CONTEXT_TOKENS_ID,200,10000,50)}</div></div></div>
             ${divider('检索与诊断')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Embedding 检索</div><div class="stx-ui-item-desc">关闭时使用 BM25、n-gram 和编辑距离回退召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(EMBEDDING_ENABLED_ID, '启用 Embedding 检索')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索模式</div><div class="stx-ui-item-desc">控制召回主链使用的检索链路：仅词法（默认稳定）、仅向量（测试）、混合（综合）。</div></div><div class="stx-ui-inline">${retrievalModeSelect}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索参数</div><div class="stx-ui-item-desc">控制召回行为的查询级默认配置。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_TOPK_ID}">默认 TopK</label>${numberField(RETRIEVAL_DEFAULT_TOPK_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID}">图扩展深度</label>${numberField(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID,0,3,1)}<span class="stx-ui-field-hint">0 = 不扩展。</span></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 QueryContextBuilder</div><div class="stx-ui-item-desc">预留：为后续 embedding 查询构造统一上下文输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, '启用 QueryContextBuilder')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用检索日志</div><div class="stx-ui-item-desc">输出中文检索链日志，并为工作台保留结构化 trace。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_LOG_ENABLED_ID, '启用检索日志')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用诊断 Trace 面板</div><div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定与召回流水。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_TRACE_PANEL_ID, '启用诊断 Trace 面板')}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索调试配置</div><div class="stx-ui-item-desc">控制日志级别与当前启用的规则包模式。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_LOG_LEVEL_ID}">retrievalLogLevel</label>${retrievalLogLevelSelect}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_RULE_PACK_ID}">retrievalRulePack</label>${retrievalRulePackSelect}</div>
             </div></div>
+            ${divider('秘书层 / 维护治理')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用蒸馏服务</div><div class="stx-ui-item-desc">在总结和接管前对原始对话做噪音清洗、批次拆分和线索提取。</div></div><div class="stx-ui-inline">${inlineCheckbox(SCORING_SERVICE_ENABLED_ID, '启用蒸馏服务')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用维护层重复检测</div><div class="stx-ui-item-desc">定期检测 compareKey 冲突和重复候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(MAINTENANCE_DUPLICATE_CHECK_ID, '启用重复检测')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用维护层自动压缩</div><div class="stx-ui-item-desc">自动标记低价值旧条目为待压缩。</div></div><div class="stx-ui-inline">${inlineCheckbox(MAINTENANCE_AUTO_COMPRESS_ID, '启用自动压缩')}</div></div>
         </div>
         <div id="${PANEL_PIPELINE_ID}" class="stx-ui-panel" hidden>
             ${divider('统一预算')}
@@ -294,18 +316,27 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [TAKEOVER_DETECT_MIN_FLOORS_ID, String(settings.takeoverDetectMinFloors)],
         [TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(settings.takeoverDefaultRecentFloors)],
         [TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(settings.takeoverDefaultBatchSize)],
+        [TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(settings.takeoverRequestIntervalSeconds)],
         [TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, settings.takeoverDefaultPrioritizeRecent],
         [TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, settings.takeoverDefaultAutoContinue],
         [TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID, settings.takeoverDefaultAutoConsolidate],
         [TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID, settings.takeoverDefaultPauseOnError],
         [INJECTION_PROMPT_ID, settings.injectionPromptEnabled],
         [INJECTION_PREVIEW_ID, settings.injectionPreviewEnabled],
-        [EMBEDDING_ENABLED_ID, settings.enableEmbedding],
         [CONTEXT_TOKENS_ID, String(settings.contextMaxTokens)],
+        [RETRIEVAL_MODE_ID, settings.retrievalMode],
+        [RETRIEVAL_DEFAULT_TOPK_ID, String(settings.retrievalDefaultTopK)],
+        [RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(settings.retrievalDefaultExpandDepth)],
+        [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, settings.retrievalEnablePayloadFilter],
+        [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, settings.retrievalEnableGraphPenalty],
+        [RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, settings.retrievalEnableQueryContextBuilder],
         [RETRIEVAL_LOG_ENABLED_ID, settings.retrievalLogEnabled],
         [RETRIEVAL_TRACE_PANEL_ID, settings.retrievalTracePanelEnabled],
         [RETRIEVAL_LOG_LEVEL_ID, settings.retrievalLogLevel],
         [RETRIEVAL_RULE_PACK_ID, settings.retrievalRulePack],
+        [SCORING_SERVICE_ENABLED_ID, settings.scoringServiceEnabled],
+        [MAINTENANCE_DUPLICATE_CHECK_ID, settings.maintenanceDuplicateCheckEnabled],
+        [MAINTENANCE_AUTO_COMPRESS_ID, settings.maintenanceAutoCompressEnabled],
         [PIPELINE_BUDGET_ENABLED_ID, settings.pipelineBudgetEnabled],
         [PIPELINE_MAX_INPUT_CHARS_ID, String(settings.pipelineMaxInputCharsPerBatch)],
         [PIPELINE_MAX_OUTPUT_ITEMS_ID, String(settings.pipelineMaxOutputItemsPerBatch)],
@@ -347,8 +378,16 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         toolbarQuickActionsEnabled: checked(TOOLBAR_QUICK_ACTIONS_ID, DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled),
         injectionPromptEnabled: checked(INJECTION_PROMPT_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled),
         injectionPreviewEnabled: checked(INJECTION_PREVIEW_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled),
-        enableEmbedding: checked(EMBEDDING_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.enableEmbedding),
         contextMaxTokens: Number(text(CONTEXT_TOKENS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens))),
+        retrievalMode: (() => {
+            const v = text(RETRIEVAL_MODE_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalMode);
+            return v === 'lexical_only' || v === 'vector_only' || v === 'hybrid' ? v : DEFAULT_MEMORY_OS_SETTINGS.retrievalMode;
+        })(),
+        retrievalDefaultTopK: Number(text(RETRIEVAL_DEFAULT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultTopK))),
+        retrievalDefaultExpandDepth: Number(text(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth))),
+        retrievalEnablePayloadFilter: checked(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnablePayloadFilter),
+        retrievalEnableGraphPenalty: checked(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphPenalty),
+        retrievalEnableQueryContextBuilder: checked(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableQueryContextBuilder),
         summaryAutoTriggerEnabled: checked(SUMMARY_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryAutoTriggerEnabled),
         summaryProgressOverlayEnabled: checked(SUMMARY_PROGRESS_OVERLAY_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryProgressOverlayEnabled),
         summaryIntervalFloors: Number(text(SUMMARY_INTERVAL_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors))),
@@ -369,6 +408,7 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         takeoverDetectMinFloors: Number(text(TAKEOVER_DETECT_MIN_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors))),
         takeoverDefaultRecentFloors: Number(text(TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors))),
         takeoverDefaultBatchSize: Number(text(TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize))),
+        takeoverRequestIntervalSeconds: Number(text(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverRequestIntervalSeconds))),
         takeoverDefaultPrioritizeRecent: checked(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultPrioritizeRecent),
         takeoverDefaultAutoContinue: checked(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoContinue),
         takeoverDefaultAutoConsolidate: checked(TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoConsolidate),
@@ -381,6 +421,9 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
                 ? 'perocore'
                 : 'hybrid',
         retrievalTracePanelEnabled: checked(RETRIEVAL_TRACE_PANEL_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalTracePanelEnabled),
+        scoringServiceEnabled: checked(SCORING_SERVICE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.scoringServiceEnabled),
+        maintenanceDuplicateCheckEnabled: checked(MAINTENANCE_DUPLICATE_CHECK_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceDuplicateCheckEnabled),
+        maintenanceAutoCompressEnabled: checked(MAINTENANCE_AUTO_COMPRESS_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceAutoCompressEnabled),
     };
 }
 

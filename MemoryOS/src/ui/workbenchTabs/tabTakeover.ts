@@ -25,6 +25,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
     const consolidation = progress?.consolidation ?? null;
     const completedCount = plan?.completedBatchIds.length ?? 0;
     const failedCount = plan?.failedBatchIds.length ?? 0;
+    const isolatedCount = plan?.isolatedBatchIds.length ?? 0;
     const totalCount = plan?.totalBatches ?? 0;
     const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
     const visibility = resolveTakeoverFieldVisibility(state.takeoverMode);
@@ -91,6 +92,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                             <div class="stx-memory-workbench__info-row"><span>总批次数</span><strong>${escapeHtml(String(totalCount))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>已完成批次</span><strong>${escapeHtml(String(completedCount))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>失败批次</span><strong>${escapeHtml(String(failedCount))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>隔离批次</span><strong>${escapeHtml(String(isolatedCount))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>当前进度</span><strong>${escapeHtml(`${progressPercent}%`)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>最近检查点</span><strong>${escapeHtml(formatTimestamp(plan.lastCheckpointAt))}</strong></div>
                             ${plan.lastError ? `<div class="stx-memory-workbench__info-row"><span>最近错误</span><strong>${escapeHtml(plan.lastError)}</strong></div>` : ''}
@@ -106,8 +108,10 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                             <div class="stx-memory-workbench__info-row"><span>类型</span><strong>${escapeHtml(currentBatch.category)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>范围</span><strong>${escapeHtml(`${currentBatch.range.startFloor} - ${currentBatch.range.endFloor}`)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>状态</span><strong>${escapeHtml(currentBatch.status)}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>准入</span><strong>${escapeHtml(currentBatch.admissionState ?? 'pending')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>开始时间</span><strong>${escapeHtml(formatTimestamp(currentBatch.startedAt))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>结束时间</span><strong>${escapeHtml(formatTimestamp(currentBatch.finishedAt))}</strong></div>
+                            ${Array.isArray(currentBatch.validationErrors) && currentBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(currentBatch.validationErrors.join('；'))}</div>` : ''}
                             ${currentBatch.error ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(currentBatch.error)}</div>` : ''}
                         </div>
                     ` : '<div class="stx-memory-workbench__empty">当前没有运行中的批次。</div>'}
@@ -132,9 +136,11 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                     ${state.takeoverProgressLoading && !latestBatch ? '<div class="stx-memory-workbench__empty">正在加载批次摘要...</div>' : latestBatch ? `
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>批次</span><strong>${escapeHtml(latestBatch.batchId)}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>准入结果</span><strong>${escapeHtml(latestBatch.isolated ? 'isolated' : (latestBatch.repairedOnce ? 'repaired' : (latestBatch.validated ? 'validated' : 'pending')))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>章节标签</span><strong>${escapeHtml(latestBatch.chapterTags.join('、') || '暂无')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>开放线索</span><strong>${escapeHtml(latestBatch.openThreads.join('、') || '暂无')}</strong></div>
                         </div>
+                        ${Array.isArray(latestBatch.validationErrors) && latestBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(latestBatch.validationErrors.join('；'))}</div>` : ''}
                         <div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(latestBatch.summary || '暂无批次摘要')}</div>
                     ` : '<div class="stx-memory-workbench__empty">还没有生成批次摘要。</div>'}
                 </div>

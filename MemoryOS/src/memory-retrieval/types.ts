@@ -1,4 +1,5 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
+import type { RetrievalMode } from './retrieval-mode';
 
 /**
  * 功能：定义可检索候选记录。
@@ -34,7 +35,6 @@ export interface RetrievalQuery {
     query: string;
     activeActorKey?: string;
     candidateTypes?: string[];
-    enableEmbedding?: boolean;
     chatKey?: string;
     rulePackMode?: RetrievalRulePackMode;
 
@@ -110,11 +110,31 @@ export interface RetrievalResultItem {
 }
 
 /**
+ * 功能：定义检索 provider 能力协议。
+ */
+export interface RetrievalProviderCapability {
+    /** provider 标识 */
+    providerId: string;
+    /** 是否当前可用 */
+    available: boolean;
+    /** 不可用原因 */
+    unavailableReason: string | null;
+    /** 支持哪些检索模式 */
+    supportedModes: RetrievalMode[];
+}
+
+/**
  * 功能：定义检索 provider。
  */
 export interface RetrievalProvider {
     providerId: string;
     search(query: RetrievalQuery, candidates: RetrievalCandidate[]): Promise<RetrievalResultItem[]>;
+    /** 是否当前可用 */
+    isAvailable(): boolean;
+    /** 不可用原因 */
+    getUnavailableReason(): string | null;
+    /** 是否支持指定模式 */
+    supportsMode(mode: RetrievalMode): boolean;
 }
 
 /**
@@ -132,6 +152,7 @@ export interface RetrievalOrchestratorResult {
  */
 export interface RetrievalDiagnostics {
     contextRoute: RetrievalContextRoute | null;
+    retrievalMode: RetrievalMode;
     seedProviderId: string;
     seedCount: number;
     expandedCount: number;
@@ -142,5 +163,8 @@ export interface RetrievalDiagnostics {
     boostSchemaIds: string[];
     coverageSubQueries: Partial<Record<RetrievalFacet, string>>;
     traceRecords: MemoryDebugLogRecord[];
+    /** 向量 provider 是否可用 */
+    vectorProviderAvailable: boolean;
+    /** 向量 provider 不可用原因 */
+    vectorUnavailableReason: string | null;
 }
-

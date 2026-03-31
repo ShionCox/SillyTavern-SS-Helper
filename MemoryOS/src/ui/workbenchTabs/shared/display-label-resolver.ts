@@ -72,12 +72,7 @@ export function resolveDisplayLabel(
 
     const stripped = stripComparePrefix(rawRef);
     if (options.mode === 'semantic') {
-        const safeFallback = fallbackLabel && fallbackLabel !== rawRef && !fallbackLabel.startsWith('char_')
-            ? fallbackLabel
-            : '';
-        if (rawRef.startsWith('char_')) {
-            return safeFallback || '未命名角色';
-        }
+        const safeFallback = fallbackLabel && fallbackLabel !== rawRef ? fallbackLabel : '';
         return stripped || safeFallback || '未命名对象';
     }
     return fallbackLabel || rawRef;

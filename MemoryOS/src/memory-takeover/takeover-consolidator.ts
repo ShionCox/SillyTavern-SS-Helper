@@ -59,6 +59,7 @@ export async function runTakeoverConsolidation(input: {
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     batchResults: MemoryTakeoverBatchResult[];
 }): Promise<MemoryTakeoverConsolidationResult> {
+    const admittedBatchResults = input.batchResults.filter((batch: MemoryTakeoverBatchResult): boolean => batch.validated !== false && batch.isolated !== true);
     const settings = readMemoryOSSettings();
     const budget = resolvePipelineBudgetPolicy(settings);
     const diagnostics = createPipelineDiagnostics(input.takeoverId, 'takeover');
@@ -70,6 +71,7 @@ export async function runTakeoverConsolidation(input: {
         phase: 'extract',
         sourceMeta: {
             batchCount: input.batchResults.length,
+            admittedBatchCount: admittedBatchResults.length,
             hasActiveSnapshot: Boolean(input.activeSnapshot),
         },
         createdAt: Date.now(),
@@ -91,7 +93,7 @@ export async function runTakeoverConsolidation(input: {
     });
 
     diagnostics.batchCount = input.batchResults.length;
-    for (const batch of input.batchResults) {
+    for (const batch of admittedBatchResults) {
         appendPipelineBatchResultRecord({
             jobId: input.takeoverId,
             batchId: batch.batchId,
@@ -110,17 +112,17 @@ export async function runTakeoverConsolidation(input: {
     });
 
     updatePipelineJobPhase(input.takeoverId, 'reduce');
-    const sectionDigests = buildTakeoverSectionDigests(input.takeoverId, input.batchResults, budget);
+    const sectionDigests = buildTakeoverSectionDigests(input.takeoverId, admittedBatchResults, budget);
     for (const sectionDigest of sectionDigests) {
         upsertPipelineSectionDigestRecord(sectionDigest);
     }
     diagnostics.sectionCount = sectionDigests.length;
 
-    const actorReduce = reduceTakeoverActors(input.batchResults);
-    const entityReduce = reduceTakeoverEntities(input.batchResults);
-    const relationshipReduce = reduceTakeoverRelationships(input.batchResults);
-    const taskReduce = reduceTakeoverTasks(input.batchResults);
-    const worldReduce = reduceTakeoverWorld(input.batchResults);
+    const actorReduce = reduceTakeoverActors(admittedBatchResults);
+    const entityReduce = reduceTakeoverEntities(admittedBatchResults);
+    const relationshipReduce = reduceTakeoverRelationships(admittedBatchResults);
+    const taskReduce = reduceTakeoverTasks(admittedBatchResults);
+    const worldReduce = reduceTakeoverWorld(admittedBatchResults);
 
     replacePipelineLedgerRecords([
         ...mapTakeoverRecordsToLedger(input.takeoverId, 'actor', actorReduce.canonicalRecords, actorReduce.unresolvedConflicts),

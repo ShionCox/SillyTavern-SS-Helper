@@ -202,6 +202,56 @@ export class LLMSDKImpl {
         }
     }
 
+    private formatRetryReason(result: LLMRunResult<unknown>): string {
+        if (result.ok) {
+            return '';
+        }
+        const errorText = String(result.error || '').trim();
+        const reasonCode = String(result.reasonCode || '').trim();
+        if (errorText && reasonCode) {
+            return `${errorText}\n原因码：${reasonCode}`;
+        }
+        if (errorText) {
+            return errorText;
+        }
+        if (reasonCode) {
+            return `原因码：${reasonCode}`;
+        }
+        return '未提供更详细的失败原因。';
+    }
+
+    private confirmRetryableFailure(record: RequestRecord, result: LLMRunResult<unknown>): boolean {
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function' || result.ok || result.retryable !== true) {
+            return false;
+        }
+        const taskLabel = String(record.taskDescription || record.taskId || 'LLM 任务').trim() || 'LLM 任务';
+        const reasonText = this.formatRetryReason(result);
+        return window.confirm(
+            `LLMHub 请求失败：${taskLabel}\n\n失败原因：\n${reasonText}\n\n是否仅重试这一次 AI 请求？`,
+        );
+    }
+
+    private async executeWithSingleRetry<T>(
+        record: RequestRecord,
+        args: RunTaskArgs | EmbedArgs | RerankArgs,
+        executor: () => Promise<LLMRunResult<T>>,
+    ): Promise<LLMRunResult<T>> {
+        const firstResult = await executor();
+        if (firstResult.ok || firstResult.retryable !== true) {
+            return firstResult;
+        }
+        const shouldRetry = this.confirmRetryableFailure(record, firstResult);
+        if (!shouldRetry) {
+            return firstResult;
+        }
+        this.emitLifecycle(args, record, {
+            stage: 'running',
+            message: '用户已确认重试，正在重新请求',
+            progress: 0.35,
+        });
+        return executor();
+    }
+
     private resolveTaskDescription(consumer: string, taskId: string, explicit?: string): string {
         const explicitText = String(explicit || '').trim();
         if (explicitText) {
@@ -419,7 +469,7 @@ export class LLMSDKImpl {
                     message: '任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeGeneration(args, record);
+                return this.executeWithSingleRetry(record, args, () => this.executeGeneration(args, record));
             case 'embedding':
                 if (!this.isEmbedArgs(args)) {
                     return { ok: false, error: 'embedding 请求参数不合法', reasonCode: 'unknown' };
@@ -429,7 +479,7 @@ export class LLMSDKImpl {
                     message: '向量任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeEmbed(args, record);
+                return this.executeWithSingleRetry(record, args, () => this.executeEmbed(args, record));
             case 'rerank':
                 if (!this.isRerankArgs(args)) {
                     return { ok: false, error: 'rerank 请求参数不合法', reasonCode: 'unknown' };
@@ -439,7 +489,7 @@ export class LLMSDKImpl {
                     message: '重排任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeRerank(args, record);
+                return this.executeWithSingleRetry(record, args, () => this.executeRerank(args, record));
             default:
                 return { ok: false, error: `未知任务类型: ${record.taskKind}`, reasonCode: 'unknown' };
         }

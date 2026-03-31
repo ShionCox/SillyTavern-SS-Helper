@@ -30,6 +30,9 @@
 - 每个 PR 保持单一主题，避免把共享 SDK 重构、界面调整和测试补丁混在同一次提交中。
 
 ## 注意
-- 必须使用utf-8编码，否则会乱码！
+1 所有文件编码 UTF-8（无 BOM）
+2 禁止 UTF-16 / GBK
+3 中文直接输出，不允许 \uXXXX
+4 文件写入必须使用 UTF-8
 - Your code must use the UTF-8 encoding format.
 - 如需logger打印，请引入各自插件里的index.ts文件的logger和toast实例

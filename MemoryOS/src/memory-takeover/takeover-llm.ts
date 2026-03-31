@@ -2,6 +2,7 @@ import { loadPromptPackSections } from '../memory-prompts/prompt-loader';
 import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer';
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
+import { readMemoryOSSettings } from '../settings/store';
 
 /**
  * 功能：定义接管结构化任务的真实请求体。
@@ -321,6 +322,8 @@ export async function runTakeoverStructuredTask<T>(input: {
     if (!input.llm) {
         throw new Error(buildTakeoverTaskErrorMessage(input.taskId, 'llm_unavailable', '当前未连接可用的 LLMHub 服务。'));
     }
+    const settings = readMemoryOSSettings();
+    const autoCloseMs = Math.max(0, Math.trunc(Number(settings.takeoverRequestIntervalSeconds) || 0)) * 1000;
     const request = await buildTakeoverStructuredTaskRequest({
         systemSection: input.systemSection,
         schemaSection: input.schemaSection,
@@ -340,6 +343,7 @@ export async function runTakeoverStructuredTask<T>(input: {
         schema: request.schema,
         enqueue: {
             displayMode: 'compact',
+            autoCloseMs,
         },
     });
     if (!result.ok) {

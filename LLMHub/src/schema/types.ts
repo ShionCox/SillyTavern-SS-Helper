@@ -182,6 +182,7 @@ export interface RequestEnqueueOptions {
     replacePendingByKey?: string;
     cancelOnScopeChange?: boolean;
     displayMode?: DisplayMode;
+    autoCloseMs?: number;
     scope?: RequestScope;
     blockNextUntilOverlayClose?: boolean;
 }
@@ -338,6 +339,7 @@ export interface LLMOverlaySpec {
     displayMode: DisplayMode;
     autoClose?: boolean;
     autoCloseMs?: number;
+    autoCloseAt?: number;
 }
 
 /** Level 2: 受限富内容 */

@@ -11,7 +11,7 @@ import {
     parseTavernChatScopedKeyEvent,
 } from '../../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
-import { db } from '../db/db';
+import { db, rebuildSSHelperDatabase } from '../db/db';
 import { PluginRegistry } from '../registry/registry';
 import { logger, toast } from './runtime-services';
 import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } from './prompt-injection-pipeline';
@@ -37,6 +37,13 @@ type HostEventSource = {
 type HostContext = {
     eventSource?: HostEventSource;
     event_types?: Record<string, string>;
+};
+
+type MemoryBindingStatus = {
+    connected: boolean;
+    chatKey?: string;
+    error?: string;
+    updatedAt: number;
 };
 
 /**
@@ -96,15 +103,25 @@ function formatLLMFailureReason(errorMessage?: string, reasonCode?: string): str
 }
 
 /**
- * 功能：在 LLM 失败时询问用户是否立即重试。
- * @param title 失败标题。
+ * 功能：判断是否为数据库主键升级不兼容错误。
  * @param errorMessage 原始错误信息。
- * @param reasonCode 原始原因码。
- * @returns 用户是否确认重试。
+ * @returns 是否需要提示整库重建。
  */
-function confirmRetryWithReason(title: string, errorMessage?: string, reasonCode?: string): boolean {
-    const reasonText = formatLLMFailureReason(errorMessage, reasonCode);
-    return window.confirm(`${title}\n\n失败原因：\n${reasonText}\n\n是否立即重新尝试？`);
+function isPrimaryKeyUpgradeError(errorMessage?: string): boolean {
+    const normalized = String(errorMessage ?? '').trim().toLowerCase();
+    return normalized.includes('not yet support for changing primary key');
+}
+
+/**
+ * 功能：询问用户是否删除本地数据库后重新构建。
+ * @returns 用户是否确认。
+ */
+function confirmRebuildDatabase(): boolean {
+    return window.confirm(
+        '检测到 SS-Helper 本地数据库结构已不兼容，当前无法直接连接记忆主链。\n\n'
+        + '是否立即删除本地数据库并重新构建？\n\n'
+        + '此操作会清空当前浏览器中的全部 SS-Helper 本地数据，且无法恢复。',
+    );
 }
 
 /**
@@ -191,6 +208,8 @@ export class MemoryOS {
     private readonly takeoverPromptedChats: Set<string>;
     private readonly takeoverRunningChats: Set<string>;
     private refreshChatBindingHandler: ((force?: boolean) => Promise<void>) | null;
+    private rebuildingDatabase: boolean;
+    private reloadingAfterDatabaseRebuild: boolean;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -203,6 +222,8 @@ export class MemoryOS {
         this.coldStartRunningChats = new Set<string>();
         this.takeoverPromptedChats = new Set<string>();
         this.takeoverRunningChats = new Set<string>();
+        this.rebuildingDatabase = false;
+        this.reloadingAfterDatabaseRebuild = false;
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -396,7 +417,47 @@ export class MemoryOS {
         (window as unknown as { STX?: Record<string, unknown> }).STX = {
             ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
             memory: null,
+            memoryBindingStatus: {
+                connected: false,
+                updatedAt: Date.now(),
+            } satisfies MemoryBindingStatus,
         };
+    }
+
+    /**
+     * 功能：在数据库结构不兼容时，引导用户删除本地数据库并重新连接当前聊天。
+     * @param chatKey 当前聊天键。
+     * @returns 重建后的 SDK；失败或取消时返回 null。
+     */
+    private async rebuildDatabaseAndReconnect(chatKey: string): Promise<MemorySDKImpl | null> {
+        if (this.rebuildingDatabase) {
+            toast.info('本地数据库正在重建，请稍候。');
+            return null;
+        }
+        const confirmed = confirmRebuildDatabase();
+        if (!confirmed) {
+            toast.info('已取消本地数据库重建，当前聊天仍未连接到记忆主链。');
+            return null;
+        }
+        this.rebuildingDatabase = true;
+        this.clearActiveMemoryBinding();
+        try {
+            await rebuildSSHelperDatabase();
+            logger.warn(`检测到数据库主键升级不兼容，已删除本地数据库：${chatKey}`);
+            this.reloadingAfterDatabaseRebuild = true;
+            toast.success('本地数据库已清空，即将自动刷新页面。');
+            window.setTimeout((): void => {
+                window.location.reload();
+            }, 80);
+            return null;
+        } catch (error) {
+            const message = String((error as Error)?.message ?? error).trim() || 'database_rebuild_failed';
+            logger.error('本地数据库重建失败', error);
+            toast.error(`本地数据库重建失败：${message}`);
+            return null;
+        } finally {
+            this.rebuildingDatabase = false;
+        }
     }
 
     /**
@@ -451,33 +512,7 @@ export class MemoryOS {
             });
             if (!result.ok) {
                 this.coldStartPromptedChats.delete(normalizedChatKey);
-                const shouldRetry = confirmRetryWithReason('冷启动执行失败。', result.errorMessage, result.reasonCode);
-                if (shouldRetry) {
-                    const retryResult = await sdk.chatState.primeColdStartPrompt('chat_bind_confirm_retry', {
-                        selectedWorldbooks: selection.selectedWorldbooks,
-                        selectedEntries: selection.selectedEntries,
-                    });
-                    if (!retryResult.ok) {
-                        toast.error(`冷启动重试失败：${formatLLMFailureReason(retryResult.errorMessage, retryResult.reasonCode)}`);
-                        return;
-                    }
-                    const retryReviewResult = await openMemoryBootstrapReviewDialog(retryResult.candidates ?? []);
-                    if (!retryReviewResult.confirmed) {
-                        await sdk.chatState.markColdStartDismissed();
-                        this.coldStartPromptedChats.delete(normalizedChatKey);
-                        toast.info('已取消冷启动候选写入。');
-                        return;
-                    }
-                    const retryApplyResult = await sdk.chatState.confirmColdStartCandidates(retryReviewResult.selectedCandidateIds);
-                    if (!retryApplyResult.ok) {
-                        this.coldStartPromptedChats.delete(normalizedChatKey);
-                        toast.error(`冷启动确认失败：${formatLLMFailureReason(retryApplyResult.errorMessage, retryApplyResult.reasonCode)}`);
-                        return;
-                    }
-                    toast.success('冷启动已完成，当前聊天已建立初始记忆。');
-                    return;
-                }
-                toast.error(`冷启动执行失败：${result.reasonCode}`);
+                toast.error(`冷启动执行失败：${formatLLMFailureReason(result.errorMessage, result.reasonCode)}`);
                 return;
             }
             const reviewResult = await openMemoryBootstrapReviewDialog(result.candidates ?? []);
@@ -566,19 +601,7 @@ export class MemoryOS {
             );
             if (!result.ok) {
                 this.takeoverPromptedChats.delete(normalizedChatKey);
-                const shouldRetry = confirmRetryWithReason('旧聊天处理失败。', result.errorMessage, result.reasonCode);
-                if (shouldRetry) {
-                    const retryResult = await sdk.chatState.startTakeover(
-                        selection.resumeExisting ? detection.recoverableTakeoverId : undefined,
-                    );
-                    if (!retryResult.ok) {
-                        toast.error(`旧聊天处理重试失败：${formatLLMFailureReason(retryResult.errorMessage, retryResult.reasonCode)}`);
-                        return true;
-                    }
-                    toast.success('旧聊天处理任务已重新启动，可在统一工作台查看进度。');
-                    return true;
-                }
-                toast.error(`旧聊天接管失败：${result.reasonCode}`);
+                toast.error(`旧聊天接管失败：${formatLLMFailureReason(result.errorMessage, result.reasonCode)}`);
                 return true;
             }
             toast.success('旧聊天接管任务已启动，可在统一工作台查看进度。');
@@ -741,8 +764,47 @@ export class MemoryOS {
                 return;
             }
             const serial = ++bindingSerial;
-            const sdk = new MemorySDKImpl(chatKey);
-            await sdk.init();
+            let sdk = new MemorySDKImpl(chatKey);
+            try {
+                await sdk.init();
+            } catch (error) {
+                const message = String((error as Error)?.message ?? error).trim() || 'unknown_binding_error';
+                if (isPrimaryKeyUpgradeError(message)) {
+                    const rebuiltSdk = await this.rebuildDatabaseAndReconnect(chatKey);
+                    if (rebuiltSdk) {
+                        sdk = rebuiltSdk;
+                    } else if (this.reloadingAfterDatabaseRebuild) {
+                        return;
+                    } else {
+                        this.clearActiveMemoryBinding();
+                        (window as unknown as { STX?: Record<string, unknown> }).STX = {
+                            ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
+                            memoryBindingStatus: {
+                                connected: false,
+                                chatKey,
+                                error: message,
+                                updatedAt: Date.now(),
+                            } satisfies MemoryBindingStatus,
+                        };
+                        logger.error(`统一记忆聊天绑定失败: ${chatKey}`, error);
+                        return;
+                    }
+                } else {
+                    this.clearActiveMemoryBinding();
+                    (window as unknown as { STX?: Record<string, unknown> }).STX = {
+                        ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
+                        memoryBindingStatus: {
+                            connected: false,
+                            chatKey,
+                            error: message,
+                            updatedAt: Date.now(),
+                        } satisfies MemoryBindingStatus,
+                    };
+                    logger.error(`统一记忆聊天绑定失败: ${chatKey}`, error);
+                    toast.error(`记忆主链连接失败：${message}`);
+                    return;
+                }
+            }
             if (serial !== bindingSerial) {
                 return;
             }
@@ -750,6 +812,11 @@ export class MemoryOS {
             (window as unknown as { STX?: Record<string, unknown> }).STX = {
                 ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
                 memory: sdk,
+                memoryBindingStatus: {
+                    connected: true,
+                    chatKey,
+                    updatedAt: Date.now(),
+                } satisfies MemoryBindingStatus,
             };
             currentChatKey = chatKey;
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);

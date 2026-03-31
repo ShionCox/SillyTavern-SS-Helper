@@ -100,7 +100,7 @@ function formatMessages(sliced: SummaryWindowMessage[]): string {
  * @returns 角色提示词。
  */
 function extractActorHintsFromSummary(summaryText: string): string[] {
-    const matches = String(summaryText ?? '').match(/char_[a-zA-Z0-9_-]+/g) ?? [];
+    const matches = String(summaryText ?? '').match(/\b(actor_[a-zA-Z0-9_]+|user)\b/g) ?? [];
     const merged: string[] = [];
     for (const match of matches) {
         const normalized = String(match ?? '').trim();

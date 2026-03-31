@@ -1,7 +1,7 @@
 // ─── SS-Helper 统一数据库 barrel export ───
 
 // 数据库实例 & 类型
-export { db, SSHelperDatabase } from './database';
+export { db, SSHelperDatabase, rebuildSSHelperDatabase } from './database';
 export type {
     DBChatDocument,
     DBChatDocumentShared,

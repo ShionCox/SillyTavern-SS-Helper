@@ -38,12 +38,6 @@ export function resolveNarrativeReferenceLabel(
         return aliasLabel;
     }
     const stripped = stripNarrativeReferencePrefix(rawRef);
-    if ((rawRef.startsWith('actor:') || rawRef.startsWith('entity:actor:')) && stripped.startsWith('char_')) {
-        return normalizedFallback || '未命名角色';
-    }
-    if (rawRef.startsWith('char_')) {
-        return normalizedFallback || '未命名角色';
-    }
     return normalizedFallback || stripped || '未命名对象';
 }
 
@@ -62,7 +56,7 @@ export function renderNarrativeReferenceText(
         return source;
     }
     const userDisplayName = normalizeNarrativeReferenceUserName(context.userDisplayName);
-    const referencePattern = /\b(user|char_[a-z0-9_]+|ck:v2:[^\s，。；、.!?！？()]+|entity:[^\s，。；、.!?！？()]+|(?:organization|city|nation|location|task|event|world_global_state|world|actor):[^\s，。；、.!?！？()]+)/gi;
+    const referencePattern = /\b(user|ck:v2:[^\s，。；、.!?！？()]+|entity:[^\s，。；、.!?！？()]+|(?:organization|city|nation|location|task|event|world_global_state|world|actor):[^\s，。；、.!?！？()]+)/gi;
     return source
         .replace(/当前用户/g, userDisplayName)
         .replace(/该用户/g, userDisplayName)

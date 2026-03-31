@@ -3,6 +3,7 @@ export { buildTakeoverPlan, buildTakeoverBatches, normalizeTakeoverRange } from 
 export { runTakeoverBaseline } from './takeover-baseline';
 export { runTakeoverActiveSnapshot } from './takeover-active-snapshot';
 export { runTakeoverBatch } from './takeover-batch-runner';
+export { admitTakeoverBatchResult } from './takeover-batch-admission';
 export { runTakeoverConsolidation } from './takeover-consolidator';
 export {
     buildTakeoverSectionDigests,

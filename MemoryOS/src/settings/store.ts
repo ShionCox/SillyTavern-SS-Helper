@@ -1,4 +1,6 @@
 import { createSdkPluginSettingsStore } from '../../../SDK/settings';
+import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
+import { normalizeRetrievalMode } from '../memory-retrieval/retrieval-mode';
 
 export type MemoryOSSettings = {
     enabled: boolean;
@@ -8,7 +10,6 @@ export type MemoryOSSettings = {
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
-    enableEmbedding: boolean;
     summaryAutoTriggerEnabled: boolean;
     summaryProgressOverlayEnabled: boolean;
     summaryIntervalFloors: number;
@@ -29,6 +30,7 @@ export type MemoryOSSettings = {
     takeoverDetectMinFloors: number;
     takeoverDefaultRecentFloors: number;
     takeoverDefaultBatchSize: number;
+    takeoverRequestIntervalSeconds: number;
     takeoverSectionDigestBatchCount: number;
     takeoverUseConflictResolver: boolean;
     takeoverMaxConflictItemsPerRun: number;
@@ -46,6 +48,24 @@ export type MemoryOSSettings = {
     retrievalLogLevel: 'info' | 'debug';
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
     retrievalTracePanelEnabled: boolean;
+    /** 检索模式三态 */
+    retrievalMode: RetrievalMode;
+    /** 默认 topK */
+    retrievalDefaultTopK: number;
+    /** 默认图扩展深度 */
+    retrievalDefaultExpandDepth: number;
+    /** 是否启用 PayloadFilter 预过滤 */
+    retrievalEnablePayloadFilter: boolean;
+    /** 是否启用图扩展热点降权 */
+    retrievalEnableGraphPenalty: boolean;
+    /** 是否启用 QueryContextBuilder */
+    retrievalEnableQueryContextBuilder: boolean;
+    /** 是否启用维护层自动压缩 */
+    maintenanceAutoCompressEnabled: boolean;
+    /** 是否启用维护层重复检测 */
+    maintenanceDuplicateCheckEnabled: boolean;
+    /** 是否启用秘书层/蒸馏服务 */
+    scoringServiceEnabled: boolean;
 };
 
 export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
@@ -58,7 +78,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
-    enableEmbedding: false,
     summaryAutoTriggerEnabled: true,
     summaryProgressOverlayEnabled: true,
     summaryIntervalFloors: 1,
@@ -79,6 +98,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     takeoverDetectMinFloors: 50,
     takeoverDefaultRecentFloors: 60,
     takeoverDefaultBatchSize: 30,
+    takeoverRequestIntervalSeconds: 3,
     takeoverSectionDigestBatchCount: 5,
     takeoverUseConflictResolver: true,
     takeoverMaxConflictItemsPerRun: 10,
@@ -96,6 +116,15 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
     retrievalTracePanelEnabled: true,
+    retrievalMode: 'lexical_only',
+    retrievalDefaultTopK: 18,
+    retrievalDefaultExpandDepth: 1,
+    retrievalEnablePayloadFilter: true,
+    retrievalEnableGraphPenalty: true,
+    retrievalEnableQueryContextBuilder: false,
+    maintenanceAutoCompressEnabled: false,
+    maintenanceDuplicateCheckEnabled: false,
+    scoringServiceEnabled: false,
 };
 
 /**
@@ -172,6 +201,10 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         1,
         Math.min(500, Math.trunc(Number(candidate.takeoverDefaultBatchSize) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize)),
     );
+    const takeoverRequestIntervalSeconds: number = Math.max(
+        0,
+        Math.min(600, Math.trunc(Number(candidate.takeoverRequestIntervalSeconds) || DEFAULT_MEMORY_OS_SETTINGS.takeoverRequestIntervalSeconds)),
+    );
     const takeoverSectionDigestBatchCount: number = Math.max(
         1,
         Math.min(50, Math.trunc(Number(candidate.takeoverSectionDigestBatchCount) || DEFAULT_MEMORY_OS_SETTINGS.takeoverSectionDigestBatchCount)),
@@ -198,6 +231,16 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         || candidate.retrievalRulePack === 'hybrid'
         ? candidate.retrievalRulePack
         : DEFAULT_MEMORY_OS_SETTINGS.retrievalRulePack;
+    const retrievalMode = normalizeRetrievalMode(candidate.retrievalMode, DEFAULT_MEMORY_OS_SETTINGS.retrievalMode);
+    const retrievalDefaultTopK: number = Math.max(
+        1,
+        Math.min(100, Math.trunc(Number(candidate.retrievalDefaultTopK) || DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultTopK)),
+    );
+    const retrievalDefaultExpandDepth: number = Math.max(
+        0,
+        Math.min(3, Math.trunc(Number(candidate.retrievalDefaultExpandDepth) || DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth)),
+    );
+
     return {
         enabled: candidate.enabled !== false,
         coldStartEnabled: candidate.coldStartEnabled !== false,
@@ -206,7 +249,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
-        enableEmbedding: candidate.enableEmbedding === true,
         summaryAutoTriggerEnabled: candidate.summaryAutoTriggerEnabled !== false,
         summaryProgressOverlayEnabled: candidate.summaryProgressOverlayEnabled !== false,
         summaryIntervalFloors,
@@ -227,6 +269,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         takeoverDetectMinFloors,
         takeoverDefaultRecentFloors,
         takeoverDefaultBatchSize,
+        takeoverRequestIntervalSeconds,
         takeoverSectionDigestBatchCount,
         takeoverUseConflictResolver: candidate.takeoverUseConflictResolver !== false,
         takeoverMaxConflictItemsPerRun,
@@ -244,6 +287,15 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         retrievalLogLevel,
         retrievalRulePack,
         retrievalTracePanelEnabled: candidate.retrievalTracePanelEnabled !== false,
+        retrievalMode,
+        retrievalDefaultTopK,
+        retrievalDefaultExpandDepth,
+        retrievalEnablePayloadFilter: candidate.retrievalEnablePayloadFilter !== false,
+        retrievalEnableGraphPenalty: candidate.retrievalEnableGraphPenalty !== false,
+        retrievalEnableQueryContextBuilder: candidate.retrievalEnableQueryContextBuilder === true,
+        maintenanceAutoCompressEnabled: candidate.maintenanceAutoCompressEnabled === true,
+        maintenanceDuplicateCheckEnabled: candidate.maintenanceDuplicateCheckEnabled === true,
+        scoringServiceEnabled: candidate.scoringServiceEnabled === true,
     };
 }
 
