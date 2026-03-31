@@ -10,8 +10,15 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 3,
+        registrationVersion: 4,
         tasks: [
+            {
+                taskId: 'memory_embedding',
+                taskKind: 'embedding',
+                requiredCapabilities: ['embeddings'],
+                description: '记忆向量批量编码',
+                backgroundEligible: false,
+            },
             {
                 taskId: 'memory_cold_start',
                 taskKind: 'generation',

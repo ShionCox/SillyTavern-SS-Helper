@@ -27,6 +27,27 @@ import {
     isVectorRuntimeReady,
 } from '../runtime/vector-runtime';
 
+const AUTO_INDEX_BATCH_SIZE = 20;
+const AUTO_INDEX_DEBOUNCE_MS = 120;
+
+interface AutoIndexWaiter {
+    vectorDocId: string;
+    resolve: () => void;
+}
+
+interface AutoIndexQueueState {
+    docs: Map<string, VectorDocument>;
+    activeDocIds: Set<string>;
+    waiters: AutoIndexWaiter[];
+    timer: ReturnType<typeof setTimeout> | null;
+    flushing: boolean;
+}
+
+interface VectorBatchDisplayContext {
+    currentBatch: number;
+    totalBatches: number;
+}
+
 /**
  * 功能：检查是否应执行自动索引。
  */
@@ -68,57 +89,13 @@ function toDBDocument(doc: VectorDocument, embeddingStatus: EmbeddingStatus, emb
 }
 
 /**
- * 功能：对单个向量文档执行 embedding 编码并写入索引。
- */
-async function encodeAndIndex(chatKey: string, doc: VectorDocument): Promise<void> {
-    const embeddingService = getSharedEmbeddingService();
-    const vectorStore = getSharedVectorStore();
-    if (!embeddingService || !vectorStore) {
-        return;
-    }
-
-    const settings = readMemoryOSSettings();
-    const embeddingVersion = settings.vectorEmbeddingVersion || '1';
-
-    const dbDoc = toDBDocument(doc, 'pending', embeddingVersion);
-    await saveVectorDocuments(chatKey, [dbDoc]);
-
-    const encodeResult = await embeddingService.encodeOne(doc.text);
-    if (!encodeResult.ok) {
-        dbDoc.embeddingStatus = 'failed';
-        dbDoc.embeddingModel = encodeResult.model || embeddingService.getModelInfo().model;
-        dbDoc.embeddingDim = 0;
-        dbDoc.lastError = encodeResult.error;
-        await saveVectorDocuments(chatKey, [dbDoc]);
-        logger.warn(`[VectorIndex] embedding 编码失败 (${doc.vectorDocId}): ${encodeResult.error}`);
-        return;
-    }
-
-    dbDoc.embeddingStatus = 'ready';
-    dbDoc.embeddingModel = encodeResult.model;
-    dbDoc.embeddingDim = encodeResult.dim;
-    dbDoc.lastError = undefined;
-    await saveVectorDocuments(chatKey, [dbDoc]);
-
-    // 写入向量索引
-    const modelInfo = embeddingService.getModelInfo();
-    await vectorStore.upsertDocuments(chatKey, [{
-        vectorDocId: doc.vectorDocId,
-        chatKey,
-        sourceKind: doc.sourceKind,
-        sourceId: doc.sourceId,
-        vector: encodeResult.vector,
-        dim: encodeResult.dim,
-    }], {
-        model: modelInfo.model,
-        version: modelInfo.version,
-    });
-}
-
-/**
  * 功能：对多个向量文档批量执行 embedding 编码并写入索引。
  */
-async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Promise<void> {
+async function encodeBatchAndIndex(
+    chatKey: string,
+    docs: VectorDocument[],
+    batchDisplay?: VectorBatchDisplayContext,
+): Promise<void> {
     const embeddingService = getSharedEmbeddingService();
     const vectorStore = getSharedVectorStore();
     if (!embeddingService || !vectorStore || docs.length === 0) {
@@ -132,7 +109,17 @@ async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Pro
     await saveVectorDocuments(chatKey, dbDocs);
 
     const texts = docs.map((d) => d.text);
-    const batchResult = await embeddingService.encodeBatch(texts);
+    const taskDescription = batchDisplay && batchDisplay.totalBatches > 1
+        ? `记忆向量编码（${batchDisplay.currentBatch}/${batchDisplay.totalBatches}）`
+        : '记忆向量编码';
+    const batchResult = await embeddingService.encodeBatch(texts, {
+        taskDescription,
+        enqueue: {
+            displayMode: 'compact',
+            autoCloseMs: 2200,
+            replacePendingByKey: `memory_embedding_batch::${chatKey}`,
+        },
+    });
 
     const modelInfo = embeddingService.getModelInfo();
     const indexDocs: Array<{ vectorDocId: string; chatKey: string; sourceKind: string; sourceId: string; vector: number[]; dim: number }> = [];
@@ -173,6 +160,150 @@ async function encodeBatchAndIndex(chatKey: string, docs: VectorDocument[]): Pro
     }
 }
 
+const autoIndexQueues = new Map<string, AutoIndexQueueState>();
+
+/**
+ * 功能：读取或创建指定聊天的自动索引队列。
+ * @param chatKey 聊天键。
+ * @returns 自动索引队列状态。
+ */
+function ensureAutoIndexQueue(chatKey: string): AutoIndexQueueState {
+    const existing = autoIndexQueues.get(chatKey);
+    if (existing) {
+        return existing;
+    }
+    const created: AutoIndexQueueState = {
+        docs: new Map<string, VectorDocument>(),
+        activeDocIds: new Set<string>(),
+        waiters: [],
+        timer: null,
+        flushing: false,
+    };
+    autoIndexQueues.set(chatKey, created);
+    return created;
+}
+
+/**
+ * 功能：在批次处理后尝试结清等待中的调用方。
+ * @param state 队列状态。
+ */
+function settleAutoIndexWaiters(state: AutoIndexQueueState): void {
+    if (state.waiters.length === 0) {
+        return;
+    }
+    const pendingWaiters: AutoIndexWaiter[] = [];
+    for (const waiter of state.waiters) {
+        if (state.docs.has(waiter.vectorDocId) || state.activeDocIds.has(waiter.vectorDocId)) {
+            pendingWaiters.push(waiter);
+            continue;
+        }
+        waiter.resolve();
+    }
+    state.waiters = pendingWaiters;
+}
+
+/**
+ * 功能：在队列空闲时释放聊天级自动索引状态。
+ * @param chatKey 聊天键。
+ * @param state 队列状态。
+ */
+function cleanupAutoIndexQueue(chatKey: string, state: AutoIndexQueueState): void {
+    if (state.docs.size > 0 || state.activeDocIds.size > 0 || state.timer || state.flushing || state.waiters.length > 0) {
+        return;
+    }
+    autoIndexQueues.delete(chatKey);
+}
+
+/**
+ * 功能：刷新指定聊天的自动索引批处理队列。
+ * @param chatKey 聊天键。
+ * @returns 异步完成。
+ */
+async function flushAutoIndexQueue(chatKey: string): Promise<void> {
+    const state = ensureAutoIndexQueue(chatKey);
+    if (state.flushing) {
+        return;
+    }
+
+    state.flushing = true;
+    if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+    }
+
+    try {
+        while (state.docs.size > 0) {
+            const roundDocs: VectorDocument[] = Array.from(state.docs.values());
+            const totalBatches = Math.max(1, Math.ceil(roundDocs.length / AUTO_INDEX_BATCH_SIZE));
+            for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+                const batch: VectorDocument[] = roundDocs.slice(
+                    batchIndex * AUTO_INDEX_BATCH_SIZE,
+                    (batchIndex + 1) * AUTO_INDEX_BATCH_SIZE,
+                );
+                const batchDocIds = batch.map((doc) => doc.vectorDocId);
+                for (const vectorDocId of batchDocIds) {
+                    state.docs.delete(vectorDocId);
+                    state.activeDocIds.add(vectorDocId);
+                }
+
+                try {
+                    await encodeBatchAndIndex(chatKey, batch, {
+                        currentBatch: batchIndex + 1,
+                        totalBatches,
+                    });
+                } catch (error) {
+                    logger.warn(`[VectorIndex] 自动索引批处理失败 (chat=${chatKey}, batch=${batchDocIds.length})`, error);
+                } finally {
+                    for (const vectorDocId of batchDocIds) {
+                        state.activeDocIds.delete(vectorDocId);
+                    }
+                    settleAutoIndexWaiters(state);
+                }
+            }
+        }
+    } finally {
+        state.flushing = false;
+        settleAutoIndexWaiters(state);
+        cleanupAutoIndexQueue(chatKey, state);
+    }
+}
+
+/**
+ * 功能：把单个向量文档加入自动索引批处理队列。
+ * @param chatKey 聊天键。
+ * @param doc 向量文档。
+ * @returns 当前文档被批处理完成时结束。
+ */
+function enqueueAutoIndexDocument(chatKey: string, doc: VectorDocument): Promise<void> {
+    const state = ensureAutoIndexQueue(chatKey);
+    state.docs.set(doc.vectorDocId, doc);
+
+    const donePromise = new Promise<void>((resolve) => {
+        state.waiters.push({
+            vectorDocId: doc.vectorDocId,
+            resolve,
+        });
+    });
+
+    if (state.docs.size >= AUTO_INDEX_BATCH_SIZE) {
+        if (state.timer) {
+            clearTimeout(state.timer);
+            state.timer = null;
+        }
+        void flushAutoIndexQueue(chatKey);
+        return donePromise;
+    }
+
+    if (!state.timer) {
+        state.timer = setTimeout((): void => {
+            state.timer = null;
+            void flushAutoIndexQueue(chatKey);
+        }, AUTO_INDEX_DEBOUNCE_MS);
+    }
+
+    return donePromise;
+}
+
 // ─── 增量刷新（写链路钩子） ──────────────────────────────
 
 /**
@@ -186,7 +317,7 @@ export async function onEntrySaved(chatKey: string, entry: MemoryEntry): Promise
     }
     try {
         const doc = buildEntryDocument(entry);
-        await encodeAndIndex(chatKey, doc);
+        await enqueueAutoIndexDocument(chatKey, doc);
     } catch (error) {
         logger.warn(`[VectorIndex] entry 自动索引失败 (${entry.entryId})`, error);
     }
@@ -221,7 +352,7 @@ export async function onRelationshipSaved(chatKey: string, rel: MemoryRelationsh
     }
     try {
         const doc = buildRelationshipDocument(rel);
-        await encodeAndIndex(chatKey, doc);
+        await enqueueAutoIndexDocument(chatKey, doc);
     } catch (error) {
         logger.warn(`[VectorIndex] relationship 自动索引失败 (${rel.relationshipId})`, error);
     }
@@ -238,7 +369,7 @@ export async function onActorSaved(chatKey: string, actor: ActorMemoryProfile): 
     }
     try {
         const doc = buildActorDocument(actor);
-        await encodeAndIndex(chatKey, doc);
+        await enqueueAutoIndexDocument(chatKey, doc);
     } catch (error) {
         logger.warn(`[VectorIndex] actor 自动索引失败 (${actor.actorKey})`, error);
     }
@@ -255,7 +386,7 @@ export async function onSummarySaved(chatKey: string, snapshot: SummarySnapshot)
     }
     try {
         const doc = buildSummaryDocument(snapshot);
-        await encodeAndIndex(chatKey, doc);
+        await enqueueAutoIndexDocument(chatKey, doc);
     } catch (error) {
         logger.warn(`[VectorIndex] summary 自动索引失败 (${snapshot.summaryId})`, error);
     }
@@ -358,13 +489,16 @@ export async function rebuildAllEmbeddings(
     }));
 
     // 分批编码（每批 20 条防止超时）
-    const BATCH_SIZE = 20;
     let successCount = 0;
+    const totalBatches = Math.max(1, Math.ceil(allDocs.length / AUTO_INDEX_BATCH_SIZE));
 
-    for (let i = 0; i < allDocs.length; i += BATCH_SIZE) {
-        const batch = allDocs.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < allDocs.length; i += AUTO_INDEX_BATCH_SIZE) {
+        const batch = allDocs.slice(i, i + AUTO_INDEX_BATCH_SIZE);
         try {
-            await encodeBatchAndIndex(chatKey, batch);
+            await encodeBatchAndIndex(chatKey, batch, {
+                currentBatch: Math.floor(i / AUTO_INDEX_BATCH_SIZE) + 1,
+                totalBatches,
+            });
             successCount += batch.length;
         } catch (error) {
             logger.warn(`[VectorIndex] 批量重建编码失败 (batch ${i}-${i + batch.length})`, error);

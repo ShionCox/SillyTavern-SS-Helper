@@ -398,7 +398,7 @@ export class LLMSDKImpl {
             'embedding',
             {
                 ...args.enqueue,
-                displayMode: 'silent',
+                displayMode: args.enqueue?.displayMode || 'silent',
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
@@ -427,7 +427,7 @@ export class LLMSDKImpl {
             'rerank',
             {
                 ...args.enqueue,
-                displayMode: 'silent',
+                displayMode: args.enqueue?.displayMode || 'silent',
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,

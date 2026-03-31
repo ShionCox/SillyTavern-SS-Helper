@@ -455,11 +455,32 @@ class LLMHub {
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close {
                     border: 0;
-                    border-radius: 10px;
-                    padding: 8px 10px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 999px;
+                    padding: 0;
                     cursor: pointer;
                     color: inherit;
                     background: rgba(255, 255, 255, 0.08);
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: background 160ms ease, transform 160ms ease, opacity 160ms ease;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close:hover {
+                    background: rgba(255, 255, 255, 0.16);
+                    transform: scale(1.04);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close:focus-visible {
+                    outline: 2px solid rgba(255,255,255,0.52);
+                    outline-offset: 2px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close i {
+                    font-size: 13px;
+                    pointer-events: none;
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-body {
@@ -630,7 +651,9 @@ class LLMHub {
                                     <div class="stx-llmhub-overlay-meta">请求 ID：${escapeHtml(spec.requestId)}</div>
                                 </div>
                                 <div class="stx-llmhub-overlay-status stx-llmhub-overlay-status--${escapeHtml(status)}">${escapeHtml(statusLabelMap[status] || status)}</div>
-                                <button type="button" class="stx-llmhub-overlay-close" data-llmhub-overlay-close="${escapeHtml(spec.requestId)}" aria-label="关闭">关闭</button>
+                                <button type="button" class="stx-llmhub-overlay-close" data-llmhub-overlay-close="${escapeHtml(spec.requestId)}" aria-label="关闭">
+                                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                                </button>
                             </header>
                             <div class="stx-llmhub-overlay-body">
                                 ${status === 'loading' || status === 'streaming' ? '<div class="stx-llmhub-overlay-loading-bar"></div>' : ''}

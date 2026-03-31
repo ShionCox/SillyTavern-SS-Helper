@@ -14,6 +14,15 @@ export interface EmbeddingEncodeOptions {
     model?: string;
     /** 资源提示 */
     resource?: string;
+    /** 任务标题 */
+    taskDescription?: string;
+    /** 入队显示设置 */
+    enqueue?: {
+        displayMode?: 'fullscreen' | 'compact' | 'silent';
+        autoCloseMs?: number;
+        dedupeKey?: string;
+        replacePendingByKey?: string;
+    };
 }
 
 /** embedding 编码结果（单条） */
@@ -49,7 +58,12 @@ interface LLMEmbedApi {
         taskDescription?: string;
         texts: string[];
         routeHint?: { resource?: string; model?: string };
-        enqueue?: { displayMode?: string };
+        enqueue?: {
+            displayMode?: string;
+            autoCloseMs?: number;
+            dedupeKey?: string;
+            replacePendingByKey?: string;
+        };
     }) => Promise<{
         ok: boolean;
         vectors?: number[][];
@@ -165,12 +179,12 @@ export class EmbeddingService {
             const response = await api.embed({
                 consumer: CONSUMER_ID,
                 taskId: TASK_ID,
-                taskDescription: '记忆向量编码',
+                taskDescription: String(options?.taskDescription ?? '').trim() || '记忆向量编码',
                 texts: validTexts,
                 routeHint: routeResource || routeModel
                     ? { resource: routeResource, model: routeModel }
                     : undefined,
-                enqueue: { displayMode: 'silent' },
+                enqueue: options?.enqueue || { displayMode: 'silent' },
             });
 
             if (!response.ok || !response.vectors || response.vectors.length !== validTexts.length) {

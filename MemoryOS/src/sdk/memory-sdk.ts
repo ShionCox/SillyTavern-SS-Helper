@@ -53,12 +53,14 @@ import {
     saveMemoryTakeoverPreview,
     writeMemoryOSChatState,
 } from '../db/db';
-import { readMemoryOSSettings } from '../settings/store';
+import { readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 import { detectWorldProfile } from '../memory-world-profile';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
+import { getSharedEmbeddingService, getSharedRetrievalService, getSharedVectorStore, isVectorRuntimeReady } from '../runtime/vector-runtime';
+import { rebuildAllEmbeddings, rebuildAllVectorDocuments, onActorSaved, onEntrySaved, onRelationshipSaved, onSummarySaved } from '../services/vector-index-service';
 import {
     buildNarrativeReferenceLookupKey,
     renderNarrativeReferenceText,
@@ -67,6 +69,8 @@ import {
 } from '../utils/narrative-reference-renderer';
 import type {
     LedgerMutation,
+    ActorMemoryProfile,
+    MemoryEntry,
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBindings,
     MemoryTakeoverConsolidationResult,
@@ -80,7 +84,13 @@ import type {
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
     MemoryRelationshipRecord,
+    RoleEntryMemory,
+    SummarySnapshot,
 } from '../types';
+import type { RetrievalResultItem } from '../memory-retrieval/types';
+import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
+import type { RetrievalOutputDiagnostics } from '../memory-retrieval/retrieval-output';
+import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
@@ -206,6 +216,78 @@ export interface MemoryTakeoverExecutionResult {
 }
 
 /**
+ * 功能：定义向量运行时状态快照。
+ */
+export interface MemoryVectorRuntimeStatus {
+    runtimeReady: boolean;
+    embeddingAvailable: boolean;
+    embeddingUnavailableReason?: string;
+    vectorStoreAvailable: boolean;
+    vectorStoreUnavailableReason?: string;
+    retrievalMode: RetrievalMode;
+    embeddingModel?: string;
+    embeddingVersion?: string;
+    vectorEnableStrategyRouting: boolean;
+    vectorEnableRerank: boolean;
+    vectorEnableLLMHubRerank: boolean;
+}
+
+/**
+ * 功能：定义向量文档查询参数。
+ */
+export interface MemoryVectorDocumentListInput {
+    sourceKind?: string;
+    status?: string;
+    schemaId?: string;
+    actorKey?: string;
+    query?: string;
+    sourceId?: string;
+}
+
+/**
+ * 功能：定义向量索引统计快照。
+ */
+export interface MemoryVectorIndexStats {
+    documentCount: number;
+    readyCount: number;
+    pendingCount: number;
+    failedCount: number;
+    indexCount: number;
+    recallStatCount: number;
+}
+
+/**
+ * 功能：定义向量检索实验输入。
+ */
+export interface MemoryVectorRetrievalTestInput {
+    query: string;
+    retrievalMode: RetrievalMode;
+    topK?: number;
+    deepWindow?: number;
+    finalTopK?: number;
+    enableStrategyRouting?: boolean;
+    enableRerank?: boolean;
+    enableLLMHubRerank?: boolean;
+    enableGraphExpansion?: boolean;
+    filters?: {
+        sourceKind?: string;
+        schemaId?: string;
+        actorKey?: string;
+        worldKey?: string;
+    };
+}
+
+/**
+ * 功能：定义向量检索实验输出。
+ */
+export interface MemoryVectorRetrievalTestResult {
+    diagnostics: RetrievalOutputDiagnostics;
+    items: RetrievalResultItem[];
+    providerId: string;
+    retrievalMode: RetrievalMode;
+}
+
+/**
  * 功能：MemoryOS 统一条目 SDK 门面。
  */
 export class MemorySDKImpl {
@@ -314,6 +396,19 @@ export class MemorySDKImpl {
              getWorldProfileBinding: () => ReturnType<EntryRepository['getWorldProfileBinding']>;
              listMutationHistory: (limit?: number) => ReturnType<EntryRepository['listMutationHistory']>;
              listEntryAuditRecords: (limit?: number) => ReturnType<EntryRepository['listEntryAuditRecords']>;
+             getVectorRuntimeStatus: () => Promise<MemoryVectorRuntimeStatus>;
+             listVectorDocuments: (input?: MemoryVectorDocumentListInput) => Promise<DBMemoryVectorDocument[]>;
+             listVectorIndexRecords: () => Promise<DBMemoryVectorIndex[]>;
+             listVectorRecallStats: () => Promise<DBMemoryVectorRecallStat[]>;
+             getVectorIndexStats: () => Promise<MemoryVectorIndexStats>;
+             testVectorRetrieval: (input: MemoryVectorRetrievalTestInput) => Promise<MemoryVectorRetrievalTestResult>;
+             rebuildAllVectorDocuments: () => Promise<number>;
+             rebuildAllEmbeddings: () => Promise<number>;
+             clearVectorIndex: () => Promise<void>;
+             clearVectorRecallStats: () => Promise<void>;
+             clearAllVectorData: () => Promise<void>;
+             reindexVectorDocument: (vectorDocId: string) => Promise<void>;
+             removeVectorDocument: (vectorDocId: string) => Promise<void>;
          };
         prompts: {
             preview: (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => ReturnType<PromptAssemblyService['buildPromptAssembly']>;
@@ -428,6 +523,7 @@ export class MemorySDKImpl {
                 if (!snapshot) {
                     return;
                 }
+                await this.refreshVectorIndexAfterPipeline('自动总结');
                 const lastSummarizedMessageId = hostMessages.length > 0
                     ? undefined
                     : await this.readLastSummarizedMessageIdFromEvents(messageWindowLimit);
@@ -746,6 +842,7 @@ export class MemorySDKImpl {
                     sourceBundle: this.pendingColdStartDraft.sourceBundle,
                     selectedCandidates,
                 });
+                await this.refreshVectorIndexAfterPipeline('冷启动');
                 this.pendingColdStartDraft = null;
                 await this.writeColdStartState({
                     coldStartCompletedAt: Date.now(),
@@ -806,13 +903,44 @@ export class MemorySDKImpl {
             },
             summaries: {
                 list: async (limit?: number) => this.entryRepository.listSummarySnapshots(limit),
-                capture: async (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => this.summaryService.captureSummaryFromChat(input),
+                capture: async (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => {
+                    const snapshot = await this.summaryService.captureSummaryFromChat(input);
+                    if (snapshot) {
+                        await this.refreshVectorIndexAfterPipeline('手动总结');
+                    }
+                    return snapshot;
+                },
             },
-             diagnostics: {
-                 getWorldProfileBinding: async () => this.entryRepository.getWorldProfileBinding(),
-                 listMutationHistory: async (limit?: number) => this.entryRepository.listMutationHistory(limit),
-                 listEntryAuditRecords: async (limit?: number) => this.entryRepository.listEntryAuditRecords(limit),
-              },
+            diagnostics: {
+                getWorldProfileBinding: async () => this.entryRepository.getWorldProfileBinding(),
+                listMutationHistory: async (limit?: number) => this.entryRepository.listMutationHistory(limit),
+                listEntryAuditRecords: async (limit?: number) => this.entryRepository.listEntryAuditRecords(limit),
+                getVectorRuntimeStatus: async (): Promise<MemoryVectorRuntimeStatus> => this.readVectorRuntimeStatus(),
+                listVectorDocuments: async (input?: MemoryVectorDocumentListInput): Promise<DBMemoryVectorDocument[]> => this.listVectorDocumentsForWorkbench(input),
+                listVectorIndexRecords: async (): Promise<DBMemoryVectorIndex[]> => this.entryRepository.listVectorIndexRecords(),
+                listVectorRecallStats: async (): Promise<DBMemoryVectorRecallStat[]> => this.entryRepository.listVectorRecallStats(),
+                getVectorIndexStats: async (): Promise<MemoryVectorIndexStats> => this.getVectorIndexStats(),
+                testVectorRetrieval: async (input: MemoryVectorRetrievalTestInput): Promise<MemoryVectorRetrievalTestResult> => {
+                    return this.testVectorRetrieval(input);
+                },
+                rebuildAllVectorDocuments: async (): Promise<number> => this.rebuildAllVectorDocumentsForCurrentChat(),
+                rebuildAllEmbeddings: async (): Promise<number> => this.rebuildAllEmbeddingsForCurrentChat(),
+                clearVectorIndex: async (): Promise<void> => {
+                    await this.entryRepository.clearVectorIndexForChat();
+                },
+                clearVectorRecallStats: async (): Promise<void> => {
+                    await this.entryRepository.clearVectorRecallStatsForChat();
+                },
+                clearAllVectorData: async (): Promise<void> => {
+                    await this.entryRepository.clearVectorDataForChat();
+                },
+                reindexVectorDocument: async (vectorDocId: string): Promise<void> => {
+                    await this.reindexVectorDocument(vectorDocId);
+                },
+                removeVectorDocument: async (vectorDocId: string): Promise<void> => {
+                    await this.removeVectorDocument(vectorDocId);
+                },
+            },
             prompts: {
                 preview: async (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => this.promptAssemblyService.buildPromptAssembly(input ?? {}),
                 inject: async (input: UnifiedPromptInjectInput): Promise<UnifiedPromptInjectResult> => {
@@ -919,6 +1047,437 @@ export class MemorySDKImpl {
     public ensureLLMTasksRegistered(): boolean {
         this.tryRegisterLLMTasks();
         return this.llmTasksRegistered;
+    }
+
+    /**
+     * 功能：读取向量运行时状态。
+     * @returns 向量运行时快照。
+     */
+    private async readVectorRuntimeStatus(): Promise<MemoryVectorRuntimeStatus> {
+        const settings = readMemoryOSSettings();
+        const embeddingService = getSharedEmbeddingService();
+        const vectorStore = getSharedVectorStore();
+        const embeddingAvailable = embeddingService?.isAvailable() === true;
+        const vectorStoreAvailable = vectorStore?.isAvailable() === true;
+        const modelInfo = embeddingService?.getModelInfo();
+        return {
+            runtimeReady: isVectorRuntimeReady(),
+            embeddingAvailable,
+            embeddingUnavailableReason: embeddingAvailable ? undefined : (embeddingService?.getUnavailableReason() ?? 'Embedding 服务不可用'),
+            vectorStoreAvailable,
+            vectorStoreUnavailableReason: vectorStoreAvailable ? undefined : '向量存储不可用',
+            retrievalMode: settings.retrievalMode,
+            embeddingModel: modelInfo?.model || settings.vectorEmbeddingModel || undefined,
+            embeddingVersion: modelInfo?.version || settings.vectorEmbeddingVersion || undefined,
+            vectorEnableStrategyRouting: settings.vectorEnableStrategyRouting,
+            vectorEnableRerank: settings.vectorEnableRerank,
+            vectorEnableLLMHubRerank: settings.vectorEnableLLMHubRerank,
+        };
+    }
+
+    /**
+     * 功能：按条件列出向量文档。
+     * @param input 过滤参数。
+     * @returns 过滤后的向量文档列表。
+     */
+    private async listVectorDocumentsForWorkbench(input?: MemoryVectorDocumentListInput): Promise<DBMemoryVectorDocument[]> {
+        const docs = await this.entryRepository.listVectorDocuments();
+        const sourceKind = String(input?.sourceKind ?? '').trim();
+        const status = String(input?.status ?? '').trim();
+        const schemaId = String(input?.schemaId ?? '').trim();
+        const actorKey = String(input?.actorKey ?? '').trim();
+        const sourceId = String(input?.sourceId ?? '').trim();
+        const query = String(input?.query ?? '').trim().toLowerCase();
+        return docs
+            .filter((doc: DBMemoryVectorDocument): boolean => {
+                if (sourceKind && doc.sourceKind !== sourceKind) {
+                    return false;
+                }
+                if (status && doc.embeddingStatus !== status) {
+                    return false;
+                }
+                if (schemaId && String(doc.schemaId ?? '').trim() !== schemaId) {
+                    return false;
+                }
+                if (actorKey && !(doc.actorKeys ?? []).includes(actorKey)) {
+                    return false;
+                }
+                if (sourceId && String(doc.sourceId ?? '').trim() !== sourceId) {
+                    return false;
+                }
+                if (!query) {
+                    return true;
+                }
+                const searchText = [
+                    doc.vectorDocId,
+                    doc.sourceKind,
+                    doc.sourceId,
+                    doc.schemaId,
+                    doc.title,
+                    doc.text,
+                    doc.compareKey,
+                    ...(doc.actorKeys ?? []),
+                    ...(doc.relationKeys ?? []),
+                    ...(doc.worldKeys ?? []),
+                ].join(' ').toLowerCase();
+                return searchText.includes(query);
+            })
+            .sort((left: DBMemoryVectorDocument, right: DBMemoryVectorDocument): number => right.updatedAt - left.updatedAt);
+    }
+
+    /**
+     * 功能：读取向量索引统计。
+     * @returns 统计快照。
+     */
+    private async getVectorIndexStats(): Promise<MemoryVectorIndexStats> {
+        const [documents, indexRecords, recallStats] = await Promise.all([
+            this.entryRepository.listVectorDocuments(),
+            this.entryRepository.listVectorIndexRecords(),
+            this.entryRepository.listVectorRecallStats(),
+        ]);
+        return {
+            documentCount: documents.length,
+            readyCount: documents.filter((doc: DBMemoryVectorDocument): boolean => doc.embeddingStatus === 'ready').length,
+            pendingCount: documents.filter((doc: DBMemoryVectorDocument): boolean => doc.embeddingStatus === 'pending' || doc.embeddingStatus === 'processing').length,
+            failedCount: documents.filter((doc: DBMemoryVectorDocument): boolean => doc.embeddingStatus === 'failed').length,
+            indexCount: indexRecords.length,
+            recallStatCount: recallStats.length,
+        };
+    }
+
+    /**
+     * 功能：执行向量实验室中的手动召回测试。
+     * @param input 测试输入。
+     * @returns 测试结果。
+     */
+    private async testVectorRetrieval(input: MemoryVectorRetrievalTestInput): Promise<MemoryVectorRetrievalTestResult> {
+        const query = String(input.query ?? '').trim();
+        if (!query) {
+            throw new Error('请输入要测试的查询文本。');
+        }
+        const retrievalService = getSharedRetrievalService();
+        const [candidates, actorProfiles] = await Promise.all([
+            this.buildWorkbenchRetrievalCandidates(),
+            this.entryRepository.listActorProfiles(),
+        ]);
+        const previousSettings = readMemoryOSSettings();
+        const nextSettings = {
+            ...previousSettings,
+            vectorTopK: Math.max(1, Math.trunc(Number(input.topK) || previousSettings.vectorTopK)),
+            vectorDeepWindow: Math.max(5, Math.trunc(Number(input.deepWindow) || previousSettings.vectorDeepWindow)),
+            vectorFinalTopK: Math.max(1, Math.trunc(Number(input.finalTopK) || previousSettings.vectorFinalTopK)),
+            vectorEnableStrategyRouting: input.enableStrategyRouting ?? previousSettings.vectorEnableStrategyRouting,
+            vectorEnableRerank: input.enableRerank ?? previousSettings.vectorEnableRerank,
+            vectorEnableLLMHubRerank: input.enableLLMHubRerank ?? previousSettings.vectorEnableLLMHubRerank,
+        };
+        writeMemoryOSSettings(nextSettings);
+        try {
+            const result = await retrievalService.searchHybrid({
+                query,
+                chatKey: this.chatKey_,
+                candidates,
+                actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
+                    actorKey: profile.actorKey,
+                    displayName: profile.displayName,
+                    aliases: [],
+                })),
+                recallConfig: {
+                    retrievalMode: input.retrievalMode,
+                    topK: nextSettings.vectorFinalTopK,
+                    enableGraphExpansion: input.enableGraphExpansion === true,
+                    payloadFilter: {
+                        ...(input.filters?.actorKey ? { actorKeys: [String(input.filters.actorKey).trim()] } : {}),
+                        ...(input.filters?.schemaId ? { schemaIds: [String(input.filters.schemaId).trim()] } : {}),
+                        ...(input.filters?.worldKey ? { worldKeys: [String(input.filters.worldKey).trim()] } : {}),
+                    },
+                },
+            });
+            return {
+                diagnostics: result.diagnostics,
+                items: result.items,
+                providerId: result.providerId,
+                retrievalMode: result.retrievalMode,
+            };
+        } finally {
+            writeMemoryOSSettings(previousSettings);
+        }
+    }
+
+    /**
+     * 功能：重建当前聊天的向量文档。
+     * @returns 重建数量。
+     */
+    private async rebuildAllVectorDocumentsForCurrentChat(): Promise<number> {
+        const data = await this.readAllVectorSourceData();
+        return rebuildAllVectorDocuments(this.chatKey_, data);
+    }
+
+    /**
+     * 功能：重建当前聊天的向量索引与 embedding。
+     * @returns 成功编码数量。
+     */
+    private async rebuildAllEmbeddingsForCurrentChat(): Promise<number> {
+        const data = await this.readAllVectorSourceData();
+        return rebuildAllEmbeddings(this.chatKey_, data);
+    }
+
+    /**
+     * 功能：在指定 AI 流程结束后统一刷新当前聊天的向量索引。
+     * @param stageLabel 阶段名称。
+     * @returns 异步完成。
+     */
+    private async refreshVectorIndexAfterPipeline(stageLabel: string): Promise<void> {
+        if (!isVectorRuntimeReady()) {
+            return;
+        }
+        const embeddingService = getSharedEmbeddingService();
+        const vectorStore = getSharedVectorStore();
+        if (!embeddingService?.isAvailable() || !vectorStore?.isAvailable()) {
+            return;
+        }
+        try {
+            const refreshedCount = await this.rebuildAllEmbeddingsForCurrentChat();
+            logger.info(`[MemoryOS] ${stageLabel}完成后已刷新向量索引: ${refreshedCount}`);
+        } catch (error) {
+            logger.warn(`[MemoryOS] ${stageLabel}完成后刷新向量索引失败`, error);
+        }
+    }
+
+    /**
+     * 功能：重建单个向量文档的索引。
+     * @param vectorDocId 向量文档 ID。
+     * @returns 异步完成。
+     */
+    private async reindexVectorDocument(vectorDocId: string): Promise<void> {
+        const doc = await this.findVectorDocumentById(vectorDocId);
+        if (!doc) {
+            throw new Error('未找到对应的向量文档。');
+        }
+        if (doc.sourceKind === 'entry') {
+            const entry = await this.entryRepository.getEntry(doc.sourceId);
+            if (!entry) {
+                throw new Error('来源条目不存在，无法重建索引。');
+            }
+            await onEntrySaved(this.chatKey_, entry);
+            return;
+        }
+        if (doc.sourceKind === 'relationship') {
+            const relationships = await this.entryRepository.listRelationships();
+            const relationship = relationships.find((item: MemoryRelationshipRecord): boolean => item.relationshipId === doc.sourceId);
+            if (!relationship) {
+                throw new Error('来源关系不存在，无法重建索引。');
+            }
+            await onRelationshipSaved(this.chatKey_, relationship);
+            return;
+        }
+        if (doc.sourceKind === 'actor') {
+            const actors = await this.entryRepository.listActorProfiles();
+            const actor = actors.find((item: ActorMemoryProfile): boolean => item.actorKey === doc.sourceId);
+            if (!actor) {
+                throw new Error('来源角色不存在，无法重建索引。');
+            }
+            await onActorSaved(this.chatKey_, actor);
+            return;
+        }
+        const summaries = await this.entryRepository.listSummarySnapshots(500);
+        const summary = summaries.find((item: SummarySnapshot): boolean => item.summaryId === doc.sourceId);
+        if (!summary) {
+            throw new Error('来源总结不存在，无法重建索引。');
+        }
+        await onSummarySaved(this.chatKey_, summary);
+    }
+
+    /**
+     * 功能：删除单个向量文档及其索引。
+     * @param vectorDocId 向量文档 ID。
+     * @returns 异步完成。
+     */
+    private async removeVectorDocument(vectorDocId: string): Promise<void> {
+        const doc = await this.findVectorDocumentById(vectorDocId);
+        if (!doc) {
+            throw new Error('未找到对应的向量文档。');
+        }
+        await this.entryRepository.deleteVectorDocumentsBySource(doc.sourceKind, doc.sourceId);
+        await this.entryRepository.deleteVectorIndexBySource(doc.sourceKind, doc.sourceId);
+    }
+
+    /**
+     * 功能：读取构建向量索引所需的全部源数据。
+     * @returns 主表数据集合。
+     */
+    private async readAllVectorSourceData(): Promise<{
+        entries: MemoryEntry[];
+        relationships: MemoryRelationshipRecord[];
+        actors: ActorMemoryProfile[];
+        summaries: SummarySnapshot[];
+    }> {
+        const [entries, relationships, actors, summaries] = await Promise.all([
+            this.entryRepository.listEntries(),
+            this.entryRepository.listRelationships(),
+            this.entryRepository.listActorProfiles(),
+            this.entryRepository.listSummarySnapshots(500),
+        ]);
+        return {
+            entries,
+            relationships,
+            actors,
+            summaries,
+        };
+    }
+
+    /**
+     * 功能：根据向量文档 ID 查找文档。
+     * @param vectorDocId 向量文档 ID。
+     * @returns 文档或空值。
+     */
+    private async findVectorDocumentById(vectorDocId: string): Promise<DBMemoryVectorDocument | null> {
+        const docs = await this.entryRepository.listVectorDocuments();
+        return docs.find((item: DBMemoryVectorDocument): boolean => item.vectorDocId === String(vectorDocId ?? '').trim()) ?? null;
+    }
+
+    /**
+     * 功能：构建工作台检索候选。
+     * @returns 检索候选列表。
+     */
+    private async buildWorkbenchRetrievalCandidates(): Promise<Array<{
+        candidateId: string;
+        entryId: string;
+        schemaId: string;
+        title: string;
+        summary: string;
+        updatedAt: number;
+        memoryPercent: number;
+        category?: string;
+        tags?: string[];
+        sourceSummaryIds?: string[];
+        actorKeys?: string[];
+        relationKeys?: string[];
+        participantActorKeys?: string[];
+        locationKey?: string;
+        worldKeys?: string[];
+        compareKey?: string;
+        injectToSystem?: boolean;
+        aliasTexts?: string[];
+    }>> {
+        const [entries, roleRows, actorProfiles, compareKeyIndex] = await Promise.all([
+            this.entryRepository.listEntries(),
+            this.entryRepository.listRoleMemories(),
+            this.entryRepository.listActorProfiles(),
+            this.entryRepository.listCompareKeyIndexRecords(),
+        ]);
+        const boundActorMap = new Map<string, string[]>();
+        const memoryPercentMap = new Map<string, number>();
+        roleRows.forEach((row: RoleEntryMemory): void => {
+            if (row.forgotten) {
+                return;
+            }
+            const list = boundActorMap.get(row.entryId) ?? [];
+            if (!list.includes(row.actorKey)) {
+                list.push(row.actorKey);
+            }
+            boundActorMap.set(row.entryId, list);
+            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, row.memoryPercent));
+        });
+        const actorDisplayNameMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.actorKey, profile.displayName]));
+        const compareKeyMap = new Map(compareKeyIndex.map((item): [string, { compareKey?: string; matchKeys?: string[] }] => [
+            item.entryId,
+            { compareKey: item.compareKey, matchKeys: Array.isArray(item.matchKeys) ? item.matchKeys : [] },
+        ]));
+        return entries.map((entry: MemoryEntry) => {
+            const payload = this.toRecord(entry.detailPayload);
+            const fields = this.toRecord(payload.fields);
+            const bindings = this.normalizeLooseBindings(payload.bindings ?? fields.bindings);
+            const boundActorKeys = boundActorMap.get(entry.entryId) ?? [];
+            const actorKeys = this.normalizeStringArray([
+                ...boundActorKeys,
+                ...bindings.actors,
+                String(payload.sourceActorKey ?? fields.sourceActorKey ?? '').trim(),
+                String(payload.targetActorKey ?? fields.targetActorKey ?? '').trim(),
+            ]);
+            const relationKeys = this.normalizeStringArray([
+                ...this.normalizeLooseStringArray(payload.relationKeys ?? fields.relationKeys),
+                ...this.normalizeLooseStringArray(payload.relationTag ?? fields.relationTag),
+                ...bindings.tasks,
+                ...bindings.events,
+            ]);
+            const worldKeys = this.normalizeStringArray([
+                ...this.normalizeLooseStringArray(payload.worldKeys ?? fields.worldKeys),
+                ...bindings.organizations,
+                ...bindings.cities,
+                ...bindings.locations,
+                ...bindings.nations,
+                ...(entry.entryType.startsWith('world_') ? [entry.title] : []),
+            ]);
+            const aliasTexts = this.normalizeStringArray([
+                ...entry.tags,
+                ...this.normalizeLooseStringArray(payload.aliases ?? fields.aliases),
+                ...actorKeys.map((actorKey: string): string => actorDisplayNameMap.get(actorKey) ?? ''),
+                ...(compareKeyMap.get(entry.entryId)?.matchKeys ?? []),
+            ]);
+            const compareKey = compareKeyMap.get(entry.entryId)?.compareKey || this.compareKeyService.buildIndexRecord(entry).compareKey;
+            return {
+                candidateId: `vector-lab:${entry.entryId}`,
+                entryId: entry.entryId,
+                schemaId: entry.entryType,
+                title: entry.title,
+                summary: entry.summary || entry.detail,
+                updatedAt: entry.updatedAt,
+                memoryPercent: memoryPercentMap.get(entry.entryId) ?? (entry.entryType.startsWith('world_') ? 88 : 60),
+                category: entry.category,
+                tags: entry.tags,
+                sourceSummaryIds: entry.sourceSummaryIds,
+                actorKeys,
+                relationKeys,
+                participantActorKeys: boundActorKeys,
+                locationKey: String(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location ?? '').trim() || undefined,
+                worldKeys,
+                compareKey,
+                injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
+                aliasTexts,
+            };
+        });
+    }
+
+    /**
+     * 功能：归一化松散字符串数组。
+     * @param value 原始值。
+     * @returns 归一化后的字符串数组。
+     */
+    private normalizeLooseStringArray(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+        }
+        const text = String(value ?? '').trim();
+        if (!text) {
+            return [];
+        }
+        return text.split(/[,，、\n]+/).map((item: string): string => item.trim()).filter(Boolean);
+    }
+
+    /**
+     * 功能：归一化向量检索候选使用的绑定对象。
+     * @param value 原始绑定值。
+     * @returns 归一化后的绑定对象。
+     */
+    private normalizeLooseBindings(value: unknown): {
+        actors: string[];
+        organizations: string[];
+        cities: string[];
+        locations: string[];
+        nations: string[];
+        tasks: string[];
+        events: string[];
+    } {
+        const record = this.toRecord(value);
+        return {
+            actors: this.normalizeLooseStringArray(record.actors),
+            organizations: this.normalizeLooseStringArray(record.organizations),
+            cities: this.normalizeLooseStringArray(record.cities),
+            locations: this.normalizeLooseStringArray(record.locations),
+            nations: this.normalizeLooseStringArray(record.nations),
+            tasks: this.normalizeLooseStringArray(record.tasks),
+            events: this.normalizeLooseStringArray(record.events),
+        };
     }
 
     /**
@@ -1230,6 +1789,7 @@ export class MemorySDKImpl {
         await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', result);
         await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
+        await this.refreshVectorIndexAfterPipeline('旧聊天处理');
     }
 
     /**

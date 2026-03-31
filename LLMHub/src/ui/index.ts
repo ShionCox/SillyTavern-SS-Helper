@@ -2118,7 +2118,7 @@ function bindUiEvents(): void {
                                                     min="1"
                                                     step="1"
                                                     placeholder="留空则不覆盖"
-                                                    value="${escapeHtml(currentOverrideValue || defaultMaxTokensText)}"
+                                                    value="${escapeHtml(currentOverrideValue)}"
                                                     data-task-assign-max-tokens="${escapeHtml(key)}"
                                                 />
                                                 ${registeredMaxTokens ? `<span class="stx-ui-field-hint">注册默认值：${escapeHtml(String(registeredMaxTokens))}</span>` : ''}

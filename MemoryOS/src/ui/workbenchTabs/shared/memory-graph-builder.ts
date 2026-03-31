@@ -1687,30 +1687,39 @@ function applyForceLayout(
         return;
     }
 
-    let seed = 24691;
-    const random = (): number => {
-        seed = (seed * 9301 + 49297) % 233280;
-        return seed / 233280.0;
-    };
-
-    const radius = Math.max(200, count * 28);
-    for (let i = 0; i < count; i += 1) {
-        const angle = ((i / count) * Math.PI * 2) + ((random() - 0.5) * 0.35);
-        const jitter = radius * (0.72 + (random() * 0.34));
-        nodes[i].x = Math.cos(angle) * jitter;
-        nodes[i].y = Math.sin(angle) * jitter;
-    }
-
+    const layoutRadius = Math.max(280, count * 24);
+    const typeAnchors = createTypeLayoutAnchors(layoutRadius);
     const nodeIndexMap = new Map(nodes.map((node: WorkbenchMemoryGraphNode, index: number): [string, number] => [node.id, index]));
+    const degreeMap = new Map<string, number>();
+    const adjacency = new Map<string, Set<string>>();
     const edgePairs = edges
-        .map((edge) => ({
-            source: nodeIndexMap.get(edge.source) ?? -1,
-            target: nodeIndexMap.get(edge.target) ?? -1,
-        }))
+        .map((edge) => {
+            const source = nodeIndexMap.get(edge.source) ?? -1;
+            const target = nodeIndexMap.get(edge.target) ?? -1;
+            if (source >= 0 && target >= 0) {
+                degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
+                degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
+                if (!adjacency.has(edge.source)) {
+                    adjacency.set(edge.source, new Set<string>());
+                }
+                if (!adjacency.has(edge.target)) {
+                    adjacency.set(edge.target, new Set<string>());
+                }
+                adjacency.get(edge.source)?.add(edge.target);
+                adjacency.get(edge.target)?.add(edge.source);
+            }
+            return {
+                source,
+                target,
+                weight: normalizeEdgeStrength(edge),
+            };
+        })
         .filter((item) => item.source >= 0 && item.target >= 0);
+    const components = buildMemoryGraphComponents(nodes, adjacency, degreeMap);
+    seedMemoryGraphNodes(nodes, components, typeAnchors, degreeMap, layoutRadius);
     const velocityX = new Float64Array(count);
     const velocityY = new Float64Array(count);
-    const iterations = Math.min(140, Math.max(90, count * 3));
+    const iterations = Math.min(180, Math.max(110, count * 4));
     for (let iteration = 0; iteration < iterations; iteration += 1) {
         const temperature = 1 - (iteration / iterations);
         for (let i = 0; i < count; i += 1) {
@@ -1718,7 +1727,7 @@ function applyForceLayout(
                 const dx = nodes[i].x - nodes[j].x;
                 const dy = nodes[i].y - nodes[j].y;
                 const distSq = (dx * dx) + (dy * dy) + 1;
-                const force = (42000 * temperature) / distSq;
+                const force = (38000 * temperature) / distSq;
                 const dist = Math.sqrt(distSq);
                 velocityX[i] += (dx / dist) * force;
                 velocityY[i] += (dy / dist) * force;
@@ -1730,18 +1739,28 @@ function applyForceLayout(
             const dx = nodes[pair.target].x - nodes[pair.source].x;
             const dy = nodes[pair.target].y - nodes[pair.source].y;
             const dist = Math.sqrt((dx * dx) + (dy * dy)) + 0.01;
-            const displacement = dist - Math.max(170, 320 - count);
-            const force = 0.026 * displacement * temperature;
+            const sourceNode = nodes[pair.source];
+            const targetNode = nodes[pair.target];
+            const sameType = sourceNode.type === targetNode.type;
+            const idealDistance = sameType ? 130 : 172;
+            const displacement = dist - idealDistance;
+            const force = (0.038 + (pair.weight * 0.022)) * displacement * temperature;
             velocityX[pair.source] += (dx / dist) * force;
             velocityY[pair.source] += (dy / dist) * force;
             velocityX[pair.target] -= (dx / dist) * force;
             velocityY[pair.target] -= (dy / dist) * force;
         }
         for (let i = 0; i < count; i += 1) {
-            velocityX[i] = (velocityX[i] - (nodes[i].x * 0.0011)) * 0.9;
-            velocityY[i] = (velocityY[i] - (nodes[i].y * 0.0011)) * 0.9;
+            const node = nodes[i];
+            const typeAnchor = typeAnchors[resolveMemoryGraphLayoutGroup(node.type)];
+            const centerPullX = (0 - node.x) * 0.00045;
+            const centerPullY = (0 - node.y) * 0.00045;
+            const typePullX = (typeAnchor.x - node.x) * 0.0034;
+            const typePullY = (typeAnchor.y - node.y) * 0.0034;
+            velocityX[i] = (velocityX[i] + centerPullX + typePullX) * 0.88;
+            velocityY[i] = (velocityY[i] + centerPullY + typePullY) * 0.88;
             const speed = Math.sqrt((velocityX[i] ** 2) + (velocityY[i] ** 2));
-            const maxMove = (58 * temperature) + 2;
+            const maxMove = (44 * temperature) + 2;
             if (speed > maxMove) {
                 velocityX[i] = (velocityX[i] / speed) * maxMove;
                 velocityY[i] = (velocityY[i] / speed) * maxMove;
@@ -1749,11 +1768,253 @@ function applyForceLayout(
             nodes[i].x += velocityX[i];
             nodes[i].y += velocityY[i];
         }
+        if (iteration % 16 === 0 || iteration === iterations - 1) {
+            applyMemoryGraphCollisionPass(nodes);
+        }
     }
+    applyMemoryGraphCollisionPass(nodes);
     nodes.forEach((node: WorkbenchMemoryGraphNode): void => {
         node.x = Math.round(node.x);
         node.y = Math.round(node.y);
     });
+}
+
+type MemoryGraphLayoutGroup =
+    | 'social'
+    | 'dynamic'
+    | 'world'
+    | 'peripheral';
+
+interface MemoryGraphTypeAnchor {
+    x: number;
+    y: number;
+}
+
+interface MemoryGraphComponent {
+    nodeIds: string[];
+    size: number;
+    score: number;
+}
+
+/**
+ * 功能：为不同节点语义区分配稳定的大区锚点。
+ * @param radius 当前图谱半径。
+ * @returns 各布局区块的锚点坐标。
+ */
+function createTypeLayoutAnchors(radius: number): Record<MemoryGraphLayoutGroup, MemoryGraphTypeAnchor> {
+    return {
+        social: { x: -radius * 0.44, y: -radius * 0.08 },
+        dynamic: { x: radius * 0.4, y: -radius * 0.04 },
+        world: { x: radius * 0.06, y: radius * 0.32 },
+        peripheral: { x: -radius * 0.08, y: radius * 0.48 },
+    };
+}
+
+/**
+ * 功能：把节点类型映射到布局分区。
+ * @param type 节点类型。
+ * @returns 布局分区。
+ */
+function resolveMemoryGraphLayoutGroup(type: string): MemoryGraphLayoutGroup {
+    if (type === 'actor' || type === 'organization') {
+        return 'social';
+    }
+    if (type === 'event' || type === 'task') {
+        return 'dynamic';
+    }
+    if (type === 'location' || type === 'city' || type === 'nation' || type === 'world_state') {
+        return 'world';
+    }
+    return 'peripheral';
+}
+
+/**
+ * 功能：根据图连通关系构建组件列表，用于初始团簇定位。
+ * @param nodes 节点列表。
+ * @param adjacency 邻接表。
+ * @param degreeMap 节点度数映射。
+ * @returns 组件列表。
+ */
+function buildMemoryGraphComponents(
+    nodes: WorkbenchMemoryGraphNode[],
+    adjacency: Map<string, Set<string>>,
+    degreeMap: Map<string, number>,
+): MemoryGraphComponent[] {
+    const visited = new Set<string>();
+    const components: MemoryGraphComponent[] = [];
+    nodes.forEach((node: WorkbenchMemoryGraphNode): void => {
+        if (visited.has(node.id)) {
+            return;
+        }
+        const queue = [node.id];
+        const componentNodeIds: string[] = [];
+        let score = 0;
+        visited.add(node.id);
+        while (queue.length > 0) {
+            const current = queue.shift();
+            if (!current) {
+                continue;
+            }
+            componentNodeIds.push(current);
+            score += degreeMap.get(current) ?? 0;
+            adjacency.get(current)?.forEach((neighbor: string): void => {
+                if (visited.has(neighbor)) {
+                    return;
+                }
+                visited.add(neighbor);
+                queue.push(neighbor);
+            });
+        }
+        components.push({
+            nodeIds: componentNodeIds,
+            size: componentNodeIds.length,
+            score,
+        });
+    });
+    return components.sort((left: MemoryGraphComponent, right: MemoryGraphComponent): number => {
+        if (right.size !== left.size) {
+            return right.size - left.size;
+        }
+        return right.score - left.score;
+    });
+}
+
+/**
+ * 功能：为节点生成“类型分区 + 关系团簇”的初始位置。
+ * @param nodes 节点列表。
+ * @param components 连通组件列表。
+ * @param typeAnchors 类型分区锚点。
+ * @param degreeMap 度数映射。
+ * @param radius 图谱半径。
+ * @returns 无返回值。
+ */
+function seedMemoryGraphNodes(
+    nodes: WorkbenchMemoryGraphNode[],
+    components: MemoryGraphComponent[],
+    typeAnchors: Record<MemoryGraphLayoutGroup, MemoryGraphTypeAnchor>,
+    degreeMap: Map<string, number>,
+    radius: number,
+): void {
+    const nodeMap = new Map(nodes.map((node: WorkbenchMemoryGraphNode): [string, WorkbenchMemoryGraphNode] => [node.id, node]));
+    const groupBucketMap = new Map<MemoryGraphLayoutGroup, MemoryGraphComponent[]>();
+    components.forEach((component: MemoryGraphComponent): void => {
+        const representativeNode = nodeMap.get(component.nodeIds[0]);
+        const group = resolveMemoryGraphLayoutGroup(representativeNode?.type ?? 'other');
+        if (!groupBucketMap.has(group)) {
+            groupBucketMap.set(group, []);
+        }
+        groupBucketMap.get(group)?.push(component);
+    });
+    groupBucketMap.forEach((bucket: MemoryGraphComponent[], group: MemoryGraphLayoutGroup): void => {
+        const anchor = typeAnchors[group];
+        const componentCount = bucket.length;
+        bucket.forEach((component: MemoryGraphComponent, componentIndex: number): void => {
+            const angle = ((componentIndex / Math.max(componentCount, 1)) * Math.PI * 2) - (Math.PI / 2);
+            const orbitRadius = componentCount <= 1
+                ? 0
+                : Math.min(radius * 0.22, 90 + (componentIndex * 28));
+            const componentCenterX = anchor.x + (Math.cos(angle) * orbitRadius);
+            const componentCenterY = anchor.y + (Math.sin(angle) * orbitRadius * 0.72);
+            positionMemoryGraphComponentNodes(
+                component,
+                componentCenterX,
+                componentCenterY,
+                nodeMap,
+                degreeMap,
+            );
+        });
+    });
+}
+
+/**
+ * 功能：把单个连通组件中的节点摆放到局部团簇中。
+ * @param component 连通组件。
+ * @param centerX 团簇中心横坐标。
+ * @param centerY 团簇中心纵坐标。
+ * @param nodeMap 节点映射。
+ * @param degreeMap 度数映射。
+ * @returns 无返回值。
+ */
+function positionMemoryGraphComponentNodes(
+    component: MemoryGraphComponent,
+    centerX: number,
+    centerY: number,
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    degreeMap: Map<string, number>,
+): void {
+    const componentNodes = component.nodeIds
+        .map((nodeId: string): WorkbenchMemoryGraphNode | null => nodeMap.get(nodeId) ?? null)
+        .filter((node: WorkbenchMemoryGraphNode | null): node is WorkbenchMemoryGraphNode => Boolean(node))
+        .sort((left: WorkbenchMemoryGraphNode, right: WorkbenchMemoryGraphNode): number => {
+            const degreeDelta = (degreeMap.get(right.id) ?? 0) - (degreeMap.get(left.id) ?? 0);
+            if (degreeDelta !== 0) {
+                return degreeDelta;
+            }
+            return (right.importance ?? 0) - (left.importance ?? 0);
+        });
+    if (componentNodes.length <= 0) {
+        return;
+    }
+    componentNodes.forEach((node: WorkbenchMemoryGraphNode, index: number): void => {
+        if (index === 0) {
+            node.x = centerX;
+            node.y = centerY;
+            return;
+        }
+        const ringIndex = Math.floor((index - 1) / 6);
+        const slotIndex = (index - 1) % 6;
+        const slotCount = 6 + (ringIndex * 3);
+        const angle = ((slotIndex / slotCount) * Math.PI * 2) - (Math.PI / 2) + (ringIndex * 0.18);
+        const radius = 56 + (ringIndex * 34) + (Math.max(0, 4 - (degreeMap.get(node.id) ?? 0)) * 3);
+        node.x = centerX + (Math.cos(angle) * radius);
+        node.y = centerY + (Math.sin(angle) * radius * 0.78);
+    });
+}
+
+/**
+ * 功能：根据边权重和置信度归一化吸引强度。
+ * @param edge 图谱边。
+ * @returns 归一化后的强度。
+ */
+function normalizeEdgeStrength(edge: WorkbenchMemoryGraph['edges'][number]): number {
+    const weight = Math.max(0, Math.min(1, Number(edge.weight) || 0));
+    const confidence = Math.max(0, Math.min(1, Number(edge.confidence) || 0));
+    const strengthBoost = edge.strengthLevel === 'strong'
+        ? 0.18
+        : edge.strengthLevel === 'normal'
+            ? 0.1
+            : 0;
+    return Math.max(0.12, Math.min(1, (weight * 0.6) + (confidence * 0.24) + strengthBoost));
+}
+
+/**
+ * 功能：对过密节点做一次轻量碰撞修正，增加留白。
+ * @param nodes 节点列表。
+ * @returns 无返回值。
+ */
+function applyMemoryGraphCollisionPass(nodes: WorkbenchMemoryGraphNode[]): void {
+    for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+            const left = nodes[i];
+            const right = nodes[j];
+            const dx = right.x - left.x;
+            const dy = right.y - left.y;
+            const distance = Math.sqrt((dx * dx) + (dy * dy)) || 0.0001;
+            const minDistance = 46
+                + ((left.importance + right.importance) * 10)
+                + (left.type === right.type ? 8 : 0);
+            if (distance >= minDistance) {
+                continue;
+            }
+            const overlap = (minDistance - distance) * 0.5;
+            const offsetX = (dx / distance) * overlap;
+            const offsetY = (dy / distance) * overlap;
+            right.x += offsetX;
+            right.y += offsetY;
+            left.x -= offsetX;
+            left.y -= offsetY;
+        }
+    }
 }
 
 /**

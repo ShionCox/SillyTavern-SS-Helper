@@ -98,6 +98,11 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     </button>
                 </div>
             </div>
+            ${state.previewLoading && !snapshot.preview ? `
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">正在加载诊断快照...</div>
+                </div>
+            ` : ''}
             <div class="stx-memory-workbench__diagnostics">
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('basic_info'))}</div>

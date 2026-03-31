@@ -46,6 +46,7 @@ import { buildPreviewViewMarkup } from './workbenchTabs/tabPreview';
 import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
+import { buildVectorsViewMarkup } from './workbenchTabs/tabVectors';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import {
@@ -55,7 +56,6 @@ import {
 } from './workbenchPages/memoryGraphPage';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
-const TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
 const graphService = new GraphService();
 
 /**
@@ -84,6 +84,9 @@ function ensureWorkbenchStyle(): void {
 function resolveInitialWorkbenchView(initialView?: UnifiedWorkbenchViewMode): WorkbenchView {
     if (initialView === 'takeover') {
         return 'takeover';
+    }
+    if (initialView === 'vectors') {
+        return 'vectors';
     }
     if (initialView === 'memory') {
         return 'actors';
@@ -169,6 +172,9 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'preview' ? ' is-active' : ''}" data-workbench-view="preview">
                         诊断中心
                     </button>
+                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'vectors' ? ' is-active' : ''}" data-workbench-view="vectors">
+                        向量实验室
+                    </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'memory-graph' ? ' is-active' : ''}" data-workbench-view="memory-graph">
                         可视化记忆
                     </button>
@@ -188,13 +194,16 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                 ${buildActorsViewMarkup(snapshot, state, selectedActor, selectedActorMemories, typeMap, entryOptions)}
                 ${buildWorldEntitiesViewMarkup(snapshot, state)}
                 ${buildPreviewViewMarkup(snapshot, state)}
-                ${buildMemoryGraphPageMarkup(snapshot, state, {
-                    selectedGraphNodeId: state.selectedGraphNodeId,
-                    selectedGraphEdgeId: state.selectedGraphEdgeId,
-                    memoryGraphQuery: state.memoryGraphQuery,
-                    memoryGraphFilterType: state.memoryGraphFilterType,
-                    graphMode: state.memoryGraphMode || 'semantic',
-                })}
+                ${buildVectorsViewMarkup(snapshot, state)}
+                <section class="stx-memory-workbench__view${state.currentView === 'memory-graph' ? ' is-active' : ''}" data-view="memory-graph"${state.currentView !== 'memory-graph' ? ' hidden' : ''}>
+                    ${buildMemoryGraphPageMarkup(snapshot, state, {
+                        selectedGraphNodeId: state.selectedGraphNodeId,
+                        selectedGraphEdgeId: state.selectedGraphEdgeId,
+                        memoryGraphQuery: state.memoryGraphQuery,
+                        memoryGraphFilterType: state.memoryGraphFilterType,
+                        graphMode: state.memoryGraphMode || 'semantic',
+                    })}
+                </section>
                 ${buildTakeoverViewMarkup(snapshot, state)}
             </main>
         </div>
@@ -259,6 +268,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         selectedActorKey: '',
         entryQuery: '',
         previewQuery: '',
+        previewLoading: false,
         bindEntryId: '',
         actorQuery: '',
         actorSortOrder: 'stat-desc',
@@ -277,17 +287,38 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         takeoverActiveSnapshotFloors: String(settings.takeoverDefaultRecentFloors),
         takeoverPreview: null,
         takeoverPreviewLoading: false,
+        takeoverPreviewExpanded: false,
         takeoverProgressLoading: false,
+        vectorQuery: '',
+        vectorMode: settings.retrievalMode,
+        vectorSourceKindFilter: 'all',
+        vectorStatusFilter: 'all',
+        vectorSchemaFilter: 'all',
+        vectorActorFilter: 'all',
+        vectorTextFilter: '',
+        vectorSelectedDocId: '',
+        vectorEnableStrategyRoutingTest: settings.vectorEnableStrategyRouting,
+        vectorEnableRerankTest: settings.vectorEnableRerank,
+        vectorEnableLLMHubRerankTest: settings.vectorEnableLLMHubRerank,
+        vectorEnableGraphExpansionTest: settings.retrievalEnableGraphPenalty,
+        vectorTopKTest: String(settings.vectorTopK),
+        vectorDeepWindowTest: String(settings.vectorDeepWindow),
+        vectorFinalTopKTest: String(settings.vectorFinalTopK),
+        vectorLoading: false,
+        vectorTestRunning: false,
+        vectorTestResult: null,
     };
     let takeoverPreviewSequence = 0;
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
     let takeoverProgressSequence = 0;
+    let previewCache: WorkbenchSnapshot['preview'] = null;
 
     /**
      * 功能：读取工作台所需快照。
      * @returns 工作台快照。
      */
     const loadSnapshot = async (): Promise<WorkbenchSnapshot> => {
+        const previewPromise: Promise<WorkbenchSnapshot['preview']> = Promise.resolve(previewCache);
         const [
             entryTypes,
             entries,
@@ -301,6 +332,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryAuditRecords,
             recallExplanation,
             takeoverProgress,
+            vectorRuntimeStatus,
+            vectorDocuments,
+            vectorIndexRecords,
+            vectorRecallStats,
+            vectorIndexStats,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -308,15 +344,21 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.relationships.list(),
             memory.unifiedMemory.roleMemory.list(),
             memory.unifiedMemory.summaries.list(8),
-            memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
+            previewPromise,
             memory.unifiedMemory.diagnostics.getWorldProfileBinding(),
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             memory.chatState.getLatestRecallExplanation(),
             takeoverProgressCache ? Promise.resolve(takeoverProgressCache) : memory.chatState.getTakeoverStatus(),
+            memory.unifiedMemory.diagnostics.getVectorRuntimeStatus(),
+            memory.unifiedMemory.diagnostics.listVectorDocuments(),
+            memory.unifiedMemory.diagnostics.listVectorIndexRecords(),
+            memory.unifiedMemory.diagnostics.listVectorRecallStats(),
+            memory.unifiedMemory.diagnostics.getVectorIndexStats(),
         ]);
 
         takeoverProgressCache = takeoverProgress;
+        previewCache = preview;
 
         return {
             entryTypes,
@@ -332,6 +374,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             actorGraph: buildActorGraph(actors, relationships, entries),
             memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
             takeoverProgress,
+            vectorSnapshot: {
+                ...vectorRuntimeStatus,
+                ...vectorIndexStats,
+                documents: vectorDocuments,
+                indexRecords: vectorIndexRecords,
+                recallStats: vectorRecallStats,
+            },
         };
     };
 
@@ -364,6 +413,12 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         }
         if (state.bindEntryId && !snapshot.entries.some((entry: MemoryEntry): boolean => entry.entryId === state.bindEntryId)) {
             state.bindEntryId = snapshot.entries[0]?.entryId ?? '';
+        }
+        if (!state.vectorSelectedDocId && snapshot.vectorSnapshot.documents.length > 0) {
+            state.vectorSelectedDocId = snapshot.vectorSnapshot.documents[0]!.vectorDocId;
+        }
+        if (state.vectorSelectedDocId && !snapshot.vectorSnapshot.documents.some((doc): boolean => doc.vectorDocId === state.vectorSelectedDocId)) {
+            state.vectorSelectedDocId = snapshot.vectorSnapshot.documents[0]?.vectorDocId ?? '';
         }
     };
 
@@ -495,11 +550,14 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             if (action === 'refresh-preview') {
                 state.previewQuery = readInputValue(root, '#stx-memory-preview-query');
+                previewCache = null;
                 await render();
+                void refreshPreviewSnapshot();
                 return;
             }
             if (action === 'capture-summary') {
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
+                previewCache = null;
                 toast.success('已触发强制快照归档。');
                 await render();
             }
@@ -522,6 +580,104 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.bindEntryId = '';
                 toast.success('当前聊天数据库已删除。');
                 await render();
+                return;
+            }
+            if (action === 'vector-refresh') {
+                await render();
+                return;
+            }
+            if (action === 'vector-rebuild-documents') {
+                const count = await memory.unifiedMemory.diagnostics.rebuildAllVectorDocuments();
+                toast.success(`已重建 ${count} 条向量文档。`);
+                await render();
+                return;
+            }
+            if (action === 'vector-rebuild-embeddings') {
+                const count = await memory.unifiedMemory.diagnostics.rebuildAllEmbeddings();
+                toast.success(`已重建 ${count} 条向量索引。`);
+                await render();
+                return;
+            }
+            if (action === 'vector-clear-data') {
+                const confirmed = window.confirm('确定要清空当前聊天的全部向量文档、向量索引和召回统计吗？此操作无法恢复。');
+                if (!confirmed) {
+                    return;
+                }
+                await memory.unifiedMemory.diagnostics.clearAllVectorData();
+                state.vectorSelectedDocId = '';
+                state.vectorTestResult = null;
+                toast.success('当前聊天的向量数据已清空。');
+                await render();
+                return;
+            }
+            if (action === 'vector-reindex-doc') {
+                const vectorDocId = String(button.dataset.vectorDocId ?? '').trim();
+                if (!vectorDocId) {
+                    return;
+                }
+                await memory.unifiedMemory.diagnostics.reindexVectorDocument(vectorDocId);
+                toast.success('已重新索引当前向量文档。');
+                await render();
+                return;
+            }
+            if (action === 'vector-remove-doc') {
+                const vectorDocId = String(button.dataset.vectorDocId ?? '').trim();
+                if (!vectorDocId) {
+                    return;
+                }
+                const confirmed = window.confirm('确定要删除当前向量文档及其索引吗？');
+                if (!confirmed) {
+                    return;
+                }
+                await memory.unifiedMemory.diagnostics.removeVectorDocument(vectorDocId);
+                if (state.vectorSelectedDocId === vectorDocId) {
+                    state.vectorSelectedDocId = '';
+                }
+                toast.success('当前向量文档已删除。');
+                await render();
+                return;
+            }
+            if (action === 'vector-run-test') {
+                state.vectorQuery = readInputValue(root, '#stx-vector-query');
+                state.vectorMode = readInputValue(root, '#stx-vector-mode') as WorkbenchState['vectorMode'];
+                state.vectorTopKTest = readInputValue(root, '#stx-vector-topk');
+                state.vectorDeepWindowTest = readInputValue(root, '#stx-vector-deep-window');
+                state.vectorFinalTopKTest = readInputValue(root, '#stx-vector-final-topk');
+                state.vectorEnableStrategyRoutingTest = readCheckedValue(root, '#stx-vector-enable-routing');
+                state.vectorEnableRerankTest = readCheckedValue(root, '#stx-vector-enable-rerank');
+                state.vectorEnableLLMHubRerankTest = readCheckedValue(root, '#stx-vector-enable-llmhub-rerank');
+                state.vectorEnableGraphExpansionTest = readCheckedValue(root, '#stx-vector-enable-graph-expansion');
+                state.vectorTestRunning = true;
+                await render();
+                try {
+                    const result = await memory.unifiedMemory.diagnostics.testVectorRetrieval({
+                        query: state.vectorQuery,
+                        retrievalMode: state.vectorMode,
+                        topK: Number(state.vectorTopKTest) || undefined,
+                        deepWindow: Number(state.vectorDeepWindowTest) || undefined,
+                        finalTopK: Number(state.vectorFinalTopKTest) || undefined,
+                        enableStrategyRouting: state.vectorEnableStrategyRoutingTest,
+                        enableRerank: state.vectorEnableRerankTest,
+                        enableLLMHubRerank: state.vectorEnableLLMHubRerankTest,
+                        enableGraphExpansion: state.vectorEnableGraphExpansionTest,
+                        filters: {
+                            schemaId: state.vectorSchemaFilter !== 'all' ? state.vectorSchemaFilter : undefined,
+                            actorKey: state.vectorActorFilter !== 'all' ? state.vectorActorFilter : undefined,
+                        },
+                    });
+                    state.vectorTestResult = {
+                        generatedAt: Date.now(),
+                        query: state.vectorQuery,
+                        retrievalMode: result.retrievalMode,
+                        providerId: result.providerId,
+                        diagnostics: result.diagnostics,
+                        items: result.items,
+                    };
+                    toast.success('向量测试已完成。');
+                } finally {
+                    state.vectorTestRunning = false;
+                    await render();
+                }
                 return;
             }
             if (action === 'takeover-start') {
@@ -557,6 +713,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await memory.chatState.startTakeover();
                 toast.success('旧聊天接管任务已启动。');
                 await render();
+                return;
+            }
+            if (action === 'takeover-preview-calc') {
+                state.takeoverPreviewExpanded = true;
+                await refreshTakeoverPreview();
                 return;
             }
             if (action === 'takeover-pause') {
@@ -599,6 +760,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             button.addEventListener('click', (): void => {
                 state.currentView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
                 void render().then((): void => {
+                    if (state.currentView === 'preview' && !previewCache && !state.previewLoading) {
+                        void refreshPreviewSnapshot();
+                    }
                     if (state.currentView === 'takeover') {
                         void refreshTakeoverProgress();
                     }
@@ -630,6 +794,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         root.querySelectorAll<HTMLElement>('[data-select-actor]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
                 state.selectedActorKey = String(button.dataset.selectActor ?? '').trim();
+                void render();
+            });
+        });
+
+        root.querySelectorAll<HTMLElement>('[data-select-vector-doc]').forEach((button: HTMLElement): void => {
+            button.addEventListener('click', (): void => {
+                state.vectorSelectedDocId = String(button.dataset.selectVectorDoc ?? '').trim();
                 void render();
             });
         });
@@ -668,57 +839,133 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             state.bindEntryId = String(bindEntrySelect.value ?? '').trim();
         });
 
-        let takeoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
-        const scheduleTakeoverRender = (): void => {
-            if (takeoverPreviewTimer) {
-                clearTimeout(takeoverPreviewTimer);
-            }
-            takeoverPreviewTimer = setTimeout((): void => {
-                takeoverPreviewTimer = null;
-                void render();
-            }, TAKEOVER_PREVIEW_DEBOUNCE_MS);
-        };
+        const vectorTextFilterInput = root.querySelector('#stx-vector-text-filter') as HTMLInputElement | null;
+        vectorTextFilterInput?.addEventListener('input', (): void => {
+            state.vectorTextFilter = String(vectorTextFilterInput.value ?? '').trim();
+            void render();
+        });
+
+        const vectorSourceFilter = root.querySelector('#stx-vector-source-filter') as HTMLSelectElement | null;
+        vectorSourceFilter?.addEventListener('change', (): void => {
+            state.vectorSourceKindFilter = String(vectorSourceFilter.value ?? 'all').trim() || 'all';
+            void render();
+        });
+
+        const vectorStatusFilter = root.querySelector('#stx-vector-status-filter') as HTMLSelectElement | null;
+        vectorStatusFilter?.addEventListener('change', (): void => {
+            state.vectorStatusFilter = String(vectorStatusFilter.value ?? 'all').trim() || 'all';
+            void render();
+        });
+
+        const vectorSchemaFilter = root.querySelector('#stx-vector-schema-filter') as HTMLSelectElement | null;
+        vectorSchemaFilter?.addEventListener('change', (): void => {
+            state.vectorSchemaFilter = String(vectorSchemaFilter.value ?? 'all').trim() || 'all';
+            void render();
+        });
+
+        const vectorActorFilter = root.querySelector('#stx-vector-actor-filter') as HTMLSelectElement | null;
+        vectorActorFilter?.addEventListener('change', (): void => {
+            state.vectorActorFilter = String(vectorActorFilter.value ?? 'all').trim() || 'all';
+            void render();
+        });
+
+        const vectorQueryInput = root.querySelector('#stx-vector-query') as HTMLTextAreaElement | null;
+        vectorQueryInput?.addEventListener('input', (): void => {
+            state.vectorQuery = String(vectorQueryInput.value ?? '').trim();
+        });
+
+        const vectorModeSelect = root.querySelector('#stx-vector-mode') as HTMLSelectElement | null;
+        vectorModeSelect?.addEventListener('change', (): void => {
+            state.vectorMode = String(vectorModeSelect.value ?? 'hybrid') as WorkbenchState['vectorMode'];
+        });
+
+        const vectorTopKInput = root.querySelector('#stx-vector-topk') as HTMLInputElement | null;
+        vectorTopKInput?.addEventListener('input', (): void => {
+            state.vectorTopKTest = String(vectorTopKInput.value ?? '').trim();
+        });
+
+        const vectorDeepWindowInput = root.querySelector('#stx-vector-deep-window') as HTMLInputElement | null;
+        vectorDeepWindowInput?.addEventListener('input', (): void => {
+            state.vectorDeepWindowTest = String(vectorDeepWindowInput.value ?? '').trim();
+        });
+
+        const vectorFinalTopKInput = root.querySelector('#stx-vector-final-topk') as HTMLInputElement | null;
+        vectorFinalTopKInput?.addEventListener('input', (): void => {
+            state.vectorFinalTopKTest = String(vectorFinalTopKInput.value ?? '').trim();
+        });
+
+        const vectorRoutingSwitch = root.querySelector('#stx-vector-enable-routing') as HTMLInputElement | null;
+        vectorRoutingSwitch?.addEventListener('change', (): void => {
+            state.vectorEnableStrategyRoutingTest = vectorRoutingSwitch.checked === true;
+        });
+
+        const vectorRerankSwitch = root.querySelector('#stx-vector-enable-rerank') as HTMLInputElement | null;
+        vectorRerankSwitch?.addEventListener('change', (): void => {
+            state.vectorEnableRerankTest = vectorRerankSwitch.checked === true;
+        });
+
+        const vectorLLMHubSwitch = root.querySelector('#stx-vector-enable-llmhub-rerank') as HTMLInputElement | null;
+        vectorLLMHubSwitch?.addEventListener('change', (): void => {
+            state.vectorEnableLLMHubRerankTest = vectorLLMHubSwitch.checked === true;
+        });
+
+        const vectorGraphSwitch = root.querySelector('#stx-vector-enable-graph-expansion') as HTMLInputElement | null;
+        vectorGraphSwitch?.addEventListener('change', (): void => {
+            state.vectorEnableGraphExpansionTest = vectorGraphSwitch.checked === true;
+        });
 
         const takeoverModeSelect = root.querySelector('#stx-memory-takeover-mode') as HTMLSelectElement | null;
         takeoverModeSelect?.addEventListener('change', (): void => {
             state.takeoverMode = String(takeoverModeSelect.value ?? 'full').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            void render();
         });
 
         const takeoverRangeStartInput = root.querySelector('#stx-memory-takeover-range-start') as HTMLInputElement | null;
         takeoverRangeStartInput?.addEventListener('input', (): void => {
             state.takeoverRangeStart = String(takeoverRangeStartInput.value ?? '').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            syncTakeoverPreviewUi();
         });
 
         const takeoverRangeEndInput = root.querySelector('#stx-memory-takeover-range-end') as HTMLInputElement | null;
         takeoverRangeEndInput?.addEventListener('input', (): void => {
             state.takeoverRangeEnd = String(takeoverRangeEndInput.value ?? '').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            syncTakeoverPreviewUi();
         });
 
         const takeoverRecentFloorsInput = root.querySelector('#stx-memory-takeover-recent-floors') as HTMLInputElement | null;
         takeoverRecentFloorsInput?.addEventListener('input', (): void => {
             state.takeoverRecentFloors = String(takeoverRecentFloorsInput.value ?? '').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            syncTakeoverPreviewUi();
         });
 
         const takeoverBatchSizeInput = root.querySelector('#stx-memory-takeover-batch-size') as HTMLInputElement | null;
         takeoverBatchSizeInput?.addEventListener('input', (): void => {
             state.takeoverBatchSize = String(takeoverBatchSizeInput.value ?? '').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            syncTakeoverPreviewUi();
         });
 
         const takeoverUseActiveSnapshotInput = root.querySelector('#stx-memory-takeover-use-active-snapshot') as HTMLInputElement | null;
         takeoverUseActiveSnapshotInput?.addEventListener('change', (): void => {
             state.takeoverUseActiveSnapshot = takeoverUseActiveSnapshotInput.checked === true;
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            void render();
         });
 
         const takeoverActiveSnapshotFloorsInput = root.querySelector('#stx-memory-takeover-active-snapshot-floors') as HTMLInputElement | null;
         takeoverActiveSnapshotFloorsInput?.addEventListener('input', (): void => {
             state.takeoverActiveSnapshotFloors = String(takeoverActiveSnapshotFloorsInput.value ?? '').trim();
-            scheduleTakeoverRender();
+            state.takeoverPreview = null;
+            syncTakeoverPreviewUi();
+        });
+
+        const takeoverPreviewDetails = root.querySelector('#stx-memory-takeover-preview-panel')?.closest('details') as HTMLDetailsElement | null;
+        takeoverPreviewDetails?.addEventListener('toggle', (): void => {
+            state.takeoverPreviewExpanded = takeoverPreviewDetails.open;
         });
 
         root.querySelectorAll<HTMLElement>('[data-action]').forEach((button: HTMLElement): void => {
@@ -743,6 +990,29 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const startButton = root.querySelector('#stx-memory-takeover-start-button') as HTMLButtonElement | null;
         if (startButton) {
             startButton.disabled = state.takeoverPreviewLoading;
+        }
+    };
+
+    /**
+     * 功能：异步刷新诊断中心的提示词预览快照，避免阻塞切页。
+     * @returns 无返回值。
+     */
+    const refreshPreviewSnapshot = async (): Promise<void> => {
+        if (state.currentView !== 'preview') {
+            state.previewLoading = false;
+            return;
+        }
+        state.previewLoading = true;
+        try {
+            previewCache = await memory.unifiedMemory.prompts.preview({ query: state.previewQuery });
+        } catch (error) {
+            logger.error('加载诊断中心预览失败', error);
+            toast.error(`诊断加载失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            state.previewLoading = false;
+            if (state.currentView === 'preview') {
+                await render();
+            }
         }
     };
 
@@ -864,6 +1134,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const preservedTypeListScrollTop = typeList?.scrollTop ?? 0;
         const worldEntityList = root.querySelector('[data-world-entity-list-scroll="true"]') as HTMLElement | null;
         const preservedWorldEntityListScrollTop = worldEntityList?.scrollTop ?? 0;
+        const vectorDocList = root.querySelector('[data-vector-doc-list-scroll="true"]') as HTMLElement | null;
+        const preservedVectorDocListScrollTop = vectorDocList?.scrollTop ?? 0;
         const snapshot = await loadSnapshot();
         normalizeSelection(snapshot);
         destroyMemoryGraphPage();
@@ -880,10 +1152,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         if (nextWorldEntityList) {
             nextWorldEntityList.scrollTop = preservedWorldEntityListScrollTop;
         }
-        bindEvents(snapshot);
-        if (state.currentView === 'takeover') {
-            void refreshTakeoverPreview();
+        const nextVectorDocList = root.querySelector('[data-vector-doc-list-scroll="true"]') as HTMLElement | null;
+        if (nextVectorDocList) {
+            nextVectorDocList.scrollTop = preservedVectorDocListScrollTop;
         }
+        bindEvents(snapshot);
 
         if (state.currentView === 'actors' && state.currentActorTab === 'relationships') {
             const container = root.querySelector('#stx-rpg-graph-container') as HTMLElement | null;
@@ -917,6 +1190,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     await render();
+    if (state.currentView === 'preview' && !previewCache) {
+        void refreshPreviewSnapshot();
+    }
     if (state.currentView === 'takeover') {
         void refreshTakeoverProgress();
     }

@@ -15,8 +15,11 @@ import type {
 } from '../../types';
 import { listRelationTagPresets } from '../../constants/relationTags';
 import type { MemoryGraphMode } from './shared/memoryGraphTypes';
+import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../../types/vector-document';
+import type { RetrievalResultItem } from '../../memory-retrieval/types';
+import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family' | 'romance';
 
@@ -86,6 +89,41 @@ export interface WorkbenchActorGraph {
     links: WorkbenchActorGraphLink[];
 }
 
+export interface WorkbenchVectorRuntimeStatus {
+    runtimeReady: boolean;
+    embeddingAvailable: boolean;
+    embeddingUnavailableReason?: string;
+    vectorStoreAvailable: boolean;
+    vectorStoreUnavailableReason?: string;
+    retrievalMode: string;
+    embeddingModel?: string;
+    embeddingVersion?: string;
+    vectorEnableStrategyRouting?: boolean;
+    vectorEnableRerank?: boolean;
+    vectorEnableLLMHubRerank?: boolean;
+}
+
+export interface WorkbenchVectorSnapshot extends WorkbenchVectorRuntimeStatus {
+    documentCount: number;
+    readyCount: number;
+    pendingCount: number;
+    failedCount: number;
+    indexCount: number;
+    recallStatCount: number;
+    documents: DBMemoryVectorDocument[];
+    indexRecords: DBMemoryVectorIndex[];
+    recallStats: DBMemoryVectorRecallStat[];
+}
+
+export interface WorkbenchVectorTestResult {
+    generatedAt: number;
+    query: string;
+    retrievalMode: 'lexical_only' | 'vector_only' | 'hybrid';
+    providerId: string;
+    diagnostics: RetrievalOutputDiagnostics;
+    items: RetrievalResultItem[];
+}
+
 export interface WorkbenchState {
     currentView: WorkbenchView;
     currentActorTab: ActorSubView;
@@ -94,6 +132,7 @@ export interface WorkbenchState {
     selectedActorKey: string;
     entryQuery: string;
     previewQuery: string;
+    previewLoading: boolean;
     bindEntryId: string;
     actorQuery: string;
     actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
@@ -112,7 +151,26 @@ export interface WorkbenchState {
     takeoverActiveSnapshotFloors: string;
     takeoverPreview: MemoryTakeoverPreviewEstimate | null;
     takeoverPreviewLoading: boolean;
+    takeoverPreviewExpanded: boolean;
     takeoverProgressLoading: boolean;
+    vectorQuery: string;
+    vectorMode: 'lexical_only' | 'vector_only' | 'hybrid';
+    vectorSourceKindFilter: string;
+    vectorStatusFilter: string;
+    vectorSchemaFilter: string;
+    vectorActorFilter: string;
+    vectorTextFilter: string;
+    vectorSelectedDocId: string;
+    vectorEnableStrategyRoutingTest: boolean;
+    vectorEnableRerankTest: boolean;
+    vectorEnableLLMHubRerankTest: boolean;
+    vectorEnableGraphExpansionTest: boolean;
+    vectorTopKTest: string;
+    vectorDeepWindowTest: string;
+    vectorFinalTopKTest: string;
+    vectorLoading: boolean;
+    vectorTestRunning: boolean;
+    vectorTestResult: WorkbenchVectorTestResult | null;
 }
 
 export interface WorkbenchSnapshot {
@@ -129,6 +187,7 @@ export interface WorkbenchSnapshot {
     actorGraph: WorkbenchActorGraph;
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
     takeoverProgress: MemoryTakeoverProgressSnapshot | null;
+    vectorSnapshot: WorkbenchVectorSnapshot;
 }
 
 /**

@@ -86,7 +86,9 @@ export function buildMemoryGraphPageMarkup(
         ? buildNodeDetailPanel(selectedNode, snapshot.memoryGraph, currentMode)
         : selectedEdge
             ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, currentMode)
-            : buildEmptyDetailPanel();
+            : '';
+    const hasSelection = Boolean(selectedNode) || Boolean(selectedEdge);
+    const detailHiddenAttr = hasSelection ? '' : ' hidden style="display:none;"';
     const typeCounts = buildTypeCountMap(snapshot.memoryGraph, currentMode);
     const typeOptions = [...typeCounts.entries()]
         .sort((left: [string, number], right: [string, number]): number => right[1] - left[1])
@@ -106,27 +108,25 @@ export function buildMemoryGraphPageMarkup(
         .join('');
 
     return `
-        <section class="stx-memory-workbench__view is-active" data-view="memory-graph">
-            <div style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
-                <div style="display:flex;align-items:center;gap:16px;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;flex-wrap:wrap;">
-                    <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('node_count'))} <strong>${visibleGraph.nodes.length}</strong></span>
-                    <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('edge_count'))} <strong>${visibleGraph.edges.length}</strong></span>
-                    <select id="${GRAPH_FILTER_ID}" class="stx-memory-workbench__select" style="max-width:170px;font-size:12px;">
-                        <option value="">${escapeHtml(resolveMemoryGraphText('all_types'))}</option>
-                        ${typeOptions}
-                    </select>
-                    <input id="${GRAPH_QUERY_ID}" class="stx-memory-workbench__input" style="max-width:220px;font-size:12px;" type="text" placeholder="${escapeAttr(resolveMemoryGraphText('search_placeholder'))}" value="${escapeAttr(graphState.memoryGraphQuery ?? '')}">
-                    <div style="display:flex;gap:4px;align-items:center;">${modeButtons}</div>
-                    <div style="margin-left:auto;">${legendHtml}</div>
-                </div>
-                <div class="stx-memory-graph-stage" style="position:relative;flex:1;overflow:hidden;background:transparent;">
-                    <div id="${GRAPH_CONTAINER_ID}" style="position:absolute;inset:0;cursor:grab;"></div>
-                    <div id="${GRAPH_DETAIL_ID}" class="stx-memory-graph-detail stx-memory-graph-detail-panel" style="position:absolute;top:16px;right:16px;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;">
-                        ${detailHtml}
-                    </div>
+        <div class="stx-memory-graph-shell">
+            <div class="stx-memory-graph-toolbar">
+                <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('node_count'))} <strong>${visibleGraph.nodes.length}</strong></span>
+                <span style="font-size:12px;opacity:0.6;">${escapeHtml(resolveMemoryGraphText('edge_count'))} <strong>${visibleGraph.edges.length}</strong></span>
+                <select id="${GRAPH_FILTER_ID}" class="stx-memory-workbench__select" style="max-width:170px;font-size:12px;">
+                    <option value="">${escapeHtml(resolveMemoryGraphText('all_types'))}</option>
+                    ${typeOptions}
+                </select>
+                <input id="${GRAPH_QUERY_ID}" class="stx-memory-workbench__input" style="max-width:220px;font-size:12px;" type="text" placeholder="${escapeAttr(resolveMemoryGraphText('search_placeholder'))}" value="${escapeAttr(graphState.memoryGraphQuery ?? '')}">
+                <div style="display:flex;gap:4px;align-items:center;">${modeButtons}</div>
+                <div style="margin-left:auto;">${legendHtml}</div>
+            </div>
+            <div class="stx-memory-graph-stage">
+                <div id="${GRAPH_CONTAINER_ID}" style="position:absolute;inset:0;cursor:grab;z-index:1;"></div>
+                <div id="${GRAPH_DETAIL_ID}" class="stx-memory-graph-detail stx-memory-graph-detail-panel" style="position:absolute;top:16px;right:16px;background:rgba(15,23,42,0.88);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-size:13px;z-index:100;pointer-events:auto;"${detailHiddenAttr}>
+                    ${detailHtml}
                 </div>
             </div>
-        </section>
+        </div>
     `;
 }
 
@@ -176,11 +176,14 @@ function createMemoryGraphPageController(options: MountMemoryGraphPageOptions): 
         }
         const selectedNode = snapshot.memoryGraph.nodes.find((node: WorkbenchMemoryGraphNode): boolean => node.id === state.selectedGraphNodeId) ?? null;
         const selectedEdge = snapshot.memoryGraph.edges.find((edge: WorkbenchMemoryGraphEdge): boolean => edge.id === state.selectedGraphEdgeId) ?? null;
+        const hasSelection = Boolean(selectedNode) || Boolean(selectedEdge);
+        detailContainer.hidden = !hasSelection;
+        detailContainer.style.display = hasSelection ? '' : 'none';
         detailContainer.innerHTML = selectedNode
             ? buildNodeDetailPanel(selectedNode, snapshot.memoryGraph, state.memoryGraphMode)
             : selectedEdge
                 ? buildEdgeDetailPanel(selectedEdge, snapshot.memoryGraph, state.memoryGraphMode)
-                : buildEmptyDetailPanel();
+                : '';
         detailContainer.scrollTop = 0;
         detailContainer.querySelectorAll<HTMLElement>('[data-memory-graph-select-node]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
@@ -568,22 +571,6 @@ function resolveRelatedNodeId(
             || node.compareKey === normalizedValue;
     });
     return matchedNode?.id ?? '';
-}
-
-/**
- * 功能：构建空状态详情。
- * @returns HTML。
- */
-function buildEmptyDetailPanel(): string {
-    return `
-        <div class="stx-memory-graph-detail__empty">
-            <div class="stx-memory-graph-detail__empty-icon">
-                <i class="fa-solid fa-circle-nodes"></i>
-            </div>
-            <div class="stx-memory-graph-detail__empty-title">${escapeHtml(resolveMemoryGraphText('waiting_selection'))}</div>
-            <div class="stx-memory-graph-detail__empty-copy">${escapeHtml(resolveMemoryGraphText('waiting_selection_hint'))}</div>
-        </div>
-    `;
 }
 
 /**

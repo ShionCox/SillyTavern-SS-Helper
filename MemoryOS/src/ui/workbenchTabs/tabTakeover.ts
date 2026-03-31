@@ -55,6 +55,9 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                     ${state.takeoverUseActiveSnapshot ? `
                         <input class="stx-memory-workbench__input" id="stx-memory-takeover-active-snapshot-floors" type="number" min="1" placeholder="快照层数" value="${escapeAttr(state.takeoverActiveSnapshotFloors)}" style="width: 120px;">
                     ` : ''}
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-preview-calc"${state.takeoverPreviewLoading ? ' disabled' : ''}>
+                        <i class="fa-solid fa-calculator"></i> ${state.takeoverPreviewLoading ? '计算中…' : '计算预估'}
+                    </button>
                     <button id="stx-memory-takeover-start-button" class="stx-memory-workbench__button" data-action="takeover-start"${state.takeoverPreviewLoading ? ' disabled' : ''}>
                         <i class="fa-solid fa-play"></i> 开始接管
                     </button>
@@ -74,11 +77,14 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
             </div>
 
             <div class="stx-memory-workbench__card">
-                <div class="stx-memory-workbench__panel-title">批次 Token 预估</div>
-                <div id="stx-memory-takeover-preview-panel">${buildTakeoverPreviewMarkup({
-                    estimate: state.takeoverPreview,
-                    loading: state.takeoverPreviewLoading,
-                })}</div>
+                <details class="stx-memory-workbench__details"${state.takeoverPreviewExpanded ? ' open' : ''}>
+                    <summary>批次 Token 预估</summary>
+                    <div id="stx-memory-takeover-preview-panel">${buildTakeoverPreviewMarkup({
+                        estimate: state.takeoverPreview,
+                        loading: state.takeoverPreviewLoading,
+                        emptyText: '点击“计算预估”后，这里会显示每一轮的 token 预估。',
+                    })}</div>
+                </details>
             </div>
 
             <div class="stx-memory-workbench__diagnostics">

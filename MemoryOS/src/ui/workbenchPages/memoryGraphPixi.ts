@@ -1,5 +1,5 @@
 import * as PIXI from 'pixi.js';
-import { Application, Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { gsap } from 'gsap';
 import { PixiPlugin } from 'gsap/PixiPlugin';
 import type { FederatedPointerEvent } from 'pixi.js';
@@ -96,10 +96,27 @@ interface DragState {
     moved: boolean;
 }
 
+interface GraphBackgroundStar {
+    root: Container;
+    baseX: number;
+    baseY: number;
+    phase: number;
+    speed: number;
+    driftRadius: number;
+    driftSpeed: number;
+    minAlpha: number;
+    maxAlpha: number;
+    minScale: number;
+    maxScale: number;
+}
+
 let persistedCameraState: GraphCameraState | null = null;
 const EDGE_SEGMENT_COUNT = 14;
 const FLOW_SEGMENT_COUNT = 12;
 const FLOW_TAIL_LENGTH = 0.26;
+const MEMORY_GRAPH_NODE_SCALE = 0.78;
+const COSMIC_PARALLAX_STRENGTH = 0.032;
+const COSMIC_SCALE_STRENGTH = 0.05;
 
 gsap.registerPlugin(PixiPlugin);
 PixiPlugin.registerPIXI(PIXI);
@@ -185,6 +202,8 @@ export async function createMemoryGraphPixiRenderer(
     container.appendChild(app.canvas as HTMLCanvasElement);
     const stage = app.stage;
     const background = new Graphics();
+    const cosmicLayer = new Container();
+    const rippleLayer = new Graphics();
     const world = new Container();
     const edgeLayer = new Container();
     const edgeGraphics = new Graphics();
@@ -198,6 +217,7 @@ export async function createMemoryGraphPixiRenderer(
     const flowState = { progress: 0, intensity: 0 };
     let selectedNodeId = options.selectedNodeId ?? '';
     let selectedEdgeId = options.selectedEdgeId ?? '';
+    let hoveredEdgeId = '';
     let dragState: DragState | null = null;
     let suppressTapUntil = 0;
     let destroyed = false;
@@ -205,6 +225,15 @@ export async function createMemoryGraphPixiRenderer(
     let flowTween: gsap.core.Timeline | null = null;
     let pulseTween: gsap.core.Timeline | null = null;
     let pulsingSprite: GraphNodeSprite | null = null;
+    let cosmicStars: GraphBackgroundStar[] = [];
+    let cosmicTime = 0;
+    const selectionRippleState = {
+        progress: 0,
+        intensity: 0,
+        x: 0,
+        y: 0,
+    };
+    let selectionRippleTween: gsap.core.Timeline | null = null;
 
     stage.eventMode = 'static';
     stage.hitArea = app.screen;
@@ -212,15 +241,22 @@ export async function createMemoryGraphPixiRenderer(
     background.cursor = 'grab';
     edgeGraphics.blendMode = 'add';
     flowGraphics.blendMode = 'add';
+    cosmicLayer.eventMode = 'none';
+    rippleLayer.eventMode = 'none';
+    rippleLayer.blendMode = 'add';
     world.addChild(edgeLayer);
     world.addChild(nodeLayer);
     edgeLayer.addChild(edgeGraphics);
     edgeLayer.addChild(flowGraphics);
     stage.addChild(background);
+    stage.addChild(cosmicLayer);
+    stage.addChild(rippleLayer);
     stage.addChild(world);
 
     redrawBackground(background, app.screen.width, app.screen.height);
-    applyCamera(world, camera);
+    cosmicStars = buildCosmicBackground(cosmicLayer, app.screen.width, app.screen.height);
+    applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+    syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
 
     filtered.edges.forEach((edge: WorkbenchMemoryGraphEdge): void => {
         const source = nodeMap.get(edge.source);
@@ -228,7 +264,7 @@ export async function createMemoryGraphPixiRenderer(
         if (!source || !target) {
             return;
         }
-        const baseAlpha = clamp(edge.weight, 0.14, 0.54);
+        const baseAlpha = resolveBaseEdgeAlpha(edge);
         edgeSprites.push({
             edge,
             sourceId: source.id,
@@ -251,7 +287,7 @@ export async function createMemoryGraphPixiRenderer(
             anchor: { x: 0.5, y: 0 },
             style: {
                 fill: '#dbe7ff',
-                fontSize: 12,
+                fontSize: 11,
                 fontFamily: 'Consolas, "Microsoft YaHei", monospace',
                 align: 'center',
                 stroke: { color: '#020617', width: 3 },
@@ -265,7 +301,7 @@ export async function createMemoryGraphPixiRenderer(
         root.addChild(pulseRing);
         root.addChild(glow);
         root.addChild(body);
-        label.position.set(0, computeMemoryGraphNodeSize(node.importance ?? 0, node.memoryPercent) * 0.5 + 10);
+        label.position.set(0, getRenderedNodeRadius(node) + 8);
         root.addChild(label);
         root.on('pointerdown', (event: FederatedPointerEvent): void => {
             event.stopPropagation();
@@ -275,6 +311,7 @@ export async function createMemoryGraphPixiRenderer(
             if (performance.now() < suppressTapUntil) {
                 return;
             }
+            hoveredEdgeId = '';
             selectedNodeId = node.id;
             selectedEdgeId = '';
             focusNode(node.id, true);
@@ -286,6 +323,7 @@ export async function createMemoryGraphPixiRenderer(
                 connectedNodeIds,
                 selectedNodeId,
                 selectedEdgeId,
+                hoveredEdgeId,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -309,6 +347,7 @@ export async function createMemoryGraphPixiRenderer(
         }
         cameraTween?.kill();
         cameraTween = null;
+        hoveredEdgeId = '';
         dragState = {
             pointerId: event.pointerId,
             startX: event.global.x,
@@ -319,6 +358,20 @@ export async function createMemoryGraphPixiRenderer(
         };
         background.cursor = 'grabbing';
         container.style.cursor = 'grabbing';
+        syncSelectionVisuals(
+            nodeSprites,
+            edgeSprites,
+            edgeGraphics,
+            flowGraphics,
+            connectedNodeIds,
+            selectedNodeId,
+            selectedEdgeId,
+            hoveredEdgeId,
+            camera.scale,
+            true,
+            flowState.progress,
+            flowState.intensity,
+        );
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, true);
     }
 
@@ -329,6 +382,34 @@ export async function createMemoryGraphPixiRenderer(
      */
     function handleGlobalPointerMove(event: FederatedPointerEvent): void {
         if (!dragState || dragState.pointerId !== event.pointerId) {
+            if (dragState) {
+                return;
+            }
+            const worldPoint = world.toLocal(event.global);
+            const edgeHit = !selectedNodeId && !selectedEdgeId
+                ? findClosestEdge(edgeSprites, worldPoint.x, worldPoint.y, camera.scale)
+                : null;
+            const nextHoveredEdgeId = edgeHit?.edge.id ?? '';
+            if (nextHoveredEdgeId === hoveredEdgeId) {
+                return;
+            }
+            hoveredEdgeId = nextHoveredEdgeId;
+            background.cursor = hoveredEdgeId ? 'pointer' : 'grab';
+            container.style.cursor = hoveredEdgeId ? 'pointer' : 'grab';
+            syncSelectionVisuals(
+                nodeSprites,
+                edgeSprites,
+                edgeGraphics,
+                flowGraphics,
+                connectedNodeIds,
+                selectedNodeId,
+                selectedEdgeId,
+                hoveredEdgeId,
+                camera.scale,
+                false,
+                flowState.progress,
+                flowState.intensity,
+            );
             return;
         }
         const deltaX = event.global.x - dragState.startX;
@@ -338,7 +419,8 @@ export async function createMemoryGraphPixiRenderer(
         }
         camera.translateX = dragState.originX + deltaX;
         camera.translateY = dragState.originY + deltaY;
-        applyCamera(world, camera);
+        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, true);
     }
 
@@ -374,6 +456,7 @@ export async function createMemoryGraphPixiRenderer(
         const worldPoint = world.toLocal(event.global);
         const edgeHit = findClosestEdge(edgeSprites, worldPoint.x, worldPoint.y, camera.scale);
         if (edgeHit) {
+            hoveredEdgeId = '';
             selectedNodeId = '';
             selectedEdgeId = edgeHit.edge.id;
             syncSelectionVisuals(
@@ -384,6 +467,7 @@ export async function createMemoryGraphPixiRenderer(
                 connectedNodeIds,
                 selectedNodeId,
                 selectedEdgeId,
+                hoveredEdgeId,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -393,6 +477,7 @@ export async function createMemoryGraphPixiRenderer(
             options.onSelectEdge?.(edgeHit.edge.id);
             return;
         }
+        hoveredEdgeId = '';
         selectedNodeId = '';
         selectedEdgeId = '';
         syncSelectionVisuals(
@@ -403,6 +488,7 @@ export async function createMemoryGraphPixiRenderer(
             connectedNodeIds,
             selectedNodeId,
             selectedEdgeId,
+            hoveredEdgeId,
             camera.scale,
             false,
             flowState.progress,
@@ -431,7 +517,8 @@ export async function createMemoryGraphPixiRenderer(
         camera.translateX = mouseX - (mouseX - camera.translateX) * zoomFactor;
         camera.translateY = mouseY - (mouseY - camera.translateY) * zoomFactor;
         camera.scale = clamp(camera.scale * zoomFactor, 0.18, 5);
-        applyCamera(world, camera);
+        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, false);
     }
 
@@ -453,7 +540,8 @@ export async function createMemoryGraphPixiRenderer(
         if (!animate) {
             camera.translateX = targetX;
             camera.translateY = targetY;
-            applyCamera(world, camera);
+            applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+            syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
             return;
         }
         cameraTween?.kill();
@@ -466,6 +554,8 @@ export async function createMemoryGraphPixiRenderer(
             },
             onUpdate: (): void => {
                 syncCameraStateFromWorld(world, camera);
+                syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height);
+                syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
                 syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, false);
             },
             onComplete: (): void => {
@@ -484,9 +574,26 @@ export async function createMemoryGraphPixiRenderer(
 
     const resizeObserver = new ResizeObserver((): void => {
         redrawBackground(background, app.screen.width, app.screen.height);
+        cosmicStars = buildCosmicBackground(cosmicLayer, app.screen.width, app.screen.height);
+        syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height);
+        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         app.stage.hitArea = app.screen;
     });
     resizeObserver.observe(container);
+
+    /**
+     * 功能：更新 Pixi 星空背景的闪烁与轻微漂移。
+     * @returns 无返回值。
+     */
+    const handleCosmicTick = (): void => {
+        cosmicTime += app.ticker.deltaMS * 0.001;
+        animateCosmicBackground(cosmicStars, cosmicTime);
+        drawSelectionRipple(rippleLayer, selectionRippleState, cosmicTime);
+        if (!selectedNodeId && !selectedEdgeId && hoveredEdgeId) {
+            redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, (cosmicTime * 0.72) % 1, 0.78);
+        }
+    };
+    app.ticker.add(handleCosmicTick);
 
     if (!persistedCameraState && selectedNodeId) {
         focusNode(selectedNodeId);
@@ -499,6 +606,7 @@ export async function createMemoryGraphPixiRenderer(
         connectedNodeIds,
         selectedNodeId,
         selectedEdgeId,
+        hoveredEdgeId,
         camera.scale,
         false,
         flowState.progress,
@@ -514,6 +622,10 @@ export async function createMemoryGraphPixiRenderer(
         if (pulseTween) {
             pulseTween.kill();
             pulseTween = null;
+        }
+        if (selectionRippleTween) {
+            selectionRippleTween.kill();
+            selectionRippleTween = null;
         }
         if (pulsingSprite) {
             gsap.killTweensOf(pulsingSprite.root.scale);
@@ -532,6 +644,9 @@ export async function createMemoryGraphPixiRenderer(
             flowTween = null;
         }
         flowGraphics.clear();
+        selectionRippleState.intensity = 0;
+        selectionRippleState.progress = 0;
+        rippleLayer.clear();
         if (!selectedNodeId) {
             flowState.intensity = 0;
             return;
@@ -570,15 +685,27 @@ export async function createMemoryGraphPixiRenderer(
                 },
             }, 0);
         }
+        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
+        selectionRippleState.progress = 0;
+        selectionRippleState.intensity = 1;
+        selectionRippleTween = gsap.timeline({ repeat: -1 });
+        selectionRippleTween.to(selectionRippleState, {
+            progress: 1,
+            duration: 2.2,
+            ease: 'none',
+        });
+        selectionRippleTween.set(selectionRippleState, {
+            progress: 0,
+        });
         flowState.progress = 0;
         flowState.intensity = 1;
-        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowState.progress, flowState.intensity);
+        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
         flowTween = gsap.timeline({ repeat: -1 });
         flowTween.set(flowState, {
             progress: 0,
             intensity: 1,
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -586,7 +713,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 1.28,
             ease: 'none',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -594,7 +721,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 0.18,
             ease: 'power1.out',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -616,6 +743,7 @@ export async function createMemoryGraphPixiRenderer(
         }
         destroyed = true;
         resizeObserver.disconnect();
+        app.ticker.remove(handleCosmicTick);
         app.canvas.removeEventListener('wheel', handleWheel);
         background.off('pointerdown', handleDragStart);
         background.off('pointertap', handleBackgroundTap);
@@ -625,6 +753,7 @@ export async function createMemoryGraphPixiRenderer(
         cameraTween?.kill();
         flowTween?.kill();
         pulseTween?.kill();
+        selectionRippleTween?.kill();
         app.destroy({ removeView: true }, {
             children: true,
             texture: true,
@@ -638,6 +767,7 @@ export async function createMemoryGraphPixiRenderer(
     return {
         destroy,
         setSelectedNode(nodeId?: string, setOptions?: { focus?: boolean }): void {
+            hoveredEdgeId = '';
             selectedNodeId = nodeId ?? '';
             selectedEdgeId = '';
             if (setOptions?.focus && selectedNodeId) {
@@ -651,6 +781,7 @@ export async function createMemoryGraphPixiRenderer(
                 connectedNodeIds,
                 selectedNodeId,
                 selectedEdgeId,
+                hoveredEdgeId,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -700,9 +831,18 @@ function createInitialCamera(container: HTMLElement): GraphCameraState {
  * @param camera 相机状态。
  * @returns 无返回值。
  */
-function applyCamera(world: Container, camera: GraphCameraState): void {
+function applyCamera(
+    world: Container,
+    cosmicLayer: Container,
+    rippleLayer: Graphics,
+    camera: GraphCameraState,
+    width: number,
+    height: number,
+): void {
     world.position.set(camera.translateX, camera.translateY);
     world.scale.set(camera.scale);
+    syncCosmicParallax(cosmicLayer, camera, width, height);
+    rippleLayer.position.set(0, 0);
     persistedCameraState = { ...camera };
 }
 
@@ -716,6 +856,23 @@ function syncCameraStateFromWorld(world: Container, camera: GraphCameraState): v
     camera.translateX = world.position.x;
     camera.translateY = world.position.y;
     persistedCameraState = { ...camera };
+}
+
+/**
+ * 功能：同步星空背景与相机之间的轻微视差和缩放纵深。
+ * @param cosmicLayer 星空图层。
+ * @param camera 相机状态。
+ * @param width 当前宽度。
+ * @param height 当前高度。
+ * @returns 无返回值。
+ */
+function syncCosmicParallax(cosmicLayer: Container, camera: GraphCameraState, width: number, height: number): void {
+    const offsetX = (camera.translateX - (width * 0.5)) * -COSMIC_PARALLAX_STRENGTH;
+    const offsetY = (camera.translateY - (height * 0.5)) * -COSMIC_PARALLAX_STRENGTH;
+    const scale = 1 + ((camera.scale - 1) * COSMIC_SCALE_STRENGTH);
+    cosmicLayer.pivot.set(width * 0.5, height * 0.5);
+    cosmicLayer.position.set((width * 0.5) + offsetX, (height * 0.5) + offsetY);
+    cosmicLayer.scale.set(scale, scale);
 }
 
 /**
@@ -747,6 +904,7 @@ function syncSelectionVisuals(
     connectedNodeIds: Set<string>,
     selectedNodeId: string,
     selectedEdgeId: string,
+    hoveredEdgeId: string,
     scale: number,
     isDragging: boolean,
     flowProgress: number,
@@ -766,18 +924,25 @@ function syncSelectionVisuals(
             connectedNodeIds.add(matchedEdge.sourceId);
             connectedNodeIds.add(matchedEdge.targetId);
         }
+    } else if (hoveredEdgeId) {
+        const hoveredEdge = edgeSprites.find((sprite: GraphEdgeSprite): boolean => sprite.edge.id === hoveredEdgeId);
+        if (hoveredEdge) {
+            connectedNodeIds.add(hoveredEdge.sourceId);
+            connectedNodeIds.add(hoveredEdge.targetId);
+        }
     }
 
     nodeSprites.forEach((sprite: GraphNodeSprite): void => {
         const isSelected = sprite.node.id === selectedNodeId;
         const isConnected = connectedNodeIds.has(sprite.node.id);
-        const dimmed = (Boolean(selectedNodeId) || Boolean(selectedEdgeId)) && !isSelected && !isConnected;
+        const isHighlighted = !isSelected && isConnected;
+        const dimmed = (Boolean(selectedNodeId) || Boolean(selectedEdgeId) || Boolean(hoveredEdgeId)) && !isSelected && !isConnected;
         const showLabel = !isDragging && (scale >= 0.62 || isSelected || isConnected);
-        drawNodeSprite(sprite, isSelected, dimmed, showLabel);
+        drawNodeSprite(sprite, isSelected, isHighlighted, dimmed, showLabel);
     });
 
-    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId);
-    redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, flowProgress, flowIntensity);
+    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId);
+    redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowProgress, flowIntensity);
 }
 
 /**
@@ -815,16 +980,28 @@ function redrawEdgeLayer(
     edgeSprites: GraphEdgeSprite[],
     selectedNodeId: string,
     selectedEdgeId: string,
+    hoveredEdgeId: string,
 ): void {
     edgeGraphics.clear();
     edgeSprites.forEach((sprite: GraphEdgeSprite): void => {
         const active = sprite.edge.id === selectedEdgeId || sprite.sourceId === selectedNodeId || sprite.targetId === selectedNodeId;
-        const alpha = !selectedNodeId && !selectedEdgeId
+        const hovered = !selectedNodeId && !selectedEdgeId && sprite.edge.id === hoveredEdgeId;
+        const alpha = !selectedNodeId && !selectedEdgeId && !hoveredEdgeId
             ? sprite.baseAlpha
             : active
-                ? Math.max(0.7, sprite.baseAlpha)
-                : 0.06;
-        const width = sprite.edge.id === selectedEdgeId ? 3.4 : active ? 2.8 : 2.2;
+                ? Math.max(0.64, sprite.baseAlpha + 0.42)
+                : hovered
+                    ? Math.max(0.54, sprite.baseAlpha + 0.34)
+                    : 0.04;
+        const width = !selectedNodeId && !selectedEdgeId && !hoveredEdgeId
+            ? 1.6
+            : sprite.edge.id === selectedEdgeId
+                ? 3.2
+                : active
+                    ? 2.6
+                    : hovered
+                        ? 2.8
+                        : 1.8;
         drawGradientEdge(
             edgeGraphics,
             sprite.sourceNode,
@@ -833,7 +1010,7 @@ function redrawEdgeLayer(
             sprite.targetColor,
             width,
             alpha,
-            active ? EDGE_SEGMENT_COUNT + 4 : EDGE_SEGMENT_COUNT,
+            active || hovered ? EDGE_SEGMENT_COUNT + 4 : EDGE_SEGMENT_COUNT,
         );
     });
 }
@@ -850,32 +1027,53 @@ function redrawFlowLayer(
     flowGraphics: Graphics,
     edgeSprites: GraphEdgeSprite[],
     selectedNodeId: string,
+    selectedEdgeId: string,
+    hoveredEdgeId: string,
     progress: number,
     intensity: number,
 ): void {
     flowGraphics.clear();
-    if (!selectedNodeId || intensity <= 0.001) {
+    const hasSelectedNode = Boolean(selectedNodeId) && intensity > 0.001;
+    const hasHoveredEdge = !selectedNodeId && !selectedEdgeId && Boolean(hoveredEdgeId);
+    if (!hasSelectedNode && !hasHoveredEdge) {
         return;
     }
     edgeSprites.forEach((sprite: GraphEdgeSprite): void => {
-        if (sprite.sourceId !== selectedNodeId && sprite.targetId !== selectedNodeId) {
+        if (hasSelectedNode) {
+            if (sprite.sourceId !== selectedNodeId && sprite.targetId !== selectedNodeId) {
+                return;
+            }
+            const fromSelected = sprite.sourceId === selectedNodeId;
+            const sourceNode = fromSelected ? sprite.sourceNode : sprite.targetNode;
+            const targetNode = fromSelected ? sprite.targetNode : sprite.sourceNode;
+            const sourceColor = fromSelected ? sprite.sourceColor : sprite.targetColor;
+            const targetColor = fromSelected ? sprite.targetColor : sprite.sourceColor;
+            drawFlowFiber(
+                flowGraphics,
+                sourceNode,
+                targetNode,
+                sourceColor,
+                targetColor,
+                progress,
+                intensity,
+                FLOW_TAIL_LENGTH,
+                FLOW_SEGMENT_COUNT,
+            );
             return;
         }
-        const fromSelected = sprite.sourceId === selectedNodeId;
-        const sourceNode = fromSelected ? sprite.sourceNode : sprite.targetNode;
-        const targetNode = fromSelected ? sprite.targetNode : sprite.sourceNode;
-        const sourceColor = fromSelected ? sprite.sourceColor : sprite.targetColor;
-        const targetColor = fromSelected ? sprite.targetColor : sprite.sourceColor;
+        if (sprite.edge.id !== hoveredEdgeId) {
+            return;
+        }
         drawFlowFiber(
             flowGraphics,
-            sourceNode,
-            targetNode,
-            sourceColor,
-            targetColor,
+            sprite.sourceNode,
+            sprite.targetNode,
+            sprite.sourceColor,
+            sprite.targetColor,
             progress,
-            intensity,
-            FLOW_TAIL_LENGTH,
-            FLOW_SEGMENT_COUNT,
+            0.78,
+            0.18,
+            FLOW_SEGMENT_COUNT + 3,
         );
     });
 }
@@ -887,14 +1085,22 @@ function redrawFlowLayer(
  * @param dimmed 是否处于弱化状态。
  * @returns 无返回值。
  */
-function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: boolean, showLabel: boolean): void {
-    const radius = computeMemoryGraphNodeSize(sprite.node.importance ?? 0, sprite.node.memoryPercent) * 0.5;
+function drawNodeSprite(
+    sprite: GraphNodeSprite,
+    isSelected: boolean,
+    isHighlighted: boolean,
+    dimmed: boolean,
+    showLabel: boolean,
+): void {
+    const radius = getRenderedNodeRadius(sprite.node);
     const color = toPixiColor(getMemoryGraphNodeColor(sprite.node.type));
-    const fillAlpha = isSelected ? 0.4 : 0.16;
-    const glowAlpha = isSelected ? 0.66 : 0.12;
-    const borderWidth = isSelected ? 3.6 : 1.4;
+    const fillAlpha = isSelected ? 0.4 : isHighlighted ? 0.28 : 0.16;
+    const glowAlpha = isSelected ? 0.66 : isHighlighted ? 0.34 : 0.12;
+    const borderWidth = isSelected ? 3 : isHighlighted ? 2 : 1.2;
     const labelColor = isSelected
         ? 0xffffff
+        : isHighlighted
+            ? 0xf8fafc
         : sprite.node.type === 'actor'
             ? 0xfcd34d
             : 0xdbe7ff;
@@ -905,14 +1111,14 @@ function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: bo
     sprite.pulseRing.clear();
     sprite.glow.clear();
     sprite.body.clear();
-    if (isSelected) {
+    if (isSelected || isHighlighted) {
         sprite.pulseRing.alpha = 0.72;
         if (sprite.node.type === 'actor') {
             sprite.pulseRing.poly([0, -radius - 12, radius + 12, 0, 0, radius + 12, -radius - 12, 0], true)
-                .stroke({ color: 0xffffff, alpha: 0.56, width: 2.2 });
+                .stroke({ color: 0xffffff, alpha: isSelected ? 0.56 : 0.28, width: isSelected ? 2.2 : 1.4 });
         } else {
             sprite.pulseRing.circle(0, 0, radius + 10)
-                .stroke({ color: 0xffffff, alpha: 0.56, width: 2.2 });
+                .stroke({ color: 0xffffff, alpha: isSelected ? 0.56 : 0.28, width: isSelected ? 2.2 : 1.4 });
         }
     } else {
         sprite.pulseRing.alpha = 0;
@@ -921,34 +1127,34 @@ function drawNodeSprite(sprite: GraphNodeSprite, isSelected: boolean, dimmed: bo
     }
 
     if (sprite.node.type === 'actor') {
-        if (isSelected) {
+        if (isSelected || isHighlighted) {
             sprite.glow.poly([0, -radius - 16, radius + 16, 0, 0, radius + 16, -radius - 16, 0], true)
-                .fill({ color: 0xffffff, alpha: 0.18 });
+                .fill({ color: 0xffffff, alpha: isSelected ? 0.18 : 0.08 });
         }
         sprite.glow.poly([0, -radius - 8, radius + 8, 0, 0, radius + 8, -radius - 8, 0], true)
             .fill({ color, alpha: glowAlpha });
         sprite.body.poly([0, -radius, radius, 0, 0, radius, -radius, 0], true)
             .fill({ color, alpha: fillAlpha })
             .stroke({ color, alpha: 0.96, width: borderWidth });
-        if (isSelected) {
+        if (isSelected || isHighlighted) {
             sprite.body.poly([0, -radius - 3, radius + 3, 0, 0, radius + 3, -radius - 3, 0], true)
-                .stroke({ color: 0xffffff, alpha: 0.92, width: 1.6 });
+                .stroke({ color: 0xffffff, alpha: isSelected ? 0.92 : 0.5, width: isSelected ? 1.6 : 1.1 });
         }
         sprite.body.circle(0, 0, Math.max(6, radius * 0.42))
             .fill({ color: 0xffffff, alpha: isSelected ? 1 : 0.9 });
         return;
     }
 
-    if (isSelected) {
-        sprite.glow.circle(0, 0, radius + 14).fill({ color: 0xffffff, alpha: 0.16 });
+    if (isSelected || isHighlighted) {
+        sprite.glow.circle(0, 0, radius + 14).fill({ color: 0xffffff, alpha: isSelected ? 0.16 : 0.08 });
     }
     sprite.glow.circle(0, 0, radius + 8).fill({ color, alpha: glowAlpha });
     sprite.body.circle(0, 0, radius)
         .fill({ color, alpha: fillAlpha })
         .stroke({ color, alpha: 0.96, width: borderWidth });
-    if (isSelected) {
+    if (isSelected || isHighlighted) {
         sprite.body.circle(0, 0, radius + 2.8)
-            .stroke({ color: 0xffffff, alpha: 0.94, width: 1.8 });
+            .stroke({ color: 0xffffff, alpha: isSelected ? 0.94 : 0.5, width: isSelected ? 1.8 : 1.1 });
     }
     sprite.body.circle(0, 0, Math.max(4, radius * 0.32))
         .fill({ color: isSelected ? 0xffffff : color, alpha: isSelected ? 1 : 0.96 });
@@ -1114,8 +1320,8 @@ function resolveEdgeEndpoints(
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const distance = Math.max(1, Math.sqrt((dx * dx) + (dy * dy)));
-    const sourceRadius = computeMemoryGraphNodeSize(source.importance ?? 0, source.memoryPercent) * 0.5;
-    const targetRadius = computeMemoryGraphNodeSize(target.importance ?? 0, target.memoryPercent) * 0.5;
+    const sourceRadius = getRenderedNodeRadius(source);
+    const targetRadius = getRenderedNodeRadius(target);
     const startRatio = sourceRadius / distance;
     const endRatio = targetRadius / distance;
     return {
@@ -1197,4 +1403,343 @@ function mixColor(sourceColor: number, targetColor: number, ratio: number): numb
     const green = Math.round(sourceGreen + ((targetGreen - sourceGreen) * safeRatio));
     const blue = Math.round(sourceBlue + ((targetBlue - sourceBlue) * safeRatio));
     return (red << 16) | (green << 8) | blue;
+}
+
+/**
+ * 功能：使用 Pixi 构建星空背景层。
+ * @param cosmicLayer 星空图层。
+ * @param width 当前宽度。
+ * @param height 当前高度。
+ * @returns 星点数据列表。
+ */
+function buildCosmicBackground(
+    cosmicLayer: Container,
+    width: number,
+    height: number,
+): GraphBackgroundStar[] {
+    cosmicLayer.removeChildren().forEach((child) => child.destroy());
+    const nebula = new Graphics();
+    drawCosmicGlow(nebula, width * 0.16, height * 0.24, Math.max(220, width * 0.24), 0x1d4ed8, 0.008);
+    drawCosmicGlow(nebula, width * 0.78, height * 0.2, Math.max(210, width * 0.22), 0x38bdf8, 0.007);
+    drawCosmicGlow(nebula, width * 0.58, height * 0.76, Math.max(240, width * 0.26), 0x6366f1, 0.006);
+    nebula.filters = [new BlurFilter({ strength: 28, quality: 2 })];
+    cosmicLayer.addChild(nebula);
+
+    const milkyWayDust = new Graphics();
+    const milkyWayDustSeed = createDeterministicRandom(Math.round((width * 23) + (height * 13) + 157));
+    drawMilkyWayDust(milkyWayDust, width, height, milkyWayDustSeed);
+    milkyWayDust.filters = [new BlurFilter({ strength: 14, quality: 1 })];
+    cosmicLayer.addChild(milkyWayDust);
+
+    const milkyWay = new Graphics();
+    const milkyWaySeed = createDeterministicRandom(Math.round((width * 17) + (height * 19) + 311));
+    drawMilkyWayBand(milkyWay, width, height, milkyWaySeed);
+    milkyWay.filters = [new BlurFilter({ strength: 20, quality: 1 })];
+    cosmicLayer.addChild(milkyWay);
+
+    const dust = new Graphics();
+    const dustSeed = createDeterministicRandom(Math.round((width * 13) + (height * 7) + 17));
+    const dustCount = Math.max(120, Math.round((width * height) / 18000));
+    for (let index = 0; index < dustCount; index += 1) {
+        const x = dustSeed() * width;
+        const y = dustSeed() * height;
+        const radius = 0.45 + (dustSeed() * 1.2);
+        const alpha = 0.015 + (dustSeed() * 0.04);
+        dust.circle(x, y, radius).fill({ color: 0xcbd5e1, alpha });
+    }
+    cosmicLayer.addChild(dust);
+
+    const starSeed = createDeterministicRandom(Math.round((width * 29) + (height * 11) + 97));
+    const starCount = Math.max(260, Math.round((width * height) / 5000));
+    const stars: GraphBackgroundStar[] = [];
+    for (let index = 0; index < starCount; index += 1) {
+        const root = new Container();
+        const haze = new Graphics();
+        const glow = new Graphics();
+        const core = new Graphics();
+        const alongBand = starSeed() > 0.28;
+        const brightStar = starSeed() > 0.82;
+        const radius = brightStar
+            ? 1.2 + (starSeed() * 1.9)
+            : 0.45 + (starSeed() * (alongBand ? 1.4 : 1.75));
+        const hazeRadius = radius * (3.6 + (starSeed() * 2.4));
+        const glowRadius = radius * (2.1 + (starSeed() * 1.7));
+        const starColor = brightStar
+            ? 0xfef3c7
+            : alongBand
+                ? 0xf8fafc
+                : (starSeed() > 0.58 ? 0x93c5fd : 0xe2e8f0);
+        haze.circle(0, 0, hazeRadius).fill({ color: starColor, alpha: brightStar ? 0.036 + (starSeed() * 0.03) : 0.012 + (starSeed() * 0.02) });
+        glow.circle(0, 0, glowRadius).fill({ color: starColor, alpha: brightStar ? 0.08 + (starSeed() * 0.06) : 0.028 + (starSeed() * 0.045) });
+        if (brightStar) {
+            drawStarCross(glow, glowRadius * 1.35, starColor, 0.11 + (starSeed() * 0.05));
+        }
+        core.circle(0, 0, radius).fill({ color: 0xffffff, alpha: brightStar ? 0.96 : 0.76 + (starSeed() * 0.18) });
+        haze.filters = [new BlurFilter({ strength: brightStar ? 8 : 6, quality: 1 })];
+        glow.filters = [new BlurFilter({ strength: brightStar ? 4 : 3, quality: 1 })];
+        root.addChild(haze);
+        root.addChild(glow);
+        root.addChild(core);
+        root.blendMode = 'add';
+        const basePosition = alongBand
+            ? resolveMilkyWayPoint(width, height, starSeed)
+            : {
+                x: (0.04 + (starSeed() * 0.92)) * width,
+                y: (0.06 + (starSeed() * 0.88)) * height,
+            };
+        const baseX = basePosition.x;
+        const baseY = basePosition.y;
+        root.position.set(baseX, baseY);
+        cosmicLayer.addChild(root);
+        stars.push({
+            root,
+            baseX,
+            baseY,
+            phase: starSeed() * Math.PI * 2,
+            speed: brightStar
+                ? 0.16 + (starSeed() * 1.2)
+                : 0.18 + (starSeed() * 2.9),
+            driftRadius: brightStar ? 0.18 + (starSeed() * 0.95) : 0.35 + (starSeed() * 2.2),
+            driftSpeed: brightStar ? 0.018 + (starSeed() * 0.08) : 0.03 + (starSeed() * 0.18),
+            minAlpha: brightStar ? 0.22 + (starSeed() * 0.12) : 0.04 + (starSeed() * 0.1),
+            maxAlpha: brightStar ? 0.58 + (starSeed() * 0.28) : 0.18 + (starSeed() * 0.42),
+            minScale: 0.78 + (starSeed() * 0.16),
+            maxScale: brightStar ? 1.12 + (starSeed() * 0.34) : 1.02 + (starSeed() * 0.42),
+        });
+    }
+    return stars;
+}
+
+/**
+ * 功能：更新 Pixi 星空背景中的星点闪烁状态。
+ * @param stars 星点数据。
+ * @param time 累积时间。
+ * @returns 无返回值。
+ */
+function animateCosmicBackground(stars: GraphBackgroundStar[], time: number): void {
+    stars.forEach((star: GraphBackgroundStar): void => {
+        const twinkle = (Math.sin((time * star.speed) + star.phase) + 1) * 0.5;
+        const shimmer = (Math.sin((time * ((star.speed * 1.85) + 0.16)) + (star.phase * 1.7)) + 1) * 0.5;
+        const sparkle = (Math.sin((time * ((star.speed * 0.56) + 0.08)) + (star.phase * 0.7)) + 1) * 0.5;
+        const alphaRatio = Math.min(1, (twinkle * 0.55) + (shimmer * 0.3) + (sparkle * 0.15));
+        const driftAngle = (time * star.driftSpeed) + star.phase;
+        const scale = star.minScale + ((star.maxScale - star.minScale) * alphaRatio);
+        star.root.alpha = star.minAlpha + ((star.maxAlpha - star.minAlpha) * alphaRatio);
+        star.root.scale.set(scale, scale);
+        star.root.position.set(
+            star.baseX + (Math.cos(driftAngle) * star.driftRadius),
+            star.baseY + (Math.sin(driftAngle * 1.12) * star.driftRadius * 0.72),
+        );
+    });
+}
+
+/**
+ * 功能：同步选中节点对应的背景波纹锚点位置。
+ * @param nodeMap 节点映射。
+ * @param selectedNodeId 当前选中节点 ID。
+ * @param camera 相机状态。
+ * @param state 波纹状态。
+ * @returns 无返回值。
+ */
+function syncSelectionRippleAnchor(
+    nodeMap: Map<string, WorkbenchMemoryGraphNode>,
+    selectedNodeId: string,
+    camera: GraphCameraState,
+    state: { progress: number; intensity: number; x: number; y: number },
+): void {
+    if (!selectedNodeId) {
+        return;
+    }
+    const node = nodeMap.get(selectedNodeId);
+    if (!node) {
+        return;
+    }
+    state.x = camera.translateX + (node.x * camera.scale);
+    state.y = camera.translateY + (node.y * camera.scale);
+}
+
+/**
+ * 功能：绘制与背景呼应的局部星尘波纹。
+ * @param rippleLayer 波纹图层。
+ * @param state 波纹状态。
+ * @param time 累积时间。
+ * @returns 无返回值。
+ */
+function drawSelectionRipple(
+    rippleLayer: Graphics,
+    state: { progress: number; intensity: number; x: number; y: number },
+    time: number,
+): void {
+    rippleLayer.clear();
+    if (state.intensity <= 0.001) {
+        return;
+    }
+    const pulse = state.progress;
+    const outerRadius = 34 + (pulse * 82);
+    const innerRadius = 16 + (pulse * 38);
+    const alpha = (1 - pulse) * 0.12 * state.intensity;
+    const sparkleAlpha = (0.035 + (Math.sin((time * 2.4) + 1.3) * 0.018)) * state.intensity;
+    rippleLayer.circle(state.x, state.y, outerRadius).stroke({ color: 0x93c5fd, alpha, width: 1 });
+    rippleLayer.circle(state.x, state.y, innerRadius).stroke({ color: 0xe0f2fe, alpha: alpha * 0.8, width: 0.8 });
+    for (let index = 0; index < 12; index += 1) {
+        const angle = ((Math.PI * 2) / 12) * index + (time * 0.16);
+        const distance = 18 + (pulse * 58) + ((index % 4) * 3.5);
+        const x = state.x + (Math.cos(angle) * distance);
+        const y = state.y + (Math.sin(angle) * distance * 0.84);
+        const radius = 0.9 + ((index % 3) * 0.4);
+        rippleLayer.circle(x, y, radius).fill({ color: index % 4 === 0 ? 0xf8fafc : 0x93c5fd, alpha: sparkleAlpha });
+    }
+}
+
+/**
+ * 功能：获取实际绘制时使用的节点半径。
+ * @param node 图节点。
+ * @returns 缩放后的节点半径。
+ */
+function getRenderedNodeRadius(node: WorkbenchMemoryGraphNode): number {
+    return computeMemoryGraphNodeSize(node.importance ?? 0, node.memoryPercent) * 0.5 * MEMORY_GRAPH_NODE_SCALE;
+}
+
+/**
+ * 功能：绘制柔边宇宙雾团。
+ * @param graphics 目标图层。
+ * @param x 中心横坐标。
+ * @param y 中心纵坐标。
+ * @param radius 外层半径。
+ * @param color 颜色。
+ * @param alpha 基础透明度。
+ * @returns 无返回值。
+ */
+function drawCosmicGlow(
+    graphics: Graphics,
+    x: number,
+    y: number,
+    radius: number,
+    color: number,
+    alpha: number,
+): void {
+    graphics.circle(x, y, radius).fill({ color, alpha });
+    graphics.circle(x, y, radius * 0.68).fill({ color, alpha: alpha * 1.45 });
+    graphics.circle(x, y, radius * 0.42).fill({ color, alpha: alpha * 1.9 });
+}
+
+/**
+ * 功能：绘制银河汇聚带，形成一条较明显的星群聚集区域。
+ * @param graphics 目标图层。
+ * @param width 当前宽度。
+ * @param height 当前高度。
+ * @param random 伪随机数生成器。
+ * @returns 无返回值。
+ */
+function drawMilkyWayBand(
+    graphics: Graphics,
+    width: number,
+    height: number,
+    random: () => number,
+): void {
+    const clusterCount = Math.max(36, Math.round(width / 38));
+    for (let index = 0; index < clusterCount; index += 1) {
+        const point = resolveMilkyWayPoint(width, height, random);
+        const midWeight = 1 - Math.abs(0.5 - random()) * 2;
+        const radius = Math.min(width, height) * (0.024 + (midWeight * 0.016) + (random() * 0.03));
+        const color = random() > 0.64 ? 0x93c5fd : (random() > 0.34 ? 0xe0f2fe : 0xc4b5fd);
+        drawCosmicGlow(graphics, point.x, point.y, radius, color, 0.004 + (midWeight * 0.01) + (random() * 0.005));
+    }
+}
+
+/**
+ * 功能：绘制银河尘埃带，增强一条星河横贯画面的感觉。
+ * @param graphics 目标图层。
+ * @param width 当前宽度。
+ * @param height 当前高度。
+ * @param random 伪随机数生成器。
+ * @returns 无返回值。
+ */
+function drawMilkyWayDust(
+    graphics: Graphics,
+    width: number,
+    height: number,
+    random: () => number,
+): void {
+    const dustCount = Math.max(120, Math.round(width / 5));
+    for (let index = 0; index < dustCount; index += 1) {
+        const point = resolveMilkyWayPoint(width, height, random);
+        const radius = 6 + (random() * Math.min(width, height) * 0.018);
+        const bandCenterRatio = Math.abs((point.x / Math.max(width, 1)) - 0.5);
+        const alpha = 0.002 + ((1 - Math.min(1, bandCenterRatio * 2.1)) * 0.005) + (random() * 0.004);
+        const color = random() > 0.5 ? 0xf8fafc : 0x93c5fd;
+        graphics.circle(point.x, point.y, radius).fill({ color, alpha });
+    }
+}
+
+/**
+ * 功能：在银河带上生成一个聚集点坐标。
+ * @param width 当前宽度。
+ * @param height 当前高度。
+ * @param random 伪随机数生成器。
+ * @returns 银河带内的坐标点。
+ */
+function resolveMilkyWayPoint(
+    width: number,
+    height: number,
+    random: () => number,
+): { x: number; y: number } {
+    const t = random();
+    const centerX = width * (0.08 + (t * 0.84));
+    const centerY = height * (0.8 - (t * 0.42));
+    const spreadX = (random() - 0.5) * width * 0.045;
+    const spreadY = (random() - 0.5) * height * 0.11;
+    const curl = Math.sin((t * Math.PI * 2.6) + (random() * 0.9)) * height * 0.036;
+    return {
+        x: centerX + spreadX,
+        y: centerY + spreadY + curl,
+    };
+}
+
+/**
+ * 功能：为亮星绘制十字星芒，增强辉光感。
+ * @param graphics 目标图层。
+ * @param radius 星芒长度。
+ * @param color 颜色。
+ * @param alpha 透明度。
+ * @returns 无返回值。
+ */
+function drawStarCross(graphics: Graphics, radius: number, color: number, alpha: number): void {
+    graphics
+        .moveTo(-radius, 0)
+        .lineTo(radius, 0)
+        .stroke({ color, alpha, width: 1.1 });
+    graphics
+        .moveTo(0, -radius)
+        .lineTo(0, radius)
+        .stroke({ color, alpha: alpha * 0.92, width: 1.1 });
+}
+
+/**
+ * 功能：创建可复用的确定性随机数生成器。
+ * @param seed 初始种子。
+ * @returns 0 到 1 之间的伪随机数函数。
+ */
+function createDeterministicRandom(seed: number): () => number {
+    let current = Math.max(1, Math.floor(seed) || 1);
+    return (): number => {
+        current = (current * 1664525 + 1013904223) % 4294967296;
+        return current / 4294967296;
+    };
+}
+
+/**
+ * 功能：解析边在默认态下的基础透明度。
+ * @param edge 关系边数据。
+ * @returns 更适合默认弱显场景的透明度。
+ */
+function resolveBaseEdgeAlpha(edge: WorkbenchMemoryGraphEdge): number {
+    const weight = clamp(Number(edge.weight) || 0, 0, 1);
+    const confidence = clamp(Number(edge.confidence) || 0, 0, 1);
+    const strengthBoost = edge.strengthLevel === 'strong'
+        ? 0.05
+        : edge.strengthLevel === 'normal'
+            ? 0.025
+            : 0;
+    return clamp(0.035 + (weight * 0.11) + (confidence * 0.04) + strengthBoost, 0.06, 0.22);
 }

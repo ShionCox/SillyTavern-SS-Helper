@@ -21,6 +21,7 @@ import {
     saveVectorDocuments,
     loadVectorDocuments,
     loadVectorDocumentsBySource,
+    loadVectorRecallStats,
     deleteVectorDocumentById,
     deleteVectorDocumentsBySource,
     clearVectorDocumentsForChat,
@@ -61,7 +62,7 @@ import {
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import type { VectorDocument, DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
 import type { IndexedVectorDocument } from '../types/vector-search';
-import { onEntrySaved, onEntryDeleted, onRelationshipSaved, onActorSaved, onSummarySaved } from '../services/vector-index-service';
+import { onEntryDeleted } from '../services/vector-index-service';
 
 interface EntryAuditWriteOptions {
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
@@ -256,7 +257,6 @@ export class EntryRepository {
             afterEntry: savedEntry,
             ts: now,
         });
-        void onEntrySaved(this.chatKey, savedEntry).catch(() => {});
         return savedEntry;
     }
 
@@ -325,7 +325,6 @@ export class EntryRepository {
         };
         await db.actor_memory_profiles.put(row);
         const savedProfile = this.mapActorProfile(row);
-        void onActorSaved(this.chatKey, savedProfile).catch(() => {});
         return savedProfile;
     }
 
@@ -440,7 +439,6 @@ export class EntryRepository {
         };
         await db.memory_relationships.put(row);
         const savedRelationship = this.mapRelationship(row);
-        void onRelationshipSaved(this.chatKey, savedRelationship).catch(() => {});
         return savedRelationship;
     }
 
@@ -801,7 +799,6 @@ export class EntryRepository {
         };
         await db.summary_snapshots.put(row);
         const savedSnapshot = this.mapSummarySnapshot(row);
-        void onSummarySaved(this.chatKey, savedSnapshot).catch(() => {});
         return savedSnapshot;
     }
 
@@ -1808,6 +1805,14 @@ export class EntryRepository {
     }
 
     /**
+     * 功能：读取当前聊天的向量召回统计记录。
+     * @returns 召回统计列表。
+     */
+    async listVectorRecallStats(): Promise<DBMemoryVectorRecallStat[]> {
+        return loadVectorRecallStats(this.chatKey);
+    }
+
+    /**
      * 功能：按来源删除向量索引。
      * @param sourceKind 来源类型。
      * @param sourceId 来源 ID。
@@ -1832,6 +1837,22 @@ export class EntryRepository {
      */
     async clearVectorDataForChat(): Promise<void> {
         await clearAllVectorDataForChat(this.chatKey);
+    }
+
+    /**
+     * 功能：清空当前聊天的向量索引。
+     * @returns 异步完成。
+     */
+    async clearVectorIndexForChat(): Promise<void> {
+        await clearVectorIndexForChat(this.chatKey);
+    }
+
+    /**
+     * 功能：清空当前聊天的向量召回统计。
+     * @returns 异步完成。
+     */
+    async clearVectorRecallStatsForChat(): Promise<void> {
+        await clearVectorRecallStatsForChat(this.chatKey);
     }
 
     /**
